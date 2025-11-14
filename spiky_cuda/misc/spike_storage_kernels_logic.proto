@@ -1,0 +1,30 @@
+copy_tail_ticks_logic(
+    uint4* target_spike_quads,
+    uint4* source_spike_quads,
+    uint32_t n_neuron_quads,
+    uint32_t spikes_int_size,
+    uint32_t past_ticks_int_size
+) {
+    NeuronIndex_t neuron_quad_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if((neuron_quad_idx >= NEURON_ALIGNMENT_QUAD_CONSTANT) && (neuron_quad_idx < n_neuron_quads)) {
+        uint32_t shift = blockIdx.y * spikes_int_size * n_neuron_quads;
+        target_spike_quads += shift;
+        source_spike_quads += shift;
+        for(uint32_t j=0; j < past_ticks_int_size;j++) { // Spikes are time-reversed: the earlier the spike, the farther to the right.
+            target_spike_quads[(spikes_int_size - past_ticks_int_size + j) * n_neuron_quads + neuron_quad_idx] = source_spike_quads[j * n_neuron_quads + neuron_quad_idx];
+        }
+    }
+}
+
+decrement_spikes_logic(
+    SpikeInfo* spikes,
+    uint32_t n_spikes,
+    uint16_t shift
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(i < n_spikes) {
+        (spikes + i)->tick -= shift;
+    }
+}

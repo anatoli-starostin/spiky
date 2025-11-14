@@ -1,0 +1,1 @@
+#include "../spnet.cu"
