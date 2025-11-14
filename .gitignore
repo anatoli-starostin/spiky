@@ -1,5 +1,7 @@
 .idea/
 **/tests/**/*.png
+**/tests/mnist
+workbooks/mnist
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
