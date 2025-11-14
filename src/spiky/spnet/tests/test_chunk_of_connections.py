@@ -3,7 +3,10 @@ import torch
 from spiky.util.chunk_of_connections import ChunkOfConnections, ChunkOfConnectionsValidator
 
 
-def main():
+def test_chunk_of_connections(device, _, __):
+    if device == torch.device('cpu') or device == 'cpu':
+        return True
+
     single_group_size = 6
 
     connections = [
@@ -34,6 +37,24 @@ def main():
     else:
         print(errors)
         return -1
+
+
+def main():
+    print("=" * 60)
+    print("SPNET SIMPLE MATH TEST")
+    print("=" * 60)
+
+    for summation_dtype in [torch.float32, torch.int32]:
+        print(f"\nTesting, summation_dtype {summation_dtype}...")
+        success = test_simple_math(torch.device('cpu'), summation_dtype)
+
+        if success:
+            print(f"\n<{summation_dtype}> test completed successfully!")
+        else:
+            print(f"\n<{summation_dtype}> test failed!")
+            return -1
+
+    return 0
 
 
 if __name__ == "__main__":

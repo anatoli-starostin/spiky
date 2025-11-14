@@ -1,11 +1,14 @@
 import torch
 
+from spiky.spnet.tests.test_spnet_math import test_simple_math
 from test_synapse_growth_lowlevel import test_synapse_growth_lowlevel
 from test_synapse_growth_simple import test_simple_two_layers
 from test_synapse_growth_convolutions import test_convolutional_topology
 from test_synapse_growth_probabilities import test_probabilistic_connections
 from test_izhikevitch_topology import test_izhikevitch_topology
 from test_izhikevitch_runtime import test_izhikevitch_runtime
+from test_spnet_math import test_simple_math
+from test_chunk_of_connections import test_chunk_of_connections
 
 
 def main():
@@ -17,7 +20,9 @@ def main():
             test_convolutional_topology,
             test_probabilistic_connections,
             test_izhikevitch_topology,
-            test_izhikevitch_runtime
+            test_izhikevitch_runtime,
+            test_simple_math,
+            test_chunk_of_connections
         ]
     }
 

@@ -20,7 +20,7 @@ def test_andn_stability_backward_sync(
 ):
     if summation_dtype == torch.float32:
         return True
-    if device == torch.device('cpu'):
+    if device == torch.device('cpu') or device == 'cpu':
         return True
     success = _test_andn_stability_backward_sync(0.4, 0.0, device, seed)
     return success

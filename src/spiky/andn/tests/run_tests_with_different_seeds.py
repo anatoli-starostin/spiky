@@ -6,6 +6,7 @@ from test_conv2d_helper import test_conv2d_helper
 from test_inhibition_layer_forward import test_inhibition_layer_forward
 from test_andn_stability_backward import test_andn_stability_backward
 from test_andn_stability_backward_sync import test_andn_stability_backward_sync
+from test_inhibition_layer_forward import test_inhibition_layer_forward
 
 
 def main():
@@ -17,7 +18,8 @@ def main():
             test_inhibition_layer_forward,
             test_andn_layer_backward_hebb,
             test_andn_stability_backward,
-            test_andn_stability_backward_sync
+            test_andn_stability_backward_sync,
+            test_inhibition_layer_forward
         ]
     }
 
