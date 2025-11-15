@@ -807,7 +807,7 @@ void ConnectionsManager::export_synapses(
 uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices)
 {
     PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
-    __TRACE__("connections_manager::count_max_input_weights_per_neuron\n");
+    __TRACE__("connections_manager::count_max_input_weights_per_neuron(neuron_indices)\n");
     checkTensor(neuron_indices, "neuron_indices", false, allocator.device, sizeof(NeuronIndex_t));
     NeuronIndex_t *neuron_indices_data = reinterpret_cast<NeuronIndex_t *>(neuron_indices.data_ptr());
 
@@ -817,6 +817,34 @@ uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Te
     GRID_CALL_SHARED_MEM(
         numBlocks, count_max_synapses, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint32_t),
         neuron_indices_data,
+        neuron_indices.numel(),
+        IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+        this->backward_shift,
+        reinterpret_cast<uint32_t *>(aux_buffer), device
+    );
+
+    if(device != -1) {
+        #ifndef NO_CUDA
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+        #endif
+    }
+    PROF_END(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    return *aux_buffer;
+}
+
+uint32_t ConnectionsManager::count_max_input_synapses_per_neuron()
+{
+    PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    __TRACE__("connections_manager::count_max_input_weights_per_neuron\n");
+
+    *aux_buffer = 0;
+
+    // TODO
+
+    dim3 numBlocks((neuron_indices.numel() + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+    GRID_CALL_SHARED_MEM(
+        numBlocks, count_max_synapses, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint32_t),
         neuron_indices.numel(),
         IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
         this->backward_shift,

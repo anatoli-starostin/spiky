@@ -16,6 +16,10 @@ generate_cu_from_proto(
     'andn/aux/andn_runtime_kernels_logic.cu'
 )
 generate_cu_from_proto(
+    'lut/lut_runtime_kernels_logic.proto',
+    'lut/aux/lut_runtime_kernels_logic.cu'
+)
+generate_cu_from_proto(
     'synapse_growth/synapse_growth_kernels_logic.proto',
     'synapse_growth/aux/synapse_growth_kernels_logic.cu'
 )
@@ -37,6 +41,8 @@ sources_list_cuda = [
     'spnet/spnet_runtime.cu',
     'andn/andn.cu',
     'andn/andn_runtime.cu',
+    'lut/lut.cu',
+    'lut/lut_runtime.cu',
     'synapse_growth/synapse_growth.cu',
     'spiky_py.cpp'
 ]
@@ -45,7 +51,9 @@ if BUILD_INTEGERS_VERSION:
         'spnet/aux/spnet_I.cu',
         'spnet/aux/spnet_runtime_I.cu',
         'andn/aux/andn_I.cu',
-        'andn/aux/andn_runtime_I.cu'
+        'andn/aux/andn_runtime_I.cu',
+        'lut/aux/lut_I.cu',
+        'lut/aux/lut_runtime_I.cu'
     ]
 
 sources_list_no_cuda = [
@@ -58,6 +66,8 @@ sources_list_no_cuda = [
     'spnet/aux/spnet_runtime.cpp',
     'andn/aux/andn.cpp',
     'andn/aux/andn_runtime.cpp',
+    'lut/aux/lut.cpp',
+    'lut/aux/lut_runtime.cpp',
     'synapse_growth/aux/synapse_growth.cpp',
     'spiky_py.cpp',
 ]
@@ -66,7 +76,9 @@ if BUILD_INTEGERS_VERSION:
         'spnet/aux/spnet_I.cpp',
         'spnet/aux/spnet_runtime_I.cpp',
         'andn/aux/andn_I.cpp',
-        'andn/aux/andn_runtime_I.cpp'
+        'andn/aux/andn_runtime_I.cpp',
+        'lut/aux/lut_I.cpp',
+        'lut/aux/lut_runtime_I.cpp'
     ]
 
 if hasattr(sys, 'getwindowsversion'):

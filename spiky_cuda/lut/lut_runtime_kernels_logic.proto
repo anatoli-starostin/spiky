@@ -1,0 +1,11 @@
+// Placeholder for LUT runtime kernels logic
+// This file will be processed by kernels_logic_parser.py to generate the actual CUDA kernels
+
+// TODO: Implement the actual kernel logic functions for LUT forward and backward passes
+// These should include:
+// - Finding closest anchors for each detector
+// - Computing lookup indices
+// - Firing lookup neurons
+// - Accumulating outputs
+// - Backpropagating gradients
+

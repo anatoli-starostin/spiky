@@ -1,0 +1,997 @@
+#include "lut_runtime.cuh"
+#include <limits.h>
+
+namespace py = pybind11;
+
+#define LUTM_CLASS_NAME PFX(LUTDataManager)
+
+class __attribute__((visibility("hidden"))) LUTM_CLASS_NAME {
+    friend py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm);
+    friend std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t);
+public:
+    LUTM_CLASS_NAME(
+        uint32_t n_inputs, uint32_t n_outputs,
+        uint32_t n_detectors, uint32_t n_anchors_per_detector,
+        uint64_t initial_synapse_capacity,
+        uint32_t forward_group_size, uint32_t backward_group_size
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        , double int_rescaler
+        #endif
+    ) :
+        #ifdef ENABLE_PROFILING
+        profiler(N_LUT_PROFILER_OPS),
+        #endif
+        host_device_allocator(initial_synapse_capacity * 2 * sizeof(NeuronIndex_t) + MAX_N_SYNAPSE_METAS * sizeof(BaseSynapseMeta)),
+        only_host_allocator(1024),
+        connections_manager(nullptr), runtime_context(nullptr),
+        detector_connections_allocator(nullptr),
+        detector_connections_manager(nullptr),
+        n_inputs(n_inputs),
+        n_outputs(n_outputs),
+        n_detectors(n_detectors),
+        n_anchors_per_detector(n_anchors_per_detector),
+        n_lookup_neurons(n_detectors * (1 << n_anchors_per_detector)),
+        forward_group_size(forward_group_size),
+        backward_group_size(backward_group_size)
+    {
+        // Validate inputs
+        if(n_inputs == 0) {
+            throw py::value_error("n_inputs == 0");
+        }
+        if(n_outputs == 0) {
+            throw py::value_error("n_outputs == 0");
+        }
+        if(n_detectors == 0) {
+            throw py::value_error("n_detectors == 0");
+        }
+        if(n_anchors_per_detector == 0) {
+            throw py::value_error("n_anchors_per_detector == 0");
+        }
+        if(forward_group_size == 0) {
+            throw py::value_error("forward_group_size == 0");
+        }
+        if(forward_group_size > MAX_SYNAPSE_GROUP_SIZE) {
+            throw py::value_error("forward_group_size > MAX_SYNAPSE_GROUP_SIZE");
+        }
+        if(backward_group_size == 0) {
+            throw py::value_error("backward_group_size == 0");
+        }
+        if(backward_group_size > MAX_SYNAPSE_GROUP_SIZE) {
+            throw py::value_error("backward_group_size > MAX_SYNAPSE_GROUP_SIZE");
+        }
+
+        // n_outputs is always > 0 for LUT, so we can always allocate these
+        this->base_synapse_metas_id = host_device_allocator.allocate(MAX_N_SYNAPSE_METAS * sizeof(BaseSynapseMeta), SYNAPSE_METAS_MEMORY_LABEL);
+        this->global_connections_meta_id = only_host_allocator.allocate(sizeof(GlobalConnectionsMeta), 0);
+        GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+        memset(gc_meta, 0, sizeof(GlobalConnectionsMeta));
+        this->n_synapse_metas = 0;
+        this->n_synapses = 0;
+        this->lookup_neuron_synapses_infos_id = 0;
+        this->output_neuron_synapses_infos_id = 0;
+        this->detectors_id = 0;
+
+        #ifdef ENABLE_PROFILING
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP, "lut::runtime::forward_step");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP, "lut::runtime::backward_backprop");
+        #endif
+
+        weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
+        // detector_connections_allocator will be created when first detector connection is added
+
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        this->int_rescaler = int_rescaler;
+        #endif
+    }
+
+    REAL_DT get_smallest_distinguishable_fraction()
+    {
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        return (1.0 / DENOMINATOR32) / int_rescaler;
+        #else
+        return 0.0;
+        #endif
+    }
+
+    double get_epsilon()
+    {
+        return (double) EPS;
+    }
+
+    auto get_summations_data_type() {
+        return SUMMATION_DT_STR;
+    }
+
+    uint32_t register_synapse_meta(
+        REAL_DT learning_rate,
+        REAL_DT min_synaptic_weight, REAL_DT max_synaptic_weight,
+        REAL_DT initial_noise_level, REAL_DT initial_weight
+    ) {
+        __TRACE__("lutm_register_synapse_meta\n");
+        checkOnHostDuringPrepare();
+
+        if(this->lookup_neuron_synapses_infos_id != 0) {
+            throw py::value_error("can't register new synapse metas after neurons were initialized");
+        }
+        if(detector_connections_manager != nullptr) {
+            throw py::value_error("can't register new synapse metas after detector connections were added");
+        }
+        if(learning_rate < 0.0) {
+            throw py::value_error("learning_rate < 0");
+        }
+        if(learning_rate > 1.0) {
+            throw py::value_error("learning_rate > 1");
+        }
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        REAL_DT denominator_reciproc = 1.0 / DENOMINATOR32;
+        if((learning_rate > 0.0) && ((learning_rate * int_rescaler) < denominator_reciproc)) {
+            std::ostringstream os;
+            os << "too small value for 'learning_rate' " << learning_rate << " (less than smallest distinguishable fraction " << denominator_reciproc << ")";
+            throw py::value_error(os.str());
+        }
+        #endif
+        if(min_synaptic_weight > max_synaptic_weight) {
+            throw py::value_error("min_synaptic_weight > max_synaptic_weight");
+        }
+        if(initial_weight < min_synaptic_weight) {
+            throw py::value_error("initial_weight < min_synaptic_weight");
+        }
+        if(initial_weight > max_synaptic_weight) {
+            throw py::value_error("initial_weight > max_synaptic_weight");
+        }
+        BaseSynapseMeta target_base_meta = {
+            learning_rate,
+            0, 0,
+            min_synaptic_weight, max_synaptic_weight,
+            initial_noise_level, initial_weight,
+            this->forward_group_size, this->backward_group_size
+        };
+        BaseSynapseMeta *current_base_synapse_meta = BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data);
+        uint32_t i=0;
+        for(;i < this->n_synapse_metas;i++, current_base_synapse_meta++) {
+            if(!memcmp(&target_base_meta, current_base_synapse_meta, sizeof(BaseSynapseMeta))) {
+                return i;
+            }
+        }
+        if(this->n_synapse_metas == MAX_N_SYNAPSE_METAS) {
+            throw py::value_error("too many different synapse metas");
+        }
+        this->n_synapse_metas++;
+        memcpy(current_base_synapse_meta, &target_base_meta, sizeof(BaseSynapseMeta));
+        return i;
+    }
+
+    void initialize_neurons() {
+        __TRACE__("lutm_initialize_neurons\n");
+        checkOnHostDuringPrepare();
+
+        this->lookup_neuron_synapses_infos_id = host_device_allocator.allocate(sizeof(IndexedSynapsesInfo) * this->n_lookup_neurons, NEURON_INFOS_MEMORY_LABEL);
+        this->output_neuron_synapses_infos_id = host_device_allocator.allocate(sizeof(IndexedSynapsesInfo) * this->n_outputs, NEURON_INFOS_MEMORY_LABEL);
+
+        IndexedSynapsesInfo *current_neuron_info = IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data);
+        memset(current_neuron_info, 0, sizeof(IndexedSynapsesInfo) * this->n_lookup_neurons);
+        current_neuron_info = IndexedSynapsesInfos(this->output_neuron_synapses_infos_id, host_device_allocator.data);
+        memset(current_neuron_info, 0, sizeof(IndexedSynapsesInfo) * this->n_outputs);
+
+        connections_manager = new ConnectionsManager(
+            #ifdef ENABLE_PROFILING
+            profiler,
+            #endif
+            host_device_allocator, only_host_allocator, true,
+            this->base_synapse_metas_id, this->global_connections_meta_id,
+            this->lookup_neuron_synapses_infos_id, this->n_lookup_neurons, 0,
+            this->output_neuron_synapses_infos_id, this->n_outputs, this->n_lookup_neurons,
+            this->n_synapse_metas
+        );
+    }
+
+    uint32_t calculate_max_n_inputs_per_detector() {
+        if(detector_connections_manager == nullptr) {
+            throw py::value_error("detector connections manager not initialized, add detector connections first");
+        }
+        return detector_connections_manager->count_max_input_synapses_per_neuron();
+    }
+
+    uint32_t get_number_of_inputs() {
+        __TRACE__("lutm_get_number_of_inputs\n");
+        return this->n_inputs;
+    }
+
+    uint32_t get_number_of_outputs() {
+        __TRACE__("lutm_get_number_of_outputs\n");
+        return this->n_outputs;
+    }
+
+    uint32_t get_number_of_detectors() {
+        __TRACE__("lutm_get_number_of_detectors\n");
+        return this->n_detectors;
+    }
+
+    uint32_t get_number_of_lookup_neurons() {
+        __TRACE__("lutm_get_number_of_lookup_neurons\n");
+        return this->n_lookup_neurons;
+    }
+
+    uint32_t get_number_of_anchors_per_detector() {
+        __TRACE__("lutm_get_number_of_anchors_per_detector\n");
+        return this->n_anchors_per_detector;
+    }
+
+    uint64_t get_number_of_synapses() {
+        __TRACE__("lutm_get_number_of_synapses\n");
+        return this->n_synapses;
+    }
+
+    uint64_t get_weights_dimension() {
+        __TRACE__("lutm_get_weights_dimension\n");
+        GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+        return N_WEIGHTS(gc_meta, true);
+    }
+
+    void to_device(int device) { // -1 - cpu
+        host_device_allocator.to_device(device);
+        if(connections_manager != nullptr) {
+            delete connections_manager;
+            connections_manager = new ConnectionsManager(
+                #ifdef ENABLE_PROFILING
+                profiler,
+                #endif
+                host_device_allocator, only_host_allocator, true,
+                this->base_synapse_metas_id, this->global_connections_meta_id,
+                this->lookup_neuron_synapses_infos_id, this->n_lookup_neurons, 0,
+                this->output_neuron_synapses_infos_id, this->n_outputs, this->n_lookup_neurons,
+                this->n_synapse_metas
+            );
+        }
+        // weights_allocator can be nullptr after compile, so check is needed
+        if(weights_allocator != nullptr) {
+            weights_allocator->to_device(device);
+        }
+        // detector_connections_allocator should not exist after compile, but check just in case
+        if(detector_connections_allocator != nullptr) {
+            detector_connections_allocator->to_device(device);
+        }
+        if(runtime_context != nullptr) {
+            delete runtime_context;
+            runtime_context = nullptr;
+        }
+    }
+
+    void add_detector_connections(
+        const torch::Tensor &connections_buffer,
+        uint32_t single_input_group_size,
+        int ids_shift,
+        std::optional<uint32_t> &random_seed
+    ) {
+        int current_device = host_device_allocator.device;
+        checkTensor(connections_buffer, "connections_buffer", false, current_device, sizeof(int32_t));
+        
+        // Initialize detector connections manager if not already done
+        if(detector_connections_manager == nullptr) {
+            // Estimate capacity for detector connections
+            uint64_t detector_connections_capacity = static_cast<uint64_t>(this->n_inputs) * this->n_detectors;
+            
+            detector_connections_allocator = new SimpleAllocator(
+                detector_connections_capacity * 2 * sizeof(NeuronIndex_t) + 
+                sizeof(IndexedSynapsesInfo) * (this->n_inputs + this->n_detectors) +
+                sizeof(BaseSynapseMeta)  // For fake synapse meta
+            );
+            detector_connections_allocator->to_device(current_device);
+            
+            // Allocate fake synapse meta for detector connections (required by ConnectionsManager)
+            NeuronDataId_t detector_synapse_metas_id = 
+                detector_connections_allocator->allocate(sizeof(BaseSynapseMeta), 0);
+            BaseSynapseMeta fake_synapse_meta = {
+                0.0,  // lr (not used for detector connections)
+                0,    // min_delay
+                0,    // max_delay
+                0.0,  // min_synaptic_weight
+                1.0,  // max_synaptic_weight
+                0.0,  // initial_noise_level
+                0.0,  // initial_weight
+                this->forward_group_size,
+                this->backward_group_size
+            };
+            BaseSynapseMeta *synapse_meta_ptr = BaseSynapseMetas(detector_synapse_metas_id, detector_connections_allocator->data);
+            if(current_device == -1) {
+                memcpy(synapse_meta_ptr, &fake_synapse_meta, sizeof(BaseSynapseMeta));
+            } else {
+                #ifndef NO_CUDA
+                c10::cuda::CUDAGuard guard(current_device);
+                cudaMemcpy(synapse_meta_ptr, &fake_synapse_meta, sizeof(BaseSynapseMeta), cudaMemcpyHostToDevice);
+                #endif
+            }
+            
+            // Allocate neuron infos for input and detector neurons on detector allocator
+            NeuronDataId_t input_neuron_synapses_infos_id = 
+                detector_connections_allocator->allocate(sizeof(IndexedSynapsesInfo) * this->n_inputs, 0);
+            NeuronDataId_t detector_neuron_synapses_infos_id = 
+                detector_connections_allocator->allocate(sizeof(IndexedSynapsesInfo) * this->n_detectors, 0);
+            
+            // Initialize neuron infos to zero
+            IndexedSynapsesInfo *input_infos = IndexedSynapsesInfos(input_neuron_synapses_infos_id, detector_connections_allocator->data);
+            if(current_device == -1) {
+                memset(input_infos, 0, sizeof(IndexedSynapsesInfo) * this->n_inputs);
+            } else {
+                #ifndef NO_CUDA
+                c10::cuda::CUDAGuard guard(current_device);
+                cudaMemset(input_infos, 0, sizeof(IndexedSynapsesInfo) * this->n_inputs);
+                #endif
+            }
+            IndexedSynapsesInfo *detector_infos = IndexedSynapsesInfos(detector_neuron_synapses_infos_id, detector_connections_allocator->data);
+            if(current_device == -1) {
+                memset(detector_infos, 0, sizeof(IndexedSynapsesInfo) * this->n_detectors);
+            } else {
+                #ifndef NO_CUDA
+                c10::cuda::CUDAGuard guard(current_device);
+                cudaMemset(detector_infos, 0, sizeof(IndexedSynapsesInfo) * this->n_detectors);
+                #endif
+            }
+            
+            // Allocate global connections meta for detector connections on main only_host_allocator
+            NeuronDataId_t detector_global_connections_meta_id = only_host_allocator.allocate(sizeof(GlobalConnectionsMeta), 0);
+            GlobalConnectionsMeta* detector_gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + detector_global_connections_meta_id);
+            memset(detector_gc_meta, 0, sizeof(GlobalConnectionsMeta));
+            
+            // Create detector connections manager
+            detector_connections_manager = new ConnectionsManager(
+                #ifdef ENABLE_PROFILING
+                profiler,
+                #endif
+                *detector_connections_allocator, only_host_allocator, true,
+                detector_synapse_metas_id, detector_global_connections_meta_id,
+                input_neuron_synapses_infos_id, this->n_inputs, 0,
+                detector_neuron_synapses_infos_id, this->n_detectors, this->n_inputs,
+                1  // One fake synapse meta
+            );
+        }
+        
+        std::optional<const torch::Tensor> none;
+        // Detector connections don't use weights, so we pass nullptr for weights allocator
+        detector_connections_manager->add_connections(
+            connections_buffer, none,
+            single_input_group_size,
+            ids_shift,
+            nullptr,  // No weights for detector connections
+            random_seed ? random_seed.value() : 0
+        );
+    }
+
+    void initialize_detectors(
+        const torch::Tensor &encoded_pairs_permutations,
+        uint32_t max_n_inputs_per_detector
+    ) {
+        checkTensor(encoded_pairs_permutations, "encoded_pairs_permutations", false, host_device_allocator.device, sizeof(int32_t));
+        if(detector_connections_manager == nullptr) {
+            throw py::value_error("detector_connections_manager not initialized");
+        }
+        if((encoded_pairs_permutations.numel() % (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1))) != 0) {
+            throw py::value_error("(encoded_pairs_permutations.numel() % (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1))) != 0");
+        }
+        uint32_t provided_n_detectors = encoded_pairs_permutations.numel() / (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1));
+        if(provided_n_detectors != this->n_detectors) {
+            throw py::value_error("provided_n_detectors != this->n_detectors");
+        }
+
+        // finalize detector connections manager, we need it only for backward synapses
+        detector_connections_manager->finalize(
+            0,  // random_seed not needed for detector connections
+            false, false,
+            false,
+            true
+        );
+
+        // uint64_t memsize = static_cast<uint64_t>(encoded_pairs_permutations.numel()) * sizeof(int32_t);
+        // this->detectors_id = host_device_allocator.allocate(memsize, DETECTORS_MEMORY_LABEL);
+
+        // int32_t* detectors_internal_ptr = reinterpret_cast<int32_t *>(host_device_allocator.data + this->detectors_id);
+        // memcpy(
+        //     detectors_internal_ptr,
+        //     encoded_pairs_permutations.data_ptr(),
+        //     memsize
+        // );
+
+        // TODO: Implement this
+
+        // Finalize and destroy detector connections manager and allocator
+        delete detector_connections_manager;
+        detector_connections_manager = nullptr;
+        delete detector_connections_allocator;
+        detector_connections_allocator = nullptr;
+    }
+
+    void add_lookup_connections(
+        const torch::Tensor &connections_buffer,
+        uint32_t single_input_group_size,
+        int ids_shift,
+        std::optional<uint32_t> &random_seed
+    ) {
+        checkConnectionsManagerIsInitialized();
+        std::optional<const torch::Tensor> none;
+        this->n_synapses += connections_manager->add_connections(
+            connections_buffer, none,
+            single_input_group_size,
+            ids_shift,
+            weights_allocator,
+            random_seed ? random_seed.value() : 0
+        );
+    }
+
+    void compile(
+        bool only_trainable_backwards,
+        torch::Tensor &weights,
+        std::optional<uint32_t> &random_seed
+    ) {
+        if(random_seed && random_seed.value() == 0) {
+            throw py::value_error("random_seed should be greater than 0");
+        }
+        checkConnectionsManagerIsInitialized();
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+
+        GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+        if(weights.numel() != N_WEIGHTS(gc_meta, true)) {
+            throw py::value_error("wrong weights.numel()");
+        }
+
+        connections_manager->finalize(
+            random_seed ? random_seed.value() : 0,
+            true, true,
+            only_trainable_backwards,
+            true
+        );
+
+        uint32_t max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
+            this->n_lookup_neurons,
+            0, true
+        );
+        uint32_t max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
+            this->n_lookup_neurons,
+            0, true
+        );
+        // TODO this estimation can be more precise and should be moved to connections manager
+        if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_forward_groups_per_neuron) {
+            gc_meta->max_forward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
+        }
+
+        max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
+            this->n_outputs,
+            0, false
+        );
+        max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
+            this->n_outputs,
+            0, false
+        );
+        // TODO this estimation can be more precise and should be moved to connections manager
+        if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_backward_groups_per_neuron) {
+            gc_meta->max_backward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
+        }
+
+        EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
+
+        if(host_device_allocator.device == -1) {
+            memcpy(
+                weights_data,
+                this->weights_allocator->data,
+                weights.numel() * sizeof(EXTERNAL_REAL_DT)
+            );
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(host_device_allocator.device);
+            cuMemcpyDtoD(
+                (CUdeviceptr) weights_data,
+                (CUdeviceptr) this->weights_allocator->data,
+                weights.numel() * sizeof(EXTERNAL_REAL_DT)
+            );
+            #endif
+        }
+        delete this->weights_allocator;
+        this->weights_allocator = nullptr;
+    }
+
+    void forward_step(
+        const torch::Tensor &weights,
+        uint32_t batch_size,
+        uint32_t sequence_length,
+        const torch::Tensor &input,
+        torch::Tensor &target_output,
+        torch::Tensor &target_lookup_indices,
+        torch::Tensor &target_min_anchor_deltas,
+        torch::Tensor &target_min_anchor_deltas_indices
+    ) {
+        __TRACE__("lutm_forward_step\n");
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+        checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(target_output, "target_output", true, host_device_allocator.device);
+        checkTensor(target_lookup_indices, "target_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_min_anchor_deltas, "target_min_anchor_deltas", true, host_device_allocator.device);
+        checkTensor(target_min_anchor_deltas_indices, "target_min_anchor_deltas_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(batch_size == 0) {
+            throw py::value_error("batch_size == 0");
+        }
+        if(sequence_length == 0) {
+            throw py::value_error("sequence_length == 0");
+        }
+
+        if(this->runtime_context == nullptr) {
+            GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+            this->runtime_context = new LUT_RUNTIME_CONTEXT_CLASS(
+                host_device_allocator.data,
+                host_device_allocator.device,
+                this->n_inputs,
+                this->n_outputs,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                this->n_lookup_neurons,
+                this->forward_group_size,
+                this->backward_group_size,
+                gc_meta->max_forward_groups_per_neuron,
+                gc_meta->max_backward_groups_per_neuron,
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                N_WEIGHTS(gc_meta, true),
+                int_rescaler,
+                #endif
+                #ifdef ENABLE_PROFILING
+                this->profiler,
+                #endif
+                this->base_synapse_metas_id == 0 ? nullptr : BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
+                IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data),
+                IndexedSynapsesInfos(this->output_neuron_synapses_infos_id, host_device_allocator.data),
+                reinterpret_cast<int32_t *>(host_device_allocator.data + this->detectors_id),
+                gc_meta->first_synapse_id
+            );
+        }
+
+        this->runtime_context->forward_step(
+            reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
+            batch_size,
+            sequence_length,
+            reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_output.data_ptr()),
+            reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(target_min_anchor_deltas_indices.data_ptr())
+        );
+    }
+
+    void backward_backprop(
+        const torch::Tensor &weights,
+        uint32_t batch_size,
+        uint32_t sequence_length,
+        const torch::Tensor &output_gradients,
+        const torch::Tensor &input,
+        const torch::Tensor &lookup_indices,
+        const torch::Tensor &min_anchor_deltas,
+        const torch::Tensor &min_anchor_deltas_indices,
+        torch::Tensor &target_input_gradients,
+        torch::Tensor &target_weights_gradients
+    ) {
+        if(batch_size == 0) {
+            throw py::value_error("batch_size == 0");
+        }
+        if(sequence_length == 0) {
+            throw py::value_error("sequence_length == 0");
+        }
+        if(this->runtime_context == nullptr) {
+            throw py::value_error("no active context");
+        }
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+        checkTensor(target_weights_gradients, "target_weights_gradients", true, host_device_allocator.device);
+        checkTensor(target_input_gradients, "target_input_gradients", true, host_device_allocator.device);
+        checkTensor(output_gradients, "output_gradients", true, host_device_allocator.device);
+        checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(lookup_indices, "lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(min_anchor_deltas, "min_anchor_deltas", true, host_device_allocator.device);
+        checkTensor(min_anchor_deltas_indices, "min_anchor_deltas_indices", false, host_device_allocator.device, sizeof(int32_t));
+
+        this->runtime_context->backward_backprop(
+            reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
+            batch_size,
+            sequence_length,
+            reinterpret_cast<EXTERNAL_REAL_DT *>(output_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<int32_t *>(lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(min_anchor_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(min_anchor_deltas_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
+        );
+    }
+
+    uint64_t count_synapses(
+        const torch::Tensor &neuron_indices_to_process,
+        bool forward_or_backward
+    ) {
+        checkConnectionsManagerIsInitialized();
+        return connections_manager->count_synapses(
+            neuron_indices_to_process,
+            forward_or_backward
+        );
+    }
+
+    void export_synapses(
+        const torch::Tensor &weights,
+        const torch::Tensor &neuron_indices_to_process,
+        torch::Tensor &target_internal_source_indices,
+        torch::Tensor &target_weights,
+        torch::Tensor &target_internal_target_indices,
+        bool forward_or_backward,
+        std::optional<torch::Tensor> &target_synapse_meta_indices
+    ) {
+        checkConnectionsManagerIsInitialized();
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+
+        EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
+        std::optional<torch::Tensor> none;
+        connections_manager->export_synapses(
+            neuron_indices_to_process,
+            target_internal_source_indices,
+            target_weights,
+            target_internal_target_indices,
+            forward_or_backward,
+            none,
+            target_synapse_meta_indices,
+            weights_data
+        );
+    }
+
+    auto __repr__() {
+        std::ostringstream os;
+        GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+        os << "LUTDataManager(host_device: " <<
+            host_device_allocator.allocated <<
+            ", " << host_device_allocator.used <<
+            "; host_only: " <<
+            only_host_allocator.allocated <<
+            ", " << only_host_allocator.used <<
+            "; summation type: " << SUMMATION_DT_STR <<
+            "; smallest distinguishable fraction: " << get_smallest_distinguishable_fraction() <<
+            "; n_synapses: " << n_synapses <<
+            "; n_detectors: " << n_detectors <<
+            "; n_lookup_neurons: " << n_lookup_neurons <<
+            "; first_synapse_id: " << gc_meta->first_synapse_id <<
+            "; last_synapse_id: " << gc_meta->last_synapse_id <<
+            "; n_forward_groups: " << gc_meta->n_forward_groups <<
+            "; n_backward_groups: " << gc_meta->n_backward_groups <<
+        ")";
+        return os.str();
+    }
+
+    auto get_memory_stats() {
+        std::ostringstream os;
+        for(int i=0; i < N_LUT_MEMORY_LABELS;i++) {
+            switch(i) {
+                case SYNAPSE_METAS_MEMORY_LABEL:
+                    os << "synapse metas: ";
+                    break;
+                case NEURON_INFOS_MEMORY_LABEL:
+                    os << "neuron infos: ";
+                    break;
+                case DETECTORS_MEMORY_LABEL:
+                    os << "detectors: ";
+                    break;
+                case FORWARD_SYNAPSES_MEMORY_LABEL:
+                    os << "forward main synapses: ";
+                    break;
+                case BACKWARD_SYNAPSES_MEMORY_LABEL:
+                    os << "backward synapses: ";
+                    break;
+                case DELAYS_INFO_MEMORY_LABEL:
+                    os << "delays info: ";
+                    break;
+            }
+            os << host_device_allocator.get_label_stat(i) / 1024;
+            os << " KB\n";
+        }
+        return os.str();
+    }
+
+    auto get_profiling_stats() {
+        #ifdef ENABLE_PROFILING
+            std::ostringstream os;
+            os << profiler.get_stats_as_string();
+            return os.str();
+        #else
+            return "profiler is disabled";
+        #endif
+    }
+
+    void reset_profiler() {
+        #ifdef ENABLE_PROFILING
+        profiler.reset();
+        #endif
+    }
+
+    ~LUTM_CLASS_NAME() {
+        if(connections_manager != nullptr) {
+            delete connections_manager;
+        }
+        if(runtime_context != nullptr) {
+            delete runtime_context;
+        }
+        if(detector_connections_manager != nullptr) {
+            delete detector_connections_manager;
+        }
+        if(detector_connections_allocator != nullptr) {
+            delete detector_connections_allocator;
+        }
+    }
+
+    void checkOnHostDuringPrepare()
+    {
+        if(host_device_allocator.device != -1) {
+            throw std::runtime_error("LUTDataManager must be in the host memory at this point");
+        }
+    }
+
+    void checkConnectionsManagerIsInitialized()
+    {
+        if(connections_manager == nullptr) {
+            throw py::value_error("connections_manager is not initialized, use initialize_neurons(...) method");
+        }
+    }
+
+private:
+    LUTM_CLASS_NAME(
+        uint8_t* host_device_data, NeuronDataId_t host_device_used,
+        uint8_t* only_host_data, NeuronDataId_t only_host_used,
+        uint32_t n_inputs,
+        uint32_t n_outputs,
+        uint32_t n_detectors,
+        uint32_t n_anchors_per_detector,
+        uint32_t forward_group_size,
+        uint32_t backward_group_size,
+        NeuronDataId_t base_synapse_metas_id,
+        uint32_t n_synapse_metas,
+        uint64_t n_synapses,
+        NeuronDataId_t lookup_neuron_synapses_infos_id,
+        NeuronDataId_t output_neuron_synapses_infos_id,
+        NeuronDataId_t detectors_id,
+        NeuronDataId_t global_connections_meta_id
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        , double int_rescaler
+        #endif
+    ) :
+        #ifdef ENABLE_PROFILING
+        profiler(N_LUT_PROFILER_OPS),
+        #endif
+        host_device_allocator(host_device_data, host_device_used),
+        only_host_allocator(only_host_data, only_host_used),
+        runtime_context(nullptr),
+        weights_allocator(nullptr),
+        detector_connections_allocator(nullptr),
+        detector_connections_manager(nullptr),
+        n_inputs(n_inputs),
+        n_outputs(n_outputs),
+        n_detectors(n_detectors),
+        n_anchors_per_detector(n_anchors_per_detector),
+        n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector)),
+        forward_group_size(forward_group_size),
+        backward_group_size(backward_group_size),
+        base_synapse_metas_id(base_synapse_metas_id),
+        n_synapse_metas(n_synapse_metas),
+        n_synapses(n_synapses),
+        lookup_neuron_synapses_infos_id(lookup_neuron_synapses_infos_id),
+        output_neuron_synapses_infos_id(output_neuron_synapses_infos_id),
+        detectors_id(detectors_id),
+        global_connections_meta_id(global_connections_meta_id)
+    {
+        connections_manager = new ConnectionsManager(
+            #ifdef ENABLE_PROFILING
+            profiler,
+            #endif
+            host_device_allocator, only_host_allocator, true,
+            base_synapse_metas_id, global_connections_meta_id,
+            lookup_neuron_synapses_infos_id, n_lookup_neurons, 0,
+            output_neuron_synapses_infos_id, n_outputs, n_lookup_neurons,
+            n_synapse_metas
+        );
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        this->int_rescaler = int_rescaler;
+        #endif
+    }
+
+    #ifdef ENABLE_PROFILING
+    SimpleProfiler profiler;
+    #endif
+    SimpleAllocator host_device_allocator;
+    SimpleAllocator only_host_allocator;
+    ConnectionsManager* connections_manager;
+    LUT_RUNTIME_CONTEXT_CLASS *runtime_context;
+    SimpleAllocator* weights_allocator;
+    SimpleAllocator* detector_connections_allocator;
+    ConnectionsManager* detector_connections_manager;
+
+    uint32_t n_inputs;
+    uint32_t n_outputs;
+    uint32_t n_detectors;
+    uint32_t n_anchors_per_detector;
+    uint32_t n_lookup_neurons;
+    uint32_t forward_group_size;
+    uint32_t backward_group_size;
+    NeuronDataId_t base_synapse_metas_id;
+    uint32_t n_synapse_metas;
+    uint64_t n_synapses;
+    NeuronDataId_t lookup_neuron_synapses_infos_id;
+    NeuronDataId_t output_neuron_synapses_infos_id;
+    NeuronDataId_t detectors_id;
+    NeuronDataId_t global_connections_meta_id;
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    double int_rescaler;
+    #endif
+};
+
+py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
+    if(ldm.host_device_allocator.device != -1) {
+        throw std::runtime_error("net must be on CPU before serialization");
+    }
+    return py::make_tuple(
+        py::reinterpret_steal<py::object>(
+            PyBytes_FromStringAndSize((char *) ldm.host_device_allocator.data, ldm.host_device_allocator.used)
+        ),
+        py::reinterpret_steal<py::object>(
+            PyBytes_FromStringAndSize((char *) ldm.only_host_allocator.data, ldm.only_host_allocator.used)
+        ),
+        ldm.n_inputs,
+        ldm.n_outputs,
+        ldm.n_detectors,
+        ldm.n_anchors_per_detector,
+        ldm.forward_group_size,
+        ldm.backward_group_size,
+        ldm.base_synapse_metas_id,
+        ldm.n_synapse_metas,
+        ldm.n_synapses,
+        ldm.lookup_neuron_synapses_infos_id,
+        ldm.output_neuron_synapses_infos_id,
+        ldm.detectors_id,
+        ldm.global_connections_meta_id
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        , ldm.int_rescaler
+        #endif
+    );
+}
+
+std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
+    char *buf;
+    Py_ssize_t host_device_used;
+    PyBytes_AsStringAndSize(t[0].ptr(), &buf, &host_device_used);
+    uint8_t *host_device_data = (uint8_t *) PyMem_Malloc(host_device_used);
+    memcpy(host_device_data, buf, host_device_used);
+
+    Py_ssize_t only_host_used;
+    PyBytes_AsStringAndSize(t[1].ptr(), &buf, &only_host_used);
+    uint8_t *only_host_data = (uint8_t *) PyMem_Malloc(only_host_used);
+    memcpy(only_host_data, buf, only_host_used);
+
+    return std::unique_ptr<LUTM_CLASS_NAME>(
+        new LUTM_CLASS_NAME(
+            host_device_data, (NeuronDataId_t) host_device_used,
+            only_host_data, (NeuronDataId_t) only_host_used,
+            t[2].cast<uint32_t>(),         // n_inputs
+            t[3].cast<uint32_t>(),         // n_outputs
+            t[4].cast<uint32_t>(),         // n_detectors
+            t[5].cast<uint32_t>(),         // n_anchors_per_detector
+            t[6].cast<uint32_t>(),         // forward_group_size
+            t[7].cast<uint32_t>(),         // backward_group_size
+            t[8].cast<NeuronDataId_t>(),   // base_synapse_metas_id
+            t[9].cast<uint32_t>(),         // n_synapse_metas
+            t[10].cast<uint64_t>(),        // n_synapses
+            t[11].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
+            t[12].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
+            t[13].cast<NeuronDataId_t>(), // detectors_id
+            t[14].cast<NeuronDataId_t>()   // global_connections_meta_id
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , t[15].cast<double>()         // int_rescaler
+            #endif
+        )
+    );
+}
+
+
+void PFX(PB_LUTDataManager)(py::module& m) {
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    py::class_<LUTDataManagerI>(m, "LUTDataManagerI")
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, double>())
+    #else
+    py::class_<LUTDataManagerF>(m, "LUTDataManagerF")
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t>())
+    #endif
+        .def("get_smallest_distinguishable_fraction", &LUTM_CLASS_NAME::get_smallest_distinguishable_fraction,
+            "Returns smallest fraction that can exist inside data manager in integers mode. Returns 0.0 in floats mode.")
+        .def("get_epsilon", &LUTM_CLASS_NAME::get_epsilon,
+            "Returns super small real number used inside the engine")
+        .def("get_summations_data_type", &LUTM_CLASS_NAME::get_summations_data_type,
+            "Returns string 'float32' in floats mode and string 'int32' in integers mode")
+        .def("register_synapse_meta", &LUTM_CLASS_NAME::register_synapse_meta,
+            "Register synapse meta",
+            py::arg("learning_rate"),
+            py::arg("min_synaptic_weight"),
+            py::arg("max_synaptic_weight"),
+            py::arg("initial_noise_level"),
+            py::arg("initial_weight"))
+        .def("initialize_neurons", &LUTM_CLASS_NAME::initialize_neurons,
+            "Initialize neurons")
+        .def("initialize_detectors", &LUTM_CLASS_NAME::initialize_detectors,
+            "Initialize detectors",
+            py::arg("encoded_pairs_permutations"),
+            py::arg("max_n_inputs_per_detector"))
+        .def("calculate_max_n_inputs_per_detector", &LUTM_CLASS_NAME::calculate_max_n_inputs_per_detector,
+            "Calculate max number of inputs per detector")
+        .def("get_number_of_inputs", &LUTM_CLASS_NAME::get_number_of_inputs,
+            "Get number of input neurons")
+        .def("get_number_of_outputs", &LUTM_CLASS_NAME::get_number_of_outputs,
+            "Get number of output neurons")
+        .def("get_number_of_detectors", &LUTM_CLASS_NAME::get_number_of_detectors,
+            "Get number of detectors")
+        .def("get_number_of_lookup_neurons", &LUTM_CLASS_NAME::get_number_of_lookup_neurons,
+            "Get number of lookup neurons")
+        .def("get_number_of_anchors_per_detector", &LUTM_CLASS_NAME::get_number_of_anchors_per_detector,
+            "Get number of anchors per detector")
+        .def("get_number_of_synapses", &LUTM_CLASS_NAME::get_number_of_synapses,
+            "Get number of synapses")
+        .def("get_weights_dimension", &LUTM_CLASS_NAME::get_weights_dimension,
+            "Get the length of the weights array (it's greater than number of synapses because of small holes)")
+        .def("to_device", &LUTM_CLASS_NAME::to_device,
+            "Move to device",
+            py::arg("device"))
+        .def("add_detector_connections", &LUTM_CLASS_NAME::add_detector_connections,
+            "Add detector connections",
+            py::arg("connections_buffer"),
+            py::arg("single_input_group_size"),
+            py::arg("ids_shift"),
+            py::arg("random_seed") = py::none())
+        .def("add_lookup_connections", &LUTM_CLASS_NAME::add_lookup_connections,
+            "Add lookup synapses",
+            py::arg("connections_buffer"),
+            py::arg("single_input_group_size"),
+            py::arg("ids_shift"),
+            py::arg("random_seed") = py::none())
+        .def("compile", &LUTM_CLASS_NAME::compile,
+            "compile the network",
+            py::arg("only_trainable_backwards"),
+            py::arg("weights"),
+            py::arg("random_seed") = py::none())
+        .def("forward_step", &LUTM_CLASS_NAME::forward_step,
+            "Forward step",
+            py::arg("weights"),
+            py::arg("batch_size"),
+            py::arg("sequence_length"),
+            py::arg("input"),
+            py::arg("target_output"),
+            py::arg("target_lookup_indices"),
+            py::arg("target_min_anchor_deltas"),
+            py::arg("target_min_anchor_deltas_indices"))
+        .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
+            "Gradients back propagation",
+            py::arg("weights"),
+            py::arg("batch_size"),
+            py::arg("sequence_length"),
+            py::arg("output_gradients"),
+            py::arg("input"),
+            py::arg("lookup_indices"),
+            py::arg("min_anchor_deltas"),
+            py::arg("min_anchor_deltas_indices"),
+            py::arg("target_input_gradients"),
+            py::arg("target_weights_gradients"))
+        .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
+            "Count forward or backward synapses for the set of neurons",
+            py::arg("neuron_indices_to_process"),
+            py::arg("forward_or_backward"))
+        .def("export_synapses", &LUTM_CLASS_NAME::export_synapses,
+            "Export all synapses for a set of neurons",
+            py::arg("weights"),
+            py::arg("neuron_indices_to_process"),
+            py::arg("target_internal_source_indices"),
+            py::arg("target_weights"),
+            py::arg("target_internal_target_indices"),
+            py::arg("forward_or_backward"),
+            py::arg("target_synapse_meta_indices") = py::none())
+        .def("__repr__", &LUTM_CLASS_NAME::__repr__)
+        .def("get_memory_stats", &LUTM_CLASS_NAME::get_memory_stats)
+        .def("get_profiling_stats", &LUTM_CLASS_NAME::get_profiling_stats)
+        .def("reset_profiler", &LUTM_CLASS_NAME::reset_profiler)
+        .def(py::pickle(
+            &PFX(pickle_lut_neuron_manager),
+            &PFX(unpickle_lut_neuron_manager)
+        ));
+}
+

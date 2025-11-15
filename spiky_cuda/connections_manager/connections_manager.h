@@ -318,6 +318,7 @@ public:
     );
 
     uint32_t count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices);
+    uint32_t count_max_input_synapses_per_neuron();
 
     void export_input_synaptic_weights(
         torch::Tensor &target_weights,

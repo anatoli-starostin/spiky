@@ -15,14 +15,14 @@
 
 #define FILE_NAME "loss.csv"    // saves loss values during training
 
-#define CONTEXT_SIZE            32
+#define CONTEXT_SIZE            8
 #define VOCAB_SIZE              256
-#define EMBEDDING_DIM           32
+#define EMBEDDING_DIM           64
 #define POSITIONAL_DIM          4
 #define NUM_LAYERS              6
 #define NUM_HEADS               4
 
-#define N_T                     16
+#define N_T                     64
 #define N_C                     6
 
 
@@ -34,7 +34,7 @@
 
 #define LEARNING_RATE  (MIN( 1 /sqrt(1+t), t/(4000)/sqrt(4000) )) // Adam learning rate scheduler
 float learning_rate;
-#define TESTING_LENGTH 10000
+#define TESTING_LENGTH 5000
 
 
 // ----------------------------------------------------------------------------
@@ -60,7 +60,7 @@ typedef struct {
 typedef struct {
     LUT V;
     LUTcache V_cache[CONTEXT_SIZE];
-    float V_vector[CONTEXT_SIZE][CONTEXT_SIZE][EMBEDDING_DIM];
+    // float V_vector[CONTEXT_SIZE][CONTEXT_SIZE][EMBEDDING_DIM];
 
     float Positional_encoding[CONTEXT_SIZE][N_T][POSITIONAL_DIM];  // position -> embedding
     LUTcache PE_cache[CONTEXT_SIZE];
@@ -321,10 +321,10 @@ void attention_forward(AttentionHead* head, float x[CONTEXT_SIZE][EMBEDDING_DIM]
 
     for (int pos = 1; pos < CONTEXT_SIZE; pos++) {
         for (int pos1 = 0; pos1 < pos; pos1++) {
-            concatenated_LUT_forward(&head->V, &head->V_cache[pos], &head->V_cache[pos1], &head->PE_cache[pos-pos1], head->V_vector[pos][pos1]);
-            for (int k = 0; k < EMBEDDING_DIM; k++) {
-                y[pos][k] += head->V_vector[pos][pos1][k];
-            }
+            concatenated_LUT_forward(&head->V, &head->V_cache[pos], &head->V_cache[pos1], &head->PE_cache[pos-pos1], y[pos]);
+            // for (int k = 0; k < EMBEDDING_DIM; k++) {
+            //     y[pos][k] += head->V_vector[pos][pos1][k];
+            // }
         }
     }
 }
@@ -353,10 +353,10 @@ void model_forward(Model* m) {
 
     for (int l = 0; l < NUM_LAYERS; l++) {
 
-        // AttentionHead from all z to all z
-        for (int h = 0; h < NUM_HEADS; h++) {
-            memset(m->head[l][h].V_vector, 0, CONTEXT_SIZE*CONTEXT_SIZE*EMBEDDING_DIM*sizeof(float));
-        }
+        // // AttentionHead from all z to all z
+        // for (int h = 0; h < NUM_HEADS; h++) {
+        //     memset(m->head[l][h].V_vector, 0, CONTEXT_SIZE*CONTEXT_SIZE*EMBEDDING_DIM*sizeof(float));
+        // }
 
         float x[CONTEXT_SIZE][EMBEDDING_DIM];
         memcpy(x, m->z, CONTEXT_SIZE*EMBEDDING_DIM*sizeof(float)); // each head will be looking at the same input
@@ -543,9 +543,11 @@ void model_prompt_response(Model* m, unsigned char* prompt, int prompt_length) {
 // Main function
 // =================================================================================
 int main(int argc, char *argv[]) {
+    (void)argc;  // Suppress unused parameter warning
+    (void)argv;  // Suppress unused parameter warning
 
     TrainingData training;
-    load_training_data(&training, "train_v2_drcat_02.csv");
+    load_training_data(&training, "tinyshakespeare.txt");
     FILE *file_loss = fopen(FILE_NAME, "w"); fclose(file_loss);
 
     Model m;
@@ -563,6 +565,7 @@ int main(int argc, char *argv[]) {
             float loss_average = 0;
 
             for (int i = 0; i < TESTING_LENGTH; i++) {
+                printf("testing_input_data[%d] = %d\n", i, training.testing_input_data[i]);
                 load_snippet(&m, &training, training.testing_input_data[i]);
                 model_forward(&m);
                 softmax(m.output[CONTEXT_SIZE-1], VOCAB_SIZE, 1.0f);

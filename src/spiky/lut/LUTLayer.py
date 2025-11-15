@@ -99,7 +99,7 @@ class LUTLayer(nn.Module):
 
         noise = torch.rand(
             self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
-            device=device
+            device=self.device
         )
         encoded_pairs_permutations = noise.argsort(dim=1)
 
@@ -126,7 +126,7 @@ class LUTLayer(nn.Module):
     def n_lookup_neurons(self):
         return self._n_lookup_neurons
 
-    def n_output_neurons(self):
+    def n_outputs(self):
         return self._n_outputs
 
     def n_detectors(self):
@@ -138,11 +138,14 @@ class LUTLayer(nn.Module):
     def n_synapses(self):
         return self._lut_dm.get_number_of_synapses()
 
+    def input_shape(self):
+        return (self._n_outputs,)
+
     def output_shape(self):
         return (self._n_outputs,)
 
     def __repr__(self):
-        return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_lookup_neurons()} lookup neurons, {self.n_output_neurons()} outputs, {self.n_synapses()} synapses, {self._lut_dm})'
+        return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_lookup_neurons()} lookup neurons, {self.n_outputs()} outputs, {self.n_synapses()} synapses, {self._lut_dm})'
 
     def add_lookup_connections(
         self, chunk_of_connections: ChunkOfConnections,
@@ -188,54 +191,70 @@ class LUTLayer(nn.Module):
     def forward_step(self, x):
         assert x.device == self.device
         batch_size = x.shape[0]
-        x = x.reshape(batch_size, self._n_inputs).flatten().contiguous()
+        sequence_length = x.shape[1]
+        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
-        min_anchor_indices = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32, device=self.device)
-        min_anchor_deltas = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32, device=self.device)
+        x = x.flatten().contiguous()
 
-        self._lut_dm.forward(
-            self._weights.detach(),
-            batch_size, x,
+        output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
+
+        lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
+        min_anchor_deltas = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.float32, device=self.device)
+        min_anchor_deltas_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
+
+        self._lut_dm.forward_step(
+            self._weights,
+            batch_size, sequence_length, x,
             output,
-            min_anchor_indices,
-            min_anchor_deltas
+            lookup_indices,
+            min_anchor_deltas,
+            min_anchor_deltas_indices,
         )
 
         return (
-            output.reshape((batch_size,) + self.output_shape()),
-            min_anchor_indices.reshape(batch_size, self._n_detectors),
-            min_anchor_deltas.reshape(batch_size, self._n_detectors),
+            output.reshape((batch_size, sequence_length) + self.output_shape()),
+            lookup_indices.reshape(batch_size, sequence_length, self._n_detectors),
+            min_anchor_deltas.reshape(batch_size, sequence_length, self._n_detectors),
+            min_anchor_deltas_indices.reshape(batch_size, sequence_length, self._n_detectors),
         )
 
     def backward_step(
         self, x, grad_output,
-        min_anchor_indices, min_anchor_deltas
+        lookup_indices, min_anchor_deltas, min_anchor_deltas_indices
     ):
         assert x.device == self.device
         source_x_shape = x.shape
         batch_size = source_x_shape[0]
+        sequence_length = x.shape[1]
+        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+
         x = x.flatten().contiguous()
-        assert min_anchor_indices.device == self.device
-        assert min_anchor_indices.shape == (batch_size, self._n_detectors)
-        min_anchor_indices = min_anchor_indices.flatten().contiguous()
+        assert lookup_indices.device == self.device
+        assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        lookup_indices = lookup_indices.flatten().contiguous()
         assert min_anchor_deltas.device == self.device
-        assert min_anchor_deltas.shape == (batch_size, self._n_detectors)
+        assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
         min_anchor_deltas = min_anchor_deltas.flatten().contiguous()
+        assert min_anchor_deltas_indices.device == self.device
+        assert min_anchor_deltas_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        min_anchor_deltas_indices = min_anchor_deltas_indices.flatten().contiguous()
 
         x_grad = torch.zeros_like(x)
         self._last_w_grad = torch.zeros_like(self._weights)
 
         assert grad_output.device == self.device
-        assert grad_output.shape == (batch_size,) + self.output_shape()
+        assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
 
         grad_output = grad_output.flatten().contiguous()
         self._lut_dm.backward_backprop(
-            self._weights.detach(),
-            batch_size,
+            self._weights,
+            batch_size, sequence_length,
             grad_output,
-            x, min_anchor_indices,
+            x, lookup_indices,
             min_anchor_deltas,
+            min_anchor_deltas_indices,
             x_grad, self._last_w_grad
         )
 
@@ -243,7 +262,7 @@ class LUTLayer(nn.Module):
             m = self._last_w_grad.abs().max()
             if m < 1e-16:
                 m = 1e-16
-            self._last_w_grad *= (1.0 - bh_ratio) / m
+            self._last_w_grad /= m
 
         return x_grad.reshape(source_x_shape), self._last_w_grad
 
@@ -274,21 +293,22 @@ class LUTLayer(nn.Module):
     class LUTForwardFN(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *args, **kwargs):
-            x, w, andn_layer = args
+            x, _, lut_layer = args
             ctx.lut_layer = lut_layer
-            output, min_anchor_indices, min_anchor_deltas = andn_layer.forward_step(x)
-            ctx.save_for_backward(x, min_anchor_indices, min_anchor_deltas)
+            output, lookup_indices, min_anchor_deltas, min_anchor_deltas_indices = lut_layer.forward_step(x)
+            ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_deltas_indices)
             return output
 
         @staticmethod
         def backward(ctx, *grad_outputs):
             (grad_output,) = grad_outputs
-            (x, min_anchor_indices, min_anchor_deltas) = ctx.saved_tensors
+            (x, lookup_indices, min_anchor_deltas, min_anchor_deltas_indices) = ctx.saved_tensors
 
-            x_grad, w_grad = ctx.andn_layer.backward_step(
+            x_grad, w_grad = ctx.lut_layer.backward_step(
                 x, grad_output,
-                min_anchor_indices,
-                min_anchor_deltas
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_deltas_indices,
             )
             return x_grad, w_grad, None
 
@@ -375,7 +395,7 @@ class Conv2DLUTLayer(LUTLayer):
             synapse_metas=[synapse_meta],
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
-            _initial_synapse_capacity=c_helper.n_connections(),
+            _initial_synapse_capacity=c_helper_2.n_connections(),
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size
         )
@@ -410,8 +430,26 @@ class Conv2DLUTLayer(LUTLayer):
         )
 
         self.compile_lut()
+        self._input_shape = input_shape
         self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
         self._lut_receptive_field_shape = lut_receptive_field_shape
+
+    def forward(self, x):
+        if x.shape == (x.shape[0],) + self._input_shape:
+            x = x.unsqueeze(1)
+        elif not (len(x.shape) == len(self._input_shape) + 2 and x.shape[2:] == self._input_shape):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self._input_shape)} or {(x.shape[0], *self._input_shape)}"
+                f"where input_shape={self._input_shape}"
+            )
+
+        result = super().forward(x)
+        if x.shape == (x.shape[0],) + self._input_shape:
+            result = result.squeeze(1)
+        return result
+
+    def input_shape(self):
+        return self._input_shape
 
     def output_shape(self):
         return self._output_shape
