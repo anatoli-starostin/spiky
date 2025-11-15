@@ -12,6 +12,7 @@ public:
     LUTM_CLASS_NAME(
         uint32_t n_inputs, uint32_t n_outputs,
         uint32_t n_detectors, uint32_t n_anchors_per_detector,
+        uint32_t sequence_length,
         uint64_t initial_synapse_capacity,
         uint32_t forward_group_size, uint32_t backward_group_size
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -30,7 +31,8 @@ public:
         n_outputs(n_outputs),
         n_detectors(n_detectors),
         n_anchors_per_detector(n_anchors_per_detector),
-        n_lookup_neurons(n_detectors * (1 << n_anchors_per_detector)),
+        sequence_length(sequence_length),
+        n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector * ((sequence_length > 1) ? 2 : 1)))),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size)
     {
@@ -46,6 +48,9 @@ public:
         }
         if(n_anchors_per_detector == 0) {
             throw py::value_error("n_anchors_per_detector == 0");
+        }
+        if(sequence_length == 0) {
+            throw py::value_error("sequence_length == 0");
         }
         if(forward_group_size == 0) {
             throw py::value_error("forward_group_size == 0");
@@ -738,6 +743,7 @@ private:
         uint32_t n_outputs,
         uint32_t n_detectors,
         uint32_t n_anchors_per_detector,
+        uint32_t sequence_length,
         uint32_t forward_group_size,
         uint32_t backward_group_size,
         NeuronDataId_t base_synapse_metas_id,
@@ -764,7 +770,8 @@ private:
         n_outputs(n_outputs),
         n_detectors(n_detectors),
         n_anchors_per_detector(n_anchors_per_detector),
-        n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector)),
+        sequence_length(sequence_length),
+        n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector) * sequence_length),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size),
         base_synapse_metas_id(base_synapse_metas_id),
@@ -805,6 +812,7 @@ private:
     uint32_t n_outputs;
     uint32_t n_detectors;
     uint32_t n_anchors_per_detector;
+    uint32_t sequence_length;
     uint32_t n_lookup_neurons;
     uint32_t forward_group_size;
     uint32_t backward_group_size;
@@ -835,6 +843,7 @@ py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
         ldm.n_outputs,
         ldm.n_detectors,
         ldm.n_anchors_per_detector,
+        ldm.sequence_length,
         ldm.forward_group_size,
         ldm.backward_group_size,
         ldm.base_synapse_metas_id,
@@ -870,17 +879,18 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
             t[3].cast<uint32_t>(),         // n_outputs
             t[4].cast<uint32_t>(),         // n_detectors
             t[5].cast<uint32_t>(),         // n_anchors_per_detector
-            t[6].cast<uint32_t>(),         // forward_group_size
-            t[7].cast<uint32_t>(),         // backward_group_size
-            t[8].cast<NeuronDataId_t>(),   // base_synapse_metas_id
-            t[9].cast<uint32_t>(),         // n_synapse_metas
-            t[10].cast<uint64_t>(),        // n_synapses
-            t[11].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
-            t[12].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
-            t[13].cast<NeuronDataId_t>(), // detectors_id
-            t[14].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[6].cast<uint32_t>(),         // sequence_length
+            t[7].cast<uint32_t>(),         // forward_group_size
+            t[8].cast<uint32_t>(),         // backward_group_size
+            t[9].cast<NeuronDataId_t>(),   // base_synapse_metas_id
+            t[10].cast<uint32_t>(),         // n_synapse_metas
+            t[11].cast<uint64_t>(),        // n_synapses
+            t[12].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
+            t[13].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
+            t[14].cast<NeuronDataId_t>(), // detectors_id
+            t[15].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[15].cast<double>()         // int_rescaler
+            , t[16].cast<double>()         // int_rescaler
             #endif
         )
     );
@@ -890,10 +900,10 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
 void PFX(PB_LUTDataManager)(py::module& m) {
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     py::class_<LUTDataManagerI>(m, "LUTDataManagerI")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, double>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, double>())
     #else
     py::class_<LUTDataManagerF>(m, "LUTDataManagerF")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t>())
     #endif
         .def("get_smallest_distinguishable_fraction", &LUTM_CLASS_NAME::get_smallest_distinguishable_fraction,
             "Returns smallest fraction that can exist inside data manager in integers mode. Returns 0.0 in floats mode.")

@@ -26,6 +26,7 @@ class LUTLayer(nn.Module):
     def __init__(
         self, n_inputs, n_outputs,
         n_detectors, n_anchors_per_detector,
+        sequence_length,
         synapse_metas: List[SynapseMeta],
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
@@ -36,13 +37,14 @@ class LUTLayer(nn.Module):
         super().__init__()
 
         assert len(synapse_metas) > 0
+        assert sequence_length > 0
         self.device = torch.device("cpu")
         self._n_inputs = n_inputs
         self._n_outputs = n_outputs
 
         self._n_detectors = n_detectors
         self._n_anchors_per_detector = n_anchors_per_detector
-        self._n_lookup_neurons = n_detectors * (2 ** n_anchors_per_detector)
+        self._sequence_length = sequence_length
 
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = self._n_lookup_neurons * n_outputs
@@ -50,6 +52,7 @@ class LUTLayer(nn.Module):
         if summation_dtype == torch.float32:
             self._lut_dm = LUTDataManagerF(
                 n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
+                sequence_length,
                 _initial_synapse_capacity,
                 _forward_group_size,
                 _backward_group_size
@@ -57,11 +60,14 @@ class LUTLayer(nn.Module):
         else:
             self._lut_dm = LUTDataManagerI(
                 n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
+                sequence_length,
                 _initial_synapse_capacity,
                 _forward_group_size,
                 _backward_group_size,
                 _int_rescaler
             )
+
+        self._n_lookup_neurons = self._lut_dm.get_number_of_lookup_neurons()
 
         for i, sm in enumerate(synapse_metas):
             m_id = self._lut_dm.register_synapse_meta(
@@ -135,6 +141,9 @@ class LUTLayer(nn.Module):
     def n_anchors_per_detector(self):
         return self._n_anchors_per_detector
 
+    def sequence_length(self):
+        return self._sequence_length
+
     def n_synapses(self):
         return self._lut_dm.get_number_of_synapses()
 
@@ -192,6 +201,7 @@ class LUTLayer(nn.Module):
         assert x.device == self.device
         batch_size = x.shape[0]
         sequence_length = x.shape[1]
+        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
         expected_shape = (batch_size, sequence_length) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
@@ -227,6 +237,7 @@ class LUTLayer(nn.Module):
         source_x_shape = x.shape
         batch_size = source_x_shape[0]
         sequence_length = x.shape[1]
+        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
         expected_shape = (batch_size, sequence_length) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
@@ -343,6 +354,7 @@ class Conv2DLUTLayer(LUTLayer):
         n_anchors_per_detector,
         detectors_shape,
         output_kernel_shape,
+        sequence_length,
         receptive_field_shape=None,
         receptive_field_stride_shape=None,
         lut_receptive_field_shape=None,
@@ -392,6 +404,7 @@ class Conv2DLUTLayer(LUTLayer):
             n_outputs=n_outputs,
             n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector,
+            sequence_length=sequence_length,
             synapse_metas=[synapse_meta],
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
