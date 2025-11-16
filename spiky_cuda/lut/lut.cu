@@ -84,6 +84,9 @@ public:
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP, "lut::runtime::forward_step");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP, "lut::runtime::backward_backprop");
+        profiler.register_operation_type(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::fire_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP, "lut::runtime::fill_outputs");
+        profiler.register_operation_type(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP, "lut::runtime::convert_outputs");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
@@ -564,12 +567,11 @@ public:
     void forward_step(
         const torch::Tensor &weights,
         uint32_t batch_size,
-        uint32_t sequence_length,
         const torch::Tensor &input,
         torch::Tensor &target_output,
         torch::Tensor &target_lookup_indices,
         torch::Tensor &target_min_anchor_deltas,
-        torch::Tensor &target_min_anchor_deltas_indices
+        torch::Tensor &target_alternative_lookup_indices
     ) {
         __TRACE__("lutm_forward_step\n");
         checkTensor(weights, "weights", true, host_device_allocator.device);
@@ -577,12 +579,9 @@ public:
         checkTensor(target_output, "target_output", true, host_device_allocator.device);
         checkTensor(target_lookup_indices, "target_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(target_min_anchor_deltas, "target_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(target_min_anchor_deltas_indices, "target_min_anchor_deltas_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_alternative_lookup_indices, "target_alternative_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
-        }
-        if(sequence_length == 0) {
-            throw py::value_error("sequence_length == 0");
         }
 
         if(this->runtime_context == nullptr) {
@@ -595,6 +594,7 @@ public:
                 this->n_detectors,
                 this->n_anchors_per_detector,
                 this->n_lookup_neurons,
+                this->sequence_length,
                 this->forward_group_size,
                 this->backward_group_size,
                 gc_meta->max_forward_groups_per_neuron,
@@ -617,32 +617,27 @@ public:
         this->runtime_context->forward_step(
             reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
             batch_size,
-            sequence_length,
             reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_output.data_ptr()),
             reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(target_min_anchor_deltas_indices.data_ptr())
+            reinterpret_cast<int32_t *>(target_alternative_lookup_indices.data_ptr())
         );
     }
 
     void backward_backprop(
         const torch::Tensor &weights,
         uint32_t batch_size,
-        uint32_t sequence_length,
         const torch::Tensor &output_gradients,
         const torch::Tensor &input,
         const torch::Tensor &lookup_indices,
         const torch::Tensor &min_anchor_deltas,
-        const torch::Tensor &min_anchor_deltas_indices,
+        const torch::Tensor &alternative_lookup_indices,
         torch::Tensor &target_input_gradients,
         torch::Tensor &target_weights_gradients
     ) {
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
-        }
-        if(sequence_length == 0) {
-            throw py::value_error("sequence_length == 0");
         }
         if(this->runtime_context == nullptr) {
             throw py::value_error("no active context");
@@ -654,17 +649,16 @@ public:
         checkTensor(input, "input", true, host_device_allocator.device);
         checkTensor(lookup_indices, "lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(min_anchor_deltas, "min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(min_anchor_deltas_indices, "min_anchor_deltas_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(alternative_lookup_indices, "alternative_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
 
         this->runtime_context->backward_backprop(
             reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
             batch_size,
-            sequence_length,
             reinterpret_cast<EXTERNAL_REAL_DT *>(output_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
             reinterpret_cast<int32_t *>(lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(min_anchor_deltas_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(alternative_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
         );
@@ -1066,22 +1060,20 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             "Forward step",
             py::arg("weights"),
             py::arg("batch_size"),
-            py::arg("sequence_length"),
             py::arg("input"),
             py::arg("target_output"),
             py::arg("target_lookup_indices"),
             py::arg("target_min_anchor_deltas"),
-            py::arg("target_min_anchor_deltas_indices"))
+            py::arg("target_alternative_lookup_indices"))
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("weights"),
             py::arg("batch_size"),
-            py::arg("sequence_length"),
             py::arg("output_gradients"),
             py::arg("input"),
             py::arg("lookup_indices"),
             py::arg("min_anchor_deltas"),
-            py::arg("min_anchor_deltas_indices"),
+            py::arg("alternative_lookup_indices"),
             py::arg("target_input_gradients"),
             py::arg("target_weights_gradients"))
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,

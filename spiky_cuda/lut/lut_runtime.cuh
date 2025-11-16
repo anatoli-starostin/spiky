@@ -40,6 +40,8 @@ private:
     double int_rescaler;
     #endif
 
+    SUMMATION32_DT *before_detectors_gradients;
+
     NeuronDataId_t first_synapse_id;
 public:
     // base constructor
@@ -51,6 +53,7 @@ public:
         uint32_t n_detectors,
         uint32_t n_anchors_per_detector,
         uint32_t n_lookup_neurons,
+        uint32_t sequence_length,
         uint32_t forward_group_size,
         uint32_t backward_group_size,
         uint32_t max_forward_groups_per_neuron,
@@ -86,25 +89,23 @@ public:
     void forward_step(
         EXTERNAL_REAL_DT *weights,
         uint32_t batch_size,
-        uint32_t sequence_length,
         EXTERNAL_REAL_DT *input,
         EXTERNAL_REAL_DT *target_output,
         int32_t *target_lookup_indices,
         EXTERNAL_REAL_DT *target_min_anchor_deltas,
-        int32_t *target_min_anchor_deltas_indices
+        int32_t *target_min_anchor_delta_indices
     );
 
     void backward_backprop(
         EXTERNAL_REAL_DT *weights,
         uint32_t batch_size,
-        uint32_t sequence_length,
         // external gradients
         EXTERNAL_REAL_DT *output_gradients,
         // data from forward pass
         EXTERNAL_REAL_DT *input,
         int32_t *lookup_indices,
         EXTERNAL_REAL_DT *min_anchor_deltas,
-        int32_t *min_anchor_deltas_indices,
+        int32_t *min_anchor_delta_indices,
         // gradients that we need to calculate
         EXTERNAL_REAL_DT *target_input_gradients,
         EXTERNAL_REAL_DT *target_weights_gradients
