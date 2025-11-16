@@ -23,6 +23,10 @@ class SynapseMeta:
 
 
 class LUTLayer(nn.Module):
+    @staticmethod
+    def n_lut_channels(n_anchors_per_detector, sequence_length):
+        return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
+
     def __init__(
         self, n_inputs, n_outputs,
         n_detectors, n_anchors_per_detector,
@@ -81,7 +85,7 @@ class LUTLayer(nn.Module):
 
         self._lut_dm.initialize_neurons()
         self._input_neuron_ids = torch.arange(0, self._n_inputs, dtype=torch.int32, device=self.device)
-        self._detector_neuron_ids = torch.arange(0, self._n_detectors, dtype=torch.int32, device=self.device)
+        self._detector_neuron_ids = torch.arange(self._n_inputs, self._n_inputs + self._n_detectors, dtype=torch.int32, device=self.device)
         self._lookup_neuron_ids = torch.arange(0, self._n_lookup_neurons, dtype=torch.int32, device=self.device)
         self._output_neuron_ids = torch.arange(self._n_lookup_neurons, self._n_lookup_neurons + n_outputs, dtype=torch.int32, device=self.device)
         self._weights = None
@@ -100,14 +104,14 @@ class LUTLayer(nn.Module):
         )
 
     def initialize_detectors(self):
-        max_n_inputs_per_detector = self._lut_dm.calculate_max_n_inputs_per_detector()
+        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
         assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
         noise = torch.rand(
             self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
             device=self.device
         )
-        encoded_pairs_permutations = noise.argsort(dim=1)
+        encoded_pairs_permutations = noise.argsort(dim=1).to(dtype=torch.int32)
 
         self._lut_dm.initialize_detectors(
             encoded_pairs_permutations.flatten().contiguous(),
@@ -347,6 +351,22 @@ class LUTLayer(nn.Module):
             synapse_metas
         )
 
+    def _export_anchors(self):
+        """
+        Export all anchor pairs for all detectors.
+        
+        Returns:
+            torch.Tensor: A tensor of shape [n_detectors, n_anchors_per_detector, 2]
+                         containing anchor pairs. Each anchor pair is [anchor1_id, anchor2_id].
+        """
+        anchors = torch.zeros(
+            self._n_detectors * self._n_anchors_per_detector * 2,
+            dtype=torch.int32,
+            device=self.device
+        )
+        self._lut_dm.export_anchors(anchors)
+        return anchors.reshape(self._n_detectors, self._n_anchors_per_detector, 2)
+
 
 class Conv2DLUTLayer(LUTLayer):
     def __init__(
@@ -380,7 +400,7 @@ class Conv2DLUTLayer(LUTLayer):
         )
 
         lut_shape = c_helper_1.out_h, c_helper_1.out_h
-        n_lut_channels = n_anchors_per_detector ** 2
+        n_lut_channels = LUTLayer.n_lut_channels(n_anchors_per_detector, sequence_length)
 
         if lut_receptive_field_shape is None:
             assert lut_receptive_field_stride_shape is None
@@ -421,7 +441,7 @@ class Conv2DLUTLayer(LUTLayer):
         self.add_detector_connections(
             chunk_of_connections=c_helper_1.grow_synapses(
                 input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
-                output_ids=self.get_detector_neuron_ids().reshape(detectors_shape[0], detectors_shape[1]) + 1,
+                output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
                 device=device,
                 seed=random_seed
             ),
@@ -431,9 +451,9 @@ class Conv2DLUTLayer(LUTLayer):
 
         self.initialize_detectors()
 
-        self.add_connections(
+        self.add_lookup_connections(
             chunk_of_connections=c_helper_2.grow_synapses(
-                input_ids=self.get_lookup_neuron_ids().reshape(lut_shape) + 1,
+                input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
                 output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
                 device=device,
                 seed=random_seed
@@ -445,7 +465,8 @@ class Conv2DLUTLayer(LUTLayer):
         self.compile_lut()
         self._input_shape = input_shape
         self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
-        self._lut_receptive_field_shape = lut_receptive_field_shape
+        self._lut_shape = lut_shape + (n_lut_channels,)
+        self._lut_receptive_field_shape = lut_receptive_field_shape + (n_lut_channels,)
 
     def forward(self, x):
         if x.shape == (x.shape[0],) + self._input_shape:
@@ -466,6 +487,9 @@ class Conv2DLUTLayer(LUTLayer):
 
     def output_shape(self):
         return self._output_shape
+
+    def lut_shape(self):
+        return self._lut_shape
 
     def lut_receptive_field_shape(self):
         return self._lut_receptive_field_shape

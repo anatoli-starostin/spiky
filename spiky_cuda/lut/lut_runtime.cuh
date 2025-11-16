@@ -30,7 +30,7 @@ private:
     BaseSynapseMeta *base_synapse_metas;
     IndexedSynapsesInfo *lookup_neuron_synapses_infos;
     IndexedSynapsesInfo *output_neuron_synapses_infos;
-    int32_t *detectors;
+    AnchorsPair *detectors;
 
     FiringBuffer *firing_buffer;
     uint32_t max_forward_groups_per_neuron;
@@ -65,7 +65,7 @@ public:
         BaseSynapseMeta *base_synapse_metas,
         IndexedSynapsesInfo *lookup_neuron_synapses_infos,
         IndexedSynapsesInfo *output_neuron_synapses_infos,
-        int32_t *detectors,
+        AnchorsPair *detectors,
         NeuronDataId_t first_synapse_id
     );
 

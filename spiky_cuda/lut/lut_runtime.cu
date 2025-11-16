@@ -28,7 +28,7 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     BaseSynapseMeta *base_synapse_metas,
     IndexedSynapsesInfo *lookup_neuron_synapses_infos,
     IndexedSynapsesInfo *output_neuron_synapses_infos,
-    int32_t *detectors,
+    AnchorsPair *detectors,
     NeuronDataId_t first_synapse_id
 ) :
     lut_data(lut_data),
