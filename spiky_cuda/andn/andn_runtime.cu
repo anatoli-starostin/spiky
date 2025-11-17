@@ -328,11 +328,7 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_backprop(
     uint64_t memsize = this->n_inputs * batch_size * sizeof(SUMMATION32_DT);
     if(before_detectors_gradients == nullptr) {
         if(device == -1) {
-            if(before_detectors_gradients != nullptr) {
-                before_detectors_gradients = (SUMMATION32_DT *) PyMem_Realloc(before_detectors_gradients, memsize);
-            } else {
-                before_detectors_gradients = (SUMMATION32_DT *) PyMem_Malloc(memsize);
-            }
+            before_detectors_gradients = (SUMMATION32_DT *) PyMem_Malloc(memsize);
         } else {
             #ifndef NO_CUDA
             c10::cuda::CUDAGuard guard(device);

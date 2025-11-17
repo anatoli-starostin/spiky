@@ -16,6 +16,4 @@
 #define N_ANDN_PROFILER_OPS (N_CONNECTIONS_MANAGER_PROFILER_OPS + 6)
 #endif
 
-#define WeightDeltaIndexBySynapseInfoId(shift, synapse_info_id) (uint64_t)(((synapse_info_id - shift) >> 3))
-
 static_assert(sizeof(EXTERNAL_REAL_DT) == 4, "this andn implementation works only with float32 weights");

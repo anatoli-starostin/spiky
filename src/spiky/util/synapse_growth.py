@@ -362,7 +362,7 @@ class SynapseGrowthEngine(object):
 
 
 class Conv2DSynapseGrowthHelper(object):
-    def __init__(self, h, w, rh, rw, sh, sw, kh, kw, p=1.0):
+    def __init__(self, h, w, rh, rw, sh, sw, kh, kw, p=1.0, n_input_channels=None):
         """
         h, w: input grid height and width
         rw, rh: sliding window width and height
@@ -378,6 +378,7 @@ class Conv2DSynapseGrowthHelper(object):
         self.kw = kw
         self.kh = kh
         self.p = p
+        self.n_input_channels = n_input_channels
 
         # Calculate number of sliding window positions along width and height
         self.num_win_h = ((self.h - self.rh) // self.sh) + 1
@@ -391,7 +392,12 @@ class Conv2DSynapseGrowthHelper(object):
         self, input_ids, output_ids, device,
         synapse_group_size=64, max_groups_in_buffer=1024, seed=123
     ):
-        assert input_ids.shape == (self.h, self.w,)
+        if self.n_input_channels is None:
+            assert input_ids.shape == (self.h, self.w,)
+            self.n_input_channels = 1
+        else:
+            assert input_ids.shape == (self.h, self.w, self.n_input_channels,)
+
         assert output_ids.shape == (self.out_h, self.out_w,)
         assert (input_ids > 0).all()
         assert (output_ids > 0).all()
@@ -414,8 +420,8 @@ class Conv2DSynapseGrowthHelper(object):
         )
 
         # we need a torch tensor with (x, y) coordinates in the input grid
-        input_grid_coords = torch.tensor([[x, y, 0] for y in range(self.h) for x in range(self.w)], dtype=torch.float32)
-        growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids.reshape(self.h * self.w), coordinates=input_grid_coords)
+        input_grid_coords = torch.tensor([[x, y, 0] for y in range(self.h) for x in range(self.w) for _ in range(self.n_input_channels)], dtype=torch.float32)
+        growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids.reshape(self.h * self.w * self.n_input_channels), coordinates=input_grid_coords)
 
         # For each position of a sliding window, compute the center coordinate of its receptive field,
         # and assign this center coordinate to all output points in the corresponding output block.

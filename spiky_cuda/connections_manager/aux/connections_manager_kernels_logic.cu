@@ -121,6 +121,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic)(
     NeuronDataId_t &first_synapse_id,
     uint64_t* &output_group_offsets,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     uint8_t* &net_data,
     int &random_seed,
     int &device,
@@ -206,7 +207,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic)(
                     }
                 }
 
-                for(;n_targets > 0; input_cursor++, output_cursor++, output_synapse_info_ptr += SizeOfSynapse(separate_weights_ptr != nullptr)) {
+                for(;n_targets > 0; input_cursor++, output_cursor++, output_synapse_info_ptr += SizeOfSynapse(separate_weights_mode)) {
                     __DETAILED_TRACE__(
                         "[create_forward_groups] input_cursor=%u, n_targets=%u, n_targets_with_current_delay=%u, current_output_group_size=%u, output_synapse_info_ptr=%p\n",
                          input_cursor, n_targets, n_targets_with_current_delay, current_output_group_size, output_synapse_info_ptr
@@ -251,7 +252,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic)(
 
                     if((output_synapse_group_ptr == nullptr) || (output_cursor == current_output_group_size)) {
                         if(output_synapse_group_ptr != nullptr) {
-                            output_synapse_group_id += SizeOfForwardSynapseGroup(current_output_group_size, separate_weights_ptr != nullptr);
+                            output_synapse_group_id += SizeOfForwardSynapseGroup(current_output_group_size, separate_weights_mode);
                         }
 
                         current_output_group_size = n_targets_with_current_delay;
@@ -264,7 +265,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic)(
                             source_neuron_id,
                             SYNAPSE_GROUP_META_INFO((synapse_meta.lr > 0.0), current_delay, synapse_meta_index, current_output_group_size)
                         };
-                        output_synapse_info_ptr = SynapseInfosInForwardGroup(output_synapse_group_id, net_data, separate_weights_ptr != nullptr);
+                        output_synapse_info_ptr = SynapseInfosInForwardGroup(output_synapse_group_id, net_data, separate_weights_mode);
                         output_cursor = 0;
                         __DETAILED_TRACE__(
                             "[create_forward_groups] Created new ForwardSynapseGroup: group_id %llu, source_neuron_id=%u, delay=%u, synapse_meta_index=%u, group_size=%u\n",
@@ -299,8 +300,10 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic)(
                         __DETAILED_TRACE__("[create_forward_groups] Noise applied: scale=%f, weight=%f\n", scale, weight);
                     }
 
-                    if(separate_weights_ptr != nullptr) {
-                        separate_weights_ptr[(output_synapse_info_ptr - (net_data + first_synapse_id)) >> 2] = weight;
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            separate_weights_ptr[(output_synapse_info_ptr - (net_data + first_synapse_id)) >> 2] = weight;
+                        }
                         *(reinterpret_cast<NeuronIndex_t *>(output_synapse_info_ptr)) = target_neuron_id;
                     } else {
                         *(reinterpret_cast<SynapseInfo *>(output_synapse_info_ptr)) = SynapseInfo{
@@ -351,6 +354,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic_on_cpu_wrappe
     NeuronDataId_t first_synapse_id,
     uint64_t* output_group_offsets,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     uint8_t* net_data,
     int random_seed,
     int device,
@@ -359,7 +363,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(create_forward_groups_logic_on_cpu_wrappe
     const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
 )
 {
-    PFX(create_forward_groups_logic)(input, input_weights, n_input_groups, single_input_group_size, ids_shift, synapse_metas, forward_indexed_synapses_ptr, forward_shift, all_forward_groups_id, first_synapse_id, output_group_offsets, separate_weights_ptr, net_data, random_seed, device, rndgen, error_counter, blockIdx, blockDim, threadIdx);
+    PFX(create_forward_groups_logic)(input, input_weights, n_input_groups, single_input_group_size, ids_shift, synapse_metas, forward_indexed_synapses_ptr, forward_shift, all_forward_groups_id, first_synapse_id, output_group_offsets, separate_weights_ptr, separate_weights_mode, net_data, random_seed, device, rndgen, error_counter, blockIdx, blockDim, threadIdx);
 }
 
 KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(gather_forward_info_logic)(
@@ -1374,6 +1378,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_forward_synapses_logic)(
     uint32_t &forward_shift,
     NeuronDataId_t &first_synapse_id,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     NeuronIndex_t* &output_source_indices,
     uint32_t* &output_synapse_meta_indices,
     EXTERNAL_REAL_DT* &output_weights,
@@ -1403,17 +1408,17 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_forward_synapses_logic)(
                 uint32_t current_group_size = SynapseGroupSize(current_group_meta_info);
                 uint32_t current_synapse_meta_index = SynapseGroupSynapseMetaIndex(current_group_meta_info);
                 uint32_t current_delay = SynapseGroupDelay(current_group_meta_info);
-                uint8_t* current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_ptr != nullptr);
+                uint8_t* current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_mode);
                 uint32_t cursor = 0;
 
-                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr+=SizeOfSynapse(separate_weights_ptr != nullptr), offset++) {
+                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr+=SizeOfSynapse(separate_weights_mode), offset++) {
                     if(cursor == current_group_size) {
-                        current_group_id = ContinuationForwardGroupId(current_group_id, current_group_size, separate_weights_ptr != nullptr);
+                        current_group_id = ContinuationForwardGroupId(current_group_id, current_group_size, separate_weights_mode);
                         current_group_meta_info = GetForwardSynapseGroup(current_group_id, net_data)->meta_info;
                         current_group_size = SynapseGroupSize(current_group_meta_info);
                         current_synapse_meta_index = SynapseGroupSynapseMetaIndex(current_group_meta_info);
                         current_delay = SynapseGroupDelay(current_group_meta_info);
-                        current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_ptr != nullptr);
+                        current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_mode);
                         cursor = 0;
                     }
 
@@ -1425,8 +1430,10 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_forward_synapses_logic)(
                         output_delays[offset] = current_delay;
                     }
 
-                    if(separate_weights_ptr != nullptr) {
-                        output_weights[offset] = separate_weights_ptr[(current_synapse_info_ptr - (net_data + first_synapse_id)) >> 2];
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            output_weights[offset] = separate_weights_ptr[(current_synapse_info_ptr - (net_data + first_synapse_id)) >> 2];
+                        }
                         output_target_indices[offset] = *reinterpret_cast<NeuronIndex_t *>(current_synapse_info_ptr);
                     } else {
                         SynapseInfo current_synapse = *reinterpret_cast<SynapseInfo *>(current_synapse_info_ptr);
@@ -1446,6 +1453,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_forward_synapses_logic_on_cpu_wrap
     uint32_t forward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     NeuronIndex_t* output_source_indices,
     uint32_t* output_synapse_meta_indices,
     EXTERNAL_REAL_DT* output_weights,
@@ -1456,7 +1464,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_forward_synapses_logic_on_cpu_wrap
     const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
 )
 {
-    PFX(export_forward_synapses_logic)(neuron_ids_to_process, n_neurons_to_process, forward_indexed_synapses_ptr, forward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
+    PFX(export_forward_synapses_logic)(neuron_ids_to_process, n_neurons_to_process, forward_indexed_synapses_ptr, forward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
 }
 
 KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_backward_synapses_logic)(
@@ -1466,6 +1474,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_backward_synapses_logic)(
     uint32_t &backward_shift,
     NeuronDataId_t &first_synapse_id,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     NeuronIndex_t* &output_source_indices,
     uint32_t* &output_synapse_meta_indices,
     EXTERNAL_REAL_DT* &output_weights,
@@ -1521,8 +1530,10 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_backward_synapses_logic)(
                     if(output_synapse_meta_indices != nullptr) {
                         output_synapse_meta_indices[offset] = current_synapse_meta_index;
                     }
-                    if(separate_weights_ptr != nullptr) {
-                        output_weights[offset] = separate_weights_ptr[current_synapse.shift_from_anchor];
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            output_weights[offset] = separate_weights_ptr[current_synapse.shift_from_anchor];
+                        }
                     } else {
                         SynapseInfo *forward_synapse_info_ptr = SynapseInfoByRelativeShift(
                             first_synapse_id,
@@ -1554,6 +1565,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_backward_synapses_logic_on_cpu_wra
     uint32_t backward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     NeuronIndex_t* output_source_indices,
     uint32_t* output_synapse_meta_indices,
     EXTERNAL_REAL_DT* output_weights,
@@ -1564,7 +1576,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(export_backward_synapses_logic_on_cpu_wra
     const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
 )
 {
-    PFX(export_backward_synapses_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
+    PFX(export_backward_synapses_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
 }
 
 KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(count_max_synapses_logic)(
@@ -1631,6 +1643,63 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(count_max_synapses_logic_on_cpu_wrapper)(
     PFX(count_max_synapses_logic)(neuron_indices, n_neuron_indices, indexed_synapses_ptr, neuron_shift, final_counter, device, blockIdx, blockDim, threadIdx);
 }
 
+KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(count_max_synapses_direct_logic)(
+    uint32_t &n_neurons,
+    IndexedSynapsesInfo* &indexed_synapses_ptr,
+    uint32_t* &final_counter,
+    int &device,
+    const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
+)
+{
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x * blockDim.x + tid;
+
+    uint32_t n_synapses = 0;
+    if(i < n_neurons) {
+        n_synapses = (indexed_synapses_ptr + i)->n_synapses;
+    }
+
+    if(device == -1) {
+        if(n_synapses > 0) {
+            if(n_synapses > *final_counter) {
+                *final_counter = n_synapses;
+            }
+        }
+    } else {
+        #ifdef ATOMIC
+        extern __shared__ __align__(16) uint8_t __sm[];
+        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+        sdata[tid] = n_synapses;
+        __syncthreads();
+
+        uint32_t t;
+        for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
+            if(tid < s) {
+                t = sdata[tid + s];
+                if(t > sdata[tid]) {
+                    sdata[tid] = t;
+                }
+            }
+            __syncthreads();
+        }
+        if(tid == 0) {
+            atomicMax(final_counter, sdata[0]);
+        }
+        #endif
+    }
+}
+
+KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(count_max_synapses_direct_logic_on_cpu_wrapper)(
+    uint32_t n_neurons,
+    IndexedSynapsesInfo* indexed_synapses_ptr,
+    uint32_t* final_counter,
+    int device,
+    const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
+)
+{
+    PFX(count_max_synapses_direct_logic)(n_neurons, indexed_synapses_ptr, final_counter, device, blockIdx, blockDim, threadIdx);
+}
+
 KERNEL_LOGIC_PREFIX void PFX(export_input_weights_logic)(
     NeuronIndex_t* &neuron_ids_to_process,
     uint32_t &n_neurons_to_process,
@@ -1638,6 +1707,7 @@ KERNEL_LOGIC_PREFIX void PFX(export_input_weights_logic)(
     uint32_t &backward_shift,
     NeuronDataId_t &first_synapse_id,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     uint32_t* &output_source_indices,
     EXTERNAL_REAL_DT* &output_weights,
     uint32_t &n_weights_per_neuron,
@@ -1672,7 +1742,7 @@ KERNEL_LOGIC_PREFIX void PFX(export_input_weights_logic)(
 
                     current_synapse = *current_synapse_info_ptr;
                     output_source_indices[offset] = current_synapse.source_neuron_index;
-                    if(separate_weights_ptr != nullptr) {
+                    if(separate_weights_mode) {
                         output_weights[offset] = separate_weights_ptr[current_synapse.shift_from_anchor];
                     } else {
                         SynapseInfo *forward_synapse_info_ptr = SynapseInfoByRelativeShift(
@@ -1723,6 +1793,7 @@ KERNEL_LOGIC_PREFIX void PFX(export_input_weights_logic_on_cpu_wrapper)(
     uint32_t backward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     uint32_t* output_source_indices,
     EXTERNAL_REAL_DT* output_weights,
     uint32_t n_weights_per_neuron,
@@ -1731,7 +1802,7 @@ KERNEL_LOGIC_PREFIX void PFX(export_input_weights_logic_on_cpu_wrapper)(
     const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
 )
 {
-    PFX(export_input_weights_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_weights, n_weights_per_neuron, order_mapping, net_data, blockIdx, blockDim, threadIdx);
+    PFX(export_input_weights_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_weights, n_weights_per_neuron, order_mapping, net_data, blockIdx, blockDim, threadIdx);
 }
 
 KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(fill_aux_logic)(
@@ -2272,6 +2343,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(create_forward_groups_logic_atomic_)(
     NeuronDataId_t &first_synapse_id,
     uint64_t* &output_group_offsets,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     uint8_t* &net_data,
     int &random_seed,
     int &device,
@@ -2357,7 +2429,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(create_forward_groups_logic_atomic_)(
                     }
                 }
 
-                for(;n_targets > 0; input_cursor++, output_cursor++, output_synapse_info_ptr += SizeOfSynapse(separate_weights_ptr != nullptr)) {
+                for(;n_targets > 0; input_cursor++, output_cursor++, output_synapse_info_ptr += SizeOfSynapse(separate_weights_mode)) {
                     __DETAILED_TRACE__(
                         "[create_forward_groups] input_cursor=%u, n_targets=%u, n_targets_with_current_delay=%u, current_output_group_size=%u, output_synapse_info_ptr=%p\n",
                          input_cursor, n_targets, n_targets_with_current_delay, current_output_group_size, output_synapse_info_ptr
@@ -2402,7 +2474,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(create_forward_groups_logic_atomic_)(
 
                     if((output_synapse_group_ptr == nullptr) || (output_cursor == current_output_group_size)) {
                         if(output_synapse_group_ptr != nullptr) {
-                            output_synapse_group_id += SizeOfForwardSynapseGroup(current_output_group_size, separate_weights_ptr != nullptr);
+                            output_synapse_group_id += SizeOfForwardSynapseGroup(current_output_group_size, separate_weights_mode);
                         }
 
                         current_output_group_size = n_targets_with_current_delay;
@@ -2415,7 +2487,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(create_forward_groups_logic_atomic_)(
                             source_neuron_id,
                             SYNAPSE_GROUP_META_INFO((synapse_meta.lr > 0.0), current_delay, synapse_meta_index, current_output_group_size)
                         };
-                        output_synapse_info_ptr = SynapseInfosInForwardGroup(output_synapse_group_id, net_data, separate_weights_ptr != nullptr);
+                        output_synapse_info_ptr = SynapseInfosInForwardGroup(output_synapse_group_id, net_data, separate_weights_mode);
                         output_cursor = 0;
                         __DETAILED_TRACE__(
                             "[create_forward_groups] Created new ForwardSynapseGroup: group_id %llu, source_neuron_id=%u, delay=%u, synapse_meta_index=%u, group_size=%u\n",
@@ -2450,8 +2522,10 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(create_forward_groups_logic_atomic_)(
                         __DETAILED_TRACE__("[create_forward_groups] Noise applied: scale=%f, weight=%f\n", scale, weight);
                     }
 
-                    if(separate_weights_ptr != nullptr) {
-                        separate_weights_ptr[(output_synapse_info_ptr - (net_data + first_synapse_id)) >> 2] = weight;
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            separate_weights_ptr[(output_synapse_info_ptr - (net_data + first_synapse_id)) >> 2] = weight;
+                        }
                         *(reinterpret_cast<NeuronIndex_t *>(output_synapse_info_ptr)) = target_neuron_id;
                     } else {
                         *(reinterpret_cast<SynapseInfo *>(output_synapse_info_ptr)) = SynapseInfo{
@@ -3312,6 +3386,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(export_forward_synapses_logic_atomic_)(
     uint32_t &forward_shift,
     NeuronDataId_t &first_synapse_id,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     NeuronIndex_t* &output_source_indices,
     uint32_t* &output_synapse_meta_indices,
     EXTERNAL_REAL_DT* &output_weights,
@@ -3341,17 +3416,17 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(export_forward_synapses_logic_atomic_)(
                 uint32_t current_group_size = SynapseGroupSize(current_group_meta_info);
                 uint32_t current_synapse_meta_index = SynapseGroupSynapseMetaIndex(current_group_meta_info);
                 uint32_t current_delay = SynapseGroupDelay(current_group_meta_info);
-                uint8_t* current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_ptr != nullptr);
+                uint8_t* current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_mode);
                 uint32_t cursor = 0;
 
-                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr+=SizeOfSynapse(separate_weights_ptr != nullptr), offset++) {
+                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr+=SizeOfSynapse(separate_weights_mode), offset++) {
                     if(cursor == current_group_size) {
-                        current_group_id = ContinuationForwardGroupId(current_group_id, current_group_size, separate_weights_ptr != nullptr);
+                        current_group_id = ContinuationForwardGroupId(current_group_id, current_group_size, separate_weights_mode);
                         current_group_meta_info = GetForwardSynapseGroup(current_group_id, net_data)->meta_info;
                         current_group_size = SynapseGroupSize(current_group_meta_info);
                         current_synapse_meta_index = SynapseGroupSynapseMetaIndex(current_group_meta_info);
                         current_delay = SynapseGroupDelay(current_group_meta_info);
-                        current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_ptr != nullptr);
+                        current_synapse_info_ptr = SynapseInfosInForwardGroup(current_group_id, net_data, separate_weights_mode);
                         cursor = 0;
                     }
 
@@ -3363,8 +3438,10 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(export_forward_synapses_logic_atomic_)(
                         output_delays[offset] = current_delay;
                     }
 
-                    if(separate_weights_ptr != nullptr) {
-                        output_weights[offset] = separate_weights_ptr[(current_synapse_info_ptr - (net_data + first_synapse_id)) >> 2];
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            output_weights[offset] = separate_weights_ptr[(current_synapse_info_ptr - (net_data + first_synapse_id)) >> 2];
+                        }
                         output_target_indices[offset] = *reinterpret_cast<NeuronIndex_t *>(current_synapse_info_ptr);
                     } else {
                         SynapseInfo current_synapse = *reinterpret_cast<SynapseInfo *>(current_synapse_info_ptr);
@@ -3384,6 +3461,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(export_backward_synapses_logic_atomic_)(
     uint32_t &backward_shift,
     NeuronDataId_t &first_synapse_id,
     EXTERNAL_REAL_DT* &separate_weights_ptr,
+    bool &separate_weights_mode,
     NeuronIndex_t* &output_source_indices,
     uint32_t* &output_synapse_meta_indices,
     EXTERNAL_REAL_DT* &output_weights,
@@ -3439,8 +3517,10 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(export_backward_synapses_logic_atomic_)(
                     if(output_synapse_meta_indices != nullptr) {
                         output_synapse_meta_indices[offset] = current_synapse_meta_index;
                     }
-                    if(separate_weights_ptr != nullptr) {
-                        output_weights[offset] = separate_weights_ptr[current_synapse.shift_from_anchor];
+                    if(separate_weights_mode) {
+                        if(separate_weights_ptr != nullptr) {
+                            output_weights[offset] = separate_weights_ptr[current_synapse.shift_from_anchor];
+                        }
                     } else {
                         SynapseInfo *forward_synapse_info_ptr = SynapseInfoByRelativeShift(
                             first_synapse_id,
@@ -3484,6 +3564,52 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(count_max_synapses_logic_atomic_)(
         if(neuron_id >= neuron_shift) {
             n_synapses = (indexed_synapses_ptr + neuron_id - neuron_shift)->n_synapses;
         }
+    }
+
+    if(device == -1) {
+        if(n_synapses > 0) {
+            if(n_synapses > *final_counter) {
+                *final_counter = n_synapses;
+            }
+        }
+    } else {
+        #ifdef ATOMIC
+        extern __shared__ __align__(16) uint8_t __sm[];
+        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+        sdata[tid] = n_synapses;
+        __syncthreads();
+
+        uint32_t t;
+        for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
+            if(tid < s) {
+                t = sdata[tid + s];
+                if(t > sdata[tid]) {
+                    sdata[tid] = t;
+                }
+            }
+            __syncthreads();
+        }
+        if(tid == 0) {
+            atomicMax(final_counter, sdata[0]);
+        }
+        #endif
+    }
+}
+
+KERNEL_LOGIC_ATOMIC_PREFIX void PFX(count_max_synapses_direct_logic_atomic_)(
+    uint32_t &n_neurons,
+    IndexedSynapsesInfo* &indexed_synapses_ptr,
+    uint32_t* &final_counter,
+    int &device,
+    const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx
+)
+{
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x * blockDim.x + tid;
+
+    uint32_t n_synapses = 0;
+    if(i < n_neurons) {
+        n_synapses = (indexed_synapses_ptr + i)->n_synapses;
     }
 
     if(device == -1) {
@@ -3836,6 +3962,7 @@ __global__ void PFX(create_forward_groups_logic_cuda)(
     NeuronDataId_t first_synapse_id,
     uint64_t* output_group_offsets,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     uint8_t* net_data,
     int random_seed,
     int device,
@@ -3843,7 +3970,7 @@ __global__ void PFX(create_forward_groups_logic_cuda)(
     uint32_t* error_counter
 )
 {
-    PFX(create_forward_groups_logic_atomic_)(input, input_weights, n_input_groups, single_input_group_size, ids_shift, synapse_metas, forward_indexed_synapses_ptr, forward_shift, all_forward_groups_id, first_synapse_id, output_group_offsets, separate_weights_ptr, net_data, random_seed, device, rndgen, error_counter, blockIdx, blockDim, threadIdx);
+    PFX(create_forward_groups_logic_atomic_)(input, input_weights, n_input_groups, single_input_group_size, ids_shift, synapse_metas, forward_indexed_synapses_ptr, forward_shift, all_forward_groups_id, first_synapse_id, output_group_offsets, separate_weights_ptr, separate_weights_mode, net_data, random_seed, device, rndgen, error_counter, blockIdx, blockDim, threadIdx);
 }
 
 __global__ void PFX(gather_forward_info_logic_cuda)(
@@ -4000,6 +4127,7 @@ __global__ void PFX(export_forward_synapses_logic_cuda)(
     uint32_t forward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     NeuronIndex_t* output_source_indices,
     uint32_t* output_synapse_meta_indices,
     EXTERNAL_REAL_DT* output_weights,
@@ -4009,7 +4137,7 @@ __global__ void PFX(export_forward_synapses_logic_cuda)(
     uint64_t* aux_buffer
 )
 {
-    PFX(export_forward_synapses_logic_atomic_)(neuron_ids_to_process, n_neurons_to_process, forward_indexed_synapses_ptr, forward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
+    PFX(export_forward_synapses_logic_atomic_)(neuron_ids_to_process, n_neurons_to_process, forward_indexed_synapses_ptr, forward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
 }
 
 __global__ void PFX(export_backward_synapses_logic_cuda)(
@@ -4019,6 +4147,7 @@ __global__ void PFX(export_backward_synapses_logic_cuda)(
     uint32_t backward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     NeuronIndex_t* output_source_indices,
     uint32_t* output_synapse_meta_indices,
     EXTERNAL_REAL_DT* output_weights,
@@ -4028,7 +4157,7 @@ __global__ void PFX(export_backward_synapses_logic_cuda)(
     uint64_t* aux_buffer
 )
 {
-    PFX(export_backward_synapses_logic_atomic_)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
+    PFX(export_backward_synapses_logic_atomic_)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_synapse_meta_indices, output_weights, output_target_indices, output_delays, net_data, aux_buffer, blockIdx, blockDim, threadIdx);
 }
 
 __global__ void PFX(count_max_synapses_logic_cuda)(
@@ -4043,6 +4172,16 @@ __global__ void PFX(count_max_synapses_logic_cuda)(
     PFX(count_max_synapses_logic_atomic_)(neuron_indices, n_neuron_indices, indexed_synapses_ptr, neuron_shift, final_counter, device, blockIdx, blockDim, threadIdx);
 }
 
+__global__ void PFX(count_max_synapses_direct_logic_cuda)(
+    uint32_t n_neurons,
+    IndexedSynapsesInfo* indexed_synapses_ptr,
+    uint32_t* final_counter,
+    int device
+)
+{
+    PFX(count_max_synapses_direct_logic_atomic_)(n_neurons, indexed_synapses_ptr, final_counter, device, blockIdx, blockDim, threadIdx);
+}
+
 __global__ void PFX(export_input_weights_logic_cuda)(
     NeuronIndex_t* neuron_ids_to_process,
     uint32_t n_neurons_to_process,
@@ -4050,6 +4189,7 @@ __global__ void PFX(export_input_weights_logic_cuda)(
     uint32_t backward_shift,
     NeuronDataId_t first_synapse_id,
     EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
     uint32_t* output_source_indices,
     EXTERNAL_REAL_DT* output_weights,
     uint32_t n_weights_per_neuron,
@@ -4057,7 +4197,7 @@ __global__ void PFX(export_input_weights_logic_cuda)(
     uint8_t* net_data
 )
 {
-    PFX(export_input_weights_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, output_source_indices, output_weights, n_weights_per_neuron, order_mapping, net_data, blockIdx, blockDim, threadIdx);
+    PFX(export_input_weights_logic)(neuron_ids_to_process, n_neurons_to_process, backward_indexed_synapses_ptr, backward_shift, first_synapse_id, separate_weights_ptr, separate_weights_mode, output_source_indices, output_weights, n_weights_per_neuron, order_mapping, net_data, blockIdx, blockDim, threadIdx);
 }
 
 __global__ void PFX(fill_aux_logic_cuda)(

@@ -73,7 +73,7 @@ static_assert((sizeof(BackwardSynapseGroup) % 8) == 0, "check sizeof(BackwardSyn
 
 typedef struct {
     NeuronIndex_t source_neuron_index;
-    uint32_t shift_from_anchor; // TODO refactor
+    uint32_t shift_from_anchor; // TODO rename to synapse_index
 } NeuronIndexAndSynapseId;
 static_assert((sizeof(NeuronIndexAndSynapseId) % 8) == 0, "check sizeof(NeuronIndexAndSynapseId)");
 
@@ -318,6 +318,7 @@ public:
     );
 
     uint32_t count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices);
+    uint32_t count_max_input_synapses_per_neuron();
 
     void export_input_synaptic_weights(
         torch::Tensor &target_weights,
@@ -332,6 +333,10 @@ public:
         #else
             return "profiler is disabled";
         #endif
+    }
+
+    NeuronDataId_t get_backward_neuron_infos_id() const {
+        return backward_neuron_infos_id;
     }
 
     #ifdef ENABLE_PROFILING

@@ -135,6 +135,7 @@ uint64_t ConnectionsManager::add_connections(
         gc_meta->first_synapse_id,
         capacity_estimations,
         weights_allocator == nullptr ? nullptr : reinterpret_cast<EXTERNAL_REAL_DT *>(weights_allocator->data),
+        this->separate_weights_mode,
         allocator.data,
         random_seed, device, rndgen, error_counter
     );
@@ -767,6 +768,7 @@ void ConnectionsManager::export_synapses(
             this->forward_shift,
             gc_meta->first_synapse_id,
             separate_weights,
+            this->separate_weights_mode,
             target_internal_source_indices_data,
             target_synapse_meta_indices_data,
             target_weights_data,
@@ -782,6 +784,7 @@ void ConnectionsManager::export_synapses(
             this->backward_shift,
             gc_meta->first_synapse_id,
             separate_weights,
+            this->separate_weights_mode,
             target_internal_source_indices_data,
             target_synapse_meta_indices_data,
             target_weights_data,
@@ -807,7 +810,7 @@ void ConnectionsManager::export_synapses(
 uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices)
 {
     PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
-    __TRACE__("connections_manager::count_max_input_weights_per_neuron\n");
+    __TRACE__("connections_manager::count_max_input_weights_per_neuron(neuron_indices)\n");
     checkTensor(neuron_indices, "neuron_indices", false, allocator.device, sizeof(NeuronIndex_t));
     NeuronIndex_t *neuron_indices_data = reinterpret_cast<NeuronIndex_t *>(neuron_indices.data_ptr());
 
@@ -833,6 +836,31 @@ uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Te
     return *aux_buffer;
 }
 
+uint32_t ConnectionsManager::count_max_input_synapses_per_neuron()
+{
+    PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    __TRACE__("connections_manager::count_max_input_weights_per_neuron\n");
+
+    *aux_buffer = 0;
+
+    dim3 numBlocks((this->n_backward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+    GRID_CALL_SHARED_MEM(
+        numBlocks, count_max_synapses_direct, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint32_t),
+        this->n_backward_neurons,
+        IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+        reinterpret_cast<uint32_t *>(aux_buffer), device
+    );
+
+    if(device != -1) {
+        #ifndef NO_CUDA
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+        #endif
+    }
+    PROF_END(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    return *aux_buffer;
+}
+
 void ConnectionsManager::export_input_synaptic_weights(
     torch::Tensor &target_weights,
     const torch::Tensor &neuron_indices,
@@ -842,6 +870,10 @@ void ConnectionsManager::export_input_synaptic_weights(
 {
     PROF_START(CONNECTIONS_MANAGER_EXPORT_INPUT_WEIGHTS_PROFILER_OP);
     __TRACE__("connections_manager::export_synaptic_weights\n");
+
+    if(this->separate_weights_mode && (separate_weights == nullptr)) {
+        throw std::runtime_error("connections_manager::export_input_synaptic_weights: separate_weights are not provided when separate_weights_mode == true");
+    }
 
     checkTensor(target_weights, "target_weights", true, allocator.device);
     checkTensor(neuron_indices, "neuron_indices", false, allocator.device, sizeof(NeuronIndex_t));
@@ -878,6 +910,7 @@ void ConnectionsManager::export_input_synaptic_weights(
         IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
         this->backward_shift,
         gc_meta->first_synapse_id, separate_weights,
+        this->separate_weights_mode,
         target_internal_source_indices_data,
         target_weights_data,
         max_weights_per_neuron,

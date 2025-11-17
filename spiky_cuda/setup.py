@@ -1,8 +1,69 @@
 import sys
+import os
+import shutil
 import torch
 
 from setuptools import setup
 from kernels_logic_parser import generate_cu_from_proto
+
+# Auto-detect and use ccache for faster builds on macOS/Linux
+def setup_ccache():
+    """Setup ccache for compiler caching if available"""
+    ccache_path = shutil.which('ccache')
+    if not ccache_path:
+        print("ccache not found. Install with 'brew install ccache' for faster builds.")
+        print("  Then create symlinks: ln -s $(which ccache) ~/bin/clang++")
+        return False
+    
+    # PyTorch's BuildExtension checks for clang++ specifically on macOS
+    # So we need to use ccache in a way that doesn't override the compiler name
+    # The best approach is to use ccache's masquerading feature via symlinks
+    # Or configure ccache directory and let it handle it automatically
+    
+    # Check if ccache masquerading is set up
+    # On macOS, users typically set up symlinks in ~/bin or /usr/local/bin
+    # We'll just provide instructions and let ccache work if it's already configured
+    
+    # For now, we'll use the CCACHE_CPP2 option which makes ccache work better
+    # and check if symlinks exist in common locations
+    common_paths = [
+        os.path.expanduser('~/bin/clang++'),
+        '/usr/local/bin/clang++',
+        '/opt/homebrew/bin/clang++'
+    ]
+    
+    ccache_configured = False
+    for path in common_paths:
+        if os.path.exists(path) and os.path.islink(path):
+            try:
+                if os.path.basename(os.path.realpath(path)) == 'ccache':
+                    print(f"Detected ccache symlink: {path}")
+                    ccache_configured = True
+                    break
+            except:
+                pass
+    
+    if not ccache_configured:
+        # Use ccache environment variable approach that PyTorch might accept
+        # Set ccache to masquerade as clang/clang++
+        os.environ.setdefault('CCACHE_SLOPPINESS', 'pch_defines,time_macros,include_file_mtime')
+        os.environ.setdefault('CCACHE_COMPILERCHECK', 'content')
+        print(f"ccache found at {ccache_path}")
+        print("For best compatibility, create symlinks:")
+        print("  mkdir -p ~/bin")
+        print("  ln -s $(which ccache) ~/bin/clang")
+        print("  ln -s $(which ccache) ~/bin/clang++")
+        print("  export PATH=~/bin:$PATH")
+        print("  Then rebuild")
+        return False
+    
+    print(f"Using ccache for faster builds via symlink")
+    return True
+
+# Setup ccache on non-Windows systems
+if not hasattr(sys, 'getwindowsversion'):
+    setup_ccache()
+
 generate_cu_from_proto(
     'connections_manager/connections_manager_kernels_logic.proto',
     'connections_manager/aux/connections_manager_kernels_logic.cu'
@@ -14,6 +75,14 @@ generate_cu_from_proto(
 generate_cu_from_proto(
     'andn/andn_runtime_kernels_logic.proto',
     'andn/aux/andn_runtime_kernels_logic.cu'
+)
+generate_cu_from_proto(
+    'lut/lut_runtime_kernels_logic.proto',
+    'lut/aux/lut_runtime_kernels_logic.cu'
+)
+generate_cu_from_proto(
+    'lut/lut_compile_time_kernels_logic.proto',
+    'lut/aux/lut_compile_time_kernels_logic.cu'
 )
 generate_cu_from_proto(
     'synapse_growth/synapse_growth_kernels_logic.proto',
@@ -33,19 +102,23 @@ sources_list_cuda = [
     'misc/firing_buffer.cu',
     'misc/concurrent_ds.cu',
     'misc/misc.cpp',
-    'spnet/spnet.cu',
-    'spnet/spnet_runtime.cu',
-    'andn/andn.cu',
-    'andn/andn_runtime.cu',
+    # 'spnet/spnet.cu',
+    # 'spnet/spnet_runtime.cu',
+    # 'andn/andn.cu',
+    # 'andn/andn_runtime.cu',
+    'lut/lut.cu',
+    'lut/lut_runtime.cu',
     'synapse_growth/synapse_growth.cu',
     'spiky_py.cpp'
 ]
 if BUILD_INTEGERS_VERSION:
     sources_list_cuda += [
-        'spnet/aux/spnet_I.cu',
-        'spnet/aux/spnet_runtime_I.cu',
-        'andn/aux/andn_I.cu',
-        'andn/aux/andn_runtime_I.cu'
+        # 'spnet/aux/spnet_I.cu',
+        # 'spnet/aux/spnet_runtime_I.cu',
+        # 'andn/aux/andn_I.cu',
+        # 'andn/aux/andn_runtime_I.cu',
+        'lut/aux/lut_I.cu',
+        'lut/aux/lut_runtime_I.cu'
     ]
 
 sources_list_no_cuda = [
@@ -54,19 +127,23 @@ sources_list_no_cuda = [
     'misc/aux/firing_buffer.cpp',
     'misc/aux/concurrent_ds.cpp',
     'misc/misc.cpp',
-    'spnet/aux/spnet.cpp',
-    'spnet/aux/spnet_runtime.cpp',
-    'andn/aux/andn.cpp',
-    'andn/aux/andn_runtime.cpp',
+    # 'spnet/aux/spnet.cpp',
+    # 'spnet/aux/spnet_runtime.cpp',
+    # 'andn/aux/andn.cpp',
+    # 'andn/aux/andn_runtime.cpp',
+    'lut/aux/lut.cpp',
+    'lut/aux/lut_runtime.cpp',
     'synapse_growth/aux/synapse_growth.cpp',
     'spiky_py.cpp',
 ]
 if BUILD_INTEGERS_VERSION:
     sources_list_no_cuda += [
-        'spnet/aux/spnet_I.cpp',
-        'spnet/aux/spnet_runtime_I.cpp',
-        'andn/aux/andn_I.cpp',
-        'andn/aux/andn_runtime_I.cpp'
+        # 'spnet/aux/spnet_I.cpp',
+        # 'spnet/aux/spnet_runtime_I.cpp',
+        # 'andn/aux/andn_I.cpp',
+        # 'andn/aux/andn_runtime_I.cpp',
+        'lut/aux/lut_I.cpp',
+        'lut/aux/lut_runtime_I.cpp'
     ]
 
 if hasattr(sys, 'getwindowsversion'):
