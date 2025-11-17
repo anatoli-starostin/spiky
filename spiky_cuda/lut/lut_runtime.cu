@@ -61,6 +61,7 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     first_synapse_id(first_synapse_id)
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
+    printf("N_WEIGHTS %llu!!!\n", n_weights);
 
     if(device == -1) {
         first_synapse_meta_lr = base_synapse_metas->lr;
@@ -272,7 +273,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_SHARED_MEM(
         numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
-        input, this->n_inputs,
         this->n_detectors,
         lookup_indices,
         min_anchor_delta_indices,
@@ -311,7 +311,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     numBlocks = dim3((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors, LUT_RUNTIME_KERNELS_TPB,
-        input, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         this->n_detectors,
         this->n_anchors_per_detector,
         this->detectors,
