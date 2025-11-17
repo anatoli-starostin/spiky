@@ -36,7 +36,8 @@ class LUTLayer(nn.Module):
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
         _forward_group_size: int = 64,
-        _backward_group_size: int = 64
+        _backward_group_size: int = 64,
+        _do_normalize_gradients=True
     ):
         super().__init__()
 
@@ -49,6 +50,7 @@ class LUTLayer(nn.Module):
         self._n_detectors = n_detectors
         self._n_anchors_per_detector = n_anchors_per_detector
         self._sequence_length = sequence_length
+        self._do_normalize_gradients = _do_normalize_gradients
 
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = self._n_lookup_neurons * n_outputs
@@ -273,11 +275,12 @@ class LUTLayer(nn.Module):
             x_grad, self._last_w_grad
         )
 
-        with torch.no_grad():
-            m = self._last_w_grad.abs().max()
-            if m < 1e-16:
-                m = 1e-16
-            self._last_w_grad /= m
+        if self._do_normalize_gradients:
+            with torch.no_grad():
+                m = self._last_w_grad.abs().max()
+                if m < 1e-16:
+                    m = 1e-16
+                self._last_w_grad /= m
 
         return x_grad.reshape(source_x_shape), self._last_w_grad
 
@@ -384,6 +387,7 @@ class Conv2DLUTLayer(LUTLayer):
         _int_rescaler=0.001,
         _forward_group_size: int = 64,
         _backward_group_size: int = 64,
+        _do_normalize_gradients=True,
         random_seed=1,
         device=None
     ):
@@ -430,7 +434,8 @@ class Conv2DLUTLayer(LUTLayer):
             _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=c_helper_2.n_connections(),
             _forward_group_size=_forward_group_size,
-            _backward_group_size=_backward_group_size
+            _backward_group_size=_backward_group_size,
+            _do_normalize_gradients=_do_normalize_gradients
         )
 
         if device is not None:
