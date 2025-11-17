@@ -61,7 +61,9 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     first_synapse_id(first_synapse_id)
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
     printf("N_WEIGHTS %llu!!!\n", n_weights);
+    #endif
 
     if(device == -1) {
         first_synapse_meta_lr = base_synapse_metas->lr;
