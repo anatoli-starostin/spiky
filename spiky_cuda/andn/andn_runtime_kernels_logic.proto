@@ -701,7 +701,6 @@ fire_detectors_by_input_ids_logic(
         input += blockIdx.y * n_inputs;
 
         int32_t neuron_id = input_ids_to_fire[i];
-        __SUPER_DETAILED_TRACE__("[backfire_detectors_logic] n_outputs %d, neuron_id %d, output_winning_stat[neuron_id] %d\n", n_outputs, neuron_id, output_winning_stat[neuron_id]);
         if((input_winning_stat == nullptr) || (input_winning_stat[neuron_id] == stat_filter)) {
             chosen_forward_synapses_info = *(forward_synapses_infos + neuron_id);
         }
