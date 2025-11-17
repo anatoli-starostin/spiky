@@ -4,7 +4,7 @@ fire_detectors_logic(
     AnchorsPair* detectors,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
-    uint32_t lookup_neurons_per_detector,
+    uint32_t n_lookup_neurons_per_detector,
     int32_t* target_lookup_indices,
     EXTERNAL_REAL_DT* target_min_anchor_deltas,
     int32_t* target_min_anchor_delta_indices,
@@ -32,7 +32,6 @@ fire_detectors_logic(
         AnchorsPair* detector_anchors = detectors + i * n_anchors_per_detector;
 
         // Calculate differences between anchor pairs and form bit representation
-        // This replaces the winner search logic from ANDN
         int32_t lookup_index = 0;
         EXTERNAL_REAL_DT min_delta = 0.0;
         int32_t min_delta_anchor_idx = -1;
@@ -41,7 +40,7 @@ fire_detectors_logic(
         for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
             ap = detector_anchors[anchor_idx];
 
-            // Skip if anchor IDs are invalid (marked as max)
+            // Skip if anchor IDs are invalid
             if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
                ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
                 continue;
@@ -55,7 +54,7 @@ fire_detectors_logic(
             }
 
             // Track anchor pair with minimum absolute delta
-            if(min_delta_anchor_idx == -1 || fabs(delta) < fabs(min_delta)) {
+            if((min_delta_anchor_idx == -1) || (fabs(delta) < fabs(min_delta))) {
                 min_delta = delta;
                 min_delta_anchor_idx = anchor_idx;
             }
@@ -67,7 +66,7 @@ fire_detectors_logic(
         *target_min_anchor_delta_indices = min_delta_anchor_idx;
 
         if(firings_buffer != nullptr) {
-            lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * lookup_neurons_per_detector + lookup_index);
+            lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + lookup_index);
         }
     }
 
@@ -257,7 +256,8 @@ fire_detectors_by_lookup_indices_logic(
     uint32_t n_inputs,
     uint32_t n_detectors,
     int32_t* lookup_indices,
-    uint32_t lookup_neurons_per_detector,
+    int32_t* min_anchor_delta_indices,
+    uint32_t n_lookup_neurons_per_detector,
     NoDelaysIndexedSynapsesInfo* lookup_neuron_synapses_infos,
     Firing* firings_buffer,
     uint64_t* firings_counter_ptr,
@@ -269,28 +269,30 @@ fire_detectors_by_lookup_indices_logic(
     uint32_t i = blockIdx.x * blockDim.x + tid; // blockDim.x should be power of 2
 
     NoDelaysIndexedSynapsesInfo chosen_lookup_neuron_synapses_info;
+    NoDelaysIndexedSynapsesInfo chosen_alternative_lookup_neuron_synapses_info;
     chosen_lookup_neuron_synapses_info.n_groups = 0;
 
     if(i < n_detectors) {
         lookup_indices += blockIdx.y * n_detectors;
+        min_anchor_delta_indices += blockIdx.y * n_detectors;
         input += blockIdx.y * n_inputs;
 
         int32_t lookup_index = lookup_indices[i];
-        // Compute the lookup neuron synapses info index: detector_i * lookup_neurons_per_detector + lookup_index
-        chosen_lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * lookup_neurons_per_detector + lookup_index);
+        chosen_lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + lookup_index);
+        chosen_alternative_lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + (lookup_index ^ (1 << min_anchor_delta_indices[i])));
     }
 
     uint64_t firings_offset;
     if(device == -1) {
         if(chosen_lookup_neuron_synapses_info.n_groups > 0) {
             firings_offset = *firings_counter_ptr;
-            (*firings_counter_ptr) += chosen_lookup_neuron_synapses_info.n_groups;
+            (*firings_counter_ptr) += chosen_lookup_neuron_synapses_info.n_groups + chosen_alternative_lookup_neuron_synapses_info.n_groups;
         }
     } else {
         #ifdef ATOMIC
         extern __shared__ __align__(16) uint8_t __sm[];
         uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
-        sdata[tid] = chosen_lookup_neuron_synapses_info.n_groups;
+        sdata[tid] = chosen_lookup_neuron_synapses_info.n_groups + chosen_alternative_lookup_neuron_synapses_info.n_groups;
         __syncthreads();
         uint32_t t;
         int offset;
@@ -343,6 +345,13 @@ fire_detectors_by_lookup_indices_logic(
                 };
                 current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
             }
+            current_group_id = chosen_alternative_lookup_neuron_synapses_info.first_group_id;
+            for(uint32_t j=0;j < chosen_alternative_lookup_neuron_synapses_info.n_groups;j++) {
+                firings_buffer[firings_offset + j] = Firing{
+                    blockIdx.y, 1.0, current_group_id
+                };
+                current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
+            }
         } else {
             DelayInfo* delays_info = DelayInfos(chosen_lookup_neuron_synapses_info.delays_info_id, lut_data);
             for(uint32_t j=0;j < chosen_lookup_neuron_synapses_info.n_synapse_metas;j++) {
@@ -350,6 +359,21 @@ fire_detectors_by_lookup_indices_logic(
                 if(delay_info != 0) {
                     uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
                     NeuronDataId_t current_group_id = chosen_lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
+                    for(uint32_t k=0;k < n_groups;k++) {
+                        firings_buffer[firings_offset + k] = Firing{
+                            blockIdx.y, 1.0, current_group_id
+                        };
+                        current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
+                    }
+                    firings_offset += n_groups;
+                }
+            }
+            delays_info = DelayInfos(chosen_alternative_lookup_neuron_synapses_info.delays_info_id, lut_data);
+            for(uint32_t j=0;j < chosen_alternative_lookup_neuron_synapses_info.n_synapse_metas;j++) {
+                DelayInfo delay_info = delays_info[j];
+                if(delay_info != 0) {
+                    uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
+                    NeuronDataId_t current_group_id = chosen_alternative_lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
                     for(uint32_t k=0;k < n_groups;k++) {
                         firings_buffer[firings_offset + k] = Firing{
                             blockIdx.y, 1.0, current_group_id
@@ -369,7 +393,7 @@ gather_gradients_logic(
     Firing* firings,
     uint64_t n_firings,
     EXTERNAL_REAL_DT* output_gradients,
-    SUMMATION32_DT* target_inputs_gradients,
+    SUMMATION32_DT* target_before_detectors_gradients,
     EXTERNAL_REAL_DT* target_weights_gradients,
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
@@ -380,7 +404,7 @@ gather_gradients_logic(
     if(i < n_firings) {
         Firing firing = firings[i];
         output_gradients += firing.batch_index * n_outputs;
-        target_inputs_gradients += firing.batch_index * n_lookup_neurons;
+        target_before_detectors_gradients += firing.batch_index * n_lookup_neurons;
 
         ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(firing.data_id, lut_data);
         int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group.meta_info));
@@ -442,7 +466,6 @@ gather_gradients_logic(
             grad_x += weight * output_grad;
 
             if(target_weights_gradients != nullptr) {
-                output_grad *= firing.payload;
                 if(fabs(output_grad) > EPS) {
                     #ifdef INTEGERS_INSTEAD_OF_FLOATS
                         sum32_delta = static_cast<SUMMATION32_DT>(output_grad * static_cast<double>(DENOMINATOR32) * int_rescaler);
@@ -473,21 +496,21 @@ gather_gradients_logic(
             sum32_delta = static_cast<SUMMATION32_DT>(grad_x * static_cast<double>(DENOMINATOR32) * int_rescaler);
             #ifdef ATOMIC
             atomicAdd(
-                target_inputs_gradients + fws_group.source_neuron_index,
+                target_before_detectors_gradients + fws_group.source_neuron_index,
                 sum32_delta
             );
             #else
-            target_inputs_gradients[fws_group.source_neuron_index] += sum32_delta;
+            target_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
             #endif
         #else
             sum32_delta = static_cast<SUMMATION32_DT>(grad_x);
             #ifdef ATOMIC
             atomicAdd(
-                target_inputs_gradients + fws_group.source_neuron_index,
+                target_before_detectors_gradients + fws_group.source_neuron_index,
                 sum32_delta
             );
             #else
-            target_inputs_gradients[fws_group.source_neuron_index] += sum32_delta;
+            target_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
             #endif
         #endif
     }
@@ -501,7 +524,7 @@ propagate_through_detectors_logic(
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
     AnchorsPair* detectors,
-    uint32_t lookup_neurons_per_detector,
+    uint32_t n_lookup_neurons_per_detector,
     SUMMATION32_DT* before_detectors_gradients,
     EXTERNAL_REAL_DT* target_input_gradients,
     uint32_t n_inputs,
@@ -514,92 +537,58 @@ propagate_through_detectors_logic(
         lookup_indices += shift;
         min_anchor_deltas += shift;
         min_anchor_delta_indices += shift;
+        before_detectors_gradients += shift * n_lookup_neurons_per_detector;
         shift = blockIdx.y * n_inputs;
         input += shift;
-        before_detectors_gradients += shift;
         target_input_gradients += shift;
 
         int32_t lookup_index = lookup_indices[i];
         int32_t min_anchor_delta_index = min_anchor_delta_indices[i];
-        EXTERNAL_REAL_DT min_delta = min_anchor_deltas[i];
+        int32_t alt_lookup_neuron_idx = lookup_index ^ (1 << min_anchor_delta_index);
 
-        // Get detector's anchor pairs
-        AnchorsPair* detector_anchors = detectors + i * n_anchors_per_detector;
+        double du = static_cast<double>(min_anchor_deltas[i]);
+        if(du > 0) {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= 0.5 * du;
+        } else {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= -0.5 * du;
+        }
+        du *= static_cast<double>(before_detectors_gradients[lookup_index]) - static_cast<double>(before_detectors_gradients[alt_lookup_neuron_idx]);
 
-        // Compute alternative lookup index from lookup_index and min_anchor_delta_index
-        int32_t alternative_lookup_index = lookup_index ^ (1 << min_anchor_delta_index);
-
-        // Compute gradient difference between main and alternative lookup neurons
-        uint32_t main_lookup_neuron_idx = i * lookup_neurons_per_detector + lookup_index;
-        uint32_t alt_lookup_neuron_idx = i * lookup_neurons_per_detector + alternative_lookup_index;
-        double grad_diff = static_cast<double>(before_detectors_gradients[main_lookup_neuron_idx]) - static_cast<double>(before_detectors_gradients[alt_lookup_neuron_idx]);
-
-        // Propagate gradients through each anchor pair
-        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-            AnchorsPair ap = detector_anchors[anchor_idx];
-
-            // Skip if anchor IDs are invalid (marked as max)
-            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                continue;
-            }
-
-            // Compute delta for this anchor pair
-            double delta = static_cast<double>(input[ap.anchor1_id]) - static_cast<double>(input[ap.anchor2_id]);
-
-            // Apply sigmoid-like function (same as ANDN)
-            double du;
-            if(delta > 0) {
-                du = 1.0 / (1.0 + fabs(delta));
-                du *= 0.5 * du;
-            } else {
-                du = 1.0 / (1.0 + fabs(delta));
-                du *= -0.5 * du;
-            }
-
-            // Multiply by gradient difference and scale by whether this anchor pair contributed to the lookup_index
-            // The anchor pair contributes if its bit is set in lookup_index
-            bool anchor_contributed = (lookup_index & (1 << anchor_idx)) != 0;
-            if(anchor_contributed) {
-                du *= grad_diff;
-            } else {
-                // If this anchor pair didn't contribute, we might still need to propagate gradients
-                // For now, we'll skip non-contributing anchor pairs
-                continue;
-            }
-
-            if(fabs(du) > EPS) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(target_input_gradients) + ap.anchor1_id,
-                        sum32_delta
-                    );
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(target_input_gradients) + ap.anchor2_id,
-                        -sum32_delta
-                    );
-                    #else
-                    *reinterpret_cast<SUMMATION32_DT *>(target_input_gradients + ap.anchor1_id) += sum32_delta;
-                    *reinterpret_cast<SUMMATION32_DT *>(target_input_gradients + ap.anchor2_id) -= sum32_delta;
-                    #endif
+        if(fabs(du) > EPS) {
+            AnchorsPair ap = detectors[i * n_anchors_per_detector + min_anchor_delta_index];
+        
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                #ifdef ATOMIC
+                atomicAdd(
+                    reinterpret_cast<SUMMATION32_DT *>(target_input_gradients) + ap.anchor1_id,
+                    sum32_delta
+                );
+                atomicAdd(
+                    reinterpret_cast<SUMMATION32_DT *>(target_input_gradients) + ap.anchor2_id,
+                    -sum32_delta
+                );
                 #else
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        target_input_gradients + ap.anchor1_id,
-                        du
-                    );
-                    atomicAdd(
-                        target_input_gradients + ap.anchor2_id,
-                        -du
-                    );
-                    #else
-                    target_input_gradients[ap.anchor1_id] += du;
-                    target_input_gradients[ap.anchor2_id] -= du;
-                    #endif
+                *reinterpret_cast<SUMMATION32_DT *>(target_input_gradients + ap.anchor1_id) += sum32_delta;
+                *reinterpret_cast<SUMMATION32_DT *>(target_input_gradients + ap.anchor2_id) -= sum32_delta;
                 #endif
-            }
+            #else
+                #ifdef ATOMIC
+                atomicAdd(
+                    target_input_gradients + ap.anchor1_id,
+                    du
+                );
+                atomicAdd(
+                    target_input_gradients + ap.anchor2_id,
+                    -du
+                );
+                #else
+                target_input_gradients[ap.anchor1_id] += du;
+                target_input_gradients[ap.anchor2_id] -= du;
+                #endif
+            #endif
         }
     }
 }

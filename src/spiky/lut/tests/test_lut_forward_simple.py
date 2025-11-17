@@ -73,6 +73,17 @@ def test_lut_forward_simple(
         summation_dtype=summation_dtype,
         seed=seed
     )
+    success = success and _test_lut_forward_simple(
+        input_shape=(28, 28),
+        receptive_field_shape=(5, 5),
+        receptive_field_stride_shape=(1, 1),
+        detectors_shape=(2, 2),
+        output_kernel_shape=(8, 8),
+        n_anchors_per_detector=4,
+        device=device,
+        summation_dtype=summation_dtype,
+        seed=seed
+    )
     return success
 
 
@@ -80,14 +91,14 @@ def _test_lut_forward_simple(
     input_shape,
     receptive_field_shape,
     receptive_field_stride_shape,
-    lut_receptive_field_shape,
-    lut_receptive_field_stride_shape,
     detectors_shape,
     output_kernel_shape,
     n_anchors_per_detector,
     device, summation_dtype,
-    forward_group_size, backward_group_size,
-    batch_size=16, seed=123
+    lut_receptive_field_shape=None,
+    lut_receptive_field_stride_shape=None,
+    forward_group_size=64, backward_group_size=64,
+    batch_size=4, seed=123
 ):
     torch.manual_seed(seed)
     synapse_meta = SynapseMeta(
@@ -131,6 +142,10 @@ def _test_lut_forward_simple(
         LUTLayer.n_lut_channels(n_anchors_per_detector, 1)
     )
 
+    if lut_receptive_field_shape is None:
+        lut_receptive_field_shape = lut_shape
+        lut_receptive_field_stride_shape = lut_shape
+
     anchors = net.layer1._export_anchors()
 
     potential_connections = connections_to_matrix(
@@ -140,7 +155,7 @@ def _test_lut_forward_simple(
             input_shape,
             receptive_field_shape,
             receptive_field_stride_shape,
-            output_kernel_shape,
+            detectors_shape,
             device
         ), device
     )
@@ -173,7 +188,7 @@ def _test_lut_forward_simple(
         receptive_field_shape=lut_receptive_field_shape,
         receptive_field_stride_shape=lut_receptive_field_stride_shape,
         output_kernel_shape=output_kernel_shape,
-        n_input_channels=detectors_shape[0] * detectors_shape[1],
+        n_input_channels=LUTLayer.n_lut_channels(n_anchors_per_detector, 1),
         device=device
     )
 
@@ -244,7 +259,6 @@ def _test_lut_forward_simple(
     #
     # print(f'Calculating ground truth...')
     #
-    # x = torch.rand([batch_size, sequence_length, input_shape[0], input_shape[1]], device=device)
     # gt_out = []
     # for i in range(batch_size):
     #     for t in range(sequence_length):
@@ -254,7 +268,6 @@ def _test_lut_forward_simple(
     #
     # print(f'Calculating result...')
     #
-    # y = net(x)
     #
     # if (gt_out - y).abs().max() > 0.001:
     #     print(f"❌ results differ from ground truth")
@@ -262,6 +275,10 @@ def _test_lut_forward_simple(
     #     print(f"Ground truth shape: {gt_out.shape}, Output shape: {y.shape}")
     #     return False
 
+    x = torch.rand([batch_size, input_shape[0], input_shape[1]], device=device)
+    y = net(x)
+
+    print(y)
     print(f'Finished!')
     print('Layer 1 profiling:')
     print(net.layer1.get_profiling_stats())

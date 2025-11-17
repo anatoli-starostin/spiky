@@ -69,7 +69,6 @@ public:
             throw py::value_error("backward_group_size > MAX_SYNAPSE_GROUP_SIZE");
         }
 
-        // n_outputs is always > 0 for LUT, so we can always allocate these
         this->base_synapse_metas_id = host_device_allocator.allocate(MAX_N_SYNAPSE_METAS * sizeof(BaseSynapseMeta), SYNAPSE_METAS_MEMORY_LABEL);
         this->global_connections_meta_id = only_host_allocator.allocate(sizeof(GlobalConnectionsMeta), 0);
         GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
@@ -571,7 +570,7 @@ public:
         torch::Tensor &target_output,
         torch::Tensor &target_lookup_indices,
         torch::Tensor &target_min_anchor_deltas,
-        torch::Tensor &target_alternative_lookup_indices
+        torch::Tensor &target_min_anchor_delta_indices
     ) {
         __TRACE__("lutm_forward_step\n");
         checkTensor(weights, "weights", true, host_device_allocator.device);
@@ -579,7 +578,7 @@ public:
         checkTensor(target_output, "target_output", true, host_device_allocator.device);
         checkTensor(target_lookup_indices, "target_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(target_min_anchor_deltas, "target_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(target_alternative_lookup_indices, "target_alternative_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_min_anchor_delta_indices, "target_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
@@ -606,7 +605,7 @@ public:
                 #ifdef ENABLE_PROFILING
                 this->profiler,
                 #endif
-                this->base_synapse_metas_id == 0 ? nullptr : BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
+                BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
                 IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data),
                 IndexedSynapsesInfos(this->output_neuron_synapses_infos_id, host_device_allocator.data),
                 reinterpret_cast<AnchorsPair *>(host_device_allocator.data + this->detector_infos_id),
@@ -621,7 +620,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_output.data_ptr()),
             reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(target_alternative_lookup_indices.data_ptr())
+            reinterpret_cast<int32_t *>(target_min_anchor_delta_indices.data_ptr())
         );
     }
 
@@ -632,7 +631,7 @@ public:
         const torch::Tensor &input,
         const torch::Tensor &lookup_indices,
         const torch::Tensor &min_anchor_deltas,
-        const torch::Tensor &alternative_lookup_indices,
+        const torch::Tensor &min_anchor_delta_indices,
         torch::Tensor &target_input_gradients,
         torch::Tensor &target_weights_gradients
     ) {
@@ -649,7 +648,7 @@ public:
         checkTensor(input, "input", true, host_device_allocator.device);
         checkTensor(lookup_indices, "lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(min_anchor_deltas, "min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(alternative_lookup_indices, "alternative_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(min_anchor_delta_indices, "min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
 
         this->runtime_context->backward_backprop(
             reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
@@ -658,7 +657,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
             reinterpret_cast<int32_t *>(lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(alternative_lookup_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(min_anchor_delta_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
         );
@@ -1064,7 +1063,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("target_output"),
             py::arg("target_lookup_indices"),
             py::arg("target_min_anchor_deltas"),
-            py::arg("target_alternative_lookup_indices"))
+            py::arg("target_min_anchor_delta_indices"))
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("weights"),
@@ -1073,7 +1072,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("input"),
             py::arg("lookup_indices"),
             py::arg("min_anchor_deltas"),
-            py::arg("alternative_lookup_indices"),
+            py::arg("min_anchor_delta_indices"),
             py::arg("target_input_gradients"),
             py::arg("target_weights_gradients"))
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,

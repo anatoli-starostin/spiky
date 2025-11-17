@@ -215,7 +215,7 @@ class LUTLayer(nn.Module):
 
         lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
         min_anchor_deltas = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.float32, device=self.device)
-        alternative_lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
+        min_anchor_delta_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
 
         self._lut_dm.forward_step(
             self._weights,
@@ -223,19 +223,19 @@ class LUTLayer(nn.Module):
             output,
             lookup_indices,
             min_anchor_deltas,
-            alternative_lookup_indices
+            min_anchor_delta_indices
         )
 
         return (
             output.reshape((batch_size, sequence_length) + self.output_shape()),
             lookup_indices.reshape(batch_size, sequence_length, self._n_detectors),
             min_anchor_deltas.reshape(batch_size, sequence_length, self._n_detectors),
-            alternative_lookup_indices.reshape(batch_size, sequence_length, self._n_detectors)
+            min_anchor_delta_indices.reshape(batch_size, sequence_length, self._n_detectors)
         )
 
     def backward_step(
         self, x, grad_output,
-        lookup_indices, min_anchor_deltas, alternative_lookup_indices
+        lookup_indices, min_anchor_deltas, min_anchor_delta_indices
     ):
         assert x.device == self.device
         source_x_shape = x.shape
@@ -252,9 +252,9 @@ class LUTLayer(nn.Module):
         assert min_anchor_deltas.device == self.device
         assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
         min_anchor_deltas = min_anchor_deltas.flatten().contiguous()
-        assert alternative_lookup_indices.device == self.device
-        assert alternative_lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
-        alternative_lookup_indices = alternative_lookup_indices.flatten().contiguous()
+        assert min_anchor_delta_indices.device == self.device
+        assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        min_anchor_delta_indices = min_anchor_delta_indices.flatten().contiguous()
 
         x_grad = torch.zeros_like(x)
         self._last_w_grad = torch.zeros_like(self._weights)
@@ -269,7 +269,7 @@ class LUTLayer(nn.Module):
             grad_output,
             x, lookup_indices,
             min_anchor_deltas,
-            alternative_lookup_indices,
+            min_anchor_delta_indices,
             x_grad, self._last_w_grad
         )
 
@@ -310,20 +310,20 @@ class LUTLayer(nn.Module):
         def forward(ctx, *args, **kwargs):
             x, _, lut_layer = args
             ctx.lut_layer = lut_layer
-            output, lookup_indices, min_anchor_deltas, alternative_lookup_indices = lut_layer.forward_step(x)
-            ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, alternative_lookup_indices)
+            output, lookup_indices, min_anchor_deltas, min_anchor_delta_indices = lut_layer.forward_step(x)
+            ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
             return output
 
         @staticmethod
         def backward(ctx, *grad_outputs):
             (grad_output,) = grad_outputs
-            (x, lookup_indices, min_anchor_deltas, alternative_lookup_indices) = ctx.saved_tensors
+            (x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices) = ctx.saved_tensors
 
             x_grad, w_grad = ctx.lut_layer.backward_step(
                 x, grad_output,
                 lookup_indices,
                 min_anchor_deltas,
-                alternative_lookup_indices
+                min_anchor_delta_indices
             )
             return x_grad, w_grad, None
 

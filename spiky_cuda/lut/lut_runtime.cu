@@ -62,24 +62,19 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
 
-    if(n_outputs > 0) {
-        if(device == -1) {
-            first_synapse_meta_lr = base_synapse_metas->lr;
-        } else {
-            #ifndef NO_CUDA
-            c10::cuda::CUDAGuard guard(device);
-            cuMemcpyDtoH(
-                &first_synapse_meta_lr,
-                (CUdeviceptr) &(base_synapse_metas->lr),
-                sizeof(REAL_DT)
-            );
-            #endif
-        }
+    if(device == -1) {
+        first_synapse_meta_lr = base_synapse_metas->lr;
     } else {
-        first_synapse_meta_lr = 0.0;
+        #ifndef NO_CUDA
+        c10::cuda::CUDAGuard guard(device);
+        cuMemcpyDtoH(
+            &first_synapse_meta_lr,
+            (CUdeviceptr) &(base_synapse_metas->lr),
+            sizeof(REAL_DT)
+        );
+        #endif
     }
 }
-
 
 LUT_RUNTIME_CONTEXT_CLASS::~LUT_RUNTIME_CONTEXT_CLASS() {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS destructor\n");
@@ -119,7 +114,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     int32_t *target_min_anchor_delta_indices
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
-    
+
+    if(this->sequence_length != 1) {
+        throw py::value_error("not implemented");
+        // TODO
+    }
+
     if(batch_size != this->batch_size) {
         if(device == -1) {
             if(before_detectors_gradients != nullptr) {
@@ -149,17 +149,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     }
 
     _ensure_firing_buffer_size(
-        static_cast<uint64_t>(n_lookup_neurons) * this->max_forward_groups_per_neuron
+        static_cast<uint64_t>(n_detectors) * this->max_forward_groups_per_neuron
     );
 
     PROF_START(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
     
-    // Note: Only implementing sequence_length == 1 case
-    // Calculate lookup indices and fire lookup neurons in one kernel call
     PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
     firing_buffer->clear();
     
-    uint32_t lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
+    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
     dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_SHARED_MEM(
         numBlocks, fire_detectors, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
@@ -168,7 +166,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         this->detectors,
         this->n_detectors,
         this->n_anchors_per_detector,
-        lookup_neurons_per_detector,
+        n_lookup_neurons_per_detector,
         target_lookup_indices,
         target_min_anchor_deltas,
         target_min_anchor_delta_indices,
@@ -237,6 +235,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         throw py::value_error("batch_size on backward pass doesn't match the current context");
     }
 
+    if(this->sequence_length != 1) {
+        throw py::value_error("not implemented");
+        // TODO
+    }
+
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
     uint64_t memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(SUMMATION32_DT);
     if(before_detectors_gradients == nullptr) {
@@ -259,18 +262,21 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #endif
     }
 
-    // 1. gather gradients for winners (both dy/dx and dy/dw)
+    // 1. gather gradients for lookup_indices and alternative_lookup_indices (both dy/dx and dy/dw)
 
     _ensure_firing_buffer_size(
-        static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron
+        static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron * 2
     );
     firing_buffer->clear();
-    uint32_t lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
+    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
     dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_SHARED_MEM(
         numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
         input, this->n_inputs,
-        this->n_detectors, lookup_indices, lookup_neurons_per_detector,
+        this->n_detectors,
+        lookup_indices,
+        min_anchor_delta_indices,
+        n_lookup_neurons_per_detector,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
         firing_buffer->firings_ptr(),
         firing_buffer->counter_ptr(),
@@ -300,42 +306,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #endif
     );
 
-    // 2. gather gradients for alternative lookup indices (only dy/dx)
-    firing_buffer->clear();
-    numBlocks = dim3((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
-    GRID_CALL_SHARED_MEM(
-        numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
-        input, this->n_inputs,
-        this->n_detectors, alternative_lookup_indices, lookup_neurons_per_detector,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        firing_buffer->firings_ptr(),
-        firing_buffer->counter_ptr(),
-        this->forward_group_size,
-        this->lut_data,
-        device
-    );
-    firing_buffer->update_counter();
-
-    n_firings = firing_buffer->number_of_firings();
-    numBlocks = dim3((n_firings + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB,
-        weights, this->first_synapse_id,
-        firing_buffer->firings_ptr(),
-        n_firings,
-        output_gradients,
-        before_detectors_gradients,
-        nullptr,
-        this->n_lookup_neurons,
-        this->n_outputs,
-        this->lut_data
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
-
     // 3. propagate through detectors
 
     numBlocks = dim3((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
@@ -345,7 +315,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         this->n_detectors,
         this->n_anchors_per_detector,
         this->detectors,
-        lookup_neurons_per_detector,
+        n_lookup_neurons_per_detector,
         before_detectors_gradients,
         target_input_gradients,
         this->n_inputs
@@ -360,11 +330,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    numBlocks = dim3((this->n_outputs + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
+    numBlocks = dim3((this->n_weights + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, 1);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB,
         target_weights_gradients,
-        this->n_outputs,
+        this->n_weights,
         this->int_rescaler
     );
     numBlocks = dim3((this->n_inputs + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);

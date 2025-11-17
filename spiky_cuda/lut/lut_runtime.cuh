@@ -41,7 +41,6 @@ private:
     #endif
 
     SUMMATION32_DT *before_detectors_gradients;
-
     NeuronDataId_t first_synapse_id;
 public:
     // base constructor
@@ -77,14 +76,6 @@ public:
     void _ensure_firing_buffer_size(uint64_t max_groups_to_fire);
 
     // base methods
-
-    uint32_t get_batch_size() const {
-        return batch_size;
-    }
-
-    uint32_t get_sequence_length() const {
-        return sequence_length;
-    }
 
     void forward_step(
         EXTERNAL_REAL_DT *weights,
