@@ -120,12 +120,12 @@ def main():
     print("LUTLayer BACKWARD TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []
     if torch.cuda.is_available():
         devices.append('cuda')
 
     for device in devices:
-        for summation_dtype in [torch.int32]:  # , torch.float32
+        for summation_dtype in [torch.float32, torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_backward(device, summation_dtype)
 
