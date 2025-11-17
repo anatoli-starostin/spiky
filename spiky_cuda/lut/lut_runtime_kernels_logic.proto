@@ -269,6 +269,7 @@ fire_detectors_by_lookup_indices_logic(
     NoDelaysIndexedSynapsesInfo chosen_lookup_neuron_synapses_info;
     NoDelaysIndexedSynapsesInfo chosen_alternative_lookup_neuron_synapses_info;
     chosen_lookup_neuron_synapses_info.n_groups = 0;
+    chosen_alternative_lookup_neuron_synapses_info.n_groups = 0;
 
     if(i < n_detectors) {
         lookup_indices += blockIdx.y * n_detectors;
