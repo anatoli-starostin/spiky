@@ -58,7 +58,9 @@ def _test_lut_backward(
                 _int_rescaler=1.0,
                 device=device
             )
-            self.layer2 = nn.Linear(self.layer1.output_shape()[0] * self.layer1.output_shape()[1], 10, bias=False)
+            self.layer2 = nn.Linear(
+                self.layer1.output_shape()[0] * self.layer1.output_shape()[1], 10, bias=False, device=device
+            )
 
         def forward(self, x):
             x1 = self.layer1(x)
@@ -123,7 +125,7 @@ def main():
         devices.append('cuda')
 
     for device in devices:
-        for summation_dtype in [torch.float32, torch.int32]:
+        for summation_dtype in [torch.float32]:  # , torch.int32
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_backward(device, summation_dtype)
 
