@@ -469,7 +469,9 @@ class Conv2DLUTLayer(LUTLayer):
         self._lut_receptive_field_shape = lut_receptive_field_shape + (n_lut_channels,)
 
     def forward(self, x):
+        do_squeeze = False
         if x.shape == (x.shape[0],) + self._input_shape:
+            do_squeeze = True
             x = x.unsqueeze(1)
         elif not (len(x.shape) == len(self._input_shape) + 2 and x.shape[2:] == self._input_shape):
             raise ValueError(
@@ -478,7 +480,7 @@ class Conv2DLUTLayer(LUTLayer):
             )
 
         result = super().forward(x)
-        if x.shape == (x.shape[0],) + self._input_shape:
+        if do_squeeze:
             result = result.squeeze(1)
         return result
 
