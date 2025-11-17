@@ -174,7 +174,6 @@ class LUTLayer(nn.Module):
 
     def compile_lut(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
         n_weights = self._lut_dm.get_weights_dimension()
-        print(f'n_weights in python: {n_weights}\n')
         self._weights = nn.Parameter(torch.zeros([n_weights], dtype=torch.float32, device=self.device))
         self._lut_dm.compile(_only_trainable_backwards, self._weights.detach(), shuffle_synapses_random_seed)
 
