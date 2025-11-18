@@ -2,6 +2,7 @@
 **/tests/**/*.png
 **/tests/mnist
 workbooks/mnist
+spiky_cuda/*/aux/*.cu
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

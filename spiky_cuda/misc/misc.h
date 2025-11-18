@@ -306,6 +306,9 @@ public:
     SimpleAllocator(size_t initialCapacityInBytes)
     {
         device = -1;
+        if(initialCapacityInBytes < sizeof(size_t)) {
+            initialCapacityInBytes = sizeof(size_t);
+        }
         data = (uint8_t *) PyMem_Malloc(initialCapacityInBytes);
         allocated = initialCapacityInBytes;
         used = sizeof(size_t); // to reserve 0 as auxiliary id

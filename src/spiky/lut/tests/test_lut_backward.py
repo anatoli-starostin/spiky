@@ -8,7 +8,7 @@ from torchvision.transforms.functional import to_pil_image
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from tqdm import tqdm
 
-from spiky.lut.LUTLayer import Conv2DLUTLayer, SynapseMeta, LUTLayer
+from spiky.lut.LUTLayer import Conv2DLUTLayer, SynapseMeta
 from spiky.util.test_utils import lex_idx
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 

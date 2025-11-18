@@ -172,7 +172,7 @@ public:
         return i;
     }
 
-    void initialize_neurons() {
+    void initialize_neurons(bool is_fully_connected) {
         __TRACE__("lutm_initialize_neurons\n");
         checkOnHostDuringPrepare();
 
@@ -663,7 +663,6 @@ public:
         torch::Tensor &target_internal_source_indices,
         torch::Tensor &target_weights,
         torch::Tensor &target_internal_target_indices,
-        bool forward_or_backward,
         std::optional<torch::Tensor> &target_synapse_meta_indices
     ) {
         checkConnectionsManagerIsInitialized();
@@ -676,7 +675,7 @@ public:
             target_internal_source_indices,
             target_weights,
             target_internal_target_indices,
-            forward_or_backward,
+            true,
             none,
             target_synapse_meta_indices,
             weights_data
@@ -992,6 +991,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("initial_noise_level"),
             py::arg("initial_weight"))
         .def("initialize_neurons", &LUTM_CLASS_NAME::initialize_neurons,
+            py::arg("is_fully_connected"),
             "Initialize neurons")
         .def("initialize_detectors", &LUTM_CLASS_NAME::initialize_detectors,
             "Initialize detectors",
@@ -1064,7 +1064,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("target_internal_source_indices"),
             py::arg("target_weights"),
             py::arg("target_internal_target_indices"),
-            py::arg("forward_or_backward"),
             py::arg("target_synapse_meta_indices") = py::none())
         .def("export_anchors", &LUTM_CLASS_NAME::export_anchors,
             "Export all anchor pairs for all detectors",

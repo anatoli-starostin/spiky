@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from spiky.lut.LUTLayer import Conv2DLUTLayer, SynapseMeta, LUTLayer
+from spiky.lut.LUTLayer import Conv2DLUTLayer, SynapseMeta, LUTLayerBasic
 from spiky.util.test_utils import lex_idx
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 
@@ -139,7 +139,7 @@ def _test_lut_forward_simple(
     assert lut_shape == (
         (((input_shape[0] - receptive_field_shape[0]) // receptive_field_stride_shape[0]) + 1) * detectors_shape[0],
         (((input_shape[1] - receptive_field_shape[1]) // receptive_field_stride_shape[1]) + 1) * detectors_shape[1],
-        LUTLayer.n_lut_channels(n_anchors_per_detector, 1)
+        LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1)
     )
 
     if lut_receptive_field_shape is None:
@@ -188,7 +188,7 @@ def _test_lut_forward_simple(
         receptive_field_shape=lut_receptive_field_shape,
         receptive_field_stride_shape=lut_receptive_field_stride_shape,
         output_kernel_shape=output_kernel_shape,
-        n_input_channels=LUTLayer.n_lut_channels(n_anchors_per_detector, 1),
+        n_input_channels=LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1),
         device=device
     )
 

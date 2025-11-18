@@ -22,7 +22,7 @@ class SynapseMeta:
         assert self.min_weight <= self.initial_weight <= self.max_weight
 
 
-class LUTLayer(nn.Module):
+class LUTLayerBasic(nn.Module):
     @staticmethod
     def n_lut_channels(n_anchors_per_detector, sequence_length):
         return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
@@ -30,6 +30,7 @@ class LUTLayer(nn.Module):
     def __init__(
         self, n_inputs, n_outputs,
         n_detectors, n_anchors_per_detector,
+        is_fully_connected,
         sequence_length,
         synapse_metas: List[SynapseMeta],
         summation_dtype=torch.float32,
@@ -49,8 +50,12 @@ class LUTLayer(nn.Module):
 
         self._n_detectors = n_detectors
         self._n_anchors_per_detector = n_anchors_per_detector
+        self._is_fully_connected = is_fully_connected
         self._sequence_length = sequence_length
         self._do_normalize_gradients = _do_normalize_gradients
+
+        if self._is_fully_connected:
+            assert len(synapse_metas) == 1
 
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = self._n_lookup_neurons * n_outputs
@@ -74,6 +79,7 @@ class LUTLayer(nn.Module):
             )
 
         self._n_lookup_neurons = self._lut_dm.get_number_of_lookup_neurons()
+        self._synapse_metas = synapse_metas
 
         for i, sm in enumerate(synapse_metas):
             m_id = self._lut_dm.register_synapse_meta(
@@ -160,13 +166,15 @@ class LUTLayer(nn.Module):
         return (self._n_outputs,)
 
     def __repr__(self):
-        return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_lookup_neurons()} lookup neurons, {self.n_outputs()} outputs, {self.n_synapses()} synapses, {self._lut_dm})'
+        return f'LUTLayerBasic({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_anchors_per_detector()} anchors per detector, {self.n_outputs()} outputs, {self.n_synapses()} synapses, {self._lut_dm})'
 
     def add_lookup_connections(
         self, chunk_of_connections: ChunkOfConnections,
         ids_shift=0,
         random_seed: int = None
     ):
+        if self._is_fully_connected:
+            raise RuntimeError(f"Can't add lookup connections in fully connected mode")
         self._lut_dm.add_lookup_connections(
             chunk_of_connections.get_connections(),
             chunk_of_connections.get_single_group_size(),
@@ -176,7 +184,14 @@ class LUTLayer(nn.Module):
 
     def compile_lut(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
         n_weights = self._lut_dm.get_weights_dimension()
-        self._weights = nn.Parameter(torch.zeros([n_weights], dtype=torch.float32, device=self.device))
+        if self._is_fully_connected:
+            sm = self._synapse_metas[0]
+            w = torch.full([n_weights], sm.initial_weight, device=x.device)
+            w += torch.rand([n_weights]) * sm.initial_noise_level
+            w.clip_(sm.min_weight, sm.max_weight)
+        else:
+            w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
+        self._weights = nn.Parameter(w)
         self._lut_dm.compile(_only_trainable_backwards, self._weights.detach(), shuffle_synapses_random_seed)
         self._lut_dm.to_device(-1)
         if self.device.type == 'cuda':
@@ -215,7 +230,6 @@ class LUTLayer(nn.Module):
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
         x = x.flatten().contiguous()
-
         output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
 
         lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device)
@@ -334,10 +348,13 @@ class LUTLayer(nn.Module):
             return x_grad, w_grad, None
 
     def forward(self, x):
-        return LUTLayer.LUTForwardFN.apply(x, self._weights, self)
+        return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, self)
 
     def _count_synapses(self, neuron_ids: torch.Tensor):
-        return self._lut_dm.count_synapses(neuron_ids, True)
+        if self._is_fully_connected:
+            return self._n_lookup_neurons * self._n_outputs
+        else:
+            return self._lut_dm.count_synapses(neuron_ids, True)
 
     def _export_synapses(
         self, neuron_ids: torch.Tensor,
@@ -346,15 +363,23 @@ class LUTLayer(nn.Module):
         target_ids: torch.Tensor,
         synapse_metas: torch.Tensor = None
     ):
-        self._lut_dm.export_synapses(
-            self._weights,
-            neuron_ids,
-            source_ids,
-            weights,
-            target_ids,
-            True,
-            synapse_metas
-        )
+        if self._is_fully_connected:
+            source_ids[:] = neuron_ids.view(neuron_ids.numel(), -1).repeat(1, self._n_outputs).flatten()
+            weights[:] = self._weights.view(self._n_lookup_neurons, self._n_outputs)[neuron_ids].flatten()
+            target_ids[:] = torch.arange(
+                self._n_outputs, device=device, dtype=torch.int32
+            ).repeat(neuron_ids.numel())
+            synapse_metas[:] = 0.0
+        else:
+            self._lut_dm.export_synapses(
+                self._weights,
+                neuron_ids,
+                source_ids,
+                weights,
+                target_ids,
+                True,
+                synapse_metas
+            )
 
     def _export_anchors(self):
         """
@@ -373,7 +398,7 @@ class LUTLayer(nn.Module):
         return anchors.reshape(self._n_detectors, self._n_anchors_per_detector, 2)
 
 
-class Conv2DLUTLayer(LUTLayer):
+class Conv2DLUTLayer(LUTLayerBasic):
     def __init__(
         self, input_shape,
         n_anchors_per_detector,
@@ -407,35 +432,42 @@ class Conv2DLUTLayer(LUTLayer):
         )
 
         lut_shape = c_helper_1.out_h, c_helper_1.out_h
-        n_lut_channels = LUTLayer.n_lut_channels(n_anchors_per_detector, sequence_length)
-
-        if lut_receptive_field_shape is None:
-            assert lut_receptive_field_stride_shape is None
-            lut_receptive_field_shape = lut_shape
-            lut_receptive_field_stride_shape = lut_shape
-
-        c_helper_2 = Conv2DSynapseGrowthHelper(
-            lut_shape[0], lut_shape[1],
-            lut_receptive_field_shape[0], lut_receptive_field_shape[1],
-            lut_receptive_field_stride_shape[0], lut_receptive_field_stride_shape[1],
-            output_kernel_shape[0], output_kernel_shape[1],
-            n_input_channels=n_lut_channels
-        )
+        n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, sequence_length)
 
         n_inputs = input_shape[0] * input_shape[1]
-        n_outputs = c_helper_2.out_h * c_helper_2.out_w
         n_detectors = lut_shape[0] * lut_shape[1]
+
+        if lut_receptive_field_shape is not None:
+            c_helper_2 = Conv2DSynapseGrowthHelper(
+                lut_shape[0], lut_shape[1],
+                lut_receptive_field_shape[0], lut_receptive_field_shape[1],
+                lut_receptive_field_stride_shape[0], lut_receptive_field_stride_shape[1],
+                output_kernel_shape[0], output_kernel_shape[1],
+                n_input_channels=n_lut_channels
+            )
+            n_outputs = c_helper_2.out_h * c_helper_2.out_w
+            self._lut_receptive_field_shape = lut_receptive_field_shape + (n_lut_channels,)
+        else:
+            assert lut_receptive_field_stride_shape is None
+            c_helper_2 = None
+            n_outputs = output_kernel_shape[0] * output_kernel_shape[1]
+            self._lut_receptive_field_shape = lut_shape + (n_lut_channels,)
+
+        self._input_shape = input_shape
+        self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
+        self._lut_shape = lut_shape + (n_lut_channels,)
 
         super().__init__(
             n_inputs=n_inputs,
             n_outputs=n_outputs,
             n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector,
+            is_fully_connected=lut_receptive_field_shape is None,
             sequence_length=sequence_length,
             synapse_metas=[synapse_meta],
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
-            _initial_synapse_capacity=c_helper_2.n_connections(),
+            _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size,
             _do_normalize_gradients=_do_normalize_gradients
@@ -461,34 +493,32 @@ class Conv2DLUTLayer(LUTLayer):
         )
 
         self.initialize_detectors()
-        connections = c_helper_2.grow_synapses(
-            input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
-            output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
-            device=device,
-            seed=random_seed
-        )
 
-        self.add_lookup_connections(
-            chunk_of_connections=connections,
-            ids_shift=-1,
-            random_seed=random_seed
-        )
+        if c_helper_2 is not None:
+            connections = c_helper_2.grow_synapses(
+                input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
+                output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
+                device=device,
+                seed=random_seed
+            )
+
+            self.add_lookup_connections(
+                chunk_of_connections=connections,
+                ids_shift=-1,
+                random_seed=random_seed
+            )
 
         self.compile_lut()
-        self._input_shape = input_shape
-        self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
-        self._lut_shape = lut_shape + (n_lut_channels,)
-        self._lut_receptive_field_shape = lut_receptive_field_shape + (n_lut_channels,)
 
     def forward(self, x):
         do_squeeze = False
-        if x.shape == (x.shape[0],) + self._input_shape:
+        if x.shape == (x.shape[0],) + self.input_shape():
             do_squeeze = True
             x = x.unsqueeze(1)
-        elif not (len(x.shape) == len(self._input_shape) + 2 and x.shape[2:] == self._input_shape):
+        elif not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
             raise ValueError(
-                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self._input_shape)} or {(x.shape[0], *self._input_shape)}"
-                f"where input_shape={self._input_shape}"
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
+                f"where input_shape={self.input_shape()}"
             )
 
         result = super().forward(x)
@@ -508,6 +538,9 @@ class Conv2DLUTLayer(LUTLayer):
     def lut_receptive_field_shape(self):
         return self._lut_receptive_field_shape
 
+    def __repr__(self):
+        return f'Conv2DLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, detectors_shape={self.detectors_shape()}, n_anchors_per_detector={self.n_anchors_per_detector()})'
+
     def export_weights(self):
         n_synapses = self.n_synapses()
         source_ids = torch.zeros([n_synapses], dtype=torch.int32, device=self.device)
@@ -518,11 +551,64 @@ class Conv2DLUTLayer(LUTLayer):
             self.get_output_neuron_ids(),
             source_ids,
             weights,
-            target_ids,
-            forward_or_backward=False
+            target_ids
         )
 
         order = torch.argsort(source_ids, stable=True, descending=False)
         order = order[torch.argsort(target_ids[order], stable=True, descending=False)]
 
-        return weights[order].reshape(self._output_shape + self._lut_receptive_field_shape)
+        return weights[order].reshape(self.output_shape() + self.lut_receptive_field_shape())
+
+
+class LUTLayer(Conv2DLUTLayer):
+    def __init__(
+        self, n_inputs,
+        n_anchors_per_detector,
+        n_detectors,
+        n_outputs,
+        sequence_length,
+        synapse_meta=SynapseMeta(),
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _forward_group_size=64,
+        _backward_group_size=64,
+        _max_groups_in_growth_buffer=2 ** 20,
+        _do_normalize_gradients=True,
+        random_seed=1,
+        device=None
+    ):
+        super().__init__(
+            input_shape=(1, n_inputs,),
+            n_anchors_per_detector=n_anchors_per_detector,
+            detectors_shape=(1, n_detectors,),
+            output_kernel_shape=(1, n_outputs),
+            sequence_length=sequence_length,
+            receptive_field_shape=None,
+            receptive_field_stride_shape=None,
+            lut_receptive_field_shape=None,
+            lut_receptive_field_stride_shape=None,
+            synapse_meta=synapse_meta,
+            summation_dtype=summation_dtype,
+            _int_rescaler=_int_rescaler,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size,
+            _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
+            _do_normalize_gradients=_do_normalize_gradients,
+            random_seed=random_seed,
+            device=device
+        )
+
+    def input_shape(self):
+        return self._input_shape[1:]
+
+    def output_shape(self):
+        return self._output_shape[1:]
+
+    def lut_shape(self):
+        return self._lut_shape[1:]
+
+    def lut_receptive_field_shape(self):
+        return self._lut_receptive_field_shape[1:]
+
+    def __repr__(self):
+        return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_outputs()} outputs, {self.n_anchors_per_detector()} anchors per detector)'
