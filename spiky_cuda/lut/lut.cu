@@ -76,7 +76,6 @@ public:
         this->n_synapse_metas = 0;
         this->n_synapses = 0;
         this->lookup_neuron_synapses_infos_id = 0;
-        this->output_neuron_synapses_infos_id = 0;
         this->detectors_id = 0;
         this->detector_infos_id = 0;
 
@@ -178,12 +177,9 @@ public:
         checkOnHostDuringPrepare();
 
         this->lookup_neuron_synapses_infos_id = host_device_allocator.allocate(sizeof(IndexedSynapsesInfo) * this->n_lookup_neurons, NEURON_INFOS_MEMORY_LABEL);
-        this->output_neuron_synapses_infos_id = host_device_allocator.allocate(sizeof(IndexedSynapsesInfo) * this->n_outputs, NEURON_INFOS_MEMORY_LABEL);
 
         IndexedSynapsesInfo *current_neuron_info = IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data);
         memset(current_neuron_info, 0, sizeof(IndexedSynapsesInfo) * this->n_lookup_neurons);
-        current_neuron_info = IndexedSynapsesInfos(this->output_neuron_synapses_infos_id, host_device_allocator.data);
-        memset(current_neuron_info, 0, sizeof(IndexedSynapsesInfo) * this->n_outputs);
 
         connections_manager = new ConnectionsManager(
             #ifdef ENABLE_PROFILING
@@ -192,7 +188,7 @@ public:
             host_device_allocator, only_host_allocator, true,
             this->base_synapse_metas_id, this->global_connections_meta_id,
             this->lookup_neuron_synapses_infos_id, this->n_lookup_neurons, 0,
-            this->output_neuron_synapses_infos_id, this->n_outputs, this->n_lookup_neurons,
+            0, 0, this->n_lookup_neurons,  // No backward synapses for output neurons
             this->n_synapse_metas
         );
     }
@@ -260,7 +256,7 @@ public:
                 host_device_allocator, only_host_allocator, true,
                 this->base_synapse_metas_id, this->global_connections_meta_id,
                 this->lookup_neuron_synapses_infos_id, this->n_lookup_neurons, 0,
-                this->output_neuron_synapses_infos_id, this->n_outputs, this->n_lookup_neurons,
+                0, 0, this->n_lookup_neurons,  // No backward synapses for output neurons
                 this->n_synapse_metas
             );
         }
@@ -528,18 +524,8 @@ public:
             gc_meta->max_forward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
         }
 
-        max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
-            this->n_outputs,
-            0, false
-        );
-        max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
-            this->n_outputs,
-            0, false
-        );
-        // TODO this estimation can be more precise and should be moved to connections manager
-        if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_backward_groups_per_neuron) {
-            gc_meta->max_backward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
-        }
+        // No backward synapses for output neurons, so no need to calculate backward groups
+        gc_meta->max_backward_groups_per_neuron = 0;
 
         EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
 
@@ -595,9 +581,7 @@ public:
                 this->n_lookup_neurons,
                 this->sequence_length,
                 this->forward_group_size,
-                this->backward_group_size,
                 gc_meta->max_forward_groups_per_neuron,
-                gc_meta->max_backward_groups_per_neuron,
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 N_WEIGHTS(gc_meta, true),
                 int_rescaler,
@@ -607,7 +591,6 @@ public:
                 #endif
                 BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
                 IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data),
-                IndexedSynapsesInfos(this->output_neuron_synapses_infos_id, host_device_allocator.data),
                 reinterpret_cast<AnchorsPair *>(host_device_allocator.data + this->detector_infos_id),
                 gc_meta->first_synapse_id
             );
@@ -840,7 +823,6 @@ private:
         uint32_t n_synapse_metas,
         uint64_t n_synapses,
         NeuronDataId_t lookup_neuron_synapses_infos_id,
-        NeuronDataId_t output_neuron_synapses_infos_id,
         NeuronDataId_t detectors_id,
         NeuronDataId_t detector_infos_id,
         NeuronDataId_t global_connections_meta_id
@@ -869,7 +851,6 @@ private:
         n_synapse_metas(n_synapse_metas),
         n_synapses(n_synapses),
         lookup_neuron_synapses_infos_id(lookup_neuron_synapses_infos_id),
-        output_neuron_synapses_infos_id(output_neuron_synapses_infos_id),
         detectors_id(detectors_id),
         detector_infos_id(detector_infos_id),
         global_connections_meta_id(global_connections_meta_id)
@@ -881,7 +862,7 @@ private:
             host_device_allocator, only_host_allocator, true,
             base_synapse_metas_id, global_connections_meta_id,
             lookup_neuron_synapses_infos_id, n_lookup_neurons, 0,
-            output_neuron_synapses_infos_id, n_outputs, n_lookup_neurons,
+            0, 0, n_lookup_neurons,  // No backward synapses for output neurons
             n_synapse_metas
         );
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -912,7 +893,6 @@ private:
     uint32_t n_synapse_metas;
     uint64_t n_synapses;
     NeuronDataId_t lookup_neuron_synapses_infos_id;
-    NeuronDataId_t output_neuron_synapses_infos_id;
     NeuronDataId_t detectors_id;
     NeuronDataId_t detector_infos_id;
     NeuronDataId_t global_connections_meta_id;
@@ -943,7 +923,6 @@ py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
         ldm.n_synapse_metas,
         ldm.n_synapses,
         ldm.lookup_neuron_synapses_infos_id,
-        ldm.output_neuron_synapses_infos_id,
         ldm.detectors_id,
         ldm.detector_infos_id,
         ldm.global_connections_meta_id
@@ -980,12 +959,11 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
             t[10].cast<uint32_t>(),         // n_synapse_metas
             t[11].cast<uint64_t>(),        // n_synapses
             t[12].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
-            t[13].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
-            t[14].cast<NeuronDataId_t>(), // detectors_id
-            t[15].cast<NeuronDataId_t>(),  // detector_infos_id
-            t[16].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[13].cast<NeuronDataId_t>(), // detectors_id
+            t[14].cast<NeuronDataId_t>(),  // detector_infos_id
+            t[15].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[17].cast<double>()         // int_rescaler
+            , t[16].cast<double>()         // int_rescaler
             #endif
         )
     );

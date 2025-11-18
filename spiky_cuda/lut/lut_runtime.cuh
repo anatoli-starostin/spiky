@@ -17,7 +17,6 @@ private:
     uint32_t n_anchors_per_detector;
     uint32_t n_lookup_neurons;
     uint32_t forward_group_size;
-    uint32_t backward_group_size;
     REAL_DT first_synapse_meta_lr;
 
     uint32_t batch_size;
@@ -29,12 +28,10 @@ private:
 
     BaseSynapseMeta *base_synapse_metas;
     IndexedSynapsesInfo *lookup_neuron_synapses_infos;
-    IndexedSynapsesInfo *output_neuron_synapses_infos;
     AnchorsPair *detectors;
 
     FiringBuffer *firing_buffer;
     uint32_t max_forward_groups_per_neuron;
-    uint32_t max_backward_groups_per_neuron;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights;
     double int_rescaler;
@@ -54,9 +51,7 @@ public:
         uint32_t n_lookup_neurons,
         uint32_t sequence_length,
         uint32_t forward_group_size,
-        uint32_t backward_group_size,
         uint32_t max_forward_groups_per_neuron,
-        uint32_t max_backward_groups_per_neuron,
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         uint64_t n_weights,
         double int_rescaler,
@@ -66,7 +61,6 @@ public:
         #endif
         BaseSynapseMeta *base_synapse_metas,
         IndexedSynapsesInfo *lookup_neuron_synapses_infos,
-        IndexedSynapsesInfo *output_neuron_synapses_infos,
         AnchorsPair *detectors,
         NeuronDataId_t first_synapse_id
     );

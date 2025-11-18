@@ -139,6 +139,9 @@ class ANDNLayer(nn.Module):
         n_weights = self._andn_dm.get_weights_dimension()
         self._weights = nn.Parameter(torch.zeros([n_weights], dtype=torch.float32, device=self.device))
         self._andn_dm.compile(_only_trainable_backwards, self._weights.detach(), shuffle_synapses_random_seed)
+        self._andn_dm.to_device(-1)
+        if self.device.type == 'cuda':
+            self._andn_dm.to_device(self.device.index)
 
     def get_smallest_distinguishable_fraction(self) -> float:
         return self._andn_dm.get_smallest_distinguishable_fraction()

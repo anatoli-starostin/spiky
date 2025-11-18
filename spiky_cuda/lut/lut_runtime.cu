@@ -16,9 +16,7 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     uint32_t n_lookup_neurons,
     uint32_t sequence_length,
     uint32_t forward_group_size,
-    uint32_t backward_group_size,
     uint32_t max_forward_groups_per_neuron,
-    uint32_t max_backward_groups_per_neuron,
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights,
     double int_rescaler,
@@ -28,7 +26,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     #endif
     BaseSynapseMeta *base_synapse_metas,
     IndexedSynapsesInfo *lookup_neuron_synapses_infos,
-    IndexedSynapsesInfo *output_neuron_synapses_infos,
     AnchorsPair *detectors,
     NeuronDataId_t first_synapse_id
 ) :
@@ -40,7 +37,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     n_anchors_per_detector(n_anchors_per_detector),
     n_lookup_neurons(n_lookup_neurons),
     forward_group_size(forward_group_size),
-    backward_group_size(backward_group_size),
     batch_size(0),
     sequence_length(sequence_length),
     #ifdef ENABLE_PROFILING
@@ -48,11 +44,9 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     #endif
     base_synapse_metas(base_synapse_metas),
     lookup_neuron_synapses_infos(lookup_neuron_synapses_infos),
-    output_neuron_synapses_infos(output_neuron_synapses_infos),
     detectors(detectors),
     firing_buffer(nullptr),
     max_forward_groups_per_neuron(max_forward_groups_per_neuron),
-    max_backward_groups_per_neuron(max_backward_groups_per_neuron),
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     n_weights(n_weights),
     int_rescaler(int_rescaler),
@@ -296,7 +290,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         target_weights_gradients,
         this->n_lookup_neurons,
         this->n_outputs,
-        this->lut_data
+        this->lut_data,
+        this->first_synapse_meta_lr,
+        this->base_synapse_metas
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
         #else

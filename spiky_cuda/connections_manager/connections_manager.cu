@@ -236,286 +236,291 @@ void ConnectionsManager::finalize(
         PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_SHUFFLE_GROUPS_PROFILER_OP);
     }
 
-    // 1. We need to calculate backward statistics: <neuron_id, synapse_meta_index> -> <count, min_input_delay, max_input_delay>
+    if(this->n_backward_neurons > 0) {
+        // 1. We need to calculate backward statistics: <neuron_id, synapse_meta_index> -> <count, min_input_delay, max_input_delay>
 
-    uint64_t memsize = 3 * sizeof(uint32_t) * this->n_backward_neurons * this->n_synapse_metas;
-    uint32_t* backward_stat; // N_neurons x N_synapse_metas x 3 (count, min_input_delay, max_input_delay)
+        uint64_t memsize = 3 * sizeof(uint32_t) * this->n_backward_neurons * this->n_synapse_metas;
+        uint32_t* backward_stat; // N_neurons x N_synapse_metas x 3 (count, min_input_delay, max_input_delay)
 
-    if (device == -1) {
-        backward_stat = (uint32_t*) PyMem_Malloc(memsize);
-        memset(backward_stat, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMalloc(&backward_stat, memsize);
-        cudaMemset(backward_stat, 0, memsize);
+        if (device == -1) {
+            backward_stat = (uint32_t*) PyMem_Malloc(memsize);
+            memset(backward_stat, 0, memsize);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaMalloc(&backward_stat, memsize);
+            cudaMemset(backward_stat, 0, memsize);
+            #endif
+        }
+
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_STATS_PROFILER_OP);
+        numBlocks = dim3((n_synapse_metas * this->n_backward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, init_backward_stats, CONN_MANAGER_TPB,
+            backward_stat, n_synapse_metas * this->n_backward_neurons
+        );
+
+        numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, calculate_backward_stats, CONN_MANAGER_TPB,
+            backward_stat, n_synapse_metas,
+            IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
+            this->n_forward_neurons, this->backward_shift,
+            only_trainable_backwards,
+            allocator.data, this->separate_weights_mode
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_STATS_PROFILER_OP);
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
+
+        // 2. Now we can calculate upper bound for number of <neuron_id, synapse_meta, delay> keys
+        // In the same kernel, we compute the total number of synapses present
+
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_STATS_PROFILER_OP);
+        numBlocks = dim3(((this->n_backward_neurons * n_synapse_metas) + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_SHARED_MEM(
+            numBlocks, reduce_backward_stats, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t) * 2,
+            backward_stat, this->n_backward_neurons * n_synapse_metas, aux_buffer, device
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_STATS_PROFILER_OP);
+
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+
+        // aux_buffer[0] - N_keys: upper bound for the number of <neuron_id, synapse_meta, delay> keys
+        // aux_buffer[1] - n_backward_synapses: total number of synapses encountered
+        uint64_t h=1;
+        aux_buffer[0] = (aux_buffer[0] * 3) / 2;
+        while((h < aux_buffer[0]) && (h < std::numeric_limits<uint32_t>::max())) {
+            h <<= 1;
+        }
+        if (h > std::numeric_limits<uint32_t>::max()) {
+            throw py::value_error("extremely big number of keys");
+        }
+        uint32_t hash_space_size = static_cast<uint32_t>(h);
+        hash_space_size <<= 1;
+
+        uint64_t n_backward_synapses = aux_buffer[1];
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
+
+        // backward_stat is no longer needed
+        if(device == -1) {
+            PyMem_Free(backward_stat);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaFree(backward_stat);
+            #endif
+        }
+
+        // 3. Allocate space for detailed statistics and references to backward groups. Initially
+        // counters are set to 0 and references are nullptr-s.
+
+        BackwardGroupsHashEntry *hash_space;
+        memsize = static_cast<uint64_t>(hash_space_size) * sizeof(BackwardGroupsHashEntry);
+        if (device == -1) {
+            hash_space = (BackwardGroupsHashEntry*) PyMem_Malloc(memsize);
+            memset(hash_space, 0, memsize);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaMalloc(&hash_space, memsize);
+            cudaDeviceSynchronize();
+            CU_CHECK(cudaStreamSynchronize(nullptr));
+            CU_CHECK(cudaGetLastError());
+            cudaMemset(hash_space, 0, memsize);
+            #endif
+        }
+
+        // 4. Now we can calculate precise statistics. For each combination <neuron_id, synapse_meta_index, delay>
+        // we can estimate number of input synapses.
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_COUNTERS_PROFILER_OP);
+        numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, calculate_backward_counters, CONN_MANAGER_TPB,
+            BaseSynapseMetas(this->synapse_metas_id, allocator.data),
+            IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
+            this->n_forward_neurons,
+            hash_space, hash_space_size,
+            only_trainable_backwards,
+            allocator.data, this->separate_weights_mode
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_COUNTERS_PROFILER_OP);
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+
+        #ifdef ENABLE_PROFILING
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_COUNTERS_PROFILER_OP);
+        numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_SHARED_MEM(
+            numBlocks, reduce_backward_counters, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t),
+            hash_space, hash_space_size,
+            aux_buffer, device
+        );
+
+        if(aux_buffer[0] != n_backward_synapses) {
+            std::ostringstream os;
+            os << "sum of backward counters (" << aux_buffer[0] << ") is not equal to n_backward_synapses (" << n_backward_synapses << ")";
+            throw py::value_error(os.str());
+        }
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_COUNTERS_PROFILER_OP);
         #endif
-    }
 
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_STATS_PROFILER_OP);
-    numBlocks = dim3((n_synapse_metas * this->n_backward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, init_backward_stats, CONN_MANAGER_TPB,
-        backward_stat, n_synapse_metas * this->n_backward_neurons
-    );
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_CAPACITY_PROFILER_OP);
+        // 5. Calculate precise total number of groups needed to store all backward synapses
+        // and the amount of memory required. Also distribute estimations among neurons (using capacity_estimations array)
 
-    numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, calculate_backward_stats, CONN_MANAGER_TPB,
-        backward_stat, n_synapse_metas,
-        IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
-        this->n_forward_neurons, this->backward_shift,
-        only_trainable_backwards,
-        allocator.data, this->separate_weights_mode
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_STATS_PROFILER_OP);
-    if(device != -1) {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-        #endif
-    }
+        uint64_t* capacity_estimations;
 
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
+        if (device == -1) {
+            capacity_estimations = (uint64_t*) PyMem_Malloc(this->n_backward_neurons * sizeof(uint64_t));
+            memset(capacity_estimations, 0, this->n_backward_neurons * sizeof(uint64_t));
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaMalloc(&capacity_estimations, this->n_backward_neurons * sizeof(uint64_t));
+            cudaMemset(capacity_estimations, 0, this->n_backward_neurons * sizeof(uint64_t));
+            #endif
+        }
 
-    // 2. Now we can calculate upper bound for number of <neuron_id, synapse_meta, delay> keys
-    // In the same kernel, we compute the total number of synapses present
+        numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_SHARED_MEM(
+            numBlocks, reduce_backward_capacity, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t) * 2,
+            hash_space, hash_space_size, IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+            this->backward_shift, aux_buffer, capacity_estimations, device
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_CAPACITY_PROFILER_OP);
 
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_STATS_PROFILER_OP);
-    numBlocks = dim3(((this->n_backward_neurons * n_synapse_metas) + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_SHARED_MEM(
-        numBlocks, reduce_backward_stats, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t) * 2,
-        backward_stat, this->n_backward_neurons * n_synapse_metas, aux_buffer, device
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_STATS_PROFILER_OP);
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+        uint64_t backward_groups_capacity = aux_buffer[0];
+        gc_meta->n_backward_groups = aux_buffer[1];
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
 
-    if(device != -1) {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-        #endif
-    }
+        if(device == -1) {
+            uint64_t prev = 0;
+            for (uint32_t i = 0; i < this->n_backward_neurons; i++) {
+                uint64_t tmp = capacity_estimations[i];
+                capacity_estimations[i] = prev;
+                prev += tmp;
+            }
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            thrust::device_ptr<uint64_t> t_ptr(capacity_estimations);
+            thrust::exclusive_scan(t_ptr, t_ptr + this->n_backward_neurons, t_ptr);
+            #endif
+        }
 
-    // aux_buffer[0] - N_keys: upper bound for the number of <neuron_id, synapse_meta, delay> keys
-    // aux_buffer[1] - n_backward_synapses: total number of synapses encountered
-    uint64_t h=1;
-    aux_buffer[0] = (aux_buffer[0] * 3) / 2;
-    while((h < aux_buffer[0]) && (h < std::numeric_limits<uint32_t>::max())) {
-        h <<= 1;
-    }
-    if (h > std::numeric_limits<uint32_t>::max()) {
-        throw py::value_error("extremely big number of keys");
-    }
-    uint32_t hash_space_size = static_cast<uint32_t>(h);
-    hash_space_size <<= 1;
+        // 6. Allocate the required space for backward groups and distribute it among neurons
+        NeuronDataId_t all_backward_groups_id = allocator.allocate(
+            backward_groups_capacity, BACKWARD_SYNAPSES_MEMORY_LABEL
+        );
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_BIG_PROFILER_OP);
+        numBlocks = dim3((this->n_backward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, distribute_big_backward_groups, CONN_MANAGER_TPB,
+            IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+            this->n_backward_neurons, all_backward_groups_id, capacity_estimations
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_BIG_PROFILER_OP);
 
-    uint64_t n_backward_synapses = aux_buffer[1];
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
+        if(device == -1) {
+            PyMem_Free(capacity_estimations);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaFree(capacity_estimations);
+            #endif
+        }
 
-    // backward_stat is no longer needed
-    if(device == -1) {
-        PyMem_Free(backward_stat);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaFree(backward_stat);
-        #endif
-    }
+        // 7. Distribute allocated space among hash entries
 
-    // 3. Allocate space for detailed statistics and references to backward groups. Initially
-    // counters are set to 0 and references are nullptr-s.
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_SMALL_PROFILER_OP);
+        for(uint32_t sm_index=0;sm_index < this->n_synapse_metas;sm_index++) { // this will keep backward groups sorted by synapse meta
+            numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, distribute_small_backward_groups, CONN_MANAGER_TPB,
+                hash_space, hash_space_size, IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+                this->backward_shift, sm_index, allocator.data
+            );
+        }
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_SMALL_PROFILER_OP);
 
-    BackwardGroupsHashEntry *hash_space;
-    memsize = static_cast<uint64_t>(hash_space_size) * sizeof(BackwardGroupsHashEntry);
-    if (device == -1) {
-        hash_space = (BackwardGroupsHashEntry*) PyMem_Malloc(memsize);
-        memset(hash_space, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMalloc(&hash_space, memsize);
-        cudaDeviceSynchronize();
-        CU_CHECK(cudaStreamSynchronize(nullptr));
-        CU_CHECK(cudaGetLastError());
-        cudaMemset(hash_space, 0, memsize);
-        #endif
-    }
+        // 8. Finally fill backward groups with backward synapses.
 
-    // 4. Now we can calculate precise statistics. For each combination <neuron_id, synapse_meta_index, delay>
-    // we can estimate number of input synapses.
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_COUNTERS_PROFILER_OP);
-    numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, calculate_backward_counters, CONN_MANAGER_TPB,
-        BaseSynapseMetas(this->synapse_metas_id, allocator.data),
-        IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
-        this->n_forward_neurons,
-        hash_space, hash_space_size,
-        only_trainable_backwards,
-        allocator.data, this->separate_weights_mode
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_CALCULATE_BACKWARD_COUNTERS_PROFILER_OP);
-    if(device != -1) {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-        #endif
-    }
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
 
-    #ifdef ENABLE_PROFILING
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_COUNTERS_PROFILER_OP);
-    numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_SHARED_MEM(
-        numBlocks, reduce_backward_counters, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t),
-        hash_space, hash_space_size,
-        aux_buffer, device
-    );
+        PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_FILL_BACKWARD_GROUPS_PROFILER_OP);
+        numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+        *error_counter = 0;
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, fill_backward_groups, CONN_MANAGER_TPB,
+            BaseSynapseMetas(this->synapse_metas_id, allocator.data),
+            IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
+            this->n_forward_neurons,
+            this->forward_shift,
+            gc_meta->first_synapse_id,
+            hash_space, hash_space_size,
+            only_trainable_backwards,
+            allocator.data, this->separate_weights_mode, aux_buffer, error_counter
+        );
+        PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_FILL_BACKWARD_GROUPS_PROFILER_OP);
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+        if(*error_counter > 0) {
+            throw py::value_error("some error happened inside fill_backward_groups kernel");
+        }
 
-    if(aux_buffer[0] != n_backward_synapses) {
-        std::ostringstream os;
-        os << "sum of backward counters (" << aux_buffer[0] << ") is not equal to n_backward_synapses (" << n_backward_synapses << ")";
-        throw py::value_error(os.str());
-    }
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_COUNTERS_PROFILER_OP);
-    #endif
+        // aux_buffer[0] > 0 means that there was an attempt to create super long distance to an anchor synapse group
+        // (normally we expect that synapses are located in memory relatively close to each other)
+        if(aux_buffer[0] > 0) {
+            throw py::value_error("Detected an attempt to create super long distance to an anchor synapse group");
+        }
+        memset(aux_buffer, 0, 3 * sizeof(uint64_t));
 
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_CAPACITY_PROFILER_OP);
-    // 5. Calculate precise total number of groups needed to store all backward synapses
-    // and the amount of memory required. Also distribute estimations among neurons (using capacity_estimations array)
-
-    uint64_t* capacity_estimations;
-
-    if (device == -1) {
-        capacity_estimations = (uint64_t*) PyMem_Malloc(this->n_backward_neurons * sizeof(uint64_t));
-        memset(capacity_estimations, 0, this->n_backward_neurons * sizeof(uint64_t));
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMalloc(&capacity_estimations, this->n_backward_neurons * sizeof(uint64_t));
-        cudaMemset(capacity_estimations, 0, this->n_backward_neurons * sizeof(uint64_t));
-        #endif
-    }
-
-    numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_SHARED_MEM(
-        numBlocks, reduce_backward_capacity, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t) * 2,
-        hash_space, hash_space_size, IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
-        this->backward_shift, aux_buffer, capacity_estimations, device
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_REDUCE_BACKWARD_CAPACITY_PROFILER_OP);
-
-    if(device != -1) {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-        #endif
-    }
-    uint64_t backward_groups_capacity = aux_buffer[0];
-    gc_meta->n_backward_groups = aux_buffer[1];
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
-
-    if(device == -1) {
-        uint64_t prev = 0;
-        for (uint32_t i = 0; i < this->n_backward_neurons; i++) {
-            uint64_t tmp = capacity_estimations[i];
-            capacity_estimations[i] = prev;
-            prev += tmp;
+        if(device == -1) {
+            PyMem_Free(hash_space);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaFree(hash_space);
+            #endif
         }
     } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        thrust::device_ptr<uint64_t> t_ptr(capacity_estimations);
-        thrust::exclusive_scan(t_ptr, t_ptr + this->n_backward_neurons, t_ptr);
-        #endif
+        gc_meta->n_backward_groups = 0;
     }
 
-    // 6. Allocate the required space for backward groups and distribute it among neurons
-    NeuronDataId_t all_backward_groups_id = allocator.allocate(
-        backward_groups_capacity, BACKWARD_SYNAPSES_MEMORY_LABEL
-    );
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_BIG_PROFILER_OP);
-    numBlocks = dim3((this->n_backward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, distribute_big_backward_groups, CONN_MANAGER_TPB,
-        IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
-        this->n_backward_neurons, all_backward_groups_id, capacity_estimations
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_BIG_PROFILER_OP);
-
-    if(device == -1) {
-        PyMem_Free(capacity_estimations);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaFree(capacity_estimations);
-        #endif
-    }
-
-    // 7. Distribute allocated space among hash entries
-
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_SMALL_PROFILER_OP);
-    for(uint32_t sm_index=0;sm_index < this->n_synapse_metas;sm_index++) { // this will keep backward groups sorted by synapse meta
-        numBlocks = dim3((hash_space_size + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, distribute_small_backward_groups, CONN_MANAGER_TPB,
-            hash_space, hash_space_size, IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
-            this->backward_shift, sm_index, allocator.data
-        );
-    }
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_DISTRIBUTE_SMALL_PROFILER_OP);
-
-    // 8. Finally fill backward groups with backward synapses.
-
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
-
-    PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_FILL_BACKWARD_GROUPS_PROFILER_OP);
-    numBlocks = dim3((this->n_forward_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
-    *error_counter = 0;
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, fill_backward_groups, CONN_MANAGER_TPB,
-        BaseSynapseMetas(this->synapse_metas_id, allocator.data),
-        IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
-        this->n_forward_neurons,
-        this->forward_shift,
-        gc_meta->first_synapse_id,
-        hash_space, hash_space_size,
-        only_trainable_backwards,
-        allocator.data, this->separate_weights_mode, aux_buffer, error_counter
-    );
-    PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_FILL_BACKWARD_GROUPS_PROFILER_OP);
-    if(device != -1) {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-        #endif
-    }
-    if(*error_counter > 0) {
-        throw py::value_error("some error happened inside fill_backward_groups kernel");
-    }
-
-    // aux_buffer[0] > 0 means that there was an attempt to create super long distance to an anchor synapse group
-    // (normally we expect that synapses are located in memory relatively close to each other)
-    if(aux_buffer[0] > 0) {
-        throw py::value_error("Detected an attempt to create super long distance to an anchor synapse group");
-    }
-    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
-
-    if(device == -1) {
-        PyMem_Free(hash_space);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaFree(hash_space);
-        #endif
-    }
-
-    for(uint32_t j=0;j < 2;j++) {
+    for(uint32_t j=0;j < ((this->n_backward_neurons == 0) ? 1 : 2);j++) {
         bool forward_or_backward = (j == 0);
         IndexedSynapsesInfo* indexed_synapse_infos_ptr = IndexedSynapsesInfos(
             forward_or_backward ? this->forward_neuron_infos_id : this->backward_neuron_infos_id, allocator.data
         );
         uint32_t n_neurons = forward_or_backward ? this->n_forward_neurons : this->n_backward_neurons;
+        uint64_t* capacity_estimations;
         if (device == -1) {
             capacity_estimations = (uint64_t*) PyMem_Malloc(n_neurons * sizeof(uint64_t));
             memset(capacity_estimations, 0, n_neurons * sizeof(uint64_t));
@@ -611,6 +616,9 @@ uint64_t ConnectionsManager::calculate_max_delay_range(
     bool forward_or_backward
 ) {
     PROF_START(CONNECTIONS_MANAGER_CALCULATE_REDUCE_AUX_INFO_PROFILER_OP);
+    if((this->n_backward_neurons == 0) && !forward_or_backward) {
+        return 0;
+    }
     aux_buffer[0] = 0;
     dim3 numBlocks((n_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
     GRID_CALL_SHARED_MEM(
@@ -634,6 +642,9 @@ uint64_t ConnectionsManager::calculate_max_n_groups(
     bool forward_or_backward
 ) {
     PROF_START(CONNECTIONS_MANAGER_CALCULATE_REDUCE_AUX_INFO_PROFILER_OP);
+    if((this->n_backward_neurons == 0) && !forward_or_backward) {
+        return 0;
+    }
     aux_buffer[0] = 0;
     dim3 numBlocks((n_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
     GRID_CALL_SHARED_MEM(
@@ -658,6 +669,9 @@ uint64_t ConnectionsManager::calculate_max_n_synapse_metas(
     bool forward_or_backward
 ) {
     PROF_START(CONNECTIONS_MANAGER_CALCULATE_REDUCE_AUX_INFO_PROFILER_OP);
+    if((this->n_backward_neurons == 0) && !forward_or_backward) {
+        return 0;
+    }
     aux_buffer[0] = 0;
     dim3 numBlocks((n_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
     GRID_CALL_SHARED_MEM(
@@ -680,6 +694,9 @@ uint64_t ConnectionsManager::count_synapses(
     bool forward_or_backward
 ) {
     PROF_START(CONNECTIONS_MANAGER_COUNT_SYNAPSES_PROFILER_OP);
+    if((this->n_backward_neurons == 0) && !forward_or_backward) {
+        return 0;
+    }
     __TRACE__("connections_manager::count_synapses\n");
     checkTensor(neuron_indices_to_process, "neuron_indices_to_process", false, allocator.device, sizeof(NeuronIndex_t));
     NeuronIndex_t *neuron_indices_to_process_data = reinterpret_cast<NeuronIndex_t *>(neuron_indices_to_process.data_ptr());
@@ -716,6 +733,9 @@ void ConnectionsManager::export_synapses(
     EXTERNAL_REAL_DT* separate_weights
 ) {
     PROF_START(CONNECTIONS_MANAGER_EXPORT_SYNAPSES_PROFILER_OP);
+    if((this->n_backward_neurons == 0) && !forward_or_backward) {
+        return;
+    }
     __TRACE__("connections_manager::export_synapses\n");
     checkTensor(neuron_indices_to_process, "neuron_indices_to_process", false, allocator.device, sizeof(NeuronIndex_t));
     checkTensor(target_internal_source_indices, "target_internal_source_indices", false, allocator.device, sizeof(NeuronIndex_t));
@@ -810,6 +830,9 @@ void ConnectionsManager::export_synapses(
 uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices)
 {
     PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    if(this->n_backward_neurons == 0) {
+       throw std::runtime_error("you're not supposed to do it, this->n_backward_neurons == 0");
+    }
     __TRACE__("connections_manager::count_max_input_weights_per_neuron(neuron_indices)\n");
     checkTensor(neuron_indices, "neuron_indices", false, allocator.device, sizeof(NeuronIndex_t));
     NeuronIndex_t *neuron_indices_data = reinterpret_cast<NeuronIndex_t *>(neuron_indices.data_ptr());
@@ -839,6 +862,9 @@ uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Te
 uint32_t ConnectionsManager::count_max_input_synapses_per_neuron()
 {
     PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);
+    if(this->n_backward_neurons == 0) {
+       throw std::runtime_error("you're not supposed to do it, this->n_backward_neurons == 0");
+    }
     __TRACE__("connections_manager::count_max_input_weights_per_neuron\n");
 
     *aux_buffer = 0;
@@ -869,6 +895,9 @@ void ConnectionsManager::export_input_synaptic_weights(
 )
 {
     PROF_START(CONNECTIONS_MANAGER_EXPORT_INPUT_WEIGHTS_PROFILER_OP);
+    if(this->n_backward_neurons == 0) {
+       throw std::runtime_error("you're not supposed to do it, this->n_backward_neurons == 0");
+    }
     __TRACE__("connections_manager::export_synaptic_weights\n");
 
     if(this->separate_weights_mode && (separate_weights == nullptr)) {

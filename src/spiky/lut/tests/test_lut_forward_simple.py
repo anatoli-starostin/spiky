@@ -196,28 +196,27 @@ def _test_lut_forward_simple(
 
     print(f'Exporting synapses, layer 1...')
 
-    n_synapses = net.layer1._count_synapses(net.layer1.get_output_neuron_ids(), False)
-    backward_export_1 = {
+    n_synapses = net.layer1._count_synapses(net.layer1.get_lookup_neuron_ids())
+    synapses_export = {
         'source_ids': torch.zeros([n_synapses], dtype=torch.int32, device=device),
         'weights': torch.zeros([n_synapses], dtype=torch.float32, device=device),
         'target_ids': torch.zeros([n_synapses], dtype=torch.int32, device=device)
     }
 
     net.layer1._export_synapses(
-        net.layer1.get_output_neuron_ids(),
-        backward_export_1['source_ids'],
-        backward_export_1['weights'],
-        backward_export_1['target_ids'],
-        forward_or_backward=False
+        net.layer1.get_lookup_neuron_ids(),
+        synapses_export['source_ids'],
+        synapses_export['weights'],
+        synapses_export['target_ids'],
     )
 
-    order1 = lex_idx(backward_export_1['source_ids'], backward_export_1['target_ids'])
+    order1 = lex_idx(synapses_export['source_ids'], synapses_export['target_ids'])
 
-    if torch.any(backward_export_1['source_ids'][order1] != layer_1_gt_source_ids):
+    if torch.any(synapses_export['source_ids'][order1] != layer_1_gt_source_ids):
         print(f"❌ wrong source connections at layer 1")
         return False
 
-    if torch.any(backward_export_1['target_ids'][order1] != layer_1_gt_target_ids):
+    if torch.any(synapses_export['target_ids'][order1] != layer_1_gt_target_ids):
         print(f"❌ wrong target connections at layer 1")
         return False
 

@@ -397,6 +397,8 @@ gather_gradients_logic(
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
     uint8_t* lut_data,
+    REAL_DT first_synapse_meta_lr,
+    BaseSynapseMeta* synapse_metas,
     double int_rescaler
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -406,6 +408,14 @@ gather_gradients_logic(
         target_before_detectors_gradients += firing.batch_index * n_lookup_neurons;
 
         ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(firing.data_id, lut_data);
+        double lr;
+        uint32_t sm_index = SynapseGroupSynapseMetaIndex(fws_group.meta_info);
+        if(sm_index == 0) {
+            lr = static_cast<double>(first_synapse_meta_lr);
+        } else {
+            lr = static_cast<double>((synapse_metas + sm_index)->lr);
+        }
+
         int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group.meta_info));
         NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, lut_data);
         long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
@@ -467,7 +477,7 @@ gather_gradients_logic(
             if(target_weights_gradients != nullptr) {
                 if(fabs(output_grad) > EPS) {
                     #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
                         #ifdef ATOMIC
                         atomicAdd(
                             reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients) + weight_shift,
@@ -477,7 +487,7 @@ gather_gradients_logic(
                         *reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients + weight_shift) += sum32_delta;
                         #endif
                     #else
-                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad);
+                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
                         #ifdef ATOMIC
                         atomicAdd(
                             target_weights_gradients + weight_shift,
@@ -492,7 +502,7 @@ gather_gradients_logic(
         }
 
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            sum32_delta = static_cast<SUMMATION32_DT>(grad_x * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
             #ifdef ATOMIC
             atomicAdd(
                 target_before_detectors_gradients + fws_group.source_neuron_index,
@@ -502,7 +512,7 @@ gather_gradients_logic(
             target_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
             #endif
         #else
-            sum32_delta = static_cast<SUMMATION32_DT>(grad_x);
+            sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr);
             #ifdef ATOMIC
             atomicAdd(
                 target_before_detectors_gradients + fws_group.source_neuron_index,
