@@ -443,30 +443,38 @@ class Conv2DLUTLayer(LUTLayer):
         else:
             device = torch.device("cpu")
 
+        print('growing detector connections')
+        connections = c_helper_1.grow_synapses(
+            input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
+            output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
+            device=device,
+            seed=random_seed
+        )
+
+        print('adding detector connections')
         self.add_detector_connections(
-            chunk_of_connections=c_helper_1.grow_synapses(
-                input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
-                output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
-                device=device,
-                seed=random_seed
-            ),
+            chunk_of_connections=connections,
             ids_shift=-1,
             random_seed=random_seed
         )
 
         self.initialize_detectors()
+        print('growing lookup connections')
+        connections = c_helper_2.grow_synapses(
+            input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
+            output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
+            device=device,
+            seed=random_seed
+        )
 
+        print('adding lookup connections')
         self.add_lookup_connections(
-            chunk_of_connections=c_helper_2.grow_synapses(
-                input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
-                output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
-                device=device,
-                seed=random_seed
-            ),
+            chunk_of_connections=connections,
             ids_shift=-1,
             random_seed=random_seed
         )
 
+        print('compiling lut')
         self.compile_lut()
         self._input_shape = input_shape
         self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
