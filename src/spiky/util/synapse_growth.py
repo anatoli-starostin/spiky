@@ -390,7 +390,7 @@ class Conv2DSynapseGrowthHelper(object):
 
     def grow_synapses(
         self, input_ids, output_ids, device,
-        synapse_group_size=64, max_groups_in_buffer=1024, seed=123
+        synapse_group_size=64, max_groups_in_buffer=2**20, seed=123
     ):
         if self.n_input_channels is None:
             assert input_ids.shape == (self.h, self.w,)

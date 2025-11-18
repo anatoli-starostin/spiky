@@ -385,8 +385,9 @@ class Conv2DLUTLayer(LUTLayer):
         synapse_meta=SynapseMeta(),
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
-        _forward_group_size: int = 64,
-        _backward_group_size: int = 64,
+        _forward_group_size=64,
+        _backward_group_size=64,
+        _max_groups_in_growth_buffer=2**20,
         _do_normalize_gradients=True,
         random_seed=1,
         device=None
@@ -443,15 +444,14 @@ class Conv2DLUTLayer(LUTLayer):
         else:
             device = torch.device("cpu")
 
-        print('growing detector connections')
         connections = c_helper_1.grow_synapses(
             input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
             output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
+            max_groups_in_buffer=_max_groups_in_growth_buffer,
             device=device,
             seed=random_seed
         )
 
-        print('adding detector connections')
         self.add_detector_connections(
             chunk_of_connections=connections,
             ids_shift=-1,
@@ -459,7 +459,6 @@ class Conv2DLUTLayer(LUTLayer):
         )
 
         self.initialize_detectors()
-        print('growing lookup connections')
         connections = c_helper_2.grow_synapses(
             input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
             output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
@@ -467,14 +466,12 @@ class Conv2DLUTLayer(LUTLayer):
             seed=random_seed
         )
 
-        print('adding lookup connections')
         self.add_lookup_connections(
             chunk_of_connections=connections,
             ids_shift=-1,
             random_seed=random_seed
         )
 
-        print('compiling lut')
         self.compile_lut()
         self._input_shape = input_shape
         self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
