@@ -713,7 +713,7 @@ gather_gradients_fully_connected_logic(
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(o_quad.x), "=r"(o_quad.y), "=r"(o_quad.z), "=r"(o_quad.w)
+                    : "=f"(o_quad.x), "=f"(o_quad.y), "=f"(o_quad.z), "=f"(o_quad.w)
                     : "l"(output_gradients)
                 );
                 #else
@@ -738,7 +738,7 @@ gather_gradients_fully_connected_logic(
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(w_quad.x), "=r"(w_quad.y), "=r"(w_quad.z), "=r"(w_quad.w)
+                    : "=f"(w_quad.x), "=f"(w_quad.y), "=f"(w_quad.z), "=f"(w_quad.w)
                     : "l"(weights)
                 );
                 #else
