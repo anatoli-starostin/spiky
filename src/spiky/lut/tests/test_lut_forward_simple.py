@@ -67,8 +67,7 @@ def test_lut_forward_simple(
         detectors_shape=(2, 2),
         output_kernel_shape=(2, 2),
         n_anchors_per_detector=2,
-        forward_group_size=3,
-        backward_group_size=3,
+        synapse_group_size=3,
         device=device,
         summation_dtype=summation_dtype,
         seed=seed
@@ -97,7 +96,7 @@ def _test_lut_forward_simple(
     device, summation_dtype,
     lut_receptive_field_shape=None,
     lut_receptive_field_stride_shape=None,
-    forward_group_size=64, backward_group_size=64,
+    synapse_group_size=64,
     batch_size=4, seed=123
 ):
     torch.manual_seed(seed)
@@ -122,8 +121,7 @@ def _test_lut_forward_simple(
                 synapse_meta=synapse_meta,
                 summation_dtype=summation_dtype,
                 _int_rescaler=1.0,
-                _forward_group_size=forward_group_size,
-                _backward_group_size=backward_group_size,
+                _synapse_group_size=synapse_group_size,
                 random_seed=seed,
                 device=device
             )
@@ -310,4 +308,3 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
-

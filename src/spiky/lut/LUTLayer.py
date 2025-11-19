@@ -36,8 +36,7 @@ class LUTLayerBasic(nn.Module):
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
-        _forward_group_size: int = 64,
-        _backward_group_size: int = 64,
+        _synapse_group_size: int = 64,
         _do_normalize_gradients=True
     ):
         super().__init__()
@@ -65,16 +64,14 @@ class LUTLayerBasic(nn.Module):
                 n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
                 sequence_length,
                 _initial_synapse_capacity,
-                _forward_group_size,
-                _backward_group_size
+                _synapse_group_size
             )
         else:
             self._lut_dm = LUTDataManagerI(
                 n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
                 sequence_length,
                 _initial_synapse_capacity,
-                _forward_group_size,
-                _backward_group_size,
+                _synapse_group_size,
                 _int_rescaler
             )
 
@@ -191,8 +188,8 @@ class LUTLayerBasic(nn.Module):
             w.clip_(sm.min_weight, sm.max_weight)
         else:
             w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
+            self._lut_dm.compile(_only_trainable_backwards, w, shuffle_synapses_random_seed)
         self._weights = nn.Parameter(w)
-        self._lut_dm.compile(_only_trainable_backwards, self._weights.detach(), shuffle_synapses_random_seed)
         self._lut_dm.to_device(-1)
         if self.device.type == 'cuda':
             self._lut_dm.to_device(self.device.index)
@@ -412,8 +409,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         synapse_meta=SynapseMeta(),
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
-        _forward_group_size=64,
-        _backward_group_size=64,
+        _synapse_group_size=64,
         _max_groups_in_growth_buffer=2**20,
         _do_normalize_gradients=True,
         random_seed=1,
@@ -468,8 +464,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
-            _forward_group_size=_forward_group_size,
-            _backward_group_size=_backward_group_size,
+            _synapse_group_size=_synapse_group_size,
             _do_normalize_gradients=_do_normalize_gradients
         )
 
@@ -570,8 +565,7 @@ class LUTLayer(Conv2DLUTLayer):
         synapse_meta=SynapseMeta(),
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
-        _forward_group_size=64,
-        _backward_group_size=64,
+        _synapse_group_size=64,
         _max_groups_in_growth_buffer=2 ** 20,
         _do_normalize_gradients=True,
         random_seed=1,
@@ -590,8 +584,7 @@ class LUTLayer(Conv2DLUTLayer):
             synapse_meta=synapse_meta,
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
-            _forward_group_size=_forward_group_size,
-            _backward_group_size=_backward_group_size,
+            _synapse_group_size=_synapse_group_size,
             _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
             _do_normalize_gradients=_do_normalize_gradients,
             random_seed=random_seed,
