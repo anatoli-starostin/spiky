@@ -357,7 +357,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr,
+            this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -377,7 +377,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr,
+            this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
