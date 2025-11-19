@@ -88,7 +88,7 @@ class LUTLayerBasic(nn.Module):
             )
             assert m_id == i
 
-        self._lut_dm.initialize_neurons()
+        self._lut_dm.initialize_neurons(is_fully_connected)
         self._input_neuron_ids = torch.arange(0, self._n_inputs, dtype=torch.int32, device=self.device)
         self._detector_neuron_ids = torch.arange(self._n_inputs, self._n_inputs + self._n_detectors, dtype=torch.int32, device=self.device)
         self._lookup_neuron_ids = torch.arange(0, self._n_lookup_neurons, dtype=torch.int32, device=self.device)
@@ -183,7 +183,7 @@ class LUTLayerBasic(nn.Module):
         n_weights = self._lut_dm.get_weights_dimension()
         if self._is_fully_connected:
             sm = self._synapse_metas[0]
-            w = torch.full([n_weights], sm.initial_weight, device=x.device)
+            w = torch.full([n_weights], sm.initial_weight, device=self.device)
             w += torch.rand([n_weights]) * sm.initial_noise_level
             w.clip_(sm.min_weight, sm.max_weight)
         else:
@@ -351,7 +351,7 @@ class LUTLayerBasic(nn.Module):
         if self._is_fully_connected:
             return self._n_lookup_neurons * self._n_outputs
         else:
-            return self._lut_dm.count_synapses(neuron_ids, True)
+            return self._lut_dm.count_synapses(neuron_ids)
 
     def _export_synapses(
         self, neuron_ids: torch.Tensor,
@@ -364,9 +364,11 @@ class LUTLayerBasic(nn.Module):
             source_ids[:] = neuron_ids.view(neuron_ids.numel(), -1).repeat(1, self._n_outputs).flatten()
             weights[:] = self._weights.view(self._n_lookup_neurons, self._n_outputs)[neuron_ids].flatten()
             target_ids[:] = torch.arange(
-                self._n_outputs, device=device, dtype=torch.int32
+                self._n_outputs, device=self.device, dtype=torch.int32
             ).repeat(neuron_ids.numel())
-            synapse_metas[:] = 0.0
+            target_ids += self._n_lookup_neurons
+            if synapse_metas is not None:
+                synapse_metas[:] = 0.0
         else:
             self._lut_dm.export_synapses(
                 self._weights,
@@ -374,7 +376,6 @@ class LUTLayerBasic(nn.Module):
                 source_ids,
                 weights,
                 target_ids,
-                True,
                 synapse_metas
             )
 
@@ -443,22 +444,24 @@ class Conv2DLUTLayer(LUTLayerBasic):
             )
             n_outputs = c_helper_2.out_h * c_helper_2.out_w
             self._lut_receptive_field_shape = lut_receptive_field_shape + (n_lut_channels,)
+            self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
         else:
             assert lut_receptive_field_stride_shape is None
             c_helper_2 = None
             n_outputs = output_kernel_shape[0] * output_kernel_shape[1]
             self._lut_receptive_field_shape = lut_shape + (n_lut_channels,)
+            self._output_shape = output_kernel_shape
 
         self._input_shape = input_shape
-        self._output_shape = (c_helper_2.out_h, c_helper_2.out_w)
         self._lut_shape = lut_shape + (n_lut_channels,)
+        self._detectors_shape = detectors_shape
 
         super().__init__(
             n_inputs=n_inputs,
             n_outputs=n_outputs,
             n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector,
-            is_fully_connected=lut_receptive_field_shape is None,
+            is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length,
             synapse_metas=[synapse_meta],
             summation_dtype=summation_dtype,
@@ -530,6 +533,9 @@ class Conv2DLUTLayer(LUTLayerBasic):
     def lut_shape(self):
         return self._lut_shape
 
+    def detectors_shape(self):
+        return self._detectors_shape
+
     def lut_receptive_field_shape(self):
         return self._lut_receptive_field_shape
 
@@ -596,6 +602,9 @@ class LUTLayer(Conv2DLUTLayer):
 
     def output_shape(self):
         return self._output_shape[1:]
+
+    def detectors_shape(self):
+        return self._detectors_shape[1:]
 
     def lut_shape(self):
         return self._lut_shape[1:]

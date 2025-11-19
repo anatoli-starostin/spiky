@@ -178,7 +178,7 @@ public:
             connections_manager = nullptr;
             GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
             gc_meta->first_synapse_id = 0;
-            gc_meta->last_synapse_id = this->n_lookup_neurons * this->n_outputs - 1;
+            gc_meta->last_synapse_id = (static_cast<uint64_t>(this->n_lookup_neurons) * this->n_outputs - 1) * SizeOfSynapse(true);
             delete this->weights_allocator;
             this->weights_allocator = nullptr;
         } else {
@@ -665,8 +665,7 @@ public:
     }
 
     uint64_t count_synapses(
-        const torch::Tensor &neuron_indices_to_process,
-        bool forward_or_backward
+        const torch::Tensor &neuron_indices_to_process
     ) {
         if(lookup_neuron_synapses_infos_id == std::numeric_limits<uint64_t>::max()) {
             throw py::value_error("count_synapses: there is nothing to count in fully connected mode");
@@ -674,7 +673,7 @@ public:
         checkConnectionsManagerIsInitialized();
         return connections_manager->count_synapses(
             neuron_indices_to_process,
-            forward_or_backward
+            true
         );
     }
 
@@ -1069,8 +1068,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("target_weights_gradients"))
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
             "Count forward or backward synapses for the set of neurons",
-            py::arg("neuron_indices_to_process"),
-            py::arg("forward_or_backward"))
+            py::arg("neuron_indices_to_process"))
         .def("export_synapses", &LUTM_CLASS_NAME::export_synapses,
             "Export all synapses for a set of neurons",
             py::arg("weights"),
