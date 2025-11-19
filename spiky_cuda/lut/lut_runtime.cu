@@ -207,19 +207,19 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         );
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
-        uint32_t n_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
+        uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
-        numBlocks = dim3((n_outputs * n_blocks + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, n_blocks, this->batch_size);
-        // TODO
+        numBlocks = dim3((n_outputs * n_detector_blocks + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, this->batch_size);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fill_outputs_direct, LUT_RUNTIME_KERNELS_TPB,
+            numBlocks, fill_outputs_fully_connected, LUT_RUNTIME_KERNELS_TPB,
             weights,
             target_lookup_indices,
             target_output,
             this->n_outputs,
             this->n_detectors,
-            this->n_blocks,
-            this->synapse_group_size,
+            n_detector_blocks,
+            n_lookup_neurons_per_detector,
+            this->synapse_group_size
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -231,7 +231,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    numBlocks = dim3((n_outputs + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
+    dim3 numBlocks((n_outputs + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB,
         target_output,
@@ -290,55 +290,154 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #endif
     }
 
-    // TODO if(lookup_neuron_synapses_infos == nullptr) {...
     // 1. gather gradients for lookup_indices and alternative_lookup_indices (both dy/dx and dy/dw)
-
-    _ensure_firing_buffer_size(
-        static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron * 2
-    );
-    firing_buffer->clear();
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
-    dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
-    GRID_CALL_SHARED_MEM(
-        numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
-        this->n_detectors,
-        lookup_indices,
-        min_anchor_delta_indices,
-        n_lookup_neurons_per_detector,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        firing_buffer->firings_ptr(),
-        firing_buffer->counter_ptr(),
-        this->synapse_group_size,
-        this->lut_data,
-        device
-    );
-    firing_buffer->update_counter();
 
-    uint64_t n_firings = firing_buffer->number_of_firings();
-    numBlocks = dim3((n_firings + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB,
-        weights, this->first_synapse_id,
-        firing_buffer->firings_ptr(),
-        n_firings,
-        output_gradients,
-        before_detectors_gradients,
-        target_weights_gradients,
-        this->n_lookup_neurons,
-        this->n_outputs,
-        this->lut_data,
-        this->first_synapse_meta_lr,
-        this->base_synapse_metas
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
+    if(lookup_neuron_synapses_infos != nullptr) {
+        _ensure_firing_buffer_size(
+            static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron * 2
+        );
+        firing_buffer->clear();
+        dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
+        GRID_CALL_SHARED_MEM(
+            numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
+            this->n_detectors,
+            lookup_indices,
+            min_anchor_delta_indices,
+            n_lookup_neurons_per_detector,
+            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+            firing_buffer->firings_ptr(),
+            firing_buffer->counter_ptr(),
+            this->synapse_group_size,
+            this->lut_data,
+            device
+        );
+        firing_buffer->update_counter();
+        uint64_t n_firings = firing_buffer->number_of_firings();
+        numBlocks = dim3((n_firings + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB,
+            weights, this->first_synapse_id,
+            firing_buffer->firings_ptr(),
+            n_firings,
+            output_gradients,
+            before_detectors_gradients,
+            target_weights_gradients,
+            this->n_lookup_neurons,
+            this->n_outputs,
+            this->lut_data,
+            this->first_synapse_meta_lr,
+            this->base_synapse_metas
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+    } else {
+        uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        dim3 numBlocks((n_detectors * n_output_blocks + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, this->batch_size);
+        #ifdef USE_CUDA_STREAMS
+        cudaStream_t streams[2];
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaStreamCreate(&streams[0]);
+            cudaStreamCreate(&streams[1]);
+        }
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_gradients_fully_connected, LUT_RUNTIME_KERNELS_TPB, streams[0],
+            weights,
+            output_gradients,
+            lookup_indices,
+            nullptr,
+            before_detectors_gradients,
+            target_weights_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr,
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_gradients_fully_connected, LUT_RUNTIME_KERNELS_TPB, streams[1],
+            weights,
+            output_gradients,
+            lookup_indices,
+            min_anchor_delta_indices,
+            before_detectors_gradients,
+            target_weights_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr,
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaStreamSynchronize(streams[0]);
+            cudaStreamDestroy(streams[0]);
+            cudaStreamSynchronize(streams[1]);
+            cudaStreamDestroy(streams[1]);
+        }
         #else
-        , 0.0
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, gather_gradients_fully_connected, LUT_RUNTIME_KERNELS_TPB,
+            weights,
+            output_gradients,
+            lookup_indices,
+            nullptr,
+            before_detectors_gradients,
+            target_weights_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, gather_gradients_fully_connected, LUT_RUNTIME_KERNELS_TPB,
+            weights,
+            output_gradients,
+            lookup_indices,
+            min_anchor_delta_indices,
+            before_detectors_gradients,
+            target_weights_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
         #endif
-    );
+    }
 
     // 3. propagate through detectors
 
-    numBlocks = dim3((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
+    dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors, LUT_RUNTIME_KERNELS_TPB,
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,

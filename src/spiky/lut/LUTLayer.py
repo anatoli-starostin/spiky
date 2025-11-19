@@ -54,7 +54,7 @@ class LUTLayerBasic(nn.Module):
         self._do_normalize_gradients = _do_normalize_gradients
 
         if self._is_fully_connected:
-            assert len(synapse_metas) == 1
+            assert len(synapse_metas) == 1, "fully connected mode is not compatible with multiple synapse metas"
 
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = self._n_lookup_neurons * n_outputs

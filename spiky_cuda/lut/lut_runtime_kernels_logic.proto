@@ -309,6 +309,87 @@ fill_outputs_logic(
     }
 }
 
+fill_outputs_fully_connected_logic(
+    EXTERNAL_REAL_DT* weights,
+    int32_t* lookup_indices,
+    EXTERNAL_REAL_DT* target_output,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_lookup_neurons_per_detector,
+    int32_t n_detectors_per_block,
+    double int_rescaler
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_outputs * n_detector_blocks) {
+        lookup_indices += blockIdx.y * n_detectors;
+        target_output += blockIdx.y * n_outputs;
+        uint32_t output_index = i / n_detector_blocks;
+        uint32_t detector_block_index = i % n_detector_blocks;
+        uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
+        lookup_indices += detector_block_index * n_detectors_per_block;
+        weights += weights_per_detector * detector_block_index * n_detectors_per_block;
+        int4 li_quad = make_int4(0, 0, 0, 0);
+        int32_t current_lookup_index;
+        int32_t n_buffered = -1;
+        double weight_sum = 0.0;
+        int32_t cursor=0;
+        if(detector_block_index == n_detector_blocks - 1) {
+            n_detector_blocks = n_detectors % n_detectors_per_block;
+        }
+        for(;cursor < n_detectors_per_block;cursor++, lookup_indices++, weights+=weights_per_detector) {
+            if((n_buffered == 0) || (((reinterpret_cast<uintptr_t>(lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3))) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(li_quad.x), "=r"(li_quad.y), "=r"(li_quad.z), "=r"(li_quad.w)
+                    : "l"(lookup_indices)
+                );
+                #else
+                li_quad = *reinterpret_cast<int4 *>(lookup_indices);
+                #endif
+                current_lookup_index = li_quad.x;
+                n_buffered = 3;
+            } else if(n_buffered > 0) {
+                if(n_buffered == 3) {
+                    current_lookup_index = li_quad.y;
+                } else if(n_buffered == 2) {
+                    current_lookup_index = li_quad.z;
+                } else {
+                    current_lookup_index = li_quad.w;
+                }
+                n_buffered--;
+            } else {
+                current_lookup_index = *lookup_indices;
+            }
+            weight_sum += weights[current_lookup_index * n_outputs + output_index];
+        }
+
+        SUMMATION32_DT payload;
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(target_output + output_index),
+                payload
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(target_output + output_index) += payload;
+            #endif
+        #else
+            payload = static_cast<SUMMATION32_DT>(weight_sum);
+            #ifdef ATOMIC
+            atomicAdd(
+                target_output + output_index,
+                payload
+            );
+            #else
+            target_output[output_index] += payload;
+            #endif
+        #endif
+    }
+}
+
 fire_detectors_by_lookup_indices_logic(
     uint32_t n_detectors,
     int32_t* lookup_indices,
@@ -532,30 +613,28 @@ gather_gradients_logic(
             output_grad = static_cast<double>(output_gradients[target_id]);
             grad_x += weight * output_grad;
 
-            if(target_weights_gradients != nullptr) {
-                if(fabs(output_grad) > EPS) {
-                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                        #ifdef ATOMIC
-                        atomicAdd(
-                            reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients) + weight_shift,
-                            sum32_delta
-                        );
-                        #else
-                        *reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients + weight_shift) += sum32_delta;
-                        #endif
+            if(fabs(output_grad) > EPS) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients) + weight_shift,
+                        sum32_delta
+                    );
                     #else
-                        sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                        #ifdef ATOMIC
-                        atomicAdd(
-                            target_weights_gradients + weight_shift,
-                            sum32_delta
-                        );
-                        #else
-                        target_weights_gradients[weight_shift] += sum32_delta;
-                        #endif
+                    *reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients + weight_shift) += sum32_delta;
                     #endif
-                }
+                #else
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        target_weights_gradients + weight_shift,
+                        sum32_delta
+                    );
+                    #else
+                    target_weights_gradients[weight_shift] += sum32_delta;
+                    #endif
+                #endif
             }
         }
 
@@ -578,6 +657,153 @@ gather_gradients_logic(
             );
             #else
             target_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
+            #endif
+        #endif
+    }
+}
+
+gather_gradients_fully_connected_logic(
+    EXTERNAL_REAL_DT* weights,
+    EXTERNAL_REAL_DT* output_gradients,
+    int32_t* lookup_indices,
+    int32_t* min_anchor_delta_indices,
+    SUMMATION32_DT* target_before_detectors_gradients,
+    EXTERNAL_REAL_DT* target_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t n_output_blocks,
+    int32_t n_outputs_per_block,
+    uint32_t n_lookup_neurons_per_detector,
+    double lr,
+    double int_rescaler
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_detectors * n_output_blocks) {
+        uint32_t detector_index = i / n_output_blocks;
+        uint32_t output_block_index = i % n_output_blocks;
+        lookup_indices += blockIdx.y * n_detectors;
+        int32_t lookup_index = lookup_indices[detector_index];
+        if(min_anchor_delta_indices != nullptr) {
+            min_anchor_delta_indices += blockIdx.y * n_detectors;
+            lookup_index ^= (1 << min_anchor_delta_indices[i]);
+        }
+        uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
+        weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
+        weights += weight_shift;
+        target_weights_gradients += weight_shift;
+
+        output_gradients += blockIdx.y * n_outputs + output_block_index * n_outputs_per_block;
+        target_before_detectors_gradients += blockIdx.y * n_detectors * n_lookup_neurons_per_detector;
+        target_before_detectors_gradients += detector_index * n_lookup_neurons_per_detector;
+
+        int32_t cursor=0;
+        if(output_block_index == static_cast<uint32_t>(n_outputs_per_block - 1)) {
+            n_outputs_per_block = n_outputs % n_outputs_per_block;
+        }
+        double grad_x = 0.0;
+        int32_t n_o_buffered = -1;
+        int32_t n_w_buffered = -1;
+        float4 o_quad = make_float4(0.0, 0.0, 0.0, 0.0);
+        float4 w_quad = make_float4(0.0, 0.0, 0.0, 0.0);
+        float output_grad;
+        float weight;
+        SUMMATION32_DT sum32_delta;
+        for(;cursor < n_outputs_per_block;cursor++, output_gradients++, weights++) {
+            if((n_o_buffered == 0) || (((reinterpret_cast<uintptr_t>(output_gradients) & 15) == 0) && (cursor < n_outputs_per_block - 3))) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(o_quad.x), "=r"(o_quad.y), "=r"(o_quad.z), "=r"(o_quad.w)
+                    : "l"(output_gradients)
+                );
+                #else
+                o_quad = *reinterpret_cast<float4 *>(output_gradients);
+                #endif
+                output_grad = o_quad.x;
+                n_o_buffered = 3;
+            } else if(n_o_buffered > 0) {
+                if(n_o_buffered == 3) {
+                    output_grad = o_quad.y;
+                } else if(n_o_buffered == 2) {
+                    output_grad = o_quad.z;
+                } else {
+                    output_grad = o_quad.w;
+                }
+                n_o_buffered--;
+            } else {
+                output_grad = *output_gradients;
+            }
+
+            if((n_w_buffered == 0) || (((reinterpret_cast<uintptr_t>(weights) & 15) == 0) && (cursor < n_outputs_per_block - 3))) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(w_quad.x), "=r"(w_quad.y), "=r"(w_quad.z), "=r"(w_quad.w)
+                    : "l"(weights)
+                );
+                #else
+                w_quad = *reinterpret_cast<float4 *>(weights);
+                #endif
+                weight = w_quad.x;
+                n_w_buffered = 3;
+            } else if(n_w_buffered > 0) {
+                if(n_w_buffered == 3) {
+                    weight = w_quad.y;
+                } else if(n_w_buffered == 2) {
+                    weight = w_quad.z;
+                } else {
+                    weight = w_quad.w;
+                }
+                n_w_buffered--;
+            } else {
+                weight = *weights;
+            }
+
+            grad_x += weight * output_grad;
+            if(fabs(output_grad) > EPS) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients) + cursor,
+                        sum32_delta
+                    );
+                    #else
+                    *reinterpret_cast<SUMMATION32_DT *>(target_weights_gradients + cursor) += sum32_delta;
+                    #endif
+                #else
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        target_weights_gradients + cursor,
+                        sum32_delta
+                    );
+                    #else
+                    target_weights_gradients[cursor] += sum32_delta;
+                    #endif
+                #endif
+            }
+        }
+
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                target_before_detectors_gradients + lookup_index,
+                sum32_delta
+            );
+            #else
+            target_before_detectors_gradients[lookup_index] += sum32_delta;
+            #endif
+        #else
+            sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr);
+            #ifdef ATOMIC
+            atomicAdd(
+                target_before_detectors_gradients + lookup_index,
+                sum32_delta
+            );
+            #else
+            target_before_detectors_gradients[lookup_index] += sum32_delta;
             #endif
         #endif
     }

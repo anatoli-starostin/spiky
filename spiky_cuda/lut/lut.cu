@@ -166,8 +166,14 @@ public:
     void initialize_neurons(bool is_fully_connected) {
         __TRACE__("lutm_initialize_neurons\n");
         checkOnHostDuringPrepare();
+        if(this->n_synapse_metas == 0) {
+            throw py::value_error("no synapse metas were registered");
+        }
 
         if(is_fully_connected) {
+            if(n_synapse_metas > 1) {
+                throw py::value_error("fully connected mode is not compatible with multiple synapse metas");
+            }
             this->lookup_neuron_synapses_infos_id = std::numeric_limits<uint64_t>::max();
             connections_manager = nullptr;
             GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
@@ -663,7 +669,7 @@ public:
         bool forward_or_backward
     ) {
         if(lookup_neuron_synapses_infos_id == std::numeric_limits<uint64_t>::max()) {
-            throw py::value_error("count_synapses: there is nothing to count in fully connected mode);
+            throw py::value_error("count_synapses: there is nothing to count in fully connected mode");
         }
         checkConnectionsManagerIsInitialized();
         return connections_manager->count_synapses(
@@ -681,7 +687,7 @@ public:
         std::optional<torch::Tensor> &target_synapse_meta_indices
     ) {
         if(lookup_neuron_synapses_infos_id == std::numeric_limits<uint64_t>::max()) {
-            throw py::value_error("export_synapses: there is nothing to export in fully connected mode);
+            throw py::value_error("export_synapses: there is nothing to export in fully connected mode");
         }
         checkConnectionsManagerIsInitialized();
         checkTensor(weights, "weights", true, host_device_allocator.device);
