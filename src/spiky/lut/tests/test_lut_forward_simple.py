@@ -131,7 +131,7 @@ def _test_lut_forward_simple(
 
     print(f'Creating TestNet, input_shape {input_shape}...')
     net = TestNet(device)
-
+    print(net.layer1.export_weights())
     lut_shape = net.layer1.lut_shape()
 
     assert lut_shape == (

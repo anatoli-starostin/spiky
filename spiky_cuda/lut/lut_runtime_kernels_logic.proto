@@ -53,6 +53,8 @@ check_detectors_logic(
         *target_lookup_indices = lookup_index;
         *target_min_anchor_deltas = min_delta;
         *target_min_anchor_delta_indices = min_delta_anchor_idx;
+
+        __SUPER_DETAILED_TRACE__("check_detectors_logic: detector_index %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", i, lookup_index, min_delta, min_delta_anchor_idx);
     }
 }
 
@@ -122,6 +124,8 @@ fire_detectors_logic(
         *target_lookup_indices = lookup_index;
         *target_min_anchor_deltas = min_delta;
         *target_min_anchor_delta_indices = min_delta_anchor_idx;
+
+        __SUPER_DETAILED_TRACE__("fire_detectors_logic: detector_index %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", i, lookup_index, min_delta, min_delta_anchor_idx);
 
         if(firings_buffer != nullptr) {
             lookup_neuron_synapses_info = *(lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + lookup_index);
@@ -280,8 +284,8 @@ fill_outputs_logic(
                 weight = static_cast<double>(*weight_ptr);
             }
 
-            __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, weight %f\n", target_id, weight);
             target_id -= n_lookup_neurons;
+            __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, weight %f\n", target_id, weight);
 
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
@@ -301,7 +305,7 @@ fill_outputs_logic(
                     payload
                 );
                 #else
-                __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, payload %f, firing.payload %f\n", target_id, payload, firing.payload);
+                __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, payload %f\n", target_id, payload);
                 target_output[target_id] += payload;
                 #endif
             #endif
@@ -322,23 +326,25 @@ fill_outputs_fully_connected_logic(
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < n_outputs * n_detector_blocks) {
-        lookup_indices += blockIdx.y * n_detectors;
-        target_output += blockIdx.y * n_outputs;
         uint32_t output_index = i / n_detector_blocks;
         uint32_t detector_block_index = i % n_detector_blocks;
-        uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
+        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: batch_index %d, output_index %d, detector_block_index %d\n", blockIdx.y, output_index, detector_block_index);
+        lookup_indices += blockIdx.y * n_detectors;
         lookup_indices += detector_block_index * n_detectors_per_block;
+        target_output += blockIdx.y * n_outputs;
+        uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
+        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: weights_per_detector %lu\n", weights_per_detector);
         weights += weights_per_detector * detector_block_index * n_detectors_per_block;
         int4 li_quad = make_int4(0, 0, 0, 0);
         int32_t current_lookup_index;
-        int32_t n_buffered = -1;
+        int32_t n_buffered = 0;
         double weight_sum = 0.0;
-        int32_t cursor=0;
-        if(detector_block_index == n_detector_blocks - 1) {
-            n_detector_blocks = n_detectors % n_detectors_per_block;
+        if((detector_block_index == n_detector_blocks - 1) && (n_detectors % n_detectors_per_block)) {
+            n_detectors_per_block = n_detectors % n_detectors_per_block;
         }
-        for(;cursor < n_detectors_per_block;cursor++, lookup_indices++, weights+=weights_per_detector) {
-            if((n_buffered == 0) || (((reinterpret_cast<uintptr_t>(lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3))) {
+        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: n_detectors_per_block %d\n", n_detectors_per_block);
+        for(int32_t cursor=0;cursor < n_detectors_per_block;cursor++, lookup_indices++, weights+=weights_per_detector) {
+            if(((reinterpret_cast<uintptr_t>(lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3)) {
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
@@ -362,8 +368,11 @@ fill_outputs_fully_connected_logic(
             } else {
                 current_lookup_index = *lookup_indices;
             }
-            weight_sum += weights[current_lookup_index * n_outputs + output_index];
+            __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: current_lookup_index %d, output_index %d, weight %f\n", current_lookup_index, output_index, weights[current_lookup_index * n_outputs + output_index]);
+            weight_sum += static_cast<double>(weights[current_lookup_index * n_outputs + output_index]);
         }
+
+        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: weight_sum %f\n", weight_sum);
 
         SUMMATION32_DT payload;
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -384,6 +393,7 @@ fill_outputs_fully_connected_logic(
                 payload
             );
             #else
+            __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: payload %f\n", payload);
             target_output[output_index] += payload;
             #endif
         #endif
@@ -611,9 +621,9 @@ gather_gradients_logic(
 
             target_id -= n_lookup_neurons;
             output_grad = static_cast<double>(output_gradients[target_id]);
-            grad_x += weight * output_grad;
 
             if(fabs(output_grad) > EPS) {
+                grad_x += weight * output_grad;
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                     sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
                     #ifdef ATOMIC
@@ -685,7 +695,7 @@ gather_gradients_fully_connected_logic(
         int32_t lookup_index = lookup_indices[detector_index];
         if(min_anchor_delta_indices != nullptr) {
             min_anchor_delta_indices += blockIdx.y * n_detectors;
-            lookup_index ^= (1 << min_anchor_delta_indices[i]);
+            lookup_index ^= (1 << min_anchor_delta_indices[detector_index]);
         }
         uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
         weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
@@ -695,21 +705,19 @@ gather_gradients_fully_connected_logic(
         output_gradients += blockIdx.y * n_outputs + output_block_index * n_outputs_per_block;
         target_before_detectors_gradients += blockIdx.y * n_detectors * n_lookup_neurons_per_detector;
         target_before_detectors_gradients += detector_index * n_lookup_neurons_per_detector;
-
-        int32_t cursor=0;
-        if(output_block_index == static_cast<uint32_t>(n_outputs_per_block - 1)) {
+        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
             n_outputs_per_block = n_outputs % n_outputs_per_block;
         }
         double grad_x = 0.0;
-        int32_t n_o_buffered = -1;
-        int32_t n_w_buffered = -1;
+        int32_t n_o_buffered = 0;
+        int32_t n_w_buffered = 0;
         float4 o_quad = make_float4(0.0, 0.0, 0.0, 0.0);
         float4 w_quad = make_float4(0.0, 0.0, 0.0, 0.0);
-        float output_grad;
-        float weight;
+        double output_grad;
+        double weight;
         SUMMATION32_DT sum32_delta;
-        for(;cursor < n_outputs_per_block;cursor++, output_gradients++, weights++) {
-            if((n_o_buffered == 0) || (((reinterpret_cast<uintptr_t>(output_gradients) & 15) == 0) && (cursor < n_outputs_per_block - 3))) {
+        for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++, output_gradients++, weights++) {
+            if(((reinterpret_cast<uintptr_t>(output_gradients) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
@@ -719,22 +727,22 @@ gather_gradients_fully_connected_logic(
                 #else
                 o_quad = *reinterpret_cast<float4 *>(output_gradients);
                 #endif
-                output_grad = o_quad.x;
+                output_grad = static_cast<double>(o_quad.x);
                 n_o_buffered = 3;
             } else if(n_o_buffered > 0) {
                 if(n_o_buffered == 3) {
-                    output_grad = o_quad.y;
+                    output_grad = static_cast<double>(o_quad.y);
                 } else if(n_o_buffered == 2) {
-                    output_grad = o_quad.z;
+                    output_grad = static_cast<double>(o_quad.z);
                 } else {
-                    output_grad = o_quad.w;
+                    output_grad = static_cast<double>(o_quad.w);
                 }
                 n_o_buffered--;
             } else {
-                output_grad = *output_gradients;
+                output_grad = static_cast<double>(*output_gradients);
             }
 
-            if((n_w_buffered == 0) || (((reinterpret_cast<uintptr_t>(weights) & 15) == 0) && (cursor < n_outputs_per_block - 3))) {
+            if(((reinterpret_cast<uintptr_t>(weights) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
@@ -744,23 +752,23 @@ gather_gradients_fully_connected_logic(
                 #else
                 w_quad = *reinterpret_cast<float4 *>(weights);
                 #endif
-                weight = w_quad.x;
+                weight = static_cast<double>(w_quad.x);
                 n_w_buffered = 3;
             } else if(n_w_buffered > 0) {
                 if(n_w_buffered == 3) {
-                    weight = w_quad.y;
+                    weight = static_cast<double>(w_quad.y);
                 } else if(n_w_buffered == 2) {
-                    weight = w_quad.z;
+                    weight = static_cast<double>(w_quad.z);
                 } else {
-                    weight = w_quad.w;
+                    weight = static_cast<double>(w_quad.w);
                 }
                 n_w_buffered--;
             } else {
-                weight = *weights;
+                weight = static_cast<double>(*weights);
             }
 
-            grad_x += weight * output_grad;
             if(fabs(output_grad) > EPS) {
+                grad_x += weight * output_grad;
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                     sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
                     #ifdef ATOMIC

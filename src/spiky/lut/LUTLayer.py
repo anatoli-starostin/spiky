@@ -108,13 +108,18 @@ class LUTLayerBasic(nn.Module):
             random_seed
         )
 
-    def initialize_detectors(self):
+    def initialize_detectors(self, seed=None):
         max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
         assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
+        if seed is not None:
+            g = torch.Generator(device=self.device)
+            g.manual_seed(seed)
+        else:
+            g = None
         noise = torch.rand(
             self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
-            device=self.device
+            device=self.device, generator=g
         )
         encoded_pairs_permutations = noise.argsort(dim=1).to(dtype=torch.int32)
 
@@ -154,7 +159,10 @@ class LUTLayerBasic(nn.Module):
         return self._sequence_length
 
     def n_synapses(self):
-        return self._lut_dm.get_number_of_synapses()
+        if self._is_fully_connected:
+            return self._n_lookup_neurons * self._n_outputs
+        else:
+            return self._lut_dm.get_number_of_synapses()
 
     def input_shape(self):
         return (self._n_outputs,)
@@ -402,7 +410,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         n_anchors_per_detector,
         detectors_shape,
         output_kernel_shape,
-        sequence_length,
+        sequence_length=1,
         receptive_field_shape=None,
         receptive_field_stride_shape=None,
         lut_receptive_field_shape=None,
@@ -428,7 +436,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             detectors_shape[0], detectors_shape[1]
         )
 
-        lut_shape = c_helper_1.out_h, c_helper_1.out_h
+        lut_shape = c_helper_1.out_h, c_helper_1.out_w
         n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, sequence_length)
 
         n_inputs = input_shape[0] * input_shape[1]
@@ -490,7 +498,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             random_seed=random_seed
         )
 
-        self.initialize_detectors()
+        self.initialize_detectors(random_seed)
 
         if c_helper_2 is not None:
             connections = c_helper_2.grow_synapses(
@@ -542,23 +550,27 @@ class Conv2DLUTLayer(LUTLayerBasic):
     def __repr__(self):
         return f'Conv2DLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, detectors_shape={self.detectors_shape()}, n_anchors_per_detector={self.n_anchors_per_detector()})'
 
-    def export_weights(self):
+    def export_weights(self, inverse_order=True):
         n_synapses = self.n_synapses()
         source_ids = torch.zeros([n_synapses], dtype=torch.int32, device=self.device)
         target_ids = torch.zeros([n_synapses], dtype=torch.int32, device=self.device)
         weights = torch.zeros([n_synapses], dtype=torch.float32, device=self.device)
 
         self._export_synapses(
-            self.get_output_neuron_ids(),
+            self.get_lookup_neuron_ids(),
             source_ids,
             weights,
             target_ids
         )
 
-        order = torch.argsort(source_ids, stable=True, descending=False)
-        order = order[torch.argsort(target_ids[order], stable=True, descending=False)]
-
-        return weights[order].reshape(self.output_shape() + self.lut_receptive_field_shape())
+        if inverse_order:
+            order = torch.argsort(source_ids, stable=True, descending=False)
+            order = order[torch.argsort(target_ids[order], stable=True, descending=False)]
+            return weights[order].reshape(self.output_shape() + self.lut_receptive_field_shape())
+        else:
+            order = torch.argsort(target_ids, stable=True, descending=False)
+            order = order[torch.argsort(source_ids[order], stable=True, descending=False)]
+            return weights[order].reshape(self.lut_receptive_field_shape() + self.output_shape())
 
 
 class LUTLayer(Conv2DLUTLayer):
@@ -567,7 +579,7 @@ class LUTLayer(Conv2DLUTLayer):
         n_anchors_per_detector,
         n_detectors,
         n_outputs,
-        sequence_length,
+        sequence_length=1,
         synapse_meta=SynapseMeta(),
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
