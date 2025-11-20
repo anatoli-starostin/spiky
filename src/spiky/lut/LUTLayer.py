@@ -493,7 +493,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
         print(self.get_input_neuron_ids().reshape(input_shape) + 1)
         print(self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1)
-        print(seed)
+        print(random_seed)
         connections = c_helper_1.grow_synapses(
             input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
             output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
