@@ -113,8 +113,8 @@ def _test_lut_fully_connected_small(
     test_net_standard.train()
 
     for _ in tqdm(range(1000)):
-        data = torch.rand([batch_size, n_inputs])
-        target = torch.rand([batch_size, n_outputs])
+        data = torch.rand([batch_size, n_inputs], device=device)
+        target = torch.rand([batch_size, n_outputs], device=device)
         optimizer_standard.zero_grad()
         output_standard = test_net_standard(data.reshape(batch_size, 1, n_inputs)).reshape(batch_size, n_outputs)
         loss = loss_func(output_standard, target)
