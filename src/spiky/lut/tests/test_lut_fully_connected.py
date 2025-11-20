@@ -92,7 +92,7 @@ def _test_lut_fully_connected(
         return False
 
     anchors_standard = test_net_standard.layer1._export_anchors()
-    anchors = test_net_standard.layer1._export_anchors()
+    anchors = test_net_fully_connected.layer1._export_anchors()
 
     if (anchors_standard - anchors).sum() != 0:
         print(f"❌ anchors difference detected")
