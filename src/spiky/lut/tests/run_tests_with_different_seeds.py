@@ -1,6 +1,9 @@
 import torch
 
 from test_lut_forward_simple import test_lut_forward_simple
+from test_lut_fully_connected_small import test_lut_fully_connected_small
+from test_lut_fully_connected import test_lut_fully_connected
+from test_lut_backward import test_lut_backward
 
 
 def main():
@@ -8,6 +11,9 @@ def main():
         func.__name__: func
         for func in [
             test_lut_forward_simple,
+            test_lut_fully_connected_small,
+            test_lut_fully_connected,
+            test_lut_backward
         ]
     }
 
@@ -36,6 +42,3 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
-
-# TODO option to run without add_connection calls
-
