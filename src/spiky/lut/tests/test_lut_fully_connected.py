@@ -143,6 +143,10 @@ def _test_lut_fully_connected(
             diff = (test_net_standard._last_hidden_output - test_net_fully_connected._last_hidden_output).abs().max()
             if diff > 0.001:
                 print(f"❌ hidden output difference detected, diff {diff}")
+                print('test_net_standard._last_hidden_output:\n')
+                print(test_net_standard._last_hidden_output)
+                print('test_net_fully_connected._last_hidden_output:\n')
+                print(test_net_fully_connected._last_hidden_output)
                 return False
 
             weights_standard = test_net_standard.layer1.export_weights(inverse_order=False)
