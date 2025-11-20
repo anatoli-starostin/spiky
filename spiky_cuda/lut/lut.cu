@@ -200,14 +200,14 @@ public:
         }
     }
 
-    uint32_t finalize_detector_connections() {
+    uint32_t finalize_detector_connections(uint32_t random_seed) {
         if(detector_connections_manager == nullptr) {
             throw py::value_error("detector connections manager not initialized, add detector connections first");
         }
         
         // finalize detector connections manager, we need it only for backward synapses
         detector_connections_manager->finalize(
-            0,  // random_seed not needed for detector connections
+            random_seed,
             false, false,
             false,
             true
@@ -1011,7 +1011,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("encoded_pairs_permutations"),
             py::arg("max_n_inputs_per_detector"))
         .def("finalize_detector_connections", &LUTM_CLASS_NAME::finalize_detector_connections,
-            "Finalize detector connections and return max number of inputs per detector")
+            "Finalize detector connections and return max number of inputs per detector",
+            py::arg("random_seed"))
         .def("get_number_of_inputs", &LUTM_CLASS_NAME::get_number_of_inputs,
             "Get number of input neurons")
         .def("get_number_of_outputs", &LUTM_CLASS_NAME::get_number_of_outputs,

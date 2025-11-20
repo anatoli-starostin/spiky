@@ -110,7 +110,7 @@ class LUTLayerBasic(nn.Module):
         )
 
     def initialize_detectors(self, seed=None):
-        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
+        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections(0 if seed is None else seed)
         assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
         if seed is not None:
@@ -122,7 +122,7 @@ class LUTLayerBasic(nn.Module):
             self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
             device=self.device, generator=g
         )
-        encoded_pairs_permutations = noise.argsort(dim=1).to(dtype=torch.int32)
+        encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
 
         self._lut_dm.initialize_detectors(
             encoded_pairs_permutations.flatten().contiguous(),
