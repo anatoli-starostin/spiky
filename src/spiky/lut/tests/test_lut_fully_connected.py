@@ -145,8 +145,13 @@ def _test_lut_fully_connected(
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
 
-            if (test_net_standard._last_lookup_indices - test_net_fully_connected._last_lookup_indices).sum() != 0:
-                print(f"❌ lookup_indices difference detected")
+            diff = (test_net_standard._last_lookup_indices - test_net_fully_connected._last_lookup_indices).sum()
+            if diff != 0:
+                print(f"❌ lookup_indices difference detected, diff {diff}")
+                print('test_net_standard._last_lookup_indices:\n')
+                print(test_net_standard._last_lookup_indices)
+                print('test_net_fully_connected._last_lookup_indices:\n')
+                print(test_net_fully_connected._last_lookup_indices)
                 return False
 
             diff = (test_net_standard._last_hidden_output - test_net_fully_connected._last_hidden_output).abs().max()
