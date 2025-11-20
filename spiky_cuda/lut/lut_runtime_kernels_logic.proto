@@ -345,15 +345,15 @@ fill_outputs_fully_connected_logic(
         __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: n_detectors_per_block %d\n", n_detectors_per_block);
         for(int32_t cursor=0;cursor < n_detectors_per_block;cursor++, lookup_indices++, weights+=weights_per_detector) {
             if(((reinterpret_cast<uintptr_t>(lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3)) {
-                #ifdef ATOMIC
-                asm volatile(
-                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(li_quad.x), "=r"(li_quad.y), "=r"(li_quad.z), "=r"(li_quad.w)
-                    : "l"(lookup_indices)
-                );
-                #else
+//                #ifdef ATOMIC
+//                asm volatile(
+//                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+//                    : "=r"(li_quad.x), "=r"(li_quad.y), "=r"(li_quad.z), "=r"(li_quad.w)
+//                    : "l"(lookup_indices)
+//                );
+//                #else
                 li_quad = *reinterpret_cast<int4 *>(lookup_indices);
-                #endif
+//                #endif
                 current_lookup_index = li_quad.x;
                 n_buffered = 3;
             } else if(n_buffered > 0) {
