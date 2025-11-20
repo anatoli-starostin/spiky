@@ -3,8 +3,6 @@ import torch.nn.functional as nf
 import torch.nn as nn
 import torch.optim as optim
 
-from torchvision.transforms.functional import to_pil_image
-from torch.utils.data import Dataset, DataLoader, TensorDataset
 from tqdm import tqdm
 
 from spiky.lut.LUTLayer import LUTLayerBasic, LUTLayer, Conv2DLUTLayer, SynapseMeta
