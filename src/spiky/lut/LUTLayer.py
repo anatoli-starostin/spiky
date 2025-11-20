@@ -498,7 +498,6 @@ class Conv2DLUTLayer(LUTLayerBasic):
             device=device,
             seed=random_seed
         )
-        print(connections.get_connections()[0:100])
 
         self.add_detector_connections(
             chunk_of_connections=connections,
