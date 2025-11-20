@@ -33,10 +33,10 @@ def test_chunk_of_connections(device, _, __):
     result, errors = validator.validate_all()
     if result:
         print('all good')
-        return 0
+        return True
     else:
         print(errors)
-        return -1
+        return False
 
 
 def main():
@@ -46,7 +46,7 @@ def main():
 
     for summation_dtype in [torch.float32, torch.int32]:
         print(f"\nTesting, summation_dtype {summation_dtype}...")
-        success = test_simple_math(torch.device('cpu'), summation_dtype)
+        success = test_chunk_of_connections(torch.device('cpu'), summation_dtype, 123)
 
         if success:
             print(f"\n<{summation_dtype}> test completed successfully!")

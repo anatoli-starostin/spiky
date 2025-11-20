@@ -64,7 +64,7 @@ private:
     int* LTP; // batch_size * n_neurons * n_past_ticks
     uint32_t stdp_period;
     uint32_t current_tick_in_LTP;
-    SingleTickSpikeStorage **stpd_dense_buffers;
+    SingleTickSpikeStorage **stdp_dense_buffers;
 public:
     // base constructor
     SPNET_RUNTIME_CONTEXT_CLASS(

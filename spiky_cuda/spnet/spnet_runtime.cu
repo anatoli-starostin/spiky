@@ -52,7 +52,7 @@ SPNET_RUNTIME_CONTEXT_CLASS::SPNET_RUNTIME_CONTEXT_CLASS(
     LTP(nullptr),
     stdp_period(0),
     current_tick_in_LTP(0),
-    stpd_dense_buffers(nullptr)
+    stdp_dense_buffers(nullptr)
 {
     __TRACE__("SPNET_RUNTIME_CONTEXT_CLASS test constructor\n");
     this->n_past_ticks = ((this->n_delays + 1 + 31) >> 5) << 5;
@@ -155,8 +155,8 @@ SPNET_RUNTIME_CONTEXT_CLASS::SPNET_RUNTIME_CONTEXT_CLASS(
     }
     __SUPER_DETAILED_TRACE__("Allocated weight_deltas %p, n_weight_deltas %llu\n", weight_deltas, n_weight_deltas);
 
-    stpd_dense_buffers = (SingleTickSpikeStorage **) PyMem_Malloc(n_neuron_metas * sizeof(SingleTickSpikeStorage *));
-    memset(stpd_dense_buffers, 0, n_neuron_metas * sizeof(SingleTickSpikeStorage *));
+    stdp_dense_buffers = (SingleTickSpikeStorage **) PyMem_Malloc(n_neuron_metas * sizeof(SingleTickSpikeStorage *));
+    memset(stdp_dense_buffers, 0, n_neuron_metas * sizeof(SingleTickSpikeStorage *));
 }
 
 SPNET_RUNTIME_CONTEXT_CLASS::~SPNET_RUNTIME_CONTEXT_CLASS() {
@@ -225,11 +225,11 @@ SPNET_RUNTIME_CONTEXT_CLASS::~SPNET_RUNTIME_CONTEXT_CLASS() {
 
     if(is_train()) {
         for(uint32_t i=0;i < n_neuron_metas;i++) {
-            if(stpd_dense_buffers[i] != nullptr) {
-                delete stpd_dense_buffers[i];
+            if(stdp_dense_buffers[i] != nullptr) {
+                delete stdp_dense_buffers[i];
             }
         }
-        PyMem_Free(stpd_dense_buffers);
+        PyMem_Free(stdp_dense_buffers);
     }
 
     #ifdef ENABLE_PROFILING
@@ -333,10 +333,10 @@ bool SPNET_RUNTIME_CONTEXT_CLASS::adjust_to_batch(
 
         if(is_train()) {
             for(uint32_t i=0;i < n_neuron_metas;i++) {
-                if(stpd_dense_buffers[i] != nullptr) {
-                    delete stpd_dense_buffers[i];
+                if(stdp_dense_buffers[i] != nullptr) {
+                    delete stdp_dense_buffers[i];
                 }
-                stpd_dense_buffers[i] = new SingleTickSpikeStorage(n_neurons, batch_size, device);
+                stdp_dense_buffers[i] = new SingleTickSpikeStorage(n_neurons, batch_size, device);
             }
         }
     }
@@ -992,44 +992,44 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
                 if((d == stdp_period - 1) || (current_tick == n_past_ticks + n_ticks_to_process - 1)) {
                     dim3 numBlocks(((nm_info.n_neurons >> 2) + SPNET_RUNTIME_KERNELS_TPB - 1) / SPNET_RUNTIME_KERNELS_TPB, this->batch_size);
                     #ifdef USE_CUDA_STREAMS
-                    stpd_dense_buffers[nm_idx]->clear(streams + nm_idx);
+                    stdp_dense_buffers[nm_idx]->clear(streams + nm_idx);
                     GRID_CALL_ON_STREAM_SHARED_MEM(
                         numBlocks, densify_by_last_spikes, SPNET_RUNTIME_KERNELS_TPB, sizeof(uint32_t) * SPNET_RUNTIME_KERNELS_TPB, streams[nm_idx],
                         nm_info.first_neuron_id >> 2,
                         nm_info.n_neurons >> 2,
                         n_neuron_quads,
-                        stpd_dense_buffers[nm_idx]->spikes_ptr(),
-                        stpd_dense_buffers[nm_idx]->counter_ptr(),
+                        stdp_dense_buffers[nm_idx]->spikes_ptr(),
+                        stdp_dense_buffers[nm_idx]->counter_ptr(),
                         reinterpret_cast<int4 *>(this->last_spikes),
                         current_tick,
                         d + 1,
                         device
                     );
-                    stpd_dense_buffers[nm_idx]->update_counter(streams + nm_idx);
+                    stdp_dense_buffers[nm_idx]->update_counter(streams + nm_idx);
                     #else
-                    stpd_dense_buffers[nm_idx]->clear();
+                    stdp_dense_buffers[nm_idx]->clear();
                     GRID_CALL_SHARED_MEM(
                         numBlocks, densify_by_last_spikes, SPNET_RUNTIME_KERNELS_TPB, sizeof(uint32_t) * SPNET_RUNTIME_KERNELS_TPB,
                         nm_info.first_neuron_id >> 2,
                         nm_info.n_neurons >> 2,
                         n_neuron_quads,
-                        stpd_dense_buffers[nm_idx]->spikes_ptr(),
-                        stpd_dense_buffers[nm_idx]->counter_ptr(),
+                        stdp_dense_buffers[nm_idx]->spikes_ptr(),
+                        stdp_dense_buffers[nm_idx]->counter_ptr(),
                         reinterpret_cast<int4 *>(this->last_spikes),
                         current_tick,
                         d + 1,
                         device
                     );
-                    stpd_dense_buffers[nm_idx]->update_counter();
+                    stdp_dense_buffers[nm_idx]->update_counter();
                     #endif
-                    uint64_t n_spikes = stpd_dense_buffers[nm_idx]->number_of_spikes();
+                    uint64_t n_spikes = stdp_dense_buffers[nm_idx]->number_of_spikes();
                     if(n_spikes > 0) {
                         numBlocks = dim3((n_spikes + SPNET_RUNTIME_KERNELS_TPB - 1) / SPNET_RUNTIME_KERNELS_TPB, 1);
                         #ifdef USE_CUDA_STREAMS
                         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
                             numBlocks, calculate_ltp_multi_tick, SPNET_RUNTIME_KERNELS_TPB, streams[nm_idx],
                             this->backward_neuron_infos,
-                            stpd_dense_buffers[nm_idx]->spikes_ptr(),
+                            stdp_dense_buffers[nm_idx]->spikes_ptr(),
                             n_spikes,
                             n_neurons,
                             this->LTP,
@@ -1047,8 +1047,8 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
                         GRID_CALL_NO_SHARED_MEM(
                             numBlocks, calculate_ltp_multi_tick, SPNET_RUNTIME_KERNELS_TPB,
                             this->backward_neuron_infos,
-                            stpd_dense_buffers[nm_idx]->spikes_ptr(),
-                            stpd_dense_buffers[nm_idx]->number_of_spikes(),
+                            stdp_dense_buffers[nm_idx]->spikes_ptr(),
+                            stdp_dense_buffers[nm_idx]->number_of_spikes(),
                             n_neurons,
                             this->LTP,
                             n_past_ticks + stdp_period - 1,
