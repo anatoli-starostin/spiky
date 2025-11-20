@@ -110,7 +110,7 @@ class LUTLayerBasic(nn.Module):
         )
 
     def initialize_detectors(self, seed=None):
-        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections(0 if seed is None else seed)
+        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
         assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
         if seed is not None:
