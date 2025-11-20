@@ -95,6 +95,7 @@ class LUTLayerBasic(nn.Module):
         self._output_neuron_ids = torch.arange(self._n_lookup_neurons, self._n_lookup_neurons + n_outputs, dtype=torch.int32, device=self.device)
         self._weights = None
         self._last_w_grad = None
+        self._lookup_indices_callback = None
 
     def add_detector_connections(
         self, chunk_of_connections: ChunkOfConnections,
@@ -226,6 +227,9 @@ class LUTLayerBasic(nn.Module):
     def reset_profiler(self):
         self._lut_dm.reset_profiler()
 
+    def _set_lookup_inidices_callback(self, cb):
+        self._lookup_indices_callback = cb
+
     def forward_step(self, x):
         assert x.device == self.device
         batch_size = x.shape[0]
@@ -249,6 +253,9 @@ class LUTLayerBasic(nn.Module):
             min_anchor_deltas,
             min_anchor_delta_indices
         )
+
+        if self._lookup_indices_callback is not None:
+            self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         return (
             output.reshape((batch_size, sequence_length) + self.output_shape()),

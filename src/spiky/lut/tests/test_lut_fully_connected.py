@@ -60,10 +60,15 @@ def _test_lut_fully_connected(
                 _int_rescaler=1.0,
                 device=device
             )
+            self.layer1._set_lookup_inidices_callback(self.store_lookup_indices)
             self.layer2 = nn.Linear(
                 self.layer1.output_shape()[0] * self.layer1.output_shape()[1], 10, bias=False, device=device
             )
             self._last_hidden_output = None
+            self._last_lookup_indices = None
+
+        def store_lookup_indices(self, lookup_inidices, _, __):
+            self._last_lookup_indices = lookup_inidices.detach()
 
         def forward(self, x):
             x1 = self.layer1(x)
@@ -139,6 +144,10 @@ def _test_lut_fully_connected(
             pbar.update(1)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
+
+            if (test_net_standard._last_lookup_indices - test_net_fully_connected._last_lookup_indices).sum() != 0:
+                print(f"❌ lookup_indices difference detected")
+                return False
 
             diff = (test_net_standard._last_hidden_output - test_net_fully_connected._last_hidden_output).abs().max()
             if diff > 0.001:

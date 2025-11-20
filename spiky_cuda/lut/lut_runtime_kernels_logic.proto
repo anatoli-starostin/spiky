@@ -12,7 +12,7 @@ check_detectors_logic(
 
     if(i < n_detectors) {
         // Offset input for current batch (sequence_length == 1)
-        EXTERNAL_REAL_DT* current_input = input + blockIdx.y * n_inputs;
+        input += blockIdx.y * n_inputs;
         target_lookup_indices += blockIdx.y * n_detectors + i;
         target_min_anchor_deltas += blockIdx.y * n_detectors + i;
         target_min_anchor_delta_indices += blockIdx.y * n_detectors + i;
@@ -35,7 +35,7 @@ check_detectors_logic(
                 continue;
             }
 
-            EXTERNAL_REAL_DT delta = current_input[ap.anchor1_id] - current_input[ap.anchor2_id];
+            EXTERNAL_REAL_DT delta = input[ap.anchor1_id] - input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
             if(delta > 0.0) {
@@ -83,7 +83,7 @@ fire_detectors_logic(
 
     if(i < n_detectors) {
         // Offset input for current batch (sequence_length == 1)
-        EXTERNAL_REAL_DT* current_input = input + blockIdx.y * n_inputs;
+        input += blockIdx.y * n_inputs;
         target_lookup_indices += blockIdx.y * n_detectors + i;
         target_min_anchor_deltas += blockIdx.y * n_detectors + i;
         target_min_anchor_delta_indices += blockIdx.y * n_detectors + i;
@@ -106,7 +106,7 @@ fire_detectors_logic(
                 continue;
             }
 
-            EXTERNAL_REAL_DT delta = current_input[ap.anchor1_id] - current_input[ap.anchor2_id];
+            EXTERNAL_REAL_DT delta = input[ap.anchor1_id] - input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
             if(delta > 0.0) {
