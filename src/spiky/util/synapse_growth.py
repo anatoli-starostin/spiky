@@ -108,7 +108,6 @@ class SynapseGrowthEngine(object):
         self._device = device  # PyTorch device for tensor operations
         self._synapse_group_size = synapse_group_size
         self._single_buffer_size = (4 + 2 * synapse_group_size) * max_groups_in_buffer
-        self._random_seed = None
         self._profiling_stats = None
         self._max_neuron_id = 0
 

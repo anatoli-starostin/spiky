@@ -498,6 +498,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
             output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
             max_groups_in_buffer=_max_groups_in_growth_buffer,
+            synapse_group_size=n_detectors,
             device=device,
             seed=random_seed
         )
