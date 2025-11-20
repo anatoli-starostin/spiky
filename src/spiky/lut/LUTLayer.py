@@ -192,7 +192,7 @@ class LUTLayerBasic(nn.Module):
         if self._is_fully_connected:
             sm = self._synapse_metas[0]
             w = torch.full([n_weights], sm.initial_weight, device=self.device)
-            w += torch.rand([n_weights]) * sm.initial_noise_level
+            w += torch.rand([n_weights], device=self.device) * sm.initial_noise_level
             w.clip_(sm.min_weight, sm.max_weight)
         else:
             w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
