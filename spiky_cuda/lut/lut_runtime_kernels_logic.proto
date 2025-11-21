@@ -251,7 +251,15 @@ fill_outputs_logic(
         int32_t n_w_buffered = 0;
         for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++) {
             if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                    : "l"(current_target_ptr)
+                );
+                #else
                 targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
+                #endif
                 target_id = targets_quad.x;
                 n_t_buffered = 3;
             } else if(n_t_buffered > 0) {
@@ -268,7 +276,15 @@ fill_outputs_logic(
             }
 
             if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                    : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                    : "l"(weight_ptr)
+                );
+                #else
                 weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
+                #endif
                 weight = static_cast<double>(weights_quad.x);
                 n_w_buffered = 3;
             } else if(n_w_buffered > 0) {
@@ -584,7 +600,15 @@ gather_gradients_logic(
         int32_t n_w_buffered = 0;
         for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++, weight_shift++) {
             if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                    : "l"(current_target_ptr)
+                );
+                #else
                 targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
+                #endif
                 target_id = targets_quad.x;
                 n_t_buffered = 3;
             } else if(n_t_buffered > 0) {
@@ -601,7 +625,15 @@ gather_gradients_logic(
             }
 
             if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                    : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                    : "l"(weight_ptr)
+                );
+                #else
                 weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
+                #endif
                 weight = static_cast<double>(weights_quad.x);
                 n_w_buffered = 3;
             } else if(n_w_buffered > 0) {

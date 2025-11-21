@@ -94,7 +94,6 @@ SimpleAllocator::~SimpleAllocator()
 }
 
 void SimpleAllocator::to_device(int device) { // -1 - cpu
-    // TODO support pack option
     #ifdef NO_CUDA
         if(device != -1) {
             throw std::runtime_error(

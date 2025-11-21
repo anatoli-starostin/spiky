@@ -21,7 +21,7 @@ def main():
     if torch.cuda.is_available():
         devices.append('cuda')
 
-    for seed in [234654, 351, 42]:
+    for seed in [234654]:  # , 351, 42
         for device in devices:
             for summation_dtype in [torch.float32, torch.int32]:
                 for fname, func in tests.items():

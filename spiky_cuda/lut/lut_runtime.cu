@@ -26,7 +26,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     #endif
     BaseSynapseMeta *base_synapse_metas,
     IndexedSynapsesInfo *lookup_neuron_synapses_infos,
-    AnchorsPair *detectors,
     NeuronDataId_t first_synapse_id
 ) :
     lut_data(lut_data),
@@ -44,14 +43,12 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     #endif
     base_synapse_metas(base_synapse_metas),
     lookup_neuron_synapses_infos(lookup_neuron_synapses_infos),
-    detectors(detectors),
     firing_buffer(nullptr),
     max_forward_groups_per_neuron(max_forward_groups_per_neuron),
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     n_weights(n_weights),
     int_rescaler(int_rescaler),
     #endif
-    before_detectors_gradients(nullptr),
     first_synapse_id(first_synapse_id)
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
@@ -71,18 +68,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
 
 LUT_RUNTIME_CONTEXT_CLASS::~LUT_RUNTIME_CONTEXT_CLASS() {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS destructor\n");
-    if (device == -1) {
-        if(before_detectors_gradients != nullptr) {
-            PyMem_Free(before_detectors_gradients);
-        }
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        if(before_detectors_gradients != nullptr) {
-            cudaFree(before_detectors_gradients);
-        }
-        #endif
-    }
     if(this->firing_buffer != nullptr) {
         delete this->firing_buffer;
     }
@@ -101,6 +86,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     EXTERNAL_REAL_DT *weights,
     uint32_t batch_size,
     EXTERNAL_REAL_DT *input,
+    AnchorsPair *detectors,
     EXTERNAL_REAL_DT *target_output,
     int32_t *target_lookup_indices,
     EXTERNAL_REAL_DT *target_min_anchor_deltas,
@@ -115,20 +101,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     }
 
     if(batch_size != this->batch_size) {
-        if(device == -1) {
-            if(before_detectors_gradients != nullptr) {
-                PyMem_Free(before_detectors_gradients);
-                before_detectors_gradients = nullptr;
-            }
-        } else {
-            #ifndef NO_CUDA
-            c10::cuda::CUDAGuard guard(device);
-            if(before_detectors_gradients != nullptr) {
-                cudaFree(before_detectors_gradients);
-                before_detectors_gradients = nullptr;
-            }
-            #endif
-        }
         this->batch_size = batch_size;
     }
 
@@ -154,7 +126,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             numBlocks, fire_detectors, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
             input,
             this->n_inputs,
-            this->detectors,
+            detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
             n_lookup_neurons_per_detector,
@@ -198,7 +170,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             numBlocks, check_detectors, LUT_RUNTIME_KERNELS_TPB,
             input,
             this->n_inputs,
-            this->detectors,
+            detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
             target_lookup_indices,
@@ -251,10 +223,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     EXTERNAL_REAL_DT *output_gradients,
     // data from forward pass
     EXTERNAL_REAL_DT *input,
+    AnchorsPair *detectors,
     int32_t *lookup_indices,
     EXTERNAL_REAL_DT *min_anchor_deltas,
     int32_t *min_anchor_delta_indices,
     // gradients that we need to calculate
+    SUMMATION32_DT *before_detectors_gradients,
     EXTERNAL_REAL_DT *target_input_gradients,
     EXTERNAL_REAL_DT *target_weights_gradients
 ) {
@@ -269,18 +243,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     }
 
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
+    
+    // Zero out before_detectors_gradients
     uint64_t memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(SUMMATION32_DT);
-    if(before_detectors_gradients == nullptr) {
-        if(device == -1) {
-            before_detectors_gradients = (SUMMATION32_DT *) PyMem_Malloc(memsize);
-        } else {
-            #ifndef NO_CUDA
-            c10::cuda::CUDAGuard guard(device);
-            cudaMalloc(&before_detectors_gradients, memsize);
-            #endif
-        }
-    }
-
     if(device == -1) {
         memset(before_detectors_gradients, 0, memsize);
     } else {
@@ -443,7 +408,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         this->n_detectors,
         this->n_anchors_per_detector,
-        this->detectors,
+        detectors,
         n_lookup_neurons_per_detector,
         before_detectors_gradients,
         target_input_gradients,

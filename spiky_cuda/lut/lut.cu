@@ -68,7 +68,6 @@ public:
         this->n_synapse_metas = 0;
         this->n_synapses = 0;
         this->lookup_neuron_synapses_infos_id = 0;
-        this->detector_infos_id = 0;
 
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP, "lut::runtime::forward_step");
@@ -383,9 +382,12 @@ public:
 
     void initialize_detectors(
         const torch::Tensor &encoded_pairs_permutations,
-        uint32_t max_n_inputs_per_detector
+        uint32_t max_n_inputs_per_detector,
+        torch::Tensor &detector_anchors
     ) {
-        checkTensor(encoded_pairs_permutations, "encoded_pairs_permutations", false, host_device_allocator.device, sizeof(int32_t));
+        int device = host_device_allocator.device;
+        checkTensor(encoded_pairs_permutations, "encoded_pairs_permutations", false, device, sizeof(int32_t));
+        checkTensor(detector_anchors, "detector_anchors", false, device, sizeof(int32_t));
         if(detector_connections_manager == nullptr) {
             throw py::value_error("detector_connections_manager not initialized");
         }
@@ -397,14 +399,16 @@ public:
         if(provided_n_detectors != this->n_detectors) {
             throw py::value_error("provided_n_detectors != this->n_detectors");
         }
-
-        // Allocate detector_infos on host_device_allocator
-        uint64_t detector_infos_memsize = static_cast<uint64_t>(this->n_detectors) * this->n_anchors_per_detector * sizeof(AnchorsPair);
-        this->detector_infos_id = host_device_allocator.allocate(detector_infos_memsize, DETECTORS_MEMORY_LABEL);
         
-        // Initialize detector_infos to zero
-        AnchorsPair* detector_infos = AnchorsPairs(this->detector_infos_id, host_device_allocator.data);
-        int device = host_device_allocator.device;
+        // Validate detector_anchors tensor size
+        int64_t expected_anchors_size = static_cast<int64_t>(this->n_detectors) * this->n_anchors_per_detector * 2;
+        if(detector_anchors.numel() != expected_anchors_size) {
+            throw py::value_error("detector_anchors.numel() != n_detectors * n_anchors_per_detector * 2");
+        }
+        
+        // Initialize detector_anchors to zero
+        uint64_t detector_infos_memsize = static_cast<uint64_t>(this->n_detectors) * this->n_anchors_per_detector * sizeof(AnchorsPair);
+        AnchorsPair* detector_infos = reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr());
         if(device == -1) {
             memset(detector_infos, 0, detector_infos_memsize);
         } else {
@@ -567,6 +571,7 @@ public:
         const torch::Tensor &weights,
         uint32_t batch_size,
         const torch::Tensor &input,
+        const torch::Tensor &detector_anchors,
         torch::Tensor &target_output,
         torch::Tensor &target_lookup_indices,
         torch::Tensor &target_min_anchor_deltas,
@@ -575,6 +580,7 @@ public:
         __TRACE__("lutm_forward_step\n");
         checkTensor(weights, "weights", true, host_device_allocator.device);
         checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(detector_anchors, "detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(target_output, "target_output", true, host_device_allocator.device);
         checkTensor(target_lookup_indices, "target_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(target_min_anchor_deltas, "target_min_anchor_deltas", true, host_device_allocator.device);
@@ -609,7 +615,6 @@ public:
                 #endif
                 BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
                 synapse_infos,
-                reinterpret_cast<AnchorsPair *>(host_device_allocator.data + this->detector_infos_id),
                 gc_meta->first_synapse_id
             );
         }
@@ -618,6 +623,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_output.data_ptr()),
             reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
@@ -630,9 +636,11 @@ public:
         uint32_t batch_size,
         const torch::Tensor &output_gradients,
         const torch::Tensor &input,
+        const torch::Tensor &detector_anchors,
         const torch::Tensor &lookup_indices,
         const torch::Tensor &min_anchor_deltas,
         const torch::Tensor &min_anchor_delta_indices,
+        const torch::Tensor &before_detectors_gradients,
         torch::Tensor &target_input_gradients,
         torch::Tensor &target_weights_gradients
     ) {
@@ -647,18 +655,22 @@ public:
         checkTensor(target_input_gradients, "target_input_gradients", true, host_device_allocator.device);
         checkTensor(output_gradients, "output_gradients", true, host_device_allocator.device);
         checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(detector_anchors, "detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(lookup_indices, "lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(min_anchor_deltas, "min_anchor_deltas", true, host_device_allocator.device);
         checkTensor(min_anchor_delta_indices, "min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(before_detectors_gradients, "before_detectors_gradients", true, host_device_allocator.device);
 
         this->runtime_context->backward_backprop(
             reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(output_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr()),
             reinterpret_cast<int32_t *>(lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(min_anchor_delta_indices.data_ptr()),
+            reinterpret_cast<SUMMATION32_DT *>(before_detectors_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
         );
@@ -703,35 +715,6 @@ public:
             target_synapse_meta_indices,
             weights_data
         );
-    }
-
-    void export_anchors(torch::Tensor &target_anchors) {
-        if(this->detector_infos_id == 0) {
-            throw py::value_error("detectors are not initialized, call initialize_detectors() first");
-        }
-        
-        int device = host_device_allocator.device;
-        checkTensor(target_anchors, "target_anchors", false, device, sizeof(NeuronIndex_t));
-        
-        if(target_anchors.numel() != static_cast<int64_t>(this->n_detectors) * this->n_anchors_per_detector * 2) {
-            throw py::value_error("target_anchors.numel() != n_detectors * n_anchors_per_detector * 2");
-        }
-        
-        AnchorsPair* detector_infos = AnchorsPairs(this->detector_infos_id, host_device_allocator.data);
-        NeuronIndex_t* target_anchors_data = reinterpret_cast<NeuronIndex_t *>(target_anchors.data_ptr());
-        
-        uint64_t anchors_size = static_cast<uint64_t>(this->n_detectors) * this->n_anchors_per_detector * sizeof(AnchorsPair);
-        
-        if(device == -1) {
-            // CPU: copy directly
-            memcpy(target_anchors_data, detector_infos, anchors_size);
-        } else {
-            #ifndef NO_CUDA
-            // GPU: use cudaMemcpy
-            c10::cuda::CUDAGuard guard(device);
-            cudaMemcpy(target_anchors_data, detector_infos, anchors_size, cudaMemcpyDeviceToDevice);
-            #endif
-        }
     }
 
     auto __repr__() {
@@ -844,7 +827,6 @@ private:
         uint32_t n_synapse_metas,
         uint64_t n_synapses,
         NeuronDataId_t lookup_neuron_synapses_infos_id,
-        NeuronDataId_t detector_infos_id,
         NeuronDataId_t global_connections_meta_id
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , double int_rescaler
@@ -870,7 +852,6 @@ private:
         n_synapse_metas(n_synapse_metas),
         n_synapses(n_synapses),
         lookup_neuron_synapses_infos_id(lookup_neuron_synapses_infos_id),
-        detector_infos_id(detector_infos_id),
         global_connections_meta_id(global_connections_meta_id)
     {
         connections_manager = new ConnectionsManager(
@@ -910,7 +891,6 @@ private:
     uint32_t n_synapse_metas;
     uint64_t n_synapses;
     NeuronDataId_t lookup_neuron_synapses_infos_id;
-    NeuronDataId_t detector_infos_id;
     NeuronDataId_t global_connections_meta_id;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     double int_rescaler;
@@ -938,7 +918,6 @@ py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
         ldm.n_synapse_metas,
         ldm.n_synapses,
         ldm.lookup_neuron_synapses_infos_id,
-        ldm.detector_infos_id,
         ldm.global_connections_meta_id
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , ldm.int_rescaler
@@ -972,10 +951,9 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
             t[9].cast<uint32_t>(),         // n_synapse_metas
             t[10].cast<uint64_t>(),        // n_synapses
             t[11].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
-            t[12].cast<NeuronDataId_t>(),  // detector_infos_id
-            t[13].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[12].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[14].cast<double>()         // int_rescaler
+            , t[13].cast<double>()         // int_rescaler
             #endif
         )
     );
@@ -1009,7 +987,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
         .def("initialize_detectors", &LUTM_CLASS_NAME::initialize_detectors,
             "Initialize detectors",
             py::arg("encoded_pairs_permutations"),
-            py::arg("max_n_inputs_per_detector"))
+            py::arg("max_n_inputs_per_detector"),
+            py::arg("detector_anchors"))
         .def("finalize_detector_connections", &LUTM_CLASS_NAME::finalize_detector_connections,
             "Finalize detector connections and return max number of inputs per detector")
         .def("get_number_of_inputs", &LUTM_CLASS_NAME::get_number_of_inputs,
@@ -1051,6 +1030,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("weights"),
             py::arg("batch_size"),
             py::arg("input"),
+            py::arg("detector_anchors"),
             py::arg("target_output"),
             py::arg("target_lookup_indices"),
             py::arg("target_min_anchor_deltas"),
@@ -1061,9 +1041,11 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("batch_size"),
             py::arg("output_gradients"),
             py::arg("input"),
+            py::arg("detector_anchors"),
             py::arg("lookup_indices"),
             py::arg("min_anchor_deltas"),
             py::arg("min_anchor_delta_indices"),
+            py::arg("before_detectors_gradients"),
             py::arg("target_input_gradients"),
             py::arg("target_weights_gradients"))
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
@@ -1077,9 +1059,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("target_weights"),
             py::arg("target_internal_target_indices"),
             py::arg("target_synapse_meta_indices") = py::none())
-        .def("export_anchors", &LUTM_CLASS_NAME::export_anchors,
-            "Export all anchor pairs for all detectors",
-            py::arg("target_anchors"))
         .def("__repr__", &LUTM_CLASS_NAME::__repr__)
         .def("get_memory_stats", &LUTM_CLASS_NAME::get_memory_stats)
         .def("get_profiling_stats", &LUTM_CLASS_NAME::get_profiling_stats)

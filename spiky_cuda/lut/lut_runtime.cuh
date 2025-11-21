@@ -28,7 +28,6 @@ private:
 
     BaseSynapseMeta *base_synapse_metas;
     IndexedSynapsesInfo *lookup_neuron_synapses_infos;
-    AnchorsPair *detectors;
 
     FiringBuffer *firing_buffer;
     uint32_t max_forward_groups_per_neuron;
@@ -37,7 +36,6 @@ private:
     double int_rescaler;
     #endif
 
-    SUMMATION32_DT *before_detectors_gradients;
     NeuronDataId_t first_synapse_id;
 public:
     // base constructor
@@ -61,7 +59,6 @@ public:
         #endif
         BaseSynapseMeta *base_synapse_metas,
         IndexedSynapsesInfo *lookup_neuron_synapses_infos,
-        AnchorsPair *detectors,
         NeuronDataId_t first_synapse_id
     );
 
@@ -75,6 +72,7 @@ public:
         EXTERNAL_REAL_DT *weights,
         uint32_t batch_size,
         EXTERNAL_REAL_DT *input,
+        AnchorsPair *detectors,
         EXTERNAL_REAL_DT *target_output,
         int32_t *target_lookup_indices,
         EXTERNAL_REAL_DT *target_min_anchor_deltas,
@@ -88,10 +86,12 @@ public:
         EXTERNAL_REAL_DT *output_gradients,
         // data from forward pass
         EXTERNAL_REAL_DT *input,
+        AnchorsPair *detectors,
         int32_t *lookup_indices,
         EXTERNAL_REAL_DT *min_anchor_deltas,
         int32_t *min_anchor_delta_indices,
         // gradients that we need to calculate
+        SUMMATION32_DT *before_detectors_gradients,
         EXTERNAL_REAL_DT *target_input_gradients,
         EXTERNAL_REAL_DT *target_weights_gradients
     );

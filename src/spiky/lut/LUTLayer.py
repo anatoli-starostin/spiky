@@ -96,6 +96,8 @@ class LUTLayerBasic(nn.Module):
         self._weights = None
         self._last_w_grad = None
         self._lookup_indices_callback = None
+        self._detector_anchors = None
+        self._before_detectors_gradients = None
 
     def add_detector_connections(
         self, chunk_of_connections: ChunkOfConnections,
@@ -124,9 +126,17 @@ class LUTLayerBasic(nn.Module):
         )
         encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
 
+        # Create detector_anchors tensor
+        self._detector_anchors = torch.zeros(
+            self._n_detectors * self._n_anchors_per_detector * 2,
+            dtype=torch.int32,
+            device=self.device
+        )
+
         self._lut_dm.initialize_detectors(
             encoded_pairs_permutations.flatten().contiguous(),
-            max_n_inputs_per_detector
+            max_n_inputs_per_detector,
+            self._detector_anchors
         )
 
     def get_input_neuron_ids(self):
@@ -248,6 +258,7 @@ class LUTLayerBasic(nn.Module):
         self._lut_dm.forward_step(
             self._weights,
             batch_size, x,
+            self._detector_anchors,
             output,
             lookup_indices,
             min_anchor_deltas,
@@ -294,13 +305,27 @@ class LUTLayerBasic(nn.Module):
         assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
 
         grad_output = grad_output.flatten().contiguous()
+        
+        # Create or recreate before_detectors_gradients if batch_size changed
+        summation_dtype = self.get_summation_type()
+        if (self._before_detectors_gradients is None or 
+            self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size * sequence_length):
+            self._before_detectors_gradients = torch.zeros(
+                self._n_lookup_neurons * batch_size * sequence_length,
+                dtype=torch.float32,
+                device=self.device
+            )
+        
         self._lut_dm.backward_backprop(
             self._weights,
             batch_size,
             grad_output,
-            x, lookup_indices,
+            x,
+            self._detector_anchors,
+            lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
+            self._before_detectors_gradients,
             x_grad, self._last_w_grad
         )
 
@@ -335,6 +360,10 @@ class LUTLayerBasic(nn.Module):
         self._output_neuron_ids = self._output_neuron_ids.to(device=self.device)
 
         self._lut_dm.to_device(device_index)
+        if self._detector_anchors is not None:
+            self._detector_anchors = self._detector_anchors.to(device=self.device)
+        if self._before_detectors_gradients is not None:
+            self._before_detectors_gradients = self._before_detectors_gradients.to(device=self.device)
         return self
 
     class LUTForwardFN(torch.autograd.Function):
@@ -402,13 +431,9 @@ class LUTLayerBasic(nn.Module):
             torch.Tensor: A tensor of shape [n_detectors, n_anchors_per_detector, 2]
                          containing anchor pairs. Each anchor pair is [anchor1_id, anchor2_id].
         """
-        anchors = torch.zeros(
-            self._n_detectors * self._n_anchors_per_detector * 2,
-            dtype=torch.int32,
-            device=self.device
-        )
-        self._lut_dm.export_anchors(anchors)
-        return anchors.reshape(self._n_detectors, self._n_anchors_per_detector, 2)
+        if self._detector_anchors is None:
+            raise RuntimeError("Detectors are not initialized, call initialize_detectors() first")
+        return self._detector_anchors.reshape(self._n_detectors, self._n_anchors_per_detector, 2)
 
 
 class Conv2DLUTLayer(LUTLayerBasic):
