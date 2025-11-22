@@ -17,6 +17,16 @@ FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device) 
         cudaMemset(this->firings, 0, memsize);
         #endif
     }
+    external_buffer = false;
+}
+
+FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int32 *external_buffer) {
+    this->device = device;
+    this->n_firings = 0;
+    this->max_firings = n_firings * batch_size;
+    uint64_t memsize = (1 + this->max_firings) * sizeof(Firing);
+    this->firings = reinterpret_cast<Firing *>(external_buffer);
+    external_buffer = true;
 }
 
 #ifdef NO_CUDA
@@ -81,12 +91,14 @@ uint64_t FiringBuffer::get_max_firings() {
 
 
 FiringBuffer::~FiringBuffer() {
-    if(this->device == -1) {
-        PyMem_Free(this->firings);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaFree(this->firings);
-        #endif
+    if(!external_buffer) {
+        if(this->device == -1) {
+            PyMem_Free(this->firings);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaFree(this->firings);
+            #endif
+        }
     }
 }

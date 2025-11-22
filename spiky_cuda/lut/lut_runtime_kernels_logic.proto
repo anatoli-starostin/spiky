@@ -217,7 +217,7 @@ fire_detectors_logic(
     }
 }
 
-fill_outputs_logic(
+fill_outputs_by_forward_groups_logic(
     EXTERNAL_REAL_DT* weights,
     NeuronDataId_t first_synapse_id,
     Firing* firings_buffer,
@@ -245,7 +245,7 @@ fill_outputs_logic(
         double weight;
         SUMMATION32_DT payload;
 
-        __SUPER_DETAILED_TRACE__("[fill_outputs_logic] i %d, current_group_size %d, n_firings %d, weight_shift %ld\n", i, current_group_size, n_firings, weight_shift);
+        __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] i %d, current_group_size %d, n_firings %d, weight_shift %ld\n", i, current_group_size, n_firings, weight_shift);
 
         int32_t n_t_buffered = 0;
         int32_t n_w_buffered = 0;
@@ -301,7 +301,7 @@ fill_outputs_logic(
             }
 
             target_id -= n_lookup_neurons;
-            __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, weight %f\n", target_id, weight);
+            __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, weight %f\n", target_id, weight);
 
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
@@ -321,7 +321,7 @@ fill_outputs_logic(
                     payload
                 );
                 #else
-                __SUPER_DETAILED_TRACE__("[fill_outputs_logic] target_id %d, payload %f\n", target_id, payload);
+                __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, payload %f\n", target_id, payload);
                 target_output[target_id] += payload;
                 #endif
             #endif
@@ -935,5 +935,451 @@ convert_integers_to_floats_logic(
         double y = static_cast<double>(*reinterpret_cast<SUMMATION32_DT *>(buffer + i)) * static_cast<double>(DENOMINATOR32_RECIPROC);
         buffer[i] = static_cast<EXTERNAL_REAL_DT>(y / int_rescaler);
         #endif
+    }
+}
+
+// Kernel for checking detectors across a sequence of timesteps
+// Grid: (n_detector_items blocks, batch_size batches) where n_detector_items = sequence_length * n_detectors
+// Each thread processes one detector at one timestep
+check_detectors_for_sequence_logic(
+    EXTERNAL_REAL_DT* input,
+    uint32_t n_inputs,
+    uint32_t sequence_length,
+    AnchorsPair* detectors,
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    int32_t* target_lookup_indices,
+    EXTERNAL_REAL_DT* target_min_anchor_deltas,
+    int32_t* target_min_anchor_delta_indices
+) {
+    // i represents n_detectors * timestep + detector_index
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    
+    if(i < n_detector_items) {
+        uint32_t timestep = i / n_detectors;
+        uint32_t detector_index = i % n_detectors;
+
+        // Offset input for current batch and timestep
+        // Input layout: [batch0_t0, batch0_t1, ..., batch0_tN, batch1_t0, ...]
+        input += blockIdx.y * n_inputs * sequence_length + timestep * n_inputs;
+        target_lookup_indices += blockIdx.y * n_detector_items + i;
+        target_min_anchor_deltas += blockIdx.y * n_detector_items + i;
+        target_min_anchor_delta_indices += blockIdx.y * n_detector_items + i;
+        
+        // Get detector's anchor pairs
+        AnchorsPair* detector_anchors = detectors + detector_index * n_anchors_per_detector;
+        
+        // Calculate differences between anchor pairs and form bit representation
+        int32_t lookup_index = 0;
+        EXTERNAL_REAL_DT min_delta = 0.0;
+        int32_t min_delta_anchor_idx = -1;
+        AnchorsPair ap;
+        
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            ap = detector_anchors[anchor_idx];
+            
+            // Skip if anchor IDs are invalid
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+            
+            EXTERNAL_REAL_DT delta = input[ap.anchor1_id] - input[ap.anchor2_id];
+            
+            // Form bit representation: 1 if delta > 0, 0 if delta <= 0
+            if(delta > 0.0) {
+                lookup_index |= (1 << anchor_idx);
+            }
+            
+            // Track anchor pair with minimum absolute delta
+            if((min_delta_anchor_idx == -1) || (fabs(delta) < fabs(min_delta))) {
+                min_delta = delta;
+                min_delta_anchor_idx = anchor_idx;
+            }
+        }
+        
+        // Store lookup index and related data
+        *target_lookup_indices = lookup_index;
+        *target_min_anchor_deltas = min_delta;
+        *target_min_anchor_delta_indices = min_delta_anchor_idx;
+        
+        __SUPER_DETAILED_TRACE__("check_detectors_for_sequence_logic: batch_index %d, detector_index %d, timestep %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", blockIdx.y, detector_index, timestep, lookup_index, min_delta, min_delta_anchor_idx);
+    }
+}
+
+check_positional_embeddings_logic(
+    uint32_t sequence_length,
+    EXTERNAL_REAL_DT* positional_embeddings,
+    uint32_t n_detectors,
+    uint32_t positional_dim,
+    int32_t* target_positional_lookup_indices,
+    EXTERNAL_REAL_DT* target_positional_min_deltas,
+    int32_t* target_positional_min_delta_indices
+) {
+    // i represents n_detectors * timestep + detector_index
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    
+    if(i < n_detector_items) {
+        uint32_t timestep = i / n_detectors;
+        uint32_t detector_index = i % n_detectors;
+        
+        // Calculate offset for this batch, detector, and timestep
+        // blockIdx.y will be 0 because positional embeddings are not batched but we leave it here for generality
+        uint32_t batch_offset = blockIdx.y * n_detector_items;
+        target_positional_lookup_indices += batch_offset + i;
+        target_positional_min_deltas += batch_offset + i;
+        target_positional_min_delta_indices += batch_offset + i;
+        
+        // Get positional embedding for this detector and timestep
+        // Positional embeddings are stored as [sequence_length * n_detectors * positional_dim]
+        uint32_t embedding_offset = timestep * n_detectors * positional_dim + detector_index * positional_dim;
+        EXTERNAL_REAL_DT* current_embedding = positional_embeddings + embedding_offset;
+        
+        int32_t lookup_index = 0;
+        int32_t min_dim_index = -1;
+        EXTERNAL_REAL_DT min_delta;
+        EXTERNAL_REAL_DT embedding_value;
+        
+        for(uint32_t dim = 0; dim < positional_dim; dim++) {
+            embedding_value = current_embedding[dim];
+            
+            if(embedding_value > 0.0) {
+                lookup_index |= (1 << dim);
+            }
+            
+            if((min_dim_index == -1) || (fabs(embedding_value) < fabs(min_delta))) {
+                min_delta = embedding_value;
+                min_dim_index = dim;
+            }
+        }
+        
+        *target_positional_lookup_indices = lookup_index;
+        *target_positional_min_deltas = min_delta;
+        *target_positional_min_delta_indices = min_dim_index;
+        
+        __SUPER_DETAILED_TRACE__(
+            "check_positional_embeddings_logic: batch_index %d, detector_index %d, timestep %d, lookup_index %d, min_dim_index %d, min_delta %f\n",
+            blockIdx.y, detector_index, timestep, lookup_index, min_dim_index, min_delta
+        );
+    }
+}
+
+densify_firing_stat_logic(
+    EXTERNAL_REAL_DT* firing_stat,
+    NeuronShiftFiring* firings_buffer,
+    uint64_t* firings_counter_ptr,
+    uint32_t n_lookup_neurons,
+    uint32_t sequence_length,
+    int device
+) {
+    uint32_t tid = threadIdx.x;
+    uint32_t neuron_index = blockIdx.x * blockDim.x + tid;
+    
+    // Check bounds
+    if(neuron_index < n_lookup_neurons) {
+        // blockIdx.y encodes: batch_index * sequence_length + timestep
+        // Extract batch_index and timestep
+        uint32_t batch_index = blockIdx.y / sequence_length;
+        uint32_t timestep = blockIdx.y % sequence_length;
+
+        // Calculate index into firing_stat array
+        // firing_stat layout: [neuron0_batch0_t0, neuron0_batch0_t1, ..., neuron0_batch0_tN, neuron0_batch1_t0, ...]
+        // Layout: [batch0_t0_neuron0, batch0_t0_neuron1, ..., batch0_t0_neuronN, batch0_t1_neuron0, ...]
+        uint32_t firing_stat_index = timestamp * n_lookup_neurons + neuron_index;
+        EXTERNAL_REAL_DT firing_value = firing_stat[firing_stat_index];
+
+        if(device == -1) {
+            // CPU path
+            if(firing_value != 0.0) {
+                uint64_t firings_offset = *firings_counter_ptr;
+                (*firings_counter_ptr)++;
+
+                firings_buffer[firings_offset] = NeuronShiftFiring{
+                    batch_index,  // batch_index
+                    firing_value,  // payload (value from firing_stat)
+                    neuron_index,  // neuron_id
+                    timestep  // shift (timestamp)
+                };
+            }
+        } else {
+            #ifdef ATOMIC
+            // Shared memory for reduction
+            extern __shared__ __align__(16) uint8_t __sm[];
+            uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+
+            sdata[tid] = (firing_value != 0.0) ? 1 : 0;
+            __syncthreads();
+
+            uint32_t t;
+            int offset;
+            int idx;
+
+            // upsweep (reduce)
+            for(offset = 1; offset < blockDim.x; offset <<= 1) {
+                idx = ((tid + 1) * (offset << 1)) - 1;
+                if(idx < blockDim.x) {
+                    t = sdata[idx - offset];
+                    if(t > 0) {
+                        sdata[idx] += t;
+                    }
+                }
+                __syncthreads();
+            }
+
+            // inject global shift
+            if(tid == 0) {
+                sdata[blockDim.x - 1] = atomicAdd(
+                    reinterpret_cast<unsigned long long*>(firings_counter_ptr),
+                    static_cast<unsigned long long>(sdata[blockDim.x - 1])
+                );
+            }
+            __syncthreads();
+
+            // downsweep
+            for(offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
+                idx = ((tid + 1) * (offset << 1)) - 1;
+                if (idx < blockDim.x) {
+                    t = sdata[idx - offset];
+                    sdata[idx - offset] = sdata[idx];
+                    if(t > 0) {
+                        sdata[idx] += t;
+                    }
+                }
+                __syncthreads();
+            }
+
+            // Write firing if this neuron fired
+            if(firing_value != 0.0) {
+                firings_buffer[sdata[tid]] = NeuronShiftFiring{
+                    batch_index,  // batch_index
+                    firing_value,  // payload (value from firing_stat)
+                    neuron_index,  // neuron_id
+                    timestep  // shift (timestamp)
+                };
+            }
+            #endif
+        }
+    }
+}
+
+// Kernel for filling outputs based on lookup indices (for sequence processing)
+// Similar to fill_outputs_by_forward_groups_logic but works with Firing entries from densify
+// Grid: (n_firings blocks, max_forward_groups_per_neuron batches)
+fill_outputs_by_lookup_indices_logic(
+    EXTERNAL_REAL_DT* weights,
+    NeuronDataId_t first_synapse_id,
+    Firing* firings_buffer,
+    uint64_t n_firings,
+    EXTERNAL_REAL_DT* target_output,
+    uint32_t n_lookup_neurons,
+    uint32_t n_outputs,
+    NoDelaysIndexedSynapsesInfo* lookup_neuron_synapses_infos,
+    uint32_t synapse_group_size,
+    uint8_t* lut_data
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    , double int_rescaler
+    #else
+    , double
+    #endif
+) {
+    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    
+    if(i < n_firings) {
+        Firing firing = firings_buffer[i];
+        
+        // Calculate batch and sequence indices from firing.batch_index
+        // firing.batch_index encodes: batch_index * sequence_length + timestep
+        // We need sequence_length to decode this - it should be passed as a parameter
+        // For now, assuming it's encoded in the batch_index or we extract it differently
+        
+        // Offset target_output for current batch and timestep
+        // This needs sequence_length to be passed as a parameter
+        // For now, using a simplified approach - firing.batch_index directly indexes into output
+        target_output += firing.batch_index * n_outputs;
+        
+        // Get synapse info for this firing
+        // The data_id in firing should point to the synapse group
+        ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(firing.data_id, lut_data);
+        int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
+        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, lut_data);
+        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
+        EXTERNAL_REAL_DT* weight_ptr = weights + weight_shift;
+        
+        uint4 targets_quad = make_uint4(0, 0, 0, 0);
+        float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
+        
+        NeuronIndex_t target_id;
+        double weight;
+        SUMMATION32_DT payload;
+        
+        int32_t n_t_buffered = 0;
+        int32_t n_w_buffered = 0;
+        
+        // Scale weight by firing value
+        EXTERNAL_REAL_DT firing_weight = firing.weight;
+        
+        for(int32_t cursor = 0; cursor < current_group_size; cursor++, current_target_ptr++, weight_ptr++) {
+            if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                    : "l"(current_target_ptr)
+                );
+                #else
+                targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
+                #endif
+                target_id = targets_quad.x;
+                n_t_buffered = 3;
+            } else if(n_t_buffered > 0) {
+                if(n_t_buffered == 3) {
+                    target_id = targets_quad.y;
+                } else if(n_t_buffered == 2) {
+                    target_id = targets_quad.z;
+                } else {
+                    target_id = targets_quad.w;
+                }
+                n_t_buffered--;
+            } else {
+                target_id = *current_target_ptr;
+            }
+            
+            if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                #ifdef ATOMIC
+                asm volatile(
+                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                    : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                    : "l"(weight_ptr)
+                );
+                #else
+                weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
+                #endif
+                weight = static_cast<double>(weights_quad.x) * static_cast<double>(firing_weight);
+                n_w_buffered = 3;
+            } else if(n_w_buffered > 0) {
+                if(n_w_buffered == 3) {
+                    weight = static_cast<double>(weights_quad.y) * static_cast<double>(firing_weight);
+                } else if(n_w_buffered == 2) {
+                    weight = static_cast<double>(weights_quad.z) * static_cast<double>(firing_weight);
+                } else {
+                    weight = static_cast<double>(weights_quad.w) * static_cast<double>(firing_weight);
+                }
+                n_w_buffered--;
+            } else {
+                weight = static_cast<double>(*weight_ptr) * static_cast<double>(firing_weight);
+            }
+            
+            target_id -= n_lookup_neurons;
+            
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                #ifdef ATOMIC
+                atomicAdd(
+                    reinterpret_cast<SUMMATION32_DT *>(target_output + target_id),
+                    payload
+                );
+                #else
+                *reinterpret_cast<SUMMATION32_DT *>(target_output + target_id) += payload;
+                #endif
+            #else
+                payload = static_cast<SUMMATION32_DT>(weight);
+                #ifdef ATOMIC
+                atomicAdd(
+                    target_output + target_id,
+                    payload
+                );
+                #else
+                target_output[target_id] += payload;
+                #endif
+            #endif
+        }
+    }
+}
+
+fill_after_detectors_firing_stat_logic(
+    int32_t* target_lookup_indices,
+    int32_t* target_positional_lookup_indices,
+    uint32_t sequence_length,
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    uint32_t positional_dim,
+    uint32_t n_lookup_neurons,
+    EXTERNAL_REAL_DT* target_firing_stat,
+    int device
+) {
+    // i represents pair_index * n_detectors + detector_index
+    // where pair_index is an index into the sequence pairs
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Calculate number of pairs: sequence_length * (sequence_length - 1) / 2
+    uint32_t n_pairs = (sequence_length * (sequence_length - 1)) >> 1;
+    uint32_t n_items = n_pairs * n_detectors;
+    
+    if(i < n_items) {
+        uint32_t pair_index = i / n_detectors;
+        uint32_t detector_index = i % n_detectors;
+        uint32_t batch_index = blockIdx.y;
+        
+        // Extract first_timestamp and second_timestamp from pair_index
+        // pair_index maps to triangular matrix: (0,1), (0,2), ..., (0,N-1), (1,2), ..., (1,N-1), ..., (N-2,N-1)
+        // Simple algorithm: divide by (sequence_length - 1) to get first, modulo to get remainder
+        uint32_t first_timestamp = pair_index / (sequence_length - 1);
+        uint32_t remainder = pair_index % (sequence_length - 1);
+        // second = remainder + first + 1 to ensure second > first
+        uint32_t second_timestamp = remainder + first_timestamp + 1;
+        
+        // Calculate offsets into lookup_indices arrays
+        // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+        uint32_t n_detector_items = sequence_length * n_detectors;
+        uint32_t batch_offset = batch_index * n_detector_items;
+        
+        // Get Q: lookup index from first timestamp
+        uint32_t q_offset = batch_offset + first_timestamp * n_detectors + detector_index;
+        int32_t Q = target_lookup_indices[q_offset];
+        
+        // Get P: lookup index from second timestamp
+        uint32_t p_offset = batch_offset + second_timestamp * n_detectors + detector_index;
+        int32_t P = target_lookup_indices[p_offset];
+        
+        // Get PE: positional lookup index from first timestamp (or second? using first for now)
+        uint32_t pe_offset = batch_offset + first_timestamp * n_detectors + detector_index;
+        int32_t PE = target_positional_lookup_indices[pe_offset];
+        
+        // N_C is the number of bits for lookup index = n_anchors_per_detector
+        uint32_t N_C = n_anchors_per_detector;
+        
+        // Bit concatenate: CONCATENATE(Q, P, PE) = ((Q << (N_C + POSITIONAL_DIM)) | (P << POSITIONAL_DIM) | PE)
+        uint32_t concatenated_index = ((Q << (N_C + positional_dim)) | (P << positional_dim) | PE);
+        
+        // Calculate index into target_firing_stat
+        // target_firing_stat layout: [neuron0_batch0_t0, neuron0_batch0_t1, ..., neuron0_batch0_tN, neuron0_batch1_t0, ...]
+        // Layout: [batch0_t0_neuron0, batch0_t0_neuron1, ..., batch0_t0_neuronN, batch0_t1_neuron0, ...]
+        // Index = batch_index * n_lookup_neurons * sequence_length + first_timestamp * n_lookup_neurons + concatenated_index
+        uint32_t firing_stat_index = batch_index * n_lookup_neurons * sequence_length + 
+                                     first_timestamp * n_lookup_neurons + 
+                                     concatenated_index;
+        
+        // Bounds check: concatenated_index should be a valid neuron index
+        if(concatenated_index < n_lookup_neurons) {
+            // Increment target_firing_stat[concat_result] (atomic or not depending on device)
+            if(device == -1) {
+                // CPU path - no atomic needed
+                target_firing_stat[firing_stat_index] += 1.0;
+            } else {
+                #ifdef ATOMIC
+                atomicAdd(
+                    target_firing_stat + firing_stat_index,
+                    1.0
+                );
+                #else
+                target_firing_stat[firing_stat_index] += 1.0;
+                #endif
+            }
+        }
+        
+        __SUPER_DETAILED_TRACE__("fill_after_detectors_firing_stat_logic: batch_index %d, pair_index %d, detector_index %d, first_t %d, second_t %d, Q %d, P %d, PE %d, concat %d\n", 
+            batch_index, pair_index, detector_index, first_timestamp, second_timestamp, Q, P, PE, concatenated_index);
     }
 }

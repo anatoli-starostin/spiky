@@ -8,6 +8,15 @@ typedef struct alignas(8) {
 } Firing;
 static_assert(sizeof(Firing) == 16, "check sizeof(Firing)");
 
+typedef struct alignas(8) {
+    uint32_t batch_index;
+    REAL_DT payload;
+    NeuronIndex_t neuron_id;
+    uint32_t shift;
+} NeuronShiftFiring;
+static_assert(sizeof(NeuronShiftFiring) == 16, "check sizeof(NeuronShiftFiring)");
+
+
 #define FIRE_BUFFER_TPB 1024
 static_assert((FIRE_BUFFER_TPB % 2) == 0, "FIRE_BUFFER_TPB must be even");
 
@@ -17,8 +26,10 @@ private:
     uint64_t n_firings;
     uint64_t max_firings;
     int device;
+    bool external_buffer;
 public:
     FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device);
+    FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int32 *external_buffer);
 #ifdef NO_CUDA
     void update_counter();
     void clear();

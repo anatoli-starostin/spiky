@@ -16,6 +16,7 @@ public:
         uint32_t n_inputs, uint32_t n_outputs,
         uint32_t n_detectors, uint32_t n_anchors_per_detector,
         uint32_t sequence_length,
+        uint32_t positional_dim,
         uint64_t initial_synapse_capacity,
         uint32_t synapse_group_size
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -35,6 +36,7 @@ public:
         n_detectors(n_detectors),
         n_anchors_per_detector(n_anchors_per_detector),
         sequence_length(sequence_length),
+        positional_dim(positional_dim),
         n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector * ((sequence_length > 1) ? 2 : 1)))),
         synapse_group_size(synapse_group_size)
     {
@@ -178,6 +180,7 @@ public:
             GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
             gc_meta->first_synapse_id = 0;
             gc_meta->last_synapse_id = (static_cast<uint64_t>(this->n_lookup_neurons) * this->n_outputs - 1) * SizeOfSynapse(true);
+            gc_meta->max_forward_groups_per_neuron = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
             delete this->weights_allocator;
             this->weights_allocator = nullptr;
         } else {
@@ -604,6 +607,7 @@ public:
                 this->n_anchors_per_detector,
                 this->n_lookup_neurons,
                 this->sequence_length,
+                this->positional_dim,
                 this->synapse_group_size,
                 gc_meta->max_forward_groups_per_neuron,
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -628,6 +632,89 @@ public:
             reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(target_min_anchor_delta_indices.data_ptr())
+        );
+    }
+
+    void forward_step_concat(
+        const torch::Tensor &weights,
+        const torch::Tensor &positional_embeddings,
+        uint32_t batch_size,
+        const torch::Tensor &input,
+        const torch::Tensor &detector_anchors,
+        torch::Tensor &target_output,
+        torch::Tensor &target_lookup_indices,
+        torch::Tensor &target_min_anchor_deltas,
+        torch::Tensor &target_min_anchor_delta_indices,
+        torch::Tensor &target_positional_lookup_indices,
+        torch::Tensor &target_positional_min_deltas,
+        torch::Tensor &target_positional_min_delta_indices,
+        torch::Tensor &target_sparse_firing_buffer,
+        torch::Tensor &target_firing_stat
+    ) {
+        __TRACE__("lutm_forward_step_concat\n");
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+        checkTensor(positional_embeddings, "positional_embeddings", true, host_device_allocator.device);
+        checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(detector_anchors, "detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_output, "target_output", true, host_device_allocator.device);
+        checkTensor(target_lookup_indices, "target_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_min_anchor_deltas, "target_min_anchor_deltas", true, host_device_allocator.device);
+        checkTensor(target_min_anchor_delta_indices, "target_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_positional_lookup_indices, "target_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_positional_min_deltas, "target_positional_min_deltas", true, host_device_allocator.device);
+        checkTensor(target_positional_min_delta_indices, "target_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_sparse_firing_buffer, "target_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(target_firing_stat, "target_firing_stat", true, host_device_allocator.device);
+        if(batch_size == 0) {
+            throw py::value_error("batch_size == 0");
+        }
+
+        if(this->runtime_context == nullptr) {
+            GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+            IndexedSynapsesInfo *synapse_infos = nullptr;
+            if(this->lookup_neuron_synapses_infos_id != std::numeric_limits<uint64_t>::max()) {
+                synapse_infos = IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data);
+            }
+            this->runtime_context = new LUT_RUNTIME_CONTEXT_CLASS(
+                host_device_allocator.data,
+                host_device_allocator.device,
+                this->n_inputs,
+                this->n_outputs,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                this->n_lookup_neurons,
+                this->sequence_length,
+                this->positional_dim,
+                this->synapse_group_size,
+                gc_meta->max_forward_groups_per_neuron,
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                N_WEIGHTS(gc_meta, true),
+                int_rescaler,
+                #endif
+                #ifdef ENABLE_PROFILING
+                this->profiler,
+                #endif
+                BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
+                synapse_infos,
+                gc_meta->first_synapse_id
+            );
+        }
+
+        this->runtime_context->forward_step_concat(
+            reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(positional_embeddings.data_ptr()),
+            batch_size,
+            reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_output.data_ptr()),
+            reinterpret_cast<int32_t *>(target_lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_min_anchor_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(target_min_anchor_delta_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(target_positional_lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_positional_min_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(target_positional_min_delta_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(target_sparse_firing_buffer.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_firing_stat.data_ptr())
         );
     }
 
@@ -673,6 +760,69 @@ public:
             reinterpret_cast<SUMMATION32_DT *>(before_detectors_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
+        );
+    }
+
+    void backward_backprop_concat(
+        const torch::Tensor &weights,
+        const torch::Tensor &positional_embeddings,
+        uint32_t batch_size,
+        const torch::Tensor &output_gradients,
+        const torch::Tensor &input,
+        const torch::Tensor &detector_anchors,
+        const torch::Tensor &lookup_indices,
+        const torch::Tensor &min_anchor_deltas,
+        const torch::Tensor &min_anchor_delta_indices,
+        const torch::Tensor &positional_lookup_indices,
+        const torch::Tensor &positional_min_deltas,
+        const torch::Tensor &positional_min_delta_indices,
+        const torch::Tensor &sparse_firing_buffer,
+        const torch::Tensor &before_detectors_gradients,
+        torch::Tensor &target_input_gradients,
+        torch::Tensor &target_weights_gradients,
+        torch::Tensor &target_positional_embeddings_gradients
+    ) {
+        if(batch_size == 0) {
+            throw py::value_error("batch_size == 0");
+        }
+        if(this->runtime_context == nullptr) {
+            throw py::value_error("no active context");
+        }
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+        checkTensor(positional_embeddings, "positional_embeddings", true, host_device_allocator.device);
+        checkTensor(target_weights_gradients, "target_weights_gradients", true, host_device_allocator.device);
+        checkTensor(target_input_gradients, "target_input_gradients", true, host_device_allocator.device);
+        checkTensor(target_positional_embeddings_gradients, "target_positional_embeddings_gradients", true, host_device_allocator.device);
+        checkTensor(output_gradients, "output_gradients", true, host_device_allocator.device);
+        checkTensor(input, "input", true, host_device_allocator.device);
+        checkTensor(detector_anchors, "detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(lookup_indices, "lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(min_anchor_deltas, "min_anchor_deltas", true, host_device_allocator.device);
+        checkTensor(min_anchor_delta_indices, "min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(positional_lookup_indices, "positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(positional_min_deltas, "positional_min_deltas", true, host_device_allocator.device);
+        checkTensor(positional_min_delta_indices, "positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(sparse_firing_buffer, "sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(before_detectors_gradients, "before_detectors_gradients", true, host_device_allocator.device);
+
+        this->runtime_context->backward_backprop_concat(
+            reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(positional_embeddings.data_ptr()),
+            batch_size,
+            reinterpret_cast<EXTERNAL_REAL_DT *>(output_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(input.data_ptr()),
+            reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr()),
+            reinterpret_cast<int32_t *>(lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(min_anchor_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(min_anchor_delta_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(positional_lookup_indices.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(positional_min_deltas.data_ptr()),
+            reinterpret_cast<int32_t *>(positional_min_delta_indices.data_ptr()),
+            reinterpret_cast<int32_t *>(sparse_firing_buffer.data_ptr()),
+            reinterpret_cast<SUMMATION32_DT *>(before_detectors_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_input_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(target_positional_embeddings_gradients.data_ptr())
         );
     }
 
@@ -822,6 +972,7 @@ private:
         uint32_t n_detectors,
         uint32_t n_anchors_per_detector,
         uint32_t sequence_length,
+        uint32_t positional_dim,
         uint32_t synapse_group_size,
         NeuronDataId_t base_synapse_metas_id,
         uint32_t n_synapse_metas,
@@ -846,6 +997,7 @@ private:
         n_detectors(n_detectors),
         n_anchors_per_detector(n_anchors_per_detector),
         sequence_length(sequence_length),
+        positional_dim(positional_dim),
         n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector) * sequence_length),
         synapse_group_size(synapse_group_size),
         base_synapse_metas_id(base_synapse_metas_id),
@@ -885,6 +1037,7 @@ private:
     uint32_t n_detectors;
     uint32_t n_anchors_per_detector;
     uint32_t sequence_length;
+    uint32_t positional_dim;
     uint32_t n_lookup_neurons;
     uint32_t synapse_group_size;
     NeuronDataId_t base_synapse_metas_id;
@@ -913,6 +1066,7 @@ py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
         ldm.n_detectors,
         ldm.n_anchors_per_detector,
         ldm.sequence_length,
+        ldm.positional_dim,
         ldm.synapse_group_size,
         ldm.base_synapse_metas_id,
         ldm.n_synapse_metas,
@@ -946,14 +1100,15 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
             t[4].cast<uint32_t>(),         // n_detectors
             t[5].cast<uint32_t>(),         // n_anchors_per_detector
             t[6].cast<uint32_t>(),         // sequence_length
-            t[7].cast<uint32_t>(),         // synapse_group_size
-            t[8].cast<NeuronDataId_t>(),   // base_synapse_metas_id
-            t[9].cast<uint32_t>(),         // n_synapse_metas
-            t[10].cast<uint64_t>(),        // n_synapses
-            t[11].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
-            t[12].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[7].cast<uint32_t>(),         // positional_dim
+            t[8].cast<uint32_t>(),         // synapse_group_size
+            t[9].cast<NeuronDataId_t>(),   // base_synapse_metas_id
+            t[10].cast<uint32_t>(),        // n_synapse_metas
+            t[11].cast<uint64_t>(),        // n_synapses
+            t[12].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
+            t[13].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[13].cast<double>()         // int_rescaler
+            , t[14].cast<double>()         // int_rescaler
             #endif
         )
     );
@@ -963,10 +1118,10 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
 void PFX(PB_LUTDataManager)(py::module& m) {
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     py::class_<LUTDataManagerI>(m, "LUTDataManagerI")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, double>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, double>())
     #else
     py::class_<LUTDataManagerF>(m, "LUTDataManagerF")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t>())
     #endif
         .def("get_smallest_distinguishable_fraction", &LUTM_CLASS_NAME::get_smallest_distinguishable_fraction,
             "Returns smallest fraction that can exist inside data manager in integers mode. Returns 0.0 in floats mode.")
@@ -1035,6 +1190,22 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("target_lookup_indices"),
             py::arg("target_min_anchor_deltas"),
             py::arg("target_min_anchor_delta_indices"))
+        .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
+            "Forward step concat",
+            py::arg("weights"),
+            py::arg("positional_embeddings"),
+            py::arg("batch_size"),
+            py::arg("input"),
+            py::arg("detector_anchors"),
+            py::arg("target_output"),
+            py::arg("target_lookup_indices"),
+            py::arg("target_min_anchor_deltas"),
+            py::arg("target_min_anchor_delta_indices"),
+            py::arg("target_positional_lookup_indices"),
+            py::arg("target_positional_min_deltas"),
+            py::arg("target_positional_min_delta_indices"),
+            py::arg("target_sparse_firing_buffer"),
+            py::arg("target_firing_stat"))
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("weights"),
@@ -1048,6 +1219,25 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("before_detectors_gradients"),
             py::arg("target_input_gradients"),
             py::arg("target_weights_gradients"))
+        .def("backward_backprop_concat", &LUTM_CLASS_NAME::backward_backprop_concat,
+            "Gradients back propagation concat",
+            py::arg("weights"),
+            py::arg("positional_embeddings"),
+            py::arg("batch_size"),
+            py::arg("output_gradients"),
+            py::arg("input"),
+            py::arg("detector_anchors"),
+            py::arg("lookup_indices"),
+            py::arg("min_anchor_deltas"),
+            py::arg("min_anchor_delta_indices"),
+            py::arg("positional_lookup_indices"),
+            py::arg("positional_min_deltas"),
+            py::arg("positional_min_delta_indices"),
+            py::arg("sparse_firing_buffer"),
+            py::arg("before_detectors_gradients"),
+            py::arg("target_input_gradients"),
+            py::arg("target_weights_gradients"),
+            py::arg("target_positional_embeddings_gradients"))
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
             "Count forward or backward synapses for the set of neurons",
             py::arg("neuron_indices_to_process"))
