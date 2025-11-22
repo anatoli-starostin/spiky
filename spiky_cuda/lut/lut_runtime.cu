@@ -559,10 +559,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         cudaMemset(target_firing_stat, 0, memsize);
         #endif
     }
-    uint32_t n_pairs = (this->sequence_length * (this->sequence_length - 1)) >> 1;
+    uint32_t n_pairs = this->sequence_length * this->sequence_length;
     uint32_t n_items = n_pairs * this->n_detectors;
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-    uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
+    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, fill_after_detectors_firing_stat, tpb_opt,
         target_lookup_indices,
@@ -572,8 +572,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_anchors_per_detector,
         this->positional_dim,
         this->n_lookup_neurons,
-        target_firing_stat,
-        device
+        target_firing_stat
     );
     PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
 
@@ -583,9 +582,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         batch_size, device, target_sparse_firing_buffer
     );
     local_firing_buffer.clear();
-    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
-    uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
+    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     GRID_CALL_SHARED_MEM(
         numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t),
         target_firing_stat,
@@ -619,7 +617,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_outputs * sequence_length), batch_size);
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_outputs * sequence_length), batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs * sequence_length),
         target_output,

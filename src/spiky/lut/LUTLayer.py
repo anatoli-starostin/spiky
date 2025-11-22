@@ -559,7 +559,7 @@ class LUTLayerBasic(nn.Module):
             if lut_layer._sequence_length == 1:
                 (
                     output, lookup_indices, min_anchor_deltas, 
-                    min_anchor_delta_indices, sparse_firing_buffer
+                    min_anchor_delta_indices
                 ) = lut_layer.forward_step(x)
                 ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
             else:

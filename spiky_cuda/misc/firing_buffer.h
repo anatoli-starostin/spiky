@@ -29,7 +29,7 @@ private:
     bool external_buffer;
 public:
     FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device);
-    FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int32 *external_buffer);
+    FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int32_t *external_buffer);
 #ifdef NO_CUDA
     void update_counter();
     void clear();
