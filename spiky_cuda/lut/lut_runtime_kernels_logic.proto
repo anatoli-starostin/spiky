@@ -72,7 +72,7 @@ fire_detectors_logic(
     Firing* rw_firings_buffer,
     uint64_t* rw_firings_counter_ptr,
     uint32_t synapse_group_size,
-    uint8_t* r_lut_data,
+    uint8_t* lut_data,
     int device
 ) {
     uint32_t tid = threadIdx.x;
@@ -197,7 +197,7 @@ fire_detectors_logic(
                     current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
                 }
             } else {
-                DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, r_lut_data);
+                DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, lut_data);
                 for(uint32_t j=0;j < lookup_neuron_synapses_info.n_synapse_metas;j++) {
                     DelayInfo delay_info = delays_info[j];
                     if(delay_info != 0) {
@@ -225,7 +225,7 @@ fill_outputs_by_forward_groups_logic(
     EXTERNAL_REAL_DT* w_output,
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
-    uint8_t* r_lut_data,
+    uint8_t* lut_data,
     double int_rescaler
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -233,10 +233,10 @@ fill_outputs_by_forward_groups_logic(
         Firing firing = r_firings_buffer[i];
         w_output += firing.batch_index * n_outputs;
 
-        ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(firing.data_id, r_lut_data);
+        ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(firing.data_id, lut_data);
         int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
-        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, r_lut_data);
-        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (r_lut_data + first_synapse_id)) >> 2;
+        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, lut_data);
+        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
         EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
         uint4 targets_quad = make_uint4(0, 0, 0, 0);
         float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
@@ -425,7 +425,7 @@ fire_detectors_by_lookup_indices_logic(
     Firing* rw_firings_buffer,
     uint64_t* rw_firings_counter_ptr,
     uint32_t synapse_group_size,
-    uint8_t* r_lut_data,
+    uint8_t* lut_data,
     int device
 ) {
     uint32_t tid = threadIdx.x;
@@ -517,7 +517,7 @@ fire_detectors_by_lookup_indices_logic(
                 current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
             }
         } else {
-            DelayInfo* delays_info = DelayInfos(chosen_lookup_neuron_synapses_info.delays_info_id, r_lut_data);
+            DelayInfo* delays_info = DelayInfos(chosen_lookup_neuron_synapses_info.delays_info_id, lut_data);
             for(uint32_t j=0;j < chosen_lookup_neuron_synapses_info.n_synapse_metas;j++) {
                 DelayInfo delay_info = delays_info[j];
                 if(delay_info != 0) {
@@ -532,7 +532,7 @@ fire_detectors_by_lookup_indices_logic(
                     firings_offset += n_groups;
                 }
             }
-            delays_info = DelayInfos(chosen_alternative_lookup_neuron_synapses_info.delays_info_id, r_lut_data);
+            delays_info = DelayInfos(chosen_alternative_lookup_neuron_synapses_info.delays_info_id, lut_data);
             for(uint32_t j=0;j < chosen_alternative_lookup_neuron_synapses_info.n_synapse_metas;j++) {
                 DelayInfo delay_info = delays_info[j];
                 if(delay_info != 0) {
@@ -561,7 +561,7 @@ gather_gradients_logic(
     EXTERNAL_REAL_DT* w_weights_gradients,
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
-    uint8_t* r_lut_data,
+    uint8_t* lut_data,
     REAL_DT first_synapse_meta_lr,
     BaseSynapseMeta* r_synapse_metas,
     double int_rescaler
@@ -572,7 +572,7 @@ gather_gradients_logic(
         r_output_gradients += firing.batch_index * n_outputs;
         w_before_detectors_gradients += firing.batch_index * n_lookup_neurons;
 
-        ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(firing.data_id, r_lut_data);
+        ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(firing.data_id, lut_data);
         double lr;
         uint32_t sm_index = SynapseGroupSynapseMetaIndex(fws_group.meta_info);
         if(sm_index == 0) {
@@ -582,8 +582,8 @@ gather_gradients_logic(
         }
 
         int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group.meta_info));
-        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, r_lut_data);
-        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (r_lut_data + first_synapse_id)) >> 2;
+        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, lut_data);
+        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
         EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
         uint4 targets_quad = make_uint4(0, 0, 0, 0);
         float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
@@ -1181,7 +1181,7 @@ fill_outputs_by_lookup_indices_logic(
     uint32_t n_outputs,
     NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
     uint32_t synapse_group_size,
-    uint8_t* r_lut_data,
+    uint8_t* lut_data,
     double int_rescaler
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -1206,10 +1206,10 @@ fill_outputs_by_lookup_indices_logic(
         // Use the first group for this neuron
         if(lookup_neuron_synapses_info.n_groups > 0 && lookup_neuron_synapses_info.n_synapse_metas == 1) {
             NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id;
-            ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(current_group_id, r_lut_data);
+            ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(current_group_id, lut_data);
             int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
-            NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, r_lut_data);
-            long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (r_lut_data + first_synapse_id)) >> 2;
+            NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
+            long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
             EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
             
             uint4 targets_quad = make_uint4(0, 0, 0, 0);

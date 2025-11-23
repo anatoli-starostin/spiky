@@ -421,6 +421,7 @@ class LUTLayerBasic(nn.Module):
                 device=self.device
             )
 
+        print(f'{source_x_shape}, {self._sparse_firing_buffer.shape}, {self._sparse_firing_buffer[:2]}!!!\n')
         self._lut_dm.backward_backprop(
             self._weights,
             batch_size,
