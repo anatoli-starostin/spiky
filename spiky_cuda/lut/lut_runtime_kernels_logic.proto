@@ -704,7 +704,7 @@ gather_gradients_logic(
     }
 }
 
-gather_gradients_fully_connected_simplified_logic(
+gather_gradients_fully_connected_logic(
     EXTERNAL_REAL_DT* r_weights,
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
@@ -762,14 +762,14 @@ gather_gradients_fully_connected_simplified_logic(
                     #endif
                 #else
                     sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        w_weights_gradients + cursor,
-                        sum32_delta
-                    );
-                    #else
+//                    #ifdef ATOMIC
+//                    atomicAdd(
+//                        w_weights_gradients + cursor,
+//                        sum32_delta
+//                    );
+//                    #else
                     w_weights_gradients[cursor] += sum32_delta;
-                    #endif
+//                    #endif
                 #endif
             }
         }
@@ -786,19 +786,19 @@ gather_gradients_fully_connected_simplified_logic(
             #endif
         #else
             sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr);
-            #ifdef ATOMIC
-            atomicAdd(
-                w_before_detectors_gradients + lookup_index,
-                sum32_delta
-            );
-            #else
+//            #ifdef ATOMIC
+//            atomicAdd(
+//                w_before_detectors_gradients + lookup_index,
+//                sum32_delta
+//            );
+//            #else
             w_before_detectors_gradients[lookup_index] += sum32_delta;
-            #endif
+//            #endif
         #endif
     }
 }
 
-gather_gradients_fully_connected_logic(
+gather_gradients_fully_connected_no_cache_logic(
     EXTERNAL_REAL_DT* r_weights,
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
