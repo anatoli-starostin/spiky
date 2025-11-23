@@ -865,7 +865,8 @@ gather_gradients_fully_connected_logic(
                 }
                 n_o_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(output_grad) : "l"(r_output_gradients));
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(o_quad.x) : "l"(r_output_gradients));
+                output_grad = static_cast<double>(o_quad.x);
             }
 
             if(((reinterpret_cast<uintptr_t>(r_weights) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
@@ -890,7 +891,8 @@ gather_gradients_fully_connected_logic(
                 }
                 n_w_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(weight) : "l"(r_weights));
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(w_quad.x) : "l"(r_weights));
+                weight = static_cast<double>(w_quad.x);
             }
 
             if(fabs(output_grad) > EPS) {
