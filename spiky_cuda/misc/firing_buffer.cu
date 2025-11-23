@@ -24,7 +24,6 @@ FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, 
     this->device = device;
     this->n_firings = 0;
     this->max_firings = n_firings * batch_size;
-    uint64_t memsize = (1 + this->max_firings) * sizeof(Firing);
     this->firings = reinterpret_cast<Firing *>(external_buffer_ptr);
     this->external_buffer = true;
 }

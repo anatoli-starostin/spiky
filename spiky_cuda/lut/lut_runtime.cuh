@@ -35,7 +35,6 @@ private:
     BaseSynapseMeta *base_synapse_metas;
     IndexedSynapsesInfo *lookup_neuron_synapses_infos;
 
-    FiringBuffer *firing_buffer;
     uint32_t max_forward_groups_per_neuron;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights;
@@ -71,77 +70,77 @@ public:
 
     ~LUT_RUNTIME_CONTEXT_CLASS();
 
-    void _ensure_firing_buffer_size(uint64_t max_groups_to_fire);
-
     // base methods
 
     void forward_step(
-        EXTERNAL_REAL_DT *weights,
+        EXTERNAL_REAL_DT *r_weights,
         uint32_t batch_size,
-        EXTERNAL_REAL_DT *input,
-        AnchorsPair *detectors,
-        EXTERNAL_REAL_DT *target_output,
-        int32_t *target_lookup_indices,
-        EXTERNAL_REAL_DT *target_min_anchor_deltas,
-        int32_t *target_min_anchor_delta_indices
+        EXTERNAL_REAL_DT *r_input,
+        AnchorsPair *r_detectors,
+        EXTERNAL_REAL_DT *w_output,
+        int32_t *w_lookup_indices,
+        EXTERNAL_REAL_DT *w_min_anchor_deltas,
+        int32_t *w_min_anchor_delta_indices,
+        int32_t *w_sparse_firing_buffer  // Can be nullptr
     );
 
     void backward_backprop(
-        EXTERNAL_REAL_DT *weights,
+        EXTERNAL_REAL_DT *r_weights,
         uint32_t batch_size,
         // external gradients
-        EXTERNAL_REAL_DT *output_gradients,
+        EXTERNAL_REAL_DT *r_output_gradients,
         // data from forward pass
-        EXTERNAL_REAL_DT *input,
-        AnchorsPair *detectors,
-        int32_t *lookup_indices,
-        EXTERNAL_REAL_DT *min_anchor_deltas,
-        int32_t *min_anchor_delta_indices,
+        EXTERNAL_REAL_DT *r_input,
+        AnchorsPair *r_detectors,
+        int32_t *r_lookup_indices,
+        EXTERNAL_REAL_DT *r_min_anchor_deltas,
+        int32_t *r_min_anchor_delta_indices,
         // gradients that we need to calculate
-        SUMMATION32_DT *before_detectors_gradients,
-        EXTERNAL_REAL_DT *target_input_gradients,
-        EXTERNAL_REAL_DT *target_weights_gradients
+        SUMMATION32_DT *w_before_detectors_gradients,
+        EXTERNAL_REAL_DT *w_input_gradients,
+        EXTERNAL_REAL_DT *w_weights_gradients,
+        // forward statistics from forward pass
+        int32_t *w_sparse_firing_buffer_ptr
     );
 
     void forward_step_concat(
-        EXTERNAL_REAL_DT *weights,
-        EXTERNAL_REAL_DT *positional_embeddings,
+        EXTERNAL_REAL_DT *r_weights,
+        EXTERNAL_REAL_DT *r_positional_embeddings,
         uint32_t batch_size,
-        EXTERNAL_REAL_DT *input,
-        AnchorsPair *detectors,
-        EXTERNAL_REAL_DT *target_output,
-        int32_t *target_lookup_indices,
-        EXTERNAL_REAL_DT *target_min_anchor_deltas,
-        int32_t *target_min_anchor_delta_indices,
-        int32_t *target_positional_lookup_indices,
-        EXTERNAL_REAL_DT *target_positional_min_deltas,
-        int32_t *target_positional_min_delta_indices,
-        int32_t *target_sparse_firing_buffer,
-        EXTERNAL_REAL_DT *target_firing_stat
+        EXTERNAL_REAL_DT *r_input,
+        AnchorsPair *r_detectors,
+        EXTERNAL_REAL_DT *w_output,
+        int32_t *w_lookup_indices,
+        EXTERNAL_REAL_DT *w_min_anchor_deltas,
+        int32_t *w_min_anchor_delta_indices,
+        int32_t *w_positional_lookup_indices,
+        EXTERNAL_REAL_DT *w_positional_min_deltas,
+        int32_t *w_positional_min_delta_indices,
+        int32_t *w_sparse_firing_buffer,
+        EXTERNAL_REAL_DT *w_firing_stat
     );
 
     void backward_backprop_concat(
-        EXTERNAL_REAL_DT *weights,
-        EXTERNAL_REAL_DT *positional_embeddings,
+        EXTERNAL_REAL_DT *r_weights,
+        EXTERNAL_REAL_DT *r_positional_embeddings,
         uint32_t batch_size,
         // external gradients
-        EXTERNAL_REAL_DT *output_gradients,
+        EXTERNAL_REAL_DT *r_output_gradients,
         // data from forward pass
-        EXTERNAL_REAL_DT *input,
-        AnchorsPair *detectors,
-        int32_t *lookup_indices,
-        EXTERNAL_REAL_DT *min_anchor_deltas,
-        int32_t *min_anchor_delta_indices,
-        int32_t *positional_lookup_indices,
-        EXTERNAL_REAL_DT *positional_min_deltas,
-        int32_t *positional_min_delta_indices,
-        // forward statistics from forward pass
-        int32_t *sparse_firing_buffer,
-        // gradients that we need to calculate
-        SUMMATION32_DT *before_detectors_gradients,
-        EXTERNAL_REAL_DT *target_input_gradients,
-        EXTERNAL_REAL_DT *target_weights_gradients,
-        EXTERNAL_REAL_DT *target_positional_embeddings_gradients
+        EXTERNAL_REAL_DT *r_input,
+        AnchorsPair *r_detectors,
+        int32_t *r_lookup_indices,
+        EXTERNAL_REAL_DT *r_min_anchor_deltas,
+        int32_t *r_min_anchor_delta_indices,
+        int32_t *r_positional_lookup_indices,
+        EXTERNAL_REAL_DT *r_positional_min_deltas,
+        int32_t *r_positional_min_delta_indices,
+        // forward statistics from forward pass (also reused as space for before_detectors_gradients)
+        EXTERNAL_REAL_DT *rw_firing_stat,
+        int32_t *w_sparse_firing_buffer,
+        EXTERNAL_REAL_DT *w_input_gradients,
+        EXTERNAL_REAL_DT *w_weights_gradients,
+        EXTERNAL_REAL_DT *w_positional_embeddings_gradients
     );
 };
 

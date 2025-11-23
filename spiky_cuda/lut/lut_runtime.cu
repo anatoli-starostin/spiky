@@ -45,7 +45,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     #endif
     base_synapse_metas(base_synapse_metas),
     lookup_neuron_synapses_infos(lookup_neuron_synapses_infos),
-    firing_buffer(nullptr),
     max_forward_groups_per_neuron(max_forward_groups_per_neuron),
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     n_weights(n_weights),
@@ -70,29 +69,18 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
 
 LUT_RUNTIME_CONTEXT_CLASS::~LUT_RUNTIME_CONTEXT_CLASS() {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS destructor\n");
-    if(this->firing_buffer != nullptr) {
-        delete this->firing_buffer;
-    }
-}
-
-void LUT_RUNTIME_CONTEXT_CLASS::_ensure_firing_buffer_size(uint64_t max_groups_to_fire) {
-    if((this->firing_buffer == nullptr) || (this->firing_buffer->get_max_firings() < max_groups_to_fire * this->batch_size * this->sequence_length)) {
-        if(this->firing_buffer != nullptr) {
-            delete this->firing_buffer;
-        }
-        this->firing_buffer = new FiringBuffer(max_groups_to_fire, this->batch_size * this->sequence_length, device);
-    }
 }
 
 void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
-    EXTERNAL_REAL_DT *weights,
+    EXTERNAL_REAL_DT *r_weights,
     uint32_t batch_size,
-    EXTERNAL_REAL_DT *input,
-    AnchorsPair *detectors,
-    EXTERNAL_REAL_DT *target_output,
-    int32_t *target_lookup_indices,
-    EXTERNAL_REAL_DT *target_min_anchor_deltas,
-    int32_t *target_min_anchor_delta_indices
+    EXTERNAL_REAL_DT *r_input,
+    AnchorsPair *r_detectors,
+    EXTERNAL_REAL_DT *w_output,
+    int32_t *w_lookup_indices,
+    EXTERNAL_REAL_DT *w_min_anchor_deltas,
+    int32_t *w_min_anchor_delta_indices,
+    int32_t *w_sparse_firing_buffer
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
     PROF_START(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -107,53 +95,58 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
 
     uint64_t memsize = this->n_outputs * batch_size * sizeof(EXTERNAL_REAL_DT);
     if(device == -1) {
-        memset(target_output, 0, memsize);
+        memset(w_output, 0, memsize);
     } else {
         #ifndef NO_CUDA
         c10::cuda::CUDAGuard guard(device);
-        cudaMemset(target_output, 0, memsize);
+        cudaMemset(w_output, 0, memsize);
         #endif
     }
 
     if(lookup_neuron_synapses_infos != nullptr) {
         PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
-        _ensure_firing_buffer_size(
-            static_cast<uint64_t>(n_detectors) * this->max_forward_groups_per_neuron
+        uint32_t max_firings = this->n_detectors * this->max_forward_groups_per_neuron;
+        // in that case  w_sparse_firing_buffer is guaranteed to be not nullptr
+        FiringBuffer local_firing_buffer(
+            max_firings,
+            batch_size,
+            device,
+            w_sparse_firing_buffer
         );
-        firing_buffer->clear();
+        local_firing_buffer.clear();
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t),
-            input,
+            r_input,
             this->n_inputs,
-            detectors,
+            r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
             n_lookup_neurons_per_detector,
-            target_lookup_indices,
-            target_min_anchor_deltas,
-            target_min_anchor_delta_indices,
+            w_lookup_indices,
+            w_min_anchor_deltas,
+            w_min_anchor_delta_indices,
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-            firing_buffer == nullptr ? nullptr : firing_buffer->firings_ptr(),
-            firing_buffer == nullptr ? nullptr : firing_buffer->counter_ptr(),
+            local_firing_buffer.firings_ptr(),
+            local_firing_buffer.counter_ptr(),
             this->synapse_group_size,
             this->lut_data,
             device
         );
-        firing_buffer->update_counter();
+        local_firing_buffer.update_counter();
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
-        if(firing_buffer != nullptr) {
-            uint64_t n_firings = firing_buffer->number_of_firings();
+        uint64_t n_firings = local_firing_buffer.number_of_firings();
+        if(n_firings > 0) {
             numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
             GRID_CALL_NO_SHARED_MEM(
                 numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
-                weights, this->first_synapse_id,
-                firing_buffer->firings_ptr(),
+                r_weights, this->first_synapse_id,
+                local_firing_buffer.firings_ptr(),
                 n_firings,
-                target_output,
+                w_output,
                 this->n_lookup_neurons,
                 this->n_outputs,
                 this->lut_data
@@ -171,14 +164,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, check_detectors, tpb_opt,
-            input,
+            r_input,
             this->n_inputs,
-            detectors,
+            r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
-            target_lookup_indices,
-            target_min_anchor_deltas,
-            target_min_anchor_delta_indices
+            w_lookup_indices,
+            w_min_anchor_deltas,
+            w_min_anchor_delta_indices
         );
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
@@ -188,9 +181,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, fill_outputs_fully_connected, LUT_RUNTIME_KERNELS_TPB_OPT(n_items),
-            weights,
-            target_lookup_indices,
-            target_output,
+            r_weights,
+            w_lookup_indices,
+            w_output,
             this->n_outputs,
             this->n_detectors,
             n_detector_blocks,
@@ -210,7 +203,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_outputs), batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs),
-        target_output,
+        w_output,
         this->n_outputs,
         this->int_rescaler
     );
@@ -221,20 +214,21 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
 }
 
 void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
-    EXTERNAL_REAL_DT *weights,
+    EXTERNAL_REAL_DT *r_weights,
     uint32_t batch_size,
     // external gradients
-    EXTERNAL_REAL_DT *output_gradients,
+    EXTERNAL_REAL_DT *r_output_gradients,
     // data from forward pass
-    EXTERNAL_REAL_DT *input,
-    AnchorsPair *detectors,
-    int32_t *lookup_indices,
-    EXTERNAL_REAL_DT *min_anchor_deltas,
-    int32_t *min_anchor_delta_indices,
+    EXTERNAL_REAL_DT *r_input,
+    AnchorsPair *r_detectors,
+    int32_t *r_lookup_indices,
+    EXTERNAL_REAL_DT *r_min_anchor_deltas,
+    int32_t *r_min_anchor_delta_indices,
     // gradients that we need to calculate
-    SUMMATION32_DT *before_detectors_gradients,
-    EXTERNAL_REAL_DT *target_input_gradients,
-    EXTERNAL_REAL_DT *target_weights_gradients
+    SUMMATION32_DT *w_before_detectors_gradients,
+    EXTERNAL_REAL_DT *w_input_gradients,
+    EXTERNAL_REAL_DT *w_weights_gradients,
+    int32_t *w_sparse_firing_buffer
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop\n");
     if(this->batch_size != batch_size) {
@@ -249,11 +243,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     // Zero out before_detectors_gradients
     uint64_t memsize = this->n_lookup_neurons * batch_size * sizeof(SUMMATION32_DT);
     if(device == -1) {
-        memset(before_detectors_gradients, 0, memsize);
+        memset(w_before_detectors_gradients, 0, memsize);
     } else {
         #ifndef NO_CUDA
         c10::cuda::CUDAGuard guard(device);
-        cudaMemset(before_detectors_gradients, 0, memsize);
+        cudaMemset(w_before_detectors_gradients, 0, memsize);
         #endif
     }
 
@@ -261,36 +255,41 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
 
     if(lookup_neuron_synapses_infos != nullptr) {
-        _ensure_firing_buffer_size(
-            static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron * 2
+        uint32_t max_firings = this->n_detectors * this->max_forward_groups_per_neuron * 2;
+        // in that case  w_sparse_firing_buffer is guaranteed to be not nullptr
+        FiringBuffer local_firing_buffer(
+            max_firings,
+            batch_size,
+            device,
+            w_sparse_firing_buffer
         );
-        firing_buffer->clear();
+        local_firing_buffer.clear();
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t),
             this->n_detectors,
-            lookup_indices,
-            min_anchor_delta_indices,
+            r_lookup_indices,
+            r_min_anchor_delta_indices,
             n_lookup_neurons_per_detector,
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-            firing_buffer->firings_ptr(),
-            firing_buffer->counter_ptr(),
+            local_firing_buffer.firings_ptr(),
+            local_firing_buffer.counter_ptr(),
             this->synapse_group_size,
             this->lut_data,
             device
         );
-        firing_buffer->update_counter();
-        uint64_t n_firings = firing_buffer->number_of_firings();
+        local_firing_buffer.update_counter();
+        uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
-            weights, this->first_synapse_id,
-            firing_buffer->firings_ptr(),
+            r_weights, this->first_synapse_id,
+            local_firing_buffer.firings_ptr(),
             n_firings,
-            output_gradients,
-            before_detectors_gradients,
-            target_weights_gradients,
+            r_output_gradients,
+            w_before_detectors_gradients,
+            w_weights_gradients,
             this->n_lookup_neurons,
             this->n_outputs,
             this->lut_data,
@@ -316,12 +315,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         }
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, gather_gradients_fully_connected, tpb_opt, streams[0],
-            weights,
-            output_gradients,
-            lookup_indices,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
             nullptr,
-            before_detectors_gradients,
-            target_weights_gradients,
+            w_before_detectors_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
@@ -336,12 +335,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, gather_gradients_fully_connected, tpb_opt, streams[1],
-            weights,
-            output_gradients,
-            lookup_indices,
-            min_anchor_delta_indices,
-            before_detectors_gradients,
-            target_weights_gradients,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
+            r_min_anchor_delta_indices,
+            w_before_detectors_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
@@ -364,12 +363,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #else
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_gradients_fully_connected, tpb_opt,
-            weights,
-            output_gradients,
-            lookup_indices,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
             nullptr,
-            before_detectors_gradients,
-            target_weights_gradients,
+            w_before_detectors_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
@@ -384,12 +383,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_gradients_fully_connected, tpb_opt,
-            weights,
-            output_gradients,
-            lookup_indices,
-            min_anchor_delta_indices,
-            before_detectors_gradients,
-            target_weights_gradients,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
+            r_min_anchor_delta_indices,
+            w_before_detectors_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
@@ -411,13 +410,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors, tpb_opt,
-        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+        r_lookup_indices, r_min_anchor_deltas, r_min_anchor_delta_indices,
         this->n_detectors,
         this->n_anchors_per_detector,
-        detectors,
+        r_detectors,
         n_lookup_neurons_per_detector,
-        before_detectors_gradients,
-        target_input_gradients,
+        w_before_detectors_gradients,
+        w_input_gradients,
         this->n_inputs
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
@@ -433,14 +432,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights),
-        target_weights_gradients,
+        w_weights_gradients,
         this->n_weights,
         this->int_rescaler
     );
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_inputs), batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_inputs),
-        target_input_gradients,
+        w_input_gradients,
         this->n_inputs,
         this->int_rescaler
     );
@@ -449,20 +448,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 }
 
 void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
-    EXTERNAL_REAL_DT *weights,
-    EXTERNAL_REAL_DT *positional_embeddings,
+    EXTERNAL_REAL_DT *r_weights,
+    EXTERNAL_REAL_DT *r_positional_embeddings,
     uint32_t batch_size,
-    EXTERNAL_REAL_DT *input,
-    AnchorsPair *detectors,
-    EXTERNAL_REAL_DT *target_output,
-    int32_t *target_lookup_indices,
-    EXTERNAL_REAL_DT *target_min_anchor_deltas,
-    int32_t *target_min_anchor_delta_indices,
-    int32_t *target_positional_lookup_indices,
-    EXTERNAL_REAL_DT *target_positional_min_deltas,
-    int32_t *target_positional_min_delta_indices,
-    int32_t *target_sparse_firing_buffer,
-    EXTERNAL_REAL_DT *target_firing_stat
+    EXTERNAL_REAL_DT *r_input,
+    AnchorsPair *r_detectors,
+    EXTERNAL_REAL_DT *w_output,
+    int32_t *w_lookup_indices,
+    EXTERNAL_REAL_DT *w_min_anchor_deltas,
+    int32_t *w_min_anchor_delta_indices,
+    int32_t *w_positional_lookup_indices,
+    EXTERNAL_REAL_DT *w_positional_min_deltas,
+    int32_t *w_positional_min_delta_indices,
+    int32_t *w_sparse_firing_buffer,
+    EXTERNAL_REAL_DT *w_firing_stat
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
     PROF_START(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -475,11 +474,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
 
     uint64_t memsize = this->n_outputs * batch_size * this->sequence_length * sizeof(EXTERNAL_REAL_DT);
     if(device == -1) {
-        memset(target_output, 0, memsize);
+        memset(w_output, 0, memsize);
     } else {
         #ifndef NO_CUDA
         c10::cuda::CUDAGuard guard(device);
-        cudaMemset(target_output, 0, memsize);
+        cudaMemset(w_output, 0, memsize);
         #endif
     }
 
@@ -496,26 +495,26 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     }
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, check_detectors_for_sequence, tpb_opt, streams[0],
-        input,
+        r_input,
         this->n_inputs,
         this->sequence_length,
-        detectors,
+        r_detectors,
         this->n_detectors,
         this->n_anchors_per_detector,
-        target_lookup_indices,
-        target_min_anchor_deltas,
-        target_min_anchor_delta_indices
+        w_lookup_indices,
+        w_min_anchor_deltas,
+        w_min_anchor_delta_indices
     );
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), 1);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, check_positional_embeddings, tpb_opt, streams[1],
         this->sequence_length,
-        positional_embeddings,
+        r_positional_embeddings,
         this->n_detectors,
         this->positional_dim,
-        target_positional_lookup_indices,
-        target_positional_min_deltas,
-        target_positional_min_delta_indices
+        w_positional_lookup_indices,
+        w_positional_min_deltas,
+        w_positional_min_delta_indices
     );
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
@@ -527,36 +526,36 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     #else
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, check_detectors_for_sequence, tpb_opt,
-        input,
+        r_input,
         this->n_inputs,
         this->sequence_length,
-        detectors,
+        r_detectors,
         this->n_detectors,
         this->n_anchors_per_detector,
-        target_lookup_indices,
-        target_min_anchor_deltas,
-        target_min_anchor_delta_indices
+        w_lookup_indices,
+        w_min_anchor_deltas,
+        w_min_anchor_delta_indices
     );
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), 1);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, check_positional_embeddings, tpb_opt,
         this->sequence_length,
-        positional_embeddings,
+        r_positional_embeddings,
         this->n_detectors,
         this->positional_dim,
-        target_positional_lookup_indices,
-        target_positional_min_deltas,
-        target_positional_min_delta_indices
+        w_positional_lookup_indices,
+        w_positional_min_deltas,
+        w_positional_min_delta_indices
     );
     #endif
 
     memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(EXTERNAL_REAL_DT);
     if(device == -1) {
-        memset(target_firing_stat, 0, memsize);
+        memset(w_firing_stat, 0, memsize);
     } else {
         #ifndef NO_CUDA
         c10::cuda::CUDAGuard guard(device);
-        cudaMemset(target_firing_stat, 0, memsize);
+        cudaMemset(w_firing_stat, 0, memsize);
         #endif
     }
     uint32_t n_pairs = this->sequence_length * this->sequence_length;
@@ -565,28 +564,28 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, fill_after_detectors_firing_stat, tpb_opt,
-        target_lookup_indices,
-        target_positional_lookup_indices,
+        w_lookup_indices,
+        w_positional_lookup_indices,
         this->sequence_length,
         this->n_detectors,
         this->n_anchors_per_detector,
         this->positional_dim,
         this->n_lookup_neurons,
-        target_firing_stat
+        w_firing_stat
     );
     PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
 
     PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
     FiringBuffer local_firing_buffer(
         this->n_lookup_neurons * this->sequence_length, 
-        batch_size, device, target_sparse_firing_buffer
+        batch_size, device, w_sparse_firing_buffer
     );
     local_firing_buffer.clear();
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     GRID_CALL_SHARED_MEM(
         numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t),
-        target_firing_stat,
+        w_firing_stat,
         reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         local_firing_buffer.counter_ptr(),
         this->n_lookup_neurons,
@@ -598,10 +597,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), this->max_forward_groups_per_neuron);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, fill_outputs_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
-        weights, this->first_synapse_id,
-        firing_buffer->firings_ptr(),
+        r_weights, this->first_synapse_id,
+        reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         n_firings,
-        target_output,
+        w_output,
         this->n_lookup_neurons,
         this->n_outputs,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
@@ -620,7 +619,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_outputs * sequence_length), batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs * sequence_length),
-        target_output,
+        w_output,
         this->n_outputs * this->sequence_length,
         this->int_rescaler
     );
@@ -631,27 +630,26 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
 }
 
 void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
-    EXTERNAL_REAL_DT *weights,
-    EXTERNAL_REAL_DT *positional_embeddings,
+    EXTERNAL_REAL_DT *r_weights,
+    EXTERNAL_REAL_DT *r_positional_embeddings,
     uint32_t batch_size,
     // external gradients
-    EXTERNAL_REAL_DT *output_gradients,
+    EXTERNAL_REAL_DT *r_output_gradients,
     // data from forward pass
-    EXTERNAL_REAL_DT *input,
-    AnchorsPair *detectors,
-    int32_t *lookup_indices,
-    EXTERNAL_REAL_DT *min_anchor_deltas,
-    int32_t *min_anchor_delta_indices,
-    int32_t *positional_lookup_indices,
-    EXTERNAL_REAL_DT *positional_min_deltas,
-    int32_t *positional_min_delta_indices,
-    // forward statistics from forward pass
-    int32_t *sparse_firing_buffer,
-    // gradients that we need to calculate
-    SUMMATION32_DT *before_detectors_gradients,
-    EXTERNAL_REAL_DT *target_input_gradients,
-    EXTERNAL_REAL_DT *target_weights_gradients,
-    EXTERNAL_REAL_DT *target_positional_embeddings_gradients
+    EXTERNAL_REAL_DT *r_input,
+    AnchorsPair *r_detectors,
+    int32_t *r_lookup_indices,
+    EXTERNAL_REAL_DT *r_min_anchor_deltas,
+    int32_t *r_min_anchor_delta_indices,
+    int32_t *r_positional_lookup_indices,
+    EXTERNAL_REAL_DT *r_positional_min_deltas,
+    int32_t *r_positional_min_delta_indices,
+    // forward statistics from forward pass (also reused as space for before_detectors_gradients)
+    EXTERNAL_REAL_DT *rw_firing_stat,
+    int32_t *w_sparse_firing_buffer,
+    EXTERNAL_REAL_DT *w_input_gradients,
+    EXTERNAL_REAL_DT *w_weights_gradients,
+    EXTERNAL_REAL_DT *w_positional_embeddings_gradients
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat\n");
     if(this->batch_size != batch_size) {

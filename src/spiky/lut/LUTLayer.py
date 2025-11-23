@@ -118,6 +118,7 @@ class LUTLayerBasic(nn.Module):
         self._lookup_indices_callback = None
         self._detector_anchors = None
         self._before_detectors_gradients = None
+        self._sparse_firing_buffer = None
 
     def add_detector_connections(
             self, chunk_of_connections: ChunkOfConnections,
@@ -261,22 +262,33 @@ class LUTLayerBasic(nn.Module):
         self._lookup_indices_callback = cb
 
     def forward_step(self, x):
+        assert self._sequence_length == 1
         assert x.device == self.device
         batch_size = x.shape[0]
         sequence_length = x.shape[1]
-        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+        expected_shape = (batch_size, 1) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
         x = x.flatten().contiguous()
-        output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
+        output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
 
-        lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32,
+        lookup_indices = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32,
                                      device=self.device)
-        min_anchor_deltas = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
+        min_anchor_deltas = torch.zeros([batch_size * self._n_detectors], dtype=torch.float32,
                                         device=self.device)
-        min_anchor_delta_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32,
+        min_anchor_delta_indices = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32,
                                                device=self.device)
+
+        if not self._is_fully_connected and (
+            self._sparse_firing_buffer is None or
+            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4
+        ):
+            self._sparse_firing_buffer = torch.zeros(
+                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4,
+                dtype=torch.int32,
+                device=self.device
+            )
 
         self._lut_dm.forward_step(
             self._weights,
@@ -285,7 +297,8 @@ class LUTLayerBasic(nn.Module):
             output,
             lookup_indices,
             min_anchor_deltas,
-            min_anchor_delta_indices
+            min_anchor_delta_indices,
+            self._sparse_firing_buffer
         )
 
         if self._lookup_indices_callback is not None:
@@ -323,21 +336,19 @@ class LUTLayerBasic(nn.Module):
         positional_min_delta_indices = torch.zeros([sequence_length * self._n_detectors],
                                                    dtype=torch.int32, device=self.device)
 
-        # Create or recreate before_detectors_gradients if batch_size changed
-        if (self._before_detectors_gradients is None or
-                self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size * sequence_length):
-            self._before_detectors_gradients = torch.zeros(
-                self._n_lookup_neurons * batch_size * sequence_length,
-                dtype=torch.float32,
-                device=self.device
-            )
-
-        # Create sparse_firing_buffer for forward statistics
-        sparse_firing_buffer = torch.zeros(
-            (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4,
-            dtype=torch.int32,
+        firing_stat = torch.zeros(
+            self._n_lookup_neurons * batch_size * sequence_length,
+            dtype=torch.float32,
             device=self.device
         )
+
+        if (self._sparse_firing_buffer is None or
+                self._sparse_firing_buffer.numel() != (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4):
+            self._sparse_firing_buffer = torch.zeros(
+                (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4,
+                dtype=torch.int32,
+                device=self.device
+            )
 
         self._lut_dm.forward_step_concat(
             self._weights,
@@ -351,8 +362,8 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            sparse_firing_buffer,
-            self._before_detectors_gradients
+            self._sparse_firing_buffer,
+            firing_stat
         )
 
         if self._lookup_indices_callback is not None:
@@ -366,7 +377,7 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices.reshape(sequence_length, self._n_detectors),
             positional_min_deltas.reshape(sequence_length, self._n_detectors),
             positional_min_delta_indices.reshape(sequence_length, self._n_detectors),
-            sparse_firing_buffer
+            firing_stat
         )
 
     def backward_step(
@@ -419,7 +430,8 @@ class LUTLayerBasic(nn.Module):
             min_anchor_deltas,
             min_anchor_delta_indices,
             self._before_detectors_gradients,
-            x_grad, self._last_w_grad
+            x_grad, self._last_w_grad,
+            self._sparse_firing_buffer
         )
 
         if self._do_normalize_gradients:
@@ -432,10 +444,10 @@ class LUTLayerBasic(nn.Module):
         return x_grad.reshape(source_x_shape), self._last_w_grad
 
     def backward_step_concat(
-            self, x, grad_output,
-            lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
-            positional_lookup_indices, positional_min_deltas, positional_min_delta_indices,
-            sparse_firing_buffer
+        self, x, grad_output,
+        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+        positional_lookup_indices, positional_min_deltas, positional_min_delta_indices,
+        firing_stat
     ):
         assert x.device == self.device
         source_x_shape = x.shape
@@ -466,10 +478,10 @@ class LUTLayerBasic(nn.Module):
         assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
         positional_min_delta_indices = positional_min_delta_indices.flatten().contiguous()
 
-        assert sparse_firing_buffer.device == self.device
-        assert sparse_firing_buffer.dtype == torch.int32
-        assert sparse_firing_buffer.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
-        sparse_firing_buffer = sparse_firing_buffer.contiguous()
+        assert firing_stat.device == self.device
+        assert firing_stat.dtype == torch.float32
+        assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
+        firing_stat = firing_stat.contiguous()
 
         x_grad = torch.zeros_like(x)
         self._last_w_grad = torch.zeros_like(self._weights)
@@ -479,15 +491,6 @@ class LUTLayerBasic(nn.Module):
         assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
 
         grad_output = grad_output.flatten().contiguous()
-
-        # Create or recreate before_detectors_gradients if batch_size changed
-        if (self._before_detectors_gradients is None or
-                self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size * sequence_length):
-            self._before_detectors_gradients = torch.zeros(
-                self._n_lookup_neurons * batch_size * sequence_length,
-                dtype=torch.float32,
-                device=self.device
-            )
 
         self._lut_dm.backward_backprop_concat(
             self._weights,
@@ -502,8 +505,11 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            sparse_firing_buffer,
-            self._before_detectors_gradients,
+            self._sparse_firing_buffer,
+            # First firing_stat will be used directly and then because it is no longer needed
+            # the same buffer will be used for gradient accumulation. So after this call firing_stat
+            # is invalid.
+            firing_stat,
             x_grad, self._last_w_grad, self._last_positional_embeddings_grad
         )
 
@@ -547,6 +553,8 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors = self._detector_anchors.to(device=self.device)
         if self._before_detectors_gradients is not None:
             self._before_detectors_gradients = self._before_detectors_gradients.to(device=self.device)
+        if self._sparse_firing_buffer is not None:
+            self._sparse_firing_buffer = self._sparse_firing_buffer.to(device=self.device)
         if self._positional_embeddings is not None:
             self._positional_embeddings = self._positional_embeddings.to(device=self.device)
         return self
@@ -567,12 +575,12 @@ class LUTLayerBasic(nn.Module):
                     output, lookup_indices, min_anchor_deltas, 
                     min_anchor_delta_indices, positional_lookup_indices, 
                     positional_min_deltas, positional_min_delta_indices, 
-                    sparse_firing_buffer
+                    firing_stat
                 ) = lut_layer.forward_step_concat(x)
                 ctx.save_for_backward(
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
                     positional_lookup_indices, positional_min_deltas, 
-                    positional_min_delta_indices, sparse_firing_buffer
+                    positional_min_delta_indices, firing_stat
                 )
             return output
 
@@ -590,7 +598,7 @@ class LUTLayerBasic(nn.Module):
                 return x_grad, w_grad, None, None
             else:
                 (x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, positional_lookup_indices,
-                 positional_min_deltas, positional_min_delta_indices, sparse_firing_buffer) = ctx.saved_tensors
+                 positional_min_deltas, positional_min_delta_indices, firing_stat) = ctx.saved_tensors
                 x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_concat(
                     x, grad_output,
                     lookup_indices,
@@ -599,7 +607,7 @@ class LUTLayerBasic(nn.Module):
                     positional_lookup_indices,
                     positional_min_deltas,
                     positional_min_delta_indices,
-                    sparse_firing_buffer
+                    firing_stat
                 )
                 return x_grad, w_grad, pe_grad, None
 
