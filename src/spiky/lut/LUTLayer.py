@@ -282,10 +282,10 @@ class LUTLayerBasic(nn.Module):
 
         if not self._is_fully_connected and (
             self._sparse_firing_buffer is None or
-            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron()) * batch_size * 4
+            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4
         ):
             self._sparse_firing_buffer = torch.zeros(
-                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron()) * batch_size * 4,
+                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4,
                 dtype=torch.int32,
                 device=self.device
             )
@@ -384,38 +384,39 @@ class LUTLayerBasic(nn.Module):
             self, x, grad_output,
             lookup_indices, min_anchor_deltas, min_anchor_delta_indices
     ):
+        assert self._sequence_length == 1
         assert x.device == self.device
         source_x_shape = x.shape
         batch_size = source_x_shape[0]
         sequence_length = x.shape[1]
-        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+        expected_shape = (batch_size, 1) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
         x = x.flatten().contiguous()
         assert lookup_indices.device == self.device
-        assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        assert lookup_indices.shape == (batch_size, 1, self._n_detectors)
         lookup_indices = lookup_indices.flatten().contiguous()
         assert min_anchor_deltas.device == self.device
-        assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
+        assert min_anchor_deltas.shape == (batch_size, 1, self._n_detectors)
         min_anchor_deltas = min_anchor_deltas.flatten().contiguous()
         assert min_anchor_delta_indices.device == self.device
-        assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        assert min_anchor_delta_indices.shape == (batch_size, 1, self._n_detectors)
         min_anchor_delta_indices = min_anchor_delta_indices.flatten().contiguous()
 
         x_grad = torch.zeros_like(x)
         self._last_w_grad = torch.zeros_like(self._weights)
 
         assert grad_output.device == self.device
-        assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
+        assert grad_output.shape == (batch_size, 1) + self.output_shape()
 
         grad_output = grad_output.flatten().contiguous()
 
         # Create or recreate before_detectors_gradients if batch_size changed
         if (self._before_detectors_gradients is None or
-                self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size * sequence_length):
+                self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size):
             self._before_detectors_gradients = torch.zeros(
-                self._n_lookup_neurons * batch_size * sequence_length,
+                self._n_lookup_neurons * batch_size,
                 dtype=torch.float32,
                 device=self.device
             )

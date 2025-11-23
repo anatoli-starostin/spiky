@@ -5,7 +5,7 @@
 #define LUT_RUNTIME_KERNELS_TPB 1024
 static_assert((LUT_RUNTIME_KERNELS_TPB % 2) == 0, "LUT_RUNTIME_KERNELS_TPB must be even");
 // Macro to calculate optimal threads per block (min of TPB and variable size)
-#define LUT_RUNTIME_KERNELS_TPB_OPT(var) ((var) < LUT_RUNTIME_KERNELS_TPB ? (var) : LUT_RUNTIME_KERNELS_TPB)
+#define LUT_RUNTIME_KERNELS_TPB_OPT(var) (((var) < LUT_RUNTIME_KERNELS_TPB) ? (var) : LUT_RUNTIME_KERNELS_TPB)
 // Macro to calculate number of blocks needed for a given variable
 #define LUT_RUNTIME_NUM_BLOCKS(var) (((var) + LUT_RUNTIME_KERNELS_TPB_OPT(var) - 1) / LUT_RUNTIME_KERNELS_TPB_OPT(var))
 #define TILE 32

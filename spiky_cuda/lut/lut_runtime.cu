@@ -113,7 +113,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             device,
             w_sparse_firing_buffer
         );
-        local_firing_buffer.clear();
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
@@ -263,7 +262,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             device,
             w_sparse_firing_buffer
         );
-        local_firing_buffer.clear();
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         GRID_CALL_SHARED_MEM(
@@ -580,7 +578,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_lookup_neurons * this->sequence_length, 
         batch_size, device, w_sparse_firing_buffer
     );
-    local_firing_buffer.clear();
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     GRID_CALL_SHARED_MEM(
