@@ -282,10 +282,10 @@ class LUTLayerBasic(nn.Module):
 
         if not self._is_fully_connected and (
             self._sparse_firing_buffer is None or
-            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4
+            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron()) * batch_size * 4
         ):
             self._sparse_firing_buffer = torch.zeros(
-                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4,
+                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron()) * batch_size * 4,
                 dtype=torch.int32,
                 device=self.device
             )
