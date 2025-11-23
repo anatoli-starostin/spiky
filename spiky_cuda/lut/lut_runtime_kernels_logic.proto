@@ -841,7 +841,9 @@ gather_gradients_fully_connected_logic(
         float4 w_quad = make_float4(0.0, 0.0, 0.0, 0.0);
         double output_grad;
         double weight;
+        #ifdef ATOMIC
         float tmp;
+        #endif
         SUMMATION32_DT sum32_delta;
         for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++, r_output_gradients++, r_weights++) {
             if(((reinterpret_cast<uintptr_t>(r_output_gradients) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
@@ -866,8 +868,12 @@ gather_gradients_fully_connected_logic(
                 }
                 n_o_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 {%0}, [%1];" : "=f"(tmp) : "l"(r_output_gradients));
+                #ifdef ATOMIC
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_output_gradients));
                 output_grad = static_cast<double>(tmp);
+                #else
+                output_grad = static_cast<double>(*r_output_gradients);
+                #endif
             }
 
             if(((reinterpret_cast<uintptr_t>(r_weights) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
@@ -892,8 +898,12 @@ gather_gradients_fully_connected_logic(
                 }
                 n_w_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 {%0}, [%1];" : "=f"(tmp) : "l"(r_weights));
+                #ifdef ATOMIC
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_weights));
                 weight = static_cast<double>(tmp);
+                #else
+                weight = static_cast<double>(*r_weights);
+                #endif
             }
 
             if(fabs(output_grad) > EPS) {
