@@ -4,6 +4,19 @@
 namespace {
 #include "aux/lut_runtime_kernels_logic.cu"
 }
+
+// Helper function to round up to the next power of 2
+static inline uint32_t next_power_of_2(uint32_t n) {
+    if (n == 0) return 1;
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    return n + 1;
+}
+
 namespace py = pybind11;
 
 LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
@@ -117,6 +130,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
+        tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t),
             r_input,
@@ -266,6 +280,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         local_firing_buffer.clear();
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
+        tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t),
             this->n_detectors,
@@ -583,6 +598,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     local_firing_buffer.clear();
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
+    tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
     GRID_CALL_SHARED_MEM(
         numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t),
         w_firing_stat,

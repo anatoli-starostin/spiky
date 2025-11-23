@@ -99,8 +99,7 @@ public:
         SUMMATION32_DT *w_before_detectors_gradients,
         EXTERNAL_REAL_DT *w_input_gradients,
         EXTERNAL_REAL_DT *w_weights_gradients,
-        // forward statistics from forward pass
-        int32_t *w_sparse_firing_buffer_ptr
+        int32_t *w_sparse_firing_buffer_ptr  // Can be nullptr
     );
 
     void forward_step_concat(
