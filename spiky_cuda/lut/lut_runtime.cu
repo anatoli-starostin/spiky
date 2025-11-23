@@ -5,9 +5,9 @@ namespace {
 #include "aux/lut_runtime_kernels_logic.cu"
 }
 
-// Helper function to round up to the next power of 2
-static inline uint32_t next_power_of_2(uint32_t n) {
-    if (n == 0) return 1;
+// Helper function to round up to the next power of 2 but not less then 32
+static inline uint32_t round_tbp(uint32_t n) {
+    if (n <= 32) return 32;
     n--;
     n |= n >> 1;
     n |= n >> 2;
@@ -130,7 +130,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-        tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+        tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t),
             r_input,
@@ -269,6 +269,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
 
     if(lookup_neuron_synapses_infos != nullptr) {
+        PROF_START(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP);
         uint32_t max_firings = this->n_detectors * this->max_forward_groups_per_neuron * 2;
         // in that case  w_sparse_firing_buffer is guaranteed to be not nullptr
         FiringBuffer local_firing_buffer(
@@ -280,7 +281,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         local_firing_buffer.clear();
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-        tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+        tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_SHARED_MEM(
             numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t),
             this->n_detectors,
@@ -294,6 +295,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->lut_data,
             device
         );
+        PROF_END(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP);
+        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         local_firing_buffer.update_counter();
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
@@ -316,7 +319,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
+        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
         uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
@@ -417,10 +422,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         #endif
+        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
     }
 
     // 3. propagate through detectors
 
+    PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
     GRID_CALL_NO_SHARED_MEM(
@@ -439,7 +446,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         , 0.0
         #endif
     );
-
+    PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     PROF_END(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -598,7 +605,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     local_firing_buffer.clear();
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
-    tpb_opt = next_power_of_2(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+    tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
     GRID_CALL_SHARED_MEM(
         numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t),
         w_firing_stat,

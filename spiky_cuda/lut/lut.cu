@@ -77,6 +77,10 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::fire_detectors");
         profiler.register_operation_type(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP, "lut::runtime::fill_outputs");
         profiler.register_operation_type(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP, "lut::runtime::convert_outputs");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::backward::fire_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP, "lut::runtime::backward::gather_gradients");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP, "lut::runtime::backward::propagate_detectors");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
