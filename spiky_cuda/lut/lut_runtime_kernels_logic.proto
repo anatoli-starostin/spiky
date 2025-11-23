@@ -849,7 +849,7 @@ gather_gradients_fully_connected_logic(
                 asm volatile(
                     "ld.global.nc.v4.f32 {%0,%1,%2,%3}, [%4];"
                     : "=f"(o_quad.x), "=f"(o_quad.y), "=f"(o_quad.z), "=f"(o_quad.w)
-                    : "l"(r_output_gradients)
+                    : "r"(r_output_gradients)
                 );
                 #else
                 o_quad = *reinterpret_cast<float4 *>(r_output_gradients);
@@ -866,7 +866,7 @@ gather_gradients_fully_connected_logic(
                 }
                 n_o_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_output_gradients));
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "r"(r_output_gradients));
                 output_grad = static_cast<double>(tmp);
             }
 
@@ -875,7 +875,7 @@ gather_gradients_fully_connected_logic(
                 asm volatile(
                     "ld.global.nc.v4.f32 {%0,%1,%2,%3}, [%4];"
                     : "=f"(w_quad.x), "=f"(w_quad.y), "=f"(w_quad.z), "=f"(w_quad.w)
-                    : "l"(r_weights)
+                    : "r"(r_weights)
                 );
                 #else
                 w_quad = *reinterpret_cast<float4 *>(r_weights);
@@ -892,7 +892,7 @@ gather_gradients_fully_connected_logic(
                 }
                 n_w_buffered--;
             } else {
-                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_weights));
+                asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "r"(r_weights));
                 weight = static_cast<double>(tmp);
             }
 
