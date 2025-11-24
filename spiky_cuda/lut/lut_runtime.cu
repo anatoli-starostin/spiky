@@ -331,7 +331,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
+        #ifndef NO_CUDA
         warmup<<<256, 65535>>>(r_weights, n_outputs * n_lookup_neurons);
+        #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
         #ifdef USE_CUDA_STREAMS
