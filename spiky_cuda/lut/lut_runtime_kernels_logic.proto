@@ -782,7 +782,7 @@ gather_x_gradients_fully_connected_logic(
         w_before_detectors_gradients += n_detectors_per_block * detector_block_index * n_lookup_neurons_per_detector;
         uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
         r_weights += weights_per_detector * n_detectors_per_block * detector_block_index;
-        if((detector_block_index == n_detectors - 1) && (n_detectors % n_detectors_per_block)) {
+        if((detector_block_index == n_detector_blocks - 1) && (n_detectors % n_detectors_per_block)) {
             n_detectors_per_block = n_detectors % n_detectors_per_block;
         }
 
