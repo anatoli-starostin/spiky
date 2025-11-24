@@ -324,7 +324,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         dim3 bb(LUT_RUNTIME_NUM_BLOCKS(n_weights), 1);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, warmup_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_weights),
+            bb, warmup_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_weights),
             r_weights, n_weights
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
