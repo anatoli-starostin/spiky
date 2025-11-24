@@ -399,26 +399,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             cudaStreamDestroy(streams[2]);
         }
         #else
-        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
-            r_weights,
-            r_output_gradients,
-            r_lookup_indices,
-            w_before_detectors_gradients,
-            this->n_outputs,
-            this->n_detectors,
-            n_output_blocks,
-            this->synapse_group_size,
-            n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
-        );
-        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_x_bar_gradients_fully_connected, tpb_opt,
@@ -440,6 +420,26 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
+        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
+            w_before_detectors_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_w_gradients_fully_connected, tpb_opt,
