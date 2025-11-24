@@ -227,15 +227,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
 }
 
-#ifndef NO_CUDA
-__global__ void PFX(warmup)(const float* w, size_t N) {
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    for (; i < N; i += blockDim.x * gridDim.x) {
-        float x = w[i];
-    }
-}
-#endif
-
 void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     EXTERNAL_REAL_DT *r_weights,
     uint32_t batch_size,
@@ -330,15 +321,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
-        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-        #ifndef NO_CUDA
-        PFX(warmup)<<<65535, 256>>>(r_weights, n_outputs * n_lookup_neurons);
-        PFX(warmup)<<<65535, 256>>>(r_output_gradients, n_outputs * batch_size);
-        #endif
-        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
         #ifdef USE_CUDA_STREAMS
-        uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        // uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        uint32_t n_output_blocks = n_outputs;
         n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
@@ -414,7 +400,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             cudaStreamDestroy(streams[2]);
         }
         #else
-        uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        // uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        uint32_t n_output_blocks = n_outputs;
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
@@ -429,7 +416,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            1, // this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -450,7 +437,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            1, // this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -469,7 +456,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            1, // this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
