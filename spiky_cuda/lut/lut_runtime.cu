@@ -253,12 +253,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
     }
 
-    PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
-
     #ifndef NO_CUDA
     c10::cuda::CUDAGuard guard(device);
     cudaDeviceSynchronize();
     #endif
+
+    PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 
     // 1. gather gradients for lookup_indices and alternative_lookup_indices (both dy/dx and dy/dw)
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;

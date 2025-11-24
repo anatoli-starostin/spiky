@@ -394,27 +394,27 @@ class LUTLayerBasic(nn.Module):
         expected_shape = (batch_size, 1) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        x = x.flatten().contiguous()
+        x = x.view(-1)
         assert lookup_indices.device == self.device
         assert lookup_indices.shape == (batch_size, 1, self._n_detectors)
-        lookup_indices = lookup_indices.flatten().contiguous()
+        lookup_indices = lookup_indices.view(-1)
         assert min_anchor_deltas.device == self.device
         assert min_anchor_deltas.shape == (batch_size, 1, self._n_detectors)
-        min_anchor_deltas = min_anchor_deltas.flatten().contiguous()
+        min_anchor_deltas = min_anchor_deltas.view(-1)
         assert min_anchor_delta_indices.device == self.device
         assert min_anchor_delta_indices.shape == (batch_size, 1, self._n_detectors)
-        min_anchor_delta_indices = min_anchor_delta_indices.flatten().contiguous()
+        min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
         x_grad = torch.zeros_like(x)
         if self._last_w_grad is None:
             self._last_w_grad = torch.zeros_like(self._weights)
-        # else:
-        #     self._last_w_grad.zero_()
+        else:
+            self._last_w_grad.zero_()
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
 
-        grad_output = grad_output.flatten().contiguous()
+        grad_output = grad_output.view(-1)
 
         # Create or recreate before_detectors_gradients if batch_size changed
         if (self._before_detectors_gradients is None or
@@ -425,10 +425,6 @@ class LUTLayerBasic(nn.Module):
                 device=self.device
             )
 
-        with torch.cuda.device(self.device):
-            torch.cuda.synchronize()
-
-        # print(f'{source_x_shape}, {self._sparse_firing_buffer.shape}, {self._sparse_firing_buffer[:2]}!!!\n')
         self._lut_dm.backward_backprop(
             self._weights,
             batch_size,
@@ -442,9 +438,6 @@ class LUTLayerBasic(nn.Module):
             x_grad, self._last_w_grad,
             self._sparse_firing_buffer
         )
-
-        with torch.cuda.device(self.device):
-            torch.cuda.synchronize()
 
         if self._do_normalize_gradients:
             with torch.no_grad():
