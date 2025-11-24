@@ -734,7 +734,7 @@ gather_x_gradients_fully_connected_simple_logic(
         w_before_detectors_gradients += detector_index * n_lookup_neurons_per_detector;
         double grad_x = static_cast<double>(r_output_gradients[output_index]);
         grad_x *= static_cast<double>(r_weights[output_index]) * lr;
-        sum32_delta = static_cast<SUMMATION32_DT>(grad_x);
+        SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(grad_x);
         #ifdef ATOMIC
         atomicAdd(
             w_before_detectors_gradients + lookup_index,
