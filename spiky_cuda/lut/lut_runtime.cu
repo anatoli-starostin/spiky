@@ -399,14 +399,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             cudaStreamDestroy(streams[2]);
         }
         #else
-
-        uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
-        uint32_t n_items = n_outputs * n_detector_blocks;
+        uint32_t n_items = n_outputs * n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fire_x_gradients_fully_connected, tpb_opt,
+            numBlocks, gather_x_gradients_fully_connected_simple, tpb_opt,
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -414,8 +412,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             w_before_detectors_gradients,
             this->n_outputs,
             this->n_detectors,
-            n_detector_blocks,
-            this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
