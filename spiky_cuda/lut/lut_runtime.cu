@@ -322,11 +322,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
-        #ifdef USE_CUDA_STREAMS
         uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
+        #ifdef USE_CUDA_STREAMS
         cudaStream_t streams[3];
         if(device != -1) {
             c10::cuda::CUDAGuard guard(device);
@@ -400,12 +400,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         }
         #else
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
-        uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
-        uint32_t n_items = n_outputs * n_detector_blocks;
-        dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
-        uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fire_x_gradients_fully_connected, tpb_opt,
+            numBlocks, gather_dense_x_gradients_fully_connected, tpb_opt,
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -413,7 +409,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             w_before_detectors_gradients,
             this->n_outputs,
             this->n_detectors,
-            n_detector_blocks,
+            n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
@@ -423,10 +419,38 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        memsize = this->n_detectors * batch_size * sizeof(SUMMATION32_DT);
+        if(device == -1) {
+            memset(w_before_detectors_gradients, 0, memsize);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaMemset(w_before_detectors_gradients, 0, memsize);
+            #endif
+        }
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fire_x_gradients_fully_connected, tpb_opt,
+            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
+            r_weights,
+            r_output_gradients,
+            r_lookup_indices,
+            nullptr,
+            w_before_detectors_gradients,
+            this->n_outputs,
+            this->n_detectors,
+            n_output_blocks,
+            this->synapse_group_size,
+            n_lookup_neurons_per_detector,
+            this->first_synapse_meta_lr
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -434,7 +458,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             w_before_detectors_gradients,
             this->n_outputs,
             this->n_detectors,
-            n_detector_blocks,
+            n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
@@ -445,10 +469,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
-        uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
-        n_items = n_detectors * n_output_blocks;
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
-        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_w_gradients_fully_connected, tpb_opt,
