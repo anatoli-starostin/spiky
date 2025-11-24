@@ -815,27 +815,27 @@ fire_x_gradients_fully_connected_logic(
             }
 
             weight = static_cast<double>(r_weights[lookup_index * n_outputs + output_index]);
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + cursor,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[cursor] += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + cursor,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[cursor] += sum32_delta;
-                #endif
-            #endif
+//            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+//                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+//                #ifdef ATOMIC
+//                atomicAdd(
+//                    w_before_detectors_gradients + cursor,
+//                    sum32_delta
+//                );
+//                #else
+//                w_before_detectors_gradients[cursor] += sum32_delta;
+//                #endif
+//            #else
+//                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr);
+//                #ifdef ATOMIC
+//                atomicAdd(
+//                    w_before_detectors_gradients + cursor,
+//                    sum32_delta
+//                );
+//                #else
+//                w_before_detectors_gradients[cursor] += sum32_delta;
+//                #endif
+//            #endif
         }
     }
 }

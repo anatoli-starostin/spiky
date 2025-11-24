@@ -399,13 +399,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             cudaStreamDestroy(streams[2]);
         }
         #else
+
         uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
         uint32_t n_items = n_outputs * n_detector_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fire_x_gradients_fully_connected_logic, tpb_opt,
+            numBlocks, fire_x_gradients_fully_connected, tpb_opt,
             r_weights,
             r_output_gradients,
             r_lookup_indices,
