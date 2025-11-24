@@ -325,7 +325,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         dim3 bb(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons * n_outputs), 1);
         GRID_CALL_NO_SHARED_MEM(
             bb, warmup_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons * n_outputs),
-            r_weights, n_weights
+            r_weights, n_lookup_neurons * n_outputs
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
