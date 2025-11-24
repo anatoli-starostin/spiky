@@ -262,6 +262,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #ifndef NO_CUDA
         c10::cuda::CUDAGuard guard(device);
         cudaMemset(w_before_detectors_gradients, 0, memsize);
+        cudaDeviceSynchronize();
         #endif
     }
 
