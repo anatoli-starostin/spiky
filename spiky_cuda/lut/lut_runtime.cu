@@ -254,20 +254,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     }
 
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
-    PROF_START(LUT_RUNTIME_BACKWARD_ZERO_GRAD_PROFILER_OP);
-    // Zero out before_detectors_gradients
-    uint64_t memsize = this->n_lookup_neurons * batch_size * sizeof(SUMMATION32_DT);
-    if(device == -1) {
-        memset(w_before_detectors_gradients, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMemset(w_before_detectors_gradients, 0, memsize);
-        cudaDeviceSynchronize();
-        #endif
-    }
-    PROF_END(LUT_RUNTIME_BACKWARD_ZERO_GRAD_PROFILER_OP);
-
     // 1. gather gradients for lookup_indices and alternative_lookup_indices (both dy/dx and dy/dw)
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
 
