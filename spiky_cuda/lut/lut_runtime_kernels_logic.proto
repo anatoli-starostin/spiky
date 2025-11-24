@@ -743,16 +743,13 @@ gather_x_gradients_fully_connected_logic(
         EXTERNAL_REAL_DT *tmp_ptr;
         for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++) {
             #ifdef ATOMIC
-            tmp_ptr = r_output_gradients + cursor;
-            asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_output_gradients));
-            output_grad = static_cast<double>(tmp);
             tmp_ptr = r_weights + cursor;
             asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_weights));
             weight = static_cast<double>(tmp);
             #else
-            output_grad = static_cast<double>(r_output_gradients[cursor]);
             weight = static_cast<double>(r_weights[cursor]);
             #endif
+            output_grad = static_cast<double>(r_output_gradients[cursor]);
             grad_x += weight * output_grad;
         }
 
@@ -820,16 +817,13 @@ gather_x_bar_gradients_fully_connected_logic(
         EXTERNAL_REAL_DT *tmp_ptr;
         for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++) {
             #ifdef ATOMIC
-            tmp_ptr = r_output_gradients + cursor;
-            asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_output_gradients));
-            output_grad = static_cast<double>(tmp);
             tmp_ptr = r_weights + cursor;
             asm volatile("ld.global.nc.f32 %0, [%1];" : "=f"(tmp) : "l"(r_weights));
             weight = static_cast<double>(tmp);
             #else
-            output_grad = static_cast<double>(r_output_gradients[cursor]);
             weight = static_cast<double>(r_weights[cursor]);
             #endif
+            output_grad = static_cast<double>(r_output_gradients[cursor]);
             grad_x += weight * output_grad;
         }
 
