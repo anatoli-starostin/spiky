@@ -814,16 +814,6 @@ gather_x_gradients_fully_connected_logic(
     }
 }
 
-warmup_floats_logic(
-    float* w,
-    uint64_t N
-) {
-    size_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    for (; i < N; i += blockDim.x * gridDim.x) {
-        float x = w[i];
-    }
-}
-
 fire_x_gradients_fully_connected_logic(
     EXTERNAL_REAL_DT* r_weights,
     EXTERNAL_REAL_DT* r_output_gradients,
