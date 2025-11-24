@@ -228,7 +228,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
 }
 
 #ifndef NO_CUDA
-__global__ void warmup(const float* w, size_t N) {
+__global__ void PFX(warmup)(const float* w, size_t N) {
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     for (; i < N; i += blockDim.x * gridDim.x) {
         float x = w[i];
@@ -332,7 +332,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         #ifndef NO_CUDA
-        warmup<<<256, 65535>>>(r_weights, n_outputs * n_lookup_neurons);
+        PFX(warmup)<<<256, 65535>>>(r_weights, n_outputs * n_lookup_neurons);
         #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
