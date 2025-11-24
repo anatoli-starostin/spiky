@@ -446,7 +446,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
-        uint32_t n_items = n_detectors * n_output_blocks;
+        n_items = n_detectors * n_output_blocks;
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
