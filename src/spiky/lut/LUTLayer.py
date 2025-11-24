@@ -406,7 +406,10 @@ class LUTLayerBasic(nn.Module):
         min_anchor_delta_indices = min_anchor_delta_indices.flatten().contiguous()
 
         x_grad = torch.zeros_like(x)
-        self._last_w_grad = torch.zeros_like(self._weights)
+        if self._last_w_grad is None:
+            self._last_w_grad = torch.zeros_like(self._weights)
+        else:
+            self._last_w_grad.zero_()
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
