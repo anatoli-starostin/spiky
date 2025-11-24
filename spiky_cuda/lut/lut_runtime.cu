@@ -332,7 +332,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         #ifndef NO_CUDA
-        PFX(warmup)<<<256, 65535>>>(r_weights, n_outputs * n_lookup_neurons);
+        PFX(warmup)<<<65535, 256>>>(r_weights, n_outputs * n_lookup_neurons);
         #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
