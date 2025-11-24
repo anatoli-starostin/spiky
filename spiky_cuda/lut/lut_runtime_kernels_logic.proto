@@ -1119,7 +1119,7 @@ propagate_through_detectors_logic(
             du = 1.0 / (1.0 + fabs(du));
             du *= -0.5 * du;
         }
-        du *= static_cast<double>(r_before_detectors_gradients[lookup_index]) - static_cast<double>(r_before_detectors_gradients[alt_lookup_neuron_idx]);
+        du *= static_cast<double>(rw_before_detectors_gradients[lookup_index]) - static_cast<double>(rw_before_detectors_gradients[alt_lookup_neuron_idx]);
 
         if(fabs(du) > EPS) {
             AnchorsPair ap = r_detectors[i * n_anchors_per_detector + min_anchor_delta_index];
