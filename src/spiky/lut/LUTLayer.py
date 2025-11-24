@@ -382,8 +382,8 @@ class LUTLayerBasic(nn.Module):
         )
 
     def backward_step(
-            self, x, grad_output,
-            lookup_indices, min_anchor_deltas, min_anchor_delta_indices
+        self, x, grad_output,
+        lookup_indices, min_anchor_deltas, min_anchor_delta_indices
     ):
         assert self._sequence_length == 1
         assert x.device == self.device
@@ -425,6 +425,9 @@ class LUTLayerBasic(nn.Module):
                 device=self.device
             )
 
+        with torch.cuda.device(self.device):
+            torch.cuda.synchronize()
+
         # print(f'{source_x_shape}, {self._sparse_firing_buffer.shape}, {self._sparse_firing_buffer[:2]}!!!\n')
         self._lut_dm.backward_backprop(
             self._weights,
@@ -439,6 +442,9 @@ class LUTLayerBasic(nn.Module):
             x_grad, self._last_w_grad,
             self._sparse_firing_buffer
         )
+
+        with torch.cuda.device(self.device):
+            torch.cuda.synchronize()
 
         if self._do_normalize_gradients:
             with torch.no_grad():
