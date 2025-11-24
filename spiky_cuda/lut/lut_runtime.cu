@@ -420,6 +420,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
+        PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_x_gradients_fully_connected, tpb_opt,
             r_weights,
@@ -439,7 +441,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
-        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
+        PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, gather_w_gradients_fully_connected, tpb_opt,

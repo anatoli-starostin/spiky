@@ -81,6 +81,7 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP, "lut::runtime::backward::gather_gradients");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x_bar");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_w");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP, "lut::runtime::backward::propagate_detectors");
         #endif
