@@ -785,9 +785,9 @@ gather_x_gradients_fully_connected_logic(
         double weight;
         SUMMATION32_DT sum32_delta;
         for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++) {
-            weight = static_cast<double>(r_weights[cursor]);
+            // weight = static_cast<double>(r_weights[cursor]);
             // output_grad = static_cast<double>(r_output_gradients[cursor]);
-            grad_x += weight; // * output_grad;
+            // grad_x += weight; // * output_grad;
         }
 
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
