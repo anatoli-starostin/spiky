@@ -339,7 +339,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_weights,
             r_output_gradients,
             r_lookup_indices,
-            nullptr,
             w_before_detectors_gradients,
             this->n_outputs,
             this->n_detectors,
@@ -354,7 +353,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt, streams[1],
+            numBlocks, gather_x_bar_gradients_fully_connected, tpb_opt, streams[1],
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -406,7 +405,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_weights,
             r_output_gradients,
             r_lookup_indices,
-            nullptr,
             w_before_detectors_gradients,
             this->n_outputs,
             this->n_detectors,
@@ -423,7 +421,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
+            numBlocks, gather_x_bar_gradients_fully_connected, tpb_opt,
             r_weights,
             r_output_gradients,
             r_lookup_indices,
