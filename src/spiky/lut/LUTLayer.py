@@ -107,7 +107,12 @@ class LUTLayerBasic(nn.Module):
         self._do_normalize_gradients = _do_normalize_gradients
 
         if shared_context is None:
+            self._own_shared_context = True
             shared_context = LUTSharedContext()
+            shared_context.to_device(self.device)
+        else:
+            self._own_shared_context = False
+
         self._shared_context = shared_context
         self._shared_context.to_device(self.device)
         self._use_sparse_w_gradients = use_sparse_w_gradients
@@ -653,6 +658,8 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors = self._detector_anchors.to(device=self.device)
         if self._positional_embeddings is not None:
             self._positional_embeddings = self._positional_embeddings.to(device=self.device)
+        if self._own_shared_context:
+            self._shared_context.to_device(self.device)
         return self
 
     class LUTForwardFN(torch.autograd.Function):
