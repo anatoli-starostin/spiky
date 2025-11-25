@@ -510,7 +510,7 @@ class LUTLayerBasic(nn.Module):
             sparse_grad = target_w_grad.to_sparse_coo()
             values = sparse_grad.values()
             target_w_grad[sparse_grad.indices()] = 0.0
-            if values().numel() > 0 and self._do_normalize_gradients:
+            if values.numel() > 0 and self._do_normalize_gradients:
                 with torch.no_grad():
                     max_val = values.abs().max()
                     if max_val > 1e-16:
