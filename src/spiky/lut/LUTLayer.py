@@ -469,7 +469,7 @@ class LUTLayerBasic(nn.Module):
                 self.device
             )
         else:
-            target_w_grad = torch.empty_like(self._weights)
+            target_w_grad = torch.zeros_like(self._weights)
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
@@ -879,7 +879,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         do_squeeze = False
         if x.shape == (x.shape[0],) + self.input_shape():
             do_squeeze = True
-            x = x.unsqueeze(1)
+            x = x.view((x.shape[0], 1) + self.input_shape())
         elif not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
             raise ValueError(
                 f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
@@ -888,7 +888,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
         result = super().forward(x)
         if do_squeeze:
-            result = result.squeeze(1)
+            result = result.view((x.shape[0],) + self.output_shape())
         return result
 
     def input_shape(self):
