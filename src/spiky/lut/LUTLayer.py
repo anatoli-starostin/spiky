@@ -517,9 +517,9 @@ class LUTLayerBasic(nn.Module):
             target_w_grad = sparse_grad
         elif self._do_normalize_gradients:
             with torch.no_grad():
-                m = target_w_grad.abs().max()
+                m = target_w_grad[:self._weights.numel()].abs().max()
                 if m > 1e-16:
-                    target_w_grad /= m
+                    target_w_grad[:self._weights.numel()] /= m
 
         return x_grad.view(source_x_shape), target_w_grad
 
@@ -617,9 +617,9 @@ class LUTLayerBasic(nn.Module):
         else:
             if self._do_normalize_gradients:
                 with torch.no_grad():
-                    m = target_w_grad.abs().max()
+                    m = target_w_grad[:self._weights.numel()].abs().max()
                     if m > 1e-16:
-                        target_w_grad /= m
+                        target_w_grad[:self._weights.numel()] /= m
 
         if self._do_normalize_gradients:
             with torch.no_grad():
