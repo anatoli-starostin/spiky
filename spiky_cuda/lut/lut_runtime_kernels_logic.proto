@@ -700,6 +700,10 @@ gather_gradients_logic(
                 sum32_delta
             );
             #else
+            __SUPER_DETAILED_TRACE__(
+                "[gather_gradients_logic] firing.batch_index %d, fws_group.source_neuron_index %d, firing.payload %f, sum32_delta %f\n",
+                firing.batch_index, fws_group.source_neuron_index, firing.payload, sum32_delta
+            );
             w_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
             #endif
         #endif
@@ -1105,6 +1109,7 @@ propagate_through_detectors_logic(
         r_min_anchor_deltas += shift;
         r_min_anchor_delta_indices += shift;
         rw_before_detectors_gradients += shift * n_lookup_neurons_per_detector;
+        rw_before_detectors_gradients += i * n_lookup_neurons_per_detector;
         w_input_gradients += blockIdx.y * n_inputs;
 
         int32_t lookup_index = r_lookup_indices[i];
@@ -1155,6 +1160,10 @@ propagate_through_detectors_logic(
                 #endif
             #endif
         }
+        __SUPER_DETAILED_TRACE__(
+            "[propagate_through_detectors_logic] batch_index %d, lookup_index %d, alt_lookup_neuron_idx %d\n",
+            blockIdx.y, lookup_index, alt_lookup_neuron_idx
+        );
         rw_before_detectors_gradients[lookup_index] = 0.0;
         rw_before_detectors_gradients[alt_lookup_neuron_idx] = 0.0;
     }

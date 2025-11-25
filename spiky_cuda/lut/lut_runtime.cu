@@ -253,9 +253,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
     }
 
+    #ifdef ENABLE_PROFILING
     #ifndef NO_CUDA
     c10::cuda::CUDAGuard guard(device);
     cudaDeviceSynchronize();
+    #endif
     #endif
 
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);

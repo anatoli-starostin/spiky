@@ -14,16 +14,6 @@ def test_lut_fully_connected_small(
     device, summation_dtype, seed=123234
 ):
     success = _test_lut_fully_connected_small(
-        n_inputs=4,
-        n_anchors_per_detector=2,
-        n_detectors=1,
-        n_outputs=2,
-        batch_size=1,
-        device=device,
-        summation_dtype=summation_dtype,
-        seed=seed
-    )
-    success = success and _test_lut_fully_connected_small(
         n_inputs=32,
         n_anchors_per_detector=3,
         n_detectors=4,

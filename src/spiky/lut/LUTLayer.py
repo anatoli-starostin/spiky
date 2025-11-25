@@ -21,23 +21,76 @@ class SynapseMeta:
         assert self.min_weight <= self.initial_weight <= self.max_weight
 
 
+class LUTSharedContext(object):
+    def __init__(self, do_asserts=True):
+        self._sparse_firing_buffer = None
+        self._before_detectors_gradients_buffer = None
+        self._weight_gradients_buffer = None
+        self._device = None
+        self._do_asserts = do_asserts
+
+    def _ensure_buffer(self, attr_name, numel, dtype, device):
+        if self._device is None:
+            raise RuntimeError('LUTSharedContext device is None, call to_device(...) first')
+
+        if self._device != device:
+            raise RuntimeError(f'LUTSharedContext is on {self._device}, but trying to get buffer on {device}')
+
+        buffer = getattr(self, attr_name)
+        if (
+            buffer is None or
+            buffer.numel() < numel
+        ):
+            buffer = torch.zeros([numel], dtype=dtype, device=self._device)
+            setattr(self, attr_name, buffer)
+        return buffer
+
+    def get_sparse_firing_buffer(self, numel, device):
+        return self._ensure_buffer('_sparse_firing_buffer', numel, torch.int32, device)
+
+    def get_before_detectors_gradients_buffer(self, numel, device):
+        buf = self._ensure_buffer('_before_detectors_gradients_buffer', numel, torch.float32, device)
+        if self._do_asserts:
+            assert torch.count_nonzero(buf) == 0
+        return buf
+
+    def get_weight_gradients_buffer(self, numel, device):
+        buf = self._ensure_buffer('_weight_gradients_buffer', numel, torch.float32, device)
+        if self._do_asserts:
+            assert torch.count_nonzero(buf) == 0
+        return buf
+
+    def to_device(self, device):
+        dev = device if isinstance(device, torch.device) else torch.device(device)
+        self._device = dev
+        if self._sparse_firing_buffer is not None:
+            self._sparse_firing_buffer = self._sparse_firing_buffer.to(device=dev)
+        if self._before_detectors_gradients_buffer is not None:
+            self._before_detectors_gradients_buffer = self._before_detectors_gradients_buffer.to(device=dev)
+        if self._weight_gradients_buffer is not None:
+            self._weight_gradients_buffer = self._weight_gradients_buffer.to(device=dev)
+        return self
+
+
 class LUTLayerBasic(nn.Module):
     @staticmethod
     def n_lut_channels(n_anchors_per_detector, sequence_length):
         return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
 
     def __init__(
-            self, n_inputs, n_outputs,
-            n_detectors, n_anchors_per_detector,
-            is_fully_connected,
-            sequence_length,
-            synapse_metas: List[SynapseMeta],
-            positional_dim=None,
-            summation_dtype=torch.float32,
-            _int_rescaler=0.001,
-            _initial_synapse_capacity=None,
-            _synapse_group_size: int = 64,
-            _do_normalize_gradients=True
+        self, n_inputs, n_outputs,
+        n_detectors, n_anchors_per_detector,
+        is_fully_connected,
+        sequence_length,
+        synapse_metas: List[SynapseMeta],
+        positional_dim=None,
+        use_sparse_w_gradients=False,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _initial_synapse_capacity=None,
+        _synapse_group_size: int = 64,
+        _do_normalize_gradients=True,
     ):
         super().__init__()
 
@@ -52,6 +105,12 @@ class LUTLayerBasic(nn.Module):
         self._is_fully_connected = is_fully_connected
         self._sequence_length = sequence_length
         self._do_normalize_gradients = _do_normalize_gradients
+
+        if shared_context is None:
+            shared_context = LUTSharedContext()
+        self._shared_context = shared_context
+        self._shared_context.to_device(self.device)
+        self._use_sparse_w_gradients = use_sparse_w_gradients
 
         # Handle positional embeddings
         if sequence_length > 1:
@@ -113,12 +172,8 @@ class LUTLayerBasic(nn.Module):
         self._output_neuron_ids = torch.arange(self._n_lookup_neurons, self._n_lookup_neurons + n_outputs,
                                                dtype=torch.int32, device=self.device)
         self._weights = None
-        self._last_w_grad = None
-        self._last_positional_embeddings_grad = None
         self._lookup_indices_callback = None
         self._detector_anchors = None
-        self._before_detectors_gradients = None
-        self._sparse_firing_buffer = None
 
     def add_detector_connections(
             self, chunk_of_connections: ChunkOfConnections,
@@ -271,7 +326,7 @@ class LUTLayerBasic(nn.Module):
         expected_shape = (batch_size, 1) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        x = x.flatten().contiguous()
+        x = x.view(-1)
         output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
 
         lookup_indices = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32,
@@ -281,14 +336,14 @@ class LUTLayerBasic(nn.Module):
         min_anchor_delta_indices = torch.zeros([batch_size * self._n_detectors], dtype=torch.int32,
                                                device=self.device)
 
-        if not self._is_fully_connected and (
-            self._sparse_firing_buffer is None or
-            self._sparse_firing_buffer.numel() != (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4
-        ):
-            self._sparse_firing_buffer = torch.zeros(
-                (1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size) * 4,
-                dtype=torch.int32,
-                device=self.device
+        sparse_firing_buffer = None
+        if not self._is_fully_connected:
+            sparse_buffer_numel = (
+                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+            ) * 4
+            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                sparse_buffer_numel,
+                self.device
             )
 
         self._lut_dm.forward_step(
@@ -299,17 +354,17 @@ class LUTLayerBasic(nn.Module):
             lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
-            self._sparse_firing_buffer
+            sparse_firing_buffer
         )
 
         if self._lookup_indices_callback is not None:
             self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         return (
-            output.reshape((batch_size, sequence_length) + self.output_shape()),
-            lookup_indices.reshape(batch_size, sequence_length, self._n_detectors),
-            min_anchor_deltas.reshape(batch_size, sequence_length, self._n_detectors),
-            min_anchor_delta_indices.reshape(batch_size, sequence_length, self._n_detectors)
+            output.view((batch_size, sequence_length) + self.output_shape()),
+            lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+            min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+            min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors)
         )
 
     def forward_step_concat(self, x):
@@ -320,7 +375,7 @@ class LUTLayerBasic(nn.Module):
         expected_shape = (batch_size, sequence_length) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        x = x.flatten().contiguous()
+        x = x.view(-1)
         output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
 
         lookup_indices = torch.zeros([batch_size * sequence_length * self._n_detectors], dtype=torch.int32,
@@ -343,13 +398,11 @@ class LUTLayerBasic(nn.Module):
             device=self.device
         )
 
-        if (self._sparse_firing_buffer is None or
-                self._sparse_firing_buffer.numel() != (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4):
-            self._sparse_firing_buffer = torch.zeros(
-                (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4,
-                dtype=torch.int32,
-                device=self.device
-            )
+        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
+        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+            sparse_buffer_numel,
+            self.device
+        )
 
         self._lut_dm.forward_step_concat(
             self._weights,
@@ -363,7 +416,7 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            self._sparse_firing_buffer,
+            sparse_firing_buffer,
             firing_stat
         )
 
@@ -371,13 +424,13 @@ class LUTLayerBasic(nn.Module):
             self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         return (
-            output.reshape((batch_size, sequence_length) + self.output_shape()),
-            lookup_indices.reshape(batch_size, sequence_length, self._n_detectors),
-            min_anchor_deltas.reshape(batch_size, sequence_length, self._n_detectors),
-            min_anchor_delta_indices.reshape(batch_size, sequence_length, self._n_detectors),
-            positional_lookup_indices.reshape(sequence_length, self._n_detectors),
-            positional_min_deltas.reshape(sequence_length, self._n_detectors),
-            positional_min_delta_indices.reshape(sequence_length, self._n_detectors),
+            output.view((batch_size, sequence_length) + self.output_shape()),
+            lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+            min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+            min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
+            positional_lookup_indices.view(sequence_length, self._n_detectors),
+            positional_min_deltas.view(sequence_length, self._n_detectors),
+            positional_min_delta_indices.view(sequence_length, self._n_detectors),
             firing_stat
         )
 
@@ -406,23 +459,32 @@ class LUTLayerBasic(nn.Module):
         min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
         x_grad = torch.zeros_like(x)
-        if self._last_w_grad is None:
-            self._last_w_grad = torch.zeros_like(self._weights)
+        if self._use_sparse_w_gradients:
+            target_w_grad = self._shared_context.get_weight_gradients_buffer(
+                self._weights.numel(),
+                self.device
+            )
         else:
-            self._last_w_grad.zero_()
+            target_w_grad = torch.zeros_like(self._weights)
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
 
         grad_output = grad_output.view(-1)
 
-        # Create or recreate before_detectors_gradients if batch_size changed
-        if (self._before_detectors_gradients is None or
-                self._before_detectors_gradients.shape[0] != self._n_lookup_neurons * batch_size):
-            self._before_detectors_gradients = torch.zeros(
-                self._n_lookup_neurons * batch_size,
-                dtype=torch.float32,
-                device=self.device
+        before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
+            self._n_lookup_neurons * batch_size,
+            self.device
+        )
+
+        sparse_firing_buffer = None
+        if not self._is_fully_connected:
+            sparse_buffer_numel = (
+                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+            ) * 4
+            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                sparse_buffer_numel,
+                self.device
             )
 
         self._lut_dm.backward_backprop(
@@ -434,19 +496,28 @@ class LUTLayerBasic(nn.Module):
             lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
-            self._before_detectors_gradients,
-            x_grad, self._last_w_grad,
-            self._sparse_firing_buffer
+            before_detectors_gradients,
+            x_grad, target_w_grad,
+            sparse_firing_buffer
         )
 
-        if self._do_normalize_gradients:
+        if self._use_sparse_w_gradients:
+            sparse_grad = target_w_grad.to_sparse_coo()
+            values = sparse_grad.values()
+            target_w_grad[sparse_grad.indices()] = 0.0
+            if values().numel() > 0 and self._do_normalize_gradients:
+                with torch.no_grad():
+                    max_val = values.abs().max()
+                    if max_val > 1e-16:
+                        values /= max_val
+            target_w_grad = sparse_grad
+        elif self._do_normalize_gradients:
             with torch.no_grad():
-                m = self._last_w_grad.abs().max()
-                if m < 1e-16:
-                    m = 1e-16
-                self._last_w_grad /= m
+                m = target_w_grad.abs().max()
+                if m > 1e-16:
+                    target_w_grad /= m
 
-        return x_grad.reshape(source_x_shape), self._last_w_grad
+        return x_grad.view(source_x_shape), target_w_grad
 
     def backward_step_concat(
         self, x, grad_output,
@@ -462,40 +533,51 @@ class LUTLayerBasic(nn.Module):
         expected_shape = (batch_size, sequence_length) + self.input_shape()
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        x = x.flatten().contiguous()
+        x = x.view(-1)
         assert lookup_indices.device == self.device
         assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
-        lookup_indices = lookup_indices.flatten().contiguous()
+        lookup_indices = lookup_indices.view(-1)
         assert min_anchor_deltas.device == self.device
         assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
-        min_anchor_deltas = min_anchor_deltas.flatten().contiguous()
+        min_anchor_deltas = min_anchor_deltas.view(-1)
         assert min_anchor_delta_indices.device == self.device
         assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
-        min_anchor_delta_indices = min_anchor_delta_indices.flatten().contiguous()
+        min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
         assert positional_lookup_indices.device == self.device
         assert positional_lookup_indices.shape == (sequence_length, self._n_detectors)
-        positional_lookup_indices = positional_lookup_indices.flatten().contiguous()
+        positional_lookup_indices = positional_lookup_indices.view(-1)
         assert positional_min_deltas.device == self.device
         assert positional_min_deltas.shape == (sequence_length, self._n_detectors)
-        positional_min_deltas = positional_min_deltas.flatten().contiguous()
+        positional_min_deltas = positional_min_deltas.view(-1)
         assert positional_min_delta_indices.device == self.device
         assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
-        positional_min_delta_indices = positional_min_delta_indices.flatten().contiguous()
+        positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
         assert firing_stat.device == self.device
         assert firing_stat.dtype == torch.float32
         assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
-        firing_stat = firing_stat.contiguous()
 
         x_grad = torch.zeros_like(x)
-        self._last_w_grad = torch.zeros_like(self._weights)
-        self._last_positional_embeddings_grad = torch.zeros_like(self._positional_embeddings)
+        if self._use_sparse_w_gradients:
+            target_w_grad = self._shared_context.get_weight_gradients_buffer(
+                self._weights.numel(),
+                self.device
+            )
+        else:
+            target_w_grad = torch.zeros_like(self._weights)
+        positional_grad = torch.zeros_like(self._positional_embeddings)
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
 
         grad_output = grad_output.flatten().contiguous()
+
+        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
+        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+            sparse_buffer_numel,
+            self.device
+        )
 
         self._lut_dm.backward_backprop_concat(
             self._weights,
@@ -510,27 +592,40 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            self._sparse_firing_buffer,
+            sparse_firing_buffer,
             # First firing_stat will be used directly and then because it is no longer needed
             # the same buffer will be used for gradient accumulation. So after this call firing_stat
             # is invalid.
             firing_stat,
-            x_grad, self._last_w_grad, self._last_positional_embeddings_grad
+            x_grad, target_w_grad, positional_grad
         )
+
+        if self._use_sparse_w_gradients:
+            sparse_grad = target_w_grad.to_sparse_coo()
+            values = sparse_grad.values()
+            target_w_grad[sparse_grad.indices()] = 0.0
+            if values.numel() > 0 and self._do_normalize_gradients:
+                with torch.no_grad():
+                    max_val = values.abs().max()
+                    if max_val > 1e-16:
+                        values /= max_val
+            target_w_grad = sparse_grad
+        else:
+            if self._do_normalize_gradients:
+                with torch.no_grad():
+                    m = target_w_grad.abs().max()
+                    if m > 1e-16:
+                        target_w_grad /= m
 
         if self._do_normalize_gradients:
             with torch.no_grad():
-                m = self._last_w_grad.abs().max()
-                if m < 1e-16:
-                    m = 1e-16
-                self._last_w_grad /= m
                 if self._positional_embeddings is not None:
-                    m_pe = self._last_positional_embeddings_grad.abs().max()
+                    m_pe = positional_grad.abs().max()
                     if m_pe < 1e-16:
                         m_pe = 1e-16
-                    self._last_positional_embeddings_grad /= m_pe
+                    positional_grad /= m_pe
 
-        return x_grad.reshape(source_x_shape), self._last_w_grad, self._last_positional_embeddings_grad
+        return x_grad.view(source_x_shape), target_w_grad, positional_grad
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -556,10 +651,6 @@ class LUTLayerBasic(nn.Module):
         self._lut_dm.to_device(device_index)
         if self._detector_anchors is not None:
             self._detector_anchors = self._detector_anchors.to(device=self.device)
-        if self._before_detectors_gradients is not None:
-            self._before_detectors_gradients = self._before_detectors_gradients.to(device=self.device)
-        if self._sparse_firing_buffer is not None:
-            self._sparse_firing_buffer = self._sparse_firing_buffer.to(device=self.device)
         if self._positional_embeddings is not None:
             self._positional_embeddings = self._positional_embeddings.to(device=self.device)
         return self
@@ -664,7 +755,7 @@ class LUTLayerBasic(nn.Module):
         """
         if self._detector_anchors is None:
             raise RuntimeError("Detectors are not initialized, call initialize_detectors() first")
-        return self._detector_anchors.reshape(self._n_detectors, self._n_anchors_per_detector, 2)
+        return self._detector_anchors.view(self._n_detectors, self._n_anchors_per_detector, 2)
 
 
 class Conv2DLUTLayer(LUTLayerBasic):
@@ -680,6 +771,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             lut_receptive_field_stride_shape=None,
             synapse_meta=SynapseMeta(),
             positional_dim=None,
+            use_sparse_w_gradients=False,
+            shared_context: LUTSharedContext = None,
             summation_dtype=torch.float32,
             _int_rescaler=0.001,
             _synapse_group_size=64,
@@ -729,19 +822,14 @@ class Conv2DLUTLayer(LUTLayerBasic):
         self._detectors_shape = detectors_shape
 
         super().__init__(
-            n_inputs=n_inputs,
-            n_outputs=n_outputs,
-            n_detectors=n_detectors,
-            n_anchors_per_detector=n_anchors_per_detector,
-            is_fully_connected=c_helper_2 is None,
-            sequence_length=sequence_length,
-            synapse_metas=[synapse_meta],
-            positional_dim=positional_dim,
-            summation_dtype=summation_dtype,
-            _int_rescaler=_int_rescaler,
+            n_inputs=n_inputs, n_outputs=n_outputs, n_detectors=n_detectors,
+            n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
+            sequence_length=sequence_length, synapse_metas=[synapse_meta],
+            positional_dim=positional_dim, use_sparse_w_gradients=use_sparse_w_gradients,
+            shared_context=shared_context,
+            summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
-            _synapse_group_size=_synapse_group_size,
-            _do_normalize_gradients=_do_normalize_gradients
+            _synapse_group_size=_synapse_group_size, _do_normalize_gradients=_do_normalize_gradients,
         )
 
         if device is not None:
@@ -750,8 +838,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             device = torch.device("cpu")
 
         connections = c_helper_1.grow_synapses(
-            input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
-            output_ids=self.get_detector_neuron_ids().reshape(lut_shape[0], lut_shape[1]) + 1,
+            input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
+            output_ids=self.get_detector_neuron_ids().view(lut_shape[0], lut_shape[1]) + 1,
             max_groups_in_buffer=_max_groups_in_growth_buffer,
             device=device,
             seed=random_seed
@@ -767,8 +855,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
         if c_helper_2 is not None:
             connections = c_helper_2.grow_synapses(
-                input_ids=self.get_lookup_neuron_ids().reshape(lut_shape + (n_lut_channels,)) + 1,
-                output_ids=self.get_output_neuron_ids().reshape(c_helper_2.out_h, c_helper_2.out_w) + 1,
+                input_ids=self.get_lookup_neuron_ids().view(lut_shape + (n_lut_channels,)) + 1,
+                output_ids=self.get_output_neuron_ids().view(c_helper_2.out_h, c_helper_2.out_w) + 1,
                 device=device,
                 seed=random_seed
             )
@@ -831,11 +919,11 @@ class Conv2DLUTLayer(LUTLayerBasic):
         if inverse_order:
             order = torch.argsort(source_ids, stable=True, descending=False)
             order = order[torch.argsort(target_ids[order], stable=True, descending=False)]
-            return weights[order].reshape(self.output_shape() + self.lut_receptive_field_shape())
+            return weights[order].view(self.output_shape() + self.lut_receptive_field_shape())
         else:
             order = torch.argsort(target_ids, stable=True, descending=False)
             order = order[torch.argsort(source_ids[order], stable=True, descending=False)]
-            return weights[order].reshape(self.lut_receptive_field_shape() + self.output_shape())
+            return weights[order].view(self.lut_receptive_field_shape() + self.output_shape())
 
 
 class LUTLayer(Conv2DLUTLayer):
@@ -847,6 +935,8 @@ class LUTLayer(Conv2DLUTLayer):
             sequence_length=1,
             synapse_meta=SynapseMeta(),
             positional_dim=None,
+            use_sparse_w_gradients=False,
+            shared_context: LUTSharedContext = None,
             summation_dtype=torch.float32,
             _int_rescaler=0.001,
             _synapse_group_size=64,
@@ -867,6 +957,8 @@ class LUTLayer(Conv2DLUTLayer):
             lut_receptive_field_stride_shape=None,
             synapse_meta=synapse_meta,
             positional_dim=positional_dim,
+            use_sparse_w_gradients=use_sparse_w_gradients,
+            shared_context=shared_context,
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
             _synapse_group_size=_synapse_group_size,
