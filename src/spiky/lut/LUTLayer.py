@@ -114,7 +114,6 @@ class LUTLayerBasic(nn.Module):
             self._own_shared_context = False
 
         self._shared_context = shared_context
-        self._shared_context.to_device(self.device)
         self._use_sparse_w_gradients = use_sparse_w_gradients
 
         # Handle positional embeddings
