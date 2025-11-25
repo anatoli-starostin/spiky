@@ -506,7 +506,7 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            sparse_grad = target_w_grad.to_sparse_coo()
+            sparse_grad = target_w_grad[:self._weights.numel()].to_sparse_coo()
             values = sparse_grad.values()
             target_w_grad[sparse_grad.indices()] = 0.0
             if values.numel() > 0 and self._do_normalize_gradients:
@@ -605,7 +605,7 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            sparse_grad = target_w_grad.to_sparse_coo()
+            sparse_grad = target_w_grad[:self._weights.numel()].to_sparse_coo()
             values = sparse_grad.values()
             target_w_grad[sparse_grad.indices()] = 0.0
             if values.numel() > 0 and self._do_normalize_gradients:
