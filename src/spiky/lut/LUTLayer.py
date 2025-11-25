@@ -469,7 +469,7 @@ class LUTLayerBasic(nn.Module):
                 self.device
             )
         else:
-            target_w_grad = torch.zeros_like(self._weights)
+            target_w_grad = torch.empty_like(self._weights)
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
