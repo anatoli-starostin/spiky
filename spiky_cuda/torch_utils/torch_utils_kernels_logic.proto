@@ -122,11 +122,11 @@ densify_logic(
         // Write all non-zero elements from this thread with vectorized writes
         uint32_t base_offset = static_cast<uint32_t>(sdata[tid]);
         
-        if(n_nonzero == 4 && (base_offset & 15) == 0) {
-            // Write quad (int4) for values - base_offset aligned to 16 elements (64 bytes)
+        if(n_nonzero == 4 && (base_offset & 3) == 0) {
+            // Write quad (int4) for values - base_offset aligned to 4 elements (16 bytes)
             int4* values_quad_ptr = reinterpret_cast<int4*>(w_target_values + base_offset);
             *values_quad_ptr = *reinterpret_cast<int4*>(values);
-            // Write indices with duplex writes (base_offset is even since it's a multiple of 16)
+            // Write indices with duplex writes
             longlong2* indices_duplex_ptr0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
             *indices_duplex_ptr0 = *reinterpret_cast<longlong2*>(indices);
             longlong2* indices_duplex_ptr1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
