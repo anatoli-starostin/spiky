@@ -82,9 +82,9 @@ public:
             throw py::value_error("counter_buffer tensor must be 1D");
         }
 
-        // Check that counter_buffer is int64
-        if (counter_buffer.dtype() != torch::kInt64) {
-            throw py::value_error("counter_buffer must be int64");
+        // Check that counter_buffer is int32
+        if (counter_buffer.dtype() != torch::kInt32) {
+            throw py::value_error("counter_buffer must be int32");
         }
 
         if (counter_buffer.numel() < 1) {
@@ -111,7 +111,7 @@ public:
         }
 
         // Get counter pointer from buffer
-        uint64_t* counter_ptr = reinterpret_cast<uint64_t*>(counter_buffer.data_ptr());
+        uint32_t* counter_ptr = reinterpret_cast<uint32_t*>(counter_buffer.data_ptr());
 
         // Initialize counter to zero
         if (device == -1) {
@@ -119,21 +119,23 @@ public:
         } else {
             #ifndef NO_CUDA
             c10::cuda::CUDAGuard guard(device);
-            CU_CHECK(cudaMemset(counter_ptr, 0, sizeof(uint64_t)));
+            CU_CHECK(cudaMemset(counter_ptr, 0, sizeof(uint32_t)));
             #endif
         }
 
         // Launch kernel
-        // Use power of 2 for shared memory efficiency (similar to detect_spikes_logic)
+        // Process elements in quads (groups of 4)
+        uint64_t n_quads = (numel + 3) / 4;
         uint32_t tpb = 1024;  // Threads per block (power of 2)
-        uint32_t num_blocks = static_cast<uint32_t>((numel + tpb - 1) / tpb);
+        uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
-        uint32_t shared_mem_size = tpb * sizeof(uint64_t);
+        uint32_t shared_mem_size = tpb * sizeof(uint32_t);
 
         // Use GRID_CALL_SHARED_MEM macro - device must be in scope
         GRID_CALL_SHARED_MEM(
             numBlocks, densify, tpb, shared_mem_size,
-            reinterpret_cast<int32_t*>(source.data_ptr()),
+            reinterpret_cast<int4*>(source.data_ptr()),
+            n_quads,
             numel,
             reinterpret_cast<int32_t*>(target_values.data_ptr()),
             reinterpret_cast<int64_t*>(target_indices.data_ptr()),
@@ -145,7 +147,7 @@ public:
         PROF_END(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP);
     }
 
-    int64_t count_nonzero(
+    int32_t count_nonzero(
         torch::Tensor source,
         torch::Tensor aux_buffer
     ) {
@@ -170,9 +172,9 @@ public:
             throw py::value_error("aux_buffer tensor must be 1D");
         }
 
-        // Check that aux_buffer is int64
-        if (aux_buffer.dtype() != torch::kInt64) {
-            throw py::value_error("aux_buffer must be int64");
+        // Check that aux_buffer is int32
+        if (aux_buffer.dtype() != torch::kInt32) {
+            throw py::value_error("aux_buffer must be int32");
         }
 
         if (aux_buffer.numel() < 1) {
@@ -197,7 +199,7 @@ public:
         }
 
         // Get aux_buffer pointer
-        uint64_t* aux_ptr = reinterpret_cast<uint64_t*>(aux_buffer.data_ptr());
+        uint32_t* aux_ptr = reinterpret_cast<uint32_t*>(aux_buffer.data_ptr());
 
         // Initialize aux_buffer to zero
         if (device == -1) {
@@ -205,13 +207,13 @@ public:
         } else {
             #ifndef NO_CUDA
             c10::cuda::CUDAGuard guard(device);
-            CU_CHECK(cudaMemset(aux_ptr, 0, sizeof(uint64_t)));
+            CU_CHECK(cudaMemset(aux_ptr, 0, sizeof(uint32_t)));
             #endif
         }
 
         // Launch count_nonzero kernel
         // Process elements in quads (groups of 4)
-        uint64_t n_quads = (numel + 3) / 4;
+        uint64_t n_quads = (numel + 3) >> 2;
         uint32_t tpb = 1024;  // Threads per block
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
@@ -228,15 +230,14 @@ public:
         );
 
         // Copy result from aux_buffer and return
-        int64_t result = 0;
+        uint32_t result = 0;
         if (device == -1) {
-            result = static_cast<int64_t>(*aux_ptr);
+            result = *aux_ptr;
         } else {
             #ifndef NO_CUDA
-            CU_CHECK(cudaMemcpy(&result, aux_ptr, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            CU_CHECK(cudaMemcpy(&result, aux_ptr, sizeof(uint32_t), cudaMemcpyDeviceToHost));
             #endif
         }
-
         PROF_END(TORCH_UTILS_COUNT_NONZERO_PROFILER_OP);
         return result;
     }

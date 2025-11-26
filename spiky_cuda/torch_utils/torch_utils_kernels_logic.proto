@@ -1,46 +1,87 @@
 densify_logic(
-    int32_t* rw_source,
+    int4* rw_source,
+    uint64_t n_quads,
     uint64_t n_elements,
     int32_t* w_target_values,
     int64_t* w_target_indices,
-    uint64_t* rw_counter_ptr,
+    uint32_t* rw_counter_ptr,
     bool erase_input,
     int device
 ) {
-    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    unsigned int tid = threadIdx.x;
+    uint64_t quad_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
+    
+    // Store up to 4 non-zero elements per thread
+    int32_t values[4];
+    int64_t indices[4];
+    uint32_t n_nonzero = 0;
+    uint64_t base_idx = quad_idx << 2;
 
-    int64_t idx = -1;
-    int32_t value = 0;
-
-    if(i < n_elements) {
-        value = rw_source[i];
-
-        if(value != 0) {
-            idx = static_cast<int64_t>(i);
+    if(quad_idx < n_quads) {
+        bool is_last_quad = (quad_idx == n_quads - 1);
+        uint64_t remaining = n_elements - base_idx;
+        
+        if(is_last_quad && remaining < 4) {
+            // Last incomplete quad - read individual int32_t values to avoid segfault
+            int32_t* elem_ptr = reinterpret_cast<int32_t*>(rw_source) + base_idx;
+            for(uint32_t j = 0; j < remaining; j++) {
+                int32_t val = elem_ptr[j];
+                if(val != 0) {
+                    values[n_nonzero] = val;
+                    indices[n_nonzero] = static_cast<int64_t>(base_idx + j);
+                    n_nonzero++;
+                    // Erase source if requested
+                    if(erase_input) {
+                        elem_ptr[j] = 0;
+                    }
+                }
+            }
+        } else {
+            // Complete quad - safe to read int4
+            int4 quad = rw_source[quad_idx];
+            if(quad.x != 0) {
+                values[n_nonzero] = quad.x;
+                indices[n_nonzero] = static_cast<int64_t>(base_idx);
+                n_nonzero++;
+            }
+            if(quad.y != 0) {
+                values[n_nonzero] = quad.y;
+                indices[n_nonzero] = static_cast<int64_t>(base_idx + 1);
+                n_nonzero++;
+            }
+            if(quad.z != 0) {
+                values[n_nonzero] = quad.z;
+                indices[n_nonzero] = static_cast<int64_t>(base_idx + 2);
+                n_nonzero++;
+            }
+            if(quad.w != 0) {
+                values[n_nonzero] = quad.w;
+                indices[n_nonzero] = static_cast<int64_t>(base_idx + 3);
+                n_nonzero++;
+            }
             // Erase source if requested
             if(erase_input) {
-                rw_source[i] = 0;
+                rw_source[quad_idx] = make_int4(0, 0, 0, 0);
             }
         }
     }
 
     if(device == -1) {
         // CPU implementation
-        if(idx >= 0) {
-            uint64_t offset = (*rw_counter_ptr)++;
-            w_target_indices[offset] = idx;
-            w_target_values[offset] = value;
+        for(uint32_t j = 0; j < n_nonzero; j++) {
+            uint32_t offset = (*rw_counter_ptr)++;
+            w_target_indices[offset] = indices[j];
+            w_target_values[offset] = values[j];
         }
     } else {
         #ifdef ATOMIC
         extern __shared__ __align__(16) uint8_t __sm[];
-        int64_t *sdata = reinterpret_cast<int64_t *>(__sm);
+        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
 
-        uint32_t tid = threadIdx.x;
-        sdata[tid] = (idx >= 0) ? 1 : 0;
+        sdata[tid] = n_nonzero;
         __syncthreads();
 
-        uint64_t t;
+        uint32_t t;
         int offset;
         int idx_shared;
 
@@ -59,8 +100,8 @@ densify_logic(
         // inject global shift
         if(tid == 0) {
             sdata[blockDim.x - 1] = atomicAdd(
-                reinterpret_cast<unsigned long long*>(rw_counter_ptr),
-                static_cast<unsigned long long>(sdata[blockDim.x - 1])
+                rw_counter_ptr,
+                sdata[blockDim.x - 1]
             );
         }
         __syncthreads();
@@ -78,10 +119,11 @@ densify_logic(
             __syncthreads();
         }
 
-        if(idx >= 0) {
-            int64_t offset = sdata[tid];
-            w_target_indices[offset] = idx;
-            w_target_values[offset] = value;
+        // Write all non-zero elements from this thread
+        uint32_t base_offset = static_cast<uint32_t>(sdata[tid]);
+        for(uint32_t j = 0; j < n_nonzero; j++) {
+            w_target_indices[base_offset + j] = indices[j];
+            w_target_values[base_offset + j] = values[j];
         }
         #endif
     }
@@ -91,7 +133,7 @@ count_nonzero_logic(
     int4* array,
     uint64_t n_quads,
     uint64_t n_elements,
-    uint64_t* aux_buffer,
+    uint32_t* aux_buffer,
     int device
 ) {
     unsigned int tid = threadIdx.x;
@@ -138,7 +180,7 @@ count_nonzero_logic(
         }
         if(tid == 0) {
             if(sdata[0] > 0) {
-                atomicAdd(reinterpret_cast<unsigned long long*>(aux_buffer), static_cast<unsigned long long>(sdata[0]));
+                atomicAdd(aux_buffer, sdata[0]);
             }
         }
         #endif

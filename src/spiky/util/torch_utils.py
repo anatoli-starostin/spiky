@@ -48,7 +48,7 @@ class DenseToSparseConverter:
         
         # Create or reuse counter buffer
         if self._counter_buffer is None or self._counter_buffer.device != source.device:
-            self._counter_buffer = torch.zeros(1, dtype=torch.int64, device=source.device)
+            self._counter_buffer = torch.zeros(1, dtype=torch.int32, device=source.device)
         
         # Count non-zero elements using native method
         nnz = self._native.count_nonzero(source, self._counter_buffer)
