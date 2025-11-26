@@ -215,7 +215,7 @@ public:
         uint32_t tpb = 1024;  // Threads per block
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
-        uint32_t shared_mem_size = tpb * sizeof(uint64_t);
+        uint32_t shared_mem_size = tpb * sizeof(uint32_t);
 
         // Count non-zero elements using count_nonzero kernel
         GRID_CALL_SHARED_MEM(

@@ -96,17 +96,27 @@ count_nonzero_logic(
 ) {
     unsigned int tid = threadIdx.x;
     uint64_t quad_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
-    uint64_t cnt = 0;
+    uint32_t cnt = 0;
 
     if(quad_idx < n_quads) {
-        int4 quad = array[quad_idx];
-        uint64_t base_idx = quad_idx * 4;
+        uint64_t base_idx = quad_idx << 2;
+        bool is_last_quad = (quad_idx == n_quads - 1);
+        uint64_t remaining = n_elements - base_idx;
         
-        // Count non-zero elements in this quad
-        if(base_idx < n_elements && quad.x != 0) cnt++;
-        if(base_idx + 1 < n_elements && quad.y != 0) cnt++;
-        if(base_idx + 2 < n_elements && quad.z != 0) cnt++;
-        if(base_idx + 3 < n_elements && quad.w != 0) cnt++;
+        if(is_last_quad && remaining < 4) {
+            // Last incomplete quad - read individual int32_t values to avoid segfault
+            int32_t* elem_ptr = reinterpret_cast<int32_t*>(array) + base_idx;
+            if(remaining > 0 && elem_ptr[0] != 0) cnt++;
+            if(remaining > 1 && elem_ptr[1] != 0) cnt++;
+            if(remaining > 2 && elem_ptr[2] != 0) cnt++;
+        } else {
+            // Complete quad - safe to read int4
+            int4 quad = array[quad_idx];
+            if(quad.x != 0) cnt++;
+            if(quad.y != 0) cnt++;
+            if(quad.z != 0) cnt++;
+            if(quad.w != 0) cnt++;
+        }
     }
 
     if(device == -1) {
@@ -116,7 +126,7 @@ count_nonzero_logic(
     } else {
         #ifdef ATOMIC
         extern __shared__ __align__(16) uint8_t __sm[];
-        uint64_t *sdata = reinterpret_cast<uint64_t *>(__sm);
+        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
         sdata[tid] = cnt;
         __syncthreads();
 
