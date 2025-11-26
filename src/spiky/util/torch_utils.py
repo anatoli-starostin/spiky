@@ -73,3 +73,25 @@ class DenseToSparseConverter:
             String containing profiling statistics, or "profiler is disabled" if profiling is not enabled.
         """
         return self._native.get_profiling_stats()
+
+
+class SparseSGD(torch.optim.Optimizer):
+    def __init__(self, params, lr):
+        super().__init__(params, dict(lr=lr))
+
+    @torch.no_grad()
+    def step(self):
+        for group in self.param_groups:
+            lr = group['lr']
+            for p in group['params']:
+                g = p.grad
+                if g is None:
+                    continue
+
+                if isinstance(g, tuple):
+                    # sparse: (indices, values)
+                    idx, val = g
+                    p[idx] -= lr * val
+                else:
+                    # dense: tensor
+                    p -= lr * g
