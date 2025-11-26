@@ -88,19 +88,25 @@ densify_logic(
 }
 
 count_nonzero_logic(
-    int32_t* array,
+    int4* array,
+    uint64_t n_quads,
     uint64_t n_elements,
     uint64_t* aux_buffer,
     int device
 ) {
     unsigned int tid = threadIdx.x;
-    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
+    uint64_t quad_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
     uint64_t cnt = 0;
 
-    if(i < n_elements) {
-        if(array[i] != 0) {
-            cnt = 1;
-        }
+    if(quad_idx < n_quads) {
+        int4 quad = array[quad_idx];
+        uint64_t base_idx = quad_idx * 4;
+        
+        // Count non-zero elements in this quad
+        if(base_idx < n_elements && quad.x != 0) cnt++;
+        if(base_idx + 1 < n_elements && quad.y != 0) cnt++;
+        if(base_idx + 2 < n_elements && quad.z != 0) cnt++;
+        if(base_idx + 3 < n_elements && quad.w != 0) cnt++;
     }
 
     if(device == -1) {

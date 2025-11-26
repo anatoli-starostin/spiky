@@ -210,15 +210,18 @@ public:
         }
 
         // Launch count_nonzero kernel
+        // Process elements in quads (groups of 4)
+        uint64_t n_quads = (numel + 3) / 4;
         uint32_t tpb = 1024;  // Threads per block
-        uint32_t num_blocks = static_cast<uint32_t>((numel + tpb - 1) / tpb);
+        uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
         uint32_t shared_mem_size = tpb * sizeof(uint64_t);
 
         // Count non-zero elements using count_nonzero kernel
         GRID_CALL_SHARED_MEM(
             numBlocks, count_nonzero, tpb, shared_mem_size,
-            reinterpret_cast<int32_t*>(source.data_ptr()),
+            reinterpret_cast<int4*>(source.data_ptr()),
+            n_quads,
             numel,
             aux_ptr,
             device
