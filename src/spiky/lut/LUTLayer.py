@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections
-from spiky.util.torch_utils import DenseToCOOConverter
+from spiky.util.torch_utils import DenseToSparseConverter
 
 
 @dataclass(frozen=True, order=True)
@@ -117,11 +117,11 @@ class LUTLayerBasic(nn.Module):
         self._shared_context = shared_context
         self._use_sparse_w_gradients = use_sparse_w_gradients
         
-        # Initialize DenseToCOOConverter for sparse gradients mode
+        # Initialize DenseToSparseConverter for sparse gradients mode
         if self._use_sparse_w_gradients:
-            self._dense_to_coo_converter = DenseToCOOConverter()
+            self._dense_to_sparse_converter = DenseToSparseConverter()
         else:
-            self._dense_to_coo_converter = None
+            self._dense_to_sparse_converter = None
 
         # Handle positional embeddings
         if sequence_length > 1:
@@ -513,8 +513,8 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            # Use DenseToCOOConverter to convert weight gradients to sparse COO format
-            sparse_grad = self._dense_to_coo_converter.dense_to_coo_32(target_w_grad, erase_input=True)
+            # Use DenseToSparseConverter to convert weight gradients to sparse format
+            sparse_grad = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
             values = sparse_grad.values()
             if values.numel() > 0 and self._do_normalize_gradients:
                 with torch.no_grad():
@@ -612,8 +612,8 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            # Use DenseToCOOConverter to convert weight gradients to sparse COO format
-            sparse_grad = self._dense_to_coo_converter.dense_to_coo_32(target_w_grad, erase_input=True)
+            # Use DenseToSparseConverter to convert weight gradients to sparse format
+            sparse_grad = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
             values = sparse_grad.values()
             if values.numel() > 0 and self._do_normalize_gradients:
                 with torch.no_grad():

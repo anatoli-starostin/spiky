@@ -87,3 +87,45 @@ densify_logic(
     }
 }
 
+count_nonzero_logic(
+    int32_t* array,
+    uint64_t n_elements,
+    uint64_t* aux_buffer,
+    int device
+) {
+    unsigned int tid = threadIdx.x;
+    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
+    uint64_t cnt = 0;
+
+    if(i < n_elements) {
+        if(array[i] != 0) {
+            cnt = 1;
+        }
+    }
+
+    if(device == -1) {
+        if(cnt > 0) {
+            aux_buffer[0] += cnt;
+        }
+    } else {
+        #ifdef ATOMIC
+        extern __shared__ __align__(16) uint8_t __sm[];
+        uint64_t *sdata = reinterpret_cast<uint64_t *>(__sm);
+        sdata[tid] = cnt;
+        __syncthreads();
+
+        for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
+            if(tid < s) {
+                sdata[tid] += sdata[tid + s];
+            }
+            __syncthreads();
+        }
+        if(tid == 0) {
+            if(sdata[0] > 0) {
+                atomicAdd(reinterpret_cast<unsigned long long*>(aux_buffer), static_cast<unsigned long long>(sdata[0]));
+            }
+        }
+        #endif
+    }
+}
+

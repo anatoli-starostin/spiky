@@ -12,7 +12,7 @@ void PB_ANDNDataManagerI(py::module& m);
 void PB_LUTDataManagerI(py::module& m);
 #endif
 void PB_SynapseGrowthLowLevelEngine(py::module& m);
-void PB_DenseToCOOConverter(py::module& m);
+void PB_DenseToSparseConverter(py::module& m);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "Spiky Module";
@@ -25,5 +25,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     PB_LUTDataManagerI(m);
     #endif
     PB_SynapseGrowthLowLevelEngine(m);
-    PB_DenseToCOOConverter(m);
+    PB_DenseToSparseConverter(m);
 }
