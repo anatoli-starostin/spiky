@@ -61,8 +61,7 @@ class DenseToCOOConverter:
         values = torch.empty(nnz, dtype=source.dtype, device=source.device)
         
         # Create or reuse counter buffer
-        if (self._counter_buffer is None or 
-            self._counter_buffer.device != source.device):
+        if self._counter_buffer is None or self._counter_buffer.device != source.device:
             self._counter_buffer = torch.zeros(1, dtype=torch.int64, device=source.device)
         
         # Run native method
@@ -73,7 +72,9 @@ class DenseToCOOConverter:
         
         # Create sparse COO tensor
         shape = source.shape
-        sparse_tensor = torch.sparse_coo_tensor(indices, values, shape, device=source.device)
+        sparse_tensor = torch.sparse_coo_tensor(
+            indices, values, shape, device=source.device, is_coalesced=True
+        )
         
         return sparse_tensor
     
@@ -85,4 +86,3 @@ class DenseToCOOConverter:
             String containing profiling statistics, or "profiler is disabled" if profiling is not enabled.
         """
         return self._native.get_profiling_stats()
-
