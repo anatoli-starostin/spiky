@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections
+from spiky.util.torch_utils import DenseToCOOConverter
 
 
 @dataclass(frozen=True, order=True)
@@ -58,7 +59,7 @@ class LUTSharedContext(object):
         buf = self._ensure_buffer('_weight_gradients_buffer', numel, torch.float32, device)
         if self._do_asserts:
             assert torch.count_nonzero(buf) == 0
-        return buf
+        return buf[:numel]
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -115,6 +116,12 @@ class LUTLayerBasic(nn.Module):
 
         self._shared_context = shared_context
         self._use_sparse_w_gradients = use_sparse_w_gradients
+        
+        # Initialize DenseToCOOConverter for sparse gradients mode
+        if self._use_sparse_w_gradients:
+            self._dense_to_coo_converter = DenseToCOOConverter()
+        else:
+            self._dense_to_coo_converter = None
 
         # Handle positional embeddings
         if sequence_length > 1:
@@ -506,9 +513,9 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            sparse_grad = target_w_grad[:self._weights.numel()].to_sparse_coo()
+            # Use DenseToCOOConverter to convert weight gradients to sparse COO format
+            sparse_grad = self._dense_to_coo_converter.dense_to_coo_32(target_w_grad, erase_input=True)
             values = sparse_grad.values()
-            target_w_grad[sparse_grad.indices()] = 0.0
             if values.numel() > 0 and self._do_normalize_gradients:
                 with torch.no_grad():
                     max_val = values.abs().max()
@@ -605,9 +612,9 @@ class LUTLayerBasic(nn.Module):
         )
 
         if self._use_sparse_w_gradients:
-            sparse_grad = target_w_grad[:self._weights.numel()].to_sparse_coo()
+            # Use DenseToCOOConverter to convert weight gradients to sparse COO format
+            sparse_grad = self._dense_to_coo_converter.dense_to_coo_32(target_w_grad, erase_input=True)
             values = sparse_grad.values()
-            target_w_grad[sparse_grad.indices()] = 0.0
             if values.numel() > 0 and self._do_normalize_gradients:
                 with torch.no_grad():
                     max_val = values.abs().max()

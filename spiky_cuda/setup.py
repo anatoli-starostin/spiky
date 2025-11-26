@@ -34,6 +34,10 @@ generate_cu_from_proto(
     'misc/spike_storage_kernels_logic.proto',
     'misc/aux/spike_storage_kernels_logic.cu'
 )
+generate_cu_from_proto(
+    'torch_utils/torch_utils_kernels_logic.proto',
+    'torch_utils/aux/torch_utils_kernels_logic.cu'
+)
 
 BUILD_INTEGERS_VERSION = True
 BUILD_INTEGERS_COMPILE_ARGS = ['-DBUILD_INTEGERS_VERSION'] if BUILD_INTEGERS_VERSION else []
@@ -51,6 +55,7 @@ sources_list_cuda = [
     'lut/lut.cu',
     'lut/lut_runtime.cu',
     'synapse_growth/synapse_growth.cu',
+    'torch_utils/torch_utils.cu',
     'spiky_py.cpp'
 ]
 if BUILD_INTEGERS_VERSION:
@@ -76,6 +81,7 @@ sources_list_no_cuda = [
     'lut/aux/lut.cpp',
     'lut/aux/lut_runtime.cpp',
     'synapse_growth/aux/synapse_growth.cpp',
+    'torch_utils/aux/torch_utils.cpp',
     'spiky_py.cpp',
 ]
 if BUILD_INTEGERS_VERSION:
