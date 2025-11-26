@@ -17,6 +17,7 @@ public:
     {
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP, "torch_utils::dense_to_sparse_32");
+        profiler.register_operation_type(TORCH_UTILS_COUNT_NONZERO_PROFILER_OP, "torch_utils::count_nonzero");
         #endif
     }
 
@@ -148,6 +149,8 @@ public:
         torch::Tensor source,
         torch::Tensor aux_buffer
     ) {
+        PROF_START(TORCH_UTILS_COUNT_NONZERO_PROFILER_OP);
+
         // Validate source tensor
         if (source.dim() != 1) {
             throw py::value_error("source tensor must be 1D");
@@ -230,6 +233,8 @@ public:
             CU_CHECK(cudaMemcpy(&result, aux_ptr, sizeof(uint64_t), cudaMemcpyDeviceToHost));
             #endif
         }
+
+        PROF_END(TORCH_UTILS_COUNT_NONZERO_PROFILER_OP);
         return result;
     }
 
