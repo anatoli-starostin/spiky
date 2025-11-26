@@ -49,6 +49,18 @@ struct float4
     float4(float vx, float vy, float vz, float vw) : x(vx), y(vy), z(vz), w(vw) {}
 };
 #define make_float4(x, y, z, w) float4(x, y, z, w)
+struct int2
+{
+    int32_t x, y;
+    int2(int32_t vx, int32_t vy) : x(vx), y(vy) {}
+};
+#define make_int2(x, y) int2(x, y)
+struct int64x2
+{
+    int64_t x, y;
+    int64x2(int64_t vx, int64_t vy) : x(vx), y(vy) {}
+};
+#define make_int64x2(x, y) int64x2(x, y)
 struct int4
 {
     int32_t x, y, z, w;
