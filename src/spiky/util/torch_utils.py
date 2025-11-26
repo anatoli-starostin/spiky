@@ -54,7 +54,10 @@ class DenseToCOOConverter:
             shape = source.shape
             indices = torch.empty((1, 0), dtype=torch.int64, device=source.device)
             values = torch.empty((0,), dtype=source.dtype, device=source.device)
-            return torch.sparse_coo_tensor(indices, values, shape, device=source.device)
+            return torch.sparse_coo_tensor(
+                indices, values, shape, check_invariants=False,
+                device=source.device, is_coalesced=True
+            )
         
         # Create empty indices and values tensors
         indices = torch.empty(nnz, dtype=torch.int64, device=source.device)
@@ -72,8 +75,9 @@ class DenseToCOOConverter:
         
         # Create sparse COO tensor
         shape = source.shape
-        sparse_tensor = torch._sparse_coo_tensor_unsafe(
-            indices, values, shape, device=source.device, is_coalesced=True
+        sparse_tensor = torch.sparse_coo_tensor(
+            indices, values, shape, device=source.device,
+            check_invariants=False, is_coalesced=True
         )
         
         return sparse_tensor
