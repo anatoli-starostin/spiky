@@ -121,91 +121,104 @@ densify_logic(
 
         if(n_nonzero > 0) {
             uint32_t base_offset = sdata[tid];
+//
+//            //------------------------------------------------------------
+//            // 1. FIX ODD ALIGNMENT (if base_offset is odd, write 1 scalar)
+//            //    After this step, base_offset is guaranteed EVEN.
+//            //------------------------------------------------------------
+//            if(n_nonzero > 0 && (base_offset & 1)) {
+//                // write one scalar to repair alignment
+//                w_target_indices[base_offset] = indices[0];
+//                w_target_values[base_offset]  = values[0];
+//
+//                base_offset += 1;
+//
+//                // shift local arrays left by one
+//                if (n_nonzero > 1) {
+//                    indices[0] = indices[1];
+//                    values[0]  = values[1];
+//                }
+//                if (n_nonzero > 2) {
+//                    indices[1] = indices[2];
+//                    values[1]  = values[2];
+//                }
+//                if (n_nonzero > 3) {
+//                    indices[2] = indices[3];
+//                    values[2]  = values[3];
+//                }
+//
+//                n_nonzero--;
+//            }
+//
+//            // now base_offset % 2 == 0 → safe for duplex (int2 / longlong2)
+//
+//            //------------------------------------------------------------
+//            // 2. CHECK FOR FULL 16-BYTE ALIGNMENT → int4 path for n==4
+//            //------------------------------------------------------------
+//            if (n_nonzero == 4 && ((base_offset & 3) == 0)) {
+//                // ---- values (int4) ----
+//                int4* v4 = reinterpret_cast<int4*>(w_target_values + base_offset);
+//                *v4 = *reinterpret_cast<int4*>(values);
+//
+//                // ---- indices (two × longlong2) ----
+//                longlong2* i2_0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+//                *i2_0 = *reinterpret_cast<longlong2*>(indices);
+//
+//                longlong2* i2_1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
+//                *i2_1 = *reinterpret_cast<longlong2*>(indices + 2);
+//
+//                return;
+//            }
+//
+//            //------------------------------------------------------------
+//            // 3. GENERAL CASE: n_nonzero ∈ {1,2,3,4} AFTER ALIGNMENT FIX
+//            //    We are guaranteed base_offset is even, so duplex ok.
+//            //------------------------------------------------------------
+//
+//            if (n_nonzero >= 2) {
+//                // ---- write first duplex (2 elements) ----
+//                int2* v2 = reinterpret_cast<int2*>(w_target_values + base_offset);
+//                *v2 = *reinterpret_cast<int2*>(values);
+//
+//                longlong2* i2 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+//                *i2 = *reinterpret_cast<longlong2*>(indices);
+//
+//                base_offset += 2;
+//                n_nonzero -= 2;
+//
+//                // shift remaining elements to front in local arrays
+//                if (n_nonzero > 0) {
+//                    indices[0] = indices[2];
+//                    values[0]  = values[2];
+//                }
+//                if (n_nonzero == 2) {
+//                    indices[1] = indices[3];
+//                    values[1]  = values[3];
+//                }
+//            }
+//
+//            //------------------------------------------------------------
+//            // 4. TAIL CASES (after possible duplex):
+//            //    • n_nonzero == 1 → scalar
+//            //    • n_nonzero == 0 → nothing
+//            //------------------------------------------------------------
 
-            //------------------------------------------------------------
-            // 1. FIX ODD ALIGNMENT (if base_offset is odd, write 1 scalar)
-            //    After this step, base_offset is guaranteed EVEN.
-            //------------------------------------------------------------
-            if(n_nonzero > 0 && (base_offset & 1)) {
-                // write one scalar to repair alignment
-                w_target_indices[base_offset] = indices[0];
-                w_target_values[base_offset]  = values[0];
+            w_target_indices[base_offset] = indices[0];
+            w_target_values[base_offset]  = values[0];
 
-                base_offset += 1;
-
-                // shift local arrays left by one
-                if (n_nonzero > 1) {
-                    indices[0] = indices[1];
-                    values[0]  = values[1];
-                }
-                if (n_nonzero > 2) {
-                    indices[1] = indices[2];
-                    values[1]  = values[2];
-                }
-                if (n_nonzero > 3) {
-                    indices[2] = indices[3];
-                    values[2]  = values[3];
-                }
-
-                n_nonzero--;
+            if (n_nonzero > 1) {
+                w_target_indices[base_offset + 1] = indices[1];
+                w_target_values[base_offset + 1]  = values[1];
             }
 
-            // now base_offset % 2 == 0 → safe for duplex (int2 / longlong2)
-
-            //------------------------------------------------------------
-            // 2. CHECK FOR FULL 16-BYTE ALIGNMENT → int4 path for n==4
-            //------------------------------------------------------------
-            if (n_nonzero == 4 && ((base_offset & 3) == 0)) {
-                // ---- values (int4) ----
-                int4* v4 = reinterpret_cast<int4*>(w_target_values + base_offset);
-                *v4 = *reinterpret_cast<int4*>(values);
-
-                // ---- indices (two × longlong2) ----
-                longlong2* i2_0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
-                *i2_0 = *reinterpret_cast<longlong2*>(indices);
-
-                longlong2* i2_1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
-                *i2_1 = *reinterpret_cast<longlong2*>(indices + 2);
-
-                return;
+            if (n_nonzero > 2) {
+                w_target_indices[base_offset + 2] = indices[2];
+                w_target_values[base_offset + 2]  = values[2];
             }
 
-            //------------------------------------------------------------
-            // 3. GENERAL CASE: n_nonzero ∈ {1,2,3,4} AFTER ALIGNMENT FIX
-            //    We are guaranteed base_offset is even, so duplex ok.
-            //------------------------------------------------------------
-
-            if (n_nonzero >= 2) {
-                // ---- write first duplex (2 elements) ----
-                int2* v2 = reinterpret_cast<int2*>(w_target_values + base_offset);
-                *v2 = *reinterpret_cast<int2*>(values);
-
-                longlong2* i2 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
-                *i2 = *reinterpret_cast<longlong2*>(indices);
-
-                base_offset += 2;
-                n_nonzero -= 2;
-
-                // shift remaining elements to front in local arrays
-                if (n_nonzero > 0) {
-                    indices[0] = indices[2];
-                    values[0]  = values[2];
-                }
-                if (n_nonzero == 2) {
-                    indices[1] = indices[3];
-                    values[1]  = values[3];
-                }
-            }
-
-            //------------------------------------------------------------
-            // 4. TAIL CASES (after possible duplex):
-            //    • n_nonzero == 1 → scalar
-            //    • n_nonzero == 0 → nothing
-            //------------------------------------------------------------
-
-            if (n_nonzero == 1) {
-                w_target_indices[base_offset] = indices[0];
-                w_target_values[base_offset]  = values[0];
+            if (n_nonzero > 3) {
+                w_target_indices[base_offset + 3] = indices[3];
+                w_target_values[base_offset + 3]  = values[3];
             }
         }
         #endif
