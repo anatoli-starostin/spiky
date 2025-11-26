@@ -127,26 +127,26 @@ densify_logic(
             int4* values_quad_ptr = reinterpret_cast<int4*>(w_target_values + base_offset);
             *values_quad_ptr = *reinterpret_cast<int4*>(values);
             // Write indices with duplex writes (base_offset is even since it's a multiple of 16)
-            int64x2* indices_duplex_ptr0 = reinterpret_cast<int64x2*>(w_target_indices + base_offset);
-            *indices_duplex_ptr0 = *reinterpret_cast<int64x2*>(indices);
-            int64x2* indices_duplex_ptr1 = reinterpret_cast<int64x2*>(w_target_indices + base_offset + 2);
-            *indices_duplex_ptr1 = *reinterpret_cast<int64x2*>(indices + 2);
+            longlong2* indices_duplex_ptr0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+            *indices_duplex_ptr0 = *reinterpret_cast<longlong2*>(indices);
+            longlong2* indices_duplex_ptr1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
+            *indices_duplex_ptr1 = *reinterpret_cast<longlong2*>(indices + 2);
         } else if(n_nonzero == 3 && (base_offset & 1) == 0) {
             // Write duplex (int2) + single for values - base_offset aligned to 2 elements (8 bytes)
             int2* values_duplex_ptr = reinterpret_cast<int2*>(w_target_values + base_offset);
             *values_duplex_ptr = *reinterpret_cast<int2*>(values);
             w_target_values[base_offset + 2] = values[2];
             // Write indices with duplex + single
-            int64x2* indices_duplex_ptr = reinterpret_cast<int64x2*>(w_target_indices + base_offset);
-            *indices_duplex_ptr = *reinterpret_cast<int64x2*>(indices);
+            longlong2* indices_duplex_ptr = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+            *indices_duplex_ptr = *reinterpret_cast<longlong2*>(indices);
             w_target_indices[base_offset + 2] = indices[2];
         } else if(n_nonzero == 2 && (base_offset & 1) == 0) {
             // Write duplex (int2) for values - base_offset aligned to 2 elements (8 bytes)
             int2* values_duplex_ptr = reinterpret_cast<int2*>(w_target_values + base_offset);
             *values_duplex_ptr = *reinterpret_cast<int2*>(values);
             // Write indices with duplex
-            int64x2* indices_duplex_ptr = reinterpret_cast<int64x2*>(w_target_indices + base_offset);
-            *indices_duplex_ptr = *reinterpret_cast<int64x2*>(indices);
+            longlong2* indices_duplex_ptr = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+            *indices_duplex_ptr = *reinterpret_cast<longlong2*>(indices);
         } else {
             // Fallback: write individually without loop
             if(n_nonzero > 0) {

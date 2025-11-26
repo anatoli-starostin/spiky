@@ -322,7 +322,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #ifdef USE_CUDA_STREAMS
         // uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
         uint32_t n_output_blocks = n_outputs;
-        n_items = n_detectors * n_output_blocks;
+        uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         cudaStream_t streams[3];

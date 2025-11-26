@@ -15,7 +15,7 @@
 //#define TRACES_FROM_PROFILER
 
 #ifndef NO_CUDA
-#define USE_CUDA_STREAMS
+//#define USE_CUDA_STREAMS
 #endif
 
 #ifdef TRACE
@@ -55,12 +55,11 @@ struct int2
     int2(int32_t vx, int32_t vy) : x(vx), y(vy) {}
 };
 #define make_int2(x, y) int2(x, y)
-struct int64x2
+struct longlong2
 {
     int64_t x, y;
-    int64x2(int64_t vx, int64_t vy) : x(vx), y(vy) {}
+    longlong2(int64_t vx, int64_t vy) : x(vx), y(vy) {}
 };
-#define make_int64x2(x, y) int64x2(x, y)
 struct int4
 {
     int32_t x, y, z, w;
