@@ -127,7 +127,7 @@ public:
         uint32_t tpb = 1024;  // Threads per block (power of 2)
         uint32_t num_blocks = static_cast<uint32_t>((numel + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
-        uint32_t shared_mem_size = tpb * sizeof(uint32_t);
+        uint32_t shared_mem_size = tpb * sizeof(uint64_t);
 
         // Use GRID_CALL_SHARED_MEM macro - device must be in scope
         GRID_CALL_SHARED_MEM(

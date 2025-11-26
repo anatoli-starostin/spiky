@@ -9,27 +9,24 @@ densify_logic(
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
 
-    bool is_nonzero = false;
     int64_t idx = -1;
     int32_t value = 0;
 
     if(i < n_elements) {
         value = rw_source[i];
-        
+
         if(value != 0) {
-            is_nonzero = true;
             idx = static_cast<int64_t>(i);
             // Erase source if requested
             if(erase_input) {
                 rw_source[i] = 0;
             }
         }
-
     }
 
     if(device == -1) {
         // CPU implementation
-        if(is_nonzero) {
+        if(idx >= 0) {
             uint64_t offset = (*rw_counter_ptr)++;
             w_target_indices[offset] = idx;
             w_target_values[offset] = value;
@@ -37,13 +34,13 @@ densify_logic(
     } else {
         #ifdef ATOMIC
         extern __shared__ __align__(16) uint8_t __sm[];
-        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+        int64_t *sdata = reinterpret_cast<int64_t *>(__sm);
 
         uint32_t tid = threadIdx.x;
-        sdata[tid] = is_nonzero ? 1 : 0;
+        sdata[tid] = (idx >= 0) ? 1 : 0;
         __syncthreads();
 
-        uint32_t t;
+        uint64_t t;
         int offset;
         int idx_shared;
 
@@ -81,8 +78,8 @@ densify_logic(
             __syncthreads();
         }
 
-        if(is_nonzero) {
-            uint64_t offset = sdata[tid];
+        if(idx >= 0) {
+            int64_t offset = sdata[tid];
             w_target_indices[offset] = idx;
             w_target_values[offset] = value;
         }
