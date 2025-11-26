@@ -1,0 +1,92 @@
+densify_logic(
+    int32_t* rw_source,
+    uint64_t n_elements,
+    int32_t* w_target_values,
+    int64_t* w_target_indices,
+    uint64_t* rw_counter_ptr,
+    bool erase_input,
+    int device
+) {
+    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+    bool is_nonzero = false;
+    int64_t idx = -1;
+    int32_t value = 0;
+
+    if(i < n_elements) {
+        value = rw_source[i];
+        
+        if(value != 0) {
+            is_nonzero = true;
+            idx = static_cast<int64_t>(i);
+            // Erase source if requested
+            if(erase_input) {
+                rw_source[i] = 0;
+            }
+        }
+
+    }
+
+    if(device == -1) {
+        // CPU implementation
+        if(is_nonzero) {
+            uint64_t offset = (*rw_counter_ptr)++;
+            w_target_indices[offset] = idx;
+            w_target_values[offset] = value;
+        }
+    } else {
+        #ifdef ATOMIC
+        extern __shared__ __align__(16) uint8_t __sm[];
+        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+
+        uint32_t tid = threadIdx.x;
+        sdata[tid] = is_nonzero ? 1 : 0;
+        __syncthreads();
+
+        uint32_t t;
+        int offset;
+        int idx_shared;
+
+        // upsweep (reduce)
+        for(offset = 1; offset < blockDim.x; offset <<= 1) {
+            idx_shared = ((tid + 1) * (offset << 1)) - 1;
+            if(idx_shared < blockDim.x) {
+                t = sdata[idx_shared - offset];
+                if(t > 0) {
+                    sdata[idx_shared] += t;
+                }
+            }
+            __syncthreads();
+        }
+
+        // inject global shift
+        if(tid == 0) {
+            sdata[blockDim.x - 1] = atomicAdd(
+                reinterpret_cast<unsigned long long*>(rw_counter_ptr),
+                static_cast<unsigned long long>(sdata[blockDim.x - 1])
+            );
+        }
+        __syncthreads();
+
+        // downsweep
+        for(offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
+            idx_shared = ((tid + 1) * (offset << 1)) - 1;
+            if (idx_shared < blockDim.x) {
+                t = sdata[idx_shared - offset];
+                sdata[idx_shared - offset] = sdata[idx_shared];
+                if(t > 0) {
+                    sdata[idx_shared] += t;
+                }
+            }
+            __syncthreads();
+        }
+
+        if(is_nonzero) {
+            uint64_t offset = sdata[tid];
+            w_target_indices[offset] = idx;
+            w_target_values[offset] = value;
+        }
+        #endif
+    }
+}
+
