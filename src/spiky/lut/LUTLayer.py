@@ -766,26 +766,27 @@ class LUTLayerBasic(nn.Module):
 
 class Conv2DLUTLayer(LUTLayerBasic):
     def __init__(
-            self, input_shape,
-            n_anchors_per_detector,
-            detectors_shape,
-            output_kernel_shape,
-            sequence_length=1,
-            receptive_field_shape=None,
-            receptive_field_stride_shape=None,
-            lut_receptive_field_shape=None,
-            lut_receptive_field_stride_shape=None,
-            synapse_meta=SynapseMeta(),
-            positional_dim=None,
-            use_sparse_w_gradients=False,
-            shared_context: LUTSharedContext = None,
-            summation_dtype=torch.float32,
-            _int_rescaler=0.001,
-            _synapse_group_size=64,
-            _max_groups_in_growth_buffer=2 ** 20,
-            _do_normalize_gradients=True,
-            random_seed=1,
-            device=None
+        self, input_shape,
+        n_anchors_per_detector,
+        detectors_shape,
+        output_kernel_shape,
+        sequence_length=1,
+        receptive_field_shape=None,
+        receptive_field_stride_shape=None,
+        lut_receptive_field_shape=None,
+        lut_receptive_field_stride_shape=None,
+        synapse_meta=SynapseMeta(),
+        positional_dim=None,
+        use_sparse_w_gradients=False,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _explicit_anchors=None,
+        _int_rescaler=0.001,
+        _synapse_group_size=64,
+        _max_groups_in_growth_buffer=2 ** 20,
+        _do_normalize_gradients=True,
+        random_seed=1,
+        device=None
     ):
         if receptive_field_shape is None:
             assert receptive_field_stride_shape is None
@@ -843,21 +844,24 @@ class Conv2DLUTLayer(LUTLayerBasic):
         else:
             device = torch.device("cpu")
 
-        connections = c_helper_1.grow_synapses(
-            input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
-            output_ids=self.get_detector_neuron_ids().view(lut_shape[0], lut_shape[1]) + 1,
-            max_groups_in_buffer=_max_groups_in_growth_buffer,
-            device=device,
-            seed=random_seed
-        )
+        if _explicit_anchors is None:
+            connections = c_helper_1.grow_synapses(
+                input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
+                output_ids=self.get_detector_neuron_ids().view(lut_shape[0], lut_shape[1]) + 1,
+                max_groups_in_buffer=_max_groups_in_growth_buffer,
+                device=device,
+                seed=random_seed
+            )
 
-        self.add_detector_connections(
-            chunk_of_connections=connections,
-            ids_shift=-1,
-            random_seed=random_seed
-        )
+            self.add_detector_connections(
+                chunk_of_connections=connections,
+                ids_shift=-1,
+                random_seed=random_seed
+            )
 
-        self.initialize_detectors(random_seed)
+            self.initialize_detectors(random_seed)
+        else:
+            self._detector_anchors = _explicit_anchors.to(self.device)
 
         if c_helper_2 is not None:
             connections = c_helper_2.grow_synapses(
@@ -934,22 +938,23 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
 class LUTLayer(Conv2DLUTLayer):
     def __init__(
-            self, n_inputs,
-            n_anchors_per_detector,
-            n_detectors,
-            n_outputs,
-            sequence_length=1,
-            synapse_meta=SynapseMeta(),
-            positional_dim=None,
-            use_sparse_w_gradients=False,
-            shared_context: LUTSharedContext = None,
-            summation_dtype=torch.float32,
-            _int_rescaler=0.001,
-            _synapse_group_size=64,
-            _max_groups_in_growth_buffer=2 ** 20,
-            _do_normalize_gradients=True,
-            random_seed=1,
-            device=None
+        self, n_inputs,
+        n_anchors_per_detector,
+        n_detectors,
+        n_outputs,
+        sequence_length=1,
+        synapse_meta=SynapseMeta(),
+        positional_dim=None,
+        use_sparse_w_gradients=False,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _explicit_anchors=None,
+        _int_rescaler=0.001,
+        _synapse_group_size=64,
+        _max_groups_in_growth_buffer=2 ** 20,
+        _do_normalize_gradients=True,
+        random_seed=1,
+        device=None
     ):
         super().__init__(
             input_shape=(1, n_inputs,),
@@ -966,6 +971,7 @@ class LUTLayer(Conv2DLUTLayer):
             use_sparse_w_gradients=use_sparse_w_gradients,
             shared_context=shared_context,
             summation_dtype=summation_dtype,
+            _explicit_anchors=_explicit_anchors,
             _int_rescaler=_int_rescaler,
             _synapse_group_size=_synapse_group_size,
             _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
