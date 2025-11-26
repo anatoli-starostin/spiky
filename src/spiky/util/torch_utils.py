@@ -72,7 +72,7 @@ class DenseToCOOConverter:
         
         # Create sparse COO tensor
         shape = source.shape
-        sparse_tensor = torch.sparse_coo_tensor(
+        sparse_tensor = torch._sparse_coo_tensor_unsafe(
             indices, values, shape, device=source.device, is_coalesced=True
         )
         
