@@ -1,9 +1,9 @@
 densify_logic(
-    int4* rw_source,
+    const int4* __restrict__ rw_source,
     uint64_t n_quads,
-    int32_t* w_target_values,
-    int64_t* w_target_indices,
-    uint32_t* rw_counter_ptr,
+    int32_t* __restrict__ w_target_values,
+    int64_t* __restrict__ w_target_indices,
+    uint32_t* __restrict__ rw_counter_ptr,
     bool erase_input,
     int device
 ) {
