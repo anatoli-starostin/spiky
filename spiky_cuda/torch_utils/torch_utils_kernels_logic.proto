@@ -203,6 +203,21 @@ densify_logic(
 //            //    • n_nonzero == 0 → nothing
 //            //------------------------------------------------------------
 
+            if (n_nonzero == 4 && ((base_offset & 3) == 0)) {
+                // ---- values (int4) ----
+                int4* v4 = reinterpret_cast<int4*>(w_target_values + base_offset);
+                *v4 = *reinterpret_cast<int4*>(values);
+
+                // ---- indices (two × longlong2) ----
+                longlong2* i2_0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
+                *i2_0 = *reinterpret_cast<longlong2*>(indices);
+
+                longlong2* i2_1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
+                *i2_1 = *reinterpret_cast<longlong2*>(indices + 2);
+
+                return;
+            }
+
             w_target_indices[base_offset] = indices[0];
             w_target_values[base_offset]  = values[0];
 
