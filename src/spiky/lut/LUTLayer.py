@@ -553,8 +553,8 @@ class LUTLayerBasic(nn.Module):
             min_anchor_delta_indices,
             before_detectors_gradients,
             x_grad,
-            sparse_firing_buffer,
             external_lr,
+            sparse_firing_buffer,
             target_w_grad if self._weights_gradient_policy != GradientPolicy.Internal else None
         )
 
