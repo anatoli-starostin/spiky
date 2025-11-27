@@ -524,7 +524,7 @@ class LUTLayerBasic(nn.Module):
             target_w_grad = torch.sparse_coo_tensor(
                 indices=indices.unsqueeze(0),
                 values=values,
-                size=self._weights.numel(),
+                size=self._weights.shape,
                 is_coalesced=True
             )
         elif self._do_normalize_gradients:
@@ -628,7 +628,7 @@ class LUTLayerBasic(nn.Module):
             target_w_grad = torch.sparse_coo_tensor(
                 indices=indices.unsqueeze(0),
                 values=values,
-                size=self._weights.numel(),
+                size=self._weights.shape,
                 is_coalesced=True
             )
         else:
