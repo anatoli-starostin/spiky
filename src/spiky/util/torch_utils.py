@@ -90,7 +90,7 @@ class DenseToSparseConverter:
         self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input)
 
         if provided_buffers:
-            nnz_written = self._counter_buffer[0].item()
+            nnz_written = self._counter_buffer.item()
             if nnz_written == 0:
                 return None, None
             # Return copies to decouple from shared buffers
