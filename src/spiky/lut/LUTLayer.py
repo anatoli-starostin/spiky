@@ -541,7 +541,7 @@ class LUTLayerBasic(nn.Module):
                 raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
             external_lr = self._external_lr_hook(self._weights)
         else:
-            external_lr = 0.0
+            external_lr = -1.0
         self._lut_dm.backward_backprop(
             self._weights,
             batch_size,
@@ -660,7 +660,7 @@ class LUTLayerBasic(nn.Module):
                 raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
             external_lr = self._external_lr_hook(self._weights)
         else:
-            external_lr = 0.0
+            external_lr = -1.0
         self._lut_dm.backward_backprop_concat(
             self._weights,
             self._positional_embeddings,

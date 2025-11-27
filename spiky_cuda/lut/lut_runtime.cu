@@ -254,7 +254,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
     }
 
-    if(external_lr != 0.0 && (w_weights_gradients != nullptr)) {
+    if(external_lr >= 0.0 && (w_weights_gradients != nullptr)) {
         throw py::value_error("in internal weight gradients mode w_weights_gradients should be nullptr");
     }
 
@@ -379,13 +379,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_weights,
             r_output_gradients,
             r_lookup_indices,
-            (external_lr != 0.0) ? r_weights : w_weights_gradients,
+            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr != 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr,
+            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr,
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -453,13 +453,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             numBlocks, gather_w_gradients_fully_connected, tpb_opt,
             r_output_gradients,
             r_lookup_indices,
-            (external_lr != 0.0) ? r_weights : w_weights_gradients,
+            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr != 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
