@@ -194,22 +194,22 @@ densify_new_logic(
 
     uint64_t quad_idx = uint64_t(blockIdx.x) * tpb + tid;
     __align__(16) int4 quad = make_int4(0, 0, 0, 0);
-    uint32_t n_nonzero = 0;
+    uint32_t local_nnz = 0;
 
     if(quad_idx < n_quads) {
         quad = rw_source[quad_idx];
 
         if(quad.x != 0) {
-            n_nonzero++;
+            local_nnz++;
         }
         if(quad.y != 0) {
-            n_nonzero++;
+            local_nnz++;
         }
         if(quad.z != 0) {
-            n_nonzero++;
+            local_nnz++;
         }
         if(quad.w != 0) {
-            n_nonzero++;
+            local_nnz++;
         }
 
         if(erase_input) {
