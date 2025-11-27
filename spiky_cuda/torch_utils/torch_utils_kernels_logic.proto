@@ -141,7 +141,11 @@ count_nonzero_logic(
     uint32_t cnt = 0;
 
     if(quad_idx < n_quads) {
+        #ifndef NO_CUDA
         __align__(16) int4 quad = array[quad_idx];
+        #else
+        int4 quad = array[quad_idx];
+        #endif
         if(quad.x != 0) cnt++;
         if(quad.y != 0) cnt++;
         if(quad.z != 0) cnt++;

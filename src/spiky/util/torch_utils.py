@@ -114,12 +114,16 @@ class DenseToSparseConverter:
         return self._native.get_profiling_stats()
 
 
-def make_lr_getter(optimizer: torch.optim.Optimizer):
-    cache = {}   # param → group
+def make_lr_getter(optimizer):
+    cache = {}
+
+    def find_group(p):
+        for g in optimizer.param_groups:
+            for q in g['params']:
+                if q is p:            # <<< match by identity
+                    return g
+        return None
 
     return lambda p: (
-        cache.setdefault(
-            p,
-            next((g for g in optimizer.param_groups if p in g['params']), None)
-        )['lr']
+        cache.setdefault(p, find_group(p))['lr']
     )
