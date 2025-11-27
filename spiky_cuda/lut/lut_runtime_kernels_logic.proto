@@ -596,6 +596,12 @@ gather_gradients_logic(
 
         __SUPER_DETAILED_TRACE__("[gather_gradients_logic] i %d, current_group_size %d, n_firings %d, weight_shift %ld\n", i, current_group_size, n_firings, weight_shift);
 
+        if(w_weights_gradients == nullptr) {
+            // internal gradients mode
+            lr = -lr;
+            w_weights_gradients = r_weights;
+        }
+
         int32_t n_t_buffered = 0;
         int32_t n_w_buffered = 0;
         for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++, weight_shift++) {
@@ -968,6 +974,7 @@ gather_gradients_fully_connected_old_logic(
             r_min_anchor_delta_indices += blockIdx.y * n_detectors;
             lookup_index ^= (1 << r_min_anchor_delta_indices[detector_index]);
         }
+
         uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
         weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
         r_weights += weight_shift;

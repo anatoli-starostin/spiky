@@ -98,8 +98,9 @@ public:
         // gradients that we need to calculate
         SUMMATION32_DT *w_before_detectors_gradients,
         EXTERNAL_REAL_DT *w_input_gradients,
-        EXTERNAL_REAL_DT *w_weights_gradients,
-        int32_t *w_sparse_firing_buffer_ptr  // Can be nullptr
+        int32_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
+        EXTERNAL_REAL_DT external_lr = 0.0,
+        EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
     );
 
     void forward_step_concat(
@@ -138,8 +139,9 @@ public:
         EXTERNAL_REAL_DT *rw_firing_stat,
         int32_t *w_sparse_firing_buffer,
         EXTERNAL_REAL_DT *w_input_gradients,
-        EXTERNAL_REAL_DT *w_weights_gradients,
-        EXTERNAL_REAL_DT *w_positional_embeddings_gradients
+        EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
+        EXTERNAL_REAL_DT external_lr = 0.0,
+        EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
     );
 };
 

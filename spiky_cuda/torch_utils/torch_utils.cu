@@ -147,9 +147,8 @@ public:
                 device
             );
         } else {
-            uint32_t shared_mem_size = tpb * sizeof(uint32_t);
             GRID_CALL_SHARED_MEM(
-                numBlocks, densify, tpb, shared_mem_size,
+                numBlocks, densify, tpb, tpb * sizeof(uint32_t),
                 reinterpret_cast<int4*>(source.data_ptr()),
                 n_quads,
                 reinterpret_cast<int32_t*>(target_values.data_ptr()),
@@ -237,11 +236,10 @@ public:
         uint32_t tpb = 1024;  // Threads per block
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
-        uint32_t shared_mem_size = tpb * sizeof(uint32_t);
 
         // Count non-zero elements using count_nonzero kernel
         GRID_CALL_SHARED_MEM(
-            numBlocks, count_nonzero, tpb, shared_mem_size,
+            numBlocks, count_nonzero, tpb, tpb * sizeof(uint32_t),
             reinterpret_cast<int4*>(source.data_ptr()),
             n_quads,
             aux_ptr,

@@ -112,3 +112,14 @@ class DenseToSparseConverter:
             String containing profiling statistics, or "profiler is disabled" if profiling is not enabled.
         """
         return self._native.get_profiling_stats()
+
+
+def make_lr_getter(optimizer: torch.optim.Optimizer):
+    cache = {}   # param → group
+
+    return lambda p: (
+        cache.setdefault(
+            p,
+            next((g for g in optimizer.param_groups if p in g['params']), None)
+        )['lr']
+    )

@@ -241,8 +241,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     // gradients that we need to calculate
     SUMMATION32_DT *w_before_detectors_gradients,
     EXTERNAL_REAL_DT *w_input_gradients,
-    EXTERNAL_REAL_DT *w_weights_gradients,
-    int32_t *w_sparse_firing_buffer
+    int32_t *w_sparse_firing_buffer,
+    EXTERNAL_REAL_DT external_lr,
+    EXTERNAL_REAL_DT *w_weights_gradients
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop\n");
     if(this->batch_size != batch_size) {
@@ -251,6 +252,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
     if(this->sequence_length != 1) {
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
+    }
+
+    if(external_lr != 0.0 && (w_weights_gradients != nullptr)) {
+        throw py::value_error("in internal weight gradients mode w_weights_gradients should be nullptr");
     }
 
     #ifdef ENABLE_PROFILING
@@ -374,13 +379,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_weights,
             r_output_gradients,
             r_lookup_indices,
-            w_weights_gradients,
+            (external_lr != 0.0) ? r_weights : w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr
+            (external_lr != 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr,
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -448,13 +453,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             numBlocks, gather_w_gradients_fully_connected, tpb_opt,
             r_output_gradients,
             r_lookup_indices,
-            w_weights_gradients,
+            (external_lr != 0.0) ? r_weights : w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr
+            (external_lr != 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -492,13 +497,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights),
-        w_weights_gradients,
-        this->n_weights,
-        this->int_rescaler
-    );
+    if(w_weights_gradients != nullptr) {
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights),
+            w_weights_gradients,
+            this->n_weights,
+            this->int_rescaler
+        );
+    }
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_inputs), batch_size);
     GRID_CALL_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_inputs),
@@ -712,8 +719,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     EXTERNAL_REAL_DT *rw_firing_stat,
     int32_t *w_sparse_firing_buffer,
     EXTERNAL_REAL_DT *w_input_gradients,
-    EXTERNAL_REAL_DT *w_weights_gradients,
-    EXTERNAL_REAL_DT *w_positional_embeddings_gradients
+    EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
+    EXTERNAL_REAL_DT external_lr,
+    EXTERNAL_REAL_DT *w_weights_gradients
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat\n");
     if(this->batch_size != batch_size) {
@@ -723,7 +731,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     if(this->sequence_length <= 1) {
         throw py::value_error("backward_backprop_concat should only be called when sequence_length > 1");
     }
-//
+//  TODO do_sgd
 //    PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 //    // Zero out before_detectors_gradients
 //    uint64_t memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(SUMMATION32_DT);

@@ -747,8 +747,9 @@ public:
         const torch::Tensor &r_min_anchor_delta_indices,
         const torch::Tensor &w_before_detectors_gradients,
         torch::Tensor &w_input_gradients,
-        torch::Tensor &w_weights_gradients,
-        std::optional<torch::Tensor> &w_sparse_firing_buffer
+        double external_lr,
+        std::optional<torch::Tensor> w_sparse_firing_buffer,
+        std::optional<torch::Tensor> w_weights_gradients
     ) {
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
@@ -757,7 +758,6 @@ public:
             throw py::value_error("no active context");
         }
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
-        checkTensor(w_weights_gradients, "w_weights_gradients", true, host_device_allocator.device);
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
         checkTensor(r_input, "r_input", true, host_device_allocator.device);
@@ -768,6 +768,9 @@ public:
         checkTensor(w_before_detectors_gradients, "w_before_detectors_gradients", true, host_device_allocator.device);
         if(w_sparse_firing_buffer.has_value()) {
             checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+        }
+        if(w_weights_gradients.has_value()) {
+            checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
 
         this->runtime_context->backward_backprop(
@@ -781,8 +784,9 @@ public:
             reinterpret_cast<int32_t *>(r_min_anchor_delta_indices.data_ptr()),
             reinterpret_cast<SUMMATION32_DT *>(w_before_detectors_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.data_ptr()),
-            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr
+            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr,
+            static_cast<EXTERNAL_REAL_DT>(external_lr),
+            w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
         );
     }
 
@@ -802,8 +806,9 @@ public:
         torch::Tensor &w_sparse_firing_buffer,
         torch::Tensor &rw_firing_stat,
         torch::Tensor &w_input_gradients,
-        torch::Tensor &w_weights_gradients,
-        torch::Tensor &w_positional_embeddings_gradients
+        torch::Tensor &w_positional_embeddings_gradients,
+        double external_lr,
+        std::optional<torch::Tensor> w_weights_gradients
     ) {
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
@@ -813,7 +818,6 @@ public:
         }
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
-        checkTensor(w_weights_gradients, "w_weights_gradients", true, host_device_allocator.device);
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
         checkTensor(w_positional_embeddings_gradients, "w_positional_embeddings_gradients", true, host_device_allocator.device);
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
@@ -827,6 +831,9 @@ public:
         checkTensor(r_positional_min_delta_indices, "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(rw_firing_stat, "rw_firing_stat", true, host_device_allocator.device);
+        if(w_weights_gradients.has_value()) {
+            checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
+        }
 
         this->runtime_context->backward_backprop_concat(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
@@ -844,8 +851,9 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(rw_firing_stat.data_ptr()),
             reinterpret_cast<int32_t *>(w_sparse_firing_buffer.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr())
+            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr()),
+            static_cast<EXTERNAL_REAL_DT>(external_lr),
+            w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
         );
     }
 
@@ -1244,8 +1252,9 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_min_anchor_delta_indices"),
             py::arg("w_before_detectors_gradients"),
             py::arg("w_input_gradients"),
-            py::arg("w_weights_gradients"),
-            py::arg("w_sparse_firing_buffer") = py::none())
+            py::arg("external_lr"),
+            py::arg("w_sparse_firing_buffer") = py::none(),
+            py::arg("w_weights_gradients") = py::none())
         .def("backward_backprop_concat", &LUTM_CLASS_NAME::backward_backprop_concat,
             "Gradients back propagation concat",
             py::arg("r_weights"),
@@ -1263,8 +1272,9 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_sparse_firing_buffer"),
             py::arg("rw_firing_stat"),
             py::arg("w_input_gradients"),
-            py::arg("w_weights_gradients"),
-            py::arg("w_positional_embeddings_gradients"))
+            py::arg("w_positional_embeddings_gradients"),
+            py::arg("external_lr"),
+            py::arg("w_weights_gradients") = py::none())
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
             "Count forward or backward synapses for the set of neurons",
             py::arg("neuron_indices_to_process"))

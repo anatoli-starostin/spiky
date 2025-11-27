@@ -2,11 +2,22 @@ import torch
 import torch.nn as nn
 from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
+from enum import Enum
 
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections
 from spiky.util.torch_utils import DenseToSparseConverter
+
+
+class GradientPolicy(Enum):
+    """Policy for handling weight gradients in LUT layers."""
+    """Default is dense."""
+    Sparse = 0
+    Dense = 1
+    SparseNormalized = 2
+    DenseNormalized = 3
+    Internal = 4
 
 
 @dataclass(frozen=True, order=True)
@@ -98,13 +109,12 @@ class LUTLayerBasic(nn.Module):
         sequence_length,
         synapse_metas: List[SynapseMeta],
         positional_dim=None,
-        use_sparse_w_gradients=False,
+        weights_gradient_policy: GradientPolicy = GradientPolicy.Dense,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
         _synapse_group_size: int = 64,
-        _do_normalize_gradients=True,
     ):
         super().__init__()
 
@@ -118,7 +128,6 @@ class LUTLayerBasic(nn.Module):
         self._n_anchors_per_detector = n_anchors_per_detector
         self._is_fully_connected = is_fully_connected
         self._sequence_length = sequence_length
-        self._do_normalize_gradients = _do_normalize_gradients
 
         if shared_context is None:
             self._own_shared_context = True
@@ -128,7 +137,8 @@ class LUTLayerBasic(nn.Module):
             self._own_shared_context = False
 
         self._shared_context = shared_context
-        self._use_sparse_w_gradients = use_sparse_w_gradients
+        self._weights_gradient_policy = weights_gradient_policy
+        self._external_lr_hook = None
 
         # Handle positional embeddings
         if sequence_length > 1:
@@ -291,6 +301,24 @@ class LUTLayerBasic(nn.Module):
             ids_shift,
             random_seed
         )
+
+    def set_external_learning_rate_hook(self, hook_fn):
+        """
+        Set a function that will be called during backward pass to get the external learning rate.
+        This hook is only allowed with Internal gradient policy and is required when using Internal policy.
+        
+        Args:
+            hook_fn: A callable that takes weights tensor as parameter and returns the learning rate (float).
+                    Must not be None. Signature: hook_fn(weights: torch.Tensor) -> float
+        
+        Raises:
+            ValueError: If gradient policy is not Internal or if hook_fn is None.
+        """
+        if self._weights_gradient_policy != GradientPolicy.Internal:
+            raise ValueError("external_learning_rate_hook can only be used with GradientPolicy.Internal")
+        if hook_fn is None:
+            raise ValueError("external_learning_rate_hook cannot be None when using GradientPolicy.Internal")
+        self._external_lr_hook = hook_fn
 
     def compile_lut(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
         n_weights = self._lut_dm.get_weights_dimension()
@@ -477,7 +505,9 @@ class LUTLayerBasic(nn.Module):
         min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
         x_grad = torch.zeros_like(x)
-        if self._use_sparse_w_gradients:
+        if self._weights_gradient_policy == GradientPolicy.Internal:
+            target_w_grad = None
+        elif self._weights_gradient_policy in [GradientPolicy.Sparse, GradientPolicy.SparseNormalized]:
             numel = ((self._weights.numel() + 3) // 4) * 4
             target_w_grad = self._shared_context.get_weight_gradients_buffer(
                 numel,
@@ -506,6 +536,12 @@ class LUTLayerBasic(nn.Module):
                 self.device
             )
 
+        if self._weights_gradient_policy == GradientPolicy.Internal:
+            if self._external_lr_hook is None:
+                raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
+            external_lr = self._external_lr_hook(self._weights)
+        else:
+            external_lr = 0.0
         self._lut_dm.backward_backprop(
             self._weights,
             batch_size,
@@ -516,11 +552,13 @@ class LUTLayerBasic(nn.Module):
             min_anchor_deltas,
             min_anchor_delta_indices,
             before_detectors_gradients,
-            x_grad, target_w_grad,
-            sparse_firing_buffer
+            x_grad,
+            sparse_firing_buffer,
+            external_lr,
+            target_w_grad if self._weights_gradient_policy != GradientPolicy.Internal else None
         )
 
-        if self._use_sparse_w_gradients:
+        if self._weights_gradient_policy in [GradientPolicy.Sparse, GradientPolicy.SparseNormalized]:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             converter = self._shared_context.get_dense_to_sparse_converter()
             indices, values = converter.dense_to_sparse_32(
@@ -531,7 +569,7 @@ class LUTLayerBasic(nn.Module):
                 )
             )
             if indices is not None:
-                if values.numel() > 0 and self._do_normalize_gradients:
+                if self._weights_gradient_policy == GradientPolicy.SparseNormalized:
                     with torch.no_grad():
                         max_val = values.abs().max()
                         if max_val > 1e-16:
@@ -540,11 +578,13 @@ class LUTLayerBasic(nn.Module):
                     indices=indices.unsqueeze(0),
                     values=values,
                     size=self._weights.shape,
+                    device=self.device,
+                    check_invariants=False,
                     is_coalesced=True
                 )
             else:
                 target_w_grad = None
-        elif self._do_normalize_gradients:
+        elif self._weights_gradient_policy == GradientPolicy.DenseNormalized:
             with torch.no_grad():
                 m = target_w_grad.abs().max()
                 if m > 1e-16:
@@ -592,7 +632,9 @@ class LUTLayerBasic(nn.Module):
         assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
 
         x_grad = torch.zeros_like(x)
-        if self._use_sparse_w_gradients:
+        if self._weights_gradient_policy == GradientPolicy.Internal:
+            target_w_grad = None
+        elif self._weights_gradient_policy in [GradientPolicy.Sparse, GradientPolicy.SparseNormalized]:
             numel = ((self._weights.numel() + 3) // 4) * 4
             target_w_grad = self._shared_context.get_weight_gradients_buffer(
                 numel,
@@ -613,6 +655,12 @@ class LUTLayerBasic(nn.Module):
             self.device
         )
 
+        if self._weights_gradient_policy == GradientPolicy.Internal:
+            if self._external_lr_hook is None:
+                raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
+            external_lr = self._external_lr_hook(self._weights)
+        else:
+            external_lr = 0.0
         self._lut_dm.backward_backprop_concat(
             self._weights,
             self._positional_embeddings,
@@ -631,10 +679,12 @@ class LUTLayerBasic(nn.Module):
             # the same buffer will be used for gradient accumulation. So after this call firing_stat
             # is invalid.
             firing_stat,
-            x_grad, target_w_grad, positional_grad
+            x_grad, positional_grad,
+            external_lr,
+            target_w_grad if self._weights_gradient_policy != GradientPolicy.Internal else None
         )
 
-        if self._use_sparse_w_gradients:
+        if self._weights_gradient_policy in [GradientPolicy.Sparse, GradientPolicy.SparseNormalized]:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             converter = self._shared_context.get_dense_to_sparse_converter()
             indices, values = converter.dense_to_sparse_32(
@@ -645,7 +695,7 @@ class LUTLayerBasic(nn.Module):
                 )
             )
             if indices is not None:
-                if values.numel() > 0 and self._do_normalize_gradients:
+                if self._weights_gradient_policy == GradientPolicy.SparseNormalized:
                     with torch.no_grad():
                         max_val = values.abs().max()
                         if max_val > 1e-16:
@@ -654,18 +704,19 @@ class LUTLayerBasic(nn.Module):
                     indices=indices.unsqueeze(0),
                     values=values,
                     size=self._weights.shape,
+                    device=self.device,
+                    check_invariants=False,
                     is_coalesced=True
                 )
             else:
                 target_w_grad = None
-        else:
-            if self._do_normalize_gradients:
-                with torch.no_grad():
-                    m = target_w_grad[:self._weights.numel()].abs().max()
-                    if m > 1e-16:
-                        target_w_grad[:self._weights.numel()] /= m
+        elif self._weights_gradient_policy == GradientPolicy.DenseNormalized:
+            with torch.no_grad():
+                m = target_w_grad.abs().max()
+                if m > 1e-16:
+                    target_w_grad /= m
 
-        if self._do_normalize_gradients:
+        if self._weights_gradient_policy in [GradientPolicy.SparseNormalized, GradientPolicy.DenseNormalized]:
             with torch.no_grad():
                 if self._positional_embeddings is not None:
                     m_pe = positional_grad.abs().max()
@@ -821,14 +872,13 @@ class Conv2DLUTLayer(LUTLayerBasic):
         lut_receptive_field_stride_shape=None,
         synapse_meta=SynapseMeta(),
         positional_dim=None,
-        use_sparse_w_gradients=False,
+        weights_gradient_policy: GradientPolicy = GradientPolicy.Dense,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
         _explicit_anchors=None,
         _int_rescaler=0.001,
         _synapse_group_size=64,
         _max_groups_in_growth_buffer=2 ** 20,
-        _do_normalize_gradients=True,
         random_seed=1,
         device=None
     ):
@@ -876,11 +926,11 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_inputs=n_inputs, n_outputs=n_outputs, n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
-            positional_dim=positional_dim, use_sparse_w_gradients=use_sparse_w_gradients,
+            positional_dim=positional_dim, weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
-            _synapse_group_size=_synapse_group_size, _do_normalize_gradients=_do_normalize_gradients,
+            _synapse_group_size=_synapse_group_size,
         )
 
         if device is not None:
@@ -989,14 +1039,13 @@ class LUTLayer(Conv2DLUTLayer):
         sequence_length=1,
         synapse_meta=SynapseMeta(),
         positional_dim=None,
-        use_sparse_w_gradients=False,
+        weights_gradient_policy: GradientPolicy = GradientPolicy.Dense,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
         _explicit_anchors=None,
         _int_rescaler=0.001,
         _synapse_group_size=64,
         _max_groups_in_growth_buffer=2 ** 20,
-        _do_normalize_gradients=True,
         random_seed=1,
         device=None
     ):
@@ -1012,14 +1061,13 @@ class LUTLayer(Conv2DLUTLayer):
             lut_receptive_field_stride_shape=None,
             synapse_meta=synapse_meta,
             positional_dim=positional_dim,
-            use_sparse_w_gradients=use_sparse_w_gradients,
+            weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype,
             _explicit_anchors=_explicit_anchors,
             _int_rescaler=_int_rescaler,
             _synapse_group_size=_synapse_group_size,
             _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
-            _do_normalize_gradients=_do_normalize_gradients,
             random_seed=random_seed,
             device=device
         )
