@@ -190,6 +190,123 @@ densify_new_logic(
 
     extern __shared__ uint32_t warp_sums[];
     __shared__ uint32_t block_base;
+    const unsigned FULL = 0xffffffffu;
+
+    uint64_t quad_idx = uint64_t(blockIdx.x) * tpb + tid;
+    __align__(16) int4 quad = make_int4(0, 0, 0, 0);
+    uint32_t n_nonzero = 0;
+
+    if(quad_idx < n_quads) {
+        quad = rw_source[quad_idx];
+
+        if(quad.x != 0) {
+            n_nonzero++;
+        }
+        if(quad.y != 0) {
+            n_nonzero++;
+        }
+        if(quad.z != 0) {
+            n_nonzero++;
+        }
+        if(quad.w != 0) {
+            n_nonzero++;
+        }
+
+        if(erase_input) {
+            rw_source[quad_idx] = make_int4(0, 0, 0, 0);
+        }
+    }
+
+    // Warp inclusive scan on local_nnz
+    uint32_t prefix = local_nnz;
+
+    #pragma unroll
+    for(int off = 1; off < 32; off <<= 1) {
+        uint32_t x = __shfl_up_sync(FULL, prefix, off);
+        if (lane >= off) prefix += x;
+    }
+
+    if(lane == 31)
+        warp_sums[warpId] = prefix;
+
+    __syncthreads();
+
+    // Warp 0 scans warp sums
+    if(warpId == 0) {
+        uint32_t wv = (lane < NWARPS) ? warp_sums[lane] : 0;
+
+        #pragma unroll
+        for (int off = 1; off < NWARPS; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, wv, off);
+            if (lane >= off) wv += x;
+        }
+
+        if (lane < NWARPS)
+            warp_sums[lane] = wv;
+    }
+
+    __syncthreads();
+
+    if(warpId > 0)
+        prefix += warp_sums[warpId - 1];
+
+    if(tid == 0) {
+        uint32_t block_sum = warp_sums[NWARPS - 1];
+        block_base = atomicAdd(rw_counter_ptr, block_sum);
+    }
+
+    __syncthreads();
+
+    // global shift
+    prefix += block_base;
+
+    // convert inclusive → exclusive
+    prefix -= local_nnz;
+
+    // write outputs
+    if(n_nonzero > 0) {
+        uint64_t base_idx = quad_idx << 2;
+        if(quad.x != 0) {
+            w_target_indices[prefix] = base_idx;
+            w_target_values[prefix++] = quad.x;
+        }
+        if(quad.y != 0) {
+            w_target_indices[prefix] = base_idx + 1;
+            w_target_values[prefix++] = quad.y;
+        }
+        if(quad.z != 0) {
+            w_target_indices[prefix] = base_idx + 2;
+            w_target_values[prefix++] = quad.z;
+        }
+        if(quad.w != 0) {
+            w_target_indices[prefix] = base_idx + 3;
+            w_target_values[prefix++] = quad.w;
+        }
+    }
+    #endif
+}
+
+
+densify_strange_new_logic(
+    int4* __restrict__ rw_source,
+    uint64_t n_quads,
+    int32_t* __restrict__ w_target_values,
+    int64_t* __restrict__ w_target_indices,
+    uint32_t* __restrict__ rw_counter_ptr,
+    bool erase_input,
+    int device
+)
+{
+    #ifdef ATOMIC
+    int tpb = blockDim.x;
+    int tid = threadIdx.x;
+    int lane = tid & 31;
+    int warpId = tid >> 5;
+
+    int NWARPS = (tpb + 31) >> 5;
+
+    extern __shared__ uint32_t warp_sums[];
+    __shared__ uint32_t block_base;
 
     const unsigned FULL = 0xffffffffu;
 
