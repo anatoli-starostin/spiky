@@ -62,7 +62,7 @@ class DenseToSparseConverter:
         provided_buffers = densify_buffers is not None
 
         if provided_buffers:
-            values, indices = densify_buffers
+            indices, values = densify_buffers
             if values.dim() != 1 or indices.dim() != 1:
                 raise ValueError("densify_buffers tensors must be 1D")
             if values.dtype != source.dtype:
