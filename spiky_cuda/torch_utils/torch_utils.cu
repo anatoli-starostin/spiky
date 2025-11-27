@@ -73,6 +73,10 @@ public:
             throw py::value_error("source tensor must be 32-bit (element_size == 4)");
         }
 
+        if ((source.numel() % 4) != 0) {
+            throw py::value_error("source tensor size must be divisable by 4");
+        }
+
         if (target_values.element_size() != 4) {
             throw py::value_error("target_values tensor must be 32-bit (element_size == 4)");
         }
@@ -125,7 +129,7 @@ public:
 
         // Launch kernel
         // Process elements in quads (groups of 4)
-        uint64_t n_quads = (numel + 3) / 4;
+        uint64_t n_quads = numel >> 2;
         uint32_t tpb = 1024;  // Threads per block (power of 2)
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
@@ -164,6 +168,10 @@ public:
         // Check that source is 32-bit (4 bytes)
         if (source.element_size() != 4) {
             throw py::value_error("source tensor must be 32-bit (element_size == 4)");
+        }
+
+        if ((source.numel() % 4) != 0) {
+            throw py::value_error("source tensor size must be divisable by 4");
         }
 
         // Validate aux_buffer tensor
@@ -212,7 +220,7 @@ public:
 
         // Launch count_nonzero kernel
         // Process elements in quads (groups of 4)
-        uint64_t n_quads = (numel + 3) >> 2;
+        uint64_t n_quads = numel >> 2;
         uint32_t tpb = 1024;  // Threads per block
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
@@ -223,7 +231,6 @@ public:
             numBlocks, count_nonzero, tpb, shared_mem_size,
             reinterpret_cast<int4*>(source.data_ptr()),
             n_quads,
-            numel,
             aux_ptr,
             device
         );

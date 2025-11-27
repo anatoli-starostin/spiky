@@ -129,7 +129,6 @@ densify_logic(
 count_nonzero_logic(
     int4* array,
     uint64_t n_quads,
-    uint64_t n_elements,
     uint32_t* aux_buffer,
     int device
 ) {
