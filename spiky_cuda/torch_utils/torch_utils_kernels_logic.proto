@@ -180,6 +180,7 @@ densify_new_logic(
     int device
 )
 {
+    #ifdef ATOMIC
     int tbp = blockDim.x;
     int tid = threadIdx.x;
     int lane = tid & 31;
@@ -280,4 +281,5 @@ densify_new_logic(
             prefix++;
         }
     }
+    #endif
 }
