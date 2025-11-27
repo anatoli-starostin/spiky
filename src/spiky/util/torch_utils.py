@@ -46,7 +46,7 @@ class DenseToSparseConverter:
         if source.element_size() != 4:
             raise ValueError(f"source tensor must be 32-bit (element_size == 4), got {source.element_size()}")
 
-        if (source.numel() % 4) == 0:
+        if (source.numel() % 4) != 0:
             raise ValueError(f"source tensor size must be divisable by 4")
 
         # Create or reuse counter buffer
