@@ -289,7 +289,7 @@ densify_best_new_logic(
 }
 
 densify_new_logic(
-    int4* __restrict__ rw_source,
+    __align__(16) int4* __restrict__ rw_source,
     uint64_t n_quads,
     int32_t* __restrict__ w_target_values,
     int64_t* __restrict__ w_target_indices,
@@ -299,31 +299,39 @@ densify_new_logic(
 )
 {
 #ifdef ATOMIC
-    int tpb    = blockDim.x;
+    int tpb    = blockDim.x;       // multiple of 32 guaranteed
     int tid    = threadIdx.x;
     int lane   = tid & 31;
     int warpId = tid >> 5;
+    int NWARPS = tpb >> 5;         // tpb / 32
 
     const unsigned FULL = 0xffffffffu;
 
+    __shared__ uint32_t warp_sums[32];   // up to 1024 threads
+    __shared__ uint32_t block_base;
+
     uint64_t quad_idx = uint64_t(blockIdx.x) * tpb + tid;
+
+    // --- load one quad + compute nnz mask ---
     int4 quad = make_int4(0, 0, 0, 0);
-    uint32_t local_nnz = 0;
+    uint32_t mask = 0;
 
     if (quad_idx < n_quads) {
         quad = rw_source[quad_idx];
 
-        if (quad.x != 0) local_nnz++;
-        if (quad.y != 0) local_nnz++;
-        if (quad.z != 0) local_nnz++;
-        if (quad.w != 0) local_nnz++;
+        mask  = (quad.x != 0);
+        mask |= (uint32_t)(quad.y != 0) << 1;
+        mask |= (uint32_t)(quad.z != 0) << 2;
+        mask |= (uint32_t)(quad.w != 0) << 3;
 
         if (erase_input) {
-            rw_source[quad_idx] = make_int4(0, 0, 0, 0);
+            rw_source[quad_idx] = make_int4(0,0,0,0);
         }
     }
 
-    // warp-level inclusive scan on local_nnz
+    uint32_t local_nnz = __popc(mask);   // 0..4
+
+    // --- warp inclusive scan on local_nnz ---
     uint32_t prefix = local_nnz;
     #pragma unroll
     for (int off = 1; off < 32; off <<= 1) {
@@ -331,40 +339,74 @@ densify_new_logic(
         if (lane >= off) prefix += x;
     }
 
-    // last lane in warp has the warp total
-    uint32_t warp_total = __shfl_sync(FULL, prefix, 31);
+    if (lane == 31)
+        warp_sums[warpId] = prefix;
 
-    // one atomic per warp (lane 31, or lane 0 if you prefer)
-    uint32_t warp_base = 0;
-    if (lane == 31 && warp_total > 0) {
-        warp_base = atomicAdd(rw_counter_ptr, warp_total);
+    __syncthreads();
+
+    // --- warp 0 scans warp sums ---
+    if (warpId == 0) {
+        uint32_t wv = (lane < NWARPS) ? warp_sums[lane] : 0;
+
+        #pragma unroll
+        for (int off = 1; off < NWARPS; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, wv, off);
+            if (lane >= off) wv += x;
+        }
+
+        if (lane < NWARPS)
+            warp_sums[lane] = wv;
     }
-    // broadcast warp_base to all lanes
-    warp_base = __shfl_sync(FULL, warp_base, 31);
 
-    // convert inclusive prefix to exclusive, add warp_base
-    // prefix was inclusive within warp
-    prefix = warp_base + prefix - local_nnz;
+    __syncthreads();
 
-    // write outputs
+    if (warpId > 0)
+        prefix += warp_sums[warpId - 1];
+
+    // --- one atomic per block ---
+    if (tid == 0) {
+        uint32_t block_sum = warp_sums[NWARPS - 1];
+        block_base = atomicAdd(rw_counter_ptr, block_sum);
+    }
+
+    __syncthreads();
+
+    // global inclusive prefix
+    prefix += block_base;
+
+    // convert inclusive → exclusive
+    prefix -= local_nnz;
+
+    // --- write out using mask and prefix directly ---
     if (local_nnz > 0 && quad_idx < n_quads) {
-        uint64_t base_idx = quad_idx << 2;
+        uint64_t base_idx = quad_idx << 2;  // *4 ints
 
-        if (quad.x != 0) {
-            w_target_indices[prefix] = base_idx;
-            w_target_values[prefix++] = quad.x;
+        if (mask & 1) {
+            w_target_indices[prefix++] = base_idx;
         }
-        if (quad.y != 0) {
-            w_target_indices[prefix] = base_idx + 1;
-            w_target_values[prefix++] = quad.y;
+        if (mask & 2) {
+            w_target_indices[prefix++] = base_idx + 1;
         }
-        if (quad.z != 0) {
-            w_target_indices[prefix] = base_idx + 2;
-            w_target_values[prefix++] = quad.z;
+        if (mask & 4) {
+            w_target_indices[prefix++] = base_idx + 2;
         }
-        if (quad.w != 0) {
-            w_target_indices[prefix] = base_idx + 3;
-            w_target_values[prefix++] = quad.w;
+        if (mask & 8) {
+            w_target_indices[prefix++] = base_idx + 3;
+        }
+
+        prefix -= local_nnz;
+
+        if (mask & 1) {
+            w_target_values[prefix++]  = quad.x;
+        }
+        if (mask & 2) {
+            w_target_values[prefix++]  = quad.y;
+        }
+        if (mask & 4) {
+            w_target_values[prefix++]  = quad.z;
+        }
+        if (mask & 8) {
+            w_target_values[prefix++]  = quad.w;
         }
     }
 #endif

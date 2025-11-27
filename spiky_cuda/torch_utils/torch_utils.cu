@@ -136,9 +136,8 @@ public:
         dim3 numBlocks(num_blocks, 1);
 
         if ((device != -1) && _use_new_kernel) {
-            uint32_t shared_mem_size = ((tpb + 31) >> 5) * sizeof(uint32_t);
-            GRID_CALL_SHARED_MEM(
-                numBlocks, densify_new, tpb, shared_mem_size,
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, densify_new, tpb,
                 reinterpret_cast<int4*>(source.data_ptr()),
                 n_quads,
                 reinterpret_cast<int32_t*>(target_values.data_ptr()),
