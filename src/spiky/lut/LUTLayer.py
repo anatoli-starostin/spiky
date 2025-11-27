@@ -516,17 +516,20 @@ class LUTLayerBasic(nn.Module):
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             indices, values = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
-            if values.numel() > 0 and self._do_normalize_gradients:
-                with torch.no_grad():
-                    max_val = values.abs().max()
-                    if max_val > 1e-16:
-                        values /= max_val
-            target_w_grad = torch.sparse_coo_tensor(
-                indices=indices.unsqueeze(0),
-                values=values,
-                size=self._weights.shape,
-                is_coalesced=True
-            )
+            if indices is not None:
+                if values.numel() > 0 and self._do_normalize_gradients:
+                    with torch.no_grad():
+                        max_val = values.abs().max()
+                        if max_val > 1e-16:
+                            values /= max_val
+                target_w_grad = torch.sparse_coo_tensor(
+                    indices=indices.unsqueeze(0),
+                    values=values,
+                    size=self._weights.shape,
+                    is_coalesced=True
+                )
+            else:
+                target_w_grad = None
         elif self._do_normalize_gradients:
             with torch.no_grad():
                 m = target_w_grad[:self._weights.numel()].abs().max()
@@ -620,17 +623,20 @@ class LUTLayerBasic(nn.Module):
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             indices, values = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
-            if values.numel() > 0 and self._do_normalize_gradients:
-                with torch.no_grad():
-                    max_val = values.abs().max()
-                    if max_val > 1e-16:
-                        values /= max_val
-            target_w_grad = torch.sparse_coo_tensor(
-                indices=indices.unsqueeze(0),
-                values=values,
-                size=self._weights.shape,
-                is_coalesced=True
-            )
+            if indices is not None:
+                if values.numel() > 0 and self._do_normalize_gradients:
+                    with torch.no_grad():
+                        max_val = values.abs().max()
+                        if max_val > 1e-16:
+                            values /= max_val
+                target_w_grad = torch.sparse_coo_tensor(
+                    indices=indices.unsqueeze(0),
+                    values=values,
+                    size=self._weights.shape,
+                    is_coalesced=True
+                )
+            else:
+                target_w_grad = None
         else:
             if self._do_normalize_gradients:
                 with torch.no_grad():

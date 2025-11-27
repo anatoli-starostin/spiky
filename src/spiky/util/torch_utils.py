@@ -57,7 +57,7 @@ class DenseToSparseConverter:
         nnz = self._native.count_nonzero(source, self._counter_buffer)
 
         if nnz == 0:
-            return None
+            return None, None
 
         # Create empty indices and values tensors
         indices = torch.empty(nnz, dtype=torch.int64, device=source.device)
