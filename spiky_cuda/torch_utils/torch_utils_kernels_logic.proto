@@ -1,5 +1,5 @@
 densify_logic(
-    const int4* __restrict__ rw_source,
+    int4* __restrict__ rw_source,
     uint64_t n_quads,
     int32_t* __restrict__ w_target_values,
     int64_t* __restrict__ w_target_indices,
