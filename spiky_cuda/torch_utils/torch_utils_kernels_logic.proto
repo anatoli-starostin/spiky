@@ -192,9 +192,9 @@ densify_new_logic(
 
     const unsigned FULL = 0xffffffffu;
 
-    uint64_t quad_base = (uint64_t(blockIdx.x) * tbp + tid) * QUADS_PER_THREAD;
+    uint64_t quad_base = (uint64_t(blockIdx.x) * tbp + tid) * DENSIFY_QUADS_PER_THREAD;
 
-    int32_t values[INTS_PER_THREAD];
+    int32_t values[DENSIFY_INTS_PER_THREAD];
     uint32_t local_nnz = 0;
 
     // ----------------------------------------------------
