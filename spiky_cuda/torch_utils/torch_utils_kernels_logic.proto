@@ -289,7 +289,7 @@ densify_best_new_logic(
 }
 
 densify_new_logic(
-    __align__(16) int4* __restrict__ rw_source,
+    int4* __restrict__ rw_source,
     uint64_t n_quads,
     int32_t* __restrict__ w_target_values,
     int64_t* __restrict__ w_target_indices,
@@ -325,7 +325,13 @@ densify_new_logic(
         mask |= (uint32_t)(quad.w != 0) << 3;
 
         if (erase_input) {
-            rw_source[quad_idx] = make_int4(0,0,0,0);
+            void* p = &rw_source[quad_idx];  // 16-byte aligned
+            asm volatile (
+                "st.global.v2.u64 [%0], {%1, %2};\n"
+                :
+                : "l"(p), "l"(0ull), "l"(0ull)
+                : "memory"
+            );
         }
     }
 
