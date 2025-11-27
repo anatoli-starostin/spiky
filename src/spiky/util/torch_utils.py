@@ -21,7 +21,7 @@ class DenseToSparseConverter:
                size=(5,), nnz=3, layout=torch.sparse_coo)
     """
     
-    def __init__(self, use_new_kernel: bool = False):
+    def __init__(self, use_new_kernel: bool = True):
         """
         Initialize the converter with a native backend.
         

@@ -190,7 +190,7 @@ densify_new_logic(
 
     extern __shared__ __align__(16) uint8_t __sm[];
     uint32_t *warp_sums = reinterpret_cast<uint32_t *>(__sm);
-    
+
     __shared__ uint32_t block_base;
     const unsigned FULL = 0xffffffffu;
 
@@ -283,121 +283,6 @@ densify_new_logic(
         if(quad.w != 0) {
             w_target_indices[prefix] = base_idx + 3;
             w_target_values[prefix++] = quad.w;
-        }
-    }
-    #endif
-}
-
-
-densify_strange_new_logic(
-    int4* __restrict__ rw_source,
-    uint64_t n_quads,
-    int32_t* __restrict__ w_target_values,
-    int64_t* __restrict__ w_target_indices,
-    uint32_t* __restrict__ rw_counter_ptr,
-    bool erase_input,
-    int device
-)
-{
-    #ifdef ATOMIC
-    int tpb = blockDim.x;
-    int tid = threadIdx.x;
-    int lane = tid & 31;
-    int warpId = tid >> 5;
-
-    int NWARPS = (tpb + 31) >> 5;
-
-    extern __shared__ uint32_t warp_sums[];
-    __shared__ uint32_t block_base;
-
-    const unsigned FULL = 0xffffffffu;
-
-    uint64_t quad_base = (uint64_t(blockIdx.x) * tpb + tid) * DENSIFY_QUADS_PER_THREAD;
-
-    int32_t values[DENSIFY_INTS_PER_THREAD];
-    uint32_t local_nnz = 0;
-
-    // ----------------------------------------------------
-    // Safe load loop — handle last block (partial)
-    // ----------------------------------------------------
-    #pragma unroll
-    for(int q = 0; q < DENSIFY_QUADS_PER_THREAD; q++)
-    {
-        uint64_t qid = quad_base + q;
-        if (qid >= n_quads) break;
-
-        int4 v = rw_source[qid];
-
-        int i = q << 2;
-
-        values[i+0] = v.x;  local_nnz += (v.x != 0);
-        values[i+1] = v.y;  local_nnz += (v.y != 0);
-        values[i+2] = v.z;  local_nnz += (v.z != 0);
-        values[i+3] = v.w;  local_nnz += (v.w != 0);
-
-        // optional: erase input quads
-        if(erase_input)
-            rw_source[qid] = make_int4(0,0,0,0);
-    }
-
-    // ----------------------------------------------------
-    // Warp inclusive scan on local_nnz
-    // ----------------------------------------------------
-    uint32_t prefix = local_nnz;
-
-    #pragma unroll
-    for(int off = 1; off < 32; off <<= 1) {
-        uint32_t x = __shfl_up_sync(FULL, prefix, off);
-        if (lane >= off) prefix += x;
-    }
-
-    if(lane == 31)
-        warp_sums[warpId] = prefix;
-
-    __syncthreads();
-
-    // Warp 0 scans warp sums
-    if(warpId == 0) {
-        uint32_t wv = (lane < NWARPS) ? warp_sums[lane] : 0;
-
-        #pragma unroll
-        for (int off = 1; off < NWARPS; off <<= 1) {
-            uint32_t x = __shfl_up_sync(FULL, wv, off);
-            if (lane >= off) wv += x;
-        }
-
-        if (lane < NWARPS)
-            warp_sums[lane] = wv;
-    }
-
-    __syncthreads();
-
-    if(warpId > 0)
-        prefix += warp_sums[warpId - 1];
-
-    if(tid == 0) {
-        uint32_t block_sum = warp_sums[NWARPS - 1];
-        block_base = atomicAdd(rw_counter_ptr, block_sum);
-    }
-
-    __syncthreads();
-
-    // global shift
-    prefix += block_base;
-
-    // convert inclusive → exclusive
-    prefix -= local_nnz;
-
-    // write outputs
-    uint64_t idx_base = quad_base << 2;
-
-    #pragma unroll
-    for (int i = 0; i < DENSIFY_INTS_PER_THREAD; i++) {
-        int32_t v = values[i];
-        if (v != 0) {
-            w_target_values[prefix]  = v;
-            w_target_indices[prefix] = int64_t(idx_base + i);
-            prefix++;
         }
     }
     #endif
