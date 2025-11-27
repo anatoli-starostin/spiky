@@ -14,7 +14,7 @@ densify_logic(
     uint32_t n_nonzero = 0;
 
     if(quad_idx < n_quads) {
-        int4 quad = rw_source[quad_idx];
+        quad = rw_source[quad_idx];
 
         if(quad.x != 0) {
             n_nonzero++;
