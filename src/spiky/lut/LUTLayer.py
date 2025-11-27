@@ -520,7 +520,12 @@ class LUTLayerBasic(nn.Module):
                     max_val = values.abs().max()
                     if max_val > 1e-16:
                         values /= max_val
-            target_w_grad = indices, values
+            target_w_grad = torch.sparse_coo_tensor(
+                indices=indices.unsqueeze(0),
+                values=values,
+                size=values.shape,
+                is_coalesced=True
+            )
         elif self._do_normalize_gradients:
             with torch.no_grad():
                 m = target_w_grad[:self._weights.numel()].abs().max()
@@ -618,7 +623,12 @@ class LUTLayerBasic(nn.Module):
                     max_val = values.abs().max()
                     if max_val > 1e-16:
                         values /= max_val
-            target_w_grad = indices, values
+            target_w_grad = torch.sparse_coo_tensor(
+                indices=indices.unsqueeze(0),
+                values=values,
+                size=values.shape,
+                is_coalesced=True
+            )
         else:
             if self._do_normalize_gradients:
                 with torch.no_grad():
