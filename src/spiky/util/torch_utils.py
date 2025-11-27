@@ -21,9 +21,15 @@ class DenseToSparseConverter:
                size=(5,), nnz=3, layout=torch.sparse_coo)
     """
     
-    def __init__(self):
-        """Initialize the converter with a native backend."""
-        self._native = DenseToSparseConverterNative()
+    def __init__(self, use_new_kernel: bool = False):
+        """
+        Initialize the converter with a native backend.
+        
+        Args:
+            use_new_kernel: If True, use the new densify_new_logic kernel instead of densify_logic.
+                Default is False (uses the old kernel).
+        """
+        self._native = DenseToSparseConverterNative(use_new_kernel)
         self._counter_buffer = None
     
     def dense_to_sparse_32(

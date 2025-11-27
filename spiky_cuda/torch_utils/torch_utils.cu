@@ -10,10 +10,11 @@ namespace py = pybind11;
 
 class __attribute__((visibility("hidden"))) DenseToSparseConverterNative {
 public:
-    DenseToSparseConverterNative() 
+    DenseToSparseConverterNative(bool use_new_kernel = false) 
         #ifdef ENABLE_PROFILING
         : profiler(N_TORCH_UTILS_PROFILER_OPS)
         #endif
+        , _use_new_kernel(use_new_kernel)
     {
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP, "torch_utils::dense_to_sparse_32");
@@ -135,17 +136,29 @@ public:
         dim3 numBlocks(num_blocks, 1);
         uint32_t shared_mem_size = tpb * sizeof(uint32_t);
 
-        // Use GRID_CALL_SHARED_MEM macro - device must be in scope
-        GRID_CALL_SHARED_MEM(
-            numBlocks, densify, tpb, shared_mem_size,
-            reinterpret_cast<int4*>(source.data_ptr()),
-            n_quads,
-            reinterpret_cast<int32_t*>(target_values.data_ptr()),
-            reinterpret_cast<int64_t*>(target_indices.data_ptr()),
-            counter_ptr,
-            erase_input,
-            device
-        );
+        if (_use_new_kernel) {
+            GRID_CALL_SHARED_MEM(
+                numBlocks, densify_new, tpb, shared_mem_size,
+                reinterpret_cast<int4*>(source.data_ptr()),
+                n_quads,
+                reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                counter_ptr,
+                erase_input,
+                device
+            );
+        } else {
+            GRID_CALL_SHARED_MEM(
+                numBlocks, densify, tpb, shared_mem_size,
+                reinterpret_cast<int4*>(source.data_ptr()),
+                n_quads,
+                reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                counter_ptr,
+                erase_input,
+                device
+            );
+        }
 
         PROF_END(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP);
     }
@@ -257,6 +270,7 @@ public:
     }
 
 private:
+    bool _use_new_kernel;
     #ifdef ENABLE_PROFILING
     SimpleProfiler profiler;
     #endif
@@ -264,7 +278,7 @@ private:
 
 void PB_DenseToSparseConverter(py::module& m) {
     py::class_<DenseToSparseConverterNative>(m, "DenseToSparseConverterNative")
-        .def(py::init<>())
+        .def(py::init<bool>(), py::arg("use_new_kernel") = false)
         .def("dense_to_sparse_32", &DenseToSparseConverterNative::dense_to_sparse_32,
             "Convert dense 32-bit tensor to sparse format",
             py::arg("source"),
