@@ -264,7 +264,7 @@ densify_new_logic(
     prefix -= local_nnz;
 
     // write outputs
-    if(n_nonzero > 0) {
+    if(local_nnz > 0) {
         uint64_t base_idx = quad_idx << 2;
         if(quad.x != 0) {
             w_target_indices[prefix] = base_idx;
