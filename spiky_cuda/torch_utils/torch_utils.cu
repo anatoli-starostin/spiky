@@ -136,7 +136,6 @@ public:
             numBlocks, densify, tpb, shared_mem_size,
             reinterpret_cast<int4*>(source.data_ptr()),
             n_quads,
-            numel,
             reinterpret_cast<int32_t*>(target_values.data_ptr()),
             reinterpret_cast<int64_t*>(target_indices.data_ptr()),
             counter_ptr,

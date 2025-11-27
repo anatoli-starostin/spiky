@@ -1,7 +1,6 @@
 densify_logic(
     int4* rw_source,
     uint64_t n_quads,
-    uint64_t n_elements,
     int32_t* w_target_values,
     int64_t* w_target_indices,
     uint32_t* rw_counter_ptr,
@@ -11,67 +10,51 @@ densify_logic(
     unsigned int tid = threadIdx.x;
     uint64_t quad_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + tid;
     
-    // Store up to 4 non-zero elements per thread
-    __align__(16) int32_t values[4];
-    __align__(16) int64_t indices[4];
+    __align__(16) int4 quad = make_int4(0, 0, 0, 0);
     uint32_t n_nonzero = 0;
-    uint64_t base_idx = quad_idx << 2;
 
     if(quad_idx < n_quads) {
-        bool is_last_quad = (quad_idx == n_quads - 1);
-        uint64_t remaining = n_elements - base_idx;
-        
-        if(is_last_quad && remaining < 4) {
-            // Last incomplete quad - read individual int32_t values to avoid segfault
-            int32_t* elem_ptr = reinterpret_cast<int32_t*>(rw_source) + base_idx;
-            for(uint32_t j = 0; j < remaining; j++) {
-                int32_t val = elem_ptr[j];
-                if(val != 0) {
-                    values[n_nonzero] = val;
-                    indices[n_nonzero] = static_cast<int64_t>(base_idx + j);
-                    n_nonzero++;
-                    // Erase source if requested
-                    if(erase_input) {
-                        elem_ptr[j] = 0;
-                    }
-                }
-            }
-        } else {
-            // Complete quad - safe to read int4
-            int4 quad = rw_source[quad_idx];
-            if(quad.x != 0) {
-                values[n_nonzero] = quad.x;
-                indices[n_nonzero] = static_cast<int64_t>(base_idx);
-                n_nonzero++;
-            }
-            if(quad.y != 0) {
-                values[n_nonzero] = quad.y;
-                indices[n_nonzero] = static_cast<int64_t>(base_idx + 1);
-                n_nonzero++;
-            }
-            if(quad.z != 0) {
-                values[n_nonzero] = quad.z;
-                indices[n_nonzero] = static_cast<int64_t>(base_idx + 2);
-                n_nonzero++;
-            }
-            if(quad.w != 0) {
-                values[n_nonzero] = quad.w;
-                indices[n_nonzero] = static_cast<int64_t>(base_idx + 3);
-                n_nonzero++;
-            }
-            // Erase source if requested
-            if(erase_input) {
-                rw_source[quad_idx] = make_int4(0, 0, 0, 0);
-            }
+        int4 quad = rw_source[quad_idx];
+
+        if(quad.x != 0) {
+            n_nonzero++;
+        }
+        if(quad.y != 0) {
+            n_nonzero++;
+        }
+        if(quad.z != 0) {
+            n_nonzero++;
+        }
+        if(quad.w != 0) {
+            n_nonzero++;
+        }
+
+        if(erase_input) {
+            rw_source[quad_idx] = make_int4(0, 0, 0, 0);
         }
     }
 
     if(device == -1) {
-        // CPU implementation
-        for(uint32_t j = 0; j < n_nonzero; j++) {
-            uint32_t offset = (*rw_counter_ptr)++;
-            w_target_indices[offset] = indices[j];
-            w_target_values[offset] = values[j];
+        if(n_nonzero > 0) {
+            uint32_t offset = *rw_counter_ptr;
+            uint64_t base_idx = quad_idx << 2;
+            if(quad.x != 0) {
+                w_target_indices[offset] = base_idx;
+                w_target_values[offset++] = quad.x;
+            }
+            if(quad.y != 0) {
+                w_target_indices[offset] = base_idx + 1;
+                w_target_values[offset++] = quad.y;
+            }
+            if(quad.z != 0) {
+                w_target_indices[offset] = base_idx + 2;
+                w_target_values[offset++] = quad.z;
+            }
+            if(quad.w != 0) {
+                w_target_indices[offset] = base_idx + 3;
+                w_target_values[offset++] = quad.w;
+            }
+            *rw_counter_ptr = offset + n_nonzero;
         }
     } else {
         #ifdef ATOMIC
@@ -120,120 +103,23 @@ densify_logic(
         }
 
         if(n_nonzero > 0) {
-            uint32_t base_offset = sdata[tid];
-//
-//            //------------------------------------------------------------
-//            // 1. FIX ODD ALIGNMENT (if base_offset is odd, write 1 scalar)
-//            //    After this step, base_offset is guaranteed EVEN.
-//            //------------------------------------------------------------
-//            if(n_nonzero > 0 && (base_offset & 1)) {
-//                // write one scalar to repair alignment
-//                w_target_indices[base_offset] = indices[0];
-//                w_target_values[base_offset]  = values[0];
-//
-//                base_offset += 1;
-//
-//                // shift local arrays left by one
-//                if (n_nonzero > 1) {
-//                    indices[0] = indices[1];
-//                    values[0]  = values[1];
-//                }
-//                if (n_nonzero > 2) {
-//                    indices[1] = indices[2];
-//                    values[1]  = values[2];
-//                }
-//                if (n_nonzero > 3) {
-//                    indices[2] = indices[3];
-//                    values[2]  = values[3];
-//                }
-//
-//                n_nonzero--;
-//            }
-//
-//            // now base_offset % 2 == 0 → safe for duplex (int2 / longlong2)
-//
-//            //------------------------------------------------------------
-//            // 2. CHECK FOR FULL 16-BYTE ALIGNMENT → int4 path for n==4
-//            //------------------------------------------------------------
-//            if (n_nonzero == 4 && ((base_offset & 3) == 0)) {
-//                // ---- values (int4) ----
-//                int4* v4 = reinterpret_cast<int4*>(w_target_values + base_offset);
-//                *v4 = *reinterpret_cast<int4*>(values);
-//
-//                // ---- indices (two × longlong2) ----
-//                longlong2* i2_0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
-//                *i2_0 = *reinterpret_cast<longlong2*>(indices);
-//
-//                longlong2* i2_1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
-//                *i2_1 = *reinterpret_cast<longlong2*>(indices + 2);
-//
-//                return;
-//            }
-//
-//            //------------------------------------------------------------
-//            // 3. GENERAL CASE: n_nonzero ∈ {1,2,3,4} AFTER ALIGNMENT FIX
-//            //    We are guaranteed base_offset is even, so duplex ok.
-//            //------------------------------------------------------------
-//
-//            if (n_nonzero >= 2) {
-//                // ---- write first duplex (2 elements) ----
-//                int2* v2 = reinterpret_cast<int2*>(w_target_values + base_offset);
-//                *v2 = *reinterpret_cast<int2*>(values);
-//
-//                longlong2* i2 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
-//                *i2 = *reinterpret_cast<longlong2*>(indices);
-//
-//                base_offset += 2;
-//                n_nonzero -= 2;
-//
-//                // shift remaining elements to front in local arrays
-//                if (n_nonzero > 0) {
-//                    indices[0] = indices[2];
-//                    values[0]  = values[2];
-//                }
-//                if (n_nonzero == 2) {
-//                    indices[1] = indices[3];
-//                    values[1]  = values[3];
-//                }
-//            }
-//
-//            //------------------------------------------------------------
-//            // 4. TAIL CASES (after possible duplex):
-//            //    • n_nonzero == 1 → scalar
-//            //    • n_nonzero == 0 → nothing
-//            //------------------------------------------------------------
-
-            if (n_nonzero == 4 && ((base_offset & 3) == 0)) {
-                // ---- values (int4) ----
-                int4* v4 = reinterpret_cast<int4*>(w_target_values + base_offset);
-                *v4 = *reinterpret_cast<int4*>(values);
-
-                // ---- indices (two × longlong2) ----
-                longlong2* i2_0 = reinterpret_cast<longlong2*>(w_target_indices + base_offset);
-                *i2_0 = *reinterpret_cast<longlong2*>(indices);
-
-                longlong2* i2_1 = reinterpret_cast<longlong2*>(w_target_indices + base_offset + 2);
-                *i2_1 = *reinterpret_cast<longlong2*>(indices + 2);
-
-                return;
+            uint32_t offset = sdata[tid];
+            uint64_t base_idx = quad_idx << 2;
+            if(quad.x != 0) {
+                w_target_indices[offset] = base_idx;
+                w_target_values[offset++] = quad.x;
             }
-
-            w_target_indices[base_offset] = indices[0];
-            w_target_values[base_offset]  = values[0];
-
-            if (n_nonzero > 1) {
-                w_target_indices[base_offset + 1] = indices[1];
-                w_target_values[base_offset + 1]  = values[1];
+            if(quad.y != 0) {
+                w_target_indices[offset] = base_idx + 1;
+                w_target_values[offset++] = quad.y;
             }
-
-            if (n_nonzero > 2) {
-                w_target_indices[base_offset + 2] = indices[2];
-                w_target_values[base_offset + 2]  = values[2];
+            if(quad.z != 0) {
+                w_target_indices[offset] = base_idx + 2;
+                w_target_values[offset++] = quad.z;
             }
-
-            if (n_nonzero > 3) {
-                w_target_indices[base_offset + 3] = indices[3];
-                w_target_values[base_offset + 3]  = values[3];
+            if(quad.w != 0) {
+                w_target_indices[offset] = base_idx + 3;
+                w_target_values[offset++] = quad.w;
             }
         }
         #endif
@@ -252,24 +138,11 @@ count_nonzero_logic(
     uint32_t cnt = 0;
 
     if(quad_idx < n_quads) {
-        uint64_t base_idx = quad_idx << 2;
-        bool is_last_quad = (quad_idx == n_quads - 1);
-        uint64_t remaining = n_elements - base_idx;
-        
-        if(is_last_quad && remaining < 4) {
-            // Last incomplete quad - read individual int32_t values to avoid segfault
-            int32_t* elem_ptr = reinterpret_cast<int32_t*>(array) + base_idx;
-            if(remaining > 0 && elem_ptr[0] != 0) cnt++;
-            if(remaining > 1 && elem_ptr[1] != 0) cnt++;
-            if(remaining > 2 && elem_ptr[2] != 0) cnt++;
-        } else {
-            // Complete quad - safe to read int4
-            int4 quad = array[quad_idx];
-            if(quad.x != 0) cnt++;
-            if(quad.y != 0) cnt++;
-            if(quad.z != 0) cnt++;
-            if(quad.w != 0) cnt++;
-        }
+        __align__(16) int4 quad = array[quad_idx];
+        if(quad.x != 0) cnt++;
+        if(quad.y != 0) cnt++;
+        if(quad.z != 0) cnt++;
+        if(quad.w != 0) cnt++;
     }
 
     if(device == -1) {
@@ -297,4 +170,3 @@ count_nonzero_logic(
         #endif
     }
 }
-

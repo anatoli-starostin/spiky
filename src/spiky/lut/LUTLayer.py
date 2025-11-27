@@ -27,6 +27,7 @@ class LUTSharedContext(object):
         self._sparse_firing_buffer = None
         self._before_detectors_gradients_buffer = None
         self._weight_gradients_buffer = None
+        self._dense_to_sparse_converter = None
         self._device = None
         self._do_asserts = do_asserts
 
@@ -60,6 +61,11 @@ class LUTSharedContext(object):
         if self._do_asserts:
             assert torch.count_nonzero(buf) == 0
         return buf[:numel]
+
+    def get_dense_to_sparse_converter(self):
+        if self._dense_to_sparse_converter is None:
+            self._dense_to_sparse_converter = DenseToSparseConverter()
+        return self._dense_to_sparse_converter
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -116,12 +122,6 @@ class LUTLayerBasic(nn.Module):
 
         self._shared_context = shared_context
         self._use_sparse_w_gradients = use_sparse_w_gradients
-        
-        # Initialize DenseToSparseConverter for sparse gradients mode
-        if self._use_sparse_w_gradients:
-            self._dense_to_sparse_converter = DenseToSparseConverter()
-        else:
-            self._dense_to_sparse_converter = None
 
         # Handle positional embeddings
         if sequence_length > 1:
@@ -515,7 +515,8 @@ class LUTLayerBasic(nn.Module):
 
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
-            indices, values = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
+            converter = self._shared_context.get_dense_to_sparse_converter()
+            indices, values = converter.dense_to_sparse_32(target_w_grad, erase_input=True)
             if indices is not None:
                 if values.numel() > 0 and self._do_normalize_gradients:
                     with torch.no_grad():
@@ -622,7 +623,8 @@ class LUTLayerBasic(nn.Module):
 
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
-            indices, values = self._dense_to_sparse_converter.dense_to_sparse_32(target_w_grad, erase_input=True)
+            converter = self._shared_context.get_dense_to_sparse_converter()
+            indices, values = converter.dense_to_sparse_32(target_w_grad, erase_input=True)
             if indices is not None:
                 if values.numel() > 0 and self._do_normalize_gradients:
                     with torch.no_grad():
