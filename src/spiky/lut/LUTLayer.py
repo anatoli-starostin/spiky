@@ -471,8 +471,9 @@ class LUTLayerBasic(nn.Module):
 
         x_grad = torch.zeros_like(x)
         if self._use_sparse_w_gradients:
+            numel = ((self._weights.numel() + 3) // 4) * 4
             target_w_grad = self._shared_context.get_weight_gradients_buffer(
-                self._weights.numel(),
+                numel,
                 self.device
             )
         else:
@@ -523,7 +524,7 @@ class LUTLayerBasic(nn.Module):
             target_w_grad = torch.sparse_coo_tensor(
                 indices=indices.unsqueeze(0),
                 values=values,
-                size=values.shape,
+                size=self._weights.numel(),
                 is_coalesced=True
             )
         elif self._do_normalize_gradients:
@@ -575,8 +576,9 @@ class LUTLayerBasic(nn.Module):
 
         x_grad = torch.zeros_like(x)
         if self._use_sparse_w_gradients:
+            numel = ((self._weights.numel() + 3) // 4) * 4
             target_w_grad = self._shared_context.get_weight_gradients_buffer(
-                self._weights.numel(),
+                numel,
                 self.device
             )
         else:
@@ -626,7 +628,7 @@ class LUTLayerBasic(nn.Module):
             target_w_grad = torch.sparse_coo_tensor(
                 indices=indices.unsqueeze(0),
                 values=values,
-                size=values.shape,
+                size=self._weights.numel(),
                 is_coalesced=True
             )
         else:

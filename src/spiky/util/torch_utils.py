@@ -45,7 +45,10 @@ class DenseToSparseConverter:
         # Check that source is 32-bit
         if source.element_size() != 4:
             raise ValueError(f"source tensor must be 32-bit (element_size == 4), got {source.element_size()}")
-        
+
+        if (source.numel() % 4) == 0:
+            raise ValueError(f"source tensor size must be divisable by 4")
+
         # Create or reuse counter buffer
         if self._counter_buffer is None or self._counter_buffer.device != source.device:
             self._counter_buffer = torch.zeros(1, dtype=torch.int32, device=source.device)
@@ -73,25 +76,3 @@ class DenseToSparseConverter:
             String containing profiling statistics, or "profiler is disabled" if profiling is not enabled.
         """
         return self._native.get_profiling_stats()
-
-
-class SparseSGD(torch.optim.Optimizer):
-    def __init__(self, params, lr):
-        super().__init__(params, dict(lr=lr))
-
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            lr = group['lr']
-            for p in group['params']:
-                g = p.grad
-                if g is None:
-                    continue
-
-                if isinstance(g, tuple):
-                    # sparse: (indices, values)
-                    idx, val = g
-                    p[idx] -= lr * val
-                else:
-                    # dense: tensor
-                    p -= lr * g
