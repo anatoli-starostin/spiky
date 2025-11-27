@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import torch
 from spiky_cuda import DenseToSparseConverterNative
 
@@ -27,8 +29,9 @@ class DenseToSparseConverter:
     def dense_to_sparse_32(
         self,
         source: torch.Tensor,
-        erase_input: bool = False
-    ) -> torch.Tensor:
+        erase_input: bool = False,
+        densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Convert a dense 1D 32-bit tensor to sparse format.
 
@@ -38,9 +41,12 @@ class DenseToSparseConverter:
         Args:
             source: 1D dense tensor to convert. Must be contiguous and 32-bit (element_size == 4).
             erase_input: If True, zeros out the source tensor during conversion. Default is False.
+            densify_buffers: Optional tuple (values, indices) with preallocated tensors to reuse.
+                When provided, count_nonzero is skipped and the tensors are passed directly to the
+                native converter.
 
         Returns:
-            Tuple of (indices, values) tensors, or None if no non-zero elements.
+            Tuple of (indices, values) tensors, or (None, None) if no non-zero elements.
         """
         # Check that source is 32-bit
         if source.element_size() != 4:
@@ -52,19 +58,43 @@ class DenseToSparseConverter:
         # Create or reuse counter buffer
         if self._counter_buffer is None or self._counter_buffer.device != source.device:
             self._counter_buffer = torch.zeros(1, dtype=torch.int32, device=source.device)
-        
-        # Count non-zero elements using native method
-        nnz = self._native.count_nonzero(source, self._counter_buffer)
 
-        if nnz == 0:
-            return None, None
+        provided_buffers = densify_buffers is not None
 
-        # Create empty indices and values tensors
-        indices = torch.empty(nnz, dtype=torch.int64, device=source.device)
-        values = torch.empty(nnz, dtype=source.dtype, device=source.device)
+        if provided_buffers:
+            values, indices = densify_buffers
+            if values.dim() != 1 or indices.dim() != 1:
+                raise ValueError("densify_buffers tensors must be 1D")
+            if values.dtype != source.dtype:
+                raise ValueError("densify_buffers values tensor must match source dtype")
+            if indices.dtype != torch.int64:
+                raise ValueError("densify_buffers indices tensor must be int64")
+            if values.device != source.device or indices.device != source.device:
+                raise ValueError("densify_buffers tensors must be on the same device as source")
+            if not values.is_contiguous() or not indices.is_contiguous():
+                raise ValueError("densify_buffers tensors must be contiguous")
+            if values.numel() != indices.numel():
+                raise ValueError("densify_buffers tensors must have the same length")
+        else:
+            # Count non-zero elements using native method
+            nnz = self._native.count_nonzero(source, self._counter_buffer)
+
+            if nnz == 0:
+                return None, None
+
+            # Create empty indices and values tensors
+            indices = torch.empty(nnz, dtype=torch.int64, device=source.device)
+            values = torch.empty(nnz, dtype=source.dtype, device=source.device)
         
         # Run native method
         self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input)
+
+        if provided_buffers:
+            nnz_written = self._counter_buffer[0].item()
+            if nnz_written == 0:
+                return None, None
+            # Return copies to decouple from shared buffers
+            return indices[:nnz_written].clone(), values[:nnz_written].clone()
 
         return indices, values
     

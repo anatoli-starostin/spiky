@@ -27,6 +27,8 @@ class LUTSharedContext(object):
         self._sparse_firing_buffer = None
         self._before_detectors_gradients_buffer = None
         self._weight_gradients_buffer = None
+        self._densify_indices_buffer = None
+        self._densify_values_buffer = None
         self._dense_to_sparse_converter = None
         self._device = None
         self._do_asserts = do_asserts
@@ -66,6 +68,11 @@ class LUTSharedContext(object):
         if self._dense_to_sparse_converter is None:
             self._dense_to_sparse_converter = DenseToSparseConverter()
         return self._dense_to_sparse_converter
+
+    def get_densify_buffers(self, numel, device):
+        indices = self._ensure_buffer('_densify_indices_buffer', numel, torch.int64, device)
+        values = self._ensure_buffer('_densify_values_buffer', numel, torch.float32, device)
+        return indices[:numel], values[:numel]
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -516,7 +523,10 @@ class LUTLayerBasic(nn.Module):
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             converter = self._shared_context.get_dense_to_sparse_converter()
-            indices, values = converter.dense_to_sparse_32(target_w_grad, erase_input=True)
+            indices, values = converter.dense_to_sparse_32(
+                target_w_grad, erase_input=True,
+                densify_buffers=self._shared_context.get_densify_buffers(self._n_detectors * 2 * batch_size)
+            )
             if indices is not None:
                 if values.numel() > 0 and self._do_normalize_gradients:
                     with torch.no_grad():
@@ -533,9 +543,9 @@ class LUTLayerBasic(nn.Module):
                 target_w_grad = None
         elif self._do_normalize_gradients:
             with torch.no_grad():
-                m = target_w_grad[:self._weights.numel()].abs().max()
+                m = target_w_grad.abs().max()
                 if m > 1e-16:
-                    target_w_grad[:self._weights.numel()] /= m
+                    target_w_grad /= m
 
         return x_grad.view(source_x_shape), target_w_grad
 
@@ -624,7 +634,12 @@ class LUTLayerBasic(nn.Module):
         if self._use_sparse_w_gradients:
             # Use DenseToSparseConverter to convert weight gradients to sparse format
             converter = self._shared_context.get_dense_to_sparse_converter()
-            indices, values = converter.dense_to_sparse_32(target_w_grad, erase_input=True)
+            indices, values = converter.dense_to_sparse_32(
+                target_w_grad, erase_input=True,
+                densify_buffers=self._shared_context.get_densify_buffers(
+                    self._n_detectors * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size
+                )
+            )
             if indices is not None:
                 if values.numel() > 0 and self._do_normalize_gradients:
                     with torch.no_grad():
