@@ -134,9 +134,9 @@ public:
         uint32_t tpb = 1024;  // Threads per block (power of 2)
         uint32_t num_blocks = static_cast<uint32_t>((n_quads + tpb - 1) / tpb);
         dim3 numBlocks(num_blocks, 1);
-        uint32_t shared_mem_size = tpb * sizeof(uint32_t);
 
         if ((device != -1) && _use_new_kernel) {
+            uint32_t shared_mem_size = ((tbp + 31) >> 5) * sizeof(uint32_t);
             GRID_CALL_SHARED_MEM(
                 numBlocks, densify_new, tpb, shared_mem_size,
                 reinterpret_cast<int4*>(source.data_ptr()),
@@ -148,6 +148,7 @@ public:
                 device
             );
         } else {
+            uint32_t shared_mem_size = tpb * sizeof(uint32_t);
             GRID_CALL_SHARED_MEM(
                 numBlocks, densify, tpb, shared_mem_size,
                 reinterpret_cast<int4*>(source.data_ptr()),
