@@ -323,16 +323,6 @@ densify_new_logic(
         mask |= (uint32_t)(quad.y != 0) << 1;
         mask |= (uint32_t)(quad.z != 0) << 2;
         mask |= (uint32_t)(quad.w != 0) << 3;
-
-        if (erase_input) {
-            void* p = &rw_source[quad_idx];  // 16-byte aligned
-            asm volatile (
-                "st.global.v2.u64 [%0], {%1, %2};\n"
-                :
-                : "l"(p), "l"(0ull), "l"(0ull)
-                : "memory"
-            );
-        }
     }
 
     uint32_t local_nnz = __popc(mask);   // 0..4
@@ -384,7 +374,7 @@ densify_new_logic(
     prefix -= local_nnz;
 
     // --- write out using mask and prefix directly ---
-    if (local_nnz > 0 && quad_idx < n_quads) {
+    if (local_nnz > 0) {
         uint64_t base_idx = quad_idx << 2;  // *4 ints
 
         if (mask & 1) {
@@ -413,6 +403,31 @@ densify_new_logic(
         }
         if (mask & 8) {
             w_target_values[prefix++]  = quad.w;
+        }
+
+        if(erase_input) {
+            if(local_nnz > 1) {
+                void* p = &rw_source[quad_idx];  // 16-byte aligned
+                asm volatile (
+                    "st.global.v2.u64 [%0], {%1, %2};\n"
+                    :
+                    : "l"(p), "l"(0ull), "l"(0ull)
+                    : "memory"
+                );
+            } else {
+                if (mask & 1) {
+                    rw_source[quad_idx].x = 0;
+                }
+                if (mask & 2) {
+                    rw_source[quad_idx].y = 0;
+                }
+                if (mask & 4) {
+                    rw_source[quad_idx].z = 0;
+                }
+                if (mask & 8) {
+                    rw_source[quad_idx].w = 0;
+                }
+            }
         }
     }
 #endif
