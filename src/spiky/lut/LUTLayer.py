@@ -526,7 +526,7 @@ class LUTLayerBasic(nn.Module):
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
-                    self._n_detectors * 2 * batch_size,
+                    self._n_detectors * 2 * self._n_outputs * batch_size,
                     self.device
                 )
             )
@@ -640,7 +640,7 @@ class LUTLayerBasic(nn.Module):
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
-                    self._n_detectors * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size,
+                    self._n_detectors * self._n_outputs * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size,
                     self.device
                 )
             )
