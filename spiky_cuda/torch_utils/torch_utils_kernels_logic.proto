@@ -181,19 +181,19 @@ densify_new_logic(
 )
 {
     #ifdef ATOMIC
-    int tbp = blockDim.x;
+    int tpb = blockDim.x;
     int tid = threadIdx.x;
     int lane = tid & 31;
     int warpId = tid >> 5;
 
-    int NWARPS = (tbp + 31) >> 5;
+    int NWARPS = (tpb + 31) >> 5;
 
     extern __shared__ uint32_t warp_sums[];
     __shared__ uint32_t block_base;
 
     const unsigned FULL = 0xffffffffu;
 
-    uint64_t quad_base = (uint64_t(blockIdx.x) * tbp + tid) * DENSIFY_QUADS_PER_THREAD;
+    uint64_t quad_base = (uint64_t(blockIdx.x) * tpb + tid) * DENSIFY_QUADS_PER_THREAD;
 
     int32_t values[DENSIFY_INTS_PER_THREAD];
     uint32_t local_nnz = 0;
