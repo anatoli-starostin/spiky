@@ -188,7 +188,9 @@ densify_new_logic(
 
     int NWARPS = (tpb + 31) >> 5;
 
-    extern __shared__ uint32_t warp_sums[];
+    extern __shared__ __align__(16) uint8_t __sm[];
+    uint32_t *warp_sums = reinterpret_cast<uint32_t *>(__sm);
+    
     __shared__ uint32_t block_base;
     const unsigned FULL = 0xffffffffu;
 
