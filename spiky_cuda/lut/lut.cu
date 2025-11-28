@@ -18,7 +18,8 @@ public:
         uint32_t sequence_length,
         uint32_t positional_dim,
         uint64_t initial_synapse_capacity,
-        uint32_t synapse_group_size
+        uint32_t forward_group_size,
+        uint32_t backward_group_size
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , double int_rescaler
         #endif
@@ -38,7 +39,8 @@ public:
         sequence_length(sequence_length),
         positional_dim(positional_dim),
         n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector * ((sequence_length > 1) ? 2 : 1)))),
-        synapse_group_size(synapse_group_size)
+        forward_group_size(forward_group_size),
+        backward_group_size(backward_group_size)
     {
         // Validate inputs
         if(n_inputs == 0) {
@@ -56,11 +58,17 @@ public:
         if(sequence_length == 0) {
             throw py::value_error("sequence_length == 0");
         }
-        if(synapse_group_size == 0) {
-            throw py::value_error("synapse_group_size == 0");
+        if(forward_group_size == 0) {
+            throw py::value_error("forward_group_size == 0");
         }
-        if(synapse_group_size > MAX_SYNAPSE_GROUP_SIZE) {
-            throw py::value_error("synapse_group_size > MAX_SYNAPSE_GROUP_SIZE");
+        if(forward_group_size > MAX_SYNAPSE_GROUP_SIZE) {
+            throw py::value_error("forward_group_size > MAX_SYNAPSE_GROUP_SIZE");
+        }
+        if(backward_group_size == 0) {
+            throw py::value_error("backward_group_size == 0");
+        }
+        if(backward_group_size > MAX_SYNAPSE_GROUP_SIZE) {
+            throw py::value_error("backward_group_size > MAX_SYNAPSE_GROUP_SIZE");
         }
 
         this->base_synapse_metas_id = host_device_allocator.allocate(MAX_N_SYNAPSE_METAS * sizeof(BaseSynapseMeta), SYNAPSE_METAS_MEMORY_LABEL);
@@ -154,7 +162,7 @@ public:
             0, 0,
             min_synaptic_weight, max_synaptic_weight,
             initial_noise_level, initial_weight,
-            this->synapse_group_size, this->synapse_group_size
+            this->forward_group_size, this->backward_group_size
         };
         BaseSynapseMeta *current_base_synapse_meta = BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data);
         uint32_t i=0;
@@ -187,7 +195,7 @@ public:
             GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
             gc_meta->first_synapse_id = 0;
             gc_meta->last_synapse_id = (static_cast<uint64_t>(this->n_lookup_neurons) * this->n_outputs - 1) * SizeOfSynapse(true);
-            gc_meta->max_forward_groups_per_neuron = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+            gc_meta->max_forward_groups_per_neuron = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
             delete this->weights_allocator;
             this->weights_allocator = nullptr;
         } else {
@@ -328,7 +336,8 @@ public:
                 1.0,  // max_synaptic_weight
                 0.0,  // initial_noise_level
                 0.0,  // initial_weight
-                this->synapse_group_size,
+                this->forward_group_size,
+                this->backward_group_size,
                 this->synapse_group_size
             };
             BaseSynapseMeta *synapse_meta_ptr = BaseSynapseMetas(detector_synapse_metas_id, detector_connections_allocator->data);
@@ -625,7 +634,8 @@ public:
                 this->n_lookup_neurons,
                 this->sequence_length,
                 this->positional_dim,
-                this->synapse_group_size,
+                this->forward_group_size,
+                this->backward_group_size,
                 gc_meta->max_forward_groups_per_neuron,
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 N_WEIGHTS(gc_meta, true),
@@ -703,7 +713,8 @@ public:
                 this->n_lookup_neurons,
                 this->sequence_length,
                 this->positional_dim,
-                this->synapse_group_size,
+                this->forward_group_size,
+                this->backward_group_size,
                 gc_meta->max_forward_groups_per_neuron,
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 N_WEIGHTS(gc_meta, true),
@@ -1004,7 +1015,8 @@ private:
         uint32_t n_anchors_per_detector,
         uint32_t sequence_length,
         uint32_t positional_dim,
-        uint32_t synapse_group_size,
+        uint32_t forward_group_size,
+        uint32_t backward_group_size,
         NeuronDataId_t base_synapse_metas_id,
         uint32_t n_synapse_metas,
         uint64_t n_synapses,
@@ -1030,7 +1042,8 @@ private:
         sequence_length(sequence_length),
         positional_dim(positional_dim),
         n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector) * sequence_length),
-        synapse_group_size(synapse_group_size),
+        forward_group_size(forward_group_size),
+        backward_group_size(backward_group_size),
         base_synapse_metas_id(base_synapse_metas_id),
         n_synapse_metas(n_synapse_metas),
         n_synapses(n_synapses),
@@ -1070,7 +1083,8 @@ private:
     uint32_t sequence_length;
     uint32_t positional_dim;
     uint32_t n_lookup_neurons;
-    uint32_t synapse_group_size;
+    uint32_t forward_group_size;
+    uint32_t backward_group_size;
     NeuronDataId_t base_synapse_metas_id;
     uint32_t n_synapse_metas;
     uint64_t n_synapses;
@@ -1098,7 +1112,8 @@ py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm) {
         ldm.n_anchors_per_detector,
         ldm.sequence_length,
         ldm.positional_dim,
-        ldm.synapse_group_size,
+        ldm.forward_group_size,
+        ldm.backward_group_size,
         ldm.base_synapse_metas_id,
         ldm.n_synapse_metas,
         ldm.n_synapses,
@@ -1132,14 +1147,15 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
             t[5].cast<uint32_t>(),         // n_anchors_per_detector
             t[6].cast<uint32_t>(),         // sequence_length
             t[7].cast<uint32_t>(),         // positional_dim
-            t[8].cast<uint32_t>(),         // synapse_group_size
-            t[9].cast<NeuronDataId_t>(),   // base_synapse_metas_id
-            t[10].cast<uint32_t>(),        // n_synapse_metas
-            t[11].cast<uint64_t>(),        // n_synapses
-            t[12].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
-            t[13].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[8].cast<uint32_t>(),         // forward_group_size
+            t[9].cast<uint32_t>(),         // backward_group_size
+            t[10].cast<NeuronDataId_t>(),   // base_synapse_metas_id
+            t[11].cast<uint32_t>(),        // n_synapse_metas
+            t[12].cast<uint64_t>(),        // n_synapses
+            t[13].cast<NeuronDataId_t>(),  // lookup_neuron_synapses_infos_id
+            t[14].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[14].cast<double>()         // int_rescaler
+            , t[15].cast<double>()         // int_rescaler
             #endif
         )
     );

@@ -22,7 +22,8 @@ private:
     uint32_t n_anchors_per_detector;
     uint32_t n_lookup_neurons;
     uint32_t positional_dim;
-    uint32_t synapse_group_size;
+    uint32_t forward_group_size;
+    uint32_t backward_group_size;
     REAL_DT first_synapse_meta_lr;
 
     uint32_t batch_size;
@@ -54,7 +55,8 @@ public:
         uint32_t n_lookup_neurons,
         uint32_t sequence_length,
         uint32_t positional_dim,
-        uint32_t synapse_group_size,
+        uint32_t forward_group_size,
+        uint32_t backward_group_size,
         uint32_t max_forward_groups_per_neuron,
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         uint64_t n_weights,

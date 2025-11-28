@@ -29,7 +29,8 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     uint32_t n_lookup_neurons,
     uint32_t sequence_length,
     uint32_t positional_dim,
-    uint32_t synapse_group_size,
+    uint32_t forward_group_size,
+    uint32_t backward_group_size,
     uint32_t max_forward_groups_per_neuron,
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights,
@@ -50,7 +51,8 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     n_anchors_per_detector(n_anchors_per_detector),
     n_lookup_neurons(n_lookup_neurons),
     positional_dim(positional_dim),
-    synapse_group_size(synapse_group_size),
+    forward_group_size(forward_group_size),
+    backward_group_size(backward_group_size),
     batch_size(0),
     sequence_length(sequence_length),
     #ifdef ENABLE_PROFILING
@@ -145,7 +147,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
             local_firing_buffer.firings_ptr(),
             local_firing_buffer.counter_ptr(),
-            this->synapse_group_size,
+            this->forward_group_size,
             this->lut_data,
             device
         );
@@ -293,7 +295,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
             local_firing_buffer.firings_ptr(),
             local_firing_buffer.counter_ptr(),
-            this->synapse_group_size,
+            this->forward_group_size,
             this->lut_data,
             device
         );
@@ -325,7 +327,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
-        uint32_t n_output_blocks = (this->n_outputs + this->synapse_group_size - 1) / this->synapse_group_size;
+        uint32_t n_output_blocks = (this->n_outputs + this->backward_group_size - 1) / this->backward_group_size;
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
@@ -347,7 +349,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -366,7 +368,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -383,7 +385,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -413,7 +415,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -434,7 +436,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -453,7 +455,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->synapse_group_size,
+            this->backward_group_size,
             n_lookup_neurons_per_detector,
             (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -767,7 +769,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
 //            firing_buffer->firings_ptr(),
 //            firing_buffer->counter_ptr(),
-//            this->synapse_group_size,
+//            this->forward_group_size,
 //            this->lut_data,
 //            device
 //        );
@@ -793,7 +795,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //        // For now, zero out positional embeddings gradients
 //        // We need to know the size - this should be passed or calculated
 //    } else {
-//        uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
+//        uint32_t n_detector_blocks = (this->n_detectors + this->backward_group_size - 1) / this->backward_group_size;
 //        dim3 numBlocks((this->n_outputs * n_detector_blocks + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size * this->sequence_length);
 //        GRID_CALL_NO_SHARED_MEM(
 //            numBlocks, gather_gradients_fully_connected, LUT_RUNTIME_KERNELS_TPB,
@@ -805,7 +807,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //            this->n_detectors,
 //            n_detector_blocks,
 //            n_lookup_neurons_per_detector,
-//            this->synapse_group_size
+//            this->backward_group_size
 //        );
 //
 //        // TODO: Also gather gradients using positional_lookup_indices for positional_embeddings gradients

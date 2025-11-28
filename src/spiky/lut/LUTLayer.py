@@ -122,7 +122,8 @@ class LUTLayerBasic(nn.Module):
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
-        _synapse_group_size: int = 64,
+        _forward_group_size: int = 64,
+        _backward_group_size: int = 8,
     ):
         super().__init__()
 
@@ -135,7 +136,8 @@ class LUTLayerBasic(nn.Module):
         self._n_detectors = n_detectors
         self._n_anchors_per_detector = n_anchors_per_detector
         self._is_fully_connected = is_fully_connected
-        self._synapse_group_size = _synapse_group_size
+        self._forward_group_size = _forward_group_size
+        self._backward_group_size = _backward_group_size
         self._sequence_length = sequence_length
 
         if shared_context is None:
@@ -176,7 +178,8 @@ class LUTLayerBasic(nn.Module):
                 sequence_length,
                 positional_dim if positional_dim is not None else 0,
                 _initial_synapse_capacity,
-                _synapse_group_size
+                _forward_group_size,
+                _backward_group_size
             )
         else:
             self._lut_dm = LUTDataManagerI(
@@ -184,7 +187,8 @@ class LUTLayerBasic(nn.Module):
                 sequence_length,
                 positional_dim if positional_dim is not None else 0,
                 _initial_synapse_capacity,
-                _synapse_group_size,
+                _forward_group_size,
+                _backward_group_size,
                 _int_rescaler
             )
 
@@ -587,7 +591,7 @@ class LUTLayerBasic(nn.Module):
 
         if self._weights_gradient_policy.type == GradientType.Sparse:
             converter = self._shared_context.get_dense_to_sparse_converter()
-            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._synapse_group_size
+            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
@@ -709,7 +713,7 @@ class LUTLayerBasic(nn.Module):
 
         if self._weights_gradient_policy.type == GradientType.Sparse:
             converter = self._shared_context.get_dense_to_sparse_converter()
-            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._synapse_group_size
+            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
@@ -890,7 +894,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
         summation_dtype=torch.float32,
         _explicit_anchors=None,
         _int_rescaler=0.001,
-        _synapse_group_size=64,
+        _forward_group_size=64,
+        _backward_group_size=8,
         _max_groups_in_growth_buffer=2 ** 20,
         random_seed=1,
         device=None
@@ -943,7 +948,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
-            _synapse_group_size=_synapse_group_size,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size,
         )
 
         if device is not None:
@@ -1057,7 +1063,8 @@ class LUTLayer(Conv2DLUTLayer):
         summation_dtype=torch.float32,
         _explicit_anchors=None,
         _int_rescaler=0.001,
-        _synapse_group_size=64,
+        _forward_group_size=64,
+        _backward_group_size=8,
         _max_groups_in_growth_buffer=2 ** 20,
         random_seed=1,
         device=None
@@ -1079,7 +1086,8 @@ class LUTLayer(Conv2DLUTLayer):
             summation_dtype=summation_dtype,
             _explicit_anchors=_explicit_anchors,
             _int_rescaler=_int_rescaler,
-            _synapse_group_size=_synapse_group_size,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size,
             _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
             random_seed=random_seed,
             device=device

@@ -121,7 +121,7 @@ def _test_lut_forward_simple(
                 synapse_meta=synapse_meta,
                 summation_dtype=summation_dtype,
                 _int_rescaler=1.0,
-                _synapse_group_size=synapse_group_size,
+                _forward_group_size=synapse_group_size,
                 random_seed=seed,
                 device=device
             )
