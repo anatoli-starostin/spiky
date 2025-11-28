@@ -337,8 +337,7 @@ public:
                 0.0,  // initial_noise_level
                 0.0,  // initial_weight
                 this->forward_group_size,
-                this->backward_group_size,
-                this->synapse_group_size
+                this->backward_group_size
             };
             BaseSynapseMeta *synapse_meta_ptr = BaseSynapseMetas(detector_synapse_metas_id, detector_connections_allocator->data);
             if(device == -1) {
@@ -476,7 +475,7 @@ public:
             max_pairs_per_detector,
             this->n_anchors_per_detector,
             backward_indexed_synapses_ptr,
-            this->synapse_group_size,
+            this->backward_group_size,
             detector_infos,
             detector_connections_allocator->data,
             error_counter

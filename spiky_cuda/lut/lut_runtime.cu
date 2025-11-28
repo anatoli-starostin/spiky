@@ -191,7 +191,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         );
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
-        uint32_t n_detector_blocks = (this->n_detectors + this->synapse_group_size - 1) / this->synapse_group_size;
+        uint32_t n_detector_blocks = (this->n_detectors + this->forward_group_size - 1) / this->forward_group_size;
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         uint32_t n_items = n_outputs * n_detector_blocks;
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
@@ -204,7 +204,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             this->n_detectors,
             n_detector_blocks,
             n_lookup_neurons_per_detector,
-            this->synapse_group_size
+            this->forward_group_size
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -673,7 +673,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_lookup_neurons,
         this->n_outputs,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
-        this->synapse_group_size,
+        this->forward_group_size,
         this->lut_data
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
