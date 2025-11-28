@@ -941,6 +941,7 @@ gather_gradients_fully_connected_old_logic(
 
             if(fabs(output_grad) > EPS) {
                 grad_x += weight * output_grad;
+                if(r_min_anchor_delta_indices == nullptr) {
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                     sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
                     #ifdef ATOMIC
@@ -962,6 +963,7 @@ gather_gradients_fully_connected_old_logic(
                     w_weights_gradients[cursor] += sum32_delta;
                     #endif
                 #endif
+                }
             }
         }
 

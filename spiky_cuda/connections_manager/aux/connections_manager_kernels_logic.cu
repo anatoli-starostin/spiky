@@ -2606,7 +2606,6 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(gather_forward_info_logic_atomic_)(
         sdata[tid] = n_forward_groups;
         __syncthreads();
 
-        uint64_t t;
         for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
             if(tid < s) {
                 sdata[tid] += sdata[tid + s];
