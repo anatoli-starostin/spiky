@@ -36,7 +36,7 @@ class DenseToSparseConverter:
         self,
         source: torch.Tensor,
         erase_input: bool = False,
-        densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Convert a dense 1D 32-bit tensor to sparse format.
@@ -50,6 +50,7 @@ class DenseToSparseConverter:
             densify_buffers: Optional tuple (values, indices) with preallocated tensors to reuse.
                 When provided, count_nonzero is skipped and the tensors are passed directly to the
                 native converter.
+            requires_grad: boolean that is passed to values
 
         Returns:
             Tuple of (indices, values) tensors, or (None, None) if no non-zero elements.

@@ -716,46 +716,6 @@ gather_gradients_logic(
     }
 }
 
-gather_x_gradients_fully_connected_simple_logic(
-    EXTERNAL_REAL_DT* r_weights,
-    EXTERNAL_REAL_DT* r_output_gradients,
-    int32_t* r_lookup_indices,
-    int32_t* r_min_anchor_delta_indices,
-    SUMMATION32_DT* w_before_detectors_gradients,
-    uint32_t n_outputs,
-    uint32_t n_detectors,
-    uint32_t n_lookup_neurons_per_detector,
-    double lr,
-    double int_rescaler
-) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < n_detectors * n_outputs) {
-        uint32_t detector_index = i / n_outputs;
-        uint32_t output_index = i % n_outputs;
-        r_lookup_indices += blockIdx.y * n_detectors;
-        int32_t lookup_index = r_lookup_indices[detector_index];
-        if(r_min_anchor_delta_indices != nullptr) {
-            r_min_anchor_delta_indices += blockIdx.y * n_detectors;
-            lookup_index ^= (1 << r_min_anchor_delta_indices[detector_index]);
-        }
-        r_weights += static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
-        r_weights += n_outputs * lookup_index;
-        w_before_detectors_gradients += blockIdx.y * n_detectors * n_lookup_neurons_per_detector;
-        w_before_detectors_gradients += detector_index * n_lookup_neurons_per_detector;
-        double grad_x = static_cast<double>(r_output_gradients[output_index]);
-        grad_x *= static_cast<double>(r_weights[output_index]) * lr;
-        SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(grad_x);
-        #ifdef ATOMIC
-        atomicAdd(
-            w_before_detectors_gradients + lookup_index,
-            sum32_delta
-        );
-        #else
-        w_before_detectors_gradients[lookup_index] += sum32_delta;
-        #endif
-    }
-}
-
 gather_x_gradients_fully_connected_logic(
     EXTERNAL_REAL_DT* r_weights,
     EXTERNAL_REAL_DT* r_output_gradients,
@@ -820,72 +780,6 @@ gather_x_gradients_fully_connected_logic(
                 );
                 #else
                 w_before_detectors_gradients[lookup_index] += sum32_delta;
-                #endif
-            #endif
-        }
-    }
-}
-
-fire_x_gradients_fully_connected_logic(
-    EXTERNAL_REAL_DT* r_weights,
-    EXTERNAL_REAL_DT* r_output_gradients,
-    int32_t* r_lookup_indices,
-    int32_t* r_min_anchor_delta_indices,
-    SUMMATION32_DT* w_before_detectors_gradients,
-    uint32_t n_outputs,
-    uint32_t n_detectors,
-    uint32_t n_detector_blocks,
-    int32_t n_detectors_per_block,
-    uint32_t n_lookup_neurons_per_detector,
-    double lr,
-    double int_rescaler
-) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < n_outputs * n_detector_blocks) {
-        uint32_t output_index = i / n_detector_blocks;
-        uint32_t detector_block_index = i % n_detector_blocks;
-        r_lookup_indices += blockIdx.y * n_detectors;
-        r_lookup_indices += detector_block_index * n_detectors_per_block;
-        if(r_min_anchor_delta_indices != nullptr) {
-            r_min_anchor_delta_indices += blockIdx.y * n_detectors;
-            r_min_anchor_delta_indices += detector_block_index * n_detectors_per_block;
-        }
-
-        r_output_gradients += blockIdx.y * n_outputs;
-        uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
-        r_weights += weights_per_detector * detector_block_index * n_detectors_per_block;
-        w_before_detectors_gradients += blockIdx.y * n_detectors;
-        w_before_detectors_gradients += detector_block_index * n_detectors_per_block;
-
-        int32_t lookup_index;
-        double weight;
-        SUMMATION32_DT sum32_delta;
-        for(int32_t cursor=0;cursor < n_detectors_per_block;cursor++, r_weights+=weights_per_detector) {
-            lookup_index = r_lookup_indices[cursor];
-            if(r_min_anchor_delta_indices != nullptr) {
-                lookup_index ^= (1 << r_min_anchor_delta_indices[cursor]);
-            }
-
-            weight = static_cast<double>(r_weights[lookup_index * n_outputs + output_index]);
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + cursor,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[cursor] += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(weight * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + cursor,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[cursor] += sum32_delta;
                 #endif
             #endif
         }
