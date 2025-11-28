@@ -1164,10 +1164,10 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
 void PFX(PB_LUTDataManager)(py::module& m) {
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     py::class_<LUTDataManagerI>(m, "LUTDataManagerI")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, double>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, double>())
     #else
     py::class_<LUTDataManagerF>(m, "LUTDataManagerF")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t>())
     #endif
         .def("get_smallest_distinguishable_fraction", &LUTM_CLASS_NAME::get_smallest_distinguishable_fraction,
             "Returns smallest fraction that can exist inside data manager in integers mode. Returns 0.0 in floats mode.")
