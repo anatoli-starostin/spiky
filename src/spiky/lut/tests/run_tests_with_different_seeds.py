@@ -11,10 +11,10 @@ def main():
     tests = {
         func.__name__: func
         for func in [
-            # test_lut_forward_simple,
-            # test_lut_fully_connected_small,
-            # test_lut_fully_connected,
-            # test_lut_backward,
+            test_lut_forward_simple,
+            test_lut_fully_connected_small,
+            test_lut_fully_connected,
+            test_lut_backward,
             test_dense_to_sparse_converter
         ]
     }
