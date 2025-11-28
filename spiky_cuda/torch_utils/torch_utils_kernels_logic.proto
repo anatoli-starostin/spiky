@@ -58,7 +58,7 @@ densify_logic(
                 w_target_indices[offset] = base_idx + 3;
                 w_target_values[offset++] = quad.w;
             }
-            *rw_counter_ptr = offset + n_nonzero;
+            *rw_counter_ptr = offset;
         }
     } else {
         #ifdef ATOMIC

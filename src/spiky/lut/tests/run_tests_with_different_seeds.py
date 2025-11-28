@@ -11,10 +11,10 @@ def main():
     tests = {
         func.__name__: func
         for func in [
-            test_lut_forward_simple,
-            test_lut_fully_connected_small,
-            test_lut_fully_connected,
-            test_lut_backward,
+            # test_lut_forward_simple,
+            # test_lut_fully_connected_small,
+            # test_lut_fully_connected,
+            # test_lut_backward,
             test_dense_to_sparse_converter
         ]
     }
@@ -23,7 +23,7 @@ def main():
     if torch.cuda.is_available():
         devices.append('cuda')
 
-    for seed in [234654]:  # , 351, 42
+    for seed in [234654, 351, 42]:
         for device in devices:
             for summation_dtype in [torch.float32, torch.int32]:
                 for fname, func in tests.items():

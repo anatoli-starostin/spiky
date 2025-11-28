@@ -82,7 +82,6 @@ class DenseToSparseConverter:
             if values.numel() != indices.numel():
                 raise ValueError("densify_buffers tensors must have the same length")
         else:
-            # Count non-zero elements using native method
             nnz = self._native.count_nonzero(source, self._counter_buffer)
 
             if nnz == 0:
@@ -144,7 +143,7 @@ def test_dense_to_sparse_converter(device, _, seed):
             )
             if do_erase:
                 if torch.count_nonzero(t_data) != 0:
-                    print(f"❌ source non empty after conversion (old kernel)")
+                    print(f"❌ source non empty after conversion (old kernel), do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                     return False
             indices_new, values_new = ds_conv_new.dense_to_sparse_32(
                 t_saved, do_erase,
@@ -152,7 +151,7 @@ def test_dense_to_sparse_converter(device, _, seed):
             )
             if do_erase:
                 if torch.count_nonzero(t_saved) != 0:
-                    print(f"❌ source non empty after conversion (new kernel)")
+                    print(f"❌ source non empty after conversion (new kernel), do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                     return False
             order = torch.argsort(indices_new)
             indices_new = indices_new[order]
@@ -161,10 +160,10 @@ def test_dense_to_sparse_converter(device, _, seed):
             indices_old = indices_old[order]
             values_old = values_old[order]
             if (indices_old - indices_new).abs().max() != 0:
-                print(f"❌ different indices detected")
+                print(f"❌ different indices detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                 return False
             if (values_old - values_new).abs().max() != 0:
-                print(f"❌ different values detected")
+                print(f"❌ different values detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                 return False
 
             return True
