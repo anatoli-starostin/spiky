@@ -563,6 +563,7 @@ gather_gradients_logic(
     uint32_t n_outputs,
     uint8_t* lut_data,
     REAL_DT first_synapse_meta_lr,
+    REAL_DT external_lr, // affects only weights in Internal gradients mode
     BaseSynapseMeta* r_synapse_metas,
     double int_rescaler
 ) {
@@ -598,7 +599,7 @@ gather_gradients_logic(
 
         if(w_weights_gradients == nullptr) {
             // internal gradients mode
-            lr = -lr;
+            lr = -lr * external_lr;
             w_weights_gradients = r_weights;
         }
 
@@ -685,6 +686,15 @@ gather_gradients_logic(
                         #endif
                     #endif
                 }
+            }
+        }
+
+        if(lr < 0.0) {
+            // x_grad should be normal gradient
+            if(sm_index == 0) {
+                lr = static_cast<double>(first_synapse_meta_lr);
+            } else {
+                lr = static_cast<double>((r_synapse_metas + sm_index)->lr);
             }
         }
 
@@ -855,7 +865,8 @@ gather_gradients_fully_connected_old_logic(
     uint32_t n_output_blocks,
     int32_t n_outputs_per_block,
     uint32_t n_lookup_neurons_per_detector,
-    double lr,
+    double internal_lr,
+    double external_lr,
     double int_rescaler
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -869,6 +880,14 @@ gather_gradients_fully_connected_old_logic(
             lookup_index ^= (1 << r_min_anchor_delta_indices[detector_index]);
         }
 
+        double lr = internal_lr;
+
+        if(w_weights_gradients == nullptr) {
+            // internal gradients mode
+            lr = -lr * external_lr;
+            w_weights_gradients = r_weights;
+        }
+
         uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
         weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
         r_weights += weight_shift;
@@ -880,6 +899,7 @@ gather_gradients_fully_connected_old_logic(
         if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
             n_outputs_per_block = n_outputs % n_outputs_per_block;
         }
+
         double grad_x = 0.0;
         int32_t n_o_buffered = 0;
         int32_t n_w_buffered = 0;
@@ -965,6 +985,11 @@ gather_gradients_fully_connected_old_logic(
                 #endif
                 }
             }
+        }
+
+        if(lr < 0.0) {
+            // x_grad should be normal gradient
+            lr = internal_lr;
         }
 
         #ifdef INTEGERS_INSTEAD_OF_FLOATS

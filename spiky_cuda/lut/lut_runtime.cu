@@ -314,6 +314,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->lut_data,
             this->first_synapse_meta_lr,
+            external_lr,
             this->base_synapse_metas
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
@@ -481,13 +482,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_lookup_indices,
             nullptr,
             w_before_detectors_gradients,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+            this->first_synapse_meta_lr,
+            external_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -501,13 +503,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_lookup_indices,
             r_min_anchor_delta_indices,
             w_before_detectors_gradients,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+            this->first_synapse_meta_lr,
+            external_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -530,13 +533,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_lookup_indices,
             nullptr,
             w_before_detectors_gradients,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+            this->first_synapse_meta_lr,
+            external_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -552,13 +556,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             r_lookup_indices,
             r_min_anchor_delta_indices,
             w_before_detectors_gradients,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+            w_weights_gradients,
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
             this->synapse_group_size,
             n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+            this->first_synapse_meta_lr,
+            external_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
