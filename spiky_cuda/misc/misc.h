@@ -15,7 +15,7 @@
 //#define TRACES_FROM_PROFILER
 
 #ifndef NO_CUDA
-//#define USE_CUDA_STREAMS
+#define USE_CUDA_STREAMS
 #endif
 
 #ifdef TRACE
