@@ -126,6 +126,8 @@ def test_dense_to_sparse_converter(device, _, seed):
             ds_conv_new = DenseToSparseConverter(use_new_kernel=True)
             t_data = torch.rand(numel, device=device, generator=g)
             t_data[t_data > 0.5] = 0.0
+            indices_gt = torch.arange(0, numel, device=device)[t_data != 0.0].to(dtype=torch.int64)
+            values_gt = t_data[t_data != 0.0]
             if do_erase:
                 t_saved = t_data.clone()
             else:
@@ -162,8 +164,14 @@ def test_dense_to_sparse_converter(device, _, seed):
             if (indices_old - indices_new).abs().max() != 0:
                 print(f"❌ different indices detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                 return False
+            if (indices_gt - indices_new).abs().max() != 0:
+                print(f"❌ indices difference with gt detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
+                return False
             if (values_old - values_new).abs().max() != 0:
                 print(f"❌ different values detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
+                return False
+            if (values_gt - values_new).abs().max() != 0:
+                print(f"❌ values difference with gt detected, do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
                 return False
 
             return True
