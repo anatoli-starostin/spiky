@@ -4,6 +4,7 @@ from test_lut_forward_simple import test_lut_forward_simple
 from test_lut_fully_connected_small import test_lut_fully_connected_small
 from test_lut_fully_connected import test_lut_fully_connected
 from test_lut_backward import test_lut_backward
+from spiky.util.torch_utils import test_dense_to_sparse_converter
 
 
 def main():
@@ -13,7 +14,8 @@ def main():
             test_lut_forward_simple,
             test_lut_fully_connected_small,
             test_lut_fully_connected,
-            test_lut_backward
+            test_lut_backward,
+            test_dense_to_sparse_converter
         ]
     }
 

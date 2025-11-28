@@ -47,10 +47,9 @@ class DenseToSparseConverter:
         Args:
             source: 1D dense tensor to convert. Must be contiguous and 32-bit (element_size == 4).
             erase_input: If True, zeros out the source tensor during conversion. Default is False.
-            densify_buffers: Optional tuple (values, indices) with preallocated tensors to reuse.
+            densify_buffers: Optional tuple (indices, values) with preallocated tensors to reuse.
                 When provided, count_nonzero is skipped and the tensors are passed directly to the
                 native converter.
-            requires_grad: boolean that is passed to values
 
         Returns:
             Tuple of (indices, values) tensors, or (None, None) if no non-zero elements.
@@ -113,6 +112,62 @@ class DenseToSparseConverter:
             String containing profiling statistics, or "profiler is disabled" if profiling is not enabled.
         """
         return self._native.get_profiling_stats()
+
+
+def test_dense_to_sparse_converter(device, _, seed):
+    numel = 150000
+    if seed is not None:
+        g = torch.Generator(device=device)
+        g.manual_seed(seed)
+    else:
+        g = None
+    for do_erase in [True, False]:
+        for use_densify_buffers in [True, False]:
+            ds_conv_old = DenseToSparseConverter(use_new_kernel=False)
+            ds_conv_new = DenseToSparseConverter(use_new_kernel=True)
+            t_data = torch.rand(numel, device=device, generator=g)
+            t_data[t_data > 0.5] = 0.0
+            if do_erase:
+                t_saved = t_data.clone()
+            else:
+                t_saved = t_data
+            if use_densify_buffers:
+                densify_buffers = (
+                    torch.empty([numel], dtype=torch.int64, device=device),
+                    torch.empty([numel], dtype=torch.float32, device=device)
+                )
+            else:
+                densify_buffers = None
+            indices_old, values_old = ds_conv_old.dense_to_sparse_32(
+                t_data, do_erase,
+                densify_buffers
+            )
+            if do_erase:
+                if torch.count_nonzero(t_data) != 0:
+                    print(f"❌ source non empty after conversion (old kernel)")
+                    return False
+            indices_new, values_new = ds_conv_new.dense_to_sparse_32(
+                t_saved, do_erase,
+                densify_buffers
+            )
+            if do_erase:
+                if torch.count_nonzero(t_saved) != 0:
+                    print(f"❌ source non empty after conversion (new kernel)")
+                    return False
+            order = torch.argsort(indices_new)
+            indices_new = indices_new[order]
+            values_new = values_new[order]
+            order = torch.argsort(indices_old)
+            indices_old = indices_old[order]
+            values_old = values_old[order]
+            if (indices_old - indices_new).abs().max() != 0:
+                print(f"❌ different indices detected")
+                return False
+            if (values_old - values_new).abs().max() != 0:
+                print(f"❌ different values detected")
+                return False
+
+            return True
 
 
 def make_lr_getter(optimizer):
