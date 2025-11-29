@@ -457,13 +457,21 @@ class LUTLayerBasic(nn.Module):
         self._lookup_indices_callback = cb
 
     def forward_step(self, x, output=None):
+        do_squeeze = False
+        if x.shape == (x.shape[0],) + self.input_shape() and output is None:
+            do_squeeze = True
+            x = x.view((x.shape[0], 1) + self.input_shape())
+        elif not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
+                f"where input_shape={self.input_shape()}"
+            )
+
         assert self._sequence_length == 1
         assert x.device == self.device
         batch_size = x.shape[0]
         sequence_length = x.shape[1]
         assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
-        expected_shape = (batch_size, 1) + self.input_shape()
-        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
         x = x.view(-1)
         if output is None:
@@ -510,6 +518,8 @@ class LUTLayerBasic(nn.Module):
             self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
+        if do_squeeze:
+            result = (result[0].view((x.shape[0],) + self.output_shape()),)
         return result + (
             lookup_indices.view(batch_size, 1, self._n_detectors),
             min_anchor_deltas.view(batch_size, 1, self._n_detectors),
@@ -517,6 +527,12 @@ class LUTLayerBasic(nn.Module):
         )
 
     def forward_step_concat(self, x, output=None):
+        if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
+                f"where input_shape={self.input_shape()}"
+            )
+
         assert x.device == self.device
         batch_size = x.shape[0]
         sequence_length = x.shape[1]
@@ -1105,22 +1121,6 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
         self.compile_lut()
 
-    def forward(self, x):
-        do_squeeze = False
-        if x.shape == (x.shape[0],) + self.input_shape():
-            do_squeeze = True
-            x = x.view((x.shape[0], 1) + self.input_shape())
-        elif not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
-            raise ValueError(
-                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
-                f"where input_shape={self.input_shape()}"
-            )
-
-        result = super().forward(x)
-        if do_squeeze:
-            result = result.view((x.shape[0],) + self.output_shape())
-        return result
-
     def input_shape(self):
         return self._input_shape
 
@@ -1352,8 +1352,12 @@ class MultiLUT(nn.Module):
                     raise RuntimeError(f"Layer {i} did not produce a result")
             
             # Reshape output to match expected shape
-            output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
-            
+
+            if x.shape == (x.shape[0],) + self.input_shape():
+                output = output.view((batch_size,) + multi_lut.output_shape())
+            else:
+                output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
+
             # Save for backward
             ctx.multi_lut = multi_lut
             ctx.save_for_backward(x)
