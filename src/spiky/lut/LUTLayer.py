@@ -779,7 +779,7 @@ class LUTLayerBasic(nn.Module):
         # Post-process weight gradients
         processed_weight_grads = []
         for lut, lut_args in zip(luts, args):
-            target_w_grad = lut_args[13]
+            target_w_grad = lut_args[12]
             if lut._weights_gradient_policy.type == GradientType.Sparse:
                 converter = lut._shared_context.get_dense_to_sparse_converter(lut._multi_id)
                 n_weights_per_neuron = lut._n_outputs if lut._is_fully_connected else lut._lut_dm.get_max_forward_groups_per_neuron() * lut._forward_group_size
