@@ -616,7 +616,7 @@ public:
             checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
         }
         if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
                 throw py::value_error("r_stream_handles must have at least 3 elements");
             }
@@ -712,7 +712,7 @@ public:
         checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_firing_stat, "w_firing_stat", true, host_device_allocator.device);
         if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
                 throw py::value_error("r_stream_handles must have at least 3 elements");
             }
@@ -819,7 +819,7 @@ public:
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
         if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
                 throw py::value_error("r_stream_handles must have at least 3 elements");
             }
@@ -898,7 +898,7 @@ public:
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
         if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
                 throw py::value_error("r_stream_handles must have at least 3 elements");
             }

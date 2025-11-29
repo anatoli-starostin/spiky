@@ -128,7 +128,7 @@ class LUTSharedContext(object):
             self._cuda_streams[multi_id][2] = torch.cuda.Stream(device=device)
             
             # Create tensor with stream handles
-            handles = torch.zeros([3], dtype=torch.int64, device=device)
+            handles = torch.zeros([3], dtype=torch.int64, device=torch.device('cpu'))
             # cuda_stream property returns the handle as an integer
             handles[0] = self._cuda_streams[multi_id][0].cuda_stream
             handles[1] = self._cuda_streams[multi_id][1].cuda_stream
@@ -162,7 +162,7 @@ class LUTSharedContext(object):
                     self._cuda_streams[i][0] = torch.cuda.Stream(device=dev)
                     self._cuda_streams[i][1] = torch.cuda.Stream(device=dev)
                     self._cuda_streams[i][2] = torch.cuda.Stream(device=dev)
-                    handles = torch.zeros([3], dtype=torch.int64, device=dev)
+                    handles = torch.zeros([3], dtype=torch.int64, device=torch.device('cpu'))
                     handles[0] = self._cuda_streams[i][0].cuda_stream
                     handles[1] = self._cuda_streams[i][1].cuda_stream
                     handles[2] = self._cuda_streams[i][2].cuda_stream
