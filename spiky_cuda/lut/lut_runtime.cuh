@@ -104,8 +104,8 @@ public:
         SUMMATION32_DT *w_before_detectors_gradients,
         EXTERNAL_REAL_DT *w_input_gradients,
         int32_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
-        EXTERNAL_REAL_DT external_lr = 0.0,
-        EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
+        EXTERNAL_REAL_DT external_lr,
+        EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -151,8 +151,8 @@ public:
         int32_t *w_sparse_firing_buffer,
         EXTERNAL_REAL_DT *w_input_gradients,
         EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
-        EXTERNAL_REAL_DT external_lr = 0.0,
-        EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
+        EXTERNAL_REAL_DT external_lr,
+        EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
