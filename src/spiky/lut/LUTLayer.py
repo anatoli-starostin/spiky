@@ -1226,7 +1226,7 @@ class MultiLUT(nn.Module):
     Each layer is assigned a unique multi_id for stream isolation.
     """
     
-    def __init__(self, layers: List[LUTLayerBasic]):
+    def __init__(self, layers: List[LUTLayerBasic], use_threads: bool = True):
         super().__init__()
         
         if len(layers) == 0:
@@ -1256,6 +1256,7 @@ class MultiLUT(nn.Module):
         self._input_shape = input_shape
         self._output_shape = output_shape
         self._sequence_length = sequence_length
+        self._use_threads = use_threads
         self._all_weights = None
         self._all_positional_encodings = None
     
@@ -1314,7 +1315,6 @@ class MultiLUT(nn.Module):
             
             results = [None] * n_luts
             errors = [None] * n_luts
-            threads = []
             
             def forward_worker(layer_idx, layer):
                 try:
@@ -1325,15 +1325,21 @@ class MultiLUT(nn.Module):
                 except Exception as e:
                     errors[layer_idx] = e
             
-            # Start all threads
-            for i, layer in enumerate(multi_lut.layers):
-                thread = threading.Thread(target=forward_worker, args=(i, layer))
-                thread.start()
-                threads.append(thread)
-            
-            # Wait for all threads to complete
-            for thread in threads:
-                thread.join()
+            if multi_lut._use_threads:
+                threads = []
+                # Start all threads
+                for i, layer in enumerate(multi_lut.layers):
+                    thread = threading.Thread(target=forward_worker, args=(i, layer))
+                    thread.start()
+                    threads.append(thread)
+                
+                # Wait for all threads to complete
+                for thread in threads:
+                    thread.join()
+            else:
+                # Run sequentially
+                for i, layer in enumerate(multi_lut.layers):
+                    forward_worker(i, layer)
             
             # Check for errors
             for i, error in enumerate(errors):
@@ -1378,7 +1384,6 @@ class MultiLUT(nn.Module):
             all_weight_grads = [None] * n_luts
             all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
             errors = [None] * n_luts
-            threads = []
             
             def backward_worker(layer_idx, layer):
                 try:
@@ -1408,15 +1413,21 @@ class MultiLUT(nn.Module):
                 except Exception as e:
                     errors[layer_idx] = e
             
-            # Start all threads
-            for i, layer in enumerate(multi_lut.layers):
-                thread = threading.Thread(target=backward_worker, args=(i, layer))
-                thread.start()
-                threads.append(thread)
-            
-            # Wait for all threads to complete
-            for thread in threads:
-                thread.join()
+            if multi_lut._use_threads:
+                threads = []
+                # Start all threads
+                for i, layer in enumerate(multi_lut.layers):
+                    thread = threading.Thread(target=backward_worker, args=(i, layer))
+                    thread.start()
+                    threads.append(thread)
+                
+                # Wait for all threads to complete
+                for thread in threads:
+                    thread.join()
+            else:
+                # Run sequentially
+                for i, layer in enumerate(multi_lut.layers):
+                    backward_worker(i, layer)
             
             # Check for errors
             for i, error in enumerate(errors):
