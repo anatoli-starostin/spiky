@@ -3,7 +3,6 @@ import torch.nn as nn
 from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 from enum import Enum
-from contextlib import nullcontext
 import threading
 from queue import Queue
 
@@ -137,7 +136,7 @@ class LUTSharedContext(object):
             handles[2] = self._cuda_streams[multi_id][2].cuda_stream
             self._cuda_stream_handles[multi_id] = handles
         
-        return self._cuda_streams[multi_id], self._cuda_stream_handles[multi_id]
+        return self._cuda_stream_handles[multi_id]
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -458,134 +457,154 @@ class LUTLayerBasic(nn.Module):
     def _set_lookup_inidices_callback(self, cb):
         self._lookup_indices_callback = cb
 
-    def forward_step(self, x, output=None):
-        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+    @staticmethod
+    def forward_step(luts: List['LUTLayerBasic'], x, use_threads=False):
+        if not (len(x.shape) == len(luts[0].input_shape()) + 2 and x.shape[2:] == luts[0].input_shape()):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 1, *luts[0].input_shape())}"
+                f" input_shape={luts[0].input_shape()}"
+            )
+        assert luts[0]._sequence_length == 1
+        assert x.device == luts[0].device
+        batch_size = x.shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+        x = x.view(-1)
+        output = torch.zeros([batch_size * luts[0]._n_outputs], dtype=torch.float32, device=x.device)
 
-        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
-            if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
-                raise ValueError(
-                    f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 1, *self.input_shape())}"
-                    f" input_shape={self.input_shape()}"
-                )
+        args = []
 
-            assert self._sequence_length == 1
-            assert x.device == self.device
-            batch_size = x.shape[0]
-            sequence_length = x.shape[1]
-            assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
-
-            x = x.view(-1)
-            if output is None:
-                external_output = False
-                output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
-            else:
-                external_output = True
+        for lut in luts:
             lookup_indices = torch.zeros(
-                [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
+                [batch_size * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
             min_anchor_deltas = torch.zeros(
-                [batch_size * self._n_detectors], dtype=torch.float32, device=self.device, requires_grad=False
+                [batch_size * lut._n_detectors], dtype=torch.float32, device=lut.device, requires_grad=False
             )
             min_anchor_delta_indices = torch.zeros(
-                [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
+                [batch_size * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
 
             sparse_firing_buffer = None
-            if not self._is_fully_connected:
+            if not lut._is_fully_connected:
                 sparse_buffer_numel = (
-                    1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+                    1 + 2 * lut._n_detectors * lut._lut_dm.get_max_forward_groups_per_neuron() * batch_size
                 ) * 4
-                sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                sparse_firing_buffer = lut._shared_context.get_sparse_firing_buffer(
                     sparse_buffer_numel,
-                    self.device,
-                    self._multi_id
+                    lut.device,
+                    lut._multi_id
                 )
 
-            self._lut_dm.forward_step(
-                self._weights,
-                batch_size, x,
-                self._detector_anchors,
+            stream_handles_tensor = None
+            if lut.device.type == 'cuda':
+                stream_handles_tensor = lut._shared_context.get_cuda_streams(lut.device, lut._multi_id)
+
+            args.append((
+                lut._weights, batch_size, x, lut._detector_anchors,
+                output, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+                sparse_firing_buffer, stream_handles_tensor,
+            ))
+
+        if use_threads:
+            threads = []
+            # Start all threads
+            for lut, lut_args in zip(luts, args):
+                thread = threading.Thread(target=lut._lut_dm.forward_step, args=lut_args)
+                thread.start()
+                threads.append(thread)
+
+            # Wait for all threads to complete
+            for thread in threads:
+                thread.join()
+        else:
+            for lut, lut_args in zip(luts, args):
+                lut._lut_dm.forward_step(*lut_args)
+                if lut._lookup_indices_callback is not None:
+                    lut._lookup_indices_callback(lut_args[5], lut_args[6], lut_args[7])
+
+        output = output.view((batch_size, 1) + luts[0].output_shape())
+
+        first_lut = luts[0]
+        if len(luts) == 1:
+            return (
                 output,
-                lookup_indices,
-                min_anchor_deltas,
-                min_anchor_delta_indices,
-                sparse_firing_buffer,
-                stream_handles_tensor
+                args[0][5].view(batch_size, 1, first_lut._n_detectors),
+                args[0][6].view(batch_size, 1, first_lut._n_detectors),
+                args[0][7].view(batch_size, 1, first_lut._n_detectors)
+            )
+        else:
+            return (
+                output,
+                [a[5].view(batch_size, 1, first_lut._n_detectors) for a in args],
+                [a[6].view(batch_size, 1, first_lut._n_detectors) for a in args],
+                [a[7].view(batch_size, 1, first_lut._n_detectors) for a in args]
             )
 
-            if self._lookup_indices_callback is not None:
-                self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-
-            result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
-            return result + (
-                lookup_indices.view(batch_size, 1, self._n_detectors),
-                min_anchor_deltas.view(batch_size, 1, self._n_detectors),
-                min_anchor_delta_indices.view(batch_size, 1, self._n_detectors)
+    @staticmethod
+    def forward_step_concat(luts: List['LUTLayerBasic'], x, use_threads=False):
+        if not (len(x.shape) == len(luts[0].input_shape()) + 2 and x.shape[2:] == luts[0].input_shape()):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *luts[0].input_shape())} or {(x.shape[0], *luts[0].input_shape())}"
+                f"where input_shape={luts[0].input_shape()}"
             )
+        assert x.device == luts[0].device
+        batch_size = x.shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == luts[0]._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {luts[0]._sequence_length}"
+        expected_shape = (batch_size, sequence_length) + luts[0].input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-    def forward_step_concat(self, x, output=None):
-        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+        x = x.view(-1)
+        output = torch.zeros([batch_size * sequence_length * luts[0]._n_outputs], dtype=torch.float32, device=x.device)
 
-        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
-            if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
-                raise ValueError(
-                    f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
-                    f"where input_shape={self.input_shape()}"
-                )
+        args = []
 
-            assert x.device == self.device
-            batch_size = x.shape[0]
-            sequence_length = x.shape[1]
-            assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-            expected_shape = (batch_size, sequence_length) + self.input_shape()
-            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
-
-            x = x.view(-1)
-            if output is None:
-                external_output = False
-                output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
-            else:
-                external_output = True
+        for lut in luts:
             lookup_indices = torch.zeros(
-                [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+                [batch_size * sequence_length * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
             min_anchor_deltas = torch.zeros(
-                [batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
-                device=self.device, requires_grad=False
+                [batch_size * sequence_length * lut._n_detectors], dtype=torch.float32,
+                device=lut.device, requires_grad=False
             )
             min_anchor_delta_indices = torch.zeros(
-                [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+                [batch_size * sequence_length * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
             positional_lookup_indices = torch.zeros(
-                [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+                [sequence_length * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
             positional_min_deltas = torch.zeros(
-                [sequence_length * self._n_detectors], dtype=torch.float32,
-                device=self.device, requires_grad=False
+                [sequence_length * lut._n_detectors], dtype=torch.float32,
+                device=lut.device, requires_grad=False
             )
             positional_min_delta_indices = torch.zeros(
-                [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+                [sequence_length * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
 
             # TODO do not store this in context (calculate on the fly using buffer from shared context)
             firing_stat = torch.zeros(
-                self._n_lookup_neurons * batch_size * sequence_length,
+                lut._n_lookup_neurons * batch_size * sequence_length,
                 dtype=torch.float32, requires_grad=False,
-                device=self.device
+                device=lut.device
             )
 
-            sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
-            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+            sparse_buffer_numel = (1 + lut._n_lookup_neurons * batch_size * sequence_length) * 4
+            sparse_firing_buffer = lut._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
-                self.device,
-                self._multi_id
+                lut.device,
+                lut._multi_id
             )
 
-            self._lut_dm.forward_step_concat(
-                self._weights,
-                self._positional_embeddings,
+            stream_handles_tensor = None
+            if lut.device.type == 'cuda':
+                stream_handles_tensor = lut._shared_context.get_cuda_streams(lut.device, lut._multi_id)
+
+            args.append((
+                lut._weights,
+                lut._positional_embeddings,
                 batch_size, x,
-                self._detector_anchors,
+                lut._detector_anchors,
                 output,
                 lookup_indices,
                 min_anchor_deltas,
@@ -596,102 +615,141 @@ class LUTLayerBasic(nn.Module):
                 sparse_firing_buffer,
                 firing_stat,
                 stream_handles_tensor
+            ))
+
+        if use_threads:
+            threads = []
+            # Start all threads
+            for lut, lut_args in zip(luts, args):
+                thread = threading.Thread(target=lut._lut_dm.forward_step_concat, args=lut_args)
+                thread.start()
+                threads.append(thread)
+
+            # Wait for all threads to complete
+            for thread in threads:
+                thread.join()
+        else:
+            for lut, lut_args in zip(luts, args):
+                lut._lut_dm.forward_step_concat(*lut_args)
+                if lut._lookup_indices_callback is not None:
+                    lut._lookup_indices_callback(lut_args[6], lut_args[7], lut_args[8])
+
+        output = output.view((batch_size, sequence_length) + luts[0].output_shape())
+
+        if len(luts) == 1:
+            first_lut = luts[0]
+            return (
+                output,
+                args[0][6].view(batch_size, sequence_length, first_lut._n_detectors),
+                args[0][7].view(batch_size, sequence_length, first_lut._n_detectors),
+                args[0][8].view(batch_size, sequence_length, first_lut._n_detectors),
+                args[0][9].view(sequence_length, first_lut._n_detectors),
+                args[0][10].view(sequence_length, first_lut._n_detectors),
+                args[0][11].view(sequence_length, first_lut._n_detectors),
+                args[0][13]
+            )
+        else:
+            return (
+                output,
+                [a[6].view(batch_size, sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[7].view(batch_size, sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[8].view(batch_size, sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[9].view(sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[10].view(sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[11].view(sequence_length, luts[i]._n_detectors) for i, a in enumerate(args)],
+                [a[13] for a in args]
             )
 
-            if self._lookup_indices_callback is not None:
-                self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-
-            result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
-            return result + (
-                lookup_indices.view(batch_size, sequence_length, self._n_detectors),
-                min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
-                min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
-                positional_lookup_indices.view(sequence_length, self._n_detectors),
-                positional_min_deltas.view(sequence_length, self._n_detectors),
-                positional_min_delta_indices.view(sequence_length, self._n_detectors),
-                firing_stat
-            )
-
+    @staticmethod
     def backward_step(
-        self, x, grad_output,
-        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
-        x_grad=None
+        luts: List['LUTLayerBasic'], x, grad_output,
+        lookup_indices_list, min_anchor_deltas_list, min_anchor_delta_indices_list,
+        use_threads=False
     ):
-        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+        assert luts[0]._sequence_length == 1
+        assert x.device == luts[0].device
+        source_x_shape = x.shape
+        batch_size = source_x_shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+        expected_shape = (batch_size, 1) + luts[0].input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
-            assert self._sequence_length == 1
-            assert x.device == self.device
-            source_x_shape = x.shape
-            batch_size = source_x_shape[0]
-            sequence_length = x.shape[1]
-            assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
-            expected_shape = (batch_size, 1) + self.input_shape()
-            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+        x = x.view(-1)
+        x_grad = torch.zeros_like(x)
+        assert grad_output.device == luts[0].device
+        assert grad_output.shape == (batch_size, 1) + luts[0].output_shape()
+        grad_output = grad_output.view(-1)
 
-            x = x.view(-1)
-            assert lookup_indices.device == self.device
-            assert lookup_indices.shape == (batch_size, 1, self._n_detectors)
+        # Handle single vs multiple LUTs
+        if len(luts) == 1:
+            lookup_indices_list = [lookup_indices_list]
+            min_anchor_deltas_list = [min_anchor_deltas_list]
+            min_anchor_delta_indices_list = [min_anchor_delta_indices_list]
+
+        args = []
+
+        for i, lut in enumerate(luts):
+            lookup_indices = lookup_indices_list[i]
+            min_anchor_deltas = min_anchor_deltas_list[i]
+            min_anchor_delta_indices = min_anchor_delta_indices_list[i]
+
+            assert lookup_indices.device == lut.device
+            assert lookup_indices.shape == (batch_size, 1, lut._n_detectors)
             lookup_indices = lookup_indices.view(-1)
-            assert min_anchor_deltas.device == self.device
-            assert min_anchor_deltas.shape == (batch_size, 1, self._n_detectors)
+            assert min_anchor_deltas.device == lut.device
+            assert min_anchor_deltas.shape == (batch_size, 1, lut._n_detectors)
             min_anchor_deltas = min_anchor_deltas.view(-1)
-            assert min_anchor_delta_indices.device == self.device
-            assert min_anchor_delta_indices.shape == (batch_size, 1, self._n_detectors)
+            assert min_anchor_delta_indices.device == lut.device
+            assert min_anchor_delta_indices.shape == (batch_size, 1, lut._n_detectors)
             min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
-            if x_grad is None:
-                external_output = False
-                x_grad = torch.zeros_like(x)
-            else:
-                external_output = True
-            if self._weights_gradient_policy.type == GradientType.Internal:
+            if lut._weights_gradient_policy.type == GradientType.Internal:
                 target_w_grad = None
-            elif self._weights_gradient_policy.type == GradientType.Sparse:
-                numel = ((self._weights.numel() + 3) // 4) * 4
-                target_w_grad = self._shared_context.get_weight_gradients_buffer(
+            elif lut._weights_gradient_policy.type == GradientType.Sparse:
+                numel = ((lut._weights.numel() + 3) // 4) * 4
+                target_w_grad = lut._shared_context.get_weight_gradients_buffer(
                     numel,
-                    self.device,
-                    self._multi_id
+                    lut.device,
+                    lut._multi_id
                 )
             else:
-                target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
+                target_w_grad = torch.zeros_like(lut._weights, requires_grad=False)
 
-            assert grad_output.device == self.device
-            assert grad_output.shape == (batch_size, 1) + self.output_shape()
-
-            grad_output = grad_output.view(-1)
-
-            before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-                self._n_lookup_neurons * batch_size,
-                self.device,
-                self._multi_id
+            before_detectors_gradients = lut._shared_context.get_before_detectors_gradients_buffer(
+                lut._n_lookup_neurons * batch_size,
+                lut.device,
+                lut._multi_id
             )
 
             sparse_firing_buffer = None
-            if not self._is_fully_connected:
+            if not lut._is_fully_connected:
                 sparse_buffer_numel = (
-                    1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+                    1 + 2 * lut._n_detectors * lut._lut_dm.get_max_forward_groups_per_neuron() * batch_size
                 ) * 4
-                sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                sparse_firing_buffer = lut._shared_context.get_sparse_firing_buffer(
                     sparse_buffer_numel,
-                    self.device,
-                    self._multi_id
+                    lut.device,
+                    lut._multi_id
                 )
 
-            if self._weights_gradient_policy.type == GradientType.Internal:
-                if self._external_lr_hook is None:
+            if lut._weights_gradient_policy.type == GradientType.Internal:
+                if lut._external_lr_hook is None:
                     raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
-                external_lr = self._external_lr_hook(self._weights)
+                external_lr = lut._external_lr_hook(lut._weights)
             else:
                 external_lr = -1.0
 
-            self._lut_dm.backward_backprop(
-                self._weights,
+            stream_handles_tensor = None
+            if lut.device.type == 'cuda':
+                stream_handles_tensor = lut._shared_context.get_cuda_streams(lut.device, lut._multi_id)
+
+            args.append((
+                lut._weights,
                 batch_size,
                 grad_output,
                 x,
-                self._detector_anchors,
+                lut._detector_anchors,
                 lookup_indices,
                 min_anchor_deltas,
                 min_anchor_delta_indices,
@@ -699,128 +757,160 @@ class LUTLayerBasic(nn.Module):
                 x_grad,
                 external_lr,
                 sparse_firing_buffer,
-                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
+                target_w_grad,
                 stream_handles_tensor
-            )
+            ))
 
-            if self._weights_gradient_policy.type == GradientType.Sparse:
-                converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
-                n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
+        if use_threads:
+            threads = []
+            # Start all threads
+            for lut, lut_args in zip(luts, args):
+                thread = threading.Thread(target=lut._lut_dm.backward_backprop, args=lut_args)
+                thread.start()
+                threads.append(thread)
+
+            # Wait for all threads to complete
+            for thread in threads:
+                thread.join()
+        else:
+            for lut, lut_args in zip(luts, args):
+                lut._lut_dm.backward_backprop(*lut_args[:14])
+
+        # Post-process weight gradients
+        processed_weight_grads = []
+        for lut, lut_args in zip(luts, args):
+            target_w_grad = lut_args[13]
+            if lut._weights_gradient_policy.type == GradientType.Sparse:
+                converter = lut._shared_context.get_dense_to_sparse_converter(lut._multi_id)
+                n_weights_per_neuron = lut._n_outputs if lut._is_fully_connected else lut._lut_dm.get_max_forward_groups_per_neuron() * lut._forward_group_size
                 indices, values = converter.dense_to_sparse_32(
                     target_w_grad, erase_input=True,
-                    densify_buffers=self._shared_context.get_densify_buffers(
-                        self._n_detectors * 2 * n_weights_per_neuron * batch_size,
-                        self.device,
-                        self._multi_id
+                    densify_buffers=lut._shared_context.get_densify_buffers(
+                        lut._n_detectors * 2 * n_weights_per_neuron * batch_size,
+                        lut.device,
+                        lut._multi_id
                     )
                 )
                 if indices is not None:
-                    if self._weights_gradient_policy.normalized:
+                    if lut._weights_gradient_policy.normalized:
                         values /= values.abs().max().clip(1e-16)
                     target_w_grad = torch.sparse_coo_tensor(
                         indices=indices.unsqueeze(0),
                         values=values,
-                        size=self._weights.shape,
-                        device=self.device,
+                        size=lut._weights.shape,
+                        device=lut.device,
                         check_invariants=False,
                         is_coalesced=True,
                         requires_grad=False
                     )
                 else:
                     target_w_grad = None
-            elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
+            elif lut._weights_gradient_policy.type == GradientType.Dense and lut._weights_gradient_policy.normalized:
                 target_w_grad /= target_w_grad.abs().max().clip(1e-16)
+            processed_weight_grads.append(target_w_grad)
 
-            result = () if external_output else (x_grad.view(source_x_shape),)
-            return result + (target_w_grad,)
+        if len(luts) == 1:
+            return x_grad.view(source_x_shape), processed_weight_grads[0]
+        else:
+            return x_grad.view(source_x_shape), processed_weight_grads
 
+    @staticmethod
     def backward_step_concat(
-        self, x, grad_output,
-        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
-        positional_lookup_indices, positional_min_deltas, positional_min_delta_indices,
-        firing_stat,
-        x_grad=None
+        luts: List['LUTLayerBasic'], x, grad_output,
+        lookup_indices_list, min_anchor_deltas_list, min_anchor_delta_indices_list,
+        positional_lookup_indices_list, positional_min_deltas_list, positional_min_delta_indices_list,
+        firing_stat_list,
+        use_threads=False
     ):
-        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+        assert x.device == luts[0].device
+        source_x_shape = x.shape
+        batch_size = source_x_shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == luts[0]._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {luts[0]._sequence_length}"
+        expected_shape = (batch_size, sequence_length) + luts[0].input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
-            assert x.device == self.device
-            source_x_shape = x.shape
-            batch_size = source_x_shape[0]
-            sequence_length = x.shape[1]
-            assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-            expected_shape = (batch_size, sequence_length) + self.input_shape()
-            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+        x = x.view(-1)
+        x_grad = torch.zeros_like(x)
 
-            x = x.view(-1)
-            assert lookup_indices.device == self.device
-            assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
+        assert grad_output.device == lut.device
+        assert grad_output.shape == (batch_size, sequence_length) + lut.output_shape()
+
+        grad_output = grad_output.view(-1)
+
+        args = []
+
+        for i, lut in enumerate(luts):
+            lookup_indices = lookup_indices_list[i]
+            min_anchor_deltas = min_anchor_deltas_list[i]
+            min_anchor_delta_indices = min_anchor_delta_indices_list[i]
+            positional_lookup_indices = positional_lookup_indices_list[i]
+            positional_min_deltas = positional_min_deltas_list[i]
+            positional_min_delta_indices = positional_min_delta_indices_list[i]
+            firing_stat = firing_stat_list[i]
+
+            assert lookup_indices.device == lut.device
+            assert lookup_indices.shape == (batch_size, sequence_length, lut._n_detectors)
             lookup_indices = lookup_indices.view(-1)
-            assert min_anchor_deltas.device == self.device
-            assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
+            assert min_anchor_deltas.device == lut.device
+            assert min_anchor_deltas.shape == (batch_size, sequence_length, lut._n_detectors)
             min_anchor_deltas = min_anchor_deltas.view(-1)
-            assert min_anchor_delta_indices.device == self.device
-            assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
+            assert min_anchor_delta_indices.device == lut.device
+            assert min_anchor_delta_indices.shape == (batch_size, sequence_length, lut._n_detectors)
             min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
-            assert positional_lookup_indices.device == self.device
-            assert positional_lookup_indices.shape == (sequence_length, self._n_detectors)
+            assert positional_lookup_indices.device == lut.device
+            assert positional_lookup_indices.shape == (sequence_length, lut._n_detectors)
             positional_lookup_indices = positional_lookup_indices.view(-1)
-            assert positional_min_deltas.device == self.device
-            assert positional_min_deltas.shape == (sequence_length, self._n_detectors)
+            assert positional_min_deltas.device == lut.device
+            assert positional_min_deltas.shape == (sequence_length, lut._n_detectors)
             positional_min_deltas = positional_min_deltas.view(-1)
-            assert positional_min_delta_indices.device == self.device
-            assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
+            assert positional_min_delta_indices.device == lut.device
+            assert positional_min_delta_indices.shape == (sequence_length, lut._n_detectors)
             positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
-            assert firing_stat.device == self.device
+            assert firing_stat.device == lut.device
             assert firing_stat.dtype == torch.float32
-            assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
+            assert firing_stat.shape == (lut._n_lookup_neurons * batch_size * sequence_length,)
 
-            if x_grad is None:
-                external_output = False
-                x_grad = torch.zeros_like(x)
-            else:
-                external_output = True
-            if self._weights_gradient_policy.type == GradientType.Internal:
+            if lut._weights_gradient_policy.type == GradientType.Internal:
                 target_w_grad = None
-            elif self._weights_gradient_policy.type == GradientType.Sparse:
-                numel = ((self._weights.numel() + 3) // 4) * 4
-                target_w_grad = self._shared_context.get_weight_gradients_buffer(
+            elif lut._weights_gradient_policy.type == GradientType.Sparse:
+                numel = ((lut._weights.numel() + 3) // 4) * 4
+                target_w_grad = lut._shared_context.get_weight_gradients_buffer(
                     numel,
-                    self.device,
-                    self._multi_id
+                    lut.device,
+                    lut._multi_id
                 )
             else:
-                target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
-            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+                target_w_grad = torch.zeros_like(lut._weights, requires_grad=False)
+            positional_grad = torch.zeros_like(lut._positional_embeddings, requires_grad=False)
 
-            assert grad_output.device == self.device
-            assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
-
-            grad_output = grad_output.view(-1)
-
-            sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
-            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+            sparse_buffer_numel = (1 + lut._n_lookup_neurons * batch_size * sequence_length) * 4
+            sparse_firing_buffer = lut._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
-                self.device,
-                self._multi_id
+                lut.device,
+                lut._multi_id
             )
 
-            if self._weights_gradient_policy.type == GradientType.Internal:
-                if self._external_lr_hook is None:
+            if lut._weights_gradient_policy.type == GradientType.Internal:
+                if lut._external_lr_hook is None:
                     raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
-                external_lr = self._external_lr_hook(self._weights)
+                external_lr = lut._external_lr_hook(lut._weights)
             else:
                 external_lr = -1.0
 
-            self._lut_dm.backward_backprop_concat(
-                self._weights,
-                self._positional_embeddings,
+            stream_handles_tensor = None
+            if lut.device.type == 'cuda':
+                stream_handles_tensor = lut._shared_context.get_cuda_streams(lut.device, lut._multi_id)
+
+            args.append((
+                lut._weights,
+                lut._positional_embeddings,
                 batch_size,
                 grad_output,
                 x,
-                self._detector_anchors,
+                lut._detector_anchors,
                 lookup_indices,
                 min_anchor_deltas,
                 min_anchor_delta_indices,
@@ -828,49 +918,73 @@ class LUTLayerBasic(nn.Module):
                 positional_min_deltas,
                 positional_min_delta_indices,
                 sparse_firing_buffer,
-                # First firing_stat will be used directly and then because it is no longer needed
-                # the same buffer will be used for gradient accumulation. So after this call firing_stat
-                # is invalid.
                 firing_stat,
                 x_grad, positional_grad,
                 external_lr,
-                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-                stream_handles_tensor
-            )
+                target_w_grad,
+                stream_handles_tensor,
+            ))
 
-            if self._weights_gradient_policy.type == GradientType.Sparse:
-                converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
-                n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
+        if use_threads:
+            threads = []
+            # Start all threads
+            for lut, lut_args in zip(luts, args):
+                thread = threading.Thread(target=lut._lut_dm.backward_backprop_concat, args=lut_args[:19])
+                thread.start()
+                threads.append(thread)
+
+            # Wait for all threads to complete
+            for thread in threads:
+                thread.join()
+        else:
+            for lut, lut_args in zip(luts, args):
+                lut._lut_dm.backward_backprop_concat(*lut_args[:19])
+
+        # Post-process weight and positional gradients
+        processed_weight_grads = []
+        processed_positional_grads = []
+        for lut, lut_args in zip(luts, args):
+            target_w_grad = lut_args[-2]
+            positional_grad = lut_args[-4]
+            
+            if lut._weights_gradient_policy.type == GradientType.Sparse:
+                converter = lut._shared_context.get_dense_to_sparse_converter(lut._multi_id)
+                n_weights_per_neuron = lut._n_outputs if lut._is_fully_connected else lut._lut_dm.get_max_forward_groups_per_neuron() * lut._forward_group_size
                 indices, values = converter.dense_to_sparse_32(
                     target_w_grad, erase_input=True,
-                    densify_buffers=self._shared_context.get_densify_buffers(
-                        self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size,
-                        self.device,
-                        self._multi_id
+                    densify_buffers=lut._shared_context.get_densify_buffers(
+                        lut._n_detectors * n_weights_per_neuron * (lut._sequence_length * (lut._sequence_length - 1) / 2) * batch_size,
+                        lut.device,
+                        lut._multi_id
                     )
                 )
                 if indices is not None:
-                    if self._weights_gradient_policy.normalized:
+                    if lut._weights_gradient_policy.normalized:
                         values /= values.abs().max().clip(1e-16)
                     target_w_grad = torch.sparse_coo_tensor(
                         indices=indices.unsqueeze(0),
                         values=values,
-                        size=self._weights.shape,
-                        device=self.device,
+                        size=lut._weights.shape,
+                        device=lut.device,
                         check_invariants=False,
                         is_coalesced=True,
                         requires_grad=False
                     )
                 else:
                     target_w_grad = None
-            elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
+            elif lut._weights_gradient_policy.type == GradientType.Dense and lut._weights_gradient_policy.normalized:
                 target_w_grad /= target_w_grad.abs().max().clip(1e-16)
 
-            if self._weights_gradient_policy.normalized:
+            if lut._weights_gradient_policy.normalized:
                 positional_grad /= positional_grad.abs().max().clip(1e-16)
 
-            result = () if external_output else (x_grad.view(source_x_shape),)
-            return result + (target_w_grad, positional_grad,)
+            processed_weight_grads.append(target_w_grad)
+            processed_positional_grads.append(positional_grad)
+
+        if len(luts) == 1:
+            return x_grad.view(source_x_shape), processed_weight_grads[0], processed_positional_grads[0]
+        else:
+            return x_grad.view(source_x_shape), processed_weight_grads, processed_positional_grads
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -909,7 +1023,7 @@ class LUTLayerBasic(nn.Module):
                 (
                     output, lookup_indices, min_anchor_deltas, 
                     min_anchor_delta_indices
-                ) = lut_layer.forward_step(x)
+                ) = LUTLayerBasic.forward_step([lut_layer], x)
                 ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
             else:
                 (
@@ -917,7 +1031,7 @@ class LUTLayerBasic(nn.Module):
                     min_anchor_delta_indices, positional_lookup_indices, 
                     positional_min_deltas, positional_min_delta_indices, 
                     firing_stat
-                ) = lut_layer.forward_step_concat(x)
+                ) = LUTLayerBasic.forward_step_concat([lut_layer], x)
                 ctx.save_for_backward(
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
                     positional_lookup_indices, positional_min_deltas, 
@@ -930,8 +1044,8 @@ class LUTLayerBasic(nn.Module):
             (grad_output,) = grad_outputs
             if ctx.lut_layer._sequence_length == 1:
                 (x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices) = ctx.saved_tensors
-                x_grad, w_grad = ctx.lut_layer.backward_step(
-                    x, grad_output,
+                x_grad, w_grad = LUTLayerBasic.backward_step(
+                    [ctx.lut_layer], x, grad_output,
                     lookup_indices,
                     min_anchor_deltas,
                     min_anchor_delta_indices
@@ -942,8 +1056,8 @@ class LUTLayerBasic(nn.Module):
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, positional_lookup_indices,
                     positional_min_deltas, positional_min_delta_indices, firing_stat
                 ) = ctx.saved_tensors
-                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_concat(
-                    x, grad_output,
+                x_grad, w_grad, pe_grad = LUTLayerBasic.backward_step_concat(
+                    [ctx.lut_layer], x, grad_output,
                     lookup_indices,
                     min_anchor_deltas,
                     min_anchor_delta_indices,
@@ -1227,7 +1341,7 @@ class LUTLayer(Conv2DLUTLayer):
 
 class MultiLUT(nn.Module):
     """
-    A module that runs multiple LUTLayerBasic instances in parallel using threads.
+    A module that runs multiple LUTLayerBasic instances in parallel or sequentially.
     All layers must have the same input_shape, output_shape, and sequence_length.
     Each layer is assigned a unique multi_id for stream isolation.
     """
@@ -1235,8 +1349,8 @@ class MultiLUT(nn.Module):
     def __init__(self, layers: List[LUTLayerBasic], use_threads: bool = True):
         super().__init__()
         
-        if len(layers) == 0:
-            raise ValueError("MultiLUT requires at least one layer")
+        if len(layers) < 2:
+            raise ValueError("MultiLUT requires at least two layers")
         
         # Validate all layers have compatible shapes
         first_layer = layers[0]
@@ -1276,227 +1390,83 @@ class MultiLUT(nn.Module):
         return self._sequence_length
     
     def set_external_learning_rate_hook(self, hook_fn):
+        """Set the external learning rate hook for all layers."""
         for layer in self.layers:
             layer.set_external_learning_rate_hook(hook_fn)
     
     def forward(self, x):
-        """
-        Forward pass that runs all layers in parallel threads.
-        Returns the sum of outputs from all layers.
-        """
+        """Forward pass that runs all layers using static methods."""
         # Lazy fill weights and positional encodings if needed
         if self._all_weights is None:
-            self._all_weights = []
-            for layer in self.layers:
-                self._all_weights.append(layer._weights)
+            self._all_weights = [layer._weights for layer in self.layers]
         
-        # Only pass positional encodings if they exist (when sequence_length > 1)
         if self._sequence_length > 1:
             if self._all_positional_encodings is None:
-                self._all_positional_encodings = []
-                for layer in self.layers:
-                    self._all_positional_encodings.append(layer._positional_embeddings)
+                self._all_positional_encodings = [layer._positional_embeddings for layer in self.layers]
             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights, *self._all_positional_encodings)
         else:
             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights)
     
     class MultiLUTForwardFN(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, *args, **kwargs):
-            """
-            Run forward pass for all layers in parallel threads.
-            All layers accumulate into the same output tensor.
-            """
+        def forward(ctx, *args):
+            """Run forward pass for all layers."""
             x, multi_lut = args[0], args[1]
-            n_luts = len(multi_lut.layers)
-
-            first_layer = multi_lut.layers[0]
             batch_size = x.shape[0]
             
-            # Create shared output tensor
+            # Call static forward method
             if multi_lut._sequence_length == 1:
-                output = torch.zeros([batch_size * first_layer._n_outputs], dtype=torch.float32, device=first_layer.device)
+                result = LUTLayerBasic.forward_step(multi_lut.layers, x, use_threads=multi_lut._use_threads)
             else:
-                output = torch.zeros([batch_size * multi_lut._sequence_length * first_layer._n_outputs], dtype=torch.float32, device=first_layer.device)
+                result = LUTLayerBasic.forward_step_concat(multi_lut.layers, x, use_threads=multi_lut._use_threads)
             
-            results_queue = Queue()
-            errors_queue = Queue()
+            # Extract output and reshape
+            output = result[0].view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
             
-            def forward_worker(layer_idx, layer):
-                try:
-                    if multi_lut._sequence_length == 1:
-                        result = layer.forward_step(x, output=output)
-                    else:
-                        result = layer.forward_step_concat(x, output=output)
-                    results_queue.put((layer_idx, result))
-                except Exception as e:
-                    errors_queue.put((layer_idx, e))
-            
-            if multi_lut._use_threads:
-                threads = []
-                # Start all threads
-                for i, layer in enumerate(multi_lut.layers):
-                    thread = threading.Thread(target=forward_worker, args=(i, layer))
-                    thread.start()
-                    threads.append(thread)
-                
-                # Wait for all threads to complete
-                for thread in threads:
-                    thread.join()
-                
-                # Collect results from queue
-                results = [None] * n_luts
-                while not results_queue.empty():
-                    layer_idx, result = results_queue.get()
-                    results[layer_idx] = result
-                
-                # Check for errors
-                errors = []
-                while not errors_queue.empty():
-                    layer_idx, error = errors_queue.get()
-                    errors.append((layer_idx, error))
-                
-                if errors:
-                    for layer_idx, error in errors:
-                        raise RuntimeError(f"Error in layer {layer_idx} forward pass: {error}") from error
-            else:
-                # Run sequentially
-                results = [None] * n_luts
-                for i, layer in enumerate(multi_lut.layers):
-                    forward_worker(i, layer)
-                    # Collect result immediately for sequential execution
-                    if not results_queue.empty():
-                        layer_idx, result = results_queue.get()
-                        results[layer_idx] = result
-                
-                # Check for errors
-                if not errors_queue.empty():
-                    layer_idx, error = errors_queue.get()
-                    raise RuntimeError(f"Error in layer {layer_idx} forward pass: {error}") from error
-            
-            # Check all results are available
-            for i, result in enumerate(results):
-                if result is None:
-                    raise RuntimeError(f"Layer {i} did not produce a result")
-            
-            # Reshape output to match expected shape
-
-            output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
-
-            # Save for backward
+            # Save full result for backward (same structure as returned by static methods)
             ctx.multi_lut = multi_lut
             ctx.save_for_backward(x)
-            ctx.results = results  # Store individual results for backward
+            ctx.result = result
             
             return output
 
         @staticmethod
         def backward(ctx, *grad_outputs):
-            """
-            Run backward pass for all layers in parallel threads.
-            All layers accumulate into the same x_grad tensor.
-            Returns gradients for x, multi_lut, all weights, and all positional encodings.
-            """
+            """Run backward pass for all layers."""
             (grad_output,) = grad_outputs
             multi_lut = ctx.multi_lut
-            n_luts = len(multi_lut.layers)
-
-            # Extract saved input
             x = ctx.saved_tensors[0]
-            results = ctx.results
-
-            # Create shared x_grad tensor
-            x_grad = torch.zeros_like(x.view(-1))
+            result = ctx.result
             
-            # Use queues for thread-safe communication
-            gradients_queue = Queue()
-            errors_queue = Queue()
-            
-            def backward_worker(layer_idx, layer):
-                try:
-                    if multi_lut._sequence_length == 1:
-                        (w_grad,) = layer.backward_step(
-                            x, grad_output,
-                            results[layer_idx][0],  # lookup_indices
-                            results[layer_idx][1],   # min_anchor_deltas
-                            results[layer_idx][2],    # min_anchor_delta_indices
-                            x_grad=x_grad
-                        )
-                        gradients_queue.put((layer_idx, w_grad, None))
-                    else:
-                        w_grad, pe_grad = layer.backward_step_concat(
-                            x, grad_output,
-                            results[layer_idx][0],   # lookup_indices
-                            results[layer_idx][1],   # min_anchor_deltas
-                            results[layer_idx][2],   # min_anchor_delta_indices
-                            results[layer_idx][3],   # positional_lookup_indices
-                            results[layer_idx][4],   # positional_min_deltas
-                            results[layer_idx][5],   # positional_min_delta_indices
-                            results[layer_idx][6],   # firing_stat
-                            x_grad=x_grad
-                        )
-                        gradients_queue.put((layer_idx, w_grad, pe_grad))
-                except Exception as e:
-                    errors_queue.put((layer_idx, e))
-            
-            if multi_lut._use_threads:
-                threads = []
-                # Start all threads
-                for i, layer in enumerate(multi_lut.layers):
-                    thread = threading.Thread(target=backward_worker, args=(i, layer))
-                    thread.start()
-                    threads.append(thread)
+            # Use the same result structure directly
+            if multi_lut._sequence_length == 1:
+                # result is (output, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
+                # or (output, [lookup_indices...], [min_anchor_deltas...], [min_anchor_delta_indices...])
+                x_grad, weight_grads = LUTLayerBasic.backward_step(
+                    multi_lut.layers, x, grad_output,
+                    result[1], result[2], result[3],
+                    use_threads=multi_lut._use_threads
+                )
                 
-                # Wait for all threads to complete
-                for thread in threads:
-                    thread.join()
-                
-                # Collect gradients from queue
-                all_weight_grads = [None] * n_luts
-                all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
-                while not gradients_queue.empty():
-                    layer_idx, w_grad, pe_grad = gradients_queue.get()
-                    all_weight_grads[layer_idx] = w_grad
-                    if pe_grad is not None:
-                        all_pe_grads[layer_idx] = pe_grad
-                
-                # Check for errors
-                errors = []
-                while not errors_queue.empty():
-                    layer_idx, error = errors_queue.get()
-                    errors.append((layer_idx, error))
-                
-                if errors:
-                    for layer_idx, error in errors:
-                        raise RuntimeError(f"Error in layer {layer_idx} backward pass: {error}") from error
+                # Return gradients: x_grad, None (for multi_lut), *weight_grads
+                return (x_grad.view(x.shape), None) + tuple(weight_grads)
             else:
-                # Run sequentially
-                all_weight_grads = [None] * n_luts
-                all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
-                for i, layer in enumerate(multi_lut.layers):
-                    backward_worker(i, layer)
-                    # Collect gradients immediately for sequential execution
-                    if not gradients_queue.empty():
-                        layer_idx, w_grad, pe_grad = gradients_queue.get()
-                        all_weight_grads[layer_idx] = w_grad
-                        if pe_grad is not None:
-                            all_pe_grads[layer_idx] = pe_grad
+                # result is (output, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, 
+                #           positional_lookup_indices, positional_min_deltas, positional_min_delta_indices, firing_stat)
+                # or (output, [lookup_indices...], [min_anchor_deltas...], [min_anchor_delta_indices...],
+                #     [positional_lookup_indices...], [positional_min_deltas...], [positional_min_delta_indices...], [firing_stat...])
+                x_grad, weight_grads, pe_grads = LUTLayerBasic.backward_step_concat(
+                    multi_lut.layers, x, grad_output,
+                    result[1], result[2], result[3],
+                    result[4], result[5], result[6], result[7],
+                    use_threads=multi_lut._use_threads
+                )
                 
-                # Check for errors
-                if not errors_queue.empty():
-                    layer_idx, error = errors_queue.get()
-                    raise RuntimeError(f"Error in layer {layer_idx} backward pass: {error}") from error
-
-            if multi_lut._sequence_length > 1:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
-            else:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
+                # Return gradients: x_grad, None (for multi_lut), *weight_grads, *pe_grads
+                return (x_grad.view(x.shape), None) + tuple(weight_grads) + tuple(pe_grads)
     
     def to(self, *args, **kwargs):
-        """
-        Move the module to a different device/dtype.
-        Resets cached weights and positional encodings so they are rebuilt on next forward.
-        """
+        """Move the module to a different device/dtype. Resets cached weights and positional encodings."""
         result = super().to(*args, **kwargs)
         self._all_weights = None
         self._all_positional_encodings = None
