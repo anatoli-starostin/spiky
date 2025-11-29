@@ -457,14 +457,10 @@ class LUTLayerBasic(nn.Module):
         self._lookup_indices_callback = cb
 
     def forward_step(self, x, output=None):
-        do_squeeze = False
-        if x.shape == (x.shape[0],) + self.input_shape() and output is None:
-            do_squeeze = True
-            x = x.view((x.shape[0], 1) + self.input_shape())
-        elif not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+        if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
             raise ValueError(
-                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
-                f"where input_shape={self.input_shape()}"
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 1, *self.input_shape())}"
+                f" input_shape={self.input_shape()}"
             )
 
         assert self._sequence_length == 1
@@ -518,8 +514,6 @@ class LUTLayerBasic(nn.Module):
             self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
-        if do_squeeze:
-            result = (result[0].view((batch_size,) + self.output_shape()),)
         return result + (
             lookup_indices.view(batch_size, 1, self._n_detectors),
             min_anchor_deltas.view(batch_size, 1, self._n_detectors),
@@ -1308,11 +1302,6 @@ class MultiLUT(nn.Module):
             """
             x, multi_lut = args[0], args[1]
             n_luts = len(multi_lut.layers)
-            if (x.shape == (x.shape[0],) + multi_lut.input_shape()) and multi_lut._sequence_length == 1:
-                do_squeeze = True
-                x = x.view((x.shape[0], 1) + multi_lut.input_shape())
-            else:
-                do_squeeze = False
 
             first_layer = multi_lut.layers[0]
             batch_size = x.shape[0]
@@ -1358,10 +1347,7 @@ class MultiLUT(nn.Module):
             
             # Reshape output to match expected shape
 
-            if do_squeeze:
-                output = output.view((batch_size,) + multi_lut.output_shape())
-            else:
-                output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
+            output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
 
             # Save for backward
             ctx.multi_lut = multi_lut

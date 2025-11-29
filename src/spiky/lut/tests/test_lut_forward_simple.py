@@ -272,7 +272,7 @@ def _test_lut_forward_simple(
     #     print(f"Ground truth shape: {gt_out.shape}, Output shape: {y.shape}")
     #     return False
 
-    x = torch.rand([batch_size, input_shape[0], input_shape[1]], device=device)
+    x = torch.rand([batch_size, 1, input_shape[0], input_shape[1]], device=device)
     y = net(x)
 
     print(y)

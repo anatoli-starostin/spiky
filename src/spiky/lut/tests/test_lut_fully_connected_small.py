@@ -74,7 +74,7 @@ def _test_lut_fully_connected_small(
                 )
 
         def forward(self, x):
-            return self.layer1(x)
+            return self.layer1(x.unsqueeze(1)).squeeze(1)
 
     print(f'Creating TestNet...')
     test_net_standard = TestNet(device, False)

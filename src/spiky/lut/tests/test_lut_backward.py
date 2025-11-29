@@ -63,7 +63,7 @@ def _test_lut_backward(
             )
 
         def forward(self, x):
-            x1 = self.layer1(x)
+            x1 = self.layer1(x.unsqueeze(1))
             return self.layer2(x1.reshape(x1.shape[0], x1.shape[-1] * x1.shape[-2]))
 
     print(f'Creating TestNet, input_shape {input_shape}...')

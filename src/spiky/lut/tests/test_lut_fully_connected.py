@@ -71,7 +71,7 @@ def _test_lut_fully_connected(
             self._last_lookup_indices = lookup_inidices.detach()
 
         def forward(self, x):
-            x1 = self.layer1(x)
+            x1 = self.layer1(x.unsqueeze(1))
             self._last_hidden_output = x1
             return self.layer2(x1.reshape(x1.shape[0], x1.shape[-1] * x1.shape[-2]))
 
