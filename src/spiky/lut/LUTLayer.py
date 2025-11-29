@@ -3,6 +3,7 @@ import torch.nn as nn
 from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 from enum import Enum
+from contextlib import nullcontext
 import threading
 
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
@@ -135,7 +136,7 @@ class LUTSharedContext(object):
             handles[2] = self._cuda_streams[multi_id][2].cuda_stream
             self._cuda_stream_handles[multi_id] = handles
         
-        return self._cuda_stream_handles[multi_id]
+        return self._cuda_streams[multi_id], self._cuda_stream_handles[multi_id]
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
@@ -457,277 +458,280 @@ class LUTLayerBasic(nn.Module):
         self._lookup_indices_callback = cb
 
     def forward_step(self, x, output=None):
-        if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
-            raise ValueError(
-                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 1, *self.input_shape())}"
-                f" input_shape={self.input_shape()}"
+        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+
+        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
+            if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+                raise ValueError(
+                    f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 1, *self.input_shape())}"
+                    f" input_shape={self.input_shape()}"
+                )
+
+            assert self._sequence_length == 1
+            assert x.device == self.device
+            batch_size = x.shape[0]
+            sequence_length = x.shape[1]
+            assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+
+            x = x.view(-1)
+            if output is None:
+                external_output = False
+                output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
+            else:
+                external_output = True
+            lookup_indices = torch.zeros(
+                [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+            min_anchor_deltas = torch.zeros(
+                [batch_size * self._n_detectors], dtype=torch.float32, device=self.device, requires_grad=False
+            )
+            min_anchor_delta_indices = torch.zeros(
+                [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
             )
 
-        assert self._sequence_length == 1
-        assert x.device == self.device
-        batch_size = x.shape[0]
-        sequence_length = x.shape[1]
-        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+            sparse_firing_buffer = None
+            if not self._is_fully_connected:
+                sparse_buffer_numel = (
+                    1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+                ) * 4
+                sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                    sparse_buffer_numel,
+                    self.device,
+                    self._multi_id
+                )
 
-        x = x.view(-1)
-        if output is None:
-            external_output = False
-            output = torch.zeros([batch_size * self._n_outputs], dtype=torch.float32, device=self.device)
-        else:
-            external_output = True
-        lookup_indices = torch.zeros(
-            [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-        min_anchor_deltas = torch.zeros(
-            [batch_size * self._n_detectors], dtype=torch.float32, device=self.device, requires_grad=False
-        )
-        min_anchor_delta_indices = torch.zeros(
-            [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
-        )
+            self._lut_dm.forward_step(
+                self._weights,
+                batch_size, x,
+                self._detector_anchors,
+                output,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                sparse_firing_buffer,
+                stream_handles_tensor
+            )
 
-        sparse_firing_buffer = None
-        if not self._is_fully_connected:
-            sparse_buffer_numel = (
-                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 4
+            if self._lookup_indices_callback is not None:
+                self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
+
+            result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
+            return result + (
+                lookup_indices.view(batch_size, 1, self._n_detectors),
+                min_anchor_deltas.view(batch_size, 1, self._n_detectors),
+                min_anchor_delta_indices.view(batch_size, 1, self._n_detectors)
+            )
+
+    def forward_step_concat(self, x, output=None):
+        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
+
+        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
+            if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+                raise ValueError(
+                    f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
+                    f"where input_shape={self.input_shape()}"
+                )
+
+            assert x.device == self.device
+            batch_size = x.shape[0]
+            sequence_length = x.shape[1]
+            assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
+            expected_shape = (batch_size, sequence_length) + self.input_shape()
+            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+
+            x = x.view(-1)
+            if output is None:
+                external_output = False
+                output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
+            else:
+                external_output = True
+            lookup_indices = torch.zeros(
+                [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+            min_anchor_deltas = torch.zeros(
+                [batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
+                device=self.device, requires_grad=False
+            )
+            min_anchor_delta_indices = torch.zeros(
+                [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+            positional_lookup_indices = torch.zeros(
+                [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+            positional_min_deltas = torch.zeros(
+                [sequence_length * self._n_detectors], dtype=torch.float32,
+                device=self.device, requires_grad=False
+            )
+            positional_min_delta_indices = torch.zeros(
+                [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+
+            # TODO do not store this in context (calculate on the fly using buffer from shared context)
+            firing_stat = torch.zeros(
+                self._n_lookup_neurons * batch_size * sequence_length,
+                dtype=torch.float32, requires_grad=False,
+                device=self.device
+            )
+
+            sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
             sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
                 self.device,
                 self._multi_id
             )
 
-        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
-
-        self._lut_dm.forward_step(
-            self._weights,
-            batch_size, x,
-            self._detector_anchors,
-            output,
-            lookup_indices,
-            min_anchor_deltas,
-            min_anchor_delta_indices,
-            sparse_firing_buffer,
-            stream_handles
-        )
-
-        if self._lookup_indices_callback is not None:
-            self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-
-        result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
-        return result + (
-            lookup_indices.view(batch_size, 1, self._n_detectors),
-            min_anchor_deltas.view(batch_size, 1, self._n_detectors),
-            min_anchor_delta_indices.view(batch_size, 1, self._n_detectors)
-        )
-
-    def forward_step_concat(self, x, output=None):
-        if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
-            raise ValueError(
-                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
-                f"where input_shape={self.input_shape()}"
+            self._lut_dm.forward_step_concat(
+                self._weights,
+                self._positional_embeddings,
+                batch_size, x,
+                self._detector_anchors,
+                output,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                positional_lookup_indices,
+                positional_min_deltas,
+                positional_min_delta_indices,
+                sparse_firing_buffer,
+                firing_stat,
+                stream_handles_tensor
             )
 
-        assert x.device == self.device
-        batch_size = x.shape[0]
-        sequence_length = x.shape[1]
-        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-        expected_shape = (batch_size, sequence_length) + self.input_shape()
-        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+            if self._lookup_indices_callback is not None:
+                self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
-        x = x.view(-1)
-        if output is None:
-            external_output = False
-            output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32, device=self.device)
-        else:
-            external_output = True
-        lookup_indices = torch.zeros(
-            [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-        min_anchor_deltas = torch.zeros(
-            [batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
-            device=self.device, requires_grad=False
-        )
-        min_anchor_delta_indices = torch.zeros(
-            [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-        positional_lookup_indices = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-        positional_min_deltas = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.float32,
-            device=self.device, requires_grad=False
-        )
-        positional_min_delta_indices = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-
-        # TODO do not store this in context (calculate on the fly using buffer from shared context)
-        firing_stat = torch.zeros(
-            self._n_lookup_neurons * batch_size * sequence_length,
-            dtype=torch.float32, requires_grad=False,
-            device=self.device
-        )
-
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
-        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-            sparse_buffer_numel,
-            self.device,
-            self._multi_id
-        )
-
-        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
-
-        self._lut_dm.forward_step_concat(
-            self._weights,
-            self._positional_embeddings,
-            batch_size, x,
-            self._detector_anchors,
-            output,
-            lookup_indices,
-            min_anchor_deltas,
-            min_anchor_delta_indices,
-            positional_lookup_indices,
-            positional_min_deltas,
-            positional_min_delta_indices,
-            sparse_firing_buffer,
-            firing_stat,
-            stream_handles
-        )
-
-        if self._lookup_indices_callback is not None:
-            self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-
-        result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
-        return result + (
-            lookup_indices.view(batch_size, sequence_length, self._n_detectors),
-            min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
-            min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
-            positional_lookup_indices.view(sequence_length, self._n_detectors),
-            positional_min_deltas.view(sequence_length, self._n_detectors),
-            positional_min_delta_indices.view(sequence_length, self._n_detectors),
-            firing_stat
-        )
+            result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
+            return result + (
+                lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+                min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+                min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
+                positional_lookup_indices.view(sequence_length, self._n_detectors),
+                positional_min_deltas.view(sequence_length, self._n_detectors),
+                positional_min_delta_indices.view(sequence_length, self._n_detectors),
+                firing_stat
+            )
 
     def backward_step(
         self, x, grad_output,
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         x_grad=None
     ):
-        assert self._sequence_length == 1
-        assert x.device == self.device
-        source_x_shape = x.shape
-        batch_size = source_x_shape[0]
-        sequence_length = x.shape[1]
-        assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
-        expected_shape = (batch_size, 1) + self.input_shape()
-        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
 
-        x = x.view(-1)
-        assert lookup_indices.device == self.device
-        assert lookup_indices.shape == (batch_size, 1, self._n_detectors)
-        lookup_indices = lookup_indices.view(-1)
-        assert min_anchor_deltas.device == self.device
-        assert min_anchor_deltas.shape == (batch_size, 1, self._n_detectors)
-        min_anchor_deltas = min_anchor_deltas.view(-1)
-        assert min_anchor_delta_indices.device == self.device
-        assert min_anchor_delta_indices.shape == (batch_size, 1, self._n_detectors)
-        min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
+        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
+            assert self._sequence_length == 1
+            assert x.device == self.device
+            source_x_shape = x.shape
+            batch_size = source_x_shape[0]
+            sequence_length = x.shape[1]
+            assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
+            expected_shape = (batch_size, 1) + self.input_shape()
+            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        if x_grad is None:
-            external_output = False
-            x_grad = torch.zeros_like(x)
-        else:
-            external_output = True
-        if self._weights_gradient_policy.type == GradientType.Internal:
-            target_w_grad = None
-        elif self._weights_gradient_policy.type == GradientType.Sparse:
-            numel = ((self._weights.numel() + 3) // 4) * 4
-            target_w_grad = self._shared_context.get_weight_gradients_buffer(
-                numel,
-                self.device,
-                self._multi_id
-            )
-        else:
-            target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
+            x = x.view(-1)
+            assert lookup_indices.device == self.device
+            assert lookup_indices.shape == (batch_size, 1, self._n_detectors)
+            lookup_indices = lookup_indices.view(-1)
+            assert min_anchor_deltas.device == self.device
+            assert min_anchor_deltas.shape == (batch_size, 1, self._n_detectors)
+            min_anchor_deltas = min_anchor_deltas.view(-1)
+            assert min_anchor_delta_indices.device == self.device
+            assert min_anchor_delta_indices.shape == (batch_size, 1, self._n_detectors)
+            min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
-        assert grad_output.device == self.device
-        assert grad_output.shape == (batch_size, 1) + self.output_shape()
-
-        grad_output = grad_output.view(-1)
-
-        before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-            self._n_lookup_neurons * batch_size,
-            self.device,
-            self._multi_id
-        )
-
-        sparse_firing_buffer = None
-        if not self._is_fully_connected:
-            sparse_buffer_numel = (
-                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 4
-            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-                sparse_buffer_numel,
-                self.device,
-                self._multi_id
-            )
-
-        if self._weights_gradient_policy.type == GradientType.Internal:
-            if self._external_lr_hook is None:
-                raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
-            external_lr = self._external_lr_hook(self._weights)
-        else:
-            external_lr = -1.0
-
-        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
-
-        self._lut_dm.backward_backprop(
-            self._weights,
-            batch_size,
-            grad_output,
-            x,
-            self._detector_anchors,
-            lookup_indices,
-            min_anchor_deltas,
-            min_anchor_delta_indices,
-            before_detectors_gradients,
-            x_grad,
-            external_lr,
-            sparse_firing_buffer,
-            target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-            stream_handles
-        )
-
-        if self._weights_gradient_policy.type == GradientType.Sparse:
-            converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
-            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
-            indices, values = converter.dense_to_sparse_32(
-                target_w_grad, erase_input=True,
-                densify_buffers=self._shared_context.get_densify_buffers(
-                    self._n_detectors * 2 * n_weights_per_neuron * batch_size,
+            if x_grad is None:
+                external_output = False
+                x_grad = torch.zeros_like(x)
+            else:
+                external_output = True
+            if self._weights_gradient_policy.type == GradientType.Internal:
+                target_w_grad = None
+            elif self._weights_gradient_policy.type == GradientType.Sparse:
+                numel = ((self._weights.numel() + 3) // 4) * 4
+                target_w_grad = self._shared_context.get_weight_gradients_buffer(
+                    numel,
                     self.device,
                     self._multi_id
                 )
-            )
-            if indices is not None:
-                if self._weights_gradient_policy.normalized:
-                    values /= values.abs().max().clip(1e-16)
-                target_w_grad = torch.sparse_coo_tensor(
-                    indices=indices.unsqueeze(0),
-                    values=values,
-                    size=self._weights.shape,
-                    device=self.device,
-                    check_invariants=False,
-                    is_coalesced=True,
-                    requires_grad=False
-                )
             else:
-                target_w_grad = None
-        elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
-            target_w_grad /= target_w_grad.abs().max().clip(1e-16)
+                target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
 
-        result = () if external_output else (x_grad.view(source_x_shape),)
-        return result + (target_w_grad,)
+            assert grad_output.device == self.device
+            assert grad_output.shape == (batch_size, 1) + self.output_shape()
+
+            grad_output = grad_output.view(-1)
+
+            before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
+                self._n_lookup_neurons * batch_size,
+                self.device,
+                self._multi_id
+            )
+
+            sparse_firing_buffer = None
+            if not self._is_fully_connected:
+                sparse_buffer_numel = (
+                    1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
+                ) * 4
+                sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                    sparse_buffer_numel,
+                    self.device,
+                    self._multi_id
+                )
+
+            if self._weights_gradient_policy.type == GradientType.Internal:
+                if self._external_lr_hook is None:
+                    raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
+                external_lr = self._external_lr_hook(self._weights)
+            else:
+                external_lr = -1.0
+
+            self._lut_dm.backward_backprop(
+                self._weights,
+                batch_size,
+                grad_output,
+                x,
+                self._detector_anchors,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                before_detectors_gradients,
+                x_grad,
+                external_lr,
+                sparse_firing_buffer,
+                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
+                stream_handles_tensor
+            )
+
+            if self._weights_gradient_policy.type == GradientType.Sparse:
+                converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
+                n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
+                indices, values = converter.dense_to_sparse_32(
+                    target_w_grad, erase_input=True,
+                    densify_buffers=self._shared_context.get_densify_buffers(
+                        self._n_detectors * 2 * n_weights_per_neuron * batch_size,
+                        self.device,
+                        self._multi_id
+                    )
+                )
+                if indices is not None:
+                    if self._weights_gradient_policy.normalized:
+                        values /= values.abs().max().clip(1e-16)
+                    target_w_grad = torch.sparse_coo_tensor(
+                        indices=indices.unsqueeze(0),
+                        values=values,
+                        size=self._weights.shape,
+                        device=self.device,
+                        check_invariants=False,
+                        is_coalesced=True,
+                        requires_grad=False
+                    )
+                else:
+                    target_w_grad = None
+            elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
+                target_w_grad /= target_w_grad.abs().max().clip(1e-16)
+
+            result = () if external_output else (x_grad.view(source_x_shape),)
+            return result + (target_w_grad,)
 
     def backward_step_concat(
         self, x, grad_output,
@@ -736,135 +740,136 @@ class LUTLayerBasic(nn.Module):
         firing_stat,
         x_grad=None
     ):
-        assert x.device == self.device
-        source_x_shape = x.shape
-        batch_size = source_x_shape[0]
-        sequence_length = x.shape[1]
-        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
-        expected_shape = (batch_size, sequence_length) + self.input_shape()
-        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+        streams, stream_handles_tensor = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else (None, None)
 
-        x = x.view(-1)
-        assert lookup_indices.device == self.device
-        assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
-        lookup_indices = lookup_indices.view(-1)
-        assert min_anchor_deltas.device == self.device
-        assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
-        min_anchor_deltas = min_anchor_deltas.view(-1)
-        assert min_anchor_delta_indices.device == self.device
-        assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
-        min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
+        with nullcontext() if streams is None else torch.cuda.stream(streams[0]):
+            assert x.device == self.device
+            source_x_shape = x.shape
+            batch_size = source_x_shape[0]
+            sequence_length = x.shape[1]
+            assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
+            expected_shape = (batch_size, sequence_length) + self.input_shape()
+            assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
-        assert positional_lookup_indices.device == self.device
-        assert positional_lookup_indices.shape == (sequence_length, self._n_detectors)
-        positional_lookup_indices = positional_lookup_indices.view(-1)
-        assert positional_min_deltas.device == self.device
-        assert positional_min_deltas.shape == (sequence_length, self._n_detectors)
-        positional_min_deltas = positional_min_deltas.view(-1)
-        assert positional_min_delta_indices.device == self.device
-        assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
-        positional_min_delta_indices = positional_min_delta_indices.view(-1)
+            x = x.view(-1)
+            assert lookup_indices.device == self.device
+            assert lookup_indices.shape == (batch_size, sequence_length, self._n_detectors)
+            lookup_indices = lookup_indices.view(-1)
+            assert min_anchor_deltas.device == self.device
+            assert min_anchor_deltas.shape == (batch_size, sequence_length, self._n_detectors)
+            min_anchor_deltas = min_anchor_deltas.view(-1)
+            assert min_anchor_delta_indices.device == self.device
+            assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
+            min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
-        assert firing_stat.device == self.device
-        assert firing_stat.dtype == torch.float32
-        assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
+            assert positional_lookup_indices.device == self.device
+            assert positional_lookup_indices.shape == (sequence_length, self._n_detectors)
+            positional_lookup_indices = positional_lookup_indices.view(-1)
+            assert positional_min_deltas.device == self.device
+            assert positional_min_deltas.shape == (sequence_length, self._n_detectors)
+            positional_min_deltas = positional_min_deltas.view(-1)
+            assert positional_min_delta_indices.device == self.device
+            assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
+            positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
-        if x_grad is None:
-            external_output = False
-            x_grad = torch.zeros_like(x)
-        else:
-            external_output = True
-        if self._weights_gradient_policy.type == GradientType.Internal:
-            target_w_grad = None
-        elif self._weights_gradient_policy.type == GradientType.Sparse:
-            numel = ((self._weights.numel() + 3) // 4) * 4
-            target_w_grad = self._shared_context.get_weight_gradients_buffer(
-                numel,
-                self.device,
-                self._multi_id
-            )
-        else:
-            target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
-        positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+            assert firing_stat.device == self.device
+            assert firing_stat.dtype == torch.float32
+            assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
 
-        assert grad_output.device == self.device
-        assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
-
-        grad_output = grad_output.view(-1)
-
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
-        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-            sparse_buffer_numel,
-            self.device,
-            self._multi_id
-        )
-
-        if self._weights_gradient_policy.type == GradientType.Internal:
-            if self._external_lr_hook is None:
-                raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
-            external_lr = self._external_lr_hook(self._weights)
-        else:
-            external_lr = -1.0
-
-        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
-
-        self._lut_dm.backward_backprop_concat(
-            self._weights,
-            self._positional_embeddings,
-            batch_size,
-            grad_output,
-            x,
-            self._detector_anchors,
-            lookup_indices,
-            min_anchor_deltas,
-            min_anchor_delta_indices,
-            positional_lookup_indices,
-            positional_min_deltas,
-            positional_min_delta_indices,
-            sparse_firing_buffer,
-            # First firing_stat will be used directly and then because it is no longer needed
-            # the same buffer will be used for gradient accumulation. So after this call firing_stat
-            # is invalid.
-            firing_stat,
-            x_grad, positional_grad,
-            external_lr,
-            target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-            stream_handles
-        )
-
-        if self._weights_gradient_policy.type == GradientType.Sparse:
-            converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
-            n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
-            indices, values = converter.dense_to_sparse_32(
-                target_w_grad, erase_input=True,
-                densify_buffers=self._shared_context.get_densify_buffers(
-                    self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size,
+            if x_grad is None:
+                external_output = False
+                x_grad = torch.zeros_like(x)
+            else:
+                external_output = True
+            if self._weights_gradient_policy.type == GradientType.Internal:
+                target_w_grad = None
+            elif self._weights_gradient_policy.type == GradientType.Sparse:
+                numel = ((self._weights.numel() + 3) // 4) * 4
+                target_w_grad = self._shared_context.get_weight_gradients_buffer(
+                    numel,
                     self.device,
                     self._multi_id
                 )
-            )
-            if indices is not None:
-                if self._weights_gradient_policy.normalized:
-                    values /= values.abs().max().clip(1e-16)
-                target_w_grad = torch.sparse_coo_tensor(
-                    indices=indices.unsqueeze(0),
-                    values=values,
-                    size=self._weights.shape,
-                    device=self.device,
-                    check_invariants=False,
-                    is_coalesced=True,
-                    requires_grad=False
-                )
             else:
-                target_w_grad = None
-        elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
-            target_w_grad /= target_w_grad.abs().max().clip(1e-16)
+                target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
+            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
 
-        if self._weights_gradient_policy.normalized:
-            positional_grad /= positional_grad.abs().max().clip(1e-16)
+            assert grad_output.device == self.device
+            assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
 
-        result = () if external_output else (x_grad.view(source_x_shape),)
-        return result + (target_w_grad, positional_grad,)
+            grad_output = grad_output.view(-1)
+
+            sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
+            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+                sparse_buffer_numel,
+                self.device,
+                self._multi_id
+            )
+
+            if self._weights_gradient_policy.type == GradientType.Internal:
+                if self._external_lr_hook is None:
+                    raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
+                external_lr = self._external_lr_hook(self._weights)
+            else:
+                external_lr = -1.0
+
+            self._lut_dm.backward_backprop_concat(
+                self._weights,
+                self._positional_embeddings,
+                batch_size,
+                grad_output,
+                x,
+                self._detector_anchors,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                positional_lookup_indices,
+                positional_min_deltas,
+                positional_min_delta_indices,
+                sparse_firing_buffer,
+                # First firing_stat will be used directly and then because it is no longer needed
+                # the same buffer will be used for gradient accumulation. So after this call firing_stat
+                # is invalid.
+                firing_stat,
+                x_grad, positional_grad,
+                external_lr,
+                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
+                stream_handles_tensor
+            )
+
+            if self._weights_gradient_policy.type == GradientType.Sparse:
+                converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
+                n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
+                indices, values = converter.dense_to_sparse_32(
+                    target_w_grad, erase_input=True,
+                    densify_buffers=self._shared_context.get_densify_buffers(
+                        self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size,
+                        self.device,
+                        self._multi_id
+                    )
+                )
+                if indices is not None:
+                    if self._weights_gradient_policy.normalized:
+                        values /= values.abs().max().clip(1e-16)
+                    target_w_grad = torch.sparse_coo_tensor(
+                        indices=indices.unsqueeze(0),
+                        values=values,
+                        size=self._weights.shape,
+                        device=self.device,
+                        check_invariants=False,
+                        is_coalesced=True,
+                        requires_grad=False
+                    )
+                else:
+                    target_w_grad = None
+            elif self._weights_gradient_policy.type == GradientType.Dense and self._weights_gradient_policy.normalized:
+                target_w_grad /= target_w_grad.abs().max().clip(1e-16)
+
+            if self._weights_gradient_policy.normalized:
+                positional_grad /= positional_grad.abs().max().clip(1e-16)
+
+            result = () if external_output else (x_grad.view(source_x_shape),)
+            return result + (target_w_grad, positional_grad,)
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
