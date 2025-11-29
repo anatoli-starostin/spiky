@@ -511,8 +511,10 @@ class LUTLayerBasic(nn.Module):
             # Start all threads
             for lut, lut_args in zip(luts, args):
                 thread = threading.Thread(target=lut._lut_dm.forward_step, args=lut_args)
-                thread.start()
                 threads.append(thread)
+
+            for thread in threads:
+                thread.start()
 
             # Wait for all threads to complete
             for thread in threads:
@@ -622,8 +624,10 @@ class LUTLayerBasic(nn.Module):
             # Start all threads
             for lut, lut_args in zip(luts, args):
                 thread = threading.Thread(target=lut._lut_dm.forward_step_concat, args=lut_args)
-                thread.start()
                 threads.append(thread)
+
+            for thread in threads:
+                thread.start()
 
             # Wait for all threads to complete
             for thread in threads:
@@ -766,8 +770,10 @@ class LUTLayerBasic(nn.Module):
             # Start all threads
             for lut, lut_args in zip(luts, args):
                 thread = threading.Thread(target=lut._lut_dm.backward_backprop, args=lut_args)
-                thread.start()
                 threads.append(thread)
+
+            for thread in threads:
+                thread.start()
 
             # Wait for all threads to complete
             for thread in threads:
@@ -930,8 +936,10 @@ class LUTLayerBasic(nn.Module):
             # Start all threads
             for lut, lut_args in zip(luts, args):
                 thread = threading.Thread(target=lut._lut_dm.backward_backprop_concat, args=lut_args[:19])
-                thread.start()
                 threads.append(thread)
+
+            for thread in threads:
+                thread.start()
 
             # Wait for all threads to complete
             for thread in threads:
