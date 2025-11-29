@@ -1385,22 +1385,22 @@ class MultiLUT(nn.Module):
                     if multi_lut._sequence_length == 1:
                         (w_grad,) = layer.backward_step(
                             x, grad_output,
-                            results[layer_idx][1],  # lookup_indices
-                            results[layer_idx][2],   # min_anchor_deltas
-                            results[layer_idx][3],    # min_anchor_delta_indices
+                            results[layer_idx][0],  # lookup_indices
+                            results[layer_idx][1],   # min_anchor_deltas
+                            results[layer_idx][2],    # min_anchor_delta_indices
                             x_grad=x_grad
                         )
                         all_weight_grads[layer_idx] = w_grad
                     else:
                         w_grad, pe_grad = layer.backward_step_concat(
                             x, grad_output,
-                            results[layer_idx][1],   # lookup_indices
-                            results[layer_idx][2],   # min_anchor_deltas
-                            results[layer_idx][3],   # min_anchor_delta_indices
-                            results[layer_idx][4],   # positional_lookup_indices
-                            results[layer_idx][5],   # positional_min_deltas
-                            results[layer_idx][6],   # positional_min_delta_indices
-                            results[layer_idx][7],   # firing_stat
+                            results[layer_idx][0],   # lookup_indices
+                            results[layer_idx][1],   # min_anchor_deltas
+                            results[layer_idx][2],   # min_anchor_delta_indices
+                            results[layer_idx][3],   # positional_lookup_indices
+                            results[layer_idx][4],   # positional_min_deltas
+                            results[layer_idx][5],   # positional_min_delta_indices
+                            results[layer_idx][6],   # firing_stat
                             x_grad=x_grad
                         )
                         all_weight_grads[layer_idx] = w_grad
