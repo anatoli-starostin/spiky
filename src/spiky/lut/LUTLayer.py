@@ -519,7 +519,7 @@ class LUTLayerBasic(nn.Module):
 
         result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
         if do_squeeze:
-            result = (result[0].view((x.shape[0],) + self.output_shape()),)
+            result = (result[0].view((batch_size,) + self.output_shape()),)
         return result + (
             lookup_indices.view(batch_size, 1, self._n_detectors),
             min_anchor_deltas.view(batch_size, 1, self._n_detectors),
