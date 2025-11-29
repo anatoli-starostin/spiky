@@ -12,9 +12,10 @@ class __attribute__((visibility("hidden"))) DenseToSparseConverterNative {
 public:
     DenseToSparseConverterNative(bool use_new_kernel = false) 
         #ifdef ENABLE_PROFILING
-        : profiler(N_TORCH_UTILS_PROFILER_OPS)
+        : profiler(N_TORCH_UTILS_PROFILER_OPS), _use_new_kernel(use_new_kernel)
+        #else
+        : _use_new_kernel(use_new_kernel)
         #endif
-        , _use_new_kernel(use_new_kernel)
     {
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP, "torch_utils::dense_to_sparse_32");
