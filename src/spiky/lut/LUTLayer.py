@@ -1274,6 +1274,10 @@ class MultiLUT(nn.Module):
     def sequence_length(self):
         return self._sequence_length
     
+    def set_external_learning_rate_hook(self, hook_fn):
+        for layer in self.layers:
+            layer.set_external_learning_rate_hook(hook_fn)
+    
     def forward(self, x):
         """
         Forward pass that runs all layers in parallel threads.

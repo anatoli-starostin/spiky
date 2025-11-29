@@ -130,7 +130,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             device,
             w_sparse_firing_buffer
         );
+        #ifdef NO_CUDA
         local_firing_buffer.clear();
+        #else
+        local_firing_buffer.clear(cuda_streams);  // launching clear on stream 0
+        #endif
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
@@ -153,7 +157,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             this->lut_data,
             device
         );
+        #ifdef NO_CUDA
         local_firing_buffer.update_counter();
+        #else
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+        #endif
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
         uint64_t n_firings = local_firing_buffer.number_of_firings();
@@ -296,7 +304,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             device,
             w_sparse_firing_buffer
         );
+        #ifdef NO_CUDA
         local_firing_buffer.clear();
+        #else
+        local_firing_buffer.clear(cuda_streams);  // launching clear on stream 0
+        #endif
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
@@ -315,7 +327,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
+        #ifdef NO_CUDA
         local_firing_buffer.update_counter();
+        #else
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+        #endif
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
@@ -572,7 +588,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_lookup_neurons * this->sequence_length, 
         batch_size, device, w_sparse_firing_buffer
     );
+    #ifdef NO_CUDA
     local_firing_buffer.clear();
+    #else
+    local_firing_buffer.clear(cuda_streams);  // launching clear on stream 0
+    #endif
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
@@ -585,7 +605,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->sequence_length,
         device
     );
+    #ifdef NO_CUDA
     local_firing_buffer.update_counter();
+    #else
+    local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+    #endif
     uint64_t n_firings = local_firing_buffer.number_of_firings();
 
     // TODO support fully connected case and n_output_blocks
@@ -707,7 +731,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //        _ensure_firing_buffer_size(
 //            static_cast<uint64_t>(this->n_detectors) * this->max_forward_groups_per_neuron * 2
 //        );
-//        firing_buffer->clear();
+//        #ifdef NO_CUDA
+//        local_firing_buffer.clear();
+//        #else
+//        local_firing_buffer.clear(cuda_streams);  // launching clear on stream 0
+//        #endif
 //        dim3 numBlocks((this->n_detectors + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, batch_size * this->sequence_length);
 //        GRID_CALL_SHARED_MEM(
 //            numBlocks, fire_detectors_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB, LUT_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
@@ -722,7 +750,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //            this->lut_data,
 //            device
 //        );
-//        firing_buffer->update_counter();
+//        #ifdef NO_CUDA
+//        local_firing_buffer.update_counter();
+//        #else
+//        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+//        #endif
 //        uint64_t n_firings = firing_buffer->number_of_firings();
 //        numBlocks = dim3((n_firings + LUT_RUNTIME_KERNELS_TPB - 1) / LUT_RUNTIME_KERNELS_TPB, 1);
 //        GRID_CALL_NO_SHARED_MEM(
