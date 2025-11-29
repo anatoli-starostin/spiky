@@ -1308,7 +1308,12 @@ class MultiLUT(nn.Module):
             """
             x, multi_lut = args[0], args[1]
             n_luts = len(multi_lut.layers)
-            
+            if x.shape == (x.shape[0],) + self.input_shape() and multi_lut._sequence_length == 1:
+                do_squeeze = True
+                x = x.view((x.shape[0], 1) + self.input_shape())
+            else:
+                do_squeeze = False
+
             first_layer = multi_lut.layers[0]
             batch_size = x.shape[0]
             
@@ -1353,7 +1358,7 @@ class MultiLUT(nn.Module):
             
             # Reshape output to match expected shape
 
-            if x.shape == (x.shape[0],) + self.input_shape():
+            if do_squeeze:
                 output = output.view((batch_size,) + multi_lut.output_shape())
             else:
                 output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
