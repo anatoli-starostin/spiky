@@ -1372,7 +1372,7 @@ class MultiLUT(nn.Module):
             results = ctx.results
 
             # Create shared x_grad tensor
-            x_grad = torch.zeros_like(x)
+            x_grad = torch.zeros_like(x.view(-1))
             
             # Store gradients for each layer
             all_weight_grads = [None] * n_luts
@@ -1422,11 +1422,11 @@ class MultiLUT(nn.Module):
             for i, error in enumerate(errors):
                 if error is not None:
                     raise RuntimeError(f"Error in layer {i} backward pass: {error}") from error
-            
+
             if multi_lut._sequence_length > 1:
-                return (x_grad, None) + tuple(all_weight_grads) + tuple(all_pe_grads)
+                return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
             else:
-                return (x_grad, None) + tuple(all_weight_grads)
+                return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
     
     def to(self, *args, **kwargs):
         """
