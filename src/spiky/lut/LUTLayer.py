@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from contextlib import nullcontext
 import threading
+from queue import Queue
 
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
@@ -1318,17 +1319,18 @@ class MultiLUT(nn.Module):
             else:
                 output = torch.zeros([batch_size * multi_lut._sequence_length * first_layer._n_outputs], dtype=torch.float32, device=first_layer.device)
             
-            results = [None] * n_luts
-            errors = [None] * n_luts
+            results_queue = Queue()
+            errors_queue = Queue()
             
             def forward_worker(layer_idx, layer):
                 try:
                     if multi_lut._sequence_length == 1:
-                        results[layer_idx] = layer.forward_step(x, output=output)
+                        result = layer.forward_step(x, output=output)
                     else:
-                        results[layer_idx] = layer.forward_step_concat(x, output=output)
+                        result = layer.forward_step_concat(x, output=output)
+                    results_queue.put((layer_idx, result))
                 except Exception as e:
-                    errors[layer_idx] = e
+                    errors_queue.put((layer_idx, e))
             
             if multi_lut._use_threads:
                 threads = []
@@ -1341,15 +1343,36 @@ class MultiLUT(nn.Module):
                 # Wait for all threads to complete
                 for thread in threads:
                     thread.join()
+                
+                # Collect results from queue
+                results = [None] * n_luts
+                while not results_queue.empty():
+                    layer_idx, result = results_queue.get()
+                    results[layer_idx] = result
+                
+                # Check for errors
+                errors = []
+                while not errors_queue.empty():
+                    layer_idx, error = errors_queue.get()
+                    errors.append((layer_idx, error))
+                
+                if errors:
+                    for layer_idx, error in errors:
+                        raise RuntimeError(f"Error in layer {layer_idx} forward pass: {error}") from error
             else:
                 # Run sequentially
+                results = [None] * n_luts
                 for i, layer in enumerate(multi_lut.layers):
                     forward_worker(i, layer)
-            
-            # Check for errors
-            for i, error in enumerate(errors):
-                if error is not None:
-                    raise RuntimeError(f"Error in layer {i} forward pass: {error}") from error
+                    # Collect result immediately for sequential execution
+                    if not results_queue.empty():
+                        layer_idx, result = results_queue.get()
+                        results[layer_idx] = result
+                
+                # Check for errors
+                if not errors_queue.empty():
+                    layer_idx, error = errors_queue.get()
+                    raise RuntimeError(f"Error in layer {layer_idx} forward pass: {error}") from error
             
             # Check all results are available
             for i, result in enumerate(results):
@@ -1385,10 +1408,9 @@ class MultiLUT(nn.Module):
             # Create shared x_grad tensor
             x_grad = torch.zeros_like(x.view(-1))
             
-            # Store gradients for each layer
-            all_weight_grads = [None] * n_luts
-            all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
-            errors = [None] * n_luts
+            # Use queues for thread-safe communication
+            gradients_queue = Queue()
+            errors_queue = Queue()
             
             def backward_worker(layer_idx, layer):
                 try:
@@ -1400,7 +1422,7 @@ class MultiLUT(nn.Module):
                             results[layer_idx][2],    # min_anchor_delta_indices
                             x_grad=x_grad
                         )
-                        all_weight_grads[layer_idx] = w_grad
+                        gradients_queue.put((layer_idx, w_grad, None))
                     else:
                         w_grad, pe_grad = layer.backward_step_concat(
                             x, grad_output,
@@ -1413,10 +1435,9 @@ class MultiLUT(nn.Module):
                             results[layer_idx][6],   # firing_stat
                             x_grad=x_grad
                         )
-                        all_weight_grads[layer_idx] = w_grad
-                        all_pe_grads[layer_idx] = pe_grad
+                        gradients_queue.put((layer_idx, w_grad, pe_grad))
                 except Exception as e:
-                    errors[layer_idx] = e
+                    errors_queue.put((layer_idx, e))
             
             if multi_lut._use_threads:
                 threads = []
@@ -1429,15 +1450,42 @@ class MultiLUT(nn.Module):
                 # Wait for all threads to complete
                 for thread in threads:
                     thread.join()
+                
+                # Collect gradients from queue
+                all_weight_grads = [None] * n_luts
+                all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
+                while not gradients_queue.empty():
+                    layer_idx, w_grad, pe_grad = gradients_queue.get()
+                    all_weight_grads[layer_idx] = w_grad
+                    if pe_grad is not None:
+                        all_pe_grads[layer_idx] = pe_grad
+                
+                # Check for errors
+                errors = []
+                while not errors_queue.empty():
+                    layer_idx, error = errors_queue.get()
+                    errors.append((layer_idx, error))
+                
+                if errors:
+                    for layer_idx, error in errors:
+                        raise RuntimeError(f"Error in layer {layer_idx} backward pass: {error}") from error
             else:
                 # Run sequentially
+                all_weight_grads = [None] * n_luts
+                all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
                 for i, layer in enumerate(multi_lut.layers):
                     backward_worker(i, layer)
-            
-            # Check for errors
-            for i, error in enumerate(errors):
-                if error is not None:
-                    raise RuntimeError(f"Error in layer {i} backward pass: {error}") from error
+                    # Collect gradients immediately for sequential execution
+                    if not gradients_queue.empty():
+                        layer_idx, w_grad, pe_grad = gradients_queue.get()
+                        all_weight_grads[layer_idx] = w_grad
+                        if pe_grad is not None:
+                            all_pe_grads[layer_idx] = pe_grad
+                
+                # Check for errors
+                if not errors_queue.empty():
+                    layer_idx, error = errors_queue.get()
+                    raise RuntimeError(f"Error in layer {layer_idx} backward pass: {error}") from error
 
             if multi_lut._sequence_length > 1:
                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
