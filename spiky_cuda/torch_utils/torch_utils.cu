@@ -268,10 +268,10 @@ public:
     }
 
 private:
-    bool _use_new_kernel;
     #ifdef ENABLE_PROFILING
     SimpleProfiler profiler;
     #endif
+    bool _use_new_kernel;
 };
 
 void PB_DenseToSparseConverter(py::module& m) {

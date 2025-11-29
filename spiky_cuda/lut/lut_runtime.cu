@@ -113,8 +113,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
 
     #ifdef ENABLE_PROFILING
     #ifndef NO_CUDA
-    c10::cuda::CUDAGuard guard(device);
-    cudaDeviceSynchronize();
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
     #endif
     #endif
 
@@ -227,7 +229,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     #endif
 
     #ifndef NO_CUDA
-    {
+    if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamSynchronize(cuda_streams[0]);
     }
@@ -272,8 +274,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
     #ifdef ENABLE_PROFILING
     #ifndef NO_CUDA
-    c10::cuda::CUDAGuard guard(device);
-    cudaDeviceSynchronize();
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
     #endif
     #endif
 
@@ -408,7 +412,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     // 3. propagate through detectors
 
     #ifndef NO_CUDA
-    {
+    if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamSynchronize(cuda_streams[1]);
         cudaStreamSynchronize(cuda_streams[2]);
@@ -455,7 +459,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->int_rescaler
         );
         #ifndef NO_CUDA
-        {
+        if(device != -1) {
             c10::cuda::CUDAGuard guard(device);
             cudaStreamSynchronize(cuda_streams[1]);
         }
@@ -465,7 +469,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #endif
 
     #ifndef NO_CUDA
-    {
+    if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamSynchronize(cuda_streams[0]);
     }
@@ -502,6 +506,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->batch_size = batch_size;
     }
 
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
+    #endif
+    #endif
+
     PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
     uint32_t n_detector_items = this->sequence_length * this->n_detectors;
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), batch_size);
@@ -531,7 +544,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
 
     #ifndef NO_CUDA
-    {
+    if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamSynchronize(cuda_streams[1]);
     }
@@ -609,7 +622,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     #endif
 
     #ifndef NO_CUDA
-    {
+    if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamSynchronize(cuda_streams[0]);
     }
@@ -652,6 +665,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     if(this->sequence_length <= 1) {
         throw py::value_error("backward_backprop_concat should only be called when sequence_length > 1");
     }
+
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
+    #endif
+    #endif
 //  TODO do_sgd
 //  TODO clean firing stat
 //  TODO cuda_streams
@@ -662,8 +684,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 //        memset(before_detectors_gradients, 0, memsize);
 //    } else {
 //        #ifndef NO_CUDA
-//        c10::cuda::CUDAGuard guard(device);
-//        cudaMemset(before_detectors_gradients, 0, memsize);
+//.       if(device != -1) {
+//            c10::cuda::CUDAGuard guard(device);
+//            cudaMemset(before_detectors_gradients, 0, memsize);
+//        }
 //        #endif
 //    }
 //
