@@ -131,8 +131,16 @@ static_assert((THREADS_PER_BLOCK % 2) == 0, "THREADS_PER_BLOCK must be even");
     if(device == -1) {\
         GRID_CALL_ON_CPU(numBlocks, logic_name, threads_per_block, __VA_ARGS__) \
     }
+    #define GRID_CALL_ON_STREAM_NO_SHARED_MEM(numBlocks, logic_name, threads_per_block, stream, ...) \
+    if(device == -1) {\
+        GRID_CALL_ON_CPU(numBlocks, logic_name, threads_per_block, __VA_ARGS__) \
+    }
     #define GRID_CALL(numBlocks, logic_name, ...) GRID_CALL_NO_SHARED_MEM(numBlocks, logic_name, THREADS_PER_BLOCK, __VA_ARGS__)
     #define GRID_CALL_SHARED_MEM(numBlocks, logic_name, threads_per_block, shared_memory_size, ...) \
+    if(device == -1) {\
+        GRID_CALL_ON_CPU(numBlocks, logic_name, threads_per_block, __VA_ARGS__) \
+    }
+    #define GRID_CALL_ON_STREAM_SHARED_MEM(numBlocks, logic_name, threads_per_block, shared_memory_size, stream, ...) \
     if(device == -1) {\
         GRID_CALL_ON_CPU(numBlocks, logic_name, threads_per_block, __VA_ARGS__) \
     }
@@ -180,6 +188,8 @@ static_assert((THREADS_PER_BLOCK % 2) == 0, "THREADS_PER_BLOCK must be even");
         } else { \
             c10::cuda::CUDAGuard guard(device); \
             PFX(logic_name##_logic_cuda)<<<numBlocks, threads_per_block, 0, stream>>>(__VA_ARGS__); \
+            CU_CHECK(cudaStreamSynchronize(stream)); \
+            CU_CHECK(cudaGetLastError()); \
         }
         #define GRID_CALL(numBlocks, logic_name, ...) GRID_CALL_NO_SHARED_MEM(numBlocks, logic_name, THREADS_PER_BLOCK, __VA_ARGS__)
         #define GRID_CALL_SHARED_MEM(numBlocks, logic_name, threads_per_block, shared_memory_size, ...) \
@@ -198,6 +208,8 @@ static_assert((THREADS_PER_BLOCK % 2) == 0, "THREADS_PER_BLOCK must be even");
         } else { \
             c10::cuda::CUDAGuard guard(device); \
             PFX(logic_name##_logic_cuda)<<<numBlocks, threads_per_block, shared_memory_size, stream>>>(__VA_ARGS__); \
+            CU_CHECK(cudaStreamSynchronize(stream)); \
+            CU_CHECK(cudaGetLastError()); \
         }
     #else
         #define GRID_CALL_NO_SHARED_MEM(numBlocks, logic_name, threads_per_block, ...) \

@@ -84,6 +84,9 @@ public:
         EXTERNAL_REAL_DT *w_min_anchor_deltas,
         int32_t *w_min_anchor_delta_indices,
         int32_t *w_sparse_firing_buffer  // Can be nullptr
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
     );
 
     void backward_backprop(
@@ -103,6 +106,9 @@ public:
         int32_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
         EXTERNAL_REAL_DT external_lr = 0.0,
         EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
     );
 
     void forward_step_concat(
@@ -120,6 +126,9 @@ public:
         int32_t *w_positional_min_delta_indices,
         int32_t *w_sparse_firing_buffer,
         EXTERNAL_REAL_DT *w_firing_stat
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
     );
 
     void backward_backprop_concat(
@@ -144,6 +153,9 @@ public:
         EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
         EXTERNAL_REAL_DT external_lr = 0.0,
         EXTERNAL_REAL_DT *w_weights_gradients = nullptr  // Can be nullptr when external_lr != 0.0
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
     );
 };
 

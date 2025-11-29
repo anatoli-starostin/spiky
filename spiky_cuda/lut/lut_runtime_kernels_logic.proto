@@ -1077,7 +1077,7 @@ check_positional_embeddings_logic(
     }
 }
 
-// TODO add alternatives firing buffer
+// TODO refactor with warps
 
 densify_firing_stat_logic(
     EXTERNAL_REAL_DT* r_firing_stat,
@@ -1378,7 +1378,7 @@ fill_after_detectors_firing_stat_logic(
         uint32_t batch_offset = batch_index * n_detector_items;
         
         // Get Q: lookup index from first timestep (i)
-        uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+        uint32_t q_offset = batch_offset + i * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
         
         // Get P: lookup index from second timestep (j)
@@ -1418,164 +1418,5 @@ fill_after_detectors_firing_stat_logic(
             "fill_after_detectors_firing_stat_logic: batch_index %d, i %d, j %d, detector_index %d, Q %d, P %d, PE %d, concat %d\n", 
             batch_index, i, j, detector_index, Q, P, PE, concatenated_index
         );
-    }
-}
-
-to_sparse_coo_logic(
-    EXTERNAL_REAL_DT* r_input,
-    uint64_t n_inputs,
-    AnchorsPair* r_detectors,
-    uint32_t n_detectors,
-    uint32_t n_anchors_per_detector,
-    uint32_t n_lookup_neurons_per_detector,
-    int32_t* w_lookup_indices,
-    EXTERNAL_REAL_DT* w_min_anchor_deltas,
-    int32_t* w_min_anchor_delta_indices,
-    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
-    Firing* rw_firings_buffer,
-    uint64_t* rw_firings_counter_ptr,
-    uint32_t synapse_group_size,
-    uint8_t* lut_data,
-    int device
-) {
-    uint32_t tid = threadIdx.x;
-    uint32_t i = blockIdx.x * blockDim.x + tid; // blockDim.x should be power of 2
-
-    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info;
-    lookup_neuron_synapses_info.n_groups = 0;
-
-    if(i < n_detectors) {
-        // Offset input for current batch (sequence_length == 1)
-        r_input += blockIdx.y * n_inputs;
-        w_lookup_indices += blockIdx.y * n_detectors + i;
-        w_min_anchor_deltas += blockIdx.y * n_detectors + i;
-        w_min_anchor_delta_indices += blockIdx.y * n_detectors + i;
-
-        // Get detector's anchor pairs
-        AnchorsPair* detector_anchors = r_detectors + i * n_anchors_per_detector;
-
-        // Calculate differences between anchor pairs and form bit representation
-        int32_t lookup_index = 0;
-        EXTERNAL_REAL_DT min_delta = 0.0;
-        int32_t min_delta_anchor_idx = -1;
-        AnchorsPair ap;
-
-        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-            ap = detector_anchors[anchor_idx];
-
-            // Skip if anchor IDs are invalid
-            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                continue;
-            }
-
-            EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
-
-            // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(delta > 0.0) {
-                lookup_index |= (1 << anchor_idx);
-            }
-
-            // Track anchor pair with minimum absolute delta
-            if((min_delta_anchor_idx == -1) || (fabs(delta) < fabs(min_delta))) {
-                min_delta = delta;
-                min_delta_anchor_idx = anchor_idx;
-            }
-        }
-
-        // Store lookup index and related data
-        *w_lookup_indices = lookup_index;
-        *w_min_anchor_deltas = min_delta;
-        *w_min_anchor_delta_indices = min_delta_anchor_idx;
-
-        __SUPER_DETAILED_TRACE__("fire_detectors_logic: detector_index %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", i, lookup_index, min_delta, min_delta_anchor_idx);
-
-        if(rw_firings_buffer != nullptr) {
-            lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + lookup_index);
-        }
-    }
-
-    if(rw_firings_buffer != nullptr) {
-        uint64_t firings_offset;
-        if(device == -1) {
-            if(lookup_neuron_synapses_info.n_groups > 0) {
-                firings_offset = *rw_firings_counter_ptr;
-                (*rw_firings_counter_ptr) += lookup_neuron_synapses_info.n_groups;
-            }
-        } else {
-            #ifdef ATOMIC
-            extern __shared__ __align__(16) uint8_t __sm[];
-            uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
-            sdata[tid] = lookup_neuron_synapses_info.n_groups;
-            __syncthreads();
-            uint32_t t;
-            int offset;
-            int idx;
-
-            // upsweep (reduce)
-            for(offset = 1; offset < blockDim.x; offset <<= 1) {
-                idx = ((tid + 1) * (offset << 1)) - 1;
-                if(idx < blockDim.x) {
-                    t = sdata[idx - offset];
-                    if(t > 0) {
-                        sdata[idx] += t;
-                    }
-                }
-                __syncthreads();
-            }
-
-            // inject global shift
-            if(tid == 0) {
-                sdata[blockDim.x - 1] = atomicAdd(
-                    reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
-                    static_cast<unsigned long long>(sdata[blockDim.x - 1])
-                );
-            }
-            __syncthreads();
-
-            // downsweep
-            for(offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
-                idx = ((tid + 1) * (offset << 1)) - 1;
-                if (idx < blockDim.x) {
-                    t = sdata[idx - offset];
-                    sdata[idx - offset] = sdata[idx];
-                    if(t > 0) {
-                        sdata[idx] += t;
-                    }
-                }
-                __syncthreads();
-            }
-
-            firings_offset = sdata[tid];
-            #endif
-        }
-
-        if(lookup_neuron_synapses_info.n_groups > 0) {
-            if(lookup_neuron_synapses_info.n_synapse_metas == 1) {
-                NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id;
-                for(uint32_t j=0;j < lookup_neuron_synapses_info.n_groups;j++) {
-                    rw_firings_buffer[firings_offset + j] = Firing{
-                        blockIdx.y, 1.0, current_group_id
-                    };
-                    current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-                }
-            } else {
-                DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, lut_data);
-                for(uint32_t j=0;j < lookup_neuron_synapses_info.n_synapse_metas;j++) {
-                    DelayInfo delay_info = delays_info[j];
-                    if(delay_info != 0) {
-                        uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
-                        NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
-                        for(uint32_t k=0;k < n_groups;k++) {
-                            rw_firings_buffer[firings_offset + k] = Firing{
-                                blockIdx.y, 1.0, current_group_id
-                            };
-                            current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-                        }
-                        firings_offset += n_groups;
-                    }
-                }
-            }
-        }
     }
 }

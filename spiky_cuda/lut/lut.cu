@@ -600,7 +600,8 @@ public:
         torch::Tensor &w_lookup_indices,
         torch::Tensor &w_min_anchor_deltas,
         torch::Tensor &w_min_anchor_delta_indices,
-        std::optional<torch::Tensor> &w_sparse_firing_buffer
+        std::optional<torch::Tensor> &w_sparse_firing_buffer,
+        std::optional<torch::Tensor> &r_stream_handles
     ) {
         __TRACE__("lutm_forward_step\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
@@ -612,6 +613,12 @@ public:
         checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         if(w_sparse_firing_buffer.has_value()) {
             checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+        }
+        if(r_stream_handles.has_value()) {
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            if(r_stream_handles.value().numel() < 3) {
+                throw py::value_error("r_stream_handles must have at least 3 elements");
+            }
         }
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
@@ -649,6 +656,12 @@ public:
             );
         }
 
+        #ifndef NO_CUDA
+        cudaStream_t *cuda_streams_ptr = nullptr;
+        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
+            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
+        }
+        #endif
         this->runtime_context->forward_step(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             batch_size,
@@ -659,6 +672,9 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr()),
             w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr
+            #ifndef NO_CUDA
+            , cuda_streams_ptr
+            #endif
         );
     }
 
@@ -676,7 +692,8 @@ public:
         torch::Tensor &w_positional_min_deltas,
         torch::Tensor &w_positional_min_delta_indices,
         torch::Tensor &w_sparse_firing_buffer,
-        torch::Tensor &w_firing_stat
+        torch::Tensor &w_firing_stat,
+        std::optional<torch::Tensor> &r_stream_handles
     ) {
         __TRACE__("lutm_forward_step_concat\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
@@ -692,6 +709,12 @@ public:
         checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_firing_stat, "w_firing_stat", true, host_device_allocator.device);
+        if(r_stream_handles.has_value()) {
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            if(r_stream_handles.value().numel() < 3) {
+                throw py::value_error("r_stream_handles must have at least 3 elements");
+            }
+        }
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
@@ -728,6 +751,12 @@ public:
             );
         }
 
+        #ifndef NO_CUDA
+        cudaStream_t *cuda_streams_ptr = nullptr;
+        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
+            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
+        }
+        #endif
         this->runtime_context->forward_step_concat(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
@@ -743,6 +772,9 @@ public:
             reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr()),
             reinterpret_cast<int32_t *>(w_sparse_firing_buffer.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_firing_stat.data_ptr())
+            #ifndef NO_CUDA
+            , cuda_streams_ptr
+            #endif
         );
     }
 
@@ -759,7 +791,8 @@ public:
         torch::Tensor &w_input_gradients,
         double external_lr,
         std::optional<torch::Tensor> w_sparse_firing_buffer,
-        std::optional<torch::Tensor> w_weights_gradients
+        std::optional<torch::Tensor> w_weights_gradients,
+        std::optional<torch::Tensor> r_stream_handles
     ) {
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
@@ -782,7 +815,19 @@ public:
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
+        if(r_stream_handles.has_value()) {
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            if(r_stream_handles.value().numel() < 3) {
+                throw py::value_error("r_stream_handles must have at least 3 elements");
+            }
+        }
 
+        #ifndef NO_CUDA
+        cudaStream_t *cuda_streams_ptr = nullptr;
+        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
+            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
+        }
+        #endif
         this->runtime_context->backward_backprop(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             batch_size,
@@ -797,6 +842,9 @@ public:
             w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr,
             static_cast<EXTERNAL_REAL_DT>(external_lr),
             w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
+            #ifndef NO_CUDA
+            , cuda_streams_ptr
+            #endif
         );
     }
 
@@ -818,7 +866,8 @@ public:
         torch::Tensor &w_input_gradients,
         torch::Tensor &w_positional_embeddings_gradients,
         double external_lr,
-        std::optional<torch::Tensor> w_weights_gradients
+        std::optional<torch::Tensor> w_weights_gradients,
+        std::optional<torch::Tensor> r_stream_handles
     ) {
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
@@ -844,7 +893,19 @@ public:
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
+        if(r_stream_handles.has_value()) {
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, host_device_allocator.device, sizeof(int64_t));
+            if(r_stream_handles.value().numel() < 3) {
+                throw py::value_error("r_stream_handles must have at least 3 elements");
+            }
+        }
 
+        #ifndef NO_CUDA
+        cudaStream_t *cuda_streams_ptr = nullptr;
+        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
+            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
+        }
+        #endif
         this->runtime_context->backward_backprop_concat(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
@@ -864,6 +925,9 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr()),
             static_cast<EXTERNAL_REAL_DT>(external_lr),
             w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
+            #ifndef NO_CUDA
+            , cuda_streams_ptr
+            #endif
         );
     }
 
@@ -1238,7 +1302,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_lookup_indices"),
             py::arg("w_min_anchor_deltas"),
             py::arg("w_min_anchor_delta_indices"),
-            py::arg("w_sparse_firing_buffer") = py::none())
+            py::arg("w_sparse_firing_buffer") = py::none(),
+            py::arg("r_stream_handles") = py::none())
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
             "Forward step concat",
             py::arg("r_weights"),
@@ -1254,7 +1319,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_positional_min_deltas"),
             py::arg("w_positional_min_delta_indices"),
             py::arg("w_sparse_firing_buffer"),
-            py::arg("w_firing_stat"))
+            py::arg("w_firing_stat"),
+            py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("r_weights"),
@@ -1269,7 +1335,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_input_gradients"),
             py::arg("external_lr"),
             py::arg("w_sparse_firing_buffer") = py::none(),
-            py::arg("w_weights_gradients") = py::none())
+            py::arg("w_weights_gradients") = py::none(),
+            py::arg("r_stream_handles") = py::none())
         .def("backward_backprop_concat", &LUTM_CLASS_NAME::backward_backprop_concat,
             "Gradients back propagation concat",
             py::arg("r_weights"),
@@ -1289,7 +1356,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_input_gradients"),
             py::arg("w_positional_embeddings_gradients"),
             py::arg("external_lr"),
-            py::arg("w_weights_gradients") = py::none())
+            py::arg("w_weights_gradients") = py::none(),
+            py::arg("r_stream_handles") = py::none())
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,
             "Count forward or backward synapses for the set of neurons",
             py::arg("neuron_indices_to_process"))

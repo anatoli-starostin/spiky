@@ -96,6 +96,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     EXTERNAL_REAL_DT *w_min_anchor_deltas,
     int32_t *w_min_anchor_delta_indices,
     int32_t *w_sparse_firing_buffer
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
     PROF_START(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -108,15 +111,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         this->batch_size = batch_size;
     }
 
-    uint64_t memsize = this->n_outputs * batch_size * sizeof(EXTERNAL_REAL_DT);
-    if(device == -1) {
-        memset(w_output, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMemset(w_output, 0, memsize);
-        #endif
-    }
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    c10::cuda::CUDAGuard guard(device);
+    cudaDeviceSynchronize();
+    #endif
+    #endif
 
     if(lookup_neuron_synapses_infos != nullptr) {
         PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
@@ -133,8 +133,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
-        GRID_CALL_SHARED_MEM(
-            numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t),
+        GRID_CALL_ON_STREAM_SHARED_MEM(
+            numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
             r_input,
             this->n_inputs,
             r_detectors,
@@ -157,8 +157,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         if(n_firings > 0) {
             numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
-            GRID_CALL_NO_SHARED_MEM(
-                numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
                 r_weights, this->first_synapse_id,
                 local_firing_buffer.firings_ptr(),
                 n_firings,
@@ -178,8 +178,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, check_detectors, tpb_opt,
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_detectors, tpb_opt, cuda_streams[0],
             r_input,
             this->n_inputs,
             r_detectors,
@@ -195,8 +195,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         uint32_t n_items = n_outputs * n_detector_blocks;
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, fill_outputs_fully_connected, LUT_RUNTIME_KERNELS_TPB_OPT(n_items),
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, fill_outputs_fully_connected, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
             r_weights,
             w_lookup_indices,
             w_output,
@@ -217,13 +217,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_outputs), batch_size);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs),
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs), cuda_streams[0],
         w_output,
         this->n_outputs,
         this->int_rescaler
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    #endif
+
+    #ifndef NO_CUDA
+    {
+        c10::cuda::CUDAGuard guard(device);
+        cudaStreamSynchronize(cuda_streams[0]);
+    }
     #endif
     
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -246,6 +253,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     int32_t *w_sparse_firing_buffer,
     EXTERNAL_REAL_DT external_lr,
     EXTERNAL_REAL_DT *w_weights_gradients
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop\n");
     if(this->batch_size != batch_size) {
@@ -286,8 +296,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
         tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
-        GRID_CALL_SHARED_MEM(
-            numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t),
+        GRID_CALL_ON_STREAM_SHARED_MEM(
+            numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
             this->n_detectors,
             r_lookup_indices,
             r_min_anchor_delta_indices,
@@ -304,8 +314,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         local_firing_buffer.update_counter();
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
             r_weights, this->first_synapse_id,
             local_firing_buffer.firings_ptr(),
             n_firings,
@@ -331,82 +341,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
-        #ifdef USE_CUDA_STREAMS
-        cudaStream_t streams[3];
-        if(device != -1) {
-            c10::cuda::CUDAGuard guard(device);
-            cudaStreamCreate(&streams[0]);
-            cudaStreamCreate(&streams[1]);
-            cudaStreamCreate(&streams[2]);
-        }
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt, streams[0],
-            r_weights,
-            r_output_gradients,
-            r_lookup_indices,
-            nullptr,
-            w_before_detectors_gradients,
-            this->n_outputs,
-            this->n_detectors,
-            n_output_blocks,
-            this->backward_group_size,
-            n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
-        );
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt, streams[1],
-            r_weights,
-            r_output_gradients,
-            r_lookup_indices,
-            r_min_anchor_delta_indices,
-            w_before_detectors_gradients,
-            this->n_outputs,
-            this->n_detectors,
-            n_output_blocks,
-            this->backward_group_size,
-            n_lookup_neurons_per_detector,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
-        );
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_w_gradients_fully_connected, tpb_opt, streams[2],
-            r_output_gradients,
-            r_lookup_indices,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
-            this->n_outputs,
-            this->n_detectors,
-            n_output_blocks,
-            this->backward_group_size,
-            n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
-        );
-        if(device != -1) {
-            c10::cuda::CUDAGuard guard(device);
-            cudaStreamSynchronize(streams[0]);
-            cudaStreamDestroy(streams[0]);
-            cudaStreamSynchronize(streams[1]);
-            cudaStreamDestroy(streams[1]);
-            cudaStreamSynchronize(streams[2]);
-            cudaStreamDestroy(streams[2]);
-        }
-        #else
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_x_gradients_fully_connected, tpb_opt, cuda_streams[0],
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -426,8 +363,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_x_gradients_fully_connected, tpb_opt,
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_x_gradients_fully_connected, tpb_opt, cuda_streams[1],
             r_weights,
             r_output_gradients,
             r_lookup_indices,
@@ -447,8 +384,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, gather_w_gradients_fully_connected, tpb_opt,
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, gather_w_gradients_fully_connected, tpb_opt, cuda_streams[2],
             r_output_gradients,
             r_lookup_indices,
             (external_lr >= 0.0) ? r_weights : w_weights_gradients,
@@ -465,17 +402,24 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
-        #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
     }
 
     // 3. propagate through detectors
 
+    #ifndef NO_CUDA
+    {
+        c10::cuda::CUDAGuard guard(device);
+        cudaStreamSynchronize(cuda_streams[1]);
+        cudaStreamSynchronize(cuda_streams[2]);
+    }
+    #endif
+
     PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, propagate_through_detectors, tpb_opt,
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, propagate_through_detectors, tpb_opt, cuda_streams[0],
         r_lookup_indices, r_min_anchor_deltas, r_min_anchor_delta_indices,
         this->n_detectors,
         this->n_anchors_per_detector,
@@ -495,25 +439,40 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    if(w_weights_gradients != nullptr) {
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights),
-            w_weights_gradients,
-            this->n_weights,
-            this->int_rescaler
-        );
-    }
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_inputs), batch_size);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_inputs),
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_inputs), cuda_streams[0],
         w_input_gradients,
         this->n_inputs,
         this->int_rescaler
     );
+    if(w_weights_gradients != nullptr) {
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[1],
+            w_weights_gradients,
+            this->n_weights,
+            this->int_rescaler
+        );
+        #ifndef NO_CUDA
+        {
+            c10::cuda::CUDAGuard guard(device);
+            cudaStreamSynchronize(cuda_streams[1]);
+        }
+        #endif
+    }
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
+
+    #ifndef NO_CUDA
+    {
+        c10::cuda::CUDAGuard guard(device);
+        cudaStreamSynchronize(cuda_streams[0]);
+    }
+    #endif
 }
+
+//// TODO start from here!!!
 
 void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     EXTERNAL_REAL_DT *r_weights,
@@ -530,6 +489,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     int32_t *w_positional_min_delta_indices,
     int32_t *w_sparse_firing_buffer,
     EXTERNAL_REAL_DT *w_firing_stat
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
     PROF_START(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -540,29 +502,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->batch_size = batch_size;
     }
 
-    uint64_t memsize = this->n_outputs * batch_size * this->sequence_length * sizeof(EXTERNAL_REAL_DT);
-    if(device == -1) {
-        memset(w_output, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMemset(w_output, 0, memsize);
-        #endif
-    }
-
     PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
     uint32_t n_detector_items = this->sequence_length * this->n_detectors;
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_items);
-    #ifdef USE_CUDA_STREAMS
-    cudaStream_t streams[2];
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaStreamCreate(&streams[0]);
-        cudaStreamCreate(&streams[1]);
-    }
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, check_detectors_for_sequence, tpb_opt, streams[0],
+        numBlocks, check_detectors_for_sequence, tpb_opt, cuda_streams[0],
         r_input,
         this->n_inputs,
         this->sequence_length,
@@ -575,7 +520,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), 1);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, check_positional_embeddings, tpb_opt, streams[1],
+        numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
         this->sequence_length,
         r_positional_embeddings,
         this->n_detectors,
@@ -584,54 +529,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         w_positional_min_deltas,
         w_positional_min_delta_indices
     );
-    if(device != -1) {
+
+    #ifndef NO_CUDA
+    {
         c10::cuda::CUDAGuard guard(device);
-        cudaStreamSynchronize(streams[0]);
-        cudaStreamDestroy(streams[0]);
-        cudaStreamSynchronize(streams[1]);
-        cudaStreamDestroy(streams[1]);
+        cudaStreamSynchronize(cuda_streams[1]);
     }
-    #else
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, check_detectors_for_sequence, tpb_opt,
-        r_input,
-        this->n_inputs,
-        this->sequence_length,
-        r_detectors,
-        this->n_detectors,
-        this->n_anchors_per_detector,
-        w_lookup_indices,
-        w_min_anchor_deltas,
-        w_min_anchor_delta_indices
-    );
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), 1);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, check_positional_embeddings, tpb_opt,
-        this->sequence_length,
-        r_positional_embeddings,
-        this->n_detectors,
-        this->positional_dim,
-        w_positional_lookup_indices,
-        w_positional_min_deltas,
-        w_positional_min_delta_indices
-    );
     #endif
 
-    memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(EXTERNAL_REAL_DT);
-    if(device == -1) {
-        memset(w_firing_stat, 0, memsize);
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMemset(w_firing_stat, 0, memsize);
-        #endif
-    }
     uint32_t n_pairs = this->sequence_length * this->sequence_length;
     uint32_t n_items = n_pairs * this->n_detectors;
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, fill_after_detectors_firing_stat, tpb_opt,
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, fill_after_detectors_firing_stat, tpb_opt, cuda_streams[0],
         w_lookup_indices,
         w_positional_lookup_indices,
         this->sequence_length,
@@ -652,8 +563,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
-    GRID_CALL_SHARED_MEM(
-        numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t),
+    GRID_CALL_ON_STREAM_SHARED_MEM(
+        numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
         w_firing_stat,
         reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         local_firing_buffer.counter_ptr(),
@@ -663,9 +574,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
     local_firing_buffer.update_counter();
     uint64_t n_firings = local_firing_buffer.number_of_firings();
+
+    // TODO support fully connected case and n_output_blocks
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), this->max_forward_groups_per_neuron);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, fill_outputs_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings),
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, fill_outputs_by_lookup_indices, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
         r_weights, this->first_synapse_id,
         reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         n_firings,
@@ -686,13 +599,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_outputs * sequence_length), batch_size);
-    GRID_CALL_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs * sequence_length),
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs * sequence_length), cuda_streams[0],
         w_output,
         this->n_outputs * this->sequence_length,
         this->int_rescaler
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    #endif
+
+    #ifndef NO_CUDA
+    {
+        c10::cuda::CUDAGuard guard(device);
+        cudaStreamSynchronize(cuda_streams[0]);
+    }
     #endif
 
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
@@ -720,6 +640,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
     EXTERNAL_REAL_DT external_lr,
     EXTERNAL_REAL_DT *w_weights_gradients
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat\n");
     if(this->batch_size != batch_size) {
@@ -730,6 +653,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         throw py::value_error("backward_backprop_concat should only be called when sequence_length > 1");
     }
 //  TODO do_sgd
+//  TODO clean firing stat
+//  TODO cuda_streams
 //    PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 //    // Zero out before_detectors_gradients
 //    uint64_t memsize = this->n_lookup_neurons * batch_size * this->sequence_length * sizeof(SUMMATION32_DT);
