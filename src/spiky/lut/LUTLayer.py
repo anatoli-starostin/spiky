@@ -1308,9 +1308,9 @@ class MultiLUT(nn.Module):
             """
             x, multi_lut = args[0], args[1]
             n_luts = len(multi_lut.layers)
-            if (x.shape == (x.shape[0],) + multi_lut.input_shape) and multi_lut._sequence_length == 1:
+            if (x.shape == (x.shape[0],) + multi_lut.input_shape()) and multi_lut._sequence_length == 1:
                 do_squeeze = True
-                x = x.view((x.shape[0], 1) + multi_lut.input_shape)
+                x = x.view((x.shape[0], 1) + multi_lut.input_shape())
             else:
                 do_squeeze = False
 
