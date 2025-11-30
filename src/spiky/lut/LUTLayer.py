@@ -6,7 +6,7 @@ from enum import Enum
 import threading
 from queue import Queue
 
-from spiky_cuda import LUTDataManagerF, LUTDataManagerI
+from spiky_cuda import LUTDataManagerF, LUTDataManagerI, forward_step_multi, backward_backprop_multi
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections
 from spiky.util.torch_utils import DenseToSparseConverter
@@ -508,18 +508,29 @@ class LUTLayerBasic(nn.Module):
             ))
 
         if use_threads:
-            threads = []
-            # Start all threads
+            # Use C++ multi-threaded function
+            lut_dms = [lut._lut_dm for lut in luts]
+            r_weights_list = [a[0] for a in args]
+            batch_sizes = [a[1] for a in args]
+            r_inputs = [a[2] for a in args]
+            r_detector_anchors_list = [a[3] for a in args]
+            w_outputs = [a[4] for a in args]
+            w_lookup_indices_list = [a[5] for a in args]
+            w_min_anchor_deltas_list = [a[6] for a in args]
+            w_min_anchor_delta_indices_list = [a[7] for a in args]
+            w_sparse_firing_buffers = [a[8] for a in args]
+            r_stream_handles_list = [a[9] for a in args]
+            
+            forward_step_multi(
+                lut_dms, r_weights_list, batch_sizes, r_inputs, r_detector_anchors_list,
+                w_outputs, w_lookup_indices_list, w_min_anchor_deltas_list, w_min_anchor_delta_indices_list,
+                w_sparse_firing_buffers, r_stream_handles_list
+            )
+            
+            # Call callbacks if needed
             for lut, lut_args in zip(luts, args):
-                thread = threading.Thread(target=lut._lut_dm.forward_step, args=lut_args)
-                threads.append(thread)
-
-            for thread in threads:
-                thread.start()
-
-            # Wait for all threads to complete
-            for thread in threads:
-                thread.join()
+                if lut._lookup_indices_callback is not None:
+                    lut._lookup_indices_callback(lut_args[5], lut_args[6], lut_args[7])
         else:
             for lut, lut_args in zip(luts, args):
                 lut._lut_dm.forward_step(*lut_args)
@@ -769,18 +780,30 @@ class LUTLayerBasic(nn.Module):
             ))
 
         if use_threads:
-            threads = []
-            # Start all threads
-            for lut, lut_args in zip(luts, args):
-                thread = threading.Thread(target=lut._lut_dm.backward_backprop, args=lut_args)
-                threads.append(thread)
-
-            for thread in threads:
-                thread.start()
-
-            # Wait for all threads to complete
-            for thread in threads:
-                thread.join()
+            # Use C++ multi-threaded function
+            lut_dms = [lut._lut_dm for lut in luts]
+            r_weights_list = [a[0] for a in args]
+            batch_sizes = [a[1] for a in args]
+            r_output_gradients_list = [a[2] for a in args]
+            r_inputs = [a[3] for a in args]
+            r_detector_anchors_list = [a[4] for a in args]
+            r_lookup_indices_list = [a[5] for a in args]
+            r_min_anchor_deltas_list = [a[6] for a in args]
+            r_min_anchor_delta_indices_list = [a[7] for a in args]
+            w_before_detectors_gradients_list = [a[8] for a in args]
+            w_input_gradients_list = [a[9] for a in args]
+            external_lrs = [a[10] for a in args]
+            w_sparse_firing_buffers = [a[11] for a in args]
+            w_weights_gradients_list = [a[12] for a in args]
+            r_stream_handles_list = [a[13] for a in args]
+            
+            backward_backprop_multi(
+                lut_dms, r_weights_list, batch_sizes, r_output_gradients_list, r_inputs,
+                r_detector_anchors_list, r_lookup_indices_list, r_min_anchor_deltas_list,
+                r_min_anchor_delta_indices_list, w_before_detectors_gradients_list,
+                w_input_gradients_list, external_lrs, w_sparse_firing_buffers,
+                w_weights_gradients_list, r_stream_handles_list
+            )
         else:
             for lut, lut_args in zip(luts, args):
                 lut._lut_dm.backward_backprop(*lut_args[:14])
