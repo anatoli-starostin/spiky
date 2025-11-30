@@ -1542,29 +1542,5 @@ void PFX(PB_LUTDataManager)(py::module& m) {
         py::arg("w_sparse_firing_buffers"),
         py::arg("w_weights_gradients_list"),
         py::arg("r_stream_handles_list"));
-    
-    // Expose backward_backprop_concat_multi as a module-level function
-    m.def("backward_backprop_concat_multi", &PFX(backward_backprop_concat_multi),
-        "Process multiple backward backprop concat steps in parallel using threads",
-        py::arg("lut_dms"),
-        py::arg("r_weights_list"),
-        py::arg("r_positional_embeddings_list"),
-        py::arg("batch_sizes"),
-        py::arg("r_output_gradients_list"),
-        py::arg("r_inputs"),
-        py::arg("r_detector_anchors_list"),
-        py::arg("r_lookup_indices_list"),
-        py::arg("r_min_anchor_deltas_list"),
-        py::arg("r_min_anchor_delta_indices_list"),
-        py::arg("r_positional_lookup_indices_list"),
-        py::arg("r_positional_min_deltas_list"),
-        py::arg("r_positional_min_delta_indices_list"),
-        py::arg("w_sparse_firing_buffers"),
-        py::arg("rw_firing_stat_list"),
-        py::arg("w_input_gradients_list"),
-        py::arg("w_positional_embeddings_gradients_list"),
-        py::arg("external_lrs"),
-        py::arg("w_weights_gradients_list"),
-        py::arg("r_stream_handles_list"));
 }
 
