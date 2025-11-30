@@ -1237,17 +1237,17 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
 //                                    w_output, w_lookup_indices, w_min_anchor_deltas, w_min_anchor_delta_indices,
 //                                    w_sparse_firing_buffer, r_stream_handles)
 void PFX(forward_step_multi)(
-    const std::vector<LUTM_CLASS_NAME*>& lut_dms,
-    const std::vector<torch::Tensor>& r_weights_list,
-    const std::vector<uint32_t>& batch_sizes,
-    const std::vector<torch::Tensor>& r_inputs,
-    const std::vector<torch::Tensor>& r_detector_anchors_list,
-    const std::vector<torch::Tensor>& w_outputs,
-    const std::vector<torch::Tensor>& w_lookup_indices_list,
-    const std::vector<torch::Tensor>& w_min_anchor_deltas_list,
-    const std::vector<torch::Tensor>& w_min_anchor_delta_indices_list,
-    const std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
-    const std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
+    std::vector<LUTM_CLASS_NAME*>& lut_dms,
+    std::vector<torch::Tensor>& r_weights_list,
+    std::vector<uint32_t>& batch_sizes,
+    std::vector<torch::Tensor>& r_inputs,
+    std::vector<torch::Tensor>& r_detector_anchors_list,
+    std::vector<torch::Tensor>& w_outputs,
+    std::vector<torch::Tensor>& w_lookup_indices_list,
+    std::vector<torch::Tensor>& w_min_anchor_deltas_list,
+    std::vector<torch::Tensor>& w_min_anchor_delta_indices_list,
+    std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
+    std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
 ) {
     if (lut_dms.size() != r_weights_list.size() || 
         lut_dms.size() != batch_sizes.size() ||
@@ -1291,21 +1291,21 @@ void PFX(forward_step_multi)(
 
 // Static function to process multiple backward_backprop steps in parallel using threads
 void PFX(backward_backprop_multi)(
-    const std::vector<LUTM_CLASS_NAME*>& lut_dms,
-    const std::vector<torch::Tensor>& r_weights_list,
-    const std::vector<uint32_t>& batch_sizes,
-    const std::vector<torch::Tensor>& r_output_gradients_list,
-    const std::vector<torch::Tensor>& r_inputs,
-    const std::vector<torch::Tensor>& r_detector_anchors_list,
-    const std::vector<torch::Tensor>& r_lookup_indices_list,
-    const std::vector<torch::Tensor>& r_min_anchor_deltas_list,
-    const std::vector<torch::Tensor>& r_min_anchor_delta_indices_list,
-    const std::vector<torch::Tensor>& w_before_detectors_gradients_list,
-    const std::vector<torch::Tensor>& w_input_gradients_list,
-    const std::vector<double>& external_lrs,
-    const std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
-    const std::vector<std::optional<torch::Tensor>>& w_weights_gradients_list,
-    const std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
+    std::vector<LUTM_CLASS_NAME*>& lut_dms,
+    std::vector<torch::Tensor>& r_weights_list,
+    std::vector<uint32_t>& batch_sizes,
+    std::vector<torch::Tensor>& r_output_gradients_list,
+    std::vector<torch::Tensor>& r_inputs,
+    std::vector<torch::Tensor>& r_detector_anchors_list,
+    std::vector<torch::Tensor>& r_lookup_indices_list,
+    std::vector<torch::Tensor>& r_min_anchor_deltas_list,
+    std::vector<torch::Tensor>& r_min_anchor_delta_indices_list,
+    std::vector<torch::Tensor>& w_before_detectors_gradients_list,
+    std::vector<torch::Tensor>& w_input_gradients_list,
+    std::vector<double>& external_lrs,
+    std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
+    std::vector<std::optional<torch::Tensor>>& w_weights_gradients_list,
+    std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
 ) {
     py::gil_scoped_release gil_guard;
     if (lut_dms.size() != r_weights_list.size() || 
@@ -1344,88 +1344,6 @@ void PFX(backward_backprop_multi)(
                 w_input_gradients_list[i],
                 external_lrs[i],
                 w_sparse_firing_buffers[i],
-                w_weights_gradients_list[i],
-                r_stream_handles_list[i]
-            );
-        });
-    }
-    
-    // Wait for all threads to complete
-    for (auto& thread : threads) {
-        thread.join();
-    }
-}
-
-// Static function to process multiple backward_backprop_concat steps in parallel using threads
-void PFX(backward_backprop_concat_multi)(
-    const std::vector<LUTM_CLASS_NAME*>& lut_dms,
-    const std::vector<torch::Tensor>& r_weights_list,
-    const std::vector<torch::Tensor>& r_positional_embeddings_list,
-    const std::vector<uint32_t>& batch_sizes,
-    const std::vector<torch::Tensor>& r_output_gradients_list,
-    const std::vector<torch::Tensor>& r_inputs,
-    const std::vector<torch::Tensor>& r_detector_anchors_list,
-    const std::vector<torch::Tensor>& r_lookup_indices_list,
-    const std::vector<torch::Tensor>& r_min_anchor_deltas_list,
-    const std::vector<torch::Tensor>& r_min_anchor_delta_indices_list,
-    const std::vector<torch::Tensor>& r_positional_lookup_indices_list,
-    const std::vector<torch::Tensor>& r_positional_min_deltas_list,
-    const std::vector<torch::Tensor>& r_positional_min_delta_indices_list,
-    const std::vector<torch::Tensor>& w_sparse_firing_buffers,
-    const std::vector<torch::Tensor>& rw_firing_stat_list,
-    const std::vector<torch::Tensor>& w_input_gradients_list,
-    const std::vector<torch::Tensor>& w_positional_embeddings_gradients_list,
-    const std::vector<double>& external_lrs,
-    const std::vector<std::optional<torch::Tensor>>& w_weights_gradients_list,
-    const std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
-) {
-    py::gil_scoped_release gil_guard;
-    if (lut_dms.size() != r_weights_list.size() || 
-        lut_dms.size() != r_positional_embeddings_list.size() ||
-        lut_dms.size() != batch_sizes.size() ||
-        lut_dms.size() != r_output_gradients_list.size() ||
-        lut_dms.size() != r_inputs.size() ||
-        lut_dms.size() != r_detector_anchors_list.size() ||
-        lut_dms.size() != r_lookup_indices_list.size() ||
-        lut_dms.size() != r_min_anchor_deltas_list.size() ||
-        lut_dms.size() != r_min_anchor_delta_indices_list.size() ||
-        lut_dms.size() != r_positional_lookup_indices_list.size() ||
-        lut_dms.size() != r_positional_min_deltas_list.size() ||
-        lut_dms.size() != r_positional_min_delta_indices_list.size() ||
-        lut_dms.size() != w_sparse_firing_buffers.size() ||
-        lut_dms.size() != rw_firing_stat_list.size() ||
-        lut_dms.size() != w_input_gradients_list.size() ||
-        lut_dms.size() != w_positional_embeddings_gradients_list.size() ||
-        lut_dms.size() != external_lrs.size() ||
-        lut_dms.size() != w_weights_gradients_list.size() ||
-        lut_dms.size() != r_stream_handles_list.size()) {
-        throw py::value_error("All argument lists must have the same size");
-    }
-    
-    std::vector<std::thread> threads;
-    threads.reserve(lut_dms.size());
-    
-    // Create and start threads
-    for (size_t i = 0; i < lut_dms.size(); ++i) {
-        threads.emplace_back([&, i]() {
-            lut_dms[i]->backward_backprop_concat(
-                r_weights_list[i],
-                r_positional_embeddings_list[i],
-                batch_sizes[i],
-                r_output_gradients_list[i],
-                r_inputs[i],
-                r_detector_anchors_list[i],
-                r_lookup_indices_list[i],
-                r_min_anchor_deltas_list[i],
-                r_min_anchor_delta_indices_list[i],
-                r_positional_lookup_indices_list[i],
-                r_positional_min_deltas_list[i],
-                r_positional_min_delta_indices_list[i],
-                w_sparse_firing_buffers[i],
-                rw_firing_stat_list[i],
-                w_input_gradients_list[i],
-                w_positional_embeddings_gradients_list[i],
-                external_lrs[i],
                 w_weights_gradients_list[i],
                 r_stream_handles_list[i]
             );
