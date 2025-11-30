@@ -1249,7 +1249,7 @@ void PFX(forward_step_multi)(
     std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
     std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
 ) {
-    if (lut_dms.size() != r_weights_list.size() || 
+    if (lut_dms.size() != r_weights_list.size() ||
         lut_dms.size() != batch_sizes.size() ||
         lut_dms.size() != r_inputs.size() ||
         lut_dms.size() != r_detector_anchors_list.size() ||
@@ -1261,7 +1261,9 @@ void PFX(forward_step_multi)(
         lut_dms.size() != r_stream_handles_list.size()) {
         throw py::value_error("All argument lists must have the same size");
     }
-    
+
+    py::gil_scoped_release gil_guard;
+
     std::vector<std::thread> threads;
     threads.reserve(lut_dms.size());
     
@@ -1307,8 +1309,7 @@ void PFX(backward_backprop_multi)(
     std::vector<std::optional<torch::Tensor>>& w_weights_gradients_list,
     std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
 ) {
-    py::gil_scoped_release gil_guard;
-    if (lut_dms.size() != r_weights_list.size() || 
+    if (lut_dms.size() != r_weights_list.size() ||
         lut_dms.size() != batch_sizes.size() ||
         lut_dms.size() != r_output_gradients_list.size() ||
         lut_dms.size() != r_inputs.size() ||
@@ -1324,7 +1325,9 @@ void PFX(backward_backprop_multi)(
         lut_dms.size() != r_stream_handles_list.size()) {
         throw py::value_error("All argument lists must have the same size");
     }
-    
+
+    py::gil_scoped_release gil_guard;
+
     std::vector<std::thread> threads;
     threads.reserve(lut_dms.size());
     
