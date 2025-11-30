@@ -1330,28 +1330,23 @@ class MultiLUT(nn.Module):
             first_lut = multi_lut.luts[0]
             batch_size = x.shape[0]
 
-            # Create shared output tensor
-            if multi_lut._sequence_length == 1:
-                output = torch.zeros([batch_size * first_lut._n_outputs], dtype=torch.float32,
-                                     device=first_lut.device)
-            else:
-                output = torch.zeros([batch_size * multi_lut._sequence_length * first_lut._n_outputs],
-                                     dtype=torch.float32, device=first_lut.device)
-
             results = [None] * len(multi_lut.luts)
+            outputs = [None] * len(multi_lut.luts)
 
             for lut_idx, lut in enumerate(multi_lut.luts):
                 if multi_lut._sequence_length == 1:
-                    results[lut_idx] = lut.forward_step(x, output=output)
+                    output = torch.zeros([batch_size * lut._n_outputs], dtype=torch.float32, device=lut.device)
                 else:
-                    results[lut_idx] = lut.forward_step_concat(x, output=output)
+                    output = torch.zeros([batch_size * multi_lut._sequence_length * lut._n_outputs], dtype=torch.float32, device=lut.device)
+
+                results[lut_idx] = lut.forward_step(x, output=output)
+                outputs[lut_idx] = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
 
             for i, lut in enumerate(multi_lut.luts):
                 lut._synchronize()
 
             # Reshape output to match expected shape
-
-            output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
+            output = torch.stack(outputs, dim=0).sum(dim=0)
 
             # Save for backward
             ctx.multi_lut = multi_lut
@@ -1375,14 +1370,14 @@ class MultiLUT(nn.Module):
             x = ctx.saved_tensors[0]
             results = ctx.results
 
-            # Create shared x_grad tensor
-            x_grad = torch.zeros_like(x.view(-1))
-
             # Store gradients for each lut
+
             all_weight_grads = [None] * n_luts
             all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
+            x_grads = [None] * len(multi_lut.luts)
 
             for lut_idx, lut in enumerate(multi_lut.luts):
+                x_grad = torch.zeros_like(x.view(-1))
                 if multi_lut._sequence_length == 1:
                     (w_grad,) = lut.backward_step(
                         x, grad_output,
@@ -1406,6 +1401,9 @@ class MultiLUT(nn.Module):
                     )
                     all_weight_grads[lut_idx] = w_grad
                     all_pe_grads[lut_idx] = pe_grad
+                x_grads[lut_idx] = x_grad.view(x.shape)
+
+            x_grad = torch.stack(x_grads, dim=0).sum(dim=0)
 
             for i, lut in enumerate(multi_lut.luts):
                 lut._synchronize()
@@ -1417,9 +1415,9 @@ class MultiLUT(nn.Module):
                 all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
 
             if multi_lut._sequence_length > 1:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
+                return (x_grad, None) + tuple(all_weight_grads) + tuple(all_pe_grads)
             else:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
+                return (x_grad, None) + tuple(all_weight_grads)
 
     def to(self, *args, **kwargs):
         """
