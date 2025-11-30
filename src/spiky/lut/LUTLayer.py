@@ -682,7 +682,6 @@ class LUTLayerBasic(nn.Module):
         assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
 
         x = x.view(-1)
-        x_grad = torch.zeros_like(x)
         assert grad_output.device == luts[0].device
         assert grad_output.shape == (batch_size, 1) + luts[0].output_shape()
         grad_output = grad_output.view(-1)
@@ -696,6 +695,8 @@ class LUTLayerBasic(nn.Module):
         args = []
 
         for i, lut in enumerate(luts):
+            x_grad = torch.zeros_like(x)
+
             lookup_indices = lookup_indices_list[i]
             min_anchor_deltas = min_anchor_deltas_list[i]
             min_anchor_delta_indices = min_anchor_delta_indices_list[i]
@@ -816,6 +817,8 @@ class LUTLayerBasic(nn.Module):
             elif lut._weights_gradient_policy.type == GradientType.Dense and lut._weights_gradient_policy.normalized:
                 target_w_grad /= target_w_grad.abs().max().clip(1e-16)
             processed_weight_grads.append(target_w_grad)
+
+        x_grad = torch.stack([a[9].view(batch_size, luts[0]._n_inputs) for a in args]).sum(dim=0)
 
         if len(luts) == 1:
             return x_grad.view(source_x_shape), processed_weight_grads[0]
