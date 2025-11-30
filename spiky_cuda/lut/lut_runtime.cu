@@ -160,7 +160,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         #ifdef NO_CUDA
         local_firing_buffer.update_counter();
         #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0  TODO avoid this
         #endif
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
@@ -235,14 +235,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
-
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaStreamSynchronize(cuda_streams[0]);
-    }
-    #endif
-    
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
 }
 
@@ -289,6 +281,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #endif
     #endif
 
+    #ifndef NO_CUDA
+    cudaEvent_t ev1;
+    cudaEvent_t ev2;
+    #endif
+
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 
     // 1. gather gradients for lookup_indices and alternative_lookup_indices (both dy/dx and dy/dw)
@@ -330,7 +327,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #ifdef NO_CUDA
         local_firing_buffer.update_counter();
         #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0 TODO avoid this
         #endif
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
@@ -402,6 +399,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        #ifndef NO_CUDA
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaEventCreate(&ev1);
+            cudaEventRecord(ev1, cuda_streams[1]);
+        }
+        #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
@@ -421,6 +425,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        #ifndef NO_CUDA
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaEventCreate(&ev2);
+            cudaEventRecord(ev2, cuda_streams[2]);
+        }
+        #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
     }
@@ -430,11 +441,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
-        cudaStreamSynchronize(cuda_streams[1]);
-        cudaStreamSynchronize(cuda_streams[2]);
+        cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
+        cudaStreamWaitEvent(cuda_streams[0], ev2, 0);
     }
     #endif
-
     PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
@@ -474,21 +484,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_weights,
             this->int_rescaler
         );
-        #ifndef NO_CUDA
-        if(device != -1) {
-            c10::cuda::CUDAGuard guard(device);
-            cudaStreamSynchronize(cuda_streams[1]);
-        }
-        #endif
     }
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    #endif
-
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaStreamSynchronize(cuda_streams[0]);
-    }
     #endif
 }
 
@@ -644,14 +641,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
-
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaStreamSynchronize(cuda_streams[0]);
-    }
-    #endif
-
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
 }
 

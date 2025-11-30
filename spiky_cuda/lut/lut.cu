@@ -1,7 +1,4 @@
 #include "lut_runtime.cuh"
-#include <thread>
-#include <vector>
-#include <memory>
 
 namespace {
 #include "aux/lut_compile_time_kernels_logic.cu"
@@ -224,7 +221,7 @@ public:
         if(detector_connections_manager == nullptr) {
             throw py::value_error("detector connections manager not initialized, add detector connections first");
         }
-        
+
         // finalize detector connections manager, we need it only for backward synapses
         detector_connections_manager->finalize(
             0,  // random_seed not needed for detector connections
@@ -232,7 +229,7 @@ public:
             false,
             true
         );
-        
+
         return detector_connections_manager->count_max_input_synapses_per_neuron();
     }
 
@@ -315,21 +312,21 @@ public:
     ) {
         int device = host_device_allocator.device;
         checkTensor(connections_buffer, "connections_buffer", false, device, sizeof(int32_t));
-        
+
         // Initialize detector connections manager if not already done
         if(detector_connections_manager == nullptr) {
             // Estimate capacity for detector connections
             uint64_t detector_connections_capacity = static_cast<uint64_t>(this->n_inputs) * this->n_detectors;
-            
+
             detector_connections_allocator = new SimpleAllocator(
-                detector_connections_capacity * 2 * sizeof(NeuronIndex_t) + 
+                detector_connections_capacity * 2 * sizeof(NeuronIndex_t) +
                 sizeof(IndexedSynapsesInfo) * (this->n_inputs + this->n_detectors) +
                 sizeof(BaseSynapseMeta)  // For fake synapse meta
             );
             detector_connections_allocator->to_device(device);
-            
+
             // Allocate fake synapse meta for detector connections (required by ConnectionsManager)
-            NeuronDataId_t detector_synapse_metas_id = 
+            NeuronDataId_t detector_synapse_metas_id =
                 detector_connections_allocator->allocate(sizeof(BaseSynapseMeta), 0);
             BaseSynapseMeta fake_synapse_meta = {
                 0.0,  // lr (not used for detector connections)
@@ -351,13 +348,13 @@ public:
                 cudaMemcpy(synapse_meta_ptr, &fake_synapse_meta, sizeof(BaseSynapseMeta), cudaMemcpyHostToDevice);
                 #endif
             }
-            
+
             // Allocate neuron infos for input and detector neurons on detector allocator
-            NeuronDataId_t input_neuron_synapses_infos_id = 
+            NeuronDataId_t input_neuron_synapses_infos_id =
                 detector_connections_allocator->allocate(sizeof(IndexedSynapsesInfo) * this->n_inputs, 0);
-            NeuronDataId_t detector_neuron_synapses_infos_id = 
+            NeuronDataId_t detector_neuron_synapses_infos_id =
                 detector_connections_allocator->allocate(sizeof(IndexedSynapsesInfo) * this->n_detectors, 0);
-            
+
             // Initialize neuron infos to zero
             IndexedSynapsesInfo *input_infos = IndexedSynapsesInfos(input_neuron_synapses_infos_id, detector_connections_allocator->data);
             if(device == -1) {
@@ -377,12 +374,12 @@ public:
                 cudaMemset(detector_infos, 0, sizeof(IndexedSynapsesInfo) * this->n_detectors);
                 #endif
             }
-            
+
             // Allocate global connections meta for detector connections on main only_host_allocator
             NeuronDataId_t detector_global_connections_meta_id = only_host_allocator.allocate(sizeof(GlobalConnectionsMeta), 0);
             GlobalConnectionsMeta* detector_gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + detector_global_connections_meta_id);
             memset(detector_gc_meta, 0, sizeof(GlobalConnectionsMeta));
-            
+
             // Create detector connections manager
             detector_connections_manager = new ConnectionsManager(
                 #ifdef ENABLE_PROFILING
@@ -395,7 +392,7 @@ public:
                 1  // One fake synapse meta
             );
         }
-        
+
         std::optional<const torch::Tensor> none;
         // Detector connections don't use weights, so we pass nullptr for weights allocator
         detector_connections_manager->add_connections(
@@ -426,13 +423,13 @@ public:
         if(provided_n_detectors != this->n_detectors) {
             throw py::value_error("provided_n_detectors != this->n_detectors");
         }
-        
+
         // Validate detector_anchors tensor size
         int64_t expected_anchors_size = static_cast<int64_t>(this->n_detectors) * this->n_anchors_per_detector * 2;
         if(detector_anchors.numel() != expected_anchors_size) {
             throw py::value_error("detector_anchors.numel() != n_detectors * n_anchors_per_detector * 2");
         }
-        
+
         // Initialize detector_anchors to zero
         uint64_t detector_infos_memsize = static_cast<uint64_t>(this->n_detectors) * this->n_anchors_per_detector * sizeof(AnchorsPair);
         AnchorsPair* detector_infos = reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr());
@@ -463,13 +460,13 @@ public:
 
         // Call kernel to prepare detectors
         NeuronDataId_t detector_neuron_synapses_infos_id = detector_connections_manager->get_backward_neuron_infos_id();
-        NoDelaysIndexedSynapsesInfo* backward_indexed_synapses_ptr = 
+        NoDelaysIndexedSynapsesInfo* backward_indexed_synapses_ptr =
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(
                 IndexedSynapsesInfos(
                     detector_neuron_synapses_infos_id, detector_connections_allocator->data
                 )
             );
-        
+
         dim3 numBlocks((this->n_detectors + LUT_COMPILE_TIME_KERNELS_TPB - 1) / LUT_COMPILE_TIME_KERNELS_TPB, 1);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, prepare_detectors, LUT_COMPILE_TIME_KERNELS_TPB,
@@ -606,6 +603,7 @@ public:
         std::optional<torch::Tensor> &w_sparse_firing_buffer,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
+        py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(r_input, "r_input", true, host_device_allocator.device);
@@ -698,6 +696,7 @@ public:
         torch::Tensor &w_firing_stat,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
+        py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step_concat\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
@@ -797,6 +796,7 @@ public:
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> r_stream_handles
     ) {
+        py::gil_scoped_release gil_guard;
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
@@ -872,6 +872,7 @@ public:
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> r_stream_handles
     ) {
+        py::gil_scoped_release gil_guard;
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
@@ -1228,133 +1229,6 @@ std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t) {
 }
 
 
-// Static function to process multiple forward steps in parallel using threads
-// Takes a list of argument tuples: (lut_dm, r_weights, batch_size, r_input, r_detector_anchors,
-//                                    w_output, w_lookup_indices, w_min_anchor_deltas, w_min_anchor_delta_indices,
-//                                    w_sparse_firing_buffer, r_stream_handles)
-void PFX(forward_step_multi)(
-    std::vector<LUTM_CLASS_NAME*>& lut_dms,
-    std::vector<torch::Tensor>& r_weights_list,
-    std::vector<uint32_t>& batch_sizes,
-    std::vector<torch::Tensor>& r_inputs,
-    std::vector<torch::Tensor>& r_detector_anchors_list,
-    std::vector<torch::Tensor>& w_outputs,
-    std::vector<torch::Tensor>& w_lookup_indices_list,
-    std::vector<torch::Tensor>& w_min_anchor_deltas_list,
-    std::vector<torch::Tensor>& w_min_anchor_delta_indices_list,
-    std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
-    std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
-) {
-    if (lut_dms.size() != r_weights_list.size() ||
-        lut_dms.size() != batch_sizes.size() ||
-        lut_dms.size() != r_inputs.size() ||
-        lut_dms.size() != r_detector_anchors_list.size() ||
-        lut_dms.size() != w_outputs.size() ||
-        lut_dms.size() != w_lookup_indices_list.size() ||
-        lut_dms.size() != w_min_anchor_deltas_list.size() ||
-        lut_dms.size() != w_min_anchor_delta_indices_list.size() ||
-        lut_dms.size() != w_sparse_firing_buffers.size() ||
-        lut_dms.size() != r_stream_handles_list.size()) {
-        throw py::value_error("All argument lists must have the same size");
-    }
-
-    py::gil_scoped_release gil_guard;
-
-    std::vector<std::thread> threads;
-    threads.reserve(lut_dms.size());
-    
-    // Create and start threads
-    for (size_t i = 0; i < lut_dms.size(); ++i) {
-        threads.emplace_back([&, i]() {
-            lut_dms[i]->forward_step(
-                r_weights_list[i],
-                batch_sizes[i],
-                r_inputs[i],
-                r_detector_anchors_list[i],
-                w_outputs[i],
-                w_lookup_indices_list[i],
-                w_min_anchor_deltas_list[i],
-                w_min_anchor_delta_indices_list[i],
-                w_sparse_firing_buffers[i],
-                r_stream_handles_list[i]
-            );
-        });
-    }
-    
-    // Wait for all threads to complete
-    for (auto& thread : threads) {
-        thread.join();
-    }
-}
-
-// Static function to process multiple backward_backprop steps in parallel using threads
-void PFX(backward_backprop_multi)(
-    std::vector<LUTM_CLASS_NAME*>& lut_dms,
-    std::vector<torch::Tensor>& r_weights_list,
-    std::vector<uint32_t>& batch_sizes,
-    std::vector<torch::Tensor>& r_output_gradients_list,
-    std::vector<torch::Tensor>& r_inputs,
-    std::vector<torch::Tensor>& r_detector_anchors_list,
-    std::vector<torch::Tensor>& r_lookup_indices_list,
-    std::vector<torch::Tensor>& r_min_anchor_deltas_list,
-    std::vector<torch::Tensor>& r_min_anchor_delta_indices_list,
-    std::vector<torch::Tensor>& w_before_detectors_gradients_list,
-    std::vector<torch::Tensor>& w_input_gradients_list,
-    std::vector<double>& external_lrs,
-    std::vector<std::optional<torch::Tensor>>& w_sparse_firing_buffers,
-    std::vector<std::optional<torch::Tensor>>& w_weights_gradients_list,
-    std::vector<std::optional<torch::Tensor>>& r_stream_handles_list
-) {
-    if (lut_dms.size() != r_weights_list.size() ||
-        lut_dms.size() != batch_sizes.size() ||
-        lut_dms.size() != r_output_gradients_list.size() ||
-        lut_dms.size() != r_inputs.size() ||
-        lut_dms.size() != r_detector_anchors_list.size() ||
-        lut_dms.size() != r_lookup_indices_list.size() ||
-        lut_dms.size() != r_min_anchor_deltas_list.size() ||
-        lut_dms.size() != r_min_anchor_delta_indices_list.size() ||
-        lut_dms.size() != w_before_detectors_gradients_list.size() ||
-        lut_dms.size() != w_input_gradients_list.size() ||
-        lut_dms.size() != external_lrs.size() ||
-        lut_dms.size() != w_sparse_firing_buffers.size() ||
-        lut_dms.size() != w_weights_gradients_list.size() ||
-        lut_dms.size() != r_stream_handles_list.size()) {
-        throw py::value_error("All argument lists must have the same size");
-    }
-
-    py::gil_scoped_release gil_guard;
-
-    std::vector<std::thread> threads;
-    threads.reserve(lut_dms.size());
-    
-    // Create and start threads
-    for (size_t i = 0; i < lut_dms.size(); ++i) {
-        threads.emplace_back([&, i]() {
-            lut_dms[i]->backward_backprop(
-                r_weights_list[i],
-                batch_sizes[i],
-                r_output_gradients_list[i],
-                r_inputs[i],
-                r_detector_anchors_list[i],
-                r_lookup_indices_list[i],
-                r_min_anchor_deltas_list[i],
-                r_min_anchor_delta_indices_list[i],
-                w_before_detectors_gradients_list[i],
-                w_input_gradients_list[i],
-                external_lrs[i],
-                w_sparse_firing_buffers[i],
-                w_weights_gradients_list[i],
-                r_stream_handles_list[i]
-            );
-        });
-    }
-    
-    // Wait for all threads to complete
-    for (auto& thread : threads) {
-        thread.join();
-    }
-}
-
 void PFX(PB_LUTDataManager)(py::module& m) {
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     py::class_<LUTDataManagerI>(m, "LUTDataManagerI")
@@ -1507,39 +1381,5 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             &PFX(pickle_lut_neuron_manager),
             &PFX(unpickle_lut_neuron_manager)
         ));
-    
-    // Expose forward_step_multi as a module-level function
-    m.def("forward_step_multi", &PFX(forward_step_multi),
-        "Process multiple forward steps in parallel using threads",
-        py::arg("lut_dms"),
-        py::arg("r_weights_list"),
-        py::arg("batch_sizes"),
-        py::arg("r_inputs"),
-        py::arg("r_detector_anchors_list"),
-        py::arg("w_outputs"),
-        py::arg("w_lookup_indices_list"),
-        py::arg("w_min_anchor_deltas_list"),
-        py::arg("w_min_anchor_delta_indices_list"),
-        py::arg("w_sparse_firing_buffers"),
-        py::arg("r_stream_handles_list"));
-    
-    // Expose backward_backprop_multi as a module-level function
-    m.def("backward_backprop_multi", &PFX(backward_backprop_multi),
-        "Process multiple backward backprop steps in parallel using threads",
-        py::arg("lut_dms"),
-        py::arg("r_weights_list"),
-        py::arg("batch_sizes"),
-        py::arg("r_output_gradients_list"),
-        py::arg("r_inputs"),
-        py::arg("r_detector_anchors_list"),
-        py::arg("r_lookup_indices_list"),
-        py::arg("r_min_anchor_deltas_list"),
-        py::arg("r_min_anchor_delta_indices_list"),
-        py::arg("w_before_detectors_gradients_list"),
-        py::arg("w_input_gradients_list"),
-        py::arg("external_lrs"),
-        py::arg("w_sparse_firing_buffers"),
-        py::arg("w_weights_gradients_list"),
-        py::arg("r_stream_handles_list"));
 }
 
