@@ -470,11 +470,12 @@ class LUTLayerBasic(nn.Module):
         sequence_length = x.shape[1]
         assert sequence_length == 1, f"Input sequence_length {sequence_length} does not match constructor sequence_length 1"
         x = x.view(-1)
-        output = torch.zeros([batch_size * luts[0]._n_outputs], dtype=torch.float32, device=x.device)
 
         args = []
 
         for lut in luts:
+            output = torch.zeros([batch_size * luts[0]._n_outputs], dtype=torch.float32, device=x.device)
+
             lookup_indices = torch.zeros(
                 [batch_size * lut._n_detectors], dtype=torch.int32, device=lut.device
             )
@@ -525,6 +526,7 @@ class LUTLayerBasic(nn.Module):
                 if lut._lookup_indices_callback is not None:
                     lut._lookup_indices_callback(lut_args[5], lut_args[6], lut_args[7])
 
+        output = torch.stack([a[4].view(batch_size, luts[0]._n_outputs) for a in args]).sum(dim=0)
         output = output.view((batch_size, 1) + luts[0].output_shape())
 
         first_lut = luts[0]
