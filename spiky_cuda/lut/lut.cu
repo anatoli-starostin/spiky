@@ -606,7 +606,6 @@ public:
         std::optional<torch::Tensor> &w_sparse_firing_buffer,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
-        py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(r_input, "r_input", true, host_device_allocator.device);
@@ -699,7 +698,6 @@ public:
         torch::Tensor &w_firing_stat,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
-        py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step_concat\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
@@ -799,7 +797,6 @@ public:
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> r_stream_handles
     ) {
-        py::gil_scoped_release gil_guard;
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
@@ -875,7 +872,6 @@ public:
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> r_stream_handles
     ) {
-        py::gil_scoped_release gil_guard;
         if(batch_size == 0) {
             throw py::value_error("batch_size == 0");
         }
