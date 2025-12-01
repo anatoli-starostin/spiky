@@ -351,6 +351,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             , 0.0
             #endif
         );
+        #ifndef NO_CUDA
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaEventCreate(&ev1);
+            cudaEventRecord(ev1, cuda_streams[0]);
+        }
+        #endif
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
@@ -477,6 +484,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         this->int_rescaler
     );
     if(w_weights_gradients != nullptr) {
+        #ifndef NO_CUDA
+        if((device != -1) && (lookup_neuron_synapses_infos != nullptr)) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaStreamWaitEvent(cuda_streams[2], ev1, 0);
+        }
+        #endif
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[2],
