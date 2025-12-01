@@ -692,9 +692,9 @@ public:
         torch::Tensor &w_positional_lookup_indices,
         torch::Tensor &w_positional_min_deltas,
         torch::Tensor &w_positional_min_delta_indices,
+        torch::Tensor &w_firing_stat,
         torch::Tensor &w_sparse_firing_buffer,
         torch::Tensor &w_sparse_firing_buffer_alternative,
-        torch::Tensor &w_firing_stat,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
@@ -711,7 +711,9 @@ public:
         checkTensor(w_positional_min_deltas, "w_positional_min_deltas", true, host_device_allocator.device);
         checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
-        checkTensor(w_sparse_firing_buffer_alternative, "w_sparse_firing_buffer_alternative", false, host_device_allocator.device, sizeof(int64_t));
+        if(w_sparse_firing_buffer_alternative.has_value()) {
+            checkTensor(w_sparse_firing_buffer_alternative.value(), "w_sparse_firing_buffer_alternative", false, host_device_allocator.device, sizeof(int64_t));
+        }
         checkTensor(w_firing_stat, "w_firing_stat", true, host_device_allocator.device);
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
@@ -775,7 +777,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr()),
             reinterpret_cast<int64_t *>(w_sparse_firing_buffer.data_ptr()),
-            reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.data_ptr()),
+            w_sparse_firing_buffer_alternative.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.value().data_ptr()) : nullptr,
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_firing_stat.data_ptr())
             #ifndef NO_CUDA
             , cuda_streams_ptr
@@ -1330,9 +1332,9 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_positional_lookup_indices"),
             py::arg("w_positional_min_deltas"),
             py::arg("w_positional_min_delta_indices"),
-            py::arg("w_sparse_firing_buffer"),
-            py::arg("w_sparse_firing_buffer_alternative"),
             py::arg("w_firing_stat"),
+            py::arg("w_sparse_firing_buffer"),
+            py::arg("w_sparse_firing_buffer_alternative") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",

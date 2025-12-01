@@ -147,7 +147,6 @@ public:
         int32_t *r_positional_lookup_indices,
         EXTERNAL_REAL_DT *r_positional_min_deltas,
         int32_t *r_positional_min_delta_indices,
-        // forward statistics from forward pass (also reused as space for before_detectors_gradients)
         EXTERNAL_REAL_DT *w_before_detectors_gradients,
         NeuronShiftFiring *r_sparse_firings,
         uint32_t n_sparse_firings,

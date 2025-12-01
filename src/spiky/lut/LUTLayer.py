@@ -413,9 +413,9 @@ class LUTLayerBasic(nn.Module):
         return f'LUTLayerBasic({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_anchors_per_detector()} anchors per detector, {self.n_outputs()} outputs, {self.n_synapses()} synapses, {self._lut_dm})'
 
     def add_lookup_connections(
-            self, chunk_of_connections: ChunkOfConnections,
-            ids_shift=0,
-            random_seed: int = None
+        self, chunk_of_connections: ChunkOfConnections,
+        ids_shift=0,
+        random_seed: int = None
     ):
         if self._is_fully_connected:
             raise RuntimeError(f"Can't add lookup connections in fully connected mode")
@@ -728,20 +728,23 @@ class LUTLayerBasic(nn.Module):
             self._multi_id
         )
 
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 2
+        sparse_buffer_numel = (1 + self._n_detectors * ((sequence_length * (sequence_length - 1)) // 2) * batch_size) * 2
         sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
             sparse_buffer_numel,
             self.device,
             self._multi_id
         )
 
-        # there may be at last two alternative indices (one for Q/K, one for PE)
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length * 2) * 2
-        sparse_firing_buffer_alternative = self._shared_context.get_sparse_firing_buffer_alternative(
-            sparse_buffer_numel,
-            self.device,
-            self._multi_id
-        )
+        # there may be at last two alternative indices per pair (one for Q/K, one for PE)
+        if self.training:
+            sparse_buffer_numel = (1 + self._n_detectors * sequence_length * (sequence_length - 1) * batch_size) * 2
+            sparse_firing_buffer_alternative = self._shared_context.get_sparse_firing_buffer_alternative(
+                sparse_buffer_numel,
+                self.device,
+                self._multi_id
+            )
+        else:
+            sparse_firing_buffer_alternative = None
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
@@ -757,16 +760,19 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
+            firing_stat,
             sparse_firing_buffer,
             sparse_firing_buffer_alternative,
-            firing_stat,
             stream_handles
         )
 
         if not external_output:
             self._synchronize()
             sparse_firings = sparse_firing_buffer[2:2 + sparse_firing_buffer[0].item() * 2].clone()
-            sparse_firing_alternatives = sparse_firing_buffer_alternative[2:2 + sparse_firing_buffer_alternative[0].item() * 2].clone()
+            if sparse_firing_buffer_alternative is not None:
+                sparse_firing_alternatives = sparse_firing_buffer_alternative[2:2 + sparse_firing_buffer_alternative[0].item() * 2].clone()
+            else:
+                sparse_firing_alternatives = None
             if self._lookup_indices_callback is not None:
                 self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
         else:
@@ -1023,7 +1029,8 @@ class LUTLayerBasic(nn.Module):
                     output, lookup_indices, min_anchor_deltas,
                     min_anchor_delta_indices
                 ) = lut_layer.forward_step(x)
-                ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
+                if ctx.lut_layer.training:
+                    ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
             else:
                 (
                     output, lookup_indices, min_anchor_deltas,
@@ -1031,11 +1038,12 @@ class LUTLayerBasic(nn.Module):
                     positional_min_deltas, positional_min_delta_indices,
                     sparse_firings, sparse_firing_alternatives
                 ) = lut_layer.forward_step_concat(x)
-                ctx.save_for_backward(
-                    x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
-                    positional_lookup_indices, positional_min_deltas,
-                    positional_min_delta_indices, sparse_firings, sparse_firing_alternatives
-                )
+                if ctx.lut_layer.training:
+                    ctx.save_for_backward(
+                        x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+                        positional_lookup_indices, positional_min_deltas,
+                        positional_min_delta_indices, sparse_firings, sparse_firing_alternatives
+                    )
             return output
 
         @staticmethod
@@ -1277,23 +1285,23 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
 class LUTLayer(Conv2DLUTLayer):
     def __init__(
-            self, n_inputs,
-            n_anchors_per_detector,
-            n_detectors,
-            n_outputs,
-            sequence_length=1,
-            synapse_meta=SynapseMeta(),
-            positional_dim=None,
-            weights_gradient_policy: GradientPolicy = GradientPolicy(GradientType.Dense, normalized=False),
-            shared_context: LUTSharedContext = None,
-            summation_dtype=torch.float32,
-            _explicit_anchors=None,
-            _int_rescaler=0.001,
-            _forward_group_size=64,
-            _backward_group_size=8,
-            _max_groups_in_growth_buffer=2 ** 20,
-            random_seed=1,
-            device=None
+        self, n_inputs,
+        n_anchors_per_detector,
+        n_detectors,
+        n_outputs,
+        sequence_length=1,
+        synapse_meta=SynapseMeta(),
+        positional_dim=None,
+        weights_gradient_policy: GradientPolicy = GradientPolicy(GradientType.Dense, normalized=False),
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _explicit_anchors=None,
+        _int_rescaler=0.001,
+        _forward_group_size=64,
+        _backward_group_size=8,
+        _max_groups_in_growth_buffer=2 ** 20,
+        random_seed=1,
+        device=None
     ):
         super().__init__(
             input_shape=(1, n_inputs,),
@@ -1432,11 +1440,15 @@ class MultiLUT(nn.Module):
 
             # Create shared output tensor
             if multi_lut._sequence_length == 1:
-                output = torch.zeros([batch_size * first_lut._n_outputs], dtype=torch.float32,
-                                     device=first_lut.device)
+                output = torch.zeros(
+                    [batch_size * first_lut._n_outputs],
+                    dtype=torch.float32, device=first_lut.device
+                )
             else:
-                output = torch.zeros([batch_size * multi_lut._sequence_length * first_lut._n_outputs],
-                                     dtype=torch.float32, device=first_lut.device)
+                output = torch.zeros(
+                    [batch_size * multi_lut._sequence_length * first_lut._n_outputs],
+                    dtype=torch.float32, device=first_lut.device
+                )
 
             results = [None] * len(multi_lut.luts)
 
@@ -1452,7 +1464,10 @@ class MultiLUT(nn.Module):
                     sparse_firing_buf = results[lut_idx][-2]
                     sparse_firing_buf_alt = results[lut_idx][-1]
                     results[lut_idx][-2] = sparse_firing_buf[2:2 + sparse_firing_buf[0].item() * 2].clone()
-                    results[lut_idx][-1] = sparse_firing_buf_alt[2:2 + sparse_firing_buf_alt[0].item() * 2].clone()
+                    if sparse_firing_buf_alt is None:
+                        results[lut_idx][-1] = None
+                    else:
+                        results[lut_idx][-1] = sparse_firing_buf_alt[2:2 + sparse_firing_buf_alt[0].item() * 2].clone()
 
                 if lut._lookup_indices_callback is not None:
                     lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
@@ -1461,10 +1476,11 @@ class MultiLUT(nn.Module):
 
             output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
 
-            # Save for backward
-            ctx.multi_lut = multi_lut
-            ctx.save_for_backward(x)
-            ctx.results = results  # Store individual results for backward
+            if ctx.multi_lut.training:
+                # Save for backward
+                ctx.multi_lut = multi_lut
+                ctx.save_for_backward(x)
+                ctx.results = results  # Store individual results for backward
 
             return output
 
