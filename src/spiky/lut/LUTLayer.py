@@ -553,13 +553,11 @@ class LUTLayerBasic(nn.Module):
 
     @staticmethod
     def _process_multiple_sparse_gradients(shared_context, target_w_grad_list, multi_id_list, densify_buffer_size):
-        densify_buffers_list = []
-        results = []
+        densify_buffers_list = [None] * len(target_w_grad_list)
+        results = [None] * len(target_w_grad_list)
 
         for i, target_w_grad in enumerate(target_w_grad_list):
             if target_w_grad is None:
-                results.append(target_w_grad)
-                densify_buffers_list.append(None)
                 continue
                 
             multi_id = multi_id_list[i]
@@ -576,7 +574,7 @@ class LUTLayerBasic(nn.Module):
                 densify_buffers=densify_buffers,
                 stream=stream
             )
-            densify_buffers_list.append(densify_buffers)
+            densify_buffers_list[i] = densify_buffers
     
         for i, densify_buffers in enumerate(densify_buffers_list):
             if densify_buffers is None:
@@ -599,7 +597,6 @@ class LUTLayerBasic(nn.Module):
                 )
             else:
                 target_w_grad = None
-            
             results[i] = target_w_grad
         return results
 
