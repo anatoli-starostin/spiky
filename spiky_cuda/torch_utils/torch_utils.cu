@@ -122,7 +122,7 @@ public:
 
         #ifndef NO_CUDA
         cudaStream_t stream = nullptr;
-        if(stream_handle.has_value() && device != -1) {
+        if(stream_handle.has_value() && (device != -1)) {
             stream = reinterpret_cast<cudaStream_t>(stream_handle.value());
         }
         #endif
