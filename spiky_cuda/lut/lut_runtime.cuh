@@ -83,7 +83,7 @@ public:
         int32_t *w_lookup_indices,
         EXTERNAL_REAL_DT *w_min_anchor_deltas,
         int32_t *w_min_anchor_delta_indices,
-        int32_t *w_sparse_firing_buffer  // Can be nullptr
+        int64_t *w_sparse_firing_buffer  // Can be nullptr
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -103,7 +103,7 @@ public:
         // gradients that we need to calculate
         SUMMATION32_DT *w_before_detectors_gradients,
         EXTERNAL_REAL_DT *w_input_gradients,
-        int32_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
+        int64_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
         EXTERNAL_REAL_DT external_lr,
         EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
@@ -124,7 +124,8 @@ public:
         int32_t *w_positional_lookup_indices,
         EXTERNAL_REAL_DT *w_positional_min_deltas,
         int32_t *w_positional_min_delta_indices,
-        int32_t *w_sparse_firing_buffer,
+        int64_t *w_sparse_firing_buffer,
+        int64_t *w_sparse_firing_buffer_alternative,
         EXTERNAL_REAL_DT *w_firing_stat
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
@@ -147,8 +148,11 @@ public:
         EXTERNAL_REAL_DT *r_positional_min_deltas,
         int32_t *r_positional_min_delta_indices,
         // forward statistics from forward pass (also reused as space for before_detectors_gradients)
-        EXTERNAL_REAL_DT *rw_firing_stat,
-        int32_t *w_sparse_firing_buffer,
+        EXTERNAL_REAL_DT *w_before_detectors_gradients,
+        NeuronShiftFiring *r_sparse_firings,
+        uint32_t n_sparse_firings,
+        NeuronShiftFiring *r_sparse_firing_alternatives,
+        uint32_t n_sparse_firing_alternatives,
         EXTERNAL_REAL_DT *w_input_gradients,
         EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
         EXTERNAL_REAL_DT external_lr,

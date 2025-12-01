@@ -3,7 +3,6 @@ import torch.nn as nn
 from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 from enum import Enum
-import threading
 
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
@@ -45,6 +44,7 @@ class SynapseMeta:
 class LUTSharedContext(object):
     def __init__(self, do_asserts=False):
         self._sparse_firing_buffers = []
+        self._sparse_firing_buffer_alternatives = []
         self._before_detectors_gradients_buffers = []
         self._weight_gradients_buffers = []
         self._densify_indices_buffers = []
@@ -76,7 +76,10 @@ class LUTSharedContext(object):
         return buffer
 
     def get_sparse_firing_buffer(self, numel, device, multi_id=0):
-        return self._ensure_buffer(self._sparse_firing_buffers, multi_id, numel, torch.int32, device)
+        return self._ensure_buffer(self._sparse_firing_buffers, multi_id, numel, torch.int64, device)
+
+    def get_sparse_firing_buffer_alternative(self, numel, device, multi_id=0):
+        return self._ensure_buffer(self._sparse_firing_buffer_alternatives, multi_id, numel, torch.int64, device)
 
     def get_before_detectors_gradients_buffer(self, numel, device, multi_id=0):
         buf = self._ensure_buffer(self._before_detectors_gradients_buffers, multi_id, numel, torch.float32, device)
@@ -169,6 +172,9 @@ class LUTSharedContext(object):
         for i, buf in enumerate(self._sparse_firing_buffers):
             if buf is not None:
                 self._sparse_firing_buffers[i] = buf.to(device=dev)
+        for i, buf in enumerate(self._sparse_firing_buffer_alternatives):
+            if buf is not None:
+                self._sparse_firing_buffer_alternatives[i] = buf.to(device=dev)
         for i, buf in enumerate(self._before_detectors_gradients_buffers):
             if buf is not None:
                 self._before_detectors_gradients_buffers[i] = buf.to(device=dev)
@@ -641,7 +647,7 @@ class LUTLayerBasic(nn.Module):
         if not self._is_fully_connected:
             sparse_buffer_numel = (
                 1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 4
+            ) * 2
             sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
                 self.device,
@@ -716,15 +722,22 @@ class LUTLayerBasic(nn.Module):
             [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
         )
 
-        # TODO do not store this in context (calculate on the fly using buffer from shared context)
-        firing_stat = torch.zeros(
-            self._n_lookup_neurons * batch_size * sequence_length,
-            dtype=torch.float32, requires_grad=False,
-            device=self.device
+        firing_stat = self._shared_context.get_before_detectors_gradients_buffer(
+            self._n_lookup_neurons * self._sequence_length * batch_size,
+            self.device,
+            self._multi_id
         )
 
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
+        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 2
         sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
+            sparse_buffer_numel,
+            self.device,
+            self._multi_id
+        )
+
+        # there may be at last two alternative indices (one for Q/K, one for PE)
+        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length * 2) * 2
+        sparse_firing_buffer_alternative = self._shared_context.get_sparse_firing_buffer_alternative(
             sparse_buffer_numel,
             self.device,
             self._multi_id
@@ -745,14 +758,20 @@ class LUTLayerBasic(nn.Module):
             positional_min_deltas,
             positional_min_delta_indices,
             sparse_firing_buffer,
+            sparse_firing_buffer_alternative,
             firing_stat,
             stream_handles
         )
 
         if not external_output:
             self._synchronize()
+            sparse_firings = sparse_firing_buffer[2:2 + sparse_firing_buffer[0].item() * 2].clone()
+            sparse_firing_alternatives = sparse_firing_buffer_alternative[2:2 + sparse_firing_buffer_alternative[0].item() * 2].clone()
             if self._lookup_indices_callback is not None:
                 self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
+        else:
+            sparse_firings = sparse_firing_buffer
+            sparse_firing_alternatives = sparse_firing_buffer_alternative
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
         return result + (
@@ -762,7 +781,7 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices.view(sequence_length, self._n_detectors),
             positional_min_deltas.view(sequence_length, self._n_detectors),
             positional_min_delta_indices.view(sequence_length, self._n_detectors),
-            firing_stat
+            sparse_firings, sparse_firing_alternatives
         )
 
     def backward_step(
@@ -822,7 +841,7 @@ class LUTLayerBasic(nn.Module):
         if not self._is_fully_connected:
             sparse_buffer_numel = (
                 1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 4
+            ) * 2
             sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
                 self.device,
@@ -862,11 +881,11 @@ class LUTLayerBasic(nn.Module):
         return result + (target_w_grad,)
 
     def backward_step_concat(
-            self, x, grad_output,
-            lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
-            positional_lookup_indices, positional_min_deltas, positional_min_delta_indices,
-            firing_stat,
-            x_grad=None
+        self, x, grad_output,
+        lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
+        positional_lookup_indices, positional_min_deltas, positional_min_delta_indices,
+        sparse_firings, sparse_firing_alternatives,
+        x_grad=None
     ):
         assert x.device == self.device
         source_x_shape = x.shape
@@ -897,9 +916,11 @@ class LUTLayerBasic(nn.Module):
         assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
         positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
-        assert firing_stat.device == self.device
-        assert firing_stat.dtype == torch.float32
-        assert firing_stat.shape == (self._n_lookup_neurons * batch_size * sequence_length,)
+        before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
+            self._n_lookup_neurons * self._sequence_length * batch_size,
+            self.device,
+            self._multi_id
+        )
 
         if x_grad is None:
             external_output = False
@@ -924,13 +945,6 @@ class LUTLayerBasic(nn.Module):
 
         grad_output = grad_output.view(-1)
 
-        sparse_buffer_numel = (1 + self._n_lookup_neurons * batch_size * sequence_length) * 4
-        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-            sparse_buffer_numel,
-            self.device,
-            self._multi_id
-        )
-
         if self._weights_gradient_policy.type == GradientType.Internal:
             if self._external_lr_hook is None:
                 raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
@@ -954,11 +968,9 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            sparse_firing_buffer,
-            # First firing_stat will be used directly and then because it is no longer needed
-            # the same buffer will be used for gradient accumulation. So after this call firing_stat
-            # is invalid.
-            firing_stat,
+            sparse_firings,
+            sparse_firing_alternatives,
+            before_detectors_gradients,
             x_grad, positional_grad,
             external_lr,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
@@ -1017,12 +1029,12 @@ class LUTLayerBasic(nn.Module):
                     output, lookup_indices, min_anchor_deltas,
                     min_anchor_delta_indices, positional_lookup_indices,
                     positional_min_deltas, positional_min_delta_indices,
-                    firing_stat
+                    sparse_firings, sparse_firing_alternatives
                 ) = lut_layer.forward_step_concat(x)
                 ctx.save_for_backward(
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
                     positional_lookup_indices, positional_min_deltas,
-                    positional_min_delta_indices, firing_stat
+                    positional_min_delta_indices, sparse_firings, sparse_firing_alternatives
                 )
             return output
 
@@ -1041,7 +1053,7 @@ class LUTLayerBasic(nn.Module):
             else:
                 (
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, positional_lookup_indices,
-                    positional_min_deltas, positional_min_delta_indices, firing_stat
+                    positional_min_deltas, positional_min_delta_indices, sparse_firings, sparse_firing_alternatives
                 ) = ctx.saved_tensors
                 x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_concat(
                     x, grad_output,
@@ -1051,7 +1063,7 @@ class LUTLayerBasic(nn.Module):
                     positional_lookup_indices,
                     positional_min_deltas,
                     positional_min_delta_indices,
-                    firing_stat
+                    sparse_firings, sparse_firing_alternatives
                 )
                 return x_grad, w_grad, pe_grad, None
 
@@ -1436,6 +1448,14 @@ class MultiLUT(nn.Module):
 
             for i, lut in enumerate(multi_lut.luts):
                 lut._synchronize()
+                if multi_lut._sequence_length > 1:
+                    sparse_firing_buf = results[lut_idx][-2]
+                    sparse_firing_buf_alt = results[lut_idx][-1]
+                    results[lut_idx][-2] = sparse_firing_buf[2:2 + sparse_firing_buf[0].item() * 2].clone()
+                    results[lut_idx][-1] = sparse_firing_buf_alt[2:2 + sparse_firing_buf_alt[0].item() * 2].clone()
+
+                if lut._lookup_indices_callback is not None:
+                    lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
 
             # Reshape output to match expected shape
 
@@ -1489,7 +1509,8 @@ class MultiLUT(nn.Module):
                         results[lut_idx][3],  # positional_lookup_indices
                         results[lut_idx][4],  # positional_min_deltas
                         results[lut_idx][5],  # positional_min_delta_indices
-                        results[lut_idx][6],  # firing_stat
+                        results[lut_idx][6],  # sparse_firings
+                        results[lut_idx][7],  # sparse_firing_alternatives
                         x_grad=x_grad
                     )
                     all_weight_grads[lut_idx] = w_grad

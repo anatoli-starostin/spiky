@@ -613,7 +613,7 @@ public:
         checkTensor(w_min_anchor_deltas, "w_min_anchor_deltas", true, host_device_allocator.device);
         checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         if(w_sparse_firing_buffer.has_value()) {
-            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
         }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
@@ -672,7 +672,7 @@ public:
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr()),
-            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr
+            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -693,6 +693,7 @@ public:
         torch::Tensor &w_positional_min_deltas,
         torch::Tensor &w_positional_min_delta_indices,
         torch::Tensor &w_sparse_firing_buffer,
+        torch::Tensor &w_sparse_firing_buffer_alternative,
         torch::Tensor &w_firing_stat,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
@@ -709,7 +710,8 @@ public:
         checkTensor(w_positional_lookup_indices, "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_positional_min_deltas, "w_positional_min_deltas", true, host_device_allocator.device);
         checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
+        checkTensor(w_sparse_firing_buffer_alternative, "w_sparse_firing_buffer_alternative", false, host_device_allocator.device, sizeof(int64_t));
         checkTensor(w_firing_stat, "w_firing_stat", true, host_device_allocator.device);
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
@@ -772,7 +774,8 @@ public:
             reinterpret_cast<int32_t *>(w_positional_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<int32_t *>(w_sparse_firing_buffer.data_ptr()),
+            reinterpret_cast<int64_t *>(w_sparse_firing_buffer.data_ptr()),
+            reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_firing_stat.data_ptr())
             #ifndef NO_CUDA
             , cuda_streams_ptr
@@ -813,7 +816,7 @@ public:
         checkTensor(r_min_anchor_delta_indices, "r_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_before_detectors_gradients, "w_before_detectors_gradients", true, host_device_allocator.device);
         if(w_sparse_firing_buffer.has_value()) {
-            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
+            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
         }
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
@@ -842,7 +845,7 @@ public:
             reinterpret_cast<int32_t *>(r_min_anchor_delta_indices.data_ptr()),
             reinterpret_cast<SUMMATION32_DT *>(w_before_detectors_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int32_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr,
+            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr,
             static_cast<EXTERNAL_REAL_DT>(external_lr),
             w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
@@ -864,8 +867,9 @@ public:
         const torch::Tensor &r_positional_lookup_indices,
         const torch::Tensor &r_positional_min_deltas,
         const torch::Tensor &r_positional_min_delta_indices,
-        torch::Tensor &w_sparse_firing_buffer,
-        torch::Tensor &rw_firing_stat,
+        torch::Tensor &w_sparse_firings,
+        torch::Tensor &w_sparse_firing_alternatives,
+        torch::Tensor &w_before_detectors_gradients,
         torch::Tensor &w_input_gradients,
         torch::Tensor &w_positional_embeddings_gradients,
         double external_lr,
@@ -892,8 +896,9 @@ public:
         checkTensor(r_positional_lookup_indices, "r_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_positional_min_deltas, "r_positional_min_deltas", true, host_device_allocator.device);
         checkTensor(r_positional_min_delta_indices, "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(rw_firing_stat, "rw_firing_stat", true, host_device_allocator.device);
+        checkTensor(w_sparse_firings, "w_sparse_firings", false, host_device_allocator.device, sizeof(int64_t));
+        checkTensor(w_sparse_firing_alternatives, "w_sparse_firing_alternatives", false, host_device_allocator.device, sizeof(int64_t));
+        checkTensor(w_before_detectors_gradients, "w_before_detectors_gradients", true, host_device_allocator.device);
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
@@ -923,8 +928,11 @@ public:
             reinterpret_cast<int32_t *>(r_positional_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(r_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(rw_firing_stat.data_ptr()),
-            reinterpret_cast<int32_t *>(w_sparse_firing_buffer.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(w_before_detectors_gradients.data_ptr()),
+            reinterpret_cast<NeuronShiftFiring *>(w_sparse_firings.data_ptr()),
+            w_sparse_firings.numel() >> 1,
+            reinterpret_cast<NeuronShiftFiring *>(w_sparse_firing_alternatives.data_ptr()),
+            w_sparse_firing_alternatives.numel() >> 1,
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr()),
             static_cast<EXTERNAL_REAL_DT>(external_lr),
@@ -1323,6 +1331,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_positional_min_deltas"),
             py::arg("w_positional_min_delta_indices"),
             py::arg("w_sparse_firing_buffer"),
+            py::arg("w_sparse_firing_buffer_alternative"),
             py::arg("w_firing_stat"),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
@@ -1355,8 +1364,9 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_positional_lookup_indices"),
             py::arg("r_positional_min_deltas"),
             py::arg("r_positional_min_delta_indices"),
-            py::arg("w_sparse_firing_buffer"),
-            py::arg("rw_firing_stat"),
+            py::arg("w_sparse_firings"),
+            py::arg("w_sparse_firing_alternatives"),
+            py::arg("w_before_detectors_gradients"),
             py::arg("w_input_gradients"),
             py::arg("w_positional_embeddings_gradients"),
             py::arg("external_lr"),

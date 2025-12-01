@@ -20,7 +20,7 @@ FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device) 
     external_buffer = false;
 }
 
-FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int32_t *external_buffer_ptr) {
+FiringBuffer::FiringBuffer(uint32_t n_firings, uint32_t batch_size, int device, int64_t *external_buffer_ptr) {
     this->device = device;
     this->n_firings = 0;
     this->max_firings = n_firings * batch_size;
