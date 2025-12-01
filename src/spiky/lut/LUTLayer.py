@@ -529,7 +529,7 @@ class LUTLayerBasic(nn.Module):
                     self.device,
                     self._multi_id
                 ),
-                stream=stream,
+                stream=None,
                 decouple=True
             )
             if indices is not None:
