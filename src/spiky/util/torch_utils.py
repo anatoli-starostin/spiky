@@ -37,7 +37,8 @@ class DenseToSparseConverter:
         source: torch.Tensor,
         erase_input: bool = False,
         densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        stream: Optional[torch.cuda.Stream] = None
+        stream: Optional[torch.cuda.Stream] = None,
+        decouple=True
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Convert a dense 1D 32-bit tensor to sparse format.
@@ -51,7 +52,8 @@ class DenseToSparseConverter:
             densify_buffers: Optional tuple (indices, values) with preallocated tensors to reuse.
                 When provided, count_nonzero is skipped and the tensors are passed directly to the
                 native converter.
-            stream: Optional CUDA stream to use for the operation. If None, uses the default stream.
+            stream: Optional CUDA stream to use for the operation. If None, uses the default stream
+            decouple: export results from densify_buffers
 
         Returns:
             Tuple of (indices, values) tensors, or (None, None) if no non-zero elements.
@@ -84,6 +86,7 @@ class DenseToSparseConverter:
             if values.numel() != indices.numel():
                 raise ValueError("densify_buffers tensors must have the same length")
         else:
+            assert decouple
             nnz = self._native.count_nonzero(source, self._counter_buffer)
 
             if nnz == 0:
@@ -96,6 +99,13 @@ class DenseToSparseConverter:
         # Run native method
         stream_handle = stream.cuda_stream if stream is not None else None
         self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input, stream_handle)
+
+        if decouple:
+            if stream is None:
+                return self.decouple_results(densify_buffers)
+            else:
+                with torch.cuda.Stream(stream):
+                    return self.decouple_results(densify_buffers)
 
         return indices, values
 

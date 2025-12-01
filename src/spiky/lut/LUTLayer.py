@@ -521,7 +521,6 @@ class LUTLayerBasic(nn.Module):
         if self._weights_gradient_policy.type == GradientType.Sparse:
             densify_buffer_size = self._gradient_densify_buffer_size(batch_size)
             converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
-            # Get CUDA stream if available (use first stream for gradient processing)
             stream = self._shared_context.get_cuda_stream(self.device, self._multi_id, stream_index=0)
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
@@ -530,7 +529,8 @@ class LUTLayerBasic(nn.Module):
                     self.device,
                     self._multi_id
                 ),
-                stream=stream
+                stream=stream,
+                decouple=True
             )
             if indices is not None:
                 if self._weights_gradient_policy.normalized:
@@ -569,12 +569,12 @@ class LUTLayerBasic(nn.Module):
                 target_w_grad.device,
                 multi_id
             )
-            # Get CUDA stream if available (use first stream for gradient processing)
             stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
             converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=densify_buffers,
-                stream=stream
+                stream=stream,
+                decouple=False
             )
             densify_buffers_list[i] = densify_buffers
     
