@@ -120,7 +120,7 @@ def main():
     print("LUTLayer BACKWARD TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []
     if torch.cuda.is_available():
         devices.append('cuda')
 
