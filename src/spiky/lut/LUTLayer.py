@@ -583,6 +583,9 @@ class LUTLayerBasic(nn.Module):
                 continue
                 
             converter = shared_context.get_dense_to_sparse_converter(multi_id_list[i])
+            stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
+            if stream is not None:
+                stream.synchronize()
             indices, values = converter.decouple_results(densify_buffers)
             
             if indices is not None:
