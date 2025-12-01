@@ -591,8 +591,8 @@ class LUTLayerBasic(nn.Module):
                 target_w_grad = torch.sparse_coo_tensor(
                     indices=indices.unsqueeze(0),
                     values=values,
-                    size=self._weights.shape,
-                    device=self.device,
+                    size=target_w_grad.shape,
+                    device=target_w_grad.device,
                     check_invariants=False,
                     is_coalesced=True,
                     requires_grad=False
