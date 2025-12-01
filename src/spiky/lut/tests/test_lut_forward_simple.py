@@ -288,7 +288,7 @@ def main():
     print("LUTLayer FORWARD SIMPLE TEST")
     print("=" * 60)
 
-    devices = []
+    devices = ['cpu']
     if torch.cuda.is_available():
         devices.append('cuda')
 

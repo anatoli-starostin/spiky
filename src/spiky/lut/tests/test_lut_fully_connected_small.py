@@ -143,7 +143,7 @@ def main():
     print("LUTLayer FULLY CONNECTED TEST")
     print("=" * 60)
 
-    devices = []
+    devices = ['cpu']
     if torch.cuda.is_available():
         devices.append('cuda')
 
