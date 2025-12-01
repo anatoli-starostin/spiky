@@ -68,8 +68,8 @@ class LUTSharedContext(object):
 
         buffer = buffers_list[multi_id]
         if (
-                buffer is None or
-                buffer.numel() < numel
+            buffer is None or
+            buffer.numel() < numel
         ):
             buffer = torch.zeros([numel], dtype=dtype, device=self._device, requires_grad=False)
             buffers_list[multi_id] = buffer

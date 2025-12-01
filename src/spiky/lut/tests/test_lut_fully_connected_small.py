@@ -104,16 +104,24 @@ def _test_lut_fully_connected_small(
         data = torch.rand([batch_size, n_inputs], device=device)
         target = torch.rand([batch_size, n_outputs], device=device)
         optimizer_standard.zero_grad()
+        print('1!!!\n')
         output_standard = test_net_standard(data.reshape(batch_size, 1, n_inputs)).reshape(batch_size, n_outputs)
         loss = loss_func(output_standard, target)
+        print('2!!!\n')
         loss.backward()
+        print('3!!!\n')
         optimizer_standard.step()
+        print('4!!!\n')
 
         optimizer.zero_grad()
+        print('5!!!\n')
         output = test_net_fully_connected(data)
         loss = loss_func(output, target)
+        print('6!!!\n')
         loss.backward()
+        print('7!!!\n')
         optimizer.step()
+        print('8!!!\n')
 
         if (output_standard - output).abs().max() > 0.00001:
             print(f"❌ output difference detected")
@@ -143,7 +151,7 @@ def main():
     print("LUTLayer FULLY CONNECTED TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []
     if torch.cuda.is_available():
         devices.append('cuda')
 
