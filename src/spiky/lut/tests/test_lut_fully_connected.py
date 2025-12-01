@@ -60,7 +60,7 @@ def _test_lut_fully_connected(
                 _int_rescaler=1.0
             )
             self.layer1.to(device=device)
-            self.layer1._set_lookup_inidices_callback(self.store_lookup_indices)
+            self.layer1._set_lookup_indices_callback(self.store_lookup_indices)
             self.layer2 = nn.Linear(
                 self.layer1.output_shape()[0] * self.layer1.output_shape()[1], 10, bias=False, device=device
             )

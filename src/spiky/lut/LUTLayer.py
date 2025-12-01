@@ -137,6 +137,32 @@ class LUTSharedContext(object):
 
         return self._cuda_stream_handles[multi_id]
 
+    def get_cuda_stream(self, device, multi_id=0, stream_index=0):
+        """
+        Get a single CUDA stream for the given multi_id and stream_index.
+        
+        Args:
+            device: The device (torch.device) to get the stream for
+            multi_id: The multi_id index (default: 0)
+            stream_index: Which stream to get (0, 1, or 2, default: 0)
+            
+        Returns:
+            torch.cuda.Stream object, or None if on CPU or stream_index is invalid
+        """
+        if device.type != 'cuda':
+            return None
+        
+        assert 0 <= stream_index < 3, "stream_index must be between 0 and 2"
+        
+        # Ensure streams are created by calling get_cuda_streams
+        self.get_cuda_streams(device, multi_id)
+        
+        # Ensure the streams list is large enough
+        if len(self._cuda_streams) <= multi_id:
+            return None
+        
+        return self._cuda_streams[multi_id][stream_index]
+
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
         self._device = dev
@@ -460,11 +486,10 @@ class LUTLayerBasic(nn.Module):
         corresponding to this layer's multi_id from the shared context.
         """
         if self.device.type == 'cuda':
-            if len(self._shared_context._cuda_streams) > self._multi_id:
-                streams = self._shared_context._cuda_streams[self._multi_id]
-                for stream in streams:
-                    if stream is not None:
-                        stream.synchronize()
+            for stream_index in range(3):
+                stream = self._shared_context.get_cuda_stream(self.device, self._multi_id, stream_index)
+                if stream is not None:
+                    stream.synchronize()
 
     def _gradient_densify_buffer_size(self, batch_size):
         """
@@ -496,13 +521,16 @@ class LUTLayerBasic(nn.Module):
         if self._weights_gradient_policy.type == GradientType.Sparse:
             densify_buffer_size = self._gradient_densify_buffer_size(batch_size)
             converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
+            # Get CUDA stream if available (use first stream for gradient processing)
+            stream = self._shared_context.get_cuda_stream(self.device, self._multi_id, stream_index=0)
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
                     densify_buffer_size,
                     self.device,
                     self._multi_id
-                )
+                ),
+                stream=stream
             )
             if indices is not None:
                 if self._weights_gradient_policy.normalized:
@@ -523,7 +551,60 @@ class LUTLayerBasic(nn.Module):
         
         return target_w_grad
 
-    def _set_lookup_inidices_callback(self, cb):
+    @staticmethod
+    def _process_multiple_sparse_gradients(shared_context, target_w_grad_list, multi_id_list, batch_size):
+        densify_buffers_list = []
+        results = []
+        densify_buffer_size = self._gradient_densify_buffer_size(batch_size)
+
+        for i, target_w_grad in enumerate(target_w_grad_list):
+            if target_w_grad is None:
+                results.append(target_w_grad)
+                densify_buffers_list.append(None)
+                continue
+                
+            multi_id = multi_id_list[i]
+            converter = shared_context.get_dense_to_sparse_converter(multi_id)
+            densify_buffers = shared_context.get_densify_buffers(
+                densify_buffer_size,
+                target_w_grad.device,
+                multi_id
+            )
+            # Get CUDA stream if available (use first stream for gradient processing)
+            stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
+            converter.dense_to_sparse_32(
+                target_w_grad, erase_input=True,
+                densify_buffers=densify_buffers,
+                stream=stream
+            )
+            densify_buffers_list.append(densify_buffers)
+    
+        for i, densify_buffers in enumerate(densify_buffers_list):
+            if densify_buffers is None:
+                continue
+                
+            converter = shared_context.get_dense_to_sparse_converter(multi_id_list[i])
+            indices, values = converter.decouple_results(densify_buffers)
+            
+            if indices is not None:
+                if self._weights_gradient_policy.normalized:
+                    values /= values.abs().max().clip(1e-16)
+                target_w_grad = torch.sparse_coo_tensor(
+                    indices=indices.unsqueeze(0),
+                    values=values,
+                    size=self._weights.shape,
+                    device=self.device,
+                    check_invariants=False,
+                    is_coalesced=True,
+                    requires_grad=False
+                )
+            else:
+                target_w_grad = None
+            
+            results[i] = target_w_grad
+        return results
+
+    def _set_lookup_indices_callback(self, cb):
         self._lookup_indices_callback = cb
 
     def forward_step(self, x, output=None):
@@ -1262,6 +1343,8 @@ class MultiLUT(nn.Module):
         input_shape = first_lut.input_shape()
         output_shape = first_lut.output_shape()
         sequence_length = first_lut.sequence_length()
+        self._shared_context = first_lut._shared_context
+        self._gradient_policy = first_lut._weights_gradient_policy
 
         for i, lut in enumerate(luts):
             if not isinstance(lut, LUTLayerBasic):
@@ -1272,6 +1355,10 @@ class MultiLUT(nn.Module):
                 raise ValueError(f"lut {i} has output_shape {lut.output_shape()}, expected {output_shape}")
             if lut.sequence_length() != sequence_length:
                 raise ValueError(f"lut {i} has sequence_length {lut.sequence_length()}, expected {sequence_length}")
+            if lut._shared_context != self._shared_context:
+                raise ValueError(f"lut {i} has different shared context than lut 0")
+            if lut._weights_gradient_policy != self._gradient_policy:
+                raise ValueError(f"lut {i} has gradient policy {lut._weights_gradient_policy}, expected {self._gradient_policy}")
 
         # Assign multi_id to each lut
         for multi_id, lut in enumerate(luts):
@@ -1410,11 +1497,15 @@ class MultiLUT(nn.Module):
             for i, lut in enumerate(multi_lut.luts):
                 lut._synchronize()
 
-            # Process gradients after synchronization
-            # TODO support multiple tensors in dense_to_sparse_32 and do this more effective
             batch_size = x.shape[0]
-            for lut_idx, lut in enumerate(multi_lut.luts):
-                all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
+
+            if multi_lut._gradient_policy.type == GradientType.Sparse:
+                all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
+                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts], batch_size
+                )
+            else:
+                for lut_idx, lut in enumerate(multi_lut.luts):
+                    all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
 
             if multi_lut._sequence_length > 1:
                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)

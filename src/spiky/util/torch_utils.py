@@ -36,7 +36,8 @@ class DenseToSparseConverter:
         self,
         source: torch.Tensor,
         erase_input: bool = False,
-        densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        densify_buffers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        stream: Optional[torch.cuda.Stream] = None
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Convert a dense 1D 32-bit tensor to sparse format.
@@ -50,6 +51,7 @@ class DenseToSparseConverter:
             densify_buffers: Optional tuple (indices, values) with preallocated tensors to reuse.
                 When provided, count_nonzero is skipped and the tensors are passed directly to the
                 native converter.
+            stream: Optional CUDA stream to use for the operation. If None, uses the default stream.
 
         Returns:
             Tuple of (indices, values) tensors, or (None, None) if no non-zero elements.
@@ -92,17 +94,19 @@ class DenseToSparseConverter:
             values = torch.empty(nnz, dtype=source.dtype, device=source.device)
         
         # Run native method
-        self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input)
-
-        if provided_buffers:
-            nnz_written = self._counter_buffer.item()
-            if nnz_written == 0:
-                return None, None
-            # Return copies to decouple from shared buffers
-            return indices[:nnz_written].clone(), values[:nnz_written].clone()
+        stream_handle = stream.cuda_stream if stream is not None else None
+        self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input, stream_handle)
 
         return indices, values
-    
+
+    def decouple_results(self, provided_buffers):
+        indices, values = provided_buffers
+        nnz_written = self._counter_buffer.item()
+        if nnz_written == 0:
+            return None, None
+        # Return copies to decouple from shared buffers
+        return indices[:nnz_written].clone(), values[:nnz_written].clone()
+
     def get_profiling_stats(self) -> str:
         """
         Get profiling statistics from the native converter.
@@ -143,6 +147,8 @@ def test_dense_to_sparse_converter(device, _, seed):
                 t_data, do_erase,
                 densify_buffers
             )
+            if use_densify_buffers:
+                indices_old, values_old = ds_conv_old.decouple_results(densify_buffers)
             if do_erase:
                 if torch.count_nonzero(t_data) != 0:
                     print(f"❌ source non empty after conversion (old kernel), do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")
@@ -151,6 +157,8 @@ def test_dense_to_sparse_converter(device, _, seed):
                 t_saved, do_erase,
                 densify_buffers
             )
+            if use_densify_buffers:
+                indices_new, values_new = ds_conv_new.decouple_results(densify_buffers)
             if do_erase:
                 if torch.count_nonzero(t_saved) != 0:
                     print(f"❌ source non empty after conversion (new kernel), do_erase {do_erase}, use_densify_buffers {use_densify_buffers}")

@@ -160,7 +160,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         #ifdef NO_CUDA
         local_firing_buffer.update_counter();
         #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0  TODO avoid this
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0  TODO avoid this (overlaunch)
         #endif
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
@@ -327,7 +327,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #ifdef NO_CUDA
         local_firing_buffer.update_counter();
         #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0 TODO avoid this
+        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0 TODO avoid this (overlaunch)
         #endif
         uint64_t n_firings = local_firing_buffer.number_of_firings();
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);

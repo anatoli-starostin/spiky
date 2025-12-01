@@ -31,7 +31,8 @@ public:
         torch::Tensor target_indices,
         torch::Tensor target_values,
         torch::Tensor counter_buffer,
-        bool erase_input = false
+        bool erase_input = false,
+        std::optional<int64_t> stream_handle = std::nullopt
     ) {
         PROF_START(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP);
 
@@ -119,13 +120,24 @@ public:
         // Get counter pointer from buffer
         uint32_t* counter_ptr = reinterpret_cast<uint32_t*>(counter_buffer.data_ptr());
 
+        #ifndef NO_CUDA
+        cudaStream_t stream = nullptr;
+        if(stream_handle.has_value() && device != -1) {
+            stream = reinterpret_cast<cudaStream_t>(stream_handle.value());
+        }
+        #endif
+
         // Initialize counter to zero
         if (device == -1) {
             *counter_ptr = 0;
         } else {
             #ifndef NO_CUDA
             c10::cuda::CUDAGuard guard(device);
-            CU_CHECK(cudaMemset(counter_ptr, 0, sizeof(uint32_t)));
+            if (stream != nullptr) {
+                CU_CHECK(cudaMemsetAsync(counter_ptr, 0, sizeof(uint32_t), stream));
+            } else {
+                CU_CHECK(cudaMemset(counter_ptr, 0, sizeof(uint32_t)));
+            }
             #endif
         }
 
@@ -137,27 +149,61 @@ public:
         dim3 numBlocks(num_blocks, 1);
 
         if ((device != -1) && _use_new_kernel) {
-            GRID_CALL_NO_SHARED_MEM(
-                numBlocks, densify_new, tpb,
-                reinterpret_cast<int4*>(source.data_ptr()),
-                n_quads,
-                reinterpret_cast<int32_t*>(target_values.data_ptr()),
-                reinterpret_cast<int64_t*>(target_indices.data_ptr()),
-                counter_ptr,
-                erase_input,
-                device
-            );
+            #ifndef NO_CUDA
+            if (stream != nullptr) {
+                GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                    numBlocks, densify_new, tpb, stream,
+                    reinterpret_cast<int4*>(source.data_ptr()),
+                    n_quads,
+                    reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                    reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                    counter_ptr,
+                    erase_input,
+                    device
+                );
+            } else {
+            #endif
+                GRID_CALL_NO_SHARED_MEM(
+                    numBlocks, densify_new, tpb,
+                    reinterpret_cast<int4*>(source.data_ptr()),
+                    n_quads,
+                    reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                    reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                    counter_ptr,
+                    erase_input,
+                    device
+                );
+            #ifndef NO_CUDA
+            }
+            #endif
         } else {
-            GRID_CALL_SHARED_MEM(
-                numBlocks, densify, tpb, tpb * sizeof(uint32_t),
-                reinterpret_cast<int4*>(source.data_ptr()),
-                n_quads,
-                reinterpret_cast<int32_t*>(target_values.data_ptr()),
-                reinterpret_cast<int64_t*>(target_indices.data_ptr()),
-                counter_ptr,
-                erase_input,
-                device
-            );
+            #ifndef NO_CUDA
+            if (stream != nullptr) {
+                GRID_CALL_ON_STREAM_SHARED_MEM(
+                    numBlocks, densify, tpb, tpb * sizeof(uint32_t), stream,
+                    reinterpret_cast<int4*>(source.data_ptr()),
+                    n_quads,
+                    reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                    reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                    counter_ptr,
+                    erase_input,
+                    device
+                );
+            } else {
+            #endif
+                GRID_CALL_SHARED_MEM(
+                    numBlocks, densify, tpb, tpb * sizeof(uint32_t),
+                    reinterpret_cast<int4*>(source.data_ptr()),
+                    n_quads,
+                    reinterpret_cast<int32_t*>(target_values.data_ptr()),
+                    reinterpret_cast<int64_t*>(target_indices.data_ptr()),
+                    counter_ptr,
+                    erase_input,
+                    device
+                );
+            #ifndef NO_CUDA
+            }
+            #endif
         }
 
         PROF_END(TORCH_UTILS_DENSE_TO_SPARSE_PROFILER_OP);
@@ -284,7 +330,8 @@ void PB_DenseToSparseConverter(py::module& m) {
             py::arg("target_indices"),
             py::arg("target_values"),
             py::arg("counter_buffer"),
-            py::arg("erase_input") = false)
+            py::arg("erase_input") = false,
+            py::arg("stream_handle") = py::none())
         .def("count_nonzero", &DenseToSparseConverterNative::count_nonzero,
             "Count non-zero elements in a dense 32-bit tensor",
             py::arg("source"),
