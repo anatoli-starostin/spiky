@@ -522,6 +522,7 @@ class LUTLayerBasic(nn.Module):
             densify_buffer_size = self._gradient_densify_buffer_size(batch_size)
             converter = self._shared_context.get_dense_to_sparse_converter(self._multi_id)
             stream = self._shared_context.get_cuda_stream(self.device, self._multi_id, stream_index=0)
+            print(stream)
             indices, values = converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=self._shared_context.get_densify_buffers(
@@ -570,7 +571,6 @@ class LUTLayerBasic(nn.Module):
                 multi_id
             )
             stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
-            print(stream)
             converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=densify_buffers,
