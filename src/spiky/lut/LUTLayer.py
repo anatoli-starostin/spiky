@@ -552,10 +552,9 @@ class LUTLayerBasic(nn.Module):
         return target_w_grad
 
     @staticmethod
-    def _process_multiple_sparse_gradients(shared_context, target_w_grad_list, multi_id_list, batch_size):
+    def _process_multiple_sparse_gradients(shared_context, target_w_grad_list, multi_id_list, densify_buffer_size):
         densify_buffers_list = []
         results = []
-        densify_buffer_size = self._gradient_densify_buffer_size(batch_size)
 
         for i, target_w_grad in enumerate(target_w_grad_list):
             if target_w_grad is None:
@@ -1500,8 +1499,9 @@ class MultiLUT(nn.Module):
             batch_size = x.shape[0]
 
             if multi_lut._gradient_policy.type == GradientType.Sparse:
+                densify_buffer_size = multi_lut.luts[0]._gradient_densify_buffer_size(batch_size)
                 all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
-                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts], batch_size
+                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts], densify_buffer_size
                 )
             else:
                 for lut_idx, lut in enumerate(multi_lut.luts):
