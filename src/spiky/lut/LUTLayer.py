@@ -552,7 +552,9 @@ class LUTLayerBasic(nn.Module):
         return target_w_grad
 
     @staticmethod
-    def _process_multiple_sparse_gradients(shared_context, target_w_grad_list, multi_id_list, densify_buffer_size):
+    def _process_multiple_sparse_gradients(
+        shared_context, target_w_grad_list, multi_id_list, densify_buffer_size, do_normalize
+    ):
         densify_buffers_list = [None] * len(target_w_grad_list)
         results = [None] * len(target_w_grad_list)
 
@@ -584,7 +586,7 @@ class LUTLayerBasic(nn.Module):
             indices, values = converter.decouple_results(densify_buffers)
             
             if indices is not None:
-                if self._weights_gradient_policy.normalized:
+                if do_normalize:
                     values /= values.abs().max().clip(1e-16)
                 target_w_grad = torch.sparse_coo_tensor(
                     indices=indices.unsqueeze(0),
@@ -1498,7 +1500,8 @@ class MultiLUT(nn.Module):
             if multi_lut._gradient_policy.type == GradientType.Sparse:
                 densify_buffer_size = multi_lut.luts[0]._gradient_densify_buffer_size(batch_size)
                 all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
-                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts], densify_buffer_size
+                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts],
+                    densify_buffer_size, multi_lut._gradient_policy.normalized
                 )
             else:
                 for lut_idx, lut in enumerate(multi_lut.luts):
