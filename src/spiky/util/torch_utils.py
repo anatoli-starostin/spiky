@@ -104,7 +104,7 @@ class DenseToSparseConverter:
             if stream is None:
                 return self.decouple_results(densify_buffers)
             else:
-                with torch.cuda.Stream(stream):
+                with stream:
                     return self.decouple_results(densify_buffers)
 
         return indices, values
