@@ -570,6 +570,7 @@ class LUTLayerBasic(nn.Module):
                 multi_id
             )
             stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
+            print(stream)
             converter.dense_to_sparse_32(
                 target_w_grad, erase_input=True,
                 densify_buffers=densify_buffers,
