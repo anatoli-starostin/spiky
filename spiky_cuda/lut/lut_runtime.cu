@@ -479,7 +479,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     if(w_weights_gradients != nullptr) {
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[1],
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[2],
             w_weights_gradients,
             this->n_weights,
             this->int_rescaler
