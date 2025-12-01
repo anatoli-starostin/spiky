@@ -581,7 +581,7 @@ class LUTLayerBasic(nn.Module):
         for i, densify_buffers in enumerate(densify_buffers_list):
             if densify_buffers is None:
                 continue
-                
+            target_w_grad = target_w_grad_list[i]
             converter = shared_context.get_dense_to_sparse_converter(multi_id_list[i])
             stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
             if stream is not None:
