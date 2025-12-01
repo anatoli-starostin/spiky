@@ -439,7 +439,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     // 3. propagate through detectors
 
     #ifndef NO_CUDA
-    if(device != -1) {
+    if((device != -1) && (lookup_neuron_synapses_infos == nullptr)) {
         c10::cuda::CUDAGuard guard(device);
         cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
         cudaStreamWaitEvent(cuda_streams[0], ev2, 0);
