@@ -101,11 +101,7 @@ class DenseToSparseConverter:
         self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input, stream_handle)
 
         if decouple:
-            if stream is None:
-                return self.decouple_results(densify_buffers)
-            else:
-                with stream:
-                    return self.decouple_results(densify_buffers)
+            return self.decouple_results(densify_buffers)
 
         return indices, values
 
