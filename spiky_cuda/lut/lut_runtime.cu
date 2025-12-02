@@ -562,6 +562,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         w_min_anchor_delta_indices
     );
 
+    n_detector_items = (this->sequence_length - 1) * this->n_detectors;
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), 1);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
@@ -581,14 +582,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
     }
     #endif
-    uint32_t n_pairs = this->sequence_length * this->sequence_length;
-    uint32_t n_items = n_pairs * this->n_detectors;
+
+    uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
+    n_items *= n_items * this->n_detectors;
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
+    tpb_opt = TILE * TILE;
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, fill_after_detectors_firing_stat, tpb_opt, cuda_streams[0],
         w_lookup_indices,
+        w_sparse_firing_buffer_alternative != nullptr ? w_min_anchor_deltas : nullptr,
+        w_sparse_firing_buffer_alternative != nullptr ? w_min_anchor_delta_indices : nullptr,
         w_positional_lookup_indices,
+        w_sparse_firing_buffer_alternative != nullptr ? w_positional_min_deltas : nullptr,
+        w_sparse_firing_buffer_alternative != nullptr ? w_positional_min_delta_indices : nullptr,
+        n_items,
         this->sequence_length,
         this->n_detectors,
         this->n_anchors_per_detector,
@@ -598,7 +605,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
     PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
 
-    n_pairs = this->n_detectors * this->sequence_length * (this->sequence_length - 1);
+    uint32_t n_pairs = this->n_detectors * this->sequence_length * (this->sequence_length - 1);
     PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
     FiringBuffer local_firing_buffer(
         n_pairs / 2,
@@ -630,7 +637,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
     tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
     GRID_CALL_ON_STREAM_SHARED_MEM(
-        numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
+        numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t) * 2, cuda_streams[0],
         w_firing_stat,
         reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         local_firing_buffer.counter_ptr(),
@@ -829,10 +836,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 
     PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
 
-    uint32_t n_pairs = this->sequence_length * this->sequence_length;
-    uint32_t n_items = n_pairs * this->n_detectors;
-    dim3 numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-    uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
+    uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
+    n_items *= n_items * this->n_detectors;
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
+    uint32_t tpb_opt = TILE * TILE;
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
         r_lookup_indices, r_min_anchor_deltas, r_min_anchor_delta_indices,
@@ -875,7 +882,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             this->int_rescaler
         );
     }
-    n_items = this->n_detectors * this->positional_dim * this->sequence_length;
+    n_items = this->n_detectors * this->positional_dim * (this->sequence_length - 1);
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],

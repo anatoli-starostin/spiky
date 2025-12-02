@@ -258,7 +258,7 @@ class LUTLayerBasic(nn.Module):
         if sequence_length > 1:
             assert positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
             positional_embeddings_data = torch.empty(
-                sequence_length * n_detectors * positional_dim,
+                (sequence_length - 1) * n_detectors * positional_dim,
                 dtype=torch.float32,
                 device=self.device
             )
@@ -712,14 +712,14 @@ class LUTLayerBasic(nn.Module):
             [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
         )
         positional_lookup_indices = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
         )
         positional_min_deltas = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.float32,
+            [(sequence_length - 1) * self._n_detectors], dtype=torch.float32,
             device=self.device, requires_grad=False
         )
         positional_min_delta_indices = torch.zeros(
-            [sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
         )
 
         firing_stat = self._shared_context.get_before_detectors_gradients_buffer(
@@ -784,9 +784,9 @@ class LUTLayerBasic(nn.Module):
             lookup_indices.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
-            positional_lookup_indices.view(sequence_length, self._n_detectors),
-            positional_min_deltas.view(sequence_length, self._n_detectors),
-            positional_min_delta_indices.view(sequence_length, self._n_detectors),
+            positional_lookup_indices.view(sequence_length - 1, self._n_detectors),
+            positional_min_deltas.view(sequence_length - 1, self._n_detectors),
+            positional_min_delta_indices.view(sequence_length - 1, self._n_detectors),
             sparse_firings, sparse_firing_alternatives
         )
 
@@ -913,13 +913,13 @@ class LUTLayerBasic(nn.Module):
         min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
         assert positional_lookup_indices.device == self.device
-        assert positional_lookup_indices.shape == (sequence_length, self._n_detectors)
+        assert positional_lookup_indices.shape == (sequence_length - 1, self._n_detectors)
         positional_lookup_indices = positional_lookup_indices.view(-1)
         assert positional_min_deltas.device == self.device
-        assert positional_min_deltas.shape == (sequence_length, self._n_detectors)
+        assert positional_min_deltas.shape == (sequence_length - 1, self._n_detectors)
         positional_min_deltas = positional_min_deltas.view(-1)
         assert positional_min_delta_indices.device == self.device
-        assert positional_min_delta_indices.shape == (sequence_length, self._n_detectors)
+        assert positional_min_delta_indices.shape == (sequence_length - 1, self._n_detectors)
         positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
         before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
