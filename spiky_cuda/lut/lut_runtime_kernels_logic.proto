@@ -1570,10 +1570,8 @@ gather_w_gradients_for_sequence_logic(
     r_output_gradients += output_grad_offset + blockIdx.y * n_outputs_per_block;
     uint64_t weight_grad_offset = static_cast<uint64_t>(firing.neuron_id) * n_outputs + blockIdx.y * n_outputs_per_block;
 
-    r_weights += weight_grad_offset;
     w_weights_gradients += weight_grad_offset;
 
-    uint32_t n_outputs_per_block = n_outputs_per_block;
     if((blockIdx.y == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
         n_outputs_per_block = n_outputs % n_outputs_per_block;
     }
