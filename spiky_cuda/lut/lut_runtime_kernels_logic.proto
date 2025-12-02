@@ -1397,8 +1397,8 @@ fill_outputs_by_sparse_firings_logic(
     NeuronShiftFiring firing = r_firings_buffer[i];
     
     uint32_t output_offset = (firing.batch_index * sequence_length + firing.shift) * n_outputs;
-    w_output += output_offset + blockIdx.y * output_block_size;
-    r_weights += firing.neuron_id * n_outputs + blockIdx.y * output_block_size;
+    w_output += output_offset + blockIdx.y * n_outputs_per_block;
+    r_weights += firing.neuron_id * n_outputs + blockIdx.y * n_outputs_per_block;
 
     if((blockIdx.y == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
         n_outputs_per_block = n_outputs % n_outputs_per_block;
