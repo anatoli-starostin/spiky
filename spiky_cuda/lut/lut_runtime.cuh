@@ -147,7 +147,7 @@ public:
         int32_t *r_positional_lookup_indices,
         EXTERNAL_REAL_DT *r_positional_min_deltas,
         int32_t *r_positional_min_delta_indices,
-        EXTERNAL_REAL_DT *w_before_detectors_gradients,
+        SUMMATION32_DT *w_before_detectors_gradients,
         NeuronShiftFiring *r_sparse_firings,
         uint32_t n_sparse_firings,
         NeuronShiftFiring *r_sparse_firing_alternatives,

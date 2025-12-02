@@ -692,7 +692,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     int32_t *r_positional_lookup_indices,
     EXTERNAL_REAL_DT *r_positional_min_deltas,
     int32_t *r_positional_min_delta_indices,
-    EXTERNAL_REAL_DT *w_before_detectors_gradients,
+    SUMMATION32_DT *w_before_detectors_gradients,
     NeuronShiftFiring *r_sparse_firings,
     uint32_t n_sparse_firings,
     NeuronShiftFiring *r_sparse_firing_alternatives,
@@ -880,7 +880,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
         w_positional_embeddings_gradients,
-        this->n_items,
+        n_items,
         this->int_rescaler
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);

@@ -930,7 +930,7 @@ public:
             reinterpret_cast<int32_t *>(r_positional_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(r_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_before_detectors_gradients.data_ptr()),
+            reinterpret_cast<SUMMATION32_DT *>(w_before_detectors_gradients.data_ptr()),
             reinterpret_cast<NeuronShiftFiring *>(w_sparse_firings.data_ptr()),
             w_sparse_firings.numel() >> 1,
             reinterpret_cast<NeuronShiftFiring *>(w_sparse_firing_alternatives.data_ptr()),
