@@ -656,6 +656,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     // TODO deal with backward/forward size during sparse connectivity implementation
     // TODO at the moment I use backward_size because it works better in the non sequential case
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), n_output_blocks);
+
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, fill_outputs_by_sparse_firings, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
         r_weights, this->first_synapse_id,
@@ -668,6 +669,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         n_output_blocks,
         this->sequence_length,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
+        this->backward_group_size,
         this->lut_data
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
