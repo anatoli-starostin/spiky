@@ -1077,12 +1077,12 @@ check_positional_embeddings_logic(
     }
 }
 
-// TODO refactor with warps
-
 densify_firing_stat_logic(
     EXTERNAL_REAL_DT* r_firing_stat,
     NeuronShiftFiring* rw_firings_buffer,
     uint64_t* rw_firings_counter_ptr,
+    NeuronShiftFiring* rw_firings_buffer_alternative,
+    uint64_t* rw_firings_counter_ptr_alternative,
     uint32_t n_lookup_neurons,
     uint32_t sequence_length,
     int device
@@ -1177,16 +1177,12 @@ densify_firing_stat_logic(
     }
 }
 
-
-// TODO
-// Kernel for filling outputs based on lookup indices (for sequence processing)
-// Similar to fill_outputs_by_forward_groups_logic but works with Firing entries from densify
-// Grid: (n_firings blocks, max_forward_groups_per_neuron batches)
-fill_outputs_by_lookup_indices_logic(
+fill_outputs_by_sparse_firings_logic(
     EXTERNAL_REAL_DT* r_weights,
     NeuronDataId_t first_synapse_id,
     NeuronShiftFiring* r_firings_buffer,
-    uint64_t n_firings,
+    uint64_t* r_firings_counter_ptr,
+    uint64_t n_total_firings,
     EXTERNAL_REAL_DT* w_output,
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
@@ -1197,7 +1193,7 @@ fill_outputs_by_lookup_indices_logic(
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     
-    if(i < n_firings) {
+    if(i < n_total_firings) {
         NeuronShiftFiring firing = r_firings_buffer[i];
         
         // Calculate batch and sequence indices from firing.batch_index
@@ -1412,11 +1408,88 @@ fill_after_detectors_firing_stat_logic(
         w_firing_stat[firing_stat_index] += 1.0;
         #endif
 
-        // TODO add alternative indices as negatives
+        // TODO add alternative indices as very small positives
 
         __SUPER_DETAILED_TRACE__(
             "fill_after_detectors_firing_stat_logic: batch_index %d, i %d, j %d, detector_index %d, Q %d, P %d, PE %d, concat %d\n", 
             batch_index, i, j, detector_index, Q, P, PE, concatenated_index
         );
     }
+}
+
+// Kernel for gathering x gradients from sparse firings for sequence processing
+// Grid: (n_sparse_firings blocks, n_output_blocks batches)
+// Each thread processes one firing
+gather_x_gradients_for_sequence_logic(
+    EXTERNAL_REAL_DT* r_weights,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    NeuronShiftFiring* r_sparse_firings,
+    SUMMATION32_DT* w_before_detectors_gradients,
+    uint64_t n_sparse_firings,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t sequence_length,
+    uint32_t n_output_blocks,
+    uint32_t backward_group_size,
+    uint32_t n_lookup_neurons_per_detector,
+    double lr,
+    double int_rescaler
+) {
+    // TODO: Implement gather_x_gradients_for_sequence_logic
+    // This kernel should process NeuronShiftFiring structures to gather gradients
+    // Similar to gather_x_gradients_fully_connected_logic but handles sequence_length
+    // and works with NeuronShiftFiring instead of lookup_indices
+}
+
+// Kernel for gathering weight gradients from sparse firings for sequence processing
+// Grid: (n_sparse_firings blocks, n_output_blocks batches)
+// Each thread processes one firing
+gather_w_gradients_for_sequence_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    NeuronShiftFiring* r_sparse_firings,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint64_t n_sparse_firings,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t sequence_length,
+    uint32_t n_output_blocks,
+    uint32_t backward_group_size,
+    uint32_t n_lookup_neurons_per_detector,
+    double lr,
+    double int_rescaler
+) {
+    // TODO: Implement gather_w_gradients_for_sequence_logic
+    // This kernel should process NeuronShiftFiring structures to gather weight gradients
+    // Similar to gather_w_gradients_fully_connected_logic but handles sequence_length
+    // and works with NeuronShiftFiring instead of lookup_indices
+}
+
+// Kernel for propagating gradients through detectors for sequence processing
+// Grid: (n_items blocks, batch_size batches) where n_items = sequence_length * sequence_length * n_detectors
+// Each thread processes one detector at one timestep pair
+propagate_through_detectors_for_sequence_logic(
+    int32_t* r_lookup_indices,
+    EXTERNAL_REAL_DT* r_min_anchor_deltas,
+    int32_t* r_min_anchor_delta_indices,
+    int32_t* r_positional_lookup_indices,
+    EXTERNAL_REAL_DT* r_positional_min_deltas,
+    int32_t* r_positional_min_delta_indices,
+    uint32_t n_detectors,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    AnchorsPair* r_detectors,
+    uint32_t n_lookup_neurons_per_detector,
+    SUMMATION32_DT* w_before_detectors_gradients,
+    EXTERNAL_REAL_DT* w_input_gradients,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients,
+    uint32_t n_inputs,
+    uint32_t positional_dim,
+    double int_rescaler
+) {
+    // TODO: Implement propagate_through_detectors_for_sequence_logic
+    // This kernel should propagate gradients through detectors for sequence processing
+    // Similar to propagate_through_detectors_logic but handles:
+    // - sequence_length timesteps
+    // - positional embeddings gradients
+    // - multiple timestep pairs (i, j) where i < j
 }

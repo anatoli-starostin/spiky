@@ -694,7 +694,7 @@ public:
         torch::Tensor &w_positional_min_delta_indices,
         torch::Tensor &w_firing_stat,
         torch::Tensor &w_sparse_firing_buffer,
-        torch::Tensor &w_sparse_firing_buffer_alternative,
+        std::optional<torch::Tensor> &w_sparse_firing_buffer_alternative,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
