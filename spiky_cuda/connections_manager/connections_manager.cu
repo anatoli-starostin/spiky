@@ -310,7 +310,9 @@ void ConnectionsManager::finalize(
         uint32_t hash_space_size = static_cast<uint32_t>(h);
         hash_space_size <<= 1;
 
+        #ifdef ENABLE_PROFILING
         uint64_t n_backward_synapses = aux_buffer[1];
+        #endif
         memset(aux_buffer, 0, 3 * sizeof(uint64_t));
 
         // backward_stat is no longer needed
