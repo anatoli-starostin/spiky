@@ -663,6 +663,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_lookup_neurons,
         this->n_outputs,
         this->max_forward_groups_per_neuron,
+        this->sequence_length,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
         this->forward_group_size,
         this->lut_data
