@@ -868,6 +868,38 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         , 0.0
         #endif
     );
+
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaEvent_t ev3;
+        cudaEventCreate(&ev3);
+        cudaEventRecord(ev3, cuda_streams[0]);
+        cudaStreamWaitEvent(cuda_streams[1], ev3, 0);
+    }
+    #endif
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firings), 1);
+    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firings);
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, cleanup_x_gradients_for_sequence, tpb_opt, cuda_streams[0],
+        r_sparse_firings,
+        w_before_detectors_gradients,
+        n_sparse_firings,
+        this->n_detectors,
+        this->sequence_length,
+        n_lookup_neurons_per_detector
+    );
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firing_alternatives), 1);
+    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firing_alternatives);
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, cleanup_x_gradients_for_sequence, tpb_opt, cuda_streams[1],
+        r_sparse_firing_alternatives,
+        w_before_detectors_gradients,
+        n_sparse_firing_alternatives,
+        this->n_detectors,
+        this->sequence_length,
+        n_lookup_neurons_per_detector
+    );
     PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     PROF_END(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 
