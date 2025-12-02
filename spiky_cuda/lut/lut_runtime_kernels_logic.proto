@@ -1089,6 +1089,7 @@ fill_after_detectors_firing_stat_logic(
     uint32_t n_anchors_per_detector,
     uint32_t positional_dim,
     uint32_t n_lookup_neurons,
+    uint32_t n_lookup_neurons_per_detector,
     EXTERNAL_REAL_DT* w_firing_stat
 ) {
     // blockIdx.x encodes: tile_id * n_detectors + detector_index
@@ -1157,15 +1158,17 @@ fill_after_detectors_firing_stat_logic(
             PE
         );
 
-        uint32_t firing_stat_index = batch_index * n_lookup_neurons * sequence_length + j * n_lookup_neurons + concatenated_index;
+        w_firing_stat += batch_index * n_lookup_neurons * sequence_length; // shift inside batch
+        w_firing_stat += j * n_lookup_neurons; // shift inside timestamp
+        w_firing_stat += detector_index * n_lookup_neurons_per_detector; // detector shift
 
         #ifdef ATOMIC
         atomicAdd(
-            w_firing_stat + firing_stat_index,
+            w_firing_stat + concatenated_index,
             1.0
         );
         #else
-        w_firing_stat[firing_stat_index] += 1.0;
+        w_firing_stat[concatenated_index] += 1.0;
         #endif
 
         if(r_min_anchor_deltas != nullptr) {
@@ -1188,11 +1191,11 @@ fill_after_detectors_firing_stat_logic(
             // adding very small floats so that we don't affect statistics but can distinguish neurons that were touched
             #ifdef ATOMIC
             atomicAdd(
-                w_firing_stat + firing_stat_index,
+                w_firing_stat + concatenated_index,
                 EPS
             );
             #else
-            w_firing_stat[firing_stat_index] += EPS;
+            w_firing_stat[concatenated_index] += EPS;
             #endif
 
             EXTERNAL_REAL_DT pe_fabs_min_delta = fabs(r_positional_min_deltas[pe_offset]);
@@ -1205,11 +1208,11 @@ fill_after_detectors_firing_stat_logic(
 
                 #ifdef ATOMIC
                 atomicAdd(
-                    w_firing_stat + firing_stat_index,
+                    w_firing_stat + concatenated_index,
                     EPS
                 );
                 #else
-                w_firing_stat[firing_stat_index] += EPS;
+                w_firing_stat[concatenated_index] += EPS;
                 #endif
             }
         }
@@ -1374,79 +1377,44 @@ fill_outputs_by_sparse_firings_logic(
     EXTERNAL_REAL_DT* w_output,
     uint32_t n_lookup_neurons,
     uint32_t n_outputs,
+    uint32_t n_output_blocks,
     NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
-    uint32_t synapse_group_size,
+    uint32_t output_block_size,
     uint8_t* lut_data,
     double int_rescaler
 ) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     
-    if(i < n_total_firings) {
-        NeuronShiftFiring firing = r_firings_buffer[i];
-        
-        // Calculate batch and sequence indices from firing.batch_index
-        // firing.batch_index encodes: batch_index * sequence_length + timestep
-        // We need sequence_length to decode this - it should be passed as a parameter
-        // For now, assuming it's encoded in the batch_index or we extract it differently
-        
-        // Offset w_output for current batch and timestep
-        // This needs sequence_length to be passed as a parameter
-        // For now, using a simplified approach - firing.batch_index directly indexes into output
-        w_output += firing.batch_index * n_outputs;
-        
-        // Get synapse info for this firing using neuron_id
-        // neuron_id is the lookup neuron index
-        NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = r_lookup_neuron_synapses_infos[firing.neuron_id];
-        
-        // Use the first group for this neuron
-        if(lookup_neuron_synapses_info.n_groups > 0 && lookup_neuron_synapses_info.n_synapse_metas == 1) {
-            NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id;
-            ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(current_group_id, lut_data);
-            int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
-            NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
-            long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
-            EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
-            
-            uint4 targets_quad = make_uint4(0, 0, 0, 0);
-            float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
-            
-            NeuronIndex_t target_id;
-            double weight;
-            SUMMATION32_DT payload;
-            
-            int32_t n_t_buffered = 0;
-            int32_t n_w_buffered = 0;
-            
-            // Scale weight by firing value
-            EXTERNAL_REAL_DT firing_weight = firing.payload;
-            
-            for(int32_t cursor = 0; cursor < current_group_size; cursor++, current_target_ptr++, weight_ptr++) {
-            if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-                #ifdef ATOMIC
-                asm volatile(
-                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
-                    : "l"(current_target_ptr)
-                );
-                #else
-                targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
-                #endif
-                target_id = targets_quad.x;
-                n_t_buffered = 3;
-            } else if(n_t_buffered > 0) {
-                if(n_t_buffered == 3) {
-                    target_id = targets_quad.y;
-                } else if(n_t_buffered == 2) {
-                    target_id = targets_quad.z;
-                } else {
-                    target_id = targets_quad.w;
-                }
-                n_t_buffered--;
-            } else {
-                target_id = *current_target_ptr;
-            }
-            
-            if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+    if(i >= n_total_firings) {
+        return;
+    }
+
+    if((r_firings_counter_ptr != nullptr) && (i >= *r_firings_counter_ptr)) {
+        return;
+    }
+
+    NeuronShiftFiring firing = r_firings_buffer[i];
+    
+    uint32_t output_offset = (firing.batch_index * sequence_length + firing.shift) * n_outputs;
+    w_output += output_offset + blockIdx.y * output_block_size;
+    r_weights += firing.neuron_id * n_outputs + blockIdx.y * output_block_size;
+
+    if((blockIdx.y == n_outputs_per_block - 1) && (n_outputs % output_block_size)) {
+        output_block_size = n_outputs % output_block_size;
+    }
+
+    if(r_lookup_neuron_synapses_infos != nullptr) {
+        // TODO: Implement sparse connections case
+    } else { // fully connected case
+        float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
+        double weight;
+        SUMMATION32_DT payload;
+
+        __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] i %d, current_group_size %d, n_firings %d, weight_shift %ld\n", i, current_group_size, n_firings, weight_shift);
+
+        int32_t n_w_buffered = 0;
+        for(int32_t cursor=0;cursor < output_block_size;cursor++, r_weights++, w_output++) {
+            if(((reinterpret_cast<uintptr_t>(r_weights) & 15) == 0) && (cursor < output_block_size - 3)) {
                 #ifdef ATOMIC
                 asm volatile(
                     "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
@@ -1456,45 +1424,45 @@ fill_outputs_by_sparse_firings_logic(
                 #else
                 weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
                 #endif
-                weight = static_cast<double>(weights_quad.x) * static_cast<double>(firing_weight);
+                weight = static_cast<double>(weights_quad.x);
                 n_w_buffered = 3;
             } else if(n_w_buffered > 0) {
                 if(n_w_buffered == 3) {
-                    weight = static_cast<double>(weights_quad.y) * static_cast<double>(firing_weight);
+                    weight = static_cast<double>(weights_quad.y);
                 } else if(n_w_buffered == 2) {
-                    weight = static_cast<double>(weights_quad.z) * static_cast<double>(firing_weight);
+                    weight = static_cast<double>(weights_quad.z);
                 } else {
-                    weight = static_cast<double>(weights_quad.w) * static_cast<double>(firing_weight);
+                    weight = static_cast<double>(weights_quad.w);
                 }
                 n_w_buffered--;
             } else {
-                weight = static_cast<double>(*weight_ptr) * static_cast<double>(firing_weight);
+                weight = static_cast<double>(*weight_ptr);
             }
-            
-            target_id -= n_lookup_neurons;
-            
+
+            weight *= firing.payload;
+
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
                 #ifdef ATOMIC
                 atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_output + target_id),
+                    reinterpret_cast<SUMMATION32_DT *>(w_output),
                     payload
                 );
                 #else
-                *reinterpret_cast<SUMMATION32_DT *>(w_output + target_id) += payload;
+                *reinterpret_cast<SUMMATION32_DT *>(w_output) += payload;
                 #endif
             #else
                 payload = static_cast<SUMMATION32_DT>(weight);
                 #ifdef ATOMIC
                 atomicAdd(
-                    w_output + target_id,
+                    w_output,
                     payload
                 );
                 #else
-                w_output[target_id] += payload;
+                __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, payload %f\n", target_id, payload);
+                *w_output += payload;
                 #endif
             #endif
-            }
         }
     }
 }

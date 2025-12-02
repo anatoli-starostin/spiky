@@ -583,6 +583,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     }
     #endif
 
+    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
+
     uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
     n_items *= n_items * this->n_detectors;
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
@@ -601,6 +603,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         this->n_anchors_per_detector,
         this->positional_dim,
         this->n_lookup_neurons,
+        n_lookup_neurons_per_detector,
         w_firing_stat
     );
     PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
@@ -659,6 +662,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         w_output,
         this->n_lookup_neurons,
         this->n_outputs,
+        this->max_forward_groups_per_neuron,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
         this->forward_group_size,
         this->lut_data
