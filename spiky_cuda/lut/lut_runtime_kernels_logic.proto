@@ -1501,7 +1501,6 @@ gather_x_gradients_for_sequence_logic(
     w_before_detectors_gradients += firing.batch_index * n_detectors * n_lookup_neurons_per_detector * sequence_length;
     w_before_detectors_gradients += n_detectors * n_lookup_neurons_per_detector * firing.shift;
 
-    uint32_t n_outputs_per_block = n_outputs_per_block;
     if((blockIdx.y == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
         n_outputs_per_block = n_outputs % n_outputs_per_block;
     }
