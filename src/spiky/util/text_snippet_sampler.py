@@ -144,3 +144,7 @@ class TextSnippetSampler:
         for i in range(0, len(test_snippets), batch_size):
             batch = test_snippets[i : i + batch_size]
             yield torch.stack(batch, dim=0)
+
+    def batch_to_text(self, batch_of_ints):
+        assert batch_of_ints.shape[1] == self.context_size
+        return ''.join(chr(int(x)) for x in batch_of_ints.flatten().tolist())
