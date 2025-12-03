@@ -43,7 +43,7 @@ class TextSnippetSampler:
         self.text_length = len(self.text)
 
         # Create testing mask: mark regions of size 2 * context_size as testing
-        self.testing_mask = torch.zeros(self.text_length, dtype=torch.bool, device=device)
+        self.testing_mask = torch.zeros(self.text_length, dtype=torch.bool, device=torch.device('cpu'))
 
         # Sample random centers for test regions
         # Each test region is 2 * context_size in size
@@ -99,12 +99,8 @@ class TextSnippetSampler:
             # Sample random start position
             start = random.randint(0, self.text_length - self.context_size - 1)
 
-            # Check if any position in the snippet is marked as testing
-            end = start + self.context_size + 1
-            if not self.testing_mask[start:end].any():
-                # Extract snippet: context + target
-                snippet = self.text[start:end]
-                batch.append(snippet)
+            if self.testing_mask[start].item() == False:
+                batch.append(self.text[start:start + self.context_size])
 
             attempts += 1
 
@@ -148,5 +144,3 @@ class TextSnippetSampler:
         for i in range(0, len(test_snippets), batch_size):
             batch = test_snippets[i : i + batch_size]
             yield torch.stack(batch, dim=0)
-
-
