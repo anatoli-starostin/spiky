@@ -2,9 +2,13 @@
 """
 Utility functions for tests
 """
+import os
+import tempfile
+
 import torch
 
 from spiky.util.chunk_of_connections import ChunkOfConnectionsValidator, ChunkOfConnections
+from spiky.util.text_snippet_sampler import TextSnippetSampler
 
 
 def extract_connection_map(
@@ -284,4 +288,58 @@ def validate_weights(synapse_metas, export, do_check_initial_value=True):
         if do_check_initial_value and synapse_meta.initial_noise_level == 0.0 and w != synapse_meta.initial_weight:
             print(f"❌ found synaptic weight {w} that differs from initial weight value {synapse_meta.initial_weight}, synapse meta index: {sm}")
             return False
+    return True
+
+
+def simple_test_text_snippet_sampler(device: torch.device, tmp_dir: str | None = None) -> bool:
+    """
+    Simple test demonstrating the work of TextSnippetSampler.
+
+    This function:
+    - creates a temporary text file with a small repeating pattern,
+    - constructs a TextSnippetSampler,
+    - samples a training batch,
+    - iterates over testing batches,
+    - prints basic diagnostics and returns True on success.
+    """
+    if tmp_dir is None:
+        tmp_dir = tempfile.gettempdir()
+
+    # Create a small synthetic text file
+    text = (b"abcdefghijklmnopqrstuvwxyz" * 100)  # 2600 bytes
+    text_path = os.path.join(tmp_dir, "test_text_snippet_sampler.txt")
+    with open(text_path, "wb") as f:
+        f.write(text)
+
+    context_size = 16
+    n_test_regions = 4
+
+    sampler = TextSnippetSampler(
+        text_file_name=text_path,
+        context_size=context_size,
+        n_test_regions=n_test_regions,
+        device=device,
+        random_seed=123,
+    )
+
+    # Sample a small training batch
+    batch_size = 8
+    train_batch = sampler.sample_training_batch(batch_size)
+
+    print(f"Training batch shape: {tuple(train_batch.shape)} (expected ({batch_size}, {context_size + 1}))")
+
+    # Collect all testing batches
+    test_batches = list(sampler.testing_batches_iterator(batch_size=2))
+    total_test_snippets = sum(b.shape[0] for b in test_batches)
+
+    print(f"Number of test batches: {len(test_batches)}")
+    print(f"Total test snippets: {total_test_snippets} (expected {n_test_regions})")
+    if test_batches:
+        print(f"First test batch shape: {tuple(test_batches[0].shape)} (expected (<=2, {context_size}))")
+
+    # Basic sanity checks
+    assert train_batch.shape == (batch_size, context_size + 1)
+    for b in test_batches:
+        assert b.shape[1] == context_size
+
     return True
