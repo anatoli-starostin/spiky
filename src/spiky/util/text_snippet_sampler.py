@@ -147,4 +147,7 @@ class TextSnippetSampler:
 
     def batch_to_text(self, batch_of_ints):
         assert batch_of_ints.shape[1] == self.context_size
-        return ''.join(chr(int(x)) for x in batch_of_ints.flatten().tolist())
+        results = []
+        for i in range(batch_of_ints.shape[0]):
+            results.append(''.join(chr(int(x)) for x in batch_of_ints[i].tolist()))
+        return results
