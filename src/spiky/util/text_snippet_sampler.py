@@ -99,7 +99,7 @@ class TextSnippetSampler:
             # Sample random start position
             start = random.randint(0, self.text_length - self.context_size - 1)
 
-            if self.testing_mask[start].item() == False:
+            if not self.testing_mask[start].item():
                 batch.append(self.text[start:start + self.context_size])
 
             attempts += 1
@@ -142,7 +142,7 @@ class TextSnippetSampler:
 
         # Yield batches
         for i in range(0, len(test_snippets), batch_size):
-            batch = test_snippets[i : i + batch_size]
+            batch = test_snippets[i:i + batch_size]
             yield torch.stack(batch, dim=0)
 
     def batch_to_text(self, batch_of_ints):

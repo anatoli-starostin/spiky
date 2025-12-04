@@ -1030,7 +1030,7 @@ check_positional_embeddings_logic(
 ) {
     // i represents n_detectors * timestep + detector_index
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t n_detector_items = (sequence_length - 1) * n_detectors;
     
     if(i < n_detector_items) {
         uint32_t timestep = i / n_detectors;
@@ -1043,7 +1043,7 @@ check_positional_embeddings_logic(
         w_positional_min_delta_indices += i;
         
         // Get positional embedding for this detector and timestep
-        // Positional embeddings are stored as [sequence_length * n_detectors * positional_dim]
+        // Positional embeddings are stored as [(sequence_length - 1) * n_detectors * positional_dim]
         r_positional_embeddings += timestep * n_detectors * positional_dim;
         r_positional_embeddings += detector_index * positional_dim;
         

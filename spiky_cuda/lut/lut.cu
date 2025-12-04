@@ -38,7 +38,7 @@ public:
         n_anchors_per_detector(n_anchors_per_detector),
         sequence_length(sequence_length),
         positional_dim(positional_dim),
-        n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector * ((sequence_length > 1) ? 2 : 1)))),
+        n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector + ((sequence_length > 1) ? (n_anchors_per_detector + positional_dim) : 0)))),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size)
     {

@@ -219,7 +219,7 @@ class LUTLayerBasic(nn.Module):
             sequence_length,
             synapse_metas: List[SynapseMeta],
             positional_dim=None,
-            weights_gradient_policy: GradientPolicy = GradientPolicy(GradientType.Dense, normalized=False),
+            weights_gradient_policy: GradientPolicy = None,
             shared_context: LUTSharedContext = None,
             summation_dtype=torch.float32,
             _int_rescaler=0.001,
@@ -251,6 +251,8 @@ class LUTLayerBasic(nn.Module):
             self._own_shared_context = False
 
         self._shared_context = shared_context
+        if weights_gradient_policy is None:
+            weights_gradient_policy = GradientPolicy(GradientType.Dense, normalized=False)
         self._weights_gradient_policy = weights_gradient_policy
         self._external_lr_hook = None
 
@@ -795,6 +797,8 @@ class LUTLayerBasic(nn.Module):
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         x_grad=None
     ):
+        print(grad_output)
+
         assert self._sequence_length == 1
         assert x.device == self.device
         source_x_shape = x.shape
@@ -1139,7 +1143,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             lut_receptive_field_stride_shape=None,
             synapse_meta=SynapseMeta(),
             positional_dim=None,
-            weights_gradient_policy: GradientPolicy = GradientPolicy(GradientType.Dense, normalized=False),
+            weights_gradient_policy: GradientPolicy = None,
             shared_context: LUTSharedContext = None,
             summation_dtype=torch.float32,
             _explicit_anchors=None,
@@ -1292,7 +1296,7 @@ class LUTLayer(Conv2DLUTLayer):
         sequence_length=1,
         synapse_meta=SynapseMeta(),
         positional_dim=None,
-        weights_gradient_policy: GradientPolicy = GradientPolicy(GradientType.Dense, normalized=False),
+        weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
         _explicit_anchors=None,
@@ -1456,9 +1460,9 @@ class MultiLUT(nn.Module):
                 if multi_lut._sequence_length == 1:
                     results[lut_idx] = lut.forward_step(x, output=output)
                 else:
-                    results[lut_idx] = lut.forward_step_concat(x, output=output)
+                    results[lut_idx] = list(lut.forward_step_concat(x, output=output))
 
-            for i, lut in enumerate(multi_lut.luts):
+            for lut_idx, lut in enumerate(multi_lut.luts):
                 lut._synchronize()
                 if multi_lut._sequence_length > 1:
                     sparse_firing_buf = results[lut_idx][-2]
@@ -1476,7 +1480,7 @@ class MultiLUT(nn.Module):
 
             output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
 
-            if ctx.multi_lut.training:
+            if multi_lut.training:
                 # Save for backward
                 ctx.multi_lut = multi_lut
                 ctx.save_for_backward(x)

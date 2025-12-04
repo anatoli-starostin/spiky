@@ -1,0 +1,154 @@
+import torch
+import torch.nn as nn
+
+from spiky.lut.LUTLayer import (
+    LUTLayer,
+    LUTSharedContext,
+    GradientPolicy,
+    GradientType,
+    MultiLUT,
+    SynapseMeta
+)
+
+
+class LUTTransformer(nn.Module):
+    def __init__(
+        self, vocab_size, embedding_dim, context_size,
+        positional_dim, num_layers, num_heads,
+        n_detectors, n_anchors_per_detector, weights_gradient_policy=None,
+        device=None, _synapse_meta=SynapseMeta(learning_rate=1.0), _use_multi_lut=False,
+        lut_shared_context=None, seed=None, summation_dtype=torch.float32
+    ):
+        super().__init__()
+
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.context_size = context_size
+        self.positional_dim = positional_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.n_detectors = n_detectors
+        self.n_anchors_per_detector = n_anchors_per_detector
+        self.weights_gradient_policy = weights_gradient_policy
+        if device is None:
+            device = torch.device('cpu')
+
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(seed)
+        else:
+            gen = None
+
+        self.device = device
+
+        if lut_shared_context is None:
+            self.lut_shared_context = LUTSharedContext()
+            self.lut_shared_context.to_device(device)
+        else:
+            self.lut_shared_context = lut_shared_context
+        self.token_embedder = nn.Embedding(vocab_size, embedding_dim, device=device)
+        nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0, generator=gen)
+        self.token_embedder.weight.requires_grad_(False)
+
+        # Transformer layers
+        self.layers = nn.ModuleList()
+        for layer_idx in range(num_layers):
+            layer = nn.ModuleDict()
+
+            # Attention heads
+            if _use_multi_lut:
+                heads = []
+                for head_idx in range(num_heads):
+                    attention_lut = LUTLayer(
+                        n_inputs=embedding_dim,
+                        n_outputs=embedding_dim,
+                        n_detectors=n_detectors,
+                        n_anchors_per_detector=n_anchors_per_detector,
+                        sequence_length=context_size,
+                        synapse_meta=_synapse_meta,
+                        positional_dim=positional_dim,
+                        weights_gradient_policy=weights_gradient_policy,
+                        shared_context=self.lut_shared_context,
+                        summation_dtype=summation_dtype,
+                        device=device,
+                        random_seed=None if seed is None else seed + layer_idx * num_heads + head_idx
+                    )
+                    heads.append(attention_lut)
+                layer['attention_lut'] = MultiLUT(heads)
+            else:
+                layer['attention_lut'] = LUTLayer(
+                    n_inputs=embedding_dim,
+                    n_outputs=embedding_dim,
+                    n_detectors=n_detectors * num_heads,
+                    n_anchors_per_detector=n_anchors_per_detector,
+                    sequence_length=context_size,
+                    synapse_meta=_synapse_meta,
+                    positional_dim=positional_dim,
+                    weights_gradient_policy=weights_gradient_policy,
+                    shared_context=self.lut_shared_context,
+                    summation_dtype=summation_dtype,
+                    device=device,
+                    random_seed=None if seed is None else seed + layer_idx * num_heads
+                )
+
+            ffn_lut = LUTLayer(
+                n_inputs=embedding_dim,
+                n_outputs=embedding_dim,
+                n_detectors=n_detectors,
+                n_anchors_per_detector=n_anchors_per_detector,
+                sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
+                synapse_meta=_synapse_meta,
+                weights_gradient_policy=weights_gradient_policy,
+                shared_context=self.lut_shared_context,
+                summation_dtype=summation_dtype,
+                device=device,
+                random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads
+            )
+            layer['ffn'] = ffn_lut
+
+            self.layers.append(layer)
+
+        self.unembedder = LUTLayer(
+            n_inputs=embedding_dim,
+            n_outputs=vocab_size,
+            n_detectors=n_detectors,
+            n_anchors_per_detector=n_anchors_per_detector,
+            sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
+            synapse_meta=_synapse_meta,
+            weights_gradient_policy=weights_gradient_policy,
+            shared_context=self.lut_shared_context,
+            summation_dtype=summation_dtype,
+            device=device,
+            random_seed=seed
+        )
+
+    def set_external_learning_rate_hook(self, lr_hook):
+        # Set hooks for all LUT layers
+        for layer in self.layers:
+            layer['attention_lut'].set_external_learning_rate_hook(lr_hook)
+            layer['ffn'].set_external_learning_rate_hook(lr_hook)
+        self.unembedder.set_external_learning_rate_hook(lr_hook)
+
+    def forward(self, tokens):
+        """
+        Forward pass.
+
+        Args:
+            tokens: (batch_size, context_size) tensor of token indices
+
+        Returns:
+            logits: (batch_size, context_size, vocab_size) tensor of logits
+        """
+        batch_size = tokens.shape[0]
+        # Token embedding: (batch_size, context_size) -> (batch_size, context_size, embedding_dim)
+        z = self.token_embedder(tokens)  # (batch_size, context_size, embedding_dim)
+
+        non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
+
+        for layer in self.layers:
+            z = z + layer['attention_lut'](z)
+            z = z + (layer['ffn'](z.reshape(non_seq_shape))).reshape(batch_size, self.context_size, self.embedding_dim)
+
+        # Unembedder: (batch_size, context_size, embedding_dim) -> (batch_size, context_size, vocab_size)
+        logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
+        return logits
