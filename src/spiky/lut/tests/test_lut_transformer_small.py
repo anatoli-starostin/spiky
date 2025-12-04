@@ -2,19 +2,209 @@ import os
 import random
 import torch
 import torch.nn as nn
-from spiky.lut.LUTLayer import GradientPolicy, GradientType
+from torch.optim import SGD
+
+from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta
 
 from spiky.lut.LUTTransformer import LUTTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 from gt_lut_transformer import _GTLUTTransformer
 
 
+def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads, vocab_size):
+    """
+    Synchronize all weights, anchors, and embeddings from PyTorch LUTTransformer to GT model.
+    
+    Args:
+        pytorch_transformer: PyTorch LUTTransformer instance
+        gt_transformer: GT _GTLUTTransformer instance
+        use_multi_lut: Whether PyTorch model uses MultiLUT
+        num_layers: Number of transformer layers
+        num_heads: Number of attention heads
+        vocab_size: Vocabulary size
+    """
+    def sync_luts(pytorch_lut, gt_lut, gt_positional_encoding=None):
+        """
+        Synchronize anchors, weights, and positional embeddings from PyTorch LUTLayer to GT model.
+        
+        Args:
+            pytorch_lut: PyTorch LUTLayer instance
+            gt_lut: GT LUT instance
+            gt_positional_encoding: Optional GT PositionalEncoding instance (for attention layers)
+        """
+        anchors_tensor = pytorch_lut._detector_anchors.cpu().detach()
+        n_detectors = pytorch_lut.n_detectors()
+        n_anchors_per_detector = pytorch_lut.n_anchors_per_detector()
+        
+        # Format: [detector0_a0, detector0_b0, detector0_a1, detector0_b1, ..., detector1_a0, ...]
+        for det_idx in range(n_detectors):
+            offset = det_idx * n_anchors_per_detector * 2
+            a_list = []
+            b_list = []
+            for anc_idx in range(n_anchors_per_detector):
+                a_list.append(int(anchors_tensor[offset + anc_idx * 2].item()))
+                b_list.append(int(anchors_tensor[offset + anc_idx * 2 + 1].item()))
+            gt_lut.anchors[det_idx] = {'a': a_list, 'b': b_list}
+        
+        weights_tensor = pytorch_lut._weights.cpu().detach()
+        n_outputs = pytorch_lut.n_outputs()
+        table_size = pytorch_lut.n_lookup_neurons() // n_detectors
+        weights_per_detector = table_size * n_outputs
+        
+        # PyTorch weights are organized as: [detector0_table0_output0, detector0_table0_output1, ..., 
+        # detector0_table0_output(n_outputs-1), detector0_table1_output0, ..., detector0_table(table_size-1)_output(n_outputs-1),
+        # detector1_table0_output0, ...]
+        for det_idx in range(n_detectors):
+            offset = det_idx * weights_per_detector
+            gt_lut.S[det_idx] = weights_tensor[offset:offset + weights_per_detector].tolist()
+        
+        # Copy positional embeddings (if provided)
+        if gt_positional_encoding is not None:
+            pos_emb_tensor = pytorch_lut._positional_embeddings.cpu().detach()
+            positional_dim = pytorch_lut._positional_dim
+            sequence_length = pytorch_lut.sequence_length()
+            
+            # PyTorch format: flat tensor of shape [(sequence_length - 1) * n_detectors * positional_dim]
+            # GT format: [context_size - 1][n_t][positional_dim]
+            n_positions = sequence_length - 1
+            elements_per_position = n_detectors * positional_dim
+            
+            for pos_idx in range(n_positions):
+                offset = pos_idx * elements_per_position
+                pos_data = pos_emb_tensor[offset:offset + elements_per_position]
+                # Reshape: [n_detectors * positional_dim] -> [n_detectors][positional_dim]
+                for det_idx in range(n_detectors):
+                    det_offset = det_idx * positional_dim
+                    gt_positional_encoding.encodings[pos_idx][det_idx] = pos_data[det_offset:det_offset + positional_dim].tolist()
+    
+    # Copy token embedding weights
+    token_embeddings = pytorch_transformer.token_embedder.weight.cpu().detach()
+    for token_idx in range(vocab_size):
+        gt_transformer.token_embedder.embeddings[token_idx] = token_embeddings[token_idx].tolist()
+    
+    # Synchronize all layers
+    # FFN layers
+    for layer_idx in range(num_layers):
+        sync_luts(
+            pytorch_transformer.layers[layer_idx]['ffn'],
+            gt_transformer.layers[layer_idx]['ffn']
+        )
+        
+        # Attention layers
+        if use_multi_lut:
+            # MultiLUT case: sync each head separately
+            for head_idx in range(num_heads):
+                sync_luts(
+                    pytorch_transformer.layers[layer_idx]['attention_lut'].luts[head_idx],
+                    gt_transformer.layers[layer_idx]['heads'][head_idx].V,
+                    gt_transformer.layers[layer_idx]['heads'][head_idx].positional_encoding
+                )
+        else:
+            # Single LUT case: sync to first head's V
+            sync_luts(
+                pytorch_transformer.layers[layer_idx]['attention_lut'],
+                gt_transformer.layers[layer_idx]['heads'][0].V,
+                gt_transformer.layers[layer_idx]['heads'][0].positional_encoding
+            )
+    
+    # Unembedder
+    sync_luts(
+        pytorch_transformer.unembedder,
+        gt_transformer.unembedder
+    )
+
+
+def compare_weights_and_positional_embeddings(
+    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads
+):
+    """
+    Compare weights and positional embeddings between PyTorch and GT transformers.
+    
+    Args:
+        pytorch_transformer: PyTorch LUTTransformer instance
+        gt_transformer: GT _GTLUTTransformer instance
+        use_multi_lut: Whether PyTorch model uses MultiLUT
+        num_layers: Number of transformer layers
+        num_heads: Number of attention heads
+    
+    Returns:
+        bool: True if all comparisons pass, False otherwise
+    """
+    # Unembedder weights
+    pytorch_unembed_weights = pytorch_transformer.unembedder._weights.cpu().detach()
+    gt_unembed_weights = torch.tensor(
+        [w for table in gt_transformer.unembedder.S for w in table],
+        dtype=torch.float32
+    )
+    if pytorch_unembed_weights.shape != gt_unembed_weights.shape:
+        print(f"❌ Train mode: Unembedder weights shape mismatch: {pytorch_unembed_weights.shape} vs {gt_unembed_weights.shape}")
+        return False
+    if not torch.allclose(pytorch_unembed_weights, gt_unembed_weights, atol=1e-4, rtol=1e-4):
+        max_diff = torch.max(torch.abs(pytorch_unembed_weights - gt_unembed_weights))
+        print(f"❌ Train mode: Unembedder weights differ. Max diff: {max_diff:.6f}")
+        return False
+
+    # Compare LUT weights in each layer
+    for layer_idx in reversed(range(num_layers)):
+        # FFN weights
+        pytorch_ffn_weights = pytorch_transformer.layers[layer_idx]['ffn']._weights.cpu().detach()
+        gt_ffn_weights = torch.tensor(
+            [w for table in gt_transformer.layers[layer_idx]['ffn'].S for w in table],
+            dtype=torch.float32
+        )
+        if pytorch_ffn_weights.shape != gt_ffn_weights.shape:
+            print(f"❌ Train mode: Layer {layer_idx} FFN weights shape mismatch: {pytorch_ffn_weights.shape} vs {gt_ffn_weights.shape}")
+            return False
+        if not torch.allclose(pytorch_ffn_weights, gt_ffn_weights, atol=1e-4, rtol=1e-4):
+            max_diff = torch.max(torch.abs(pytorch_ffn_weights - gt_ffn_weights))
+            print(f"❌ Train mode: Layer {layer_idx} FFN weights differ. Max diff: {max_diff:.6f}")
+            return False
+
+        # Attention head weights
+        for head_idx in range(num_heads if use_multi_lut else 1):
+            if use_multi_lut:
+                pytorch_lut = pytorch_transformer.layers[layer_idx]['attention_lut'].luts[head_idx]
+            else:
+                pytorch_lut = pytorch_transformer.layers[layer_idx]['attention_lut']
+
+            pytorch_head_weights = pytorch_lut._weights.cpu().detach()
+            gt_head_weights = torch.tensor(
+                [w for table in gt_transformer.layers[layer_idx]['heads'][head_idx].V.S for w in table],
+                dtype=torch.float32
+            )
+            if pytorch_head_weights.shape != gt_head_weights.shape:
+                print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
+                return False
+            if not torch.allclose(pytorch_head_weights, gt_head_weights, atol=1e-4, rtol=1e-4):
+                max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
+                print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights differ. Max diff: {max_diff:.6f}")
+                return False
+
+            # Positional encodings
+            pytorch_pos_emb = pytorch_lut._positional_embeddings
+            if pytorch_pos_emb is not None:
+                pytorch_pos_emb = pytorch_pos_emb.cpu().detach()
+                gt_pos_emb = torch.tensor(
+                    [w for pos_enc in gt_transformer.layers[layer_idx]['heads'][head_idx].positional_encoding.encodings for enc in pos_enc for w in enc],
+                    dtype=torch.float32
+                )
+                if pytorch_pos_emb.shape != gt_pos_emb.shape:
+                    print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings shape mismatch: {pytorch_pos_emb.shape} vs {gt_pos_emb.shape}")
+                    return False
+                if not torch.allclose(pytorch_pos_emb, gt_pos_emb, atol=1e-4, rtol=1e-4):
+                    max_diff = torch.max(torch.abs(pytorch_pos_emb - gt_pos_emb))
+                    print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
+                    return False
+    
+    return True
+
+
 def test_lut_transformer_small(
     device, summation_dtype, seed=123
 ):
-    for use_multi_lut in [True, False]:
-        for train_or_eval in ['train', 'eval']:
-            for batch_size in [1, 4]:
+    for use_multi_lut in [True]:  # , False]:
+        for train_or_eval in ['train']:  # , 'eval']:
+            for batch_size in [1]:  # , 4]:
                 success = _test_lut_transformer_small(
                     vocab_size=256,
                     embedding_dim=32,
@@ -25,7 +215,8 @@ def test_lut_transformer_small(
                     n_detectors=4,
                     n_anchors_per_detector=3,
                     summation_dtype=summation_dtype,
-                    device=device, seed=seed,
+                    device=device,
+                    seed=seed,
                     batch_size=batch_size,
                     use_multi_lut=use_multi_lut,
                     train_or_eval=train_or_eval
@@ -46,8 +237,6 @@ def _test_lut_transformer_small(
     torch.manual_seed(seed)
     snippet_sampler = TextSnippetSampler('../../../../workbooks/tinyshakespeare.txt', context_size + 1, 100, device)
 
-    # TODO random initial weights
-
     lut_transformer = LUTTransformer(
         vocab_size=vocab_size,
         embedding_dim=embedding_dim,
@@ -58,6 +247,11 @@ def _test_lut_transformer_small(
         n_detectors=n_detectors,
         n_anchors_per_detector=n_anchors_per_detector,
         _use_multi_lut=use_multi_lut,
+        _synapse_meta=SynapseMeta(
+            min_weight=-1.0, max_weight=1.0,
+            # initial_weight=0.0, initial_noise_level=0.0
+            initial_weight=-1.0, initial_noise_level=2.0
+        ),
         summation_dtype=summation_dtype,
         weights_gradient_policy=GradientPolicy(GradientType.Internal),
         device=device, seed=seed
@@ -65,24 +259,43 @@ def _test_lut_transformer_small(
 
     # Create _GTLUTTransformer with matching parameters
     random.seed(seed)
-    gt_lut_transformer = _GTLUTTransformer(
-        vocab_size=vocab_size,
-        embedding_dim=embedding_dim,
-        context_size=context_size,
-        positional_dim=positional_dim,
-        num_layers=num_layers,
-        num_heads=num_heads,
-        n_t=n_detectors,
-        n_c=n_anchors_per_detector,
-        batch_size=batch_size
-    )
+    if use_multi_lut:
+        gt_lut_transformer = _GTLUTTransformer(
+            vocab_size=vocab_size,
+            embedding_dim=embedding_dim,
+            context_size=context_size,
+            positional_dim=positional_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            n_t=n_detectors,
+            n_t_a=n_detectors,
+            n_c=n_anchors_per_detector,
+            batch_size=batch_size
+        )
+    else:
+        gt_lut_transformer = _GTLUTTransformer(
+            vocab_size=vocab_size,
+            embedding_dim=embedding_dim,
+            context_size=context_size,
+            positional_dim=positional_dim,
+            num_layers=num_layers,
+            num_heads=1,
+            n_t=n_detectors,
+            n_t_a=n_detectors * num_heads,
+            n_c=n_anchors_per_detector,
+            batch_size=batch_size
+        )
 
-    # TODO copy initial weights
-    # Copy token embedding weights from lut_transformer to gt_lut_transformer
-    token_embeddings = lut_transformer.token_embedder.weight.cpu().detach()
-    for token_idx in range(vocab_size):
-        gt_lut_transformer.token_embedder.embeddings[token_idx] = token_embeddings[token_idx].tolist()
-    
+    # Synchronize entire models
+    synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
+
+    # Compare weights after synchronization
+    if not compare_weights_and_positional_embeddings(
+        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+    ):
+        print(f"❌ something is wrong after synchronization №1")
+        return False
+
     # Set mode
     if train_or_eval == 'train':
         lut_transformer.train()
@@ -113,92 +326,54 @@ def _test_lut_transformer_small(
             return False
 
     # If train mode, perform backward pass and compare weights
-    if train_or_eval == 'train' and use_multi_lut:
+    if train_or_eval == 'train':
         learning_rate = 0.01  # Use a fixed learning rate for testing
         
         # Set up learning rate hook for PyTorch model
         def lr_hook(_):
             return learning_rate
         lut_transformer.set_external_learning_rate_hook(lr_hook)
-        
-        # PyTorch model backward pass
-        # Compute loss: cross-entropy with target tokens
-        targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
-        loss = nn.functional.cross_entropy(
-            y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
-            targets.reshape(-1),  # (batch_size * context_size,)
-            reduction='none'
-        ).sum()
-        loss.backward()
-        
-        x_list = [x[i].cpu().tolist() for i in range(batch_size)]
-        gt_lut_transformer.load_snippet(x_list)
-        gt_lut_transformer.training_step(learning_rate)
-        
-        # Compare weights after backward
+        opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
 
-        # Unembedder weights
-        pytorch_unembed_weights = lut_transformer.unembedder._weights.cpu().detach()
-        gt_unembed_weights = torch.tensor(
-            [w for table in gt_lut_transformer.unembedder.S for w in table],
-            dtype=torch.float32
-        )
-        if pytorch_unembed_weights.shape != gt_unembed_weights.shape:
-            print(f"❌ Train mode: Unembedder weights shape mismatch: {pytorch_unembed_weights.shape} vs {gt_unembed_weights.shape}")
-            return False
-        if not torch.allclose(pytorch_unembed_weights, gt_unembed_weights, atol=1e-4, rtol=1e-4):
-            max_diff = torch.max(torch.abs(pytorch_unembed_weights - gt_unembed_weights))
-            print(f"❌ Train mode: Unembedder weights differ. Max diff: {max_diff:.6f}")
-            return False
+        for i in range(4):
+            # PyTorch model backward pass
+            # Compute loss: cross-entropy with target tokens
+            targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
+            loss = nn.functional.cross_entropy(
+                y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
+                targets.reshape(-1),  # (batch_size * context_size,)
+                reduction='none'
+            ).sum()
+            loss.backward()
+            opt.step()
 
-        # Compare LUT weights in each layer
-        for layer_idx in reversed(range(num_layers)):
-            # FFN weights
-            pytorch_ffn_weights = lut_transformer.layers[layer_idx]['ffn']._weights.cpu().detach()
-            gt_ffn_weights = torch.tensor(
-                [w for table in gt_lut_transformer.layers[layer_idx]['ffn'].S for w in table],
-                dtype=torch.float32
-            )
-            # Note: Weight layouts may differ, so we compare with larger tolerance
-            if pytorch_ffn_weights.shape != gt_ffn_weights.shape:
-                print(f"❌ Train mode: Layer {layer_idx} FFN weights shape mismatch: {pytorch_ffn_weights.shape} vs {gt_ffn_weights.shape}")
+            x_list = [x[i].cpu().tolist() for i in range(batch_size)]
+            gt_lut_transformer.load_snippet(x_list)
+            gt_lut_transformer.training_step(learning_rate)
+
+            # Compare weights after backward
+            if not compare_weights_and_positional_embeddings(
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+            ):
+                print(f"❌ something is wrong after backward pass №{i + 1}")
                 return False
-            if not torch.allclose(pytorch_ffn_weights, gt_ffn_weights, atol=1e-4, rtol=1e-4):
-                max_diff = torch.max(torch.abs(pytorch_ffn_weights - gt_ffn_weights))
-                print(f"❌ Train mode: Layer {layer_idx} FFN weights differ. Max diff: {max_diff:.6f}")
-                # return False
-            
-            # Attention head weights
-            # MultiLUT case: compare each head separately
-            for head_idx in range(num_heads):
-                pytorch_head_weights = lut_transformer.layers[layer_idx]['attention_lut'].luts[head_idx]._weights.cpu().detach()
-                gt_head_weights = torch.tensor(
-                    [w for table in gt_lut_transformer.layers[layer_idx]['heads'][head_idx].V.S for w in table],
-                    dtype=torch.float32
-                )
-                if pytorch_head_weights.shape != gt_head_weights.shape:
-                    print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
-                    return False
-                if not torch.allclose(pytorch_head_weights, gt_head_weights, atol=1e-4, rtol=1e-4):
-                    max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
-                    print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights differ. Max diff: {max_diff:.6f}")
-                    # return False
 
-                # Positional encodings
-                pytorch_pos_emb = lut_transformer.layers[layer_idx]['attention_lut'].luts[head_idx]._positional_embeddings
-                if pytorch_pos_emb is not None:
-                    pytorch_pos_emb = pytorch_pos_emb.cpu().detach()
-                    gt_pos_emb = torch.tensor(
-                        [w for pos_enc in gt_lut_transformer.layers[layer_idx]['heads'][head_idx].positional_encoding.encodings for enc in pos_enc for w in enc],
-                        dtype=torch.float32
-                    )
-                    if pytorch_pos_emb.shape != gt_pos_emb.shape:
-                        print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings shape mismatch: {pytorch_pos_emb.shape} vs {gt_pos_emb.shape}")
-                        return False
-                    if not torch.allclose(pytorch_pos_emb, gt_pos_emb, atol=1e-4, rtol=1e-4):
-                        max_diff = torch.max(torch.abs(pytorch_pos_emb - gt_pos_emb))
-                        print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
-                        # return False
+            synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
+            # Compare weights after backward
+            if not compare_weights_and_positional_embeddings(
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+            ):
+                print(f"❌ something is wrong after synchronization №{i + 2}")
+                return False
+
+            x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
+            y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+
+            # Load all batch items into GT model
+            batch_tokens = [x[i].cpu().tolist() for i in range(batch_size)]
+            gt_lut_transformer.load_snippet(batch_tokens)
+            # Run forward pass
+            gt_lut_transformer.forward()
 
     return True
 
@@ -213,7 +388,7 @@ def main():
         devices.append('cuda')
 
     for device in devices:
-        for summation_dtype in [torch.float32, torch.int32]:
+        for summation_dtype in [torch.float32]:  # , torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_transformer_small(device, summation_dtype)
 

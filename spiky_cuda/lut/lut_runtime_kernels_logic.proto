@@ -1162,6 +1162,11 @@ fill_after_detectors_firing_stat_logic(
         w_firing_stat += j * n_lookup_neurons; // shift inside timestamp
         w_firing_stat += detector_index * n_lookup_neurons_per_detector; // detector shift
 
+        printf(
+            "detector index %d, j %d, i %d, Q %d, K %d, PE %d, concat_index %d\n",
+            detector_index, j, i, Q, K, PE, concatenated_index
+        );
+
         #ifdef ATOMIC
         atomicAdd(
             w_firing_stat + concatenated_index,
@@ -1224,7 +1229,7 @@ fill_after_detectors_firing_stat_logic(
 }
 
 densify_firing_stat_logic(
-    EXTERNAL_REAL_DT* r_firing_stat,
+    EXTERNAL_REAL_DT* rw_firing_stat,
     NeuronShiftFiring* rw_firings_buffer,
     uint64_t* rw_firings_counter_ptr,
     NeuronShiftFiring* rw_firings_buffer_alternative,
@@ -1242,11 +1247,11 @@ densify_firing_stat_logic(
         batch_index = blockIdx.y / sequence_length;
         timestep = blockIdx.y % sequence_length;
 
-        r_firing_stat += batch_index * n_lookup_neurons * sequence_length;
-        r_firing_stat += timestep * n_lookup_neurons;
-        firing_stat_value = r_firing_stat[neuron_index];
+        rw_firing_stat += batch_index * n_lookup_neurons * sequence_length;
+        rw_firing_stat += timestep * n_lookup_neurons;
+        firing_stat_value = rw_firing_stat[neuron_index];
         if(firing_stat_value != 0.0) {
-            r_firing_stat[neuron_index] = 0.0;
+            rw_firing_stat[neuron_index] = 0.0;
         }
     }
 

@@ -213,19 +213,19 @@ class LUTLayerBasic(nn.Module):
         return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
 
     def __init__(
-            self, n_inputs, n_outputs,
-            n_detectors, n_anchors_per_detector,
-            is_fully_connected,
-            sequence_length,
-            synapse_metas: List[SynapseMeta],
-            positional_dim=None,
-            weights_gradient_policy: GradientPolicy = None,
-            shared_context: LUTSharedContext = None,
-            summation_dtype=torch.float32,
-            _int_rescaler=0.001,
-            _initial_synapse_capacity=None,
-            _forward_group_size: int = 64,
-            _backward_group_size: int = 8,
+        self, n_inputs, n_outputs,
+        n_detectors, n_anchors_per_detector,
+        is_fully_connected,
+        sequence_length,
+        synapse_metas: List[SynapseMeta],
+        positional_dim=None,
+        weights_gradient_policy: GradientPolicy = None,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _initial_synapse_capacity=None,
+        _forward_group_size: int = 64,
+        _backward_group_size: int = 8
     ):
         super().__init__()
 
@@ -270,6 +270,7 @@ class LUTLayerBasic(nn.Module):
         else:
             assert positional_dim is None, "positional_dim must be None when sequence_length == 1"
             self._positional_embeddings = None
+        self._positional_dim = positional_dim
 
         if self._is_fully_connected:
             assert len(synapse_metas) == 1, "fully connected mode is not compatible with multiple synapse metas"
@@ -459,6 +460,8 @@ class LUTLayerBasic(nn.Module):
                 w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
                 self._lut_dm.compile(_only_trainable_backwards, w, shuffle_synapses_random_seed)
         self._weights = nn.Parameter(w)
+        if self._weights_gradient_policy.type == GradientType.Internal:
+            self._weights.requires_grad_(False)
         self._lut_dm.to_device(-1)
         if self.device.type == 'cuda':
             self._lut_dm.to_device(self.device.index)
@@ -782,7 +785,7 @@ class LUTLayerBasic(nn.Module):
             sparse_firing_alternatives = sparse_firing_buffer_alternative
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
-        return result + (
+        result = result + (
             lookup_indices.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
@@ -791,14 +794,14 @@ class LUTLayerBasic(nn.Module):
             positional_min_delta_indices.view(sequence_length - 1, self._n_detectors),
             sparse_firings, sparse_firing_alternatives
         )
+        print(f'_multi_id {self._multi_id}, attention output: {output}')
+        return result
 
     def backward_step(
         self, x, grad_output,
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         x_grad=None
     ):
-        print(grad_output)
-
         assert self._sequence_length == 1
         assert x.device == self.device
         source_x_shape = x.shape

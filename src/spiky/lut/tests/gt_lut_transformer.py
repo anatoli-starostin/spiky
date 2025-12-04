@@ -14,7 +14,7 @@ VOCAB_SIZE = 256
 EMBEDDING_DIM = 32
 POSITIONAL_DIM = 4
 NUM_LAYERS = 2
-NUM_HEADS = 1
+NUM_HEADS = 2
 N_T = 8  # Number of detectors
 N_C = 6  # Number of anchor pairs per detector
 TESTING_LENGTH = 512
@@ -134,8 +134,9 @@ class LUT:
                     cache['r_min'][i] = r
                     cache['u_min'][i] = u
         
+        # print(f'cached lut info {cache} for position {key}')
         self.caches[key] = cache
-    
+
     def forward(self, y: List[float], key: int = 0) -> None:
         """
         Forward pass: accumulate outputs from LUT tables.
@@ -249,7 +250,9 @@ class PositionalEncoding:
                 if abs(val) < abs(cache['u_min'][i]):
                     cache['r_min'][i] = r
                     cache['u_min'][i] = val
-        
+
+        # print(f'cached positional info {cache} for position {pos}')
+
         self.caches[pos] = cache
     
     def update(self, pos: int, gradients: List[List[float]], learning_rate: float) -> None:
@@ -324,15 +327,17 @@ class AttentionHead:
                 self.positional_encoding.cache_index(pos)
         
         # Process all pairs (pos, pos1) where pos1 < pos
-        for pos in range(1, self.context_size):
-            for pos1 in range(pos):
-                cacheQ = self.V.caches[pos]
-                cacheK = self.V.caches[pos1]
-                cachePE = self.positional_encoding.caches[pos - pos1 - 1]
-                
-                # Concatenated forward pass
-                for i in range(self.n_t):
+        for i in range(self.n_t):
+            for pos1 in range(self.context_size):
+                for pos in range(pos1 + 1, self.context_size):
+                    cacheQ = self.V.caches[pos]
+                    cacheK = self.V.caches[pos1]
+                    cachePE = self.positional_encoding.caches[pos - pos1 - 1]
+
+                    # Concatenated forward pass
+
                     j = self._concatenate(cacheQ['j'][i], cacheK['j'][i], cachePE['j'][i])
+                    print(f'detector index {i}, pos (j) {pos}, pos1 (i) {pos1}, Q {cacheQ["j"][i]}, K {cacheK["j"][i]}, PE {cachePE["j"][i]}, concat_index {j // self.V.y_dim}')
                     for k in range(self.V.y_dim):
                         y[pos][k] += self.V.S[i][j + k]
     
@@ -474,7 +479,7 @@ class _GTLUTTransformer:
     def __init__(self, vocab_size: int = VOCAB_SIZE, embedding_dim: int = EMBEDDING_DIM,
                  context_size: int = CONTEXT_SIZE, positional_dim: int = POSITIONAL_DIM,
                  num_layers: int = NUM_LAYERS, num_heads: int = NUM_HEADS,
-                 n_t: int = N_T, n_c: int = N_C, batch_size: int = 1):
+                 n_t: int = N_T, n_t_a: int = N_T, n_c: int = N_C, batch_size: int = 1):
         """
         Initialize model.
         
@@ -496,6 +501,7 @@ class _GTLUTTransformer:
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.n_t = n_t
+        self.n_t_a = n_t_a
         self.n_c = n_c
         self.batch_size = batch_size
         
@@ -511,7 +517,7 @@ class _GTLUTTransformer:
             }
             for h in range(num_heads):
                 head = AttentionHead(
-                    n_t=n_t, n_c=n_c, embedding_dim=embedding_dim,
+                    n_t=n_t_a, n_c=n_c, embedding_dim=embedding_dim,
                     positional_dim=positional_dim, context_size=context_size
                 )
                 layer['heads'].append(head)
@@ -551,6 +557,7 @@ class _GTLUTTransformer:
                 for h in range(self.num_heads):
                     y = [[0.0] * self.embedding_dim for _ in range(self.context_size)]
                     self.layers[l]['heads'][h].forward(x, y)
+                    print(f'layer {l}, head {h}, gt attention output: {y}')
                     # Resnet connection: add to z
                     for pos in range(self.context_size):
                         for k in range(self.embedding_dim):
@@ -901,6 +908,10 @@ def main():
         '--batch-size', type=int, default=4,
         help='Batch size for training'
     )
+    parser.add_argument(
+        '--single-head', dest='multi_head', action='store_false', default=True,
+        help='Use single-head mode (default: multi-head mode)'
+    )
     
     args = parser.parse_args()
     
@@ -921,25 +932,41 @@ def main():
         return
     
     # Create model
-    model = _GTLUTTransformer(
-        vocab_size=VOCAB_SIZE,
-        embedding_dim=EMBEDDING_DIM,
-        context_size=CONTEXT_SIZE,
-        positional_dim=POSITIONAL_DIM,
-        num_layers=NUM_LAYERS,
-        num_heads=NUM_HEADS,
-        n_t=N_T,
-        n_c=N_C,
-        batch_size=args.batch_size
-    )
+    if args.multi_head:
+        model = _GTLUTTransformer(
+            vocab_size=VOCAB_SIZE,
+            embedding_dim=EMBEDDING_DIM,
+            context_size=CONTEXT_SIZE,
+            positional_dim=POSITIONAL_DIM,
+            num_layers=NUM_LAYERS,
+            num_heads=NUM_HEADS,
+            n_t=N_T,
+            n_t_a=N_T,
+            n_c=N_C,
+            batch_size=args.batch_size
+        )
+    else:
+        model = _GTLUTTransformer(
+            vocab_size=VOCAB_SIZE,
+            embedding_dim=EMBEDDING_DIM,
+            context_size=CONTEXT_SIZE,
+            positional_dim=POSITIONAL_DIM,
+            num_layers=NUM_LAYERS,
+            num_heads=1,
+            n_t=N_T,
+            n_t_a=N_T * NUM_HEADS,
+            n_c=N_C,
+            batch_size=args.batch_size
+        )
     
     print(f"Model created:")
     print(f"  Context size: {CONTEXT_SIZE}")
     print(f"  Vocab size: {VOCAB_SIZE}")
     print(f"  Embedding dim: {EMBEDDING_DIM}")
     print(f"  Num layers: {NUM_LAYERS}")
-    print(f"  Num heads: {NUM_HEADS}")
+    print(f"  Num heads: {NUM_HEADS if args.multi_head else 1}")
     print(f"  N_T: {N_T}")
+    print(f"  N_T_A: {N_T if args.multi_head else N_T * NUM_HEADS}")
     print(f"  N_C: {N_C}")
     print(f"  Batch size: {args.batch_size}")
     

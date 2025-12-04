@@ -587,7 +587,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
 
     uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
     n_items *= n_items * this->n_detectors;
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
+    numBlocks = dim3(n_items, batch_size);
     tpb_opt = TILE * TILE;
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, fill_after_detectors_firing_stat, tpb_opt, cuda_streams[0],
@@ -847,7 +847,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
 
     uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
     n_items *= n_items * this->n_detectors;
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
+    dim3 numBlocks(n_items, batch_size);
     uint32_t tpb_opt = TILE * TILE;
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
