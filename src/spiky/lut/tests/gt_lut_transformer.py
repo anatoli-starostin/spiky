@@ -134,7 +134,7 @@ class LUT:
                     cache['r_min'][i] = r
                     cache['u_min'][i] = u
         
-        # print(f'cached lut info {cache} for position {key}')
+        print(f'cached lut info {cache} for position {key}')
         self.caches[key] = cache
 
     def forward(self, y: List[float], key: int = 0) -> None:
@@ -161,6 +161,8 @@ class LUT:
             learning_rate: Learning rate for weight updates
             key: Key to identify which cache to use
         """
+        print(f'GT y_gradient {y_gradient}')
+
         cache = self.caches[key]
         for i in range(self.n_t):
             j = cache['j'][i] * self.y_dim
@@ -624,14 +626,9 @@ class _GTLUTTransformer:
             for h in range(self.num_heads):
                 self.layers[l]["heads"][h].apply_gradients(learning_rate)
     
-    def training_step(self, learning_rate: float) -> None:
-        """
-        Single training step: forward + backward.
-        
-        Args:
-            learning_rate: Learning rate
-        """
-        self.forward()
+    def training_step(self, learning_rate: float, no_forward=False) -> None:
+        if not no_forward:
+            self.forward()
         
         # Compute softmax and convert output to gradients for all batches
         for b in range(self.batch_size):

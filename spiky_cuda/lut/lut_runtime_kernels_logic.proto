@@ -1806,6 +1806,7 @@ propagate_through_detectors_for_sequence_logic(
                 du *= -0.5 * du;
             }
             du *= static_cast<double>(w_before_detectors_gradients[concatenated_index]) - static_cast<double>(w_before_detectors_gradients[concatenated_index_alt]);
+            w_positional_embeddings_gradients += pe_offset * positional_dim;
 
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);

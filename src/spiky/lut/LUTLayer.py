@@ -447,6 +447,10 @@ class LUTLayerBasic(nn.Module):
             raise ValueError("external_learning_rate_hook cannot be None when using GradientPolicy.Internal")
         self._external_lr_hook = hook_fn
 
+    def _reset_shared_context(self, new_context):
+        self._shared_context = new_context
+        self._own_shared_context = False
+
     def compile_lut(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
         n_weights = self._lut_dm.get_weights_dimension()
         with torch.no_grad():
@@ -794,6 +798,7 @@ class LUTLayerBasic(nn.Module):
             positional_min_delta_indices.view(sequence_length - 1, self._n_detectors),
             sparse_firings, sparse_firing_alternatives
         )
+        print(result)
         print(f'_multi_id {self._multi_id}, attention output: {output}')
         return result
 
@@ -802,6 +807,8 @@ class LUTLayerBasic(nn.Module):
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         x_grad=None
     ):
+        print(f'grad_output {grad_output}')
+
         assert self._sequence_length == 1
         assert x.device == self.device
         source_x_shape = x.shape
@@ -1411,6 +1418,10 @@ class MultiLUT(nn.Module):
     def set_external_learning_rate_hook(self, hook_fn):
         for lut in self.luts:
             lut.set_external_learning_rate_hook(hook_fn)
+
+    def _reset_shared_context(self, new_context):
+        for lut in self.luts:
+            lut._reset_shared_context(new_context)
 
     def forward(self, x):
         """

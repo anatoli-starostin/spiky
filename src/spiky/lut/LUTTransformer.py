@@ -152,3 +152,9 @@ class LUTTransformer(nn.Module):
         # Unembedder: (batch_size, context_size, embedding_dim) -> (batch_size, context_size, vocab_size)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits
+
+    def _reset_shared_context(self, new_context):
+        for layer in self.layers:
+            layer['attention_lut']._reset_shared_context(new_context)
+            layer['ffn']._reset_shared_context(new_context)
+        self.unembedder._reset_shared_context(new_context)
