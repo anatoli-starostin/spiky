@@ -3,12 +3,40 @@ import random
 import torch
 import torch.nn as nn
 from torch.optim import SGD
+from tqdm import tqdm
 
 from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta, LUTSharedContext
 
 from spiky.lut.LUTTransformer import LUTTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 from gt_lut_transformer import _GTLUTTransformer
+
+
+def test_lut_transformer_small(
+    device, summation_dtype, seed=123
+):
+    for use_multi_lut in [False]:  # , True]:
+        for train_or_eval in ['train']:  # , 'eval']:
+            for batch_size in [4]:
+                success = _test_lut_transformer_small(
+                    vocab_size=256,
+                    embedding_dim=32,
+                    context_size=8,
+                    positional_dim=4,
+                    num_layers=2,
+                    num_heads=2,
+                    n_detectors=4,
+                    n_anchors_per_detector=3,
+                    summation_dtype=summation_dtype,
+                    device=device,
+                    seed=seed,
+                    batch_size=batch_size,
+                    use_multi_lut=use_multi_lut,
+                    train_or_eval=train_or_eval
+                )
+                if not success:
+                    return False
+    return True
 
 
 def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads, vocab_size):
@@ -117,7 +145,6 @@ def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_l
 def compare_weights_and_positional_embeddings(
     pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads
 ):
-    result = True
     """
     Compare weights and positional embeddings between PyTorch and GT transformers.
     
@@ -131,6 +158,22 @@ def compare_weights_and_positional_embeddings(
     Returns:
         bool: True if all comparisons pass, False otherwise
     """
+    result = True
+    
+    # Token embeddings
+    pytorch_token_embeddings = pytorch_transformer.token_embedder.weight.cpu().detach()
+    gt_token_embeddings = torch.tensor(
+        gt_transformer.token_embedder.embeddings,
+        dtype=torch.float32
+    )
+    if pytorch_token_embeddings.shape != gt_token_embeddings.shape:
+        print(f"❌ Train mode: Token embeddings shape mismatch: {pytorch_token_embeddings.shape} vs {gt_token_embeddings.shape}")
+        result = False
+    elif not torch.allclose(pytorch_token_embeddings, gt_token_embeddings, atol=1e-4, rtol=1e-4):
+        max_diff = torch.max(torch.abs(pytorch_token_embeddings - gt_token_embeddings))
+        print(f"❌ Train mode: Token embeddings differ. Max diff: {max_diff:.6f}")
+        result = False
+    
     # Unembedder weights
     pytorch_unembed_weights = pytorch_transformer.unembedder._weights.cpu().detach()
     gt_unembed_weights = torch.tensor(
@@ -214,33 +257,6 @@ def compare_outputs(gt_lut_transformer, y, train_or_eval, device):
             max_diff = torch.max(torch.abs(y[i] - gt_output))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
             return False
-    return True
-
-
-def test_lut_transformer_small(
-    device, summation_dtype, seed=123
-):
-    for use_multi_lut in [False]:  # , True]:
-        for train_or_eval in ['train']:  # , 'eval']:
-            for batch_size in [1]:  # , 4]:
-                success = _test_lut_transformer_small(
-                    vocab_size=256,
-                    embedding_dim=32,
-                    context_size=8,
-                    positional_dim=4,
-                    num_layers=2,
-                    num_heads=2,
-                    n_detectors=4,
-                    n_anchors_per_detector=3,
-                    summation_dtype=summation_dtype,
-                    device=device,
-                    seed=seed,
-                    batch_size=batch_size,
-                    use_multi_lut=use_multi_lut,
-                    train_or_eval=train_or_eval
-                )
-                if not success:
-                    return False
     return True
 
 
@@ -344,7 +360,7 @@ def _test_lut_transformer_small(
         lut_transformer.set_external_learning_rate_hook(lr_hook)
         opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
 
-        for i in range(4):
+        for i in tqdm(range(64)):
             # PyTorch model backward pass
             # Compute loss: cross-entropy with target tokens
             targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
@@ -353,6 +369,7 @@ def _test_lut_transformer_small(
                 targets.reshape(-1),  # (batch_size * context_size,)
                 reduction='none'
             ).sum()
+            opt.zero_grad()
             loss.backward()
             opt.step()
 

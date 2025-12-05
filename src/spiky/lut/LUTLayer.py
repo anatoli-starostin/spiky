@@ -789,7 +789,7 @@ class LUTLayerBasic(nn.Module):
             sparse_firing_alternatives = sparse_firing_buffer_alternative
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
-        result = result + (
+        return result + (
             lookup_indices.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
             min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
@@ -798,17 +798,12 @@ class LUTLayerBasic(nn.Module):
             positional_min_delta_indices.view(sequence_length - 1, self._n_detectors),
             sparse_firings, sparse_firing_alternatives
         )
-        print(result)
-        print(f'_multi_id {self._multi_id}, attention output: {output}')
-        return result
 
     def backward_step(
         self, x, grad_output,
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
         x_grad=None
     ):
-        print(f'grad_output {grad_output}')
-
         assert self._sequence_length == 1
         assert x.device == self.device
         source_x_shape = x.shape

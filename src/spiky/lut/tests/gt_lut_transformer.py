@@ -103,17 +103,18 @@ class LUT:
         for i in range(n_t):
             self.S.append([0.0] * (table_size * y_dim))
         
-        # Internal cache storage: dict[key] -> cache dict
+        # Internal cache storage: dict[(batch_idx, key)] -> cache dict
         self.caches = {}
         # Accumulator for weight gradients: dict[(table_index, weight_idx)] -> grad
         self.v_weight_grads = {}
     
-    def cache_index(self, x: List[float], key: int = 0) -> None:
+    def cache_index(self, x: List[float], batch_idx: int = 0, key: int = 0) -> None:
         """
         Cache lookup indices for input x and store internally.
         
         Args:
             x: Input vector
+            batch_idx: Batch index
             key: Key to identify this cache (e.g., position index)
         """
         cache = {
@@ -134,24 +135,25 @@ class LUT:
                     cache['r_min'][i] = r
                     cache['u_min'][i] = u
         
-        print(f'cached lut info {cache} for position {key}')
-        self.caches[key] = cache
+        # print(f'cached lut info {cache} for batch {batch_idx}, position {key}')
+        self.caches[(batch_idx, key)] = cache
 
-    def forward(self, y: List[float], key: int = 0) -> None:
+    def forward(self, y: List[float], batch_idx: int = 0, key: int = 0) -> None:
         """
         Forward pass: accumulate outputs from LUT tables.
         
         Args:
             y: Output vector (will be modified in-place)
+            batch_idx: Batch index
             key: Key to identify which cache to use
         """
-        cache = self.caches[key]
+        cache = self.caches[(batch_idx, key)]
         for i in range(self.n_t):
             j = cache['j'][i]
             for k in range(self.y_dim):
                 y[k] += self.S[i][j * self.y_dim + k]
     
-    def backward(self, x_gradient: List[float], y_gradient: List[float], learning_rate: float, key: int = 0) -> None:
+    def backward(self, x_gradient: List[float], y_gradient: List[float], learning_rate: float, batch_idx: int = 0, key: int = 0) -> None:
         """
         Backward pass: compute gradients and update weights.
         
@@ -159,11 +161,12 @@ class LUT:
             x_gradient: Input gradient (will be modified in-place)
             y_gradient: Output gradient
             learning_rate: Learning rate for weight updates
+            batch_idx: Batch index
             key: Key to identify which cache to use
         """
-        print(f'GT y_gradient {y_gradient}')
+        # print(f'GT y_gradient {y_gradient}')
 
-        cache = self.caches[key]
+        cache = self.caches[(batch_idx, key)]
         for i in range(self.n_t):
             j = cache['j'][i] * self.y_dim
             jbar = (cache['j'][i] ^ (1 << cache['r_min'][i])) * self.y_dim
@@ -223,15 +226,16 @@ class PositionalEncoding:
                 pos_encoding.append(encoding)
             self.encodings.append(pos_encoding)
         
-        # Internal cache storage: dict[pos] -> cache dict
+        # Internal cache storage: dict[(batch_idx, pos)] -> cache dict
         self.caches = {}
     
-    def cache_index(self, pos: int) -> None:
+    def cache_index(self, pos: int, batch_idx: int = 0) -> None:
         """
         Cache lookup indices for positional encoding at position pos and store internally.
         
         Args:
             pos: Position index (0 to context_size - 2)
+            batch_idx: Batch index
         """
         cache = {
             'j': [0] * self.n_t,
@@ -253,9 +257,9 @@ class PositionalEncoding:
                     cache['r_min'][i] = r
                     cache['u_min'][i] = val
 
-        # print(f'cached positional info {cache} for position {pos}')
+        # print(f'cached positional info {cache} for batch {batch_idx}, position {pos}')
 
-        self.caches[pos] = cache
+        self.caches[(batch_idx, pos)] = cache
     
     def update(self, pos: int, gradients: List[List[float]], learning_rate: float) -> None:
         """
@@ -314,36 +318,38 @@ class AttentionHead:
         """Concatenate Q, K, PE indices into single lookup index."""
         return ((q << (self.n_c + self.positional_dim)) | (k << self.positional_dim) | pe) * self.V.y_dim
     
-    def forward(self, x: List[List[float]], y: List[List[float]]) -> None:
+    def forward(self, x: List[List[float]], y: List[List[float]], batch_idx: int = 0) -> None:
         """
         Forward pass for attention.
         
         Args:
             x: Input embeddings [context_size][embedding_dim]
             y: Output embeddings [context_size][embedding_dim] (will be modified in-place)
+            batch_idx: Batch index
         """
         # Cache indices for all positions
         for pos in range(self.context_size):
-            self.V.cache_index(x[pos], key=pos)
+            self.V.cache_index(x[pos], batch_idx=batch_idx, key=pos)
             if pos < self.context_size - 1:
-                self.positional_encoding.cache_index(pos)
+                self.positional_encoding.cache_index(pos, batch_idx=batch_idx)
         
         # Process all pairs (pos, pos1) where pos1 < pos
         for i in range(self.n_t):
             for pos1 in range(self.context_size):
                 for pos in range(pos1 + 1, self.context_size):
-                    cacheQ = self.V.caches[pos]
-                    cacheK = self.V.caches[pos1]
-                    cachePE = self.positional_encoding.caches[pos - pos1 - 1]
+                    cacheQ = self.V.caches[(batch_idx, pos)]
+                    cacheK = self.V.caches[(batch_idx, pos1)]
+                    cachePE = self.positional_encoding.caches[(batch_idx, pos - pos1 - 1)]
 
                     # Concatenated forward pass
 
                     j = self._concatenate(cacheQ['j'][i], cacheK['j'][i], cachePE['j'][i])
-                    print(f'detector index {i}, pos (j) {pos}, pos1 (i) {pos1}, Q {cacheQ["j"][i]}, K {cacheK["j"][i]}, PE {cachePE["j"][i]}, concat_index {j // self.V.y_dim}')
+                    # print(f'detector index {i}, pos (j) {pos}, pos1 (i) {pos1}, Q {cacheQ["j"][i]}, K {cacheK["j"][i]}, PE {cachePE["j"][i]}, concat_index {j // self.V.y_dim}')
                     for k in range(self.V.y_dim):
+                        # print(f'y[{pos}][{k}] += self.V.S[{i}][{j + k}] = {self.V.S[i][j + k]}')
                         y[pos][k] += self.V.S[i][j + k]
     
-    def backward(self, x_grad: List[List[float]], y_grad: List[List[float]], learning_rate: float) -> None:
+    def backward(self, x_grad: List[List[float]], y_grad: List[List[float]], learning_rate: float, batch_idx: int = 0) -> None:
         """
         Backward pass for attention.
         
@@ -351,13 +357,14 @@ class AttentionHead:
             x_grad: Input gradients [context_size][embedding_dim] (will be modified in-place)
             y_grad: Output gradients [context_size][embedding_dim]
             learning_rate: Learning rate
+            batch_idx: Batch index
         """
         # Process all pairs (pos, pos1) where pos1 < pos
         for pos in range(1, self.context_size):
             for pos1 in range(pos):
-                cacheQ = self.V.caches[pos]
-                cacheK = self.V.caches[pos1]
-                cachePE = self.positional_encoding.caches[pos - pos1 - 1]
+                cacheQ = self.V.caches[(batch_idx, pos)]
+                cacheK = self.V.caches[(batch_idx, pos1)]
+                cachePE = self.positional_encoding.caches[(batch_idx, pos - pos1 - 1)]
                 
                 for i in range(self.n_t):
                     j_idx = self._concatenate(cacheQ['j'][i], cacheK['j'][i], cachePE['j'][i])
@@ -470,7 +477,7 @@ class TokenEmbedder:
         Returns:
             Embedding vector
         """
-        return self.embeddings[token]
+        return self.embeddings[token].copy()
 
 
 class _GTLUTTransformer:
@@ -551,30 +558,33 @@ class _GTLUTTransformer:
             bs = self.batch_size
 
         for b in range(bs):
+            # print(f'Processing batch {b}:')
             # Process through transformer layers
             for l in range(self.num_layers):
                 # Attention: resnet connection (add to z)
                 x = [row.copy() for row in self.z[b]]  # Copy for attention input
 
                 for h in range(self.num_heads):
+                    # print(self.z[b])
                     y = [[0.0] * self.embedding_dim for _ in range(self.context_size)]
-                    self.layers[l]['heads'][h].forward(x, y)
-                    print(f'layer {l}, head {h}, gt attention output: {y}')
+                    self.layers[l]['heads'][h].forward(x, y, batch_idx=b)
+                    # print(f'layer {l}, head {h}, gt attention output: {y}')
                     # Resnet connection: add to z
+                    # print(y)
                     for pos in range(self.context_size):
                         for k in range(self.embedding_dim):
                             self.z[b][pos][k] += y[pos][k]
 
                 # FFN: resnet connection (add to z)
                 for pos in range(self.context_size):
-                    self.layers[l]['ffn'].cache_index(self.z[b][pos], key=pos)
-                    self.layers[l]['ffn'].forward(self.z[b][pos], key=pos)
+                    self.layers[l]['ffn'].cache_index(self.z[b][pos], batch_idx=b, key=pos)
+                    self.layers[l]['ffn'].forward(self.z[b][pos], batch_idx=b, key=pos)
 
             # Unembedder
             for pos in range(self.context_size):
                 self.output[b][pos] = [0.0] * self.vocab_size
-                self.unembedder.cache_index(self.z[b][pos], key=pos)
-                self.unembedder.forward(self.output[b][pos], key=pos)
+                self.unembedder.cache_index(self.z[b][pos], batch_idx=b, key=pos)
+                self.unembedder.forward(self.output[b][pos], batch_idx=b, key=pos)
         
     def backward(self, learning_rate: float) -> None:
         """
@@ -594,7 +604,7 @@ class _GTLUTTransformer:
             # Unembedder backward
             for pos in range(self.context_size):
                 self.unembedder.backward(
-                    x_grad[b][pos], self.output[b][pos], learning_rate, key=pos
+                    x_grad[b][pos], self.output[b][pos], learning_rate, batch_idx=b, key=pos
                 )
 
             # Process layers in reverse order
@@ -603,14 +613,14 @@ class _GTLUTTransformer:
                 y_grad = [row.copy() for row in x_grad[b]]  # Copy for resnet connection
                 for pos in range(self.context_size):
                     self.layers[l]["ffn"].backward(
-                        x_grad[b][pos], y_grad[pos], learning_rate, key=pos
+                        x_grad[b][pos], y_grad[pos], learning_rate, batch_idx=b, key=pos
                     )
 
                 # Attention backward
                 y_grad = [row.copy() for row in x_grad[b]]  # Copy for resnet connection
                 for h in range(self.num_heads):
                     self.layers[l]["heads"][h].backward(
-                        x_grad[b], y_grad, learning_rate
+                        x_grad[b], y_grad, learning_rate, batch_idx=b
                     )
         
         # Apply accumulated gradients after processing all batches

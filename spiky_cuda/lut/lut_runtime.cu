@@ -651,7 +651,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         device
     );
 
-    n_items = n_pairs / 2;
+    n_items = (n_pairs / 2) * batch_size;
     uint32_t n_output_blocks = (n_outputs + this->backward_group_size - 1) / this->backward_group_size;
     // TODO deal with backward/forward size during sparse connectivity implementation
     // TODO at the moment I use backward_size because it works better in the non sequential case

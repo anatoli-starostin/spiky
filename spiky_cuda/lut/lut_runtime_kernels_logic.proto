@@ -1159,12 +1159,12 @@ fill_after_detectors_firing_stat_logic(
         );
 
         w_firing_stat += batch_index * n_lookup_neurons * sequence_length; // shift inside batch
-        w_firing_stat += j * n_lookup_neurons; // shift inside timestamp
+        w_firing_stat += j * n_lookup_neurons; // shift to the output timestamp
         w_firing_stat += detector_index * n_lookup_neurons_per_detector; // detector shift
 
-        printf(
-            "detector index %d, j %d, i %d, Q %d, K %d, PE %d, concat_index %d\n",
-            detector_index, j, i, Q, K, PE, concatenated_index
+        __SUPER_DETAILED_TRACE__(
+            "[fill_after_detectors_firing_stat] batch_index %d, detector index %d, j %d, i %d, Q %d, K %d, PE %d, concat_index %d\n",
+            batch_index, detector_index, j, i, Q, K, PE, concatenated_index
         );
 
         #ifdef ATOMIC
@@ -1400,7 +1400,12 @@ fill_outputs_by_sparse_firings_logic(
     }
 
     NeuronShiftFiring firing = r_firings_buffer[i];
-    
+
+    __SUPER_DETAILED_TRACE__(
+        "[fill_outputs_by_sparse_firings] firing.batch_index %d, firing.shift %d, firing.neuron_id %d, blockIdx.y %d, n_outputs_per_block %d, sequence_length %d, n_outputs %d\n",
+        firing.batch_index, firing.shift, firing.neuron_id, blockIdx.y, n_outputs_per_block, sequence_length, n_outputs
+    );
+
     uint32_t output_offset = (firing.batch_index * sequence_length + firing.shift) * n_outputs;
     w_output += output_offset + blockIdx.y * n_outputs_per_block;
     r_weights += static_cast<uint64_t>(firing.neuron_id) * n_outputs + blockIdx.y * n_outputs_per_block;
