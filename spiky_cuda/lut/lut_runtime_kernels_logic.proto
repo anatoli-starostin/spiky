@@ -890,6 +890,9 @@ propagate_through_detectors_logic(
             du *= -0.5 * du;
         }
         du *= static_cast<double>(rw_before_detectors_gradients[lookup_index]) - static_cast<double>(rw_before_detectors_gradients[alt_lookup_neuron_idx]);
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
+        #endif
 
         if(fabs(du) > EPS) {
             AnchorsPair ap = r_detectors[i * n_anchors_per_detector + min_anchor_delta_index];
@@ -1758,6 +1761,9 @@ propagate_through_detectors_for_sequence_logic(
             du *= -0.5 * du;
         }
         du *= static_cast<double>(w_before_detectors_gradients[concatenated_index]) - static_cast<double>(w_before_detectors_gradients[concatenated_index_alt]);
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
+        #endif
 
         if(fabs(du) > EPS) {
             AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
@@ -1811,6 +1817,9 @@ propagate_through_detectors_for_sequence_logic(
                 du *= -0.5 * du;
             }
             du *= static_cast<double>(w_before_detectors_gradients[concatenated_index]) - static_cast<double>(w_before_detectors_gradients[concatenated_index_alt]);
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
+            #endif
             w_positional_embeddings_gradients += pe_offset * positional_dim;
 
             #ifdef INTEGERS_INSTEAD_OF_FLOATS

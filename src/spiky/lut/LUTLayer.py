@@ -253,6 +253,10 @@ class LUTLayerBasic(nn.Module):
         self._shared_context = shared_context
         if weights_gradient_policy is None:
             weights_gradient_policy = GradientPolicy(GradientType.Dense, normalized=False)
+
+        if summation_dtype == torch.int32 and weights_gradient_policy.type == GradientType.Internal:
+            raise ValueError("summation dtype torch.int32 can't be combined with GradientType.Internal")
+
         self._weights_gradient_policy = weights_gradient_policy
         self._external_lr_hook = None
 
@@ -1390,6 +1394,8 @@ class MultiLUT(nn.Module):
                 raise ValueError(f"lut {i} has different shared context than lut 0")
             if lut._weights_gradient_policy != self._gradient_policy:
                 raise ValueError(f"lut {i} has gradient policy {lut._weights_gradient_policy}, expected {self._gradient_policy}")
+            if lut.get_summation_type() == torch.int32:
+                raise ValueError(f"lut {i} has summation type int32 which is not allowed for MultiLUT")
 
         # Assign multi_id to each lut
         for multi_id, lut in enumerate(luts):

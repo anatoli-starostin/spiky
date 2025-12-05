@@ -15,8 +15,12 @@ from gt_lut_transformer import _GTLUTTransformer
 def test_lut_transformer_small(
     device, summation_dtype, seed=123
 ):
-    for g_type in [GradientType.Sparse, GradientType.Dense, GradientType.Internal]:
-        for use_multi_lut in [True, False]:
+    for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
+        if g_type == GradientType.Internal and summation_dtype == torch.int32:
+            continue
+        for use_multi_lut in [False, True]:
+            if use_multi_lut and summation_dtype == torch.int32:
+                continue
             for train_or_eval in ['train', 'eval']:
                 for batch_size in [1, 4]:
                     success = _test_lut_transformer_small(
@@ -436,7 +440,7 @@ def main():
         devices.append('cuda')
 
     for device in devices:
-        for summation_dtype in [torch.float32]:  # , torch.int32]:
+        for summation_dtype in [torch.float32, torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_transformer_small(device, summation_dtype)
 

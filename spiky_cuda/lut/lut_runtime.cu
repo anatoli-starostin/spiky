@@ -268,7 +268,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
     }
 
-    if(external_lr >= 0.0 && (w_weights_gradients != nullptr)) {
+    if((external_lr >= 0.0) && (w_weights_gradients != nullptr)) {
         throw py::value_error("in internal weight gradients mode w_weights_gradients should be nullptr");
     }
 
