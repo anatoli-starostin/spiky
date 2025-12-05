@@ -168,6 +168,11 @@ class LUTSharedContext(object):
 
     def to_device(self, device):
         dev = device if isinstance(device, torch.device) else torch.device(device)
+
+        if dev.type == 'cuda' and dev.index is None:
+            device_index = torch.cuda.current_device()
+            dev = torch.device(f'cuda:{device_index}')
+
         self._device = dev
         for i, buf in enumerate(self._sparse_firing_buffers):
             if buf is not None:
