@@ -131,7 +131,6 @@ def _test_lut_forward_simple(
 
     print(f'Creating TestNet, input_shape {input_shape}...')
     net = TestNet(device)
-    print(net.layer1.export_weights())
     lut_shape = net.layer1.lut_shape()
 
     assert lut_shape == (
@@ -217,60 +216,6 @@ def _test_lut_forward_simple(
     if torch.any(synapses_export['target_ids'][order1] != layer_1_gt_target_ids):
         print(f"❌ wrong target connections at layer 1")
         return False
-
-    # print(f'Creating GtNet, input_shape {input_shape}...')
-    #
-    # n_inputs = input_shape[0] * input_shape[1]
-    # n_outputs = layer_1_output_shape[0] * layer_1_output_shape[1]
-    #
-    # class GtNet(nn.Module):
-    #     def __init__(
-    #         self,
-    #         input_shape,
-    #         output_kernel_shape,
-    #         layer_1_output_shape,
-    #         source_ids_1,
-    #         targets_ids_1,
-    #         weights_1,
-    #         device
-    #     ):
-    #         super().__init__()
-    #         self.m1 = connections_to_matrix(
-    #             input_shape[0] * input_shape[1],
-    #             layer_1_output_shape[0] * layer_1_output_shape[1],
-    #             source_ids_1, targets_ids_1, weights_1, device
-    #         )
-    #
-    #     def forward(self, x):
-    #         return (x @ self.m1).reshape(layer_1_output_shape)
-    #
-    # gt_net = GtNet(
-    #     input_shape,
-    #     output_kernel_shape,
-    #     layer_1_output_shape,
-    #     layer_1_gt_source_ids,
-    #     layer_1_gt_target_ids,
-    #     backward_export_1['weights'][order1],
-    #     device
-    # )
-    #
-    # print(f'Calculating ground truth...')
-    #
-    # gt_out = []
-    # for i in range(batch_size):
-    #     for t in range(sequence_length):
-    #         x_flat = x[i, t].reshape(input_shape[0] * input_shape[1])
-    #         gt_out.append(gt_net(x_flat))
-    # gt_out = torch.stack(gt_out, dim=0).reshape(batch_size, sequence_length, *layer_1_output_shape)
-    #
-    # print(f'Calculating result...')
-    #
-    #
-    # if (gt_out - y).abs().max() > 0.001:
-    #     print(f"❌ results differ from ground truth")
-    #     print(f"Max difference: {(gt_out - y).abs().max()}")
-    #     print(f"Ground truth shape: {gt_out.shape}, Output shape: {y.shape}")
-    #     return False
 
     x = torch.rand([batch_size, 1, input_shape[0], input_shape[1]], device=device)
     y = net(x)

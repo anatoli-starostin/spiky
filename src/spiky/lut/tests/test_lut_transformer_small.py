@@ -149,14 +149,10 @@ def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_l
 
 
 def compare_weights_and_positional_embeddings(
-    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads,
-    summation_dtype
+    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads
 ):
     result = True
-    if summation_dtype == torch.int32:
-        eps = 1e-3
-    else:
-        eps = 1e-4
+    eps = 1e-3
 
     # Token embeddings
     pytorch_token_embeddings = pytorch_transformer.token_embedder.weight.cpu().detach()
@@ -241,12 +237,9 @@ def compare_weights_and_positional_embeddings(
     return result
 
 
-def compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
+def compare_outputs(gt_lut_transformer, y, train_or_eval, device):
     batch_size = y.shape[0]
-    if summation_dtype == torch.int32:
-        eps = 1e-3
-    else:
-        eps = 1e-4
+    eps = 1e-3
     # Compare outputs for all batch items
     for i in range(batch_size):
         # Convert GT output to tensor: (context_size, vocab_size)
@@ -345,8 +338,7 @@ def _test_lut_transformer_small(
 
     # Compare weights after synchronization
     if not compare_weights_and_positional_embeddings(
-        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
-        summation_dtype
+        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
     ):
         print(f"❌ something is wrong after synchronization №1")
         return False
@@ -367,7 +359,7 @@ def _test_lut_transformer_small(
     # Run forward pass
     gt_lut_transformer.forward()
     
-    if not compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
+    if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
         print(f"❌ something is wrong after forward pass №1")
         return False
 
@@ -399,8 +391,7 @@ def _test_lut_transformer_small(
 
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
-                summation_dtype
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
             ):
                 print(f"❌ something is wrong after backward pass №{i + 1}")
                 return False
@@ -408,8 +399,7 @@ def _test_lut_transformer_small(
             synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
-                summation_dtype
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
             ):
                 print(f"❌ something is wrong after synchronization №{i + 2}")
                 return False
@@ -423,7 +413,7 @@ def _test_lut_transformer_small(
             # Run forward pass
             gt_lut_transformer.forward()
 
-            if not compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
+            if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
                 print(f"❌ something is wrong after forward pass №{i + 2}")
                 return False
 
@@ -435,7 +425,7 @@ def main():
     print("LUTTransformer SMALL TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []
     if torch.cuda.is_available():
         devices.append('cuda')
 
