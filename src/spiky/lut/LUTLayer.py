@@ -992,7 +992,8 @@ class LUTLayerBasic(nn.Module):
             stream_handles
         )
 
-        target_w_grad = self._process_gradients(target_w_grad, batch_size)
+        if not external_output:
+            target_w_grad = self._process_gradients(target_w_grad, batch_size)
 
         if self._weights_gradient_policy.normalized:
             positional_grad /= positional_grad.abs().max().clip(1e-16)
