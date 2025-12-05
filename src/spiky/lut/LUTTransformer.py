@@ -42,6 +42,7 @@ class LUTTransformer(nn.Module):
             self.lut_shared_context = lut_shared_context
 
         self.token_embedder = nn.Embedding(vocab_size, embedding_dim, device=device)
+        self.token_embedder.weight.requires_grad_(False)
         if seed is not None:
             gen = torch.Generator(device=device)
             gen.manual_seed(seed)
@@ -49,7 +50,6 @@ class LUTTransformer(nn.Module):
             self.token_embedder.weight.copy_(w)
         else:
             nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0)
-        self.token_embedder.weight.requires_grad_(False)
 
         # Transformer layers
         self.layers = nn.ModuleList()
