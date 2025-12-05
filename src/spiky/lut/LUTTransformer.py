@@ -33,12 +33,6 @@ class LUTTransformer(nn.Module):
         if device is None:
             device = torch.device('cpu')
 
-        if seed is not None:
-            gen = torch.Generator(device=device)
-            gen.manual_seed(seed)
-        else:
-            gen = None
-
         self.device = device
 
         if lut_shared_context is None:
@@ -46,8 +40,15 @@ class LUTTransformer(nn.Module):
             self.lut_shared_context.to_device(device)
         else:
             self.lut_shared_context = lut_shared_context
+
         self.token_embedder = nn.Embedding(vocab_size, embedding_dim, device=device)
-        nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0, generator=gen)
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(seed)
+            w = 2 * torch.rand(self.token_embedder.weight.shape, generator=gen, device=device) - 1.0
+            self.token_embedder.weight.copy_(w)
+        else:
+            nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0)
         self.token_embedder.weight.requires_grad_(False)
 
         # Transformer layers
