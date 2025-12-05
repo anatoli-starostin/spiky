@@ -520,7 +520,7 @@ class LUTLayerBasic(nn.Module):
         if self._sequence_length == 1:
             return self._n_detectors * 2 * n_weights_per_neuron * batch_size
         else:
-            return self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) / 2) * batch_size
+            return self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) // 2) * batch_size
 
     def _process_gradients(self, target_w_grad, batch_size):
         """

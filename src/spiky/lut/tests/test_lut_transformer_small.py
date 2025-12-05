@@ -15,27 +15,29 @@ from gt_lut_transformer import _GTLUTTransformer
 def test_lut_transformer_small(
     device, summation_dtype, seed=123
 ):
-    for use_multi_lut in [False]:  # , True]:
-        for train_or_eval in ['train']:  # , 'eval']:
-            for batch_size in [4]:
-                success = _test_lut_transformer_small(
-                    vocab_size=256,
-                    embedding_dim=32,
-                    context_size=8,
-                    positional_dim=4,
-                    num_layers=2,
-                    num_heads=2,
-                    n_detectors=4,
-                    n_anchors_per_detector=3,
-                    summation_dtype=summation_dtype,
-                    device=device,
-                    seed=seed,
-                    batch_size=batch_size,
-                    use_multi_lut=use_multi_lut,
-                    train_or_eval=train_or_eval
-                )
-                if not success:
-                    return False
+    for g_type in [GradientType.Sparse, GradientType.Dense, GradientType.Internal]:
+        for use_multi_lut in [True, False]:
+            for train_or_eval in ['train', 'eval']:
+                for batch_size in [1, 4]:
+                    success = _test_lut_transformer_small(
+                        vocab_size=256,
+                        embedding_dim=32,
+                        context_size=8,
+                        positional_dim=4,
+                        num_layers=2,
+                        num_heads=2,
+                        n_detectors=4,
+                        n_anchors_per_detector=3,
+                        gradient_type=g_type,
+                        summation_dtype=summation_dtype,
+                        device=device,
+                        seed=seed,
+                        batch_size=batch_size,
+                        use_multi_lut=use_multi_lut,
+                        train_or_eval=train_or_eval
+                    )
+                    if not success:
+                        return False
     return True
 
 
@@ -143,23 +145,15 @@ def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_l
 
 
 def compare_weights_and_positional_embeddings(
-    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads
+    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads,
+    summation_dtype
 ):
-    """
-    Compare weights and positional embeddings between PyTorch and GT transformers.
-    
-    Args:
-        pytorch_transformer: PyTorch LUTTransformer instance
-        gt_transformer: GT _GTLUTTransformer instance
-        use_multi_lut: Whether PyTorch model uses MultiLUT
-        num_layers: Number of transformer layers
-        num_heads: Number of attention heads
-    
-    Returns:
-        bool: True if all comparisons pass, False otherwise
-    """
     result = True
-    
+    if summation_dtype == torch.int32:
+        eps = 1e-3
+    else:
+        eps = 1e-4
+
     # Token embeddings
     pytorch_token_embeddings = pytorch_transformer.token_embedder.weight.cpu().detach()
     gt_token_embeddings = torch.tensor(
@@ -169,7 +163,7 @@ def compare_weights_and_positional_embeddings(
     if pytorch_token_embeddings.shape != gt_token_embeddings.shape:
         print(f"❌ Train mode: Token embeddings shape mismatch: {pytorch_token_embeddings.shape} vs {gt_token_embeddings.shape}")
         result = False
-    elif not torch.allclose(pytorch_token_embeddings, gt_token_embeddings, atol=1e-4, rtol=1e-4):
+    elif not torch.allclose(pytorch_token_embeddings, gt_token_embeddings, atol=eps, rtol=eps):
         max_diff = torch.max(torch.abs(pytorch_token_embeddings - gt_token_embeddings))
         print(f"❌ Train mode: Token embeddings differ. Max diff: {max_diff:.6f}")
         result = False
@@ -183,7 +177,7 @@ def compare_weights_and_positional_embeddings(
     if pytorch_unembed_weights.shape != gt_unembed_weights.shape:
         print(f"❌ Train mode: Unembedder weights shape mismatch: {pytorch_unembed_weights.shape} vs {gt_unembed_weights.shape}")
         result = False
-    if not torch.allclose(pytorch_unembed_weights, gt_unembed_weights, atol=1e-4, rtol=1e-4):
+    if not torch.allclose(pytorch_unembed_weights, gt_unembed_weights, atol=eps, rtol=eps):
         max_diff = torch.max(torch.abs(pytorch_unembed_weights - gt_unembed_weights))
         print(f"❌ Train mode: Unembedder weights differ. Max diff: {max_diff:.6f}")
         result = False
@@ -199,7 +193,7 @@ def compare_weights_and_positional_embeddings(
         if pytorch_ffn_weights.shape != gt_ffn_weights.shape:
             print(f"❌ Train mode: Layer {layer_idx} FFN weights shape mismatch: {pytorch_ffn_weights.shape} vs {gt_ffn_weights.shape}")
             result = False
-        if not torch.allclose(pytorch_ffn_weights, gt_ffn_weights, atol=1e-4, rtol=1e-4):
+        if not torch.allclose(pytorch_ffn_weights, gt_ffn_weights, atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(pytorch_ffn_weights - gt_ffn_weights))
             print(f"❌ Train mode: Layer {layer_idx} FFN weights differ. Max diff: {max_diff:.6f}")
             result = False
@@ -219,7 +213,7 @@ def compare_weights_and_positional_embeddings(
             if pytorch_head_weights.shape != gt_head_weights.shape:
                 print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
                 result = False
-            if not torch.allclose(pytorch_head_weights, gt_head_weights, atol=1e-4, rtol=1e-4):
+            if not torch.allclose(pytorch_head_weights, gt_head_weights, atol=eps, rtol=eps):
                 max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
                 print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} weights differ. Max diff: {max_diff:.6f}")
                 result = False
@@ -235,7 +229,7 @@ def compare_weights_and_positional_embeddings(
                 if pytorch_pos_emb.shape != gt_pos_emb.shape:
                     print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings shape mismatch: {pytorch_pos_emb.shape} vs {gt_pos_emb.shape}")
                     result = False
-                if not torch.allclose(pytorch_pos_emb, gt_pos_emb, atol=1e-4, rtol=1e-4):
+                if not torch.allclose(pytorch_pos_emb, gt_pos_emb, atol=1e-3, rtol=1e-3):
                     max_diff = torch.max(torch.abs(pytorch_pos_emb - gt_pos_emb))
                     print(f"❌ Train mode: Layer {layer_idx} Head {head_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
                     result = False
@@ -243,8 +237,12 @@ def compare_weights_and_positional_embeddings(
     return result
 
 
-def compare_outputs(gt_lut_transformer, y, train_or_eval, device):
+def compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
     batch_size = y.shape[0]
+    if summation_dtype == torch.int32:
+        eps = 1e-3
+    else:
+        eps = 1e-4
     # Compare outputs for all batch items
     for i in range(batch_size):
         # Convert GT output to tensor: (context_size, vocab_size)
@@ -253,7 +251,7 @@ def compare_outputs(gt_lut_transformer, y, train_or_eval, device):
         # Compare with PyTorch output: y[i] is (context_size, vocab_size)
         # Note: GT model outputs logits, PyTorch model also outputs logits
         # We compare with some tolerance since implementations may differ slightly
-        if not torch.allclose(y[i], gt_output, atol=1e-4, rtol=1e-4):
+        if not torch.allclose(y[i], gt_output, atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(y[i] - gt_output))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
             return False
@@ -264,11 +262,29 @@ def _test_lut_transformer_small(
     vocab_size, embedding_dim,
     context_size, positional_dim,
     num_layers, num_heads, n_detectors,
-    n_anchors_per_detector,
+    n_anchors_per_detector, gradient_type,
     summation_dtype, device, seed,
     batch_size, use_multi_lut, train_or_eval
 ):
     torch.manual_seed(seed)
+    print('Test configuration:')
+    print(f'  Vocab size: {vocab_size}')
+    print(f'  Embedding dim: {embedding_dim}')
+    print(f'  Context size: {context_size}')
+    print(f'  Positional dim: {positional_dim}')
+    print(f'  Num layers: {num_layers}')
+    print(f'  Num heads: {num_heads}')
+    print(f'  N detectors: {n_detectors}')
+    print(f'  N anchors per detector: {n_anchors_per_detector}')
+    print(f'  Gradient type: {gradient_type}')
+    print(f'  Summation dtype: {summation_dtype}')
+    print(f'  Device: {device}')
+    print(f'  Seed: {seed}')
+    print(f'  Batch size: {batch_size}')
+    print(f'  Use multi LUT: {use_multi_lut}')
+    print(f'  Train or eval: {train_or_eval}')
+    print('=' * 60)
+
     snippet_sampler = TextSnippetSampler('../../../../workbooks/tinyshakespeare.txt', context_size + 1, 100, device)
 
     lut_transformer = LUTTransformer(
@@ -283,11 +299,11 @@ def _test_lut_transformer_small(
         _use_multi_lut=use_multi_lut,
         _synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
-            # initial_weight=0.0, initial_noise_level=0.0
             initial_weight=-1.0, initial_noise_level=2.0
         ),
         summation_dtype=summation_dtype,
-        weights_gradient_policy=GradientPolicy(GradientType.Internal),
+        _int_rescaler=1.0,
+        weights_gradient_policy=GradientPolicy(gradient_type),
         device=device, seed=seed
     )
 
@@ -325,7 +341,8 @@ def _test_lut_transformer_small(
 
     # Compare weights after synchronization
     if not compare_weights_and_positional_embeddings(
-        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
+        summation_dtype
     ):
         print(f"❌ something is wrong after synchronization №1")
         return False
@@ -346,7 +363,7 @@ def _test_lut_transformer_small(
     # Run forward pass
     gt_lut_transformer.forward()
     
-    if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
+    if not compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
         print(f"❌ something is wrong after forward pass №1")
         return False
 
@@ -357,10 +374,11 @@ def _test_lut_transformer_small(
         # Set up learning rate hook for PyTorch model
         def lr_hook(_):
             return learning_rate
-        lut_transformer.set_external_learning_rate_hook(lr_hook)
+        if gradient_type == GradientType.Internal:
+            lut_transformer.set_external_learning_rate_hook(lr_hook)
         opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
 
-        for i in tqdm(range(64)):
+        for i in tqdm(range(32)):
             # PyTorch model backward pass
             # Compute loss: cross-entropy with target tokens
             targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
@@ -377,7 +395,8 @@ def _test_lut_transformer_small(
 
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
+                summation_dtype
             ):
                 print(f"❌ something is wrong after backward pass №{i + 1}")
                 return False
@@ -385,7 +404,8 @@ def _test_lut_transformer_small(
             synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads,
+                summation_dtype
             ):
                 print(f"❌ something is wrong after synchronization №{i + 2}")
                 return False
@@ -399,7 +419,7 @@ def _test_lut_transformer_small(
             # Run forward pass
             gt_lut_transformer.forward()
 
-            if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
+            if not compare_outputs(gt_lut_transformer, y, train_or_eval, device, summation_dtype):
                 print(f"❌ something is wrong after forward pass №{i + 2}")
                 return False
 

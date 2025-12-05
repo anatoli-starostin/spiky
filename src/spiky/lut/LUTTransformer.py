@@ -17,7 +17,7 @@ class LUTTransformer(nn.Module):
         positional_dim, num_layers, num_heads,
         n_detectors, n_anchors_per_detector, weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(learning_rate=1.0), _use_multi_lut=False,
-        lut_shared_context=None, seed=None, summation_dtype=torch.float32
+        lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001
     ):
         super().__init__()
 
@@ -70,6 +70,7 @@ class LUTTransformer(nn.Module):
                         weights_gradient_policy=weights_gradient_policy,
                         shared_context=self.lut_shared_context,
                         summation_dtype=summation_dtype,
+                        _int_rescaler=_int_rescaler,
                         device=device,
                         random_seed=None if seed is None else seed + layer_idx * num_heads + head_idx
                     )
@@ -87,6 +88,7 @@ class LUTTransformer(nn.Module):
                     weights_gradient_policy=weights_gradient_policy,
                     shared_context=self.lut_shared_context,
                     summation_dtype=summation_dtype,
+                    _int_rescaler=_int_rescaler,
                     device=device,
                     random_seed=None if seed is None else seed + layer_idx * num_heads
                 )
@@ -101,6 +103,7 @@ class LUTTransformer(nn.Module):
                 weights_gradient_policy=weights_gradient_policy,
                 shared_context=self.lut_shared_context,
                 summation_dtype=summation_dtype,
+                _int_rescaler=_int_rescaler,
                 device=device,
                 random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads
             )
@@ -118,6 +121,7 @@ class LUTTransformer(nn.Module):
             weights_gradient_policy=weights_gradient_policy,
             shared_context=self.lut_shared_context,
             summation_dtype=summation_dtype,
+            _int_rescaler=_int_rescaler,
             device=device,
             random_seed=seed
         )
