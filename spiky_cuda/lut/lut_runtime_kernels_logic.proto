@@ -1289,9 +1289,9 @@ densify_firing_stat_logic(
         extern __shared__ __align__(16) uint8_t __sm[];
         uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
 
-        sdata[tid] = (firing_stat_value >= 1.0) ? 1 : 0;
+        sdata[tid << 1] = (firing_stat_value >= 1.0) ? 1 : 0;
         if(rw_firings_buffer_alternative != nullptr) {
-            sdata[tid + 1] = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
+            sdata[(tid << 1) + 1] = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
         }
         __syncthreads();
 
