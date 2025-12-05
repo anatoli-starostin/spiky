@@ -1271,7 +1271,7 @@ densify_firing_stat_logic(
                     neuron_index,  // neuron_id
                     timestep  // shift (timestep)
                 };
-            } else if(rw_firings_buffer_alternative != nullptr) {
+            } else if(rw_firings_counter_ptr_alternative != nullptr) {
                 uint64_t firings_offset = *rw_firings_counter_ptr_alternative;
                 (*rw_firings_counter_ptr_alternative)++;
 
@@ -1290,7 +1290,7 @@ densify_firing_stat_logic(
         uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
 
         sdata[tid << 1] = (firing_stat_value >= 1.0) ? 1 : 0;
-        if(rw_firings_buffer_alternative != nullptr) {
+        if(rw_firings_counter_ptr_alternative != nullptr) {
             sdata[(tid << 1) + 1] = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
         }
         __syncthreads();
@@ -1307,7 +1307,7 @@ densify_firing_stat_logic(
                 if(t > 0) {
                     sdata[idx << 1] += t;
                 }
-                if(rw_firings_buffer_alternative != nullptr) {
+                if(rw_firings_counter_ptr_alternative != nullptr) {
                     t = sdata[((idx - offset) << 1) + 1];
                     if(t > 0) {
                         sdata[(idx << 1) + 1] += t;
@@ -1326,7 +1326,7 @@ densify_firing_stat_logic(
         }
 
         if(tid == 1) {
-            if(rw_firings_buffer_alternative != nullptr) {
+            if(rw_firings_counter_ptr_alternative != nullptr) {
                 sdata[((blockDim.x - 1) << 1) + 1] = atomicAdd(
                     reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr_alternative),
                     static_cast<unsigned long long>(sdata[((blockDim.x - 1) << 1) + 1])
@@ -1345,7 +1345,7 @@ densify_firing_stat_logic(
                 if(t > 0) {
                     sdata[idx << 1] += t;
                 }
-                if(rw_firings_buffer_alternative != nullptr) {
+                if(rw_firings_counter_ptr_alternative != nullptr) {
                     t = sdata[((idx - offset) << 1) + 1];
                     sdata[((idx - offset) << 1) + 1] = sdata[(idx << 1) + 1];
                     if(t > 0) {
@@ -1364,7 +1364,7 @@ densify_firing_stat_logic(
                 neuron_index,  // neuron_id
                 timestep  // shift (timestep)
             };
-        } else if((firing_stat_value != 0.0) && (rw_firings_buffer_alternative != nullptr)) {
+        } else if((firing_stat_value != 0.0) && (rw_firings_counter_ptr_alternative != nullptr)) {
             rw_firings_buffer_alternative[sdata[(tid << 1) + 1]] = NeuronShiftFiring{
                 batch_index,  // batch_index
                 1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
