@@ -229,8 +229,8 @@ class LUTLayerBasic(nn.Module):
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
-        _forward_group_size: int = 8,
-        _backward_group_size: int = 64
+        _forward_group_size: int = 32,
+        _backward_group_size: int = 32
     ):
         super().__init__()
 
@@ -1161,8 +1161,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             summation_dtype=torch.float32,
             _explicit_anchors=None,
             _int_rescaler=0.001,
-            _forward_group_size=8,
-            _backward_group_size=64,
+            _forward_group_size=32,
+            _backward_group_size=32,
             _max_groups_in_growth_buffer=2 ** 20,
             random_seed=1,
             device=None
@@ -1314,8 +1314,8 @@ class LUTLayer(Conv2DLUTLayer):
         summation_dtype=torch.float32,
         _explicit_anchors=None,
         _int_rescaler=0.001,
-        _forward_group_size=8,
-        _backward_group_size=64,
+        _forward_group_size=32,
+        _backward_group_size=32,
         _max_groups_in_growth_buffer=2 ** 20,
         random_seed=1,
         device=None

@@ -17,7 +17,8 @@ class LUTTransformer(nn.Module):
         positional_dim, num_layers, num_heads,
         n_detectors, n_anchors_per_detector, weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(learning_rate=1.0), _use_multi_lut=False,
-        lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001
+        lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
+        _forward_group_size=32, _backward_group_size=32
     ):
         super().__init__()
 
@@ -73,7 +74,9 @@ class LUTTransformer(nn.Module):
                         summation_dtype=summation_dtype,
                         _int_rescaler=_int_rescaler,
                         device=device,
-                        random_seed=None if seed is None else seed + layer_idx * num_heads + head_idx
+                        random_seed=None if seed is None else seed + layer_idx * num_heads + head_idx,
+                        _forward_group_size=_forward_group_size,
+                        _backward_group_size=_backward_group_size
                     )
                     heads.append(attention_lut)
                 layer['attention_lut'] = MultiLUT(heads)
@@ -91,7 +94,9 @@ class LUTTransformer(nn.Module):
                     summation_dtype=summation_dtype,
                     _int_rescaler=_int_rescaler,
                     device=device,
-                    random_seed=None if seed is None else seed + layer_idx * num_heads
+                    random_seed=None if seed is None else seed + layer_idx * num_heads,
+                    _forward_group_size=_forward_group_size,
+                    _backward_group_size=_backward_group_size
                 )
 
             ffn_lut = LUTLayer(
@@ -106,7 +111,9 @@ class LUTTransformer(nn.Module):
                 summation_dtype=summation_dtype,
                 _int_rescaler=_int_rescaler,
                 device=device,
-                random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads
+                random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads,
+                _forward_group_size=_forward_group_size,
+                _backward_group_size=_backward_group_size
             )
             layer['ffn'] = ffn_lut
 
@@ -124,7 +131,9 @@ class LUTTransformer(nn.Module):
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
             device=device,
-            random_seed=seed
+            random_seed=seed,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size
         )
 
     def set_external_learning_rate_hook(self, lr_hook):
