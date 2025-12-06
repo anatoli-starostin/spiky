@@ -157,33 +157,25 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             this->lut_data,
             device
         );
-        #ifdef NO_CUDA
-        local_firing_buffer.update_counter();
-        #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0  TODO avoid this (overlaunch)
-        #endif
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
-        uint64_t n_firings = local_firing_buffer.number_of_firings();
-        if(n_firings > 0) {
-            numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
-            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-                numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
-                r_weights, this->first_synapse_id,
-                local_firing_buffer.firings_ptr(),
-                local_firing_buffer.counter_ptr(),
-                n_firings,
-                w_output,
-                this->n_lookup_neurons,
-                this->n_outputs,
-                this->lut_data
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
-            );
-        }
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(max_firings), 1);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
+            r_weights, this->first_synapse_id,
+            local_firing_buffer.firings_ptr(),
+            local_firing_buffer.counter_ptr(),
+            max_firings,
+            w_output,
+            this->n_lookup_neurons,
+            this->n_outputs,
+            this->lut_data
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
         PROF_END(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
@@ -325,18 +317,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-        #ifdef NO_CUDA
-        local_firing_buffer.update_counter();
-        #else
-        local_firing_buffer.update_counter(cuda_streams); // launching on stream 0 TODO avoid this (overlaunch)
-        #endif
-        uint64_t n_firings = local_firing_buffer.number_of_firings();
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_firings), 1);
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(max_firings), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
             r_weights, this->first_synapse_id,
             local_firing_buffer.firings_ptr(),
-            n_firings,
+            local_firing_buffer.counter_ptr(),
+            max_firings,
             r_output_gradients,
             w_before_detectors_gradients,
             w_weights_gradients,
