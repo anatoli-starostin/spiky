@@ -161,7 +161,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(max_firings), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
+            numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(max_firings), cuda_streams[0],
             r_weights, this->first_synapse_id,
             local_firing_buffer.firings_ptr(),
             local_firing_buffer.counter_ptr(),
@@ -319,7 +319,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(max_firings), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
+            numBlocks, gather_gradients, LUT_RUNTIME_KERNELS_TPB_OPT(max_firings), cuda_streams[0],
             r_weights, this->first_synapse_id,
             local_firing_buffer.firings_ptr(),
             local_firing_buffer.counter_ptr(),
