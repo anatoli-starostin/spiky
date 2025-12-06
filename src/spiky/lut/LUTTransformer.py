@@ -172,3 +172,6 @@ class LUTTransformer(nn.Module):
             layer['attention_lut']._reset_shared_context(new_context)
             layer['ffn']._reset_shared_context(new_context)
         self.unembedder._reset_shared_context(new_context)
+
+# TODO Conv2DTransformer
+
