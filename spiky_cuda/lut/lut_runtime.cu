@@ -195,7 +195,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         );
         PROF_END(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP);
-        uint32_t n_detector_blocks = (this->n_detectors + this->forward_group_size - 1) / this->forward_group_size;
+        uint32_t n_detector_blocks = (this->n_detectors + this->backward_group_size - 1) / this->backward_group_size;
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         uint32_t n_items = n_outputs * n_detector_blocks;
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
@@ -208,7 +208,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             this->n_detectors,
             n_detector_blocks,
             n_lookup_neurons_per_detector,
-            this->forward_group_size
+            this->backward_group_size
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
@@ -351,7 +351,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP);
-        uint32_t n_output_blocks = (this->n_outputs + this->backward_group_size - 1) / this->backward_group_size;
+        uint32_t n_output_blocks = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
         uint32_t n_items = n_detectors * n_output_blocks;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
@@ -366,7 +366,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -387,7 +387,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -413,7 +413,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->n_outputs,
             this->n_detectors,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -642,9 +642,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     );
 
     n_items = (n_pairs / 2) * batch_size;
-    uint32_t n_output_blocks = (n_outputs + this->backward_group_size - 1) / this->backward_group_size;
-    // TODO deal with backward/forward size during sparse connectivity implementation
-    // TODO at the moment I use backward_size because it works better in the non sequential case
+    uint32_t n_output_blocks = (n_outputs + this->forward_group_size - 1) / this->forward_group_size;
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), n_output_blocks);
 
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
@@ -659,7 +657,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         n_output_blocks,
         this->sequence_length,
         reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(this->lookup_neuron_synapses_infos),
-        this->backward_group_size,
+        this->forward_group_size,
         this->lut_data
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
@@ -740,7 +738,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         // TODO
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
-        uint32_t n_output_blocks = (this->n_outputs + this->backward_group_size - 1) / this->backward_group_size;
+        uint32_t n_output_blocks = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firings), n_output_blocks);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firings);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
@@ -754,7 +752,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             this->n_detectors,
             this->sequence_length,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -775,7 +773,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             this->n_detectors,
             this->sequence_length,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -806,7 +804,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             this->n_detectors,
             this->sequence_length,
             n_output_blocks,
-            this->backward_group_size,
+            this->forward_group_size,
             n_lookup_neurons_per_detector,
             this->first_synapse_meta_lr
             #ifdef INTEGERS_INSTEAD_OF_FLOATS

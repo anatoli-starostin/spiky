@@ -162,7 +162,7 @@ public:
             0, 0,
             min_synaptic_weight, max_synaptic_weight,
             initial_noise_level, initial_weight,
-            this->forward_group_size, this->backward_group_size
+            this->forward_group_size, 0
         };
         BaseSynapseMeta *current_base_synapse_meta = BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data);
         uint32_t i=0;
