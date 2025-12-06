@@ -171,6 +171,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
                 numBlocks, fill_outputs_by_forward_groups, LUT_RUNTIME_KERNELS_TPB_OPT(n_firings), cuda_streams[0],
                 r_weights, this->first_synapse_id,
                 local_firing_buffer.firings_ptr(),
+                local_firing_buffer.counter_ptr(),
                 n_firings,
                 w_output,
                 this->n_lookup_neurons,

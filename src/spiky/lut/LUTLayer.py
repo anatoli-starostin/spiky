@@ -473,8 +473,6 @@ class LUTLayerBasic(nn.Module):
                 w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
                 self._lut_dm.compile(_only_trainable_backwards, w, shuffle_synapses_random_seed)
         self._weights = nn.Parameter(w)
-        if self._weights_gradient_policy.type == GradientType.Internal:
-            self._weights.requires_grad_(False)
         self._lut_dm.to_device(-1)
         if self.device.type == 'cuda':
             self._lut_dm.to_device(self.device.index)
