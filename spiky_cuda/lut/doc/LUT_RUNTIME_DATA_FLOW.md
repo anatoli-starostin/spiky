@@ -12,22 +12,37 @@ flowchart TD
     B -->|Sparse| C(fire_detectors)
     B -->|Fully Connected| D(check_detectors)
     
-    C --> E["Lookup Indices<br/>Min Deltas<br/>[batch_size × n_detectors]"]
-    C --> F["Firing Events<br/>[max_firings]"]
+    C --> E["Lookup Indices<br/>[batch_size × n_detectors]"]
+    C --> F["Min Anchor Deltas<br/>[batch_size × n_detectors]"]
+    C --> G["Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
+    C --> H["Firing Events<br/>[max_firings]"]
     
     D --> E
+    D --> F
+    D --> G
     
-    E --> G{Mode?}
-    F --> H(fill_outputs_by_forward_groups)
-    G -->|Fully Connected| I(fill_outputs_fully_connected)
+    E --> I{Mode?}
+    F --> I
+    G --> I
+    H --> J(fill_outputs_by_forward_groups)
+    I -->|Fully Connected| K(fill_outputs_fully_connected)
     
-    H --> J["Output<br/>[batch_size × n_outputs]"]
-    I --> J
+    J --> L["Output<br/>[batch_size × n_outputs]"]
+    K --> L
     
-    J --> K{Integer<br/>Mode?}
-    K -->|Yes| L(convert_integers_to_floats)
-    K -->|No| M[Final Output]
-    L --> M
+    L --> M{Integer<br/>Mode?}
+    M -->|Yes| N(convert_integers_to_floats)
+    M -->|No| O["Final Output<br/>[batch_size × n_outputs]"]
+    N --> O
+    
+    E --> P["Output: Lookup Indices"]
+    F --> Q["Output: Min Anchor Deltas"]
+    G --> R["Output: Min Anchor Delta Indices"]
+    
+    style P fill:#e8f5e9
+    style Q fill:#e8f5e9
+    style R fill:#e8f5e9
+    style O fill:#e8f5e9
 ```
 
 ### Non-Concatenated Mode - Backward Pass
