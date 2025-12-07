@@ -112,7 +112,7 @@ flowchart TD
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
     D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
     
-    E --> K("fill_after_detectors_firing_stat<br/>(processes&nbsp;B×S×(S-1)&nbsp;pairs&nbsp;with&nbsp;tiles)")
+    E --> K("fill_after_detectors_firing_stat<br/>(&nbsp;processes&nbsp;B&nbsp;×&nbsp;S&nbsp;×&nbsp;(&nbsp;S&nbsp;-&nbsp;1&nbsp;)&nbsp;pairs&nbsp;with&nbsp;tiles&nbsp;)")
     F --> K
     G --> K
     H --> K
