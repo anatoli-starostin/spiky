@@ -9,8 +9,8 @@ This document describes the data flow for both non-concatenated (single timestep
 ```mermaid
 flowchart TD
     A["Input<br/>[batch_size × n_inputs]"] --> B{Connectivity<br/>Mode?}
-    B -->|Sparse| C[fire_detectors<br/>Kernel]
-    B -->|Fully Connected| D[check_detectors<br/>Kernel]
+    B -->|Sparse| C(fire_detectors)
+    B -->|Fully Connected| D(check_detectors)
     
     C --> E["Lookup Indices<br/>Min Deltas<br/>[batch_size × n_detectors]"]
     C --> F["Firing Events<br/>[max_firings]"]
@@ -18,14 +18,14 @@ flowchart TD
     D --> E
     
     E --> G{Mode?}
-    F --> H[fill_outputs_by_forward_groups<br/>Kernel]
-    G -->|Fully Connected| I[fill_outputs_fully_connected<br/>Kernel]
+    F --> H(fill_outputs_by_forward_groups)
+    G -->|Fully Connected| I(fill_outputs_fully_connected)
     
     H --> J["Output<br/>[batch_size × n_outputs]"]
     I --> J
     
     J --> K{Integer<br/>Mode?}
-    K -->|Yes| L[convert_integers_to_floats<br/>Kernel]
+    K -->|Yes| L(convert_integers_to_floats)
     K -->|No| M[Final Output]
     L --> M
 ```
@@ -36,13 +36,13 @@ flowchart TD
 flowchart TD
     A["Output Gradients<br/>[batch_size × n_outputs]"] --> B{Connectivity<br/>Mode?}
     
-    B -->|Sparse| C[fire_detectors_by_lookup_indices<br/>Kernel]
+    B -->|Sparse| C(fire_detectors_by_lookup_indices)
     C --> D["Firing Events<br/>Main + Alternative<br/>[max_firings]"]
-    D --> E[gather_gradients<br/>Kernel]
+    D --> E(gather_gradients)
     
-    B -->|Fully Connected| F[gather_x_gradients_fully_connected<br/>Main - Stream 0]
-    B -->|Fully Connected| G[gather_x_gradients_fully_connected<br/>Alternative - Stream 1]
-    B -->|Fully Connected| H[gather_w_gradients_fully_connected<br/>Stream 2]
+    B -->|Fully Connected| F("gather_x_gradients_fully_connected<br/>Main - Stream 0")
+    B -->|Fully Connected| G("gather_x_gradients_fully_connected<br/>Alternative - Stream 1")
+    B -->|Fully Connected| H("gather_w_gradients_fully_connected<br/>Stream 2")
     
     E --> I["Before Detectors Gradients<br/>[batch_size × n_lookup_neurons]"]
     E --> J["Weight Gradients<br/>[n_weights]"]
@@ -51,11 +51,11 @@ flowchart TD
     G --> I
     H --> J
     
-    I --> K[propagate_through_detectors<br/>Kernel]
+    I --> K(propagate_through_detectors)
     K --> L["Input Gradients<br/>[batch_size × n_inputs]"]
     
     L --> M{Integer<br/>Mode?}
-    M -->|Yes| N[convert_integers_to_floats<br/>Kernel]
+    M -->|Yes| N(convert_integers_to_floats)
     M -->|No| O[Final Input Gradients]
     N --> O
 ```
@@ -64,8 +64,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["Input<br/>[batch_size × seq_len × n_inputs]"] --> B[check_detectors_for_sequence<br/>Stream 0]
-    C["Positional Embeddings<br/>[seq_len-1 × n_detectors × pos_dim]"] --> D[check_positional_embeddings<br/>Stream 1]
+    A["Input<br/>[batch_size × seq_len × n_inputs]"] --> B("check_detectors_for_sequence<br/>Stream 0")
+    C["Positional Embeddings<br/>[seq_len-1 × n_detectors × pos_dim]"] --> D("check_positional_embeddings<br/>Stream 1")
     
     B --> E["Q/K Lookup Indices<br/>[batch_size × seq_len × n_detectors]"]
     B --> F[Q/K Min Deltas & Indices]
@@ -73,25 +73,25 @@ flowchart TD
     D --> G["PE Lookup Indices<br/>[seq_len-1 × n_detectors]"]
     D --> H[PE Min Deltas & Indices]
     
-    E --> I[fill_after_detectors_firing_stat<br/>Kernel<br/>Tiled Processing]
+    E --> I("fill_after_detectors_firing_stat<br/>Tiled Processing")
     F --> I
     G --> I
     H --> I
     
     I --> J["Firing Statistics<br/>[batch_size × seq_len × n_lookup_neurons]"]
     
-    J --> K[densify_firing_stat<br/>Kernel]
+    J --> K(densify_firing_stat)
     
     K --> L["Main Firing Events<br/>[n_firings]"]
     K --> M["Alternative Firing Events<br/>[n_alternative_firings]"]
     
-    L --> N[fill_outputs_by_sparse_firings<br/>Kernel]
+    L --> N(fill_outputs_by_sparse_firings)
     M --> N
     
     N --> O["Output<br/>[batch_size × seq_len × n_outputs]"]
     
     O --> P{Integer<br/>Mode?}
-    P -->|Yes| Q[convert_integers_to_floats<br/>Kernel]
+    P -->|Yes| Q(convert_integers_to_floats)
     P -->|No| R[Final Output]
     Q --> R
 ```
@@ -100,9 +100,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["Output Gradients<br/>[batch_size × seq_len × n_outputs]"] --> B[gather_x_gradients_for_sequence<br/>Main - Stream 0]
-    A --> C[gather_w_gradients_for_sequence<br/>Stream 1]
-    A --> D[gather_x_gradients_for_sequence<br/>Alternative - Stream 2]
+    A["Output Gradients<br/>[batch_size × seq_len × n_outputs]"] --> B("gather_x_gradients_for_sequence<br/>Main - Stream 0")
+    A --> C("gather_w_gradients_for_sequence<br/>Stream 1")
+    A --> D("gather_x_gradients_for_sequence<br/>Alternative - Stream 2")
     
     E["Main Firing Events<br/>[n_firings]"] --> B
     E --> C
@@ -112,19 +112,19 @@ flowchart TD
     C --> H["Weight Gradients<br/>[n_weights]"]
     D --> G
     
-    G --> I[propagate_through_detectors_for_sequence<br/>Kernel<br/>Tiled Processing]
+    G --> I("propagate_through_detectors_for_sequence<br/>Tiled Processing")
     
     I --> J["Input Gradients<br/>[batch_size × seq_len × n_inputs]"]
     I --> K["Positional Embedding Gradients<br/>[seq_len-1 × n_detectors × pos_dim]"]
     
-    G --> L[cleanup_x_gradients_for_sequence<br/>Main - Stream 0]
-    G --> M[cleanup_x_gradients_for_sequence<br/>Alternative - Stream 1]
+    G --> L("cleanup_x_gradients_for_sequence<br/>Main - Stream 0")
+    G --> M("cleanup_x_gradients_for_sequence<br/>Alternative - Stream 1")
     
     L --> N[Cleared Gradients]
     M --> N
     
     J --> O{Integer<br/>Mode?}
-    O -->|Yes| P[convert_integers_to_floats<br/>Kernel]
+    O -->|Yes| P(convert_integers_to_floats)
     O -->|No| Q[Final Input Gradients]
     P --> Q
 ```
