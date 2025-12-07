@@ -6,43 +6,65 @@ This document describes the data flow for both non-concatenated (single timestep
 
 ### Non-Concatenated Mode - Forward Pass
 
+#### Fully Connected Mode
+
 ```mermaid
 flowchart TD
-    A["Input<br/>[batch_size × n_inputs]"] --> B{Connectivity<br/>Mode?}
-    B -->|Sparse| C(fire_detectors)
-    B -->|Fully Connected| D(check_detectors)
+    A["Input<br/>[batch_size × n_inputs]"] --> B(check_detectors)
     
-    C --> E["Lookup Indices<br/>[batch_size × n_detectors]"]
-    C --> F["Min Anchor Deltas<br/>[batch_size × n_detectors]"]
-    C --> G["Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
-    C --> H["Firing Events<br/>[max_firings]"]
+    B --> C["Lookup Indices<br/>[batch_size × n_detectors]"]
+    B --> D["Min Anchor Deltas<br/>[batch_size × n_detectors]"]
+    B --> E["Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
     
-    D --> E
+    C --> F(fill_outputs_fully_connected)
     D --> F
-    D --> G
+    E --> F
     
-    E --> I{Mode?}
-    F --> I
-    G --> I
-    H --> J(fill_outputs_by_forward_groups)
-    I -->|Fully Connected| K(fill_outputs_fully_connected)
+    F --> G["Output<br/>[batch_size × n_outputs]"]
     
-    J --> L["Output<br/>[batch_size × n_outputs]"]
-    K --> L
+    G --> H{Integer<br/>Mode?}
+    H -->|Yes| I(convert_integers_to_floats)
+    H -->|No| J["Final Output<br/>[batch_size × n_outputs]"]
+    I --> J
     
-    L --> M{Integer<br/>Mode?}
-    M -->|Yes| N(convert_integers_to_floats)
-    M -->|No| O["Final Output<br/>[batch_size × n_outputs]"]
-    N --> O
+    C --> K["Output: Lookup Indices<br/>[batch_size × n_detectors]"]
+    D --> L["Output: Min Anchor Deltas<br/>[batch_size × n_detectors]"]
+    E --> M["Output: Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
     
-    E --> P["Output: Lookup Indices"]
-    F --> Q["Output: Min Anchor Deltas"]
-    G --> R["Output: Min Anchor Delta Indices"]
+    style K fill:#e8f5e9
+    style L fill:#e8f5e9
+    style M fill:#e8f5e9
+    style J fill:#e8f5e9
+```
+
+#### Sparse Connectivity Mode
+
+```mermaid
+flowchart TD
+    A["Input<br/>[batch_size × n_inputs]"] --> B(fire_detectors)
     
-    style P fill:#e8f5e9
-    style Q fill:#e8f5e9
-    style R fill:#e8f5e9
-    style O fill:#e8f5e9
+    B --> C["Lookup Indices<br/>[batch_size × n_detectors]"]
+    B --> D["Min Anchor Deltas<br/>[batch_size × n_detectors]"]
+    B --> E["Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
+    B --> F["Firing Events<br/>[max_firings]"]
+    
+    F --> G(fill_outputs_by_forward_groups)
+    
+    G --> H["Output<br/>[batch_size × n_outputs]"]
+    
+    H --> I{Integer<br/>Mode?}
+    I -->|Yes| J(convert_integers_to_floats)
+    I -->|No| K["Final Output<br/>[batch_size × n_outputs]"]
+    J --> K
+    
+    C --> L["Output: Lookup Indices<br/>[batch_size × n_detectors]"]
+    D --> M["Output: Min Anchor Deltas<br/>[batch_size × n_detectors]"]
+    E --> N["Output: Min Anchor Delta Indices<br/>[batch_size × n_detectors]"]
+    
+    style L fill:#e8f5e9
+    style M fill:#e8f5e9
+    style N fill:#e8f5e9
+    style K fill:#e8f5e9
 ```
 
 ### Non-Concatenated Mode - Backward Pass
