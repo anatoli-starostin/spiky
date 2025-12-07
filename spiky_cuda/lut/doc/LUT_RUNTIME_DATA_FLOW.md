@@ -71,7 +71,13 @@ flowchart TD
     
     W3["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
     W3 --> C
-    W3 --> D
+    
+    L1["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
+    L1 --> C
+    L1 --> D
+    M1["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> G
+    M2["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> C
+    M2 --> G
     
     B --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
     C --> E
@@ -94,10 +100,18 @@ flowchart TD
 flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B(fire_detectors_by_lookup_indices)
     
+    L5["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
+    M9["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
+    
     B --> C["Firing Events<br/>Main&nbsp;+&nbsp;Alternative<br/>[B&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;max_fw_groups&nbsp;×&nbsp;2]"]
     
     W4["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> D(gather_gradients)
     C --> D
+    
+    L2["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
+    M3["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> G
+    M4["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
+    M4 --> G
     
     D --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
     D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
@@ -174,8 +188,14 @@ flowchart TD
     E --> C
     F["Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"] --> D
     
+    L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
+    L4["PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    M5["Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"] --> I
+    M6["Q/K Min Anchor Delta Indices<br/>[B × S × N<sub>t</sub>]"] --> I
+    M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    
     W6["Weights<br/>[N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>)) × O]"] --> B
-    W6 --> C
     W6 --> D
     
     B --> G["Before Detectors Gradients<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
