@@ -2,7 +2,7 @@
 
 ## Non-Sequential Mode - Forward Pass
 
-### Fully Connected Mode
+### Fully Connected Case
 
 ```mermaid
 flowchart TD
@@ -25,7 +25,7 @@ flowchart TD
     style G fill:#ffffff,color:#000000
 ```
 
-### Sparse Connectivity Mode
+### Sparse Connectivity Case
 
 ```mermaid
 flowchart TD
@@ -51,7 +51,7 @@ flowchart TD
 
 ## Non-Sequential Mode - Backward Pass
 
-### Fully Connected Mode
+### Fully Connected Case
 
 ```mermaid
 flowchart TD
@@ -78,7 +78,7 @@ flowchart TD
     style H fill:#ffffff,color:#000000
 ```
 
-### Sparse Connectivity Mode
+### Sparse Connectivity Case
 
 ```mermaid
 flowchart TD
