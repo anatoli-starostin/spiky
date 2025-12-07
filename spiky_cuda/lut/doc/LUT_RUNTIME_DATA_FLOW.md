@@ -8,12 +8,12 @@ This document describes the data flow for both non-concatenated (single timestep
 
 ```mermaid
 flowchart TD
-    A[Input<br/>batch_size × n_inputs] --> B{Connectivity<br/>Mode?}
+    A["Input<br/>[batch_size × n_inputs]"] --> B{Connectivity<br/>Mode?}
     B -->|Sparse| C[fire_detectors<br/>Kernel]
     B -->|Fully Connected| D[check_detectors<br/>Kernel]
     
-    C --> E[Lookup Indices<br/>Min Deltas<br/>batch_size × n_detectors]
-    C --> F[Firing Events<br/>max_firings]
+    C --> E["Lookup Indices<br/>Min Deltas<br/>[batch_size × n_detectors]"]
+    C --> F["Firing Events<br/>[max_firings]"]
     
     D --> E
     
@@ -21,7 +21,7 @@ flowchart TD
     F --> H[fill_outputs_by_forward_groups<br/>Kernel]
     G -->|Fully Connected| I[fill_outputs_fully_connected<br/>Kernel]
     
-    H --> J[Output<br/>batch_size × n_outputs]
+    H --> J["Output<br/>[batch_size × n_outputs]"]
     I --> J
     
     J --> K{Integer<br/>Mode?}
@@ -34,25 +34,25 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Output Gradients<br/>batch_size × n_outputs] --> B{Connectivity<br/>Mode?}
+    A["Output Gradients<br/>[batch_size × n_outputs]"] --> B{Connectivity<br/>Mode?}
     
     B -->|Sparse| C[fire_detectors_by_lookup_indices<br/>Kernel]
-    C --> D[Firing Events<br/>Main + Alternative<br/>max_firings]
+    C --> D["Firing Events<br/>Main + Alternative<br/>[max_firings]"]
     D --> E[gather_gradients<br/>Kernel]
     
     B -->|Fully Connected| F[gather_x_gradients_fully_connected<br/>Main - Stream 0]
     B -->|Fully Connected| G[gather_x_gradients_fully_connected<br/>Alternative - Stream 1]
     B -->|Fully Connected| H[gather_w_gradients_fully_connected<br/>Stream 2]
     
-    E --> I[Before Detectors Gradients<br/>batch_size × n_lookup_neurons]
-    E --> J[Weight Gradients<br/>n_weights]
+    E --> I["Before Detectors Gradients<br/>[batch_size × n_lookup_neurons]"]
+    E --> J["Weight Gradients<br/>[n_weights]"]
     
     F --> I
     G --> I
     H --> J
     
     I --> K[propagate_through_detectors<br/>Kernel]
-    K --> L[Input Gradients<br/>batch_size × n_inputs]
+    K --> L["Input Gradients<br/>[batch_size × n_inputs]"]
     
     L --> M{Integer<br/>Mode?}
     M -->|Yes| N[convert_integers_to_floats<br/>Kernel]
@@ -64,13 +64,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Input<br/>batch_size × seq_len × n_inputs] --> B[check_detectors_for_sequence<br/>Stream 0]
-    C[Positional Embeddings<br/>seq_len-1 × n_detectors × pos_dim] --> D[check_positional_embeddings<br/>Stream 1]
+    A["Input<br/>[batch_size × seq_len × n_inputs]"] --> B[check_detectors_for_sequence<br/>Stream 0]
+    C["Positional Embeddings<br/>[seq_len-1 × n_detectors × pos_dim]"] --> D[check_positional_embeddings<br/>Stream 1]
     
-    B --> E[Q/K Lookup Indices<br/>batch_size × seq_len × n_detectors]
+    B --> E["Q/K Lookup Indices<br/>[batch_size × seq_len × n_detectors]"]
     B --> F[Q/K Min Deltas & Indices]
     
-    D --> G[PE Lookup Indices<br/>seq_len-1 × n_detectors]
+    D --> G["PE Lookup Indices<br/>[seq_len-1 × n_detectors]"]
     D --> H[PE Min Deltas & Indices]
     
     E --> I[fill_after_detectors_firing_stat<br/>Kernel<br/>Tiled Processing]
@@ -78,17 +78,17 @@ flowchart TD
     G --> I
     H --> I
     
-    I --> J[Firing Statistics<br/>batch_size × seq_len × n_lookup_neurons]
+    I --> J["Firing Statistics<br/>[batch_size × seq_len × n_lookup_neurons]"]
     
     J --> K[densify_firing_stat<br/>Kernel]
     
-    K --> L[Main Firing Events<br/>n_firings]
-    K --> M[Alternative Firing Events<br/>n_alternative_firings]
+    K --> L["Main Firing Events<br/>[n_firings]"]
+    K --> M["Alternative Firing Events<br/>[n_alternative_firings]"]
     
     L --> N[fill_outputs_by_sparse_firings<br/>Kernel]
     M --> N
     
-    N --> O[Output<br/>batch_size × seq_len × n_outputs]
+    N --> O["Output<br/>[batch_size × seq_len × n_outputs]"]
     
     O --> P{Integer<br/>Mode?}
     P -->|Yes| Q[convert_integers_to_floats<br/>Kernel]
@@ -100,22 +100,22 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Output Gradients<br/>batch_size × seq_len × n_outputs] --> B[gather_x_gradients_for_sequence<br/>Main - Stream 0]
+    A["Output Gradients<br/>[batch_size × seq_len × n_outputs]"] --> B[gather_x_gradients_for_sequence<br/>Main - Stream 0]
     A --> C[gather_w_gradients_for_sequence<br/>Stream 1]
     A --> D[gather_x_gradients_for_sequence<br/>Alternative - Stream 2]
     
-    E[Main Firing Events<br/>n_firings] --> B
+    E["Main Firing Events<br/>[n_firings]"] --> B
     E --> C
-    F[Alternative Firing Events<br/>n_alternative_firings] --> D
+    F["Alternative Firing Events<br/>[n_alternative_firings]"] --> D
     
-    B --> G[Before Detectors Gradients<br/>batch_size × seq_len ×<br/>n_detectors × n_lookup_neurons_per_detector]
-    C --> H[Weight Gradients<br/>n_weights]
+    B --> G["Before Detectors Gradients<br/>[batch_size × seq_len ×<br/>n_detectors × n_lookup_neurons_per_detector]"]
+    C --> H["Weight Gradients<br/>[n_weights]"]
     D --> G
     
     G --> I[propagate_through_detectors_for_sequence<br/>Kernel<br/>Tiled Processing]
     
-    I --> J[Input Gradients<br/>batch_size × seq_len × n_inputs]
-    I --> K[Positional Embedding Gradients<br/>seq_len-1 × n_detectors × pos_dim]
+    I --> J["Input Gradients<br/>[batch_size × seq_len × n_inputs]"]
+    I --> K["Positional Embedding Gradients<br/>[seq_len-1 × n_detectors × pos_dim]"]
     
     G --> L[cleanup_x_gradients_for_sequence<br/>Main - Stream 0]
     G --> M[cleanup_x_gradients_for_sequence<br/>Alternative - Stream 1]
@@ -133,18 +133,18 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[Timestep i<br/>Input] --> B[K Lookup Index]
-    C[Timestep j<br/>Input] --> D[Q Lookup Index]
-    E[Relative Position<br/>j-i-1] --> F[PE Lookup Index]
+    A["Timestep i<br/>Input"] --> B[K Lookup Index]
+    C["Timestep j<br/>Input"] --> D[Q Lookup Index]
+    E["Relative Position<br/>j-i-1"] --> F[PE Lookup Index]
     
     B --> G[Concatenate<br/>Q, K, PE]
     D --> G
     F --> G
     
-    G --> H[Concatenated Index<br/>Q << n_anchors+pos_dim<br/>K << pos_dim<br/>PE]
+    G --> H["Concatenated Index<br/>Q << n_anchors+pos_dim<br/>K << pos_dim<br/>PE"]
     
-    H --> I[Lookup Neuron<br/>Weight Table]
-    I --> J[Output at<br/>Timestep j]
+    H --> I["Lookup Neuron<br/>Weight Table"]
+    I --> J["Output at<br/>Timestep j"]
     
     style G fill:#e1f5ff
     style H fill:#fff4e1
