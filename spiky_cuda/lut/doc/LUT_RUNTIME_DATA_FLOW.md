@@ -9,7 +9,6 @@
 - **N<sub>t</sub>**: Number of detectors
 - **N<sub>c</sub>**: Number of anchor pairs per detector (determines lookup table size: 2<sup>N<sub>c</sub></sup>)
 - **N<sub>pe</sub>**: Positional embedding dimension
-- **max_fw_groups**: Maximum forward groups per neuron (sparse connectivity case)
 
 ## Non-Sequential Mode - Forward Pass
 
