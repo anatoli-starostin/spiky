@@ -80,7 +80,7 @@ flowchart TD
 flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B(fire_detectors_by_lookup_indices)
     
-    B --> C["Firing Events<br/>Main&nbsp;+&nbsp;Alternative<br/>[B × N<sub>t</sub> × max_fw_groups × 2]"]
+    B --> C["Firing Events<br/>Main&nbsp;+&nbsp;Alternative<br/>[B&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;max_fw_groups&nbsp;×&nbsp;2]"]
     
     C --> D(gather_gradients)
     
