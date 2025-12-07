@@ -21,27 +21,31 @@ def test_lut_transformer_small(
         for use_multi_lut in [False, True]:
             if use_multi_lut and summation_dtype == torch.int32:
                 continue
-            for train_or_eval in ['train', 'eval']:
-                for batch_size in [1, 4]:
-                    success = _test_lut_transformer_small(
-                        vocab_size=256,
-                        embedding_dim=32,
-                        context_size=8,
-                        positional_dim=4,
-                        num_layers=2,
-                        num_heads=2,
-                        n_detectors=4,
-                        n_anchors_per_detector=3,
-                        gradient_type=g_type,
-                        summation_dtype=summation_dtype,
-                        device=device,
-                        seed=seed,
-                        batch_size=batch_size,
-                        use_multi_lut=use_multi_lut,
-                        train_or_eval=train_or_eval
-                    )
-                    if not success:
-                        return False
+            for fully_connected in [True, False]:
+                if not fully_connected and not use_multi_lut:
+                    continue
+                for train_or_eval in ['train', 'eval']:
+                    for batch_size in [1, 4]:
+                        success = _test_lut_transformer_small(
+                            vocab_size=256,
+                            embedding_dim=32,
+                            context_size=8,
+                            positional_dim=4,
+                            num_layers=2,
+                            num_heads=2,
+                            n_detectors=4,
+                            n_anchors_per_detector=3,
+                            gradient_type=g_type,
+                            summation_dtype=summation_dtype,
+                            device=device,
+                            seed=seed,
+                            batch_size=batch_size,
+                            use_multi_lut=use_multi_lut,
+                            fully_connected=fully_connected,
+                            train_or_eval=train_or_eval
+                        )
+                        if not success:
+                            return False
     return True
 
 
@@ -261,7 +265,7 @@ def _test_lut_transformer_small(
     num_layers, num_heads, n_detectors,
     n_anchors_per_detector, gradient_type,
     summation_dtype, device, seed,
-    batch_size, use_multi_lut, train_or_eval
+    batch_size, use_multi_lut, fully_connected, train_or_eval
 ):
     torch.manual_seed(seed)
     print('Test configuration:')
@@ -279,6 +283,7 @@ def _test_lut_transformer_small(
     print(f'  Seed: {seed}')
     print(f'  Batch size: {batch_size}')
     print(f'  Use multi LUT: {use_multi_lut}')
+    print(f'  Fully connected: {fully_connected}')
     print(f'  Train or eval: {train_or_eval}')
     print('=' * 60)
 
@@ -286,7 +291,7 @@ def _test_lut_transformer_small(
 
     lut_transformer = LUTTransformer(
         vocab_size=vocab_size,
-        embedding_dim=embedding_dim,
+        embedding_dim=embedding_dim if fully_connected else (1, embedding_dim),
         context_size=context_size,
         positional_dim=positional_dim,
         num_layers=num_layers,
