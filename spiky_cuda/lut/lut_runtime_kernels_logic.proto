@@ -342,7 +342,7 @@ fill_outputs_by_forward_groups_logic(
             Firing firing = r_firings_buffer[i];
             w_output += firing.batch_index * n_outputs;
             double multiplier = 1.0;
-            PFX(process_single_synapse_group)(
+            ATOMIC_PFX(process_single_synapse_group)(
                 firing.data_id,
                 lut_data,
                 first_synapse_id,
@@ -1467,7 +1467,7 @@ fill_outputs_by_sparse_firings_logic(
             }
 
             double multiplier = static_cast<double>(firing.payload);
-            PFX(process_single_synapse_group)(
+            ATOMIC_PFX(process_single_synapse_group)(
                 current_group_id,
                 lut_data,
                 first_synapse_id,
