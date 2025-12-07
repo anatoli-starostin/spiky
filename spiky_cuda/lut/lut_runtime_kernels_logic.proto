@@ -1261,15 +1261,14 @@ fill_after_detectors_firing_stat_logic(
     }
 }
 
-densify_firing_stat_logic(
+densify_firing_stat_cpu_logic(
     EXTERNAL_REAL_DT* rw_firing_stat,
     NeuronShiftFiring* rw_firings_buffer,
     uint64_t* rw_firings_counter_ptr,
     NeuronShiftFiring* rw_firings_buffer_alternative,
     uint64_t* rw_firings_counter_ptr_alternative,
     uint32_t n_lookup_neurons,
-    uint32_t sequence_length,
-    int device
+    uint32_t sequence_length
 ) {
     uint32_t tid = threadIdx.x;
     uint32_t neuron_index = blockIdx.x * blockDim.x + tid;
@@ -1288,163 +1287,289 @@ densify_firing_stat_logic(
         }
     }
 
-    if(device == -1) {
-        // CPU path
-        if(firing_stat_value != 0.0) {
-            if(firing_stat_value >= 1.0) {
-                uint64_t firings_offset = *rw_firings_counter_ptr;
-                (*rw_firings_counter_ptr)++;
-
-                rw_firings_buffer[firings_offset] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    std::floor(firing_stat_value),  // payload (whole number from firing_stat, we floor it to be able to handle rare situations when the same element is positive and alternative at the same time)
-                    neuron_index,  // neuron_id
-                    timestep  // shift (timestep)
-                };
-            } else if(rw_firings_counter_ptr_alternative != nullptr) {
-                uint64_t firings_offset = *rw_firings_counter_ptr_alternative;
-                (*rw_firings_counter_ptr_alternative)++;
-
-                rw_firings_buffer_alternative[firings_offset] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
-                    neuron_index,  // neuron_id
-                    timestep  // shift (timestep)
-                };
-            }
-        }
-    } else {
-        #ifdef ATOMIC
-        int tpb    = blockDim.x;       // multiple of 32 and >= 64 is guaranteed
-        int lane   = tid & 31;
-        int warpId = tid >> 5;
-        int NWARPS = tpb >> 5;         // tpb / 32
-
-        const unsigned FULL = 0xffffffffu;
-
-        __shared__ uint32_t warp_sums_main[32];      // up to 1024 threads
-        __shared__ uint32_t warp_sums_alt[32];       // for alternative firings
-        __shared__ uint64_t block_base_main;
-        __shared__ uint64_t block_base_alt;
-
-        // Compute local counts
-        uint32_t local_main = (firing_stat_value >= 1.0) ? 1 : 0;
-        uint32_t local_alt = 0;
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            local_alt = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
-        }
-
-        // --- warp inclusive scan on local_main ---
-        uint32_t prefix_main = local_main;
-        #pragma unroll
-        for (int off = 1; off < 32; off <<= 1) {
-            uint32_t x = __shfl_up_sync(FULL, prefix_main, off);
-            if (lane >= off) prefix_main += x;
-        }
-
-        if (lane == 31)
-            warp_sums_main[warpId] = prefix_main;
-
-        // --- warp inclusive scan on local_alt ---
-        uint32_t prefix_alt = local_alt;
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            #pragma unroll
-            for (int off = 1; off < 32; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, prefix_alt, off);
-                if (lane >= off) prefix_alt += x;
-            }
-
-            if (lane == 31)
-                warp_sums_alt[warpId] = prefix_alt;
-        }
-
-        __syncthreads();
-
-        // --- warp 0 scans warp sums for main ---
-        if (warpId == 0) {
-            uint32_t wv = (lane < NWARPS) ? warp_sums_main[lane] : 0;
-
-            #pragma unroll
-            for (int off = 1; off < NWARPS; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, wv, off);
-                if (lane >= off) wv += x;
-            }
-
-            if (lane < NWARPS)
-                warp_sums_main[lane] = wv;
-        }
-
-        // --- warp 1 scans warp sums for alt ---
-        if(rw_firings_counter_ptr_alternative != nullptr && warpId == 1) {
-            uint32_t wv = (lane < NWARPS) ? warp_sums_alt[lane] : 0;
-
-            #pragma unroll
-            for (int off = 1; off < NWARPS; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, wv, off);
-                if (lane >= off) wv += x;
-            }
-
-            if (lane < NWARPS)
-                warp_sums_alt[lane] = wv;
-        }
-
-        __syncthreads();
-
-        // Add warp prefix to thread prefix
-        if (warpId > 0) {
-            prefix_main += warp_sums_main[warpId - 1];
-            if(rw_firings_counter_ptr_alternative != nullptr) {
-                prefix_alt += warp_sums_alt[warpId - 1];
-            }
-        }
-
-        // --- one atomic per block for main ---
-        if (tid == 0) {
-            uint32_t block_sum_main = warp_sums_main[NWARPS - 1];
-            block_base_main = atomicAdd(
-                reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
-                static_cast<unsigned long long>(block_sum_main)
-            );
-        }
-
-        // --- one atomic per block for alt ---
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            if (tid == 0) {
-                uint32_t block_sum_alt = warp_sums_alt[NWARPS - 1];
-                block_base_alt = atomicAdd(
-                    reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr_alternative),
-                    static_cast<unsigned long long>(block_sum_alt)
-                );
-            }
-        }
-
-        __syncthreads();
-
-        // Convert inclusive → exclusive and add block base
-        uint64_t offset_main = block_base_main + prefix_main - local_main;
-        uint64_t offset_alt = 0;
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            offset_alt = block_base_alt + prefix_alt - local_alt;
-        }
-
-        // Write firing if this neuron fired
+    if(firing_stat_value != 0.0) {
         if(firing_stat_value >= 1.0) {
-            rw_firings_buffer[offset_main] = NeuronShiftFiring{
+            uint64_t firings_offset = *rw_firings_counter_ptr;
+            (*rw_firings_counter_ptr)++;
+
+            rw_firings_buffer[firings_offset] = NeuronShiftFiring{
                 batch_index,  // batch_index
-                std::floor(firing_stat_value),  // payload (see comment above, CPU path)
+                std::floor(firing_stat_value),  // payload (whole number from firing_stat, we floor it to be able to handle rare situations when the same element is positive and alternative at the same time)
                 neuron_index,  // neuron_id
                 timestep  // shift (timestep)
             };
-        } else if((firing_stat_value != 0.0) && (rw_firings_counter_ptr_alternative != nullptr)) {
-            rw_firings_buffer_alternative[offset_alt] = NeuronShiftFiring{
+        } else if(rw_firings_counter_ptr_alternative != nullptr) {
+            uint64_t firings_offset = *rw_firings_counter_ptr_alternative;
+            (*rw_firings_counter_ptr_alternative)++;
+
+            rw_firings_buffer_alternative[firings_offset] = NeuronShiftFiring{
                 batch_index,  // batch_index
                 1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
                 neuron_index,  // neuron_id
                 timestep  // shift (timestep)
             };
         }
-        #endif
     }
+}
+
+densify_firing_stat_cuda_logic(
+    float4* rw_firing_stat,
+    NeuronShiftFiring* rw_firings_buffer,
+    uint64_t* rw_firings_counter_ptr,
+    NeuronShiftFiring* rw_firings_buffer_alternative,
+    uint64_t* rw_firings_counter_ptr_alternative,
+    uint32_t n_lookup_neurons,
+    uint32_t n_quads,
+    uint32_t sequence_length
+) {
+    #ifdef ATOMIC
+    #ifndef NO_CUDA
+    int tpb    = blockDim.x;       // multiple of 32 and >= 64 is guaranteed
+    int tid    = threadIdx.x;
+    int lane   = tid & 31;
+    int warpId = tid >> 5;
+    int NWARPS = tpb >> 5;         // tpb / 32
+
+    const unsigned FULL = 0xffffffffu;
+
+    __shared__ uint32_t warp_sums_main[32];      // up to 1024 threads
+    __shared__ uint32_t warp_sums_alt[32];       // for alternative firings
+    __shared__ uint64_t block_base_main;
+    __shared__ uint64_t block_base_alt;
+
+    uint32_t batch_index = blockIdx.y / sequence_length;
+    uint32_t timestep = blockIdx.y % sequence_length;
+    uint64_t quad_idx = static_cast<uint64_t>(blockIdx.x) * tpb + tid;
+
+    bool valid_quad = (quad_idx < n_quads);
+
+    // Compute base pointer for this batch/timestep
+    rw_firing_stat += batch_index * (n_lookup_neurons >> 2) * sequence_length;
+    rw_firing_stat += timestep * (n_lookup_neurons >> 2);
+
+    // Load quad of firing stat values (or zeros if out of bounds)
+    __align__(16) float4 quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if(valid_quad) {
+        quad = rw_firing_stat[quad_idx];
+    }
+    
+    uint32_t mask_main = 0;
+    uint32_t mask_alt = 0;
+    uint32_t n_main = 0;
+    uint32_t n_alt = 0;
+    
+    // Check each value and build masks (only if valid quad)
+    if(valid_quad) {
+        if(quad.x >= 1.0f) {
+            mask_main |= 1;
+            n_main++;
+        } else if(quad.x > 0.0f && quad.x < 1.0f && rw_firings_counter_ptr_alternative != nullptr) {
+            mask_alt |= 1;
+            n_alt++;
+        }
+        
+        if(quad.y >= 1.0f) {
+            mask_main |= 2;
+            n_main++;
+        } else if(quad.y > 0.0f && quad.y < 1.0f && rw_firings_counter_ptr_alternative != nullptr) {
+            mask_alt |= 2;
+            n_alt++;
+        }
+        
+        if(quad.z >= 1.0f) {
+            mask_main |= 4;
+            n_main++;
+        } else if(quad.z > 0.0f && quad.z < 1.0f && rw_firings_counter_ptr_alternative != nullptr) {
+            mask_alt |= 4;
+            n_alt++;
+        }
+        
+        if(quad.w >= 1.0f) {
+            mask_main |= 8;
+            n_main++;
+        } else if(quad.w > 0.0f && quad.w < 1.0f && rw_firings_counter_ptr_alternative != nullptr) {
+            mask_alt |= 8;
+            n_alt++;
+        }
+
+        // Clear input if any value is non-zero
+        if((mask_main | mask_alt) != 0) {
+            void* p = &rw_firing_stat[quad_idx];
+            asm volatile (
+                "st.global.v4.f32 [%0], {%1, %2, %3, %4};\n"
+                :
+                : "l"(p), "f"(0.0f), "f"(0.0f), "f"(0.0f), "f"(0.0f)
+                : "memory"
+            );
+        }
+    }
+
+    // --- warp inclusive scan on n_main ---
+    uint32_t prefix_main = n_main;
+    #pragma unroll
+    for (int off = 1; off < 32; off <<= 1) {
+        uint32_t x = __shfl_up_sync(FULL, prefix_main, off);
+        if (lane >= off) prefix_main += x;
+    }
+
+    if (lane == 31)
+        warp_sums_main[warpId] = prefix_main;
+
+    // --- warp inclusive scan on n_alt ---
+    uint32_t prefix_alt = n_alt;
+    if(rw_firings_counter_ptr_alternative != nullptr) {
+        #pragma unroll
+        for (int off = 1; off < 32; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, prefix_alt, off);
+            if (lane >= off) prefix_alt += x;
+        }
+
+        if (lane == 31)
+            warp_sums_alt[warpId] = prefix_alt;
+    }
+
+    __syncthreads();
+
+    // --- warp 0 scans warp sums for main ---
+    if (warpId == 0) {
+        uint32_t wv = (lane < NWARPS) ? warp_sums_main[lane] : 0;
+
+        #pragma unroll
+        for (int off = 1; off < NWARPS; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, wv, off);
+            if (lane >= off) wv += x;
+        }
+
+        if (lane < NWARPS)
+            warp_sums_main[lane] = wv;
+    }
+
+    // --- warp 1 scans warp sums for alt ---
+    if(rw_firings_counter_ptr_alternative != nullptr && warpId == 1) {
+        uint32_t wv = (lane < NWARPS) ? warp_sums_alt[lane] : 0;
+
+        #pragma unroll
+        for (int off = 1; off < NWARPS; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, wv, off);
+            if (lane >= off) wv += x;
+        }
+
+        if (lane < NWARPS)
+            warp_sums_alt[lane] = wv;
+    }
+
+    __syncthreads();
+
+    // Add warp prefix to thread prefix
+    if (warpId > 0) {
+        prefix_main += warp_sums_main[warpId - 1];
+        if(rw_firings_counter_ptr_alternative != nullptr) {
+            prefix_alt += warp_sums_alt[warpId - 1];
+        }
+    }
+
+    // --- one atomic per block for main ---
+    if (tid == 0) {
+        uint32_t block_sum_main = warp_sums_main[NWARPS - 1];
+        block_base_main = atomicAdd(
+            reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
+            static_cast<unsigned long long>(block_sum_main)
+        );
+    }
+
+    // --- one atomic per block for alt ---
+    if(rw_firings_counter_ptr_alternative != nullptr) {
+        if (tid == 0) {
+            uint32_t block_sum_alt = warp_sums_alt[NWARPS - 1];
+            block_base_alt = atomicAdd(
+                reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr_alternative),
+                static_cast<unsigned long long>(block_sum_alt)
+            );
+        }
+    }
+
+    __syncthreads();
+
+    // Convert inclusive → exclusive and add block base
+    uint64_t offset_main = block_base_main + prefix_main - n_main;
+    uint64_t offset_alt = 0;
+    if(rw_firings_counter_ptr_alternative != nullptr) {
+        offset_alt = block_base_alt + prefix_alt - n_alt;
+    }
+    NeuronIndex_t base_neuron_idx = quad_idx << 2;
+
+    // Write firings using masks (only if valid quad)
+    if(valid_quad && n_main > 0) {
+        if(mask_main & 1) {
+            rw_firings_buffer[offset_main++] = NeuronShiftFiring{
+                batch_index,
+                std::floor(quad.x),
+                base_neuron_idx,
+                timestep
+            };
+        }
+        if(mask_main & 2) {
+            rw_firings_buffer[offset_main++] = NeuronShiftFiring{
+                batch_index,
+                std::floor(quad.y),
+                base_neuron_idx + 1,
+                timestep
+            };
+        }
+        if(mask_main & 4) {
+            rw_firings_buffer[offset_main++] = NeuronShiftFiring{
+                batch_index,
+                std::floor(quad.z),
+                base_neuron_idx + 2,
+                timestep
+            };
+        }
+        if(mask_main & 8) {
+            rw_firings_buffer[offset_main++] = NeuronShiftFiring{
+                batch_index,
+                std::floor(quad.w),
+                base_neuron_idx + 3,
+                timestep
+            };
+        }
+    }
+
+    if(valid_quad && n_alt > 0 && rw_firings_counter_ptr_alternative != nullptr) {
+        if(mask_alt & 1) {
+            rw_firings_buffer_alternative[offset_alt++] = NeuronShiftFiring{
+                batch_index,
+                1.0,
+                base_neuron_idx,
+                timestep
+            };
+        }
+        if(mask_alt & 2) {
+            rw_firings_buffer_alternative[offset_alt++] = NeuronShiftFiring{
+                batch_index,
+                1.0,
+                base_neuron_idx + 1,
+                timestep
+            };
+        }
+        if(mask_alt & 4) {
+            rw_firings_buffer_alternative[offset_alt++] = NeuronShiftFiring{
+                batch_index,
+                1.0,
+                base_neuron_idx + 2,
+                timestep
+            };
+        }
+        if(mask_alt & 8) {
+            rw_firings_buffer_alternative[offset_alt++] = NeuronShiftFiring{
+                batch_index,
+                1.0,
+                base_neuron_idx + 3,
+                timestep
+            };
+        }
+    }
+    #endif
+    #endif
 }
 
 fill_outputs_by_sparse_firings_logic(

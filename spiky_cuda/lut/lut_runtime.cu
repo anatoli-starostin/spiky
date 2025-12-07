@@ -632,21 +632,38 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         }
         #endif
     }
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
-    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
-    tpb_opt = round_tbp(tpb_opt, 64);  // Round up to power of 2 for shared memory efficiency
     PROF_START(LUT_RUNTIME_DENSIFY_FIRING_STAT_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, densify_firing_stat, tpb_opt, cuda_streams[0],
-        w_firing_stat,
-        reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
-        local_firing_buffer.counter_ptr(),
-        reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer_alternative.firings_ptr()),
-        local_firing_buffer_alternative.counter_ptr(),
-        this->n_lookup_neurons,
-        this->sequence_length,
-        device
-    );
+    if(device == -1) {
+        // CPU path - no quads
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
+        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, densify_firing_stat_cpu, tpb_opt, cuda_streams[0],
+            w_firing_stat,
+            reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
+            local_firing_buffer.counter_ptr(),
+            reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer_alternative.firings_ptr()),
+            local_firing_buffer_alternative.counter_ptr(),
+            this->n_lookup_neurons,
+            this->sequence_length
+        );
+    } else {
+        uint32_t n_quads = n_lookup_neurons >> 2;
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_quads), batch_size * this->sequence_length);
+        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_quads);
+        tpb_opt = round_tbp(tpb_opt, 64);  // Round up to power of 2 for shared memory efficiency
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, densify_firing_stat_cuda, tpb_opt, cuda_streams[0],
+            reinterpret_cast<float4 *>(w_firing_stat),
+            reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
+            local_firing_buffer.counter_ptr(),
+            reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer_alternative.firings_ptr()),
+            local_firing_buffer_alternative.counter_ptr(),
+            this->n_lookup_neurons,
+            n_quads,
+            this->sequence_length
+        );
+    }
     PROF_END(LUT_RUNTIME_DENSIFY_FIRING_STAT_PROFILER_OP);
 
     n_items = (n_pairs / 2) * batch_size;

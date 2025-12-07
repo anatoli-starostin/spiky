@@ -713,8 +713,10 @@ class LUTLayerBasic(nn.Module):
         x = x.view(-1)
         if output is None:
             external_output = False
-            output = torch.zeros([batch_size * sequence_length * self._n_outputs], dtype=torch.float32,
-                                 device=self.device)
+            output = torch.zeros(
+                [batch_size * sequence_length * self._n_outputs],
+                dtype=torch.float32, device=self.device
+            )
         else:
             external_output = True
         lookup_indices = torch.zeros(
