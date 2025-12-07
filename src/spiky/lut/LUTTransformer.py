@@ -128,7 +128,7 @@ class LUTTransformer(nn.Module):
                 layer['attention_lut'] = self._create_single_attention(
                     _synapse_meta=_synapse_meta, summation_dtype=summation_dtype,
                     _int_rescaler=_int_rescaler,
-                    seed=None if seed is None else seed + layer_idx * num_heads + head_idx,
+                    seed=None if seed is None else seed + layer_idx * num_heads,
                     _forward_group_size=_forward_group_size,
                     _backward_group_size=_backward_group_size,
                     num_heads=num_heads
