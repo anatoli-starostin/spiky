@@ -594,15 +594,3 @@ This document provides a comprehensive overview of all CUDA kernels used in the 
 
 **Description**: Loads synapse group metadata, iterates through target neurons and weights using vectorized loads, and accumulates weighted contributions to outputs. Handles both integer and floating point arithmetic modes.
 
----
-
-## Notes
-
-- **TILE**: Typically 16, used for tiling attention matrices
-- **LUT_RUNTIME_NUM_BLOCKS(n)**: Computes `ceil(n / threads_per_block)`
-- **LUT_RUNTIME_KERNELS_TPB_OPT(n)**: Optimized threads per block (typically 256-512)
-- **ATOMIC**: Compile-time flag for atomic operations vs. non-atomic
-- **INTEGERS_INSTEAD_OF_FLOATS**: Compile-time flag for integer arithmetic mode
-- **Shared Memory**: Used for efficient reduction operations in firing counter updates
-- **Vectorized Loads**: Kernels use uint4/float4/int4 for efficient memory access when aligned
-
