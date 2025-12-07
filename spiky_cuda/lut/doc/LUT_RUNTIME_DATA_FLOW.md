@@ -186,7 +186,7 @@ flowchart TD
     M --> N["Output: Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"]
     M --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
     
-    W5["Weights<br/>[N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>)) × O]"] --> P(fill_outputs_by_sparse_firings)
+    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"] --> P(fill_outputs_by_sparse_firings)
     SC3["Sparse connectivity info<br/>(if not fully connected)"] --> P
     N --> P
     
@@ -233,7 +233,7 @@ flowchart TD
     M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
     M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
     
-    W6["Weights<br/>[N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>)) × O]"] --> B
+    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"] --> B
     W6 --> D
     SC4["Sparse connectivity info<br/>(if not fully connected)"] --> B
     SC4 --> C
