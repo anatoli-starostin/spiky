@@ -748,6 +748,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     uint32_t n_output_blocks = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firings), n_output_blocks);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firings);
+    PROF_START(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, gather_x_gradients_for_sequence, tpb_opt, cuda_streams[0],
         r_weights,
@@ -772,8 +773,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         , 0.0
         #endif
     );
+    PROF_END(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     PROF_END(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP);
     PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP);
+    PROF_START(LUT_RUNTIME_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, gather_w_gradients_for_sequence, tpb_opt, cuda_streams[1],
         r_output_gradients,
@@ -798,6 +801,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         , 0.0
         #endif
     );
+    PROF_END(LUT_RUNTIME_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
@@ -809,6 +813,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     PROF_START(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP);
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firing_alternatives), n_output_blocks);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firing_alternatives);
+    PROF_START(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, gather_x_gradients_for_sequence, tpb_opt, cuda_streams[2],
         r_weights,
@@ -833,6 +838,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         , 0.0
         #endif
     );
+    PROF_END(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
@@ -856,6 +862,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     n_items *= n_items * this->n_detectors;
     numBlocks = dim3(n_items, batch_size);
     tpb_opt = TILE * TILE;
+    PROF_START(LUT_RUNTIME_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
         r_lookup_indices, r_min_anchor_deltas, r_min_anchor_delta_indices,
@@ -877,6 +884,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         , 0.0
         #endif
     );
+    PROF_END(LUT_RUNTIME_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
 
     #ifndef NO_CUDA
     if(device != -1) {
@@ -889,6 +897,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     #endif
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firings), 1);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firings);
+    PROF_START(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, cleanup_x_gradients_for_sequence, tpb_opt, cuda_streams[0],
         r_sparse_firings,
@@ -898,8 +907,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         this->sequence_length,
         n_lookup_neurons_per_detector
     );
+    PROF_END(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firing_alternatives), 1);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firing_alternatives);
+    PROF_START(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, cleanup_x_gradients_for_sequence, tpb_opt, cuda_streams[1],
         r_sparse_firing_alternatives,
@@ -909,6 +920,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         this->sequence_length,
         n_lookup_neurons_per_detector
     );
+    PROF_END(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
     PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
     PROF_END(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 

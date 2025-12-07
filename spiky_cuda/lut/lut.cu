@@ -97,6 +97,10 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_FILL_AFTER_DETECTORS_FIRING_STAT_PROFILER_OP, "lut::runtime::fill_after_detectors_firing_stat");
         profiler.register_operation_type(LUT_RUNTIME_DENSIFY_FIRING_STAT_PROFILER_OP, "lut::runtime::densify_firing_stat");
         profiler.register_operation_type(LUT_RUNTIME_FILL_OUTPUTS_BY_SPARSE_FIRINGS_PROFILER_OP, "lut::runtime::fill_outputs_by_sparse_firings");
+        profiler.register_operation_type(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::gather_x_gradients_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::gather_w_gradients_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::propagate_through_detectors_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::cleanup_x_gradients_for_sequence");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
