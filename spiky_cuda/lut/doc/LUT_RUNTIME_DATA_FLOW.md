@@ -166,7 +166,7 @@ flowchart TD
     
     B --> E["Output: Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"]
     B --> F["Output: Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"]
-    B --> G["Output: Q/K Min Anchor Delta Indices<br/>[B × S × N<sub>t</sub>]"]
+    B --> G["Output: Q/K Min Anchor Delta Indices<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>]"]
     
     D --> H["Output: PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"]
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
@@ -229,7 +229,7 @@ flowchart TD
     L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
     L4["PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
     M5["Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"] --> I
-    M6["Q/K Min Anchor Delta Indices<br/>[B × S × N<sub>t</sub>]"] --> I
+    M6["Q/K Min Anchor Delta Indices<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>]"] --> I
     M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
     M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
     
