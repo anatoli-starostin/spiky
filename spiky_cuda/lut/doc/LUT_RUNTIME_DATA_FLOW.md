@@ -14,7 +14,8 @@ flowchart TD
     B --> D["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"]
     B --> E["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"]
     
-    C --> F(fill_outputs_fully_connected)
+    W1["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> F(fill_outputs_fully_connected)
+    C --> F
     
     F --> G["Output: Output<br/>[B × O]"]
     
@@ -37,7 +38,8 @@ flowchart TD
     B --> E["Output: Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"]
     B --> F["Firing Events<br/>[B × N<sub>t</sub> × max_fw_groups]"]
     
-    F --> G(fill_outputs_by_forward_groups)
+    W2["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> G(fill_outputs_by_forward_groups)
+    F --> G
     
     G --> H["Output: Output<br/>[B × O]"]
     
@@ -59,9 +61,13 @@ flowchart TD
     A --> C("gather_x_gradients_fully_connected<br/>Alternative - Stream 1")
     A --> D("gather_w_gradients_fully_connected<br/>Stream 2")
     
+    W3["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
+    W3 --> C
+    W3 --> D
+    
     B --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
     C --> E
-    D --> F["Output: Weight Gradients<br/>[n_weights]"]
+    D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
     E --> G(propagate_through_detectors)
     G --> H["Output: Input Gradients<br/>[B × I]"]
@@ -82,10 +88,11 @@ flowchart TD
     
     B --> C["Firing Events<br/>Main&nbsp;+&nbsp;Alternative<br/>[B&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;max_fw_groups&nbsp;×&nbsp;2]"]
     
-    C --> D(gather_gradients)
+    W4["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> D(gather_gradients)
+    C --> D
     
     D --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
-    D --> F["Output: Weight Gradients<br/>[n_weights]"]
+    D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
     E --> G(propagate_through_detectors)
     G --> H["Output: Input Gradients<br/>[B × I]"]
@@ -126,7 +133,8 @@ flowchart TD
     M --> N["Output: Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"]
     M --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
     
-    N --> P(fill_outputs_by_sparse_firings)
+    W5["Weights<br/>[N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>)) × O]"] --> P(fill_outputs_by_sparse_firings)
+    N --> P
     
     P --> Q["Output: Output<br/>[B × S × O]"]
     
@@ -158,6 +166,10 @@ flowchart TD
     E --> C
     F["Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"] --> D
     
+    W6["Weights<br/>[N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>)) × O]"] --> B
+    W6 --> C
+    W6 --> D
+    
     B --> G["Before Detectors Gradients<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
     D --> G
     
@@ -166,7 +178,7 @@ flowchart TD
     I --> J["Output: Input Gradients<br/>[B × S × I]"]
     I --> K["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
     
-    C --> H["Output: Weight Gradients<br/>[n_weights]"]
+    C --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"]
     
     style B fill:#81c784,color:#000000
     style C fill:#81c784,color:#000000
