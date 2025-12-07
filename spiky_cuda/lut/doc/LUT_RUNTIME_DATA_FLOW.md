@@ -112,14 +112,14 @@ flowchart TD
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
     D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
     
-    E --> K("fill_after_detectors_firing_stat<br/>(processes B×S×(S-1) pairs with tiles)")
+    E --> K("fill_after_detectors_firing_stat<br/>(processes&nbsp;B×S×(S-1)&nbsp;pairs&nbsp;with&nbsp;tiles)")
     F --> K
     G --> K
     H --> K
     I --> K
     J --> K
     
-    K --> L["Firing Statistics<br/>[B × S × N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>))]"]
+    K --> L["Firing Statistics<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
     
     L --> M(densify_firing_stat)
     
@@ -158,7 +158,7 @@ flowchart TD
     E --> C
     F["Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"] --> D
     
-    B --> G["Before Detectors Gradients<br/>[B × S × N<sub>t</sub> × (1 << (2N<sub>c</sub> + N<sub>pe</sub>))]"]
+    B --> G["Before Detectors Gradients<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
     D --> G
     
     G --> I("propagate_through_detectors_for_sequence<br/>(processes B×S×(S-1) pairs with tiles)")
