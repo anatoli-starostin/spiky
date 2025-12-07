@@ -6,8 +6,8 @@ namespace {
 }
 
 // Helper function to round up to the next power of 2 but not less then 32
-static inline uint32_t round_tbp(uint32_t n) {
-    if (n <= 32) return 32;
+static inline uint32_t round_tbp(uint32_t n, uint32_t m) {
+    if (n <= m) return m;
     n--;
     n |= n >> 1;
     n |= n >> 2;
@@ -138,7 +138,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-        tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+        tpb_opt = round_tbp(tpb_opt, 32);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_ON_STREAM_SHARED_MEM(
             numBlocks, fire_detectors, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
             r_input,
@@ -302,7 +302,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         #endif
         dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
         uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-        tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+        tpb_opt = round_tbp(tpb_opt, 32);  // Round up to power of 2 for shared memory efficiency
         GRID_CALL_ON_STREAM_SHARED_MEM(
             numBlocks, fire_detectors_by_lookup_indices, tpb_opt, tpb_opt * sizeof(uint32_t), cuda_streams[0],
             this->n_detectors,
@@ -634,10 +634,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     }
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_lookup_neurons), batch_size * this->sequence_length);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_lookup_neurons);
-    tpb_opt = round_tbp(tpb_opt);  // Round up to power of 2 for shared memory efficiency
+    tpb_opt = round_tbp(tpb_opt, 64);  // Round up to power of 2 for shared memory efficiency
     PROF_START(LUT_RUNTIME_DENSIFY_FIRING_STAT_PROFILER_OP);
-    GRID_CALL_ON_STREAM_SHARED_MEM(
-        numBlocks, densify_firing_stat, tpb_opt, tpb_opt * sizeof(uint32_t) * 2, cuda_streams[0],
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, densify_firing_stat, tpb_opt, cuda_streams[0],
         w_firing_stat,
         reinterpret_cast<NeuronShiftFiring *>(local_firing_buffer.firings_ptr()),
         local_firing_buffer.counter_ptr(),

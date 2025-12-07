@@ -1315,87 +1315,128 @@ densify_firing_stat_logic(
         }
     } else {
         #ifdef ATOMIC
-        // Shared memory for reduction
-        extern __shared__ __align__(16) uint8_t __sm[];
-        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
+        int tpb    = blockDim.x;       // multiple of 32 and >= 64 is guaranteed
+        int lane   = tid & 31;
+        int warpId = tid >> 5;
+        int NWARPS = tpb >> 5;         // tpb / 32
 
-        sdata[tid << 1] = (firing_stat_value >= 1.0) ? 1 : 0;
+        const unsigned FULL = 0xffffffffu;
+
+        __shared__ uint32_t warp_sums_main[32];      // up to 1024 threads
+        __shared__ uint32_t warp_sums_alt[32];       // for alternative firings
+        __shared__ uint64_t block_base_main;
+        __shared__ uint64_t block_base_alt;
+
+        // Compute local counts
+        uint32_t local_main = (firing_stat_value >= 1.0) ? 1 : 0;
+        uint32_t local_alt = 0;
         if(rw_firings_counter_ptr_alternative != nullptr) {
-            sdata[(tid << 1) + 1] = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
+            local_alt = ((firing_stat_value > 0.0) && (firing_stat_value < 1.0)) ? 1 : 0;
         }
+
+        // --- warp inclusive scan on local_main ---
+        uint32_t prefix_main = local_main;
+        #pragma unroll
+        for (int off = 1; off < 32; off <<= 1) {
+            uint32_t x = __shfl_up_sync(FULL, prefix_main, off);
+            if (lane >= off) prefix_main += x;
+        }
+
+        if (lane == 31)
+            warp_sums_main[warpId] = prefix_main;
+
+        // --- warp inclusive scan on local_alt ---
+        uint32_t prefix_alt = local_alt;
+        if(rw_firings_counter_ptr_alternative != nullptr) {
+            #pragma unroll
+            for (int off = 1; off < 32; off <<= 1) {
+                uint32_t x = __shfl_up_sync(FULL, prefix_alt, off);
+                if (lane >= off) prefix_alt += x;
+            }
+
+            if (lane == 31)
+                warp_sums_alt[warpId] = prefix_alt;
+        }
+
         __syncthreads();
 
-        uint32_t t;
-        int offset;
-        int idx;
+        // --- warp 0 scans warp sums for main ---
+        if (warpId == 0) {
+            uint32_t wv = (lane < NWARPS) ? warp_sums_main[lane] : 0;
 
-        // upsweep (reduce)
-        for(offset = 1; offset < blockDim.x; offset <<= 1) {
-            idx = ((tid + 1) * (offset << 1)) - 1;
-            if(idx < blockDim.x) {
-                t = sdata[(idx - offset) << 1];
-                if(t > 0) {
-                    sdata[idx << 1] += t;
-                }
-                if(rw_firings_counter_ptr_alternative != nullptr) {
-                    t = sdata[((idx - offset) << 1) + 1];
-                    if(t > 0) {
-                        sdata[(idx << 1) + 1] += t;
-                    }
-                }
+            #pragma unroll
+            for (int off = 1; off < NWARPS; off <<= 1) {
+                uint32_t x = __shfl_up_sync(FULL, wv, off);
+                if (lane >= off) wv += x;
             }
-            __syncthreads();
+
+            if (lane < NWARPS)
+                warp_sums_main[lane] = wv;
         }
 
-        // inject global shift
-        if(tid == 0) {
-            sdata[(blockDim.x - 1) << 1] = atomicAdd(
+        // --- warp 1 scans warp sums for alt ---
+        if(rw_firings_counter_ptr_alternative != nullptr && warpId == 1) {
+            uint32_t wv = (lane < NWARPS) ? warp_sums_alt[lane] : 0;
+
+            #pragma unroll
+            for (int off = 1; off < NWARPS; off <<= 1) {
+                uint32_t x = __shfl_up_sync(FULL, wv, off);
+                if (lane >= off) wv += x;
+            }
+
+            if (lane < NWARPS)
+                warp_sums_alt[lane] = wv;
+        }
+
+        __syncthreads();
+
+        // Add warp prefix to thread prefix
+        if (warpId > 0) {
+            prefix_main += warp_sums_main[warpId - 1];
+            if(rw_firings_counter_ptr_alternative != nullptr) {
+                prefix_alt += warp_sums_alt[warpId - 1];
+            }
+        }
+
+        // --- one atomic per block for main ---
+        if (tid == 0) {
+            uint32_t block_sum_main = warp_sums_main[NWARPS - 1];
+            block_base_main = atomicAdd(
                 reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
-                static_cast<unsigned long long>(sdata[(blockDim.x - 1) << 1])
+                static_cast<unsigned long long>(block_sum_main)
             );
         }
 
-        if(tid == 1) {
-            if(rw_firings_counter_ptr_alternative != nullptr) {
-                sdata[((blockDim.x - 1) << 1) + 1] = atomicAdd(
+        // --- one atomic per block for alt ---
+        if(rw_firings_counter_ptr_alternative != nullptr) {
+            if (tid == 0) {
+                uint32_t block_sum_alt = warp_sums_alt[NWARPS - 1];
+                block_base_alt = atomicAdd(
                     reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr_alternative),
-                    static_cast<unsigned long long>(sdata[((blockDim.x - 1) << 1) + 1])
+                    static_cast<unsigned long long>(block_sum_alt)
                 );
             }
         }
 
         __syncthreads();
 
-        // downsweep
-        for(offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
-            idx = ((tid + 1) * (offset << 1)) - 1;
-            if (idx < blockDim.x) {
-                t = sdata[(idx - offset) << 1];
-                sdata[(idx - offset) << 1] = sdata[idx << 1];
-                if(t > 0) {
-                    sdata[idx << 1] += t;
-                }
-                if(rw_firings_counter_ptr_alternative != nullptr) {
-                    t = sdata[((idx - offset) << 1) + 1];
-                    sdata[((idx - offset) << 1) + 1] = sdata[(idx << 1) + 1];
-                    if(t > 0) {
-                        sdata[(idx << 1) + 1] += t;
-                    }
-                }
-            }
-            __syncthreads();
+        // Convert inclusive → exclusive and add block base
+        uint64_t offset_main = block_base_main + prefix_main - local_main;
+        uint64_t offset_alt = 0;
+        if(rw_firings_counter_ptr_alternative != nullptr) {
+            offset_alt = block_base_alt + prefix_alt - local_alt;
         }
 
         // Write firing if this neuron fired
         if(firing_stat_value >= 1.0) {
-            rw_firings_buffer[sdata[tid << 1]] = NeuronShiftFiring{
+            rw_firings_buffer[offset_main] = NeuronShiftFiring{
                 batch_index,  // batch_index
                 std::floor(firing_stat_value),  // payload (see comment above, CPU path)
                 neuron_index,  // neuron_id
                 timestep  // shift (timestep)
             };
         } else if((firing_stat_value != 0.0) && (rw_firings_counter_ptr_alternative != nullptr)) {
-            rw_firings_buffer_alternative[sdata[(tid << 1) + 1]] = NeuronShiftFiring{
+            rw_firings_buffer_alternative[offset_alt] = NeuronShiftFiring{
                 batch_index,  // batch_index
                 1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
                 neuron_index,  // neuron_id
