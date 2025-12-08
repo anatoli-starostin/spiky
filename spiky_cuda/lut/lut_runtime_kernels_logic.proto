@@ -1961,9 +1961,11 @@ gather_x_gradients_for_sequence_logic(
     }
 
     if(fabs(grad_x) > EPS) {
-        // Use simple sum modulo for hash: (neuron_id + shift) % gradient_hash_width
         uint64_t hash = (static_cast<uint64_t>(firing.neuron_id) + static_cast<uint64_t>(firing.shift)) % gradient_hash_width;
-        uint64_t hash_key = (static_cast<uint64_t>(firing.neuron_id + 1) << 32) | static_cast<uint64_t>(firing.shift);
+        // Construct hash_key to match little-endian memory layout when read as uint64_t:
+        // Memory: [neuron_id (4 bytes)][timestep (4 bytes)]
+        // As uint64_t: lower 32 bits = neuron_id, upper 32 bits = timestep
+        uint64_t hash_key = static_cast<uint64_t>(firing.neuron_id + 1) | (static_cast<uint64_t>(firing.shift) << 32);
         int32_t firing_id = is_alternative ? -static_cast<int32_t>(i + 1) : (i + 1);
 
         SUMMATION32_DT sum32_delta;
@@ -2198,10 +2200,13 @@ lookup_gradient_from_hash(
     uint32_t timestep,
     SUMMATION32_DT grad_value
 ) {
-    uint64_t hash_key = (static_cast<uint64_t>(neuron_id + 1) << 32) | static_cast<uint64_t>(timestep);
+    // Construct hash_key to match little-endian memory layout when read as uint64_t:
+    // Memory: [neuron_id (4 bytes)][timestep (4 bytes)]
+    // As uint64_t: lower 32 bits = neuron_id, upper 32 bits = timestep
+    uint64_t hash_key = static_cast<uint64_t>(neuron_id + 1) | (static_cast<uint64_t>(timestep) << 32);
     uint64_t hash = (static_cast<uint64_t>(neuron_id) + static_cast<uint64_t>(timestep)) % gradient_hash_width;
     uint64_t start_hash = hash;
-    
+
     while(true) {
         uint64_t current_key = *reinterpret_cast<uint64_t*>(hash_table + hash);
         if(current_key == hash_key) {
@@ -2268,7 +2273,7 @@ propagate_through_detectors_for_sequence_logic(
     }
 
     uint32_t batch_index = blockIdx.y;
-    
+
     // Calculate tile start positions
     uint32_t i0 = bi * TILE;
     uint32_t j0 = bj * TILE;
