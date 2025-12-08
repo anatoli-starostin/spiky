@@ -891,6 +891,7 @@ class LUTLayerBasic(nn.Module):
         )
 
         if not external_output:
+            self._synchronize()
             target_w_grad = self._process_gradients(target_w_grad, batch_size)
 
         result = () if external_output else (x_grad.view(source_x_shape),)
@@ -994,6 +995,7 @@ class LUTLayerBasic(nn.Module):
         )
 
         if not external_output:
+            self._synchronize()
             target_w_grad = self._process_gradients(target_w_grad, batch_size)
 
         if self._weights_gradient_policy.normalized:

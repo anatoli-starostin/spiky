@@ -10,6 +10,11 @@
 - **N<sub>c</sub>**: Number of anchor pairs per detector (determines lookup table size: 2<sup>N<sub>c</sub></sup>)
 - **N<sub>pe</sub>**: Positional embedding dimension
 
+## Notes
+
+- **Hash Table Structure**: In sequential backward pass, gradients are stored in a hash table (`GradientHashInfo` entries) keyed by `(neuron_id, timestep)` with `firing_id` as a filter. The hash table is cleared at the beginning of each backward pass using `memsetAsync` (CUDA) or `memset` (CPU).
+- **Forward Pass Optimization**: The sequential forward pass directly generates sparse firing events from `fill_after_detectors_firing_stat` without an intermediate dense array, eliminating the need for a separate densification step.
+
 ## Non-Sequential Mode - Forward Pass
 
 ### Fully Connected Case
@@ -90,7 +95,7 @@ flowchart TD
     
     M2["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> C
     
-    B --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
+    B --> E["Before Detectors Gradients<br/>[B × 2 × N<sub>t</sub>]"]
     C --> E
     D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
@@ -130,7 +135,7 @@ flowchart TD
     SC2 --> D
     C --> D
     
-    D --> E["Before Detectors Gradients<br/>[B × N<sub>t</sub> × (1 << N<sub>c</sub>)]"]
+    D --> E["Before Detectors Gradients<br/>[B × 2 × N<sub>t</sub>]"]
     D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
     D4["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> G(propagate_through_detectors)
@@ -179,12 +184,8 @@ flowchart TD
     I --> K
     J --> K
     
-    K --> L["Firing Statistics<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
-    
-    L --> M(densify_firing_stat)
-    
-    M --> N["Output: Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"]
-    M --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
+    K --> N["Output: Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"]
+    K --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
     
     W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> P(fill_outputs_by_sparse_firings)
     SC3["Sparse connectivity info<br/>(if not fully connected)"] --> P
@@ -195,22 +196,20 @@ flowchart TD
     style B fill:#81c784,color:#000000
     style D fill:#81c784,color:#000000
     style K fill:#81c784,color:#000000
-    style M fill:#81c784,color:#000000
     style P fill:#81c784,color:#000000
     style A fill:#000000,color:#ffffff
     style C fill:#000000,color:#ffffff
     style D5 fill:#000000,color:#ffffff
     style SC3 fill:#000000,color:#ffffff
     style W5 fill:#000000,color:#ffffff
-    style L fill:#000000,color:#ffffff
-    style N fill:#000000,color:#ffffff
-    style O fill:#000000,color:#ffffff
     style E fill:#ffffff,color:#000000
     style F fill:#ffffff,color:#000000
     style G fill:#ffffff,color:#000000
     style H fill:#ffffff,color:#000000
     style I fill:#ffffff,color:#000000
     style J fill:#ffffff,color:#000000
+    style N fill:#ffffff,color:#000000
+    style O fill:#ffffff,color:#000000
     style Q fill:#ffffff,color:#000000
 ```
 
@@ -218,9 +217,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["Output Gradients<br/>[B × S × O]"] --> B("gather_x_gradients_for_sequence<br/>Main - Stream 0")
+    A["Output Gradients<br/>[B × S × O]"] --> B("gather_x_gradients_for_sequence<br/>Main - Stream 0<br/>(is_alternative=false)")
     A --> C("gather_w_gradients_for_sequence<br/>Stream 1")
-    A --> D("gather_x_gradients_for_sequence<br/>Alternative - Stream 2")
+    A --> D("gather_x_gradients_for_sequence<br/>Alternative - Stream 2<br/>(is_alternative=true)")
     
     E["Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"] --> B
     E --> C
@@ -239,7 +238,7 @@ flowchart TD
     SC4 --> C
     SC4 --> D
     
-    B --> G["Before Detectors Gradients<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))]"]
+    B --> G["Before Detectors Gradients<br/>(Hash Table)<br/>[B × 6N<sub>t</sub>S(S-1)]"]
     D --> G
     
     D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I("propagate_through_detectors_for_sequence<br/>(processes B×S×(S-1) pairs with tiles)")
@@ -270,6 +269,4 @@ flowchart TD
     style D6 fill:#000000,color:#ffffff
     style SC4 fill:#000000,color:#ffffff
     style G fill:#000000,color:#ffffff
-    style E fill:#000000,color:#ffffff
-    style F fill:#000000,color:#ffffff
 ```
