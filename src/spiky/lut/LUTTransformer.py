@@ -293,10 +293,16 @@ class LUTTransformer(nn.Module):
         # Average Attention metrics
         if attention_luts:
             result_lines.append("Average Attention:")
-            for op_name in sorted(attention_stats.keys()):
-                total_time = attention_stats[op_name]['total_time']
-                total_count = attention_stats[op_name]['total_count']
-                n_layers = len(attention_luts)
+            n_layers = len(attention_luts)
+            # Sort by average total_time (total_time / n_layers) descending
+            sorted_attention = sorted(
+                attention_stats.items(),
+                key=lambda x: x[1]['total_time'] / n_layers,
+                reverse=True
+            )
+            for op_name, stats in sorted_attention:
+                total_time = stats['total_time']
+                total_count = stats['total_count']
                 
                 if total_count > 0:
                     avg_time = total_time / total_count
@@ -311,10 +317,16 @@ class LUTTransformer(nn.Module):
         # Average FFN metrics
         if ffn_luts:
             result_lines.append("Average FFN:")
-            for op_name in sorted(ffn_stats.keys()):
-                total_time = ffn_stats[op_name]['total_time']
-                total_count = ffn_stats[op_name]['total_count']
-                n_layers = len(ffn_luts)
+            n_layers = len(ffn_luts)
+            # Sort by average total_time (total_time / n_layers) descending
+            sorted_ffn = sorted(
+                ffn_stats.items(),
+                key=lambda x: x[1]['total_time'] / n_layers,
+                reverse=True
+            )
+            for op_name, stats in sorted_ffn:
+                total_time = stats['total_time']
+                total_count = stats['total_count']
                 
                 if total_count > 0:
                     avg_time = total_time / total_count
@@ -328,9 +340,15 @@ class LUTTransformer(nn.Module):
         
         # Unembedder metrics
         result_lines.append("Unembedder:")
-        for op_name in sorted(unembedder_stats.keys()):
-            total_time = unembedder_stats[op_name]['total_time']
-            total_count = unembedder_stats[op_name]['total_count']
+        # Sort by total_time descending
+        sorted_unembedder = sorted(
+            unembedder_stats.items(),
+            key=lambda x: x[1]['total_time'],
+            reverse=True
+        )
+        for op_name, stats in sorted_unembedder:
+            total_time = stats['total_time']
+            total_count = stats['total_count']
             
             if total_count > 0:
                 avg_time = total_time / total_count
