@@ -1963,8 +1963,8 @@ gather_x_gradients_for_sequence_logic(
     if(fabs(grad_x) > EPS) {
         // Use simple sum modulo for hash: (neuron_id + shift) % gradient_hash_width
         uint64_t hash = (static_cast<uint64_t>(firing.neuron_id) + static_cast<uint64_t>(firing.shift)) % gradient_hash_width;
-        uint64_t hash_key = (static_cast<uint64_t>(firing.neuron_id) << 32) | static_cast<uint64_t>(firing.shift);
-        int32_t firing_id = is_alternative ? -i : i;
+        uint64_t hash_key = (static_cast<uint64_t>(firing.neuron_id + 1) << 32) | static_cast<uint64_t>(firing.shift);
+        int32_t firing_id = is_alternative ? -static_cast<int32_t>(i + 1) : (i + 1);
 
         SUMMATION32_DT sum32_delta;
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -2024,7 +2024,7 @@ gather_x_gradients_for_sequence_logic(
             }
             if(current_key == 0) {
                 // Empty slot, claim it
-                (rw_before_detectors_gradients + hash)->neuron_id = firing.neuron_id;
+                (rw_before_detectors_gradients + hash)->neuron_id = firing.neuron_id + 1;
                 (rw_before_detectors_gradients + hash)->timestep = firing.shift;
                 (rw_before_detectors_gradients + hash)->firing_id = firing_id;
                 (rw_before_detectors_gradients + hash)->gradient_value = sum32_delta;
@@ -2198,7 +2198,7 @@ lookup_gradient_from_hash(
     uint32_t timestep,
     SUMMATION32_DT grad_value
 ) {
-    uint64_t hash_key = (static_cast<uint64_t>(neuron_id) << 32) | static_cast<uint64_t>(timestep);
+    uint64_t hash_key = (static_cast<uint64_t>(neuron_id + 1) << 32) | static_cast<uint64_t>(timestep);
     uint64_t hash = (static_cast<uint64_t>(neuron_id) + static_cast<uint64_t>(timestep)) % gradient_hash_width;
     uint64_t start_hash = hash;
     
@@ -2207,6 +2207,7 @@ lookup_gradient_from_hash(
         if(current_key == hash_key) {
             // Found matching entry, return gradient value
             grad_value = (hash_table + hash)->gradient_value;
+            break;
         }
         if(current_key == 0) {
             // Empty slot, entry not found
@@ -2322,21 +2323,21 @@ propagate_through_detectors_for_sequence_logic(
             (Q << (n_anchors_per_detector + positional_dim)) |
             (K << positional_dim) |
             PE
-        );
+        ) + detector_index * n_lookup_neurons_per_detector;
 
         double du;
         uint32_t concatenated_index_alt;
         uint32_t flipping_anchor_index;
         uint32_t i_or_j;
-        SUMMATION32_DT grad_main;
-        SUMMATION32_DT grad_alt;
+        SUMMATION32_DT grad_main = SUMMATION_ZERO;
+        SUMMATION32_DT grad_alt = SUMMATION_ZERO;
 
         if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
             concatenated_index_alt = (
                 ((Q ^ (1 << q_min_anchor_delta_index)) << (n_anchors_per_detector + positional_dim)) |
                 (K << positional_dim) |
                 PE
-            );
+            ) + detector_index * n_lookup_neurons_per_detector;
 
             du = static_cast<double>(q_min_anchor_delta);
             flipping_anchor_index = q_min_anchor_delta_index;
@@ -2346,7 +2347,7 @@ propagate_through_detectors_for_sequence_logic(
                 (Q << (n_anchors_per_detector + positional_dim)) |
                 ((K ^ (1 << k_min_anchor_delta_index)) << positional_dim) |
                 PE
-            );
+            ) + detector_index * n_lookup_neurons_per_detector;
 
             du = static_cast<double>(k_min_anchor_delta);
             flipping_anchor_index = k_min_anchor_delta_index;
@@ -2421,7 +2422,7 @@ propagate_through_detectors_for_sequence_logic(
                 (Q << (n_anchors_per_detector + positional_dim)) |
                 (K << positional_dim) |
                 (PE ^ (1 << r_positional_min_delta_indices[pe_offset]))
-            );
+            ) + detector_index * n_lookup_neurons_per_detector;
 
             du = static_cast<double>(pe_min_delta);
             if(du > 0) {
@@ -2431,13 +2432,7 @@ propagate_through_detectors_for_sequence_logic(
                 du = 1.0 / (1.0 + fabs(du));
                 du *= -0.5 * du;
             }
-            ATOMIC_PFX(lookup_gradient_from_hash)(
-                w_before_detectors_gradients,
-                gradient_hash_width,
-                concatenated_index,
-                j,
-                grad_main
-            );
+            grad_alt = SUMMATION_ZERO;
             ATOMIC_PFX(lookup_gradient_from_hash)(
                 w_before_detectors_gradients,
                 gradient_hash_width,

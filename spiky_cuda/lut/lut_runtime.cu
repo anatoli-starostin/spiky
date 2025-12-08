@@ -504,7 +504,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     EXTERNAL_REAL_DT *w_positional_min_deltas,
     int32_t *w_positional_min_delta_indices,
     int64_t *w_sparse_firing_buffer,
-    int64_t *w_sparse_firing_buffer_alternative,
+    int64_t *w_sparse_firing_buffer_alternative
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
