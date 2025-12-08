@@ -216,3 +216,126 @@ class LUTTransformer(nn.Module):
             layer['attention_lut']._reset_shared_context(new_context)
             layer['ffn']._reset_shared_context(new_context)
         self.unembedder._reset_shared_context(new_context)
+
+    def get_profile_statistics(self) -> str:
+        """
+        Get aggregated profiling statistics from all LUT layers in the transformer.
+        Only includes lut::runtime operations, grouped and averaged by component type.
+        
+        Returns:
+            String with aggregated profiling statistics in the format:
+            - Average Attention metrics (averaged across all attention layers)
+            - Average FFN metrics (averaged across all FFN layers)
+            - Unembedder metrics (single layer)
+            Format: operation_name: total_time ms / total_count = avg_time ms
+        """
+        import re
+        from collections import defaultdict
+        
+        # Collect LUT layers by component type
+        attention_luts = []
+        ffn_luts = []
+        unembedder_lut = self.unembedder
+        
+        # Collect from transformer layers
+        for layer in self.layers:
+            # Handle attention_lut (can be LUTLayer or MultiLUT)
+            attention_lut = layer['attention_lut']
+            if isinstance(attention_lut, MultiLUT):
+                attention_luts.extend(attention_lut.luts)
+            else:
+                attention_luts.append(attention_lut)
+            
+            # FFN is always a single LUTLayer
+            ffn_luts.append(layer['ffn'])
+        
+        # Aggregate statistics by component type
+        attention_stats = defaultdict(lambda: {'total_time': 0.0, 'total_count': 0})
+        ffn_stats = defaultdict(lambda: {'total_time': 0.0, 'total_count': 0})
+        unembedder_stats = defaultdict(lambda: {'total_time': 0.0, 'total_count': 0})
+        
+        def parse_and_aggregate(profiling_stats, stats_dict):
+            """Parse profiling stats and aggregate into stats_dict"""
+            for line in profiling_stats.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Only process lut::runtime lines
+                if 'lut::runtime' not in line:
+                    continue
+                
+                # Parse: operation_name: total_time ms / count = avg_time ms
+                # Example: lut::runtime::forward_step: 11750.9 ms / 1164 = 10.0952 ms
+                match = re.match(r'^([^:]+(?:::[^:]+)*):\s+([\d.]+)\s+ms\s+/\s+(\d+)\s+=\s+([\d.-]+)\s+ms$', line)
+                if match:
+                    op_name = match.group(1)
+                    total_time = float(match.group(2))
+                    count = int(match.group(3))
+                    
+                    stats_dict[op_name]['total_time'] += total_time
+                    stats_dict[op_name]['total_count'] += count
+        
+        # Parse statistics from attention layers
+        for lut in attention_luts:
+            parse_and_aggregate(lut.get_profiling_stats(), attention_stats)
+        
+        # Parse statistics from FFN layers
+        for lut in ffn_luts:
+            parse_and_aggregate(lut.get_profiling_stats(), ffn_stats)
+        
+        # Parse statistics from unembedder
+        parse_and_aggregate(unembedder_lut.get_profiling_stats(), unembedder_stats)
+        
+        # Format output
+        result_lines = []
+        
+        # Average Attention metrics
+        if attention_luts:
+            result_lines.append("Average Attention:")
+            for op_name in sorted(attention_stats.keys()):
+                total_time = attention_stats[op_name]['total_time']
+                total_count = attention_stats[op_name]['total_count']
+                n_layers = len(attention_luts)
+                
+                if total_count > 0:
+                    avg_time = total_time / total_count
+                    avg_total_time = total_time / n_layers
+                    avg_count = total_count / n_layers
+                    result_lines.append(f"  {op_name}: {avg_total_time:.6g} ms / {avg_count:.1f} = {avg_time:.6g} ms")
+                else:
+                    avg_total_time = total_time / n_layers
+                    result_lines.append(f"  {op_name}: {avg_total_time:.6g} ms / 0 = -nan ms")
+            result_lines.append("")
+        
+        # Average FFN metrics
+        if ffn_luts:
+            result_lines.append("Average FFN:")
+            for op_name in sorted(ffn_stats.keys()):
+                total_time = ffn_stats[op_name]['total_time']
+                total_count = ffn_stats[op_name]['total_count']
+                n_layers = len(ffn_luts)
+                
+                if total_count > 0:
+                    avg_time = total_time / total_count
+                    avg_total_time = total_time / n_layers
+                    avg_count = total_count / n_layers
+                    result_lines.append(f"  {op_name}: {avg_total_time:.6g} ms / {avg_count:.1f} = {avg_time:.6g} ms")
+                else:
+                    avg_total_time = total_time / n_layers
+                    result_lines.append(f"  {op_name}: {avg_total_time:.6g} ms / 0 = -nan ms")
+            result_lines.append("")
+        
+        # Unembedder metrics
+        result_lines.append("Unembedder:")
+        for op_name in sorted(unembedder_stats.keys()):
+            total_time = unembedder_stats[op_name]['total_time']
+            total_count = unembedder_stats[op_name]['total_count']
+            
+            if total_count > 0:
+                avg_time = total_time / total_count
+                result_lines.append(f"  {op_name}: {total_time:.6g} ms / {total_count} = {avg_time:.6g} ms")
+            else:
+                result_lines.append(f"  {op_name}: {total_time:.6g} ms / {total_count} = -nan ms")
+        
+        return '\n'.join(result_lines)
