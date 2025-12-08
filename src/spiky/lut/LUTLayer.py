@@ -740,12 +740,6 @@ class LUTLayerBasic(nn.Module):
             [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
         )
 
-        firing_stat = self._shared_context.get_before_detectors_gradients_buffer(
-            self._n_lookup_neurons * self._sequence_length * batch_size,
-            self.device,
-            self._multi_id
-        )
-
         sparse_buffer_numel = (1 + self._n_detectors * ((sequence_length * (sequence_length - 1)) // 2) * batch_size) * 2
         sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
             sparse_buffer_numel,
@@ -778,7 +772,6 @@ class LUTLayerBasic(nn.Module):
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            firing_stat,
             sparse_firing_buffer,
             sparse_firing_buffer_alternative,
             stream_handles
@@ -856,7 +849,7 @@ class LUTLayerBasic(nn.Module):
         grad_output = grad_output.view(-1)
 
         before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-            self._n_lookup_neurons * batch_size,
+            2 * self._n_detectors * batch_size,
             self.device,
             self._multi_id
         )
@@ -885,7 +878,6 @@ class LUTLayerBasic(nn.Module):
             self._weights,
             batch_size,
             grad_output,
-            x,
             self._detector_anchors,
             lookup_indices,
             min_anchor_deltas,
@@ -940,8 +932,9 @@ class LUTLayerBasic(nn.Module):
         assert positional_min_delta_indices.shape == (sequence_length - 1, self._n_detectors)
         positional_min_delta_indices = positional_min_delta_indices.view(-1)
 
+        gradient_hash_width = 6 * self._n_detectors * self._sequence_length * (self._sequence_length - 1)
         before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-            self._n_lookup_neurons * self._sequence_length * batch_size,
+            batch_size * gradient_hash_width * 4,
             self.device,
             self._multi_id
         )
@@ -976,15 +969,13 @@ class LUTLayerBasic(nn.Module):
         else:
             external_lr = -1.0
 
-        stream_handles = self._shared_context.get_cuda_streams(self.device,
-                                                               self._multi_id) if self.device.type == 'cuda' else None
+        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
         self._lut_dm.backward_backprop_concat(
             self._weights,
             self._positional_embeddings,
             batch_size,
             grad_output,
-            x,
             self._detector_anchors,
             lookup_indices,
             min_anchor_deltas,
@@ -995,6 +986,7 @@ class LUTLayerBasic(nn.Module):
             sparse_firings,
             sparse_firing_alternatives,
             before_detectors_gradients,
+            gradient_hash_width,
             x_grad, positional_grad,
             external_lr,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,

@@ -82,25 +82,23 @@ public:
         #ifdef ENABLE_PROFILING
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP, "lut::runtime::forward_step");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP, "lut::runtime::backward_backprop");
-        profiler.register_operation_type(LUT_RUNTIME_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::fire_detectors");
-        profiler.register_operation_type(LUT_RUNTIME_FILL_OUTPUTS_PROFILER_OP, "lut::runtime::fill_outputs");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::forward::fire_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_OUTPUTS_PROFILER_OP, "lut::runtime::forward::fill_outputs");
         profiler.register_operation_type(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP, "lut::runtime::convert_outputs");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::backward::fire_detectors");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP, "lut::runtime::backward::gather_gradients");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x_bar");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_w");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP, "lut::runtime::backward::propagate_detectors");
-        profiler.register_operation_type(LUT_RUNTIME_CHECK_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::check_detectors_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::check_positional_embeddings");
-        profiler.register_operation_type(LUT_RUNTIME_FILL_AFTER_DETECTORS_FIRING_STAT_PROFILER_OP, "lut::runtime::fill_after_detectors_firing_stat");
-        profiler.register_operation_type(LUT_RUNTIME_DENSIFY_FIRING_STAT_PROFILER_OP, "lut::runtime::densify_firing_stat");
-        profiler.register_operation_type(LUT_RUNTIME_FILL_OUTPUTS_BY_SPARSE_FIRINGS_PROFILER_OP, "lut::runtime::fill_outputs_by_sparse_firings");
-        profiler.register_operation_type(LUT_RUNTIME_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::gather_x_gradients_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::gather_w_gradients_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::propagate_through_detectors_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_CLEANUP_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::cleanup_x_gradients_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_CHECK_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::forward::check_detectors_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::forward::check_positional_embeddings");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_AFTER_DETECTORS_FIRING_STAT_PROFILER_OP, "lut::runtime::forward::fill_after_detectors_firing_stat");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_DENSIFY_FIRING_STAT_PROFILER_OP, "lut::runtime::forward::densify_firing_stat");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_OUTPUTS_BY_SPARSE_FIRINGS_PROFILER_OP, "lut::runtime::forward::fill_outputs_by_sparse_firings");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::gather_x_gradients_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::gather_w_gradients_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::propagate_through_detectors_for_sequence");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
@@ -701,7 +699,6 @@ public:
         torch::Tensor &w_positional_lookup_indices,
         torch::Tensor &w_positional_min_deltas,
         torch::Tensor &w_positional_min_delta_indices,
-        torch::Tensor &w_firing_stat,
         torch::Tensor &w_sparse_firing_buffer,
         std::optional<torch::Tensor> &w_sparse_firing_buffer_alternative,
         std::optional<torch::Tensor> &r_stream_handles
@@ -723,7 +720,6 @@ public:
         if(w_sparse_firing_buffer_alternative.has_value()) {
             checkTensor(w_sparse_firing_buffer_alternative.value(), "w_sparse_firing_buffer_alternative", false, host_device_allocator.device, sizeof(int64_t));
         }
-        checkTensor(w_firing_stat, "w_firing_stat", true, host_device_allocator.device);
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -786,8 +782,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr()),
             reinterpret_cast<int64_t *>(w_sparse_firing_buffer.data_ptr()),
-            w_sparse_firing_buffer_alternative.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.value().data_ptr()) : nullptr,
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_firing_stat.data_ptr())
+            w_sparse_firing_buffer_alternative.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -798,7 +793,6 @@ public:
         const torch::Tensor &r_weights,
         uint32_t batch_size,
         const torch::Tensor &r_output_gradients,
-        const torch::Tensor &r_input,
         const torch::Tensor &r_detector_anchors,
         const torch::Tensor &r_lookup_indices,
         const torch::Tensor &r_min_anchor_deltas,
@@ -820,7 +814,6 @@ public:
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
-        checkTensor(r_input, "r_input", true, host_device_allocator.device);
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_lookup_indices, "r_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_min_anchor_deltas, "r_min_anchor_deltas", true, host_device_allocator.device);
@@ -849,7 +842,6 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_output_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_input.data_ptr()),
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<int32_t *>(r_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_min_anchor_deltas.data_ptr()),
@@ -870,7 +862,6 @@ public:
         const torch::Tensor &r_positional_embeddings,
         uint32_t batch_size,
         const torch::Tensor &r_output_gradients,
-        const torch::Tensor &r_input,
         const torch::Tensor &r_detector_anchors,
         const torch::Tensor &r_lookup_indices,
         const torch::Tensor &r_min_anchor_deltas,
@@ -881,6 +872,7 @@ public:
         torch::Tensor &w_sparse_firings,
         torch::Tensor &w_sparse_firing_alternatives,
         torch::Tensor &w_before_detectors_gradients,
+        uint32_t gradient_hash_width,
         torch::Tensor &w_input_gradients,
         torch::Tensor &w_positional_embeddings_gradients,
         double external_lr,
@@ -899,7 +891,6 @@ public:
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
         checkTensor(w_positional_embeddings_gradients, "w_positional_embeddings_gradients", true, host_device_allocator.device);
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
-        checkTensor(r_input, "r_input", true, host_device_allocator.device);
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_lookup_indices, "r_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_min_anchor_deltas, "r_min_anchor_deltas", true, host_device_allocator.device);
@@ -931,7 +922,6 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_output_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_input.data_ptr()),
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<int32_t *>(r_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_min_anchor_deltas.data_ptr()),
@@ -939,7 +929,8 @@ public:
             reinterpret_cast<int32_t *>(r_positional_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(r_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<SUMMATION32_DT *>(w_before_detectors_gradients.data_ptr()),
+            reinterpret_cast<GradientHashInfo *>(w_before_detectors_gradients.data_ptr()),
+            gradient_hash_width,
             reinterpret_cast<NeuronShiftFiring *>(w_sparse_firings.data_ptr()),
             w_sparse_firings.numel() >> 1,
             reinterpret_cast<NeuronShiftFiring *>(w_sparse_firing_alternatives.data_ptr()),
@@ -1341,7 +1332,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_positional_lookup_indices"),
             py::arg("w_positional_min_deltas"),
             py::arg("w_positional_min_delta_indices"),
-            py::arg("w_firing_stat"),
             py::arg("w_sparse_firing_buffer"),
             py::arg("w_sparse_firing_buffer_alternative") = py::none(),
             py::arg("r_stream_handles") = py::none())
@@ -1350,7 +1340,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_weights"),
             py::arg("batch_size"),
             py::arg("r_output_gradients"),
-            py::arg("r_input"),
             py::arg("r_detector_anchors"),
             py::arg("r_lookup_indices"),
             py::arg("r_min_anchor_deltas"),
@@ -1367,7 +1356,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_positional_embeddings"),
             py::arg("batch_size"),
             py::arg("r_output_gradients"),
-            py::arg("r_input"),
             py::arg("r_detector_anchors"),
             py::arg("r_lookup_indices"),
             py::arg("r_min_anchor_deltas"),
@@ -1378,6 +1366,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_sparse_firings"),
             py::arg("w_sparse_firing_alternatives"),
             py::arg("w_before_detectors_gradients"),
+            py::arg("gradient_hash_width"),
             py::arg("w_input_gradients"),
             py::arg("w_positional_embeddings_gradients"),
             py::arg("external_lr"),

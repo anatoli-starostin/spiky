@@ -10,6 +10,15 @@ static_assert((LUT_RUNTIME_KERNELS_TPB % 2) == 0, "LUT_RUNTIME_KERNELS_TPB must 
 #define LUT_RUNTIME_NUM_BLOCKS(var) (((var) + LUT_RUNTIME_KERNELS_TPB_OPT(var) - 1) / LUT_RUNTIME_KERNELS_TPB_OPT(var))
 #define TILE 32
 
+typedef struct alignas(8) {
+    NeuronIndex_t neuron_id;
+    uint32_t timestep;
+    int32_t firing_id;
+    SUMMATION32_DT gradient_value;
+} GradientHashInfo;
+static_assert(sizeof(GradientHashInfo) == 16, "check sizeof(GradientHashInfo)");
+
+
 #define LUT_RUNTIME_CONTEXT_CLASS PFX(LUTRuntimeContext)
 class LUT_RUNTIME_CONTEXT_CLASS {
 private:
@@ -95,7 +104,6 @@ public:
         // external gradients
         EXTERNAL_REAL_DT *r_output_gradients,
         // data from forward pass
-        EXTERNAL_REAL_DT *r_input,
         AnchorsPair *r_detectors,
         int32_t *r_lookup_indices,
         EXTERNAL_REAL_DT *r_min_anchor_deltas,
@@ -125,8 +133,7 @@ public:
         EXTERNAL_REAL_DT *w_positional_min_deltas,
         int32_t *w_positional_min_delta_indices,
         int64_t *w_sparse_firing_buffer,
-        int64_t *w_sparse_firing_buffer_alternative,
-        EXTERNAL_REAL_DT *w_firing_stat
+        int64_t *w_sparse_firing_buffer_alternative
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -139,7 +146,6 @@ public:
         // external gradients
         EXTERNAL_REAL_DT *r_output_gradients,
         // data from forward pass
-        EXTERNAL_REAL_DT *r_input,
         AnchorsPair *r_detectors,
         int32_t *r_lookup_indices,
         EXTERNAL_REAL_DT *r_min_anchor_deltas,
@@ -147,7 +153,8 @@ public:
         int32_t *r_positional_lookup_indices,
         EXTERNAL_REAL_DT *r_positional_min_deltas,
         int32_t *r_positional_min_delta_indices,
-        SUMMATION32_DT *w_before_detectors_gradients,
+        GradientHashInfo *w_before_detectors_gradients,
+        uint32_t gradient_hash_width,
         NeuronShiftFiring *r_sparse_firings,
         uint32_t n_sparse_firings,
         NeuronShiftFiring *r_sparse_firing_alternatives,
