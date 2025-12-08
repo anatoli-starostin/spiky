@@ -2366,7 +2366,7 @@ propagate_through_detectors_for_sequence_logic(
             du = 1.0 / (1.0 + fabs(du));
             du *= -0.5 * du;
         }
-        ATOMIC_PFX(lookup_gradient_from_hash)(
+        PFX(lookup_gradient_from_hash)(
             w_before_detectors_gradients,
             gradient_hash_width,
             concatenated_index,
@@ -2374,7 +2374,7 @@ propagate_through_detectors_for_sequence_logic(
             grad_main
         );
 
-        ATOMIC_PFX(lookup_gradient_from_hash)(
+        PFX(lookup_gradient_from_hash)(
             w_before_detectors_gradients,
             gradient_hash_width,
             concatenated_index_alt,
@@ -2438,7 +2438,7 @@ propagate_through_detectors_for_sequence_logic(
                 du *= -0.5 * du;
             }
             grad_alt = SUMMATION_ZERO;
-            ATOMIC_PFX(lookup_gradient_from_hash)(
+            PFX(lookup_gradient_from_hash)(
                 w_before_detectors_gradients,
                 gradient_hash_width,
                 concatenated_index_alt,
