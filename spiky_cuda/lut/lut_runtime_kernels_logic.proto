@@ -1994,8 +1994,7 @@ gather_x_gradients_for_sequence_logic(
             }
             if(current_key == 0) {
                 // Empty slot, try to claim it using atomicCAS on the 64-bit key
-                if(atomicCAS(reinterpret_cast<unsigned long long*>(rw_before_detectors_gradients + hash),
-                             0ULL, hash_key) == 0ULL) {
+                if(atomicCAS(reinterpret_cast<unsigned long long*>(rw_before_detectors_gradients + hash), 0, hash_key) == 0) {
                     // Successfully claimed the slot
                     current_firing_id = atomicAdd(&((rw_before_detectors_gradients + hash)->firing_id), 0);
                     if(current_firing_id == 0) {
@@ -2383,10 +2382,10 @@ propagate_through_detectors_for_sequence_logic(
             j,
             grad_alt
         );
-        du *= static_cast<double>(grad_main) - static_cast<double>(grad_alt);
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
         #endif
+        du *= static_cast<double>(grad_main) - static_cast<double>(grad_alt);
 
         if(fabs(du) > EPS) {
             AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
@@ -2447,10 +2446,10 @@ propagate_through_detectors_for_sequence_logic(
                 j,
                 grad_alt
             );
-            du *= static_cast<double>(grad_main) - static_cast<double>(grad_alt);
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
             #endif
+            du *= static_cast<double>(grad_main) - static_cast<double>(grad_alt);
             w_positional_embeddings_gradients += pe_offset * positional_dim;
 
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
