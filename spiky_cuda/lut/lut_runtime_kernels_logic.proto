@@ -1998,7 +1998,7 @@ gather_x_gradients_for_sequence_logic(
                              0ULL, hash_key) == 0ULL) {
                     // Successfully claimed the slot
                     current_firing_id = atomicAdd(&((rw_before_detectors_gradients + hash)->firing_id), 0);
-                    if(current_firing_id == firing_id) {
+                    if(current_firing_id == 0) {
                         atomicAdd(&((rw_before_detectors_gradients + hash)->gradient_value), sum32_delta);
                     }
                     break;
