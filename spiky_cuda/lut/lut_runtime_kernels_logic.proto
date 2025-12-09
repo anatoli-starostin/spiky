@@ -1987,31 +1987,20 @@ gather_x_gradients_for_sequence_logic(
                 current_firing_id = atomicAdd(&((rw_before_detectors_gradients + hash)->firing_id), 0);
                 if(current_firing_id == firing_id) {
                     // Found matching entry with correct firing_id, update gradient value
-                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(&((rw_before_detectors_gradients + hash)->gradient_value)),
-                        sum32_delta
-                    );
-                    #else
                     atomicAdd(&((rw_before_detectors_gradients + hash)->gradient_value), sum32_delta);
-                    #endif
                 }
                 // Key matches but firing_id doesn't match, just skip (don't update, don't probe)
                 break;
             }
             if(current_key == 0) {
                 // Empty slot, try to claim it using atomicCAS on the 64-bit key
-                if(atomicCAS(reinterpret_cast<unsigned long long*>(rw_before_detectors_gradients + hash), 0ULL, hash_key) == 0ULL) {
+                if(atomicCAS(reinterpret_cast<unsigned long long*>(rw_before_detectors_gradients + hash),
+                             0ULL, hash_key) == 0ULL) {
                     // Successfully claimed the slot
-                    (rw_before_detectors_gradients + hash)->firing_id = firing_id;
-                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(&((rw_before_detectors_gradients + hash)->gradient_value)),
-                        sum32_delta
-                    );
-                    #else
-                    atomicAdd(&((rw_before_detectors_gradients + hash)->gradient_value), sum32_delta);
-                    #endif
+                    current_firing_id = atomicAdd(&((rw_before_detectors_gradients + hash)->firing_id), 0);
+                    if(current_firing_id == firing_id) {
+                        atomicAdd(&((rw_before_detectors_gradients + hash)->gradient_value), sum32_delta);
+                    }
                     break;
                 }
                 // Another thread claimed it, check again
