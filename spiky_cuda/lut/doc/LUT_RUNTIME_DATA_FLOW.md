@@ -215,6 +215,46 @@ flowchart TD
 
 ## Sequential Mode - Backward Pass
 
+### Fully Connected Case
+
+```mermaid
+flowchart TD
+    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_fc<br/>(processes B×S×(S-1) pairs with tiles)")
+    
+    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
+    
+    L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
+    L4["PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    M5["Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"] --> I
+    M6["Q/K Min Anchor Delta Indices<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>]"] --> I
+    M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    
+    D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I
+    
+    I --> J["Output: Input Gradients<br/>[B × S × I]"]
+    I --> K["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
+    I --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"]
+    
+    style I fill:#81c784,color:#000000
+    style H fill:#ffffff,color:#000000
+    style J fill:#ffffff,color:#000000
+    style K fill:#ffffff,color:#000000
+    style A fill:#000000,color:#ffffff
+    style W6 fill:#000000,color:#ffffff
+    style L3 fill:#000000,color:#ffffff
+    style L4 fill:#000000,color:#ffffff
+    style M5 fill:#000000,color:#ffffff
+    style M6 fill:#000000,color:#ffffff
+    style M7 fill:#000000,color:#ffffff
+    style M8 fill:#000000,color:#ffffff
+    style D6 fill:#000000,color:#ffffff
+```
+
+**Note**: In fully connected mode, gradients are computed directly from output gradients and weights without requiring a hash table intermediate step. The kernel processes all timestep pairs in parallel using tiled computation.
+
+### Sparse Connectivity Case
+
 ```mermaid
 flowchart TD
     A["Output Gradients<br/>[B × S × O]"] --> B("gather_x_gradients_for_sequence<br/>Main - Stream 0<br/>(is_alternative=false)")
@@ -234,7 +274,7 @@ flowchart TD
     
     W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> B
     W6 --> D
-    SC4["Sparse connectivity info<br/>(if not fully connected)"] --> B
+    SC4["Sparse connectivity info"] --> B
     SC4 --> C
     SC4 --> D
     

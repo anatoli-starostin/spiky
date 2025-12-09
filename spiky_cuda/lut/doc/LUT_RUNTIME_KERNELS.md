@@ -573,7 +573,71 @@ This document provides a comprehensive overview of all CUDA kernels used in the 
 
 ---
 
+### 18. `propagate_through_detectors_for_sequence_fc_logic`
+
+**Purpose**: Propagates gradients through detectors and positional embeddings for fully connected sequence processing, computing all gradients directly without hash table lookups.
+
+**Launch Grid**:
+- `blockDim.x`: `TILE * TILE` (typically 16x16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles * n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size * n_output_blocks` (one block per batch item per output block)
+- Shared Memory: None
+
+**Inputs**:
+- `r_output_gradients`: `[batch_size * sequence_length * n_outputs]` - Output gradients
+- `r_weights`: `[n_weights]` - Weight tensor (fully connected: `n_detectors * (1 << (2 * n_anchors_per_detector + positional_dim)) * n_outputs`)
+- `r_lookup_indices`: `[batch_size * sequence_length * n_detectors]` - Q and K lookup indices
+- `r_min_anchor_deltas`: `[batch_size * sequence_length * n_detectors]` - Min anchor deltas
+- `r_min_anchor_delta_indices`: `[batch_size * sequence_length * n_detectors]` - Min delta indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) * n_detectors]` - PE lookup indices
+- `r_positional_min_deltas`: `[(sequence_length - 1) * n_detectors]` - PE min deltas
+- `r_positional_min_delta_indices`: `[(sequence_length - 1) * n_detectors]` - PE min delta indices
+- `n_detectors`: Number of detectors
+- `n_total_tiles`: Total number of tiles = `ceil(sequence_length / TILE)²`
+- `sequence_length`: Length of sequence
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `n_outputs`: Number of output dimensions
+- `n_output_blocks`: Number of output blocks for tiling
+- `n_outputs_per_block`: Number of outputs per block
+- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector = `(1 << (2 * n_anchors_per_detector + positional_dim))`
+- `n_inputs`: Number of input dimensions
+- `positional_dim`: Dimension of positional encoding
+- `lr`: Learning rate for weight gradient accumulation
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_input_gradients`: `[batch_size * sequence_length * n_inputs]` - Input gradients (accumulated)
+- `w_positional_embeddings_gradients`: `[(sequence_length - 1) * n_detectors * positional_dim]` - Positional embedding gradients (accumulated)
+- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated)
+
+**Description**: Processes attention pairs (i, j) in a tiled manner for fully connected mode. Unlike the sparse connectivity version, this kernel computes gradients directly from output gradients and weights without requiring a hash table intermediate step. For each valid pair (i < j), the kernel:
+
+1. **Computes gradient contributions**: For each output in the current output block, computes `output_gradient * weight` to get the gradient contribution for the concatenated neuron (Q, K, PE combination).
+
+2. **Propagates to input gradients**: Computes gradient differences between main and alternative concatenated neurons (flipping Q, K, or PE) and propagates gradients to input anchors using the up() function gradient.
+
+3. **Propagates to positional embeddings**: Computes gradient differences for PE and accumulates gradients to positional embedding gradients.
+
+4. **Accumulates weight gradients**: Accumulates `output_gradient * firing.payload * lr` to weight gradients.
+
+**Key Differences from Sparse Version**:
+- **No hash table**: Gradients are computed directly from output gradients and weights, eliminating the need for hash table lookups and intermediate storage.
+- **All gradients in one pass**: Computes input gradients, positional embedding gradients, and weight gradients simultaneously.
+- **Fully connected assumption**: Assumes all lookup neurons are connected to all outputs, allowing direct weight indexing without sparse connectivity information.
+- **More efficient**: Avoids hash table overhead and multiple kernel passes, making it faster for fully connected architectures.
+
+**Tiling Strategy**:
+- Processes sequence pairs in tiles of size `TILE × TILE` (typically 16×16)
+- Only processes pairs where `i < j` (upper triangular)
+- Each thread within a tile processes one (i, j) pair
+- Outputs are processed in blocks for better memory access patterns
+
+---
+
 ## Utility Kernels
+
+### 19. `convert_integers_to_floats_logic`
 
 ### 18. `convert_integers_to_floats_logic`
 

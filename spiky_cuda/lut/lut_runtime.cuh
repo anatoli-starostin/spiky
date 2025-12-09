@@ -167,5 +167,27 @@ public:
         , cudaStream_t *cuda_streams
         #endif
     );
+
+    void backward_backprop_concat_fc(
+        EXTERNAL_REAL_DT *r_weights,
+        uint32_t batch_size,
+        // external gradients
+        EXTERNAL_REAL_DT *r_output_gradients,
+        // data from forward pass
+        AnchorsPair *r_detectors,
+        int32_t *r_lookup_indices,
+        EXTERNAL_REAL_DT *r_min_anchor_deltas,
+        int32_t *r_min_anchor_delta_indices,
+        int32_t *r_positional_lookup_indices,
+        EXTERNAL_REAL_DT *r_positional_min_deltas,
+        int32_t *r_positional_min_delta_indices,
+        EXTERNAL_REAL_DT *w_input_gradients,
+        EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
+        EXTERNAL_REAL_DT external_lr,
+        EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
+    );
 };
 
