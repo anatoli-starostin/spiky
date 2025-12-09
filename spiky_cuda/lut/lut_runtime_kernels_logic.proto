@@ -2496,10 +2496,10 @@ propagate_through_detectors_for_sequence_fc_logic(
     uint32_t n_lookup_neurons_per_detector,
     EXTERNAL_REAL_DT* w_input_gradients,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients,
-    EXTERNAL_REAL_DT* w_weights_gradients,
+    // EXTERNAL_REAL_DT* w_weights_gradients,
     uint32_t n_inputs,
     uint32_t positional_dim,
-    double lr,
+    // double lr,
     double int_rescaler
 ) {
     // blockIdx.x encodes: tile_id * n_detectors + detector_index
@@ -2547,7 +2547,7 @@ propagate_through_detectors_for_sequence_fc_logic(
         uint32_t batch_index = blockIdx.y / n_output_blocks;
         uint32_t output_block_index = blockIdx.y % n_output_blocks;
         r_weights += output_block_index * n_outputs_per_block;
-        w_weights_gradients += output_block_index * n_outputs_per_block;
+        // w_weights_gradients += output_block_index * n_outputs_per_block;
         r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
         r_output_gradients += output_block_index * n_outputs_per_block;
         if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
@@ -2593,7 +2593,9 @@ propagate_through_detectors_for_sequence_fc_logic(
         double main_grad_sum = 0.0;
         double alt_grad_sum = 0.0;
         double output_grad;
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
         SUMMATION32_DT sum32_delta;
+        #endif
 
         if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
             concatenated_index_alt = (
@@ -2624,40 +2626,35 @@ propagate_through_detectors_for_sequence_fc_logic(
             du = 1.0 / (1.0 + fabs(du));
             du *= -0.5 * du;
         }
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
-        #endif
-
         uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
         uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
         for(uint32_t cursor = 0; cursor < n_outputs_per_block; cursor++, weights_main_shift++, weights_alt_shift++) {
             output_grad = static_cast<double>(r_output_gradients[cursor]);
             main_grad_sum += static_cast<double>(r_weights[weights_main_shift]) * output_grad;
             alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
-
-            if(fabs(output_grad) > EPS) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_main_shift,
-                        sum32_delta
-                    );
-                    #else
-                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_main_shift) += sum32_delta;
-                    #endif
-                #else
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        w_weights_gradients + weights_main_shift,
-                        sum32_delta
-                    );
-                    #else
-                    w_weights_gradients[weights_main_shift] += sum32_delta;
-                    #endif
-                #endif
-            }
+//            if(fabs(output_grad) > EPS) {
+//                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+//                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+//                    #ifdef ATOMIC
+//                    atomicAdd(
+//                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_main_shift,
+//                        sum32_delta
+//                    );
+//                    #else
+//                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_main_shift) += sum32_delta;
+//                    #endif
+//                #else
+//                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+//                    #ifdef ATOMIC
+//                    atomicAdd(
+//                        w_weights_gradients + weights_main_shift,
+//                        sum32_delta
+//                    );
+//                    #else
+//                    w_weights_gradients[weights_main_shift] += sum32_delta;
+//                    #endif
+//                #endif
+//            }
         }
         du *= main_grad_sum - alt_grad_sum;
 
@@ -2712,9 +2709,6 @@ propagate_through_detectors_for_sequence_fc_logic(
                 du = 1.0 / (1.0 + fabs(du));
                 du *= -0.5 * du;
             }
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
-            #endif
             weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
             alt_grad_sum = 0.0;
             for(uint32_t cursor = 0; cursor < n_outputs_per_block; cursor++, weights_alt_shift++) {
@@ -2743,6 +2737,132 @@ propagate_through_detectors_for_sequence_fc_logic(
                 w_positional_embeddings_gradients[pe_min_delta_index] += du;
                 #endif
             #endif
+        }
+    }
+}
+
+gather_w_gradients_for_sequence_fc_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    int32_t* r_positional_lookup_indices,
+    uint32_t n_detectors,
+    uint32_t n_total_tiles,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    uint32_t n_lookup_neurons_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t positional_dim,
+    double lr,
+    double int_rescaler
+) {
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+
+    if(tile_id >= n_total_tiles) {
+        return;
+    }
+
+    uint32_t bi = tile_id / tile_grid_w;  // tile row
+    uint32_t bj = tile_id % tile_grid_w;  // tile col
+
+    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    if(bi > bj) {
+        return;
+    }
+
+    // Calculate tile start positions
+    uint32_t i0 = bi * TILE;
+    uint32_t j0 = bj * TILE;
+
+    // Get thread coordinates within tile
+    uint32_t i = i0 + (threadIdx.x / TILE);  // first timestep (row)
+    uint32_t j = j0 + (threadIdx.x % TILE);  // second timestep (col)
+
+    // Check if this (i, j) pair is valid (i < j and within bounds)
+    bool valid_pair = false;
+    if(bi < bj) {
+        // Tile strictly above diagonal - all elements are valid (i < j)
+        if(i < sequence_length && j < sequence_length) {
+            valid_pair = true;
+        }
+    } else {
+        // Diagonal tile - only process where i < j
+        if(i < sequence_length && j < sequence_length && i < j) {
+            valid_pair = true;
+        }
+    }
+
+    if(valid_pair) {
+        // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+        uint32_t batch_index = blockIdx.y / n_output_blocks;
+        uint32_t output_block_index = blockIdx.y % n_output_blocks;
+        w_weights_gradients += output_block_index * n_outputs_per_block;
+        r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
+        r_output_gradients += output_block_index * n_outputs_per_block;
+        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
+            n_outputs_per_block = n_outputs % n_outputs_per_block;
+        }
+
+        // Calculate offsets into lookup_indices arrays
+        // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+        uint32_t n_detector_items = sequence_length * n_detectors;
+        uint32_t batch_offset = batch_index * n_detector_items;
+
+
+        // Get Q: lookup index from first timestep (i)
+        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+        int32_t K = r_lookup_indices[k_offset];
+
+        // Get K: lookup index from second timestep (j)
+        uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+        int32_t Q = r_lookup_indices[q_offset];
+
+        // Get PE: positional lookup index from timestep difference (j - i - 1)
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        int32_t PE = r_positional_lookup_indices[pe_offset];
+
+        // Calculate concatenated index
+        uint32_t concatenated_index = (
+            (Q << (n_anchors_per_detector + positional_dim)) |
+            (K << positional_dim) |
+            PE
+        ) + detector_index * n_lookup_neurons_per_detector;
+
+        double output_grad;
+        SUMMATION32_DT sum32_delta;
+
+        uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
+        for(uint32_t cursor = 0; cursor < n_outputs_per_block; cursor++, weights_main_shift++) {
+            output_grad = static_cast<double>(r_output_gradients[cursor]);
+            if(fabs(output_grad) > EPS) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_main_shift,
+                        sum32_delta
+                    );
+                    #else
+                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_main_shift) += sum32_delta;
+                    #endif
+                #else
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        w_weights_gradients + weights_main_shift,
+                        sum32_delta
+                    );
+                    #else
+                    w_weights_gradients[weights_main_shift] += sum32_delta;
+                    #endif
+                #endif
+            }
         }
     }
 }

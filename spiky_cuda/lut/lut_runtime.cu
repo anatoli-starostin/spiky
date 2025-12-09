@@ -1000,8 +1000,30 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
         n_lookup_neurons_per_detector,
         w_input_gradients,
         w_positional_embeddings_gradients,
-        (external_lr >= 0.0) ? r_weights : w_weights_gradients,
         this->n_inputs,
+        this->positional_dim
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        , this->int_rescaler
+        #else
+        , 0.0
+        #endif
+    );
+    PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
+    PROF_START(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, gather_w_gradients_for_sequence_fc, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
+        r_output_gradients,
+        r_lookup_indices,
+        r_positional_lookup_indices,
+        this->n_detectors,
+        n_items,
+        this->sequence_length,
+        this->n_anchors_per_detector,
+        this->n_outputs,
+        n_output_blocks,
+        this->forward_group_size,
+        n_lookup_neurons_per_detector,
+        (external_lr >= 0.0) ? r_weights : w_weights_gradients,
         this->positional_dim,
         (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -1010,17 +1032,19 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
         , 0.0
         #endif
     );
-    PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
+    PROF_END(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
-        cudaEvent_t ev3;
-        cudaEventCreate(&ev3);
-        cudaEventRecord(ev3, cuda_streams[0]);
-        cudaStreamWaitEvent(cuda_streams[1], ev3, 0);
-        cudaStreamWaitEvent(cuda_streams[2], ev3, 0);
+        cudaEvent_t ev1;
+        cudaEventCreate(&ev1);
+        cudaEventRecord(ev1, cuda_streams[0]);
+        if(external_lr >= 0) {
+            cudaStreamWaitEvent(cuda_streams[1], ev1, 0);
+        }
+        cudaStreamWaitEvent(cuda_streams[2], ev1, 0);
     }
     #endif
     #endif
