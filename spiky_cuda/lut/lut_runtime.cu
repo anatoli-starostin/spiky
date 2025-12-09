@@ -867,6 +867,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     );
     PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
 
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
@@ -874,7 +875,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         cudaEventCreate(&ev3);
         cudaEventRecord(ev3, cuda_streams[0]);
         cudaStreamWaitEvent(cuda_streams[1], ev3, 0);
+        cudaStreamWaitEvent(cuda_streams[2], ev3, 0);
     }
+    #endif
     #endif
     if(device == -1) {
         memset(
