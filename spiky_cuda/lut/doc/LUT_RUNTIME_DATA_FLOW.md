@@ -163,6 +163,49 @@ flowchart TD
 
 ## Sequential Mode - Forward Pass
 
+### Fully Connected Case
+
+```mermaid
+flowchart TD
+    A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
+    D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    C["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> D("check_positional_embeddings<br/>Stream 1")
+    
+    B --> E["Output: Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"]
+    B --> F["Output: Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"]
+    B --> G["Output: Q/K Min Anchor Delta Indices<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>]"]
+    
+    D --> H["Output: PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"]
+    D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
+    D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
+    
+    E --> K("fill_outputs_fully_connected_for_sequence<br/>(processes all pairs i,j where i < j)")
+    H --> K
+    
+    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
+    
+    K --> Q["Output: Output<br/>[B × S × O]"]
+    
+    style B fill:#81c784,color:#000000
+    style D fill:#81c784,color:#000000
+    style K fill:#81c784,color:#000000
+    style A fill:#000000,color:#ffffff
+    style C fill:#000000,color:#ffffff
+    style D5 fill:#000000,color:#ffffff
+    style W5 fill:#000000,color:#ffffff
+    style E fill:#ffffff,color:#000000
+    style F fill:#ffffff,color:#000000
+    style G fill:#ffffff,color:#000000
+    style H fill:#ffffff,color:#000000
+    style I fill:#ffffff,color:#000000
+    style J fill:#ffffff,color:#000000
+    style Q fill:#ffffff,color:#000000
+```
+
+**Note**: In fully connected mode, outputs are computed directly from lookup indices and weights without generating sparse firing events. The kernel processes all timestep pairs (i, j) where i < j in parallel, accumulating weights for each output position.
+
+### Sparse Connectivity Case
+
 ```mermaid
 flowchart TD
     A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
@@ -188,7 +231,7 @@ flowchart TD
     K --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
     
     W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> P(fill_outputs_by_sparse_firings)
-    SC3["Sparse connectivity info<br/>(if not fully connected)"] --> P
+    SC3["Sparse connectivity info"] --> P
     N --> P
     
     P --> Q["Output: Output<br/>[B × S × O]"]

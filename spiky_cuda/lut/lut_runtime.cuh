@@ -139,6 +139,24 @@ public:
         #endif
     );
 
+    void forward_step_concat_fc(
+        EXTERNAL_REAL_DT *r_weights,
+        EXTERNAL_REAL_DT *r_positional_embeddings,
+        uint32_t batch_size,
+        EXTERNAL_REAL_DT *r_input,
+        AnchorsPair *r_detectors,
+        EXTERNAL_REAL_DT *w_output,
+        int32_t *w_lookup_indices,
+        EXTERNAL_REAL_DT *w_min_anchor_deltas,
+        int32_t *w_min_anchor_delta_indices,
+        int32_t *w_positional_lookup_indices,
+        EXTERNAL_REAL_DT *w_positional_min_deltas,
+        int32_t *w_positional_min_delta_indices
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
+    );
+
     void backward_backprop_concat(
         EXTERNAL_REAL_DT *r_weights,
         EXTERNAL_REAL_DT *r_positional_embeddings,

@@ -443,6 +443,107 @@ fill_outputs_fully_connected_logic(
     }
 }
 
+fill_outputs_fully_connected_for_sequence_logic(
+    EXTERNAL_REAL_DT* r_weights,
+    int32_t* r_lookup_indices,
+    int32_t* r_positional_lookup_indices,
+    EXTERNAL_REAL_DT* w_output,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t positional_dim,
+    uint32_t n_lookup_neurons_per_detector,
+    double int_rescaler
+) {
+    // blockIdx.x * blockDim.x + threadIdx.x encodes: detector_index * n_outputs + output_index
+    // This ensures threads in one warp accumulate weights for the same output
+    uint32_t linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(linear_idx >= n_detectors * n_outputs) {
+        return;
+    }
+
+    uint32_t detector_index = linear_idx / n_outputs;
+    uint32_t output_index = linear_idx % n_outputs;
+
+    
+    // blockIdx.y encodes: batch_index * (sequence_length - 1) + j_offset
+    // j_offset ranges from 0 to sequence_length - 2, j = j_offset + 1 ranges from 1 to sequence_length - 1
+    uint32_t batch_index = blockIdx.y / (sequence_length - 1);
+    uint32_t j = blockIdx.y % (sequence_length - 1) + 1;
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
+
+    // Get Q: lookup index from first timestep (j)
+    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+    int32_t Q = r_lookup_indices[q_offset];
+
+    // Get PE lookup indices (shared across batches)
+    // PE indices are stored as [(S-1) × N_t]
+    
+    // Accumulate weight sum over all i from 0 to j (inclusive)
+    double weight_sum = 0.0;
+    
+    for(uint32_t i = 0; i < j; i++) {
+        // Get K: lookup index from second timestep (i)
+        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+        int32_t K = r_lookup_indices[k_offset];
+        
+        // Get PE: positional lookup index from timestep difference (j - i - 1)
+        // Note: j - i - 1 can be negative when i == j, but in that case we don't use PE
+        int32_t PE = 0;
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+
+        // Calculate concatenated_index
+        uint32_t concatenated_index = (
+            (static_cast<uint32_t>(Q) << (n_anchors_per_detector + positional_dim)) |
+            (static_cast<uint32_t>(K) << positional_dim) |
+            static_cast<uint32_t>(PE)
+        );
+        
+        // Add detector offset to get neuron_id
+        uint32_t neuron_id = concatenated_index + detector_index * n_lookup_neurons_per_detector;
+        
+        // Get weight connecting this neuron to current output
+        // Weight layout: weights[neuron_id * n_outputs + output_index]
+        double weight = static_cast<double>(r_weights[neuron_id * n_outputs + output_index]);
+        weight_sum += weight;
+    }
+    
+    // Calculate output offset
+    // Output layout: [batch0_t0_out0, batch0_t0_out1, ..., batch0_t0_outN, batch0_t1_out0, ...]
+    uint32_t output_offset = (batch_index * sequence_length + j) * n_outputs + output_index;
+    
+    // Atomic add accumulated sum to output
+    SUMMATION32_DT payload;
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        #ifdef ATOMIC
+        atomicAdd(
+            reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset),
+            payload
+        );
+        #else
+        *reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset) += payload;
+        #endif
+    #else
+        payload = static_cast<SUMMATION32_DT>(weight_sum);
+        #ifdef ATOMIC
+        atomicAdd(
+            w_output + output_offset,
+            payload
+        );
+        #else
+        w_output[output_offset] += payload;
+        #endif
+    #endif
+}
+
 fire_detectors_by_lookup_indices_logic(
     uint32_t n_detectors,
     int32_t* r_lookup_indices,
@@ -1182,11 +1283,11 @@ fill_after_detectors_firing_stat_logic(
         uint32_t n_detector_items = sequence_length * n_detectors;
         uint32_t batch_offset = batch_index * n_detector_items;
 
-        // Get Q: lookup index from first timestep (i)
+        // Get K: lookup index from first timestep (i)
         uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
         int32_t K = r_lookup_indices[k_offset];
 
-        // Get K: lookup index from second timestep (j)
+        // Get Q: lookup index from second timestep (j)
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
 
@@ -2303,13 +2404,13 @@ propagate_through_detectors_for_sequence_logic(
         uint32_t n_detector_items = sequence_length * n_detectors;
         uint32_t batch_offset = batch_index * n_detector_items;
 
-        // Get Q: lookup index from first timestep (i)
+        // Get K: lookup index from first timestep (i)
         uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
         int32_t K = r_lookup_indices[k_offset];
         int32_t k_min_anchor_delta_index = r_min_anchor_delta_indices[k_offset];
         EXTERNAL_REAL_DT k_min_anchor_delta = r_min_anchor_deltas[k_offset];
 
-        // Get K: lookup index from second timestep (j)
+        // Get Q: lookup index from second timestep (j)
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
         int32_t q_min_anchor_delta_index = r_min_anchor_delta_indices[q_offset];
@@ -2560,13 +2661,13 @@ propagate_through_detectors_for_sequence_fc_logic(
         uint32_t batch_offset = batch_index * n_detector_items;
 
 
-        // Get Q: lookup index from first timestep (i)
+        // Get K: lookup index from first timestep (i)
         uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
         int32_t K = r_lookup_indices[k_offset];
         int32_t k_min_anchor_delta_index = r_min_anchor_delta_indices[k_offset];
         EXTERNAL_REAL_DT k_min_anchor_delta = r_min_anchor_deltas[k_offset];
 
-        // Get K: lookup index from second timestep (j)
+        // Get Q: lookup index from second timestep (j)
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
         int32_t q_min_anchor_delta_index = r_min_anchor_delta_indices[q_offset];
@@ -2815,11 +2916,11 @@ gather_w_gradients_for_sequence_fc_logic(
         uint32_t batch_offset = batch_index * n_detector_items;
 
 
-        // Get Q: lookup index from first timestep (i)
+        // Get K: lookup index from first timestep (i)
         uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
         int32_t K = r_lookup_indices[k_offset];
 
-        // Get K: lookup index from second timestep (j)
+        // Get Q: lookup index from second timestep (j)
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
 

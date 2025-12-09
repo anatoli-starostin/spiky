@@ -740,55 +740,75 @@ class LUTLayerBasic(nn.Module):
             [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
         )
 
-        sparse_buffer_numel = (1 + self._n_detectors * ((sequence_length * (sequence_length - 1)) // 2) * batch_size) * 2
-        sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-            sparse_buffer_numel,
-            self.device,
-            self._multi_id
-        )
+        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
-        # there may be at last two alternative indices per pair (one for Q/K, one for PE)
-        if self.training:
-            sparse_buffer_numel = (1 + self._n_detectors * sequence_length * (sequence_length - 1) * batch_size) * 2
-            sparse_firing_buffer_alternative = self._shared_context.get_sparse_firing_buffer_alternative(
+        if self._is_fully_connected:
+            self._lut_dm.forward_step_concat_fc(
+                self._weights,
+                self._positional_embeddings,
+                batch_size, x,
+                self._detector_anchors,
+                output,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                positional_lookup_indices,
+                positional_min_deltas,
+                positional_min_delta_indices,
+                stream_handles
+            )
+            sparse_firings = None
+            sparse_firing_alternatives = None
+        else:
+            sparse_buffer_numel = (1 + self._n_detectors * ((sequence_length * (sequence_length - 1)) // 2) * batch_size) * 2
+            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
                 sparse_buffer_numel,
                 self.device,
                 self._multi_id
             )
-        else:
-            sparse_firing_buffer_alternative = None
 
-        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
+            # there may be at last two alternative indices per pair (one for Q/K, one for PE)
+            if self.training:
+                sparse_buffer_numel = (1 + self._n_detectors * sequence_length * (sequence_length - 1) * batch_size) * 2
+                sparse_firing_buffer_alternative = self._shared_context.get_sparse_firing_buffer_alternative(
+                    sparse_buffer_numel,
+                    self.device,
+                    self._multi_id
+                )
+            else:
+                sparse_firing_buffer_alternative = None
 
-        self._lut_dm.forward_step_concat(
-            self._weights,
-            self._positional_embeddings,
-            batch_size, x,
-            self._detector_anchors,
-            output,
-            lookup_indices,
-            min_anchor_deltas,
-            min_anchor_delta_indices,
-            positional_lookup_indices,
-            positional_min_deltas,
-            positional_min_delta_indices,
-            sparse_firing_buffer,
-            sparse_firing_buffer_alternative,
-            stream_handles
-        )
+            self._lut_dm.forward_step_concat(
+                self._weights,
+                self._positional_embeddings,
+                batch_size, x,
+                self._detector_anchors,
+                output,
+                lookup_indices,
+                min_anchor_deltas,
+                min_anchor_delta_indices,
+                positional_lookup_indices,
+                positional_min_deltas,
+                positional_min_delta_indices,
+                sparse_firing_buffer,
+                sparse_firing_buffer_alternative,
+                stream_handles
+            )
+
+            if not external_output:
+                sparse_firings = sparse_firing_buffer[2:2 + sparse_firing_buffer[0].item() * 2].clone()
+                if sparse_firing_buffer_alternative is not None:
+                    sparse_firing_alternatives = sparse_firing_buffer_alternative[2:2 + sparse_firing_buffer_alternative[0].item() * 2].clone()
+                else:
+                    sparse_firing_alternatives = None
+            else:
+                sparse_firings = sparse_firing_buffer
+                sparse_firing_alternatives = sparse_firing_buffer_alternative
 
         if not external_output:
             self._synchronize()
-            sparse_firings = sparse_firing_buffer[2:2 + sparse_firing_buffer[0].item() * 2].clone()
-            if sparse_firing_buffer_alternative is not None:
-                sparse_firing_alternatives = sparse_firing_buffer_alternative[2:2 + sparse_firing_buffer_alternative[0].item() * 2].clone()
-            else:
-                sparse_firing_alternatives = None
             if self._lookup_indices_callback is not None:
                 self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-        else:
-            sparse_firings = sparse_firing_buffer
-            sparse_firing_alternatives = sparse_firing_buffer_alternative
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
         return result + (
@@ -1499,7 +1519,11 @@ class MultiLUT(nn.Module):
                 if multi_lut._sequence_length > 1:
                     sparse_firing_buf = results[lut_idx][-2]
                     sparse_firing_buf_alt = results[lut_idx][-1]
-                    results[lut_idx][-2] = sparse_firing_buf[2:2 + sparse_firing_buf[0].item() * 2].clone()
+                    # Handle FC case where sparse_firings can be None
+                    if sparse_firing_buf is not None:
+                        results[lut_idx][-2] = sparse_firing_buf[2:2 + sparse_firing_buf[0].item() * 2].clone()
+                    else:
+                        results[lut_idx][-2] = None
                     if sparse_firing_buf_alt is None:
                         results[lut_idx][-1] = None
                     else:
