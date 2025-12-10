@@ -985,51 +985,22 @@ class LUTLayerBasic(nn.Module):
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
-        if self._is_fully_connected:
-            self._lut_dm.backward_backprop_concat_fc(
-                self._weights,
-                batch_size,
-                grad_output,
-                self._detector_anchors,
-                lookup_indices,
-                min_anchor_deltas,
-                min_anchor_delta_indices,
-                positional_lookup_indices,
-                positional_min_deltas,
-                positional_min_delta_indices,
-                x_grad, positional_grad,
-                external_lr,
-                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-                stream_handles
-            )
-        else:
-            gradient_hash_width = 6 * self._n_detectors * self._sequence_length * (self._sequence_length - 1)
-            before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-                batch_size * gradient_hash_width * 4,
-                self.device,
-                self._multi_id
-            )
-            self._lut_dm.backward_backprop_concat(
-                self._weights,
-                self._positional_embeddings,
-                batch_size,
-                grad_output,
-                self._detector_anchors,
-                lookup_indices,
-                min_anchor_deltas,
-                min_anchor_delta_indices,
-                positional_lookup_indices,
-                positional_min_deltas,
-                positional_min_delta_indices,
-                sparse_firings,
-                sparse_firing_alternatives,
-                before_detectors_gradients,
-                gradient_hash_width,
-                x_grad, positional_grad,
-                external_lr,
-                target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-                stream_handles
-            )
+        self._lut_dm.backward_backprop_concat(
+            self._weights,
+            batch_size,
+            grad_output,
+            self._detector_anchors,
+            lookup_indices,
+            min_anchor_deltas,
+            min_anchor_delta_indices,
+            positional_lookup_indices,
+            positional_min_deltas,
+            positional_min_delta_indices,
+            x_grad, positional_grad,
+            external_lr,
+            target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
+            stream_handles
+        )
 
         if not external_output:
             self._synchronize()

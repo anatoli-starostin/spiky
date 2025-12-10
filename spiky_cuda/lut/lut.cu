@@ -955,7 +955,6 @@ public:
 
     void backward_backprop_concat(
         const torch::Tensor &r_weights,
-        const torch::Tensor &r_positional_embeddings,
         uint32_t batch_size,
         const torch::Tensor &r_output_gradients,
         const torch::Tensor &r_detector_anchors,
@@ -965,10 +964,6 @@ public:
         const torch::Tensor &r_positional_lookup_indices,
         const torch::Tensor &r_positional_min_deltas,
         const torch::Tensor &r_positional_min_delta_indices,
-        torch::Tensor &w_sparse_firings,
-        torch::Tensor &w_sparse_firing_alternatives,
-        torch::Tensor &w_before_detectors_gradients,
-        uint32_t gradient_hash_width,
         torch::Tensor &w_input_gradients,
         torch::Tensor &w_positional_embeddings_gradients,
         double external_lr,
@@ -983,7 +978,6 @@ public:
             throw py::value_error("no active context");
         }
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
-        checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
         checkTensor(w_positional_embeddings_gradients, "w_positional_embeddings_gradients", true, host_device_allocator.device);
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
@@ -994,9 +988,6 @@ public:
         checkTensor(r_positional_lookup_indices, "r_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_positional_min_deltas, "r_positional_min_deltas", true, host_device_allocator.device);
         checkTensor(r_positional_min_delta_indices, "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_sparse_firings, "w_sparse_firings", false, host_device_allocator.device, sizeof(int64_t));
-        checkTensor(w_sparse_firing_alternatives, "w_sparse_firing_alternatives", false, host_device_allocator.device, sizeof(int64_t));
-        checkTensor(w_before_detectors_gradients, "w_before_detectors_gradients", true, host_device_allocator.device);
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
@@ -1014,85 +1005,6 @@ public:
         }
         #endif
         this->runtime_context->backward_backprop_concat(
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
-            batch_size,
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_output_gradients.data_ptr()),
-            reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
-            reinterpret_cast<int32_t *>(r_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(r_min_anchor_delta_indices.data_ptr()),
-            reinterpret_cast<int32_t *>(r_positional_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(r_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<GradientHashInfo *>(w_before_detectors_gradients.data_ptr()),
-            gradient_hash_width,
-            reinterpret_cast<NeuronShiftFiring *>(w_sparse_firings.data_ptr()),
-            w_sparse_firings.numel() >> 1,
-            reinterpret_cast<NeuronShiftFiring *>(w_sparse_firing_alternatives.data_ptr()),
-            w_sparse_firing_alternatives.numel() >> 1,
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr()),
-            static_cast<EXTERNAL_REAL_DT>(external_lr),
-            w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
-            #ifndef NO_CUDA
-            , cuda_streams_ptr
-            #endif
-        );
-    }
-
-    void backward_backprop_concat_fc(
-        const torch::Tensor &r_weights,
-        uint32_t batch_size,
-        const torch::Tensor &r_output_gradients,
-        const torch::Tensor &r_detector_anchors,
-        const torch::Tensor &r_lookup_indices,
-        const torch::Tensor &r_min_anchor_deltas,
-        const torch::Tensor &r_min_anchor_delta_indices,
-        const torch::Tensor &r_positional_lookup_indices,
-        const torch::Tensor &r_positional_min_deltas,
-        const torch::Tensor &r_positional_min_delta_indices,
-        torch::Tensor &w_input_gradients,
-        torch::Tensor &w_positional_embeddings_gradients,
-        double external_lr,
-        std::optional<torch::Tensor> w_weights_gradients,
-        std::optional<torch::Tensor> r_stream_handles
-    ) {
-        py::gil_scoped_release gil_guard;
-        if(batch_size == 0) {
-            throw py::value_error("batch_size == 0");
-        }
-        if(this->runtime_context == nullptr) {
-            throw py::value_error("no active context");
-        }
-        checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
-        checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
-        checkTensor(w_positional_embeddings_gradients, "w_positional_embeddings_gradients", true, host_device_allocator.device);
-        checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
-        checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_lookup_indices, "r_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_min_anchor_deltas, "r_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(r_min_anchor_delta_indices, "r_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_positional_lookup_indices, "r_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_positional_min_deltas, "r_positional_min_deltas", true, host_device_allocator.device);
-        checkTensor(r_positional_min_delta_indices, "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        if(w_weights_gradients.has_value()) {
-            checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
-        }
-        if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
-            if(r_stream_handles.value().numel() < 3) {
-                throw py::value_error("r_stream_handles must have at least 3 elements");
-            }
-        }
-
-        #ifndef NO_CUDA
-        cudaStream_t *cuda_streams_ptr = nullptr;
-        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
-            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
-        }
-        #endif
-        this->runtime_context->backward_backprop_concat_fc(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_output_gradients.data_ptr()),
@@ -1534,28 +1446,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_weights_gradients") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop_concat", &LUTM_CLASS_NAME::backward_backprop_concat,
-            "Gradients back propagation concat",
-            py::arg("r_weights"),
-            py::arg("r_positional_embeddings"),
-            py::arg("batch_size"),
-            py::arg("r_output_gradients"),
-            py::arg("r_detector_anchors"),
-            py::arg("r_lookup_indices"),
-            py::arg("r_min_anchor_deltas"),
-            py::arg("r_min_anchor_delta_indices"),
-            py::arg("r_positional_lookup_indices"),
-            py::arg("r_positional_min_deltas"),
-            py::arg("r_positional_min_delta_indices"),
-            py::arg("w_sparse_firings"),
-            py::arg("w_sparse_firing_alternatives"),
-            py::arg("w_before_detectors_gradients"),
-            py::arg("gradient_hash_width"),
-            py::arg("w_input_gradients"),
-            py::arg("w_positional_embeddings_gradients"),
-            py::arg("external_lr"),
-            py::arg("w_weights_gradients") = py::none(),
-            py::arg("r_stream_handles") = py::none())
-        .def("backward_backprop_concat_fc", &LUTM_CLASS_NAME::backward_backprop_concat_fc,
             "Gradients back propagation for fully connected sequence mode",
             py::arg("r_weights"),
             py::arg("batch_size"),

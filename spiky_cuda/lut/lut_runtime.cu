@@ -793,267 +793,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     PROF_END(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP);
 }
 
-// TODO r_positional_embeddings
-
 void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     EXTERNAL_REAL_DT *r_weights,
-    EXTERNAL_REAL_DT *r_positional_embeddings,
-    uint32_t batch_size,
-    // external gradients
-    EXTERNAL_REAL_DT *r_output_gradients,
-    // data from forward pass
-    AnchorsPair *r_detectors,
-    int32_t *r_lookup_indices,
-    EXTERNAL_REAL_DT *r_min_anchor_deltas,
-    int32_t *r_min_anchor_delta_indices,
-    int32_t *r_positional_lookup_indices,
-    EXTERNAL_REAL_DT *r_positional_min_deltas,
-    int32_t *r_positional_min_delta_indices,
-    GradientHashInfo *w_before_detectors_gradients,
-    uint32_t gradient_hash_width,
-    NeuronShiftFiring *r_sparse_firings,
-    uint32_t n_sparse_firings,
-    NeuronShiftFiring *r_sparse_firing_alternatives,
-    uint32_t n_sparse_firing_alternatives,
-    EXTERNAL_REAL_DT *w_input_gradients,
-    EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
-    EXTERNAL_REAL_DT external_lr,
-    EXTERNAL_REAL_DT *w_weights_gradients
-    #ifndef NO_CUDA
-    , cudaStream_t *cuda_streams
-    #endif
-) {
-    __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat\n");
-    if(this->batch_size != batch_size) {
-        throw py::value_error("batch_size on backward pass doesn't match the current context");
-    }
-
-    if(this->sequence_length <= 1) {
-        throw py::value_error("backward_backprop_concat should only be called when sequence_length > 1");
-    }
-
-    #ifdef ENABLE_PROFILING
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-    }
-    #endif
-    #endif
-
-    PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
-    PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
-    #ifndef NO_CUDA
-    cudaEvent_t ev1;
-    cudaEvent_t ev2;
-    #endif
-
-    uint32_t n_output_blocks = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firings), n_output_blocks);
-    uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firings);
-    PROF_START(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, gather_x_gradients_for_sequence, tpb_opt, cuda_streams[0],
-        r_weights,
-        r_output_gradients,
-        r_sparse_firings,
-        w_before_detectors_gradients,
-        gradient_hash_width,
-        n_sparse_firings,
-        this->n_outputs,
-        this->n_detectors,
-        this->sequence_length,
-        n_output_blocks,
-        this->forward_group_size,
-        n_lookup_neurons_per_detector,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        this->base_synapse_metas,
-        this->first_synapse_id,
-        false,
-        this->lut_data,
-        this->first_synapse_meta_lr
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
-    PROF_END(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    PROF_START(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, gather_w_gradients_for_sequence, tpb_opt, cuda_streams[1],
-        r_output_gradients,
-        r_sparse_firings,
-        (external_lr >= 0.0) ? r_weights : w_weights_gradients,
-        n_sparse_firings,
-        this->n_outputs,
-        this->n_detectors,
-        this->sequence_length,
-        n_output_blocks,
-        this->forward_group_size,
-        n_lookup_neurons_per_detector,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        this->base_synapse_metas,
-        this->first_synapse_id,
-        this->lut_data,
-        external_lr,
-        this->first_synapse_meta_lr
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
-    PROF_END(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaEventCreate(&ev1);
-        cudaEventRecord(ev1, cuda_streams[1]);
-    }
-    #endif
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_sparse_firing_alternatives), n_output_blocks);
-    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_sparse_firing_alternatives);
-    PROF_START(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, gather_x_gradients_for_sequence, tpb_opt, cuda_streams[2],
-        r_weights,
-        r_output_gradients,
-        r_sparse_firing_alternatives,
-        w_before_detectors_gradients,
-        gradient_hash_width,
-        n_sparse_firing_alternatives,
-        this->n_outputs,
-        this->n_detectors,
-        this->sequence_length,
-        n_output_blocks,
-        this->forward_group_size,
-        n_lookup_neurons_per_detector,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        this->base_synapse_metas,
-        this->first_synapse_id,
-        true,
-        this->lut_data,
-        this->first_synapse_meta_lr
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
-    PROF_END(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaEventCreate(&ev2);
-        cudaEventRecord(ev2, cuda_streams[2]);
-    }
-    #endif
-
-    #ifndef NO_CUDA
-    if((device != -1) && (lookup_neuron_synapses_infos == nullptr)) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
-        cudaStreamWaitEvent(cuda_streams[0], ev2, 0);
-    }
-    #endif
-    PROF_END(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-    PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
-    uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
-    n_items *= n_items * this->n_detectors;
-    numBlocks = dim3(n_items, batch_size);
-    tpb_opt = TILE * TILE;
-    PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
-        r_lookup_indices, r_min_anchor_deltas, r_min_anchor_delta_indices,
-        r_positional_lookup_indices, r_positional_min_deltas, r_positional_min_delta_indices,
-        this->n_detectors,
-        n_items,
-        this->sequence_length,
-        this->n_anchors_per_detector,
-        r_detectors,
-        n_lookup_neurons_per_detector,
-        w_before_detectors_gradients,
-        gradient_hash_width,
-        w_input_gradients,
-        w_positional_embeddings_gradients,
-        this->n_inputs,
-        this->positional_dim
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
-    PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
-
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaEvent_t ev3;
-        cudaEventCreate(&ev3);
-        cudaEventRecord(ev3, cuda_streams[0]);
-        cudaStreamWaitEvent(cuda_streams[1], ev3, 0);
-        cudaStreamWaitEvent(cuda_streams[2], ev3, 0);
-    }
-    #endif
-    #endif
-    if(device == -1) {
-        memset(
-            w_before_detectors_gradients,
-            0,
-            batch_size * gradient_hash_width * sizeof(GradientHashInfo)
-        );
-    } else {
-        #ifndef NO_CUDA
-        c10::cuda::CUDAGuard guard(device);
-        cudaMemsetAsync(
-            w_before_detectors_gradients,
-            0,
-            batch_size * gradient_hash_width * sizeof(GradientHashInfo),
-            cuda_streams[0]
-        );
-        #endif
-    }
-    PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
-    PROF_END(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
-
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    n_items = this->n_inputs * this->sequence_length;
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
-        w_input_gradients,
-        n_items,
-        this->int_rescaler
-    );
-    if(w_weights_gradients != nullptr) {
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[1],
-            w_weights_gradients,
-            this->n_weights,
-            this->int_rescaler
-        );
-    }
-    n_items = this->n_detectors * this->positional_dim * (this->sequence_length - 1);
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
-        w_positional_embeddings_gradients,
-        n_items,
-        this->int_rescaler
-    );
-    PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    #endif
-}
-
-void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
-    EXTERNAL_REAL_DT *r_weights,
     uint32_t batch_size,
     // external gradients
     EXTERNAL_REAL_DT *r_output_gradients,
@@ -1094,13 +835,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
     PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
     uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
-    uint32_t n_output_blocks = (this->n_outputs + this->forward_group_size - 1) / this->forward_group_size;
+    uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
     n_items *= n_items * this->n_detectors;
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
     dim3 numBlocks(n_items, batch_size * n_output_blocks);
     uint32_t tpb_opt = TILE * TILE;
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, propagate_through_detectors_for_sequence_fc, tpb_opt, cuda_streams[0],
+        numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
         r_output_gradients,
         r_weights,
         r_lookup_indices,
@@ -1116,6 +857,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
         this->n_outputs,
         n_output_blocks,
         this->forward_group_size,
+        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+        this->base_synapse_metas,
+        this->first_synapse_id,
+        this->lut_data,
         r_detectors,
         n_lookup_neurons_per_detector,
         w_input_gradients,
@@ -1131,7 +876,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
     PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
     PROF_START(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, gather_w_gradients_for_sequence_fc, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
+        numBlocks, gather_w_gradients_for_sequence, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
         r_output_gradients,
         r_lookup_indices,
         r_positional_lookup_indices,
@@ -1142,10 +887,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat_fc(
         this->n_outputs,
         n_output_blocks,
         this->forward_group_size,
+        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+        this->base_synapse_metas,
+        this->first_synapse_id,
+        this->lut_data,
         n_lookup_neurons_per_detector,
         (external_lr >= 0.0) ? r_weights : w_weights_gradients,
         this->positional_dim,
-        (external_lr >= 0.0) ? -external_lr * this->first_synapse_meta_lr : this->first_synapse_meta_lr
+        external_lr,
+        this->first_synapse_meta_lr
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , this->int_rescaler
         #else
