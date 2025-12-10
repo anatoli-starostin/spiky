@@ -2492,14 +2492,14 @@ propagate_through_detectors_for_sequence_logic(
     }
 
     if(i == j) {
-        i = bi * TILE + (threadIdx.x / TILE);
-        j = bj * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
         if(i >= j) {
             return;
         }
     } else {
-        i = bi * TILE + (threadIdx.x / TILE);
-        j = bj * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
     }
 
     if(i >= sequence_length || j >= sequence_length) {
