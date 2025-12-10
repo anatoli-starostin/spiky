@@ -1866,7 +1866,6 @@ propagate_through_detectors_for_sequence_sparse_logic(
     uint32_t i_or_j;
     double main_grad_sum;
     double alt_grad_sum;
-    double output_grad;
     #ifdef ATOMIC
     double weight;
     #endif
@@ -2724,7 +2723,6 @@ gather_w_gradients_for_sequence_fc_logic(
     // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
     uint32_t n_detector_items = sequence_length * n_detectors;
     uint32_t batch_offset = batch_index * n_detector_items;
-
 
     // Get K: lookup index from first timestep (i)
     uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
