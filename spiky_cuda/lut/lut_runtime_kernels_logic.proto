@@ -1,3 +1,51 @@
+// ======================= HELPER FUNCTIONS =============================== //
+
+find_forward_synapse_group(
+    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info,
+    uint32_t output_block_index,
+    uint32_t n_outputs_per_block,
+    uint8_t* lut_data,
+    NeuronDataId_t current_group_id
+) {
+    if(lookup_neuron_synapses_info.n_synapse_metas == 1) {
+        current_group_id = lookup_neuron_synapses_info.first_group_id;
+        current_group_id += output_block_index * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
+    } else {
+        DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, lut_data);
+        uint32_t current_group = 0;
+        for(uint32_t j=0;j < lookup_neuron_synapses_info.n_synapse_metas;j++) {
+            DelayInfo delay_info = delays_info[j];
+            if(delay_info != 0) {
+                uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
+                if(current_group + n_groups <= output_block_index) {
+                    current_group += n_groups;
+                    continue;
+                }
+                current_group_id = lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
+                current_group_id += (output_block_index - current_group) * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
+                break;
+            }
+        }
+    }
+}
+
+convert_integers_to_floats_logic(
+    EXTERNAL_REAL_DT* buffer,
+    uint64_t n,
+    double int_rescaler
+) {
+    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i < n) {
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        buffer += n * blockIdx.y;
+        double y = static_cast<double>(*reinterpret_cast<SUMMATION32_DT *>(buffer + i)) * static_cast<double>(DENOMINATOR32_RECIPROC);
+        buffer[i] = static_cast<EXTERNAL_REAL_DT>(y / int_rescaler);
+        #endif
+    }
+}
+
+// ======================= NON SEQUENCE, FORWARD =============================== //
+
 check_detectors_logic(
     EXTERNAL_REAL_DT* r_input,
     uint32_t n_inputs,
@@ -443,106 +491,7 @@ fill_outputs_fully_connected_logic(
     }
 }
 
-fill_outputs_fully_connected_for_sequence_logic(
-    EXTERNAL_REAL_DT* r_weights,
-    int32_t* r_lookup_indices,
-    int32_t* r_positional_lookup_indices,
-    EXTERNAL_REAL_DT* w_output,
-    uint32_t n_outputs,
-    uint32_t n_detectors,
-    uint32_t sequence_length,
-    uint32_t n_anchors_per_detector,
-    uint32_t positional_dim,
-    uint32_t n_lookup_neurons_per_detector,
-    double int_rescaler
-) {
-    // blockIdx.x * blockDim.x + threadIdx.x encodes: detector_index * n_outputs + output_index
-    // This ensures threads in one warp accumulate weights for the same output
-    uint32_t linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if(linear_idx >= n_detectors * n_outputs) {
-        return;
-    }
-
-    uint32_t detector_index = linear_idx / n_outputs;
-    uint32_t output_index = linear_idx % n_outputs;
-
-    
-    // blockIdx.y encodes: batch_index * (sequence_length - 1) + j_offset
-    // j_offset ranges from 0 to sequence_length - 2, j = j_offset + 1 ranges from 1 to sequence_length - 1
-    uint32_t batch_index = blockIdx.y / (sequence_length - 1);
-    uint32_t j = blockIdx.y % (sequence_length - 1) + 1;
-
-    // Calculate offsets into lookup_indices arrays
-    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
-    uint32_t n_detector_items = sequence_length * n_detectors;
-    uint32_t batch_offset = batch_index * n_detector_items;
-
-    // Get Q: lookup index from first timestep (j)
-    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
-    int32_t Q = r_lookup_indices[q_offset];
-
-    // Get PE lookup indices (shared across batches)
-    // PE indices are stored as [(S-1) × N_t]
-    
-    // Accumulate weight sum over all i from 0 to j (inclusive)
-    double weight_sum = 0.0;
-    
-    for(uint32_t i = 0; i < j; i++) {
-        // Get K: lookup index from second timestep (i)
-        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
-        int32_t K = r_lookup_indices[k_offset];
-        
-        // Get PE: positional lookup index from timestep difference (j - i - 1)
-        // Note: j - i - 1 can be negative when i == j, but in that case we don't use PE
-        int32_t PE = 0;
-        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-        PE = r_positional_lookup_indices[pe_offset];
-
-        // Calculate concatenated_index
-        uint32_t concatenated_index = (
-            (static_cast<uint32_t>(Q) << (n_anchors_per_detector + positional_dim)) |
-            (static_cast<uint32_t>(K) << positional_dim) |
-            static_cast<uint32_t>(PE)
-        );
-        
-        // Add detector offset to get neuron_id
-        uint32_t neuron_id = concatenated_index + detector_index * n_lookup_neurons_per_detector;
-        
-        // Get weight connecting this neuron to current output
-        // Weight layout: weights[neuron_id * n_outputs + output_index]
-        double weight = static_cast<double>(r_weights[neuron_id * n_outputs + output_index]);
-        weight_sum += weight;
-    }
-    
-    // Calculate output offset
-    // Output layout: [batch0_t0_out0, batch0_t0_out1, ..., batch0_t0_outN, batch0_t1_out0, ...]
-    uint32_t output_offset = (batch_index * sequence_length + j) * n_outputs + output_index;
-    
-    // Atomic add accumulated sum to output
-    SUMMATION32_DT payload;
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
-        #ifdef ATOMIC
-        atomicAdd(
-            reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset),
-            payload
-        );
-        #else
-        *reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset) += payload;
-        #endif
-    #else
-        payload = static_cast<SUMMATION32_DT>(weight_sum);
-        #ifdef ATOMIC
-        atomicAdd(
-            w_output + output_offset,
-            payload
-        );
-        #else
-        w_output[output_offset] += payload;
-        #endif
-    #endif
-}
+// ======================= NON SEQUENCE, BACKWARD =============================== //
 
 fire_detectors_by_lookup_indices_logic(
     uint32_t n_detectors,
@@ -1071,24 +1020,8 @@ propagate_through_detectors_logic(
     }
 }
 
-convert_integers_to_floats_logic(
-    EXTERNAL_REAL_DT* buffer,
-    uint64_t n,
-    double int_rescaler
-) {
-    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(i < n) {
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        buffer += n * blockIdx.y;
-        double y = static_cast<double>(*reinterpret_cast<SUMMATION32_DT *>(buffer + i)) * static_cast<double>(DENOMINATOR32_RECIPROC);
-        buffer[i] = static_cast<EXTERNAL_REAL_DT>(y / int_rescaler);
-        #endif
-    }
-}
+// ======================= SEQUENCE, FORWARD =============================== //
 
-// Kernel for checking detectors across a sequence of timesteps
-// Grid: (n_detector_items blocks, batch_size batches) where n_detector_items = sequence_length * n_detectors
-// Each thread processes one detector at one timestep
 check_detectors_for_sequence_logic(
     EXTERNAL_REAL_DT* r_input,
     uint32_t n_inputs,
@@ -1213,24 +1146,125 @@ check_positional_embeddings_logic(
     }
 }
 
-fill_after_detectors_firing_stat_logic(
+fill_outputs_fully_connected_for_sequence_logic(
+    EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
-    EXTERNAL_REAL_DT* r_min_anchor_deltas,
-    int32_t* r_min_anchor_delta_indices,
     int32_t* r_positional_lookup_indices,
-    EXTERNAL_REAL_DT* r_positional_min_deltas,
-    int32_t* r_positional_min_delta_indices,
-    uint32_t n_total_tiles,
-    uint32_t sequence_length,
+    EXTERNAL_REAL_DT* w_output,
+    uint32_t n_outputs,
     uint32_t n_detectors,
+    uint32_t sequence_length,
     uint32_t n_anchors_per_detector,
     uint32_t positional_dim,
     uint32_t n_lookup_neurons_per_detector,
-    NeuronShiftFiring* rw_firings_buffer,
-    uint64_t* rw_firings_counter_ptr,
-    NeuronShiftFiring* rw_firings_buffer_alternative,
-    uint64_t* rw_firings_counter_ptr_alternative,
-    int device
+    double int_rescaler
+) {
+    // blockIdx.x * blockDim.x + threadIdx.x encodes: detector_index * n_outputs + output_index
+    // This ensures threads in one warp accumulate weights for the same output
+    uint32_t linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(linear_idx >= n_detectors * n_outputs) {
+        return;
+    }
+
+    uint32_t detector_index = linear_idx / n_outputs;
+    uint32_t output_index = linear_idx % n_outputs;
+
+
+    // blockIdx.y encodes: batch_index * (sequence_length - 1) + j_offset
+    // j_offset ranges from 0 to sequence_length - 2, j = j_offset + 1 ranges from 1 to sequence_length - 1
+    uint32_t batch_index = blockIdx.y / (sequence_length - 1);
+    uint32_t j = blockIdx.y % (sequence_length - 1) + 1;
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
+
+    // Get Q: lookup index from first timestep (j)
+    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+    int32_t Q = r_lookup_indices[q_offset];
+
+    // Get PE lookup indices (shared across batches)
+    // PE indices are stored as [(S-1) × N_t]
+
+    // Accumulate weight sum over all i from 0 to j (inclusive)
+    double weight_sum = 0.0;
+
+    for(uint32_t i = 0; i < j; i++) {
+        // Get K: lookup index from second timestep (i)
+        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+        int32_t K = r_lookup_indices[k_offset];
+
+        // Get PE: positional lookup index from timestep difference (j - i - 1)
+        // Note: j - i - 1 can be negative when i == j, but in that case we don't use PE
+        int32_t PE = 0;
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+
+        // Calculate concatenated_index
+        uint32_t concatenated_index = (
+            (static_cast<uint32_t>(Q) << (n_anchors_per_detector + positional_dim)) |
+            (static_cast<uint32_t>(K) << positional_dim) |
+            static_cast<uint32_t>(PE)
+        );
+
+        // Add detector offset to get neuron_id
+        uint32_t neuron_id = concatenated_index + detector_index * n_lookup_neurons_per_detector;
+
+        // Get weight connecting this neuron to current output
+        // Weight layout: weights[neuron_id * n_outputs + output_index]
+        double weight = static_cast<double>(r_weights[neuron_id * n_outputs + output_index]);
+        weight_sum += weight;
+    }
+
+    // Calculate output offset
+    // Output layout: [batch0_t0_out0, batch0_t0_out1, ..., batch0_t0_outN, batch0_t1_out0, ...]
+    uint32_t output_offset = (batch_index * sequence_length + j) * n_outputs + output_index;
+
+    // Atomic add accumulated sum to output
+    SUMMATION32_DT payload;
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        #ifdef ATOMIC
+        atomicAdd(
+            reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset),
+            payload
+        );
+        #else
+        *reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset) += payload;
+        #endif
+    #else
+        payload = static_cast<SUMMATION32_DT>(weight_sum);
+        #ifdef ATOMIC
+        atomicAdd(
+            w_output + output_offset,
+            payload
+        );
+        #else
+        w_output[output_offset] += payload;
+        #endif
+    #endif
+}
+
+fill_outputs_sparse_for_sequence_logic(
+    EXTERNAL_REAL_DT* r_weights,
+    int32_t* r_lookup_indices,
+    int32_t* r_positional_lookup_indices,
+    uint32_t n_detectors,
+    uint32_t n_total_tiles,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
+    uint32_t n_lookup_neurons_per_detector,
+    EXTERNAL_REAL_DT* w_output,
+    uint32_t positional_dim,
+    double int_rescaler
 ) {
     // blockIdx.x encodes: tile_id * n_detectors + detector_index
     // Extract tile_id and detector_index
@@ -1242,442 +1276,86 @@ fill_after_detectors_firing_stat_logic(
         return;
     }
 
-    uint32_t bi = tile_id / tile_grid_w;  // tile row
-    uint32_t bj = tile_id % tile_grid_w;  // tile col
+    uint32_t i = tile_id / tile_grid_w;  // tile row
+    uint32_t j = tile_id % tile_grid_w;  // tile col
 
     // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
-    if(bi > bj) {
+    if(i > j) {
         return;
     }
 
-    uint32_t concatenated_index = std::numeric_limits<uint32_t>::max();
-    uint32_t alt_index_1 = std::numeric_limits<uint32_t>::max();
-    uint32_t alt_index_2 = std::numeric_limits<uint32_t>::max();
-    uint32_t batch_index = blockIdx.y;
-
-    // Calculate tile start positions
-    uint32_t i0 = bi * TILE;
-    uint32_t j0 = bj * TILE;
-
-    // Get thread coordinates within tile
-    uint32_t i = i0 + (threadIdx.x / TILE);  // first timestep (row)
-    uint32_t j = j0 + (threadIdx.x % TILE);  // second timestep (col)
-
-    // Check if this (i, j) pair is valid (i < j and within bounds)
-    bool valid_pair = false;
-    if(bi < bj) {
-        // Tile strictly above diagonal - all elements are valid (i < j)
-        if(i < sequence_length && j < sequence_length) {
-            valid_pair = true;
+    if(i == j) {
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
+        if(i >= j) {
+            return;
         }
     } else {
-        // Diagonal tile - only process where i < j
-        if(i < sequence_length && j < sequence_length && i < j) {
-            valid_pair = true;
-        }
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
     }
 
-    if(valid_pair) {
-        // Calculate offsets into lookup_indices arrays
-        // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
-        uint32_t n_detector_items = sequence_length * n_detectors;
-        uint32_t batch_offset = batch_index * n_detector_items;
-
-        // Get K: lookup index from first timestep (i)
-        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
-        int32_t K = r_lookup_indices[k_offset];
-
-        // Get Q: lookup index from second timestep (j)
-        uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
-        int32_t Q = r_lookup_indices[q_offset];
-
-        // Get PE: positional lookup index from timestep difference (j - i - 1)
-        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-        int32_t PE = r_positional_lookup_indices[pe_offset];
-
-        concatenated_index = (
-            (Q << (n_anchors_per_detector + positional_dim)) |
-            (K << positional_dim) |
-            PE
-        ) + detector_index * n_lookup_neurons_per_detector;
-
-        if(r_min_anchor_deltas != nullptr) {
-            EXTERNAL_REAL_DT q_fabs_min_delta = fabs(r_min_anchor_deltas[q_offset]);
-            EXTERNAL_REAL_DT k_fabs_min_delta = fabs(r_min_anchor_deltas[k_offset]);
-            if(q_fabs_min_delta < k_fabs_min_delta) {
-                alt_index_1 = (
-                    ((Q ^ (1 << r_min_anchor_delta_indices[q_offset])) << (n_anchors_per_detector + positional_dim)) |
-                    (K << positional_dim) |
-                    PE
-                ) + detector_index * n_lookup_neurons_per_detector;
-            } else {
-                alt_index_1 = (
-                    (Q << (n_anchors_per_detector + positional_dim)) |
-                    ((K ^ (1 << r_min_anchor_delta_indices[k_offset])) << positional_dim) |
-                    PE
-                ) + detector_index * n_lookup_neurons_per_detector;
-            }
-
-            EXTERNAL_REAL_DT pe_fabs_min_delta = fabs(r_positional_min_deltas[pe_offset]);
-            if((pe_fabs_min_delta < q_fabs_min_delta) && (pe_fabs_min_delta < k_fabs_min_delta)) {
-                alt_index_2 = (
-                    (Q << (n_anchors_per_detector + positional_dim)) |
-                    (K << positional_dim) |
-                    (PE ^ (1 << r_positional_min_delta_indices[pe_offset]))
-                ) + detector_index * n_lookup_neurons_per_detector;
-            }
-        }
-    }
-
-    if(device == -1) {
-        uint64_t firings_offset;
-        if(concatenated_index != std::numeric_limits<uint32_t>::max()) {
-            firings_offset = *rw_firings_counter_ptr;
-            (*rw_firings_counter_ptr)++;
-            rw_firings_buffer[firings_offset] = NeuronShiftFiring{
-                batch_index,  // batch_index
-                1.0,  // payload
-                concatenated_index,  // neuron_id
-                j  // shift (timestep)
-            };
-            if(alt_index_1 != std::numeric_limits<uint32_t>::max()) {
-                firings_offset = *rw_firings_counter_ptr_alternative;
-                (*rw_firings_counter_ptr_alternative)++;
-
-                rw_firings_buffer_alternative[firings_offset] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
-                    alt_index_1,  // neuron_id
-                    j  // shift (timestep)
-                };
-            }
-            if(alt_index_2 != std::numeric_limits<uint32_t>::max()) {
-                firings_offset = *rw_firings_counter_ptr_alternative;
-                (*rw_firings_counter_ptr_alternative)++;
-
-                rw_firings_buffer_alternative[firings_offset] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
-                    alt_index_2,  // neuron_id
-                    j  // shift (timestep)
-                };
-            }
-        }
-    } else {
-    #ifdef ATOMIC
-        int tpb    = blockDim.x; // TILE * TILE = 1024
-        int tid    = threadIdx.x;
-        int lane   = tid & 31;
-        int warpId = tid >> 5;
-        int NWARPS = tpb >> 5;
-
-        const unsigned FULL = 0xffffffffu;
-        __shared__ uint32_t warp_sums_main[32];      // up to 1024 threads
-        __shared__ uint32_t warp_sums_alt[32];       // for alternative firings
-        __shared__ uint64_t block_base_main;
-        __shared__ uint64_t block_base_alt;
-
-        uint32_t n_main = 0;
-        uint32_t n_alt = 0;
-
-        if(concatenated_index != std::numeric_limits<uint32_t>::max()) {
-            n_main++;
-            if(alt_index_1 != std::numeric_limits<uint32_t>::max()) {
-                n_alt++;
-            }
-            if(alt_index_2 != std::numeric_limits<uint32_t>::max()) {
-                n_alt++;
-            }
-        }
-
-        // --- warp inclusive scan on n_main ---
-        uint32_t prefix_main = n_main;
-        #pragma unroll
-        for (int off = 1; off < 32; off <<= 1) {
-            uint32_t x = __shfl_up_sync(FULL, prefix_main, off);
-            if (lane >= off) prefix_main += x;
-        }
-
-        if (lane == 31)
-            warp_sums_main[warpId] = prefix_main;
-
-        // --- warp inclusive scan on n_alt ---
-        uint32_t prefix_alt = n_alt;
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            #pragma unroll
-            for (int off = 1; off < 32; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, prefix_alt, off);
-                if (lane >= off) prefix_alt += x;
-            }
-
-            if (lane == 31)
-                warp_sums_alt[warpId] = prefix_alt;
-        }
-
-        __syncthreads();
-
-        // --- warp 0 scans warp sums for main ---
-        if (warpId == 0) {
-            uint32_t wv = (lane < NWARPS) ? warp_sums_main[lane] : 0;
-
-            #pragma unroll
-            for (int off = 1; off < NWARPS; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, wv, off);
-                if (lane >= off) wv += x;
-            }
-
-            if (lane < NWARPS)
-                warp_sums_main[lane] = wv;
-        }
-
-        // --- warp 1 scans warp sums for alt ---
-        if(rw_firings_counter_ptr_alternative != nullptr && warpId == 1) {
-            uint32_t wv = (lane < NWARPS) ? warp_sums_alt[lane] : 0;
-
-            #pragma unroll
-            for (int off = 1; off < NWARPS; off <<= 1) {
-                uint32_t x = __shfl_up_sync(FULL, wv, off);
-                if (lane >= off) wv += x;
-            }
-
-            if (lane < NWARPS)
-                warp_sums_alt[lane] = wv;
-        }
-
-        __syncthreads();
-
-        // Add warp prefix to thread prefix
-        if (warpId > 0) {
-            prefix_main += warp_sums_main[warpId - 1];
-            if(rw_firings_counter_ptr_alternative != nullptr) {
-                prefix_alt += warp_sums_alt[warpId - 1];
-            }
-        }
-
-        // --- one atomic per block for main ---
-        if (tid == 0) {
-            uint32_t block_sum_main = warp_sums_main[NWARPS - 1];
-            block_base_main = atomicAdd(
-                reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
-                static_cast<unsigned long long>(block_sum_main)
-            );
-        }
-
-        // --- one atomic per block for alt ---
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            if (tid == 1) {
-                uint32_t block_sum_alt = warp_sums_alt[NWARPS - 1];
-                block_base_alt = atomicAdd(
-                    reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr_alternative),
-                    static_cast<unsigned long long>(block_sum_alt)
-                );
-            }
-        }
-
-        __syncthreads();
-
-        // Convert inclusive → exclusive and add block base
-        uint64_t offset_main = block_base_main + prefix_main - n_main;
-        uint64_t offset_alt = 0;
-        if(rw_firings_counter_ptr_alternative != nullptr) {
-            offset_alt = block_base_alt + prefix_alt - n_alt;
-        }
-
-        if(concatenated_index != std::numeric_limits<uint32_t>::max()) {
-            rw_firings_buffer[offset_main] = NeuronShiftFiring{
-                batch_index,  // batch_index
-                1.0,  // payload
-                concatenated_index,  // neuron_id
-                j  // shift (timestep)
-            };
-            if(alt_index_1 != std::numeric_limits<uint32_t>::max()) {
-                rw_firings_buffer_alternative[offset_alt++] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    1.0,  // payload
-                    alt_index_1,  // neuron_id
-                    j  // shift (timestep)
-                };
-            }
-            if(alt_index_2 != std::numeric_limits<uint32_t>::max()) {
-                rw_firings_buffer_alternative[offset_alt] = NeuronShiftFiring{
-                    batch_index,  // batch_index
-                    1.0,  // payload (here we just need to remember that the gradient from this element will be used on a backward pass)
-                    alt_index_2,  // neuron_id
-                    j  // shift (timestep)
-                };
-            }
-        }
-    #endif
-    }
-}
-
-fill_outputs_by_sparse_firings_logic(
-    EXTERNAL_REAL_DT* r_weights,
-    NeuronDataId_t first_synapse_id,
-    NeuronShiftFiring* r_firings_buffer,
-    uint64_t* r_firings_counter_ptr,
-    uint64_t max_firings,
-    EXTERNAL_REAL_DT* w_output,
-    uint32_t n_lookup_neurons,
-    uint32_t n_outputs,
-    uint32_t n_output_blocks,
-    uint32_t sequence_length,
-    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
-    int32_t n_outputs_per_block,
-    uint8_t* lut_data,
-    double int_rescaler
-) {
-    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    
-    if(i >= max_firings) {
+    if(i >= sequence_length || j >= sequence_length) {
         return;
     }
 
-    if(i >= *r_firings_counter_ptr) {
-        return;
-    }
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
+    w_output += (batch_index * sequence_length + j) * n_outputs;
 
-    NeuronShiftFiring firing = r_firings_buffer[i];
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
 
-    __SUPER_DETAILED_TRACE__(
-        "[fill_outputs_by_sparse_firings] firing.batch_index %d, firing.shift %d, firing.neuron_id %d, blockIdx.y %d, n_outputs_per_block %d, sequence_length %d, n_outputs %d\n",
-        firing.batch_index, firing.shift, firing.neuron_id, blockIdx.y, n_outputs_per_block, sequence_length, n_outputs
-    );
+    // Get K: lookup index from first timestep (i)
+    uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+    int32_t K = r_lookup_indices[k_offset];
 
-    w_output += (firing.batch_index * sequence_length + firing.shift) * n_outputs;
+    // Get Q: lookup index from second timestep (j)
+    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+    int32_t Q = r_lookup_indices[q_offset];
 
-    if(r_lookup_neuron_synapses_infos != nullptr) {
-        NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + firing.neuron_id);
-        if(blockIdx.y < lookup_neuron_synapses_info.n_groups) {
-            NeuronDataId_t current_group_id = 0;
-            if(lookup_neuron_synapses_info.n_synapse_metas == 1) {
-                current_group_id = lookup_neuron_synapses_info.first_group_id;
-                current_group_id += blockIdx.y * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
-            } else {
-                DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, lut_data);
-                uint32_t current_group = 0;
-                for(uint32_t j=0;j < lookup_neuron_synapses_info.n_synapse_metas;j++) {
-                    DelayInfo delay_info = delays_info[j];
-                    if(delay_info != 0) {
-                        uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
-                        if(current_group + n_groups <= blockIdx.y) {
-                            current_group += n_groups;
-                            continue;
-                        }
-                        current_group_id = lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
-                        current_group_id += (blockIdx.y - current_group) * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
-                        break;
-                    }
-                }
-            }
+    // Get PE: positional lookup index from timestep difference (j - i - 1)
+    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+    int32_t PE = r_positional_lookup_indices[pe_offset];
 
-            double multiplier = static_cast<double>(firing.payload);
-            ATOMIC_PFX(process_single_synapse_group)(
-                current_group_id,
-                lut_data,
-                first_synapse_id,
-                r_weights,
-                w_output,
-                n_lookup_neurons,
-                multiplier,
-                int_rescaler
-            );
-        }
-    } else { // fully connected case
-        w_output += blockIdx.y * n_outputs_per_block;
-        r_weights += static_cast<uint64_t>(firing.neuron_id) * n_outputs + blockIdx.y * n_outputs_per_block;
-        if((blockIdx.y == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-            n_outputs_per_block = n_outputs % n_outputs_per_block;
-        }
-        float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
-        double weight;
-        SUMMATION32_DT payload;
+    // Calculate concatenated index
+    uint32_t concatenated_index = (
+        (Q << (n_anchors_per_detector + positional_dim)) |
+        (K << positional_dim) |
+        PE
+    ) + detector_index * n_lookup_neurons_per_detector;
 
-        __SUPER_DETAILED_TRACE__("[fill_outputs_by_sparse_firings] i %d, current_group_size %d, n_firings %d, weight_shift %ld\n", i, current_group_size, n_firings, weight_shift);
+    double multiplier = 1.0;
+    uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
 
-        int32_t n_w_buffered = 0;
-        for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++, r_weights++, w_output++) {
-            if(((reinterpret_cast<uintptr_t>(r_weights) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
-                #ifdef ATOMIC
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
-                    : "l"(r_weights)
-                );
-                #else
-                weights_quad = *reinterpret_cast<float4 *>(r_weights);
-                #endif
-                weight = static_cast<double>(weights_quad.x);
-                n_w_buffered = 3;
-            } else if(n_w_buffered > 0) {
-                if(n_w_buffered == 3) {
-                    weight = static_cast<double>(weights_quad.y);
-                } else if(n_w_buffered == 2) {
-                    weight = static_cast<double>(weights_quad.z);
-                } else {
-                    weight = static_cast<double>(weights_quad.w);
-                }
-                n_w_buffered--;
-            } else {
-                weight = static_cast<double>(*r_weights);
-            }
+    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
 
-            weight *= firing.payload;
-
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_output),
-                    payload
-                );
-                #else
-                *reinterpret_cast<SUMMATION32_DT *>(w_output) += payload;
-                #endif
-            #else
-                payload = static_cast<SUMMATION32_DT>(weight);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_output,
-                    payload
-                );
-                #else
-                __SUPER_DETAILED_TRACE__("[fill_outputs_by_sparse_firings] target_id %d, payload %f\n", target_id, payload);
-                *w_output += payload;
-                #endif
-            #endif
-        }
+    if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+        NeuronDataId_t current_group_id;
+        PFX(find_forward_synapse_group)(
+            lookup_neuron_synapses_info,
+            output_block_index,
+            n_outputs_per_block,
+            lut_data,
+            current_group_id
+        );
+        ATOMIC_PFX(process_single_synapse_group)(
+            current_group_id,
+            lut_data,
+            first_synapse_id,
+            r_weights,
+            w_output,
+            n_lookup_neurons,
+            multiplier,
+            int_rescaler
+        );
     }
 }
 
-find_forward_synapse_group(
-    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info,
-    uint32_t output_block_index,
-    uint32_t n_outputs_per_block,
-    uint8_t* lut_data,
-    NeuronDataId_t current_group_id
-) {
-    if(lookup_neuron_synapses_info.n_synapse_metas == 1) {
-        current_group_id = lookup_neuron_synapses_info.first_group_id;
-        current_group_id += output_block_index * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
-    } else {
-        DelayInfo* delays_info = DelayInfos(lookup_neuron_synapses_info.delays_info_id, lut_data);
-        uint32_t current_group = 0;
-        for(uint32_t j=0;j < lookup_neuron_synapses_info.n_synapse_metas;j++) {
-            DelayInfo delay_info = delays_info[j];
-            if(delay_info != 0) {
-                uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
-                if(current_group + n_groups <= output_block_index) {
-                    current_group += n_groups;
-                    continue;
-                }
-                current_group_id = lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
-                current_group_id += (output_block_index - current_group) * SizeOfForwardSynapseGroup(n_outputs_per_block, true);
-                break;
-            }
-        }
-    }
-}
+// ======================= SEQUENCE, BACKWARD =============================== //
 
 accumulate_grad_sum_sparse(
     NeuronDataId_t current_group_id,
@@ -1703,7 +1381,7 @@ accumulate_grad_sum_sparse(
     int32_t n_w_buffered = 0;
     NeuronIndex_t target_id;
     EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
-    
+
     for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, current_target_ptr++, weight_ptr++) {
         if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
             asm volatile(
@@ -1726,7 +1404,7 @@ accumulate_grad_sum_sparse(
             target_id = *current_target_ptr;
         }
         target_id -= n_lookup_neurons;
-        
+
         // Vectorized read of weights
         if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
             asm volatile(
@@ -1760,8 +1438,6 @@ accumulate_grad_sum_sparse(
     }
     #endif
 }
-
-// ======================= SEQUENCE, BACKWARD =============================== //
 
 propagate_through_detectors_for_sequence_sparse_logic(
     EXTERNAL_REAL_DT* r_output_gradients,

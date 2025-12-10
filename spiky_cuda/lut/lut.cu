@@ -699,9 +699,7 @@ public:
         torch::Tensor &w_positional_lookup_indices,
         torch::Tensor &w_positional_min_deltas,
         torch::Tensor &w_positional_min_delta_indices,
-        torch::Tensor &w_sparse_firing_buffer,
-        std::optional<torch::Tensor> &w_sparse_firing_buffer_alternative,
-        std::optional<torch::Tensor> &r_stream_handles
+        std::optional<torch::Tensor> r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step_concat\n");
@@ -716,10 +714,6 @@ public:
         checkTensor(w_positional_lookup_indices, "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_positional_min_deltas, "w_positional_min_deltas", true, host_device_allocator.device);
         checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_sparse_firing_buffer, "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
-        if(w_sparse_firing_buffer_alternative.has_value()) {
-            checkTensor(w_sparse_firing_buffer_alternative.value(), "w_sparse_firing_buffer_alternative", false, host_device_allocator.device, sizeof(int64_t));
-        }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -768,105 +762,8 @@ public:
             cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
         }
         #endif
+
         this->runtime_context->forward_step_concat(
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
-            batch_size,
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_input.data_ptr()),
-            reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
-            reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr()),
-            reinterpret_cast<int32_t *>(w_positional_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr()),
-            reinterpret_cast<int64_t *>(w_sparse_firing_buffer.data_ptr()),
-            w_sparse_firing_buffer_alternative.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer_alternative.value().data_ptr()) : nullptr
-            #ifndef NO_CUDA
-            , cuda_streams_ptr
-            #endif
-        );
-    }
-
-    void forward_step_concat_fc(
-        const torch::Tensor &r_weights,
-        const torch::Tensor &r_positional_embeddings,
-        uint32_t batch_size,
-        const torch::Tensor &r_input,
-        const torch::Tensor &r_detector_anchors,
-        torch::Tensor &w_output,
-        torch::Tensor &w_lookup_indices,
-        torch::Tensor &w_min_anchor_deltas,
-        torch::Tensor &w_min_anchor_delta_indices,
-        torch::Tensor &w_positional_lookup_indices,
-        torch::Tensor &w_positional_min_deltas,
-        torch::Tensor &w_positional_min_delta_indices,
-        std::optional<torch::Tensor> r_stream_handles
-    ) {
-        py::gil_scoped_release gil_guard;
-        __TRACE__("lutm_forward_step_concat_fc\n");
-        checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
-        checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
-        checkTensor(r_input, "r_input", true, host_device_allocator.device);
-        checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_output, "w_output", true, host_device_allocator.device);
-        checkTensor(w_lookup_indices, "w_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_min_anchor_deltas, "w_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_positional_lookup_indices, "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_positional_min_deltas, "w_positional_min_deltas", true, host_device_allocator.device);
-        checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        if(r_stream_handles.has_value()) {
-            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
-            if(r_stream_handles.value().numel() < 3) {
-                throw py::value_error("r_stream_handles must have at least 3 elements");
-            }
-        }
-        if(batch_size == 0) {
-            throw py::value_error("batch_size == 0");
-        }
-
-        if(this->runtime_context == nullptr) {
-            GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
-            IndexedSynapsesInfo *synapse_infos = nullptr;
-            if(this->lookup_neuron_synapses_infos_id != std::numeric_limits<uint64_t>::max()) {
-                synapse_infos = IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data);
-            }
-            this->runtime_context = new LUT_RUNTIME_CONTEXT_CLASS(
-                host_device_allocator.data,
-                host_device_allocator.device,
-                this->n_inputs,
-                this->n_outputs,
-                this->n_detectors,
-                this->n_anchors_per_detector,
-                this->n_lookup_neurons,
-                this->sequence_length,
-                this->positional_dim,
-                this->forward_group_size,
-                this->backward_group_size,
-                gc_meta->max_forward_groups_per_neuron,
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                N_WEIGHTS(gc_meta, true),
-                int_rescaler,
-                #endif
-                #ifdef ENABLE_PROFILING
-                this->profiler,
-                #endif
-                BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
-                synapse_infos,
-                gc_meta->first_synapse_id
-            );
-        }
-
-        #ifndef NO_CUDA
-        cudaStream_t *cuda_streams_ptr = nullptr;
-        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
-            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
-        }
-        #endif
-
-        this->runtime_context->forward_step_concat_fc(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
             batch_size,
@@ -1399,23 +1296,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_sparse_firing_buffer") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
-            "Forward step concat",
-            py::arg("r_weights"),
-            py::arg("r_positional_embeddings"),
-            py::arg("batch_size"),
-            py::arg("r_input"),
-            py::arg("r_detector_anchors"),
-            py::arg("w_output"),
-            py::arg("w_lookup_indices"),
-            py::arg("w_min_anchor_deltas"),
-            py::arg("w_min_anchor_delta_indices"),
-            py::arg("w_positional_lookup_indices"),
-            py::arg("w_positional_min_deltas"),
-            py::arg("w_positional_min_delta_indices"),
-            py::arg("w_sparse_firing_buffer"),
-            py::arg("w_sparse_firing_buffer_alternative") = py::none(),
-            py::arg("r_stream_handles") = py::none())
-        .def("forward_step_concat_fc", &LUTM_CLASS_NAME::forward_step_concat_fc,
             "Forward step concat for fully connected mode",
             py::arg("r_weights"),
             py::arg("r_positional_embeddings"),
