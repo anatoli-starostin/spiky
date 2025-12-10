@@ -2445,7 +2445,7 @@ accumulate_grad_sum_sparse(
 
 // ======================= SEQUENCE, BACKWARD =============================== //
 
-propagate_through_detectors_for_sequence_logic(
+propagate_through_detectors_for_sequence_sparse_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
@@ -2510,17 +2510,6 @@ propagate_through_detectors_for_sequence_logic(
     uint32_t batch_index = blockIdx.y / n_output_blocks;
     uint32_t output_block_index = blockIdx.y % n_output_blocks;
     r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
-
-    int32_t n_outputs_in_current_block;
-    if(r_lookup_neuron_synapses_infos == nullptr) {
-        r_weights += output_block_index * n_outputs_per_block;
-        r_output_gradients += output_block_index * n_outputs_per_block;
-        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-            n_outputs_in_current_block = n_outputs % n_outputs_per_block;
-        } else {
-            n_outputs_in_current_block = n_outputs_per_block;
-        }
-    }
 
     // Calculate offsets into lookup_indices arrays
     // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
@@ -2601,153 +2590,54 @@ propagate_through_detectors_for_sequence_logic(
     main_grad_sum = 0.0;
     alt_grad_sum = 0.0;
     NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info;
-    if(r_lookup_neuron_synapses_infos != nullptr) {
-        // Sparse connectivity: gather output gradients using ForwardSynapseGroups
-        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
-        NeuronDataId_t current_group_id;
+    
+    // Sparse connectivity: gather output gradients using ForwardSynapseGroups
+    lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
+    NeuronDataId_t current_group_id;
 
-        if(output_block_index < lookup_neuron_synapses_info.n_groups) {
-            PFX(find_forward_synapse_group)(
-                lookup_neuron_synapses_info,
-                output_block_index,
-                n_outputs_per_block,
-                lut_data,
-                current_group_id
-            );
+    if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+        PFX(find_forward_synapse_group)(
+            lookup_neuron_synapses_info,
+            output_block_index,
+            n_outputs_per_block,
+            lut_data,
+            current_group_id
+        );
 
-            ATOMIC_PFX(accumulate_grad_sum_sparse)(
-                current_group_id,
-                lut_data,
-                first_synapse_id,
-                r_output_gradients,
-                r_weights,
-                n_lookup_neurons,
-                n_outputs,
-                main_grad_sum
-            );
-        }
+        ATOMIC_PFX(accumulate_grad_sum_sparse)(
+            current_group_id,
+            lut_data,
+            first_synapse_id,
+            r_output_gradients,
+            r_weights,
+            n_lookup_neurons,
+            n_outputs,
+            main_grad_sum
+        );
+    }
 
-        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
+    lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
 
-        // Process alt concatenated_index_alt
-        if(output_block_index < lookup_neuron_synapses_info.n_groups) {
-            PFX(find_forward_synapse_group)(
-                lookup_neuron_synapses_info,
-                output_block_index,
-                n_outputs_per_block,
-                lut_data,
-                current_group_id
-            );
+    // Process alt concatenated_index_alt
+    if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+        PFX(find_forward_synapse_group)(
+            lookup_neuron_synapses_info,
+            output_block_index,
+            n_outputs_per_block,
+            lut_data,
+            current_group_id
+        );
 
-            ATOMIC_PFX(accumulate_grad_sum_sparse)(
-                current_group_id,
-                lut_data,
-                first_synapse_id,
-                r_output_gradients,
-                r_weights,
-                n_lookup_neurons,
-                n_outputs,
-                alt_grad_sum
-            );
-        }
-    } else {
-        // Fully connected: direct indexing
-        uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
-        uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
-
-        #ifdef ATOMIC
-        float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        float4 main_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        int32_t n_output_grad_buffered = 0;
-        int32_t n_main_w_buffered = 0;
-        int32_t n_alt_w_buffered = 0;
-        EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
-        EXTERNAL_REAL_DT* r_main_weights_ptr = r_weights + weights_main_shift;
-        EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
-
-        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
-            // Vectorized read of output gradients
-            if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
-                    : "l"(r_output_grad_ptr)
-                );
-                output_grad = static_cast<double>(output_grad_quad.x);
-                n_output_grad_buffered = 3;
-            } else if(n_output_grad_buffered > 0) {
-                if(n_output_grad_buffered == 3) {
-                    output_grad = static_cast<double>(output_grad_quad.y);
-                } else if(n_output_grad_buffered == 2) {
-                    output_grad = static_cast<double>(output_grad_quad.z);
-                } else {
-                    output_grad = static_cast<double>(output_grad_quad.w);
-                }
-                n_output_grad_buffered--;
-            } else {
-                output_grad = static_cast<double>(*r_output_grad_ptr);
-            }
-
-            // Vectorized read of main weights
-            if(((reinterpret_cast<uintptr_t>(r_main_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(main_weights_quad.x), "=f"(main_weights_quad.y), "=f"(main_weights_quad.z), "=f"(main_weights_quad.w)
-                    : "l"(r_main_weights_ptr)
-                );
-                weight = static_cast<double>(main_weights_quad.x);
-                n_main_w_buffered = 3;
-            } else if(n_main_w_buffered > 0) {
-                if(n_main_w_buffered == 3) {
-                    weight = static_cast<double>(main_weights_quad.y);
-                } else if(n_main_w_buffered == 2) {
-                    weight = static_cast<double>(main_weights_quad.z);
-                } else {
-                    weight = static_cast<double>(main_weights_quad.w);
-                }
-                n_main_w_buffered--;
-            } else {
-                weight = static_cast<double>(*r_main_weights_ptr);
-            }
-
-            main_grad_sum += weight * output_grad;
-
-            // Vectorized read of alt weights
-            if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
-                    : "l"(r_alt_weights_ptr)
-                );
-                weight = static_cast<double>(alt_weights_quad.x);
-                n_alt_w_buffered = 3;
-            } else if(n_alt_w_buffered > 0) {
-                if(n_alt_w_buffered == 3) {
-                    weight = static_cast<double>(alt_weights_quad.y);
-                } else if(n_alt_w_buffered == 2) {
-                    weight = static_cast<double>(alt_weights_quad.z);
-                } else {
-                    weight = static_cast<double>(alt_weights_quad.w);
-                }
-                n_alt_w_buffered--;
-            } else {
-                weight = static_cast<double>(*r_alt_weights_ptr);
-            }
-
-            alt_grad_sum += weight * output_grad;
-
-            r_output_grad_ptr++;
-            r_main_weights_ptr++;
-            r_alt_weights_ptr++;
-        }
-        #else
-        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++, weights_alt_shift++) {
-            output_grad = static_cast<double>(r_output_gradients[cursor]);
-            main_grad_sum += static_cast<double>(r_weights[weights_main_shift]) * output_grad;
-            alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
-        }
-        #endif
+        ATOMIC_PFX(accumulate_grad_sum_sparse)(
+            current_group_id,
+            lut_data,
+            first_synapse_id,
+            r_output_gradients,
+            r_weights,
+            n_lookup_neurons,
+            n_outputs,
+            alt_grad_sum
+        );
     }
     du *= main_grad_sum - alt_grad_sum;
 
@@ -2803,100 +2693,422 @@ propagate_through_detectors_for_sequence_logic(
             du *= -0.5 * du;
         }
         alt_grad_sum = 0.0;
-        if(r_lookup_neuron_synapses_infos != nullptr) {
-            // Sparse connectivity: gather output gradients using ForwardSynapseGroups
-            lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
-            NeuronDataId_t current_group_id;
+        // Sparse connectivity: gather output gradients using ForwardSynapseGroups
+        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
 
-            if(output_block_index < lookup_neuron_synapses_info.n_groups) {
-                PFX(find_forward_synapse_group)(
-                    lookup_neuron_synapses_info,
-                    output_block_index,
-                    n_outputs_per_block,
-                    lut_data,
-                    current_group_id
-                );
+        if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+            PFX(find_forward_synapse_group)(
+                lookup_neuron_synapses_info,
+                output_block_index,
+                n_outputs_per_block,
+                lut_data,
+                current_group_id
+            );
 
-                ATOMIC_PFX(accumulate_grad_sum_sparse)(
-                    current_group_id,
-                    lut_data,
-                    first_synapse_id,
-                    r_output_gradients,
-                    r_weights,
-                    n_lookup_neurons,
-                    n_outputs,
-                    alt_grad_sum
-                );
-            }
-        } else {
-            // Fully connected: direct indexing
-            uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
-
-            #ifdef ATOMIC
-            float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            int32_t n_output_grad_buffered = 0;
-            int32_t n_alt_w_buffered = 0;
-            EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
-            EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
-
-            for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
-                // Vectorized read of output gradients
-                if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                    asm volatile(
-                        "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                        : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
-                        : "l"(r_output_grad_ptr)
-                    );
-                    output_grad = static_cast<double>(output_grad_quad.x);
-                    n_output_grad_buffered = 3;
-                } else if(n_output_grad_buffered > 0) {
-                    if(n_output_grad_buffered == 3) {
-                        output_grad = static_cast<double>(output_grad_quad.y);
-                    } else if(n_output_grad_buffered == 2) {
-                        output_grad = static_cast<double>(output_grad_quad.z);
-                    } else {
-                        output_grad = static_cast<double>(output_grad_quad.w);
-                    }
-                    n_output_grad_buffered--;
-                } else {
-                    output_grad = static_cast<double>(*r_output_grad_ptr);
-                }
-
-                // Vectorized read of alt weights
-                if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                    asm volatile(
-                        "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                        : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
-                        : "l"(r_alt_weights_ptr)
-                    );
-                    weight = static_cast<double>(alt_weights_quad.x);
-                    n_alt_w_buffered = 3;
-                } else if(n_alt_w_buffered > 0) {
-                    if(n_alt_w_buffered == 3) {
-                        weight = static_cast<double>(alt_weights_quad.y);
-                    } else if(n_alt_w_buffered == 2) {
-                        weight = static_cast<double>(alt_weights_quad.z);
-                    } else {
-                        weight = static_cast<double>(alt_weights_quad.w);
-                    }
-                    n_alt_w_buffered--;
-                } else {
-                    weight = static_cast<double>(*r_alt_weights_ptr);
-                }
-
-                alt_grad_sum += weight * output_grad;
-
-                r_output_grad_ptr++;
-                r_alt_weights_ptr++;
-            }
-            #else
-            for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_alt_shift++) {
-                output_grad = static_cast<double>(r_output_gradients[cursor]);
-                alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
-            }
-            #endif
+            ATOMIC_PFX(accumulate_grad_sum_sparse)(
+                current_group_id,
+                lut_data,
+                first_synapse_id,
+                r_output_gradients,
+                r_weights,
+                n_lookup_neurons,
+                n_outputs,
+                alt_grad_sum
+            );
         }
+        du *= main_grad_sum - alt_grad_sum;
+        w_positional_embeddings_gradients += pe_offset * positional_dim;
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients) + pe_min_delta_index,
+                sum32_delta
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients + pe_min_delta_index) += sum32_delta;
+            #endif
+        #else
+            #ifdef ATOMIC
+            atomicAdd(
+                w_positional_embeddings_gradients + pe_min_delta_index,
+                du
+            );
+            #else
+            w_positional_embeddings_gradients[pe_min_delta_index] += du;
+            #endif
+        #endif
+    }
+}
+
+propagate_through_detectors_for_sequence_fc_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_weights,
+    int32_t* r_lookup_indices,
+    EXTERNAL_REAL_DT* r_min_anchor_deltas,
+    int32_t* r_min_anchor_delta_indices,
+    int32_t* r_positional_lookup_indices,
+    EXTERNAL_REAL_DT* r_positional_min_deltas,
+    int32_t* r_positional_min_delta_indices,
+    uint32_t n_detectors,
+    uint32_t n_total_tiles,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    AnchorsPair* r_detectors,
+    uint32_t n_lookup_neurons_per_detector,
+    EXTERNAL_REAL_DT* w_input_gradients,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients,
+    uint32_t n_inputs,
+    uint32_t positional_dim,
+    double int_rescaler
+) {
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+
+    if(tile_id >= n_total_tiles) {
+        return;
+    }
+
+    uint32_t i = tile_id / tile_grid_w;  // tile row
+    uint32_t j = tile_id % tile_grid_w;  // tile col
+
+    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    if(i > j) {
+        return;
+    }
+
+    if(i == j) {
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
+        if(i >= j) {
+            return;
+        }
+    } else {
+        i = i * TILE + (threadIdx.x / TILE);
+        j = j * TILE + (threadIdx.x % TILE);
+    }
+
+    if(i >= sequence_length || j >= sequence_length) {
+        return;
+    }
+
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
+    r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
+
+    int32_t n_outputs_in_current_block;
+    r_weights += output_block_index * n_outputs_per_block;
+    r_output_gradients += output_block_index * n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
+        n_outputs_in_current_block = n_outputs % n_outputs_per_block;
+    } else {
+        n_outputs_in_current_block = n_outputs_per_block;
+    }
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
+
+    // Get K: lookup index from first timestep (i)
+    uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+    int32_t K = r_lookup_indices[k_offset];
+    int32_t k_min_anchor_delta_index = r_min_anchor_delta_indices[k_offset];
+    EXTERNAL_REAL_DT k_min_anchor_delta = r_min_anchor_deltas[k_offset];
+
+    // Get Q: lookup index from second timestep (j)
+    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+    int32_t Q = r_lookup_indices[q_offset];
+    int32_t q_min_anchor_delta_index = r_min_anchor_delta_indices[q_offset];
+    EXTERNAL_REAL_DT q_min_anchor_delta = r_min_anchor_deltas[q_offset];
+
+    // Get PE: positional lookup index from timestep difference (j - i - 1)
+    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+    int32_t PE = r_positional_lookup_indices[pe_offset];
+    int32_t pe_min_delta_index = r_positional_min_delta_indices[pe_offset];
+    EXTERNAL_REAL_DT pe_min_delta = r_positional_min_deltas[pe_offset];
+    w_input_gradients += batch_index * n_inputs * sequence_length;
+
+    // Calculate concatenated index
+    uint32_t concatenated_index = (
+        (Q << (n_anchors_per_detector + positional_dim)) |
+        (K << positional_dim) |
+        PE
+    ) + detector_index * n_lookup_neurons_per_detector;
+
+    double du;
+    uint32_t concatenated_index_alt;
+    uint32_t flipping_anchor_index;
+    uint32_t i_or_j;
+    double main_grad_sum;
+    double alt_grad_sum;
+    double output_grad;
+    #ifdef ATOMIC
+    double weight;
+    #endif
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    SUMMATION32_DT sum32_delta;
+    #endif
+
+    if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
+        concatenated_index_alt = (
+            ((Q ^ (1 << q_min_anchor_delta_index)) << (n_anchors_per_detector + positional_dim)) |
+            (K << positional_dim) |
+            PE
+        ) + detector_index * n_lookup_neurons_per_detector;
+
+        du = static_cast<double>(q_min_anchor_delta);
+        flipping_anchor_index = q_min_anchor_delta_index;
+        i_or_j = j;
+    } else {
+        concatenated_index_alt = (
+            (Q << (n_anchors_per_detector + positional_dim)) |
+            ((K ^ (1 << k_min_anchor_delta_index)) << positional_dim) |
+            PE
+        ) + detector_index * n_lookup_neurons_per_detector;
+
+        du = static_cast<double>(k_min_anchor_delta);
+        flipping_anchor_index = k_min_anchor_delta_index;
+        i_or_j = i;
+    }
+
+    if(du > 0) {
+        du = 1.0 / (1.0 + fabs(du));
+        du *= 0.5 * du;
+    } else {
+        du = 1.0 / (1.0 + fabs(du));
+        du *= -0.5 * du;
+    }
+
+    main_grad_sum = 0.0;
+    alt_grad_sum = 0.0;
+    
+    // Fully connected: direct indexing
+    uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
+    uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
+
+    #ifdef ATOMIC
+    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 main_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    int32_t n_output_grad_buffered = 0;
+    int32_t n_main_w_buffered = 0;
+    int32_t n_alt_w_buffered = 0;
+    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
+    EXTERNAL_REAL_DT* r_main_weights_ptr = r_weights + weights_main_shift;
+    EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
+
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
+        // Vectorized read of output gradients
+        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
+                : "l"(r_output_grad_ptr)
+            );
+            output_grad = static_cast<double>(output_grad_quad.x);
+            n_output_grad_buffered = 3;
+        } else if(n_output_grad_buffered > 0) {
+            if(n_output_grad_buffered == 3) {
+                output_grad = static_cast<double>(output_grad_quad.y);
+            } else if(n_output_grad_buffered == 2) {
+                output_grad = static_cast<double>(output_grad_quad.z);
+            } else {
+                output_grad = static_cast<double>(output_grad_quad.w);
+            }
+            n_output_grad_buffered--;
+        } else {
+            output_grad = static_cast<double>(*r_output_grad_ptr);
+        }
+
+        // Vectorized read of main weights
+        if(((reinterpret_cast<uintptr_t>(r_main_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(main_weights_quad.x), "=f"(main_weights_quad.y), "=f"(main_weights_quad.z), "=f"(main_weights_quad.w)
+                : "l"(r_main_weights_ptr)
+            );
+            weight = static_cast<double>(main_weights_quad.x);
+            n_main_w_buffered = 3;
+        } else if(n_main_w_buffered > 0) {
+            if(n_main_w_buffered == 3) {
+                weight = static_cast<double>(main_weights_quad.y);
+            } else if(n_main_w_buffered == 2) {
+                weight = static_cast<double>(main_weights_quad.z);
+            } else {
+                weight = static_cast<double>(main_weights_quad.w);
+            }
+            n_main_w_buffered--;
+        } else {
+            weight = static_cast<double>(*r_main_weights_ptr);
+        }
+
+        main_grad_sum += weight * output_grad;
+
+        // Vectorized read of alt weights
+        if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
+                : "l"(r_alt_weights_ptr)
+            );
+            weight = static_cast<double>(alt_weights_quad.x);
+            n_alt_w_buffered = 3;
+        } else if(n_alt_w_buffered > 0) {
+            if(n_alt_w_buffered == 3) {
+                weight = static_cast<double>(alt_weights_quad.y);
+            } else if(n_alt_w_buffered == 2) {
+                weight = static_cast<double>(alt_weights_quad.z);
+            } else {
+                weight = static_cast<double>(alt_weights_quad.w);
+            }
+            n_alt_w_buffered--;
+        } else {
+            weight = static_cast<double>(*r_alt_weights_ptr);
+        }
+
+        alt_grad_sum += weight * output_grad;
+
+        r_output_grad_ptr++;
+        r_main_weights_ptr++;
+        r_alt_weights_ptr++;
+    }
+    #else
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++, weights_alt_shift++) {
+        output_grad = static_cast<double>(r_output_gradients[cursor]);
+        main_grad_sum += static_cast<double>(r_weights[weights_main_shift]) * output_grad;
+        alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
+    }
+    #endif
+    du *= main_grad_sum - alt_grad_sum;
+
+    if(fabs(du) > EPS) {
+        AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
+        EXTERNAL_REAL_DT* w_input_grad = w_input_gradients + i_or_j * n_inputs;
+
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor1_id,
+                sum32_delta
+            );
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor2_id,
+                -sum32_delta
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor1_id) += sum32_delta;
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor2_id) -= sum32_delta;
+            #endif
+        #else
+            #ifdef ATOMIC
+            atomicAdd(
+                w_input_grad + ap.anchor1_id,
+                du
+            );
+            atomicAdd(
+                w_input_grad + ap.anchor2_id,
+                -du
+            );
+            #else
+            w_input_grad[ap.anchor1_id] += du;
+            w_input_grad[ap.anchor2_id] -= du;
+            #endif
+        #endif
+    }
+
+    if((fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
+        concatenated_index_alt = (
+            (Q << (n_anchors_per_detector + positional_dim)) |
+            (K << positional_dim) |
+            (PE ^ (1 << r_positional_min_delta_indices[pe_offset]))
+        ) + detector_index * n_lookup_neurons_per_detector;
+
+        du = static_cast<double>(pe_min_delta);
+        if(du > 0) {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= 0.5 * du;
+        } else {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= -0.5 * du;
+        }
+        alt_grad_sum = 0.0;
+        
+        // Fully connected: direct indexing
+        uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
+
+        #ifdef ATOMIC
+        float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        int32_t n_output_grad_buffered = 0;
+        int32_t n_alt_w_buffered = 0;
+        EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
+        EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
+
+        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
+            // Vectorized read of output gradients
+            if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+                asm volatile(
+                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                    : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
+                    : "l"(r_output_grad_ptr)
+                );
+                output_grad = static_cast<double>(output_grad_quad.x);
+                n_output_grad_buffered = 3;
+            } else if(n_output_grad_buffered > 0) {
+                if(n_output_grad_buffered == 3) {
+                    output_grad = static_cast<double>(output_grad_quad.y);
+                } else if(n_output_grad_buffered == 2) {
+                    output_grad = static_cast<double>(output_grad_quad.z);
+                } else {
+                    output_grad = static_cast<double>(output_grad_quad.w);
+                }
+                n_output_grad_buffered--;
+            } else {
+                output_grad = static_cast<double>(*r_output_grad_ptr);
+            }
+
+            // Vectorized read of alt weights
+            if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+                asm volatile(
+                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                    : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
+                    : "l"(r_alt_weights_ptr)
+                );
+                weight = static_cast<double>(alt_weights_quad.x);
+                n_alt_w_buffered = 3;
+            } else if(n_alt_w_buffered > 0) {
+                if(n_alt_w_buffered == 3) {
+                    weight = static_cast<double>(alt_weights_quad.y);
+                } else if(n_alt_w_buffered == 2) {
+                    weight = static_cast<double>(alt_weights_quad.z);
+                } else {
+                    weight = static_cast<double>(alt_weights_quad.w);
+                }
+                n_alt_w_buffered--;
+            } else {
+                weight = static_cast<double>(*r_alt_weights_ptr);
+            }
+
+            alt_grad_sum += weight * output_grad;
+
+            r_output_grad_ptr++;
+            r_alt_weights_ptr++;
+        }
+        #else
+        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_alt_shift++) {
+            output_grad = static_cast<double>(r_output_gradients[cursor]);
+            alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
+        }
+        #endif
         du *= main_grad_sum - alt_grad_sum;
         w_positional_embeddings_gradients += pe_offset * positional_dim;
         #ifdef INTEGERS_INSTEAD_OF_FLOATS

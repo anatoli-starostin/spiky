@@ -841,39 +841,74 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
     dim3 numBlocks(n_items, batch_size * n_output_blocks);
     uint32_t tpb_opt = TILE * TILE;
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, propagate_through_detectors_for_sequence, tpb_opt, cuda_streams[0],
-        r_output_gradients,
-        r_weights,
-        r_lookup_indices,
-        r_min_anchor_deltas,
-        r_min_anchor_delta_indices,
-        r_positional_lookup_indices,
-        r_positional_min_deltas,
-        r_positional_min_delta_indices,
-        this->n_detectors,
-        n_items,
-        this->sequence_length,
-        this->n_anchors_per_detector,
-        this->n_outputs,
-        n_output_blocks,
-        this->forward_group_size,
-        reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-        this->base_synapse_metas,
-        this->first_synapse_id,
-        this->lut_data,
-        r_detectors,
-        n_lookup_neurons_per_detector,
-        w_input_gradients,
-        w_positional_embeddings_gradients,
-        this->n_inputs,
-        this->positional_dim
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        , this->int_rescaler
-        #else
-        , 0.0
-        #endif
-    );
+    
+    if(lookup_neuron_synapses_infos != nullptr) {
+        // Sparse connectivity
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, propagate_through_detectors_for_sequence_sparse, tpb_opt, cuda_streams[0],
+            r_output_gradients,
+            r_weights,
+            r_lookup_indices,
+            r_min_anchor_deltas,
+            r_min_anchor_delta_indices,
+            r_positional_lookup_indices,
+            r_positional_min_deltas,
+            r_positional_min_delta_indices,
+            this->n_detectors,
+            n_items,
+            this->sequence_length,
+            this->n_anchors_per_detector,
+            this->n_outputs,
+            n_output_blocks,
+            this->forward_group_size,
+            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+            this->base_synapse_metas,
+            this->first_synapse_id,
+            this->lut_data,
+            r_detectors,
+            n_lookup_neurons_per_detector,
+            w_input_gradients,
+            w_positional_embeddings_gradients,
+            this->n_inputs,
+            this->positional_dim
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+    } else {
+        // Fully connected
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, propagate_through_detectors_for_sequence_fc, tpb_opt, cuda_streams[0],
+            r_output_gradients,
+            r_weights,
+            r_lookup_indices,
+            r_min_anchor_deltas,
+            r_min_anchor_delta_indices,
+            r_positional_lookup_indices,
+            r_positional_min_deltas,
+            r_positional_min_delta_indices,
+            this->n_detectors,
+            n_items,
+            this->sequence_length,
+            this->n_anchors_per_detector,
+            this->n_outputs,
+            n_output_blocks,
+            this->forward_group_size,
+            r_detectors,
+            n_lookup_neurons_per_detector,
+            w_input_gradients,
+            w_positional_embeddings_gradients,
+            this->n_inputs,
+            this->positional_dim
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+    }
     PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
     PROF_START(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
