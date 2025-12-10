@@ -2804,7 +2804,7 @@ propagate_through_detectors_for_sequence_logic(
         alt_grad_sum = 0.0;
         if(r_lookup_neuron_synapses_infos != nullptr) {
             // Sparse connectivity: gather output gradients using ForwardSynapseGroups
-            lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
+            NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
             NeuronDataId_t current_group_id;
 
             if(output_block_index < lookup_neuron_synapses_info_alt.n_groups) {
