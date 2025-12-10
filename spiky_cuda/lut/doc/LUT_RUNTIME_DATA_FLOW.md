@@ -20,6 +20,7 @@
 ### Fully Connected Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × I]"] --> B(check_detectors)
     D1["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
@@ -47,6 +48,7 @@ flowchart TD
 ### Sparse Connectivity Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × I]"] --> B(fire_detectors)
     D2["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
@@ -81,6 +83,7 @@ flowchart TD
 ### Fully Connected Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B("gather_x_gradients_fully_connected<br/>Main - Stream 0")
     A --> C("gather_x_gradients_fully_connected<br/>Alternative - Stream 1")
@@ -123,6 +126,7 @@ flowchart TD
 ### Sparse Connectivity Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B(fire_detectors_by_lookup_indices)
     M9["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
@@ -166,6 +170,7 @@ flowchart TD
 ### Fully Connected Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
     D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
@@ -207,6 +212,7 @@ flowchart TD
 ### Sparse Connectivity Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
     D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
@@ -220,26 +226,17 @@ flowchart TD
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
     D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
     
-    E --> K("fill_after_detectors_firing_stat<br/>(processes&nbsp;B&nbsp;×&nbsp;S&nbsp;×&nbsp;(S&minus;1)&nbsp;pairs&nbsp;with&nbsp;tiles)")
-    F --> K
-    G --> K
+    E --> K("fill_outputs_sparse_for_sequence<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     H --> K
-    I --> K
-    J --> K
     
-    K --> N["Output: Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"]
-    K --> O["Output: Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"]
+    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
+    SC3["Sparse connectivity info"] --> K
     
-    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> P(fill_outputs_by_sparse_firings)
-    SC3["Sparse connectivity info"] --> P
-    N --> P
-    
-    P --> Q["Output: Output<br/>[B × S × O]"]
+    K --> Q["Output: Output<br/>[B × S × O]"]
     
     style B fill:#81c784,color:#000000
     style D fill:#81c784,color:#000000
     style K fill:#81c784,color:#000000
-    style P fill:#81c784,color:#000000
     style A fill:#000000,color:#ffffff
     style C fill:#000000,color:#ffffff
     style D5 fill:#000000,color:#ffffff
@@ -251,18 +248,19 @@ flowchart TD
     style H fill:#ffffff,color:#000000
     style I fill:#ffffff,color:#000000
     style J fill:#ffffff,color:#000000
-    style N fill:#ffffff,color:#000000
-    style O fill:#ffffff,color:#000000
     style Q fill:#ffffff,color:#000000
 ```
+
+**Note**: In sparse connectivity mode, outputs are computed directly from lookup indices and weights using sparse connectivity information, without generating intermediate firing events. The kernel processes all timestep pairs (i, j) where i < j in parallel, using `ForwardSynapseGroups` to efficiently gather weights for connected outputs.
 
 ## Sequential Mode - Backward Pass
 
 ### Fully Connected Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_fc<br/>(processes B×S×(S-1) pairs with tiles)")
+    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_fc<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
     W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
     
@@ -299,50 +297,40 @@ flowchart TD
 ### Sparse Connectivity Case
 
 ```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × S × O]"] --> B("gather_x_gradients_for_sequence<br/>Main - Stream 0<br/>(is_alternative=false)")
-    A --> C("gather_w_gradients_for_sequence<br/>Stream 1")
-    A --> D("gather_x_gradients_for_sequence<br/>Alternative - Stream 2<br/>(is_alternative=true)")
+    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_sparse<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A --> C("gather_w_gradients_for_sequence_sparse<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
-    E["Main Firing Events<br/>[B × N<sub>t</sub> × S × (S-1) / 2]"] --> B
-    E --> C
-    F["Alternative Firing Events<br/>[B × N<sub>t</sub> × S × (S-1)]"] --> D
+    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
+    W6 --> C
     
     L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
+    L3 --> C
     L4["PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
+    L4 --> C
     M5["Q/K Min Anchor Deltas<br/>[B × S × N<sub>t</sub>]"] --> I
     M6["Q/K Min Anchor Delta Indices<br/>[B&nbsp;×&nbsp;S&nbsp;×&nbsp;N<sub>t</sub>]"] --> I
     M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
     M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
     
-    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> B
-    W6 --> D
-    SC4["Sparse connectivity info"] --> B
+    SC4["Sparse connectivity info"] --> I
     SC4 --> C
-    SC4 --> D
     
-    B --> G["Before Detectors Gradients<br/>(Hash Table)<br/>[B × 6N<sub>t</sub>S(S-1)]"]
-    D --> G
-    
-    D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I("propagate_through_detectors_for_sequence<br/>(processes B×S×(S-1) pairs with tiles)")
-    G --> I
+    D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I
     
     I --> J["Output: Input Gradients<br/>[B × S × I]"]
     I --> K["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
     
     C --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"]
     
-    style B fill:#81c784,color:#000000
-    style C fill:#81c784,color:#000000
-    style D fill:#81c784,color:#000000
     style I fill:#81c784,color:#000000
+    style C fill:#81c784,color:#000000
     style H fill:#ffffff,color:#000000
     style J fill:#ffffff,color:#000000
     style K fill:#ffffff,color:#000000
     style A fill:#000000,color:#ffffff
     style W6 fill:#000000,color:#ffffff
-    style E fill:#000000,color:#ffffff
-    style F fill:#000000,color:#ffffff
     style L3 fill:#000000,color:#ffffff
     style L4 fill:#000000,color:#ffffff
     style M5 fill:#000000,color:#ffffff
@@ -351,5 +339,6 @@ flowchart TD
     style M8 fill:#000000,color:#ffffff
     style D6 fill:#000000,color:#ffffff
     style SC4 fill:#000000,color:#ffffff
-    style G fill:#000000,color:#ffffff
 ```
+
+**Note**: In sparse connectivity mode, gradients are computed directly from output gradients, weights, and lookup indices using sparse connectivity information, without requiring hash tables or firing events. The kernels process all timestep pairs in parallel using tiled computation, with `propagate_through_detectors_for_sequence_sparse` computing input and positional embedding gradients, and `gather_w_gradients_for_sequence_sparse` computing weight gradients.

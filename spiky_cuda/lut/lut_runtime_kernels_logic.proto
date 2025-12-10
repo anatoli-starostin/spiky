@@ -44,6 +44,195 @@ convert_integers_to_floats_logic(
     }
 }
 
+process_single_synapse_group(
+    NeuronDataId_t group_id,
+    uint8_t* lut_data,
+    NeuronDataId_t first_synapse_id,
+    EXTERNAL_REAL_DT* r_weights,
+    EXTERNAL_REAL_DT* w_output,
+    uint32_t n_lookup_neurons,
+    double multiplier,
+    double int_rescaler
+) {
+    ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(group_id, lut_data);
+    int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
+    NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(group_id, lut_data);
+    long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
+    EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
+    uint4 targets_quad = make_uint4(0, 0, 0, 0);
+    float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
+
+    NeuronIndex_t target_id;
+    double weight;
+    SUMMATION32_DT payload;
+
+    __SUPER_DETAILED_TRACE__("[process_single_synapse_group] i %d, current_group_size %d, weight_shift %ld\n", i, current_group_size, weight_shift);
+
+    int32_t n_t_buffered = 0;
+    int32_t n_w_buffered = 0;
+    for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++) {
+        if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+            #ifdef ATOMIC
+            asm volatile(
+                "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                : "l"(current_target_ptr)
+            );
+            #else
+            targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
+            #endif
+            target_id = targets_quad.x;
+            n_t_buffered = 3;
+        } else if(n_t_buffered > 0) {
+            if(n_t_buffered == 3) {
+                target_id = targets_quad.y;
+            } else if(n_t_buffered == 2) {
+                target_id = targets_quad.z;
+            } else {
+                target_id = targets_quad.w;
+            }
+            n_t_buffered--;
+        } else {
+            target_id = *current_target_ptr;
+        }
+
+        if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+            #ifdef ATOMIC
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                : "l"(weight_ptr)
+            );
+            #else
+            weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
+            #endif
+            weight = static_cast<double>(weights_quad.x);
+            n_w_buffered = 3;
+        } else if(n_w_buffered > 0) {
+            if(n_w_buffered == 3) {
+                weight = static_cast<double>(weights_quad.y);
+            } else if(n_w_buffered == 2) {
+                weight = static_cast<double>(weights_quad.z);
+            } else {
+                weight = static_cast<double>(weights_quad.w);
+            }
+            n_w_buffered--;
+        } else {
+            weight = static_cast<double>(*weight_ptr);
+        }
+
+        target_id -= n_lookup_neurons;
+        __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, weight %f\n", target_id, weight);
+
+        weight *= multiplier;
+
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_output + target_id),
+                payload
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_output + target_id) += payload;
+            #endif
+        #else
+            payload = static_cast<SUMMATION32_DT>(weight);
+            #ifdef ATOMIC
+            atomicAdd(
+                w_output + target_id,
+                payload
+            );
+            #else
+            __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, payload %f\n", target_id, payload);
+            w_output[target_id] += payload;
+            #endif
+        #endif
+    }
+}
+
+accumulate_grad_sum_sparse(
+    NeuronDataId_t current_group_id,
+    uint8_t* lut_data,
+    NeuronDataId_t first_synapse_id,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons,
+    uint32_t n_outputs,
+    double grad_sum
+) {
+    ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(current_group_id, lut_data);
+    int32_t n_outputs_in_current_block = SynapseGroupSize(fws_group.meta_info);
+    NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
+    long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
+    double weight;
+    double output_grad;
+
+    #ifdef ATOMIC
+    uint4 targets_quad = make_uint4(0, 0, 0, 0);
+    float4 weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    int32_t n_t_buffered = 0;
+    int32_t n_w_buffered = 0;
+    NeuronIndex_t target_id;
+    EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
+
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, current_target_ptr++, weight_ptr++) {
+        if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                : "l"(current_target_ptr)
+            );
+            target_id = targets_quad.x;
+            n_t_buffered = 3;
+        } else if(n_t_buffered > 0) {
+            if(n_t_buffered == 3) {
+                target_id = targets_quad.y;
+            } else if(n_t_buffered == 2) {
+                target_id = targets_quad.z;
+            } else {
+                target_id = targets_quad.w;
+            }
+            n_t_buffered--;
+        } else {
+            target_id = *current_target_ptr;
+        }
+        target_id -= n_lookup_neurons;
+
+        // Vectorized read of weights
+        if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                : "l"(weight_ptr)
+            );
+            weight = static_cast<double>(weights_quad.x);
+            n_w_buffered = 3;
+        } else if(n_w_buffered > 0) {
+            if(n_w_buffered == 3) {
+                weight = static_cast<double>(weights_quad.y);
+            } else if(n_w_buffered == 2) {
+                weight = static_cast<double>(weights_quad.z);
+            } else {
+                weight = static_cast<double>(weights_quad.w);
+            }
+            n_w_buffered--;
+        } else {
+            weight = static_cast<double>(*weight_ptr);
+        }
+        output_grad = static_cast<double>(r_output_gradients[target_id]);
+        grad_sum += weight * output_grad;
+    }
+    #else
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weight_shift++) {
+        NeuronIndex_t target_id = current_target_ptr[cursor] - n_lookup_neurons;
+        output_grad = static_cast<double>(r_output_gradients[target_id]);
+        weight = static_cast<double>(r_weights[weight_shift]);
+        grad_sum += weight * output_grad;
+    }
+    #endif
+}
+
 // ======================= NON SEQUENCE, FORWARD =============================== //
 
 check_detectors_logic(
@@ -262,113 +451,6 @@ fire_detectors_logic(
                 }
             }
         }
-    }
-}
-
-process_single_synapse_group(
-    NeuronDataId_t group_id,
-    uint8_t* lut_data,
-    NeuronDataId_t first_synapse_id,
-    EXTERNAL_REAL_DT* r_weights,
-    EXTERNAL_REAL_DT* w_output,
-    uint32_t n_lookup_neurons,
-    double multiplier,
-    double int_rescaler
-) {
-    ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(group_id, lut_data);
-    int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
-    NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(group_id, lut_data);
-    long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
-    EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
-    uint4 targets_quad = make_uint4(0, 0, 0, 0);
-    float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
-
-    NeuronIndex_t target_id;
-    double weight;
-    SUMMATION32_DT payload;
-
-    __SUPER_DETAILED_TRACE__("[process_single_synapse_group] i %d, current_group_size %d, weight_shift %ld\n", i, current_group_size, weight_shift);
-
-    int32_t n_t_buffered = 0;
-    int32_t n_w_buffered = 0;
-    for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++) {
-        if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-            #ifdef ATOMIC
-            asm volatile(
-                "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
-                : "l"(current_target_ptr)
-            );
-            #else
-            targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
-            #endif
-            target_id = targets_quad.x;
-            n_t_buffered = 3;
-        } else if(n_t_buffered > 0) {
-            if(n_t_buffered == 3) {
-                target_id = targets_quad.y;
-            } else if(n_t_buffered == 2) {
-                target_id = targets_quad.z;
-            } else {
-                target_id = targets_quad.w;
-            }
-            n_t_buffered--;
-        } else {
-            target_id = *current_target_ptr;
-        }
-
-        if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-            #ifdef ATOMIC
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
-                : "l"(weight_ptr)
-            );
-            #else
-            weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
-            #endif
-            weight = static_cast<double>(weights_quad.x);
-            n_w_buffered = 3;
-        } else if(n_w_buffered > 0) {
-            if(n_w_buffered == 3) {
-                weight = static_cast<double>(weights_quad.y);
-            } else if(n_w_buffered == 2) {
-                weight = static_cast<double>(weights_quad.z);
-            } else {
-                weight = static_cast<double>(weights_quad.w);
-            }
-            n_w_buffered--;
-        } else {
-            weight = static_cast<double>(*weight_ptr);
-        }
-
-        target_id -= n_lookup_neurons;
-        __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, weight %f\n", target_id, weight);
-
-        weight *= multiplier;
-
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_output + target_id),
-                payload
-            );
-            #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_output + target_id) += payload;
-            #endif
-        #else
-            payload = static_cast<SUMMATION32_DT>(weight);
-            #ifdef ATOMIC
-            atomicAdd(
-                w_output + target_id,
-                payload
-            );
-            #else
-            __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, payload %f\n", target_id, payload);
-            w_output[target_id] += payload;
-            #endif
-        #endif
     }
 }
 
@@ -1356,88 +1438,6 @@ fill_outputs_sparse_for_sequence_logic(
 }
 
 // ======================= SEQUENCE, BACKWARD =============================== //
-
-accumulate_grad_sum_sparse(
-    NeuronDataId_t current_group_id,
-    uint8_t* lut_data,
-    NeuronDataId_t first_synapse_id,
-    EXTERNAL_REAL_DT* r_output_gradients,
-    EXTERNAL_REAL_DT* r_weights,
-    uint32_t n_lookup_neurons,
-    uint32_t n_outputs,
-    double grad_sum
-) {
-    ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(current_group_id, lut_data);
-    int32_t n_outputs_in_current_block = SynapseGroupSize(fws_group.meta_info);
-    NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
-    long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
-    double weight;
-    double output_grad;
-
-    #ifdef ATOMIC
-    uint4 targets_quad = make_uint4(0, 0, 0, 0);
-    float4 weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    int32_t n_t_buffered = 0;
-    int32_t n_w_buffered = 0;
-    NeuronIndex_t target_id;
-    EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
-
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, current_target_ptr++, weight_ptr++) {
-        if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
-                : "l"(current_target_ptr)
-            );
-            target_id = targets_quad.x;
-            n_t_buffered = 3;
-        } else if(n_t_buffered > 0) {
-            if(n_t_buffered == 3) {
-                target_id = targets_quad.y;
-            } else if(n_t_buffered == 2) {
-                target_id = targets_quad.z;
-            } else {
-                target_id = targets_quad.w;
-            }
-            n_t_buffered--;
-        } else {
-            target_id = *current_target_ptr;
-        }
-        target_id -= n_lookup_neurons;
-
-        // Vectorized read of weights
-        if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
-                : "l"(weight_ptr)
-            );
-            weight = static_cast<double>(weights_quad.x);
-            n_w_buffered = 3;
-        } else if(n_w_buffered > 0) {
-            if(n_w_buffered == 3) {
-                weight = static_cast<double>(weights_quad.y);
-            } else if(n_w_buffered == 2) {
-                weight = static_cast<double>(weights_quad.z);
-            } else {
-                weight = static_cast<double>(weights_quad.w);
-            }
-            n_w_buffered--;
-        } else {
-            weight = static_cast<double>(*weight_ptr);
-        }
-        output_grad = static_cast<double>(r_output_gradients[target_id]);
-        grad_sum += weight * output_grad;
-    }
-    #else
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weight_shift++) {
-        NeuronIndex_t target_id = current_target_ptr[cursor] - n_lookup_neurons;
-        output_grad = static_cast<double>(r_output_gradients[target_id]);
-        weight = static_cast<double>(r_weights[weight_shift]);
-        grad_sum += weight * output_grad;
-    }
-    #endif
-}
 
 propagate_through_detectors_for_sequence_sparse_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
