@@ -2600,9 +2600,10 @@ propagate_through_detectors_for_sequence_logic(
 
     main_grad_sum = 0.0;
     alt_grad_sum = 0.0;
+    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info;
     if(r_lookup_neuron_synapses_infos != nullptr) {
         // Sparse connectivity: gather output gradients using ForwardSynapseGroups
-        NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
+        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
         NeuronDataId_t current_group_id;
 
         if(output_block_index < lookup_neuron_synapses_info.n_groups) {
@@ -2804,10 +2805,10 @@ propagate_through_detectors_for_sequence_logic(
         alt_grad_sum = 0.0;
         if(r_lookup_neuron_synapses_infos != nullptr) {
             // Sparse connectivity: gather output gradients using ForwardSynapseGroups
-            NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
+            lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index_alt);
             NeuronDataId_t current_group_id;
 
-            if(output_block_index < lookup_neuron_synapses_info_alt.n_groups) {
+            if(output_block_index < lookup_neuron_synapses_info.n_groups) {
                 PFX(find_forward_synapse_group)(
                     lookup_neuron_synapses_info,
                     output_block_index,
