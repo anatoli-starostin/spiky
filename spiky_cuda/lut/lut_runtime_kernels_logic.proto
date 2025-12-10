@@ -2726,7 +2726,7 @@ propagate_through_detectors_for_sequence_logic(
                         : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
                         : "l"(r_alt_weights_ptr)
                     );
-                    weight = static_cast<double>(alt_weights_quad.x)
+                    weight = static_cast<double>(alt_weights_quad.x);
                     n_alt_w_buffered = 3;
                 } else if(n_alt_w_buffered > 0) {
                     if(n_alt_w_buffered == 3) {
