@@ -835,7 +835,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
     PROF_START(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP);
     uint32_t n_items = (this->sequence_length + TILE - 1) / TILE;
-    printf("this->max_forward_groups_per_neuron %d!!!\n", this->max_forward_groups_per_neuron);
     uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
     n_items *= n_items * this->n_detectors;
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
