@@ -776,8 +776,8 @@ check_detectors_logic(
                 lookup_index |= (1 << anchor_idx);
             }
 
-            if(fabs(delta) < EPS) {
-                printf("!!!!%f!!!!!\n", delta);
+            if((fabs(delta) - fabs(min_delta)) < EPS) {
+                printf("!!!!%f, %f!!!!!\n", delta, min_delta);
             }
 
             // Track anchor pair with minimum absolute delta
