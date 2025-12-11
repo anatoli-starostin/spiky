@@ -776,7 +776,11 @@ check_detectors_logic(
                 lookup_index |= (1 << anchor_idx);
             }
 
-            if((fabs(delta) - fabs(min_delta)) < EPS) {
+            if(fabs(delta) < 0.00001) {
+                printf("!!!!%f!!!!!\n", delta);
+            }
+
+            if((fabs(delta) - fabs(min_delta)) < 0.00001) {
                 printf("!!!!%f, %f!!!!!\n", delta, min_delta);
             }
 
