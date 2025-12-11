@@ -1360,12 +1360,12 @@ fill_outputs_fully_connected_seq_logic(
 ) {
     uint32_t linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if(linear_idx >= n_outputs * n_detectors) {
+    if(linear_idx >= n_detectors * n_outputs) {
         return;
     }
 
-    uint32_t output_index = linear_idx / n_detectors;
-    uint32_t detector_index = linear_idx % n_detectors;
+    uint32_t detector_index = linear_idx / n_outputs;
+    uint32_t output_index = linear_idx % n_outputs;
 
     // blockIdx.y encodes: batch_index * (sequence_length - 1) + j_offset
     // j_offset ranges from 0 to sequence_length - 2, j = j_offset + 1 ranges from 1 to sequence_length - 1
