@@ -306,7 +306,9 @@ def _test_lut_transformer_small(
         summation_dtype=summation_dtype,
         _int_rescaler=1.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
-        device=device, seed=seed
+        device=device, seed=seed,
+        _forward_group_size=24,
+        _backward_group_size=4
     )
 
     # Create _GTLUTTransformer with matching parameters

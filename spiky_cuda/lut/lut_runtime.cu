@@ -316,11 +316,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             #endif
         );
         PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
-        
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-        n_items = this->n_detectors * n_output_blocks;
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, gather_w_gradients_non_seq_sparse, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
             r_output_gradients,
@@ -374,9 +370,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
         );
         PROF_END(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP);
-        n_items = this->n_detectors * n_output_blocks;
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
-        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, gather_w_gradients_non_seq_fc, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
             r_output_gradients,
@@ -413,7 +406,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #endif
 
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_inputs), batch_size);
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_inputs), batch_size);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
         numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_inputs), cuda_streams[0],
         w_input_gradients,

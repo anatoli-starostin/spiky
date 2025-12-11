@@ -1297,7 +1297,7 @@ gather_w_gradients_non_seq_sparse_logic(
         r_lookup_indices += blockIdx.y * n_detectors;
         r_output_gradients += blockIdx.y * n_outputs;
 
-        NeuronIndex_t main_neuron_id = i * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
+        NeuronIndex_t main_neuron_id = detector_index * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
         uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
 
         // Sparse connectivity: gather weight gradients using ForwardSynapseGroups
@@ -1343,7 +1343,7 @@ gather_w_gradients_non_seq_fc_logic(
             n_outputs_per_block = n_outputs % n_outputs_per_block;
         }
 
-        NeuronIndex_t main_neuron_id = i * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
+        NeuronIndex_t main_neuron_id = detector_index * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
 
         // Fully connected: direct indexing
         ATOMIC_PFX(gather_weight_gradients_fc)(
@@ -1802,9 +1802,6 @@ propagate_through_detectors_seq_sparse_logic(
     #ifdef ATOMIC
     double weight;
     #endif
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    SUMMATION32_DT sum32_delta;
-    #endif
 
     if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
         concatenated_index_alt = (
@@ -2059,12 +2056,8 @@ propagate_through_detectors_seq_fc_logic(
     uint32_t i_or_j;
     double main_grad_sum;
     double alt_grad_sum;
-    double output_grad;
     #ifdef ATOMIC
     double weight;
-    #endif
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    SUMMATION32_DT sum32_delta;
     #endif
 
     if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
