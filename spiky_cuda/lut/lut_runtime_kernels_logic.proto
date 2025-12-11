@@ -1799,9 +1799,6 @@ propagate_through_detectors_seq_sparse_logic(
     uint32_t i_or_j;
     double main_grad_sum;
     double alt_grad_sum;
-    #ifdef ATOMIC
-    double weight;
-    #endif
 
     if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
         concatenated_index_alt = (
@@ -2056,9 +2053,6 @@ propagate_through_detectors_seq_fc_logic(
     uint32_t i_or_j;
     double main_grad_sum;
     double alt_grad_sum;
-    #ifdef ATOMIC
-    double weight;
-    #endif
 
     if(fabs(q_min_anchor_delta) < fabs(k_min_anchor_delta)) {
         concatenated_index_alt = (

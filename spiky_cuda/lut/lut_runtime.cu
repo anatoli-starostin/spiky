@@ -272,10 +272,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #endif
     #endif
 
-    #ifndef NO_CUDA
-    cudaEvent_t ev1;
-    #endif
-
     PROF_START(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP);
 
     // 1. propagate through detectors and gather weight gradients
