@@ -172,7 +172,7 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
+    A["Input<br/>[B × S × I]"] --> B("check_detectors_seq<br/>Stream 0")
     D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
     C["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> D("check_positional_embeddings<br/>Stream 1")
     
@@ -184,7 +184,7 @@ flowchart TD
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
     D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
     
-    E --> K("fill_outputs_fully_connected_for_sequence<br/>(processes all pairs i,j where i < j)")
+    E --> K("fill_outputs_fully_connected_seq<br/>(processes all pairs i,j where i < j)")
     H --> K
     
     W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
@@ -214,7 +214,7 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Input<br/>[B × S × I]"] --> B("check_detectors_for_sequence<br/>Stream 0")
+    A["Input<br/>[B × S × I]"] --> B("check_detectors_seq<br/>Stream 0")
     D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
     C["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> D("check_positional_embeddings<br/>Stream 1")
     
@@ -226,7 +226,7 @@ flowchart TD
     D --> I["Output: PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"]
     D --> J["Output: PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"]
     
-    E --> K("fill_outputs_sparse_for_sequence<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    E --> K("fill_outputs_sparse_seq<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     H --> K
     
     W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
@@ -260,7 +260,7 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_fc<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_seq_fc<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
     W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
     
@@ -299,8 +299,8 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_for_sequence_sparse<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
-    A --> C("gather_w_gradients_for_sequence_sparse<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_seq_sparse<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A --> C("gather_w_gradients_seq_sparse<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
     W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
     W6 --> C
@@ -341,4 +341,4 @@ flowchart TD
     style SC4 fill:#000000,color:#ffffff
 ```
 
-**Note**: In sparse connectivity mode, gradients are computed directly from output gradients, weights, and lookup indices using sparse connectivity information, without requiring hash tables or firing events. The kernels process all timestep pairs in parallel using tiled computation, with `propagate_through_detectors_for_sequence_sparse` computing input and positional embedding gradients, and `gather_w_gradients_for_sequence_sparse` computing weight gradients.
+**Note**: In sparse connectivity mode, gradients are computed directly from output gradients, weights, and lookup indices using sparse connectivity information, without requiring hash tables or firing events. The kernels process all timestep pairs in parallel using tiled computation, with `propagate_through_detectors_seq_sparse` computing input and positional embedding gradients, and `gather_w_gradients_seq_sparse` computing weight gradients.

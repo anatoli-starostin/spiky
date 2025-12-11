@@ -790,10 +790,8 @@ public:
         const torch::Tensor &r_lookup_indices,
         const torch::Tensor &r_min_anchor_deltas,
         const torch::Tensor &r_min_anchor_delta_indices,
-        const torch::Tensor &w_before_detectors_gradients,
         torch::Tensor &w_input_gradients,
         double external_lr,
-        std::optional<torch::Tensor> w_sparse_firing_buffer,
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> r_stream_handles
     ) {
@@ -811,10 +809,6 @@ public:
         checkTensor(r_lookup_indices, "r_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_min_anchor_deltas, "r_min_anchor_deltas", true, host_device_allocator.device);
         checkTensor(r_min_anchor_delta_indices, "r_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_before_detectors_gradients, "w_before_detectors_gradients", true, host_device_allocator.device);
-        if(w_sparse_firing_buffer.has_value()) {
-            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
-        }
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
@@ -839,9 +833,7 @@ public:
             reinterpret_cast<int32_t *>(r_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(r_min_anchor_delta_indices.data_ptr()),
-            reinterpret_cast<SUMMATION32_DT *>(w_before_detectors_gradients.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr,
             static_cast<EXTERNAL_REAL_DT>(external_lr),
             w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
@@ -1319,10 +1311,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_lookup_indices"),
             py::arg("r_min_anchor_deltas"),
             py::arg("r_min_anchor_delta_indices"),
-            py::arg("w_before_detectors_gradients"),
             py::arg("w_input_gradients"),
             py::arg("external_lr"),
-            py::arg("w_sparse_firing_buffer") = py::none(),
             py::arg("w_weights_gradients") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop_concat", &LUTM_CLASS_NAME::backward_backprop_concat,

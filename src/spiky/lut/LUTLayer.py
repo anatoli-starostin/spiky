@@ -44,7 +44,6 @@ class SynapseMeta:
 class LUTSharedContext(object):
     def __init__(self, do_asserts=False):
         self._sparse_firing_buffers = []
-        self._before_detectors_gradients_buffers = []
         self._weight_gradients_buffers = []
         self._densify_indices_buffers = []
         self._densify_values_buffers = []
@@ -76,12 +75,6 @@ class LUTSharedContext(object):
 
     def get_sparse_firing_buffer(self, numel, device, multi_id=0):
         return self._ensure_buffer(self._sparse_firing_buffers, multi_id, numel, torch.int64, device)
-
-    def get_before_detectors_gradients_buffer(self, numel, device, multi_id=0):
-        buf = self._ensure_buffer(self._before_detectors_gradients_buffers, multi_id, numel, torch.float32, device)
-        if self._do_asserts:
-            assert torch.count_nonzero(buf) == 0
-        return buf
 
     def get_weight_gradients_buffer(self, numel, device, multi_id=0):
         buf = self._ensure_buffer(self._weight_gradients_buffers, multi_id, numel, torch.float32, device)
@@ -173,9 +166,6 @@ class LUTSharedContext(object):
         for i, buf in enumerate(self._sparse_firing_buffers):
             if buf is not None:
                 self._sparse_firing_buffers[i] = buf.to(device=dev)
-        for i, buf in enumerate(self._before_detectors_gradients_buffers):
-            if buf is not None:
-                self._before_detectors_gradients_buffers[i] = buf.to(device=dev)
         for i, buf in enumerate(self._weight_gradients_buffers):
             if buf is not None:
                 self._weight_gradients_buffers[i] = buf.to(device=dev)
@@ -812,23 +802,6 @@ class LUTLayerBasic(nn.Module):
 
         grad_output = grad_output.view(-1)
 
-        before_detectors_gradients = self._shared_context.get_before_detectors_gradients_buffer(
-            2 * self._n_detectors * batch_size,
-            self.device,
-            self._multi_id
-        )
-
-        sparse_firing_buffer = None
-        if not self._is_fully_connected:
-            sparse_buffer_numel = (
-                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 2
-            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-                sparse_buffer_numel,
-                self.device,
-                self._multi_id
-            )
-
         if self._weights_gradient_policy.type == GradientType.Internal:
             if self._external_lr_hook is None:
                 raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
@@ -846,10 +819,8 @@ class LUTLayerBasic(nn.Module):
             lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
-            before_detectors_gradients,
             x_grad,
             external_lr,
-            sparse_firing_buffer,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
             stream_handles
         )

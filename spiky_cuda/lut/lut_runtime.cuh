@@ -109,9 +109,7 @@ public:
         EXTERNAL_REAL_DT *r_min_anchor_deltas,
         int32_t *r_min_anchor_delta_indices,
         // gradients that we need to calculate
-        SUMMATION32_DT *w_before_detectors_gradients,
         EXTERNAL_REAL_DT *w_input_gradients,
-        int64_t *w_sparse_firing_buffer_ptr,  // Can be nullptr
         EXTERNAL_REAL_DT external_lr,
         EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA

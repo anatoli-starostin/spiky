@@ -44,7 +44,7 @@ convert_integers_to_floats_logic(
     }
 }
 
-process_single_synapse_group(
+fire_single_synapse_group(
     NeuronDataId_t group_id,
     uint8_t* lut_data,
     NeuronDataId_t first_synapse_id,
@@ -65,8 +65,6 @@ process_single_synapse_group(
     NeuronIndex_t target_id;
     double weight;
     SUMMATION32_DT payload;
-
-    __SUPER_DETAILED_TRACE__("[process_single_synapse_group] i %d, current_group_size %d, weight_shift %ld\n", i, current_group_size, weight_shift);
 
     int32_t n_t_buffered = 0;
     int32_t n_w_buffered = 0;
@@ -122,7 +120,6 @@ process_single_synapse_group(
         }
 
         target_id -= n_lookup_neurons;
-        __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, weight %f\n", target_id, weight);
 
         weight *= multiplier;
 
@@ -144,7 +141,6 @@ process_single_synapse_group(
                 payload
             );
             #else
-            __SUPER_DETAILED_TRACE__("[fill_outputs_by_forward_groups_logic] target_id %d, payload %f\n", target_id, payload);
             w_output[target_id] += payload;
             #endif
         #endif
@@ -230,6 +226,510 @@ accumulate_grad_sum_sparse(
         weight = static_cast<double>(r_weights[weight_shift]);
         grad_sum += weight * output_grad;
     }
+    #endif
+}
+
+accumulate_grad_sum_fc(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t neuron_id,
+    uint32_t n_outputs,
+    int32_t n_outputs_per_block,
+    double grad_sum
+) {
+    uint64_t weights_shift = static_cast<uint64_t>(neuron_id) * n_outputs;
+
+    #ifdef ATOMIC
+    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    int32_t n_output_grad_buffered = 0;
+    int32_t n_w_buffered = 0;
+    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
+    EXTERNAL_REAL_DT* r_weights_ptr = r_weights + weights_shift;
+    double output_grad;
+    double weight;
+
+    for(int32_t cursor = 0; cursor < n_outputs_per_block; cursor++) {
+        // Vectorized read of output gradients
+        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
+                : "l"(r_output_grad_ptr)
+            );
+            output_grad = static_cast<double>(output_grad_quad.x);
+            n_output_grad_buffered = 3;
+        } else if(n_output_grad_buffered > 0) {
+            if(n_output_grad_buffered == 3) {
+                output_grad = static_cast<double>(output_grad_quad.y);
+            } else if(n_output_grad_buffered == 2) {
+                output_grad = static_cast<double>(output_grad_quad.z);
+            } else {
+                output_grad = static_cast<double>(output_grad_quad.w);
+            }
+            n_output_grad_buffered--;
+        } else {
+            output_grad = static_cast<double>(*r_output_grad_ptr);
+        }
+
+        // Vectorized read of weights
+        if(((reinterpret_cast<uintptr_t>(r_weights_ptr) & 15) == 0) && (cursor < n_outputs_per_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
+                : "l"(r_weights_ptr)
+            );
+            weight = static_cast<double>(weights_quad.x);
+            n_w_buffered = 3;
+        } else if(n_w_buffered > 0) {
+            if(n_w_buffered == 3) {
+                weight = static_cast<double>(weights_quad.y);
+            } else if(n_w_buffered == 2) {
+                weight = static_cast<double>(weights_quad.z);
+            } else {
+                weight = static_cast<double>(weights_quad.w);
+            }
+            n_w_buffered--;
+        } else {
+            weight = static_cast<double>(*r_weights_ptr);
+        }
+
+        grad_sum += weight * output_grad;
+
+        r_output_grad_ptr++;
+        r_weights_ptr++;
+    }
+    #else
+    for(int32_t cursor = 0; cursor < n_outputs_per_block; cursor++, weights_shift++) {
+        grad_sum += static_cast<double>(r_weights[weights_shift]) * static_cast<double>(r_output_gradients[cursor]);
+    }
+    #endif
+}
+
+accumulate_pair_of_gradient_sums_fc(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_weights,
+    NeuronIndex_t main_neuron_id,
+    NeuronIndex_t alt_neuron_id,
+    uint32_t n_outputs,
+    int32_t n_outputs_in_current_block,
+    double main_grad_sum,
+    double alt_grad_sum
+) {
+    uint64_t weights_main_shift = static_cast<uint64_t>(main_neuron_id) * n_outputs;
+    uint64_t weights_alt_shift = static_cast<uint64_t>(alt_neuron_id) * n_outputs;
+
+    #ifdef ATOMIC
+    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 main_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    int32_t n_output_grad_buffered = 0;
+    int32_t n_main_w_buffered = 0;
+    int32_t n_alt_w_buffered = 0;
+    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
+    EXTERNAL_REAL_DT* r_main_weights_ptr = r_weights + weights_main_shift;
+    EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
+    double output_grad;
+    double weight;
+
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
+        // Vectorized read of output gradients
+        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
+                : "l"(r_output_grad_ptr)
+            );
+            output_grad = static_cast<double>(output_grad_quad.x);
+            n_output_grad_buffered = 3;
+        } else if(n_output_grad_buffered > 0) {
+            if(n_output_grad_buffered == 3) {
+                output_grad = static_cast<double>(output_grad_quad.y);
+            } else if(n_output_grad_buffered == 2) {
+                output_grad = static_cast<double>(output_grad_quad.z);
+            } else {
+                output_grad = static_cast<double>(output_grad_quad.w);
+            }
+            n_output_grad_buffered--;
+        } else {
+            output_grad = static_cast<double>(*r_output_grad_ptr);
+        }
+
+        // Vectorized read of main weights
+        if(((reinterpret_cast<uintptr_t>(r_main_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(main_weights_quad.x), "=f"(main_weights_quad.y), "=f"(main_weights_quad.z), "=f"(main_weights_quad.w)
+                : "l"(r_main_weights_ptr)
+            );
+            weight = static_cast<double>(main_weights_quad.x);
+            n_main_w_buffered = 3;
+        } else if(n_main_w_buffered > 0) {
+            if(n_main_w_buffered == 3) {
+                weight = static_cast<double>(main_weights_quad.y);
+            } else if(n_main_w_buffered == 2) {
+                weight = static_cast<double>(main_weights_quad.z);
+            } else {
+                weight = static_cast<double>(main_weights_quad.w);
+            }
+            n_main_w_buffered--;
+        } else {
+            weight = static_cast<double>(*r_main_weights_ptr);
+        }
+
+        main_grad_sum += weight * output_grad;
+
+        // Vectorized read of alt weights
+        if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
+                : "l"(r_alt_weights_ptr)
+            );
+            weight = static_cast<double>(alt_weights_quad.x);
+            n_alt_w_buffered = 3;
+        } else if(n_alt_w_buffered > 0) {
+            if(n_alt_w_buffered == 3) {
+                weight = static_cast<double>(alt_weights_quad.y);
+            } else if(n_alt_w_buffered == 2) {
+                weight = static_cast<double>(alt_weights_quad.z);
+            } else {
+                weight = static_cast<double>(alt_weights_quad.w);
+            }
+            n_alt_w_buffered--;
+        } else {
+            weight = static_cast<double>(*r_alt_weights_ptr);
+        }
+
+        alt_grad_sum += weight * output_grad;
+
+        r_output_grad_ptr++;
+        r_main_weights_ptr++;
+        r_alt_weights_ptr++;
+    }
+    #else
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++, weights_alt_shift++) {
+        double output_grad = static_cast<double>(r_output_gradients[cursor]);
+        main_grad_sum += static_cast<double>(r_weights[weights_main_shift]) * output_grad;
+        alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
+    }
+    #endif
+}
+
+gather_weight_gradients_sparse(
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    uint32_t neuron_id,
+    uint32_t output_block_index,
+    uint32_t n_outputs_per_block,
+    uint8_t* lut_data,
+    NeuronDataId_t first_synapse_id,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    BaseSynapseMeta* r_synapse_metas,
+    double first_synapse_meta_lr,
+    double external_lr,
+    uint32_t n_lookup_neurons,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    double int_rescaler
+) {
+    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + neuron_id);
+
+    if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+        NeuronDataId_t current_group_id;
+        PFX(find_forward_synapse_group)(
+            lookup_neuron_synapses_info,
+            output_block_index,
+            n_outputs_per_block,
+            lut_data,
+            current_group_id
+        );
+
+        ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(current_group_id, lut_data);
+        uint32_t sm_index = SynapseGroupSynapseMetaIndex(fws_group.meta_info);
+        double lr;
+        if(sm_index == 0) {
+            lr = first_synapse_meta_lr;
+        } else {
+            lr = static_cast<double>((r_synapse_metas + sm_index)->lr);
+        }
+        if(external_lr >= 0) {
+            lr *= -external_lr;
+        }
+
+        uint32_t current_group_size = SynapseGroupSize(fws_group.meta_info);
+        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
+        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
+
+        double output_grad;
+        SUMMATION32_DT sum32_delta;
+
+        #ifdef ATOMIC
+        uint4 targets_quad = make_uint4(0, 0, 0, 0);
+        int32_t n_t_buffered = 0;
+        NeuronIndex_t target_id;
+
+        for(uint32_t cursor = 0; cursor < current_group_size; cursor++, current_target_ptr++, weight_shift++) {
+            // Vectorized read of target IDs
+            if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
+                asm volatile(
+                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
+                    : "l"(current_target_ptr)
+                );
+                target_id = targets_quad.x;
+                n_t_buffered = 3;
+            } else if(n_t_buffered > 0) {
+                if(n_t_buffered == 3) {
+                    target_id = targets_quad.y;
+                } else if(n_t_buffered == 2) {
+                    target_id = targets_quad.z;
+                } else {
+                    target_id = targets_quad.w;
+                }
+                n_t_buffered--;
+            } else {
+                target_id = *current_target_ptr;
+            }
+            target_id -= n_lookup_neurons;
+            output_grad = static_cast<double>(r_output_gradients[target_id]);
+
+            if(fabs(output_grad) > EPS) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weight_shift,
+                        sum32_delta
+                    );
+                    #else
+                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weight_shift) += sum32_delta;
+                    #endif
+                #else
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        w_weights_gradients + weight_shift,
+                        sum32_delta
+                    );
+                    #else
+                    w_weights_gradients[weight_shift] += sum32_delta;
+                    #endif
+                #endif
+            }
+        }
+        #else
+        for(uint32_t cursor = 0; cursor < current_group_size; cursor++, weight_shift++) {
+            NeuronIndex_t target_id = current_target_ptr[cursor] - n_lookup_neurons;
+            output_grad = static_cast<double>(r_output_gradients[target_id]);
+            if(fabs(output_grad) > EPS) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weight_shift,
+                        sum32_delta
+                    );
+                    #else
+                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weight_shift) += sum32_delta;
+                    #endif
+                #else
+                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                    #ifdef ATOMIC
+                    atomicAdd(
+                        w_weights_gradients + weight_shift,
+                        sum32_delta
+                    );
+                    #else
+                    w_weights_gradients[weight_shift] += sum32_delta;
+                    #endif
+                #endif
+            }
+        }
+        #endif
+    }
+}
+
+gather_weight_gradients_fc(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    uint32_t neuron_id,
+    uint32_t n_outputs,
+    int32_t n_outputs_in_current_block,
+    double first_synapse_meta_lr,
+    double external_lr,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    double int_rescaler
+) {
+    double output_grad;
+    SUMMATION32_DT sum32_delta;
+    double lr;
+
+    // Fully connected: direct indexing
+    lr = first_synapse_meta_lr;
+    if(external_lr >= 0) {
+        lr *= -external_lr;
+    }
+    uint64_t weights_shift = static_cast<uint64_t>(neuron_id) * n_outputs;
+
+    #ifdef ATOMIC
+    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    int32_t n_output_grad_buffered = 0;
+    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
+
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_shift++) {
+        // Vectorized read of output gradients
+        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
+            asm volatile(
+                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
+                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
+                : "l"(r_output_grad_ptr)
+            );
+            output_grad = static_cast<double>(output_grad_quad.x);
+            n_output_grad_buffered = 3;
+        } else if(n_output_grad_buffered > 0) {
+            if(n_output_grad_buffered == 3) {
+                output_grad = static_cast<double>(output_grad_quad.y);
+            } else if(n_output_grad_buffered == 2) {
+                output_grad = static_cast<double>(output_grad_quad.z);
+            } else {
+                output_grad = static_cast<double>(output_grad_quad.w);
+            }
+            n_output_grad_buffered--;
+        } else {
+            output_grad = static_cast<double>(*r_output_grad_ptr);
+        }
+
+        if(fabs(output_grad) > EPS) {
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                #ifdef ATOMIC
+                atomicAdd(
+                    reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_shift,
+                    sum32_delta
+                );
+                #else
+                *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_shift) += sum32_delta;
+                #endif
+            #else
+                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                #ifdef ATOMIC
+                atomicAdd(
+                    w_weights_gradients + weights_shift,
+                    sum32_delta
+                );
+                #else
+                w_weights_gradients[weights_shift] += sum32_delta;
+                #endif
+            #endif
+        }
+
+        r_output_grad_ptr++;
+    }
+    #else
+    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_shift++) {
+        output_grad = static_cast<double>(r_output_gradients[cursor]);
+        if(fabs(output_grad) > EPS) {
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+                #ifdef ATOMIC
+                atomicAdd(
+                    reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_shift,
+                    sum32_delta
+                );
+                #else
+                *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_shift) += sum32_delta;
+                #endif
+            #else
+                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                #ifdef ATOMIC
+                atomicAdd(
+                    w_weights_gradients + weights_shift,
+                    sum32_delta
+                );
+                #else
+                w_weights_gradients[weights_shift] += sum32_delta;
+                #endif
+            #endif
+        }
+    }
+    #endif
+}
+
+propagate_through_detector(
+    double du,
+    AnchorsPair* r_detectors,
+    uint32_t detector_index,
+    uint32_t n_anchors_per_detector,
+    uint32_t flipping_anchor_index,
+    EXTERNAL_REAL_DT* w_input_gradients,
+    uint32_t i_or_j,
+    uint32_t n_inputs,
+    double int_rescaler
+) {
+    if(fabs(du) > EPS) {
+        AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
+        EXTERNAL_REAL_DT* w_input_grad = w_input_gradients + i_or_j * n_inputs;
+
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor1_id,
+                sum32_delta
+            );
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor2_id,
+                -sum32_delta
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor1_id) += sum32_delta;
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor2_id) -= sum32_delta;
+            #endif
+        #else
+            #ifdef ATOMIC
+            atomicAdd(
+                w_input_grad + ap.anchor1_id,
+                du
+            );
+            atomicAdd(
+                w_input_grad + ap.anchor2_id,
+                -du
+            );
+            #else
+            w_input_grad[ap.anchor1_id] += du;
+            w_input_grad[ap.anchor2_id] -= du;
+            #endif
+        #endif
+    }
+}
+
+update_positional_gradients(
+    double du,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients,
+    uint32_t pe_offset,
+    uint32_t positional_dim,
+    int32_t pe_min_delta_index,
+    double int_rescaler
+) {
+    w_positional_embeddings_gradients += pe_offset * positional_dim;
+
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        #ifdef ATOMIC
+        atomicAdd(
+            reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients) + pe_min_delta_index,
+            sum32_delta
+        );
+        #else
+        *reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients + pe_min_delta_index) += sum32_delta;
+        #endif
+    #else
+        #ifdef ATOMIC
+        atomicAdd(
+            w_positional_embeddings_gradients + pe_min_delta_index,
+            du
+        );
+        #else
+        w_positional_embeddings_gradients[pe_min_delta_index] += du;
+        #endif
     #endif
 }
 
@@ -472,7 +972,7 @@ fill_outputs_by_forward_groups_logic(
             Firing firing = r_firings_buffer[i];
             w_output += firing.batch_index * n_outputs;
             double multiplier = 1.0;
-            ATOMIC_PFX(process_single_synapse_group)(
+            ATOMIC_PFX(fire_single_synapse_group)(
                 firing.data_id,
                 lut_data,
                 first_synapse_id,
@@ -575,478 +1075,42 @@ fill_outputs_fully_connected_logic(
 
 // ======================= NON SEQUENCE, BACKWARD =============================== //
 
-fire_detectors_by_lookup_indices_logic(
-    uint32_t n_detectors,
-    int32_t* r_lookup_indices,
-    int32_t* r_min_anchor_delta_indices,
-    uint32_t n_lookup_neurons_per_detector,
-    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
-    Firing* rw_firings_buffer,
-    uint64_t* rw_firings_counter_ptr,
-    uint32_t synapse_group_size,
-    uint8_t* lut_data,
-    int device
-) {
-    uint32_t tid = threadIdx.x;
-    uint32_t i = blockIdx.x * blockDim.x + tid; // blockDim.x should be power of 2
-
-    NoDelaysIndexedSynapsesInfo chosen_lookup_neuron_synapses_info;
-    NoDelaysIndexedSynapsesInfo chosen_alternative_lookup_neuron_synapses_info;
-    chosen_lookup_neuron_synapses_info.n_groups = 0;
-    chosen_alternative_lookup_neuron_synapses_info.n_groups = 0;
-
-    if(i < n_detectors) {
-        r_lookup_indices += blockIdx.y * n_detectors;
-        r_min_anchor_delta_indices += blockIdx.y * n_detectors;
-
-        int32_t lookup_index = r_lookup_indices[i];
-        chosen_lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + lookup_index);
-        chosen_alternative_lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + i * n_lookup_neurons_per_detector + (lookup_index ^ (1 << r_min_anchor_delta_indices[i])));
-    }
-
-    uint64_t firings_offset;
-    if(device == -1) {
-        if((chosen_lookup_neuron_synapses_info.n_groups + chosen_lookup_neuron_synapses_info.n_groups) > 0) {
-            firings_offset = *rw_firings_counter_ptr;
-            (*rw_firings_counter_ptr) += chosen_lookup_neuron_synapses_info.n_groups + chosen_alternative_lookup_neuron_synapses_info.n_groups;
-        }
-    } else {
-        #ifdef ATOMIC
-        extern __shared__ __align__(16) uint8_t __sm[];
-        uint32_t *sdata = reinterpret_cast<uint32_t *>(__sm);
-        sdata[tid] = chosen_lookup_neuron_synapses_info.n_groups + chosen_alternative_lookup_neuron_synapses_info.n_groups;
-        __syncthreads();
-        uint32_t t;
-        int offset;
-        int idx;
-
-        // upsweep (reduce)
-        for(offset = 1; offset < blockDim.x; offset <<= 1) {
-            idx = ((tid + 1) * (offset << 1)) - 1;
-            if(idx < blockDim.x) {
-                t = sdata[idx - offset];
-                if(t > 0) {
-                    sdata[idx] += t;
-                }
-            }
-            __syncthreads();
-        }
-
-        // inject global shift
-        if(tid == 0) {
-            sdata[blockDim.x - 1] = atomicAdd(
-                reinterpret_cast<unsigned long long*>(rw_firings_counter_ptr),
-                static_cast<unsigned long long>(sdata[blockDim.x - 1])
-            );
-        }
-        __syncthreads();
-
-        // downsweep
-        for(offset = blockDim.x >> 1; offset > 0; offset >>= 1) {
-            idx = ((tid + 1) * (offset << 1)) - 1;
-            if (idx < blockDim.x) {
-                t = sdata[idx - offset];
-                sdata[idx - offset] = sdata[idx];
-                if(t > 0) {
-                    sdata[idx] += t;
-                }
-            }
-            __syncthreads();
-        }
-
-        firings_offset = sdata[tid];
-        #endif
-    }
-
-    if((chosen_lookup_neuron_synapses_info.n_groups + chosen_lookup_neuron_synapses_info.n_groups) > 0) {
-        if(chosen_lookup_neuron_synapses_info.n_synapse_metas == 1) {
-            NeuronDataId_t current_group_id = chosen_lookup_neuron_synapses_info.first_group_id;
-            for(uint32_t j=0;j < chosen_lookup_neuron_synapses_info.n_groups;j++) {
-                rw_firings_buffer[firings_offset + j] = Firing{
-                    blockIdx.y, 1.0, current_group_id
-                };
-                current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-            }
-            firings_offset += chosen_lookup_neuron_synapses_info.n_groups;
-            current_group_id = chosen_alternative_lookup_neuron_synapses_info.first_group_id;
-            for(uint32_t j=0;j < chosen_alternative_lookup_neuron_synapses_info.n_groups;j++) {
-                rw_firings_buffer[firings_offset + j] = Firing{
-                    blockIdx.y, -1.0, current_group_id
-                };
-                current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-            }
-        } else {
-            DelayInfo* delays_info = DelayInfos(chosen_lookup_neuron_synapses_info.delays_info_id, lut_data);
-            for(uint32_t j=0;j < chosen_lookup_neuron_synapses_info.n_synapse_metas;j++) {
-                DelayInfo delay_info = delays_info[j];
-                if(delay_info != 0) {
-                    uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
-                    NeuronDataId_t current_group_id = chosen_lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
-                    for(uint32_t k=0;k < n_groups;k++) {
-                        rw_firings_buffer[firings_offset + k] = Firing{
-                            blockIdx.y, 1.0, current_group_id
-                        };
-                        current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-                    }
-                    firings_offset += n_groups;
-                }
-            }
-            delays_info = DelayInfos(chosen_alternative_lookup_neuron_synapses_info.delays_info_id, lut_data);
-            for(uint32_t j=0;j < chosen_alternative_lookup_neuron_synapses_info.n_synapse_metas;j++) {
-                DelayInfo delay_info = delays_info[j];
-                if(delay_info != 0) {
-                    uint32_t n_groups = DELAY_INFO_N_GROUPS(delay_info);
-                    NeuronDataId_t current_group_id = chosen_alternative_lookup_neuron_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
-                    for(uint32_t k=0;k < n_groups;k++) {
-                        rw_firings_buffer[firings_offset + k] = Firing{
-                            blockIdx.y, -1.0, current_group_id
-                        };
-                        current_group_id += SizeOfForwardSynapseGroup(synapse_group_size, true);
-                    }
-                    firings_offset += n_groups;
-                }
-            }
-        }
-    }
-}
-
-gather_gradients_logic(
-    EXTERNAL_REAL_DT* r_weights,
-    NeuronDataId_t first_synapse_id,
-    Firing* r_firings,
-    uint64_t* r_firings_counter_ptr,
-    uint64_t max_firings,
-    EXTERNAL_REAL_DT* r_output_gradients,
-    SUMMATION32_DT* w_before_detectors_gradients,
-    EXTERNAL_REAL_DT* w_weights_gradients,
-    uint32_t n_lookup_neurons,
-    uint32_t n_detectors,
-    uint32_t n_outputs,
-    uint8_t* lut_data,
-    REAL_DT first_synapse_meta_lr,
-    REAL_DT external_lr, // affects only weights in Internal gradients mode
-    BaseSynapseMeta* r_synapse_metas,
-    double int_rescaler
-) {
-    uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(i < max_firings) {
-        if(i < *r_firings_counter_ptr) {
-            Firing firing = r_firings[i];
-            r_output_gradients += firing.batch_index * n_outputs;
-            w_before_detectors_gradients += firing.batch_index * 2 * n_detectors;
-
-            ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(firing.data_id, lut_data);
-            double lr;
-            uint32_t sm_index = SynapseGroupSynapseMetaIndex(fws_group.meta_info);
-            if(sm_index == 0) {
-                lr = static_cast<double>(first_synapse_meta_lr);
-            } else {
-                lr = static_cast<double>((r_synapse_metas + sm_index)->lr);
-            }
-
-            int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group.meta_info));
-            NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(firing.data_id, lut_data);
-            long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
-            EXTERNAL_REAL_DT* weight_ptr = r_weights + weight_shift;
-            uint4 targets_quad = make_uint4(0, 0, 0, 0);
-            float4 weights_quad = make_float4(0.0, 0.0, 0.0, 0.0);
-
-            NeuronIndex_t target_id;
-            double weight;
-            double output_grad;
-            double grad_x = 0.0;
-            SUMMATION32_DT sum32_delta;
-
-            __SUPER_DETAILED_TRACE__("[gather_gradients_logic] i %d, current_group_size %d, max_firings %d, weight_shift %ld\n", i, current_group_size, max_firings, weight_shift);
-
-            if(w_weights_gradients == nullptr) {
-                // internal gradients mode
-                lr = -lr * external_lr;
-                w_weights_gradients = r_weights;
-            }
-
-            int32_t n_t_buffered = 0;
-            int32_t n_w_buffered = 0;
-            for(int32_t cursor=0;cursor < current_group_size;cursor++, current_target_ptr++, weight_ptr++, weight_shift++) {
-                if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-                    #ifdef ATOMIC
-                    asm volatile(
-                        "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                        : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
-                        : "l"(current_target_ptr)
-                    );
-                    #else
-                    targets_quad = *reinterpret_cast<uint4 *>(current_target_ptr);
-                    #endif
-                    target_id = targets_quad.x;
-                    n_t_buffered = 3;
-                } else if(n_t_buffered > 0) {
-                    if(n_t_buffered == 3) {
-                        target_id = targets_quad.y;
-                    } else if(n_t_buffered == 2) {
-                        target_id = targets_quad.z;
-                    } else {
-                        target_id = targets_quad.w;
-                    }
-                    n_t_buffered--;
-                } else {
-                    target_id = *current_target_ptr;
-                }
-
-                if(((reinterpret_cast<uintptr_t>(weight_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-                    #ifdef ATOMIC
-                    asm volatile(
-                        "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                        : "=f"(weights_quad.x), "=f"(weights_quad.y), "=f"(weights_quad.z), "=f"(weights_quad.w)
-                        : "l"(weight_ptr)
-                    );
-                    #else
-                    weights_quad = *reinterpret_cast<float4 *>(weight_ptr);
-                    #endif
-                    weight = static_cast<double>(weights_quad.x);
-                    n_w_buffered = 3;
-                } else if(n_w_buffered > 0) {
-                    if(n_w_buffered == 3) {
-                        weight = static_cast<double>(weights_quad.y);
-                    } else if(n_w_buffered == 2) {
-                        weight = static_cast<double>(weights_quad.z);
-                    } else {
-                        weight = static_cast<double>(weights_quad.w);
-                    }
-                    n_w_buffered--;
-                } else {
-                    weight = static_cast<double>(*weight_ptr);
-                }
-
-                __SUPER_DETAILED_TRACE__("[gather_gradients_logic] target_id %d, weight %f\n", target_id, weight);
-
-                target_id -= n_lookup_neurons;
-                output_grad = static_cast<double>(r_output_gradients[target_id]);
-
-                if(fabs(output_grad) > EPS) {
-                    grad_x += weight * output_grad;
-                    if(firing.payload == 1.0) {
-                        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                            sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                            #ifdef ATOMIC
-                            atomicAdd(
-                                reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weight_shift,
-                                sum32_delta
-                            );
-                            #else
-                            *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weight_shift) += sum32_delta;
-                            #endif
-                        #else
-                            sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                            #ifdef ATOMIC
-                            atomicAdd(
-                                w_weights_gradients + weight_shift,
-                                sum32_delta
-                            );
-                            #else
-                            w_weights_gradients[weight_shift] += sum32_delta;
-                            #endif
-                        #endif
-                    }
-                }
-            }
-
-            if(lr < 0.0) {
-                // x_grad should be normal gradient
-                if(sm_index == 0) {
-                    lr = static_cast<double>(first_synapse_meta_lr);
-                } else {
-                    lr = static_cast<double>((r_synapse_metas + sm_index)->lr);
-                }
-            }
-
-            n_lookup_neurons /= n_detectors;
-            fws_group.source_neuron_index /= n_lookup_neurons;
-
-            if(firing.payload != 1.0) {
-                fws_group.source_neuron_index += n_detectors;
-            }
-
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + fws_group.source_neuron_index,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + fws_group.source_neuron_index,
-                    sum32_delta
-                );
-                #else
-                __SUPER_DETAILED_TRACE__(
-                    "[gather_gradients_logic] firing.batch_index %d, fws_group.source_neuron_index %d, firing.payload %f, sum32_delta %f\n",
-                    firing.batch_index, fws_group.source_neuron_index, firing.payload, sum32_delta
-                );
-                w_before_detectors_gradients[fws_group.source_neuron_index] += sum32_delta;
-                #endif
-            #endif
-        }
-    }
-}
-
-gather_x_gradients_fully_connected_logic(
+propagate_through_detectors_non_seq_sparse_logic(
     EXTERNAL_REAL_DT* r_weights,
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
-    int32_t* r_min_anchor_delta_indices,
-    SUMMATION32_DT* w_before_detectors_gradients,
-    uint32_t n_outputs,
-    uint32_t n_detectors,
-    uint32_t n_output_blocks,
-    int32_t n_outputs_per_block,
-    uint32_t n_lookup_neurons_per_detector,
-    double lr,
-    double int_rescaler
-) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < n_detectors * n_output_blocks) {
-        uint32_t detector_index = i / n_output_blocks;
-        uint32_t output_block_index = i % n_output_blocks;
-        r_lookup_indices += blockIdx.y * n_detectors;
-        int32_t lookup_index = r_lookup_indices[detector_index];
-        if(r_min_anchor_delta_indices != nullptr) {
-            r_min_anchor_delta_indices += blockIdx.y * n_detectors;
-            lookup_index ^= (1 << r_min_anchor_delta_indices[detector_index]);
-        }
-        uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
-        weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
-        r_weights += weight_shift;
-
-        r_output_gradients += blockIdx.y * n_outputs + output_block_index * n_outputs_per_block;
-        w_before_detectors_gradients += blockIdx.y * 2 * n_detectors;
-        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-            n_outputs_per_block = n_outputs % n_outputs_per_block;
-        }
-        double grad_x = 0.0;
-        double output_grad;
-        double weight;
-        SUMMATION32_DT sum32_delta;
-        for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++) {
-             weight = static_cast<double>(r_weights[cursor]);
-             output_grad = static_cast<double>(r_output_gradients[cursor]);
-             grad_x += weight * output_grad;
-        }
-
-        if(fabs(grad_x) > EPS) {
-            if(r_min_anchor_delta_indices != nullptr) {
-                detector_index += n_detectors;
-            }
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + detector_index,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[detector_index] += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(grad_x * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_before_detectors_gradients + detector_index,
-                    sum32_delta
-                );
-                #else
-                w_before_detectors_gradients[detector_index] += sum32_delta;
-                #endif
-            #endif
-        }
-    }
-}
-
-gather_w_gradients_fully_connected_logic(
-    EXTERNAL_REAL_DT* r_output_gradients,
-    int32_t* r_lookup_indices,
-    EXTERNAL_REAL_DT* w_weights_gradients,
-    uint32_t n_outputs,
-    uint32_t n_detectors,
-    uint32_t n_output_blocks,
-    int32_t n_outputs_per_block,
-    uint32_t n_lookup_neurons_per_detector,
-    double lr,
-    double int_rescaler
-) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < n_detectors * n_output_blocks) {
-        uint32_t detector_index = i / n_output_blocks;
-        uint32_t output_block_index = i % n_output_blocks;
-        r_lookup_indices += blockIdx.y * n_detectors;
-        int32_t lookup_index = r_lookup_indices[detector_index];
-        uint64_t weight_shift = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs * detector_index;
-        weight_shift += n_outputs * lookup_index + output_block_index * n_outputs_per_block;
-        w_weights_gradients += weight_shift;
-        r_output_gradients += blockIdx.y * n_outputs + output_block_index * n_outputs_per_block;
-        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-            n_outputs_per_block = n_outputs % n_outputs_per_block;
-        }
-        double output_grad;
-        SUMMATION32_DT sum32_delta;
-        for(int32_t cursor=0;cursor < n_outputs_per_block;cursor++) {
-            output_grad = static_cast<double>(r_output_gradients[cursor]);
-
-            if(fabs(output_grad) > EPS) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + cursor,
-                        sum32_delta
-                    );
-                    #else
-                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + cursor) += sum32_delta;
-                    #endif
-                #else
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        w_weights_gradients + cursor,
-                        sum32_delta
-                    );
-                    #else
-                    w_weights_gradients[cursor] += sum32_delta;
-                    #endif
-                #endif
-            }
-        }
-    }
-}
-
-propagate_through_detectors_logic(
     EXTERNAL_REAL_DT* r_min_anchor_deltas,
     int32_t* r_min_anchor_delta_indices,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
     AnchorsPair* r_detectors,
     uint32_t n_lookup_neurons_per_detector,
-    SUMMATION32_DT* rw_before_detectors_gradients,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    BaseSynapseMeta* r_synapse_metas,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
     EXTERNAL_REAL_DT* w_input_gradients,
     uint32_t n_inputs,
     double int_rescaler
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t n_items = n_detectors * n_output_blocks;
 
-    if(i < n_detectors) {
+    if(i < n_items) {
+        uint32_t detector_index = i / n_output_blocks;
+        uint32_t output_block_index = i % n_output_blocks;
+
         uint64_t shift = blockIdx.y * n_detectors;
+        r_lookup_indices += shift;
         r_min_anchor_deltas += shift;
         r_min_anchor_delta_indices += shift;
-        rw_before_detectors_gradients += 2 * shift;
         w_input_gradients += blockIdx.y * n_inputs;
+        r_output_gradients += blockIdx.y * n_outputs;
 
-        double du = static_cast<double>(r_min_anchor_deltas[i]);
+        double du = static_cast<double>(r_min_anchor_deltas[detector_index]);
         if(du > 0) {
             du = 1.0 / (1.0 + fabs(du));
             du *= 0.5 * du;
@@ -1054,57 +1118,250 @@ propagate_through_detectors_logic(
             du = 1.0 / (1.0 + fabs(du));
             du *= -0.5 * du;
         }
-        du *= static_cast<double>(rw_before_detectors_gradients[i]) - static_cast<double>(rw_before_detectors_gradients[n_detectors + i]);
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        du *= static_cast<double>(DENOMINATOR32_RECIPROC) / int_rescaler;
-        #endif
 
-        if(fabs(du) > EPS) {
-            AnchorsPair ap = r_detectors[i * n_anchors_per_detector + r_min_anchor_delta_indices[i]];
-        
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_input_gradients) + ap.anchor1_id,
-                    sum32_delta
-                );
-                atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_input_gradients) + ap.anchor2_id,
-                    -sum32_delta
-                );
-                #else
-                *reinterpret_cast<SUMMATION32_DT *>(w_input_gradients + ap.anchor1_id) += sum32_delta;
-                *reinterpret_cast<SUMMATION32_DT *>(w_input_gradients + ap.anchor2_id) -= sum32_delta;
-                #endif
-            #else
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_input_gradients + ap.anchor1_id,
-                    du
-                );
-                atomicAdd(
-                    w_input_gradients + ap.anchor2_id,
-                    -du
-                );
-                #else
-                w_input_gradients[ap.anchor1_id] += du;
-                w_input_gradients[ap.anchor2_id] -= du;
-                #endif
-            #endif
+        double main_grad_sum = 0.0;
+        double alt_grad_sum = 0.0;
+        NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info;
+
+        int32_t lookup_index = r_lookup_indices[detector_index];
+        NeuronIndex_t main_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+        NeuronIndex_t alt_neuron_id = detector_index * n_lookup_neurons_per_detector + (lookup_index ^ (1 << r_min_anchor_delta_indices[detector_index]));
+        uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
+
+        // Sparse connectivity: gather output gradients using ForwardSynapseGroups
+        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + main_neuron_id);
+        NeuronDataId_t current_group_id;
+
+        if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+            PFX(find_forward_synapse_group)(
+                lookup_neuron_synapses_info,
+                output_block_index,
+                n_outputs_per_block,
+                lut_data,
+                current_group_id
+            );
+
+            ATOMIC_PFX(accumulate_grad_sum_sparse)(
+                current_group_id,
+                lut_data,
+                first_synapse_id,
+                r_output_gradients,
+                r_weights,
+                n_lookup_neurons,
+                n_outputs,
+                main_grad_sum
+            );
         }
-        __SUPER_DETAILED_TRACE__(
-            "[propagate_through_detectors_logic] batch_index %d, lookup_index %d, alt_lookup_neuron_idx %d\n",
-            blockIdx.y, lookup_index, alt_lookup_neuron_idx
+
+        lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + alt_neuron_id);
+
+        // Process alt concatenated_index_alt
+        if(output_block_index < lookup_neuron_synapses_info.n_groups) {
+            PFX(find_forward_synapse_group)(
+                lookup_neuron_synapses_info,
+                output_block_index,
+                n_outputs_per_block,
+                lut_data,
+                current_group_id
+            );
+
+            ATOMIC_PFX(accumulate_grad_sum_sparse)(
+                current_group_id,
+                lut_data,
+                first_synapse_id,
+                r_output_gradients,
+                r_weights,
+                n_lookup_neurons,
+                n_outputs,
+                alt_grad_sum
+            );
+        }
+        du *= main_grad_sum - alt_grad_sum;
+
+        uint32_t _s = 0;
+        uint32_t flipping_anchor_index = r_min_anchor_delta_indices[detector_index];
+        ATOMIC_PFX(propagate_through_detector)(
+            du,
+            r_detectors,
+            detector_index,
+            n_anchors_per_detector,
+            flipping_anchor_index,
+            w_input_gradients,
+            _s, _s,
+            int_rescaler
         );
-        rw_before_detectors_gradients[i] = 0.0;
-        rw_before_detectors_gradients[n_detectors + i] = 0.0;
+    }
+}
+
+propagate_through_detectors_non_seq_fc_logic(
+    EXTERNAL_REAL_DT* r_weights,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    EXTERNAL_REAL_DT* r_min_anchor_deltas,
+    int32_t* r_min_anchor_delta_indices,
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    AnchorsPair* r_detectors,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    int32_t n_outputs_per_block,
+    EXTERNAL_REAL_DT* w_input_gradients,
+    uint32_t n_inputs,
+    double int_rescaler
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t n_items = n_detectors * n_output_blocks;
+
+    if(i < n_items) {
+        uint32_t detector_index = i / n_output_blocks;
+        uint32_t output_block_index = i % n_output_blocks;
+
+        uint64_t shift = blockIdx.y * n_detectors;
+        r_lookup_indices += shift;
+        r_min_anchor_deltas += shift;
+        r_min_anchor_delta_indices += shift;
+        w_input_gradients += blockIdx.y * n_inputs;
+        r_output_gradients += blockIdx.y * n_outputs;
+
+        r_weights += output_block_index * n_outputs_per_block;
+        r_output_gradients += output_block_index * n_outputs_per_block;
+        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
+            n_outputs_per_block = n_outputs % n_outputs_per_block;
+        }
+
+        double du = static_cast<double>(r_min_anchor_deltas[detector_index]);
+        if(du > 0) {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= 0.5 * du;
+        } else {
+            du = 1.0 / (1.0 + fabs(du));
+            du *= -0.5 * du;
+        }
+
+        double main_grad_sum = 0.0;
+        double alt_grad_sum = 0.0;
+
+        int32_t lookup_index = r_lookup_indices[detector_index];
+        NeuronIndex_t main_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+        NeuronIndex_t alt_neuron_id = detector_index * n_lookup_neurons_per_detector + (lookup_index ^ (1 << r_min_anchor_delta_indices[detector_index]));
+
+        ATOMIC_PFX(accumulate_pair_of_gradient_sums_fc)(
+            r_output_gradients,
+            r_weights,
+            main_neuron_id,
+            alt_neuron_id,
+            n_outputs,
+            n_outputs_per_block,
+            main_grad_sum,
+            alt_grad_sum
+        );
+
+        du *= main_grad_sum - alt_grad_sum;
+        uint32_t _s = 0;
+        uint32_t flipping_anchor_index = r_min_anchor_delta_indices[detector_index];
+        ATOMIC_PFX(propagate_through_detector)(
+            du,
+            r_detectors,
+            detector_index,
+            n_anchors_per_detector,
+            flipping_anchor_index,
+            w_input_gradients,
+            _s, _s,
+            int_rescaler
+        );
+    }
+}
+
+gather_w_gradients_non_seq_sparse_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    uint32_t n_lookup_neurons_per_detector,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    BaseSynapseMeta* r_synapse_metas,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_detectors * n_output_blocks) {
+        uint32_t detector_index = i / n_output_blocks;
+        uint32_t output_block_index = i % n_output_blocks;
+        r_lookup_indices += blockIdx.y * n_detectors;
+        r_output_gradients += blockIdx.y * n_outputs;
+
+        NeuronIndex_t main_neuron_id = i * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
+        uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
+
+        // Sparse connectivity: gather weight gradients using ForwardSynapseGroups
+        ATOMIC_PFX(gather_weight_gradients_sparse)(
+            r_lookup_neuron_synapses_infos,
+            main_neuron_id,
+            output_block_index,
+            n_outputs_per_block,
+            lut_data,
+            first_synapse_id,
+            r_output_gradients,
+            r_synapse_metas,
+            first_synapse_meta_lr,
+            external_lr,
+            n_lookup_neurons,
+            w_weights_gradients,
+            int_rescaler
+        );
+    }
+}
+
+gather_w_gradients_non_seq_fc_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_detectors,
+    uint32_t n_output_blocks,
+    int32_t n_outputs_per_block,
+    uint32_t n_lookup_neurons_per_detector,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_detectors * n_output_blocks) {
+        uint32_t detector_index = i / n_output_blocks;
+        uint32_t output_block_index = i % n_output_blocks;
+        r_lookup_indices += blockIdx.y * n_detectors;
+        w_weights_gradients += output_block_index * n_outputs_per_block;
+        r_output_gradients += blockIdx.y * n_outputs + output_block_index * n_outputs_per_block;
+        if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
+            n_outputs_per_block = n_outputs % n_outputs_per_block;
+        }
+
+        NeuronIndex_t main_neuron_id = i * n_lookup_neurons_per_detector + r_lookup_indices[detector_index];
+
+        // Fully connected: direct indexing
+        ATOMIC_PFX(gather_weight_gradients_fc)(
+            r_output_gradients,
+            main_neuron_id,
+            n_outputs,
+            n_outputs_per_block,
+            first_synapse_meta_lr,
+            external_lr,
+            w_weights_gradients,
+            int_rescaler
+        );
     }
 }
 
 // ======================= SEQUENCE, FORWARD =============================== //
 
-check_detectors_for_sequence_logic(
+check_detectors_seq_logic(
     EXTERNAL_REAL_DT* r_input,
     uint32_t n_inputs,
     uint32_t sequence_length,
@@ -1167,7 +1424,7 @@ check_detectors_for_sequence_logic(
         *w_min_anchor_deltas = min_delta;
         *w_min_anchor_delta_indices = min_delta_anchor_idx;
         
-        __SUPER_DETAILED_TRACE__("check_detectors_for_sequence_logic: batch_index %d, detector_index %d, timestep %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", blockIdx.y, detector_index, timestep, lookup_index, min_delta, min_delta_anchor_idx);
+        __SUPER_DETAILED_TRACE__("check_detectors_seq_logic: batch_index %d, detector_index %d, timestep %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", blockIdx.y, detector_index, timestep, lookup_index, min_delta, min_delta_anchor_idx);
     }
 }
 
@@ -1228,7 +1485,7 @@ check_positional_embeddings_logic(
     }
 }
 
-fill_outputs_fully_connected_for_sequence_logic(
+fill_outputs_fully_connected_seq_logic(
     EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
     int32_t* r_positional_lookup_indices,
@@ -1329,7 +1586,7 @@ fill_outputs_fully_connected_for_sequence_logic(
     #endif
 }
 
-fill_outputs_sparse_for_sequence_logic(
+fill_outputs_sparse_seq_logic(
     EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
     int32_t* r_positional_lookup_indices,
@@ -1424,7 +1681,7 @@ fill_outputs_sparse_for_sequence_logic(
             lut_data,
             current_group_id
         );
-        ATOMIC_PFX(process_single_synapse_group)(
+        ATOMIC_PFX(fire_single_synapse_group)(
             current_group_id,
             lut_data,
             first_synapse_id,
@@ -1439,7 +1696,7 @@ fill_outputs_sparse_for_sequence_logic(
 
 // ======================= SEQUENCE, BACKWARD =============================== //
 
-propagate_through_detectors_for_sequence_sparse_logic(
+propagate_through_detectors_seq_sparse_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
@@ -1634,41 +1891,17 @@ propagate_through_detectors_for_sequence_sparse_logic(
     }
     du *= main_grad_sum - alt_grad_sum;
 
-    if(fabs(du) > EPS) {
-        AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
-        EXTERNAL_REAL_DT* w_input_grad = w_input_gradients + i_or_j * n_inputs;
-
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor1_id,
-                sum32_delta
-            );
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor2_id,
-                -sum32_delta
-            );
-            #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor1_id) += sum32_delta;
-            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor2_id) -= sum32_delta;
-            #endif
-        #else
-            #ifdef ATOMIC
-            atomicAdd(
-                w_input_grad + ap.anchor1_id,
-                du
-            );
-            atomicAdd(
-                w_input_grad + ap.anchor2_id,
-                -du
-            );
-            #else
-            w_input_grad[ap.anchor1_id] += du;
-            w_input_grad[ap.anchor2_id] -= du;
-            #endif
-        #endif
-    }
+    ATOMIC_PFX(propagate_through_detector)(
+        du,
+        r_detectors,
+        detector_index,
+        n_anchors_per_detector,
+        flipping_anchor_index,
+        w_input_gradients,
+        i_or_j,
+        n_inputs,
+        int_rescaler
+    );
 
     if((fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
         concatenated_index_alt = (
@@ -1710,31 +1943,18 @@ propagate_through_detectors_for_sequence_sparse_logic(
             );
         }
         du *= main_grad_sum - alt_grad_sum;
-        w_positional_embeddings_gradients += pe_offset * positional_dim;
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients) + pe_min_delta_index,
-                sum32_delta
-            );
-            #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients + pe_min_delta_index) += sum32_delta;
-            #endif
-        #else
-            #ifdef ATOMIC
-            atomicAdd(
-                w_positional_embeddings_gradients + pe_min_delta_index,
-                du
-            );
-            #else
-            w_positional_embeddings_gradients[pe_min_delta_index] += du;
-            #endif
-        #endif
+        ATOMIC_PFX(update_positional_gradients)(
+            du,
+            w_positional_embeddings_gradients,
+            pe_offset,
+            positional_dim,
+            pe_min_delta_index,
+            int_rescaler
+        );
     }
 }
 
-propagate_through_detectors_for_sequence_fc_logic(
+propagate_through_detectors_seq_fc_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* r_weights,
     int32_t* r_lookup_indices,
@@ -1749,7 +1969,7 @@ propagate_through_detectors_for_sequence_fc_logic(
     uint32_t n_anchors_per_detector,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    uint32_t n_outputs_per_block,
+    int32_t n_outputs_per_block,
     AnchorsPair* r_detectors,
     uint32_t n_lookup_neurons_per_detector,
     EXTERNAL_REAL_DT* w_input_gradients,
@@ -1796,13 +2016,10 @@ propagate_through_detectors_for_sequence_fc_logic(
     uint32_t output_block_index = blockIdx.y % n_output_blocks;
     r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
 
-    int32_t n_outputs_in_current_block;
     r_weights += output_block_index * n_outputs_per_block;
     r_output_gradients += output_block_index * n_outputs_per_block;
     if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-        n_outputs_in_current_block = n_outputs % n_outputs_per_block;
-    } else {
-        n_outputs_in_current_block = n_outputs_per_block;
+        n_outputs_per_block = n_outputs % n_outputs_per_block;
     }
 
     // Calculate offsets into lookup_indices arrays
@@ -1884,139 +2101,29 @@ propagate_through_detectors_for_sequence_fc_logic(
     alt_grad_sum = 0.0;
     
     // Fully connected: direct indexing
-    uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
-    uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
-
-    #ifdef ATOMIC
-    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 main_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    int32_t n_output_grad_buffered = 0;
-    int32_t n_main_w_buffered = 0;
-    int32_t n_alt_w_buffered = 0;
-    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
-    EXTERNAL_REAL_DT* r_main_weights_ptr = r_weights + weights_main_shift;
-    EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
-
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
-        // Vectorized read of output gradients
-        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
-                : "l"(r_output_grad_ptr)
-            );
-            output_grad = static_cast<double>(output_grad_quad.x);
-            n_output_grad_buffered = 3;
-        } else if(n_output_grad_buffered > 0) {
-            if(n_output_grad_buffered == 3) {
-                output_grad = static_cast<double>(output_grad_quad.y);
-            } else if(n_output_grad_buffered == 2) {
-                output_grad = static_cast<double>(output_grad_quad.z);
-            } else {
-                output_grad = static_cast<double>(output_grad_quad.w);
-            }
-            n_output_grad_buffered--;
-        } else {
-            output_grad = static_cast<double>(*r_output_grad_ptr);
-        }
-
-        // Vectorized read of main weights
-        if(((reinterpret_cast<uintptr_t>(r_main_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(main_weights_quad.x), "=f"(main_weights_quad.y), "=f"(main_weights_quad.z), "=f"(main_weights_quad.w)
-                : "l"(r_main_weights_ptr)
-            );
-            weight = static_cast<double>(main_weights_quad.x);
-            n_main_w_buffered = 3;
-        } else if(n_main_w_buffered > 0) {
-            if(n_main_w_buffered == 3) {
-                weight = static_cast<double>(main_weights_quad.y);
-            } else if(n_main_w_buffered == 2) {
-                weight = static_cast<double>(main_weights_quad.z);
-            } else {
-                weight = static_cast<double>(main_weights_quad.w);
-            }
-            n_main_w_buffered--;
-        } else {
-            weight = static_cast<double>(*r_main_weights_ptr);
-        }
-
-        main_grad_sum += weight * output_grad;
-
-        // Vectorized read of alt weights
-        if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
-                : "l"(r_alt_weights_ptr)
-            );
-            weight = static_cast<double>(alt_weights_quad.x);
-            n_alt_w_buffered = 3;
-        } else if(n_alt_w_buffered > 0) {
-            if(n_alt_w_buffered == 3) {
-                weight = static_cast<double>(alt_weights_quad.y);
-            } else if(n_alt_w_buffered == 2) {
-                weight = static_cast<double>(alt_weights_quad.z);
-            } else {
-                weight = static_cast<double>(alt_weights_quad.w);
-            }
-            n_alt_w_buffered--;
-        } else {
-            weight = static_cast<double>(*r_alt_weights_ptr);
-        }
-
-        alt_grad_sum += weight * output_grad;
-
-        r_output_grad_ptr++;
-        r_main_weights_ptr++;
-        r_alt_weights_ptr++;
-    }
-    #else
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++, weights_alt_shift++) {
-        output_grad = static_cast<double>(r_output_gradients[cursor]);
-        main_grad_sum += static_cast<double>(r_weights[weights_main_shift]) * output_grad;
-        alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
-    }
-    #endif
+    ATOMIC_PFX(accumulate_pair_of_gradient_sums_fc)(
+        r_output_gradients,
+        r_weights,
+        concatenated_index,
+        concatenated_index_alt,
+        n_outputs,
+        n_outputs_per_block,
+        main_grad_sum,
+        alt_grad_sum
+    );
     du *= main_grad_sum - alt_grad_sum;
 
-    if(fabs(du) > EPS) {
-        AnchorsPair ap = r_detectors[detector_index * n_anchors_per_detector + flipping_anchor_index];
-        EXTERNAL_REAL_DT* w_input_grad = w_input_gradients + i_or_j * n_inputs;
-
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor1_id,
-                sum32_delta
-            );
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_input_grad) + ap.anchor2_id,
-                -sum32_delta
-            );
-            #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor1_id) += sum32_delta;
-            *reinterpret_cast<SUMMATION32_DT *>(w_input_grad + ap.anchor2_id) -= sum32_delta;
-            #endif
-        #else
-            #ifdef ATOMIC
-            atomicAdd(
-                w_input_grad + ap.anchor1_id,
-                du
-            );
-            atomicAdd(
-                w_input_grad + ap.anchor2_id,
-                -du
-            );
-            #else
-            w_input_grad[ap.anchor1_id] += du;
-            w_input_grad[ap.anchor2_id] -= du;
-            #endif
-        #endif
-    }
+    ATOMIC_PFX(propagate_through_detector)(
+        du,
+        r_detectors,
+        detector_index,
+        n_anchors_per_detector,
+        flipping_anchor_index,
+        w_input_gradients,
+        i_or_j,
+        n_inputs,
+        int_rescaler
+    );
 
     if((fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
         concatenated_index_alt = (
@@ -2036,98 +2143,27 @@ propagate_through_detectors_for_sequence_fc_logic(
         alt_grad_sum = 0.0;
         
         // Fully connected: direct indexing
-        uint64_t weights_alt_shift = static_cast<uint64_t>(concatenated_index_alt) * n_outputs;
-
-        #ifdef ATOMIC
-        float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        float4 alt_weights_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        int32_t n_output_grad_buffered = 0;
-        int32_t n_alt_w_buffered = 0;
-        EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
-        EXTERNAL_REAL_DT* r_alt_weights_ptr = r_weights + weights_alt_shift;
-
-        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++) {
-            // Vectorized read of output gradients
-            if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
-                    : "l"(r_output_grad_ptr)
-                );
-                output_grad = static_cast<double>(output_grad_quad.x);
-                n_output_grad_buffered = 3;
-            } else if(n_output_grad_buffered > 0) {
-                if(n_output_grad_buffered == 3) {
-                    output_grad = static_cast<double>(output_grad_quad.y);
-                } else if(n_output_grad_buffered == 2) {
-                    output_grad = static_cast<double>(output_grad_quad.z);
-                } else {
-                    output_grad = static_cast<double>(output_grad_quad.w);
-                }
-                n_output_grad_buffered--;
-            } else {
-                output_grad = static_cast<double>(*r_output_grad_ptr);
-            }
-
-            // Vectorized read of alt weights
-            if(((reinterpret_cast<uintptr_t>(r_alt_weights_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-                asm volatile(
-                    "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                    : "=f"(alt_weights_quad.x), "=f"(alt_weights_quad.y), "=f"(alt_weights_quad.z), "=f"(alt_weights_quad.w)
-                    : "l"(r_alt_weights_ptr)
-                );
-                weight = static_cast<double>(alt_weights_quad.x);
-                n_alt_w_buffered = 3;
-            } else if(n_alt_w_buffered > 0) {
-                if(n_alt_w_buffered == 3) {
-                    weight = static_cast<double>(alt_weights_quad.y);
-                } else if(n_alt_w_buffered == 2) {
-                    weight = static_cast<double>(alt_weights_quad.z);
-                } else {
-                    weight = static_cast<double>(alt_weights_quad.w);
-                }
-                n_alt_w_buffered--;
-            } else {
-                weight = static_cast<double>(*r_alt_weights_ptr);
-            }
-
-            alt_grad_sum += weight * output_grad;
-
-            r_output_grad_ptr++;
-            r_alt_weights_ptr++;
-        }
-        #else
-        for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_alt_shift++) {
-            output_grad = static_cast<double>(r_output_gradients[cursor]);
-            alt_grad_sum += static_cast<double>(r_weights[weights_alt_shift]) * output_grad;
-        }
-        #endif
+        ATOMIC_PFX(accumulate_grad_sum_fc)(
+            r_output_gradients,
+            r_weights,
+            concatenated_index_alt,
+            n_outputs,
+            n_outputs_per_block,
+            alt_grad_sum
+        );
         du *= main_grad_sum - alt_grad_sum;
-        w_positional_embeddings_gradients += pe_offset * positional_dim;
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
-            atomicAdd(
-                reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients) + pe_min_delta_index,
-                sum32_delta
-            );
-            #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_positional_embeddings_gradients + pe_min_delta_index) += sum32_delta;
-            #endif
-        #else
-            #ifdef ATOMIC
-            atomicAdd(
-                w_positional_embeddings_gradients + pe_min_delta_index,
-                du
-            );
-            #else
-            w_positional_embeddings_gradients[pe_min_delta_index] += du;
-            #endif
-        #endif
+        ATOMIC_PFX(update_positional_gradients)(
+            du,
+            w_positional_embeddings_gradients,
+            pe_offset,
+            positional_dim,
+            pe_min_delta_index,
+            int_rescaler
+        );
     }
 }
 
-gather_w_gradients_for_sequence_sparse_logic(
+gather_w_gradients_seq_sparse_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
     int32_t* r_positional_lookup_indices,
@@ -2211,126 +2247,27 @@ gather_w_gradients_for_sequence_sparse_logic(
         PE
     ) + detector_index * n_lookup_neurons_per_detector;
 
-    double output_grad;
-    SUMMATION32_DT sum32_delta;
     uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
-    double lr;
 
     // Sparse connectivity: gather weight gradients using ForwardSynapseGroups
-    NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + concatenated_index);
-
-    if(output_block_index < lookup_neuron_synapses_info.n_groups) {
-        NeuronDataId_t current_group_id;
-        PFX(find_forward_synapse_group)(
-            lookup_neuron_synapses_info,
-            output_block_index,
-            n_outputs_per_block,
-            lut_data,
-            current_group_id
-        );
-
-        ForwardSynapseGroup fws_group = *GetForwardSynapseGroup(current_group_id, lut_data);
-        uint32_t sm_index = SynapseGroupSynapseMetaIndex(fws_group.meta_info);
-        if(sm_index == 0) {
-            lr = first_synapse_meta_lr;
-        } else {
-            lr = static_cast<double>((r_synapse_metas + sm_index)->lr);
-        }
-        if(external_lr >= 0) {
-            lr *= -external_lr;
-        }
-
-        uint32_t current_group_size = SynapseGroupSize(fws_group.meta_info);
-        NeuronIndex_t* current_target_ptr = TargetNeuronsInForwardGroup(current_group_id, lut_data);
-        long weight_shift = (reinterpret_cast<uint8_t *>(current_target_ptr) - (lut_data + first_synapse_id)) >> 2;
-
-        #ifdef ATOMIC
-        uint4 targets_quad = make_uint4(0, 0, 0, 0);
-        int32_t n_t_buffered = 0;
-        NeuronIndex_t target_id;
-
-        for(uint32_t cursor = 0; cursor < current_group_size; cursor++, current_target_ptr++, weight_shift++) {
-            // Vectorized read of target IDs
-            if(((reinterpret_cast<uintptr_t>(current_target_ptr) & 15) == 0) && (cursor < current_group_size - 3)) {
-                asm volatile(
-                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(targets_quad.x), "=r"(targets_quad.y), "=r"(targets_quad.z), "=r"(targets_quad.w)
-                    : "l"(current_target_ptr)
-                );
-                target_id = targets_quad.x;
-                n_t_buffered = 3;
-            } else if(n_t_buffered > 0) {
-                if(n_t_buffered == 3) {
-                    target_id = targets_quad.y;
-                } else if(n_t_buffered == 2) {
-                    target_id = targets_quad.z;
-                } else {
-                    target_id = targets_quad.w;
-                }
-                n_t_buffered--;
-            } else {
-                target_id = *current_target_ptr;
-            }
-            target_id -= n_lookup_neurons;
-            output_grad = static_cast<double>(r_output_gradients[target_id]);
-
-            if(fabs(output_grad) > EPS) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weight_shift,
-                        sum32_delta
-                    );
-                    #else
-                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weight_shift) += sum32_delta;
-                    #endif
-                #else
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        w_weights_gradients + weight_shift,
-                        sum32_delta
-                    );
-                    #else
-                    w_weights_gradients[weight_shift] += sum32_delta;
-                    #endif
-                #endif
-            }
-        }
-        #else
-        for(uint32_t cursor = 0; cursor < current_group_size; cursor++, weight_shift++) {
-            NeuronIndex_t target_id = current_target_ptr[cursor] - n_lookup_neurons;
-            output_grad = static_cast<double>(r_output_gradients[target_id]);
-            if(fabs(output_grad) > EPS) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weight_shift,
-                        sum32_delta
-                    );
-                    #else
-                    *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weight_shift) += sum32_delta;
-                    #endif
-                #else
-                    sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                    #ifdef ATOMIC
-                    atomicAdd(
-                        w_weights_gradients + weight_shift,
-                        sum32_delta
-                    );
-                    #else
-                    w_weights_gradients[weight_shift] += sum32_delta;
-                    #endif
-                #endif
-            }
-        }
-        #endif
-    }
+    ATOMIC_PFX(gather_weight_gradients_sparse)(
+        r_lookup_neuron_synapses_infos,
+        concatenated_index,
+        output_block_index,
+        n_outputs_per_block,
+        lut_data,
+        first_synapse_id,
+        r_output_gradients,
+        r_synapse_metas,
+        first_synapse_meta_lr,
+        external_lr,
+        n_lookup_neurons,
+        w_weights_gradients,
+        int_rescaler
+    );
 }
 
-gather_w_gradients_for_sequence_fc_logic(
+gather_w_gradients_seq_fc_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
     int32_t* r_positional_lookup_indices,
@@ -2340,7 +2277,7 @@ gather_w_gradients_for_sequence_fc_logic(
     uint32_t n_anchors_per_detector,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    uint32_t n_outputs_per_block,
+    int32_t n_outputs_per_block,
     uint32_t n_lookup_neurons_per_detector,
     EXTERNAL_REAL_DT* w_weights_gradients,
     uint32_t positional_dim,
@@ -2386,13 +2323,10 @@ gather_w_gradients_for_sequence_fc_logic(
     uint32_t output_block_index = blockIdx.y % n_output_blocks;
     r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
 
-    int32_t n_outputs_in_current_block;
     w_weights_gradients += output_block_index * n_outputs_per_block;
     r_output_gradients += output_block_index * n_outputs_per_block;
     if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
-        n_outputs_in_current_block = n_outputs % n_outputs_per_block;
-    } else {
-        n_outputs_in_current_block = n_outputs_per_block;
+        n_outputs_per_block = n_outputs % n_outputs_per_block;
     }
 
     // Calculate offsets into lookup_indices arrays
@@ -2419,97 +2353,15 @@ gather_w_gradients_for_sequence_fc_logic(
         PE
     ) + detector_index * n_lookup_neurons_per_detector;
 
-    double output_grad;
-    SUMMATION32_DT sum32_delta;
-    double lr;
-
     // Fully connected: direct indexing
-    lr = first_synapse_meta_lr;
-    if(external_lr >= 0) {
-        lr *= -external_lr;
-    }
-    uint64_t weights_main_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
-
-    #ifdef ATOMIC
-    float4 output_grad_quad = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    int32_t n_output_grad_buffered = 0;
-    EXTERNAL_REAL_DT* r_output_grad_ptr = r_output_gradients;
-
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++) {
-        // Vectorized read of output gradients
-        if(((reinterpret_cast<uintptr_t>(r_output_grad_ptr) & 15) == 0) && (cursor < n_outputs_in_current_block - 3)) {
-            asm volatile(
-                "ld.global.v4.f32 {%0,%1,%2,%3}, [%4];"
-                : "=f"(output_grad_quad.x), "=f"(output_grad_quad.y), "=f"(output_grad_quad.z), "=f"(output_grad_quad.w)
-                : "l"(r_output_grad_ptr)
-            );
-            output_grad = static_cast<double>(output_grad_quad.x);
-            n_output_grad_buffered = 3;
-        } else if(n_output_grad_buffered > 0) {
-            if(n_output_grad_buffered == 3) {
-                output_grad = static_cast<double>(output_grad_quad.y);
-            } else if(n_output_grad_buffered == 2) {
-                output_grad = static_cast<double>(output_grad_quad.z);
-            } else {
-                output_grad = static_cast<double>(output_grad_quad.w);
-            }
-            n_output_grad_buffered--;
-        } else {
-            output_grad = static_cast<double>(*r_output_grad_ptr);
-        }
-
-        if(fabs(output_grad) > EPS) {
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_main_shift,
-                    sum32_delta
-                );
-                #else
-                *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_main_shift) += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_weights_gradients + weights_main_shift,
-                    sum32_delta
-                );
-                #else
-                w_weights_gradients[weights_main_shift] += sum32_delta;
-                #endif
-            #endif
-        }
-
-        r_output_grad_ptr++;
-    }
-    #else
-    for(int32_t cursor = 0; cursor < n_outputs_in_current_block; cursor++, weights_main_shift++) {
-        output_grad = static_cast<double>(r_output_gradients[cursor]);
-        if(fabs(output_grad) > EPS) {
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(
-                    reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_main_shift,
-                    sum32_delta
-                );
-                #else
-                *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_main_shift) += sum32_delta;
-                #endif
-            #else
-                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_weights_gradients + weights_main_shift,
-                    sum32_delta
-                );
-                #else
-                w_weights_gradients[weights_main_shift] += sum32_delta;
-                #endif
-            #endif
-        }
-    }
-    #endif
+    ATOMIC_PFX(gather_weight_gradients_fc)(
+        r_output_gradients,
+        concatenated_index,
+        n_outputs,
+        n_outputs_per_block,
+        first_synapse_meta_lr,
+        external_lr,
+        w_weights_gradients,
+        int_rescaler
+    );
 }
