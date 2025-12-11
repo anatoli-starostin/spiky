@@ -780,7 +780,7 @@ check_detectors_logic(
                 printf("!!!!%f!!!!!\n", delta);
             }
 
-            if((fabs(delta) - fabs(min_delta)) < 0.00001) {
+            if(fabs(fabs(delta) - fabs(min_delta)) < 0.00001) {
                 printf("!!!!%f, %f!!!!!\n", delta, min_delta);
             }
 
