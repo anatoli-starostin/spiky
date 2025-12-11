@@ -1563,7 +1563,7 @@ fill_aux_logic(
         for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
             if(tid < s) {
                 sdata[2 * tid] += sdata[2 * (tid + s)];
-                t = sdata[2 * (tid + s) + 1]
+                t = sdata[2 * (tid + s) + 1];
                 if(t > sdata[2 * tid + 1]) {
                     sdata[2 * tid + 1] = t;
                 }
