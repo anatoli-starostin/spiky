@@ -860,6 +860,7 @@ fill_outputs_non_seq_fc_logic(
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < n_outputs * n_detector_blocks) {
         uint32_t output_index = i / n_detector_blocks;
+        // TOdO
         uint32_t detector_block_index = i % n_detector_blocks;
         __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: batch_index %d, output_index %d, detector_block_index %d\n", blockIdx.y, output_index, detector_block_index);
         r_lookup_indices += blockIdx.y * n_detectors;
@@ -877,30 +878,30 @@ fill_outputs_non_seq_fc_logic(
         }
         __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: n_detectors_per_block %d\n", n_detectors_per_block);
         for(int32_t cursor=0;cursor < n_detectors_per_block;cursor++, r_lookup_indices++, r_weights+=weights_per_detector) {
-            if(((reinterpret_cast<uintptr_t>(r_lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3)) {
-                #ifdef ATOMIC
-                asm volatile(
-                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
-                    : "=r"(li_quad.x), "=r"(li_quad.y), "=r"(li_quad.z), "=r"(li_quad.w)
-                    : "l"(r_lookup_indices)
-                );
-                #else
-                li_quad = *reinterpret_cast<int4 *>(r_lookup_indices);
-                #endif
-                current_lookup_index = li_quad.x;
-                n_buffered = 3;
-            } else if(n_buffered > 0) {
-                if(n_buffered == 3) {
-                    current_lookup_index = li_quad.y;
-                } else if(n_buffered == 2) {
-                    current_lookup_index = li_quad.z;
-                } else {
-                    current_lookup_index = li_quad.w;
-                }
-                n_buffered--;
-            } else {
+//            if(((reinterpret_cast<uintptr_t>(r_lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3)) {
+//                #ifdef ATOMIC
+//                asm volatile(
+//                    "ld.global.v4.s32 {%0,%1,%2,%3}, [%4];"
+//                    : "=r"(li_quad.x), "=r"(li_quad.y), "=r"(li_quad.z), "=r"(li_quad.w)
+//                    : "l"(r_lookup_indices)
+//                );
+//                #else
+//                li_quad = *reinterpret_cast<int4 *>(r_lookup_indices);
+//                #endif
+//                current_lookup_index = li_quad.x;
+//                n_buffered = 3;
+//            } else if(n_buffered > 0) {
+//                if(n_buffered == 3) {
+//                    current_lookup_index = li_quad.y;
+//                } else if(n_buffered == 2) {
+//                    current_lookup_index = li_quad.z;
+//                } else {
+//                    current_lookup_index = li_quad.w;
+//                }
+//                n_buffered--;
+//            } else {
                 current_lookup_index = *r_lookup_indices;
-            }
+//            }
             __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: current_lookup_index %d, output_index %d, weight %f\n", current_lookup_index, output_index, r_weights[current_lookup_index * n_outputs + output_index]);
             weight_sum += static_cast<double>(r_weights[current_lookup_index * n_outputs + output_index]);
         }

@@ -5,18 +5,6 @@ namespace {
 #include "aux/lut_runtime_kernels_logic.cu"
 }
 
-// Helper function to round up to the next power of 2 but not less then 32
-static inline uint32_t round_tbp(uint32_t n, uint32_t m) {
-    if (n <= m) return m;
-    n--;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    return n + 1;
-}
-
 namespace py = pybind11;
 
 LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
