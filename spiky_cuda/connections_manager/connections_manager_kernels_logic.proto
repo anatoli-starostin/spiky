@@ -1484,11 +1484,11 @@ fill_aux_logic(
     uint32_t min_delay = MAX_DELAY + 1;
     uint32_t n_synapse_metas = 0;
     uint64_t capacity = 0;
+    uint32_t n_groups = 0;
     if(neuron_idx < n_neurons) {
         indexed_synapses_ptr += neuron_idx;
         IndexedSynapsesInfo synapses_info = *indexed_synapses_ptr;
         NeuronDataId_t current_group_id = synapses_info.first_group_id;
-        uint32_t n_groups = 0;
         if(current_group_id > 0) {
             uint32_t current_group_meta_info;
             if(forward_or_backward) {
@@ -1547,23 +1547,35 @@ fill_aux_logic(
     if(device == -1) {
         if(capacity > 0) {
             aux_buffer[0] += capacity;
+            if(n_groups > aux_buffer[1]) {
+                aux_buffer[1] = n_groups;
+            }
         }
     } else {
         #ifdef ATOMIC
         extern __shared__ __align__(16) uint8_t __sm[];
         uint64_t *sdata = reinterpret_cast<uint64_t *>(__sm);
-        sdata[tid] = capacity;
+        sdata[2 * tid] = capacity;
+        sdata[2 * tid + 1] = n_groups;
         __syncthreads();
 
+        uint64_t t;
         for(unsigned int s = blockDim.x >> 1; s > 0; s >>= 1){
             if(tid < s) {
-                sdata[tid] += sdata[tid + s];
+                sdata[2 * tid] += sdata[2 * (tid + s)];
+                t = sdata[2 * (tid + s) + 1]
+                if(t > sdata[2 * tid + 1]) {
+                    sdata[2 * tid + 1] = t;
+                }
             }
             __syncthreads();
         }
         if(tid == 0) {
             if(sdata[0] > 0) {
                 atomicAdd(reinterpret_cast<unsigned long long*>(aux_buffer), static_cast<unsigned long long>(sdata[0]));
+            }
+            if(sdata[1] > 0) {
+                atomicMax(reinterpret_cast<unsigned long long*>(aux_buffer + 1), static_cast<unsigned long long>(sdata[1]));
             }
         }
         #endif

@@ -327,32 +327,6 @@ public:
                 true
             );
 
-            uint32_t max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
-                this->n_inputs,
-                0, true
-            );
-            uint32_t max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
-                this->n_inputs,
-                0, true
-            );
-            // TODO this estimation can be more precise and should be moved to connections manager
-            if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_forward_groups_per_neuron) {
-                gc_meta->max_forward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
-            }
-
-            max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
-                this->n_outputs,
-                0, false
-            );
-            max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
-                this->n_outputs,
-                0, false
-            );
-            // TODO this estimation can be more precise and should be moved to connections manager
-            if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_backward_groups_per_neuron) {
-                gc_meta->max_backward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
-            }
-
             EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
 
             if(host_device_allocator.device == -1) {

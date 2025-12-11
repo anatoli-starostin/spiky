@@ -80,25 +80,26 @@ public:
         this->lookup_neuron_synapses_infos_id = 0;
 
         #ifdef ENABLE_PROFILING
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_STEP_PROFILER_OP, "lut::runtime::forward_step");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_BACKPROP_PROFILER_OP, "lut::runtime::backward_backprop");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::forward::fire_detectors");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_OUTPUTS_PROFILER_OP, "lut::runtime::forward::fill_outputs");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP, "lut::runtime::forward_non_seq");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP, "lut::runtime::forward_non_seq::check_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP, "lut::runtime::forward_non_seq::fill_outputs_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_FC_PROFILER_OP, "lut::runtime::forward_non_seq::fill_outputs_fc");
         profiler.register_operation_type(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP, "lut::runtime::convert_outputs");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_FIRE_DETECTORS_PROFILER_OP, "lut::runtime::backward::fire_detectors");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_GRADIENTS_PROFILER_OP, "lut::runtime::backward::gather_gradients");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_X_BAR_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_x_bar");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_FC_W_PROFILER_OP, "lut::runtime::backward::gather_gradients_fc_w");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_DETECTORS_PROFILER_OP, "lut::runtime::backward::propagate_detectors");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_CHECK_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::forward::check_detectors_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::forward::check_positional_embeddings");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_AFTER_DETECTORS_FIRING_STAT_PROFILER_OP, "lut::runtime::forward::fill_after_detectors_firing_stat");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_DENSIFY_FIRING_STAT_PROFILER_OP, "lut::runtime::forward::densify_firing_stat");
-        profiler.register_operation_type(LUT_RUNTIME_FORWARD_FILL_OUTPUTS_BY_SPARSE_FIRINGS_PROFILER_OP, "lut::runtime::forward::fill_outputs_by_sparse_firings");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_X_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::gather_x_gradients_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_GATHER_W_GRADIENTS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::gather_w_gradients_for_sequence");
-        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_PROPAGATE_THROUGH_DETECTORS_FOR_SEQUENCE_PROFILER_OP, "lut::runtime::backward::propagate_through_detectors_for_sequence");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_BACKPROP_PROFILER_OP, "lut::runtime::backward_non_seq::backprop");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_PROPAGATE_DETECTORS_SPARSE_PROFILER_OP, "lut::runtime::backward_non_seq::propagate_detectors_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_SPARSE_PROFILER_OP, "lut::runtime::backward_non_seq::gather_gradients_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_PROPAGATE_DETECTORS_FC_PROFILER_OP, "lut::runtime::backward_non_seq::propagate_detectors_fc");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_FC_PROFILER_OP, "lut::runtime::backward_non_seq::gather_gradients_fc");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP, "lut::runtime::forward_seq");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_CHECK_DETECTORS_PROFILER_OP, "lut::runtime::forward_seq::check_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::forward_seq::check_positional_embeddings");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP, "lut::runtime::forward_seq::fill_outputs_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_FC_PROFILER_OP, "lut::runtime::forward_seq::fill_outputs_fc");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROFILER_OP, "lut::runtime::backward_seq");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_SPARSE_PROFILER_OP, "lut::runtime::backward_seq::propagate_through_detectors_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_FC_PROFILER_OP, "lut::runtime::backward_seq::propagate_through_detectors_fc");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_SPARSE_PROFILER_OP, "lut::runtime::backward_seq::gather_w_gradients_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP, "lut::runtime::backward_seq::gather_w_gradients_fc");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
@@ -559,22 +560,6 @@ public:
             only_trainable_backwards,
             true
         );
-
-        uint32_t max_groups_per_synapse_meta = connections_manager->calculate_max_n_groups(
-            this->n_lookup_neurons,
-            0, true
-        );
-        uint32_t max_n_synapse_metas = connections_manager->calculate_max_n_synapse_metas(
-            this->n_lookup_neurons,
-            0, true
-        );
-        // TODO this estimation can be more precise and should be moved to connections manager
-        if(max_groups_per_synapse_meta * max_n_synapse_metas > gc_meta->max_forward_groups_per_neuron) {
-            gc_meta->max_forward_groups_per_neuron = max_groups_per_synapse_meta * max_n_synapse_metas;
-        }
-
-        // No backward synapses for output neurons, so no need to calculate backward groups
-        gc_meta->max_backward_groups_per_neuron = 0;
 
         EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
 

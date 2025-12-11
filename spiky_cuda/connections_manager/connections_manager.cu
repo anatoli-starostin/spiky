@@ -194,7 +194,7 @@ void ConnectionsManager::finalize(
         #endif
     }
     gc_meta->n_forward_groups = aux_buffer[0];
-    memset(aux_buffer, 0, sizeof(uint64_t));
+    memset(aux_buffer, 0, 3 * sizeof(uint64_t));
     PROF_END(CONNECTIONS_MANAGER_FINALIZE_GROUPS_GATHER_FORWARD_INFO_PROFILER_OP);
 
     if(random_seed > 0) { // Shuffle forward connections if needed
@@ -537,7 +537,7 @@ void ConnectionsManager::finalize(
         PROF_START(CONNECTIONS_MANAGER_FINALIZE_GROUPS_FILL_AUX_PROFILER_OP);
         numBlocks = dim3((n_neurons + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
         GRID_CALL_SHARED_MEM(
-            numBlocks, fill_aux, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t),
+            numBlocks, fill_aux, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t) * 2,
             indexed_synapse_infos_ptr,
             n_neurons, aux_buffer, allocator.data,
             capacity_estimations, forward_or_backward,
@@ -553,6 +553,11 @@ void ConnectionsManager::finalize(
         }
 
         uint64_t capacity = aux_buffer[0];
+        if(forward_or_backward) {
+            gc_meta->max_forward_groups_per_neuron = aux_buffer[1];
+        } else {
+            gc_meta->max_backward_groups_per_neuron = aux_buffer[1];
+        }
         memset(aux_buffer, 0, 3 * sizeof(uint64_t));
 
         if(device == -1) {
