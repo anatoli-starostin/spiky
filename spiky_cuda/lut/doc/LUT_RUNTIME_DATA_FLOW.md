@@ -85,75 +85,64 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × O]"] --> B("gather_x_gradients_fully_connected<br/>Main - Stream 0")
-    A --> C("gather_x_gradients_fully_connected<br/>Alternative - Stream 1")
-    A --> D("gather_w_gradients_fully_connected<br/>Stream 2")
+    A["Output Gradients<br/>[B × O]"] --> B("propagate_through_detectors_non_seq_fc<br/>Stream 0")
+    A --> C("gather_w_gradients_non_seq_fc")
     
     W3["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
-    W3 --> C
     
     L1["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
     L1 --> C
-    L1 --> D
     
-    M2["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> C
+    M1["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> B
+    M2["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
     
-    B --> E["Before Detectors Gradients<br/>[B × 2 × N<sub>t</sub>]"]
-    C --> E
-    D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
+    D3["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
     
-    D3["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> G(propagate_through_detectors)
-    M1["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> G
-    M2 --> G
-    E --> G
-    G --> H["Output: Input Gradients<br/>[B × I]"]
+    B --> D["Output: Input Gradients<br/>[B × I]"]
+    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
     style B fill:#81c784,color:#000000
     style C fill:#81c784,color:#000000
-    style D fill:#81c784,color:#000000
-    style G fill:#81c784,color:#000000
-    style F fill:#ffffff,color:#000000
-    style H fill:#ffffff,color:#000000
+    style D fill:#ffffff,color:#000000
+    style E fill:#ffffff,color:#000000
     style A fill:#000000,color:#ffffff
     style W3 fill:#000000,color:#ffffff
     style L1 fill:#000000,color:#ffffff
     style M1 fill:#000000,color:#ffffff
     style M2 fill:#000000,color:#ffffff
     style D3 fill:#000000,color:#ffffff
-    style E fill:#000000,color:#ffffff
 ```
+
+**Note**: In fully connected mode, `propagate_through_detectors_non_seq_fc` directly computes input gradients from output gradients and weights, while `gather_w_gradients_non_seq_fc` computes weight gradients.
 
 ### Sparse Connectivity Case
 
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Output Gradients<br/>[B × O]"] --> B(fire_detectors_by_lookup_indices)
-    M9["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
-    SC2["Sparse connectivity info"] --> B
+    A["Output Gradients<br/>[B × O]"] --> B("propagate_through_detectors_non_seq_sparse<br/>Stream 0")
+    A --> C("gather_w_gradients_non_seq_sparse")
+    
+    W4["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
+    
     L5["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
+    L5 --> C
     
-    B --> C["Firing Events<br/>Main&nbsp;+&nbsp;Alternative<br/>[B&nbsp;×&nbsp;N<sub>t</sub>&nbsp;×&nbsp;max_fw_groups&nbsp;×&nbsp;2]"]
+    M3["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> B
+    M9["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
     
-    W4["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> D(gather_gradients)
-    SC2 --> D
-    C --> D
+    D4["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
     
-    D --> E["Before Detectors Gradients<br/>[B × 2 × N<sub>t</sub>]"]
-    D --> F["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
+    SC2["Sparse connectivity info"] --> B
+    SC2 --> C
     
-    D4["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> G(propagate_through_detectors)
-    M3["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> G
-    M9 --> G
-    L5 --> G
-    E --> G
-    G --> H["Output: Input Gradients<br/>[B × I]"]
+    B --> D["Output: Input Gradients<br/>[B × I]"]
+    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
     
     style B fill:#81c784,color:#000000
-    style D fill:#81c784,color:#000000
-    style G fill:#81c784,color:#000000
-    style F fill:#ffffff,color:#000000
-    style H fill:#ffffff,color:#000000
+    style C fill:#81c784,color:#000000
+    style D fill:#ffffff,color:#000000
+    style E fill:#ffffff,color:#000000
     style A fill:#000000,color:#ffffff
     style W4 fill:#000000,color:#ffffff
     style L5 fill:#000000,color:#ffffff
@@ -161,9 +150,9 @@ flowchart TD
     style M9 fill:#000000,color:#ffffff
     style D4 fill:#000000,color:#ffffff
     style SC2 fill:#000000,color:#ffffff
-    style E fill:#000000,color:#ffffff
-    style C fill:#000000,color:#ffffff
 ```
+
+**Note**: In sparse connectivity mode, `propagate_through_detectors_non_seq_sparse` directly computes input gradients from output gradients, weights, and sparse connectivity information using `ForwardSynapseGroups`, while `gather_w_gradients_non_seq_sparse` computes weight gradients.
 
 ## Sequential Mode - Forward Pass
 
