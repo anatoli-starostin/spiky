@@ -43,7 +43,6 @@ class SynapseMeta:
 
 class LUTSharedContext(object):
     def __init__(self, do_asserts=False):
-        self._sparse_firing_buffers = []
         self._weight_gradients_buffers = []
         self._densify_indices_buffers = []
         self._densify_values_buffers = []
@@ -72,9 +71,6 @@ class LUTSharedContext(object):
             buffer = torch.zeros([numel], dtype=dtype, device=self._device, requires_grad=False)
             buffers_list[multi_id] = buffer
         return buffer
-
-    def get_sparse_firing_buffer(self, numel, device, multi_id=0):
-        return self._ensure_buffer(self._sparse_firing_buffers, multi_id, numel, torch.int64, device)
 
     def get_weight_gradients_buffer(self, numel, device, multi_id=0):
         buf = self._ensure_buffer(self._weight_gradients_buffers, multi_id, numel, torch.float32, device)
@@ -163,9 +159,6 @@ class LUTSharedContext(object):
             dev = torch.device(f'cuda:{device_index}')
 
         self._device = dev
-        for i, buf in enumerate(self._sparse_firing_buffers):
-            if buf is not None:
-                self._sparse_firing_buffers[i] = buf.to(device=dev)
         for i, buf in enumerate(self._weight_gradients_buffers):
             if buf is not None:
                 self._weight_gradients_buffers[i] = buf.to(device=dev)
@@ -642,17 +635,6 @@ class LUTLayerBasic(nn.Module):
             [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
         )
 
-        sparse_firing_buffer = None
-        if not self._is_fully_connected:
-            sparse_buffer_numel = (
-                1 + 2 * self._n_detectors * self._lut_dm.get_max_forward_groups_per_neuron() * batch_size
-            ) * 2
-            sparse_firing_buffer = self._shared_context.get_sparse_firing_buffer(
-                sparse_buffer_numel,
-                self.device,
-                self._multi_id
-            )
-
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
         self._lut_dm.forward_step(
@@ -663,7 +645,6 @@ class LUTLayerBasic(nn.Module):
             lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
-            sparse_firing_buffer,
             stream_handles
         )
 

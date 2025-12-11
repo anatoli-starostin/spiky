@@ -10,11 +10,6 @@
 - **N<sub>c</sub>**: Number of anchor pairs per detector (determines lookup table size: 2<sup>N<sub>c</sub></sup>)
 - **N<sub>pe</sub>**: Positional embedding dimension
 
-## Notes
-
-- **Hash Table Structure**: In sequential backward pass, gradients are stored in a hash table (`GradientHashInfo` entries) keyed by `(neuron_id, timestep)` with `firing_id` as a filter. The hash table is cleared at the beginning of each backward pass using `memsetAsync` (CUDA) or `memset` (CPU).
-- **Forward Pass Optimization**: The sequential forward pass directly generates sparse firing events from `fill_after_detectors_firing_stat` without an intermediate dense array, eliminating the need for a separate densification step.
-
 ## Non-Sequential Mode - Forward Pass
 
 ### Fully Connected Case
@@ -23,13 +18,13 @@
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × I]"] --> B(check_detectors)
-    D1["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    D1["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     
     B --> C["Lookup Indices<br/>[B × N<sub>t</sub>]"]
     B --> D["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"]
     B --> E["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"]
     
-    W1["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> F(fill_outputs_fully_connected)
+    W1["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> F(fill_outputs_fully_connected)
     C --> F
     
     F --> G["Output: Output<br/>[B × O]"]
@@ -50,32 +45,29 @@ flowchart TD
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
-    A["Input<br/>[B × I]"] --> B(fire_detectors)
-    D2["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
-    SC1["Sparse connectivity info"] --> B
+    A["Input<br/>[B × I]"] --> B(check_detectors)
+    D2["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     
     B --> C["Output: Lookup Indices<br/>[B × N<sub>t</sub>]"]
     B --> D["Output: Min Anchor Deltas<br/>[B × N<sub>t</sub>]"]
     B --> E["Output: Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"]
-    B --> F["Firing Events<br/>[B × N<sub>t</sub> × max_fw_groups]"]
     
-    W2["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> G(fill_outputs_by_forward_groups)
-    SC1 --> G
-    F --> G
+    W2["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> F(fill_outputs_non_seq_sparse)
+    SC1["Sparse connectivity info"] --> F
+    C --> F
     
-    G --> H["Output: Output<br/>[B × O]"]
+    F --> G["Output: Output<br/>[B × O]"]
     
     style B fill:#81c784,color:#000000
-    style G fill:#81c784,color:#000000
+    style F fill:#81c784,color:#000000
     style C fill:#ffffff,color:#000000
     style D fill:#ffffff,color:#000000
     style E fill:#ffffff,color:#000000
-    style H fill:#ffffff,color:#000000
+    style G fill:#ffffff,color:#000000
     style A fill:#000000,color:#ffffff
     style D2 fill:#000000,color:#ffffff
     style SC1 fill:#000000,color:#ffffff
     style W2 fill:#000000,color:#ffffff
-    style F fill:#000000,color:#ffffff
 ```
 
 ## Non-Sequential Mode - Backward Pass
@@ -88,7 +80,7 @@ flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B("propagate_through_detectors_non_seq_fc<br/>Stream 0")
     A --> C("gather_w_gradients_non_seq_fc")
     
-    W3["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
+    W3["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B
     
     L1["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
     L1 --> C
@@ -96,10 +88,10 @@ flowchart TD
     M1["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> B
     M2["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
     
-    D3["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    D3["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     
     B --> D["Output: Input Gradients<br/>[B × I]"]
-    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
+    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>N<sub>c</sub></sup>&nbsp;×&nbsp;O]"]
     
     style B fill:#81c784,color:#000000
     style C fill:#81c784,color:#000000
@@ -113,8 +105,6 @@ flowchart TD
     style D3 fill:#000000,color:#ffffff
 ```
 
-**Note**: In fully connected mode, `propagate_through_detectors_non_seq_fc` directly computes input gradients from output gradients and weights, while `gather_w_gradients_non_seq_fc` computes weight gradients.
-
 ### Sparse Connectivity Case
 
 ```mermaid
@@ -123,7 +113,7 @@ flowchart TD
     A["Output Gradients<br/>[B × O]"] --> B("propagate_through_detectors_non_seq_sparse<br/>Stream 0")
     A --> C("gather_w_gradients_non_seq_sparse")
     
-    W4["Weights<br/>[N<sub>t</sub> × (1 << N<sub>c</sub>) × O]"] --> B
+    W4["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B
     
     L5["Lookup Indices<br/>[B × N<sub>t</sub>]"] --> B
     L5 --> C
@@ -131,13 +121,13 @@ flowchart TD
     M3["Min Anchor Deltas<br/>[B × N<sub>t</sub>]"] --> B
     M9["Min Anchor Delta Indices<br/>[B × N<sub>t</sub>]"] --> B
     
-    D4["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    D4["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     
     SC2["Sparse connectivity info"] --> B
     SC2 --> C
     
     B --> D["Output: Input Gradients<br/>[B × I]"]
-    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;N<sub>c</sub>)&nbsp;×&nbsp;O]"]
+    C --> E["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>N<sub>c</sub></sup>&nbsp;×&nbsp;O]"]
     
     style B fill:#81c784,color:#000000
     style C fill:#81c784,color:#000000
@@ -152,8 +142,6 @@ flowchart TD
     style SC2 fill:#000000,color:#ffffff
 ```
 
-**Note**: In sparse connectivity mode, `propagate_through_detectors_non_seq_sparse` directly computes input gradients from output gradients, weights, and sparse connectivity information using `ForwardSynapseGroups`, while `gather_w_gradients_non_seq_sparse` computes weight gradients.
-
 ## Sequential Mode - Forward Pass
 
 ### Fully Connected Case
@@ -162,7 +150,7 @@ flowchart TD
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × S × I]"] --> B("check_detectors_seq<br/>Stream 0")
-    D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    D5["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     C["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> D("check_positional_embeddings<br/>Stream 1")
     
     B --> E["Output: Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"]
@@ -176,7 +164,7 @@ flowchart TD
     E --> K("fill_outputs_fully_connected_seq<br/>(processes all pairs i,j where i < j)")
     H --> K
     
-    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
+    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]&nbsp;"] --> K
     
     K --> Q["Output: Output<br/>[B × S × O]"]
     
@@ -196,15 +184,13 @@ flowchart TD
     style Q fill:#ffffff,color:#000000
 ```
 
-**Note**: In fully connected mode, outputs are computed directly from lookup indices and weights without generating sparse firing events. The kernel processes all timestep pairs (i, j) where i < j in parallel, accumulating weights for each output position.
-
 ### Sparse Connectivity Case
 
 ```mermaid
 %%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
 flowchart TD
     A["Input<br/>[B × S × I]"] --> B("check_detectors_seq<br/>Stream 0")
-    D5["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> B
+    D5["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B
     C["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> D("check_positional_embeddings<br/>Stream 1")
     
     B --> E["Output: Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"]
@@ -218,7 +204,7 @@ flowchart TD
     E --> K("fill_outputs_sparse_seq<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     H --> K
     
-    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> K
+    W5["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]&nbsp;"] --> K
     SC3["Sparse connectivity info"] --> K
     
     K --> Q["Output: Output<br/>[B × S × O]"]
@@ -240,8 +226,6 @@ flowchart TD
     style Q fill:#ffffff,color:#000000
 ```
 
-**Note**: In sparse connectivity mode, outputs are computed directly from lookup indices and weights using sparse connectivity information, without generating intermediate firing events. The kernel processes all timestep pairs (i, j) where i < j in parallel, using `ForwardSynapseGroups` to efficiently gather weights for connected outputs.
-
 ## Sequential Mode - Backward Pass
 
 ### Fully Connected Case
@@ -251,7 +235,7 @@ flowchart TD
 flowchart TD
     A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_seq_fc<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
-    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
+    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]&nbsp;"] --> I
     
     L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
     L4["PE Lookup Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
@@ -260,11 +244,11 @@ flowchart TD
     M7["PE Min Deltas<br/>[(S-1) × N<sub>t</sub>]"] --> I
     M8["PE Min Delta Indices<br/>[(S-1) × N<sub>t</sub>]"] --> I
     
-    D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I
+    D6["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> I
     
     I --> J["Output: Input Gradients<br/>[B × S × I]"]
     I --> K["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
-    I --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"]
+    I --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]"]
     
     style I fill:#81c784,color:#000000
     style H fill:#ffffff,color:#000000
@@ -281,8 +265,6 @@ flowchart TD
     style D6 fill:#000000,color:#ffffff
 ```
 
-**Note**: In fully connected mode, gradients are computed directly from output gradients and weights without requiring a hash table intermediate step. The kernel processes all timestep pairs in parallel using tiled computation.
-
 ### Sparse Connectivity Case
 
 ```mermaid
@@ -291,7 +273,7 @@ flowchart TD
     A["Output Gradients<br/>[B × S × O]"] --> I("propagate_through_detectors_seq_sparse<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     A --> C("gather_w_gradients_seq_sparse<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
     
-    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]&nbsp;"] --> I
+    W6["Weights<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]&nbsp;"] --> I
     W6 --> C
     
     L3["Q/K Lookup Indices<br/>[B × S × N<sub>t</sub>]"] --> I
@@ -306,12 +288,12 @@ flowchart TD
     SC4["Sparse connectivity info"] --> I
     SC4 --> C
     
-    D6["Anchors<br/>[N<sub>t</sub> × 2N<sub>c</sub>]"] --> I
+    D6["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> I
     
     I --> J["Output: Input Gradients<br/>[B × S × I]"]
     I --> K["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
     
-    C --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;(1&nbsp;<<&nbsp;(2N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub>))&nbsp;×&nbsp;O]"]
+    C --> H["Output: Weight Gradients<br/>[N<sub>t</sub>&nbsp;×&nbsp;2<sup>2&nbsp;×&nbsp;N<sub>c</sub>&nbsp;+&nbsp;N<sub>pe</sub></sup>&nbsp;×&nbsp;O]"]
     
     style I fill:#81c784,color:#000000
     style C fill:#81c784,color:#000000
@@ -329,5 +311,3 @@ flowchart TD
     style D6 fill:#000000,color:#ffffff
     style SC4 fill:#000000,color:#ffffff
 ```
-
-**Note**: In sparse connectivity mode, gradients are computed directly from output gradients, weights, and lookup indices using sparse connectivity information, without requiring hash tables or firing events. The kernels process all timestep pairs in parallel using tiled computation, with `propagate_through_detectors_seq_sparse` computing input and positional embedding gradients, and `gather_w_gradients_seq_sparse` computing weight gradients.

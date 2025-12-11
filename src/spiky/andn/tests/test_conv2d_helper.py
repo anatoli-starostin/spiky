@@ -27,6 +27,8 @@ def _test_conv2d_helper(device, h, w, rh, rw, sh, sw, kh, kw, seed=1):
         for target_id in c_group['target_ids']:
             extracted_pairs.add((source_id, target_id,))
 
+    print('calculating ground truth pairs...')
+
     ground_truth_pairs = set()
     for win_y in range(c_helper.num_win_h):
         for win_x in range(c_helper.num_win_w):

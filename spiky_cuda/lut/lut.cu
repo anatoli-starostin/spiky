@@ -592,7 +592,6 @@ public:
         torch::Tensor &w_lookup_indices,
         torch::Tensor &w_min_anchor_deltas,
         torch::Tensor &w_min_anchor_delta_indices,
-        std::optional<torch::Tensor> &w_sparse_firing_buffer,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
@@ -604,9 +603,6 @@ public:
         checkTensor(w_lookup_indices, "w_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_min_anchor_deltas, "w_min_anchor_deltas", true, host_device_allocator.device);
         checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        if(w_sparse_firing_buffer.has_value()) {
-            checkTensor(w_sparse_firing_buffer.value(), "w_sparse_firing_buffer", false, host_device_allocator.device, sizeof(int64_t));
-        }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -663,8 +659,7 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr()),
-            w_sparse_firing_buffer.has_value() ? reinterpret_cast<int64_t *>(w_sparse_firing_buffer.value().data_ptr()) : nullptr
+            reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr())
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -1270,7 +1265,6 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_lookup_indices"),
             py::arg("w_min_anchor_deltas"),
             py::arg("w_min_anchor_delta_indices"),
-            py::arg("w_sparse_firing_buffer") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
             "Forward step concat for fully connected mode",

@@ -91,8 +91,7 @@ public:
         EXTERNAL_REAL_DT *w_output,
         int32_t *w_lookup_indices,
         EXTERNAL_REAL_DT *w_min_anchor_deltas,
-        int32_t *w_min_anchor_delta_indices,
-        int64_t *w_sparse_firing_buffer  // Can be nullptr
+        int32_t *w_min_anchor_delta_indices
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
