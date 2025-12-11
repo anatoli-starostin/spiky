@@ -69,7 +69,7 @@ def extract_connection_map(
 def unpack_chunk_of_connections(chunk_of_connections, do_assign_delays=False, synapse_metas=None):
     # Dictionary to assert that (source_id, meta_index) are not repeated
     connection_groups = {}
-    connections_buffer = chunk_of_connections.get_connections()
+    connections_buffer = chunk_of_connections.get_connections().cpu()
     # Process the connections buffer
     # Each synapse group has format: [source_id, meta_index, n_targets, next_shift, ...<synapse_meat_index, target_id>+...]
     group_size = 4 + 2 * chunk_of_connections.get_single_group_size()
