@@ -420,7 +420,8 @@ public:
     void initialize_detectors(
         const torch::Tensor &encoded_pairs_permutations,
         uint32_t max_n_inputs_per_detector,
-        torch::Tensor &detector_anchors
+        torch::Tensor &detector_anchors,
+        bool compact_mode
     ) {
         int device = host_device_allocator.device;
         checkTensor(encoded_pairs_permutations, "encoded_pairs_permutations", false, device, sizeof(int32_t));
@@ -428,10 +429,20 @@ public:
         if(detector_connections_manager == nullptr) {
             throw py::value_error("detector_connections_manager not initialized");
         }
-        uint32_t max_pairs_per_detector = max_n_inputs_per_detector * (max_n_inputs_per_detector - 1);
-        if((encoded_pairs_permutations.numel() % max_pairs_per_detector) != 0) {
-            throw py::value_error("(encoded_pairs_permutations.numel() % (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1))) != 0");
+
+        uint32_t max_pairs_per_detector;
+        if(compact_mode) {
+            max_pairs_per_detector = max_n_inputs_per_detector;
+            if((encoded_pairs_permutations.numel() % max_pairs_per_detector) != 0) {
+                throw py::value_error("(encoded_pairs_permutations.numel() % max_n_inputs_per_detector) != 0");
+            }
+        } else {
+            max_pairs_per_detector = max_n_inputs_per_detector * (max_n_inputs_per_detector - 1);
+            if((encoded_pairs_permutations.numel() % max_pairs_per_detector) != 0) {
+                throw py::value_error("(encoded_pairs_permutations.numel() % (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1))) != 0");
+            }
         }
+
         uint32_t provided_n_detectors = encoded_pairs_permutations.numel() / max_pairs_per_detector;
         if(provided_n_detectors != this->n_detectors) {
             throw py::value_error("provided_n_detectors != this->n_detectors");
@@ -481,18 +492,33 @@ public:
             );
 
         dim3 numBlocks((this->n_detectors + LUT_COMPILE_TIME_KERNELS_TPB - 1) / LUT_COMPILE_TIME_KERNELS_TPB, 1);
-        GRID_CALL_NO_SHARED_MEM(
-            numBlocks, prepare_detectors, LUT_COMPILE_TIME_KERNELS_TPB,
-            encoded_pairs_data,
-            this->n_detectors,
-            max_pairs_per_detector,
-            this->n_anchors_per_detector,
-            backward_indexed_synapses_ptr,
-            this->backward_group_size,
-            detector_infos,
-            detector_connections_allocator->data,
-            error_counter
-        );
+        if(compact_mode) {
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, prepare_detectors_compact, LUT_COMPILE_TIME_KERNELS_TPB,
+                encoded_pairs_data,
+                this->n_detectors,
+                max_pairs_per_detector,
+                this->n_anchors_per_detector,
+                backward_indexed_synapses_ptr,
+                this->backward_group_size,
+                detector_infos,
+                detector_connections_allocator->data,
+                error_counter
+            );
+        } else {
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, prepare_detectors, LUT_COMPILE_TIME_KERNELS_TPB,
+                encoded_pairs_data,
+                this->n_detectors,
+                max_pairs_per_detector,
+                this->n_anchors_per_detector,
+                backward_indexed_synapses_ptr,
+                this->backward_group_size,
+                detector_infos,
+                detector_connections_allocator->data,
+                error_counter
+            );
+        }
 
         // Check for errors
         if(device == -1) {
@@ -1233,7 +1259,8 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             "Initialize detectors",
             py::arg("encoded_pairs_permutations"),
             py::arg("max_n_inputs_per_detector"),
-            py::arg("detector_anchors"))
+            py::arg("detector_anchors"),
+            py::arg("compact_mode"))
         .def("finalize_detector_connections", &LUTM_CLASS_NAME::finalize_detector_connections,
             "Finalize detector connections and return max number of inputs per detector")
         .def("get_number_of_inputs", &LUTM_CLASS_NAME::get_number_of_inputs,

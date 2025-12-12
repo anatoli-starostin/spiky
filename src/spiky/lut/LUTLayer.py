@@ -327,7 +327,7 @@ class LUTLayerBasic(nn.Module):
             random_seed
         )
 
-    def initialize_detectors(self, seed=None):
+    def initialize_detectors(self, compact_mode=True, seed=None):
         max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
         assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
@@ -336,23 +336,31 @@ class LUTLayerBasic(nn.Module):
             g.manual_seed(seed)
         else:
             g = None
-        noise = torch.rand(
-            self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
-            device=self.device, generator=g
-        )
-        encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
 
-        # Create detector_anchors tensor
         self._detector_anchors = torch.zeros(
             self._n_detectors * self._n_anchors_per_detector * 2,
             dtype=torch.int32,
             device=self.device
         )
 
+        if compact_mode:
+            encoded_pairs_permutations = torch.randint(
+                max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
+                [self._n_detectors, max_n_inputs_per_detector],
+                dtype=torch.int32, device=self.device, generator=g
+            )
+        else:
+            noise = torch.rand(
+                self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
+                device=self.device, generator=g
+            )
+            encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
+
         self._lut_dm.initialize_detectors(
             encoded_pairs_permutations.flatten().contiguous(),
             max_n_inputs_per_detector,
-            self._detector_anchors
+            self._detector_anchors,
+            compact_mode
         )
 
     def get_input_neuron_ids(self):
@@ -1156,7 +1164,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
                 random_seed=random_seed
             )
 
-            self.initialize_detectors(random_seed)
+            self.initialize_detectors(seed=random_seed)
         else:
             self._detector_anchors = _explicit_anchors.to(self.device)
 

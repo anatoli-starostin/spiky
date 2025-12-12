@@ -66,3 +66,60 @@ prepare_detectors_logic(
         }
     }
 }
+
+prepare_detectors_compact_logic(
+    uint32_t* encoded_pairs,
+    uint32_t n_detectors,
+    uint32_t max_pairs_per_detector,
+    uint32_t n_anchors_per_detector,
+    NoDelaysIndexedSynapsesInfo* backward_indexed_synapses_ptr,
+    uint32_t synapse_group_size,
+    AnchorsPair* target_detectors_info,
+    uint8_t* net_data,
+    uint32_t* error_counter
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_detectors) {
+        encoded_pairs += i * max_pairs_per_detector;
+        target_detectors_info += i * n_anchors_per_detector;
+        NoDelaysIndexedSynapsesInfo synapses_info = *(backward_indexed_synapses_ptr + i);
+        if(synapses_info.n_synapses <= 1) {
+            #ifdef ATOMIC
+            atomicAdd(error_counter, 1);
+            #else
+            *error_counter += 1;
+            #endif
+            return;
+        }
+
+        uint32_t max_pair_codes = synapses_info.n_synapses * (synapses_info.n_synapses - 1);
+        uint32_t current_encoded_pair;
+        NeuronDataId_t current_group_id;
+        NeuronIndexAndSynapseId* current_synapse_info_ptr;
+        NeuronIndex_t anchor1_id;
+        NeuronIndex_t anchor2_id;
+        for(uint32_t j=0; j < n_anchors_per_detector; j++) {
+            current_encoded_pair = encoded_pairs[j] % max_pair_codes;
+            anchor1_id = current_encoded_pair / (synapses_info.n_synapses - 1);
+            anchor2_id = current_encoded_pair % (synapses_info.n_synapses - 1);
+            if(anchor2_id >= anchor1_id) {
+                anchor2_id++;
+            }
+            __SUPER_DETAILED_TRACE__("decoded pair (%d, %d) for detector %d\n", anchor1_id, anchor2_id, i);
+
+            current_group_id = synapses_info.first_group_id + (anchor1_id / synapse_group_size) * SizeOfBackwardSynapseGroup(synapse_group_size);
+            current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data) + (anchor1_id % synapse_group_size);
+            anchor1_id = current_synapse_info_ptr->source_neuron_index;
+
+            current_group_id = synapses_info.first_group_id + (anchor2_id / synapse_group_size) * SizeOfBackwardSynapseGroup(synapse_group_size);
+            current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data) + (anchor2_id % synapse_group_size);
+            anchor2_id = current_synapse_info_ptr->source_neuron_index;
+
+            target_detectors_info[j] = AnchorsPair{
+                anchor1_id,
+                anchor2_id
+            };
+            __SUPER_DETAILED_TRACE__("generated pair (%d, %d) for detector %d\n", anchor1_id, anchor2_id, i);
+        }
+    }
+}

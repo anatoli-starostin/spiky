@@ -1312,8 +1312,6 @@ check_detectors_seq_eval_logic(
 
         // Store lookup index and related data
         *w_lookup_indices = lookup_index;
-
-        __SUPER_DETAILED_TRACE__("check_detectors_seq_logic: batch_index %d, detector_index %d, timestep %d, lookup_index %d, min_delta %f, min_delta_anchor_idx %d\n", blockIdx.y, detector_index, timestep, lookup_index, min_delta, min_delta_anchor_idx);
     }
 }
 
