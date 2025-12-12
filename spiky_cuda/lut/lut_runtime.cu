@@ -88,13 +88,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
-    bool is_train = (w_min_anchor_deltas != nullptr);
-    if(is_train) {
-        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
-    } else {
-        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_PROFILER_OP);
-    }
-
     if(this->sequence_length != 1) {
         throw py::value_error("forward_step should only be called when sequence_length == 1");
     }
@@ -111,6 +104,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     }
     #endif
     #endif
+
+    bool is_train = (w_min_anchor_deltas != nullptr);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_PROFILER_OP);
+    }
 
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
@@ -420,6 +420,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat_fc, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
+    #endif
+    #endif
+
     bool is_train = (w_min_anchor_deltas != nullptr);
     if(is_train) {
         PROF_START(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP);
@@ -432,15 +441,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     if(batch_size != this->batch_size) {
         this->batch_size = batch_size;
     }
-
-    #ifdef ENABLE_PROFILING
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaDeviceSynchronize();
-    }
-    #endif
-    #endif
 
     #ifndef NO_CUDA
     cudaEvent_t ev1;
