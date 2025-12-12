@@ -737,6 +737,9 @@ class LUTLayerBasic(nn.Module):
             positional_min_delta_indices
         )
 
+        if not external_output:
+            self._synchronize()
+
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
         if self.training:
             return result + (
