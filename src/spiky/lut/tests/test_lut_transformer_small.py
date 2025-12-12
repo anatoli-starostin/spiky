@@ -13,7 +13,7 @@ from gt_lut_transformer import _GTLUTTransformer
 
 
 def test_lut_transformer_small(
-    device, summation_dtype, seed=123
+    device, summation_dtype, seed=42
 ):
     for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
@@ -304,7 +304,7 @@ def _test_lut_transformer_small(
             initial_weight=-1.0, initial_noise_level=2.0
         ),
         summation_dtype=summation_dtype,
-        _int_rescaler=1.0,
+        _int_rescaler=10.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
         device=device, seed=seed,
         _forward_group_size=24,

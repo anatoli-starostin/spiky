@@ -776,14 +776,6 @@ check_detectors_logic(
                 lookup_index |= (1 << anchor_idx);
             }
 
-            if(fabs(delta) < 0.00001) {
-                printf("!!!!%f!!!!!\n", delta);
-            }
-
-            if(fabs(fabs(delta) - fabs(min_delta)) < 0.00001) {
-                printf("!!!!%f, %f!!!!!\n", delta, min_delta);
-            }
-
             // Track anchor pair with minimum absolute delta
             if((min_delta_anchor_idx == -1) || (fabs(delta) < fabs(min_delta))) {
                 min_delta = delta;
@@ -866,16 +858,15 @@ fill_outputs_non_seq_fc_logic(
     double int_rescaler
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i < n_outputs * n_detector_blocks) {
-        uint32_t output_index = i / n_detector_blocks;
-        // TOdO
-        uint32_t detector_block_index = i % n_detector_blocks;
-        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: batch_index %d, output_index %d, detector_block_index %d\n", blockIdx.y, output_index, detector_block_index);
+    if(i < n_detector_blocks * n_outputs) {
+        uint32_t detector_block_index = i / n_outputs;
+        uint32_t output_index = i % n_outputs;
+        __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: batch_index %d, output_index %d, detector_block_index %d\n", blockIdx.y, output_index, detector_block_index);
         r_lookup_indices += blockIdx.y * n_detectors;
         r_lookup_indices += detector_block_index * n_detectors_per_block;
         w_output += blockIdx.y * n_outputs;
         uint64_t weights_per_detector = static_cast<uint64_t>(n_lookup_neurons_per_detector) * n_outputs;
-        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: weights_per_detector %lu\n", weights_per_detector);
+        __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: weights_per_detector %lu\n", weights_per_detector);
         r_weights += weights_per_detector * detector_block_index * n_detectors_per_block;
         int4 li_quad = make_int4(0, 0, 0, 0);
         int32_t current_lookup_index;
@@ -884,7 +875,7 @@ fill_outputs_non_seq_fc_logic(
         if((detector_block_index == n_detector_blocks - 1) && (n_detectors % n_detectors_per_block)) {
             n_detectors_per_block = n_detectors % n_detectors_per_block;
         }
-        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: n_detectors_per_block %d\n", n_detectors_per_block);
+        __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: n_detectors_per_block %d\n", n_detectors_per_block);
         for(int32_t cursor=0;cursor < n_detectors_per_block;cursor++, r_lookup_indices++, r_weights+=weights_per_detector) {
             if(((reinterpret_cast<uintptr_t>(r_lookup_indices) & 15) == 0) && (cursor < n_detectors_per_block - 3)) {
                 #ifdef ATOMIC
@@ -910,11 +901,11 @@ fill_outputs_non_seq_fc_logic(
             } else {
                 current_lookup_index = *r_lookup_indices;
             }
-            __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: current_lookup_index %d, output_index %d, weight %f\n", current_lookup_index, output_index, r_weights[current_lookup_index * n_outputs + output_index]);
+            __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: current_lookup_index %d, output_index %d, weight %f\n", current_lookup_index, output_index, r_weights[current_lookup_index * n_outputs + output_index]);
             weight_sum += static_cast<double>(r_weights[current_lookup_index * n_outputs + output_index]);
         }
 
-        __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: weight_sum %f\n", weight_sum);
+        __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: weight_sum %f\n", weight_sum);
 
         SUMMATION32_DT payload;
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -935,7 +926,7 @@ fill_outputs_non_seq_fc_logic(
                 payload
             );
             #else
-            __SUPER_DETAILED_TRACE__("fill_outputs_fully_connected_logic: payload %f\n", payload);
+            __SUPER_DETAILED_TRACE__("fill_outputs_non_seq_fc_logic: payload %f\n", payload);
             w_output[output_index] += payload;
             #endif
         #endif
