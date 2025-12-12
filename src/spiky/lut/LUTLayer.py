@@ -1089,7 +1089,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             _forward_group_size=32,
             _backward_group_size=32,
             _max_groups_in_growth_buffer=2 ** 20,
-            random_seed=1,
+            random_seed=None,
             device=None
     ):
         if receptive_field_shape is None:
@@ -1242,7 +1242,7 @@ class LUTLayer(Conv2DLUTLayer):
         _forward_group_size=32,
         _backward_group_size=32,
         _max_groups_in_growth_buffer=2 ** 20,
-        random_seed=1,
+        random_seed=None,
         device=None
     ):
         super().__init__(

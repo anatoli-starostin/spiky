@@ -56,7 +56,7 @@ def connections_to_matrix(n_inputs, n_outputs, source_ids, targets_ids, device):
 
 
 def test_lut_forward_simple(
-    device, summation_dtype, seed=123
+    device, summation_dtype, seed=None
 ):
     success = _test_lut_forward_simple(
         input_shape=(4, 4),
@@ -97,9 +97,10 @@ def _test_lut_forward_simple(
     lut_receptive_field_shape=None,
     lut_receptive_field_stride_shape=None,
     synapse_group_size=64,
-    batch_size=4, seed=123
+    batch_size=4, seed=None
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     synapse_meta = SynapseMeta(
         initial_weight=0.0,
         initial_noise_level=1.0

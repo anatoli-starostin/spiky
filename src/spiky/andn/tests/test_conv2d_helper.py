@@ -4,7 +4,7 @@ from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.test_utils import unpack_chunk_of_connections
 
 
-def test_conv2d_helper(device, summation_dtype=torch.float32, seed=1):
+def test_conv2d_helper(device, summation_dtype=torch.float32, seed=None):
     if summation_dtype != torch.float32:
         return True
     success = _test_conv2d_helper(device, 4, 4, 2, 2, 1, 1, 2, 2, seed)
@@ -12,7 +12,7 @@ def test_conv2d_helper(device, summation_dtype=torch.float32, seed=1):
     return success
 
 
-def _test_conv2d_helper(device, h, w, rh, rw, sh, sw, kh, kw, seed=1):
+def _test_conv2d_helper(device, h, w, rh, rw, sh, sw, kh, kw, seed=None):
     c_helper = Conv2DSynapseGrowthHelper(h, w, rh, rw, sh, sw, kh, kw)
     chunk_of_connections = c_helper.grow_synapses(
         torch.arange(1, c_helper.h * c_helper.w + 1, dtype=torch.int32).reshape(c_helper.h, c_helper.w),

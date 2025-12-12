@@ -1,5 +1,6 @@
 #include "spnet_runtime.cuh"
 #include <limits.h>
+#include <random>
 
 namespace py = pybind11;
 
@@ -446,7 +447,7 @@ public:
             connections_buffer, none,
             single_input_group_size,
             0, nullptr,
-            random_seed ? random_seed.value() : 0
+            random_seed ? random_seed.value() : std::random_device{}()
         );
     }
 

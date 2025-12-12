@@ -19,7 +19,7 @@ def gt_detectors(input_shape, inhibition_shape, device):
 
 
 def test_inhibition_layer_forward(
-    device, summation_dtype=torch.float32, seed=123
+    device, summation_dtype=torch.float32, seed=None
 ):
     if summation_dtype != torch.float32:
         return True
@@ -43,9 +43,10 @@ def _test_inhibition_layer_forward(
     inhibition_grid_shape,
     device,
     batch_size=16,
-    seed=123
+    seed=None
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
 
     class TestNet(nn.Module):
         def __init__(self, device):

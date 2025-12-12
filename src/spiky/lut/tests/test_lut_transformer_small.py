@@ -13,7 +13,7 @@ from gt_lut_transformer import _GTLUTTransformer
 
 
 def test_lut_transformer_small(
-    device, summation_dtype, seed=42
+    device, summation_dtype, seed=None
 ):
     for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
@@ -267,7 +267,8 @@ def _test_lut_transformer_small(
     summation_dtype, device, seed,
     batch_size, use_multi_lut, fully_connected, train_or_eval
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     print('Test configuration:')
     print(f'  Vocab size: {vocab_size}')
     print(f'  Embedding dim: {embedding_dim}')

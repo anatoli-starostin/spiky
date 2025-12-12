@@ -11,7 +11,7 @@ from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 
 
 def test_lut_fully_connected_small(
-    device, summation_dtype, seed=123234
+    device, summation_dtype, seed=None
 ):
     success = _test_lut_fully_connected_small(
         n_inputs=32,
@@ -32,9 +32,10 @@ def _test_lut_fully_connected_small(
     n_detectors,
     n_outputs,
     batch_size,
-    device, summation_dtype, seed=123243
+    device, summation_dtype, seed=None
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
 
     synapse_meta = SynapseMeta(
         initial_weight=0.0,

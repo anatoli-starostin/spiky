@@ -17,13 +17,13 @@ class __attribute__((visibility("hidden"))) SynapseGrowthLowLevelEngine {
 public:
     SynapseGrowthLowLevelEngine(
         uint32_t n_neuron_types, uint32_t n_total_growth_commands, uint32_t n_total_neurons, uint32_t max_neuron_id,
-        int device, uint32_t single_block_size, uint32_t random_seed
+        int device, uint32_t single_block_size, std::optional<uint32_t> random_seed
     ) :
         n_total_neurons(n_total_neurons),
         max_neuron_id(max_neuron_id),
         device(device),
         single_block_size(single_block_size),
-        random_seed(random_seed)
+        random_seed(random_seed.has_value() ? random_seed.value() : std::random_device{}())
         #ifdef ENABLE_PROFILING
         , profiler(N_SYNAPSE_GROWTH_PROFILER_OPS)
         #endif
@@ -446,7 +446,14 @@ private:
 
 void PB_SynapseGrowthLowLevelEngine(py::module& m) {
     py::class_<SynapseGrowthLowLevelEngine>(m, "SynapseGrowthLowLevelEngine")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, int, uint32_t, uint32_t>())
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t, int, uint32_t, std::optional<uint32_t>>(),
+            py::arg("n_neuron_types"),
+            py::arg("n_total_growth_commands"),
+            py::arg("n_total_neurons"),
+            py::arg("max_neuron_id"),
+            py::arg("device"),
+            py::arg("single_block_size"),
+            py::arg("random_seed") = py::none())
         .def("setup_neuron_type", &SynapseGrowthLowLevelEngine::setup_neuron_type,
             "Setup neuron type",
             py::arg("tp_index"),

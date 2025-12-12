@@ -645,7 +645,7 @@ class Conv2DANDNLayer(ANDNLayer):
         _int_rescaler=0.001,
         _forward_group_size: int = 64,
         _backward_group_size: int = 64,
-        random_seed=1,
+        random_seed=None,
         device=None
     ):
         c_helper = Conv2DSynapseGrowthHelper(

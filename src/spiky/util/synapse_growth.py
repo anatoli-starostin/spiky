@@ -184,7 +184,7 @@ class SynapseGrowthEngine(object):
         # Compute KL divergence
         return torch.sum(p_obs * torch.log((p_obs + eps) / p_exp))
 
-    def grow(self, random_seed=1, neuron_ids_mask=None):
+    def grow(self, random_seed=None, neuron_ids_mask=None):
         # Determine device index for low-level engine (int for CUDA, -1 for CPU)
         device = self._device
         if not isinstance(device, int):
@@ -308,7 +308,7 @@ class SynapseGrowthEngine(object):
                 )
         return lowlevel_engine
 
-    def _grow_explicit(self, explicit_triples, random_seed=1, do_sort_by_target_id=False):
+    def _grow_explicit(self, explicit_triples, random_seed=None, do_sort_by_target_id=False):
         # Determine device index for low-level engine (int for CUDA, -1 for CPU)
         device = self._device
         if not isinstance(device, int):
@@ -389,7 +389,7 @@ class Conv2DSynapseGrowthHelper(object):
 
     def grow_synapses(
         self, input_ids, output_ids, device,
-        synapse_group_size=64, max_groups_in_buffer=2**20, seed=123
+        synapse_group_size=64, max_groups_in_buffer=2**20, seed=None
     ):
         if self.n_input_channels is None:
             assert input_ids.shape == (self.h, self.w,)

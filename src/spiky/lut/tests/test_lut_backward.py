@@ -14,7 +14,7 @@ from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 
 
 def test_lut_backward(
-    device, summation_dtype, seed=123234
+    device, summation_dtype, seed=None
 ):
     success = _test_lut_backward(
         device=device,
@@ -25,9 +25,10 @@ def test_lut_backward(
 
 
 def _test_lut_backward(
-    device, summation_dtype, seed=123243
+    device, summation_dtype, seed=None
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
 
     input_shape = (28, 28)
     receptive_field_shape = (28, 28)
@@ -92,7 +93,8 @@ def _test_lut_backward(
     train_loader = torch.utils.data.DataLoader(mnist_train_dataset, batch_size=batch_size, shuffle=True)
     pbar = tqdm(total=n_epochs * len(train_loader))
     for epoch in range(n_epochs):
-        torch.manual_seed(seed + epoch)
+        if seed is not None:
+            torch.manual_seed(seed + epoch)
         train_loader = torch.utils.data.DataLoader(mnist_train_dataset, batch_size=batch_size, shuffle=True)
         pbar.set_description(f"Epoch {epoch + 1}/{n_epochs}")
         correct = 0

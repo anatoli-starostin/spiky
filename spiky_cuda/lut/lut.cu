@@ -1,4 +1,5 @@
 #include "lut_runtime.cuh"
+#include <random>
 
 namespace {
 #include "aux/lut_compile_time_kernels_logic.cu"
@@ -413,7 +414,7 @@ public:
             single_input_group_size,
             ids_shift,
             nullptr,  // No weights for detector connections
-            random_seed ? random_seed.value() : 0
+            random_seed ? random_seed.value() : std::random_device{}()
         );
     }
 

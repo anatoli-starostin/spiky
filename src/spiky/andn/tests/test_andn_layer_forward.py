@@ -63,7 +63,7 @@ def gt_detectors(input_shape, inhibition_shape, device):
 
 
 def test_andn_layer_forward(
-    device, summation_dtype, seed=123
+    device, summation_dtype, seed=None
 ):
     success = _test_andn_layer_forward(
         input_shape=(4, 4),
@@ -97,9 +97,10 @@ def _test_andn_layer_forward(
     output_kernel_shape,
     device, summation_dtype,
     forward_group_size, backward_group_size,
-    batch_size=16, seed=123
+    batch_size=16, seed=None
 ):
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     final_output_shape = (1, 10)
     synapse_meta = SynapseMeta(
         initial_weight=0.0,

@@ -16,7 +16,7 @@ from spiky.util.visual_helpers import grayscale_to_red_and_blue
 
 
 def test_andn_stability_backward_sync(
-    device, summation_dtype, seed=1
+    device, summation_dtype, seed=None
 ):
     if summation_dtype == torch.float32:
         return True
@@ -27,16 +27,18 @@ def test_andn_stability_backward_sync(
 
 
 def _test_andn_stability_backward_sync(
-    anti_hebb_coeff, initial_noise_level, device, seed=456678
+    anti_hebb_coeff, initial_noise_level, device, seed=None
 ):
     cpu_device = torch.device('cpu')
     summation_dtype = torch.int32
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     input_shape = (28, 28)
     receptive_field_shape = (28, 28)
     receptive_field_stride_shape = (28, 28)
     output_kernel_shape = (4, 4)
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     synapse_meta = SynapseMeta(
         min_weight=0.0,
         max_weight=1.0,

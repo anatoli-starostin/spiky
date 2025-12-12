@@ -17,7 +17,7 @@ cpu_gt_weights = None
 
 
 def test_andn_layer_backward_hebb(
-    device, summation_dtype, seed=1
+    device, summation_dtype, seed=None
 ):
     success = _test_andn_layer_backward_hebb(0.0, device, summation_dtype, seed)
     success = success and _test_andn_layer_backward_hebb(0.4, device, summation_dtype, seed)
@@ -25,14 +25,14 @@ def test_andn_layer_backward_hebb(
 
 
 def _test_andn_layer_backward_hebb(
-    anti_hebb_coeff, device, summation_dtype, seed=456678
+    anti_hebb_coeff, device, summation_dtype, seed=None
 ):
-    torch.manual_seed(seed)
     input_shape = (28, 28)
     receptive_field_shape = (28, 28)
     receptive_field_stride_shape = (28, 28)
     output_kernel_shape = (8, 8)
-    torch.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
     synapse_meta = SynapseMeta(
         min_weight=0.0,
         max_weight=1.0,
@@ -106,7 +106,8 @@ def _test_andn_layer_backward_hebb(
     train_loader = torch.utils.data.DataLoader(mnist_train_dataset, batch_size=batch_size, shuffle=True)
     pbar = tqdm(total=n_epochs * len(train_loader))
     for epoch in range(n_epochs):
-        torch.manual_seed(seed + epoch)
+        if seed is not None:
+            torch.manual_seed(seed + epoch)
         train_loader = torch.utils.data.DataLoader(mnist_train_dataset, batch_size=batch_size, shuffle=True)
         pbar.set_description(f"Epoch {epoch + 1}/{n_epochs}")
         for data, target in train_loader:

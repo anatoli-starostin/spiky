@@ -217,8 +217,6 @@ def test_synapse_growth_lowlevel(device, summation_dtype, seed=42):
             if not compare_blocks(gt_block, sg_block):
                 return False
 
-    # TODO synapse_growth_merged_data
-
     return True
 
 

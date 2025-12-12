@@ -1,5 +1,6 @@
 #include "andn_runtime.cuh"
 #include <limits.h>
+#include <random>
 
 namespace py = pybind11;
 
@@ -297,7 +298,7 @@ public:
             single_input_group_size,
             ids_shift,
             weights_allocator,
-            random_seed ? random_seed.value() : 0
+            random_seed ? random_seed.value() : std::random_device{}()
         );
     }
 
