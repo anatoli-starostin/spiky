@@ -88,7 +88,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
-    PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
+    bool is_train = (w_min_anchor_deltas != nullptr);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_PROFILER_OP);
+    }
 
     if(this->sequence_length != 1) {
         throw py::value_error("forward_step should only be called when sequence_length == 1");
@@ -107,21 +112,35 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     #endif
     #endif
 
-    PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP);
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_detectors), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(this->n_detectors);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, check_detectors, tpb_opt, cuda_streams[0],
-        r_input,
-        this->n_inputs,
-        r_detectors,
-        this->n_detectors,
-        this->n_anchors_per_detector,
-        w_lookup_indices,
-        w_min_anchor_deltas,
-        w_min_anchor_delta_indices
-    );
-    PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_detectors, tpb_opt, cuda_streams[0],
+            r_input,
+            this->n_inputs,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            w_lookup_indices,
+            w_min_anchor_deltas,
+            w_min_anchor_delta_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_detectors_eval, tpb_opt, cuda_streams[0],
+            r_input,
+            this->n_inputs,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            w_lookup_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
+    }
 
     if(lookup_neuron_synapses_infos != nullptr) {
         PROF_START(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP);
@@ -174,7 +193,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         );
         PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_FC_PROFILER_OP);
     }
-    PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
+    if(is_train) {
+        PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_PROFILER_OP);
+    } else {
+        PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_PROFILER_OP);
+    }
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
@@ -397,7 +420,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat_fc, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
-    PROF_START(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP);
+    bool is_train = (w_min_anchor_deltas != nullptr);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_EVAL_PROFILER_OP);
+    }
     if(this->sequence_length <= 1) {
         throw py::value_error("forward_step_concat_fc should only be called when sequence_length > 1");
     }
@@ -421,34 +449,62 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     uint32_t n_detector_items = this->sequence_length * this->n_detectors;
     dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_items), batch_size);
     uint32_t tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_items);
-    PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_DETECTORS_PROFILER_OP);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, check_detectors_seq, tpb_opt, cuda_streams[0],
-        r_input,
-        this->n_inputs,
-        this->sequence_length,
-        r_detectors,
-        this->n_detectors,
-        this->n_anchors_per_detector,
-        w_lookup_indices,
-        w_min_anchor_deltas,
-        w_min_anchor_delta_indices
-    );
-    PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_DETECTORS_PROFILER_OP);
-    PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_DETECTORS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_detectors_seq, tpb_opt, cuda_streams[0],
+            r_input,
+            this->n_inputs,
+            this->sequence_length,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            w_lookup_indices,
+            w_min_anchor_deltas,
+            w_min_anchor_delta_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_DETECTORS_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_detectors_seq_eval, tpb_opt, cuda_streams[0],
+            r_input,
+            this->n_inputs,
+            this->sequence_length,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            w_lookup_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
+    }
     numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS((this->sequence_length - 1) * this->n_detectors), 1);
     tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT((this->sequence_length - 1) * this->n_detectors);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
-        this->sequence_length,
-        r_positional_embeddings,
-        this->n_detectors,
-        this->positional_dim,
-        w_positional_lookup_indices,
-        w_positional_min_deltas,
-        w_positional_min_delta_indices
-    );
-    PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+    if(is_train) {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
+            this->sequence_length,
+            r_positional_embeddings,
+            this->n_detectors,
+            this->positional_dim,
+            w_positional_lookup_indices,
+            w_positional_min_deltas,
+            w_positional_min_delta_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, check_positional_embeddings_eval, tpb_opt, cuda_streams[1],
+            this->sequence_length,
+            r_positional_embeddings,
+            this->n_detectors,
+            this->positional_dim,
+            w_positional_lookup_indices
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+    }
     #ifndef NO_CUDA
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
@@ -518,7 +574,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         );
         PROF_END(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_FC_PROFILER_OP);
     }
-    PROF_END(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP);
+    if(is_train) {
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_PROFILER_OP);
+    } else {
+        PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_PROFILER_OP);
+    }
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);

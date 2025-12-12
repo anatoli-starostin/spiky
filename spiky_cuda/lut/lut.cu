@@ -84,6 +84,8 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_CHECK_DETECTORS_PROFILER_OP, "lut::runtime::forward_non_seq::check_detectors");
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP, "lut::runtime::forward_non_seq::fill_outputs_sparse");
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_FC_PROFILER_OP, "lut::runtime::forward_non_seq::fill_outputs_fc");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_PROFILER_OP, "lut::runtime::forward_non_seq_eval");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP, "lut::runtime::forward_non_seq_eval::check_detectors");
         profiler.register_operation_type(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP, "lut::runtime::convert_outputs");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_BACKPROP_PROFILER_OP, "lut::runtime::backward_non_seq::backprop");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_NON_SEQ_PROPAGATE_DETECTORS_SPARSE_PROFILER_OP, "lut::runtime::backward_non_seq::propagate_detectors_sparse");
@@ -95,6 +97,9 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::forward_seq::check_positional_embeddings");
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP, "lut::runtime::forward_seq::fill_outputs_sparse");
         profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_FC_PROFILER_OP, "lut::runtime::forward_seq::fill_outputs_fc");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_EVAL_PROFILER_OP, "lut::runtime::forward_seq_eval");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP, "lut::runtime::forward_seq_eval::check_detectors");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP, "lut::runtime::forward_seq_eval::check_positional_embeddings");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROFILER_OP, "lut::runtime::backward_seq");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_SPARSE_PROFILER_OP, "lut::runtime::backward_seq::propagate_through_detectors_sparse");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_FC_PROFILER_OP, "lut::runtime::backward_seq::propagate_through_detectors_fc");
@@ -590,9 +595,9 @@ public:
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
         torch::Tensor &w_lookup_indices,
-        torch::Tensor &w_min_anchor_deltas,
-        torch::Tensor &w_min_anchor_delta_indices,
-        std::optional<torch::Tensor> &r_stream_handles
+        std::optional<torch::Tensor> &r_stream_handles,
+        std::optional<torch::Tensor> &w_min_anchor_deltas,
+        std::optional<torch::Tensor> &w_min_anchor_delta_indices
     ) {
         py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step\n");
@@ -601,8 +606,12 @@ public:
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_output, "w_output", true, host_device_allocator.device);
         checkTensor(w_lookup_indices, "w_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_min_anchor_deltas, "w_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(w_min_anchor_deltas.has_value()) {
+            checkTensor(w_min_anchor_deltas.value(), "w_min_anchor_deltas", true, host_device_allocator.device);
+        }
+        if(w_min_anchor_delta_indices.has_value()) {
+            checkTensor(w_min_anchor_delta_indices.value(), "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -658,8 +667,8 @@ public:
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr())
+            w_min_anchor_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.value().data_ptr()) : nullptr,
+            w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -674,12 +683,12 @@ public:
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
         torch::Tensor &w_lookup_indices,
-        torch::Tensor &w_min_anchor_deltas,
-        torch::Tensor &w_min_anchor_delta_indices,
         torch::Tensor &w_positional_lookup_indices,
-        torch::Tensor &w_positional_min_deltas,
-        torch::Tensor &w_positional_min_delta_indices,
-        std::optional<torch::Tensor> r_stream_handles
+        std::optional<torch::Tensor> r_stream_handles,
+        std::optional<torch::Tensor> &w_min_anchor_deltas,
+        std::optional<torch::Tensor> &w_min_anchor_delta_indices,
+        std::optional<torch::Tensor> &w_positional_min_deltas,
+        std::optional<torch::Tensor> &w_positional_min_delta_indices
     ) {
         py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step_concat\n");
@@ -689,11 +698,19 @@ public:
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_output, "w_output", true, host_device_allocator.device);
         checkTensor(w_lookup_indices, "w_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_min_anchor_deltas, "w_min_anchor_deltas", true, host_device_allocator.device);
-        checkTensor(w_min_anchor_delta_indices, "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_positional_lookup_indices, "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_positional_min_deltas, "w_positional_min_deltas", true, host_device_allocator.device);
-        checkTensor(w_positional_min_delta_indices, "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(w_min_anchor_deltas.has_value()) {
+            checkTensor(w_min_anchor_deltas.value(), "w_min_anchor_deltas", true, host_device_allocator.device);
+        }
+        if(w_min_anchor_delta_indices.has_value()) {
+            checkTensor(w_min_anchor_delta_indices.value(), "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        }
+        if(w_positional_min_deltas.has_value()) {
+            checkTensor(w_positional_min_deltas.value(), "w_positional_min_deltas", true, host_device_allocator.device);
+        }
+        if(w_positional_min_delta_indices.has_value()) {
+            checkTensor(w_positional_min_delta_indices.value(), "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -751,11 +768,11 @@ public:
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.data_ptr()),
+            w_min_anchor_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.value().data_ptr()) : nullptr,
+            w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr,
             reinterpret_cast<int32_t *>(w_positional_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(w_positional_min_delta_indices.data_ptr())
+            w_positional_min_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.value().data_ptr()) : nullptr,
+            w_positional_min_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_positional_min_delta_indices.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -1263,9 +1280,9 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
             py::arg("w_lookup_indices"),
-            py::arg("w_min_anchor_deltas"),
-            py::arg("w_min_anchor_delta_indices"),
-            py::arg("r_stream_handles") = py::none())
+            py::arg("r_stream_handles") = py::none(),
+            py::arg("w_min_anchor_deltas") = py::none(),
+            py::arg("w_min_anchor_delta_indices") = py::none())
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
             "Forward step concat for fully connected mode",
             py::arg("r_weights"),
@@ -1275,12 +1292,12 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
             py::arg("w_lookup_indices"),
-            py::arg("w_min_anchor_deltas"),
-            py::arg("w_min_anchor_delta_indices"),
             py::arg("w_positional_lookup_indices"),
-            py::arg("w_positional_min_deltas"),
-            py::arg("w_positional_min_delta_indices"),
-            py::arg("r_stream_handles") = py::none())
+            py::arg("r_stream_handles") = py::none(),
+            py::arg("w_min_anchor_deltas") = py::none(),
+            py::arg("w_min_anchor_delta_indices") = py::none(),
+            py::arg("w_positional_min_deltas") = py::none(),
+            py::arg("w_positional_min_delta_indices") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("r_weights"),

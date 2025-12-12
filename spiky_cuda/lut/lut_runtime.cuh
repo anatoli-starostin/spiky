@@ -90,8 +90,8 @@ public:
         AnchorsPair *r_detectors,
         EXTERNAL_REAL_DT *w_output,
         int32_t *w_lookup_indices,
-        EXTERNAL_REAL_DT *w_min_anchor_deltas,
-        int32_t *w_min_anchor_delta_indices
+        EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
+        int32_t *w_min_anchor_delta_indices // can be nullptr in eval mode
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -110,7 +110,7 @@ public:
         // gradients that we need to calculate
         EXTERNAL_REAL_DT *w_input_gradients,
         EXTERNAL_REAL_DT external_lr,
-        EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
+        EXTERNAL_REAL_DT *w_weights_gradients  // can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -124,11 +124,11 @@ public:
         AnchorsPair *r_detectors,
         EXTERNAL_REAL_DT *w_output,
         int32_t *w_lookup_indices,
-        EXTERNAL_REAL_DT *w_min_anchor_deltas,
-        int32_t *w_min_anchor_delta_indices,
+        EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
+        int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
         int32_t *w_positional_lookup_indices,
-        EXTERNAL_REAL_DT *w_positional_min_deltas,
-        int32_t *w_positional_min_delta_indices
+        EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr in eval mode
+        int32_t *w_positional_min_delta_indices // can be nullptr in eval mode
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -150,10 +150,9 @@ public:
         EXTERNAL_REAL_DT *w_input_gradients,
         EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
         EXTERNAL_REAL_DT external_lr,
-        EXTERNAL_REAL_DT *w_weights_gradients  // Can be nullptr when external_lr != 0.0
+        EXTERNAL_REAL_DT *w_weights_gradients  // can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
     );
 };
-

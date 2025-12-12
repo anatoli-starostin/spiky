@@ -604,6 +604,7 @@ class LUTLayerBasic(nn.Module):
         return results
 
     def _set_lookup_indices_callback(self, cb):
+        assert self._sequence_length == 1
         self._lookup_indices_callback = cb
 
     def forward_step(self, x, output=None):
@@ -628,12 +629,16 @@ class LUTLayerBasic(nn.Module):
         lookup_indices = torch.zeros(
             [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
         )
-        min_anchor_deltas = torch.zeros(
-            [batch_size * self._n_detectors], dtype=torch.float32, device=self.device, requires_grad=False
-        )
-        min_anchor_delta_indices = torch.zeros(
-            [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
-        )
+        if self.training:
+            min_anchor_deltas = torch.zeros(
+                [batch_size * self._n_detectors], dtype=torch.float32, device=self.device, requires_grad=False
+            )
+            min_anchor_delta_indices = torch.zeros(
+                [batch_size * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+        else:
+            min_anchor_deltas = None
+            min_anchor_delta_indices = None
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
@@ -643,22 +648,25 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors,
             output,
             lookup_indices,
+            stream_handles,
             min_anchor_deltas,
-            min_anchor_delta_indices,
-            stream_handles
+            min_anchor_delta_indices
         )
 
         if not external_output:
             self._synchronize()
-            if self._lookup_indices_callback is not None:
+            if self.training and self._lookup_indices_callback is not None:
                 self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
-        result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
-        return result + (
-            lookup_indices.view(batch_size, 1, self._n_detectors),
-            min_anchor_deltas.view(batch_size, 1, self._n_detectors),
-            min_anchor_delta_indices.view(batch_size, 1, self._n_detectors)
-        )
+        if self.training:
+            result = () if external_output else (output.view((batch_size, 1) + self.output_shape()),)
+            return result + (
+                lookup_indices.view(batch_size, 1, self._n_detectors),
+                min_anchor_deltas.view(batch_size, 1, self._n_detectors),
+                min_anchor_delta_indices.view(batch_size, 1, self._n_detectors)
+            )
+        else:
+            return None if external_output else output.view((batch_size, 1) + self.output_shape())
 
     def forward_step_concat(self, x, output=None):
         if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
@@ -686,23 +694,31 @@ class LUTLayerBasic(nn.Module):
         lookup_indices = torch.zeros(
             [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
         )
-        min_anchor_deltas = torch.zeros(
-            [batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
-            device=self.device, requires_grad=False
-        )
-        min_anchor_delta_indices = torch.zeros(
-            [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
-        )
+        if self.training:
+            min_anchor_deltas = torch.zeros(
+                [batch_size * sequence_length * self._n_detectors], dtype=torch.float32,
+                device=self.device, requires_grad=False
+            )
+            min_anchor_delta_indices = torch.zeros(
+                [batch_size * sequence_length * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+        else:
+            min_anchor_deltas = None
+            min_anchor_delta_indices = None
         positional_lookup_indices = torch.zeros(
             [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
         )
-        positional_min_deltas = torch.zeros(
-            [(sequence_length - 1) * self._n_detectors], dtype=torch.float32,
-            device=self.device, requires_grad=False
-        )
-        positional_min_delta_indices = torch.zeros(
-            [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
-        )
+        if self.training:
+            positional_min_deltas = torch.zeros(
+                [(sequence_length - 1) * self._n_detectors], dtype=torch.float32,
+                device=self.device, requires_grad=False
+            )
+            positional_min_delta_indices = torch.zeros(
+                [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
+            )
+        else:
+            positional_min_deltas = None
+            positional_min_delta_indices = None
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
@@ -713,28 +729,26 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors,
             output,
             lookup_indices,
+            positional_lookup_indices,
+            stream_handles,
             min_anchor_deltas,
             min_anchor_delta_indices,
-            positional_lookup_indices,
             positional_min_deltas,
-            positional_min_delta_indices,
-            stream_handles
+            positional_min_delta_indices
         )
-
-        if not external_output:
-            self._synchronize()
-            if self._lookup_indices_callback is not None:
-                self._lookup_indices_callback(lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
-        return result + (
-            lookup_indices.view(batch_size, sequence_length, self._n_detectors),
-            min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
-            min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
-            positional_lookup_indices.view(sequence_length - 1, self._n_detectors),
-            positional_min_deltas.view(sequence_length - 1, self._n_detectors),
-            positional_min_delta_indices.view(sequence_length - 1, self._n_detectors)
-        )
+        if self.training:
+            return result + (
+                lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+                min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+                min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
+                positional_lookup_indices.view(sequence_length - 1, self._n_detectors),
+                positional_min_deltas.view(sequence_length - 1, self._n_detectors),
+                positional_min_delta_indices.view(sequence_length - 1, self._n_detectors)
+            )
+        else:
+            return None if external_output else output.view((batch_size, sequence_length) + self.output_shape())
 
     def backward_step(
         self, x, grad_output,
@@ -939,27 +953,30 @@ class LUTLayerBasic(nn.Module):
         @staticmethod
         def forward(ctx, *args, **kwargs):
             x, _, __, lut_layer = args
-            ctx.lut_layer = lut_layer
-            if lut_layer._sequence_length == 1:
-                (
-                    output, lookup_indices, min_anchor_deltas,
-                    min_anchor_delta_indices
-                ) = lut_layer.forward_step(x)
-                if ctx.lut_layer.training:
+            if lut_layer.training:
+                ctx.lut_layer = lut_layer
+                if lut_layer._sequence_length == 1:
+                    (
+                        output, lookup_indices, min_anchor_deltas,
+                        min_anchor_delta_indices
+                    ) = lut_layer.forward_step(x)
                     ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-            else:
-                (
-                    output, lookup_indices, min_anchor_deltas,
-                    min_anchor_delta_indices, positional_lookup_indices,
-                    positional_min_deltas, positional_min_delta_indices
-                ) = lut_layer.forward_step_concat(x)
-                if ctx.lut_layer.training:
+                else:
+                    (
+                        output, lookup_indices, min_anchor_deltas,
+                        min_anchor_delta_indices, positional_lookup_indices,
+                        positional_min_deltas, positional_min_delta_indices
+                    ) = lut_layer.forward_step_concat(x)
                     ctx.save_for_backward(
                         x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
                         positional_lookup_indices, positional_min_deltas,
                         positional_min_delta_indices
                     )
-            return output
+                return output
+            elif lut_layer._sequence_length == 1:
+                return lut_layer.forward_step(x)
+            else:
+                return lut_layer.forward_step_concat(x)
 
         @staticmethod
         def backward(ctx, *grad_outputs):
@@ -1370,18 +1387,28 @@ class MultiLUT(nn.Module):
                     dtype=torch.float32, device=first_lut.device
                 )
 
-            results = [None] * len(multi_lut.luts)
+            if multi_lut.training:
+                results = [None] * len(multi_lut.luts)
 
-            for lut_idx, lut in enumerate(multi_lut.luts):
-                if multi_lut._sequence_length == 1:
-                    results[lut_idx] = lut.forward_step(x, output=output)
-                else:
-                    results[lut_idx] = list(lut.forward_step_concat(x, output=output))
+                for lut_idx, lut in enumerate(multi_lut.luts):
+                    if multi_lut._sequence_length == 1:
+                        results[lut_idx] = lut.forward_step(x, output=output)
+                    else:
+                        results[lut_idx] = list(lut.forward_step_concat(x, output=output))
 
-            for lut_idx, lut in enumerate(multi_lut.luts):
-                lut._synchronize()
-                if lut._lookup_indices_callback is not None:
-                    lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
+                for lut_idx, lut in enumerate(multi_lut.luts):
+                    lut._synchronize()
+                    if lut._lookup_indices_callback is not None:
+                        lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
+            else:
+                for lut_idx, lut in enumerate(multi_lut.luts):
+                    if multi_lut._sequence_length == 1:
+                        lut.forward_step(x, output=output)
+                    else:
+                        lut.forward_step_concat(x, output=output)
+
+                for lut_idx, lut in enumerate(multi_lut.luts):
+                    lut._synchronize()
 
             # Reshape output to match expected shape
 

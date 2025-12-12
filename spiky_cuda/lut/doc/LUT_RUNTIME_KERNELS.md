@@ -4,89 +4,81 @@ This document provides a comprehensive overview of all CUDA kernels used in the 
 
 ## Table of Contents
 
-1. [Forward Pass Kernels](#forward-pass-kernels)
-2. [Backward Pass Kernels](#backward-pass-kernels)
-3. [Sequence Processing Kernels - Forward](#sequence-processing-kernels---forward)
-4. [Sequence Processing Kernels - Backward](#sequence-processing-kernels---backward)
+1. [Non-Sequential Forward Pass Kernels](#non-sequential-forward-pass-kernels)
+2. [Non-Sequential Backward Pass Kernels](#non-sequential-backward-pass-kernels)
+3. [Sequential Forward Pass Kernels](#sequential-forward-pass-kernels)
+4. [Sequential Backward Pass Kernels](#sequential-backward-pass-kernels)
 5. [Utility Kernels](#utility-kernels)
 
 ---
 
-## Forward Pass Kernels
+## Non-Sequential Forward Pass Kernels
 
 ### 1. `check_detectors_logic`
 
 **Purpose**: Computes lookup indices for detectors by comparing anchor pair differences in the input vector.
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
+- `blockDim.x`: Configurable (typically 1024 threads)
 - `gridDim.x`: `ceil(n_detectors / blockDim.x)`
 - `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
-- `r_input`: `[batch_size * n_inputs]` - Input activations
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs (AnchorsPair structs)
+- `r_input`: `[batch_size × n_inputs]` - Input activations
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs (AnchorsPair structs)
 - `n_inputs`: Number of input dimensions
 - `n_detectors`: Number of detectors
 - `n_anchors_per_detector`: Number of anchor pairs per detector
 
 **Outputs**:
-- `w_lookup_indices`: `[batch_size * n_detectors]` - Lookup table indices (int32)
-- `w_min_anchor_deltas`: `[batch_size * n_detectors]` - Minimum anchor delta values (float)
-- `w_min_anchor_delta_indices`: `[batch_size * n_detectors]` - Indices of minimum delta anchors (int32)
+- `w_lookup_indices`: `[batch_size × n_detectors]` - Lookup table indices (int32)
+- `w_min_anchor_deltas`: `[batch_size × n_detectors]` - Minimum anchor delta values (float)
+- `w_min_anchor_delta_indices`: `[batch_size × n_detectors]` - Indices of minimum delta anchors (int32)
 
 **Description**: Each thread processes one detector for one batch item. For each anchor pair, it computes the difference between anchor values, forms a bit representation (1 if delta > 0, 0 otherwise), and tracks the anchor pair with the minimum absolute delta. The bit representation forms the lookup index into the LUT table.
 
 ---
 
-### 2. `fire_detectors_logic`
+### 2. `check_detectors_eval_logic`
 
-**Purpose**: Similar to `check_detectors_logic`, but also generates firing events for sparse connectivity mode.
+**Purpose**: Computes lookup indices for detectors by comparing anchor pair differences in the input vector (eval mode, no gradient tracking).
 
 **Launch Grid**:
-- `blockDim.x`: Power of 2 (typically 256-512 threads, rounded up)
+- `blockDim.x`: Configurable (typically 1024 threads)
 - `gridDim.x`: `ceil(n_detectors / blockDim.x)`
 - `gridDim.y`: `batch_size`
-- Shared Memory: `blockDim.x * sizeof(uint32_t)` (for atomic reduction)
+- Shared Memory: None
 
 **Inputs**:
-- `r_input`: `[batch_size * n_inputs]` - Input activations
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
+- `r_input`: `[batch_size × n_inputs]` - Input activations
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs (AnchorsPair structs)
 - `n_inputs`: Number of input dimensions
 - `n_detectors`: Number of detectors
 - `n_anchors_per_detector`: Number of anchor pairs per detector
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures containing synapse connectivity info for each lookup neuron
-- `synapse_group_size`: Size of synapse groups
-- `lut_data`: Pointer to LUT data structure
-- `device`: Device ID
 
 **Outputs**:
-- `w_lookup_indices`: `[batch_size * n_detectors]` - Lookup table indices (int32)
-- `w_min_anchor_deltas`: `[batch_size * n_detectors]` - Minimum anchor delta values (float)
-- `w_min_anchor_delta_indices`: `[batch_size * n_detectors]` - Indices of minimum delta anchors (int32)
-- `rw_firings_buffer`: `[max_firings]` - Firing events (Firing structs)
-- `rw_firings_counter_ptr`: Pointer to firing counter
+- `w_lookup_indices`: `[batch_size × n_detectors]` - Lookup table indices (int32)
 
-**Description**: Each thread processes one detector for one batch item. Computes lookup indices similar to `check_detectors_logic`, and also generates firing events for sparse connectivity mode. Uses shared memory reduction for efficient counter updates.
+**Description**: Each thread processes one detector for one batch item. For each anchor pair, it computes the difference between anchor values and forms a bit representation (1 if delta > 0, 0 otherwise). The bit representation forms the lookup index into the LUT table. This is the eval mode version that skips tracking minimum anchor deltas and indices (not needed for inference).
 
 ---
 
-### 3. `fill_outputs_by_forward_groups_logic`
+### 3. `fill_outputs_non_seq_sparse_logic`
 
-**Purpose**: Accumulates outputs from firing events using forward synapse groups (sparse connectivity mode).
+**Purpose**: Accumulates outputs from lookup indices using sparse connectivity information (sparse connectivity mode).
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_firings / blockDim.x)`
-- `gridDim.y`: `n_output_blocks`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_output_blocks / blockDim.x)`
+- `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
 - `r_weights`: `[n_weights]` - Weight tensor
-- `r_firings`: `[n_firings]` - Firing events
-- `r_firings_counter_ptr`: Pointer to firing counter
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
+- `n_detectors`: Number of detectors
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
 - `n_outputs`: Number of output dimensions
 - `n_output_blocks`: Number of output blocks for tiling
 - `n_outputs_per_block`: Number of outputs per block
@@ -96,596 +88,539 @@ This document provides a comprehensive overview of all CUDA kernels used in the 
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_output`: `[batch_size * n_outputs]` - Output activations (accumulated in-place)
+- `w_output`: `[batch_size × n_outputs]` - Output activations (accumulated in-place)
 
-**Description**: Each thread processes one firing event for one output block. For sparse connectivity, processes synapse groups using the `process_single_synapse_group` helper function. Handles both integer and floating point arithmetic modes.
+**Description**: Each thread processes one detector and one output block. Uses sparse connectivity information to find the forward synapse group for the lookup neuron, then iterates through connected outputs to accumulate weights. Handles both integer and floating point arithmetic modes.
 
 ---
 
-### 4. `fill_outputs_fully_connected_logic`
+### 4. `fill_outputs_non_seq_fc_logic`
 
 **Purpose**: Accumulates outputs from lookup indices (fully connected mode).
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_detectors * n_output_blocks / blockDim.x)`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_outputs × n_detector_blocks / blockDim.x)`
 - `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
-- `r_weights`: `[n_detectors * n_lookup_neurons_per_detector * n_outputs]` - Weight tensor
-- `r_lookup_indices`: `[batch_size * n_detectors]` - Lookup indices
+- `r_weights`: `[n_detectors × n_lookup_neurons_per_detector × n_outputs]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
 - `n_outputs`: Number of output dimensions
 - `n_detectors`: Number of detectors
-- `n_output_blocks`: Number of output blocks for tiling
-- `n_outputs_per_block`: Number of outputs per block
+- `n_detector_blocks`: Number of detector blocks for tiling
 - `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
+- `backward_group_size`: Size of backward groups
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_output`: `[batch_size * n_outputs]` - Output activations (accumulated in-place)
+- `w_output`: `[batch_size × n_outputs]` - Output activations (accumulated in-place)
 
-**Description**: Each thread processes one detector and one output block. Directly accesses weights using the lookup index and accumulates to outputs. Handles both integer and floating point arithmetic modes.
-
----
-
-## Backward Pass Kernels
-
-### 5. `fire_detectors_by_lookup_indices_logic`
-
-**Purpose**: Generates firing events from lookup indices for backward pass (sparse connectivity mode).
-
-**Launch Grid**:
-- `blockDim.x`: Power of 2 (typically 256-512 threads, rounded up)
-- `gridDim.x`: `ceil(n_detectors / blockDim.x)`
-- `gridDim.y`: `batch_size`
-- Shared Memory: `blockDim.x * sizeof(uint32_t)` (for atomic reduction)
-
-**Inputs**:
-- `r_lookup_indices`: `[batch_size * n_detectors]` - Lookup indices
-- `r_min_anchor_delta_indices`: `[batch_size * n_detectors]` - Min delta anchor indices
-- `n_detectors`: Number of detectors
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
-- `synapse_group_size`: Size of synapse groups
-- `lut_data`: Pointer to LUT data structure
-- `device`: Device ID
-
-**Outputs**:
-- `rw_firings_buffer`: `[max_firings]` - Main firing events (Firing structs)
-- `rw_firings_counter_ptr`: Pointer to main firing counter
-- `rw_firings_buffer_alternative`: `[max_firings]` - Alternative firing events
-- `rw_firings_counter_ptr_alternative`: Pointer to alternative firing counter
-
-**Description**: Each thread processes one detector for one batch item. Generates both main and alternative firing events based on lookup indices and minimum anchor delta indices. Uses shared memory reduction for efficient counter updates.
+**Description**: Each thread processes one output and one detector block. Directly accesses weights using the lookup index and accumulates to outputs. Handles both integer and floating point arithmetic modes.
 
 ---
 
-### 6. `gather_gradients_logic`
+## Non-Sequential Backward Pass Kernels
 
-**Purpose**: Gathers input and weight gradients from firing events (sparse connectivity mode).
+### 5. `propagate_through_detectors_non_seq_sparse_logic`
 
-**Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_firings / blockDim.x)`
-- `gridDim.y`: `n_output_blocks`
-- Shared Memory: None
-
-**Inputs**:
-- `r_output_gradients`: `[batch_size * n_outputs]` - Output gradients
-- `r_firings`: `[n_firings]` - Firing events
-- `r_firings_counter_ptr`: Pointer to firing counter
-- `w_before_detectors_gradients`: `[batch_size * 2 * n_detectors]` - Gradients before detectors (accumulated)
-- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated, optional)
-- `n_lookup_neurons`: Total number of lookup neurons
-- `n_detectors`: Number of detectors
-- `n_outputs`: Number of output dimensions
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
-- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
-- `first_synapse_id`: First synapse ID offset
-- `lut_data`: Pointer to LUT data structure
-- `first_synapse_meta_lr`: Learning rate for first synapse meta
-- `int_rescaler`: Integer rescaling factor
-
-**Outputs**:
-- `w_before_detectors_gradients`: `[batch_size * 2 * n_detectors]` - Gradients before detectors (accumulated)
-- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated, if not in internal mode)
-
-**Description**: Each thread processes one firing event for one output block. For each synapse group in the firing, it computes the gradient contribution by multiplying weights with output gradients. Accumulates gradients to lookup neurons (main and alternative) and optionally to weights (depending on gradient policy). Handles both sparse connectivity and internal/external gradient modes.
-
----
-
-### 7. `gather_x_gradients_fully_connected_logic`
-
-**Purpose**: Gathers input gradients for fully connected mode.
+**Purpose**: Propagates gradients through detectors to input gradients using sparse connectivity information.
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_detectors * n_output_blocks / blockDim.x)`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_output_blocks / blockDim.x)`
 - `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
-- `r_weights`: `[n_detectors * n_lookup_neurons_per_detector * n_outputs]` - Weight tensor
-- `r_output_gradients`: `[batch_size * n_outputs]` - Output gradients
-- `r_lookup_indices`: `[batch_size * n_detectors]` - Lookup indices
-- `r_min_anchor_delta_indices`: `[batch_size * n_detectors]` - Min delta anchor indices (optional)
-- `n_outputs`: Number of output dimensions
-- `n_detectors`: Number of detectors
-- `n_output_blocks`: Number of output blocks for tiling
-- `n_outputs_per_block`: Number of outputs per block
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `lr`: Learning rate
-- `int_rescaler`: Integer rescaling factor
-
-**Outputs**:
-- `w_before_detectors_gradients`: `[batch_size * 2 * n_detectors]` - Gradients before detectors (accumulated)
-
-**Description**: Each thread processes one detector and one output block. It computes the gradient by summing `weight * output_gradient` over all outputs in the block, then accumulates to the appropriate lookup neuron (using main or alternative index based on `r_min_anchor_delta_indices`).
-
----
-
-### 8. `gather_w_gradients_fully_connected_logic`
-
-**Purpose**: Accumulates weight gradients for fully connected mode.
-
-**Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_detectors * n_output_blocks / blockDim.x)`
-- `gridDim.y`: `batch_size`
-- Shared Memory: None
-
-**Inputs**:
-- `r_output_gradients`: `[batch_size * n_outputs]` - Output gradients
-- `r_lookup_indices`: `[batch_size * n_detectors]` - Lookup indices
-- `n_outputs`: Number of output dimensions
+- `r_output_gradients`: `[batch_size × n_outputs]` - Output gradients
+- `r_weights`: `[n_weights]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
+- `r_min_anchor_deltas`: `[batch_size × n_detectors]` - Minimum anchor deltas
+- `r_min_anchor_delta_indices`: `[batch_size × n_detectors]` - Min delta anchor indices
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
 - `n_detectors`: Number of detectors
 - `n_output_blocks`: Number of output blocks
 - `n_outputs_per_block`: Number of outputs per block
 - `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `lr`: Learning rate
+- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
+- `first_synapse_id`: First synapse ID offset
+- `lut_data`: Pointer to LUT data structure
+- `n_inputs`: Number of input dimensions
+- `n_anchors_per_detector`: Number of anchor pairs per detector
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_weights_gradients`: `[n_detectors * n_lookup_neurons_per_detector * n_outputs]` - Weight gradients (accumulated)
+- `w_input_gradients`: `[batch_size × n_inputs]` - Input gradients (accumulated)
 
-**Description**: Each thread processes one detector and one output block. For each output in the block, it accumulates `output_gradient * lr` to the corresponding weight gradient location (determined by detector index and lookup index).
+**Description**: Each thread processes one detector and one output block. Uses sparse connectivity information to gather output gradients, computes the gradient difference between main and alternative lookup neurons, and propagates gradients to input anchors using the uncertainty function gradient.
 
 ---
 
-### 9. `propagate_through_detectors_logic`
+### 6. `propagate_through_detectors_non_seq_fc_logic`
 
-**Purpose**: Propagates gradients through detectors to input gradients using the gradient of the up() function.
+**Purpose**: Propagates gradients through detectors to input gradients (fully connected mode).
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_detectors / blockDim.x)`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_output_blocks / blockDim.x)`
 - `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
-- `r_min_anchor_deltas`: `[batch_size * n_detectors]` - Minimum anchor deltas
-- `r_min_anchor_delta_indices`: `[batch_size * n_detectors]` - Min delta anchor indices
+- `r_output_gradients`: `[batch_size × n_outputs]` - Output gradients
+- `r_weights`: `[n_detectors × n_lookup_neurons_per_detector × n_outputs]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
+- `r_min_anchor_deltas`: `[batch_size × n_detectors]` - Minimum anchor deltas
+- `r_min_anchor_delta_indices`: `[batch_size × n_detectors]` - Min delta anchor indices
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
 - `n_detectors`: Number of detectors
-- `n_anchors_per_detector`: Number of anchor pairs per detector
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
 - `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `rw_before_detectors_gradients`: `[batch_size * 2 * n_detectors]` - Gradients before detectors
 - `n_inputs`: Number of input dimensions
+- `n_anchors_per_detector`: Number of anchor pairs per detector
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_input_gradients`: `[batch_size * n_inputs]` - Input gradients (accumulated)
-- `rw_before_detectors_gradients`: Cleared for main and alternative lookup neurons (in-place)
+- `w_input_gradients`: `[batch_size × n_inputs]` - Input gradients (accumulated)
 
-**Description**: Each thread processes one detector. It computes the gradient difference between the main and alternative lookup neurons, applies the gradient of the up() function (0.5 * sign(delta) / (1 + |delta|)^2), and propagates to the input anchors. Clears the gradient buffers after processing.
+**Description**: Each thread processes one detector and one output block. Directly accesses weights and output gradients, computes the gradient difference between main and alternative lookup neurons, and propagates gradients to input anchors using the uncertainty function gradient.
 
 ---
 
-## Sequence Processing Kernels - Forward
+### 6. `gather_w_gradients_non_seq_sparse_logic`
 
-### 10. `check_detectors_for_sequence_logic`
+**Purpose**: Accumulates weight gradients using sparse connectivity information.
+
+**Launch Grid**:
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_output_blocks / blockDim.x)`
+- `gridDim.y`: `batch_size`
+- Shared Memory: None
+
+**Inputs**:
+- `r_output_gradients`: `[batch_size × n_outputs]` - Output gradients
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
+- `n_detectors`: Number of detectors
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
+- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
+- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
+- `first_synapse_id`: First synapse ID offset
+- `lut_data`: Pointer to LUT data structure
+- `external_lr`: External learning rate. When `external_lr >= 0` (internal mode), gradients are applied directly to weights (`r_weights`) and the learning rate is multiplied by `-external_lr`. When `external_lr < 0` (external mode), gradients are accumulated in `w_weights_gradients` for later use and the synapse meta learning rate is used directly.
+- `first_synapse_meta_lr`: Learning rate for first synapse meta
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated). When `external_lr >= 0`, this points to `r_weights` for direct weight updates. When `external_lr < 0`, this is the separate gradient buffer.
+
+**Description**: Each thread processes one detector and one output block. Uses sparse connectivity information to find connected outputs, then accumulates `output_gradient × lr` to the corresponding weight gradient locations. The learning rate `lr` is computed as: if `external_lr >= 0`, then `lr = first_synapse_meta_lr × (-external_lr)`, otherwise `lr = first_synapse_meta_lr` (or synapse-specific learning rate from `r_synapse_metas`).
+
+---
+
+### 8. `gather_w_gradients_non_seq_fc_logic`
+
+**Purpose**: Accumulates weight gradients (fully connected mode).
+
+**Launch Grid**:
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_output_blocks / blockDim.x)`
+- `gridDim.y`: `batch_size`
+- Shared Memory: None
+
+**Inputs**:
+- `r_output_gradients`: `[batch_size × n_outputs]` - Output gradients
+- `r_lookup_indices`: `[batch_size × n_detectors]` - Lookup indices
+- `n_detectors`: Number of detectors
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
+- `external_lr`: External learning rate. When `external_lr >= 0` (internal mode), gradients are applied directly to weights (`r_weights`) and the learning rate is multiplied by `-external_lr`. When `external_lr < 0` (external mode), gradients are accumulated in `w_weights_gradients` for later use and the synapse meta learning rate is used directly.
+- `first_synapse_meta_lr`: Learning rate for first synapse meta
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_weights_gradients`: `[n_detectors × n_lookup_neurons_per_detector × n_outputs]` - Weight gradients (accumulated). When `external_lr >= 0`, this points to `r_weights` for direct weight updates. When `external_lr < 0`, this is the separate gradient buffer.
+
+**Description**: Each thread processes one detector and one output block. Directly accesses output gradients and accumulates `output_gradient × lr` to the corresponding weight gradient location (determined by detector index and lookup index). The learning rate `lr` is computed as: if `external_lr >= 0`, then `lr = first_synapse_meta_lr × (-external_lr)`, otherwise `lr = first_synapse_meta_lr`.
+
+---
+
+## Sequential Forward Pass Kernels
+
+### 8. `check_detectors_seq_logic`
 
 **Purpose**: Computes lookup indices for detectors in sequence processing mode (Q and K detectors).
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
+- `blockDim.x`: Configurable (typically 1024 threads)
 - `gridDim.x`: `ceil(n_detectors / blockDim.x)`
-- `gridDim.y`: `batch_size * sequence_length`
+- `gridDim.y`: `batch_size × sequence_length`
 - Shared Memory: None
 
 **Inputs**:
-- `r_input`: `[batch_size * sequence_length * n_inputs]` - Input activations
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
+- `r_input`: `[batch_size × sequence_length × n_inputs]` - Input activations
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
 - `n_inputs`: Number of input dimensions
 - `n_detectors`: Number of detectors
 - `n_anchors_per_detector`: Number of anchor pairs per detector
 - `sequence_length`: Length of sequence
 
 **Outputs**:
-- `w_lookup_indices`: `[batch_size * sequence_length * n_detectors]` - Q and K lookup table indices (int32)
-- `w_min_anchor_deltas`: `[batch_size * sequence_length * n_detectors]` - Minimum anchor delta values (float)
-- `w_min_anchor_delta_indices`: `[batch_size * sequence_length * n_detectors]` - Indices of minimum delta anchors (int32)
+- `w_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup table indices (int32)
+- `w_min_anchor_deltas`: `[batch_size × sequence_length × n_detectors]` - Minimum anchor delta values (float)
+- `w_min_anchor_delta_indices`: `[batch_size × sequence_length × n_detectors]` - Indices of minimum delta anchors (int32)
 
 **Description**: Each thread processes one detector for one batch item at one timestep. Similar to `check_detectors_logic` but handles sequence dimension through `blockIdx.y`.
 
 ---
 
-### 11. `check_positional_embeddings_logic`
+### 9. `check_detectors_seq_eval_logic`
+
+**Purpose**: Computes lookup indices for detectors in sequence processing mode (Q and K detectors) for eval mode (no gradient tracking).
+
+**Launch Grid**:
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors / blockDim.x)`
+- `gridDim.y`: `batch_size × sequence_length`
+- Shared Memory: None
+
+**Inputs**:
+- `r_input`: `[batch_size × sequence_length × n_inputs]` - Input activations
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
+- `n_inputs`: Number of input dimensions
+- `n_detectors`: Number of detectors
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `sequence_length`: Length of sequence
+
+**Outputs**:
+- `w_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup table indices (int32)
+
+**Description**: Each thread processes one detector for one batch item at one timestep. Similar to `check_detectors_seq_logic` but skips tracking minimum anchor deltas and indices (not needed for inference). This is the eval mode version.
+
+---
+
+### 10. `check_positional_embeddings_logic`
 
 **Purpose**: Computes lookup indices for positional embeddings in sequence processing mode.
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
+- `blockDim.x`: Configurable (typically 1024 threads)
 - `gridDim.x`: `ceil(n_detectors / blockDim.x)`
 - `gridDim.y`: `sequence_length - 1`
 - Shared Memory: None
 
 **Inputs**:
-- `r_positional_embeddings`: `[(sequence_length - 1) * n_detectors * positional_dim]` - Positional embeddings
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
+- `r_positional_embeddings`: `[(sequence_length - 1) × n_detectors × positional_dim]` - Positional embeddings
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
 - `n_detectors`: Number of detectors
 - `n_anchors_per_detector`: Number of anchor pairs per detector
 - `positional_dim`: Dimension of positional encoding
 - `sequence_length`: Length of sequence
 
 **Outputs**:
-- `w_lookup_indices`: `[(sequence_length - 1) * n_detectors]` - PE lookup table indices (int32)
-- `w_min_deltas`: `[(sequence_length - 1) * n_detectors]` - Minimum delta values (float)
-- `w_min_delta_indices`: `[(sequence_length - 1) * n_detectors]` - Indices of minimum deltas (int32)
+- `w_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup table indices (int32)
+- `w_min_deltas`: `[(sequence_length - 1) × n_detectors]` - Minimum delta values (float)
+- `w_min_delta_indices`: `[(sequence_length - 1) × n_detectors]` - Indices of minimum deltas (int32)
 
 **Description**: Each thread processes one detector for one timestep pair (i, i+1). Computes lookup indices for positional embeddings by comparing anchor pair differences in the positional embedding vector.
 
 ---
 
-### 12. `fill_after_detectors_firing_stat_logic`
+### 11. `check_positional_embeddings_eval_logic`
 
-**Purpose**: Fills firing statistics by processing attention pairs (i, j) in a tiled manner.
+**Purpose**: Computes lookup indices for positional embeddings in sequence processing mode for eval mode (no gradient tracking).
 
 **Launch Grid**:
-- `blockDim.x`: `TILE * TILE` (typically 16x16 = 256 threads per tile)
-- `gridDim.x`: `n_total_tiles * n_detectors` (one block per tile per detector)
-- `gridDim.y`: `batch_size`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors / blockDim.x)`
+- `gridDim.y`: `sequence_length - 1`
 - Shared Memory: None
 
 **Inputs**:
-- `r_lookup_indices`: `[batch_size * sequence_length * n_detectors]` - Q and K lookup indices
-- `r_min_anchor_deltas`: `[batch_size * sequence_length * n_detectors]` - Min anchor deltas
-- `r_min_anchor_delta_indices`: `[batch_size * sequence_length * n_detectors]` - Min delta indices
-- `r_positional_lookup_indices`: `[(sequence_length - 1) * n_detectors]` - PE lookup indices
-- `r_positional_min_deltas`: `[(sequence_length - 1) * n_detectors]` - PE min deltas
-- `r_positional_min_delta_indices`: `[(sequence_length - 1) * n_detectors]` - PE min delta indices
+- `r_positional_embeddings`: `[(sequence_length - 1) × n_detectors × positional_dim]` - Positional embeddings
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
 - `n_detectors`: Number of detectors
 - `n_anchors_per_detector`: Number of anchor pairs per detector
 - `positional_dim`: Dimension of positional encoding
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `rw_firings_buffer`: `[max_firings]` - Main firing events buffer
-- `rw_firings_counter_ptr`: Pointer to main firing counter
-- `rw_firings_buffer_alternative`: `[max_firings]` - Alternative firing events buffer
-- `rw_firings_counter_ptr_alternative`: Pointer to alternative firing counter
-- `device`: Device ID
-
-**Outputs**:
-- `rw_firings_buffer`: `[max_firings]` - Main firing events (NeuronShiftFiring structs)
-- `rw_firings_counter_ptr`: Updated firing counter
-- `rw_firings_buffer_alternative`: `[max_firings]` - Alternative firing events (optional)
-- `rw_firings_counter_ptr_alternative`: Updated alternative firing counter
-
-**Description**: Processes attention pairs (i, j) in a tiled manner. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Generates main firing events (when Q/K/PE combinations are valid) and alternative firing events (when flipping Q, K, or PE would change the result). Uses tiling for efficient processing of sequence pairs.
-
----
-
-### 13. `densify_firing_stat_cpu_logic` and `densify_firing_stat_cuda_logic`
-
-**Purpose**: Converts dense firing statistics into sparse firing events. Split into separate CPU and CUDA kernels for optimal performance on each platform.
-
-**Launch Grid**:
-- **CPU version** (`densify_firing_stat_cpu_logic`):
-  - `blockDim.x`: Configurable (typically 256-512 threads)
-  - `gridDim.x`: `ceil(n_lookup_neurons / blockDim.x)`
-  - `gridDim.y`: `batch_size * sequence_length`
-  - Shared Memory: None
-- **CUDA version** (`densify_firing_stat_cuda_logic`):
-  - `blockDim.x`: Power of 2 (typically 256-512 threads, rounded up)
-  - `gridDim.x`: `ceil(n_quads / (blockDim.x / 4))` (processes 4 neurons per thread)
-  - `gridDim.y`: `batch_size * sequence_length`
-  - Shared Memory: `blockDim.x * 2 * sizeof(uint32_t)` (for dual counter reduction)
-
-**Inputs**:
-- `rw_firing_stat`: `[batch_size * sequence_length * n_lookup_neurons]` - Firing statistics
-  - CPU version: `EXTERNAL_REAL_DT*` (scalar access)
-  - CUDA version: `float4*` (vectorized access, 4 neurons per element)
-- `n_lookup_neurons`: Total number of lookup neurons
-- `n_quads`: Number of quads (4-neuron groups) - CUDA version only, equals `n_lookup_neurons / 4`
 - `sequence_length`: Length of sequence
 
 **Outputs**:
-- `rw_firings_buffer`: `[max_firings]` - Main firing events (NeuronShiftFiring structs)
-- `rw_firings_counter_ptr`: Pointer to main firing counter
-- `rw_firings_buffer_alternative`: `[max_firings]` - Alternative firing events (optional)
-- `rw_firings_counter_ptr_alternative`: Pointer to alternative firing counter (optional)
-- `rw_firing_stat`: Cleared after processing (in-place)
+- `w_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup table indices (int32)
 
-**Description**: 
-- **CPU version**: Each thread processes one lookup neuron at one timestep sequentially. If firing_stat >= 1.0, creates a main firing event. If 0 < firing_stat < 1.0, creates an alternative firing event (for gradient computation).
-- **CUDA version**: Each thread processes 4 neurons at once (quads) using `float4` vectorized loads. Uses warp-level prefix scans (`__shfl_up_sync`) for efficient dual counter updates. Out-of-bounds quads are treated as zeros to maintain warp coherence. Uses shared memory reduction for efficient dual counter updates.
+**Description**: Each thread processes one detector for one timestep pair (i, i+1). Computes lookup indices for positional embeddings by comparing anchor pair differences in the positional embedding vector. This is the eval mode version that skips tracking minimum deltas and delta indices (not needed for inference).
 
 ---
 
-### 14. `fill_outputs_by_sparse_firings_logic`
+### 12. `fill_outputs_fully_connected_seq_logic`
 
-**Purpose**: Accumulates outputs from sparse firing events for sequence processing.
+**Purpose**: Accumulates outputs from lookup indices for fully connected sequential mode.
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_sparse_firings / blockDim.x)`
-- `gridDim.y`: `n_output_blocks`
+- `blockDim.x`: Configurable (typically 1024 threads)
+- `gridDim.x`: `ceil(n_detectors × n_outputs / blockDim.x)`
+- `gridDim.y`: `batch_size × (sequence_length - 1)`
+- Shared Memory: None
+
+**Inputs**:
+- `r_weights`: `[n_detectors × 2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup> × n_outputs]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
+- `n_outputs`: Number of output dimensions
+- `n_detectors`: Number of detectors
+- `sequence_length`: Length of sequence
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `positional_dim`: Dimension of positional encoding
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector = `2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup>`
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_output`: `[batch_size × sequence_length × n_outputs]` - Output activations (accumulated in-place)
+
+**Description**: Each thread processes one detector and one output for one timestep pair (i, j) where i < j. For each output position j, accumulates weights over all previous timesteps i from 0 to j-1. Computes concatenated indices from Q, K, and PE lookup indices, then directly accesses weights and accumulates to outputs.
+
+---
+
+### 13. `fill_outputs_sparse_seq_logic`
+
+**Purpose**: Accumulates outputs from lookup indices using sparse connectivity information for sequential mode.
+
+**Launch Grid**:
+- `blockDim.x`: `TILE × TILE` (typically 16×16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles × n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size × n_output_blocks`
 - Shared Memory: None
 
 **Inputs**:
 - `r_weights`: `[n_weights]` - Weight tensor
-- `r_sparse_firings`: `[n_sparse_firings]` - Sparse firing events (NeuronShiftFiring structs)
-- `n_sparse_firings`: Number of sparse firings
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
 - `n_outputs`: Number of output dimensions
 - `n_detectors`: Number of detectors
 - `sequence_length`: Length of sequence
 - `n_output_blocks`: Number of output blocks
 - `n_outputs_per_block`: Number of outputs per block
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures containing synapse connectivity info for each lookup neuron (optional)
-- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
-- `first_synapse_id`: First synapse ID offset
-- `lut_data`: Pointer to LUT data structure
-- `first_synapse_meta_lr`: Learning rate for first synapse meta
-- `int_rescaler`: Integer rescaling factor
-
-**Outputs**:
-- `w_output`: `[batch_size * sequence_length * n_outputs]` - Output activations (accumulated in-place)
-
-**Description**: Each thread processes one firing event for one output block. For sparse connectivity, processes synapse groups. For fully connected mode, directly accesses weights and accumulates to outputs. Handles sequence dimension through firing.shift field.
-
----
-
-## Sequence Processing Kernels - Backward
-
-### 15. `gather_x_gradients_for_sequence_logic`
-
-**Purpose**: Gathers input gradients from sparse firings for sequence processing using a hash table.
-
-**Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_sparse_firings / blockDim.x)`
-- `gridDim.y`: `n_output_blocks`
-- Shared Memory: None
-
-**Inputs**:
-- `r_weights`: `[n_weights]` - Weight tensor
-- `r_output_gradients`: `[batch_size * sequence_length * n_outputs]` - Output gradients
-- `r_sparse_firings`: `[n_sparse_firings]` - Sparse firing events
-- `n_sparse_firings`: Number of sparse firings
-- `n_outputs`: Number of output dimensions
-- `n_detectors`: Number of detectors
-- `sequence_length`: Length of sequence
-- `n_output_blocks`: Number of output blocks
-- `n_outputs_per_block`: Number of outputs per block
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures containing synapse connectivity info for each lookup neuron (optional)
-- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
-- `first_synapse_id`: First synapse ID offset
-- `lut_data`: Pointer to LUT data structure
-- `first_synapse_meta_lr`: Learning rate for first synapse meta
-- `int_rescaler`: Integer rescaling factor
-- `rw_before_detectors_gradients`: `[batch_size * 6 * n_detectors * sequence_length * (sequence_length - 1)]` - Hash table of `GradientHashInfo` entries for gradients before detectors
-- `gradient_hash_width`: Width of the hash table per batch = `6 × n_detectors × sequence_length × (sequence_length - 1)`
-- `is_alternative`: Boolean flag indicating whether processing alternative firings (true) or main firings (false)
-
-**Outputs**:
-- `rw_before_detectors_gradients`: `[batch_size * 6 * n_detectors * sequence_length * (sequence_length - 1)]` - Hash table of `GradientHashInfo` entries containing gradients before detectors (accumulated in-place)
-
-**Description**: Each thread processes one firing event for one output block. Computes gradient by summing `weight * output_gradient` over outputs in the block, then inserts/updates the gradient in a hash table keyed by `(neuron_id, timestep)` with `firing_id` as a filter.
-
-**Hash Table Details**:
-- Each `GradientHashInfo` entry contains: `neuron_id` (stored as `neuron_id + 1` to distinguish empty slots), `timestep`, `firing_id` (positive for main firings, negative for alternative firings), and `gradient_value` (the accumulated gradient).
-- Hash function: `(neuron_id + timestep) % (6 × n_detectors × sequence_length × (sequence_length - 1))`
-- Collision resolution: Linear probing
-- Empty slots are identified by `neuron_id == 0` (since stored values are `neuron_id + 1`)
-- On CUDA path: Uses `atomicCAS` for thread-safe slot claiming and `atomicAdd` for gradient accumulation
-- On CPU path: Direct memory writes (non-thread-safe, single-threaded execution)
-- The hash table is cleared at the beginning of the backward pass using `memsetAsync` (CUDA) or `memset` (CPU)
-
----
-
-### 16. `gather_w_gradients_for_sequence_logic`
-
-**Purpose**: Accumulates weight gradients from sparse firings for sequence processing.
-
-**Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
-- `gridDim.x`: `ceil(n_sparse_firings / blockDim.x)`
-- `gridDim.y`: `n_output_blocks`
-- Shared Memory: None
-
-**Inputs**:
-- `r_output_gradients`: `[batch_size * sequence_length * n_outputs]` - Output gradients
-- `r_sparse_firings`: `[n_sparse_firings]` - Sparse firing events
-- `n_sparse_firings`: Number of sparse firings
-- `n_outputs`: Number of output dimensions
-- `n_detectors`: Number of detectors
-- `sequence_length`: Length of sequence
-- `n_output_blocks`: Number of output blocks
-- `n_outputs_per_block`: Number of outputs per block
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures containing synapse connectivity info for each lookup neuron (optional)
-- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
-- `first_synapse_id`: First synapse ID offset
-- `lut_data`: Pointer to LUT data structure
-- `external_lr`: External learning rate
-- `first_synapse_meta_lr`: Learning rate for first synapse meta
-- `int_rescaler`: Integer rescaling factor
-
-**Outputs**:
-- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated)
-
-**Description**: Each thread processes one firing event for one output block. For each output in the block, accumulates `output_gradient * firing.payload * lr` to the corresponding weight gradient location.
-
----
-
-### 17. `propagate_through_detectors_for_sequence_logic`
-
-**Purpose**: Propagates gradients through detectors and positional embeddings for sequence processing using hash table lookups.
-
-**Launch Grid**:
-- `blockDim.x`: `TILE * TILE` (typically 16x16 = 256 threads per tile)
-- `gridDim.x`: `n_total_tiles * n_detectors` (one block per tile per detector)
-- `gridDim.y`: `batch_size`
-- Shared Memory: None
-
-**Inputs**:
-- `r_lookup_indices`: `[batch_size * sequence_length * n_detectors]` - Q and K lookup indices
-- `r_min_anchor_deltas`: `[batch_size * sequence_length * n_detectors]` - Min anchor deltas
-- `r_min_anchor_delta_indices`: `[batch_size * sequence_length * n_detectors]` - Min delta indices
-- `r_positional_lookup_indices`: `[(sequence_length - 1) * n_detectors]` - PE lookup indices
-- `r_positional_min_deltas`: `[(sequence_length - 1) * n_detectors]` - PE min deltas
-- `r_positional_min_delta_indices`: `[(sequence_length - 1) * n_detectors]` - PE min delta indices
-- `n_detectors`: Number of detectors
-- `n_total_tiles`: Total number of tiles
-- `sequence_length`: Length of sequence
 - `n_anchors_per_detector`: Number of anchor pairs per detector
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
-- `w_before_detectors_gradients`: `[batch_size * 6 * n_detectors * sequence_length * (sequence_length - 1)]` - Hash table of `GradientHashInfo` entries containing gradients before detectors
-- `gradient_hash_width`: Width of the hash table per batch = `6 × n_detectors × sequence_length × (sequence_length - 1)`
-- `n_inputs`: Number of input dimensions
 - `positional_dim`: Dimension of positional encoding
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
+- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
+- `first_synapse_id`: First synapse ID offset
+- `lut_data`: Pointer to LUT data structure
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_input_gradients`: `[batch_size * sequence_length * n_inputs]` - Input gradients (accumulated)
-- `w_positional_embeddings_gradients`: `[(sequence_length - 1) * n_detectors * positional_dim]` - Positional embedding gradients (accumulated)
+- `w_output`: `[batch_size × sequence_length × n_outputs]` - Output activations (accumulated in-place)
 
-**Description**: Processes attention pairs (i, j) in a tiled manner. For each valid pair, looks up gradients from the hash table using `(neuron_id, timestep)` keys for both main and alternative concatenated neurons (flipping Q, K, or PE). Computes gradient differences and propagates gradients to input anchors (for Q and K) and to positional embeddings (for PE) using the up() function gradient.
-
-**Hash Table Lookup**:
-- Uses the same hash function and linear probing as in `gather_x_gradients_for_sequence_logic`
-- Looks up gradient values for both main and alternative neurons
-- If an entry is not found (empty slot), the gradient value is treated as zero
-- The hash table is cleared at the beginning of the backward pass using `memsetAsync` (CUDA) or `memset` (CPU)
+**Description**: Processes attention pairs (i, j) in a tiled manner where i < j. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Uses sparse connectivity information to find forward synapse groups and accumulate weights for connected outputs. Processes sequence pairs in tiles of size `TILE × TILE` (typically 16×16) for efficient memory access.
 
 ---
 
-### 18. `propagate_through_detectors_for_sequence_fc_logic`
+## Sequential Backward Pass Kernels
 
-**Purpose**: Propagates gradients through detectors and positional embeddings for fully connected sequence processing, computing all gradients directly without hash table lookups.
+### 14. `propagate_through_detectors_seq_sparse_logic`
+
+**Purpose**: Propagates gradients through detectors and positional embeddings for sequential processing using sparse connectivity information.
 
 **Launch Grid**:
-- `blockDim.x`: `TILE * TILE` (typically 16x16 = 256 threads per tile)
-- `gridDim.x`: `n_total_tiles * n_detectors` (one block per tile per detector)
-- `gridDim.y`: `batch_size * n_output_blocks` (one block per batch item per output block)
+- `blockDim.x`: `TILE × TILE` (typically 16×16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles × n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size × n_output_blocks`
 - Shared Memory: None
 
 **Inputs**:
-- `r_output_gradients`: `[batch_size * sequence_length * n_outputs]` - Output gradients
-- `r_weights`: `[n_weights]` - Weight tensor (fully connected: `n_detectors * (1 << (2 * n_anchors_per_detector + positional_dim)) * n_outputs`)
-- `r_lookup_indices`: `[batch_size * sequence_length * n_detectors]` - Q and K lookup indices
-- `r_min_anchor_deltas`: `[batch_size * sequence_length * n_detectors]` - Min anchor deltas
-- `r_min_anchor_delta_indices`: `[batch_size * sequence_length * n_detectors]` - Min delta indices
-- `r_positional_lookup_indices`: `[(sequence_length - 1) * n_detectors]` - PE lookup indices
-- `r_positional_min_deltas`: `[(sequence_length - 1) * n_detectors]` - PE min deltas
-- `r_positional_min_delta_indices`: `[(sequence_length - 1) * n_detectors]` - PE min delta indices
+- `r_output_gradients`: `[batch_size × sequence_length × n_outputs]` - Output gradients
+- `r_weights`: `[n_weights]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_min_anchor_deltas`: `[batch_size × sequence_length × n_detectors]` - Min anchor deltas
+- `r_min_anchor_delta_indices`: `[batch_size × sequence_length × n_detectors]` - Min delta indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
+- `r_positional_min_deltas`: `[(sequence_length - 1) × n_detectors]` - PE min deltas
+- `r_positional_min_delta_indices`: `[(sequence_length - 1) × n_detectors]` - PE min delta indices
 - `n_detectors`: Number of detectors
 - `n_total_tiles`: Total number of tiles = `ceil(sequence_length / TILE)²`
 - `sequence_length`: Length of sequence
 - `n_anchors_per_detector`: Number of anchor pairs per detector
 - `n_outputs`: Number of output dimensions
-- `n_output_blocks`: Number of output blocks for tiling
+- `n_output_blocks`: Number of output blocks
 - `n_outputs_per_block`: Number of outputs per block
-- `r_detectors`: `[n_detectors * n_anchors_per_detector]` - Anchor pairs
-- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector = `(1 << (2 * n_anchors_per_detector + positional_dim))`
+- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
+- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
+- `first_synapse_id`: First synapse ID offset
+- `lut_data`: Pointer to LUT data structure
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
 - `n_inputs`: Number of input dimensions
 - `positional_dim`: Dimension of positional encoding
-- `lr`: Learning rate for weight gradient accumulation
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `w_input_gradients`: `[batch_size * sequence_length * n_inputs]` - Input gradients (accumulated)
-- `w_positional_embeddings_gradients`: `[(sequence_length - 1) * n_detectors * positional_dim]` - Positional embedding gradients (accumulated)
-- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated)
+- `w_input_gradients`: `[batch_size × sequence_length × n_inputs]` - Input gradients (accumulated)
+- `w_positional_embeddings_gradients`: `[(sequence_length - 1) × n_detectors × positional_dim]` - Positional embedding gradients (accumulated)
 
-**Description**: Processes attention pairs (i, j) in a tiled manner for fully connected mode. Unlike the sparse connectivity version, this kernel computes gradients directly from output gradients and weights without requiring a hash table intermediate step. For each valid pair (i < j), the kernel:
+**Description**: Processes attention pairs (i, j) in a tiled manner where i < j. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Uses sparse connectivity information to gather output gradients, computes gradient differences between main and alternative concatenated neurons (flipping Q, K, or PE), and propagates gradients to input anchors (for Q and K) and to positional embeddings (for PE) using the uncertainty function gradient.
 
-1. **Computes gradient contributions**: For each output in the current output block, computes `output_gradient * weight` to get the gradient contribution for the concatenated neuron (Q, K, PE combination).
+---
 
-2. **Propagates to input gradients**: Computes gradient differences between main and alternative concatenated neurons (flipping Q, K, or PE) and propagates gradients to input anchors using the up() function gradient.
+### 15. `propagate_through_detectors_seq_fc_logic`
 
-3. **Propagates to positional embeddings**: Computes gradient differences for PE and accumulates gradients to positional embedding gradients.
+**Purpose**: Propagates gradients through detectors and positional embeddings for fully connected sequential processing, computing all gradients directly without sparse connectivity lookups.
 
-4. **Accumulates weight gradients**: Accumulates `output_gradient * firing.payload * lr` to weight gradients.
+**Launch Grid**:
+- `blockDim.x`: `TILE × TILE` (typically 16×16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles × n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size × n_output_blocks`
+- Shared Memory: None
 
-**Key Differences from Sparse Version**:
-- **No hash table**: Gradients are computed directly from output gradients and weights, eliminating the need for hash table lookups and intermediate storage.
-- **All gradients in one pass**: Computes input gradients, positional embedding gradients, and weight gradients simultaneously.
-- **Fully connected assumption**: Assumes all lookup neurons are connected to all outputs, allowing direct weight indexing without sparse connectivity information.
-- **More efficient**: Avoids hash table overhead and multiple kernel passes, making it faster for fully connected architectures.
+**Inputs**:
+- `r_output_gradients`: `[batch_size × sequence_length × n_outputs]` - Output gradients
+- `r_weights`: `[n_detectors × 2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup> × n_outputs]` - Weight tensor
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_min_anchor_deltas`: `[batch_size × sequence_length × n_detectors]` - Min anchor deltas
+- `r_min_anchor_delta_indices`: `[batch_size × sequence_length × n_detectors]` - Min delta indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
+- `r_positional_min_deltas`: `[(sequence_length - 1) × n_detectors]` - PE min deltas
+- `r_positional_min_delta_indices`: `[(sequence_length - 1) × n_detectors]` - PE min delta indices
+- `n_detectors`: Number of detectors
+- `n_total_tiles`: Total number of tiles = `ceil(sequence_length / TILE)²`
+- `sequence_length`: Length of sequence
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `n_outputs`: Number of output dimensions
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
+- `r_detectors`: `[n_detectors × n_anchors_per_detector]` - Anchor pairs
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector = `2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup>`
+- `n_inputs`: Number of input dimensions
+- `positional_dim`: Dimension of positional encoding
+- `int_rescaler`: Integer rescaling factor
 
-**Tiling Strategy**:
-- Processes sequence pairs in tiles of size `TILE × TILE` (typically 16×16)
-- Only processes pairs where `i < j` (upper triangular)
-- Each thread within a tile processes one (i, j) pair
-- Outputs are processed in blocks for better memory access patterns
+**Outputs**:
+- `w_input_gradients`: `[batch_size × sequence_length × n_inputs]` - Input gradients (accumulated)
+- `w_positional_embeddings_gradients`: `[(sequence_length - 1) × n_detectors × positional_dim]` - Positional embedding gradients (accumulated)
+
+**Description**: Processes attention pairs (i, j) in a tiled manner where i < j. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Directly accesses weights and output gradients (using vectorized reads when available), computes gradient differences between main and alternative concatenated neurons (flipping Q, K, or PE), and propagates gradients to input anchors (for Q and K) and to positional embeddings (for PE) using the uncertainty function gradient. More efficient than the sparse version as it avoids sparse connectivity lookups.
+
+---
+
+### 16. `gather_w_gradients_seq_sparse_logic`
+
+**Purpose**: Accumulates weight gradients from sequential processing using sparse connectivity information.
+
+**Launch Grid**:
+- `blockDim.x`: `TILE × TILE` (typically 16×16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles × n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size × n_output_blocks`
+- Shared Memory: None
+
+**Inputs**:
+- `r_output_gradients`: `[batch_size × sequence_length × n_outputs]` - Output gradients
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
+- `n_detectors`: Number of detectors
+- `n_total_tiles`: Total number of tiles = `ceil(sequence_length / TILE)²`
+- `sequence_length`: Length of sequence
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `n_outputs`: Number of output dimensions
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector
+- `r_lookup_neuron_synapses_infos`: `[n_lookup_neurons]` - Array of `NoDelaysIndexedSynapsesInfo` structures
+- `r_synapse_metas`: `[n_synapse_metas]` - Synapse metadata
+- `first_synapse_id`: First synapse ID offset
+- `lut_data`: Pointer to LUT data structure
+- `positional_dim`: Dimension of positional encoding
+- `external_lr`: External learning rate. When `external_lr >= 0` (internal mode), gradients are applied directly to weights (`r_weights`) and the learning rate is multiplied by `-external_lr`. When `external_lr < 0` (external mode), gradients are accumulated in `w_weights_gradients` for later use and the synapse meta learning rate is used directly.
+- `first_synapse_meta_lr`: Learning rate for first synapse meta
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_weights_gradients`: `[n_weights]` - Weight gradients (accumulated). When `external_lr >= 0`, this points to `r_weights` for direct weight updates. When `external_lr < 0`, this is the separate gradient buffer.
+
+**Description**: Processes attention pairs (i, j) in a tiled manner where i < j. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Uses sparse connectivity information to find forward synapse groups, then accumulates `output_gradient × lr` to the corresponding weight gradient locations. The learning rate `lr` is computed as: if `external_lr >= 0`, then `lr = first_synapse_meta_lr × (-external_lr)` (or synapse-specific learning rate from `r_synapse_metas` multiplied by `-external_lr`), otherwise `lr = first_synapse_meta_lr` (or synapse-specific learning rate from `r_synapse_metas`).
+
+---
+
+### 17. `gather_w_gradients_seq_fc_logic`
+
+**Purpose**: Accumulates weight gradients for fully connected sequential processing.
+
+**Launch Grid**:
+- `blockDim.x`: `TILE × TILE` (typically 16×16 = 256 threads per tile)
+- `gridDim.x`: `n_total_tiles × n_detectors` (one block per tile per detector)
+- `gridDim.y`: `batch_size × n_output_blocks`
+- Shared Memory: None
+
+**Inputs**:
+- `r_output_gradients`: `[batch_size × sequence_length × n_outputs]` - Output gradients
+- `r_lookup_indices`: `[batch_size × sequence_length × n_detectors]` - Q and K lookup indices
+- `r_positional_lookup_indices`: `[(sequence_length - 1) × n_detectors]` - PE lookup indices
+- `n_detectors`: Number of detectors
+- `n_total_tiles`: Total number of tiles = `ceil(sequence_length / TILE)²`
+- `sequence_length`: Length of sequence
+- `n_anchors_per_detector`: Number of anchor pairs per detector
+- `n_outputs`: Number of output dimensions
+- `n_output_blocks`: Number of output blocks
+- `n_outputs_per_block`: Number of outputs per block
+- `n_lookup_neurons_per_detector`: Number of lookup neurons per detector = `2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup>`
+- `positional_dim`: Dimension of positional encoding
+- `external_lr`: External learning rate. When `external_lr >= 0` (internal mode), gradients are applied directly to weights (`r_weights`) and the learning rate is multiplied by `-external_lr`. When `external_lr < 0` (external mode), gradients are accumulated in `w_weights_gradients` for later use and the synapse meta learning rate is used directly.
+- `first_synapse_meta_lr`: Learning rate for first synapse meta
+- `int_rescaler`: Integer rescaling factor
+
+**Outputs**:
+- `w_weights_gradients`: `[n_detectors × 2<sup>2 × N<sub>c</sub> + N<sub>pe</sub></sup> × n_outputs]` - Weight gradients (accumulated). When `external_lr >= 0`, this points to `r_weights` for direct weight updates. When `external_lr < 0`, this is the separate gradient buffer.
+
+**Description**: Processes attention pairs (i, j) in a tiled manner where i < j. For each valid pair, computes concatenated indices from Q, K, and PE lookup indices. Directly accesses output gradients (using vectorized reads when available) and accumulates `output_gradient × lr` to the corresponding weight gradient location (determined by concatenated index and output index). The learning rate `lr` is computed as: if `external_lr >= 0`, then `lr = first_synapse_meta_lr × (-external_lr)`, otherwise `lr = first_synapse_meta_lr`.
 
 ---
 
 ## Utility Kernels
-
-### 19. `convert_integers_to_floats_logic`
 
 ### 18. `convert_integers_to_floats_logic`
 
 **Purpose**: Converts integer accumulations back to floating point (when using integer arithmetic mode).
 
 **Launch Grid**:
-- `blockDim.x`: Configurable (typically 256-512 threads)
+- `blockDim.x`: Configurable (typically 1024 threads)
 - `gridDim.x`: `ceil(n / blockDim.x)`
 - `gridDim.y`: `batch_size`
 - Shared Memory: None
 
 **Inputs**:
-- `buffer`: `[batch_size * n]` - Integer values (converted in-place)
+- `buffer`: `[batch_size × n]` - Integer values (converted in-place)
 - `n`: Number of elements to convert
 - `int_rescaler`: Integer rescaling factor
 
 **Outputs**:
-- `buffer`: `[batch_size * n]` - Floating point values (converted in-place)
+- `buffer`: `[batch_size × n]` - Floating point values (converted in-place)
 
 **Description**: Each thread converts one integer value to floating point by dividing by the denominator and rescaling factor. Only active when `INTEGERS_INSTEAD_OF_FLOATS` is defined.
 
 ---
 
-## Data Structures
+## Helper Functions
 
-### `GradientHashInfo`
+The kernels use several helper functions that are defined in `lut_runtime_kernels_logic.proto`:
 
-Structure used for hash table entries in sequence backward pass:
-
-```c++
-typedef struct alignas(8) {
-    NeuronIndex_t neuron_id;    // Stored as neuron_id + 1 (0 indicates empty slot)
-    uint32_t timestep;          // Timestep (firing.shift)
-    int32_t firing_id;          // Positive for main firings, negative for alternative
-    SUMMATION32_DT gradient_value;  // Accumulated gradient value
-} GradientHashInfo;
-```
-
-- Size: 16 bytes (aligned to 8 bytes)
-- Hash key construction: `(neuron_id + 1) | (timestep << 32)` (little-endian layout)
-- Hash index: `(neuron_id + timestep) % (6 × n_detectors × sequence_length × (sequence_length - 1))`
+- `find_forward_synapse_group`: Finds the forward synapse group ID for a given lookup neuron and output block index.
+- `accumulate_grad_sum_sparse`: Accumulates gradient sums using sparse connectivity information.
+- `accumulate_grad_sum_fc`: Accumulates gradient sums for fully connected mode.
+- `accumulate_pair_of_gradient_sums_fc`: Accumulates pairs of gradient sums (main and alternative) for fully connected mode.
+- `gather_weight_gradients_sparse`: Gathers weight gradients using sparse connectivity information.
+- `gather_weight_gradients_fc`: Gathers weight gradients for fully connected mode.
+- `propagate_through_detector`: Propagates gradients through a single detector using the uncertainty function gradient.
+- `update_positional_gradients`: Updates positional embedding gradients.
 
 ---
 
-## Notes
+## Implementation Notes
 
 - All kernels support both integer and floating point arithmetic modes (controlled by `INTEGERS_INSTEAD_OF_FLOATS`).
 - CUDA kernels use atomic operations when `ATOMIC` is defined for thread-safe updates.
-- The hash table implementation uses linear probing for collision resolution.
-- Sequence processing kernels handle the sequence dimension through `blockIdx.y` or `firing.shift` fields.
-- The `densify_firing_stat` kernels are split into CPU and CUDA versions for optimal performance on each platform.
+- Vectorized memory accesses (using `float4` and `uint4`) are used when available and when data is properly aligned.
+- Sequence processing kernels handle the sequence dimension through tiled computation or `blockIdx.y` encoding.
+- Sparse connectivity kernels use `ForwardSynapseGroups` to efficiently access only connected outputs.
+- Fully connected kernels use direct indexing for better performance when all connections exist.
