@@ -1,4 +1,4 @@
-# spiky
+# spiky lib, version 0.8
 Effective CUDA implementation of several spiking neural network models
 
 # Installation
