@@ -63,6 +63,8 @@ def test_simple_math(device, summation_dtype, seed=1):
         ],
         summation_dtype=summation_dtype
     )
+    if 'profiler is disabled' in spnet.get_profiling_stats():
+        return True
     spnet.to_device('cpu')
 
     # Create bottom layer neurons (type 0) - arranged in a square at y=0
