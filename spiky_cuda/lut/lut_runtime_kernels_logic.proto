@@ -607,14 +607,14 @@ gather_weight_gradients_fc(
                 #endif
             #else
                 sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-                #ifdef ATOMIC
-                atomicAdd(
-                    w_weights_gradients + weights_shift,
-                    sum32_delta
-                );
-                #else
+//                #ifdef ATOMIC
+//                atomicAdd(
+//                    w_weights_gradients + weights_shift,
+//                    sum32_delta
+//                );
+//                #else
                 w_weights_gradients[weights_shift] += sum32_delta;
-                #endif
+//                #endif
             #endif
         }
 
@@ -635,15 +635,15 @@ gather_weight_gradients_fc(
                 *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_shift) += sum32_delta;
                 #endif
             #else
-//                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
-//                #ifdef ATOMIC
-//                atomicAdd(
-//                    w_weights_gradients + weights_shift,
-//                    sum32_delta
-//                );
-//                #else
-//                w_weights_gradients[weights_shift] += sum32_delta;
-//                #endif
+                sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+                #ifdef ATOMIC
+                atomicAdd(
+                    w_weights_gradients + weights_shift,
+                    sum32_delta
+                );
+                #else
+                w_weights_gradients[weights_shift] += sum32_delta;
+                #endif
             #endif
         }
     }
