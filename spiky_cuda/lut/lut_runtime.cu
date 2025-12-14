@@ -771,8 +771,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
                 #endif
             );
         } else {
+            uint32_t n_outputs_aligned = TILE * ((this->n_outputs + TILE - 1) / TILE);
+            n_items = this->sequence_length * this->sequence_length * this->n_outputs;
+            numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size * n_detectors);
+            tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
             GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-                numBlocks, gather_w_gradients_seq_fc_cuda, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
+                numBlocks, gather_w_gradients_seq_fc_cuda_no_tiles_logic,
+                tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
                 r_output_gradients,
                 r_lookup_indices,
                 r_positional_lookup_indices,
@@ -781,8 +786,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
                 this->sequence_length,
                 this->n_anchors_per_detector,
                 this->n_outputs,
-                n_output_blocks,
-                this->forward_group_size,
+                n_outputs_aligned,
                 n_lookup_neurons_per_detector,
                 (external_lr >= 0.0) ? r_weights : w_weights_gradients,
                 this->positional_dim,

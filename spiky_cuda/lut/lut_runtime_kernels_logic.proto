@@ -2482,3 +2482,114 @@ gather_w_gradients_seq_fc_cuda_logic(
     );
     #endif
 }
+
+gather_w_gradients_seq_fc_cuda_no_tiles_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    int32_t* r_positional_lookup_indices,
+    uint32_t n_detectors,
+    uint32_t n_items,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_outputs_aligned,
+    uint32_t n_lookup_neurons_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t positional_dim,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    #ifdef ATOMIC
+    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+    if(linear_idx >= n_items) {
+        return;
+    }
+
+    // linear_idx encodes: pair_id * n_outputs + output_index
+
+    uint32_t pair_id = linear_idx / n_outputs_aligned;
+    uint32_t output_index = linear_idx % n_outputs_aligned;
+
+    if(output_index >= n_outputs) {
+        return;
+    }
+
+    uint32_t i = pair_id / sequence_length;
+    uint32_t j = pair_id % sequence_length;
+
+    if(i >= j) {
+        return;
+    }
+
+    // blockIdx.y encodes: batch_index * n_detectors + detector_index
+    uint32_t batch_index = blockIdx.y / n_detectors;
+    uint32_t detector_index = blockIdx.y % n_detectors;
+    r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
+
+    w_weights_gradients += output_index;
+    r_output_gradients += output_index;
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
+
+    // Get K: lookup index from first timestep (i)
+    uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+    int32_t K = r_lookup_indices[k_offset];
+
+    // Get Q: lookup index from second timestep (j)
+    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+    int32_t Q = r_lookup_indices[q_offset];
+
+    // Get PE: positional lookup index from timestep difference (j - i - 1)
+    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+    int32_t PE = r_positional_lookup_indices[pe_offset];
+
+    // Calculate concatenated index
+    uint32_t concatenated_index = (
+        (Q << (n_anchors_per_detector + positional_dim)) |
+        (K << positional_dim) |
+        PE
+    ) + detector_index * n_lookup_neurons_per_detector;
+
+    SUMMATION32_DT sum32_delta;
+    double lr;
+
+    // Fully connected: direct indexing
+    double lr = first_synapse_meta_lr;
+    if(external_lr >= 0) {
+        lr *= -external_lr;
+    }
+
+    uint64_t weights_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
+
+    #ifdef ATOMIC
+    double output_grad = static_cast<double>(*r_output_gradients);
+    if(fabs(output_grad) > EPS) {
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(
+                reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients) + weights_shift,
+                sum32_delta
+            );
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_weights_gradients + weights_shift) += sum32_delta;
+            #endif
+        #else
+            sum32_delta = static_cast<SUMMATION32_DT>(output_grad * lr);
+            #ifdef ATOMIC
+            atomicAdd(
+                w_weights_gradients + weights_shift,
+                sum32_delta
+            );
+            #else
+            w_weights_gradients[weights_shift] += sum32_delta;
+            #endif
+        #endif
+    }
+    #endif
+}
