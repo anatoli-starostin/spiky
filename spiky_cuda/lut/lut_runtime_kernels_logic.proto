@@ -2426,7 +2426,7 @@ gather_w_gradients_seq_fc_cuda_logic(
     if(tid >= 2 * TILE && tid < 3 * TILE - 1) {
         uint32_t p_idx = tid - 2 * TILE;
         uint32_t pe_offset = (j_base - i_base + p_idx) * n_detectors + detector_index;
-        shared_P[pe_idx] = r_positional_lookup_indices[pe_offset];
+        shared_PE[p_idx] = r_positional_lookup_indices[pe_offset];
     }
 
     __syncthreads();
@@ -2460,7 +2460,7 @@ gather_w_gradients_seq_fc_cuda_logic(
     // Get K, Q, and PE from shared memory
     int32_t K = shared_K[i_local];
     int32_t Q = shared_Q[j_local];
-    int32_t PE = shared_P[j_local - i_local - 1];
+    int32_t PE = shared_PE[j_local - i_local - 1];
 
     // Calculate concatenated index
     uint32_t concatenated_index = (

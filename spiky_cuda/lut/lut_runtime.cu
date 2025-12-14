@@ -748,7 +748,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         // Fully connected
         if(device == -1) {
             GRID_CALL_NO_SHARED_MEM(
-                numBlocks, gather_w_gradients_seq_fc, tpb_opt,
+                numBlocks, gather_w_gradients_seq_fc_cpu, tpb_opt,
                 r_output_gradients,
                 r_lookup_indices,
                 r_positional_lookup_indices,
