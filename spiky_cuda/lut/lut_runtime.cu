@@ -746,29 +746,55 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     } else {
         PROF_START(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP);
         // Fully connected
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, gather_w_gradients_seq_fc, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
-            r_output_gradients,
-            r_lookup_indices,
-            r_positional_lookup_indices,
-            this->n_detectors,
-            n_items,
-            this->sequence_length,
-            this->n_anchors_per_detector,
-            this->n_outputs,
-            n_output_blocks,
-            this->forward_group_size,
-            n_lookup_neurons_per_detector,
-            (external_lr >= 0.0) ? r_weights : w_weights_gradients,
-            this->positional_dim,
-            external_lr,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
-        );
+        if(device == -1) {
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, gather_w_gradients_seq_fc, tpb_opt,
+                r_output_gradients,
+                r_lookup_indices,
+                r_positional_lookup_indices,
+                this->n_detectors,
+                n_items,
+                this->sequence_length,
+                this->n_anchors_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                this->forward_group_size,
+                n_lookup_neurons_per_detector,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                this->positional_dim,
+                external_lr,
+                this->first_synapse_meta_lr
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+        } else {
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, gather_w_gradients_seq_fc_cuda, tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
+                r_output_gradients,
+                r_lookup_indices,
+                r_positional_lookup_indices,
+                this->n_detectors,
+                n_items,
+                this->sequence_length,
+                this->n_anchors_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                this->forward_group_size,
+                n_lookup_neurons_per_detector,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                this->positional_dim,
+                external_lr,
+                this->first_synapse_meta_lr
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+        }
         PROF_END(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP);
     }
 

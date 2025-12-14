@@ -2242,7 +2242,7 @@ gather_w_gradients_seq_sparse_logic(
     );
 }
 
-gather_w_gradients_seq_fc_logic(
+gather_w_gradients_seq_fc_cpu_logic(
     EXTERNAL_REAL_DT* r_output_gradients,
     int32_t* r_lookup_indices,
     int32_t* r_positional_lookup_indices,
@@ -2320,6 +2320,146 @@ gather_w_gradients_seq_fc_logic(
     // Get PE: positional lookup index from timestep difference (j - i - 1)
     uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
     int32_t PE = r_positional_lookup_indices[pe_offset];
+
+    // Calculate concatenated index
+    uint32_t concatenated_index = (
+        (Q << (n_anchors_per_detector + positional_dim)) |
+        (K << positional_dim) |
+        PE
+    ) + detector_index * n_lookup_neurons_per_detector;
+
+    // Fully connected: direct indexing
+    ATOMIC_PFX(gather_weight_gradients_fc)(
+        r_output_gradients,
+        concatenated_index,
+        n_outputs,
+        n_outputs_per_block,
+        first_synapse_meta_lr,
+        external_lr,
+        w_weights_gradients,
+        int_rescaler
+    );
+}
+
+gather_w_gradients_seq_fc_cuda_logic(
+    EXTERNAL_REAL_DT* r_output_gradients,
+    int32_t* r_lookup_indices,
+    int32_t* r_positional_lookup_indices,
+    uint32_t n_detectors,
+    uint32_t n_total_tiles,
+    uint32_t sequence_length,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    int32_t n_outputs_per_block,
+    uint32_t n_lookup_neurons_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t positional_dim,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+
+    if(tile_id >= n_total_tiles) {
+        return;
+    }
+
+    // Shared memory for K[i], Q[j], and PE[j - i - 1]
+    __shared__ int32_t shared_K[TILE];
+    __shared__ int32_t shared_Q[TILE];
+    __shared__ int32_t shared_PE[TILE - 1];
+
+    uint32_t tile_i = tile_id / tile_grid_w;  // tile row
+    uint32_t tile_j = tile_id % tile_grid_w;  // tile col
+
+    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    if(tile_i > tile_j) {
+        return;
+    }
+
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t n_detector_items = sequence_length * n_detectors;
+    uint32_t batch_offset = batch_index * n_detector_items;
+
+    // Load K, Q, and P values into shared memory cooperatively
+    // Different threads load different values:
+    // - Threads 0 to TILE-1 load K values
+    // - Threads TILE to 2*TILE-1 load Q values
+    // - All threads compute and load their own P value based on their (i, j) position
+    uint32_t tid = threadIdx.x;
+    uint32_t i_base = tile_i * TILE;
+    uint32_t j_base = tile_j * TILE;
+
+    // Load K values (threads 0 to TILE-1)
+    if(tid < TILE) {
+        if((i_base + tid) < sequence_length) {
+            uint32_t k_offset = batch_offset + (i_base + tid) * n_detectors + detector_index;
+            shared_K[tid] = r_lookup_indices[k_offset];
+        } else {
+            shared_K[tid] = 0;  // Padding for out-of-bounds
+        }
+    }
+
+    // Load Q values (threads TILE to 2*TILE-1)
+    if(tid >= TILE && tid < 2 * TILE) {
+        uint32_t q_idx = tid - TILE;
+        if((j_base + q_idx) < sequence_length) {
+            uint32_t q_offset = batch_offset + (j_base + q_idx) * n_detectors + detector_index;
+            shared_Q[q_idx] = r_lookup_indices[q_offset];
+        } else {
+            shared_Q[q_idx] = 0;  // Padding for out-of-bounds
+        }
+    }
+
+    // Load P values (threads TILE to 3*TILE-1)
+    if(tid >= 2 * TILE && tid < 3 * TILE - 1) {
+        uint32_t p_idx = tid - 2 * TILE;
+        uint32_t pe_offset = (j_base - i_base + p_idx) * n_detectors + detector_index;
+        shared_P[pe_idx] = r_positional_lookup_indices[pe_offset];
+    }
+
+    __syncthreads();
+
+    uint32_t i_local = tid / TILE;
+    uint32_t j_local = tid % TILE;
+    // Now compute i and j for this thread
+    uint32_t i, j;
+    if(tile_i == tile_j) {
+        i = i_base + i_local;
+        j = j_base + j_local;
+        if(i >= j) {
+            return;
+        }
+    } else {
+        i = i_base + i_local;
+        j = j_base + j_local;
+    }
+
+    if(i >= sequence_length || j >= sequence_length) {
+        return;
+    }
+
+    r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
+    w_weights_gradients += output_block_index * n_outputs_per_block;
+    r_output_gradients += output_block_index * n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_per_block)) {
+        n_outputs_per_block = n_outputs % n_outputs_per_block;
+    }
+
+    // Get K, Q, and PE from shared memory
+    int32_t K = shared_K[i_local];
+    int32_t Q = shared_Q[j_local];
+    int32_t PE = shared_P[j_local - i_local - 1];
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
