@@ -2526,27 +2526,38 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
     // blockIdx.y encodes: batch_index * n_detectors + detector_index
     uint32_t batch_index = blockIdx.y / n_detectors;
     uint32_t detector_index = blockIdx.y % n_detectors;
-    r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
-
-    w_weights_gradients += output_index;
-    r_output_gradients += output_index;
 
     // Calculate offsets into lookup_indices arrays
     // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
     uint32_t n_detector_items = sequence_length * n_detectors;
     uint32_t batch_offset = batch_index * n_detector_items;
 
-    // Get K: lookup index from first timestep (i)
-    uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
-    int32_t K = r_lookup_indices[k_offset];
+    // K, Q, and PE are constant per warp (since pair_id is constant per warp)
+    // Use lane 0 to load them and broadcast to all threads in the warp
+    uint32_t lane_id = threadIdx.x & 0x1F;  // lane ID within warp (0-31)
+    uint32_t warp_mask = 0xFFFFFFFF;  // Full warp mask
+    
+    int32_t K, Q, PE;
+    if(lane_id == 0) {
+        // Lane 0 loads K, Q, and PE for the warp
+        uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
+        K = r_lookup_indices[k_offset];
+        
+        uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
+        Q = r_lookup_indices[q_offset];
+        
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+    }
+    
+    // Broadcast K, Q, and PE from lane 0 to all threads in the warp
+    K = __shfl_sync(warp_mask, K, 0);
+    Q = __shfl_sync(warp_mask, Q, 0);
+    PE = __shfl_sync(warp_mask, PE, 0);
 
-    // Get Q: lookup index from second timestep (j)
-    uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
-    int32_t Q = r_lookup_indices[q_offset];
-
-    // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
+    r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
+    w_weights_gradients += output_index;
+    r_output_gradients += output_index;
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
