@@ -2556,9 +2556,6 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
     ) + detector_index * n_lookup_neurons_per_detector;
 
     SUMMATION32_DT sum32_delta;
-    double lr;
-
-    // Fully connected: direct indexing
     double lr = first_synapse_meta_lr;
     if(external_lr >= 0) {
         lr *= -external_lr;
