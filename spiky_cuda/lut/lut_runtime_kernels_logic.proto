@@ -613,7 +613,7 @@ gather_weight_gradients_fc(
 //                    sum32_delta
 //                );
 //                #else
-                w_weights_gradients[weights_shift] += sum32_delta;
+//                w_weights_gradients[weights_shift] += sum32_delta;
 //                #endif
             #endif
         }
