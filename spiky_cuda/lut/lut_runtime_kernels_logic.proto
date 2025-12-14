@@ -2359,6 +2359,7 @@ gather_w_gradients_seq_fc_cuda_logic(
     double first_synapse_meta_lr,
     double int_rescaler
 ) {
+    #ifdef ATOMIC
     // blockIdx.x encodes: tile_id * n_detectors + detector_index
     // Extract tile_id and detector_index
     uint32_t tile_id = blockIdx.x / n_detectors;
@@ -2479,4 +2480,5 @@ gather_w_gradients_seq_fc_cuda_logic(
         w_weights_gradients,
         int_rescaler
     );
+    #endif
 }
