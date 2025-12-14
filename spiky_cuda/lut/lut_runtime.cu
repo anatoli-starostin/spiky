@@ -776,7 +776,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size * n_detectors);
             tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT(n_items);
             GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-                numBlocks, gather_w_gradients_seq_fc_cuda_no_tiles_logic,
+                numBlocks, gather_w_gradients_seq_fc_cuda_no_tiles,
                 tpb_opt, cuda_streams[(external_lr >= 0) ? 0 : 1],
                 r_output_gradients,
                 r_lookup_indices,
