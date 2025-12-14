@@ -2566,7 +2566,6 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
 
     uint64_t weights_shift = static_cast<uint64_t>(concatenated_index) * n_outputs;
 
-    #ifdef ATOMIC
     double output_grad = static_cast<double>(*r_output_gradients);
     if(fabs(output_grad) > EPS) {
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
