@@ -2533,38 +2533,35 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
     uint32_t batch_offset = batch_index * n_detector_items;
 
     // K, Q, and PE are constant per warp (since pair_id is constant per warp)
-    // Use lane 0 to load them and broadcast to all threads in the warp
+    // Compute concatenated_index once per warp (in lane 0) and broadcast it
     uint32_t lane_id = threadIdx.x & 0x1F;  // lane ID within warp (0-31)
     uint32_t warp_mask = 0xFFFFFFFF;  // Full warp mask
     
-    int32_t K, Q, PE;
+    uint32_t concatenated_index;
     if(lane_id == 0) {
-        // Lane 0 loads K, Q, and PE for the warp
+        // Lane 0 loads K, Q, and PE, then computes concatenated_index for the warp
         uint32_t k_offset = batch_offset + i * n_detectors + detector_index;
-        K = r_lookup_indices[k_offset];
+        int32_t K = r_lookup_indices[k_offset];
         
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
-        Q = r_lookup_indices[q_offset];
+        int32_t Q = r_lookup_indices[q_offset];
         
         uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-        PE = r_positional_lookup_indices[pe_offset];
+        int32_t PE = r_positional_lookup_indices[pe_offset];
+        
+        concatenated_index = (
+            (Q << (n_anchors_per_detector + positional_dim)) |
+            (K << positional_dim) |
+            PE
+        ) + detector_index * n_lookup_neurons_per_detector;
     }
     
-    // Broadcast K, Q, and PE from lane 0 to all threads in the warp
-    K = __shfl_sync(warp_mask, K, 0);
-    Q = __shfl_sync(warp_mask, Q, 0);
-    PE = __shfl_sync(warp_mask, PE, 0);
+    // Broadcast concatenated_index from lane 0 to all threads in the warp
+    concatenated_index = __shfl_sync(warp_mask, concatenated_index, 0);
 
     r_output_gradients += (batch_index * sequence_length + j) * n_outputs;
     w_weights_gradients += output_index;
     r_output_gradients += output_index;
-
-    // Calculate concatenated index
-    uint32_t concatenated_index = (
-        (Q << (n_anchors_per_detector + positional_dim)) |
-        (K << positional_dim) |
-        PE
-    ) + detector_index * n_lookup_neurons_per_detector;
 
     SUMMATION32_DT sum32_delta;
     double lr = first_synapse_meta_lr;
