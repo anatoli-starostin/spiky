@@ -2484,9 +2484,9 @@ gather_w_gradients_seq_fc_cuda_logic(
 }
 
 gather_w_gradients_seq_fc_cuda_no_tiles_logic(
-    EXTERNAL_REAL_DT* r_output_gradients,
-    int32_t* r_lookup_indices,
-    int32_t* r_positional_lookup_indices,
+    EXTERNAL_REAL_DT* __restrict__ r_output_gradients,
+    int32_t* __restrict__ r_lookup_indices,
+    int32_t* __restrict__ r_positional_lookup_indices,
     uint32_t n_detectors,
     uint32_t n_items,
     uint32_t sequence_length,
@@ -2494,7 +2494,7 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
     uint32_t n_outputs,
     uint32_t n_outputs_aligned,
     uint32_t n_lookup_neurons_per_detector,
-    EXTERNAL_REAL_DT* w_weights_gradients,
+    EXTERNAL_REAL_DT* __restrict__ w_weights_gradients,
     uint32_t positional_dim,
     double external_lr,
     double first_synapse_meta_lr,
