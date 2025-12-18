@@ -394,8 +394,6 @@ grow_explicit_logic(
             NeuronIndex_t target_neuron_id;
 
             for(uint32_t j=i;j < n_sorted_triples;j++) {
-                triple = sorted_triples[j];
-
                 if((static_cast<NeuronIndex_t>(sorted_triples[3 * j + 1]) != source_neuron_id) || (sorted_triples[3 * j + 1] != current_synapse_meta_index)) {
                     break;
                 }
