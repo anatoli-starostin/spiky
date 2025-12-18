@@ -64,7 +64,7 @@ static_assert((sizeof(SynapseMetaNeuronIdPair) % 8) == 0, "check sizeof(SynapseM
 #define SYNAPSE_GROWTH_TPB 1024
 
 typedef struct alignas(4) {
-    int synapse_meta_index;
+    int32_t synapse_meta_index;
     NeuronIndex_t source_neuron_id;
     NeuronIndex_t target_neuron_id;
 } ExplicitTriple;
