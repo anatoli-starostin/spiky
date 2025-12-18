@@ -326,7 +326,7 @@ public:
             entry_points.numel(),
             source_sorted_triples_tensor.numel() / 3,
             reinterpret_cast<uint32_t *>(entry_points.data_ptr()),
-            reinterpret_cast<ExplicitTriple *>(source_sorted_triples_tensor.data_ptr()),
+            reinterpret_cast<int32_t *>(source_sorted_triples_tensor.data_ptr()),
             target_buffer, static_cast<uint64_t>(target_tensor.numel()), this->single_block_size,
             this->n_allocated
         );
