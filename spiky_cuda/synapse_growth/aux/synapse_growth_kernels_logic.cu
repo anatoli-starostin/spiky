@@ -450,7 +450,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(grow_explicit_logic)(
     uint32_t &n_entry_points,
     uint32_t &n_sorted_triples,
     uint32_t* &entry_points,
-    ExplicitTriple* &sorted_triples,
+    int32_t* &sorted_triples,
     NeuronIndex_t* &target_buffer,
     uint64_t &buffer_size,
     uint32_t &single_block_size,
@@ -461,26 +461,23 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(grow_explicit_logic)(
     uint32_t ep = blockIdx.x * blockDim.x + threadIdx.x;
     if(ep < n_entry_points) {
         uint32_t i = entry_points[ep];
-        ExplicitTriple triple = sorted_triples[i];
-        if(triple.synapse_meta_index >= 0) {
-            int current_synapse_meta_index = triple.synapse_meta_index;
+        int current_synapse_meta_index = sorted_triples[3 * i];
+        if(current_synapse_meta_index >= 0) {
             uint32_t nIntsToAllocate = ConnectionsBlockIntSize(single_block_size);
             ConnectionsBlockHeader* first_block_hdr = nullptr;
             ConnectionsBlockHeader* current_block_hdr = nullptr;
             SynapseMetaNeuronIdPair* current_block_body = nullptr;
             uint32_t n_elements_in_current_block = 0;
             uint64_t used = 0;
-            NeuronIndex_t source_neuron_id = triple.source_neuron_id;
+            NeuronIndex_t source_neuron_id = static_cast<NeuronIndex_t>(sorted_triples[3 * i + 1]);
             NeuronIndex_t target_neuron_id;
 
             for(uint32_t j=i;j < n_sorted_triples;j++) {
-                triple = sorted_triples[j];
-
-                if((triple.source_neuron_id != source_neuron_id) || (triple.synapse_meta_index != current_synapse_meta_index)) {
+                if((static_cast<NeuronIndex_t>(sorted_triples[3 * j + 1]) != source_neuron_id) || (sorted_triples[3 * j + 1] != current_synapse_meta_index)) {
                     break;
                 }
 
-                target_neuron_id = triple.target_neuron_id;
+                target_neuron_id = static_cast<NeuronIndex_t>(sorted_triples[3 * j + 2]);
 
                 if((current_block_hdr == nullptr) || (n_elements_in_current_block == single_block_size)) {
                     #ifdef ATOMIC
@@ -530,7 +527,7 @@ KERNEL_LOGIC_ONLY_HOST_PREFIX void PFX(grow_explicit_logic_on_cpu_wrapper)(
     uint32_t n_entry_points,
     uint32_t n_sorted_triples,
     uint32_t* entry_points,
-    ExplicitTriple* sorted_triples,
+    int32_t* sorted_triples,
     NeuronIndex_t* target_buffer,
     uint64_t buffer_size,
     uint32_t single_block_size,
@@ -1230,7 +1227,7 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(grow_explicit_logic_atomic_)(
     uint32_t &n_entry_points,
     uint32_t &n_sorted_triples,
     uint32_t* &entry_points,
-    ExplicitTriple* &sorted_triples,
+    int32_t* &sorted_triples,
     NeuronIndex_t* &target_buffer,
     uint64_t &buffer_size,
     uint32_t &single_block_size,
@@ -1241,26 +1238,23 @@ KERNEL_LOGIC_ATOMIC_PREFIX void PFX(grow_explicit_logic_atomic_)(
     uint32_t ep = blockIdx.x * blockDim.x + threadIdx.x;
     if(ep < n_entry_points) {
         uint32_t i = entry_points[ep];
-        ExplicitTriple triple = sorted_triples[i];
-        if(triple.synapse_meta_index >= 0) {
-            int current_synapse_meta_index = triple.synapse_meta_index;
+        int current_synapse_meta_index = sorted_triples[3 * i];
+        if(current_synapse_meta_index >= 0) {
             uint32_t nIntsToAllocate = ConnectionsBlockIntSize(single_block_size);
             ConnectionsBlockHeader* first_block_hdr = nullptr;
             ConnectionsBlockHeader* current_block_hdr = nullptr;
             SynapseMetaNeuronIdPair* current_block_body = nullptr;
             uint32_t n_elements_in_current_block = 0;
             uint64_t used = 0;
-            NeuronIndex_t source_neuron_id = triple.source_neuron_id;
+            NeuronIndex_t source_neuron_id = static_cast<NeuronIndex_t>(sorted_triples[3 * i + 1]);
             NeuronIndex_t target_neuron_id;
 
             for(uint32_t j=i;j < n_sorted_triples;j++) {
-                triple = sorted_triples[j];
-
-                if((triple.source_neuron_id != source_neuron_id) || (triple.synapse_meta_index != current_synapse_meta_index)) {
+                if((static_cast<NeuronIndex_t>(sorted_triples[3 * j + 1]) != source_neuron_id) || (sorted_triples[3 * j + 1] != current_synapse_meta_index)) {
                     break;
                 }
 
-                target_neuron_id = triple.target_neuron_id;
+                target_neuron_id = static_cast<NeuronIndex_t>(sorted_triples[3 * j + 2]);
 
                 if((current_block_hdr == nullptr) || (n_elements_in_current_block == single_block_size)) {
                     #ifdef ATOMIC
@@ -1513,7 +1507,7 @@ __global__ void PFX(grow_explicit_logic_cuda)(
     uint32_t n_entry_points,
     uint32_t n_sorted_triples,
     uint32_t* entry_points,
-    ExplicitTriple* sorted_triples,
+    int32_t* sorted_triples,
     NeuronIndex_t* target_buffer,
     uint64_t buffer_size,
     uint32_t single_block_size,
