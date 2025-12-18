@@ -309,7 +309,7 @@ public:
     ) {
         checkTensor(target_tensor, "target_tensor", false, device, sizeof(NeuronIndex_t));
         checkTensor(entry_points, "entry_points", false, device, sizeof(uint32_t));
-        checkTensor(source_sorted_triples_tensor, "source_sorted_triples_tensor", false, device, sizeof(uint32_t));
+        checkTensor(source_sorted_triples_tensor, "source_sorted_triples_tensor", false, device, sizeof(int32_t));
         if(device == -1) {
             *n_allocated = 0;
         } else {
