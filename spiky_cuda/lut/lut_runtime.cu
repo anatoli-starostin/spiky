@@ -404,17 +404,18 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
 
 void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     EXTERNAL_REAL_DT *r_weights,
-    EXTERNAL_REAL_DT *r_positional_embeddings,
     uint32_t batch_size,
     EXTERNAL_REAL_DT *r_input,
     AnchorsPair *r_detectors,
     EXTERNAL_REAL_DT *w_output,
     int32_t *w_lookup_indices,
-    EXTERNAL_REAL_DT *w_min_anchor_deltas,
-    int32_t *w_min_anchor_delta_indices,
-    int32_t *w_positional_lookup_indices,
-    EXTERNAL_REAL_DT *w_positional_min_deltas,
-    int32_t *w_positional_min_delta_indices
+    // optional parameters
+    EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+    int32_t *w_positional_lookup_indices, // can be nullptr when positional_dim == 0
+    EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
+    int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
+    EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr when positional_dim == 0
+    int32_t *w_positional_min_delta_indices // can be nullptr when positional_dim == 0
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
@@ -478,41 +479,43 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
         );
         PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
     }
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS((this->sequence_length - 1) * this->n_detectors), 1);
-    tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT((this->sequence_length - 1) * this->n_detectors);
-    if(is_train) {
-        PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
-            this->sequence_length,
-            r_positional_embeddings,
-            this->n_detectors,
-            this->positional_dim,
-            w_positional_lookup_indices,
-            w_positional_min_deltas,
-            w_positional_min_delta_indices
-        );
-        PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
-    } else {
-        PROF_START(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
-        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-            numBlocks, check_positional_embeddings_eval, tpb_opt, cuda_streams[1],
-            this->sequence_length,
-            r_positional_embeddings,
-            this->n_detectors,
-            this->positional_dim,
-            w_positional_lookup_indices
-        );
-        PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+    if(this->positional_dim > 0) {
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS((this->sequence_length - 1) * this->n_detectors), 1);
+        tpb_opt = LUT_RUNTIME_KERNELS_TPB_OPT((this->sequence_length - 1) * this->n_detectors);
+        if(is_train) {
+            PROF_START(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, check_positional_embeddings, tpb_opt, cuda_streams[1],
+                this->sequence_length,
+                r_positional_embeddings,
+                this->n_detectors,
+                this->positional_dim,
+                w_positional_lookup_indices,
+                w_positional_min_deltas,
+                w_positional_min_delta_indices
+            );
+            PROF_END(LUT_RUNTIME_FORWARD_SEQ_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+        } else {
+            PROF_START(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, check_positional_embeddings_eval, tpb_opt, cuda_streams[1],
+                this->sequence_length,
+                r_positional_embeddings,
+                this->n_detectors,
+                this->positional_dim,
+                w_positional_lookup_indices
+            );
+            PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
+        }
+        #ifndef NO_CUDA
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaEventCreate(&ev1);
+            cudaEventRecord(ev1, cuda_streams[1]);
+            cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
+        }
+        #endif
     }
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaEventCreate(&ev1);
-        cudaEventRecord(ev1, cuda_streams[1]);
-        cudaStreamWaitEvent(cuda_streams[0], ev1, 0);
-    }
-    #endif
 
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
 
@@ -603,12 +606,13 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     int32_t *r_lookup_indices,
     EXTERNAL_REAL_DT *r_min_anchor_deltas,
     int32_t *r_min_anchor_delta_indices,
-    int32_t *r_positional_lookup_indices,
-    EXTERNAL_REAL_DT *r_positional_min_deltas,
-    int32_t *r_positional_min_delta_indices,
     EXTERNAL_REAL_DT *w_input_gradients,
-    EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
     EXTERNAL_REAL_DT external_lr,
+    // optional parameters
+    int32_t *r_positional_lookup_indices, // can be nullptr when positional_dim == 0
+    EXTERNAL_REAL_DT *r_positional_min_deltas, // can be nullptr when positional_dim == 0
+    int32_t *r_positional_min_delta_indices, // can be nullptr when positional_dim == 0
+    EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // can be nullptr when positional_dim == 0
     EXTERNAL_REAL_DT *w_weights_gradients
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
@@ -803,18 +807,20 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     }
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    #ifndef NO_CUDA
-    if(device != -1) {
-        c10::cuda::CUDAGuard guard(device);
-        cudaEvent_t ev1;
-        cudaEventCreate(&ev1);
-        cudaEventRecord(ev1, cuda_streams[0]);
-        if(external_lr >= 0) {
-            cudaStreamWaitEvent(cuda_streams[1], ev1, 0);
+        #ifndef NO_CUDA
+        if(device != -1) {
+            c10::cuda::CUDAGuard guard(device);
+            cudaEvent_t ev1;
+            cudaEventCreate(&ev1);
+            cudaEventRecord(ev1, cuda_streams[0]);
+            if(external_lr >= 0) {
+                cudaStreamWaitEvent(cuda_streams[1], ev1, 0);
+            }
+            if(this->positional_dim > 0) {
+                cudaStreamWaitEvent(cuda_streams[2], ev1, 0);
+            }
         }
-        cudaStreamWaitEvent(cuda_streams[2], ev1, 0);
-    }
-    #endif
+        #endif
     #endif
     PROF_END(LUT_RUNTIME_BACKWARD_SEQ_PROFILER_OP);
 
@@ -837,14 +843,16 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             this->int_rescaler
         );
     }
-    n_items = this->n_detectors * this->positional_dim * (this->sequence_length - 1);
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
-        w_positional_embeddings_gradients,
-        n_items,
-        this->int_rescaler
-    );
+    if(this->positional_dim > 0) {
+        n_items = this->n_detectors * this->positional_dim * (this->sequence_length - 1);
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
+            w_positional_embeddings_gradients,
+            n_items,
+            this->int_rescaler
+        );
+    }
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
 }

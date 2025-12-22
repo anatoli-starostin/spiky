@@ -1528,8 +1528,10 @@ fill_outputs_fully_connected_seq_logic(
         // Get PE: positional lookup index from timestep difference (j - i - 1)
         // Note: j - i - 1 can be negative when i == j, but in that case we don't use PE
         int32_t PE = 0;
-        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-        PE = r_positional_lookup_indices[pe_offset];
+        if(positional_dim > 0) {
+            uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+            PE = r_positional_lookup_indices[pe_offset];
+        }
 
         // Calculate concatenated_index
         uint32_t concatenated_index = (
@@ -1647,8 +1649,11 @@ fill_outputs_sparse_seq_logic(
     int32_t Q = r_lookup_indices[q_offset];
 
     // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
+    int32_t PE = 0;
+    if(positional_dim > 0) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+    }
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
@@ -1768,10 +1773,15 @@ propagate_through_detectors_seq_sparse_logic(
     EXTERNAL_REAL_DT q_min_anchor_delta = r_min_anchor_deltas[q_offset];
 
     // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
-    int32_t pe_min_delta_index = r_positional_min_delta_indices[pe_offset];
-    EXTERNAL_REAL_DT pe_min_delta = r_positional_min_deltas[pe_offset];
+    int32_t PE = 0;
+    int32_t pe_min_delta_index = -1;
+    EXTERNAL_REAL_DT pe_min_delta = 0.0;
+    if(positional_dim > 0) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+        pe_min_delta_index = r_positional_min_delta_indices[pe_offset];
+        pe_min_delta = r_positional_min_deltas[pe_offset];
+    }
     w_input_gradients += batch_index * n_inputs * sequence_length;
 
     // Calculate concatenated index
@@ -1885,7 +1895,8 @@ propagate_through_detectors_seq_sparse_logic(
         int_rescaler
     );
 
-    if((fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
+    if(positional_dim > 0 && (fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
         concatenated_index_alt = (
             (Q << (n_anchors_per_detector + positional_dim)) |
             (K << positional_dim) |
@@ -2022,10 +2033,15 @@ propagate_through_detectors_seq_fc_logic(
     EXTERNAL_REAL_DT q_min_anchor_delta = r_min_anchor_deltas[q_offset];
 
     // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
-    int32_t pe_min_delta_index = r_positional_min_delta_indices[pe_offset];
-    EXTERNAL_REAL_DT pe_min_delta = r_positional_min_deltas[pe_offset];
+    int32_t PE = 0;
+    int32_t pe_min_delta_index = -1;
+    EXTERNAL_REAL_DT pe_min_delta = 0.0;
+    if(positional_dim > 0) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+        pe_min_delta_index = r_positional_min_delta_indices[pe_offset];
+        pe_min_delta = r_positional_min_deltas[pe_offset];
+    }
     w_input_gradients += batch_index * n_inputs * sequence_length;
 
     // Calculate concatenated index
@@ -2100,7 +2116,8 @@ propagate_through_detectors_seq_fc_logic(
         int_rescaler
     );
 
-    if((fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
+    if(positional_dim > 0 && (fabs(pe_min_delta) < fabs(q_min_anchor_delta)) && (fabs(pe_min_delta) < fabs(k_min_anchor_delta))) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
         concatenated_index_alt = (
             (Q << (n_anchors_per_detector + positional_dim)) |
             (K << positional_dim) |
@@ -2212,8 +2229,11 @@ gather_w_gradients_seq_sparse_logic(
     int32_t Q = r_lookup_indices[q_offset];
 
     // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
+    int32_t PE = 0;
+    if(positional_dim > 0) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+    }
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
@@ -2318,8 +2338,11 @@ gather_w_gradients_seq_fc_cpu_logic(
     int32_t Q = r_lookup_indices[q_offset];
 
     // Get PE: positional lookup index from timestep difference (j - i - 1)
-    uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-    int32_t PE = r_positional_lookup_indices[pe_offset];
+    int32_t PE = 0;
+    if(positional_dim > 0) {
+        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+        PE = r_positional_lookup_indices[pe_offset];
+    }
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
@@ -2460,7 +2483,7 @@ gather_w_gradients_seq_fc_cuda_logic(
     // Get K, Q, and PE from shared memory
     int32_t K = shared_K[i_local];
     int32_t Q = shared_Q[j_local];
-    int32_t PE = shared_PE[j_local - i_local - 1];
+    int32_t PE = (positional_dim > 0) ? shared_PE[j_local - i_local - 1] : 0;
 
     // Calculate concatenated index
     uint32_t concatenated_index = (
@@ -2546,8 +2569,11 @@ gather_w_gradients_seq_fc_cuda_no_tiles_logic(
         uint32_t q_offset = batch_offset + j * n_detectors + detector_index;
         int32_t Q = r_lookup_indices[q_offset];
         
-        uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
-        int32_t PE = r_positional_lookup_indices[pe_offset];
+        int32_t PE = 0;
+        if(positional_dim > 0) {
+            uint32_t pe_offset = (j - i - 1) * n_detectors + detector_index;
+            PE = r_positional_lookup_indices[pe_offset];
+        }
         
         concatenated_index = (
             (Q << (n_anchors_per_detector + positional_dim)) |

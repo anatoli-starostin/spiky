@@ -330,7 +330,7 @@ class SynapseGrowthEngine(object):
         n_source_ids = explicit_triples[:, 1:2].unique().shape[0]
         n_groups = (explicit_triples.shape[0] + self._synapse_group_size - 1) // self._synapse_group_size + (n_synapse_metas - 1) * (n_source_ids - 1)
         connections_buffer = torch.zeros(
-            [2 * n_groups * (4 + 2 * self._synapse_group_size)], dtype=torch.int32, device=self._device
+            [n_groups * (4 + 2 * self._synapse_group_size)], dtype=torch.int32, device=self._device
         )
 
         sort_idx = torch.argsort(explicit_triples[:, 1], stable=True)

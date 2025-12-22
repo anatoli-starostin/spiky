@@ -704,39 +704,62 @@ public:
 
     void forward_step_concat(
         const torch::Tensor &r_weights,
-        const torch::Tensor &r_positional_embeddings,
         uint32_t batch_size,
         const torch::Tensor &r_input,
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
         torch::Tensor &w_lookup_indices,
-        torch::Tensor &w_positional_lookup_indices,
-        std::optional<torch::Tensor> r_stream_handles,
+        std::optional<torch::Tensor> &r_positional_embeddings,
+        std::optional<torch::Tensor> &w_positional_lookup_indices,
         std::optional<torch::Tensor> &w_min_anchor_deltas,
         std::optional<torch::Tensor> &w_min_anchor_delta_indices,
         std::optional<torch::Tensor> &w_positional_min_deltas,
-        std::optional<torch::Tensor> &w_positional_min_delta_indices
+        std::optional<torch::Tensor> &w_positional_min_delta_indices,
+        std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
         __TRACE__("lutm_forward_step_concat\n");
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
-        checkTensor(r_positional_embeddings, "r_positional_embeddings", true, host_device_allocator.device);
+        if(this->positional_dim > 0) {
+            if(!r_positional_embeddings.has_value()) {
+                throw py::value_error("r_positional_embeddings must be provided when positional_dim > 0");
+            }
+            checkTensor(r_positional_embeddings.value(), "r_positional_embeddings", true, host_device_allocator.device);
+        } else {
+            if(r_positional_embeddings.has_value()) {
+                throw py::value_error("r_positional_embeddings must be None when positional_dim == 0");
+            }
+        }
         checkTensor(r_input, "r_input", true, host_device_allocator.device);
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_output, "w_output", true, host_device_allocator.device);
         checkTensor(w_lookup_indices, "w_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(w_positional_lookup_indices, "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(this->positional_dim > 0) {
+            if(!w_positional_lookup_indices.has_value()) {
+                throw py::value_error("w_positional_lookup_indices must be provided when positional_dim > 0");
+            }
+            checkTensor(w_positional_lookup_indices.value(), "w_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+        }
         if(w_min_anchor_deltas.has_value()) {
             checkTensor(w_min_anchor_deltas.value(), "w_min_anchor_deltas", true, host_device_allocator.device);
         }
         if(w_min_anchor_delta_indices.has_value()) {
             checkTensor(w_min_anchor_delta_indices.value(), "w_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
         }
-        if(w_positional_min_deltas.has_value()) {
-            checkTensor(w_positional_min_deltas.value(), "w_positional_min_deltas", true, host_device_allocator.device);
-        }
-        if(w_positional_min_delta_indices.has_value()) {
-            checkTensor(w_positional_min_delta_indices.value(), "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(this->positional_dim > 0) {
+            if(w_positional_min_deltas.has_value()) {
+                checkTensor(w_positional_min_deltas.value(), "w_positional_min_deltas", true, host_device_allocator.device);
+            }
+            if(w_positional_min_delta_indices.has_value()) {
+                checkTensor(w_positional_min_delta_indices.value(), "w_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+            }
+        } else {
+            if(w_positional_min_deltas.has_value()) {
+                throw py::value_error("w_positional_min_deltas must be None when positional_dim == 0");
+            }
+            if(w_positional_min_delta_indices.has_value()) {
+                throw py::value_error("w_positional_min_delta_indices must be None when positional_dim == 0");
+            }
         }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
@@ -789,17 +812,17 @@ public:
 
         this->runtime_context->forward_step_concat(
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.data_ptr()),
             batch_size,
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_input.data_ptr()),
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
+            (this->positional_dim > 0 && r_positional_embeddings.has_value()) ? reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.value().data_ptr()) : nullptr,
+            (this->positional_dim > 0 && w_positional_lookup_indices.has_value()) ? reinterpret_cast<int32_t *>(w_positional_lookup_indices.value().data_ptr()) : nullptr,
             w_min_anchor_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.value().data_ptr()) : nullptr,
             w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr,
-            reinterpret_cast<int32_t *>(w_positional_lookup_indices.data_ptr()),
-            w_positional_min_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.value().data_ptr()) : nullptr,
-            w_positional_min_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_positional_min_delta_indices.value().data_ptr()) : nullptr
+            (this->positional_dim > 0 && w_positional_min_deltas.has_value()) ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.value().data_ptr()) : nullptr,
+            (this->positional_dim > 0 && w_positional_min_delta_indices.has_value()) ? reinterpret_cast<int32_t *>(w_positional_min_delta_indices.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -874,14 +897,14 @@ public:
         const torch::Tensor &r_lookup_indices,
         const torch::Tensor &r_min_anchor_deltas,
         const torch::Tensor &r_min_anchor_delta_indices,
-        const torch::Tensor &r_positional_lookup_indices,
-        const torch::Tensor &r_positional_min_deltas,
-        const torch::Tensor &r_positional_min_delta_indices,
         torch::Tensor &w_input_gradients,
-        torch::Tensor &w_positional_embeddings_gradients,
         double external_lr,
-        std::optional<torch::Tensor> w_weights_gradients,
-        std::optional<torch::Tensor> r_stream_handles
+        std::optional<torch::Tensor> &r_positional_lookup_indices,
+        std::optional<torch::Tensor> &r_positional_min_deltas,
+        std::optional<torch::Tensor> &r_positional_min_delta_indices,
+        std::optional<torch::Tensor> &w_positional_embeddings_gradients,
+        std::optional<torch::Tensor> &w_weights_gradients,
+        std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
         if(batch_size == 0) {
@@ -892,15 +915,35 @@ public:
         }
         checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
         checkTensor(w_input_gradients, "w_input_gradients", true, host_device_allocator.device);
-        checkTensor(w_positional_embeddings_gradients, "w_positional_embeddings_gradients", true, host_device_allocator.device);
+        if(this->positional_dim > 0) {
+            if(!w_positional_embeddings_gradients.has_value()) {
+                throw py::value_error("w_positional_embeddings_gradients must be provided when positional_dim > 0");
+            }
+            checkTensor(w_positional_embeddings_gradients.value(), "w_positional_embeddings_gradients", true, host_device_allocator.device);
+        } else {
+            if(w_positional_embeddings_gradients.has_value()) {
+                throw py::value_error("w_positional_embeddings_gradients must be None when positional_dim == 0");
+            }
+        }
         checkTensor(r_output_gradients, "r_output_gradients", true, host_device_allocator.device);
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_lookup_indices, "r_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(r_min_anchor_deltas, "r_min_anchor_deltas", true, host_device_allocator.device);
         checkTensor(r_min_anchor_delta_indices, "r_min_anchor_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_positional_lookup_indices, "r_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
-        checkTensor(r_positional_min_deltas, "r_positional_min_deltas", true, host_device_allocator.device);
-        checkTensor(r_positional_min_delta_indices, "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        if(this->positional_dim > 0) {
+            if(!r_positional_lookup_indices.has_value()) {
+                throw py::value_error("r_positional_lookup_indices must be provided when positional_dim > 0");
+            }
+            checkTensor(r_positional_lookup_indices.value(), "r_positional_lookup_indices", false, host_device_allocator.device, sizeof(int32_t));
+            if(!r_positional_min_deltas.has_value()) {
+                throw py::value_error("r_positional_min_deltas must be provided when positional_dim > 0");
+            }
+            checkTensor(r_positional_min_deltas.value(), "r_positional_min_deltas", true, host_device_allocator.device);
+            if(!r_positional_min_delta_indices.has_value()) {
+                throw py::value_error("r_positional_min_delta_indices must be provided when positional_dim > 0");
+            }
+            checkTensor(r_positional_min_delta_indices.value(), "r_positional_min_delta_indices", false, host_device_allocator.device, sizeof(int32_t));
+        }
         if(w_weights_gradients.has_value()) {
             checkTensor(w_weights_gradients.value(), "w_weights_gradients", true, host_device_allocator.device);
         }
@@ -925,12 +968,12 @@ public:
             reinterpret_cast<int32_t *>(r_lookup_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_min_anchor_deltas.data_ptr()),
             reinterpret_cast<int32_t *>(r_min_anchor_delta_indices.data_ptr()),
-            reinterpret_cast<int32_t *>(r_positional_lookup_indices.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.data_ptr()),
-            reinterpret_cast<int32_t *>(r_positional_min_delta_indices.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_input_gradients.data_ptr()),
-            reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.data_ptr()),
             static_cast<EXTERNAL_REAL_DT>(external_lr),
+            (this->positional_dim > 0 && r_positional_lookup_indices.has_value()) ? reinterpret_cast<int32_t *>(r_positional_lookup_indices.value().data_ptr()) : nullptr,
+            (this->positional_dim > 0 && r_positional_min_deltas.has_value()) ? reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_min_deltas.value().data_ptr()) : nullptr,
+            (this->positional_dim > 0 && r_positional_min_delta_indices.has_value()) ? reinterpret_cast<int32_t *>(r_positional_min_delta_indices.value().data_ptr()) : nullptr,
+            (this->positional_dim > 0 && w_positional_embeddings_gradients.has_value()) ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.value().data_ptr()) : nullptr,
             w_weights_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_weights_gradients.value().data_ptr()) : nullptr
             #ifndef NO_CUDA
             , cuda_streams_ptr
@@ -1111,7 +1154,7 @@ private:
         n_anchors_per_detector(n_anchors_per_detector),
         sequence_length(sequence_length),
         positional_dim(positional_dim),
-        n_lookup_neurons(n_detectors * (1U << n_anchors_per_detector) * sequence_length),
+        n_lookup_neurons(n_detectors * (1U << (n_anchors_per_detector + ((sequence_length > 1) ? (n_anchors_per_detector + positional_dim) : 0)))),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size),
         base_synapse_metas_id(base_synapse_metas_id),
@@ -1314,18 +1357,18 @@ void PFX(PB_LUTDataManager)(py::module& m) {
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
             "Forward step concat for fully connected mode",
             py::arg("r_weights"),
-            py::arg("r_positional_embeddings"),
             py::arg("batch_size"),
             py::arg("r_input"),
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
             py::arg("w_lookup_indices"),
-            py::arg("w_positional_lookup_indices"),
-            py::arg("r_stream_handles") = py::none(),
+            py::arg("r_positional_embeddings") = py::none(),
+            py::arg("w_positional_lookup_indices") = py::none(),
             py::arg("w_min_anchor_deltas") = py::none(),
             py::arg("w_min_anchor_delta_indices") = py::none(),
             py::arg("w_positional_min_deltas") = py::none(),
-            py::arg("w_positional_min_delta_indices") = py::none())
+            py::arg("w_positional_min_delta_indices") = py::none(),
+            py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",
             py::arg("r_weights"),
@@ -1348,12 +1391,12 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_lookup_indices"),
             py::arg("r_min_anchor_deltas"),
             py::arg("r_min_anchor_delta_indices"),
-            py::arg("r_positional_lookup_indices"),
-            py::arg("r_positional_min_deltas"),
-            py::arg("r_positional_min_delta_indices"),
             py::arg("w_input_gradients"),
-            py::arg("w_positional_embeddings_gradients"),
             py::arg("external_lr"),
+            py::arg("r_positional_lookup_indices") = py::none(),
+            py::arg("r_positional_min_deltas") = py::none(),
+            py::arg("r_positional_min_delta_indices") = py::none(),
+            py::arg("w_positional_embeddings_gradients") = py::none(),
             py::arg("w_weights_gradients") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("count_synapses", &LUTM_CLASS_NAME::count_synapses,

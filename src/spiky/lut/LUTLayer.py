@@ -244,14 +244,17 @@ class LUTLayerBasic(nn.Module):
         # Handle positional embeddings
         if sequence_length > 1:
             assert positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
-            positional_embeddings_data = torch.empty(
-                (sequence_length - 1) * n_detectors * positional_dim,
-                dtype=torch.float32,
-                device=self.device
-            )
-            # Initialize with random floats in [-1, 1]
-            positional_embeddings_data.uniform_(-1.0, 1.0)
-            self._positional_embeddings = nn.Parameter(positional_embeddings_data)
+            if positional_dim > 0:
+                positional_embeddings_data = torch.empty(
+                    (sequence_length - 1) * n_detectors * positional_dim,
+                    dtype=torch.float32,
+                    device=self.device
+                )
+                # Initialize with random floats in [-1, 1]
+                positional_embeddings_data.uniform_(-1.0, 1.0)
+                self._positional_embeddings = nn.Parameter(positional_embeddings_data)
+            else:
+                self._positional_embeddings = None
         else:
             assert positional_dim is None, "positional_dim must be None when sequence_length == 1"
             self._positional_embeddings = None
@@ -713,18 +716,23 @@ class LUTLayerBasic(nn.Module):
         else:
             min_anchor_deltas = None
             min_anchor_delta_indices = None
-        positional_lookup_indices = torch.zeros(
-            [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
-        )
-        if self.training:
-            positional_min_deltas = torch.zeros(
-                [(sequence_length - 1) * self._n_detectors], dtype=torch.float32,
-                device=self.device, requires_grad=False
-            )
-            positional_min_delta_indices = torch.zeros(
+        if self._positional_dim > 0:
+            positional_lookup_indices = torch.zeros(
                 [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
             )
+            if self.training:
+                positional_min_deltas = torch.zeros(
+                    [(sequence_length - 1) * self._n_detectors], dtype=torch.float32,
+                    device=self.device, requires_grad=False
+                )
+                positional_min_delta_indices = torch.zeros(
+                    [(sequence_length - 1) * self._n_detectors], dtype=torch.int32, device=self.device
+                )
+            else:
+                positional_min_deltas = None
+                positional_min_delta_indices = None
         else:
+            positional_lookup_indices = None
             positional_min_deltas = None
             positional_min_delta_indices = None
 
@@ -732,17 +740,17 @@ class LUTLayerBasic(nn.Module):
 
         self._lut_dm.forward_step_concat(
             self._weights,
-            self._positional_embeddings,
             batch_size, x,
             self._detector_anchors,
             output,
             lookup_indices,
+            self._positional_embeddings,
             positional_lookup_indices,
-            stream_handles,
             min_anchor_deltas,
             min_anchor_delta_indices,
             positional_min_deltas,
-            positional_min_delta_indices
+            positional_min_delta_indices,
+            stream_handles
         )
 
         if not external_output:
@@ -750,14 +758,24 @@ class LUTLayerBasic(nn.Module):
 
         result = () if external_output else (output.view((batch_size, sequence_length) + self.output_shape()),)
         if self.training:
-            return result + (
-                lookup_indices.view(batch_size, sequence_length, self._n_detectors),
-                min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
-                min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
-                positional_lookup_indices.view(sequence_length - 1, self._n_detectors),
-                positional_min_deltas.view(sequence_length - 1, self._n_detectors),
-                positional_min_delta_indices.view(sequence_length - 1, self._n_detectors)
-            )
+            if self._positional_dim > 0:
+                return result + (
+                    lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+                    min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+                    min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
+                    positional_lookup_indices.view(sequence_length - 1, self._n_detectors),
+                    positional_min_deltas.view(sequence_length - 1, self._n_detectors),
+                    positional_min_delta_indices.view(sequence_length - 1, self._n_detectors)
+                )
+            else:
+                return result + (
+                    lookup_indices.view(batch_size, sequence_length, self._n_detectors),
+                    min_anchor_deltas.view(batch_size, sequence_length, self._n_detectors),
+                    min_anchor_delta_indices.view(batch_size, sequence_length, self._n_detectors),
+                    None,  # positional_lookup_indices
+                    None,  # positional_min_deltas
+                    None   # positional_min_delta_indices
+                )
         else:
             return None if external_output else output.view((batch_size, sequence_length) + self.output_shape())
 
@@ -863,15 +881,23 @@ class LUTLayerBasic(nn.Module):
         assert min_anchor_delta_indices.shape == (batch_size, sequence_length, self._n_detectors)
         min_anchor_delta_indices = min_anchor_delta_indices.view(-1)
 
-        assert positional_lookup_indices.device == self.device
-        assert positional_lookup_indices.shape == (sequence_length - 1, self._n_detectors)
-        positional_lookup_indices = positional_lookup_indices.view(-1)
-        assert positional_min_deltas.device == self.device
-        assert positional_min_deltas.shape == (sequence_length - 1, self._n_detectors)
-        positional_min_deltas = positional_min_deltas.view(-1)
-        assert positional_min_delta_indices.device == self.device
-        assert positional_min_delta_indices.shape == (sequence_length - 1, self._n_detectors)
-        positional_min_delta_indices = positional_min_delta_indices.view(-1)
+        if self._positional_dim > 0:
+            assert positional_lookup_indices.device == self.device
+            assert positional_lookup_indices.shape == (sequence_length - 1, self._n_detectors)
+            positional_lookup_indices = positional_lookup_indices.view(-1)
+            assert positional_min_deltas.device == self.device
+            assert positional_min_deltas.shape == (sequence_length - 1, self._n_detectors)
+            positional_min_deltas = positional_min_deltas.view(-1)
+            assert positional_min_delta_indices.device == self.device
+            assert positional_min_delta_indices.shape == (sequence_length - 1, self._n_detectors)
+            positional_min_delta_indices = positional_min_delta_indices.view(-1)
+        else:
+            assert positional_lookup_indices is None
+            assert positional_min_deltas is None
+            assert positional_min_delta_indices is None
+            positional_lookup_indices = None
+            positional_min_deltas = None
+            positional_min_delta_indices = None
 
         if x_grad is None:
             external_output = False
@@ -889,7 +915,10 @@ class LUTLayerBasic(nn.Module):
             )
         else:
             target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
-        positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+        if self._positional_dim > 0:
+            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+        else:
+            positional_grad = None
 
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
@@ -913,11 +942,12 @@ class LUTLayerBasic(nn.Module):
             lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
+            x_grad,
+            external_lr,
             positional_lookup_indices,
             positional_min_deltas,
             positional_min_delta_indices,
-            x_grad, positional_grad,
-            external_lr,
+            positional_grad,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
             stream_handles
         )
@@ -926,7 +956,7 @@ class LUTLayerBasic(nn.Module):
             self._synchronize()
             target_w_grad = self._process_gradients(target_w_grad, batch_size)
 
-        if self._weights_gradient_policy.normalized:
+        if self._positional_dim > 0 and self._weights_gradient_policy.normalized:
             positional_grad /= positional_grad.abs().max().clip(1e-16)
 
         result = () if external_output else (x_grad.view(source_x_shape),)

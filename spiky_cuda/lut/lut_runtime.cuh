@@ -118,17 +118,18 @@ public:
 
     void forward_step_concat(
         EXTERNAL_REAL_DT *r_weights,
-        EXTERNAL_REAL_DT *r_positional_embeddings,
         uint32_t batch_size,
         EXTERNAL_REAL_DT *r_input,
         AnchorsPair *r_detectors,
         EXTERNAL_REAL_DT *w_output,
         int32_t *w_lookup_indices,
+        // optional parameters
+        EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+        int32_t *w_positional_lookup_indices, // can be nullptr when positional_dim == 0
         EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
         int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
-        int32_t *w_positional_lookup_indices,
-        EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr in eval mode
-        int32_t *w_positional_min_delta_indices // can be nullptr in eval mode
+        EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr in eval mode or when positional_dim == 0
+        int32_t *w_positional_min_delta_indices // can be nullptr in eval mode or when positional_dim == 0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -144,12 +145,13 @@ public:
         int32_t *r_lookup_indices,
         EXTERNAL_REAL_DT *r_min_anchor_deltas,
         int32_t *r_min_anchor_delta_indices,
-        int32_t *r_positional_lookup_indices,
-        EXTERNAL_REAL_DT *r_positional_min_deltas,
-        int32_t *r_positional_min_delta_indices,
         EXTERNAL_REAL_DT *w_input_gradients,
-        EXTERNAL_REAL_DT *w_positional_embeddings_gradients,
         EXTERNAL_REAL_DT external_lr,
+        // optional parameters
+        int32_t *r_positional_lookup_indices, // can be nullptr when positional_dim == 0
+        EXTERNAL_REAL_DT *r_positional_min_deltas, // can be nullptr when positional_dim == 0
+        int32_t *r_positional_min_delta_indices, // can be nullptr when positional_dim == 0
+        EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // can be nullptr when positional_dim == 0
         EXTERNAL_REAL_DT *w_weights_gradients  // can be nullptr when external_lr != 0.0
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
