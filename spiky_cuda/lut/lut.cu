@@ -106,6 +106,9 @@ public:
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_FC_PROFILER_OP, "lut::runtime::backward_seq::propagate_through_detectors_fc");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_SPARSE_PROFILER_OP, "lut::runtime::backward_seq::gather_w_gradients_sparse");
         profiler.register_operation_type(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP, "lut::runtime::backward_seq::gather_w_gradients_fc");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_PRODUCT_PROFILER_OP, "lut::runtime::forward_product");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP, "lut::runtime::forward_product::fill_outputs_sparse");
+        profiler.register_operation_type(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP, "lut::runtime::forward_product::fill_outputs_fc");
         #endif
 
         weights_allocator = new SimpleAllocator(initial_synapse_capacity * sizeof(EXTERNAL_REAL_DT));
@@ -829,6 +832,93 @@ public:
         );
     }
 
+    void forward_step_product(
+        const torch::Tensor &r_weights,
+        uint32_t batch_size,
+        uint32_t sequence_length,
+        const torch::Tensor &r_input_1,
+        const torch::Tensor &r_input_2,
+        const torch::Tensor &r_detector_anchors,
+        torch::Tensor &w_output,
+        bool future_masking,
+        std::optional<torch::Tensor> &r_stream_handles
+    ) {
+        py::gil_scoped_release gil_guard;
+        __TRACE__("lutm_forward_step_product\n");
+        checkTensor(r_weights, "r_weights", true, host_device_allocator.device);
+        checkTensor(r_input_1, "r_input_1", true, host_device_allocator.device);
+        checkTensor(r_input_2, "r_input_2", true, host_device_allocator.device);
+        checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
+        checkTensor(w_output, "w_output", true, host_device_allocator.device);
+        if(r_stream_handles.has_value()) {
+            checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
+            if(r_stream_handles.value().numel() < 3) {
+                throw py::value_error("r_stream_handles must have at least 3 elements");
+            }
+        }
+        if(batch_size == 0) {
+            throw py::value_error("batch_size == 0");
+        }
+        if(this->sequence_length != 1) {
+            throw py::value_error("forward_step_product: this is an experimental method, this->sequence_length should be equal to 1, real length of the sequence is passed as the method parameter");
+        }
+        if(sequence_length == 0) {
+            throw py::value_error("sequence_length == 0");
+        }
+
+        if(this->runtime_context == nullptr) {
+            GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
+            IndexedSynapsesInfo *synapse_infos = nullptr;
+            if(this->lookup_neuron_synapses_infos_id != std::numeric_limits<uint64_t>::max()) {
+                synapse_infos = IndexedSynapsesInfos(this->lookup_neuron_synapses_infos_id, host_device_allocator.data);
+            }
+            this->runtime_context = new LUT_RUNTIME_CONTEXT_CLASS(
+                host_device_allocator.data,
+                host_device_allocator.device,
+                this->n_inputs,
+                this->n_outputs,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                this->n_lookup_neurons,
+                this->sequence_length,
+                this->positional_dim,
+                this->forward_group_size,
+                this->backward_group_size,
+                gc_meta->max_forward_groups_per_neuron,
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                N_WEIGHTS(gc_meta, true),
+                int_rescaler,
+                #endif
+                #ifdef ENABLE_PROFILING
+                this->profiler,
+                #endif
+                BaseSynapseMetas(this->base_synapse_metas_id, host_device_allocator.data),
+                synapse_infos,
+                gc_meta->first_synapse_id
+            );
+        }
+
+        #ifndef NO_CUDA
+        cudaStream_t *cuda_streams_ptr = nullptr;
+        if(r_stream_handles.has_value() && host_device_allocator.device != -1) {
+            cuda_streams_ptr = reinterpret_cast<cudaStream_t *>(r_stream_handles.value().data_ptr());
+        }
+        #endif
+        this->runtime_context->forward_step_product(
+            reinterpret_cast<EXTERNAL_REAL_DT *>(r_weights.data_ptr()),
+            batch_size,
+            sequence_length,
+            reinterpret_cast<EXTERNAL_REAL_DT *>(r_input_1.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(r_input_2.data_ptr()),
+            reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
+            reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
+            future_masking,
+            #ifndef NO_CUDA
+            , cuda_streams_ptr
+            #endif
+        );
+    }
+
     void backward_backprop(
         const torch::Tensor &r_weights,
         uint32_t batch_size,
@@ -1154,7 +1244,7 @@ private:
         n_anchors_per_detector(n_anchors_per_detector),
         sequence_length(sequence_length),
         positional_dim(positional_dim),
-        n_lookup_neurons(n_detectors * (1U << (n_anchors_per_detector + ((sequence_length > 1) ? (n_anchors_per_detector + positional_dim) : 0)))),
+        n_lookup_neurons(n_detectors * (1 << (n_anchors_per_detector + ((sequence_length > 1) ? (n_anchors_per_detector + positional_dim) : 0)))),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size),
         base_synapse_metas_id(base_synapse_metas_id),
@@ -1355,7 +1445,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_min_anchor_deltas") = py::none(),
             py::arg("w_min_anchor_delta_indices") = py::none())
         .def("forward_step_concat", &LUTM_CLASS_NAME::forward_step_concat,
-            "Forward step concat for fully connected mode",
+            "Forward step concat",
             py::arg("r_weights"),
             py::arg("batch_size"),
             py::arg("r_input"),
@@ -1368,6 +1458,17 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("w_min_anchor_delta_indices") = py::none(),
             py::arg("w_positional_min_deltas") = py::none(),
             py::arg("w_positional_min_delta_indices") = py::none(),
+            py::arg("r_stream_handles") = py::none())
+        .def("forward_step_product", &LUTM_CLASS_NAME::forward_step_product,
+            "Forward step product",
+            py::arg("r_weights"),
+            py::arg("batch_size"),
+            py::arg("sequence_length"),
+            py::arg("r_input_1"),
+            py::arg("r_input_2"),
+            py::arg("r_detector_anchors"),
+            py::arg("w_output"),
+            py::arg("future_masking"),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",

@@ -157,4 +157,18 @@ public:
         , cudaStream_t *cuda_streams
         #endif
     );
+
+    void forward_step_product(
+        EXTERNAL_REAL_DT *r_weights,
+        uint32_t batch_size,
+        uint32_t sequence_length,
+        EXTERNAL_REAL_DT *r_input_1,
+        EXTERNAL_REAL_DT *r_input_2,
+        AnchorsPair *r_detectors,
+        EXTERNAL_REAL_DT *w_output,
+        bool future_masking,
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
+    );
 };

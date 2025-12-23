@@ -856,3 +856,112 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
 }
+
+void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
+    EXTERNAL_REAL_DT *r_weights,
+    uint32_t batch_size,
+    uint32_t sequence_length,
+    EXTERNAL_REAL_DT *r_input_1,
+    EXTERNAL_REAL_DT *r_input_2,
+    AnchorsPair *r_detectors,
+    EXTERNAL_REAL_DT *w_output,
+    bool future_masking,
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
+) {
+    __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_product, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, sequence_length);
+    if(batch_size != this->batch_size) {
+        this->batch_size = batch_size;
+    }
+
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
+    #endif
+    #endif
+
+    PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_PROFILER_OP);
+
+    uint32_t n_items = (sequence_length + TILE - 1) / TILE;
+    uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
+    n_items *= n_items * this->n_detectors;
+    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
+    dim3 numBlocks(n_items, batch_size * n_output_blocks);
+    uint32_t tpb_opt = TILE * TILE;
+
+    // TODO flexible TILE depending on (n_inputs + n_outputs)
+
+    if(lookup_neuron_synapses_infos != nullptr) {
+        PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP);
+        GRID_CALL_ON_STREAM_SHARED_MEM(
+            numBlocks, fill_outputs_product_sparse, tpb_opt,
+            sizeof(EXTERNAL_REAL_DT) * TILE * (this->n_inputs + forward_group_size), cuda_streams[0],
+            r_input_1,
+            r_input_2,
+            this->n_inputs >> 1,
+            sequence_length,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            r_weights,
+            n_lookup_neurons_per_detector,
+            this->n_outputs,
+            n_output_blocks,
+            this->forward_group_size,
+            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+            this->first_synapse_id,
+            this->lut_data,
+            w_output,
+            future_masking
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP);
+    } else {
+        PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
+        GRID_CALL_ON_STREAM_SHARED_MEM(
+            numBlocks, fill_outputs_product_fc, tpb_opt,
+            sizeof(EXTERNAL_REAL_DT) * TILE * (this->n_inputs + n_outputs), cuda_streams[0],
+            r_input_1,
+            r_input_2,
+            this->n_inputs >> 1,
+            sequence_length,
+            r_detectors,
+            this->n_detectors,
+            this->n_anchors_per_detector,
+            r_weights,
+            n_lookup_neurons_per_detector,
+            this->n_outputs,
+            n_output_blocks,
+            this->forward_group_size,
+            w_output,
+            future_masking
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            , this->int_rescaler
+            #else
+            , 0.0
+            #endif
+        );
+        PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
+    }
+    PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_PROFILER_OP);
+
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_outputs), batch_size);
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs), cuda_streams[0],
+        w_output,
+        this->n_outputs,
+        this->int_rescaler
+    );
+    PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    #endif
+}

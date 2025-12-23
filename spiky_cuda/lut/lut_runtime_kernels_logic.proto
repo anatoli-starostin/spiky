@@ -1610,7 +1610,7 @@ fill_outputs_sparse_seq_logic(
     uint32_t i = tile_id / tile_grid_w;  // tile row
     uint32_t j = tile_id % tile_grid_w;  // tile col
 
-    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    // Skip tiles below diagonal (tile i > tile j means all pairs have i > j, which we don't want)
     if(i > j) {
         return;
     }
@@ -1684,6 +1684,307 @@ fill_outputs_sparse_seq_logic(
             n_lookup_neurons,
             int_rescaler
         );
+    }
+}
+
+// ======================= PRODUCT, FORWARD =============================== //
+
+fill_outputs_product_sparse_logic(
+    EXTERNAL_REAL_DT* r_input_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_half,
+    uint32_t sequence_length,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_per_block,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
+    EXTERNAL_REAL_DT* w_output,
+    bool future_masking,
+    double int_rescaler
+) {
+    // TODO: Implement fill_outputs_product_sparse_logic
+    // This kernel processes product operations between r_input_1 and r_input_2
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    // threadIdx.x encodes: position within TILE*TILE tile
+    
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+    
+    // Extract tile coordinates
+    uint32_t tile_i = tile_id / tile_grid_w;
+    uint32_t tile_j = tile_id % tile_grid_w;
+    
+    // Future masking: skip tiles below diagonal (i > j means all pairs have i > j)
+    if(future_masking && tile_i > tile_j) {
+        return;
+    }
+    
+    // TODO: Continue implementation...
+}
+
+
+// TODO separate cpu and cuda implementations
+fill_outputs_product_fc_logic(
+    EXTERNAL_REAL_DT* r_input_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_half,
+    uint32_t sequence_length,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t forward_group_size,
+    EXTERNAL_REAL_DT* w_output,
+    bool future_masking,
+    double int_rescaler
+) {
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
+    
+    // threadIdx.x encodes: position within TILE*TILE tile
+    // i_local = threadIdx.x / TILE, j_local = threadIdx.x % TILE
+    uint32_t i_local = threadIdx.x / TILE;
+    uint32_t j_local = threadIdx.x % TILE;
+    
+    // Calculate tile grid width
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+    
+    // Extract tile coordinates from tile_id
+    uint32_t tile_i = tile_id / tile_grid_w;
+    uint32_t tile_j = tile_id % tile_grid_w;
+    
+    // Future masking: skip tiles below diagonal (i > j means all pairs have i > j)
+    if(future_masking && tile_i > tile_j) {
+        return;
+    }
+    
+    // Shared memory layout:
+    // - shared_input_1_i: TILE * n_inputs_half (input_1 for tile i positions)
+    // - shared_input_1_j: TILE * n_inputs_half (input_1 for tile j positions)
+    // - shared_input_2_i: TILE * n_inputs_half (input_2 for tile i positions)
+    // - shared_input_2_j: TILE * n_inputs_half (input_2 for tile j positions)
+    // - shared_outputs: TILE * forward_group_size (output blocks for tile j positions)
+    extern __shared__ EXTERNAL_REAL_DT shared_mem[];
+    EXTERNAL_REAL_DT* shared_input_1_i = shared_mem;
+    EXTERNAL_REAL_DT* shared_input_1_j = shared_input_1_i + TILE * n_inputs_half;
+    EXTERNAL_REAL_DT* shared_input_2_i = shared_input_1_j + TILE * n_inputs_half;
+    EXTERNAL_REAL_DT* shared_input_2_j = shared_input_2_i + TILE * n_inputs_half;
+    EXTERNAL_REAL_DT* shared_outputs = shared_input_2_j + TILE * n_inputs_half;
+    
+    // Initialize output blocks in shared memory to zero
+    if(threadIdx.x < TILE * forward_group_size) {
+        shared_outputs[threadIdx.x] = 0.0;
+    }
+    __syncthreads();
+    
+    // Calculate global indices
+    uint32_t i = tile_i * TILE + i_local;
+    uint32_t j = tile_j * TILE + j_local;
+    
+    // Calculate batch offset for inputs
+    // Layout: [batch0_seq0, batch0_seq1, ..., batch0_seqN, batch1_seq0, ...]
+    // Each sequence element has n_inputs_half elements
+    uint32_t batch_offset = batch_index * sequence_length * n_inputs_half;
+    
+    // Cooperative loading: load input_1 and input_2 for tiles i and j
+    // Each thread loads one element from one of the 4 arrays
+    // We have TILE*TILE threads, and need to load 4 * TILE * n_inputs_half elements total
+    // Strategy: threads are assigned in groups to load different arrays
+    // Threads 0..TILE-1: load input_1_i
+    // Threads TILE..2*TILE-1: load input_1_j  
+    // Threads 2*TILE..3*TILE-1: load input_2_i
+    // Threads 3*TILE..4*TILE-1: load input_2_j
+    // (TILE*TILE is typically >= 4*TILE, e.g., 16*16=256 >= 4*16=64)
+    
+    // Load input_1 for tile i (threads 0 to TILE-1)
+    if(threadIdx.x < TILE) {
+        uint32_t pos_in_tile = threadIdx.x;
+        uint32_t global_i = tile_i * TILE + pos_in_tile;
+        if(global_i < sequence_length) {
+            for(uint32_t k = 0; k < n_inputs_half; k++) {
+                shared_input_1_i[pos_in_tile * n_inputs_half + k] = 
+                    r_input_1[batch_offset + global_i * n_inputs_half + k];
+            }
+        }
+    }
+    
+    // Load input_1 for tile j (threads TILE to 2*TILE-1)
+    if(threadIdx.x >= TILE && threadIdx.x < 2 * TILE) {
+        uint32_t pos_in_tile = threadIdx.x - TILE;
+        uint32_t global_j = tile_j * TILE + pos_in_tile;
+        if(global_j < sequence_length) {
+            for(uint32_t k = 0; k < n_inputs_half; k++) {
+                shared_input_1_j[pos_in_tile * n_inputs_half + k] = 
+                    r_input_1[batch_offset + global_j * n_inputs_half + k];
+            }
+        }
+    }
+    
+    // Load input_2 for tile i (threads 2*TILE to 3*TILE-1)
+    if(threadIdx.x >= 2 * TILE && threadIdx.x < 3 * TILE) {
+        uint32_t pos_in_tile = threadIdx.x - 2 * TILE;
+        uint32_t global_i = tile_i * TILE + pos_in_tile;
+        if(global_i < sequence_length) {
+            for(uint32_t k = 0; k < n_inputs_half; k++) {
+                shared_input_2_i[pos_in_tile * n_inputs_half + k] = 
+                    r_input_2[batch_offset + global_i * n_inputs_half + k];
+            }
+        }
+    }
+    
+    // Load input_2 for tile j (threads 3*TILE to 4*TILE-1)
+    if(threadIdx.x >= 3 * TILE && threadIdx.x < 4 * TILE) {
+        uint32_t pos_in_tile = threadIdx.x - 3 * TILE;
+        uint32_t global_j = tile_j * TILE + pos_in_tile;
+        if(global_j < sequence_length) {
+            for(uint32_t k = 0; k < n_inputs_half; k++) {
+                shared_input_2_j[pos_in_tile * n_inputs_half + k] = 
+                    r_input_2[batch_offset + global_j * n_inputs_half + k];
+            }
+        }
+    }
+    
+    __syncthreads();
+    
+    // Calculate global indices
+    uint32_t i = tile_i * TILE + i_local;
+    uint32_t j = tile_j * TILE + j_local;
+    
+    // Future masking: skip pairs where i >= j (for diagonal tiles) or i > j (for off-diagonal tiles)
+    if(future_masking) {
+        if(tile_i == tile_j) {
+            // On diagonal tile: skip pairs where i >= j
+            if(i >= j) {
+                return;
+            }
+        } else {
+            // Off-diagonal tile: already skipped at tile level if tile_i > tile_j
+            // But we still need to check bounds
+        }
+    }
+    
+    // Check bounds
+    if(i >= sequence_length || j >= sequence_length) {
+        return;
+    }
+    
+    // Each thread processes its (i, j) pair
+    // Get detector anchors
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+    
+    // Concatenate input_1[i] and input_2[j] to form combined input
+    // Combined input: [input_1[i][0..n_inputs_half-1], input_2[j][0..n_inputs_half-1]]
+    // Total size: n_inputs_half * 2
+    EXTERNAL_REAL_DT* input_1_i = shared_input_1_i + i_local * n_inputs_half;
+    EXTERNAL_REAL_DT* input_2_j = shared_input_2_j + j_local * n_inputs_half;
+    
+    // Calculate lookup index by applying check_detectors logic to concatenated input
+    int32_t lookup_index = 0;
+    for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+        AnchorsPair ap = detector_anchors[anchor_idx];
+        
+        if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+           ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+            continue;
+        }
+        
+        // Anchor IDs refer to positions in concatenated input [input_1[i], input_2[j]]
+        // If anchor_id < n_inputs_half, it's from input_1[i], else from input_2[j]
+        EXTERNAL_REAL_DT val1, val2;
+        
+        if(ap.anchor1_id < n_inputs_half) {
+            val1 = input_1_i[ap.anchor1_id];
+        } else {
+            val1 = input_2_j[ap.anchor1_id - n_inputs_half];
+        }
+        
+        if(ap.anchor2_id < n_inputs_half) {
+            val2 = input_1_i[ap.anchor2_id];
+        } else {
+            val2 = input_2_j[ap.anchor2_id - n_inputs_half];
+        }
+        
+        EXTERNAL_REAL_DT delta = val1 - val2;
+        if(delta > 0.0) {
+            lookup_index |= (1 << anchor_idx);
+        }
+    }
+    
+    // Calculate lookup neuron ID and weight offset
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+    
+    // Calculate output block range
+    uint32_t output_start = output_block_index * forward_group_size;
+    uint32_t n_outputs_in_block = forward_group_size;
+    if(output_block_index == n_output_blocks - 1 && (n_outputs % forward_group_size)) {
+        n_outputs_in_block = n_outputs % forward_group_size;
+    }
+    
+    // Load weights and accumulate into shared memory (for position j)
+    uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_start;
+    
+    for(uint32_t output_idx = 0; output_idx < n_outputs_in_block; output_idx++) {
+        EXTERNAL_REAL_DT weight = r_weights[weights_offset + output_idx];
+        // Accumulate in shared memory for position j_local
+        #ifdef ATOMIC
+        atomicAdd(&shared_outputs[j_local * forward_group_size + output_idx], weight);
+        #else
+        shared_outputs[j_local * forward_group_size + output_idx] += weight;
+        #endif
+    }
+    
+    __syncthreads();
+    
+    // Write shared memory outputs to global memory (atomic add)
+    // Each thread writes one output element
+    if(threadIdx.x < TILE * forward_group_size) {
+        uint32_t j_idx = threadIdx.x / forward_group_size;
+        uint32_t output_in_block = threadIdx.x % forward_group_size;
+        
+        if(output_in_block < n_outputs_in_block) {
+            uint32_t global_j = tile_j * TILE + j_idx;
+            uint32_t global_output_idx = output_start + output_in_block;
+            
+            EXTERNAL_REAL_DT value = shared_outputs[threadIdx.x];
+            
+            // Calculate global output offset
+            // w_output layout: [batch0_seq0, batch0_seq1, ..., batch1_seq0, ...]
+            // Each sequence element has n_outputs elements
+            uint32_t global_offset = batch_index * sequence_length * n_outputs + global_j * n_outputs + global_output_idx;
+            
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(value * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset), payload);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset) += payload;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_output + global_offset, value);
+            #else
+            w_output[global_offset] += value;
+            #endif
+            #endif
+        }
     }
 }
 
