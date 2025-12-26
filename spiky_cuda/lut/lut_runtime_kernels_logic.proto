@@ -1988,6 +1988,80 @@ fill_outputs_product_fc_logic(
     }
 }
 
+
+// TODO
+
+uint32_t batch_size; // 64
+uint32_t n_inputs; // 128
+uint32_t n_inputs_1; // 48
+uint32_t n_inputs_2; // 48
+uint32_t positional_dim; // 32
+uint32_t n_outputs; // 128
+uint32_t n_detectors;  // 2048
+uint32_t n_anchors_per_detector; // 10
+uint32_t sequence_length; // 512
+uint32_t forward_group_size;  // 32
+uint32_t tbp = 1024;
+uint32_t n_detectors_in_block = tbp;
+uint32_t n_detector_blocks = (n_detectors + tpb - 1) / tbp;
+uint32_t tile_height;
+if(n_detector_blocks == 1) {
+    n_detectors_in_block = n_detectors;
+    tile_height = tpb / n_detectors;
+    tbp = tile_height * n_detectors;
+} else {
+    tile_height = 1;
+}
+uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+uint32_t n_outputs_in_block = forward_group_size;
+uint32_t n_output_blocks = (n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+
+dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+
+--------------
+
+uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+uint64_t tile_id = linear_idx / n_detectors_in_block; // we use vertical tiles (same j, different i)
+
+uint32_t t = tile_id % tile_height;
+tile_id /= tile_height;
+
+uint32_t i = (tile_id / sequence_length) * tile_height + t;
+uint32_t j = tile_id % sequence_length;
+
+if((i >= j) || (i >= sequence_length)) {
+    return;
+}
+
+t = n_output_blocks * n_detector_blocks;
+uint32_t batch_index = blockIdx.y / t;
+t = blockIdx.y % t;
+uint32_t output_block_index = t / n_detector_blocks;
+uint32_t detector_block_index = t % n_detector_blocks;
+
+uint32_t detector_index = detector_block_index * n_detectors_in_block + blockIdx.x % n_detectors_in_block;
+
+if(detector_index >= n_detectors) {
+    return;
+}
+
+// at this point we have absolute i, j, detector_index, batch_index and output_block_index
+
+// batch_index and output_block_index are fixed for the thread block
+// single thread block always correspond to the certain j (same for all threads in block)
+// single thread block covers n_i = min(tile_height, sequence_length) i-s
+
+// we need to load inputs to shared memory:
+//  - single input_2 vector for positions j shifted inside batch (use thread 0)
+//  - n_i input_1 vectors for positions i shifted inside batch (use threads [1, n_i])
+//  - if positional_dim > 0, n_i positional_embeddings (use threads [n_i + 1, 2 * n_i])
+
+// next we need to calculate lookup indices, here we want to support two models of inputs'
+// unification - sequential and sliced. In sequential mode we consider combined input as
+// a sequence [inp1, inp2, pos_embedding], we expect n_inputs_1 + n_inputs_2 + positional_dim == n_inputs.
+// In sliced mode we mix inputs value by value ([i11, i21, p1, i12, i22, p2 ...]),
+// we additionaly expect that n_inputs_1 == n_inputs_2 == positional_dim
+
 // ======================= SEQUENCE, BACKWARD =============================== //
 
 propagate_through_detectors_seq_sparse_logic(
