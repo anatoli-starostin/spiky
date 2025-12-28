@@ -926,23 +926,66 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
+        
+        // Calculate grid dimensions based on new kernel structure
+        uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+        uint32_t n_detectors_in_block = tpb;
+        uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+        uint32_t tile_height;
+        
+        if(n_detector_blocks == 1) {
+            n_detectors_in_block = this->n_detectors;
+            tile_height = tpb / this->n_detectors;
+            tpb = tile_height * this->n_detectors;
+        } else {
+            tile_height = 1;
+        }
+        
+        uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+        uint32_t n_outputs_in_block = this->forward_group_size;
+        uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+        
+        dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+        
+        // Calculate shared memory size
+        // shared_input_2: n_inputs_2
+        // shared_input_1: n_i * n_inputs_1 (n_i = tile_height, but may be less at boundaries)
+        // shared_pos_emb: n_i * positional_dim (if positional_dim > 0)
+        // shared_lookup_indices: blockDim.x (int32_t, one per thread)
+        // shared_outputs: n_outputs_in_block
+        uint32_t n_inputs_1 = this->n_inputs >> 1;
+        uint32_t n_inputs_2 = this->n_inputs >> 1;
+        uint32_t max_n_i = tile_height;
+        uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                   max_n_i * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                   (this->positional_dim > 0 ? max_n_i * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
+                                   tpb * sizeof(int32_t) +
+                                   n_outputs_in_block * sizeof(EXTERNAL_REAL_DT);
+        
         GRID_CALL_ON_STREAM_SHARED_MEM(
-            numBlocks, fill_outputs_product_fc, tpb_opt,
-            sizeof(EXTERNAL_REAL_DT) * TILE * (this->n_inputs + n_outputs), cuda_streams[0],
-            r_input_1,
-            r_input_2,
-            this->n_inputs >> 1,
+            numBlocks, fill_outputs_product_fc, tpb,
+            shared_mem_size, cuda_streams[0],
             sequence_length,
+            this->positional_dim,
+            tile_height,
+            r_input_1,
+            n_inputs_1,
+            r_input_2,
+            n_inputs_2,
+            nullptr, // pos_embedding - TODO: add as parameter if needed
             r_detectors,
             this->n_detectors,
+            n_detector_blocks,
+            n_detectors_in_block,
             this->n_anchors_per_detector,
             r_weights,
             n_lookup_neurons_per_detector,
             this->n_outputs,
             n_output_blocks,
-            this->forward_group_size,
+            n_outputs_in_block,
             w_output,
-            future_masking
+            future_masking,
+            false // sliced_mode - TODO: add as parameter if needed
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             , this->int_rescaler
             #else
