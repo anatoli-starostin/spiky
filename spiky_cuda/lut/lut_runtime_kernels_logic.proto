@@ -2290,19 +2290,173 @@ fill_outputs_product_fc_logic(
             
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(value * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            #ifdef ATOMIC
             atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset), payload);
             #else
-            *reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset) += payload;
-            #endif
-            #else
-            #ifdef ATOMIC
             atomicAdd(w_output + global_offset, value);
-            #else
-            w_output[global_offset] += value;
-            #endif
             #endif
         }
+    }
+}
+
+fill_outputs_product_fc_cpu_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* r_input_1, // [batch_size * sequence_length * n_inputs_1]
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim]
+    AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_outputs]
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t batch_size,
+    EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
+    bool sliced_mode,
+    double int_rescaler
+) {
+    // blockIdx.y encodes: batch_index
+    // blockIdx.x encodes: j * n_detectors + detector_index
+    // threadIdx.x encodes: i (for position i < j)
+    
+    uint32_t batch_index = blockIdx.y;
+    uint32_t j_detector_combo = blockIdx.x;
+    uint32_t j = j_detector_combo / n_detectors;
+    uint32_t detector_index = j_detector_combo % n_detectors;
+    uint32_t i = threadIdx.x;
+    
+    // Future masking: only process pairs where i < j
+    if(i >= j || i >= sequence_length || j >= sequence_length || detector_index >= n_detectors) {
+        return;
+    }
+    
+    // Get detector anchors
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+    
+    // Calculate batch offsets
+    uint32_t batch_offset = batch_index * sequence_length;
+    
+    // Get pointers to input vectors
+    EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
+    EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
+    
+    // Get positional embedding once (if needed)
+    EXTERNAL_REAL_DT* pos_emb = nullptr;
+    if(positional_dim > 0 && j > i) {
+        uint32_t pe_offset = (j - i - 1) * positional_dim;
+        pos_emb = pos_embedding + pe_offset;
+    }
+    
+    // Calculate lookup index by applying detector logic to combined input
+    int32_t lookup_index = 0;
+    
+    if(sliced_mode) {
+        // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
+        // n_inputs_1 == n_inputs_2 == positional_dim
+        uint32_t slice_size = n_inputs_1; // == n_inputs_2 == positional_dim
+        uint32_t total_size = slice_size * 3; // input_1 + input_2 + pos_emb
+        
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+            
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+            
+            if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
+                continue;
+            }
+            
+            // Map anchor_id to the appropriate input slice
+            uint32_t slice_idx_1 = ap.anchor1_id / 3;
+            uint32_t component_1 = ap.anchor1_id % 3;
+            uint32_t slice_idx_2 = ap.anchor2_id / 3;
+            uint32_t component_2 = ap.anchor2_id % 3;
+            
+            EXTERNAL_REAL_DT val1, val2;
+            
+            // Get value from appropriate component
+            if(component_1 == 0) {
+                val1 = input_1_i[slice_idx_1];
+            } else if(component_1 == 1) {
+                val1 = input_2_j[slice_idx_1];
+            } else {
+                val1 = (pos_emb != nullptr) ? pos_emb[slice_idx_1] : 0.0;
+            }
+            
+            if(component_2 == 0) {
+                val2 = input_1_i[slice_idx_2];
+            } else if(component_2 == 1) {
+                val2 = input_2_j[slice_idx_2];
+            } else {
+                val2 = (pos_emb != nullptr) ? pos_emb[slice_idx_2] : 0.0;
+            }
+            
+            EXTERNAL_REAL_DT delta = val1 - val2;
+            if(delta > 0.0) {
+                lookup_index |= (1 << anchor_idx);
+            }
+        }
+    } else {
+        // Sequential mode: [inp1, inp2, pos_embedding]
+        uint32_t total_size = n_inputs_1 + n_inputs_2 + positional_dim;
+        
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+            
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+            
+            if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
+                continue;
+            }
+            
+            EXTERNAL_REAL_DT val1, val2;
+            
+            // Map anchor_id to the appropriate input section
+            if(ap.anchor1_id < n_inputs_1) {
+                val1 = input_1_i[ap.anchor1_id];
+            } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
+                val1 = input_2_j[ap.anchor1_id - n_inputs_1];
+            } else {
+                val1 = (pos_emb != nullptr) ? pos_emb[ap.anchor1_id - n_inputs_1 - n_inputs_2] : 0.0;
+            }
+            
+            if(ap.anchor2_id < n_inputs_1) {
+                val2 = input_1_i[ap.anchor2_id];
+            } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
+                val2 = input_2_j[ap.anchor2_id - n_inputs_1];
+            } else {
+                val2 = (pos_emb != nullptr) ? pos_emb[ap.anchor2_id - n_inputs_1 - n_inputs_2] : 0.0;
+            }
+            
+            EXTERNAL_REAL_DT delta = val1 - val2;
+            if(delta > 0.0) {
+                lookup_index |= (1 << anchor_idx);
+            }
+        }
+    }
+    
+    // Calculate lookup neuron ID and fetch weights
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+    uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs;
+    
+    // Accumulate weights into output for position j
+    uint32_t output_offset = batch_index * sequence_length * n_outputs + j * n_outputs;
+    
+    for(uint32_t output_idx = 0; output_idx < n_outputs; output_idx++) {
+        EXTERNAL_REAL_DT weight = r_weights[weights_offset + output_idx];
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset + output_idx)[0] += payload;
+        #else
+        w_output[output_offset + output_idx] += weight;
+        #endif
     }
 }
 
