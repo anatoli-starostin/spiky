@@ -2066,15 +2066,15 @@ fill_outputs_product_fc_logic(
 
     // Shared memory layout:
     // - shared_input_2: n_inputs_2 (input_2 for position j)
-    // - shared_input_1: n_i * n_inputs_1 (input_1 for positions i_base to i_base+n_i-1)
-    // - shared_pos_emb: n_i * positional_dim (positional embeddings, if positional_dim > 0)
+    // - shared_input_1: tile_height * n_inputs_1 (input_1 for positions i_base to i_base+tile_height-1)
+    // - shared_pos_emb: tile_height * positional_dim (positional embeddings, if positional_dim > 0)
     // - shared_lookup_indices: blockDim.x (lookup indices, one per thread)
     // - shared_outputs: n_outputs_in_block (accumulated outputs)
     extern __shared__ EXTERNAL_REAL_DT shared_mem[];
     EXTERNAL_REAL_DT* shared_input_2 = shared_mem;
     EXTERNAL_REAL_DT* shared_input_1 = shared_input_2 + n_inputs_2;
     EXTERNAL_REAL_DT* shared_pos_emb = shared_input_1 + tile_height * n_inputs_1;
-    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_pos_emb + (positional_dim > 0 ? n_i * positional_dim : 0));
+    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_pos_emb + (positional_dim > 0 ? tile_height * positional_dim : 0));
     EXTERNAL_REAL_DT* shared_outputs = reinterpret_cast<EXTERNAL_REAL_DT*>(shared_lookup_indices + blockDim.x);
 
     // Initialize outputs in shared memory to zero
@@ -2233,37 +2233,44 @@ fill_outputs_product_fc_logic(
     shared_lookup_indices[threadIdx.x] = lookup_index;
     __syncthreads();
 
-    // Distribute threads over outputs: each thread gathers weights for one output index
-    // Threads 0 to n_outputs_in_block-1 handle outputs
-    if(threadIdx.x < n_outputs_in_block) {
-        uint32_t output_idx = threadIdx.x;
-        uint32_t output_start = output_block_index * n_outputs_in_block;
-        double weight_sum = 0.0;
+    // Distribute threads over (output, lookup_index) pairs
+    // Total work: n_outputs_in_block outputs × blockDim.x lookup indices
+    uint32_t total_work = n_outputs_in_block * blockDim.x;
+    uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
+    uint32_t work_start = threadIdx.x * work_per_thread;
+    uint32_t work_end = min(work_start + work_per_thread, total_work);
+    uint32_t global_output_start = output_block_index * n_outputs_in_block;
+    
+    // Each thread processes its assigned (output, lookup_index) pairs
+    for(uint32_t work_idx = work_start; work_idx < work_end; work_idx++) {
+        uint32_t output_idx = work_idx / blockDim.x;
+        uint32_t thread_idx = work_idx % blockDim.x;
         
-        // Gather weights from all lookup indices (all i values in the tile) for this output
-        for(uint32_t thread_idx = 0; thread_idx < blockDim.x; thread_idx++) {
-            int32_t li = shared_lookup_indices[thread_idx];
-            if(li < 0) {
-                continue; // Invalid/masked lookup index
-            }
-            
-            // Reconstruct i and detector_index for this thread to get the correct lookup_neuron_id
-            // We need to figure out which detector_index and i correspond to thread_idx
-            // Actually, we need to recalculate from thread_idx's linear_idx
-            // But we don't have that stored. Let's use a different approach:
-            // Each thread already calculated lookup_index for its (i, detector_index) pair
-            // We need to know which detector_index corresponds to each thread
-            
-            // Actually, all threads in the block share the same detector_index (it's block-level)
-            // So we can use detector_index directly
-            uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
-            uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_start + output_idx;
-            
-            weight_sum += static_cast<double>(r_weights[weights_offset]);
+        int32_t li = shared_lookup_indices[thread_idx];
+        if(li < 0) {
+            continue; // Invalid/masked lookup index
         }
         
-        // Store accumulated weight sum in shared memory
-        shared_outputs[output_idx] = static_cast<EXTERNAL_REAL_DT>(weight_sum);
+        // Calculate detector_index for this thread on the fly
+        uint64_t thread_linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + thread_idx;
+        uint32_t thread_detector_block_index = detector_block_index;
+        uint32_t thread_detector_index = thread_detector_block_index * n_detectors_in_block + (thread_linear_idx % n_detectors_in_block);
+        
+        if(thread_detector_index >= n_detectors) {
+            continue; // Invalid detector index
+        }
+        
+        uint32_t lookup_neuron_id = thread_detector_index * n_lookup_neurons_per_detector + li;
+        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + global_output_start + output_idx;
+        
+        EXTERNAL_REAL_DT weight = r_weights[weights_offset];
+        
+        // Atomic accumulate in shared memory for this output
+        #ifdef ATOMIC
+        atomicAdd(&shared_outputs[output_idx], weight);
+        #else
+        shared_outputs[output_idx] += weight;
+        #endif
     }
 
     __syncthreads();

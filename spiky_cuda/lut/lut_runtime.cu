@@ -949,16 +949,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
         
         // Calculate shared memory size
         // shared_input_2: n_inputs_2
-        // shared_input_1: n_i * n_inputs_1 (n_i = tile_height, but may be less at boundaries)
-        // shared_pos_emb: n_i * positional_dim (if positional_dim > 0)
+        // shared_input_1: tile_height * n_inputs_1
+        // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
         // shared_lookup_indices: blockDim.x (int32_t, one per thread)
         // shared_outputs: n_outputs_in_block
         uint32_t n_inputs_1 = this->n_inputs >> 1;
         uint32_t n_inputs_2 = this->n_inputs >> 1;
-        uint32_t max_n_i = tile_height;
         uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
-                                   max_n_i * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
-                                   (this->positional_dim > 0 ? max_n_i * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
+                                   tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                   (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
                                    tpb * sizeof(int32_t) +
                                    n_outputs_in_block * sizeof(EXTERNAL_REAL_DT);
         
