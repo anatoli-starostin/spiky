@@ -7,7 +7,7 @@ positional embeddings to create triples that are processed by an inner LUTLayer.
 
 import torch
 import torch.nn as nn
-from spiky.lut.LUTLayer import LUTLayer, SynapseMeta, GradientPolicy, LUTSharedContext
+from spiky.lut.LUTLayer import LUTLayer, SynapseMeta, GradientPolicy, GradientType, LUTSharedContext
 
 
 class GTLUTProduct(nn.Module):
@@ -30,7 +30,6 @@ class GTLUTProduct(nn.Module):
         n_detectors: int = 8,
         n_anchors_per_detector: int = 6,
         synapse_meta: SynapseMeta = None,
-        weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
         random_seed=None,
@@ -50,7 +49,6 @@ class GTLUTProduct(nn.Module):
             n_detectors: Number of detectors for the inner LUTLayer
             n_anchors_per_detector: Number of anchor pairs per detector
             synapse_meta: Synapse metadata for the inner LUTLayer
-            weights_gradient_policy: Gradient policy for the inner LUTLayer
             shared_context: Shared context for the inner LUTLayer
             summation_dtype: Data type for summations
             random_seed: Random seed for initialization
@@ -95,7 +93,7 @@ class GTLUTProduct(nn.Module):
             sequence_length=1,
             synapse_meta=synapse_meta,
             positional_dim=None,  # No positional embeddings in inner LUTLayer
-            weights_gradient_policy=weights_gradient_policy,
+            weights_gradient_policy=GradientPolicy(GradientType.Dense),
             shared_context=shared_context,
             summation_dtype=summation_dtype,
             random_seed=random_seed,
@@ -119,7 +117,7 @@ class GTLUTProduct(nn.Module):
         if device is not None:
             self.to(device=device)
     
-    def forward(self, input_1: torch.Tensor, input_2: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_1: torch.Tensor, input_2: torch.Tensor = None) -> torch.Tensor:
         """
         Forward pass.
         
@@ -132,6 +130,9 @@ class GTLUTProduct(nn.Module):
         """
         batch_size = input_1.shape[0]
         sequence_length = input_1.shape[1]
+
+        if input_2 is None:
+            input_2 = input_1
         
         # Validate input shapes
         assert sequence_length == self.sequence_length, \
@@ -156,7 +157,7 @@ class GTLUTProduct(nn.Module):
                 if self.positional_embeddings is not None:
                     pos_idx = j - i
                     # pos_idx is guaranteed to be < sequence_length - 1 (in range [1, sequence_length - 2])
-                    pos_emb = self.positional_embeddings[pos_idx - 1].unsqueeze(0).expand(batch_size, -1)  # [batch_size, positional_dim]
+                    pos_emb = self.positional_embeddings[pos_idx - 1].unsqueeze(0).repeat(batch_size, 1)  # [batch_size, positional_dim]
                 else:
                     pos_emb = None
                 
@@ -193,14 +194,14 @@ class GTLUTProduct(nn.Module):
                 stacked_triples = stacked_triples.view(batch_size * n_triples, 1, -1)
                 
                 # Process with inner LUTLayer
-                lut_output = self.lut_layer(stacked_triples)  # [batch_size * n_triples, 1, n_outputs]
+                lut_output = self.lut_layer(stacked_triples.contiguous())  # [batch_size * n_triples, 1, n_outputs]
                 lut_output = lut_output.squeeze(1)  # [batch_size * n_triples, n_outputs]
                 
                 # Reshape and sum over all triples for each batch item to get output[j]
                 lut_output = lut_output.view(batch_size, n_triples, self.n_outputs)  # [batch_size, n_triples, n_outputs]
                 output[:, j, :] = lut_output.sum(dim=1)  # [batch_size, n_outputs]
         
-        return output
+        return output.contiguous()
     
     def to(self, *args, **kwargs):
         """Move module to device/dtype."""
@@ -218,3 +219,148 @@ class GTLUTProduct(nn.Module):
         
         return result
 
+
+class GTLUTProductTransformer(nn.Module):
+    def _create_single_attention(
+        self, _synapse_meta, summation_dtype, _int_rescaler, seed,
+        _forward_group_size, _backward_group_size, num_heads
+    ):
+        return GTLUTProduct(
+            n_inputs_1=self.embedding_dim,
+            n_inputs_2=self.embedding_dim,
+            positional_dim=self.positional_dim,
+            n_outputs=self.embedding_dim,
+            sequence_length=self.context_size,
+            sliced_mode=self.sliced_mode,
+            n_detectors=self.n_detectors * num_heads,
+            n_anchors_per_detector=self.n_anchors_per_detector_attention,
+            synapse_meta=_synapse_meta,
+            shared_context=self.lut_shared_context,
+            summation_dtype=summation_dtype,
+            random_seed=seed,
+            device=self.device
+        )
+
+    def __init__(
+        self, vocab_size, embedding_dim, context_size,
+        positional_dim, num_layers, num_heads,
+        n_detectors, n_anchors_per_detector,
+        device=None, _synapse_meta=SynapseMeta(),
+        lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
+        _forward_group_size=32, _backward_group_size=32,
+        n_anchors_per_detector_attention=None, sliced_mode=False
+    ):
+        super().__init__()
+
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.context_size = context_size
+        self.positional_dim = positional_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.n_detectors = n_detectors
+        self.n_anchors_per_detector = n_anchors_per_detector
+        # If not specified, use the same value as n_anchors_per_detector for backward compatibility
+        self.n_anchors_per_detector_attention = n_anchors_per_detector_attention if n_anchors_per_detector_attention is not None else n_anchors_per_detector
+        self.sliced_mode = sliced_mode
+        if device is None:
+            device = torch.device('cpu')
+
+        self.device = device
+
+        if lut_shared_context is None:
+            self.lut_shared_context = LUTSharedContext()
+            self.lut_shared_context.to_device(device)
+        else:
+            self.lut_shared_context = lut_shared_context
+
+        n_embeddings = embedding_dim
+
+        self.token_embedder = nn.Embedding(vocab_size, n_embeddings, device=device)
+        self.token_embedder.weight.requires_grad_(False)
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(seed)
+            w = 2 * torch.rand(self.token_embedder.weight.shape, generator=gen, device=device) - 1.0
+            self.token_embedder.weight.copy_(w)
+        else:
+            nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0)
+
+        # Transformer layers
+        self.layers = nn.ModuleList()
+        for layer_idx in range(num_layers):
+            layer = nn.ModuleDict()
+
+            # Attention heads
+            assert isinstance(embedding_dim, int)
+            layer['attention_lut'] = self._create_single_attention(
+                _synapse_meta=_synapse_meta, summation_dtype=summation_dtype,
+                _int_rescaler=_int_rescaler,
+                seed=None if seed is None else seed + layer_idx * num_heads,
+                _forward_group_size=_forward_group_size,
+                _backward_group_size=_backward_group_size,
+                num_heads=num_heads
+            )
+
+            ffn_lut = LUTLayer(
+                n_inputs=n_embeddings,
+                n_outputs=n_embeddings,
+                n_detectors=n_detectors,
+                n_anchors_per_detector=n_anchors_per_detector,
+                sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
+                synapse_meta=_synapse_meta,
+                weights_gradient_policy=GradientPolicy(GradientType.Dense),
+                shared_context=self.lut_shared_context,
+                summation_dtype=summation_dtype,
+                _int_rescaler=_int_rescaler,
+                device=device,
+                random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads,
+                _forward_group_size=_forward_group_size,
+                _backward_group_size=_backward_group_size
+            )
+            layer['ffn'] = ffn_lut
+            self.layers.append(layer)
+
+        self.unembedder = LUTLayer(
+            n_inputs=n_embeddings,
+            n_outputs=vocab_size,
+            n_detectors=n_detectors,
+            n_anchors_per_detector=n_anchors_per_detector,
+            sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
+            synapse_meta=_synapse_meta,
+            weights_gradient_policy=GradientPolicy(GradientType.Dense),
+            shared_context=self.lut_shared_context,
+            summation_dtype=summation_dtype,
+            _int_rescaler=_int_rescaler,
+            device=device,
+            random_seed=seed,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size
+        )
+
+    def forward(self, tokens):
+        """
+        Forward pass.
+
+        Args:
+            tokens: (batch_size, context_size) tensor of token indices
+
+        Returns:
+            logits: (batch_size, context_size, vocab_size) tensor of logits
+        """
+        batch_size = tokens.shape[0]
+        # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
+        z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
+
+        non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
+        seq_shape = (batch_size, self.context_size, self.embedding_dim)
+
+        for layer in self.layers:
+            attention_output = layer['attention_lut'](z)
+            z = z + attention_output
+            ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+            z = z + ffn_output
+
+        # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
+        logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
+        return logits

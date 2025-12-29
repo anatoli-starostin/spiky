@@ -41,7 +41,6 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     positional_dim(positional_dim),
     forward_group_size(forward_group_size),
     backward_group_size(backward_group_size),
-    batch_size(0),
     sequence_length(sequence_length),
     #ifdef ENABLE_PROFILING
     profiler(profiler),
@@ -90,10 +89,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, this->sequence_length);
     if(this->sequence_length != 1) {
         throw py::value_error("forward_step should only be called when sequence_length == 1");
-    }
-
-    if(batch_size != this->batch_size) {
-        this->batch_size = batch_size;
     }
 
     #ifdef ENABLE_PROFILING
@@ -174,7 +169,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
         uint32_t n_detector_blocks = (this->n_detectors + this->backward_group_size - 1) / this->backward_group_size;
         uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
         uint32_t n_items = n_outputs * n_detector_blocks;
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), this->batch_size);
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, fill_outputs_non_seq_fc, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
             r_weights,
@@ -231,10 +226,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop\n");
-    if(this->batch_size != batch_size) {
-        throw py::value_error("batch_size on backward pass doesn't match the current context");
-    }
-
     if(this->sequence_length != 1) {
         throw py::value_error("backward_backprop should only be called when sequence_length == 1");
     }
@@ -439,9 +430,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     if(this->sequence_length <= 1) {
         throw py::value_error("forward_step_concat_fc should only be called when sequence_length > 1");
     }
-    if(batch_size != this->batch_size) {
-        this->batch_size = batch_size;
-    }
 
     #ifndef NO_CUDA
     cudaEvent_t ev1;
@@ -619,10 +607,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat\n");
-    if(this->batch_size != batch_size) {
-        throw py::value_error("batch_size on backward pass doesn't match the current context");
-    }
-
     if(this->sequence_length <= 1) {
         throw py::value_error("backward_backprop_concat should only be called when sequence_length > 1");
     }
@@ -865,16 +849,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
     EXTERNAL_REAL_DT *r_input_2,
     AnchorsPair *r_detectors,
     EXTERNAL_REAL_DT *w_output,
-    bool future_masking,
+    uint32_t n_inputs_1,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+    bool sliced_mode
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
 ) {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::forward_step_product, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, sequence_length);
-    if(batch_size != this->batch_size) {
-        this->batch_size = batch_size;
-    }
-
     #ifdef ENABLE_PROFILING
     #ifndef NO_CUDA
     if(device != -1) {
@@ -886,120 +869,208 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
 
     PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_PROFILER_OP);
 
-    uint32_t n_items = (sequence_length + TILE - 1) / TILE;
-    uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
-    n_items *= n_items * this->n_detectors;
     uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
-    dim3 numBlocks(n_items, batch_size * n_output_blocks);
-    uint32_t tpb_opt = TILE * TILE;
-
-    // TODO flexible TILE depending on (n_inputs + n_outputs)
 
     if(lookup_neuron_synapses_infos != nullptr) {
         PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP);
-        GRID_CALL_ON_STREAM_SHARED_MEM(
-            numBlocks, fill_outputs_product_sparse, tpb_opt,
-            sizeof(EXTERNAL_REAL_DT) * TILE * (this->n_inputs + forward_group_size), cuda_streams[0],
-            r_input_1,
-            r_input_2,
-            this->n_inputs >> 1,
-            sequence_length,
-            r_detectors,
-            this->n_detectors,
-            this->n_anchors_per_detector,
-            r_weights,
-            n_lookup_neurons_per_detector,
-            this->n_outputs,
-            n_output_blocks,
-            this->forward_group_size,
-            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
-            this->first_synapse_id,
-            this->lut_data,
-            w_output,
-            future_masking
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
+        if(device == -1) {
+            uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
+            dim3 numBlocks(n_detector_output_pairs, batch_size);
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, fill_outputs_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                sequence_length,
+                this->positional_dim,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                batch_size,
+                reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                this->first_synapse_id,
+                this->lut_data,
+                w_output,
+                sliced_mode
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+        } else {
+            #ifndef NO_CUDA
+            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+            uint32_t n_detectors_in_block = tpb;
+            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+            uint32_t tile_height;
+            
+            if(n_detector_blocks == 1) {
+                n_detectors_in_block = this->n_detectors;
+                tile_height = tpb / this->n_detectors;
+                tpb = tile_height * this->n_detectors;
+            } else {
+                tile_height = 1;
+            }
+            
+            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+            uint32_t n_outputs_in_block = this->forward_group_size;
+            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+            
+            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+            
+            // Calculate shared memory size (only inputs, no lookup indices or outputs for sparse)
+            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0);
+            
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, fill_outputs_product_sparse, tpb,
+                shared_mem_size, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                this->first_synapse_id,
+                this->lut_data,
+                w_output,
+                sliced_mode
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
             #endif
-        );
+        }
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_SPARSE_PROFILER_OP);
     } else {
         PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
-        
-        // Calculate grid dimensions based on new kernel structure
-        uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
-        uint32_t n_detectors_in_block = tpb;
-        uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
-        uint32_t tile_height;
-        
-        if(n_detector_blocks == 1) {
-            n_detectors_in_block = this->n_detectors;
-            tile_height = tpb / this->n_detectors;
-            tpb = tile_height * this->n_detectors;
+        if(device == -1) {
+            uint32_t n_detector_output_pairs = this->n_detectors * this->n_outputs;
+            dim3 numBlocks(n_detector_output_pairs, batch_size * sequence_length);
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, fill_outputs_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                sequence_length,
+                this->positional_dim,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                batch_size,
+                nullptr, // r_lookup_neuron_synapses_infos (nullptr for FC)
+                0, // first_synapse_id (not used for FC)
+                nullptr, // lut_data (not used for FC)
+                w_output,
+                sliced_mode
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
         } else {
-            tile_height = 1;
-        }
-        
-        uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
-        uint32_t n_outputs_in_block = this->forward_group_size;
-        uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
-        
-        dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
-        
-        // Calculate shared memory size
-        // shared_input_2: n_inputs_2
-        // shared_input_1: tile_height * n_inputs_1
-        // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
-        // shared_lookup_indices: blockDim.x (int32_t, one per thread)
-        // shared_outputs: n_outputs_in_block
-        uint32_t n_inputs_1 = this->n_inputs >> 1;
-        uint32_t n_inputs_2 = this->n_inputs >> 1;
-        uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
-                                   tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
-                                   (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
-                                   tpb * sizeof(int32_t) +
-                                   n_outputs_in_block * sizeof(EXTERNAL_REAL_DT);
-        
-        GRID_CALL_ON_STREAM_SHARED_MEM(
-            numBlocks, fill_outputs_product_fc, tpb,
-            shared_mem_size, cuda_streams[0],
-            sequence_length,
-            this->positional_dim,
-            tile_height,
-            r_input_1,
-            n_inputs_1,
-            r_input_2,
-            n_inputs_2,
-            nullptr, // pos_embedding - TODO: add as parameter if needed
-            r_detectors,
-            this->n_detectors,
-            n_detector_blocks,
-            n_detectors_in_block,
-            this->n_anchors_per_detector,
-            r_weights,
-            n_lookup_neurons_per_detector,
-            this->n_outputs,
-            n_output_blocks,
-            n_outputs_in_block,
-            w_output,
-            future_masking,
-            false // sliced_mode - TODO: add as parameter if needed
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
+            #ifndef NO_CUDA
+            // CUDA path
+            // Calculate grid dimensions based on new kernel structure
+            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+            uint32_t n_detectors_in_block = tpb;
+            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+            uint32_t tile_height;
+            
+            if(n_detector_blocks == 1) {
+                n_detectors_in_block = this->n_detectors;
+                tile_height = tpb / this->n_detectors;
+                tpb = tile_height * this->n_detectors;
+            } else {
+                tile_height = 1;
+            }
+            
+            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+            uint32_t n_outputs_in_block = this->forward_group_size;
+            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+            
+            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+            
+            // Calculate shared memory size
+            // shared_input_2: n_inputs_2
+            // shared_input_1: tile_height * n_inputs_1
+            // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
+            // shared_lookup_indices: blockDim.x (int32_t, one per thread)
+            // shared_outputs: n_outputs_in_block
+            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
+                                       tpb * sizeof(int32_t) +
+                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT);
+            
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, fill_outputs_product_fc, tpb,
+                shared_mem_size, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                w_output,
+                sliced_mode
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
             #endif
-        );
+        }
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
     }
     PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_PROFILER_OP);
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_outputs), batch_size);
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_outputs), batch_size);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_outputs), cuda_streams[0],
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_outputs), cuda_streams[0],
         w_output,
         this->n_outputs,
         this->int_rescaler

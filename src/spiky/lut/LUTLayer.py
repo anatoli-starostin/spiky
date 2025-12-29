@@ -824,7 +824,7 @@ class LUTLayerBasic(nn.Module):
         assert grad_output.device == self.device
         assert grad_output.shape == (batch_size, 1) + self.output_shape()
 
-        grad_output = grad_output.view(-1)
+        grad_output = grad_output.contiguous().view(-1)
 
         if self._weights_gradient_policy.type == GradientType.Internal:
             if self._external_lr_hook is None:

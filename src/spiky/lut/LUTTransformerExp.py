@@ -11,52 +11,47 @@ from spiky.lut.LUTLayer import (
     SynapseMeta
 )
 
+from spiky.lut.tests.gt_lut_product import GTLUTProduct
+
 
 class LUTTransformerExp(nn.Module):
     def _create_single_attention(
         self, _synapse_meta, summation_dtype, _int_rescaler, seed,
         _forward_group_size, _backward_group_size, num_heads
     ):
-        if isinstance(self.embedding_dim, int):
-            return LUTLayer(
-                n_inputs=self.embedding_dim,
-                n_outputs=self.embedding_dim,
-                n_detectors=self.n_detectors_attention * num_heads,
-                n_anchors_per_detector=self.n_anchors_per_detector_attention,
-                sequence_length=self.context_size,
-                synapse_meta=_synapse_meta,
-                positional_dim=self.positional_dim,
-                weights_gradient_policy=self.weights_gradient_policy,
-                shared_context=self.lut_shared_context,
-                summation_dtype=summation_dtype,
-                _int_rescaler=_int_rescaler,
-                device=self.device,
-                random_seed=seed,
-                _forward_group_size=_forward_group_size,
-                _backward_group_size=_backward_group_size
-            )
-        else:
-            # right now this branch is needed only for tests
-            assert num_heads == 1
-            return Conv2DLUTLayer(
-                input_shape=self.embedding_dim,
-                n_anchors_per_detector=self.n_anchors_per_detector_attention,
-                detectors_shape=(1, self.n_detectors_attention),
-                output_kernel_shape=self.embedding_dim,
-                sequence_length=self.context_size,
-                positional_dim=self.positional_dim,
-                weights_gradient_policy=self.weights_gradient_policy,
-                receptive_field_shape=self.embedding_dim,
-                receptive_field_stride_shape=self.embedding_dim,
-                synapse_meta=_synapse_meta,
-                shared_context=self.lut_shared_context,
-                summation_dtype=summation_dtype,
-                random_seed=seed,
-                _int_rescaler=_int_rescaler,
-                device=self.device,
-                _forward_group_size=_forward_group_size,
-                _backward_group_size=_backward_group_size
-            )
+        # return LUTLayer(
+        #     n_inputs=self.embedding_dim,
+        #     n_outputs=self.embedding_dim,
+        #     n_detectors=self.n_detectors * num_heads,
+        #     n_anchors_per_detector=self.n_anchors_per_detector_attention,
+        #     sequence_length=self.context_size,
+        #     synapse_meta=_synapse_meta,
+        #     positional_dim=self.positional_dim,
+        #     weights_gradient_policy=self.weights_gradient_policy,
+        #     shared_context=self.lut_shared_context,
+        #     summation_dtype=summation_dtype,
+        #     _int_rescaler=_int_rescaler,
+        #     device=self.device,
+        #     random_seed=seed,
+        #     _forward_group_size=_forward_group_size,
+        #     _backward_group_size=_backward_group_size
+        # )
+        return GTLUTProduct(
+            n_inputs_1=self.embedding_dim,
+            n_inputs_2=self.embedding_dim,
+            positional_dim=self.positional_dim,
+            n_outputs=self.embedding_dim,
+            sequence_length=self.context_size,
+            sliced_mode=False,
+            n_detectors=self.n_detectors * num_heads,
+            n_anchors_per_detector=self.n_anchors_per_detector_attention,
+            synapse_meta=_synapse_meta,
+            weights_gradient_policy=self.weights_gradient_policy,
+            shared_context=self.lut_shared_context,
+            summation_dtype=summation_dtype,
+            random_seed=seed,
+            device=self.device
+        )
 
     def __init__(
         self, vocab_size, embedding_dim, context_size,
@@ -65,8 +60,7 @@ class LUTTransformerExp(nn.Module):
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.1,
-        n_detectors_attention=None, n_anchors_per_detector_attention=None,
-        _new_product_mode=False
+        n_anchors_per_detector_attention=None
     ):
         super().__init__()
 
@@ -78,8 +72,6 @@ class LUTTransformerExp(nn.Module):
         self.num_heads = num_heads
         self.n_detectors = n_detectors
         self.n_anchors_per_detector = n_anchors_per_detector
-        # If not specified, use the same value as n_detectors for backward compatibility
-        self.n_detectors_attention = n_detectors_attention if n_detectors_attention is not None else n_detectors
         # If not specified, use the same value as n_anchors_per_detector for backward compatibility
         self.n_anchors_per_detector_attention = n_anchors_per_detector_attention if n_anchors_per_detector_attention is not None else n_anchors_per_detector
         self.weights_gradient_policy = weights_gradient_policy
@@ -95,11 +87,7 @@ class LUTTransformerExp(nn.Module):
         else:
             self.lut_shared_context = lut_shared_context
 
-        if isinstance(embedding_dim, int):
-            n_embeddings = embedding_dim
-        else:
-            assert len(embedding_dim) == 2
-            n_embeddings = embedding_dim[0] * embedding_dim[1]
+        n_embeddings = embedding_dim
 
         self.token_embedder = nn.Embedding(vocab_size, n_embeddings, device=device)
         self.token_embedder.weight.requires_grad_(False)
@@ -113,6 +101,9 @@ class LUTTransformerExp(nn.Module):
 
         # Dropout after embeddings
         self.embedding_dropout = nn.Dropout(dropout)
+
+        #         pe = build_sinusoidal_pe(context_size, positional_dim, device)
+        #         self.register_buffer("pos_emb", pe.unsqueeze(0))
 
         # Transformer layers
         self.layers = nn.ModuleList()
@@ -211,22 +202,15 @@ class LUTTransformerExp(nn.Module):
         # Apply dropout after embeddings
         z = self.embedding_dropout(z)
 
-        if isinstance(self.embedding_dim, int):
-            non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
-            seq_shape = (batch_size, self.context_size, self.embedding_dim)
-        else:
-            non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim[0] * self.embedding_dim[1])
-            seq_shape = (batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
+        non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
+        seq_shape = (batch_size, self.context_size, self.embedding_dim)
 
         for layer in self.layers:
-            if not isinstance(self.embedding_dim, int):
-                z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
-            attention_output = layer['attention_lut'](z)
+            #            attention_output = layer['attention_lut'](torch.cat([z, self.pos_emb.repeat(z.shape[0], 1, 1)], dim=-1))
+            attention_output = layer['attention_lut'](z, z)
             attention_output = layer['attention_dropout'](attention_output)
             z = z + attention_output
-            if not isinstance(self.embedding_dim, int):
-                z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
             # FFN with residual connection and dropout
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             ffn_output = layer['ffn_dropout'](ffn_output)

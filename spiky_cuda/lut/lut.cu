@@ -840,7 +840,10 @@ public:
         const torch::Tensor &r_input_2,
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
-        bool future_masking,
+        uint32_t n_inputs_1,
+        uint32_t n_inputs_2,
+        bool sliced_mode,
+        std::optional<torch::Tensor> &r_positional_embeddings,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
         py::gil_scoped_release gil_guard;
@@ -850,6 +853,9 @@ public:
         checkTensor(r_input_2, "r_input_2", true, host_device_allocator.device);
         checkTensor(r_detector_anchors, "r_detector_anchors", false, host_device_allocator.device, sizeof(int32_t));
         checkTensor(w_output, "w_output", true, host_device_allocator.device);
+        if(r_positional_embeddings.has_value()) {
+            checkTensor(r_positional_embeddings.value(), "r_positional_embeddings", true, host_device_allocator.device);
+        }
         if(r_stream_handles.has_value()) {
             checkTensor(r_stream_handles.value(), "r_stream_handles", false, -1, sizeof(int64_t));
             if(r_stream_handles.value().numel() < 3) {
@@ -912,7 +918,10 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(r_input_2.data_ptr()),
             reinterpret_cast<AnchorsPair *>(r_detector_anchors.data_ptr()),
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
-            future_masking,
+            n_inputs_1,
+            n_inputs_2,
+            r_positional_embeddings.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.value().data_ptr()) : nullptr,
+            sliced_mode
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -1468,7 +1477,10 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_input_2"),
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
-            py::arg("future_masking"),
+            py::arg("n_inputs_1"),
+            py::arg("n_inputs_2"),
+            py::arg("sliced_mode") = false,
+            py::arg("r_positional_embeddings") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop", &LUTM_CLASS_NAME::backward_backprop,
             "Gradients back propagation",

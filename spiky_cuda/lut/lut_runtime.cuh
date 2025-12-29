@@ -35,7 +35,6 @@ private:
     uint32_t backward_group_size;
     REAL_DT first_synapse_meta_lr;
 
-    uint32_t batch_size;
     uint32_t sequence_length;
 
     #ifdef ENABLE_PROFILING
@@ -166,7 +165,10 @@ public:
         EXTERNAL_REAL_DT *r_input_2,
         AnchorsPair *r_detectors,
         EXTERNAL_REAL_DT *w_output,
-        bool future_masking,
+        uint32_t n_inputs_1,
+        uint32_t n_inputs_2,
+        EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+        bool sliced_mode
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
