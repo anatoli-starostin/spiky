@@ -156,7 +156,7 @@ class GTLUTProduct(nn.Module):
                 if self.positional_embeddings is not None:
                     pos_idx = j - i
                     # pos_idx is guaranteed to be < sequence_length - 1 (in range [1, sequence_length - 2])
-                    pos_emb = self.positional_embeddings[pos_idx].unsqueeze(0).expand(batch_size, -1)  # [batch_size, positional_dim]
+                    pos_emb = self.positional_embeddings[pos_idx - 1].unsqueeze(0).expand(batch_size, -1)  # [batch_size, positional_dim]
                 else:
                     pos_emb = None
                 
