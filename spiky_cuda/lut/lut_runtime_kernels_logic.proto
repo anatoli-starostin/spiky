@@ -2389,13 +2389,14 @@ fill_outputs_product_sparse_logic(
             
             // Calculate global output offset for position j
             uint32_t global_offset = batch_index * sequence_length * n_outputs + j * n_outputs;
+            w_output += global_offset;
             
             ATOMIC_PFX(fire_single_synapse_group)(
                 current_group_id,
                 lut_data,
                 first_synapse_id,
                 r_weights,
-                w_output + global_offset,
+                w_output,
                 n_lookup_neurons,
                 int_rescaler
             );
