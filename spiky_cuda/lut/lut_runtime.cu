@@ -877,7 +877,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
             dim3 numBlocks(n_detector_output_pairs, batch_size);
             GRID_CALL_NO_SHARED_MEM(
-                numBlocks, fill_outputs_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                numBlocks, fill_outputs_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
                 r_input_1,
@@ -912,22 +912,25 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                tile_height = tpb / this->n_detectors;
-                tpb = tile_height * this->n_detectors;
+                if(n_detectors_in_block < 4) {
+                    n_detectors_in_block = 4;
+                }
+                tile_height = tpb / n_detectors_in_block;
+                tpb = tile_height * n_detectors_in_block;
             } else {
                 tile_height = 1;
             }
             
             uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
             uint32_t n_outputs_in_block = this->forward_group_size;
-            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+            uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
             
             dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
             
             // Calculate shared memory size (only inputs, no lookup indices or outputs for sparse)
             uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
                                        tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
-                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0);
+                                       tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT);
             
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_sparse, tpb,
@@ -998,17 +1001,17 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             );
         } else {
             #ifndef NO_CUDA
-            // CUDA path
-            // Calculate grid dimensions based on new kernel structure
             uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
             uint32_t n_detectors_in_block = tpb;
             uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
             uint32_t tile_height;
-            
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                tile_height = tpb / this->n_detectors;
-                tpb = tile_height * this->n_detectors;
+                if(n_detectors_in_block < 4) {
+                    n_detectors_in_block = 4;
+                }
+                tile_height = tpb / n_detectors_in_block;
+                tpb = tile_height * n_detectors_in_block;
             } else {
                 tile_height = 1;
             }
@@ -1029,7 +1032,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                                        tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
                                        (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
                                        tpb * sizeof(int32_t) +
-                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT);
+                                       #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                                       n_outputs_in_block * sizeof(SUMMATION32_DT)
+                                       #else
+                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
+                                       #endif
+                                       ;
             
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,

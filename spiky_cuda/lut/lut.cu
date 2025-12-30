@@ -65,6 +65,9 @@ public:
         if(forward_group_size > MAX_SYNAPSE_GROUP_SIZE) {
             throw py::value_error("forward_group_size > MAX_SYNAPSE_GROUP_SIZE");
         }
+        if(forward_group_size > LUT_RUNTIME_KERNELS_TPB) {
+            throw py::value_error("forward_group_size > LUT_RUNTIME_KERNELS_TPB");
+        }
         if(backward_group_size == 0) {
             throw py::value_error("backward_group_size == 0");
         }

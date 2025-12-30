@@ -29,6 +29,95 @@ find_forward_synapse_group(
     }
 }
 
+calculate_product_lookup_index(
+    bool sliced_mode,
+    AnchorsPair* detector_anchors,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_inputs_1,
+    uint32_t n_inputs_2,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* input_1_ptr,
+    EXTERNAL_REAL_DT* input_2_ptr,
+    EXTERNAL_REAL_DT* pos_emb_ptr,
+    int32_t lookup_index
+) {
+    lookup_index = 0;
+    
+    if(sliced_mode) {
+        // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+
+            // Map anchor_id to the appropriate input slice
+            uint32_t slice_idx_1 = ap.anchor1_id / 3;
+            uint32_t component_1 = ap.anchor1_id % 3;
+            uint32_t slice_idx_2 = ap.anchor2_id / 3;
+            uint32_t component_2 = ap.anchor2_id % 3;
+
+            EXTERNAL_REAL_DT val1, val2;
+
+            // Get value from appropriate component
+            if(component_1 == 0) {
+                val1 = input_1_ptr[slice_idx_1];
+            } else if(component_1 == 1) {
+                val1 = input_2_ptr[slice_idx_1];
+            } else {
+                val1 = pos_emb_ptr[slice_idx_1];
+            }
+
+            if(component_2 == 0) {
+                val2 = input_1_ptr[slice_idx_2];
+            } else if(component_2 == 1) {
+                val2 = input_2_ptr[slice_idx_2];
+            } else {
+                val2 = pos_emb_ptr[slice_idx_2];
+            }
+
+            if(val1 > val2) {
+                lookup_index |= (1 << anchor_idx);
+            }
+        }
+    } else {
+        // Sequential mode: [inp1, inp2, pos_embedding]
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+
+            EXTERNAL_REAL_DT val1, val2;
+
+            // Map anchor_id to the appropriate input section
+            if(ap.anchor1_id < n_inputs_1) {
+                val1 = input_1_ptr[ap.anchor1_id];
+            } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
+                val1 = input_2_ptr[ap.anchor1_id - n_inputs_1];
+            } else {
+                val1 = pos_emb_ptr[ap.anchor1_id - n_inputs_1 - n_inputs_2];
+            }
+
+            if(ap.anchor2_id < n_inputs_1) {
+                val2 = input_1_ptr[ap.anchor2_id];
+            } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
+                val2 = input_2_ptr[ap.anchor2_id - n_inputs_1];
+            } else {
+                val2 = pos_emb_ptr[ap.anchor2_id - n_inputs_1 - n_inputs_2];
+            }
+
+            if(val1 > val2) {
+                lookup_index |= (1 << anchor_idx);
+            }
+        }
+    }
+}
+
 convert_integers_to_floats_logic(
     EXTERNAL_REAL_DT* buffer,
     uint64_t n,
@@ -1703,7 +1792,7 @@ fill_outputs_product_fc_logic(
     uint32_t n_detector_blocks,
     uint32_t n_detectors_in_block,
     uint32_t n_anchors_per_detector,
-    EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_inputs * n_outputs]
+    EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_outputs]
     uint32_t n_lookup_neurons_per_detector,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
@@ -1728,6 +1817,18 @@ fill_outputs_product_fc_logic(
     uint32_t i = (tile_id / sequence_length) * tile_height + t;
     uint32_t j = tile_id % sequence_length;
 
+    // calculating i_base
+    linear_idx -= threadIdx.x;
+    tile_id = linear_idx / n_detectors_in_block;
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
+
+    if(i_base >= j) {
+        // whole thread block can be skipped
+        return;
+    }
+
     // at this point we have absolute i, j, detector_index, batch_index and output_block_index
 
     // batch_index and output_block_index are fixed for the thread block
@@ -1744,14 +1845,17 @@ fill_outputs_product_fc_logic(
     EXTERNAL_REAL_DT* shared_input_2 = shared_mem;
     EXTERNAL_REAL_DT* shared_input_1 = shared_input_2 + n_inputs_2;
     EXTERNAL_REAL_DT* shared_pos_emb = shared_input_1 + tile_height * n_inputs_1;
-    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_pos_emb + (positional_dim > 0 ? tile_height * positional_dim : 0));
+    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_pos_emb + tile_height * positional_dim);
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    SUMMATION32_DT* shared_outputs = reinterpret_cast<SUMMATION32_DT*>(shared_lookup_indices + blockDim.x);
+    #else
     EXTERNAL_REAL_DT* shared_outputs = reinterpret_cast<EXTERNAL_REAL_DT*>(shared_lookup_indices + blockDim.x);
+    #endif
 
     // Initialize outputs in shared memory to zero
     if(threadIdx.x < n_outputs_in_block) {
-        shared_outputs[threadIdx.x] = 0.0;
+        shared_outputs[threadIdx.x] = SUMMATION_ZERO;
     }
-    __syncthreads();
 
     // Load inputs to shared memory
     // Thread 0: load input_2 for position j
@@ -1761,13 +1865,6 @@ fill_outputs_product_fc_logic(
             shared_input_2[k] = r_input_2[(batch_offset + j) * n_inputs_2 + k];
         }
     }
-
-    // calculating i_base
-    linear_idx -= threadIdx.x;
-    tile_id = linear_idx / n_detectors_in_block;
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
 
     // Threads 1 to tile_height: load input_1 for positions i_base to i_base+tile_height-1
     if(threadIdx.x >= 1 && threadIdx.x <= tile_height) {
@@ -1798,105 +1895,29 @@ fill_outputs_product_fc_logic(
     // Calculate lookup index - each thread calculates for its own (i, j) pair
     int32_t lookup_index = -1; // -1 means invalid/masked
     
-    if((detector_index < n_detectors) && (i < sequence_length) && (i < j)) {
+    if((detector_index < n_detectors) && (i < j)) {
         // Get detector anchors
         AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
         
-        // Calculate i_idx relative to i_base for accessing shared memory
-        uint32_t i_idx = i - i_base;
-        
-        lookup_index = 0;
-        
-        // Build combined input based on mode
-        if(sliced_mode) {
-            // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
-            // n_inputs_1 == n_inputs_2 == positional_dim
-            uint32_t slice_size = n_inputs_1; // == n_inputs_2 == positional_dim
-            uint32_t total_size = slice_size * 3; // input_1 + input_2 + pos_emb
-
-            for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-                AnchorsPair ap = detector_anchors[anchor_idx];
-
-                if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-                   ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                    continue;
-                }
-
-                if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                    continue;
-                }
-
-                // Map anchor_id to the appropriate input slice
-                uint32_t slice_idx_1 = ap.anchor1_id / 3;
-                uint32_t component_1 = ap.anchor1_id % 3;
-                uint32_t slice_idx_2 = ap.anchor2_id / 3;
-                uint32_t component_2 = ap.anchor2_id % 3;
-
-                EXTERNAL_REAL_DT val1, val2;
-
-                // Get value from appropriate component
-                if(component_1 == 0) {
-                    val1 = shared_input_1[i_idx * n_inputs_1 + slice_idx_1];
-                } else if(component_1 == 1) {
-                    val1 = shared_input_2[slice_idx_1];
-                } else {
-                    val1 = shared_pos_emb[i_idx * positional_dim + slice_idx_1];
-                }
-
-                if(component_2 == 0) {
-                    val2 = shared_input_1[i_idx * n_inputs_1 + slice_idx_2];
-                } else if(component_2 == 1) {
-                    val2 = shared_input_2[slice_idx_2];
-                } else {
-                    val2 = shared_pos_emb[i_idx * positional_dim + slice_idx_2];
-                }
-
-                EXTERNAL_REAL_DT delta = val1 - val2;
-                if(delta > 0.0) {
-                    lookup_index |= (1 << anchor_idx);
-                }
-            }
+        shared_input_1 += (i - i_base) * n_inputs_1;
+        if(positional_dim > 0) {
+            shared_pos_emb += (i - i_base) * positional_dim;
         } else {
-            // Sequential mode: [inp1, inp2, pos_embedding]
-            uint32_t total_size = n_inputs_1 + n_inputs_2 + positional_dim;
-
-            for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-                AnchorsPair ap = detector_anchors[anchor_idx];
-
-                if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-                   ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                    continue;
-                }
-
-                if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                    continue;
-                }
-
-                EXTERNAL_REAL_DT val1, val2;
-
-                // Map anchor_id to the appropriate input section
-                if(ap.anchor1_id < n_inputs_1) {
-                    val1 = shared_input_1[i_idx * n_inputs_1 + ap.anchor1_id];
-                } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
-                    val1 = shared_input_2[ap.anchor1_id - n_inputs_1];
-                } else {
-                    val1 = shared_pos_emb[i_idx * positional_dim + (ap.anchor1_id - n_inputs_1 - n_inputs_2)];
-                }
-
-                if(ap.anchor2_id < n_inputs_1) {
-                    val2 = shared_input_1[i_idx * n_inputs_1 + ap.anchor2_id];
-                } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
-                    val2 = shared_input_2[ap.anchor2_id - n_inputs_1];
-                } else {
-                    val2 = shared_pos_emb[i_idx * positional_dim + (ap.anchor2_id - n_inputs_1 - n_inputs_2)];
-                }
-
-                EXTERNAL_REAL_DT delta = val1 - val2;
-                if(delta > 0.0) {
-                    lookup_index |= (1 << anchor_idx);
-                }
-            }
+            shared_pos_emb = nullptr;
         }
+        // Calculate lookup index using helper function
+        PFX(calculate_product_lookup_index)(
+            sliced_mode,
+            detector_anchors,
+            n_anchors_per_detector,
+            n_inputs_1,
+            n_inputs_2,
+            positional_dim,
+            shared_input_1,
+            shared_input_2,
+            shared_pos_emb,
+            lookup_index
+        );
     }
     
     // Store lookup index at thread's position
@@ -1923,11 +1944,10 @@ fill_outputs_product_fc_logic(
         
         // Calculate detector_index for this thread on the fly
         uint64_t thread_linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + thread_idx;
-        uint32_t thread_detector_block_index = detector_block_index;
-        uint32_t thread_detector_index = thread_detector_block_index * n_detectors_in_block + (thread_linear_idx % n_detectors_in_block);
+        uint32_t thread_detector_index = detector_block_index * n_detectors_in_block + (thread_linear_idx % n_detectors_in_block);
         
         if(thread_detector_index >= n_detectors) {
-            continue; // Invalid detector index
+            continue;
         }
         
         uint32_t lookup_neuron_id = thread_detector_index * n_lookup_neurons_per_detector + li;
@@ -1936,10 +1956,19 @@ fill_outputs_product_fc_logic(
         EXTERNAL_REAL_DT weight = r_weights[weights_offset];
         
         // Atomic accumulate in shared memory for this output
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        #ifdef ATOMIC
+        atomicAdd(&shared_outputs[output_idx], payload);
+        #else
+        shared_outputs[output_idx] += payload;
+        #endif
+        #else
         #ifdef ATOMIC
         atomicAdd(&shared_outputs[output_idx], weight);
         #else
         shared_outputs[output_idx] += weight;
+        #endif
         #endif
     }
 
@@ -1952,16 +1981,15 @@ fill_outputs_product_fc_logic(
         uint32_t global_output_idx = output_start + threadIdx.x;
         
         if(global_output_idx < n_outputs) {
-            EXTERNAL_REAL_DT value = shared_outputs[threadIdx.x];
-            
             // Calculate global output offset
             // w_output layout: [batch0_seq0, batch0_seq1, ..., batch1_seq0, ...]
             uint32_t global_offset = batch_index * sequence_length * n_outputs + j * n_outputs + global_output_idx;
             
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(value * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            SUMMATION32_DT payload = shared_outputs[threadIdx.x];
             atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset), payload);
             #else
+            EXTERNAL_REAL_DT value = shared_outputs[threadIdx.x];
             atomicAdd(w_output + global_offset, value);
             #endif
         }
@@ -2002,7 +2030,7 @@ fill_outputs_product_cpu_logic(
     uint32_t i = threadIdx.x;
     
     // Future masking: only process pairs where i < j
-    if(i >= j || i >= sequence_length || j >= sequence_length || detector_index >= n_detectors) {
+    if(i >= j) {
         return;
     }
     
@@ -2016,116 +2044,36 @@ fill_outputs_product_cpu_logic(
     EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
     EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
     
-    // Get positional embedding once (if needed)
+    // Get positional embedding
     EXTERNAL_REAL_DT* pos_emb = nullptr;
-    if(positional_dim > 0 && j > i) {
-        uint32_t pe_offset = (j - i - 1) * positional_dim;
-        pos_emb = pos_embedding + pe_offset;
+    if(positional_dim > 0) {
+        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
     }
     
     // Calculate lookup index by applying detector logic to combined input
     int32_t lookup_index = 0;
     
-    if(sliced_mode) {
-        // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
-        // n_inputs_1 == n_inputs_2 == positional_dim
-        uint32_t slice_size = n_inputs_1; // == n_inputs_2 == positional_dim
-        uint32_t total_size = slice_size * 3; // input_1 + input_2 + pos_emb
-        
-        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-            AnchorsPair ap = detector_anchors[anchor_idx];
-            
-            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                continue;
-            }
-            
-            if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                continue;
-            }
-            
-            // Map anchor_id to the appropriate input slice
-            uint32_t slice_idx_1 = ap.anchor1_id / 3;
-            uint32_t component_1 = ap.anchor1_id % 3;
-            uint32_t slice_idx_2 = ap.anchor2_id / 3;
-            uint32_t component_2 = ap.anchor2_id % 3;
-            
-            EXTERNAL_REAL_DT val1, val2;
-            
-            // Get value from appropriate component
-            if(component_1 == 0) {
-                val1 = input_1_i[slice_idx_1];
-            } else if(component_1 == 1) {
-                val1 = input_2_j[slice_idx_1];
-            } else {
-                val1 = (pos_emb != nullptr) ? pos_emb[slice_idx_1] : 0.0;
-            }
-            
-            if(component_2 == 0) {
-                val2 = input_1_i[slice_idx_2];
-            } else if(component_2 == 1) {
-                val2 = input_2_j[slice_idx_2];
-            } else {
-                val2 = (pos_emb != nullptr) ? pos_emb[slice_idx_2] : 0.0;
-            }
-            
-            EXTERNAL_REAL_DT delta = val1 - val2;
-            if(delta > 0.0) {
-                lookup_index |= (1 << anchor_idx);
-            }
-        }
-    } else {
-        // Sequential mode: [inp1, inp2, pos_embedding]
-        uint32_t total_size = n_inputs_1 + n_inputs_2 + positional_dim;
-        
-        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-            AnchorsPair ap = detector_anchors[anchor_idx];
-            
-            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                continue;
-            }
-            
-            if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                continue;
-            }
-            
-            EXTERNAL_REAL_DT val1, val2;
-            
-            // Map anchor_id to the appropriate input section
-            if(ap.anchor1_id < n_inputs_1) {
-                val1 = input_1_i[ap.anchor1_id];
-            } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
-                val1 = input_2_j[ap.anchor1_id - n_inputs_1];
-            } else {
-                val1 = (pos_emb != nullptr) ? pos_emb[ap.anchor1_id - n_inputs_1 - n_inputs_2] : 0.0;
-            }
-            
-            if(ap.anchor2_id < n_inputs_1) {
-                val2 = input_1_i[ap.anchor2_id];
-            } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
-                val2 = input_2_j[ap.anchor2_id - n_inputs_1];
-            } else {
-                val2 = (pos_emb != nullptr) ? pos_emb[ap.anchor2_id - n_inputs_1 - n_inputs_2] : 0.0;
-            }
-            
-            EXTERNAL_REAL_DT delta = val1 - val2;
-            if(delta > 0.0) {
-                lookup_index |= (1 << anchor_idx);
-            }
-        }
-    }
+    PFX(calculate_product_lookup_index)(
+        sliced_mode,
+        detector_anchors,
+        n_anchors_per_detector,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        input_1_i,
+        input_2_j,
+        pos_emb,
+        lookup_index
+    );
     
     // Calculate lookup neuron ID
     uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
-    uint32_t output_offset = batch_index * sequence_length * n_outputs + j * n_outputs;
-    
+    w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
     // Fork output filling logic based on sparse connectivity
     if(r_lookup_neuron_synapses_infos != nullptr) {
         // Sparse connectivity: gather outputs using ForwardSynapseGroups
         uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
         NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + lookup_neuron_id);
-        w_output += output_offset;
         // Iterate through all synapse groups by following the group chain
         NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id;
         for(uint32_t group_idx = 0; group_idx < lookup_neuron_synapses_info.n_groups; group_idx++) {
@@ -2155,9 +2103,9 @@ fill_outputs_product_cpu_logic(
             EXTERNAL_REAL_DT weight = r_weights[weights_offset + output_idx];
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset + output_idx)[0] += payload;
+            reinterpret_cast<SUMMATION32_DT *>(w_output + output_idx)[0] += payload;
             #else
-            w_output[output_offset + output_idx] += weight;
+            w_output[output_idx] += weight;
             #endif
         }
     }
@@ -2206,6 +2154,18 @@ fill_outputs_product_sparse_logic(
     uint32_t i = (tile_id / sequence_length) * tile_height + t;
     uint32_t j = tile_id % sequence_length;
 
+    // calculating i_base
+    linear_idx -= threadIdx.x;
+    tile_id = linear_idx / n_detectors_in_block;
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
+
+    if(i_base >= j) {
+        // whole thread block can be skipped
+        return;
+    }
+
     // at this point we have absolute i, j, detector_index, batch_index and output_block_index
 
     // batch_index and output_block_index are fixed for the thread block
@@ -2231,13 +2191,6 @@ fill_outputs_product_sparse_logic(
             shared_input_2[k] = r_input_2[(batch_offset + j) * n_inputs_2 + k];
         }
     }
-
-    // calculating i_base
-    linear_idx -= threadIdx.x;
-    tile_id = linear_idx / n_detectors_in_block;
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
 
     // Threads 1 to tile_height: load input_1 for positions i_base to i_base+tile_height-1
     if(threadIdx.x >= 1 && threadIdx.x <= tile_height) {
@@ -2271,102 +2224,26 @@ fill_outputs_product_sparse_logic(
     if((detector_index < n_detectors) && (i < sequence_length) && (i < j)) {
         // Get detector anchors
         AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
-        
-        // Calculate i_idx relative to i_base for accessing shared memory
-        uint32_t i_idx = i - i_base;
-        
-        lookup_index = 0;
-        
-        // Build combined input based on mode
-        if(sliced_mode) {
-            // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
-            // n_inputs_1 == n_inputs_2 == positional_dim
-            uint32_t slice_size = n_inputs_1; // == n_inputs_2 == positional_dim
-            uint32_t total_size = slice_size * 3; // input_1 + input_2 + pos_emb
-
-            for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-                AnchorsPair ap = detector_anchors[anchor_idx];
-
-                if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-                   ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                    continue;
-                }
-
-                if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                    continue;
-                }
-
-                // Map anchor_id to the appropriate input slice
-                uint32_t slice_idx_1 = ap.anchor1_id / 3;
-                uint32_t component_1 = ap.anchor1_id % 3;
-                uint32_t slice_idx_2 = ap.anchor2_id / 3;
-                uint32_t component_2 = ap.anchor2_id % 3;
-
-                EXTERNAL_REAL_DT val1, val2;
-
-                // Get value from appropriate component
-                if(component_1 == 0) {
-                    val1 = shared_input_1[i_idx * n_inputs_1 + slice_idx_1];
-                } else if(component_1 == 1) {
-                    val1 = shared_input_2[slice_idx_1];
-                } else {
-                    val1 = shared_pos_emb[i_idx * positional_dim + slice_idx_1];
-                }
-
-                if(component_2 == 0) {
-                    val2 = shared_input_1[i_idx * n_inputs_1 + slice_idx_2];
-                } else if(component_2 == 1) {
-                    val2 = shared_input_2[slice_idx_2];
-                } else {
-                    val2 = shared_pos_emb[i_idx * positional_dim + slice_idx_2];
-                }
-
-                EXTERNAL_REAL_DT delta = val1 - val2;
-                if(delta > 0.0) {
-                    lookup_index |= (1 << anchor_idx);
-                }
-            }
+        shared_input_1 += (i - i_base) * n_inputs_1;
+        if(positional_dim > 0) {
+            shared_pos_emb += (i - i_base) * positional_dim;
         } else {
-            // Sequential mode: [inp1, inp2, pos_embedding]
-            uint32_t total_size = n_inputs_1 + n_inputs_2 + positional_dim;
-
-            for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
-                AnchorsPair ap = detector_anchors[anchor_idx];
-
-                if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
-                   ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
-                    continue;
-                }
-
-                if(ap.anchor1_id >= total_size || ap.anchor2_id >= total_size) {
-                    continue;
-                }
-
-                EXTERNAL_REAL_DT val1, val2;
-
-                // Map anchor_id to the appropriate input section
-                if(ap.anchor1_id < n_inputs_1) {
-                    val1 = shared_input_1[i_idx * n_inputs_1 + ap.anchor1_id];
-                } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
-                    val1 = shared_input_2[ap.anchor1_id - n_inputs_1];
-                } else {
-                    val1 = shared_pos_emb[i_idx * positional_dim + (ap.anchor1_id - n_inputs_1 - n_inputs_2)];
-                }
-
-                if(ap.anchor2_id < n_inputs_1) {
-                    val2 = shared_input_1[i_idx * n_inputs_1 + ap.anchor2_id];
-                } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
-                    val2 = shared_input_2[ap.anchor2_id - n_inputs_1];
-                } else {
-                    val2 = shared_pos_emb[i_idx * positional_dim + (ap.anchor2_id - n_inputs_1 - n_inputs_2)];
-                }
-
-                EXTERNAL_REAL_DT delta = val1 - val2;
-                if(delta > 0.0) {
-                    lookup_index |= (1 << anchor_idx);
-                }
-            }
+            shared_pos_emb = nullptr;
         }
+        
+        // Calculate lookup index using helper function
+        PFX(calculate_product_lookup_index)(
+            sliced_mode,
+            detector_anchors,
+            n_anchors_per_detector,
+            n_inputs_1,
+            n_inputs_2,
+            positional_dim,
+            shared_input_1,
+            shared_input_2,
+            shared_pos_emb,
+            lookup_index
+        );
     }
     
     // For sparse mode: each thread fires the synapse group for its own (detector_index, lookup_index) pair
@@ -2390,7 +2267,7 @@ fill_outputs_product_sparse_logic(
             // Calculate global output offset for position j
             uint32_t global_offset = batch_index * sequence_length * n_outputs + j * n_outputs;
             w_output += global_offset;
-            
+
             ATOMIC_PFX(fire_single_synapse_group)(
                 current_group_id,
                 lut_data,
@@ -2404,7 +2281,6 @@ fill_outputs_product_sparse_logic(
     }
     #endif
 }
-
 
 // ======================= SEQUENCE, BACKWARD =============================== //
 
