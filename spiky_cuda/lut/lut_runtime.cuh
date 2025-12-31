@@ -173,4 +173,26 @@ public:
         , cudaStream_t *cuda_streams
         #endif
     );
+
+    void backward_backprop_product(
+        EXTERNAL_REAL_DT *r_weights,
+        uint32_t batch_size,
+        uint32_t sequence_length,
+        EXTERNAL_REAL_DT *r_input_1,
+        EXTERNAL_REAL_DT *r_input_2,
+        AnchorsPair *r_detectors,
+        EXTERNAL_REAL_DT *r_output_gradients,
+        EXTERNAL_REAL_DT *w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+        EXTERNAL_REAL_DT *w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+        EXTERNAL_REAL_DT external_lr,
+        EXTERNAL_REAL_DT *w_weights_gradients, // can be nullptr when external_lr != 0.0
+        uint32_t n_inputs_1,
+        uint32_t n_inputs_2,
+        EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+        EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+        bool sliced_mode
+        #ifndef NO_CUDA
+        , cudaStream_t *cuda_streams
+        #endif
+    );
 };

@@ -1086,3 +1086,397 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
     #endif
 }
+
+void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
+    EXTERNAL_REAL_DT *r_weights,
+    uint32_t batch_size,
+    uint32_t sequence_length,
+    EXTERNAL_REAL_DT *r_input_1,
+    EXTERNAL_REAL_DT *r_input_2,
+    AnchorsPair *r_detectors,
+    EXTERNAL_REAL_DT *r_output_gradients,
+    EXTERNAL_REAL_DT *w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT *w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    EXTERNAL_REAL_DT external_lr,
+    EXTERNAL_REAL_DT *w_weights_gradients, // can be nullptr when external_lr != 0.0
+    uint32_t n_inputs_1,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
+    EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+    bool sliced_mode
+    #ifndef NO_CUDA
+    , cudaStream_t *cuda_streams
+    #endif
+) {
+    __TRACE__("LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product, n_detectors %d, n_outputs %d, batch_size %d, sequence_length %d\n", n_detectors, this->n_outputs, batch_size, sequence_length);
+    
+    if((external_lr >= 0.0) && (w_weights_gradients != nullptr)) {
+        throw py::value_error("in internal weight gradients mode w_weights_gradients should be nullptr");
+    }
+
+    #ifdef ENABLE_PROFILING
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+    }
+    #endif
+    #endif
+
+    PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROFILER_OP);
+
+    uint32_t n_lookup_neurons_per_detector = this->n_lookup_neurons / this->n_detectors;
+
+    if(lookup_neuron_synapses_infos != nullptr) {
+        // Sparse connectivity
+        if(device == -1) {
+            // CPU: single kernel does everything
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
+            uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
+            dim3 numBlocks(n_detector_output_pairs, batch_size);
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, propagate_backward_product_cpu, sequence_length,
+                sequence_length,
+                this->positional_dim,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                batch_size,
+                r_output_gradients,
+                reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                this->base_synapse_metas,
+                this->first_synapse_id,
+                this->lut_data,
+                w_input_gradients_1,
+                w_input_gradients_2,
+                sliced_mode,
+                external_lr,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                this->first_synapse_meta_lr,
+                w_positional_embeddings_gradients
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
+        } else {
+            #ifndef NO_CUDA
+            // CUDA: separate kernels for input and weight gradients
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
+            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+            uint32_t n_detectors_in_block = tpb;
+            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+            uint32_t tile_height;
+            
+            if(n_detector_blocks == 1) {
+                n_detectors_in_block = this->n_detectors;
+                if(n_detectors_in_block < 4) {
+                    n_detectors_in_block = 4;
+                }
+                tile_height = tpb / n_detectors_in_block;
+                tpb = tile_height * n_detectors_in_block;
+            } else {
+                tile_height = 1;
+            }
+            
+            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+            uint32_t n_output_blocks = this->max_forward_groups_per_neuron;
+            uint32_t n_outputs_in_block = this->forward_group_size;
+            
+            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+            
+            // Calculate shared memory size
+            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT);
+            
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, propagate_backward_product_sparse, tpb,
+                shared_mem_size, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                r_output_gradients,
+                reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                this->base_synapse_metas,
+                this->first_synapse_id,
+                this->lut_data,
+                w_input_gradients_1,
+                w_input_gradients_2,
+                sliced_mode,
+                w_positional_embeddings_gradients
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
+            
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_SPARSE_PROFILER_OP);
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, gather_w_gradients_product_sparse, tpb,
+                shared_mem_size, cuda_streams[(external_lr >= 0) ? 0 : 1],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_output_gradients,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                this->base_synapse_metas,
+                this->first_synapse_id,
+                this->lut_data,
+                external_lr,
+                this->first_synapse_meta_lr
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_SPARSE_PROFILER_OP);
+            #endif
+        }
+    } else {
+        // Fully connected
+        if(device == -1) {
+            // CPU: single kernel does everything
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
+            uint32_t n_detector_output_pairs = this->n_detectors * this->n_outputs;
+            dim3 numBlocks(n_detector_output_pairs, batch_size * sequence_length);
+            GRID_CALL_NO_SHARED_MEM(
+                numBlocks, propagate_backward_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                sequence_length,
+                this->positional_dim,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                batch_size,
+                r_output_gradients,
+                nullptr, // r_lookup_neuron_synapses_infos (nullptr for FC)
+                nullptr, // base_synapse_metas (nullptr for FC)
+                0, // first_synapse_id (not used for FC)
+                nullptr, // lut_data (not used for FC)
+                w_input_gradients_1,
+                w_input_gradients_2,
+                sliced_mode,
+                external_lr,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                this->first_synapse_meta_lr,
+                w_positional_embeddings_gradients
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
+        } else {
+            #ifndef NO_CUDA
+            // CUDA: separate kernels for input and weight gradients
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
+            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+            uint32_t n_detectors_in_block = tpb;
+            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+            uint32_t tile_height;
+            if(n_detector_blocks == 1) {
+                n_detectors_in_block = this->n_detectors;
+                if(n_detectors_in_block < 4) {
+                    n_detectors_in_block = 4;
+                }
+                tile_height = tpb / n_detectors_in_block;
+                tpb = tile_height * n_detectors_in_block;
+            } else {
+                tile_height = 1;
+            }
+            
+            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+            uint32_t n_outputs_in_block = this->forward_group_size;
+            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+            
+            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+            
+            // Calculate shared memory size
+            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
+                                       tpb * sizeof(int32_t) +
+                                       #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                                       n_outputs_in_block * sizeof(SUMMATION32_DT)
+                                       #else
+                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
+                                       #endif
+                                       ;
+            
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, propagate_backward_product_fc, tpb,
+                shared_mem_size, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                r_output_gradients,
+                w_input_gradients_1,
+                w_input_gradients_2,
+                sliced_mode,
+                w_positional_embeddings_gradients
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
+            
+            if(w_weights_gradients != nullptr || external_lr < 0.0) {
+                PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
+                GRID_CALL_ON_STREAM_SHARED_MEM(
+                    numBlocks, gather_w_gradients_product_fc, tpb,
+                    shared_mem_size, cuda_streams[(external_lr >= 0) ? 0 : 1],
+                    sequence_length,
+                    this->positional_dim,
+                    tile_height,
+                    r_output_gradients,
+                    r_input_1,
+                    n_inputs_1,
+                    r_input_2,
+                    n_inputs_2,
+                    r_positional_embeddings,
+                    r_detectors,
+                    this->n_detectors,
+                    n_detector_blocks,
+                    n_detectors_in_block,
+                    this->n_anchors_per_detector,
+                    (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                    n_lookup_neurons_per_detector,
+                    this->n_outputs,
+                    n_output_blocks,
+                    n_outputs_in_block,
+                    external_lr,
+                    this->first_synapse_meta_lr
+                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    , this->int_rescaler
+                    #else
+                    , 0.0
+                    #endif
+                );
+                PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
+            }
+            #endif
+        }
+    }
+    PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROFILER_OP);
+
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    #ifndef NO_CUDA
+    if(device != -1) {
+        c10::cuda::CUDAGuard guard(device);
+        cudaEvent_t ev1;
+        cudaEventCreate(&ev1);
+        cudaEventRecord(ev1, cuda_streams[0]);
+        if(external_lr >= 0) {
+            cudaStreamWaitEvent(cuda_streams[1], ev1, 0);
+        }
+        if(this->positional_dim > 0) {
+            cudaStreamWaitEvent(cuda_streams[2], ev1, 0);
+        }
+    }
+    #endif
+    PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_inputs_1), batch_size);
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_inputs_1), cuda_streams[0],
+        w_input_gradients_1,
+        n_inputs_1,
+        this->int_rescaler
+    );
+    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_inputs_2), batch_size);
+    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_inputs_2), cuda_streams[0],
+        w_input_gradients_2,
+        n_inputs_2,
+        this->int_rescaler
+    );
+    if(w_weights_gradients != nullptr) {
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_weights), cuda_streams[1],
+            w_weights_gradients,
+            this->n_weights,
+            this->int_rescaler
+        );
+    }
+    if(this->positional_dim > 0) {
+        uint32_t n_items = this->positional_dim * (sequence_length - 1);
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
+            w_positional_embeddings_gradients,
+            n_items,
+            this->int_rescaler
+        );
+    }
+    PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
+    #endif
+}

@@ -118,6 +118,159 @@ calculate_product_lookup_index(
     }
 }
 
+calculate_product_lookup_index_backprop(
+    bool sliced_mode,
+    AnchorsPair* detector_anchors,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_inputs_1,
+    uint32_t n_inputs_2,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* input_1_ptr,
+    EXTERNAL_REAL_DT* input_2_ptr,
+    EXTERNAL_REAL_DT* pos_emb_ptr,
+    int32_t lookup_index,
+    int32_t alt_lookup_index,
+    uint32_t first_flipping_index,
+    uint32_t second_flipping_index,
+    EXTERNAL_REAL_DT min_delta,
+    uint32_t first_anchor_source,
+    uint32_t second_anchor_source
+) {
+    lookup_index = 0;
+    alt_lookup_index = 0;
+    first_flipping_index = std::numeric_limits<uint32_t>::max();
+    second_flipping_index = std::numeric_limits<uint32_t>::max();
+    min_delta = std::numeric_limits<EXTERNAL_REAL_DT>::max();
+    first_anchor_source = std::numeric_limits<uint32_t>::max();
+    second_anchor_source = std::numeric_limits<uint32_t>::max();
+    uint32_t flipping_anchor_idx = std::numeric_limits<uint32_t>::max();
+    
+    if(sliced_mode) {
+        // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+
+            // Map anchor_id to the appropriate input slice
+            uint32_t slice_idx_1 = ap.anchor1_id / 3;
+            uint32_t component_1 = ap.anchor1_id % 3;
+            uint32_t slice_idx_2 = ap.anchor2_id / 3;
+            uint32_t component_2 = ap.anchor2_id % 3;
+
+            EXTERNAL_REAL_DT val1, val2;
+
+            // Get value from appropriate component
+            if(component_1 == 0) {
+                val1 = input_1_ptr[slice_idx_1];
+            } else if(component_1 == 1) {
+                val1 = input_2_ptr[slice_idx_1];
+            } else {
+                val1 = pos_emb_ptr[slice_idx_1];
+            }
+
+            if(component_2 == 0) {
+                val2 = input_1_ptr[slice_idx_2];
+            } else if(component_2 == 1) {
+                val2 = input_2_ptr[slice_idx_2];
+            } else {
+                val2 = pos_emb_ptr[slice_idx_2];
+            }
+
+            if(val1 > val2) {
+                lookup_index |= (1 << anchor_idx);
+            }
+            
+            // Track minimum delta across all anchors and determine which input component it belongs to
+            EXTERNAL_REAL_DT delta = fabs(val1 - val2);
+            
+            if(delta < min_delta) {
+                min_delta = delta;
+                flipping_anchor_idx = anchor_idx;
+                
+                // Determine which input component each anchor belongs to
+                // component: 0=input_1, 1=input_2, 2=positional embedding
+                first_anchor_source = component_1;
+                second_anchor_source = component_2;
+                
+                // Set flipping indices to the indices used to access the corresponding input arrays
+                // For sliced mode, use slice_idx (the index used to access the input array)
+                first_flipping_index = slice_idx_1;
+                second_flipping_index = slice_idx_2;
+            }
+        }
+    } else {
+        // Sequential mode: [inp1, inp2, pos_embedding]
+        for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
+            AnchorsPair ap = detector_anchors[anchor_idx];
+
+            if(ap.anchor1_id == std::numeric_limits<NeuronIndex_t>::max() ||
+               ap.anchor2_id == std::numeric_limits<NeuronIndex_t>::max()) {
+                continue;
+            }
+
+            EXTERNAL_REAL_DT val1, val2;
+
+            // Map anchor_id to the appropriate input section
+            if(ap.anchor1_id < n_inputs_1) {
+                val1 = input_1_ptr[ap.anchor1_id];
+            } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
+                val1 = input_2_ptr[ap.anchor1_id - n_inputs_1];
+            } else {
+                val1 = pos_emb_ptr[ap.anchor1_id - n_inputs_1 - n_inputs_2];
+            }
+
+            if(ap.anchor2_id < n_inputs_1) {
+                val2 = input_1_ptr[ap.anchor2_id];
+            } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
+                val2 = input_2_ptr[ap.anchor2_id - n_inputs_1];
+            } else {
+                val2 = pos_emb_ptr[ap.anchor2_id - n_inputs_1 - n_inputs_2];
+            }
+
+            if(val1 > val2) {
+                lookup_index |= (1 << anchor_idx);
+            }
+            
+            // Track minimum delta across all anchors and determine which input component it belongs to
+            EXTERNAL_REAL_DT delta = fabs(val1 - val2);
+            
+            if(delta < min_delta) {
+                min_delta = delta;
+                flipping_anchor_idx = anchor_idx;
+                
+                // Determine which input component each anchor belongs to and set flipping indices
+                // 0=input_1, 1=input_2, 2=positional embedding
+                if(ap.anchor1_id < n_inputs_1) {
+                    first_anchor_source = 0; // input_1
+                    first_flipping_index = ap.anchor1_id; // index in input_1 array
+                } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
+                    first_anchor_source = 1; // input_2
+                    first_flipping_index = ap.anchor1_id - n_inputs_1; // index in input_2 array
+                } else {
+                    first_anchor_source = 2; // positional embedding
+                    first_flipping_index = ap.anchor1_id - n_inputs_1 - n_inputs_2; // index in pos_emb array
+                }
+                
+                if(ap.anchor2_id < n_inputs_1) {
+                    second_anchor_source = 0; // input_1
+                    second_flipping_index = ap.anchor2_id; // index in input_1 array
+                } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
+                    second_anchor_source = 1; // input_2
+                    second_flipping_index = ap.anchor2_id - n_inputs_1; // index in input_2 array
+                } else {
+                    second_anchor_source = 2; // positional embedding
+                    second_flipping_index = ap.anchor2_id - n_inputs_1 - n_inputs_2; // index in pos_emb array
+                }
+            }
+        }
+    }
+    alt_lookup_index = lookup_index ^ (1 << flipping_anchor_idx);
+}
+
 convert_integers_to_floats_logic(
     EXTERNAL_REAL_DT* buffer,
     uint64_t n,
@@ -784,6 +937,151 @@ propagate_through_detector(
             w_input_grad[ap.anchor2_id] -= du;
             #endif
         #endif
+    }
+}
+
+propagate_through_detector_product(
+    EXTERNAL_REAL_DT min_delta,
+    double main_grad_sum,
+    double alt_grad_sum,
+    uint32_t first_flipping_index,
+    uint32_t first_anchor_source,
+    uint32_t second_flipping_index,
+    uint32_t second_anchor_source,
+    EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    uint32_t batch_index,
+    uint32_t sequence_length,
+    uint32_t i,
+    uint32_t j,
+    uint32_t n_inputs_1,
+    uint32_t n_inputs_2,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // can be nullptr when positional_dim == 0
+    double int_rescaler
+) {
+    // Compute uncertainty function gradient
+    double du = main_grad_sum - alt_grad_sum;
+    if(fabs(du) > EPS) {
+        // Compute uncertainty gradient using min_delta
+        double delta = static_cast<double>(min_delta);
+        if(delta > 0) {
+            du = 1.0 / (1.0 + fabs(delta));
+            du *= 0.5 * du * (main_grad_sum - alt_grad_sum);
+        } else {
+            du = 1.0 / (1.0 + fabs(delta));
+            du *= -0.5 * du * (main_grad_sum - alt_grad_sum);
+        }
+        
+        // Propagate to the appropriate input component based on first_anchor_source
+        if(first_anchor_source == 0) {
+            // Propagate to input_1 gradients (from position i)
+            EXTERNAL_REAL_DT* w_input_1_grad = w_input_gradients_1 + (batch_index * sequence_length + i) * n_inputs_1;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_input_1_grad) + first_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_1_grad + first_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_input_1_grad + first_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_input_1_grad[first_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        } else if(first_anchor_source == 1) {
+            // Propagate to input_2 gradients (from position j)
+            EXTERNAL_REAL_DT* w_input_2_grad = w_input_gradients_2 + (batch_index * sequence_length + j) * n_inputs_2;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_input_2_grad) + first_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_2_grad + first_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_input_2_grad + first_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_input_2_grad[first_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        } else if(first_anchor_source == 2) {
+            // Propagate to positional embedding gradients
+            uint32_t pe_offset = (j - i - 1) * positional_dim;
+            EXTERNAL_REAL_DT* w_pe_grad = w_positional_embeddings_gradients + pe_offset;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_pe_grad) + first_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_pe_grad + first_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_pe_grad + first_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_pe_grad[first_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        }
+
+        // Also propagate using second_flipping_index if it's different
+        if(second_anchor_source == 0) {
+            // Propagate to input_1 gradients (from position i)
+            EXTERNAL_REAL_DT* w_input_1_grad = w_input_gradients_1 + (batch_index * sequence_length + i) * n_inputs_1;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_input_1_grad) + second_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_1_grad + second_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_input_1_grad + second_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_input_1_grad[second_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        } else if(second_anchor_source == 1) {
+            // Propagate to input_2 gradients (from position j)
+            EXTERNAL_REAL_DT* w_input_2_grad = w_input_gradients_2 + (batch_index * sequence_length + j) * n_inputs_2;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_input_2_grad) + second_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_input_2_grad + second_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_input_2_grad + second_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_input_2_grad[second_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        } else if(second_anchor_source == 2 && positional_dim > 0 && w_positional_embeddings_gradients != nullptr) {
+            // Propagate to positional embedding gradients
+            uint32_t pe_offset = (j - i - 1) * positional_dim;
+            EXTERNAL_REAL_DT* w_pe_grad = w_positional_embeddings_gradients + pe_offset;
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            #ifdef ATOMIC
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_pe_grad) + second_flipping_index, sum32_delta);
+            #else
+            *reinterpret_cast<SUMMATION32_DT *>(w_pe_grad + second_flipping_index) += sum32_delta;
+            #endif
+            #else
+            #ifdef ATOMIC
+            atomicAdd(w_pe_grad + second_flipping_index, static_cast<EXTERNAL_REAL_DT>(du));
+            #else
+            w_pe_grad[second_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
+            #endif
+            #endif
+        }
     }
 }
 
@@ -2280,6 +2578,358 @@ fill_outputs_product_sparse_logic(
         }
     }
     #endif
+}
+
+// ======================= PRODUCT, BACKWARD =============================== //
+
+propagate_backward_product_cpu_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* r_input_1, // [batch_size * sequence_length * n_inputs_1]
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim] or nullptr
+    AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_outputs]
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t batch_size,
+    EXTERNAL_REAL_DT* r_output_gradients, // [batch_size * sequence_length * n_outputs]
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos, // nullptr for FC mode
+    BaseSynapseMeta* r_synapse_metas, // only used for sparse mode
+    NeuronDataId_t first_synapse_id, // only used for sparse mode
+    uint8_t* lut_data, // only used for sparse mode
+    EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    bool sliced_mode,
+    double external_lr,
+    EXTERNAL_REAL_DT* w_weights_gradients, // can be nullptr when external_lr != 0.0
+    double first_synapse_meta_lr,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+    double int_rescaler
+) {
+    // blockIdx.y encodes: batch_index
+    // blockIdx.x encodes: j * n_detectors + detector_index
+    // threadIdx.x encodes: i (for position i < j)
+    
+    uint32_t batch_index = blockIdx.y;
+    uint32_t j_detector_combo = blockIdx.x;
+    uint32_t j = j_detector_combo / n_detectors;
+    uint32_t detector_index = j_detector_combo % n_detectors;
+    uint32_t i = threadIdx.x;
+    
+    // Only process pairs where i < j
+    if(i >= j) {
+        return;
+    }
+    
+    // Get detector anchors
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+    
+    // Calculate batch offsets
+    uint32_t batch_offset = batch_index * sequence_length;
+    
+    // Get pointers to input vectors
+    EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
+    EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
+    
+    // Get positional embedding
+    EXTERNAL_REAL_DT* pos_emb = nullptr;
+    if(positional_dim > 0 && pos_embedding != nullptr) {
+        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+    }
+    
+    // Calculate lookup index and track flipping anchors
+    int32_t lookup_index;
+    int32_t alt_lookup_index;
+    uint32_t first_flipping_index;
+    uint32_t second_flipping_index;
+    EXTERNAL_REAL_DT min_delta;
+    uint32_t first_anchor_source;
+    uint32_t second_anchor_source;
+    
+    // Calculate lookup index and find flipping anchors (determines which input component)
+    PFX(calculate_product_lookup_index_backprop)(
+        sliced_mode,
+        detector_anchors,
+        n_anchors_per_detector,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        input_1_i,
+        input_2_j,
+        pos_emb,
+        lookup_index,
+        alt_lookup_index,
+        first_flipping_index,
+        second_flipping_index,
+        min_delta,
+        first_anchor_source,
+        second_anchor_source
+    );
+
+    // Calculate lookup neuron ID
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+    
+    // Get output gradients for position j
+    EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
+    
+    // Compute gradient difference between main and alternative lookup neurons
+    double main_grad_sum = 0.0;
+    double alt_grad_sum = 0.0;
+    
+    uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
+    int32_t n_outputs_per_block = static_cast<int32_t>(n_outputs);
+
+    // Compute main gradient sum
+    if(r_lookup_neuron_synapses_infos != nullptr) {
+        // Sparse connectivity
+        NoDelaysIndexedSynapsesInfo lookup_neuron_synapses_info = *(r_lookup_neuron_synapses_infos + lookup_neuron_id);
+        NeuronDataId_t current_group_id = lookup_neuron_synapses_info.first_group_id;
+        for(uint32_t group_idx = 0; group_idx < lookup_neuron_synapses_info.n_groups; group_idx++) {
+            PFX(accumulate_grad_sum_sparse)(
+                current_group_id,
+                lut_data,
+                first_synapse_id,
+                output_grads,
+                r_weights,
+                n_lookup_neurons,
+                n_outputs,
+                main_grad_sum
+            );
+            
+            if(group_idx + 1 < lookup_neuron_synapses_info.n_groups) {
+                ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(current_group_id, lut_data);
+                int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
+                current_group_id += SizeOfForwardSynapseGroup(current_group_size, true);
+            }
+        }
+    } else {
+        // Fully connected
+        PFX(accumulate_grad_sum_fc)(
+            output_grads,
+            r_weights,
+            lookup_neuron_id,
+            n_outputs,
+            n_outputs_per_block,
+            main_grad_sum
+        );
+    }
+    
+    // Compute alternative gradient sum
+    NeuronIndex_t alt_neuron_id = detector_index * n_lookup_neurons_per_detector + alt_lookup_index;
+
+    if(r_lookup_neuron_synapses_infos != nullptr) {
+        // Sparse connectivity
+        NoDelaysIndexedSynapsesInfo alt_synapses_info = *(r_lookup_neuron_synapses_infos + alt_neuron_id);
+        NeuronDataId_t current_group_id = alt_synapses_info.first_group_id;
+        for(uint32_t group_idx = 0; group_idx < alt_synapses_info.n_groups; group_idx++) {
+            PFX(accumulate_grad_sum_sparse)(
+                current_group_id,
+                lut_data,
+                first_synapse_id,
+                output_grads,
+                r_weights,
+                n_lookup_neurons,
+                n_outputs,
+                alt_grad_sum
+            );
+
+            if(group_idx + 1 < alt_synapses_info.n_groups) {
+                ForwardSynapseGroup* fws_group_ptr = GetForwardSynapseGroup(current_group_id, lut_data);
+                int32_t current_group_size = static_cast<int32_t>(SynapseGroupSize(fws_group_ptr->meta_info));
+                current_group_id += SizeOfForwardSynapseGroup(current_group_size, true);
+            }
+        }
+    } else {
+        // Fully connected
+        PFX(accumulate_grad_sum_fc)(
+            output_grads,
+            r_weights,
+            alt_neuron_id,
+            n_outputs,
+            n_outputs_per_block,
+            alt_grad_sum
+        );
+    }
+
+    // Compute uncertainty function gradient and propagate based on which input component the flipping anchor belongs to
+    PFX(propagate_through_detector_product)(
+        min_delta,
+        main_grad_sum,
+        alt_grad_sum,
+        first_flipping_index,
+        first_anchor_source,
+        second_flipping_index,
+        second_anchor_source,
+        w_input_gradients_1,
+        w_input_gradients_2,
+        batch_index,
+        sequence_length,
+        i,
+        j,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        w_positional_embeddings_gradients,
+        int_rescaler
+    );
+    
+    // Gather weight gradients if needed
+    if(r_lookup_neuron_synapses_infos != nullptr) {
+        // Sparse connectivity: gather weight gradients
+        uint32_t output_block_index = 0;
+        PFX(gather_weight_gradients_sparse)(
+            r_lookup_neuron_synapses_infos,
+            lookup_neuron_id,
+            output_block_index,
+            n_outputs,
+            lut_data,
+            first_synapse_id,
+            output_grads,
+            r_synapse_metas,
+            first_synapse_meta_lr,
+            external_lr,
+            n_lookup_neurons,
+            w_weights_gradients,
+            int_rescaler
+        );
+    } else {
+        // Fully connected: gather weight gradients
+        PFX(gather_weight_gradients_fc)(
+            output_grads,
+            lookup_neuron_id,
+            n_outputs,
+            n_outputs_per_block,
+            first_synapse_meta_lr,
+            external_lr,
+            w_weights_gradients,
+            int_rescaler
+        );
+    }
+}
+
+propagate_backward_product_sparse_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    BaseSynapseMeta* r_synapse_metas,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
+    EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    bool sliced_mode,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+    double int_rescaler
+) {
+    // TODO: Implement propagate_backward_product_sparse_logic
+}
+
+gather_w_gradients_product_sparse_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    uint32_t n_lookup_neurons_per_detector,
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos,
+    BaseSynapseMeta* r_synapse_metas,
+    NeuronDataId_t first_synapse_id,
+    uint8_t* lut_data,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    // TODO: Implement gather_w_gradients_product_sparse_logic
+}
+
+propagate_backward_product_fc_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    bool sliced_mode,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+    double int_rescaler
+) {
+    // TODO: Implement propagate_backward_product_fc_logic
+}
+
+gather_w_gradients_product_fc_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    uint32_t n_lookup_neurons_per_detector,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    // TODO: Implement gather_w_gradients_product_fc_logic
 }
 
 // ======================= SEQUENCE, BACKWARD =============================== //
