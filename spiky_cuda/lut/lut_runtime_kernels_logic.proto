@@ -2606,8 +2606,7 @@ propagate_backward_product_cpu_logic(
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
     bool sliced_mode,
-    double external_lr,
-    EXTERNAL_REAL_DT* w_weights_gradients, // can be nullptr when external_lr != 0.0
+    EXTERNAL_REAL_DT* w_weights_gradients, // can be nullptr in internal gradients mode
     double first_synapse_meta_lr,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
     double int_rescaler
@@ -2779,7 +2778,123 @@ propagate_backward_product_cpu_logic(
         int_rescaler
     );
     
-    // Gather weight gradients if needed
+    if(w_weights_gradients != nullptr) {
+        double external_lr = -1.0;
+        if(r_lookup_neuron_synapses_infos != nullptr) {
+            // Sparse connectivity: gather weight gradients
+            uint32_t output_block_index = 0;
+            PFX(gather_weight_gradients_sparse)(
+                r_lookup_neuron_synapses_infos,
+                lookup_neuron_id,
+                output_block_index,
+                n_outputs,
+                lut_data,
+                first_synapse_id,
+                output_grads,
+                r_synapse_metas,
+                first_synapse_meta_lr,
+                external_lr,
+                n_lookup_neurons,
+                w_weights_gradients,
+                int_rescaler
+            );
+        } else {
+            // Fully connected: gather weight gradients
+            PFX(gather_weight_gradients_fc)(
+                output_grads,
+                lookup_neuron_id,
+                n_outputs,
+                n_outputs_per_block,
+                first_synapse_meta_lr,
+                external_lr,
+                w_weights_gradients,
+                int_rescaler
+            );
+        }
+    }
+}
+
+gather_w_gradients_internal_product_cpu_logic(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    EXTERNAL_REAL_DT* r_input_1, // [batch_size * sequence_length * n_inputs_1]
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim] or nullptr
+    AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
+    uint32_t n_detectors,
+    uint32_t n_anchors_per_detector,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t batch_size,
+    EXTERNAL_REAL_DT* r_output_gradients, // [batch_size * sequence_length * n_outputs]
+    NoDelaysIndexedSynapsesInfo* r_lookup_neuron_synapses_infos, // nullptr for FC mode
+    BaseSynapseMeta* r_synapse_metas, // only used for sparse mode
+    NeuronDataId_t first_synapse_id, // only used for sparse mode
+    uint8_t* lut_data, // only used for sparse mode
+    bool sliced_mode,
+    double external_lr,
+    EXTERNAL_REAL_DT* w_weights,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    // blockIdx.y encodes: batch_index
+    // blockIdx.x encodes: j * n_detectors + detector_index
+    // threadIdx.x encodes: i (for position i < j)
+
+    uint32_t batch_index = blockIdx.y;
+    uint32_t j_detector_combo = blockIdx.x;
+    uint32_t j = j_detector_combo / n_detectors;
+    uint32_t detector_index = j_detector_combo % n_detectors;
+    uint32_t i = threadIdx.x;
+
+    // Only process pairs where i < j
+    if(i >= j) {
+        return;
+    }
+
+    // Get detector anchors
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+
+    // Calculate batch offsets
+    uint32_t batch_offset = batch_index * sequence_length;
+
+    // Get pointers to input vectors
+    EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
+    EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
+
+    // Get positional embedding
+    EXTERNAL_REAL_DT* pos_emb = nullptr;
+    if(positional_dim > 0 && pos_embedding != nullptr) {
+        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+    }
+
+    // Calculate lookup index and track flipping anchors
+    int32_t lookup_index;
+
+    PFX(calculate_product_lookup_index)(
+        sliced_mode,
+        detector_anchors,
+        n_anchors_per_detector,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        input_1_i,
+        input_2_j,
+        pos_emb,
+        lookup_index
+    );
+
+    // Calculate lookup neuron ID
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+
+    // Get output gradients for position j
+    EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
+
+    uint32_t n_lookup_neurons = n_lookup_neurons_per_detector * n_detectors;
+    int32_t n_outputs_per_block = static_cast<int32_t>(n_outputs);
+
     if(r_lookup_neuron_synapses_infos != nullptr) {
         // Sparse connectivity: gather weight gradients
         uint32_t output_block_index = 0;
@@ -2795,7 +2910,7 @@ propagate_backward_product_cpu_logic(
             first_synapse_meta_lr,
             external_lr,
             n_lookup_neurons,
-            w_weights_gradients,
+            w_weights,
             int_rescaler
         );
     } else {
@@ -2807,7 +2922,7 @@ propagate_backward_product_cpu_logic(
             n_outputs_per_block,
             first_synapse_meta_lr,
             external_lr,
-            w_weights_gradients,
+            w_weights,
             int_rescaler
         );
     }

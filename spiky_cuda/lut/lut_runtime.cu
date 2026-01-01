@@ -1158,8 +1158,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
-                external_lr,
-                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
                 w_positional_embeddings_gradients
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -1168,6 +1167,38 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 , 0.0
                 #endif
             );
+            if(external_lr >= 0) {
+                GRID_CALL_NO_SHARED_MEM(
+                    numBlocks, gather_w_gradients_internal_product_cpu, sequence_length,
+                    sequence_length,
+                    this->positional_dim,
+                    r_input_1,
+                    n_inputs_1,
+                    r_input_2,
+                    n_inputs_2,
+                    r_positional_embeddings,
+                    r_detectors,
+                    this->n_detectors,
+                    this->n_anchors_per_detector,
+                    n_lookup_neurons_per_detector,
+                    this->n_outputs,
+                    batch_size,
+                    r_output_gradients,
+                    reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
+                    this->base_synapse_metas,
+                    this->first_synapse_id,
+                    this->lut_data,
+                    sliced_mode,
+                    external_lr,
+                    r_weights,
+                    this->first_synapse_meta_lr
+                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    , this->int_rescaler
+                    #else
+                    , 0.0
+                    #endif
+                );
+            }
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
         } else {
             #ifndef NO_CUDA
@@ -1307,8 +1338,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
-                external_lr,
-                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
                 w_positional_embeddings_gradients
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -1317,6 +1347,38 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 , 0.0
                 #endif
             );
+            if(external_lr >= 0) {
+                GRID_CALL_NO_SHARED_MEM(
+                    numBlocks, gather_w_gradients_internal_product_cpu, sequence_length,
+                    sequence_length,
+                    this->positional_dim,
+                    r_input_1,
+                    n_inputs_1,
+                    r_input_2,
+                    n_inputs_2,
+                    r_positional_embeddings,
+                    r_detectors,
+                    this->n_detectors,
+                    this->n_anchors_per_detector,
+                    n_lookup_neurons_per_detector,
+                    this->n_outputs,
+                    batch_size,
+                    r_output_gradients,
+                    nullptr, // r_lookup_neuron_synapses_infos (nullptr for FC)
+                    nullptr, // base_synapse_metas (nullptr for FC)
+                    0, // first_synapse_id (not used for FC)
+                    nullptr, // lut_data (not used for FC)
+                    sliced_mode,
+                    external_lr,
+                    r_weights,
+                    this->first_synapse_meta_lr
+                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                    , this->int_rescaler
+                    #else
+                    , 0.0
+                    #endif
+                );
+            }
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
         } else {
             #ifndef NO_CUDA
@@ -1443,21 +1505,26 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
         }
     }
     #endif
+    uint32_t n_items;
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_inputs_1), batch_size);
+    n_items = n_inputs_1 * sequence_length;
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_inputs_1), cuda_streams[0],
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
         w_input_gradients_1,
-        n_inputs_1,
+        n_items,
         this->int_rescaler
     );
-    numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_inputs_2), batch_size);
-    GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_inputs_2), cuda_streams[0],
-        w_input_gradients_2,
-        n_inputs_2,
-        this->int_rescaler
-    );
+    if(w_input_gradients_2 != w_input_gradients_1) {
+        n_items = n_inputs_2 * sequence_length;
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), batch_size);
+        GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+            numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[0],
+            w_input_gradients_2,
+            n_items,
+            this->int_rescaler
+        );
+    }
     if(w_weights_gradients != nullptr) {
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(this->n_weights), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
@@ -1468,7 +1535,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
         );
     }
     if(this->positional_dim > 0) {
-        uint32_t n_items = this->positional_dim * (sequence_length - 1);
+        n_items = this->positional_dim * (sequence_length - 1);
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
