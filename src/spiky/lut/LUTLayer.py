@@ -1178,7 +1178,7 @@ class LUTLayerBasic(nn.Module):
                     min_anchor_delta_indices
                 )
                 return x_grad, w_grad, None, None
-            elif lut_layer._concatenation_product:
+            elif ctx.lut_layer._concatenation_product:
                 (
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, positional_lookup_indices,
                     positional_min_deltas, positional_min_delta_indices
@@ -1333,7 +1333,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_inputs=n_inputs, n_outputs=n_outputs, n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
-            concatenation_product=concatenation_product, sliced_product_mode=True,
+            concatenation_product=concatenation_product, sliced_product_mode=sliced_product_mode,
             positional_dim=positional_dim, weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,

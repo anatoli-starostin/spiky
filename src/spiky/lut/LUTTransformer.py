@@ -25,6 +25,8 @@ class LUTTransformer(nn.Module):
                 n_anchors_per_detector=self.n_anchors_per_detector,
                 sequence_length=self.context_size,
                 synapse_meta=_synapse_meta,
+                concatenation_product=self.concatenation_product,
+                sliced_product_mode=self.sliced_product_mode,
                 positional_dim=self.positional_dim,
                 weights_gradient_policy=self.weights_gradient_policy,
                 shared_context=self.lut_shared_context,
@@ -44,6 +46,8 @@ class LUTTransformer(nn.Module):
                 detectors_shape=(1, self.n_detectors),
                 output_kernel_shape=self.embedding_dim,
                 sequence_length=self.context_size,
+                concatenation_product=self.concatenation_product,
+                sliced_product_mode=self.sliced_product_mode,
                 positional_dim=self.positional_dim,
                 weights_gradient_policy=self.weights_gradient_policy,
                 receptive_field_shape=self.embedding_dim,
@@ -61,7 +65,9 @@ class LUTTransformer(nn.Module):
     def __init__(
         self, vocab_size, embedding_dim, context_size,
         positional_dim, num_layers, num_heads,
-        n_detectors, n_anchors_per_detector, weights_gradient_policy=None,
+        n_detectors, n_anchors_per_detector,
+        concatenation_product=True, sliced_product_mode=False,
+        weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32
@@ -76,6 +82,8 @@ class LUTTransformer(nn.Module):
         self.num_heads = num_heads
         self.n_detectors = n_detectors
         self.n_anchors_per_detector = n_anchors_per_detector
+        self.concatenation_product = concatenation_product
+        self.sliced_product_mode = sliced_product_mode
         self.weights_gradient_policy = weights_gradient_policy
         if device is None:
             device = torch.device('cpu')
