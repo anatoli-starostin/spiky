@@ -220,26 +220,122 @@ class GTLUTProduct(nn.Module):
         return result
 
 
+class GTLUTProductMultiHead(nn.Module):
+    """
+    A module that runs multiple GTLUTProduct instances in parallel (similar to MultiLUT).
+    All heads must have the same input/output shapes and sequence_length.
+    Returns the sum of outputs from all heads.
+    """
+    
+    def __init__(self, heads):
+        """
+        Initialize GTLUTProductMultiHead.
+        
+        Args:
+            heads: List of GTLUTProduct instances (one per head)
+        """
+        super().__init__()
+        
+        if len(heads) < 1:
+            raise ValueError("GTLUTProductMultiHead requires at least one head")
+        
+        # Validate all heads have compatible shapes
+        first_head = heads[0]
+        n_inputs_1 = first_head.n_inputs_1
+        n_inputs_2 = first_head.n_inputs_2
+        n_outputs = first_head.n_outputs
+        sequence_length = first_head.sequence_length
+        sliced_mode = first_head.sliced_mode
+        
+        for i, head in enumerate(heads):
+            if not isinstance(head, GTLUTProduct):
+                raise ValueError(f"head {i} is not an instance of GTLUTProduct")
+            if head.n_inputs_1 != n_inputs_1 or head.n_inputs_2 != n_inputs_2:
+                raise ValueError(f"head {i} has incompatible input dimensions")
+            if head.n_outputs != n_outputs:
+                raise ValueError(f"head {i} has incompatible output dimensions")
+            if head.sequence_length != sequence_length:
+                raise ValueError(f"head {i} has incompatible sequence_length")
+            if head.sliced_mode != sliced_mode:
+                raise ValueError(f"head {i} has incompatible sliced_mode")
+        
+        self.heads = nn.ModuleList(heads)
+        self.n_inputs_1 = n_inputs_1
+        self.n_inputs_2 = n_inputs_2
+        self.n_outputs = n_outputs
+        self.sequence_length = sequence_length
+        self.sliced_mode = sliced_mode
+    
+    def forward(self, input_1: torch.Tensor, input_2: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass that runs all heads and sums their outputs.
+        
+        Args:
+            input_1: First input tensor of shape [batch_size, sequence_length, n_inputs_1]
+            input_2: Second input tensor of shape [batch_size, sequence_length, n_inputs_2]
+            
+        Returns:
+            Output tensor of shape [batch_size, sequence_length, n_outputs]
+        """
+        # Sum outputs from all heads
+        output = None
+        for head in self.heads:
+            head_output = head(input_1, input_2)
+            if output is None:
+                output = head_output
+            else:
+                output = output + head_output
+        return output
+
+
 class GTLUTProductTransformer(nn.Module):
     def _create_single_attention(
         self, _synapse_meta, summation_dtype, _int_rescaler, seed,
-        _forward_group_size, _backward_group_size, num_heads
+        _forward_group_size, _backward_group_size, num_heads, use_multi_lut=False
     ):
-        return GTLUTProduct(
-            n_inputs_1=self.embedding_dim,
-            n_inputs_2=self.embedding_dim,
-            positional_dim=self.positional_dim,
-            n_outputs=self.embedding_dim,
-            sequence_length=self.context_size,
-            sliced_mode=self.sliced_mode,
-            n_detectors=self.n_detectors * num_heads,
-            n_anchors_per_detector=self.n_anchors_per_detector_attention,
-            synapse_meta=_synapse_meta,
-            shared_context=self.lut_shared_context,
-            summation_dtype=summation_dtype,
-            random_seed=seed,
-            device=self.device
-        )
+        """
+        Create attention layer(s).
+        If use_multi_lut is True, creates num_heads separate GTLUTProduct instances
+        (one per head), otherwise creates a single GTLUTProduct with all heads combined.
+        """
+        if use_multi_lut:
+            # Create separate GTLUTProduct for each head (matching MultiLUT structure)
+            heads = []
+            for head_idx in range(num_heads):
+                head = GTLUTProduct(
+                    n_inputs_1=self.embedding_dim,
+                    n_inputs_2=self.embedding_dim,
+                    positional_dim=self.positional_dim,
+                    n_outputs=self.embedding_dim,
+                    sequence_length=self.context_size,
+                    sliced_mode=self.sliced_mode,
+                    n_detectors=self.n_detectors,
+                    n_anchors_per_detector=self.n_anchors_per_detector_attention,
+                    synapse_meta=_synapse_meta,
+                    shared_context=self.lut_shared_context,
+                    summation_dtype=summation_dtype,
+                    random_seed=None if seed is None else seed + head_idx,
+                    device=self.device
+                )
+                heads.append(head)
+            return GTLUTProductMultiHead(heads)
+        else:
+            # Single GTLUTProduct with all heads combined
+            return GTLUTProduct(
+                n_inputs_1=self.embedding_dim,
+                n_inputs_2=self.embedding_dim,
+                positional_dim=self.positional_dim,
+                n_outputs=self.embedding_dim,
+                sequence_length=self.context_size,
+                sliced_mode=self.sliced_mode,
+                n_detectors=self.n_detectors * num_heads,
+                n_anchors_per_detector=self.n_anchors_per_detector_attention,
+                synapse_meta=_synapse_meta,
+                shared_context=self.lut_shared_context,
+                summation_dtype=summation_dtype,
+                random_seed=seed,
+                device=self.device
+            )
 
     def __init__(
         self, vocab_size, embedding_dim, context_size,
@@ -248,7 +344,7 @@ class GTLUTProductTransformer(nn.Module):
         device=None, _synapse_meta=SynapseMeta(),
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32,
-        n_anchors_per_detector_attention=None, sliced_mode=False
+        n_anchors_per_detector_attention=None, sliced_mode=False, use_multi_lut=False
     ):
         super().__init__()
 
@@ -299,7 +395,8 @@ class GTLUTProductTransformer(nn.Module):
                 seed=None if seed is None else seed + layer_idx * num_heads,
                 _forward_group_size=_forward_group_size,
                 _backward_group_size=_backward_group_size,
-                num_heads=num_heads
+                num_heads=num_heads,
+                use_multi_lut=use_multi_lut
             )
 
             ffn_lut = LUTLayer(
@@ -356,9 +453,12 @@ class GTLUTProductTransformer(nn.Module):
         seq_shape = (batch_size, self.context_size, self.embedding_dim)
 
         for layer in self.layers:
+            # print(f'gt: z {z}')
             attention_output = layer['attention_lut'](z)
+            # print(f'gt: z after attention {attention_output}')
             z = z + attention_output
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+            # print(f'gt: ffn_output {ffn_output}')
             z = z + ffn_output
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)

@@ -2398,12 +2398,14 @@ fill_outputs_product_cpu_logic(
         uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs;
         
         for(uint32_t output_idx = 0; output_idx < n_outputs; output_idx++) {
-            EXTERNAL_REAL_DT weight = r_weights[weights_offset + output_idx];
+            double weight = static_cast<double>(r_weights[weights_offset + output_idx]);
+            SUMMATION32_DT payload;
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            reinterpret_cast<SUMMATION32_DT *>(w_output + output_idx)[0] += payload;
+            payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+            *reinterpret_cast<SUMMATION32_DT *>(w_output + output_idx) += payload;
             #else
-            w_output[output_idx] += weight;
+            payload = static_cast<SUMMATION32_DT>(weight);
+            w_output[output_idx] += payload;
             #endif
         }
     }

@@ -970,10 +970,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
     } else {
         PROF_START(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
         if(device == -1) {
-            uint32_t n_detector_output_pairs = this->n_detectors * this->n_outputs;
-            dim3 numBlocks(n_detector_output_pairs, batch_size * sequence_length);
+            uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
+            dim3 numBlocks(n_detector_output_pairs, batch_size);
             GRID_CALL_NO_SHARED_MEM(
-                numBlocks, fill_outputs_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                numBlocks, fill_outputs_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
                 r_input_1,
@@ -1076,11 +1076,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     PROF_START(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);
-    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_outputs), batch_size);
+    dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(this->n_outputs * sequence_length), batch_size);
     GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_outputs), cuda_streams[0],
+        numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(this->n_outputs * sequence_length), cuda_streams[0],
         w_output,
-        this->n_outputs,
+        this->n_outputs * sequence_length,
         this->int_rescaler
     );
     PROF_END(LUT_RUNTIME_CONVERT_OUTPUTS_PROFILER_OP);

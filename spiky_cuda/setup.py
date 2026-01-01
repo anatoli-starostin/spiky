@@ -74,10 +74,10 @@ sources_list_no_cuda = [
     'misc/aux/firing_buffer.cpp',
     'misc/aux/concurrent_ds.cpp',
     'misc/misc.cpp',
-    'spnet/aux/spnet.cpp',
-    'spnet/aux/spnet_runtime.cpp',
-    'andn/aux/andn.cpp',
-    'andn/aux/andn_runtime.cpp',
+    # 'spnet/aux/spnet.cpp',
+    # 'spnet/aux/spnet_runtime.cpp',
+    # 'andn/aux/andn.cpp',
+    # 'andn/aux/andn_runtime.cpp',
     'lut/aux/lut.cpp',
     'lut/aux/lut_runtime.cpp',
     'synapse_growth/aux/synapse_growth.cpp',
@@ -86,10 +86,10 @@ sources_list_no_cuda = [
 ]
 if BUILD_INTEGERS_VERSION:
     sources_list_no_cuda += [
-        'spnet/aux/spnet_I.cpp',
-        'spnet/aux/spnet_runtime_I.cpp',
-        'andn/aux/andn_I.cpp',
-        'andn/aux/andn_runtime_I.cpp',
+        # 'spnet/aux/spnet_I.cpp',
+        # 'spnet/aux/spnet_runtime_I.cpp',
+        # 'andn/aux/andn_I.cpp',
+        # 'andn/aux/andn_runtime_I.cpp',
         'lut/aux/lut_I.cpp',
         'lut/aux/lut_runtime_I.cpp'
     ]

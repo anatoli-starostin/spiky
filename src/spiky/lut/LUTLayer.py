@@ -196,6 +196,25 @@ class LUTLayerBasic(nn.Module):
         else:
             return 1 << n_anchors_per_detector
 
+    def _initialize_positional_embeddings(self):
+        # Handle positional embeddings
+        if self._sequence_length > 1:
+            assert self._positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
+            if self._positional_dim > 0:
+                positional_embeddings_data = torch.empty(
+                    (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
+                    dtype=torch.float32,
+                    device=self.device
+                )
+                # Initialize with random floats in [-1, 1]
+                positional_embeddings_data.uniform_(-1.0, 1.0)
+                self._positional_embeddings = nn.Parameter(positional_embeddings_data)
+            else:
+                self._positional_embeddings = None
+        else:
+            assert self._positional_dim is None, "positional_dim must be None when sequence_length == 1"
+            self._positional_embeddings = None
+
     def __init__(
         self, n_inputs, n_outputs,
         n_detectors, n_anchors_per_detector,
@@ -240,6 +259,11 @@ class LUTLayerBasic(nn.Module):
         if self._sliced_product_mode and n_inputs != positional_dim:
             raise ValueError("if sliced_product_mode == True then n_inputs and positional_dim should be equal")
 
+        if self._concatenation_product:
+            self._unified_positional_embeddings = False
+        else:
+            self._unified_positional_embeddings = True
+
         if shared_context is None:
             self._own_shared_context = True
             shared_context = LUTSharedContext()
@@ -257,24 +281,8 @@ class LUTLayerBasic(nn.Module):
         self._weights_gradient_policy = weights_gradient_policy
         self._external_lr_hook = None
 
-        # Handle positional embeddings
-        if sequence_length > 1:
-            assert positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
-            if positional_dim > 0:
-                positional_embeddings_data = torch.empty(
-                    (sequence_length - 1) * n_detectors * positional_dim,
-                    dtype=torch.float32,
-                    device=self.device
-                )
-                # Initialize with random floats in [-1, 1]
-                positional_embeddings_data.uniform_(-1.0, 1.0)
-                self._positional_embeddings = nn.Parameter(positional_embeddings_data)
-            else:
-                self._positional_embeddings = None
-        else:
-            assert positional_dim is None, "positional_dim must be None when sequence_length == 1"
-            self._positional_embeddings = None
         self._positional_dim = positional_dim
+        self._initialize_positional_embeddings()
 
         if self._is_fully_connected:
             assert len(synapse_metas) == 1, "fully connected mode is not compatible with multiple synapse metas"
@@ -323,7 +331,7 @@ class LUTLayerBasic(nn.Module):
             dtype=torch.int32, device=self.device
         )
         self._detector_neuron_ids = torch.arange(
-            self._n_inputs, self._n_inputs + self._n_detectors,
+            self._input_neuron_ids.numel(), self._input_neuron_ids.numel() + self._n_detectors,
             dtype=torch.int32, device=self.device
         )
         self._lookup_neuron_ids = torch.arange(
@@ -758,13 +766,20 @@ class LUTLayerBasic(nn.Module):
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
+        if self._unified_positional_embeddings:
+            pos_embeddings = self._positional_embeddings.reshape(
+                self._sequence_length - 1, 1, self._positional_dim
+            ).repeat(1, self._n_detectors, 1).flatten().contiguous()
+        else:
+            pos_embeddings = self._positional_embeddings
+
         self._lut_dm.forward_step_concat(
             self._weights,
             batch_size, x,
             self._detector_anchors,
             output,
             lookup_indices,
-            self._positional_embeddings,
+            pos_embeddings,
             positional_lookup_indices,
             min_anchor_deltas,
             min_anchor_delta_indices,
@@ -826,7 +841,7 @@ class LUTLayerBasic(nn.Module):
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
-        self._lut_dm.forward_step_concat(
+        self._lut_dm.forward_step_product(
             self._weights,
             batch_size, self._sequence_length,
             x, x,
@@ -981,7 +996,13 @@ class LUTLayerBasic(nn.Module):
         else:
             target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
         if self._positional_dim > 0:
-            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+            if self._unified_positional_embeddings:
+                positional_grad = torch.zeros(
+                    [(self._sequence_length - 1) * self._n_detectors * self._positional_dim],
+                    requires_grad=False, device=self.device
+                )
+            else:
+                positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
         else:
             positional_grad = None
 
@@ -1020,6 +1041,11 @@ class LUTLayerBasic(nn.Module):
         if not external_output:
             self._synchronize()
             target_w_grad = self._process_gradients(target_w_grad, batch_size)
+
+        if self._positional_dim > 0 and self._unified_positional_embeddings:
+            positional_grad = positional_grad.reshape(
+                self._sequence_length - 1, self._n_detectors, self._positional_dim
+            ).sum(dim=1)
 
         if self._positional_dim > 0 and self._weights_gradient_policy.normalized:
             positional_grad /= positional_grad.abs().max().clip(1e-16)
@@ -1077,7 +1103,7 @@ class LUTLayerBasic(nn.Module):
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
-        self._lut_dm.backward_backprop_concat(
+        self._lut_dm.backward_backprop_product(
             self._weights,
             batch_size,
             self._sequence_length,
@@ -1195,7 +1221,7 @@ class LUTLayerBasic(nn.Module):
                 return x_grad, w_grad, pe_grad, None
             else:
                 (x, ) = ctx.saved_tensors
-                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_concat(x, grad_output)
+                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_product(x, grad_output)
                 return x_grad, w_grad, pe_grad, None
 
     def forward(self, x):
@@ -1275,24 +1301,26 @@ class Conv2DLUTLayer(LUTLayerBasic):
         random_seed=None,
         device=None
     ):
-        if receptive_field_shape is None:
-            assert receptive_field_stride_shape is None
-            receptive_field_shape = input_shape
-            receptive_field_stride_shape = input_shape
-
         if concatenation_product:
             input_shape_ex = input_shape
-            receptive_field_shape_ex = receptive_field_shape
-            receptive_field_stride_shape_ex = receptive_field_stride_shape
         elif sliced_product_mode:
             input_shape_ex = (input_shape[0], input_shape[1] * 3)
-            receptive_field_shape_ex = (receptive_field_shape[0], receptive_field_shape[1] * 3)
-            receptive_field_stride_shape_ex = (receptive_field_stride_shape_ex[0], receptive_field_stride_shape_ex[1] * 3)
         else:
-            p_dim = 0 if positional_dim is None else positional_dim
-            input_shape_ex = (input_shape[0], input_shape[1] * 2 + p_dim)
-            receptive_field_shape_ex = (receptive_field_shape[0], receptive_field_shape[1] * 2 + p_dim)
-            receptive_field_stride_shape_ex = (receptive_field_stride_shape[0], receptive_field_stride_shape[1] * 2 + p_dim)
+            input_shape_ex = (input_shape[0], input_shape[1] * 2 + (0 if positional_dim is None else positional_dim))
+
+        if receptive_field_shape is None:
+            assert receptive_field_stride_shape is None
+            receptive_field_shape_ex = input_shape_ex
+            receptive_field_stride_shape_ex = input_shape_ex
+        else:
+            if concatenation_product:
+                receptive_field_shape_ex = receptive_field_shape
+                receptive_field_stride_shape_ex = receptive_field_stride_shape
+            elif sliced_product_mode:
+                receptive_field_shape_ex = (receptive_field_shape[0], receptive_field_shape[1] * 3)
+                receptive_field_stride_shape_ex = (receptive_field_stride_shape[0], receptive_field_stride_shape[1] * 3)
+            else:
+                assert False
 
         c_helper_1 = Conv2DSynapseGrowthHelper(
             input_shape_ex[0], input_shape_ex[1],
