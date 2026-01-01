@@ -190,8 +190,11 @@ class LUTSharedContext(object):
 
 class LUTLayerBasic(nn.Module):
     @staticmethod
-    def n_lut_channels(n_anchors_per_detector, sequence_length):
-        return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
+    def n_lut_channels(n_anchors_per_detector, sequence_length, concatentation_product=True):
+        if concatentation_product:
+            return 1 << (n_anchors_per_detector * (2 if (sequence_length > 1) else 1))
+        else:
+            return 1 << n_anchors_per_detector
 
     def __init__(
         self, n_inputs, n_outputs,
@@ -199,6 +202,8 @@ class LUTLayerBasic(nn.Module):
         is_fully_connected,
         sequence_length,
         synapse_metas: List[SynapseMeta],
+        concatenation_product=True,
+        sliced_product_mode=False,
         positional_dim=None,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
@@ -223,6 +228,17 @@ class LUTLayerBasic(nn.Module):
         self._backward_group_size = _backward_group_size
         self._sequence_length = sequence_length
         self._multi_id = 0
+        if self._sequence_length == 1 and not concatenation_product:
+            raise ValueError("concatenation_product == False doesn't make sense with sequence_length == 1")
+
+        self._concatenation_product = concatenation_product
+        self._sliced_product_mode = sliced_product_mode
+
+        if self._sliced_product_mode and concatenation_product:
+            raise ValueError("sliced_product_mode == True doesn't make sense in concatenation product mode")
+
+        if self._sliced_product_mode and n_inputs != positional_dim:
+            raise ValueError("if sliced_product_mode == True then n_inputs and positional_dim should be equal")
 
         if shared_context is None:
             self._own_shared_context = True
@@ -268,8 +284,9 @@ class LUTLayerBasic(nn.Module):
 
         if summation_dtype == torch.float32:
             self._lut_dm = LUTDataManagerF(
-                n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
-                sequence_length,
+                n_inputs if self._concatenation_product else (2 * n_inputs + positional_dim),
+                n_outputs, n_detectors, n_anchors_per_detector,
+                sequence_length if self._concatenation_product else 1,
                 positional_dim if positional_dim is not None else 0,
                 _initial_synapse_capacity,
                 _forward_group_size,
@@ -277,8 +294,9 @@ class LUTLayerBasic(nn.Module):
             )
         else:
             self._lut_dm = LUTDataManagerI(
-                n_inputs, n_outputs, n_detectors, n_anchors_per_detector,
-                sequence_length,
+                n_inputs if self._concatenation_product else (2 * n_inputs + positional_dim),
+                n_outputs, n_detectors, n_anchors_per_detector,
+                sequence_length if self._concatenation_product else 1,
                 positional_dim if positional_dim is not None else 0,
                 _initial_synapse_capacity,
                 _forward_group_size,
@@ -301,7 +319,8 @@ class LUTLayerBasic(nn.Module):
 
         self._lut_dm.initialize_neurons(is_fully_connected)
         self._input_neuron_ids = torch.arange(
-            0, self._n_inputs, dtype=torch.int32, device=self.device
+            0, self._n_inputs if self._concatenation_product else 2 * self._n_inputs + self._positional_dim,
+            dtype=torch.int32, device=self.device
         )
         self._detector_neuron_ids = torch.arange(
             self._n_inputs, self._n_inputs + self._n_detectors,
@@ -319,9 +338,9 @@ class LUTLayerBasic(nn.Module):
         self._detector_anchors = None
 
     def add_detector_connections(
-            self, chunk_of_connections: ChunkOfConnections,
-            ids_shift=0,
-            random_seed: int = None
+        self, chunk_of_connections: ChunkOfConnections,
+        ids_shift=0,
+        random_seed: int = None
     ):
         self._lut_dm.add_detector_connections(
             chunk_of_connections.get_connections(),
@@ -512,7 +531,7 @@ class LUTLayerBasic(nn.Module):
         """
         n_weights_per_neuron = self._n_outputs if self._is_fully_connected else self._lut_dm.get_max_forward_groups_per_neuron() * self._forward_group_size
         if self._sequence_length == 1:
-            return self._n_detectors * 2 * n_weights_per_neuron * batch_size
+            return self._n_detectors * n_weights_per_neuron * batch_size
         else:
             return self._n_detectors * n_weights_per_neuron * (self._sequence_length * (self._sequence_length - 1) // 2) * batch_size
 
@@ -686,6 +705,7 @@ class LUTLayerBasic(nn.Module):
                 f"where input_shape={self.input_shape()}"
             )
 
+        assert self._concatenation_product
         assert x.device == self.device
         batch_size = x.shape[0]
         sequence_length = x.shape[1]
@@ -779,6 +799,50 @@ class LUTLayerBasic(nn.Module):
         else:
             return None if external_output else output.view((batch_size, sequence_length) + self.output_shape())
 
+    def forward_step_product(self, x, output=None):
+        if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
+            raise ValueError(
+                f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
+                f"where input_shape={self.input_shape()}"
+            )
+
+        assert not self._concatenation_product
+        assert x.device == self.device
+        batch_size = x.shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
+        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+
+        x = x.view(-1)
+        if output is None:
+            external_output = False
+            output = torch.zeros(
+                [batch_size * sequence_length * self._n_outputs],
+                dtype=torch.float32, device=self.device
+            )
+        else:
+            external_output = True
+
+        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
+
+        self._lut_dm.forward_step_concat(
+            self._weights,
+            batch_size, self._sequence_length,
+            x, x,
+            self._detector_anchors,
+            output,
+            self._n_inputs, self._n_inputs,
+            self._sliced_product_mode,
+            self._positional_embeddings,
+            stream_handles
+        )
+
+        if not external_output:
+            self._synchronize()
+
+        return None if external_output else output.view((batch_size, sequence_length) + self.output_shape())
+
     def backward_step(
         self, x, grad_output,
         lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
@@ -863,6 +927,7 @@ class LUTLayerBasic(nn.Module):
         positional_min_delta_indices, x_grad=None
     ):
         assert x.device == self.device
+        assert self._concatenation_product
         source_x_shape = x.shape
         batch_size = source_x_shape[0]
         sequence_length = x.shape[1]
@@ -962,6 +1027,83 @@ class LUTLayerBasic(nn.Module):
         result = () if external_output else (x_grad.view(source_x_shape),)
         return result + (target_w_grad, positional_grad,)
 
+    def backward_step_product(
+        self, x, grad_output, x_grad=None
+    ):
+        assert x.device == self.device
+        assert not self._concatenation_product
+
+        source_x_shape = x.shape
+        batch_size = source_x_shape[0]
+        sequence_length = x.shape[1]
+        assert sequence_length == self._sequence_length, f"Input sequence_length {sequence_length} does not match constructor sequence_length {self._sequence_length}"
+        expected_shape = (batch_size, sequence_length) + self.input_shape()
+        assert x.shape == expected_shape, f"Expected input shape {expected_shape}, got {x.shape}"
+
+        x = x.view(-1)
+
+        if x_grad is None:
+            external_output = False
+            x_grad = torch.zeros_like(x)
+        else:
+            external_output = True
+        if self._weights_gradient_policy.type == GradientType.Internal:
+            target_w_grad = None
+        elif self._weights_gradient_policy.type == GradientType.Sparse:
+            numel = ((self._weights.numel() + 3) // 4) * 4
+            target_w_grad = self._shared_context.get_weight_gradients_buffer(
+                numel,
+                self.device,
+                self._multi_id
+            )
+        else:
+            target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
+        if self._positional_dim > 0:
+            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+        else:
+            positional_grad = None
+
+        assert grad_output.device == self.device
+        assert grad_output.shape == (batch_size, sequence_length) + self.output_shape()
+
+        grad_output = grad_output.view(-1)
+
+        if self._weights_gradient_policy.type == GradientType.Internal:
+            if self._external_lr_hook is None:
+                raise ValueError("external_learning_rate_hook must be set when using GradientPolicy.Internal")
+            external_lr = self._external_lr_hook(self._weights)
+        else:
+            external_lr = -1.0
+
+        stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
+
+        self._lut_dm.backward_backprop_concat(
+            self._weights,
+            batch_size,
+            self._sequence_length,
+            x, x,
+            self._detector_anchors,
+            grad_output,
+            x_grad, x_grad,
+            external_lr,
+            self._n_inputs, self._n_inputs,
+            self._sliced_product_mode,
+            target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
+            self._positional_embeddings,
+            positional_grad,
+            stream_handles
+        )
+
+        if not external_output:
+            self._synchronize()
+            target_w_grad = self._process_gradients(target_w_grad, batch_size)
+
+        if self._positional_dim > 0 and self._weights_gradient_policy.normalized:
+            positional_grad /= positional_grad.abs().max().clip(1e-16)
+
+        result = () if external_output else (x_grad.view(source_x_shape),)
+        return result + (target_w_grad, positional_grad,)
+
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         device = kwargs.get("device", None)
@@ -1002,7 +1144,7 @@ class LUTLayerBasic(nn.Module):
                         min_anchor_delta_indices
                     ) = lut_layer.forward_step(x)
                     ctx.save_for_backward(x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices)
-                else:
+                elif lut_layer._concatenation_product:
                     (
                         output, lookup_indices, min_anchor_deltas,
                         min_anchor_delta_indices, positional_lookup_indices,
@@ -1013,11 +1155,16 @@ class LUTLayerBasic(nn.Module):
                         positional_lookup_indices, positional_min_deltas,
                         positional_min_delta_indices
                     )
+                else:
+                    output = lut_layer.forward_step_product(x)
+                    ctx.save_for_backward(x)
                 return output
             elif lut_layer._sequence_length == 1:
                 return lut_layer.forward_step(x)
-            else:
+            elif lut_layer._concatenation_product:
                 return lut_layer.forward_step_concat(x)
+            else:
+                return lut_layer.forward_step_product(x)
 
         @staticmethod
         def backward(ctx, *grad_outputs):
@@ -1031,7 +1178,7 @@ class LUTLayerBasic(nn.Module):
                     min_anchor_delta_indices
                 )
                 return x_grad, w_grad, None, None
-            else:
+            elif lut_layer._concatenation_product:
                 (
                     x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices, positional_lookup_indices,
                     positional_min_deltas, positional_min_delta_indices
@@ -1045,6 +1192,10 @@ class LUTLayerBasic(nn.Module):
                     positional_min_deltas,
                     positional_min_delta_indices
                 )
+                return x_grad, w_grad, pe_grad, None
+            else:
+                (x, ) = ctx.saved_tensors
+                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_concat(x, grad_output)
                 return x_grad, w_grad, pe_grad, None
 
     def forward(self, x):
@@ -1060,11 +1211,11 @@ class LUTLayerBasic(nn.Module):
             return self._lut_dm.count_synapses(neuron_ids)
 
     def _export_synapses(
-            self, neuron_ids: torch.Tensor,
-            source_ids: torch.Tensor,
-            weights: torch.Tensor,
-            target_ids: torch.Tensor,
-            synapse_metas: torch.Tensor = None
+        self, neuron_ids: torch.Tensor,
+        source_ids: torch.Tensor,
+        weights: torch.Tensor,
+        target_ids: torch.Tensor,
+        synapse_metas: torch.Tensor = None
     ):
         if self._is_fully_connected:
             source_ids[:] = neuron_ids.view(neuron_ids.numel(), -1).repeat(1, self._n_outputs).flatten()
@@ -1100,37 +1251,53 @@ class LUTLayerBasic(nn.Module):
 
 class Conv2DLUTLayer(LUTLayerBasic):
     def __init__(
-            self, input_shape,
-            n_anchors_per_detector,
-            detectors_shape,
-            output_kernel_shape,
-            sequence_length=1,
-            receptive_field_shape=None,
-            receptive_field_stride_shape=None,
-            lut_receptive_field_shape=None,
-            lut_receptive_field_stride_shape=None,
-            synapse_meta=SynapseMeta(),
-            positional_dim=None,
-            weights_gradient_policy: GradientPolicy = None,
-            shared_context: LUTSharedContext = None,
-            summation_dtype=torch.float32,
-            _explicit_anchors=None,
-            _int_rescaler=0.001,
-            _forward_group_size=32,
-            _backward_group_size=32,
-            _max_groups_in_growth_buffer=2 ** 20,
-            random_seed=None,
-            device=None
+        self, input_shape,
+        n_anchors_per_detector,
+        detectors_shape,
+        output_kernel_shape,
+        sequence_length=1,
+        receptive_field_shape=None,
+        receptive_field_stride_shape=None,
+        lut_receptive_field_shape=None,
+        lut_receptive_field_stride_shape=None,
+        synapse_meta=SynapseMeta(),
+        concatenation_product=True,
+        sliced_product_mode=False,
+        positional_dim=None,
+        weights_gradient_policy: GradientPolicy = None,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _explicit_anchors=None,
+        _int_rescaler=0.001,
+        _forward_group_size=32,
+        _backward_group_size=32,
+        _max_groups_in_growth_buffer=2 ** 20,
+        random_seed=None,
+        device=None
     ):
         if receptive_field_shape is None:
             assert receptive_field_stride_shape is None
             receptive_field_shape = input_shape
             receptive_field_stride_shape = input_shape
 
+        if concatenation_product:
+            input_shape_ex = input_shape
+            receptive_field_shape_ex = receptive_field_shape
+            receptive_field_stride_shape_ex = receptive_field_stride_shape
+        elif sliced_product_mode:
+            input_shape_ex = (input_shape[0], input_shape[1] * 3)
+            receptive_field_shape_ex = (receptive_field_shape[0], receptive_field_shape[1] * 3)
+            receptive_field_stride_shape_ex = (receptive_field_stride_shape_ex[0], receptive_field_stride_shape_ex[1] * 3)
+        else:
+            p_dim = 0 if positional_dim is None else positional_dim
+            input_shape_ex = (input_shape[0], input_shape[1] * 2 + p_dim)
+            receptive_field_shape_ex = (receptive_field_shape[0], receptive_field_shape[1] * 2 + p_dim)
+            receptive_field_stride_shape_ex = (receptive_field_stride_shape[0], receptive_field_stride_shape[1] * 2 + p_dim)
+
         c_helper_1 = Conv2DSynapseGrowthHelper(
-            input_shape[0], input_shape[1],
-            receptive_field_shape[0], receptive_field_shape[1],
-            receptive_field_stride_shape[0], receptive_field_stride_shape[1],
+            input_shape_ex[0], input_shape_ex[1],
+            receptive_field_shape_ex[0], receptive_field_shape_ex[1],
+            receptive_field_stride_shape_ex[0], receptive_field_stride_shape_ex[1],
             detectors_shape[0], detectors_shape[1]
         )
 
@@ -1166,6 +1333,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_inputs=n_inputs, n_outputs=n_outputs, n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
+            concatenation_product=concatenation_product, sliced_product_mode=True,
             positional_dim=positional_dim, weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
@@ -1181,7 +1349,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
         if _explicit_anchors is None:
             connections = c_helper_1.grow_synapses(
-                input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
+                input_ids=self.get_input_neuron_ids().view(input_shape_ex) + 1,
                 output_ids=self.get_detector_neuron_ids().view(lut_shape[0], lut_shape[1]) + 1,
                 max_groups_in_buffer=_max_groups_in_growth_buffer,
                 device=device,
@@ -1263,6 +1431,8 @@ class LUTLayer(Conv2DLUTLayer):
         n_outputs,
         sequence_length=1,
         synapse_meta=SynapseMeta(),
+        concatenation_product=True,
+        sliced_product_mode=False,
         positional_dim=None,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
@@ -1286,6 +1456,8 @@ class LUTLayer(Conv2DLUTLayer):
             lut_receptive_field_shape=None,
             lut_receptive_field_stride_shape=None,
             synapse_meta=synapse_meta,
+            concatenation_product=concatenation_product,
+            sliced_product_mode=sliced_product_mode,
             positional_dim=positional_dim,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
@@ -1336,6 +1508,8 @@ class MultiLUT(nn.Module):
         input_shape = first_lut.input_shape()
         output_shape = first_lut.output_shape()
         sequence_length = first_lut.sequence_length()
+        concatenation_product = first_lut._concatenation_product
+        sliced_product_mode = first_lut._sliced_product_mode
         self._shared_context = first_lut._shared_context
         self._gradient_policy = first_lut._weights_gradient_policy
 
@@ -1348,6 +1522,10 @@ class MultiLUT(nn.Module):
                 raise ValueError(f"lut {i} has output_shape {lut.output_shape()}, expected {output_shape}")
             if lut.sequence_length() != sequence_length:
                 raise ValueError(f"lut {i} has sequence_length {lut.sequence_length()}, expected {sequence_length}")
+            if lut._concatenation_product != concatenation_product:
+                raise ValueError(f"lut {i} has _concatenation_product {lut._concatenation_product}, expected {concatenation_product}")
+            if lut._sliced_product_mode != sliced_product_mode:
+                raise ValueError(f"lut {i} has _sliced_product_mode {lut._sliced_product_mode}, expected {sliced_product_mode}")
             if lut._shared_context != self._shared_context:
                 raise ValueError(f"lut {i} has different shared context than lut 0")
             if lut._weights_gradient_policy != self._gradient_policy:
@@ -1434,8 +1612,10 @@ class MultiLUT(nn.Module):
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     if multi_lut._sequence_length == 1:
                         results[lut_idx] = lut.forward_step(x, output=output)
-                    else:
+                    elif lut._concatenation_product:
                         results[lut_idx] = list(lut.forward_step_concat(x, output=output))
+                    else:
+                        lut.forward_step_product(x, output=output)
 
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     lut._synchronize()
@@ -1445,8 +1625,10 @@ class MultiLUT(nn.Module):
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     if multi_lut._sequence_length == 1:
                         lut.forward_step(x, output=output)
-                    else:
+                    elif lut._concatenation_product:
                         lut.forward_step_concat(x, output=output)
+                    else:
+                        lut.forward_step_product(x, output=output)
 
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     lut._synchronize()
@@ -1495,7 +1677,7 @@ class MultiLUT(nn.Module):
                         x_grad=x_grad
                     )
                     all_weight_grads[lut_idx] = w_grad
-                else:
+                elif lut._concatenation_product:
                     w_grad, pe_grad = lut.backward_step_concat(
                         x, grad_output,
                         results[lut_idx][0],  # lookup_indices
@@ -1504,6 +1686,13 @@ class MultiLUT(nn.Module):
                         results[lut_idx][3],  # positional_lookup_indices
                         results[lut_idx][4],  # positional_min_deltas
                         results[lut_idx][5],  # positional_min_delta_indices
+                        x_grad=x_grad
+                    )
+                    all_weight_grads[lut_idx] = w_grad
+                    all_pe_grads[lut_idx] = pe_grad
+                else:
+                    w_grad, pe_grad = lut.backward_step_product(
+                        x, grad_output,
                         x_grad=x_grad
                     )
                     all_weight_grads[lut_idx] = w_grad
