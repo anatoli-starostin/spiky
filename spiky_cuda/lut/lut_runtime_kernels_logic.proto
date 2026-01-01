@@ -180,14 +180,14 @@ calculate_product_lookup_index_backprop(
                 val2 = pos_emb_ptr[slice_idx_2];
             }
 
-            if(val1 > val2) {
+            EXTERNAL_REAL_DT delta = val1 - val2;
+            if(delta > 0.0) {
                 lookup_index |= (1 << anchor_idx);
             }
             
             // Track minimum delta across all anchors and determine which input component it belongs to
-            EXTERNAL_REAL_DT delta = fabs(val1 - val2);
-            
-            if(delta < min_delta) {
+
+            if(fabs(delta) < fabs(min_delta)) {
                 min_delta = delta;
                 flipping_anchor_idx = anchor_idx;
                 
@@ -231,14 +231,12 @@ calculate_product_lookup_index_backprop(
                 val2 = pos_emb_ptr[ap.anchor2_id - n_inputs_1 - n_inputs_2];
             }
 
-            if(val1 > val2) {
+            EXTERNAL_REAL_DT delta = val1 - val2;
+            if(delta > 0.0) {
                 lookup_index |= (1 << anchor_idx);
             }
             
-            // Track minimum delta across all anchors and determine which input component it belongs to
-            EXTERNAL_REAL_DT delta = fabs(val1 - val2);
-            
-            if(delta < min_delta) {
+            if(fabs(delta) < fabs(min_delta)) {
                 min_delta = delta;
                 flipping_anchor_idx = anchor_idx;
                 
@@ -961,18 +959,19 @@ propagate_through_detector_product(
     double int_rescaler
 ) {
     // Compute uncertainty function gradient
-    double du = main_grad_sum - alt_grad_sum;
+    double du = static_cast<double>(min_delta);
+
+    // Compute uncertainty gradient using min_delta
+    if(du > 0) {
+        du = 1.0 / (1.0 + fabs(du));
+        du *= 0.5 * du;
+    } else {
+        du = 1.0 / (1.0 + fabs(du));
+        du *= -0.5 * du;
+    }
+    du *= main_grad_sum - alt_grad_sum;
+
     if(fabs(du) > EPS) {
-        // Compute uncertainty gradient using min_delta
-        double delta = static_cast<double>(min_delta);
-        if(delta > 0) {
-            du = 1.0 / (1.0 + fabs(delta));
-            du *= 0.5 * du * (main_grad_sum - alt_grad_sum);
-        } else {
-            du = 1.0 / (1.0 + fabs(delta));
-            du *= -0.5 * du * (main_grad_sum - alt_grad_sum);
-        }
-        
         // Propagate to the appropriate input component based on first_anchor_source
         if(first_anchor_source == 0) {
             // Propagate to input_1 gradients (from position i)
@@ -1028,7 +1027,7 @@ propagate_through_detector_product(
             #endif
         }
 
-        // Also propagate using second_flipping_index if it's different
+        du = -du;
         if(second_anchor_source == 0) {
             // Propagate to input_1 gradients (from position i)
             EXTERNAL_REAL_DT* w_input_1_grad = w_input_gradients_1 + (batch_index * sequence_length + i) * n_inputs_1;
@@ -1063,7 +1062,7 @@ propagate_through_detector_product(
             w_input_2_grad[second_flipping_index] += static_cast<EXTERNAL_REAL_DT>(du);
             #endif
             #endif
-        } else if(second_anchor_source == 2 && positional_dim > 0 && w_positional_embeddings_gradients != nullptr) {
+        } else if(second_anchor_source == 2) {
             // Propagate to positional embedding gradients
             uint32_t pe_offset = (j - i - 1) * positional_dim;
             EXTERNAL_REAL_DT* w_pe_grad = w_positional_embeddings_gradients + pe_offset;

@@ -1281,10 +1281,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
         if(device == -1) {
             // CPU: single kernel does everything
             PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
-            uint32_t n_detector_output_pairs = this->n_detectors * this->n_outputs;
-            dim3 numBlocks(n_detector_output_pairs, batch_size * sequence_length);
+            uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
+            dim3 numBlocks(n_detector_output_pairs, batch_size);
             GRID_CALL_NO_SHARED_MEM(
-                numBlocks, propagate_backward_product_cpu, LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs),
+                numBlocks, propagate_backward_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
                 r_input_1,

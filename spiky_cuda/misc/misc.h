@@ -8,11 +8,11 @@
 #include <sstream>
 #include <string>
 
-#define TRACE
+//#define TRACE
 //#define DETAILED_TRACE
 //#define SUPER_DETAILED_TRACE
 #define ENABLE_PROFILING
-#define TRACES_FROM_PROFILER
+//#define TRACES_FROM_PROFILER
 
 #ifndef NO_CUDA
 #define USE_CUDA_STREAMS

@@ -382,24 +382,24 @@ def _test_lut_transformer_product(
             # PyTorch model backward pass
             # Compute loss: cross-entropy with target tokens
             targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
-            # loss = nn.functional.cross_entropy(
-            #     y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
-            #     targets.reshape(-1),  # (batch_size * context_size,)
-            #     reduction='none'
-            # ).sum()
-            # opt.zero_grad()
-            # loss.backward()
-            # opt.step()
+            loss = nn.functional.cross_entropy(
+                y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
+                targets.reshape(-1),  # (batch_size * context_size,)
+                reduction='none'
+            ).sum()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
 
             # GT model backward pass
-            # gt_loss = nn.functional.cross_entropy(
-            #     gt_y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
-            #     targets.reshape(-1),  # (batch_size * context_size,)
-            #     reduction='none'
-            # ).sum()
-            # gt_opt.zero_grad()
-            # gt_loss.backward()
-            # gt_opt.step()
+            gt_loss = nn.functional.cross_entropy(
+                gt_y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
+                targets.reshape(-1),  # (batch_size * context_size,)
+                reduction='none'
+            ).sum()
+            gt_opt.zero_grad()
+            gt_loss.backward()
+            gt_opt.step()
 
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
