@@ -3156,7 +3156,7 @@ propagate_backward_product_fc_logic(
     
     int32_t n_outputs_per_block;
     if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
-        n_outputs_per_block = n_outputs % n_outputs_per_block;
+        n_outputs_per_block = n_outputs % n_outputs_in_block;
     } else {
         n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
     }
@@ -3342,7 +3342,7 @@ gather_w_gradients_product_fc_logic(
 
     int32_t n_outputs_per_block;
     if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
-        n_outputs_per_block = n_outputs % n_outputs_per_block;
+        n_outputs_per_block = n_outputs % n_outputs_in_block;
     } else {
         n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
     }
