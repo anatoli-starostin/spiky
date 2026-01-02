@@ -2222,8 +2222,6 @@ fill_outputs_product_fc_logic(
     __syncthreads();
 
     // Distribute threads over (output, lookup_index) pairs
-    // Total work: n_outputs_in_block outputs × blockDim.x lookup indices
-    // Use interleaved distribution so consecutive threads process different output indices
     uint32_t total_work = n_outputs_in_block * blockDim.x;
     uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
     uint32_t global_output_start = output_block_index * n_outputs_in_block;
@@ -2403,18 +2401,19 @@ fill_outputs_product_fc_no_shared_logic(
     __syncthreads();
 
     // Distribute threads over (output, lookup_index) pairs
-    // Total work: n_outputs_in_block outputs × blockDim.x lookup indices
     uint32_t total_work = n_outputs_in_block * blockDim.x;
     uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
-    uint32_t work_start = threadIdx.x * work_per_thread;
-    uint32_t work_end = min(work_start + work_per_thread, total_work);
     uint32_t global_output_start = output_block_index * n_outputs_in_block;
-    
-    // Each thread processes its assigned (output, lookup_index) pairs
-    for(uint32_t work_idx = work_start; work_idx < work_end; work_idx++) {
-        uint32_t output_idx = work_idx / blockDim.x;
-        uint32_t thread_idx = work_idx % blockDim.x;
-        
+
+    for(uint32_t k = 0; k < work_per_thread; k++) {
+        uint32_t work_idx = work_per_thread * threadIdx.x + k;
+        uint32_t thread_idx = work_idx / n_outputs_in_block;
+        uint32_t output_idx = work_idx % n_outputs_in_block;
+
+        if(thread_idx >= blockDim.x) {
+            break;
+        }
+
         int32_t li = shared_lookup_indices[thread_idx];
         if(li < 0) {
             continue; // Invalid/masked lookup index
