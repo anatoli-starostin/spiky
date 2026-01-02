@@ -2294,7 +2294,7 @@ fill_outputs_product_fc_logic(
     #endif
 }
 
-fill_outputs_product_fc_logic_no_shared(
+fill_outputs_product_fc_logic_no_shared_logic(
     uint32_t sequence_length,
     uint32_t positional_dim,
     uint32_t tile_height,
