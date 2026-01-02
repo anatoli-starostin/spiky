@@ -1041,7 +1041,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
-            #ifdef USE_FILL_OUTPUTS_PRODUCT_FC_NO_SHARED
+            #ifdef LUT_PRODUCT_NO_SHARED_MEM
             // Calculate shared memory size for no_shared version (only shared_lookup_indices and shared_outputs)
             uint32_t shared_mem_size_no_shared = tpb * sizeof(int32_t) +
                                                  #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -1449,6 +1449,74 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             
             dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
             
+            #ifdef LUT_PRODUCT_NO_SHARED_MEM
+            // No shared memory version - direct global memory access
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, propagate_backward_product_fc_no_shared, tpb, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                r_output_gradients,
+                w_input_gradients_1,
+                w_input_gradients_2,
+                sliced_mode,
+                w_positional_embeddings_gradients
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
+            
+            PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, gather_w_gradients_product_fc_no_shared, tpb, cuda_streams[(external_lr >= 0) ? 0 : 1],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_output_gradients,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                (external_lr >= 0.0) ? r_weights : w_weights_gradients,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                n_lookup_neurons_per_detector,
+                sliced_mode,
+                external_lr,
+                this->first_synapse_meta_lr
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
+            #else
             uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
                                        tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
                                        (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0);

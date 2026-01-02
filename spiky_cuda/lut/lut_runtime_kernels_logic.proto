@@ -2333,15 +2333,8 @@ fill_outputs_product_fc_no_shared_logic(
     uint32_t i = (tile_id / sequence_length) * tile_height + t;
     uint32_t j = tile_id % sequence_length;
 
-    // calculating i_base
-    linear_idx -= threadIdx.x;
-    tile_id = linear_idx / n_detectors_in_block;
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
-
-    if(i_base >= j) {
-        // whole thread block can be skipped
+    // Early exit for invalid indices
+    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
         return;
     }
 
@@ -3840,6 +3833,265 @@ gather_w_gradients_product_fc_logic(
     if(positional_dim > 0) {
         pos_emb_ptr = shared_pos_emb + (i - i_base) * positional_dim;
     }
+
+    // Calculate lookup index using helper function
+    PFX(calculate_product_lookup_index)(
+        sliced_mode,
+        detector_anchors,
+        n_anchors_per_detector,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        input_1_ptr,
+        input_2_ptr,
+        pos_emb_ptr,
+        lookup_index
+    );
+
+    // Calculate lookup neuron ID
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+    
+    // Get output gradients for position j
+    EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
+    output_grads += output_block_index * n_outputs_in_block;
+    w_weights_gradients += output_block_index * n_outputs_in_block;
+
+    int32_t n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
+        n_outputs_per_block = n_outputs % n_outputs_in_block;
+    } else {
+        n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
+    }
+
+    // Gather weight gradients (fully connected)
+    ATOMIC_PFX(gather_weight_gradients_fc)(
+        output_grads,
+        lookup_neuron_id,
+        n_outputs,
+        n_outputs_per_block,
+        first_synapse_meta_lr,
+        external_lr,
+        w_weights_gradients,
+        int_rescaler
+    );
+    #endif
+}
+
+propagate_backward_product_fc_logic_no_shared(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights,
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
+    EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
+    bool sliced_mode,
+    EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
+    double int_rescaler
+) {
+    // threads layout similar to propagate_backward_product_fc_logic
+    // no shared memory - direct global memory access
+    // the logic of the kernel should be consistent with propagate_backward_product_cpu_logic
+    #ifdef ATOMIC
+    uint32_t t = n_output_blocks * n_detector_blocks;
+    uint32_t batch_index = blockIdx.y / t;
+    t = blockIdx.y % t;
+    uint32_t output_block_index = t / n_detector_blocks;
+    uint32_t detector_block_index = t % n_detector_blocks;
+    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+
+    uint64_t tile_id = linear_idx / n_detectors_in_block; // we use vertical tiles (same j, different i)
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+
+    uint32_t i = (tile_id / sequence_length) * tile_height + t;
+    uint32_t j = tile_id % sequence_length;
+
+    // Only process valid (i, j) pairs where i < j and lookup_index is valid
+    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
+        return;
+    }
+
+    // Direct global memory access (no shared memory)
+    uint32_t batch_offset = batch_index * sequence_length;
+    
+    // Access inputs directly from global memory
+    EXTERNAL_REAL_DT* input_1_ptr = r_input_1 + (batch_offset + i) * n_inputs_1;
+    EXTERNAL_REAL_DT* input_2_ptr = r_input_2 + (batch_offset + j) * n_inputs_2;
+    
+    // Access positional embeddings directly from global memory (if needed)
+    EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
+    if(positional_dim > 0) {
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+    }
+
+    // Calculate lookup index with backprop info - each thread calculates for its own (i, j) pair
+    int32_t lookup_index;
+    int32_t alt_lookup_index;
+    uint32_t first_flipping_index = std::numeric_limits<uint32_t>::max();
+    uint32_t second_flipping_index = std::numeric_limits<uint32_t>::max();
+    EXTERNAL_REAL_DT min_delta = std::numeric_limits<EXTERNAL_REAL_DT>::max();
+    uint32_t first_anchor_source = std::numeric_limits<uint32_t>::max();
+    uint32_t second_anchor_source = std::numeric_limits<uint32_t>::max();
+    
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+
+    // Calculate lookup index using backprop helper function
+    PFX(calculate_product_lookup_index_backprop)(
+        sliced_mode,
+        detector_anchors,
+        n_anchors_per_detector,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        input_1_ptr,
+        input_2_ptr,
+        pos_emb_ptr,
+        lookup_index,
+        alt_lookup_index,
+        first_flipping_index,
+        second_flipping_index,
+        min_delta,
+        first_anchor_source,
+        second_anchor_source
+    );
+
+    // Calculate lookup neuron IDs
+    uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+    uint32_t alt_neuron_id = detector_index * n_lookup_neurons_per_detector + alt_lookup_index;
+    
+    // Get output gradients for position j
+    EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
+    output_grads += output_block_index * n_outputs_in_block;
+    r_weights += output_block_index * n_outputs_in_block;
+
+    // Compute gradient sums for both main and alternative lookup neurons (fully connected)
+    double main_grad_sum = 0.0;
+    double alt_grad_sum = 0.0;
+    
+    int32_t n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
+        n_outputs_per_block = n_outputs % n_outputs_in_block;
+    } else {
+        n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
+    }
+
+    ATOMIC_PFX(accumulate_pair_of_gradient_sums_fc)(
+        output_grads,
+        r_weights,
+        lookup_neuron_id,
+        alt_neuron_id,
+        n_outputs,
+        n_outputs_per_block,
+        main_grad_sum,
+        alt_grad_sum
+    );
+
+    // Compute uncertainty function gradient and propagate based on which input component the flipping anchor belongs to
+    ATOMIC_PFX(propagate_through_detector_product)(
+        min_delta,
+        main_grad_sum,
+        alt_grad_sum,
+        first_flipping_index,
+        first_anchor_source,
+        second_flipping_index,
+        second_anchor_source,
+        w_input_gradients_1,
+        w_input_gradients_2,
+        batch_index,
+        sequence_length,
+        i,
+        j,
+        n_inputs_1,
+        n_inputs_2,
+        positional_dim,
+        w_positional_embeddings_gradients,
+        int_rescaler
+    );
+    #endif
+}
+
+gather_w_gradients_product_fc_logic_no_shared(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_output_gradients,
+    EXTERNAL_REAL_DT* r_input_1,
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2,
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* r_positional_embeddings,
+    AnchorsPair* r_detectors,
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* w_weights_gradients,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    uint32_t n_lookup_neurons_per_detector,
+    bool sliced_mode,
+    double external_lr,
+    double first_synapse_meta_lr,
+    double int_rescaler
+) {
+    // threads layout similar to gather_w_gradients_product_fc_logic
+    // no shared memory - direct global memory access
+    // the logic of the kernel should be consistent with gather_w_gradients_internal_product_cpu_logic
+    #ifdef ATOMIC
+    uint32_t t = n_output_blocks * n_detector_blocks;
+    uint32_t batch_index = blockIdx.y / t;
+    t = blockIdx.y % t;
+    uint32_t output_block_index = t / n_detector_blocks;
+    uint32_t detector_block_index = t % n_detector_blocks;
+    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+
+    uint64_t tile_id = linear_idx / n_detectors_in_block; // we use vertical tiles (same j, different i)
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+
+    uint32_t i = (tile_id / sequence_length) * tile_height + t;
+    uint32_t j = tile_id % sequence_length;
+
+    // Only process valid (i, j) pairs where i < j
+    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
+        return;
+    }
+
+    // Direct global memory access (no shared memory)
+    uint32_t batch_offset = batch_index * sequence_length;
+    
+    // Access inputs directly from global memory
+    EXTERNAL_REAL_DT* input_1_ptr = r_input_1 + (batch_offset + i) * n_inputs_1;
+    EXTERNAL_REAL_DT* input_2_ptr = r_input_2 + (batch_offset + j) * n_inputs_2;
+    
+    // Access positional embeddings directly from global memory (if needed)
+    EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
+    if(positional_dim > 0) {
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+    }
+
+    // Calculate lookup index - each thread calculates for its own (i, j) pair
+    int32_t lookup_index;
+    
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
 
     // Calculate lookup index using helper function
     PFX(calculate_product_lookup_index)(
