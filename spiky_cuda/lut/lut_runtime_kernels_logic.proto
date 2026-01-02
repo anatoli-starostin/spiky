@@ -2333,8 +2333,15 @@ fill_outputs_product_fc_no_shared_logic(
     uint32_t i = (tile_id / sequence_length) * tile_height + t;
     uint32_t j = tile_id % sequence_length;
 
-    // Early exit for invalid indices
-    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
+    // calculating i_base
+    linear_idx -= threadIdx.x;
+    tile_id = linear_idx / n_detectors_in_block;
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
+
+    if(i_base >= j) {
+        // whole thread block can be skipped
         return;
     }
 
