@@ -3148,7 +3148,7 @@ propagate_backward_product_fc_logic(
     
     // Get output gradients for position j
     EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
-    output_grads += output_block_index * n_outputs_per_block;
+    output_grads += output_block_index * n_outputs_in_block;
 
     // Compute gradient sums for both main and alternative lookup neurons (fully connected)
     double main_grad_sum = 0.0;
@@ -3338,7 +3338,7 @@ gather_w_gradients_product_fc_logic(
     
     // Get output gradients for position j
     EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
-    output_grads += output_block_index * n_outputs_per_block;
+    output_grads += output_block_index * n_outputs_in_block;
 
     int32_t n_outputs_per_block;
     if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
