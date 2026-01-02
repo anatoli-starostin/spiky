@@ -2346,22 +2346,6 @@ fill_outputs_product_fc_no_shared_logic(
         return;
     }
 
-    // Shared memory layout:
-    // - shared_lookup_indices: blockDim.x (lookup indices, one per thread)
-    // - shared_outputs: n_outputs_in_block (accumulated outputs)
-    extern __shared__ EXTERNAL_REAL_DT shared_mem[];
-    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_mem);
-    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-    SUMMATION32_DT* shared_outputs = reinterpret_cast<SUMMATION32_DT*>(shared_lookup_indices + blockDim.x);
-    #else
-    EXTERNAL_REAL_DT* shared_outputs = reinterpret_cast<EXTERNAL_REAL_DT*>(shared_lookup_indices + blockDim.x);
-    #endif
-
-    // Initialize outputs in shared memory to zero
-    if(threadIdx.x < n_outputs_in_block) {
-        shared_outputs[threadIdx.x] = SUMMATION_ZERO;
-    }
-
     // Calculate lookup index - each thread calculates for its own (i, j) pair
     // Direct global memory access for inputs (no shared memory for inputs)
     int32_t lookup_index = -1; // -1 means invalid/masked
@@ -2405,10 +2389,36 @@ fill_outputs_product_fc_no_shared_logic(
     uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
     uint32_t global_output_start = output_block_index * n_outputs_in_block;
 
+    uint32_t last_output_idx = std::numeric_limits<uint32_t>::max();
+    SUMMATION32_DT cur_output = SUMMATION_ZERO;
+
+    w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
+    w_output += global_output_start;
+
     for(uint32_t k = 0; k < work_per_thread; k++) {
         uint32_t work_idx = work_per_thread * threadIdx.x + k;
-        uint32_t thread_idx = work_idx / n_outputs_in_block;
-        uint32_t output_idx = work_idx % n_outputs_in_block;
+        uint32_t output_idx = work_idx / n_outputs_in_block;
+        uint32_t thread_idx = work_idx % n_outputs_in_block;
+
+        if(output_idx != last_output_idx) {
+            if(last_output_idx != std::numeric_limits<uint32_t>::max()) {
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                #ifdef ATOMIC
+                atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + last_output_idx), cur_output);
+                #else
+                w_output[last_output_idx] += cur_output;
+                #endif
+                #else
+                #ifdef ATOMIC
+                atomicAdd(w_output + last_output_idx, cur_output);
+                #else
+                w_output[last_output_idx] += cur_output;
+                #endif
+                #endif
+            }
+            last_output_idx = output_idx;
+            cur_output = SUMMATION_ZERO;
+        }
 
         if(thread_idx >= blockDim.x) {
             break;
@@ -2431,45 +2441,30 @@ fill_outputs_product_fc_no_shared_logic(
         uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + global_output_start + output_idx;
         
         EXTERNAL_REAL_DT weight = r_weights[weights_offset];
-        
+
         // Atomic accumulate in shared memory for this output
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-        #ifdef ATOMIC
-        atomicAdd(&shared_outputs[output_idx], payload);
+        cur_output += static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
         #else
-        shared_outputs[output_idx] += payload;
-        #endif
-        #else
-        #ifdef ATOMIC
-        atomicAdd(&shared_outputs[output_idx], weight);
-        #else
-        shared_outputs[output_idx] += weight;
+        cur_output += weight;
         #endif
         #endif
     }
 
-    __syncthreads();
-
-    // Write shared memory outputs to global memory (atomic add)
-    // First n_outputs_in_block threads write outputs
-    if(threadIdx.x < n_outputs_in_block) {
-        uint32_t output_start = output_block_index * n_outputs_in_block;
-        uint32_t global_output_idx = output_start + threadIdx.x;
-        
-        if(global_output_idx < n_outputs) {
-            // Calculate global output offset
-            // w_output layout: [batch0_seq0, batch0_seq1, ..., batch1_seq0, ...]
-            uint32_t global_offset = batch_index * sequence_length * n_outputs + j * n_outputs + global_output_idx;
-            
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            SUMMATION32_DT payload = shared_outputs[threadIdx.x];
-            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset), payload);
-            #else
-            EXTERNAL_REAL_DT value = shared_outputs[threadIdx.x];
-            atomicAdd(w_output + global_offset, value);
-            #endif
-        }
+    if(last_output_idx != std::numeric_limits<uint32_t>::max()) {
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        #ifdef ATOMIC
+        atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + last_output_idx), cur_output);
+        #else
+        w_output[last_output_idx] += cur_output;
+        #endif
+        #else
+        #ifdef ATOMIC
+        atomicAdd(w_output + last_output_idx, cur_output);
+        #else
+        w_output[last_output_idx] += cur_output;
+        #endif
+        #endif
     }
     #endif
 }

@@ -1022,38 +1022,11 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
             
-            // Calculate shared memory size
-            // shared_input_2: n_inputs_2
-            // shared_input_1: tile_height * n_inputs_1
-            // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
-            // shared_lookup_indices: blockDim.x (int32_t, one per thread)
-            // shared_outputs: n_outputs_in_block
-            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
-                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
-                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
-                                       tpb * sizeof(int32_t) +
-                                       #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                                       n_outputs_in_block * sizeof(SUMMATION32_DT)
-                                       #else
-                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
-                                       #endif
-                                       ;
-            
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
             #ifdef LUT_PRODUCT_NO_SHARED_MEM
-            // Calculate shared memory size for no_shared version (only shared_lookup_indices and shared_outputs)
-            uint32_t shared_mem_size_no_shared = tpb * sizeof(int32_t) +
-                                                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                                                 n_outputs_in_block * sizeof(SUMMATION32_DT)
-                                                 #else
-                                                 n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
-                                                 #endif
-                                                 ;
-            
-            GRID_CALL_ON_STREAM_SHARED_MEM(
-                numBlocks, fill_outputs_product_fc_no_shared, tpb,
-                shared_mem_size_no_shared, cuda_streams[0],
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, fill_outputs_product_fc_no_shared, tpb, cuda_streams[0],
                 sequence_length,
                 this->positional_dim,
                 tile_height,
@@ -1081,6 +1054,22 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
             #else
+            // Calculate shared memory size
+            // shared_input_2: n_inputs_2
+            // shared_input_1: tile_height * n_inputs_1
+            // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
+            // shared_lookup_indices: blockDim.x (int32_t, one per thread)
+            // shared_outputs: n_outputs_in_block
+            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
+                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
+                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
+                                       tpb * sizeof(int32_t) +
+                                       #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                                       n_outputs_in_block * sizeof(SUMMATION32_DT)
+                                       #else
+                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
+                                       #endif
+                                       ;
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
                 shared_mem_size, cuda_streams[0],
