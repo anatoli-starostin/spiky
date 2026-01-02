@@ -3148,13 +3148,19 @@ propagate_backward_product_fc_logic(
     
     // Get output gradients for position j
     EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
-    
+    output_grads += output_block_index * n_outputs_per_block;
+
     // Compute gradient sums for both main and alternative lookup neurons (fully connected)
     double main_grad_sum = 0.0;
     double alt_grad_sum = 0.0;
     
-    int32_t n_outputs_per_block = static_cast<int32_t>(n_outputs);
-    
+    int32_t n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
+        n_outputs_per_block = n_outputs % n_outputs_per_block;
+    } else {
+        n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
+    }
+
     ATOMIC_PFX(accumulate_pair_of_gradient_sums_fc)(
         output_grads,
         r_weights,
@@ -3332,9 +3338,15 @@ gather_w_gradients_product_fc_logic(
     
     // Get output gradients for position j
     EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
-    
-    int32_t n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
-    
+    output_grads += output_block_index * n_outputs_per_block;
+
+    int32_t n_outputs_per_block;
+    if((output_block_index == n_output_blocks - 1) && (n_outputs % n_outputs_in_block)) {
+        n_outputs_per_block = n_outputs % n_outputs_per_block;
+    } else {
+        n_outputs_per_block = static_cast<int32_t>(n_outputs_in_block);
+    }
+
     // Gather weight gradients (fully connected)
     ATOMIC_PFX(gather_weight_gradients_fc)(
         output_grads,

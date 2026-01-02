@@ -1407,8 +1407,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             
             dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
             
-            // Calculate shared memory size
-            // Note: backward kernel doesn't need shared_lookup_indices or shared_outputs
             uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
                                        tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
                                        (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0);
