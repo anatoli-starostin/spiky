@@ -2423,7 +2423,7 @@ fill_outputs_product_fc_no_shared_logic(
             cur_output = SUMMATION_ZERO;
         }
 
-        if(thread_idx >= blockDim.x) {
+        if(output_idx + global_output_start >= n_outputs) {
             break;
         }
 
