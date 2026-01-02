@@ -1025,8 +1025,12 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
             #ifdef LUT_PRODUCT_NO_SHARED_MEM
-            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-                numBlocks, fill_outputs_product_fc_no_shared, tpb, cuda_streams[0],
+            // Calculate shared memory size for no_shared version (only shared_lookup_indices and shared_outputs)
+            uint32_t shared_mem_size_no_shared = tpb * sizeof(int32_t);
+
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, fill_outputs_product_fc_no_shared, tpb,
+                shared_mem_size_no_shared, cuda_streams[0],
                 sequence_length,
                 this->positional_dim,
                 tile_height,

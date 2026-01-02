@@ -2346,6 +2346,9 @@ fill_outputs_product_fc_no_shared_logic(
         return;
     }
 
+    extern __shared__ EXTERNAL_REAL_DT shared_mem[];
+    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_mem);
+
     // Calculate lookup index - each thread calculates for its own (i, j) pair
     // Direct global memory access for inputs (no shared memory for inputs)
     int32_t lookup_index = -1; // -1 means invalid/masked
@@ -2393,7 +2396,7 @@ fill_outputs_product_fc_no_shared_logic(
     SUMMATION32_DT cur_output = SUMMATION_ZERO;
 
     w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
-    w_output += global_output_start;
+    w_output += output_block_index * n_outputs_in_block;
 
     for(uint32_t k = 0; k < work_per_thread; k++) {
         uint32_t work_idx = work_per_thread * threadIdx.x + k;
