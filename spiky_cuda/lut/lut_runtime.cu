@@ -1290,14 +1290,15 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 n_detectors_in_block,
                 this->n_anchors_per_detector,
                 (external_lr >= 0.0) ? r_weights : w_weights_gradients,
-                n_lookup_neurons_per_detector,
                 this->n_outputs,
                 n_output_blocks,
                 n_outputs_in_block,
+                n_lookup_neurons_per_detector,
                 reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
                 this->base_synapse_metas,
                 this->first_synapse_id,
                 this->lut_data,
+                sliced_mode,
                 external_lr,
                 this->first_synapse_meta_lr
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS

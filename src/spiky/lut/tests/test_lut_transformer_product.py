@@ -20,7 +20,7 @@ def test_lut_transformer_product(
         for use_multi_lut in [False, True]:
             if use_multi_lut and summation_dtype == torch.int32:
                 continue
-            for fully_connected in [True]:  # , False
+            for fully_connected in [True, False]:
                 if not fully_connected and not use_multi_lut:
                     continue
                 for train_or_eval in ['train']:  # 'eval',
