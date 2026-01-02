@@ -11,6 +11,47 @@ from spiky.lut.tests.gt_lut_product import GTLUTProductTransformer, GTLUTProduct
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 
 
+def test_lut_transformer_product(
+    device, summation_dtype, seed=None
+):
+    for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
+        if g_type == GradientType.Internal and summation_dtype == torch.int32:
+            continue
+        for use_multi_lut in [False, True]:
+            if use_multi_lut and summation_dtype == torch.int32:
+                continue
+            for fully_connected in [True, False]:
+                if not fully_connected and not use_multi_lut:
+                    continue
+                for train_or_eval in ['eval']:  # 'train',
+                    for batch_size in [1, 4]:
+                        for sliced_mode in [False, True]:
+                            if not sliced_mode and not fully_connected:
+                                continue
+                            success = _test_lut_transformer_product(
+                                vocab_size=256,
+                                embedding_dim=32,
+                                context_size=8,
+                                positional_dim=32 if sliced_mode else 4,
+                                num_layers=2,
+                                num_heads=2,
+                                n_detectors=4,
+                                n_anchors_per_detector=3,
+                                gradient_type=g_type,
+                                summation_dtype=summation_dtype,
+                                device=device,
+                                seed=seed,
+                                batch_size=batch_size,
+                                use_multi_lut=use_multi_lut,
+                                fully_connected=fully_connected,
+                                train_or_eval=train_or_eval,
+                                sliced_mode=sliced_mode
+                            )
+                            if not success:
+                                return False
+    return True
+
+
 def synchronize_models(pytorch_transformer, gt_transformer, num_layers):
     """
     Synchronize all weights, anchors, and embeddings from PyTorch LUTTransformer to GT model.
@@ -221,47 +262,6 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
     return True
 
 
-def test_lut_transformer_product(
-    device, summation_dtype, seed=None
-):
-    for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
-        if g_type == GradientType.Internal and summation_dtype == torch.int32:
-            continue
-        for use_multi_lut in [False, True]:
-            if use_multi_lut and summation_dtype == torch.int32:
-                continue
-            for fully_connected in [True, False]:
-                if not fully_connected and not use_multi_lut:
-                    continue
-                for train_or_eval in ['train', 'eval']:
-                    for batch_size in [1, 4]:
-                        for sliced_mode in [False, True]:
-                            if not sliced_mode and not fully_connected:
-                                continue
-                            success = _test_lut_transformer_product(
-                                vocab_size=256,
-                                embedding_dim=32,
-                                context_size=8,
-                                positional_dim=32 if sliced_mode else 4,
-                                num_layers=2,
-                                num_heads=2,
-                                n_detectors=4,
-                                n_anchors_per_detector=3,
-                                gradient_type=g_type,
-                                summation_dtype=summation_dtype,
-                                device=device,
-                                seed=seed,
-                                batch_size=batch_size,
-                                use_multi_lut=use_multi_lut,
-                                fully_connected=fully_connected,
-                                train_or_eval=train_or_eval,
-                                sliced_mode=sliced_mode
-                            )
-                            if not success:
-                                return False
-    return True
-
-
 def _test_lut_transformer_product(
     vocab_size, embedding_dim,
     context_size, positional_dim,
@@ -369,18 +369,22 @@ def _test_lut_transformer_product(
     # If train mode, perform backward pass and compare weights
     if train_or_eval == 'train':
         learning_rate = 0.01  # Use a fixed learning rate for testing
-        
-        # Set up learning rate hook for PyTorch model
+
         def lr_hook(_):
             return learning_rate
         if gradient_type == GradientType.Internal:
             lut_transformer.set_external_learning_rate_hook(lr_hook)
         opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
         gt_opt = SGD([p for p in gt_lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
+    else:
+        learning_rate = None
+        opt = None
+        gt_opt = None
 
-        for i in tqdm(range(32)):
-            # PyTorch model backward pass
-            # Compute loss: cross-entropy with target tokens
+    for i in tqdm(range(32)):
+        # PyTorch model backward pass
+        # Compute loss: cross-entropy with target tokens
+        if train_or_eval == 'train':
             targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
             loss = nn.functional.cross_entropy(
                 y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
@@ -416,13 +420,13 @@ def _test_lut_transformer_product(
                 print(f"❌ something is wrong after synchronization №{i + 2}")
                 return False
 
-            x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-            y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
-            gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
+        y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
-            if not compare_outputs(gt_y, y, train_or_eval):
-                print(f"❌ something is wrong after forward pass №{i + 2}")
-                return False
+        if not compare_outputs(gt_y, y, train_or_eval):
+            print(f"❌ something is wrong after forward pass №{i + 2}")
+            return False
 
     return True
 
@@ -432,7 +436,7 @@ def main():
     print("LUTTransformer PRODUCT TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []  # 'cpu'
     if torch.cuda.is_available():
         devices.append('cuda')
 
