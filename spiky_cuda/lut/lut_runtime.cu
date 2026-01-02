@@ -912,8 +912,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 4) {
-                    n_detectors_in_block = 4;
+                if(n_detectors_in_block < 8) {
+                    n_detectors_in_block = 8;
                 }
                 tile_height = tpb / n_detectors_in_block;
                 tpb = tile_height * n_detectors_in_block;
@@ -1007,8 +1007,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             uint32_t tile_height;
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 4) {
-                    n_detectors_in_block = 4;
+                if(n_detectors_in_block < 8) {
+                    n_detectors_in_block = 8;
                 }
                 tile_height = tpb / n_detectors_in_block;
                 tpb = tile_height * n_detectors_in_block;
@@ -1039,8 +1039,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                                        #endif
                                        ;
             
-            // print numBlocks, tbp and shared_mem_size
-            printf("numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
+            __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
@@ -1214,8 +1213,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 4) {
-                    n_detectors_in_block = 4;
+                if(n_detectors_in_block < 8) {
+                    n_detectors_in_block = 8;
                 }
                 tile_height = tpb / n_detectors_in_block;
                 tpb = tile_height * n_detectors_in_block;
@@ -1393,8 +1392,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             uint32_t tile_height;
             if(n_detector_blocks == 1) {
                 n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 4) {
-                    n_detectors_in_block = 4;
+                if(n_detectors_in_block < 8) {
+                    n_detectors_in_block = 8;
                 }
                 tile_height = tpb / n_detectors_in_block;
                 tpb = tile_height * n_detectors_in_block;
