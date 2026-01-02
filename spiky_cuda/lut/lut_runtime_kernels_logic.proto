@@ -2228,16 +2228,15 @@ fill_outputs_product_fc_logic(
     uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
     uint32_t global_output_start = output_block_index * n_outputs_in_block;
     
-    // Each thread processes its assigned (output, lookup_index) pairs
-    // Interleave by output index: thread processes work items with stride blockDim.x
-    for(uint32_t work_offset = 0; work_offset < work_per_thread; work_offset++) {
-        uint32_t work_idx = threadIdx.x + work_offset * blockDim.x;
-        if(work_idx >= total_work) {
+    for(uint32_t k = 0; k < work_per_thread; k++) {
+        uint32_t work_idx = work_per_thread * threadIdx.x + k;
+        uint32_t thread_idx = work_idx / n_outputs_in_block;
+        uint32_t output_idx = work_idx % n_outputs_in_block;
+
+        if(thread_idx >= blockDim.x || output_idx >= n_outputs_in_block) {
             break;
         }
-        uint32_t output_idx = work_idx / blockDim.x;
-        uint32_t thread_idx = work_idx % blockDim.x;
-        
+
         int32_t li = shared_lookup_indices[thread_idx];
         if(li < 0) {
             continue; // Invalid/masked lookup index
