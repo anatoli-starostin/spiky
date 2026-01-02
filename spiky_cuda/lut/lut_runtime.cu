@@ -1111,6 +1111,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
             #endif
+            #endif
         }
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
     }
@@ -1587,6 +1588,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 #endif
             );
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
+            #endif
             #endif
         }
     }
