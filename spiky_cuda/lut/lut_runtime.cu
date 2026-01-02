@@ -1041,6 +1041,46 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
+            #ifdef USE_FILL_OUTPUTS_PRODUCT_FC_NO_SHARED
+            // Calculate shared memory size for no_shared version (only shared_lookup_indices and shared_outputs)
+            uint32_t shared_mem_size_no_shared = tpb * sizeof(int32_t) +
+                                                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                                                 n_outputs_in_block * sizeof(SUMMATION32_DT)
+                                                 #else
+                                                 n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
+                                                 #endif
+                                                 ;
+            
+            GRID_CALL_ON_STREAM_SHARED_MEM(
+                numBlocks, fill_outputs_product_fc_no_shared, tpb,
+                shared_mem_size_no_shared, cuda_streams[0],
+                sequence_length,
+                this->positional_dim,
+                tile_height,
+                r_input_1,
+                n_inputs_1,
+                r_input_2,
+                n_inputs_2,
+                r_positional_embeddings,
+                r_detectors,
+                this->n_detectors,
+                n_detector_blocks,
+                n_detectors_in_block,
+                this->n_anchors_per_detector,
+                r_weights,
+                n_lookup_neurons_per_detector,
+                this->n_outputs,
+                n_output_blocks,
+                n_outputs_in_block,
+                w_output,
+                sliced_mode
+                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+                , this->int_rescaler
+                #else
+                , 0.0
+                #endif
+            );
+            #else
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
                 shared_mem_size, cuda_streams[0],
@@ -1070,6 +1110,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 , 0.0
                 #endif
             );
+            #endif
             #endif
         }
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);

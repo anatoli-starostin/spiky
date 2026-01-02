@@ -2294,6 +2294,184 @@ fill_outputs_product_fc_logic(
     #endif
 }
 
+fill_outputs_product_fc_logic_no_shared(
+    uint32_t sequence_length,
+    uint32_t positional_dim,
+    uint32_t tile_height,
+    EXTERNAL_REAL_DT* r_input_1, // [batch_size * sequence_length * n_inputs_1]
+    uint32_t n_inputs_1,
+    EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
+    uint32_t n_inputs_2,
+    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim]
+    AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
+    uint32_t n_detectors,
+    uint32_t n_detector_blocks,
+    uint32_t n_detectors_in_block,
+    uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_outputs]
+    uint32_t n_lookup_neurons_per_detector,
+    uint32_t n_outputs,
+    uint32_t n_output_blocks,
+    uint32_t n_outputs_in_block,
+    EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
+    bool sliced_mode,
+    double int_rescaler
+) {
+    #ifdef ATOMIC
+    uint32_t t = n_output_blocks * n_detector_blocks;
+    uint32_t batch_index = blockIdx.y / t;
+    t = blockIdx.y % t;
+    uint32_t output_block_index = t / n_detector_blocks;
+    uint32_t detector_block_index = t % n_detector_blocks;
+    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+
+    uint64_t tile_id = linear_idx / n_detectors_in_block; 
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+
+    uint32_t i = (tile_id / sequence_length) * tile_height + t;
+    uint32_t j = tile_id % sequence_length;
+
+    // calculating i_base
+    linear_idx -= threadIdx.x;
+    tile_id = linear_idx / n_detectors_in_block;
+    t = tile_id % tile_height;
+    tile_id /= tile_height;
+    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
+
+    if(i_base >= j) {
+        // whole thread block can be skipped
+        return;
+    }
+
+    // Shared memory layout:
+    // - shared_lookup_indices: blockDim.x (lookup indices, one per thread)
+    // - shared_outputs: n_outputs_in_block (accumulated outputs)
+    extern __shared__ EXTERNAL_REAL_DT shared_mem[];
+    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_mem);
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    SUMMATION32_DT* shared_outputs = reinterpret_cast<SUMMATION32_DT*>(shared_lookup_indices + blockDim.x);
+    #else
+    EXTERNAL_REAL_DT* shared_outputs = reinterpret_cast<EXTERNAL_REAL_DT*>(shared_lookup_indices + blockDim.x);
+    #endif
+
+    // Initialize outputs in shared memory to zero
+    if(threadIdx.x < n_outputs_in_block) {
+        shared_outputs[threadIdx.x] = SUMMATION_ZERO;
+    }
+
+    // Calculate lookup index - each thread calculates for its own (i, j) pair
+    // Direct global memory access for inputs (no shared memory for inputs)
+    int32_t lookup_index = -1; // -1 means invalid/masked
+    
+    if((detector_index < n_detectors) && (i < j) && (i < sequence_length)) {
+        // Get detector anchors
+        AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+        
+        // Access inputs directly from global memory
+        uint32_t batch_offset = batch_index * sequence_length;
+        EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
+        EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
+        
+        // Access positional embeddings directly from global memory (if needed)
+        EXTERNAL_REAL_DT* pos_emb = nullptr;
+        if(positional_dim > 0) {
+            pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+        }
+        
+        // Calculate lookup index using helper function
+        PFX(calculate_product_lookup_index)(
+            sliced_mode,
+            detector_anchors,
+            n_anchors_per_detector,
+            n_inputs_1,
+            n_inputs_2,
+            positional_dim,
+            input_1_i,
+            input_2_j,
+            pos_emb,
+            lookup_index
+        );
+    }
+    
+    // Store lookup index at thread's position
+    shared_lookup_indices[threadIdx.x] = lookup_index;
+    __syncthreads();
+
+    // Distribute threads over (output, lookup_index) pairs
+    // Total work: n_outputs_in_block outputs × blockDim.x lookup indices
+    uint32_t total_work = n_outputs_in_block * blockDim.x;
+    uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
+    uint32_t work_start = threadIdx.x * work_per_thread;
+    uint32_t work_end = min(work_start + work_per_thread, total_work);
+    uint32_t global_output_start = output_block_index * n_outputs_in_block;
+    
+    // Each thread processes its assigned (output, lookup_index) pairs
+    for(uint32_t work_idx = work_start; work_idx < work_end; work_idx++) {
+        uint32_t output_idx = work_idx / blockDim.x;
+        uint32_t thread_idx = work_idx % blockDim.x;
+        
+        int32_t li = shared_lookup_indices[thread_idx];
+        if(li < 0) {
+            continue; // Invalid/masked lookup index
+        }
+        
+        // Calculate detector_index for this thread on the fly
+        uint64_t thread_linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + thread_idx;
+        uint32_t thread_detector_index = detector_block_index * n_detectors_in_block + (thread_linear_idx % n_detectors_in_block);
+        
+        if(thread_detector_index >= n_detectors) {
+            continue;
+        }
+        
+        uint32_t lookup_neuron_id = thread_detector_index * n_lookup_neurons_per_detector + li;
+        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + global_output_start + output_idx;
+        
+        EXTERNAL_REAL_DT weight = r_weights[weights_offset];
+        
+        // Atomic accumulate in shared memory for this output
+        #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+        #ifdef ATOMIC
+        atomicAdd(&shared_outputs[output_idx], payload);
+        #else
+        shared_outputs[output_idx] += payload;
+        #endif
+        #else
+        #ifdef ATOMIC
+        atomicAdd(&shared_outputs[output_idx], weight);
+        #else
+        shared_outputs[output_idx] += weight;
+        #endif
+        #endif
+    }
+
+    __syncthreads();
+
+    // Write shared memory outputs to global memory (atomic add)
+    // First n_outputs_in_block threads write outputs
+    if(threadIdx.x < n_outputs_in_block) {
+        uint32_t output_start = output_block_index * n_outputs_in_block;
+        uint32_t global_output_idx = output_start + threadIdx.x;
+        
+        if(global_output_idx < n_outputs) {
+            // Calculate global output offset
+            // w_output layout: [batch0_seq0, batch0_seq1, ..., batch1_seq0, ...]
+            uint32_t global_offset = batch_index * sequence_length * n_outputs + j * n_outputs + global_output_idx;
+            
+            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+            SUMMATION32_DT payload = shared_outputs[threadIdx.x];
+            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + global_offset), payload);
+            #else
+            EXTERNAL_REAL_DT value = shared_outputs[threadIdx.x];
+            atomicAdd(w_output + global_offset, value);
+            #endif
+        }
+    }
+    #endif
+}
+
 fill_outputs_product_cpu_logic(
     uint32_t sequence_length,
     uint32_t positional_dim,

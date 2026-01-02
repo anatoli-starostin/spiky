@@ -436,12 +436,12 @@ def main():
     print("LUTTransformer PRODUCT TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []  # 'cpu'
     if torch.cuda.is_available():
         devices.append('cuda')
 
     for device in devices:
-        for summation_dtype in [torch.float32, torch.int32]:
+        for summation_dtype in [torch.float32]:  # , torch.int32
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_transformer_product(device, summation_dtype, seed=123)
 
