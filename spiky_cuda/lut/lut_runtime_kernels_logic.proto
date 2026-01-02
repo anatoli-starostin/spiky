@@ -3149,6 +3149,7 @@ propagate_backward_product_fc_logic(
     // Get output gradients for position j
     EXTERNAL_REAL_DT* output_grads = r_output_gradients + batch_index * sequence_length * n_outputs + j * n_outputs;
     output_grads += output_block_index * n_outputs_in_block;
+    r_weights += output_block_index * n_outputs_in_block;
 
     // Compute gradient sums for both main and alternative lookup neurons (fully connected)
     double main_grad_sum = 0.0;
