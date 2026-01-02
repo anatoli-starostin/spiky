@@ -22,7 +22,7 @@ class LUTTransformer(nn.Module):
                 n_inputs=self.embedding_dim,
                 n_outputs=self.embedding_dim,
                 n_detectors=self.n_detectors * num_heads,
-                n_anchors_per_detector=self.n_anchors_per_detector,
+                n_anchors_per_detector=self.n_anchors_per_detector_attention,
                 sequence_length=self.context_size,
                 synapse_meta=_synapse_meta,
                 concatenation_product=self.concatenation_product,
@@ -42,7 +42,7 @@ class LUTTransformer(nn.Module):
             assert num_heads == 1
             return Conv2DLUTLayer(
                 input_shape=self.embedding_dim,
-                n_anchors_per_detector=self.n_anchors_per_detector,
+                n_anchors_per_detector=self.n_anchors_per_detector_attention,
                 detectors_shape=(1, self.n_detectors),
                 output_kernel_shape=self.embedding_dim,
                 sequence_length=self.context_size,
@@ -65,7 +65,7 @@ class LUTTransformer(nn.Module):
     def __init__(
         self, vocab_size, embedding_dim, context_size,
         positional_dim, num_layers, num_heads,
-        n_detectors, n_anchors_per_detector,
+        n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
         concatenation_product=True, sliced_product_mode=False,
         weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
@@ -82,6 +82,8 @@ class LUTTransformer(nn.Module):
         self.num_heads = num_heads
         self.n_detectors = n_detectors
         self.n_anchors_per_detector = n_anchors_per_detector
+        # If not specified, use the same value as n_anchors_per_detector for backward compatibility
+        self.n_anchors_per_detector_attention = n_anchors_per_detector_attention if n_anchors_per_detector_attention is not None else n_anchors_per_detector
         self.concatenation_product = concatenation_product
         self.sliced_product_mode = sliced_product_mode
         self.weights_gradient_policy = weights_gradient_policy
