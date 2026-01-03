@@ -2297,7 +2297,6 @@ fill_outputs_product_fc_logic(
 fill_outputs_product_fc_no_shared_logic(
     uint32_t sequence_length,
     uint32_t positional_dim,
-    uint32_t tile_height,
     EXTERNAL_REAL_DT* r_input_1, // [batch_size * sequence_length * n_inputs_1]
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
@@ -2305,14 +2304,10 @@ fill_outputs_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim]
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
-    uint32_t n_detector_blocks,
-    uint32_t n_detectors_in_block,
     uint32_t n_anchors_per_detector,
     EXTERNAL_REAL_DT* r_weights, // [n_detectors * n_lookup_neurons_per_detector * n_outputs]
     uint32_t n_lookup_neurons_per_detector,
     uint32_t n_outputs,
-    uint32_t n_output_blocks,
-    uint32_t n_outputs_in_block,
     EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
     bool sliced_mode,
     double int_rescaler
@@ -2377,24 +2372,17 @@ fill_outputs_product_fc_no_shared_logic(
     SUMMATION32_DT payload;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
         payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
-        #ifdef ATOMIC
         atomicAdd(
             reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset),
             payload
         );
-        #else
-        *reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset) += payload;
-        #endif
     #else
         payload = static_cast<SUMMATION32_DT>(weight_sum);
-        #ifdef ATOMIC
         atomicAdd(
             w_output + output_offset,
             payload
         );
-        #else
-        w_output[output_offset] += payload;
-        #endif
+    #endif
     #endif
 }
 

@@ -1011,7 +1011,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs), cuda_streams[0],
                 sequence_length,
                 this->positional_dim,
-                tile_height,
                 r_input_1,
                 n_inputs_1,
                 r_input_2,
@@ -1019,14 +1018,10 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 r_positional_embeddings,
                 r_detectors,
                 this->n_detectors,
-                n_detector_blocks,
-                n_detectors_in_block,
                 this->n_anchors_per_detector,
                 r_weights,
                 n_lookup_neurons_per_detector,
                 this->n_outputs,
-                n_output_blocks,
-                n_outputs_in_block,
                 w_output,
                 sliced_mode
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
