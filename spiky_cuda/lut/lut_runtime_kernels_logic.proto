@@ -4364,14 +4364,14 @@ propagate_through_detectors_seq_fc_logic(
     }
 
     if(i == j) {
-        i = i * TILE + (threadIdx.x / TILE);
-        j = j * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
         if(i >= j) {
             return;
         }
     } else {
-        i = i * TILE + (threadIdx.x / TILE);
-        j = j * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
     }
 
     if(i >= sequence_length || j >= sequence_length) {
@@ -4673,14 +4673,14 @@ gather_w_gradients_seq_fc_cpu_logic(
     }
 
     if(i == j) {
-        i = i * TILE + (threadIdx.x / TILE);
-        j = j * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
         if(i >= j) {
             return;
         }
     } else {
-        i = i * TILE + (threadIdx.x / TILE);
-        j = j * TILE + (threadIdx.x % TILE);
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
     }
 
     if(i >= sequence_length || j >= sequence_length) {
