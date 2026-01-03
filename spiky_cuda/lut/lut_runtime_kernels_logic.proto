@@ -144,7 +144,12 @@ calculate_product_lookup_index_backprop(
     first_anchor_source = std::numeric_limits<uint32_t>::max();
     second_anchor_source = std::numeric_limits<uint32_t>::max();
     uint32_t flipping_anchor_idx = std::numeric_limits<uint32_t>::max();
-    
+
+    EXTERNAL_REAL_DT* sources[3];
+    sources[0] = input_1_ptr;
+    sources[1] = input_2_ptr;
+    sources[2] = pos_emb_ptr;
+
     if(sliced_mode) {
         // Sliced mode: [i11, i21, p1, i12, i22, p2, ...]
         for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
@@ -161,48 +166,25 @@ calculate_product_lookup_index_backprop(
             uint32_t slice_idx_2 = ap.anchor2_id / 3;
             uint32_t component_2 = ap.anchor2_id % 3;
 
-            EXTERNAL_REAL_DT val1, val2;
-
-            // Get value from appropriate component
-            if(component_1 == 0) {
-                val1 = input_1_ptr[slice_idx_1];
-            } else if(component_1 == 1) {
-                val1 = input_2_ptr[slice_idx_1];
-            } else {
-                val1 = pos_emb_ptr[slice_idx_1];
-            }
-
-            if(component_2 == 0) {
-                val2 = input_1_ptr[slice_idx_2];
-            } else if(component_2 == 1) {
-                val2 = input_2_ptr[slice_idx_2];
-            } else {
-                val2 = pos_emb_ptr[slice_idx_2];
-            }
+            EXTERNAL_REAL_DT val1 = sources[component_1][slice_idx_1];
+            EXTERNAL_REAL_DT val2 = sources[component_2][slice_idx_2];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            if(delta > 0.0) {
-                lookup_index |= (1 << anchor_idx);
-            }
-            
-            // Track minimum delta across all anchors and determine which input component it belongs to
+            lookup_index |= (delta > 0.0) ? (1 << anchor_idx) : 0;
 
-            if(fabs(delta) < fabs(min_delta)) {
-                min_delta = delta;
-                flipping_anchor_idx = anchor_idx;
-                
-                // Determine which input component each anchor belongs to
-                // component: 0=input_1, 1=input_2, 2=positional embedding
-                first_anchor_source = component_1;
-                second_anchor_source = component_2;
-                
-                // Set flipping indices to the indices used to access the corresponding input arrays
-                // For sliced mode, use slice_idx (the index used to access the input array)
-                first_flipping_index = slice_idx_1;
-                second_flipping_index = slice_idx_2;
-            }
+            bool m = fabs(delta) < fabs(min_delta);
+            min_delta = m ? delta : min_delta;
+            flipping_anchor_idx = m ? anchor_idx : flipping_anchor_idx;
+            first_anchor_source = m ? component_1 : first_anchor_source;
+            second_anchor_source = m ? component_2 : second_anchor_source;
+            first_flipping_index = m ? slice_idx_1 : first_flipping_index;
+            second_flipping_index = m ? slice_idx_2 : second_flipping_index;
         }
     } else {
+        int shifts[3];
+        shifts[0] = 0;
+        shifts[1] = n_inputs_1;
+        shifts[2] = n_inputs_1 + n_inputs_2;
         // Sequential mode: [inp1, inp2, pos_embedding]
         for(uint32_t anchor_idx = 0; anchor_idx < n_anchors_per_detector; anchor_idx++) {
             AnchorsPair ap = detector_anchors[anchor_idx];
@@ -212,58 +194,22 @@ calculate_product_lookup_index_backprop(
                 continue;
             }
 
-            EXTERNAL_REAL_DT val1, val2;
+            uint32_t component_1 = (ap.anchor1_id < shifts[1]) ? 0 : (ap.anchor1_id < shifts[2]) ? 1 : 2;
+            uint32_t component_2 = (ap.anchor2_id < shifts[1]) ? 0 : (ap.anchor2_id < shifts[2]) ? 1 : 2;
 
-            // Map anchor_id to the appropriate input section
-            if(ap.anchor1_id < n_inputs_1) {
-                val1 = input_1_ptr[ap.anchor1_id];
-            } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
-                val1 = input_2_ptr[ap.anchor1_id - n_inputs_1];
-            } else {
-                val1 = pos_emb_ptr[ap.anchor1_id - n_inputs_1 - n_inputs_2];
-            }
-
-            if(ap.anchor2_id < n_inputs_1) {
-                val2 = input_1_ptr[ap.anchor2_id];
-            } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
-                val2 = input_2_ptr[ap.anchor2_id - n_inputs_1];
-            } else {
-                val2 = pos_emb_ptr[ap.anchor2_id - n_inputs_1 - n_inputs_2];
-            }
+            EXTERNAL_REAL_DT val1 = sources[component_1][ap.anchor1_id - shifts[component_1]];
+            EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            if(delta > 0.0) {
-                lookup_index |= (1 << anchor_idx);
-            }
-            
-            if(fabs(delta) < fabs(min_delta)) {
-                min_delta = delta;
-                flipping_anchor_idx = anchor_idx;
-                
-                // Determine which input component each anchor belongs to and set flipping indices
-                // 0=input_1, 1=input_2, 2=positional embedding
-                if(ap.anchor1_id < n_inputs_1) {
-                    first_anchor_source = 0; // input_1
-                    first_flipping_index = ap.anchor1_id; // index in input_1 array
-                } else if(ap.anchor1_id < n_inputs_1 + n_inputs_2) {
-                    first_anchor_source = 1; // input_2
-                    first_flipping_index = ap.anchor1_id - n_inputs_1; // index in input_2 array
-                } else {
-                    first_anchor_source = 2; // positional embedding
-                    first_flipping_index = ap.anchor1_id - n_inputs_1 - n_inputs_2; // index in pos_emb array
-                }
-                
-                if(ap.anchor2_id < n_inputs_1) {
-                    second_anchor_source = 0; // input_1
-                    second_flipping_index = ap.anchor2_id; // index in input_1 array
-                } else if(ap.anchor2_id < n_inputs_1 + n_inputs_2) {
-                    second_anchor_source = 1; // input_2
-                    second_flipping_index = ap.anchor2_id - n_inputs_1; // index in input_2 array
-                } else {
-                    second_anchor_source = 2; // positional embedding
-                    second_flipping_index = ap.anchor2_id - n_inputs_1 - n_inputs_2; // index in pos_emb array
-                }
-            }
+            lookup_index |= (delta > 0.0) ? (1 << anchor_idx) : 0;
+
+            bool m = fabs(delta) < fabs(min_delta);
+            min_delta = m ? delta : min_delta;
+            flipping_anchor_idx = m ? anchor_idx : flipping_anchor_idx;
+            first_anchor_source = m ? component_1 : first_anchor_source;
+            second_anchor_source = m ? component_2 : second_anchor_source;
+            first_flipping_index = m ? (ap.anchor1_id - shifts[component_1]) : first_flipping_index;
+            second_flipping_index = m ? (ap.anchor2_id - shifts[component_2]) : second_flipping_index;
         }
     }
     alt_lookup_index = lookup_index ^ (1 << flipping_anchor_idx);
