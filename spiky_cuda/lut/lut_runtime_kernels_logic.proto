@@ -2340,7 +2340,7 @@ fill_outputs_product_fc_no_shared_logic(
     uint32_t lookup_index;
     uint32_t neuron_id;
 
-    for(uint32_t i = 0; i < j; i++, input_1_i += n_inputs_1) {
+    for(uint32_t i = 0; i < j; i++, r_input_1 += n_inputs_1) {
         // Calculate lookup index using helper function
         PFX(calculate_product_lookup_index)(
             sliced_mode,
