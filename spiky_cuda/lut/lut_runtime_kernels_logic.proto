@@ -2332,9 +2332,8 @@ fill_outputs_product_fc_no_shared_logic(
     AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
     r_input_2 += (batch_offset + j) * n_inputs_2;
     r_input_1 += batch_offset + n_inputs_1;
-    EXTERNAL_REAL_DT* pos_emb = nullptr;
     if(positional_dim > 0) {
-        pos_emb = pos_embedding + (j - 1) * positional_dim;
+         pos_embedding += (j - 1) * positional_dim;
     }
     // Accumulate weight sum over all i from 0 to j (inclusive)
     double weight_sum = 0.0;
@@ -2350,17 +2349,17 @@ fill_outputs_product_fc_no_shared_logic(
             n_inputs_1,
             n_inputs_2,
             positional_dim,
-            input_1_i,
-            input_2_j,
-            pos_emb,
+            r_input_1,
+            r_input_2,
+            pos_embedding,
             lookup_index
         );
 
         neuron_id = lookup_index + detector_index * n_lookup_neurons_per_detector;
         weight_sum += static_cast<double>(r_weights[neuron_id * n_outputs + output_index]);
 
-        if(pos_emb != nullptr) {
-            pos_emb -= positional_dim;
+        if(pos_embedding != nullptr) {
+            pos_embedding -= positional_dim;
         }
     }
 
