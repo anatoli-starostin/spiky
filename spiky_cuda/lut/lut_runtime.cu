@@ -1004,7 +1004,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
             #ifdef LUT_PRODUCT_NO_SHARED_MEM
-            uint32_t n_detector_output_pairs = (this->sequence_length - 1) * this->n_detectors * this->n_outputs;
+            uint32_t n_detector_output_pairs = (sequence_length - 1) * this->n_detectors * this->n_outputs;
             dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size);
             GRID_CALL_ON_STREAM_NO_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc_no_shared,
