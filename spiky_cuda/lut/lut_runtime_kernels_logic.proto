@@ -3751,7 +3751,6 @@ gather_w_gradients_product_fc_logic(
 propagate_backward_product_fc_no_shared_logic(
     uint32_t sequence_length,
     uint32_t positional_dim,
-    uint32_t tile_height,
     EXTERNAL_REAL_DT* r_input_1,
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2,
@@ -3759,14 +3758,13 @@ propagate_backward_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* r_positional_embeddings,
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
-    uint32_t n_detector_blocks,
-    uint32_t n_detectors_in_block,
+    uint32_t n_total_tiles,
     uint32_t n_anchors_per_detector,
     EXTERNAL_REAL_DT* r_weights,
     uint32_t n_lookup_neurons_per_detector,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    uint32_t n_outputs_in_block,
+    int32_t n_outputs_per_block,
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
@@ -3774,29 +3772,46 @@ propagate_backward_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
     double int_rescaler
 ) {
-    // threads layout similar to propagate_backward_product_fc_logic
+    // threads layout similar to propagate_through_detectors_seq_fc_logic
     // no shared memory - direct global memory access
     // the logic of the kernel should be consistent with propagate_backward_product_cpu_logic
     #ifdef ATOMIC
-    uint32_t t = n_output_blocks * n_detector_blocks;
-    uint32_t batch_index = blockIdx.y / t;
-    t = blockIdx.y % t;
-    uint32_t output_block_index = t / n_detector_blocks;
-    uint32_t detector_block_index = t % n_detector_blocks;
-    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
 
-    uint64_t tile_id = linear_idx / n_detectors_in_block; // we use vertical tiles (same j, different i)
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-
-    uint32_t i = (tile_id / sequence_length) * tile_height + t;
-    uint32_t j = tile_id % sequence_length;
-
-    // Only process valid (i, j) pairs where i < j and lookup_index is valid
-    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
+    if(tile_id >= n_total_tiles) {
         return;
     }
+
+    uint32_t i = tile_id / tile_grid_w;  // tile row
+    uint32_t j = tile_id % tile_grid_w;  // tile col
+
+    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    if(i > j) {
+        return;
+    }
+
+    if(i == j) {
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
+        if(i >= j) {
+            return;
+        }
+    } else {
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
+    }
+
+    if(i >= sequence_length || j >= sequence_length) {
+        return;
+    }
+
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
 
     // Direct global memory access (no shared memory)
     uint32_t batch_offset = batch_index * sequence_length;
@@ -3900,7 +3915,6 @@ propagate_backward_product_fc_no_shared_logic(
 gather_w_gradients_product_fc_no_shared_logic(
     uint32_t sequence_length,
     uint32_t positional_dim,
-    uint32_t tile_height,
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* r_input_1,
     uint32_t n_inputs_1,
@@ -3909,42 +3923,58 @@ gather_w_gradients_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* r_positional_embeddings,
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
-    uint32_t n_detector_blocks,
-    uint32_t n_detectors_in_block,
+    uint32_t n_total_tiles,
     uint32_t n_anchors_per_detector,
     EXTERNAL_REAL_DT* w_weights_gradients,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    uint32_t n_outputs_in_block,
+    int32_t n_outputs_per_block,
     uint32_t n_lookup_neurons_per_detector,
     bool sliced_mode,
     double external_lr,
     double first_synapse_meta_lr,
     double int_rescaler
 ) {
-    // threads layout similar to gather_w_gradients_product_fc_logic
+    // threads layout similar to gather_w_gradients_seq_fc_cpu_logic
     // no shared memory - direct global memory access
     // the logic of the kernel should be consistent with gather_w_gradients_internal_product_cpu_logic
     #ifdef ATOMIC
-    uint32_t t = n_output_blocks * n_detector_blocks;
-    uint32_t batch_index = blockIdx.y / t;
-    t = blockIdx.y % t;
-    uint32_t output_block_index = t / n_detector_blocks;
-    uint32_t detector_block_index = t % n_detector_blocks;
-    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+    // blockIdx.x encodes: tile_id * n_detectors + detector_index
+    // Extract tile_id and detector_index
+    uint32_t tile_id = blockIdx.x / n_detectors;
+    uint32_t detector_index = blockIdx.x % n_detectors;
+    uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
 
-    uint64_t tile_id = linear_idx / n_detectors_in_block; // we use vertical tiles (same j, different i)
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-
-    uint32_t i = (tile_id / sequence_length) * tile_height + t;
-    uint32_t j = tile_id % sequence_length;
-
-    // Only process valid (i, j) pairs where i < j
-    if((detector_index >= n_detectors) || (i >= j) || (i >= sequence_length)) {
+    if(tile_id >= n_total_tiles) {
         return;
     }
+
+    uint32_t i = tile_id / tile_grid_w;  // tile row
+    uint32_t j = tile_id % tile_grid_w;  // tile col
+
+    // Skip tiles below diagonal (bi > bj means all pairs have i > j, which we don't want)
+    if(i > j) {
+        return;
+    }
+
+    if(i == j) {
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
+        if(i >= j) {
+            return;
+        }
+    } else {
+        i = i * TILE + (threadIdx.x % TILE);
+        j = j * TILE + (threadIdx.x / TILE);
+    }
+
+    if(i >= sequence_length || j >= sequence_length) {
+        return;
+    }
+
+    // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
+    uint32_t batch_index = blockIdx.y / n_output_blocks;
+    uint32_t output_block_index = blockIdx.y % n_output_blocks;
 
     // Direct global memory access (no shared memory)
     uint32_t batch_offset = batch_index * sequence_length;
