@@ -2318,55 +2318,35 @@ fill_outputs_product_fc_no_shared_logic(
     double int_rescaler
 ) {
     #ifdef ATOMIC
-    uint32_t t = n_output_blocks * n_detector_blocks;
-    uint32_t batch_index = blockIdx.y / t;
-    t = blockIdx.y % t;
-    uint32_t output_block_index = t / n_detector_blocks;
-    uint32_t detector_block_index = t % n_detector_blocks;
-    uint64_t linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    uint32_t detector_index = detector_block_index * n_detectors_in_block + linear_idx % n_detectors_in_block;
+    uint32_t linear_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    uint64_t tile_id = linear_idx / n_detectors_in_block; 
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-
-    uint32_t i = (tile_id / sequence_length) * tile_height + t;
-    uint32_t j = tile_id % sequence_length;
-
-    // calculating i_base
-    linear_idx -= threadIdx.x;
-    tile_id = linear_idx / n_detectors_in_block;
-    t = tile_id % tile_height;
-    tile_id /= tile_height;
-    uint32_t i_base = (tile_id / sequence_length) * tile_height + t;
-
-    if(i_base >= j) {
-        // whole thread block can be skipped
+    if(linear_idx >= (sequence_length - 1) * n_detectors * n_outputs) {
         return;
     }
 
-    extern __shared__ EXTERNAL_REAL_DT shared_mem[];
-    int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_mem);
+    uint32_t j = (linear_idx / (n_detectors * n_outputs)) + 1;
+    linear_idx = linear_idx % (n_detectors * n_outputs);
+    uint32_t detector_index = linear_idx / n_outputs;
+    uint32_t output_index = linear_idx % n_outputs;
 
-    // Calculate lookup index - each thread calculates for its own (i, j) pair
-    // Direct global memory access for inputs (no shared memory for inputs)
-    int32_t lookup_index = -1; // -1 means invalid/masked
-    
-    if((detector_index < n_detectors) && (i < j) && (i < sequence_length)) {
-        // Get detector anchors
-        AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
-        
-        // Access inputs directly from global memory
-        uint32_t batch_offset = batch_index * sequence_length;
-        EXTERNAL_REAL_DT* input_1_i = r_input_1 + (batch_offset + i) * n_inputs_1;
-        EXTERNAL_REAL_DT* input_2_j = r_input_2 + (batch_offset + j) * n_inputs_2;
-        
-        // Access positional embeddings directly from global memory (if needed)
-        EXTERNAL_REAL_DT* pos_emb = nullptr;
-        if(positional_dim > 0) {
-            pos_emb = pos_embedding + (j - i - 1) * positional_dim;
-        }
-        
+    uint32_t batch_index = blockIdx.y;
+
+    // Calculate offsets into lookup_indices arrays
+    // Layout: [batch0_t0_det0, batch0_t0_det1, ..., batch0_t0_detN, batch0_t1_det0, ...]
+    uint32_t batch_offset = batch_index * sequence_length;
+    AnchorsPair* detector_anchors = r_detectors + detector_index * n_anchors_per_detector;
+    r_input_2 += (batch_offset + j) * n_inputs_2;
+    r_input_1 += batch_offset + n_inputs_1;
+    EXTERNAL_REAL_DT* pos_emb = nullptr;
+    if(positional_dim > 0) {
+        pos_emb = pos_embedding + (j - 1) * positional_dim;
+    }
+    // Accumulate weight sum over all i from 0 to j (inclusive)
+    double weight_sum = 0.0;
+    uint32_t lookup_index;
+    uint32_t neuron_id;
+
+    for(uint32_t i = 0; i < j; i++, input_1_i += n_inputs_1) {
         // Calculate lookup index using helper function
         PFX(calculate_product_lookup_index)(
             sliced_mode,
@@ -2380,91 +2360,41 @@ fill_outputs_product_fc_no_shared_logic(
             pos_emb,
             lookup_index
         );
-    }
-    
-    // Store lookup index at thread's position
-    shared_lookup_indices[threadIdx.x] = lookup_index;
-    __syncthreads();
 
-    // Distribute threads over (output, lookup_index) pairs
-    uint32_t total_work = n_outputs_in_block * blockDim.x;
-    uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
-    uint32_t global_output_start = output_block_index * n_outputs_in_block;
+        neuron_id = lookup_index + detector_index * n_lookup_neurons_per_detector;
+        weight_sum += static_cast<double>(r_weights[neuron_id * n_outputs + output_index]);
 
-    uint32_t last_output_idx = std::numeric_limits<uint32_t>::max();
-    double cur_output = 0.0;
-
-    w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
-    w_output += output_block_index * n_outputs_in_block;
-
-    for(uint32_t k = 0; k < work_per_thread; k++) {
-        uint32_t work_idx = work_per_thread * threadIdx.x + k;
-        uint32_t output_idx = work_idx / blockDim.x;
-        uint32_t thread_idx = work_idx % blockDim.x;
-
-        if(output_idx != last_output_idx) {
-            if(last_output_idx != std::numeric_limits<uint32_t>::max()) {
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(cur_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
-                #ifdef ATOMIC
-                atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + last_output_idx), payload);
-                #else
-                w_output[last_output_idx] += payload;
-                #endif
-                #else
-                #ifdef ATOMIC
-                atomicAdd(w_output + last_output_idx, static_cast<SUMMATION32_DT>(cur_output));
-                #else
-                w_output[last_output_idx] += static_cast<SUMMATION32_DT>(cur_output);
-                #endif
-                #endif
-            }
-            last_output_idx = output_idx;
-            cur_output = SUMMATION_ZERO;
+        if(pos_emb != nullptr) {
+            pos_emb -= positional_dim;
         }
-
-        if(output_idx + global_output_start >= n_outputs) {
-            break;
-        }
-
-        int32_t li = shared_lookup_indices[thread_idx];
-        if(li < 0) {
-            continue; // Invalid/masked lookup index
-        }
-        
-        // Calculate detector_index for this thread on the fly
-        uint64_t thread_linear_idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + thread_idx;
-        uint32_t thread_detector_index = detector_block_index * n_detectors_in_block + (thread_linear_idx % n_detectors_in_block);
-        
-        if(thread_detector_index >= n_detectors) {
-            continue;
-        }
-        
-        uint32_t lookup_neuron_id = thread_detector_index * n_lookup_neurons_per_detector + li;
-        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + global_output_start + output_idx;
-        
-        EXTERNAL_REAL_DT weight = r_weights[weights_offset];
-
-        // Atomic accumulate in shared memory for this output
-        cur_output += static_cast<double>(weight);
     }
 
-    if(last_output_idx != std::numeric_limits<uint32_t>::max()) {
-        #ifdef INTEGERS_INSTEAD_OF_FLOATS
-        SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(cur_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
+    // Calculate output offset
+    // Output layout: [batch0_t0_out0, batch0_t0_out1, ..., batch0_t0_outN, batch0_t1_out0, ...]
+    uint32_t output_offset = (batch_offset + j) * n_outputs + output_index;
+
+    // Atomic add accumulated sum to output
+    SUMMATION32_DT payload;
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+        payload = static_cast<SUMMATION32_DT>(weight_sum * static_cast<double>(DENOMINATOR32) * int_rescaler);
         #ifdef ATOMIC
-        atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + last_output_idx), payload);
+        atomicAdd(
+            reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset),
+            payload
+        );
         #else
-        w_output[last_output_idx] += payload;
+        *reinterpret_cast<SUMMATION32_DT *>(w_output + output_offset) += payload;
         #endif
-        #else
+    #else
+        payload = static_cast<SUMMATION32_DT>(weight_sum);
         #ifdef ATOMIC
-        atomicAdd(w_output + last_output_idx, static_cast<SUMMATION32_DT>(cur_output));
+        atomicAdd(
+            w_output + output_offset,
+            payload
+        );
         #else
-        w_output[last_output_idx] += static_cast<SUMMATION32_DT>(cur_output);
+        w_output[output_offset] += payload;
         #endif
-        #endif
-    }
     #endif
 }
 

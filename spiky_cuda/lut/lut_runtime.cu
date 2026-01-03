@@ -1001,36 +1001,14 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             );
         } else {
             #ifndef NO_CUDA
-            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
-            uint32_t n_detectors_in_block = tpb;
-            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
-            uint32_t tile_height;
-            if(n_detector_blocks == 1) {
-                n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 8) {
-                    n_detectors_in_block = 8;
-                }
-                tile_height = tpb / n_detectors_in_block;
-                tpb = tile_height * n_detectors_in_block;
-            } else {
-                tile_height = 1;
-            }
-            
-            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
-            uint32_t n_outputs_in_block = this->forward_group_size;
-            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
-            
-            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
-            
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
             #ifdef LUT_PRODUCT_NO_SHARED_MEM
-            // Calculate shared memory size for no_shared version (only shared_lookup_indices and shared_outputs)
-            uint32_t shared_mem_size_no_shared = tpb * sizeof(int32_t);
-
-            GRID_CALL_ON_STREAM_SHARED_MEM(
-                numBlocks, fill_outputs_product_fc_no_shared, tpb,
-                shared_mem_size_no_shared, cuda_streams[0],
+            uint32_t n_detector_output_pairs = (this->sequence_length - 1) * this->n_detectors * this->n_outputs;
+            dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size);
+            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+                numBlocks, fill_outputs_product_fc_no_shared,
+                LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs), cuda_streams[0],
                 sequence_length,
                 this->positional_dim,
                 tile_height,
@@ -1058,6 +1036,27 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
             #else
+            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
+            uint32_t n_detectors_in_block = tpb;
+            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
+            uint32_t tile_height;
+            if(n_detector_blocks == 1) {
+                n_detectors_in_block = this->n_detectors;
+                if(n_detectors_in_block < 8) {
+                    n_detectors_in_block = 8;
+                }
+                tile_height = tpb / n_detectors_in_block;
+                tpb = tile_height * n_detectors_in_block;
+            } else {
+                tile_height = 1;
+            }
+
+            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+            uint32_t n_outputs_in_block = this->forward_group_size;
+            uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+
+            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
+
             // Calculate shared memory size
             // shared_input_2: n_inputs_2
             // shared_input_1: tile_height * n_inputs_1
