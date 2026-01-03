@@ -542,8 +542,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     } else {
         PROF_START(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_FC_PROFILER_OP);
         // Grid: [ceil((n_detectors * n_outputs) / blockDim.x), batch_size * (sequence_length - 1)]
-        uint32_t n_detector_output_pairs = this->n_detectors * this->n_outputs;
-        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size * (this->sequence_length - 1));
+        uint32_t n_detector_output_pairs = (this->sequence_length - 1) * this->n_detectors * this->n_outputs;
+        numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, fill_outputs_fully_connected_seq,
             LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs), cuda_streams[0],
