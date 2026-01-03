@@ -3764,7 +3764,7 @@ propagate_backward_product_fc_no_shared_logic(
     uint32_t n_lookup_neurons_per_detector,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    int32_t n_outputs_per_block,
+    uint32_t n_outputs_in_block,
     EXTERNAL_REAL_DT* r_output_gradients,
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
@@ -3928,7 +3928,7 @@ gather_w_gradients_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* w_weights_gradients,
     uint32_t n_outputs,
     uint32_t n_output_blocks,
-    int32_t n_outputs_per_block,
+    uint32_t n_outputs_in_block,
     uint32_t n_lookup_neurons_per_detector,
     bool sliced_mode,
     double external_lr,
