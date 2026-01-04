@@ -27,7 +27,7 @@ class LUTTransformer(nn.Module):
                 synapse_meta=_synapse_meta,
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
-                positional_dim=self.positional_dim,
+                positional_dim=self.positional_dim if self._positional_embeddings is None else 0,
                 use_sinusoidal_pe=self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 shared_context=self.lut_shared_context,
@@ -49,7 +49,7 @@ class LUTTransformer(nn.Module):
                 sequence_length=self.context_size,
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
-                positional_dim=self.positional_dim,
+                positional_dim=self.positional_dim if self._positional_embeddings is None else 0,
                 use_sinusoidal_pe=self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 receptive_field_shape=self.embedding_dim,
@@ -69,6 +69,7 @@ class LUTTransformer(nn.Module):
         positional_dim, num_layers, num_heads,
         n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
         concatenation_product=True, sliced_product_mode=False, use_sinusoidal_pe=False,
+        inject_pe_once=False,
         weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
@@ -128,7 +129,21 @@ class LUTTransformer(nn.Module):
         else:
             self.embedding_bn = None
 
-        # Transformer layers
+        if inject_pe_once:
+            assert use_sinusoidal_pe
+            position = torch.arange(sequence_length, device=device).float().unsqueeze(1)
+            inv_freq = torch.exp(
+                -torch.arange(0, embedding_dim, 2, device=device).float() * (torch.log(torch.tensor(10000.0)) / embedding_dim)
+            )
+            sinusoid = position * inv_freq
+            pe = torch.empty(1, sequence_length, embedding_dim, device=self.device)
+            pe[:, 0::2] = torch.sin(sinusoid)
+            pe[:, 1::2] = torch.cos(sinusoid)
+            self.register_buffer("_positional_embeddings", pe.flatten())
+        else:
+            self._positional_embeddings = None
+
+            # Transformer layers
         self.layers = nn.ModuleList()
         for layer_idx in range(num_layers):
             layer = nn.ModuleDict()
@@ -236,6 +251,9 @@ class LUTTransformer(nn.Module):
 
         # Apply dropout after embeddings
         z = self.embedding_dropout(z)
+
+        if self._positional_embeddings is not None:
+            z = z + self._positional_embeddings
         
         # Apply batch normalization after embeddings
         if self.use_batch_norm:
