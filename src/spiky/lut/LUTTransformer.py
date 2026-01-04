@@ -131,14 +131,14 @@ class LUTTransformer(nn.Module):
 
         if inject_pe_once:
             assert use_sinusoidal_pe
-            position = torch.arange(sequence_length, device=device).float().unsqueeze(1)
+            position = torch.arange(context_size, device=device).float().unsqueeze(1)
             inv_freq = torch.exp(
                 -torch.arange(0, embedding_dim, 2, device=device).float() * (torch.log(torch.tensor(10000.0)) / embedding_dim)
             )
             sinusoid = position * inv_freq
-            pe = torch.empty(1, sequence_length, embedding_dim, device=self.device)
-            pe[:, 0::2] = torch.sin(sinusoid)
-            pe[:, 1::2] = torch.cos(sinusoid)
+            pe = torch.empty(1, context_size, embedding_dim, device=self.device)
+            pe[:, :, 0::2] = torch.sin(sinusoid)
+            pe[:, :, 1::2] = torch.cos(sinusoid)
             self.register_buffer("_positional_embeddings", pe.flatten())
         else:
             self._positional_embeddings = None
