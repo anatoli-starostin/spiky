@@ -28,6 +28,7 @@ class LUTTransformer(nn.Module):
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
                 positional_dim=self.positional_dim,
+                use_sinusoidal_pe=self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 shared_context=self.lut_shared_context,
                 summation_dtype=summation_dtype,
@@ -49,6 +50,7 @@ class LUTTransformer(nn.Module):
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
                 positional_dim=self.positional_dim,
+                use_sinusoidal_pe=self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 receptive_field_shape=self.embedding_dim,
                 receptive_field_stride_shape=self.embedding_dim,
@@ -66,7 +68,7 @@ class LUTTransformer(nn.Module):
         self, vocab_size, embedding_dim, context_size,
         positional_dim, num_layers, num_heads,
         n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
-        concatenation_product=True, sliced_product_mode=False,
+        concatenation_product=True, sliced_product_mode=False, use_sinusoidal_pe=False,
         weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
@@ -89,6 +91,7 @@ class LUTTransformer(nn.Module):
         self.weights_gradient_policy = weights_gradient_policy
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
+        self.use_sinusoidal_pe = use_sinusoidal_pe
         if device is None:
             device = torch.device('cpu')
 

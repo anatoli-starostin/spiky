@@ -201,18 +201,32 @@ class LUTLayerBasic(nn.Module):
         if self._sequence_length > 1:
             assert self._positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
             if self._positional_dim > 0:
-                positional_embeddings_data = torch.empty(
-                    (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
-                    dtype=torch.float32,
-                    device=self.device
-                )
-                # Initialize with random floats in [-1, 1]
-                positional_embeddings_data.uniform_(-1.0, 1.0)
-                self._positional_embeddings = nn.Parameter(positional_embeddings_data)
+                if self._use_sinusoidal_pe:
+                    assert self._unified_positional_embeddings
+                    position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
+                    inv_freq = torch.exp(
+                        -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
+                    )
+                    sinusoid = position * inv_freq
+                    pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
+                    pe[:, 0::2] = torch.sin(sinusoid)
+                    pe[:, 1::2] = torch.cos(sinusoid)
+                    self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
+                else:
+                    positional_embeddings_data = torch.empty(
+                        (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
+                        dtype=torch.float32,
+                        device=self.device
+                    )
+                    # Initialize with random floats in [-1, 1]
+                    positional_embeddings_data.uniform_(-1.0, 1.0)
+                    self._positional_embeddings = nn.Parameter(positional_embeddings_data)
             else:
+                assert not self._use_sinusoidal_pe
                 self._positional_embeddings = None
         else:
             assert self._positional_dim is None, "positional_dim must be None when sequence_length == 1"
+            assert not self._use_sinusoidal_pe
             self._positional_embeddings = None
 
     def __init__(
@@ -224,6 +238,7 @@ class LUTLayerBasic(nn.Module):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
+        use_sinusoidal_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -282,6 +297,7 @@ class LUTLayerBasic(nn.Module):
         self._external_lr_hook = None
 
         self._positional_dim = positional_dim
+        self._use_sinusoidal_pe = use_sinusoidal_pe
         self._initialize_positional_embeddings()
 
         if self._is_fully_connected:
@@ -1290,6 +1306,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
+        use_sinusoidal_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1362,7 +1379,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
             concatenation_product=concatenation_product, sliced_product_mode=sliced_product_mode,
-            positional_dim=positional_dim, weights_gradient_policy=weights_gradient_policy,
+            positional_dim=positional_dim, use_sinusoidal_pe=use_sinusoidal_pe,
+            weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
@@ -1462,6 +1480,7 @@ class LUTLayer(Conv2DLUTLayer):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
+        use_sinusoidal_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1487,6 +1506,7 @@ class LUTLayer(Conv2DLUTLayer):
             concatenation_product=concatenation_product,
             sliced_product_mode=sliced_product_mode,
             positional_dim=positional_dim,
+            use_sinusoidal_pe=use_sinusoidal_pe,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype,
