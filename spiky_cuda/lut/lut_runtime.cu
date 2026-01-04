@@ -1003,77 +1003,54 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             #ifndef NO_CUDA
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
-            #ifdef LUT_PRODUCT_NO_SHARED_MEM
-            uint32_t n_detector_output_pairs = (sequence_length - 1) * this->n_detectors * this->n_outputs;
-            dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size);
-            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
-                numBlocks, fill_outputs_product_fc_no_shared,
-                LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs), cuda_streams[0],
-                sequence_length,
-                this->positional_dim,
-                r_input_1,
-                n_inputs_1,
-                r_input_2,
-                n_inputs_2,
-                r_positional_embeddings,
-                r_detectors,
-                this->n_detectors,
-                this->n_anchors_per_detector,
-                r_weights,
-                n_lookup_neurons_per_detector,
-                this->n_outputs,
-                w_output,
-                sliced_mode
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
-            );
-            #else
-            uint32_t tpb = LUT_RUNTIME_KERNELS_TPB;
-            uint32_t n_detectors_in_block = tpb;
-            uint32_t n_detector_blocks = (this->n_detectors + tpb - 1) / tpb;
-            uint32_t tile_height;
-            if(n_detector_blocks == 1) {
-                n_detectors_in_block = this->n_detectors;
-                if(n_detectors_in_block < 8) {
-                    n_detectors_in_block = 8;
-                }
-                tile_height = tpb / n_detectors_in_block;
-                tpb = tile_height * n_detectors_in_block;
-            } else {
-                tile_height = 1;
-            }
-
-            uint32_t n_tiles = sequence_length * ((sequence_length + tile_height - 1) / tile_height);
+//            #ifdef LUT_PRODUCT_NO_SHARED_MEM
+//            uint32_t n_detector_output_pairs = (sequence_length - 1) * this->n_detectors * this->n_outputs;
+//            dim3 numBlocks(LUT_RUNTIME_NUM_BLOCKS(n_detector_output_pairs), batch_size);
+//            GRID_CALL_ON_STREAM_NO_SHARED_MEM(
+//                numBlocks, fill_outputs_product_fc_no_shared,
+//                LUT_RUNTIME_KERNELS_TPB_OPT(n_detector_output_pairs), cuda_streams[0],
+//                sequence_length,
+//                this->positional_dim,
+//                r_input_1,
+//                n_inputs_1,
+//                r_input_2,
+//                n_inputs_2,
+//                r_positional_embeddings,
+//                r_detectors,
+//                this->n_detectors,
+//                this->n_anchors_per_detector,
+//                r_weights,
+//                n_lookup_neurons_per_detector,
+//                this->n_outputs,
+//                w_output,
+//                sliced_mode
+//                #ifdef INTEGERS_INSTEAD_OF_FLOATS
+//                , this->int_rescaler
+//                #else
+//                , 0.0
+//                #endif
+//            );
+//            #else
+            #ifndef NO_CUDA
+            // Use TILE x TILE grid layout like other kernels
+            uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
+            uint32_t n_total_tiles = tile_grid_w * tile_grid_w;
             uint32_t n_outputs_in_block = this->forward_group_size;
+            if(n_outputs_in_block > TILE) {
+                n_outputs_in_block = TILE;
+            }
             uint32_t n_output_blocks = (this->n_outputs + n_outputs_in_block - 1) / n_outputs_in_block;
+            dim3 numBlocks(n_total_tiles * this->n_detectors, batch_size * n_output_blocks);
+            uint32_t tpb = TILE * TILE;
+            uint32_t shared_mem_size = tpb * sizeof(int32_t);
+            
+            __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
-            dim3 numBlocks(n_tiles * tile_height * n_detectors_in_block, batch_size * n_output_blocks * n_detector_blocks);
-
-            // Calculate shared memory size
-            // shared_input_2: n_inputs_2
-            // shared_input_1: tile_height * n_inputs_1
-            // shared_pos_emb: tile_height * positional_dim (if positional_dim > 0)
-            // shared_lookup_indices: blockDim.x (int32_t, one per thread)
-            // shared_outputs: n_outputs_in_block
-            uint32_t shared_mem_size = n_inputs_2 * sizeof(EXTERNAL_REAL_DT) +
-                                       tile_height * n_inputs_1 * sizeof(EXTERNAL_REAL_DT) +
-                                       (this->positional_dim > 0 ? tile_height * this->positional_dim * sizeof(EXTERNAL_REAL_DT) : 0) +
-                                       tpb * sizeof(int32_t) +
-                                       #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                                       n_outputs_in_block * sizeof(SUMMATION32_DT)
-                                       #else
-                                       n_outputs_in_block * sizeof(EXTERNAL_REAL_DT)
-                                       #endif
-                                       ;
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
                 shared_mem_size, cuda_streams[0],
                 sequence_length,
                 this->positional_dim,
-                tile_height,
                 r_input_1,
                 n_inputs_1,
                 r_input_2,
@@ -1081,8 +1058,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 r_positional_embeddings,
                 r_detectors,
                 this->n_detectors,
-                n_detector_blocks,
-                n_detectors_in_block,
+                n_total_tiles,
                 this->n_anchors_per_detector,
                 r_weights,
                 n_lookup_neurons_per_detector,
@@ -1098,7 +1074,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
             #endif
-            #endif
+//            #endif
         }
         PROF_END(LUT_RUNTIME_FORWARD_PRODUCT_FILL_OUTPUTS_FC_PROFILER_OP);
     }
