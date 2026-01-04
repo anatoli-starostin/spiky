@@ -139,7 +139,7 @@ class LUTTransformer(nn.Module):
             pe = torch.empty(1, context_size, embedding_dim, device=self.device)
             pe[:, :, 0::2] = torch.sin(sinusoid)
             pe[:, :, 1::2] = torch.cos(sinusoid)
-            self.register_buffer("_positional_embeddings", pe.flatten())
+            self.register_buffer("_positional_embeddings", pe)
         else:
             self._positional_embeddings = None
 
