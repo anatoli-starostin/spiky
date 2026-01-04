@@ -73,7 +73,8 @@ class LUTTransformer(nn.Module):
         weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
-        _forward_group_size=32, _backward_group_size=32, dropout=0.0, use_batch_norm=False
+        _forward_group_size=32, _backward_group_size=32, dropout=0.0,
+        use_batch_norm=False, use_layer_norm=False
     ):
         super().__init__()
 
@@ -92,6 +93,7 @@ class LUTTransformer(nn.Module):
         self.weights_gradient_policy = weights_gradient_policy
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
+        self.use_layer_norm = use_layer_norm
         self.use_sinusoidal_pe = use_sinusoidal_pe
         if device is None:
             device = torch.device('cpu')
@@ -119,15 +121,6 @@ class LUTTransformer(nn.Module):
             self.token_embedder.weight.copy_(w)
         else:
             nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0)
-
-        # Dropout after embeddings
-        self.embedding_dropout = nn.Dropout(dropout)
-        
-        # Batch normalization after embeddings
-        if use_batch_norm:
-            self.embedding_bn = nn.BatchNorm1d(n_embeddings, device=device)
-        else:
-            self.embedding_bn = None
 
         if inject_pe_once:
             assert use_sinusoidal_pe
@@ -182,6 +175,12 @@ class LUTTransformer(nn.Module):
             else:
                 layer['attention_bn'] = None
 
+            # Layer normalization after attention
+            if use_layer_norm:
+                layer['attention_ln'] = nn.LayerNorm(n_embeddings, device=device)
+            else:
+                layer['attention_ln'] = None
+
             ffn_lut = LUTLayer(
                 n_inputs=n_embeddings,
                 n_outputs=n_embeddings,
@@ -208,6 +207,12 @@ class LUTTransformer(nn.Module):
                 layer['ffn_bn'] = nn.BatchNorm1d(n_embeddings, device=device)
             else:
                 layer['ffn_bn'] = None
+
+            # Layer normalization after FFN
+            if use_layer_norm:
+                layer['ffn_ln'] = nn.LayerNorm(n_embeddings, device=device)
+            else:
+                layer['ffn_ln'] = None
 
             self.layers.append(layer)
 
@@ -249,19 +254,9 @@ class LUTTransformer(nn.Module):
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
 
-        # Apply dropout after embeddings
-        z = self.embedding_dropout(z)
-
         if self._positional_embeddings is not None:
             z = z + self._positional_embeddings
         
-        # Apply batch normalization after embeddings
-        if self.use_batch_norm:
-            # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-            z_flat = z.reshape(-1, z.shape[-1])
-            z_flat = self.embedding_bn(z_flat)
-            z = z_flat.reshape(z.shape)
-
         if isinstance(self.embedding_dim, int):
             non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
             seq_shape = (batch_size, self.context_size, self.embedding_dim)
@@ -272,31 +267,32 @@ class LUTTransformer(nn.Module):
         for layer in self.layers:
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
-            # print(f'test: z {z}')
             # Attention with residual connection and dropout
             aat = layer['attention_lut'](z)
             aat = layer['attention_dropout'](aat)
-            # Apply batch normalization after attention (before residual)
+            z = z + aat
+            if self.use_layer_norm:
+                z = layer['attention_ln'](z)
             if self.use_batch_norm:
                 # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                aat_flat = aat.reshape(-1, aat.shape[-1])
-                aat_flat = layer['attention_bn'](aat_flat)
-                aat = aat_flat.reshape(aat.shape)
-            # print(f'test: z after attention {aat}')
-            z = z + aat
+                z_flat = aat.reshape(-1, z.shape[-1])
+                z_flat = layer['attention_bn'](z_flat)
+                z = z_flat.reshape(z.shape)
+
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
             # FFN with residual connection and dropout
             ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             ffn_result = layer['ffn_dropout'](ffn_result)
-            # Apply batch normalization after FFN (before residual)
-            if self.use_batch_norm and layer['ffn_bn'] is not None:
-                # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                ffn_result_flat = ffn_result.reshape(-1, ffn_result.shape[-1])
-                ffn_result_flat = layer['ffn_bn'](ffn_result_flat)
-                ffn_result = ffn_result_flat.reshape(ffn_result.shape)
-            # print(f'test: ffn_result {ffn_result}')
             z = z + ffn_result
+
+            if self.use_layer_norm:
+                z = layer['ffn_ln'](z)
+            if self.use_batch_norm:
+                # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
+                z_flat = ffn_result.reshape(-1, z.shape[-1])
+                z_flat = layer['ffn_bn'](z_flat)
+                z = z_flat.reshape(z.shape)
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
