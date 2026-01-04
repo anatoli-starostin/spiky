@@ -270,29 +270,31 @@ class LUTTransformer(nn.Module):
             # Attention with residual connection and dropout
             aat = layer['attention_lut'](z)
             aat = layer['attention_dropout'](aat)
-            z = z + aat
             if self.use_layer_norm:
-                z = layer['attention_ln'](z)
+                aat = layer['attention_ln'](aat)
             if self.use_batch_norm:
                 # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                z_flat = z.reshape(-1, z.shape[-1])
-                z_flat = layer['attention_bn'](z_flat)
-                z = z_flat.reshape(z.shape)
+                aat_flat = aat.reshape(-1, aat.shape[-1])
+                aat_flat = layer['attention_bn'](aat_flat)
+                aat = aat_flat.reshape(aat.shape)
+
+            z = z + aat
 
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
             # FFN with residual connection and dropout
             ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             ffn_result = layer['ffn_dropout'](ffn_result)
-            z = z + ffn_result
 
             if self.use_layer_norm:
-                z = layer['ffn_ln'](z)
+                ffn_result = layer['ffn_ln'](ffn_result)
             if self.use_batch_norm:
                 # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                z_flat = z.reshape(-1, z.shape[-1])
-                z_flat = layer['ffn_bn'](z_flat)
-                z = z_flat.reshape(z.shape)
+                ffn_result_flat = ffn_result.reshape(-1, ffn_result.shape[-1])
+                ffn_result_flat = layer['ffn_bn'](ffn_result_flat)
+                ffn_result = ffn_result_flat.reshape(ffn_result.shape)
+
+            z = z + ffn_result
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
