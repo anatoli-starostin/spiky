@@ -1000,7 +1000,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
         } else {
-            #ifndef NO_CUDA
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
 //            #ifdef LUT_PRODUCT_NO_SHARED_MEM
