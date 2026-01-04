@@ -275,7 +275,7 @@ class LUTTransformer(nn.Module):
                 z = layer['attention_ln'](z)
             if self.use_batch_norm:
                 # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                z_flat = aat.reshape(-1, z.shape[-1])
+                z_flat = z.reshape(-1, z.shape[-1])
                 z_flat = layer['attention_bn'](z_flat)
                 z = z_flat.reshape(z.shape)
 
