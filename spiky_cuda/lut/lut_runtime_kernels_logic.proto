@@ -67,7 +67,7 @@ calculate_product_lookup_index(
             EXTERNAL_REAL_DT val1 = sources[component_1][slice_idx_1];
             EXTERNAL_REAL_DT val2 = sources[component_2][slice_idx_2];
 
-            lookup_index |= (val1 > val2) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
         }
     } else {
         int shifts[3];
@@ -89,7 +89,7 @@ calculate_product_lookup_index(
             EXTERNAL_REAL_DT val1 = sources[component_1][ap.anchor1_id - shifts[component_1]];
             EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
-            lookup_index |= ((fabs(val1 - val2) > 0.0001) && (val1 > val2)) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
         }
     }
 }
@@ -146,7 +146,7 @@ calculate_product_lookup_index_backprop(
             EXTERNAL_REAL_DT val2 = sources[component_2][slice_idx_2];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            lookup_index |= (delta > 0.0) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0) ? (1 << anchor_idx) : 0;
 
             bool m = fabs(delta) < fabs(min_delta);
             min_delta = m ? delta : min_delta;
@@ -177,7 +177,7 @@ calculate_product_lookup_index_backprop(
             EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            lookup_index |= (delta > 0.0) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0) ? (1 << anchor_idx) : 0;
 
             bool m = fabs(delta) < fabs(min_delta);
             min_delta = m ? delta : min_delta;
@@ -1074,7 +1074,7 @@ check_detectors_eval_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(delta > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
                 lookup_index |= (1 << anchor_idx);
             }
         }
@@ -1123,7 +1123,7 @@ check_detectors_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(delta > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
                 lookup_index |= (1 << anchor_idx);
             }
 
@@ -1613,7 +1613,7 @@ check_detectors_seq_eval_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(delta > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
                 lookup_index |= (1 << anchor_idx);
             }
         }
@@ -1670,7 +1670,7 @@ check_detectors_seq_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
             
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(delta > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
                 lookup_index |= (1 << anchor_idx);
             }
             
@@ -1720,7 +1720,7 @@ check_positional_embeddings_eval_logic(
         for(uint32_t dim = 0; dim < positional_dim; dim++) {
             embedding_value = r_positional_embeddings[dim];
 
-            if(embedding_value > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0)) {
                 lookup_index |= (1 << dim);
             }
         }
@@ -1765,7 +1765,7 @@ check_positional_embeddings_logic(
         for(uint32_t dim = 0; dim < positional_dim; dim++) {
             embedding_value = r_positional_embeddings[dim];
             
-            if(embedding_value > 0.0) {
+            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0)) {
                 lookup_index |= (1 << dim);
             }
             
