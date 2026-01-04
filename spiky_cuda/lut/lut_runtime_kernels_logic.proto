@@ -2049,7 +2049,7 @@ fill_outputs_product_fc_logic(
     }
 
     if(i >= sequence_length || j >= sequence_length) {
-        valid_pair = false;;
+        valid_pair = false;
     }
 
     // blockIdx.y encodes: batch_index * n_output_blocks + output_block_index
@@ -2058,7 +2058,6 @@ fill_outputs_product_fc_logic(
 
     // Shared memory layout:
     // - shared_lookup_indices: blockDim.x (lookup indices, one per thread)
-    // - shared_outputs: n_outputs_in_block (accumulated outputs)
     extern __shared__ EXTERNAL_REAL_DT shared_mem[];
     int32_t* shared_lookup_indices = reinterpret_cast<int32_t*>(shared_mem);
 

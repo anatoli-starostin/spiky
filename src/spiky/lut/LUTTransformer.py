@@ -68,9 +68,8 @@ class LUTTransformer(nn.Module):
         self, vocab_size, embedding_dim, context_size,
         positional_dim, num_layers, num_heads,
         n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
-        concatenation_product=True, sliced_product_mode=False, use_sinusoidal_pe=False,
-        inject_pe_once=False,
-        weights_gradient_policy=None,
+        no_ffn=False, concatenation_product=True, sliced_product_mode=False,
+        use_sinusoidal_pe=False, inject_pe_once=False, weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.0,
@@ -184,41 +183,43 @@ class LUTTransformer(nn.Module):
             else:
                 layer['attention_ln'] = None
 
-            ffn_lut = LUTLayer(
-                n_inputs=n_embeddings,
-                n_outputs=n_embeddings,
-                n_detectors=n_detectors,
-                n_anchors_per_detector=n_anchors_per_detector,
-                sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
-                synapse_meta=_synapse_meta,
-                weights_gradient_policy=weights_gradient_policy,
-                shared_context=self.lut_shared_context,
-                summation_dtype=summation_dtype,
-                _int_rescaler=_int_rescaler,
-                device=device,
-                random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads,
-                _forward_group_size=_forward_group_size,
-                _backward_group_size=_backward_group_size
-            )
-            layer['ffn'] = ffn_lut
-
-            # Dropout after FFN
-            layer['ffn_dropout'] = nn.Dropout(dropout)
-            
-            # Batch normalization after FFN
-            if use_batch_norm:
-                layer['ffn_bn'] = nn.BatchNorm1d(n_embeddings, device=device)
-            else:
-                layer['ffn_bn'] = None
-
-            # Layer normalization after FFN
-            if layer_norm_d is not None:
-                layer['ffn_ln'] = nn.LayerNorm(
-                    (context_size, n_embeddings) if layer_norm_d == 2 else n_embeddings,
-                    device=device
+            self.no_ffn = no_ffn
+            if not no_ffn:
+                ffn_lut = LUTLayer(
+                    n_inputs=n_embeddings,
+                    n_outputs=n_embeddings,
+                    n_detectors=n_detectors,
+                    n_anchors_per_detector=n_anchors_per_detector,
+                    sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
+                    synapse_meta=_synapse_meta,
+                    weights_gradient_policy=weights_gradient_policy,
+                    shared_context=self.lut_shared_context,
+                    summation_dtype=summation_dtype,
+                    _int_rescaler=_int_rescaler,
+                    device=device,
+                    random_seed=None if seed is None else seed + layer_idx * num_heads + num_heads,
+                    _forward_group_size=_forward_group_size,
+                    _backward_group_size=_backward_group_size
                 )
-            else:
-                layer['ffn_ln'] = None
+                layer['ffn'] = ffn_lut
+
+                # Dropout after FFN
+                layer['ffn_dropout'] = nn.Dropout(dropout)
+
+                # Batch normalization after FFN
+                if use_batch_norm:
+                    layer['ffn_bn'] = nn.BatchNorm1d(n_embeddings, device=device)
+                else:
+                    layer['ffn_bn'] = None
+
+                # Layer normalization after FFN
+                if layer_norm_d is not None:
+                    layer['ffn_ln'] = nn.LayerNorm(
+                        (context_size, n_embeddings) if layer_norm_d == 2 else n_embeddings,
+                        device=device
+                    )
+                else:
+                    layer['ffn_ln'] = None
 
             self.layers.append(layer)
 
@@ -288,19 +289,21 @@ class LUTTransformer(nn.Module):
 
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
-            # FFN with residual connection and dropout
-            ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
-            ffn_result = layer['ffn_dropout'](ffn_result)
 
-            if self.layer_norm_d is not None:
-                ffn_result = layer['ffn_ln'](ffn_result)
-            if self.use_batch_norm:
-                # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
-                ffn_result_flat = ffn_result.reshape(-1, ffn_result.shape[-1])
-                ffn_result_flat = layer['ffn_bn'](ffn_result_flat)
-                ffn_result = ffn_result_flat.reshape(ffn_result.shape)
+            if not no_ffn:
+                # FFN with residual connection and dropout
+                ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+                ffn_result = layer['ffn_dropout'](ffn_result)
 
-            z = z + ffn_result
+                if self.layer_norm_d is not None:
+                    ffn_result = layer['ffn_ln'](ffn_result)
+                if self.use_batch_norm:
+                    # Reshape for BatchNorm1d: (B, S, E) -> (B*S, E)
+                    ffn_result_flat = ffn_result.reshape(-1, ffn_result.shape[-1])
+                    ffn_result_flat = layer['ffn_bn'](ffn_result_flat)
+                    ffn_result = ffn_result_flat.reshape(ffn_result.shape)
+
+                z = z + ffn_result
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
