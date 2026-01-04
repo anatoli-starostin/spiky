@@ -89,7 +89,7 @@ calculate_product_lookup_index(
             EXTERNAL_REAL_DT val1 = sources[component_1][ap.anchor1_id - shifts[component_1]];
             EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
-            lookup_index |= (val1 > val2) ? (1 << anchor_idx) : 0;
+            lookup_index |= ((fabs(val1 - val2) > 0.0001) && (val1 > val2)) ? (1 << anchor_idx) : 0;
         }
     }
 }
@@ -2094,10 +2094,6 @@ fill_outputs_product_fc_logic(
     shared_lookup_indices[threadIdx.x] = lookup_index;
     __syncthreads();
 
-    // Distribute threads over (output, lookup_index) pairs
-    uint32_t total_work = n_outputs_in_block * blockDim.x;
-    uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
-
     j = threadIdx.x / n_outputs_in_block;
     if(j >= TILE) {
         return;
@@ -2110,7 +2106,7 @@ fill_outputs_product_fc_logic(
         return;
     }
 
-    float sum_output = 0.0;
+    double sum_output = 0.0;
     for(uint32_t k = 0; k < TILE; k++) {
         int32_t li = shared_lookup_indices[j * TILE + k];
         if(li < 0) {
@@ -2118,7 +2114,7 @@ fill_outputs_product_fc_logic(
         }
         uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
         uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_idx;
-        sum_output += static_cast<float>(r_weights[weights_offset]);
+        sum_output += static_cast<double>(r_weights[weights_offset]);
     }
 
     j += (tile_id % tile_grid_w) * TILE;
