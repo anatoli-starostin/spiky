@@ -74,7 +74,7 @@ class LUTTransformer(nn.Module):
         device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.0,
-        use_batch_norm=False, use_layer_norm=False
+        use_batch_norm=False, layer_norm_d=None
     ):
         super().__init__()
 
@@ -93,7 +93,7 @@ class LUTTransformer(nn.Module):
         self.weights_gradient_policy = weights_gradient_policy
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
-        self.use_layer_norm = use_layer_norm
+        self.layer_norm_d = layer_norm_d
         self.use_sinusoidal_pe = use_sinusoidal_pe
         if device is None:
             device = torch.device('cpu')
@@ -176,8 +176,11 @@ class LUTTransformer(nn.Module):
                 layer['attention_bn'] = None
 
             # Layer normalization after attention
-            if use_layer_norm:
-                layer['attention_ln'] = nn.LayerNorm(n_embeddings, device=device)
+            if layer_norm_d is not None:
+                assert 0 < layer_norm_d < 3
+                layer['attention_ln'] = nn.LayerNorm(
+                    (context_size, n_embeddings) if layer_norm_d == 2 else n_embeddings, device=device
+                )
             else:
                 layer['attention_ln'] = None
 
@@ -209,8 +212,11 @@ class LUTTransformer(nn.Module):
                 layer['ffn_bn'] = None
 
             # Layer normalization after FFN
-            if use_layer_norm:
-                layer['ffn_ln'] = nn.LayerNorm(n_embeddings, device=device)
+            if layer_norm_d is not None:
+                layer['ffn_ln'] = nn.LayerNorm(
+                    (context_size, n_embeddings) if layer_norm_d == 2 else n_embeddings,
+                    device=device
+                )
             else:
                 layer['ffn_ln'] = None
 
