@@ -290,7 +290,7 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
 
-            if not no_ffn:
+            if not self.no_ffn:
                 # FFN with residual connection and dropout
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 ffn_result = layer['ffn_dropout'](ffn_result)
