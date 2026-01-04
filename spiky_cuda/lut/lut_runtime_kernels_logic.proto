@@ -2097,30 +2097,32 @@ fill_outputs_product_fc_logic(
     // Distribute threads over (output, lookup_index) pairs
     uint32_t total_work = n_outputs_in_block * blockDim.x;
     uint32_t work_per_thread = (total_work + blockDim.x - 1) / blockDim.x;
-    uint32_t global_output_start = output_block_index * n_outputs_in_block;
 
-    uint32_t j_bar = threadIdx.x / n_outputs_in_block;
-    if(j_bar >= TILE) {
+    j = threadIdx.x / n_outputs_in_block;
+    if(j >= TILE) {
         return;
     }
 
     uint32_t output_idx = threadIdx.x % n_outputs_in_block;
-    if(output_idx + global_output_start >= n_outputs) {
+    output_idx += output_block_index * n_outputs_in_block;
+
+    if(output_idx >= n_outputs) {
         return;
     }
 
     double sum_output = 0.0;
     for(uint32_t k = 0; k < TILE; k++) {
-        int32_t li = shared_lookup_indices[j_bar * TILE + k];
+        int32_t li = shared_lookup_indices[j * TILE + k];
         if(li < 0) {
             continue;
         }
         uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
-        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + global_output_start + output_idx;
+        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_idx;
         sum_output += static_cast<double>(r_weights[weights_offset]);
     }
 
-    w_output += batch_index * sequence_length * n_outputs + j_bar * n_outputs + global_output_start + output_idx;
+    j += (tile_id % tile_grid_w) * TILE;
+    w_output += batch_index * sequence_length * n_outputs + j * n_outputs + output_idx;
 
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(sum_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
