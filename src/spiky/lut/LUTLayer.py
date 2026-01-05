@@ -212,13 +212,13 @@ class LUTLayerBasic(nn.Module):
                     # pe[:, 0::2] = torch.sin(sinusoid)
                     # pe[:, 1::2] = torch.cos(sinusoid)
 
-                    max_i = sequence_length - 1
-                    if max_i >= (1 << positional_dim):
+                    max_i = self._sequence_length - 1
+                    if max_i >= (1 << self._positional_dim):
                         raise ValueError(
-                            f"positional_dim={positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
+                            f"positional_dim={self._positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
 
-                    i = torch.arange(sequence_length - 1, device=device, dtype=torch.long).unsqueeze(1)  # [L,1]
-                    b = torch.arange(positional_dim, device=device, dtype=torch.long).unsqueeze(0)  # [1,D]
+                    i = torch.arange(self._sequence_length - 1, device=device, dtype=torch.long).unsqueeze(1)  # [L,1]
+                    b = torch.arange(self._positional_dim, device=device, dtype=torch.long).unsqueeze(0)  # [1,D]
                     pe = ((i >> b) & 1).to(torch.float32)
                     self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
                 else:
