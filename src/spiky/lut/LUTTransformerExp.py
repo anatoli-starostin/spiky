@@ -323,6 +323,7 @@ class LUTTransformerExp(nn.Module):
 
             res_inputs.append(inp_z)
 
+        z = torch.cat(res_inputs + [inp_z], dim=-1)
         # Unembedder: (batch_size, context_size, final_concatenated_dim) -> (batch_size, context_size, vocab_size)
         final_dim = z.shape[-1]
         non_seq_shape = (batch_size * self.context_size, 1, final_dim)
