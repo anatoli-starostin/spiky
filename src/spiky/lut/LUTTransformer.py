@@ -15,8 +15,9 @@ from spiky.lut.LUTLayer import (
 class LUTTransformer(nn.Module):
     def _create_single_attention(
         self, _synapse_meta, summation_dtype, _int_rescaler, seed,
-        _forward_group_size, _backward_group_size, num_heads
+        _forward_group_size, _backward_group_size, num_heads, inject_pe
     ):
+        p_dim = self.positional_dim if inject_pe else 0
         if isinstance(self.embedding_dim, int):
             return LUTLayer(
                 n_inputs=self.embedding_dim,
@@ -27,8 +28,8 @@ class LUTTransformer(nn.Module):
                 synapse_meta=_synapse_meta,
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
-                positional_dim=self.positional_dim if self._positional_embeddings is None else 0,
-                use_sinusoidal_pe=self.use_sinusoidal_pe if self._positional_embeddings is None else False,
+                positional_dim=p_dim,
+                use_sinusoidal_pe=p_dim > 0 and self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 shared_context=self.lut_shared_context,
                 summation_dtype=summation_dtype,
@@ -49,8 +50,8 @@ class LUTTransformer(nn.Module):
                 sequence_length=self.context_size,
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
-                positional_dim=self.positional_dim if self._positional_embeddings is None else 0,
-                use_sinusoidal_pe=self.use_sinusoidal_pe if self._positional_embeddings is None else False,
+                positional_dim=p_dim,
+                use_sinusoidal_pe=p_dim > 0 and self.use_sinusoidal_pe,
                 weights_gradient_policy=self.weights_gradient_policy,
                 receptive_field_shape=self.embedding_dim,
                 receptive_field_stride_shape=self.embedding_dim,
@@ -121,21 +122,9 @@ class LUTTransformer(nn.Module):
         else:
             nn.init.uniform_(self.token_embedder.weight, -1.0, 1.0)
 
-        if inject_pe_once:
-            assert use_sinusoidal_pe
-            position = torch.arange(context_size, device=device).float().unsqueeze(1)
-            inv_freq = torch.exp(
-                -torch.arange(0, embedding_dim, 2, device=device).float() * (torch.log(torch.tensor(10000.0)) / embedding_dim)
-            )
-            sinusoid = position * inv_freq
-            pe = torch.empty(1, context_size, embedding_dim, device=self.device)
-            pe[:, :, 0::2] = torch.sin(sinusoid)
-            pe[:, :, 1::2] = torch.cos(sinusoid)
-            self.register_buffer("_positional_embeddings", pe)
-        else:
-            self._positional_embeddings = None
+        self.inject_pe_once = inject_pe_once
 
-            # Transformer layers
+        # Transformer layers
         self.layers = nn.ModuleList()
         for layer_idx in range(num_layers):
             layer = nn.ModuleDict()
@@ -150,7 +139,7 @@ class LUTTransformer(nn.Module):
                         seed=None if seed is None else seed + layer_idx * num_heads + head_idx,
                         _forward_group_size=_forward_group_size,
                         _backward_group_size=_backward_group_size,
-                        num_heads=1
+                        num_heads=1, inject_pe=not inject_pe_once or layer_idx == 0
                     )
                     heads.append(attention_lut)
                 layer['attention_lut'] = MultiLUT(heads)
@@ -162,7 +151,7 @@ class LUTTransformer(nn.Module):
                     seed=None if seed is None else seed + layer_idx * num_heads,
                     _forward_group_size=_forward_group_size,
                     _backward_group_size=_backward_group_size,
-                    num_heads=num_heads
+                    num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0
                 )
 
             # Dropout after attention
@@ -261,9 +250,6 @@ class LUTTransformer(nn.Module):
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
 
-        if self._positional_embeddings is not None:
-            z = z + self._positional_embeddings
-        
         if isinstance(self.embedding_dim, int):
             non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
             seq_shape = (batch_size, self.context_size, self.embedding_dim)
