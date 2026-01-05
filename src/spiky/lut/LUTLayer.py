@@ -217,8 +217,8 @@ class LUTLayerBasic(nn.Module):
                         raise ValueError(
                             f"positional_dim={self._positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
 
-                    i = torch.arange(self._sequence_length - 1, device=device, dtype=torch.long).unsqueeze(1)  # [L,1]
-                    b = torch.arange(self._positional_dim, device=device, dtype=torch.long).unsqueeze(0)  # [1,D]
+                    i = torch.arange(self._sequence_length - 1, device=self.device, dtype=torch.long).unsqueeze(1)  # [L,1]
+                    b = torch.arange(self._positional_dim, device=self.device, dtype=torch.long).unsqueeze(0)  # [1,D]
                     pe = ((i >> b) & 1).to(torch.float32)
                     self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
                 else:
