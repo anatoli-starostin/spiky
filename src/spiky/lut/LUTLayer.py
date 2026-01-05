@@ -203,14 +203,23 @@ class LUTLayerBasic(nn.Module):
             if self._positional_dim > 0:
                 if self._use_sinusoidal_pe:
                     assert self._unified_positional_embeddings
-                    position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
-                    inv_freq = torch.exp(
-                        -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
-                    )
-                    sinusoid = position * inv_freq
-                    pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
-                    pe[:, 0::2] = torch.sin(sinusoid)
-                    pe[:, 1::2] = torch.cos(sinusoid)
+                    # position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
+                    # inv_freq = torch.exp(
+                    #     -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
+                    # )
+                    # sinusoid = position * inv_freq
+                    # pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
+                    # pe[:, 0::2] = torch.sin(sinusoid)
+                    # pe[:, 1::2] = torch.cos(sinusoid)
+
+                    max_i = sequence_length - 1
+                    if max_i >= (1 << positional_dim):
+                        raise ValueError(
+                            f"positional_dim={positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
+
+                    i = torch.arange(sequence_length - 1, device=device, dtype=torch.long).unsqueeze(1)  # [L,1]
+                    b = torch.arange(positional_dim, device=device, dtype=torch.long).unsqueeze(0)  # [1,D]
+                    pe = ((i >> b) & 1).to(torch.float32)
                     self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
                 else:
                     positional_embeddings_data = torch.empty(
