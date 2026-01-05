@@ -1261,9 +1261,9 @@ class LUTLayerBasic(nn.Module):
 
             if self._use_sinusoidal_pe:
                 position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
-                position = position.unsqueeze(1).repeat(1, self._positional_dim)
+                position = position.unsqueeze(1).repeat(1, self._positional_dim * (self._n_detectors if self._concatenation_product else 1))
                 pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
-                pos_embeddings = torch.sin(position * pos_embeddings[:, 0] + pos_embeddings[:, 1])
+                pos_embeddings = torch.sin(position.flatten() * pos_embeddings[:, 0] + pos_embeddings[:, 1])
                 pos_embeddings = pos_embeddings.flatten().contiguous()
 
             return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, pos_embeddings, self)
