@@ -1212,9 +1212,9 @@ class LUTLayerBasic(nn.Module):
             elif lut_layer._sequence_length == 1:
                 return lut_layer.forward_step(x)
             elif lut_layer._concatenation_product:
-                return lut_layer.forward_step_concat(x)
+                return lut_layer.forward_step_concat(x, pos_embeddings)
             else:
-                return lut_layer.forward_step_product(x)
+                return lut_layer.forward_step_product(x, pos_embeddings)
 
         @staticmethod
         def backward(ctx, *grad_outputs):
