@@ -213,25 +213,25 @@ class LUTLayerBasic(nn.Module):
                     pe[:, 1::2] = torch.cos(sinusoid)
                     self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
                 else:
-                    positional_embeddings_data = torch.zeros(
+                    positional_embeddings_data = torch.empty(
                         (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
                         dtype=torch.float32,
                         device=self.device
                     )
                     # Initialize with random floats in [-1, 1]
-                    # positional_embeddings_data.uniform_(-1.0, 1.0)
+                    positional_embeddings_data.uniform_(-1.0, 1.0)
                     self._positional_embeddings = nn.Parameter(positional_embeddings_data)
 
-                    if self._unified_positional_embeddings:
-                        max_i = self._sequence_length - 1
-                        if max_i >= (1 << self._positional_dim):
-                            raise ValueError(
-                                f"positional_dim={self._positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
-
-                        i = torch.arange(self._sequence_length - 1, device=self.device, dtype=torch.long).unsqueeze(1)  # [L,1]
-                        b = torch.arange(self._positional_dim, device=self.device, dtype=torch.long).unsqueeze(0)  # [1,D]
-                        pe = ((i >> b) & 1).to(torch.float32)
-                        self.register_buffer("_positional_embeddings_mask", pe.flatten())
+                    # if self._unified_positional_embeddings:
+                    #     max_i = self._sequence_length - 1
+                    #     if max_i >= (1 << self._positional_dim):
+                    #         raise ValueError(
+                    #             f"positional_dim={self._positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
+                    #
+                    #     i = torch.arange(self._sequence_length - 1, device=self.device, dtype=torch.long).unsqueeze(1)  # [L,1]
+                    #     b = torch.arange(self._positional_dim, device=self.device, dtype=torch.long).unsqueeze(0)  # [1,D]
+                    #     pe = ((i >> b) & 1).to(torch.float32)
+                    #     self.register_buffer("_positional_embeddings_mask", pe.flatten())
             else:
                 assert not self._use_sinusoidal_pe
                 self._positional_embeddings = None
@@ -794,7 +794,7 @@ class LUTLayerBasic(nn.Module):
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
         if self._unified_positional_embeddings:
-            pos_embeddings = (self._positional_embeddings + self._positional_embeddings_mask).reshape(
+            pos_embeddings = self._positional_embeddings.reshape(
                 self._sequence_length - 1, 1, self._positional_dim
             ).repeat(1, self._n_detectors, 1).flatten().contiguous()
         else:
@@ -876,7 +876,7 @@ class LUTLayerBasic(nn.Module):
             output,
             self._n_inputs, self._n_inputs,
             self._sliced_product_mode,
-            self._positional_embeddings + self._positional_embeddings_mask,
+            self._positional_embeddings,
             stream_handles
         )
 
