@@ -138,7 +138,7 @@ class LUTTransformerExp(nn.Module):
             # Each attention layer produces output_dim (same as input_dim for simplicity)
             # After concatenation: new_dim = input_dim + output_dim
             input_dim = current_input_dim
-            output_dim = input_dim  # Attention output dimension matches input
+            output_dim = initial_n_embeddings
             
             self.layer_dims.append((input_dim, output_dim))
             
@@ -278,13 +278,16 @@ class LUTTransformerExp(nn.Module):
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, initial_n_embeddings)
 
+        res_inputs = []
         # Process through layers with residual concatenation
         for layer_idx, layer in enumerate(self.layers):
             input_dim, output_dim = self.layer_dims[layer_idx]
-            
-            # Store input for concatenation
-            z_input = z
-            
+
+            inp_z = z
+
+            if len(res_inputs) > 0:
+                z = torch.cat(res_inputs + [inp_z], dim=-1)
+
             # Attention: z (input_dim) -> aat (output_dim)
             aat = layer['attention_lut'](z)
             aat = layer['attention_dropout'](aat)
@@ -296,8 +299,7 @@ class LUTTransformerExp(nn.Module):
                 aat_flat = layer['attention_bn'](aat_flat)
                 aat = aat_flat.reshape(aat.shape)
 
-            # Residual concatenation: concat(input, attention_output)
-            z = torch.cat([z_input, aat], dim=-1)  # (batch_size, context_size, input_dim + output_dim)
+            z = aat
 
             if not self.no_ffn:
                 # FFN operates on concatenated dimension
@@ -318,6 +320,8 @@ class LUTTransformerExp(nn.Module):
 
                 # Use FFN output (dimension remains concatenated_dim)
                 z = ffn_result
+
+            res_inputs.append(inp_z)
 
         # Unembedder: (batch_size, context_size, final_concatenated_dim) -> (batch_size, context_size, vocab_size)
         final_dim = z.shape[-1]
