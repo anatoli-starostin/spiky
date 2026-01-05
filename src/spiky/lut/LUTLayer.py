@@ -202,16 +202,23 @@ class LUTLayerBasic(nn.Module):
             assert self._positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
             if self._positional_dim > 0:
                 if self._use_sinusoidal_pe:
-                    assert self._unified_positional_embeddings
-                    position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
-                    inv_freq = torch.exp(
-                        -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
+                    # position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
+                    # inv_freq = torch.exp(
+                    #     -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
+                    # )
+                    # sinusoid = position * inv_freq
+                    # pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
+                    # pe[:, 0::2] = torch.sin(sinusoid)
+                    # pe[:, 1::2] = torch.cos(sinusoid)
+                    # self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
+                    positional_embeddings_data = torch.empty(
+                        (self._sequence_length - 1) * 2 * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
+                        dtype=torch.float32,
+                        device=self.device
                     )
-                    sinusoid = position * inv_freq
-                    pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
-                    pe[:, 0::2] = torch.sin(sinusoid)
-                    pe[:, 1::2] = torch.cos(sinusoid)
-                    self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
+                    # Initialize with random floats in [-1, 1]
+                    positional_embeddings_data.uniform_(-1.0, 1.0)
+                    self._positional_embeddings = nn.Parameter(positional_embeddings_data)
                 else:
                     positional_embeddings_data = torch.empty(
                         (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
@@ -733,7 +740,7 @@ class LUTLayerBasic(nn.Module):
         else:
             return None if external_output else output.view((batch_size, 1) + self.output_shape())
 
-    def forward_step_concat(self, x, output=None):
+    def forward_step_concat(self, x, pos_embeddings, output=None):
         if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
             raise ValueError(
                 f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
@@ -793,13 +800,6 @@ class LUTLayerBasic(nn.Module):
 
         stream_handles = self._shared_context.get_cuda_streams(self.device, self._multi_id) if self.device.type == 'cuda' else None
 
-        if self._unified_positional_embeddings:
-            pos_embeddings = self._positional_embeddings.reshape(
-                self._sequence_length - 1, 1, self._positional_dim
-            ).repeat(1, self._n_detectors, 1).flatten().contiguous()
-        else:
-            pos_embeddings = self._positional_embeddings
-
         self._lut_dm.forward_step_concat(
             self._weights,
             batch_size, x,
@@ -841,7 +841,7 @@ class LUTLayerBasic(nn.Module):
         else:
             return None if external_output else output.view((batch_size, sequence_length) + self.output_shape())
 
-    def forward_step_product(self, x, output=None):
+    def forward_step_product(self, x, pos_embeddings, output=None):
         if not (len(x.shape) == len(self.input_shape()) + 2 and x.shape[2:] == self.input_shape()):
             raise ValueError(
                 f"Input x has invalid shape {x.shape}; expected {(x.shape[0], 'S', *self.input_shape())} or {(x.shape[0], *self.input_shape())}"
@@ -876,7 +876,7 @@ class LUTLayerBasic(nn.Module):
             output,
             self._n_inputs, self._n_inputs,
             self._sliced_product_mode,
-            self._positional_embeddings,
+            pos_embeddings,
             stream_handles
         )
 
@@ -1023,13 +1023,10 @@ class LUTLayerBasic(nn.Module):
         else:
             target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
         if self._positional_dim > 0:
-            if self._unified_positional_embeddings:
-                positional_grad = torch.zeros(
-                    [(self._sequence_length - 1) * self._n_detectors * self._positional_dim],
-                    requires_grad=False, device=self.device
-                )
-            else:
-                positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+            positional_grad = torch.zeros(
+                [(self._sequence_length - 1) * self._n_detectors * self._positional_dim],
+                requires_grad=False, device=self.device
+            )
         else:
             positional_grad = None
 
@@ -1081,7 +1078,7 @@ class LUTLayerBasic(nn.Module):
         return result + (target_w_grad, positional_grad,)
 
     def backward_step_product(
-        self, x, grad_output, x_grad=None
+        self, x, pos_embeddings, grad_output, x_grad=None
     ):
         assert x.device == self.device
         assert not self._concatenation_product
@@ -1112,7 +1109,7 @@ class LUTLayerBasic(nn.Module):
         else:
             target_w_grad = torch.zeros_like(self._weights, requires_grad=False)
         if self._positional_dim > 0:
-            positional_grad = torch.zeros_like(self._positional_embeddings, requires_grad=False)
+            positional_grad = torch.zeros_like(pos_embeddings, requires_grad=False)
         else:
             positional_grad = None
 
@@ -1142,7 +1139,7 @@ class LUTLayerBasic(nn.Module):
             self._n_inputs, self._n_inputs,
             self._sliced_product_mode,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
-            self._positional_embeddings,
+            pos_embeddings,
             positional_grad,
             stream_handles
         )
@@ -1188,7 +1185,7 @@ class LUTLayerBasic(nn.Module):
     class LUTForwardFN(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *args, **kwargs):
-            x, _, __, lut_layer = args
+            x, _, pos_embeddings, lut_layer = args
             if lut_layer.training:
                 ctx.lut_layer = lut_layer
                 if lut_layer._sequence_length == 1:
@@ -1202,15 +1199,15 @@ class LUTLayerBasic(nn.Module):
                         output, lookup_indices, min_anchor_deltas,
                         min_anchor_delta_indices, positional_lookup_indices,
                         positional_min_deltas, positional_min_delta_indices
-                    ) = lut_layer.forward_step_concat(x)
+                    ) = lut_layer.forward_step_concat(x, pos_embeddings)
                     ctx.save_for_backward(
                         x, lookup_indices, min_anchor_deltas, min_anchor_delta_indices,
                         positional_lookup_indices, positional_min_deltas,
                         positional_min_delta_indices
                     )
                 else:
-                    output = lut_layer.forward_step_product(x)
-                    ctx.save_for_backward(x)
+                    output = lut_layer.forward_step_product(x, pos_embeddings)
+                    ctx.save_for_backward(x, pos_embeddings)
                 return output
             elif lut_layer._sequence_length == 1:
                 return lut_layer.forward_step(x)
@@ -1247,15 +1244,29 @@ class LUTLayerBasic(nn.Module):
                 )
                 return x_grad, w_grad, pe_grad, None
             else:
-                (x, ) = ctx.saved_tensors
-                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_product(x, grad_output)
+                (x, pos_embeddings) = ctx.saved_tensors
+                x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_product(x, pos_embeddings, grad_output)
                 return x_grad, w_grad, pe_grad, None
 
     def forward(self, x):
         if self._sequence_length == 1:
             return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, None, self)
         else:
-            return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, self._positional_embeddings, self)
+            if self._unified_positional_embeddings and self._concatenation_product:
+                pos_embeddings = self._positional_embeddings.reshape(
+                    (self._sequence_length - 1) * (2 if self._use_sinusoidal_pe else 1), 1, self._positional_dim
+                ).repeat(1, self._n_detectors, 1).flatten().contiguous()
+            else:
+                pos_embeddings = self._positional_embeddings
+
+            if self._use_sinusoidal_pe:
+                position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
+                position = position.unsqueeze(1).repeat(1, self._positional_dim)
+                pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
+                pos_embeddings = torch.sin(position * pos_embeddings[:, 0] + pos_embeddings[:, 1])
+                pos_embeddings = pos_embeddings.flatten().contiguous()
+
+            return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, pos_embeddings, self)
 
     def _count_synapses(self, neuron_ids: torch.Tensor):
         if self._is_fully_connected:
