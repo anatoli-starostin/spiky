@@ -124,9 +124,9 @@ class LUTTransformerExp(nn.Module):
 
         self.inject_pe_once = inject_pe_once
 
-        # Track embedding dimensions through layers
-        # Dimensions increase every two layers (on even layers: 0, 2, 4, ...)
-        current_embedding_dim = initial_n_embeddings
+        # Track embedding dimensions through layers with residual concatenation
+        # Each layer concatenates input with output, so next layer's input = previous input + previous output
+        current_input_dim = initial_n_embeddings
         self.layer_dims = []  # Store input/output dims for each layer
 
         # Transformer layers
@@ -135,17 +135,16 @@ class LUTTransformerExp(nn.Module):
             layer = nn.ModuleDict()
             
             # Determine input and output dimensions for this layer
-            if (layer_idx % 2) != 0:
-                # Even layer: increase dimension
-                input_dim = current_embedding_dim
-                output_dim = current_embedding_dim * 2
-                current_embedding_dim = output_dim
-            else:
-                # Odd layer: keep same dimension
-                input_dim = current_embedding_dim
-                output_dim = current_embedding_dim
+            # Each attention layer produces output_dim (same as input_dim for simplicity)
+            # After concatenation: new_dim = input_dim + output_dim
+            input_dim = current_input_dim
+            output_dim = input_dim  # Attention output dimension matches input
             
             self.layer_dims.append((input_dim, output_dim))
+            
+            # Next layer's input will be the concatenated dimension
+            # After this layer: z = concat(input, output) = input_dim + output_dim
+            current_input_dim = input_dim + output_dim
 
             # Attention heads
             if _use_multi_lut:
@@ -197,9 +196,11 @@ class LUTTransformerExp(nn.Module):
 
             self.no_ffn = no_ffn
             if not no_ffn:
+                # FFN operates on concatenated dimension (input_dim + output_dim)
+                concatenated_dim = input_dim + output_dim
                 ffn_lut = LUTLayer(
-                    n_inputs=output_dim,
-                    n_outputs=output_dim,
+                    n_inputs=concatenated_dim,
+                    n_outputs=concatenated_dim,
                     n_detectors=n_detectors,
                     n_anchors_per_detector=n_anchors_per_detector,
                     sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
@@ -220,14 +221,14 @@ class LUTTransformerExp(nn.Module):
 
                 # Batch normalization after FFN
                 if use_batch_norm:
-                    layer['ffn_bn'] = nn.BatchNorm1d(output_dim, device=device)
+                    layer['ffn_bn'] = nn.BatchNorm1d(concatenated_dim, device=device)
                 else:
                     layer['ffn_bn'] = None
 
                 # Layer normalization after FFN
                 if layer_norm_d is not None:
                     layer['ffn_ln'] = nn.LayerNorm(
-                        (context_size, output_dim) if layer_norm_d == 2 else output_dim,
+                        (context_size, concatenated_dim) if layer_norm_d == 2 else concatenated_dim,
                         device=device
                     )
                 else:
@@ -235,8 +236,9 @@ class LUTTransformerExp(nn.Module):
 
             self.layers.append(layer)
 
-        # Unembedder uses the final embedding dimension
-        final_embedding_dim = current_embedding_dim
+        # Unembedder uses the final concatenated dimension
+        # After the last layer, z will have dimension = last input_dim + last output_dim
+        final_embedding_dim = current_input_dim
         self.unembedder = LUTLayer(
             n_inputs=final_embedding_dim,
             n_outputs=vocab_size,
@@ -264,7 +266,7 @@ class LUTTransformerExp(nn.Module):
 
     def forward(self, tokens):
         """
-        Forward pass.
+        Forward pass with residual concatenation.
 
         Args:
             tokens: (batch_size, context_size) tensor of token indices
@@ -276,11 +278,14 @@ class LUTTransformerExp(nn.Module):
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, initial_n_embeddings)
 
-        # Process through layers with increasing dimensions
+        # Process through layers with residual concatenation
         for layer_idx, layer in enumerate(self.layers):
             input_dim, output_dim = self.layer_dims[layer_idx]
             
-            # Attention without residual connection
+            # Store input for concatenation
+            z_input = z
+            
+            # Attention: z (input_dim) -> aat (output_dim)
             aat = layer['attention_lut'](z)
             aat = layer['attention_dropout'](aat)
             if self.layer_norm_d is not None:
@@ -291,14 +296,15 @@ class LUTTransformerExp(nn.Module):
                 aat_flat = layer['attention_bn'](aat_flat)
                 aat = aat_flat.reshape(aat.shape)
 
-            # No residual connection - just use attention output
-            z = aat
+            # Residual concatenation: concat(input, attention_output)
+            z = torch.cat([z_input, aat], dim=-1)  # (batch_size, context_size, input_dim + output_dim)
 
             if not self.no_ffn:
-                # FFN without residual connection
+                # FFN operates on concatenated dimension
                 # Reshape for FFN: (B, S, E) -> (B*S, 1, E)
-                non_seq_shape = (batch_size * self.context_size, 1, output_dim)
-                seq_shape = (batch_size, self.context_size, output_dim)
+                concatenated_dim = input_dim + output_dim
+                non_seq_shape = (batch_size * self.context_size, 1, concatenated_dim)
+                seq_shape = (batch_size, self.context_size, concatenated_dim)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 ffn_result = layer['ffn_dropout'](ffn_result)
 
@@ -310,12 +316,11 @@ class LUTTransformerExp(nn.Module):
                     ffn_result_flat = layer['ffn_bn'](ffn_result_flat)
                     ffn_result = ffn_result_flat.reshape(ffn_result.shape)
 
-                # No residual connection - just use FFN output
+                # Use FFN output (dimension remains concatenated_dim)
                 z = ffn_result
 
-        # Unembedder: (batch_size, context_size, final_n_embeddings) -> (batch_size, context_size, vocab_size)
-        # Get final dimension from the last layer's output dimension
-        final_dim = self.layer_dims[-1][1] if self.layer_dims else z.shape[-1]
+        # Unembedder: (batch_size, context_size, final_concatenated_dim) -> (batch_size, context_size, vocab_size)
+        final_dim = z.shape[-1]
         non_seq_shape = (batch_size * self.context_size, 1, final_dim)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits
