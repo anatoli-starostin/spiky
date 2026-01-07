@@ -1564,249 +1564,249 @@ class LUTLayer(Conv2DLUTLayer):
     def __repr__(self):
         return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_outputs()} outputs, {self.n_anchors_per_detector()} anchors per detector)'
 
-
-class MultiLUT(nn.Module):
-    """
-    A module that runs multiple LUTLayerBasic instances in parallel (cuda kernels work in parallel on different cuda streams, cpu part is synchronous).
-    All layers must have the same input_shape, output_shape, and sequence_length.
-    Each layer is assigned a unique multi_id for stream isolation.
-    """
-
-    def __init__(self, luts: List[LUTLayerBasic]):
-        super().__init__()
-
-        if len(luts) < 2:
-            raise ValueError("MultiLUT requires at least two luts")
-
-        # Validate all luts have compatible shapes
-        first_lut = luts[0]
-        input_shape = first_lut.input_shape()
-        output_shape = first_lut.output_shape()
-        sequence_length = first_lut.sequence_length()
-        concatenation_product = first_lut._concatenation_product
-        sliced_product_mode = first_lut._sliced_product_mode
-        self._shared_context = first_lut._shared_context
-        self._gradient_policy = first_lut._weights_gradient_policy
-
-        for i, lut in enumerate(luts):
-            if not isinstance(lut, LUTLayerBasic):
-                raise ValueError(f"lut {i} is not an instance of LUTLayerBasic")
-            if lut.input_shape() != input_shape:
-                raise ValueError(f"lut {i} has input_shape {lut.input_shape()}, expected {input_shape}")
-            if lut.output_shape() != output_shape:
-                raise ValueError(f"lut {i} has output_shape {lut.output_shape()}, expected {output_shape}")
-            if lut.sequence_length() != sequence_length:
-                raise ValueError(f"lut {i} has sequence_length {lut.sequence_length()}, expected {sequence_length}")
-            if lut._concatenation_product != concatenation_product:
-                raise ValueError(f"lut {i} has _concatenation_product {lut._concatenation_product}, expected {concatenation_product}")
-            if lut._sliced_product_mode != sliced_product_mode:
-                raise ValueError(f"lut {i} has _sliced_product_mode {lut._sliced_product_mode}, expected {sliced_product_mode}")
-            if lut._shared_context != self._shared_context:
-                raise ValueError(f"lut {i} has different shared context than lut 0")
-            if lut._weights_gradient_policy != self._gradient_policy:
-                raise ValueError(f"lut {i} has gradient policy {lut._weights_gradient_policy}, expected {self._gradient_policy}")
-            if lut.get_summation_type() == torch.int32:
-                raise ValueError(f"lut {i} has summation type int32 which is not allowed for MultiLUT")
-
-        # Assign multi_id to each lut
-        for multi_id, lut in enumerate(luts):
-            lut._multi_id = multi_id
-
-        self.luts = nn.ModuleList(luts)
-        self._input_shape = input_shape
-        self._output_shape = output_shape
-        self._sequence_length = sequence_length
-        self._all_weights = None
-        self._all_positional_encodings = None
-
-    def input_shape(self):
-        return self._input_shape
-
-    def output_shape(self):
-        return self._output_shape
-
-    def sequence_length(self):
-        return self._sequence_length
-
-    def set_external_learning_rate_hook(self, hook_fn):
-        for lut in self.luts:
-            lut.set_external_learning_rate_hook(hook_fn)
-
-    def _reset_shared_context(self, new_context):
-        for lut in self.luts:
-            lut._reset_shared_context(new_context)
-
-    def forward(self, x):
-        """
-        Forward pass that runs all luts in "parallel".
-        Returns the sum of outputs from all luts.
-        """
-        # Lazy fill weights and positional encodings if needed
-        if self._all_weights is None:
-            self._all_weights = []
-            for lut in self.luts:
-                self._all_weights.append(lut._weights)
-
-        # Only pass positional encodings if they exist (when sequence_length > 1)
-        if self._sequence_length > 1:
-            if self._all_positional_encodings is None:
-                self._all_positional_encodings = []
-                for lut in self.luts:
-                    self._all_positional_encodings.append(lut._positional_embeddings)
-            return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights, *self._all_positional_encodings)
-        else:
-            return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights)
-
-    class MultiLUTForwardFN(torch.autograd.Function):
-        @staticmethod
-        def forward(ctx, *args, **kwargs):
-            """
-            Run forward pass for all luts in "parallel"
-            All luts accumulate into the same output tensor.
-            """
-            x, multi_lut = args[0], args[1]
-
-            first_lut = multi_lut.luts[0]
-            batch_size = x.shape[0]
-
-            # Create shared output tensor
-            if multi_lut._sequence_length == 1:
-                output = torch.zeros(
-                    [batch_size * first_lut._n_outputs],
-                    dtype=torch.float32, device=first_lut.device
-                )
-            else:
-                output = torch.zeros(
-                    [batch_size * multi_lut._sequence_length * first_lut._n_outputs],
-                    dtype=torch.float32, device=first_lut.device
-                )
-
-            pos_emb = None
-            if multi_lut.training:
-                results = [None] * len(multi_lut.luts)
-
-                for lut_idx, lut in enumerate(multi_lut.luts):
-                    if multi_lut._sequence_length == 1:
-                        results[lut_idx] = lut.forward_step(x, output=output)
-                    elif lut._concatenation_product:
-                        pos_emb = lut._prepare_positional_embeddings()
-                        results[lut_idx] = list(lut.forward_step_concat(x, pos_emb, output=output))
-                    else:
-                        pos_emb = lut._prepare_positional_embeddings()
-                        lut.forward_step_product(x, pos_emb, output=output)
-
-                for lut_idx, lut in enumerate(multi_lut.luts):
-                    lut._synchronize()
-                    if lut._lookup_indices_callback is not None:
-                        lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
-            else:
-                for lut_idx, lut in enumerate(multi_lut.luts):
-                    if multi_lut._sequence_length == 1:
-                        lut.forward_step(x, output=output)
-                    elif lut._concatenation_product:
-                        pos_emb = lut._prepare_positional_embeddings()
-                        lut.forward_step_concat(x, pos_emb, output=output)
-                    else:
-                        pos_emb = lut._prepare_positional_embeddings()
-                        lut.forward_step_product(x, pos_emb, output=output)
-
-                for lut_idx, lut in enumerate(multi_lut.luts):
-                    lut._synchronize()
-
-            # Reshape output to match expected shape
-
-            output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
-
-            if multi_lut.training:
-                # Save for backward
-                ctx.multi_lut = multi_lut
-                ctx.save_for_backward(x, pos_emb)
-                ctx.results = results  # Store individual results for backward
-
-            return output
-
-        @staticmethod
-        def backward(ctx, *grad_outputs):
-            """
-            Run backward pass for all luts in "parallel".
-            All luts accumulate into the same x_grad tensor.
-            Returns gradients for x, multi_lut, all weights, and all positional encodings.
-            """
-            (grad_output,) = grad_outputs
-            multi_lut = ctx.multi_lut
-            n_luts = len(multi_lut.luts)
-
-            # Extract saved input
-            x, pos_emb = ctx.saved_tensors
-            results = ctx.results
-
-            # Create shared x_grad tensor
-            x_grad = torch.zeros_like(x.view(-1))
-
-            # Store gradients for each lut
-            all_weight_grads = [None] * n_luts
-            all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
-
-            for lut_idx, lut in enumerate(multi_lut.luts):
-                if multi_lut._sequence_length == 1:
-                    (w_grad,) = lut.backward_step(
-                        x, grad_output,
-                        results[lut_idx][0],  # lookup_indices
-                        results[lut_idx][1],  # min_anchor_deltas
-                        results[lut_idx][2],  # min_anchor_delta_indices
-                        x_grad=x_grad
-                    )
-                    all_weight_grads[lut_idx] = w_grad
-                elif lut._concatenation_product:
-                    w_grad, pe_grad = lut.backward_step_concat(
-                        x, grad_output,
-                        results[lut_idx][0],  # lookup_indices
-                        results[lut_idx][1],  # min_anchor_deltas
-                        results[lut_idx][2],  # min_anchor_delta_indices
-                        results[lut_idx][3],  # positional_lookup_indices
-                        results[lut_idx][4],  # positional_min_deltas
-                        results[lut_idx][5],  # positional_min_delta_indices
-                        x_grad=x_grad
-                    )
-                    all_weight_grads[lut_idx] = w_grad
-                    all_pe_grads[lut_idx] = pe_grad
-                else:
-                    w_grad, pe_grad = lut.backward_step_product(
-                        x, pos_emb, grad_output,
-                        x_grad=x_grad
-                    )
-                    all_weight_grads[lut_idx] = w_grad
-                    all_pe_grads[lut_idx] = pe_grad
-
-            for i, lut in enumerate(multi_lut.luts):
-                lut._synchronize()
-
-            batch_size = x.shape[0]
-
-            if multi_lut._gradient_policy.type == GradientType.Sparse:
-                densify_buffer_size = multi_lut.luts[0]._gradient_densify_buffer_size(batch_size)
-                all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
-                    multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts],
-                    densify_buffer_size, multi_lut._gradient_policy.normalized
-                )
-            else:
-                for lut_idx, lut in enumerate(multi_lut.luts):
-                    all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
-
-            if multi_lut._sequence_length > 1:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
-            else:
-                return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
-
-    def to(self, *args, **kwargs):
-        """
-        Move the module to a different device/dtype.
-        Resets cached weights and positional encodings so they are rebuilt on next forward.
-        """
-        result = super().to(*args, **kwargs)
-        self._all_weights = None
-        self._all_positional_encodings = None
-        return result
-
-    def __repr__(self):
-        return f'MultiLUT({len(self.luts)} luts, input_shape={self.input_shape()}, output_shape={self.output_shape()}, sequence_length={self.sequence_length()})'
+#
+# class MultiLUT(nn.Module):
+#     """
+#     A module that runs multiple LUTLayerBasic instances in parallel (cuda kernels work in parallel on different cuda streams, cpu part is synchronous).
+#     All layers must have the same input_shape, output_shape, and sequence_length.
+#     Each layer is assigned a unique multi_id for stream isolation.
+#     """
+#
+#     def __init__(self, luts: List[LUTLayerBasic]):
+#         super().__init__()
+#
+#         if len(luts) < 2:
+#             raise ValueError("MultiLUT requires at least two luts")
+#
+#         # Validate all luts have compatible shapes
+#         first_lut = luts[0]
+#         input_shape = first_lut.input_shape()
+#         output_shape = first_lut.output_shape()
+#         sequence_length = first_lut.sequence_length()
+#         concatenation_product = first_lut._concatenation_product
+#         sliced_product_mode = first_lut._sliced_product_mode
+#         self._shared_context = first_lut._shared_context
+#         self._gradient_policy = first_lut._weights_gradient_policy
+#
+#         for i, lut in enumerate(luts):
+#             if not isinstance(lut, LUTLayerBasic):
+#                 raise ValueError(f"lut {i} is not an instance of LUTLayerBasic")
+#             if lut.input_shape() != input_shape:
+#                 raise ValueError(f"lut {i} has input_shape {lut.input_shape()}, expected {input_shape}")
+#             if lut.output_shape() != output_shape:
+#                 raise ValueError(f"lut {i} has output_shape {lut.output_shape()}, expected {output_shape}")
+#             if lut.sequence_length() != sequence_length:
+#                 raise ValueError(f"lut {i} has sequence_length {lut.sequence_length()}, expected {sequence_length}")
+#             if lut._concatenation_product != concatenation_product:
+#                 raise ValueError(f"lut {i} has _concatenation_product {lut._concatenation_product}, expected {concatenation_product}")
+#             if lut._sliced_product_mode != sliced_product_mode:
+#                 raise ValueError(f"lut {i} has _sliced_product_mode {lut._sliced_product_mode}, expected {sliced_product_mode}")
+#             if lut._shared_context != self._shared_context:
+#                 raise ValueError(f"lut {i} has different shared context than lut 0")
+#             if lut._weights_gradient_policy != self._gradient_policy:
+#                 raise ValueError(f"lut {i} has gradient policy {lut._weights_gradient_policy}, expected {self._gradient_policy}")
+#             if lut.get_summation_type() == torch.int32:
+#                 raise ValueError(f"lut {i} has summation type int32 which is not allowed for MultiLUT")
+#
+#         # Assign multi_id to each lut
+#         for multi_id, lut in enumerate(luts):
+#             lut._multi_id = multi_id
+#
+#         self.luts = nn.ModuleList(luts)
+#         self._input_shape = input_shape
+#         self._output_shape = output_shape
+#         self._sequence_length = sequence_length
+#         self._all_weights = None
+#         self._all_positional_encodings = None
+#
+#     def input_shape(self):
+#         return self._input_shape
+#
+#     def output_shape(self):
+#         return self._output_shape
+#
+#     def sequence_length(self):
+#         return self._sequence_length
+#
+#     def set_external_learning_rate_hook(self, hook_fn):
+#         for lut in self.luts:
+#             lut.set_external_learning_rate_hook(hook_fn)
+#
+#     def _reset_shared_context(self, new_context):
+#         for lut in self.luts:
+#             lut._reset_shared_context(new_context)
+#
+#     def forward(self, x):
+#         """
+#         Forward pass that runs all luts in "parallel".
+#         Returns the sum of outputs from all luts.
+#         """
+#         # Lazy fill weights and positional encodings if needed
+#         if self._all_weights is None:
+#             self._all_weights = []
+#             for lut in self.luts:
+#                 self._all_weights.append(lut._weights)
+#
+#         # Only pass positional encodings if they exist (when sequence_length > 1)
+#         if self._sequence_length > 1:
+#             if self._all_positional_encodings is None:
+#                 self._all_positional_encodings = []
+#                 for lut in self.luts:
+#                     self._all_positional_encodings.append(lut._positional_embeddings)
+#             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights, *self._all_positional_encodings)
+#         else:
+#             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights)
+#
+#     class MultiLUTForwardFN(torch.autograd.Function):
+#         @staticmethod
+#         def forward(ctx, *args, **kwargs):
+#             """
+#             Run forward pass for all luts in "parallel"
+#             All luts accumulate into the same output tensor.
+#             """
+#             x, multi_lut = args[0], args[1]
+#
+#             first_lut = multi_lut.luts[0]
+#             batch_size = x.shape[0]
+#
+#             # Create shared output tensor
+#             if multi_lut._sequence_length == 1:
+#                 output = torch.zeros(
+#                     [batch_size * first_lut._n_outputs],
+#                     dtype=torch.float32, device=first_lut.device
+#                 )
+#             else:
+#                 output = torch.zeros(
+#                     [batch_size * multi_lut._sequence_length * first_lut._n_outputs],
+#                     dtype=torch.float32, device=first_lut.device
+#                 )
+#
+#             pos_emb = None
+#             if multi_lut.training:
+#                 results = [None] * len(multi_lut.luts)
+#
+#                 for lut_idx, lut in enumerate(multi_lut.luts):
+#                     if multi_lut._sequence_length == 1:
+#                         results[lut_idx] = lut.forward_step(x, output=output)
+#                     elif lut._concatenation_product:
+#                         pos_emb = lut._prepare_positional_embeddings()
+#                         results[lut_idx] = list(lut.forward_step_concat(x, pos_emb, output=output))
+#                     else:
+#                         pos_emb = lut._prepare_positional_embeddings()
+#                         lut.forward_step_product(x, pos_emb, output=output)
+#
+#                 for lut_idx, lut in enumerate(multi_lut.luts):
+#                     lut._synchronize()
+#                     if lut._lookup_indices_callback is not None:
+#                         lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
+#             else:
+#                 for lut_idx, lut in enumerate(multi_lut.luts):
+#                     if multi_lut._sequence_length == 1:
+#                         lut.forward_step(x, output=output)
+#                     elif lut._concatenation_product:
+#                         pos_emb = lut._prepare_positional_embeddings()
+#                         lut.forward_step_concat(x, pos_emb, output=output)
+#                     else:
+#                         pos_emb = lut._prepare_positional_embeddings()
+#                         lut.forward_step_product(x, pos_emb, output=output)
+#
+#                 for lut_idx, lut in enumerate(multi_lut.luts):
+#                     lut._synchronize()
+#
+#             # Reshape output to match expected shape
+#
+#             output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
+#
+#             if multi_lut.training:
+#                 # Save for backward
+#                 ctx.multi_lut = multi_lut
+#                 ctx.save_for_backward(x, pos_emb)
+#                 ctx.results = results  # Store individual results for backward
+#
+#             return output
+#
+#         @staticmethod
+#         def backward(ctx, *grad_outputs):
+#             """
+#             Run backward pass for all luts in "parallel".
+#             All luts accumulate into the same x_grad tensor.
+#             Returns gradients for x, multi_lut, all weights, and all positional encodings.
+#             """
+#             (grad_output,) = grad_outputs
+#             multi_lut = ctx.multi_lut
+#             n_luts = len(multi_lut.luts)
+#
+#             # Extract saved input
+#             x, pos_emb = ctx.saved_tensors
+#             results = ctx.results
+#
+#             # Create shared x_grad tensor
+#             x_grad = torch.zeros_like(x.view(-1))
+#
+#             # Store gradients for each lut
+#             all_weight_grads = [None] * n_luts
+#             all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
+#
+#             for lut_idx, lut in enumerate(multi_lut.luts):
+#                 if multi_lut._sequence_length == 1:
+#                     (w_grad,) = lut.backward_step(
+#                         x, grad_output,
+#                         results[lut_idx][0],  # lookup_indices
+#                         results[lut_idx][1],  # min_anchor_deltas
+#                         results[lut_idx][2],  # min_anchor_delta_indices
+#                         x_grad=x_grad
+#                     )
+#                     all_weight_grads[lut_idx] = w_grad
+#                 elif lut._concatenation_product:
+#                     w_grad, pe_grad = lut.backward_step_concat(
+#                         x, grad_output,
+#                         results[lut_idx][0],  # lookup_indices
+#                         results[lut_idx][1],  # min_anchor_deltas
+#                         results[lut_idx][2],  # min_anchor_delta_indices
+#                         results[lut_idx][3],  # positional_lookup_indices
+#                         results[lut_idx][4],  # positional_min_deltas
+#                         results[lut_idx][5],  # positional_min_delta_indices
+#                         x_grad=x_grad
+#                     )
+#                     all_weight_grads[lut_idx] = w_grad
+#                     all_pe_grads[lut_idx] = pe_grad
+#                 else:
+#                     w_grad, pe_grad = lut.backward_step_product(
+#                         x, pos_emb, grad_output,
+#                         x_grad=x_grad
+#                     )
+#                     all_weight_grads[lut_idx] = w_grad
+#                     all_pe_grads[lut_idx] = pe_grad
+#
+#             for i, lut in enumerate(multi_lut.luts):
+#                 lut._synchronize()
+#
+#             batch_size = x.shape[0]
+#
+#             if multi_lut._gradient_policy.type == GradientType.Sparse:
+#                 densify_buffer_size = multi_lut.luts[0]._gradient_densify_buffer_size(batch_size)
+#                 all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
+#                     multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts],
+#                     densify_buffer_size, multi_lut._gradient_policy.normalized
+#                 )
+#             else:
+#                 for lut_idx, lut in enumerate(multi_lut.luts):
+#                     all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
+#
+#             if multi_lut._sequence_length > 1:
+#                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
+#             else:
+#                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
+#
+#     def to(self, *args, **kwargs):
+#         """
+#         Move the module to a different device/dtype.
+#         Resets cached weights and positional encodings so they are rebuilt on next forward.
+#         """
+#         result = super().to(*args, **kwargs)
+#         self._all_weights = None
+#         self._all_positional_encodings = None
+#         return result
+#
+#     def __repr__(self):
+#         return f'MultiLUT({len(self.luts)} luts, input_shape={self.input_shape()}, output_shape={self.output_shape()}, sequence_length={self.sequence_length()})'

@@ -4,10 +4,10 @@ import torch.nn as nn
 from torch.optim import SGD
 from tqdm import tqdm
 
-from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta, MultiLUT
+from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta
 
 from spiky.lut.LUTTransformer import LUTTransformer
-from spiky.lut.tests.gt_lut_product import GTLUTProductTransformer, GTLUTProductMultiHead
+from spiky.lut.tests.gt_lut_product import GTLUTProductTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 
 
@@ -17,38 +17,32 @@ def test_lut_transformer_product(
     for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
-        for use_multi_lut in [False, True]:
-            if use_multi_lut and summation_dtype == torch.int32:
-                continue
-            for fully_connected in [True, False]:
-                if not fully_connected and not use_multi_lut:
-                    continue
-                for train_or_eval in ['eval', 'train']:
-                    for batch_size in [1, 4]:
-                        for sliced_mode in [False, True]:
-                            if not sliced_mode and not fully_connected:
-                                continue
-                            success = _test_lut_transformer_product(
-                                vocab_size=256,
-                                embedding_dim=32,
-                                context_size=8,
-                                positional_dim=32 if sliced_mode else 4,
-                                num_layers=1,
-                                num_heads=2,
-                                n_detectors=4,
-                                n_anchors_per_detector=3,
-                                gradient_type=g_type,
-                                summation_dtype=summation_dtype,
-                                device=device,
-                                seed=seed,
-                                batch_size=batch_size,
-                                use_multi_lut=use_multi_lut,
-                                fully_connected=fully_connected,
-                                train_or_eval=train_or_eval,
-                                sliced_mode=sliced_mode
-                            )
-                            if not success:
-                                return False
+        for fully_connected in [True, False]:
+            for train_or_eval in ['eval', 'train']:
+                for batch_size in [1, 4]:
+                    for sliced_mode in [False, True]:
+                        if not sliced_mode and not fully_connected:
+                            continue
+                        success = _test_lut_transformer_product(
+                            vocab_size=256,
+                            embedding_dim=32,
+                            context_size=8,
+                            positional_dim=32 if sliced_mode else 4,
+                            num_layers=1,
+                            num_heads=2,
+                            n_detectors=4,
+                            n_anchors_per_detector=3,
+                            gradient_type=g_type,
+                            summation_dtype=summation_dtype,
+                            device=device,
+                            seed=seed,
+                            batch_size=batch_size,
+                            fully_connected=fully_connected,
+                            train_or_eval=train_or_eval,
+                            sliced_mode=sliced_mode
+                        )
+                        if not success:
+                            return False
     return True
 
 
@@ -63,10 +57,10 @@ def synchronize_models(pytorch_transformer, gt_transformer, num_layers):
     """
     def sync_luts(pytorch_lut, gt_lut, gt_product=None):
         """
-        Synchronize anchors, weights, and positional embeddings from PyTorch LUTLayer (or MultiLUT) to GT LUTLayer.
+        Synchronize anchors, weights, and positional embeddings from PyTorch LUTLayer to GT LUTLayer.
         
         Args:
-            pytorch_lut: PyTorch LUTLayer instance or MultiLUT instance
+            pytorch_lut: PyTorch LUTLayer instance
             gt_lut: GT LUTLayer instance
             gt_product: Optional GTLUTProduct instance (if syncing attention layer with positional embeddings)
         """
@@ -108,28 +102,12 @@ def synchronize_models(pytorch_transformer, gt_transformer, num_layers):
         pytorch_attention_lut = pytorch_transformer.layers[layer_idx]['attention_lut']
         gt_attention_product = gt_transformer.layers[layer_idx]['attention_lut']
         
-        # Handle MultiLUT: sync each head separately
-        if isinstance(pytorch_attention_lut, MultiLUT):
-            # GT model should also have MultiLUT structure
-            assert isinstance(gt_attention_product, GTLUTProductMultiHead), \
-                "GT model should use GTLUTProductMultiHead when PyTorch model uses MultiLUT"
-            assert len(pytorch_attention_lut.luts) == len(gt_attention_product.heads), \
-                f"Number of heads mismatch: {len(pytorch_attention_lut.luts)} vs {len(gt_attention_product.heads)}"
-            
-            # Sync each head separately
-            for head_idx in range(len(pytorch_attention_lut.luts)):
-                sync_luts(
-                    pytorch_attention_lut.luts[head_idx],
-                    gt_attention_product.heads[head_idx].lut_layer,
-                    gt_product=gt_attention_product.heads[head_idx]
-                )
-        else:
-            # Single LUTLayer: sync to single GT head
-            sync_luts(
-                pytorch_attention_lut,
-                gt_attention_product.lut_layer,
-                gt_product=gt_attention_product
-            )
+        # Single LUTLayer: sync to single GT head
+        sync_luts(
+            pytorch_attention_lut,
+            gt_attention_product.lut_layer,
+            gt_product=gt_attention_product
+        )
     
     # Unembedder
     sync_luts(
@@ -183,60 +161,29 @@ def compare_weights_and_positional_embeddings(
         pytorch_attention_lut = pytorch_transformer.layers[layer_idx]['attention_lut']
         gt_attention_product = gt_transformer.layers[layer_idx]['attention_lut']
         
-        # Handle MultiLUT: compare each head separately
-        if isinstance(pytorch_attention_lut, MultiLUT):
-            assert isinstance(gt_attention_product, GTLUTProductMultiHead), \
-                "GT model should use GTLUTProductMultiHead when PyTorch model uses MultiLUT"
-            assert len(pytorch_attention_lut.luts) == len(gt_attention_product.heads), \
-                f"Number of heads mismatch: {len(pytorch_attention_lut.luts)} vs {len(gt_attention_product.heads)}"
-            
-            for head_idx in range(len(pytorch_attention_lut.luts)):
-                pytorch_head_weights = pytorch_attention_lut.luts[head_idx]._weights.cpu().detach()
-                gt_head_weights = gt_attention_product.heads[head_idx].lut_layer._weights.cpu().detach()
-                if pytorch_head_weights.shape != gt_head_weights.shape:
-                    print(f"❌ Layer {layer_idx} Head {head_idx} Attention weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
-                    result = False
-                elif not torch.allclose(pytorch_head_weights, gt_head_weights, atol=eps, rtol=eps):
-                    max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
-                    print(f"❌ Layer {layer_idx} Head {head_idx} Attention weights differ. Max diff: {max_diff:.6f}")
-                    result = False
-                
-                # Positional encodings (all heads should have the same)
-                pytorch_pos_emb = pytorch_attention_lut.luts[head_idx]._positional_embeddings
-                if pytorch_pos_emb is not None:
-                    pytorch_pos_emb = pytorch_pos_emb.cpu().detach()
-                    gt_pos_emb = gt_attention_product.heads[head_idx].positional_embeddings
-                    if gt_pos_emb is not None:
-                        gt_pos_emb = gt_pos_emb.cpu().detach()
-                        
-                        if not torch.allclose(pytorch_pos_emb.reshape(gt_pos_emb.shape), gt_pos_emb, atol=1e-3, rtol=1e-3):
-                            max_diff = torch.max(torch.abs(pytorch_pos_emb.reshape(gt_pos_emb.shape) - gt_pos_emb))
-                            print(f"❌ Layer {layer_idx} Head {head_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
-                            result = False
-        else:
-            # Single LUTLayer
-            pytorch_head_weights = pytorch_attention_lut._weights.cpu().detach()
-            gt_head_weights = gt_attention_product.lut_layer._weights.cpu().detach()
-            if pytorch_head_weights.shape != gt_head_weights.shape:
-                print(f"❌ Layer {layer_idx} Attention weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
-                result = False
-            elif not torch.allclose(pytorch_head_weights, gt_head_weights, atol=eps, rtol=eps):
-                max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
-                print(f"❌ Layer {layer_idx} Attention weights differ. Max diff: {max_diff:.6f}")
-                result = False
+        # Single LUTLayer
+        pytorch_head_weights = pytorch_attention_lut._weights.cpu().detach()
+        gt_head_weights = gt_attention_product.lut_layer._weights.cpu().detach()
+        if pytorch_head_weights.shape != gt_head_weights.shape:
+            print(f"❌ Layer {layer_idx} Attention weights shape mismatch: {pytorch_head_weights.shape} vs {gt_head_weights.shape}")
+            result = False
+        elif not torch.allclose(pytorch_head_weights, gt_head_weights, atol=eps, rtol=eps):
+            max_diff = torch.max(torch.abs(pytorch_head_weights - gt_head_weights))
+            print(f"❌ Layer {layer_idx} Attention weights differ. Max diff: {max_diff:.6f}")
+            result = False
 
-            # Positional encodings
-            pytorch_pos_emb = pytorch_attention_lut._positional_embeddings
-            if pytorch_pos_emb is not None:
-                pytorch_pos_emb = pytorch_pos_emb.cpu().detach()
-                gt_pos_emb = gt_attention_product.positional_embeddings
-                if gt_pos_emb is not None:
-                    gt_pos_emb = gt_pos_emb.cpu().detach()
-                    
-                    if not torch.allclose(pytorch_pos_emb.reshape(gt_pos_emb.shape), gt_pos_emb, atol=1e-3, rtol=1e-3):
-                        max_diff = torch.max(torch.abs(pytorch_pos_emb.reshape(gt_pos_emb.shape) - gt_pos_emb))
-                        print(f"❌ Layer {layer_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
-                        result = False
+        # Positional encodings
+        pytorch_pos_emb = pytorch_attention_lut._positional_embeddings
+        if pytorch_pos_emb is not None:
+            pytorch_pos_emb = pytorch_pos_emb.cpu().detach()
+            gt_pos_emb = gt_attention_product.positional_embeddings
+            if gt_pos_emb is not None:
+                gt_pos_emb = gt_pos_emb.cpu().detach()
+
+                if not torch.allclose(pytorch_pos_emb.reshape(gt_pos_emb.shape), gt_pos_emb, atol=1e-3, rtol=1e-3):
+                    max_diff = torch.max(torch.abs(pytorch_pos_emb.reshape(gt_pos_emb.shape) - gt_pos_emb))
+                    print(f"❌ Layer {layer_idx} positional embeddings differ. Max diff: {max_diff:.6f}")
+                    result = False
     
     return result
 
@@ -268,7 +215,7 @@ def _test_lut_transformer_product(
     num_layers, num_heads, n_detectors,
     n_anchors_per_detector, gradient_type,
     summation_dtype, device, seed,
-    batch_size, use_multi_lut, fully_connected,
+    batch_size, fully_connected,
     sliced_mode, train_or_eval
 ):
     if seed is not None:
@@ -287,7 +234,6 @@ def _test_lut_transformer_product(
     print(f'  Device: {device}')
     print(f'  Seed: {seed}')
     print(f'  Batch size: {batch_size}')
-    print(f'  Use multi LUT: {use_multi_lut}')
     print(f'  Fully connected: {fully_connected}')
     print(f'  Sliced mode: {sliced_mode}')
     print(f'  Train or eval: {train_or_eval}')
@@ -306,7 +252,6 @@ def _test_lut_transformer_product(
         n_anchors_per_detector=n_anchors_per_detector,
         concatenation_product=False,
         sliced_product_mode=sliced_mode,
-        _use_multi_lut=use_multi_lut,
         _synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
             initial_weight=-1.0, initial_noise_level=2.0
@@ -336,8 +281,7 @@ def _test_lut_transformer_product(
         ),
         summation_dtype=torch.float32,
         device=device, seed=seed,
-        sliced_mode=sliced_mode,
-        use_multi_lut=use_multi_lut
+        sliced_mode=sliced_mode
     )
 
     # Synchronize entire models

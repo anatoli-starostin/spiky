@@ -7,7 +7,6 @@ from spiky.lut.LUTLayer import (
     LUTSharedContext,
     GradientPolicy,
     GradientType,
-    MultiLUT,
     SynapseMeta
 )
 
@@ -71,7 +70,7 @@ class LUTTransformer(nn.Module):
         n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
         no_ffn=False, concatenation_product=True, sliced_product_mode=False,
         use_sinusoidal_pe=False, inject_pe_once=False, weights_gradient_policy=None,
-        device=None, _synapse_meta=SynapseMeta(), _use_multi_lut=False,
+        device=None, _synapse_meta=SynapseMeta(),
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.0,
         use_batch_norm=False, layer_norm_d=None
@@ -129,30 +128,14 @@ class LUTTransformer(nn.Module):
         for layer_idx in range(num_layers):
             layer = nn.ModuleDict()
 
-            # Attention heads
-            if _use_multi_lut:
-                heads = []
-                for head_idx in range(num_heads):
-                    attention_lut = self._create_single_attention(
-                        _synapse_meta=_synapse_meta, summation_dtype=summation_dtype,
-                        _int_rescaler=_int_rescaler,
-                        seed=None if seed is None else seed + layer_idx * num_heads + head_idx,
-                        _forward_group_size=_forward_group_size,
-                        _backward_group_size=_backward_group_size,
-                        num_heads=1, inject_pe=not inject_pe_once or layer_idx == 0
-                    )
-                    heads.append(attention_lut)
-                layer['attention_lut'] = MultiLUT(heads)
-            else:
-                assert isinstance(embedding_dim, int)
-                layer['attention_lut'] = self._create_single_attention(
-                    _synapse_meta=_synapse_meta, summation_dtype=summation_dtype,
-                    _int_rescaler=_int_rescaler,
-                    seed=None if seed is None else seed + layer_idx * num_heads,
-                    _forward_group_size=_forward_group_size,
-                    _backward_group_size=_backward_group_size,
-                    num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0
-                )
+            layer['attention_lut'] = self._create_single_attention(
+                _synapse_meta=_synapse_meta, summation_dtype=summation_dtype,
+                _int_rescaler=_int_rescaler,
+                seed=None if seed is None else seed + layer_idx * num_heads,
+                _forward_group_size=_forward_group_size,
+                _backward_group_size=_backward_group_size,
+                num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0
+            )
 
             # Dropout after attention
             layer['attention_dropout'] = nn.Dropout(dropout)
@@ -326,12 +309,8 @@ class LUTTransformer(nn.Module):
         
         # Collect from transformer layers
         for layer in self.layers:
-            # Handle attention_lut (can be LUTLayer or MultiLUT)
             attention_lut = layer['attention_lut']
-            if isinstance(attention_lut, MultiLUT):
-                attention_luts.extend(attention_lut.luts)
-            else:
-                attention_luts.append(attention_lut)
+            attention_luts.append(attention_lut)
             
             # FFN is always a single LUTLayer
             ffn_luts.append(layer['ffn'])
