@@ -324,6 +324,8 @@ def _test_lut_transformer_product(
         opt = None
         gt_opt = None
 
+    lut_transformer.to(device=torch.device('cpu'))
+
     for i in tqdm(range(32)):
         # PyTorch model backward pass
         # Compute loss: cross-entropy with target tokens
@@ -364,7 +366,7 @@ def _test_lut_transformer_product(
                 return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-        y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
         if not compare_outputs(gt_y, y, train_or_eval):
