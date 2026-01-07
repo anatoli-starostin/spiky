@@ -381,7 +381,7 @@ def main():
     print("LUTTransformer PRODUCT TEST")
     print("=" * 60)
 
-    devices = ['cpu']  # 'cpu'
+    devices = []  # 'cpu'
     if torch.cuda.is_available():
         devices.append('cuda:5')
         devices.append('cuda:7')
