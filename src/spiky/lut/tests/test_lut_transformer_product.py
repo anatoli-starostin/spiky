@@ -30,8 +30,8 @@ def test_lut_transformer_product(
                             positional_dim=32 if sliced_mode else 4,
                             num_layers=1,
                             num_heads=2,
-                            n_detectors=4,
-                            n_anchors_per_detector=3,
+                            n_detectors=16,
+                            n_anchors_per_detector=4,
                             gradient_type=g_type,
                             summation_dtype=summation_dtype,
                             device=device,
@@ -357,13 +357,13 @@ def _test_lut_transformer_product(
                 print(f"❌ something is wrong after backward pass №{i + 1}")
                 return False
 
-            synchronize_models(lut_transformer, gt_lut_transformer, num_layers)
-            # Compare weights after synchronization
-            if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, num_layers
-            ):
-                print(f"❌ something is wrong after synchronization №{i + 2}")
-                return False
+        synchronize_models(lut_transformer, gt_lut_transformer, num_layers)
+        # Compare weights after synchronization
+        if not compare_weights_and_positional_embeddings(
+            lut_transformer, gt_lut_transformer, num_layers
+        ):
+            print(f"❌ something is wrong after synchronization №{i + 2}")
+            return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
         y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
