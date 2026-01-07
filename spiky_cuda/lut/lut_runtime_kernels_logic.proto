@@ -1087,9 +1087,9 @@ check_detectors_eval_logic(
         }
         printf("[check_detectors_eval_logic] lookup_index: %d\n", lookup_index);
         *w_lookup_indices = lookup_index;
-    }
 
-    printf("[check_detectors_eval_logic] returning lookup_index: %d\n", lookup_index);
+        printf("[check_detectors_eval_logic] returning lookup_index: %d\n", lookup_index);
+    }
 }
 
 check_detectors_logic(
