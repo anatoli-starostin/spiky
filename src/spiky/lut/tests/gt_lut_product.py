@@ -455,6 +455,7 @@ class GTLUTProductTransformer(nn.Module):
 
         for layer in self.layers:
             # print(f'gt: z {z}')
+            torch.cuda.synchronize(z.device)
             attention_output = layer['attention_lut'](z)
             # print(f'gt: z after attention {attention_output}')
             z = z + attention_output
