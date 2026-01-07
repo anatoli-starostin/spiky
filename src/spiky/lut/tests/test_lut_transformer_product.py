@@ -21,8 +21,6 @@ def test_lut_transformer_product(
             for train_or_eval in ['eval']:  # , 'train'
                 for batch_size in [1, 4]:
                     for sliced_mode in [False]:  # , True
-                        if not sliced_mode and not fully_connected:
-                            continue
                         success = _test_lut_transformer_product(
                             vocab_size=256,
                             embedding_dim=32,
