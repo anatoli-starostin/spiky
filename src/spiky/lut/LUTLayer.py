@@ -1681,6 +1681,7 @@ class MultiLUT(nn.Module):
                     dtype=torch.float32, device=first_lut.device
                 )
 
+            pos_emb = None
             if multi_lut.training:
                 results = [None] * len(multi_lut.luts)
 
@@ -1719,7 +1720,7 @@ class MultiLUT(nn.Module):
             if multi_lut.training:
                 # Save for backward
                 ctx.multi_lut = multi_lut
-                ctx.save_for_backward(x)
+                ctx.save_for_backward(x, pos_emb)
                 ctx.results = results  # Store individual results for backward
 
             return output
@@ -1736,7 +1737,7 @@ class MultiLUT(nn.Module):
             n_luts = len(multi_lut.luts)
 
             # Extract saved input
-            x = ctx.saved_tensors[0]
+            x, pos_emb = ctx.saved_tensors[0]
             results = ctx.results
 
             # Create shared x_grad tensor
@@ -1771,7 +1772,7 @@ class MultiLUT(nn.Module):
                     all_pe_grads[lut_idx] = pe_grad
                 else:
                     w_grad, pe_grad = lut.backward_step_product(
-                        x, grad_output,
+                        x, pos_emb, grad_output,
                         x_grad=x_grad
                     )
                     all_weight_grads[lut_idx] = w_grad
