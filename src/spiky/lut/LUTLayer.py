@@ -1248,24 +1248,29 @@ class LUTLayerBasic(nn.Module):
                 x_grad, w_grad, pe_grad = ctx.lut_layer.backward_step_product(x, pos_embeddings, grad_output)
                 return x_grad, w_grad, pe_grad, None
 
+    def _prepare_positional_embeddings(self):
+        if self._unified_positional_embeddings and self._concatenation_product:
+            pos_embeddings = self._positional_embeddings.reshape(
+                (self._sequence_length - 1) * (2 if self._use_sinusoidal_pe else 1), 1, self._positional_dim
+            ).repeat(1, self._n_detectors, 1).flatten().contiguous()
+        else:
+            pos_embeddings = self._positional_embeddings
+
+        if self._use_sinusoidal_pe:
+            position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
+            position = position.unsqueeze(1).repeat(1, self._positional_dim * (
+                self._n_detectors if self._concatenation_product else 1))
+            pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
+            pos_embeddings = torch.sin(position.flatten() * pos_embeddings[:, 0] + pos_embeddings[:, 1])
+            pos_embeddings = pos_embeddings.flatten().contiguous()
+
+        return pos_embeddings
+
     def forward(self, x):
         if self._sequence_length == 1:
             return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, None, self)
         else:
-            if self._unified_positional_embeddings and self._concatenation_product:
-                pos_embeddings = self._positional_embeddings.reshape(
-                    (self._sequence_length - 1) * (2 if self._use_sinusoidal_pe else 1), 1, self._positional_dim
-                ).repeat(1, self._n_detectors, 1).flatten().contiguous()
-            else:
-                pos_embeddings = self._positional_embeddings
-
-            if self._use_sinusoidal_pe:
-                position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
-                position = position.unsqueeze(1).repeat(1, self._positional_dim * (self._n_detectors if self._concatenation_product else 1))
-                pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
-                pos_embeddings = torch.sin(position.flatten() * pos_embeddings[:, 0] + pos_embeddings[:, 1])
-                pos_embeddings = pos_embeddings.flatten().contiguous()
-
+            pos_embeddings = self._prepare_positional_embeddings()
             return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, pos_embeddings, self)
 
     def _count_synapses(self, neuron_ids: torch.Tensor):
@@ -1683,9 +1688,11 @@ class MultiLUT(nn.Module):
                     if multi_lut._sequence_length == 1:
                         results[lut_idx] = lut.forward_step(x, output=output)
                     elif lut._concatenation_product:
-                        results[lut_idx] = list(lut.forward_step_concat(x, output=output))
+                        pos_emb = lut._prepare_positional_embeddings()
+                        results[lut_idx] = list(lut.forward_step_concat(x, pos_emb, output=output))
                     else:
-                        lut.forward_step_product(x, output=output)
+                        pos_emb = lut._prepare_positional_embeddings()
+                        lut.forward_step_product(x, pos_emb, output=output)
 
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     lut._synchronize()
@@ -1696,9 +1703,11 @@ class MultiLUT(nn.Module):
                     if multi_lut._sequence_length == 1:
                         lut.forward_step(x, output=output)
                     elif lut._concatenation_product:
-                        lut.forward_step_concat(x, output=output)
+                        pos_emb = lut._prepare_positional_embeddings()
+                        lut.forward_step_concat(x, pos_emb, output=output)
                     else:
-                        lut.forward_step_product(x, output=output)
+                        pos_emb = lut._prepare_positional_embeddings()
+                        lut.forward_step_product(x, pos_emb, output=output)
 
                 for lut_idx, lut in enumerate(multi_lut.luts):
                     lut._synchronize()
