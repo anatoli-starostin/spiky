@@ -286,6 +286,51 @@ class LUTTransformer(nn.Module):
             layer['ffn']._reset_shared_context(new_context)
         self.unembedder._reset_shared_context(new_context)
 
+    def to(self, *args, **kwargs):
+        """
+        Move the module to a different device or dtype.
+        
+        Args:
+            *args: Device or dtype (e.g., 'cuda', torch.device('cuda:0'), torch.float32)
+            **kwargs: Device or dtype (e.g., device='cuda', dtype=torch.float32)
+        
+        Returns:
+            self
+        """
+        # Call super().to() to move all standard PyTorch modules (Embedding, Dropout, BatchNorm, LayerNorm)
+        super().to(*args, **kwargs)
+        
+        # Extract device from args/kwargs
+        device = kwargs.get("device", None)
+        if device is None and len(args) > 0:
+            # Check if first arg is a device (not dtype)
+            first_arg = args[0]
+            if isinstance(first_arg, torch.device):
+                device = first_arg
+            elif isinstance(first_arg, str):
+                # Try to parse as device; if it fails, it's likely a dtype and we'll ignore it
+                try:
+                    device = torch.device(first_arg)
+                except (ValueError, RuntimeError):
+                    # Not a valid device string, likely a dtype - keep device as None
+                    pass
+        
+        # Normalize and update device if provided
+        if device is not None:
+            dev = device if isinstance(device, torch.device) else torch.device(device)
+            
+            # Handle CUDA device index
+            if dev.type == 'cuda' and dev.index is None:
+                device_index = torch.cuda.current_device()
+                dev = torch.device(f'cuda:{device_index}')
+            
+            self.device = dev
+            
+            # Move shared context to the device
+            self.lut_shared_context.to_device(self.device)
+        
+        return self
+
     def get_profile_statistics(self) -> str:
         """
         Get aggregated profiling statistics from all LUT layers in the transformer.
