@@ -20,7 +20,7 @@ def test_lut_transformer_product(
         for fully_connected in [False, True]:
             for train_or_eval in ['eval', 'train']:
                 for batch_size in [1, 4]:
-                    for sliced_mode in [False]:
+                    for sliced_mode in [True]:
                         if not sliced_mode and not fully_connected:
                             continue
                         success = _test_lut_transformer_product(
