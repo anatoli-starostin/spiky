@@ -324,7 +324,7 @@ def _test_lut_transformer_product(
         opt = None
         gt_opt = None
 
-    lut_transformer.to(device=torch.device('cpu'))
+    lut_transformer = lut_transformer.to(device=torch.device('cpu'))
 
     for i in tqdm(range(32)):
         # PyTorch model backward pass
