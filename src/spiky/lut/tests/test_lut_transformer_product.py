@@ -18,7 +18,7 @@ def test_lut_transformer_product(
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
         for fully_connected in [True]:  # , False
-            for train_or_eval in ['eval']:  # , 'train'
+            for train_or_eval in ['eval', 'train']:  # , 'train'
                 for batch_size in [1, 4]:
                     for sliced_mode in [False]:  # , True
                         if not sliced_mode and not fully_connected:
