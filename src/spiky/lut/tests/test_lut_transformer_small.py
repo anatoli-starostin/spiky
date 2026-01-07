@@ -18,47 +18,40 @@ def test_lut_transformer_small(
     for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
-        for use_multi_lut in [False, True]:
-            if use_multi_lut and summation_dtype == torch.int32:
-                continue
-            for fully_connected in [True, False]:
-                if not fully_connected and not use_multi_lut:
-                    continue
-                for train_or_eval in ['train', 'eval']:
-                    for batch_size in [1, 4]:
-                        success = _test_lut_transformer_small(
-                            vocab_size=256,
-                            embedding_dim=32,
-                            context_size=8,
-                            positional_dim=4,
-                            num_layers=2,
-                            num_heads=2,
-                            n_detectors=4,
-                            n_anchors_per_detector=3,
-                            gradient_type=g_type,
-                            summation_dtype=summation_dtype,
-                            device=device,
-                            seed=seed,
-                            batch_size=batch_size,
-                            use_multi_lut=use_multi_lut,
-                            fully_connected=fully_connected,
-                            train_or_eval=train_or_eval
-                        )
-                        if not success:
-                            return False
+
+        for fully_connected in [True, False]:
+            for train_or_eval in ['train', 'eval']:
+                for batch_size in [1, 4]:
+                    success = _test_lut_transformer_small(
+                        vocab_size=256,
+                        embedding_dim=32,
+                        context_size=8,
+                        positional_dim=4,
+                        num_layers=2,
+                        num_heads=2,
+                        n_detectors=4,
+                        n_anchors_per_detector=3,
+                        gradient_type=g_type,
+                        summation_dtype=summation_dtype,
+                        device=device,
+                        seed=seed,
+                        batch_size=batch_size,
+                        fully_connected=fully_connected,
+                        train_or_eval=train_or_eval
+                    )
+                    if not success:
+                        return False
     return True
 
 
-def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads, vocab_size):
+def synchronize_models(pytorch_transformer, gt_transformer, num_layers, vocab_size):
     """
     Synchronize all weights, anchors, and embeddings from PyTorch LUTTransformer to GT model.
     
     Args:
         pytorch_transformer: PyTorch LUTTransformer instance
         gt_transformer: GT _GTLUTTransformer instance
-        use_multi_lut: Whether PyTorch model uses MultiLUT
         num_layers: Number of transformer layers
-        num_heads: Number of attention heads
         vocab_size: Vocabulary size
     """
     def sync_luts(pytorch_lut, gt_lut, gt_positional_encoding=None):
@@ -129,21 +122,12 @@ def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_l
         )
         
         # Attention layers
-        if use_multi_lut:
-            # MultiLUT case: sync each head separately
-            for head_idx in range(num_heads):
-                sync_luts(
-                    pytorch_transformer.layers[layer_idx]['attention_lut'].luts[head_idx],
-                    gt_transformer.layers[layer_idx]['heads'][head_idx].V,
-                    gt_transformer.layers[layer_idx]['heads'][head_idx].positional_encoding
-                )
-        else:
-            # Single LUT case: sync to first head's V
-            sync_luts(
-                pytorch_transformer.layers[layer_idx]['attention_lut'],
-                gt_transformer.layers[layer_idx]['heads'][0].V,
-                gt_transformer.layers[layer_idx]['heads'][0].positional_encoding
-            )
+        # Single LUT case: sync to first head's V
+        sync_luts(
+            pytorch_transformer.layers[layer_idx]['attention_lut'],
+            gt_transformer.layers[layer_idx]['heads'][0].V,
+            gt_transformer.layers[layer_idx]['heads'][0].positional_encoding
+        )
     
     # Unembedder
     sync_luts(
@@ -153,7 +137,7 @@ def synchronize_models(pytorch_transformer, gt_transformer, use_multi_lut, num_l
 
 
 def compare_weights_and_positional_embeddings(
-    pytorch_transformer, gt_transformer, use_multi_lut, num_layers, num_heads
+    pytorch_transformer, gt_transformer, num_layers
 ):
     result = True
     eps = 1e-3
@@ -203,11 +187,8 @@ def compare_weights_and_positional_embeddings(
             result = False
 
         # Attention head weights
-        for head_idx in range(num_heads if use_multi_lut else 1):
-            if use_multi_lut:
-                pytorch_lut = pytorch_transformer.layers[layer_idx]['attention_lut'].luts[head_idx]
-            else:
-                pytorch_lut = pytorch_transformer.layers[layer_idx]['attention_lut']
+        for head_idx in range(1):
+            pytorch_lut = pytorch_transformer.layers[layer_idx]['attention_lut']
 
             pytorch_head_weights = pytorch_lut._weights.cpu().detach()
             gt_head_weights = torch.tensor(
@@ -265,7 +246,7 @@ def _test_lut_transformer_small(
     num_layers, num_heads, n_detectors,
     n_anchors_per_detector, gradient_type,
     summation_dtype, device, seed,
-    batch_size, use_multi_lut, fully_connected, train_or_eval
+    batch_size, fully_connected, train_or_eval
 ):
     if seed is not None:
         torch.manual_seed(seed)
@@ -283,7 +264,6 @@ def _test_lut_transformer_small(
     print(f'  Device: {device}')
     print(f'  Seed: {seed}')
     print(f'  Batch size: {batch_size}')
-    print(f'  Use multi LUT: {use_multi_lut}')
     print(f'  Fully connected: {fully_connected}')
     print(f'  Train or eval: {train_or_eval}')
     print('=' * 60)
@@ -299,7 +279,6 @@ def _test_lut_transformer_small(
         num_heads=num_heads,
         n_detectors=n_detectors,
         n_anchors_per_detector=n_anchors_per_detector,
-        _use_multi_lut=use_multi_lut,
         _synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
             initial_weight=-1.0, initial_noise_level=2.0
@@ -314,39 +293,25 @@ def _test_lut_transformer_small(
 
     # Create _GTLUTTransformer with matching parameters
     random.seed(seed)
-    if use_multi_lut:
-        gt_lut_transformer = _GTLUTTransformer(
-            vocab_size=vocab_size,
-            embedding_dim=embedding_dim,
-            context_size=context_size,
-            positional_dim=positional_dim,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            n_t=n_detectors,
-            n_t_a=n_detectors,
-            n_c=n_anchors_per_detector,
-            batch_size=batch_size
-        )
-    else:
-        gt_lut_transformer = _GTLUTTransformer(
-            vocab_size=vocab_size,
-            embedding_dim=embedding_dim,
-            context_size=context_size,
-            positional_dim=positional_dim,
-            num_layers=num_layers,
-            num_heads=1,
-            n_t=n_detectors,
-            n_t_a=n_detectors * num_heads,
-            n_c=n_anchors_per_detector,
-            batch_size=batch_size
-        )
+    gt_lut_transformer = _GTLUTTransformer(
+        vocab_size=vocab_size,
+        embedding_dim=embedding_dim,
+        context_size=context_size,
+        positional_dim=positional_dim,
+        num_layers=num_layers,
+        num_heads=1,
+        n_t=n_detectors,
+        n_t_a=n_detectors * num_heads,
+        n_c=n_anchors_per_detector,
+        batch_size=batch_size
+    )
 
     # Synchronize entire models
-    synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
+    synchronize_models(lut_transformer, gt_lut_transformer, num_layers, vocab_size)
 
     # Compare weights after synchronization
     if not compare_weights_and_positional_embeddings(
-        lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+        lut_transformer, gt_lut_transformer, num_layers
     ):
         print(f"❌ something is wrong after synchronization №1")
         return False
@@ -399,15 +364,15 @@ def _test_lut_transformer_small(
 
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+                lut_transformer, gt_lut_transformer, num_layers
             ):
                 print(f"❌ something is wrong after backward pass №{i + 1}")
                 return False
 
-            synchronize_models(lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads, vocab_size)
+            synchronize_models(lut_transformer, gt_lut_transformer, num_layers, vocab_size)
             # Compare weights after backward
             if not compare_weights_and_positional_embeddings(
-                lut_transformer, gt_lut_transformer, use_multi_lut, num_layers, num_heads
+                lut_transformer, gt_lut_transformer, num_layers
             ):
                 print(f"❌ something is wrong after synchronization №{i + 2}")
                 return False
