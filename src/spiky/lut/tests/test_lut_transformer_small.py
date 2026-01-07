@@ -346,10 +346,14 @@ def _test_lut_transformer_small(
         if gradient_type == GradientType.Internal:
             lut_transformer.set_external_learning_rate_hook(lr_hook)
         opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
+    else:
+        learning_rate = None
+        opt = None
 
-        for i in tqdm(range(32)):
-            # PyTorch model backward pass
-            # Compute loss: cross-entropy with target tokens
+    for i in tqdm(range(32)):
+        # PyTorch model backward pass
+        # Compute loss: cross-entropy with target tokens
+        if train_or_eval == 'train':
             targets = x[:, 1:context_size + 1].to(torch.long)  # (batch_size, context_size)
             loss = nn.functional.cross_entropy(
                 y.reshape(-1, vocab_size),  # (batch_size * context_size, vocab_size)
@@ -377,18 +381,18 @@ def _test_lut_transformer_small(
                 print(f"❌ something is wrong after synchronization №{i + 2}")
                 return False
 
-            x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-            y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
+        y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
-            # Load all batch items into GT model
-            batch_tokens = [x[j].cpu().tolist() for j in range(batch_size)]
-            gt_lut_transformer.load_snippet(batch_tokens)
-            # Run forward pass
-            gt_lut_transformer.forward()
+        # Load all batch items into GT model
+        batch_tokens = [x[j].cpu().tolist() for j in range(batch_size)]
+        gt_lut_transformer.load_snippet(batch_tokens)
+        # Run forward pass
+        gt_lut_transformer.forward()
 
-            if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
-                print(f"❌ something is wrong after forward pass №{i + 2}")
-                return False
+        if not compare_outputs(gt_lut_transformer, y, train_or_eval, device):
+            print(f"❌ something is wrong after forward pass №{i + 2}")
+            return False
 
     return True
 
@@ -398,14 +402,14 @@ def main():
     print("LUTTransformer SMALL TEST")
     print("=" * 60)
 
-    devices = ['cpu']
+    devices = []
     if torch.cuda.is_available():
-        devices.append('cuda')
+        devices.append('cuda:5')
 
     for device in devices:
         for summation_dtype in [torch.float32, torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
-            success = test_lut_transformer_small(device, summation_dtype)
+            success = test_lut_transformer_small(device, summation_dtype, seed=42)
 
             if success:
                 print(f"\n<{device}, {summation_dtype}> test completed successfully!")
