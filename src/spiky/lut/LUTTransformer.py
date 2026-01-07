@@ -243,7 +243,6 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
-            torch.cuda.synchronize(z.device)
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat}')
 
@@ -262,7 +261,6 @@ class LUTTransformer(nn.Module):
                 z = z.reshape(batch_size, self.context_size, self.embedding_dim[0] * self.embedding_dim[1])
 
             if not self.no_ffn:
-                torch.cuda.synchronize(z.device)
                 # FFN with residual connection and dropout
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 # print(f'test: ffn_result {ffn_result}')
@@ -279,7 +277,6 @@ class LUTTransformer(nn.Module):
                 z = z + ffn_result
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
-        torch.cuda.synchronize(z.device)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits
 
