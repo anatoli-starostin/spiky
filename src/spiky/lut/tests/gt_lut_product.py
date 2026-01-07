@@ -192,9 +192,12 @@ class GTLUTProduct(nn.Module):
                 
                 # Reshape for LUTLayer: [batch_size * n_triples, 1, n_lut_inputs]
                 stacked_triples = stacked_triples.view(batch_size * n_triples, 1, -1)
-                
+
+                inp = stacked_triples.contiguous()
+                torch.cuda.synchronize(inp.device)
+
                 # Process with inner LUTLayer
-                lut_output = self.lut_layer(stacked_triples.contiguous())  # [batch_size * n_triples, 1, n_outputs]
+                lut_output = self.lut_layer(inp)  # [batch_size * n_triples, 1, n_outputs]
                 lut_output = lut_output.squeeze(1)  # [batch_size * n_triples, n_outputs]
                 
                 # Reshape and sum over all triples for each batch item to get output[j]
