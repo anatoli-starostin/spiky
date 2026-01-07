@@ -261,7 +261,6 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
-            print(f'{z.numel()}, {z.unique().numel()}')
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat}')
 
