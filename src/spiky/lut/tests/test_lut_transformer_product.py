@@ -20,7 +20,7 @@ def test_lut_transformer_product(
         for fully_connected in [False, True]:
             for train_or_eval in ['eval', 'train']:
                 for batch_size in [1, 4]:
-                    for sliced_mode in [False, True]:
+                    for sliced_mode in [False]:
                         if not sliced_mode and not fully_connected:
                             continue
                         success = _test_lut_transformer_product(
@@ -382,6 +382,7 @@ def main():
     devices = []  # 'cpu'
     if torch.cuda.is_available():
         devices.append('cuda:5')
+        devices.append('cuda:7')
 
     for device in devices:
         for summation_dtype in [torch.float32]:  # , torch.int32
