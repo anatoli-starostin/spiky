@@ -1737,7 +1737,7 @@ class MultiLUT(nn.Module):
             n_luts = len(multi_lut.luts)
 
             # Extract saved input
-            x, pos_emb = ctx.saved_tensors[0]
+            x, pos_emb = ctx.saved_tensors
             results = ctx.results
 
             # Create shared x_grad tensor
