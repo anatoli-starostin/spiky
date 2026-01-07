@@ -67,6 +67,8 @@ calculate_product_lookup_index(
             EXTERNAL_REAL_DT val1 = sources[component_1][slice_idx_1];
             EXTERNAL_REAL_DT val2 = sources[component_2][slice_idx_2];
 
+            printf("[calculate_product_lookup_index] slice_idx_1: %d, slice_idx_2: %d, component_1: %d, component_2: %d, val1: %f, val2: %f\n", slice_idx_1, slice_idx_2, component_1, component_2, val1, val2);
+
             lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
         }
     } else {
@@ -92,6 +94,8 @@ calculate_product_lookup_index(
             lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
         }
     }
+
+    printf("[calculate_product_lookup_index] lookup_index: %d\n", lookup_index);
 }
 
 calculate_product_lookup_index_backprop(
@@ -1073,13 +1077,19 @@ check_detectors_eval_logic(
 
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
+            printf("[check_detectors_eval_logic] anchor_idx: %d, anchor1_id: %d, anchor2_id: %d, val1: %f, val2: %f\n", anchor_idx, ap.anchor1_id, ap.anchor2_id, r_input[ap.anchor1_id], r_input[ap.anchor2_id]);
+
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
             if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
+                printf("[check_detectors_eval_logic] setting bit %d\n", anchor_idx);
                 lookup_index |= (1 << anchor_idx);
             }
         }
+        printf("[check_detectors_eval_logic] lookup_index: %d\n", lookup_index);
         *w_lookup_indices = lookup_index;
     }
+
+    printf("[check_detectors_eval_logic] returning lookup_index: %d\n", lookup_index);
 }
 
 check_detectors_logic(
