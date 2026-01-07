@@ -421,7 +421,6 @@ def _test_lut_transformer_product(
                 return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-        print(f'{x.numel()}, {x.unique()}')
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
