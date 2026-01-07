@@ -14,13 +14,13 @@ from spiky.util.text_snippet_sampler import TextSnippetSampler
 def test_lut_transformer_product(
     device, summation_dtype, seed=None
 ):
-    for g_type in [GradientType.Dense]:  # , GradientType.Sparse, GradientType.Internal
+    for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
-        for fully_connected in [True]:  # , False]:
-            for train_or_eval in ['eval']:  # , 'train']:
-                for batch_size in [4]:   # 1
-                    for sliced_mode in [True]:  # False,
+        for fully_connected in [False, True]:
+            for train_or_eval in ['eval', 'train']:
+                for batch_size in [1, 4]:
+                    for sliced_mode in [False, True]:
                         if not sliced_mode and not fully_connected:
                             continue
                         success = _test_lut_transformer_product(
@@ -366,7 +366,7 @@ def _test_lut_transformer_product(
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
-        # torch.cuda.synchronize(device=device)
+        torch.cuda.synchronize(device=device)
 
         if not compare_outputs(gt_y, y, train_or_eval):
             print(f"❌ something is wrong after forward pass №{i + 2}")

@@ -244,7 +244,7 @@ class LUTTransformer(nn.Module):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
             aat = layer['attention_lut'](z)
-            print(f'test: aat {aat}')
+            # print(f'test: aat {aat}')
 
             aat = layer['attention_dropout'](aat)
             if self.layer_norm_d is not None:
