@@ -259,7 +259,7 @@ def _test_lut_transformer_product(
         summation_dtype=summation_dtype,
         _int_rescaler=10.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
-        device=torch.device('cpu'), seed=seed,
+        device=device, seed=seed,
         _forward_group_size=24,
         _backward_group_size=4
     )
@@ -294,6 +294,8 @@ def _test_lut_transformer_product(
         print(f"❌ something is wrong after synchronization №1")
         return False
 
+    lut_transformer = lut_transformer.to(device=torch.device('cpu'))
+
     # Set mode
     if train_or_eval == 'train':
         lut_transformer.train()
@@ -301,7 +303,7 @@ def _test_lut_transformer_product(
     else:
         lut_transformer.eval()
         gt_lut_transformer.eval()
-    
+
     x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
     y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
     gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
@@ -323,8 +325,6 @@ def _test_lut_transformer_product(
     else:
         opt = None
         gt_opt = None
-
-    lut_transformer = lut_transformer.to(device=torch.device('cpu'))
 
     for i in tqdm(range(32)):
         # PyTorch model backward pass
