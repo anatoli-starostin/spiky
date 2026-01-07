@@ -40,11 +40,10 @@ class LUTTransformer(nn.Module):
             )
         else:
             # right now this branch is needed only for tests
-            assert num_heads == 1
             return Conv2DLUTLayer(
                 input_shape=self.embedding_dim,
                 n_anchors_per_detector=self.n_anchors_per_detector_attention,
-                detectors_shape=(1, self.n_detectors),
+                detectors_shape=(1, self.n_detectors * num_heads),
                 output_kernel_shape=self.embedding_dim,
                 sequence_length=self.context_size,
                 concatenation_product=self.concatenation_product,
