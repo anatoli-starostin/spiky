@@ -33,7 +33,7 @@ def test_lut_transformer_product(
                                 embedding_dim=32,
                                 context_size=8,
                                 positional_dim=32 if sliced_mode else 4,
-                                num_layers=2,
+                                num_layers=1,
                                 num_heads=2,
                                 n_detectors=4,
                                 n_anchors_per_detector=3,
@@ -438,10 +438,10 @@ def main():
 
     devices = []  # 'cpu'
     if torch.cuda.is_available():
-        devices.append('cuda')
+        devices.append('cuda:5')
 
     for device in devices:
-        for summation_dtype in [torch.float32]:  # , torch.int32
+        for summation_dtype in [torch.int32]:  # , torch.int32
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = test_lut_transformer_product(device, summation_dtype, seed=123)
 

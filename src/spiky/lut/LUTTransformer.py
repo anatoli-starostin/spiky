@@ -262,7 +262,7 @@ class LUTTransformer(nn.Module):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
             aat = layer['attention_lut'](z)
-            print(f'test: aat {aat}')
+            # print(f'test: aat {aat}')
 
             aat = layer['attention_dropout'](aat)
             if self.layer_norm_d is not None:
@@ -281,7 +281,7 @@ class LUTTransformer(nn.Module):
             if not self.no_ffn:
                 # FFN with residual connection and dropout
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
-                print(f'test: ffn_result {ffn_result}')
+                # print(f'test: ffn_result {ffn_result}')
                 ffn_result = layer['ffn_dropout'](ffn_result)
 
                 if self.layer_norm_d is not None:
