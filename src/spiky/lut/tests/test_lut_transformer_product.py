@@ -259,7 +259,7 @@ def _test_lut_transformer_product(
         summation_dtype=summation_dtype,
         _int_rescaler=10.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
-        device=device, seed=seed,
+        device=torch.device('cpu'), seed=seed,
         _forward_group_size=24,
         _backward_group_size=4
     )
@@ -303,7 +303,7 @@ def _test_lut_transformer_product(
         gt_lut_transformer.eval()
     
     x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-    y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+    y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
     gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
 
     if not compare_outputs(gt_y, y, train_or_eval):
