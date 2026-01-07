@@ -458,10 +458,12 @@ class GTLUTProductTransformer(nn.Module):
             attention_output = layer['attention_lut'](z)
             # print(f'gt: z after attention {attention_output}')
             z = z + attention_output
+            torch.cuda.synchronize(z.device)
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             # print(f'gt: ffn_output {ffn_output}')
             z = z + ffn_output
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
+        torch.cuda.synchronize(z.device)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits
