@@ -296,10 +296,7 @@ class LUTTransformer(nn.Module):
         Returns:
             self
         """
-        # Call super().to() to move all standard PyTorch modules (Embedding, Dropout, BatchNorm, LayerNorm)
-        super().to(*args, **kwargs)
-        
-        # Extract device from args/kwargs
+        # Extract device from args/kwargs first to normalize it
         device = kwargs.get("device", None)
         if device is None and len(args) > 0:
             # Check if first arg is a device (not dtype)
@@ -314,7 +311,8 @@ class LUTTransformer(nn.Module):
                     # Not a valid device string, likely a dtype - keep device as None
                     pass
         
-        # Normalize and update device if provided
+        # Normalize device if provided
+        normalized_device = None
         if device is not None:
             dev = device if isinstance(device, torch.device) else torch.device(device)
             
@@ -323,10 +321,33 @@ class LUTTransformer(nn.Module):
                 device_index = torch.cuda.current_device()
                 dev = torch.device(f'cuda:{device_index}')
             
+            normalized_device = dev
             self.device = dev
             
             # Move shared context to the device
             self.lut_shared_context.to_device(self.device)
+        
+        # Call super().to() to move all standard PyTorch modules (Embedding, Dropout, BatchNorm, LayerNorm)
+        super().to(*args, **kwargs)
+        
+        # Explicitly call to() on all LUT layers to ensure their custom device logic runs
+        # This is necessary because LUT layers have custom to() methods that update
+        # their internal state (self.device, _lut_dm, etc.)
+        # Use normalized device if available, otherwise pass through args/kwargs
+        if normalized_device is not None:
+            # Pass normalized device to LUT layers
+            for layer in self.layers:
+                layer['attention_lut'].to(device=normalized_device)
+                if not self.no_ffn:
+                    layer['ffn'].to(device=normalized_device)
+            self.unembedder.to(device=normalized_device)
+        else:
+            # No device change, but might be dtype change - pass through args/kwargs
+            for layer in self.layers:
+                layer['attention_lut'].to(*args, **kwargs)
+                if not self.no_ffn:
+                    layer['ffn'].to(*args, **kwargs)
+            self.unembedder.to(*args, **kwargs)
         
         return self
 
