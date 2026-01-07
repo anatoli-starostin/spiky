@@ -387,7 +387,9 @@ def main():
     for device in devices:
         for summation_dtype in [torch.float32]:  # , torch.int32
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
-            success = test_lut_transformer_product(device, summation_dtype, seed=123)
+            success = True
+            for s in [42, 123, 56, 89]:
+                success = success and test_lut_transformer_product(device, summation_dtype, seed=s)
 
             if success:
                 print(f"\n<{device}, {summation_dtype}> test completed successfully!")
