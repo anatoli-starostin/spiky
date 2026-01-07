@@ -194,7 +194,6 @@ class GTLUTProduct(nn.Module):
                 stacked_triples = stacked_triples.view(batch_size * n_triples, 1, -1)
 
                 inp = stacked_triples.contiguous()
-                torch.cuda.synchronize(inp.device)
 
                 # Process with inner LUTLayer
                 lut_output = self.lut_layer(inp)  # [batch_size * n_triples, 1, n_outputs]
@@ -455,16 +454,13 @@ class GTLUTProductTransformer(nn.Module):
 
         for layer in self.layers:
             # print(f'gt: z {z}')
-            torch.cuda.synchronize(z.device)
             attention_output = layer['attention_lut'](z)
             # print(f'gt: z after attention {attention_output}')
             z = z + attention_output
-            torch.cuda.synchronize(z.device)
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             # print(f'gt: ffn_output {ffn_output}')
             z = z + ffn_output
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
-        torch.cuda.synchronize(z.device)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits

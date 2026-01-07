@@ -1169,7 +1169,6 @@ class LUTLayerBasic(nn.Module):
         else:
             device_index = -1
 
-        print(f'setting device to {dev}')
         self.device = dev
         self._input_neuron_ids = self._input_neuron_ids.to(device=self.device)
         self._detector_neuron_ids = self._detector_neuron_ids.to(device=self.device)
@@ -1473,6 +1472,21 @@ class Conv2DLUTLayer(LUTLayerBasic):
 
     def __repr__(self):
         return f'Conv2DLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, detectors_shape={self.detectors_shape()}, n_anchors_per_detector={self.n_anchors_per_detector()})'
+
+    def to(self, *args, **kwargs):
+        """
+        Move the module to a different device or dtype.
+        
+        Args:
+            *args: Device or dtype (e.g., 'cuda', torch.device('cuda:0'), torch.float32)
+            **kwargs: Device or dtype (e.g., device='cuda', dtype=torch.float32)
+        
+        Returns:
+            self
+        """
+        # Conv2DLUTLayer doesn't add any device-specific attributes beyond what
+        # LUTLayerBasic handles, so we can just delegate to the parent class
+        return super().to(*args, **kwargs)
 
     def export_weights(self, inverse_order=True):
         n_synapses = self.n_synapses()
