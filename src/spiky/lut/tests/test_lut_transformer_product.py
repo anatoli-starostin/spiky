@@ -18,7 +18,7 @@ def test_lut_transformer_product(
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
         for fully_connected in [True]:  # , False]:
-            for train_or_eval in ['train']:  # , 'eval']:
+            for train_or_eval in ['eval']:  # , 'train']:
                 for batch_size in [4]:   # 1
                     for sliced_mode in [True]:  # False,
                         if not sliced_mode and not fully_connected:
@@ -321,7 +321,6 @@ def _test_lut_transformer_product(
         opt = SGD([p for p in lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
         gt_opt = SGD([p for p in gt_lut_transformer.parameters() if p.requires_grad], lr=learning_rate)
     else:
-        learning_rate = None
         opt = None
         gt_opt = None
 
@@ -366,7 +365,9 @@ def _test_lut_transformer_product(
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        torch.cuda.synchronize()
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        torch.cuda.synchronize()
 
         if not compare_outputs(gt_y, y, train_or_eval):
             print(f"❌ something is wrong after forward pass №{i + 2}")
