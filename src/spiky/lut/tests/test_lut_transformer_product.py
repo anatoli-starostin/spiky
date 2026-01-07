@@ -365,6 +365,7 @@ def _test_lut_transformer_product(
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        torch.cuda.synchronize(device=device)
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
         torch.cuda.synchronize(device=device)
 
