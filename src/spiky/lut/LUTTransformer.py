@@ -231,7 +231,7 @@ class LUTTransformer(nn.Module):
         batch_size = tokens.shape[0]
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
-
+        print(z.device)
         if isinstance(self.embedding_dim, int):
             non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
             seq_shape = (batch_size, self.context_size, self.embedding_dim)
