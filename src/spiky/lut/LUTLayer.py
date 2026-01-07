@@ -1169,6 +1169,7 @@ class LUTLayerBasic(nn.Module):
         else:
             device_index = -1
 
+        print(f'setting device to {dev}')
         self.device = dev
         self._input_neuron_ids = self._input_neuron_ids.to(device=self.device)
         self._detector_neuron_ids = self._detector_neuron_ids.to(device=self.device)
