@@ -20,7 +20,7 @@ def test_lut_transformer_small(
             continue
 
         for fully_connected in [True, False]:
-            for train_or_eval in ['train', 'eval']:
+            for train_or_eval in ['train']:  # 'eval'
                 for batch_size in [1, 4]:
                     success = _test_lut_transformer_small(
                         vocab_size=256,

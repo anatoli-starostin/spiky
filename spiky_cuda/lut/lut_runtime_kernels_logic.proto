@@ -92,8 +92,6 @@ calculate_product_lookup_index(
             lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
         }
     }
-
-    printf("lut_product: lookup_index %d\n", lookup_index);
 }
 
 calculate_product_lookup_index_backprop(
@@ -1080,8 +1078,6 @@ check_detectors_eval_logic(
                 lookup_index |= (1 << anchor_idx);
             }
         }
-
-        printf("lut: lookup_index %d\n", lookup_index);
         *w_lookup_indices = lookup_index;
     }
 }
