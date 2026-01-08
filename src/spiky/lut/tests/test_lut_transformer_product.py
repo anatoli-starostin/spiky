@@ -14,12 +14,12 @@ from spiky.util.text_snippet_sampler import TextSnippetSampler
 def test_lut_transformer_product(
     device, summation_dtype, seed=None
 ):
-    for g_type in [GradientType.Sparse]:
+    for g_type in [GradientType.Dense, GradientType.Sparse, GradientType.Internal]:
         if g_type == GradientType.Internal and summation_dtype == torch.int32:
             continue
-        for fully_connected in [True]:   # False
+        for fully_connected in [True, False]:
             for train_or_eval in ['eval']:  # , 'train'
-                for batch_size in [4]:  # 1
+                for batch_size in [1, 4]:
                     for sliced_mode in [True]:
                         if not sliced_mode and not fully_connected:
                             continue
