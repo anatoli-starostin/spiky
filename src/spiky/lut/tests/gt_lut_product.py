@@ -456,17 +456,22 @@ class GTLUTProductTransformer(nn.Module):
         non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
         seq_shape = (batch_size, self.context_size, self.embedding_dim)
         if self._debug_last_forward is not None:
+            torch.cuda.synchronize(device=z.device)
             self._debug_last_forward.append(z.detach().clone())
 
         for layer in self.layers:
             # print(f'gt: z {z}')
+            torch.cuda.synchronize(device=z.device)
             attention_output = layer['attention_lut'](z)
             # print(f'gt: z after attention {attention_output.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
+                torch.cuda.synchronize(device=z.device)
                 self._debug_last_forward.append(attention_output.detach().clone())
             z = z + attention_output
+            torch.cuda.synchronize(device=z.device)
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             if self._debug_last_forward is not None:
+                torch.cuda.synchronize(device=z.device)
                 self._debug_last_forward.append(ffn_output.detach().clone())
             # print(f'gt: ffn_output {ffn_output}')
             z = z + ffn_output
