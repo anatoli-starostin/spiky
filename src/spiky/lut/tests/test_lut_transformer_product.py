@@ -394,7 +394,7 @@ def _test_lut_transformer_product(
         if not compare_outputs(gt_y, y, train_or_eval):
             diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
             print(f"❌ something is wrong after forward pass №{i + 2}")
-            #return False
+            return False
 
     return True
 
@@ -407,13 +407,13 @@ def main():
     import numpy as np
     np.set_printoptions(threshold=np.inf)
 
-    devices = []  # 'cpu'
+    devices = ['cpu']
     if torch.cuda.is_available():
         devices.append('cuda:5')
         devices.append('cuda:7')
 
     for device in devices:
-        for summation_dtype in [torch.float32]:
+        for summation_dtype in [torch.float32, torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = True
             for s in [42, 123, 5465, 3247289, 23748923]:
