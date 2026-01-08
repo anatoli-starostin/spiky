@@ -27,7 +27,7 @@ def test_lut_transformer_product(
                             vocab_size=256,
                             embedding_dim=16,
                             context_size=8,
-                            positional_dim=8 if sliced_mode else 4,
+                            positional_dim=16 if sliced_mode else 4,
                             num_layers=1,
                             num_heads=2,
                             n_detectors=4,
