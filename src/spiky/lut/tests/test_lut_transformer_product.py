@@ -205,8 +205,8 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
         if not torch.allclose(pytorch_output[i], gt_output[i], atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(pytorch_output[i] - gt_output[i]))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
-            print(f"gt: {gt_output[i].cpu().detach().numpy()}")
-            print(f"diff: {(pytorch_output[i] - gt_output[i]).cpu().detach().numpy()}")
+            # print(f"gt: {gt_output[i].cpu().detach().numpy()}")
+            # print(f"diff: {(pytorch_output[i] - gt_output[i]).cpu().detach().numpy()}")
             return False
     return True
 
@@ -217,7 +217,7 @@ def diff_outputs(gt_tensor_list, test_tensor_list):
         for i in range(batch_size):
             # Compare with PyTorch output: both are (context_size, vocab_size)
             max_diff = torch.max(torch.abs(test_t[i] - gt_t[i]))
-            print(f"tensor pair {ti}, batch item {i}, max diff: {max_diff:.6f}")
+            print(f"tensor pair {ti}, batch item {i}, max diff: {max_diff:.20f}")
 
 
 def _test_lut_transformer_product(
