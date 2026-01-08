@@ -25,7 +25,7 @@ def test_lut_transformer_product(
                             continue
                         success = _test_lut_transformer_product(
                             vocab_size=256,
-                            embedding_dim=8,
+                            embedding_dim=16,
                             context_size=8,
                             positional_dim=8 if sliced_mode else 4,
                             num_layers=1,
