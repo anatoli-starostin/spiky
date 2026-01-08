@@ -28,7 +28,7 @@ def test_lut_transformer_product(
                             embedding_dim=32,
                             context_size=8,
                             positional_dim=32 if sliced_mode else 4,
-                            num_layers=1,
+                            num_layers=2,
                             num_heads=2,
                             n_detectors=4,
                             n_anchors_per_detector=3,
