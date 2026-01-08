@@ -236,7 +236,6 @@ class LUTTransformer(nn.Module):
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
         if self._debug_last_forward is not None:
-            torch.cuda.synchronize(device=z.device)
             self._debug_last_forward.append(z.detach().clone())
         if isinstance(self.embedding_dim, int):
             non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
@@ -249,11 +248,9 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
-            torch.cuda.synchronize(device=z.device)
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
-                torch.cuda.synchronize(device=aat.device)
                 self._debug_last_forward.append(aat.detach().clone())
 
             aat = layer['attention_dropout'](aat)
@@ -272,10 +269,8 @@ class LUTTransformer(nn.Module):
 
             if not self.no_ffn:
                 # FFN with residual connection and dropout
-                torch.cuda.synchronize(device=z.device)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 if self._debug_last_forward is not None:
-                    torch.cuda.synchronize(device=ffn_result.device)
                     self._debug_last_forward.append(ffn_result.detach().clone())
                 # print(f'test: ffn_result {ffn_result}')
                 ffn_result = layer['ffn_dropout'](ffn_result)

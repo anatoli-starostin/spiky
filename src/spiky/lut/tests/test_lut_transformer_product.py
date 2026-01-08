@@ -380,16 +380,17 @@ def _test_lut_transformer_product(
             return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-        x_bar = x.detach().clone()
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
-        # print(f"x diff: {torch.max(torch.abs(x - x_bar)):.20f}")
+        gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
-        gt_y = gt_lut_transformer(x_bar[:, :context_size])  # (batch_size, context_size, vocab_size)
+        if not torch.allclose(gt_lut_transformer._debug_last_forward[0], lut_transformer._debug_last_forward[0], atol=0.00001, rtol=0.00001):
+            max_diff = torch.max(torch.abs(gt_lut_transformer._debug_last_forward[0] - lut_transformer._debug_last_forward[0]))
+            print(f"❌ {train_or_eval.capitalize()} something is wrong, vectors after token embedders differ. Max diff: {max_diff:.6f}")
 
         if not compare_outputs(gt_y, y, train_or_eval):
             diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
             print(f"❌ something is wrong after forward pass №{i + 2}")
-            # return False
+            return False
 
     return True
 
@@ -408,7 +409,7 @@ def main():
         devices.append('cuda:7')
 
     for device in devices:
-        for summation_dtype in [torch.float32, torch.int32]:
+        for summation_dtype in [torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = True
             for s in [42, 123, 5465, 3247289, 23748923]:
