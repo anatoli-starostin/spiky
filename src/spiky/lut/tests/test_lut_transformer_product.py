@@ -292,7 +292,7 @@ def _test_lut_transformer_product(
             initial_weight=-1.0, initial_noise_level=2.0
         ),
         summation_dtype=torch.float32,
-        device=torch.device('cpu'), seed=seed,
+        device=device, seed=seed,
         sliced_mode=sliced_mode
     )
     gt_lut_transformer._debug_last_forward = []
@@ -307,8 +307,6 @@ def _test_lut_transformer_product(
         print(f"❌ something is wrong after synchronization №1")
         return False
 
-    lut_transformer = lut_transformer.to(device=torch.device('cpu'))
-
     # Set mode
     if train_or_eval == 'train':
         lut_transformer.train()
@@ -318,8 +316,8 @@ def _test_lut_transformer_product(
         gt_lut_transformer.eval()
 
     x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-    y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
-    gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
+    y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+    gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
     if not compare_outputs(gt_y, y, train_or_eval):
         diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
@@ -380,8 +378,8 @@ def _test_lut_transformer_product(
             return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-        y = lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
-        gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
+        y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
+        gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
         if not compare_outputs(gt_y, y, train_or_eval):
             diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
@@ -405,7 +403,7 @@ def main():
         devices.append('cuda:7')
 
     for device in devices:
-        for summation_dtype in [torch.float32]:  # , torch.int32
+        for summation_dtype in [torch.float32, torch.int32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = True
             for s in [42, 123, 56, 89, 32, 5465, 3247289, 23748923]:
