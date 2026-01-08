@@ -374,6 +374,7 @@ def _test_lut_transformer_product(
         gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
 
         if not compare_outputs(gt_y, y, train_or_eval):
+            print(f"pos_emb: {gt_lut_transformer.layers[0]['attention_lut'].positional_embeddings}")
             print(f"❌ something is wrong after forward pass №{i + 2}")
             return False
 
