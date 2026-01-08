@@ -260,7 +260,7 @@ def _test_lut_transformer_product(
         _int_rescaler=10.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
         device=device, seed=seed,
-        _forward_group_size=24,
+        _forward_group_size=32,
         _backward_group_size=4
     )
 
