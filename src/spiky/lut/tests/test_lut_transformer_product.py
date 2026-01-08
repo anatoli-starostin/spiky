@@ -207,6 +207,7 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
             import numpy as np
             np.set_printoptions(threshold=np.inf)
+            print(f"gt: {gt_output[i].cpu().detach().numpy()}")
             print(f"diff: {(pytorch_output[i] - gt_output[i]).cpu().detach().numpy()}")
             return False
     return True
