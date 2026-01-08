@@ -413,7 +413,7 @@ def main():
         devices.append('cuda:7')
 
     for device in devices:
-        for summation_dtype in [torch.int32]:
+        for summation_dtype in [torch.float32]:
             print(f"\nTesting on {device}, summation_dtype {summation_dtype}...")
             success = True
             for s in [42, 123, 5465, 3247289, 23748923]:
