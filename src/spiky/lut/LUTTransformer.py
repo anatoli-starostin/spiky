@@ -248,6 +248,7 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
+            torch.cuda.synchronize(device=z.device)
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
@@ -269,6 +270,7 @@ class LUTTransformer(nn.Module):
 
             if not self.no_ffn:
                 # FFN with residual connection and dropout
+                torch.cuda.synchronize(device=z.device)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 if self._debug_last_forward is not None:
                     self._debug_last_forward.append(ffn_result.detach().clone())

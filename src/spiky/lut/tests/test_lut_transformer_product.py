@@ -380,7 +380,7 @@ def _test_lut_transformer_product(
             return False
 
         x = snippet_sampler.sample_training_batch(batch_size)  # (batch_size, context_size + 1)
-        x_bar = x.detach().clone()
+        # x_bar = x.detach().clone()
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
         # print(f"x diff: {torch.max(torch.abs(x - x_bar)):.20f}")
 
