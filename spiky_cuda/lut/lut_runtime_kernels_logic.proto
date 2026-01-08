@@ -2112,58 +2112,58 @@ fill_outputs_product_fc_logic(
     shared_lookup_indices[threadIdx.x] = lookup_index;
     __syncthreads();
 
-    if(lookup_index >= 0) {
-        w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
-        uint32_t outputs_shift = output_block_index * n_outputs_in_block;
-        uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
-        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs;
+//    if(lookup_index >= 0) {
+//        w_output += batch_index * sequence_length * n_outputs + j * n_outputs;
+//        uint32_t outputs_shift = output_block_index * n_outputs_in_block;
+//        uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + lookup_index;
+//        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs;
+//
+//        for(uint32_t output_idx = 0; output_idx < n_outputs_in_block; output_idx++) {
+//            if(output_idx + outputs_shift == n_outputs) {
+//                break;
+//            }
+//            double weight = static_cast<double>(r_weights[weights_offset + output_idx + outputs_shift]);
+//            #ifdef INTEGERS_INSTEAD_OF_FLOATS
+//            SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
+//            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + output_idx + outputs_shift), payload);
+//            #else
+//            atomicAdd(w_output + output_idx + outputs_shift, static_cast<EXTERNAL_REAL_DT>(weight));
+//            #endif
+//        }
+//    }
 
-        for(uint32_t output_idx = 0; output_idx < n_outputs_in_block; output_idx++) {
-            if(output_idx + outputs_shift == n_outputs) {
-                break;
-            }
-            double weight = static_cast<double>(r_weights[weights_offset + output_idx + outputs_shift]);
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(weight * static_cast<double>(DENOMINATOR32) * int_rescaler);
-            atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output + output_idx + outputs_shift), payload);
-            #else
-            atomicAdd(w_output + output_idx + outputs_shift, static_cast<EXTERNAL_REAL_DT>(weight));
-            #endif
-        }
+    j = threadIdx.x / n_outputs_in_block;
+    if(j >= TILE) {
+        return;
     }
 
-//    j = threadIdx.x / n_outputs_in_block;
-//    if(j >= TILE) {
-//        return;
-//    }
-//
-//    uint32_t output_idx = threadIdx.x % n_outputs_in_block;
-//    output_idx += output_block_index * n_outputs_in_block;
-//
-//    if(output_idx >= n_outputs) {
-//        return;
-//    }
-//
-//    double sum_output = 0.0;
-//    for(uint32_t k = 0; k < TILE; k++) {
-//        int32_t li = shared_lookup_indices[j * TILE + k];
-//        if(li < 0) {
-//            continue;
-//        }
-//        uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
-//        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_idx;
-//        sum_output += static_cast<double>(r_weights[weights_offset]);
-//    }
-//
-//    j += (tile_id % tile_grid_w) * TILE;
-//    w_output += batch_index * sequence_length * n_outputs + j * n_outputs + output_idx;
-//
-//    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-//    SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(sum_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
-//    atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output), payload);
-//    #else
-//    atomicAdd(w_output, static_cast<EXTERNAL_REAL_DT>(sum_output));
-//    #endif
+    uint32_t output_idx = threadIdx.x % n_outputs_in_block;
+    output_idx += output_block_index * n_outputs_in_block;
+
+    if(output_idx >= n_outputs) {
+        return;
+    }
+
+    double sum_output = 0.0;
+    for(uint32_t k = 0; k < TILE; k++) {
+        int32_t li = shared_lookup_indices[j * TILE + k];
+        if(li < 0) {
+            continue;
+        }
+        uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
+        uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_idx;
+        sum_output += static_cast<double>(r_weights[weights_offset]);
+    }
+
+    j += (tile_id % tile_grid_w) * TILE;
+    w_output += batch_index * sequence_length * n_outputs + j * n_outputs + output_idx;
+
+    #ifdef INTEGERS_INSTEAD_OF_FLOATS
+    SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(sum_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
+    atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output), payload);
+    #else
+    atomicAdd(w_output, static_cast<EXTERNAL_REAL_DT>(sum_output));
+    #endif
     #endif
 }
 
