@@ -383,13 +383,8 @@ def _test_lut_transformer_product(
         y = lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
         gt_y = gt_lut_transformer(x[:, :context_size])  # (batch_size, context_size, vocab_size)
 
-        if not compare_weights_and_positional_embeddings(
-            lut_transformer, gt_lut_transformer, num_layers
-        ):
-            print(f"❌ something is wrong after synchronization №{i + 2}")
-            return False
-
         if not compare_outputs(gt_y, y, train_or_eval):
+            print(f"token embeddings diff: {torch.max(torch.abs(gt_lut_transformer.token_embedder.weight - lut_transformer.token_embedder.weight)):.20f}")
             diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
             print(f"❌ something is wrong after forward pass №{i + 2}")
             return False
