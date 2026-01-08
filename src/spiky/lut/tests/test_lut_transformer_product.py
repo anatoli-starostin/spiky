@@ -205,6 +205,7 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
         if not torch.allclose(pytorch_output[i], gt_output[i], atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(pytorch_output[i] - gt_output[i]))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
+            print(f"diff: {pytorch_output[i] - gt_output[i]}")
             return False
     return True
 
@@ -260,7 +261,7 @@ def _test_lut_transformer_product(
         _int_rescaler=10.0,
         weights_gradient_policy=GradientPolicy(gradient_type),
         device=device, seed=seed,
-        _forward_group_size=32,
+        _forward_group_size=24,
         _backward_group_size=4
     )
 
