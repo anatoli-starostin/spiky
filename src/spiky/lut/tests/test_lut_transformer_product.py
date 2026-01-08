@@ -385,6 +385,10 @@ def _test_lut_transformer_product(
 
         if not torch.allclose(gt_lut_transformer._debug_last_forward[0], lut_transformer._debug_last_forward[0], atol=0.00001, rtol=0.00001):
             max_diff = torch.max(torch.abs(gt_lut_transformer._debug_last_forward[0] - lut_transformer._debug_last_forward[0]))
+            print(f"❌ {train_or_eval.capitalize()} something is wrong, tokens differ. Max diff: {max_diff:.6f}")
+
+        if not torch.allclose(gt_lut_transformer._debug_last_forward[1], lut_transformer._debug_last_forward[1], atol=0.00001, rtol=0.00001):
+            max_diff = torch.max(torch.abs(gt_lut_transformer._debug_last_forward[1] - lut_transformer._debug_last_forward[1]))
             print(f"❌ {train_or_eval.capitalize()} something is wrong, vectors after token embedders differ. Max diff: {max_diff:.6f}")
 
         if not compare_outputs(gt_y, y, train_or_eval):

@@ -230,7 +230,7 @@ class LUTTransformer(nn.Module):
             logits: (batch_size, context_size, vocab_size) tensor of logits
         """
         if self._debug_last_forward is not None:
-            self._debug_last_forward = []
+            self._debug_last_forward = [tokens.to(dtype=torch.float32)]
 
         batch_size = tokens.shape[0]
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
