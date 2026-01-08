@@ -196,11 +196,17 @@ class LUTLayerBasic(nn.Module):
         else:
             return 1 << n_anchors_per_detector
 
-    def _initialize_positional_embeddings(self):
+    def _initialize_positional_embeddings(self, random_seed=None):
         # Handle positional embeddings
         if self._sequence_length > 1:
             assert self._positional_dim is not None, "positional_dim must be provided when sequence_length > 1"
             if self._positional_dim > 0:
+                if random_seed is not None:
+                    g = torch.Generator(device=self.device)
+                    g.manual_seed(random_seed)
+                else:
+                    g = None
+                
                 if self._use_sinusoidal_pe:
                     # position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
                     # inv_freq = torch.exp(
@@ -217,7 +223,7 @@ class LUTLayerBasic(nn.Module):
                         device=self.device
                     )
                     # Initialize with random floats in [-1, 1]
-                    positional_embeddings_data.uniform_(-1.0, 1.0)
+                    positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
                     self._positional_embeddings = nn.Parameter(positional_embeddings_data)
                 else:
                     positional_embeddings_data = torch.empty(
@@ -226,7 +232,7 @@ class LUTLayerBasic(nn.Module):
                         device=self.device
                     )
                     # Initialize with random floats in [-1, 1]
-                    positional_embeddings_data.uniform_(-1.0, 1.0)
+                    positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
                     self._positional_embeddings = nn.Parameter(positional_embeddings_data)
 
                     # if self._unified_positional_embeddings:
@@ -263,7 +269,8 @@ class LUTLayerBasic(nn.Module):
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
         _forward_group_size: int = 32,
-        _backward_group_size: int = 32
+        _backward_group_size: int = 32,
+        random_seed=None
     ):
         super().__init__()
 
@@ -316,7 +323,7 @@ class LUTLayerBasic(nn.Module):
 
         self._positional_dim = positional_dim
         self._use_sinusoidal_pe = use_sinusoidal_pe
-        self._initialize_positional_embeddings()
+        self._initialize_positional_embeddings(random_seed=random_seed)
 
         if self._is_fully_connected:
             assert len(synapse_metas) == 1, "fully connected mode is not compatible with multiple synapse metas"
@@ -1413,6 +1420,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size,
+            random_seed=random_seed
         )
 
         if device is not None:
