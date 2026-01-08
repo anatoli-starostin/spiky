@@ -1004,9 +1004,9 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             
             __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
 
-            GRID_CALL_ON_STREAM_SHARED_MEM(
+            GRID_CALL_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
-                shared_mem_size, cuda_streams[0],
+                shared_mem_size,
                 sequence_length,
                 this->positional_dim,
                 r_input_1,
