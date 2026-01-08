@@ -205,7 +205,7 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
         if not torch.allclose(pytorch_output[i], gt_output[i], atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(pytorch_output[i] - gt_output[i]))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
-            print(f"diff: {pytorch_output[i] - gt_output[i]}")
+            print(f"diff: {(pytorch_output[i] - gt_output[i]).numpy()}")
             return False
     return True
 
