@@ -205,8 +205,6 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
         if not torch.allclose(pytorch_output[i], gt_output[i], atol=eps, rtol=eps):
             max_diff = torch.max(torch.abs(pytorch_output[i] - gt_output[i]))
             print(f"❌ {train_or_eval.capitalize()} mode: Batch item {i} outputs differ. Max diff: {max_diff:.6f}")
-            import numpy as np
-            np.set_printoptions(threshold=np.inf)
             print(f"gt: {gt_output[i].cpu().detach().numpy()}")
             print(f"diff: {(pytorch_output[i] - gt_output[i]).cpu().detach().numpy()}")
             return False
@@ -385,6 +383,9 @@ def main():
     print("=" * 60)
     print("LUTTransformer PRODUCT TEST")
     print("=" * 60)
+
+    import numpy as np
+    np.set_printoptions(threshold=np.inf)
 
     devices = []  # 'cpu'
     if torch.cuda.is_available():

@@ -455,7 +455,7 @@ class GTLUTProductTransformer(nn.Module):
         for layer in self.layers:
             # print(f'gt: z {z}')
             attention_output = layer['attention_lut'](z)
-            # print(f'gt: z after attention {attention_output}')
+            print(f'gt: z after attention {attention_output.cpu().detach().numpy()}')
             z = z + attention_output
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
             # print(f'gt: ffn_output {ffn_output}')
