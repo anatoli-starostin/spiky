@@ -633,6 +633,7 @@ public:
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
         torch::Tensor &w_lookup_indices,
+        EXTERNAL_REAL_DT cmp_eps,
         std::optional<torch::Tensor> &r_stream_handles,
         std::optional<torch::Tensor> &w_min_anchor_deltas,
         std::optional<torch::Tensor> &w_min_anchor_delta_indices
@@ -706,7 +707,8 @@ public:
             reinterpret_cast<EXTERNAL_REAL_DT *>(w_output.data_ptr()),
             reinterpret_cast<int32_t *>(w_lookup_indices.data_ptr()),
             w_min_anchor_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.value().data_ptr()) : nullptr,
-            w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr
+            w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr,
+            cmp_eps
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -720,6 +722,7 @@ public:
         const torch::Tensor &r_detector_anchors,
         torch::Tensor &w_output,
         torch::Tensor &w_lookup_indices,
+        EXTERNAL_REAL_DT cmp_eps,
         std::optional<torch::Tensor> &r_positional_embeddings,
         std::optional<torch::Tensor> &w_positional_lookup_indices,
         std::optional<torch::Tensor> &w_min_anchor_deltas,
@@ -833,7 +836,8 @@ public:
             w_min_anchor_deltas.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_min_anchor_deltas.value().data_ptr()) : nullptr,
             w_min_anchor_delta_indices.has_value() ? reinterpret_cast<int32_t *>(w_min_anchor_delta_indices.value().data_ptr()) : nullptr,
             (this->positional_dim > 0 && w_positional_min_deltas.has_value()) ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_min_deltas.value().data_ptr()) : nullptr,
-            (this->positional_dim > 0 && w_positional_min_delta_indices.has_value()) ? reinterpret_cast<int32_t *>(w_positional_min_delta_indices.value().data_ptr()) : nullptr
+            (this->positional_dim > 0 && w_positional_min_delta_indices.has_value()) ? reinterpret_cast<int32_t *>(w_positional_min_delta_indices.value().data_ptr()) : nullptr,
+            cmp_eps
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -851,6 +855,7 @@ public:
         uint32_t n_inputs_1,
         uint32_t n_inputs_2,
         bool sliced_mode,
+        EXTERNAL_REAL_DT cmp_eps,
         std::optional<torch::Tensor> &r_positional_embeddings,
         std::optional<torch::Tensor> &r_stream_handles
     ) {
@@ -929,7 +934,8 @@ public:
             n_inputs_1,
             n_inputs_2,
             r_positional_embeddings.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.value().data_ptr()) : nullptr,
-            sliced_mode
+            sliced_mode,
+            cmp_eps
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -950,6 +956,7 @@ public:
         uint32_t n_inputs_1,
         uint32_t n_inputs_2,
         bool sliced_mode,
+        EXTERNAL_REAL_DT cmp_eps,
         std::optional<torch::Tensor> w_weights_gradients,
         std::optional<torch::Tensor> &r_positional_embeddings,
         std::optional<torch::Tensor> &w_positional_embeddings_gradients,
@@ -1012,7 +1019,8 @@ public:
             n_inputs_2,
             r_positional_embeddings.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(r_positional_embeddings.value().data_ptr()) : nullptr,
             w_positional_embeddings_gradients.has_value() ? reinterpret_cast<EXTERNAL_REAL_DT *>(w_positional_embeddings_gradients.value().data_ptr()) : nullptr,
-            sliced_mode
+            sliced_mode,
+            cmp_eps
             #ifndef NO_CUDA
             , cuda_streams_ptr
             #endif
@@ -1541,6 +1549,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
             py::arg("w_lookup_indices"),
+            py::arg("cmp_eps") = 0.0,
             py::arg("r_stream_handles") = py::none(),
             py::arg("w_min_anchor_deltas") = py::none(),
             py::arg("w_min_anchor_delta_indices") = py::none())
@@ -1552,6 +1561,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("r_detector_anchors"),
             py::arg("w_output"),
             py::arg("w_lookup_indices"),
+            py::arg("cmp_eps") = 0.0,
             py::arg("r_positional_embeddings") = py::none(),
             py::arg("w_positional_lookup_indices") = py::none(),
             py::arg("w_min_anchor_deltas") = py::none(),
@@ -1571,6 +1581,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("n_inputs_1"),
             py::arg("n_inputs_2"),
             py::arg("sliced_mode") = false,
+            py::arg("cmp_eps") = 0.0,
             py::arg("r_positional_embeddings") = py::none(),
             py::arg("r_stream_handles") = py::none())
         .def("backward_backprop_product", &LUTM_CLASS_NAME::backward_backprop_product,
@@ -1588,6 +1599,7 @@ void PFX(PB_LUTDataManager)(py::module& m) {
             py::arg("n_inputs_1"),
             py::arg("n_inputs_2"),
             py::arg("sliced_mode") = false,
+            py::arg("cmp_eps") = 0.0,
             py::arg("w_weights_gradients") = py::none(),
             py::arg("r_positional_embeddings") = py::none(),
             py::arg("w_positional_embeddings_gradients") = py::none(),

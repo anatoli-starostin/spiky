@@ -81,7 +81,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
     EXTERNAL_REAL_DT *w_output,
     int32_t *w_lookup_indices,
     EXTERNAL_REAL_DT *w_min_anchor_deltas,
-    int32_t *w_min_anchor_delta_indices
+    int32_t *w_min_anchor_delta_indices,
+    EXTERNAL_REAL_DT cmp_eps
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
@@ -118,6 +119,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
+            cmp_eps,
             w_lookup_indices,
             w_min_anchor_deltas,
             w_min_anchor_delta_indices
@@ -132,6 +134,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
+            cmp_eps,
             w_lookup_indices
         );
         PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
@@ -406,7 +409,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
     EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
     int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
     EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr when positional_dim == 0
-    int32_t *w_positional_min_delta_indices // can be nullptr when positional_dim == 0
+    int32_t *w_positional_min_delta_indices, // can be nullptr when positional_dim == 0
+    EXTERNAL_REAL_DT cmp_eps
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
@@ -448,6 +452,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
             r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
+            cmp_eps,
             w_lookup_indices,
             w_min_anchor_deltas,
             w_min_anchor_delta_indices
@@ -463,6 +468,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
             r_detectors,
             this->n_detectors,
             this->n_anchors_per_detector,
+            cmp_eps,
             w_lookup_indices
         );
         PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_DETECTORS_PROFILER_OP);
@@ -478,6 +484,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
                 r_positional_embeddings,
                 this->n_detectors,
                 this->positional_dim,
+                cmp_eps,
                 w_positional_lookup_indices,
                 w_positional_min_deltas,
                 w_positional_min_delta_indices
@@ -491,6 +498,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
                 r_positional_embeddings,
                 this->n_detectors,
                 this->positional_dim,
+                cmp_eps,
                 w_positional_lookup_indices
             );
             PROF_END(LUT_RUNTIME_FORWARD_SEQ_EVAL_CHECK_POSITIONAL_EMBEDDINGS_PROFILER_OP);
@@ -852,7 +860,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
     uint32_t n_inputs_1,
     uint32_t n_inputs_2,
     EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
-    bool sliced_mode
+    bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
@@ -896,7 +905,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 this->first_synapse_id,
                 this->lut_data,
                 w_output,
-                sliced_mode
+                sliced_mode,
+                cmp_eps
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
                 #else
@@ -934,7 +944,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 this->first_synapse_id,
                 this->lut_data,
                 w_output,
-                sliced_mode
+                sliced_mode,
+                cmp_eps
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
                 #else
@@ -969,7 +980,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 0, // first_synapse_id (not used for FC)
                 nullptr, // lut_data (not used for FC)
                 w_output,
-                sliced_mode
+                sliced_mode,
+                cmp_eps
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
                 #else
@@ -1012,7 +1024,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 n_output_blocks,
                 n_outputs_in_block,
                 w_output,
-                sliced_mode
+                sliced_mode,
+                cmp_eps
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
                 #else
@@ -1054,7 +1067,8 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
     uint32_t n_inputs_2,
     EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
     EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
-    bool sliced_mode
+    bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps
     #ifndef NO_CUDA
     , cudaStream_t *cuda_streams
     #endif
@@ -1109,6 +1123,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
+                cmp_eps,
                 (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
                 w_positional_embeddings_gradients
@@ -1140,6 +1155,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                     this->first_synapse_id,
                     this->lut_data,
                     sliced_mode,
+                    cmp_eps,
                     external_lr,
                     r_weights,
                     this->first_synapse_meta_lr
@@ -1211,6 +1227,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
+                cmp_eps,
                 w_positional_embeddings_gradients
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
@@ -1248,6 +1265,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 this->first_synapse_id,
                 this->lut_data,
                 sliced_mode,
+                cmp_eps,
                 external_lr,
                 this->first_synapse_meta_lr
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -1290,6 +1308,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
+                cmp_eps,
                 (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
                 w_positional_embeddings_gradients
@@ -1321,6 +1340,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                     0, // first_synapse_id (not used for FC)
                     nullptr, // lut_data (not used for FC)
                     sliced_mode,
+                    cmp_eps,
                     external_lr,
                     r_weights,
                     this->first_synapse_meta_lr
@@ -1368,6 +1388,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_1,
                 w_input_gradients_2,
                 sliced_mode,
+                cmp_eps,
                 w_positional_embeddings_gradients
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
@@ -1398,6 +1419,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 n_outputs_in_block,
                 n_lookup_neurons_per_detector,
                 sliced_mode,
+                cmp_eps,
                 external_lr,
                 this->first_synapse_meta_lr
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS

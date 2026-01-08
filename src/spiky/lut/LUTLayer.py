@@ -42,7 +42,7 @@ class SynapseMeta:
 
 
 class LUTSharedContext(object):
-    def __init__(self, do_asserts=False):
+    def __init__(self, do_asserts=False, _cmp_eps=0.0):
         self._weight_gradients_buffers = []
         self._densify_indices_buffers = []
         self._densify_values_buffers = []
@@ -51,6 +51,7 @@ class LUTSharedContext(object):
         self._cuda_stream_handles = []  # List of tensors: each tensor contains 3 int64 handles
         self._device = None
         self._do_asserts = do_asserts
+        self._cmp_eps = _cmp_eps
 
     def _ensure_buffer(self, buffers_list, multi_id, numel, dtype, device):
         if self._device is None:
@@ -727,6 +728,7 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors,
             output,
             lookup_indices,
+            self._shared_context._cmp_eps,
             stream_handles,
             min_anchor_deltas,
             min_anchor_delta_indices
@@ -813,6 +815,7 @@ class LUTLayerBasic(nn.Module):
             self._detector_anchors,
             output,
             lookup_indices,
+            self._shared_context._cmp_eps,
             pos_embeddings,
             positional_lookup_indices,
             min_anchor_deltas,
@@ -883,6 +886,7 @@ class LUTLayerBasic(nn.Module):
             output,
             self._n_inputs, self._n_inputs,
             self._sliced_product_mode,
+            self._shared_context._cmp_eps,
             pos_embeddings,
             stream_handles
         )
@@ -1145,6 +1149,7 @@ class LUTLayerBasic(nn.Module):
             external_lr,
             self._n_inputs, self._n_inputs,
             self._sliced_product_mode,
+            self._shared_context._cmp_eps,
             target_w_grad if self._weights_gradient_policy.type != GradientType.Internal else None,
             pos_embeddings,
             positional_grad,

@@ -90,7 +90,8 @@ public:
         EXTERNAL_REAL_DT *w_output,
         int32_t *w_lookup_indices,
         EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
-        int32_t *w_min_anchor_delta_indices // can be nullptr in eval mode
+        int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
+        EXTERNAL_REAL_DT cmp_eps
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -128,7 +129,8 @@ public:
         EXTERNAL_REAL_DT *w_min_anchor_deltas, // can be nullptr in eval mode
         int32_t *w_min_anchor_delta_indices, // can be nullptr in eval mode
         EXTERNAL_REAL_DT *w_positional_min_deltas, // can be nullptr in eval mode or when positional_dim == 0
-        int32_t *w_positional_min_delta_indices // can be nullptr in eval mode or when positional_dim == 0
+        int32_t *w_positional_min_delta_indices, // can be nullptr in eval mode or when positional_dim == 0
+        EXTERNAL_REAL_DT cmp_eps
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -168,7 +170,8 @@ public:
         uint32_t n_inputs_1,
         uint32_t n_inputs_2,
         EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
-        bool sliced_mode
+        bool sliced_mode,
+        EXTERNAL_REAL_DT cmp_eps
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif
@@ -190,7 +193,8 @@ public:
         uint32_t n_inputs_2,
         EXTERNAL_REAL_DT *r_positional_embeddings, // can be nullptr when positional_dim == 0
         EXTERNAL_REAL_DT *w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
-        bool sliced_mode
+        bool sliced_mode,
+        EXTERNAL_REAL_DT cmp_eps
         #ifndef NO_CUDA
         , cudaStream_t *cuda_streams
         #endif

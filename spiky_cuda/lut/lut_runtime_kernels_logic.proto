@@ -39,6 +39,7 @@ calculate_product_lookup_index(
     EXTERNAL_REAL_DT* input_1_ptr,
     EXTERNAL_REAL_DT* input_2_ptr,
     EXTERNAL_REAL_DT* pos_emb_ptr,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t lookup_index
 ) {
     lookup_index = 0;
@@ -69,10 +70,10 @@ calculate_product_lookup_index(
 
             // printf("[calculate_product_lookup_index] slice_idx_1: %d, slice_idx_2: %d, component_1: %d, component_2: %d, val1: %f, val2: %f\n", slice_idx_1, slice_idx_2, component_1, component_2, val1, val2);
 
-            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2, cmp_eps) ? (1 << anchor_idx) : 0;
         }
     } else {
-        int shifts[3];
+        uint32_t shifts[3];
         shifts[0] = 0;
         shifts[1] = n_inputs_1;
         shifts[2] = n_inputs_1 + n_inputs_2;
@@ -91,7 +92,7 @@ calculate_product_lookup_index(
             EXTERNAL_REAL_DT val1 = sources[component_1][ap.anchor1_id - shifts[component_1]];
             EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
-            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(val1, val2, cmp_eps) ? (1 << anchor_idx) : 0;
         }
     }
 
@@ -108,6 +109,7 @@ calculate_product_lookup_index_backprop(
     EXTERNAL_REAL_DT* input_1_ptr,
     EXTERNAL_REAL_DT* input_2_ptr,
     EXTERNAL_REAL_DT* pos_emb_ptr,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t lookup_index,
     int32_t alt_lookup_index,
     uint32_t first_flipping_index,
@@ -150,7 +152,7 @@ calculate_product_lookup_index_backprop(
             EXTERNAL_REAL_DT val2 = sources[component_2][slice_idx_2];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps) ? (1 << anchor_idx) : 0;
 
             bool m = fabs(delta) < fabs(min_delta);
             min_delta = m ? delta : min_delta;
@@ -161,7 +163,7 @@ calculate_product_lookup_index_backprop(
             second_flipping_index = m ? slice_idx_2 : second_flipping_index;
         }
     } else {
-        int shifts[3];
+        uint32_t shifts[3];
         shifts[0] = 0;
         shifts[1] = n_inputs_1;
         shifts[2] = n_inputs_1 + n_inputs_2;
@@ -181,7 +183,7 @@ calculate_product_lookup_index_backprop(
             EXTERNAL_REAL_DT val2 = sources[component_2][ap.anchor2_id - shifts[component_2]];
 
             EXTERNAL_REAL_DT delta = val1 - val2;
-            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0) ? (1 << anchor_idx) : 0;
+            lookup_index |= ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps) ? (1 << anchor_idx) : 0;
 
             bool m = fabs(delta) < fabs(min_delta);
             min_delta = m ? delta : min_delta;
@@ -1050,6 +1052,7 @@ check_detectors_eval_logic(
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_lookup_indices
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1080,7 +1083,7 @@ check_detectors_eval_logic(
             // printf("[check_detectors_eval_logic] anchor_idx: %d, anchor1_id: %d, anchor2_id: %d, val1: %f, val2: %f\n", anchor_idx, ap.anchor1_id, ap.anchor2_id, r_input[ap.anchor1_id], r_input[ap.anchor2_id]);
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps)) {
                 // printf("[check_detectors_eval_logic] setting bit %d\n", anchor_idx);
                 lookup_index |= (1 << anchor_idx);
             }
@@ -1098,6 +1101,7 @@ check_detectors_logic(
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_lookup_indices,
     EXTERNAL_REAL_DT* w_min_anchor_deltas,
     int32_t* w_min_anchor_delta_indices
@@ -1132,7 +1136,7 @@ check_detectors_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps)) {
                 lookup_index |= (1 << anchor_idx);
             }
 
@@ -1588,6 +1592,7 @@ check_detectors_seq_eval_logic(
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_lookup_indices
 ) {
     // i represents n_detectors * timestep + detector_index
@@ -1622,7 +1627,7 @@ check_detectors_seq_eval_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
 
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps)) {
                 lookup_index |= (1 << anchor_idx);
             }
         }
@@ -1639,6 +1644,7 @@ check_detectors_seq_logic(
     AnchorsPair* r_detectors,
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_lookup_indices,
     EXTERNAL_REAL_DT* w_min_anchor_deltas,
     int32_t* w_min_anchor_delta_indices
@@ -1679,7 +1685,7 @@ check_detectors_seq_logic(
             EXTERNAL_REAL_DT delta = r_input[ap.anchor1_id] - r_input[ap.anchor2_id];
             
             // Form bit representation: 1 if delta > 0, 0 if delta <= 0
-            if(ROUNDED_COMPARISON_GREATER(delta, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(delta, 0.0, cmp_eps)) {
                 lookup_index |= (1 << anchor_idx);
             }
             
@@ -1704,6 +1710,7 @@ check_positional_embeddings_eval_logic(
     EXTERNAL_REAL_DT* r_positional_embeddings,
     uint32_t n_detectors,
     uint32_t positional_dim,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_positional_lookup_indices
 ) {
     // i represents n_detectors * timestep + detector_index
@@ -1729,7 +1736,7 @@ check_positional_embeddings_eval_logic(
         for(uint32_t dim = 0; dim < positional_dim; dim++) {
             embedding_value = r_positional_embeddings[dim];
 
-            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0, cmp_eps)) {
                 lookup_index |= (1 << dim);
             }
         }
@@ -1743,6 +1750,7 @@ check_positional_embeddings_logic(
     EXTERNAL_REAL_DT* r_positional_embeddings,
     uint32_t n_detectors,
     uint32_t positional_dim,
+    EXTERNAL_REAL_DT cmp_eps,
     int32_t* w_positional_lookup_indices,
     EXTERNAL_REAL_DT* w_positional_min_deltas,
     int32_t* w_positional_min_delta_indices
@@ -1774,7 +1782,7 @@ check_positional_embeddings_logic(
         for(uint32_t dim = 0; dim < positional_dim; dim++) {
             embedding_value = r_positional_embeddings[dim];
             
-            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0)) {
+            if(ROUNDED_COMPARISON_GREATER(embedding_value, 0.0, cmp_eps)) {
                 lookup_index |= (1 << dim);
             }
             
@@ -2024,6 +2032,7 @@ fill_outputs_product_fc_logic(
     uint32_t n_outputs_in_block,
     EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double int_rescaler
 ) {
     #ifdef ATOMIC
@@ -2096,6 +2105,7 @@ fill_outputs_product_fc_logic(
             input_1_ptr,
             input_2_ptr,
             pos_emb_ptr,
+            cmp_eps,
             lookup_index
         );
     }
@@ -2177,6 +2187,7 @@ fill_outputs_product_cpu_logic(
     uint8_t* lut_data, // only used for sparse mode
     EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double int_rescaler
 ) {
     // blockIdx.y encodes: batch_index
@@ -2223,6 +2234,7 @@ fill_outputs_product_cpu_logic(
         input_1_i,
         input_2_j,
         pos_emb,
+        cmp_eps,
         lookup_index
     );
     
@@ -2295,6 +2307,7 @@ fill_outputs_product_sparse_logic(
     uint8_t* lut_data,
     EXTERNAL_REAL_DT* w_output, // [batch_size * sequence_length * n_outputs]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double int_rescaler
 ) {
     #ifdef ATOMIC
@@ -2364,6 +2377,7 @@ fill_outputs_product_sparse_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index
     );
 
@@ -2425,6 +2439,7 @@ propagate_backward_product_cpu_logic(
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     EXTERNAL_REAL_DT* w_weights_gradients, // can be nullptr in internal gradients mode
     double first_synapse_meta_lr,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
@@ -2481,6 +2496,7 @@ propagate_backward_product_cpu_logic(
         input_1_i,
         input_2_j,
         pos_emb,
+        cmp_eps,
         lookup_index,
         alt_lookup_index,
         first_flipping_index,
@@ -2653,6 +2669,7 @@ gather_w_gradients_internal_product_cpu_logic(
     NeuronDataId_t first_synapse_id, // only used for sparse mode
     uint8_t* lut_data, // only used for sparse mode
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double external_lr,
     EXTERNAL_REAL_DT* w_weights,
     double first_synapse_meta_lr,
@@ -2702,6 +2719,7 @@ gather_w_gradients_internal_product_cpu_logic(
         input_1_i,
         input_2_j,
         pos_emb,
+        cmp_eps,
         lookup_index
     );
 
@@ -2774,6 +2792,7 @@ propagate_backward_product_sparse_logic(
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
     double int_rescaler
 ) {
@@ -2889,6 +2908,7 @@ propagate_backward_product_sparse_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index,
         alt_lookup_index,
         first_flipping_index,
@@ -3010,6 +3030,7 @@ gather_w_gradients_product_sparse_logic(
     NeuronDataId_t first_synapse_id,
     uint8_t* lut_data,
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double external_lr,
     double first_synapse_meta_lr,
     double int_rescaler
@@ -3123,6 +3144,7 @@ gather_w_gradients_product_sparse_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index
     );
 
@@ -3177,6 +3199,7 @@ propagate_backward_product_fc_logic(
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
     double int_rescaler
 ) {
@@ -3295,6 +3318,7 @@ propagate_backward_product_fc_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index,
         alt_lookup_index,
         first_flipping_index,
@@ -3380,6 +3404,7 @@ gather_w_gradients_product_fc_logic(
     uint32_t n_outputs_in_block,
     uint32_t n_lookup_neurons_per_detector,
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double external_lr,
     double first_synapse_meta_lr,
     double int_rescaler
@@ -3493,6 +3518,7 @@ gather_w_gradients_product_fc_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index
     );
 
@@ -3546,6 +3572,7 @@ propagate_backward_product_fc_no_shared_logic(
     EXTERNAL_REAL_DT* w_input_gradients_1, // [batch_size * sequence_length * n_inputs_1]
     EXTERNAL_REAL_DT* w_input_gradients_2, // [batch_size * sequence_length * n_inputs_2]
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // [(sequence_length - 1) * positional_dim] or nullptr
     double int_rescaler
 ) {
@@ -3625,6 +3652,7 @@ propagate_backward_product_fc_no_shared_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index,
         alt_lookup_index,
         first_flipping_index,
@@ -3708,6 +3736,7 @@ gather_w_gradients_product_fc_no_shared_logic(
     uint32_t n_outputs_in_block,
     uint32_t n_lookup_neurons_per_detector,
     bool sliced_mode,
+    EXTERNAL_REAL_DT cmp_eps,
     double external_lr,
     double first_synapse_meta_lr,
     double int_rescaler
@@ -3782,6 +3811,7 @@ gather_w_gradients_product_fc_no_shared_logic(
         input_1_ptr,
         input_2_ptr,
         pos_emb_ptr,
+        cmp_eps,
         lookup_index
     );
 
