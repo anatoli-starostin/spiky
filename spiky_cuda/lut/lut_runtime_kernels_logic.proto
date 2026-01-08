@@ -2144,7 +2144,7 @@ fill_outputs_product_fc_logic(
         return;
     }
 
-    double sum_output = 0.0;
+    EXTERNAL_REAL_DT sum_output = 0.0;
     for(uint32_t k = 0; k < TILE; k++) {
         int32_t li = shared_lookup_indices[j * TILE + k];
         if(li < 0) {
@@ -2152,7 +2152,7 @@ fill_outputs_product_fc_logic(
         }
         uint32_t lookup_neuron_id = detector_index * n_lookup_neurons_per_detector + li;
         uint64_t weights_offset = static_cast<uint64_t>(lookup_neuron_id) * n_outputs + output_idx;
-        sum_output += static_cast<double>(r_weights[weights_offset]);
+        sum_output += r_weights[weights_offset];
     }
 
     j += (tile_id % tile_grid_w) * TILE;
@@ -2162,7 +2162,7 @@ fill_outputs_product_fc_logic(
     SUMMATION32_DT payload = static_cast<SUMMATION32_DT>(sum_output * static_cast<double>(DENOMINATOR32) * int_rescaler);
     atomicAdd(reinterpret_cast<SUMMATION32_DT *>(w_output), payload);
     #else
-    atomicAdd(w_output, static_cast<EXTERNAL_REAL_DT>(sum_output));
+    atomicAdd(w_output, sum_output);
     #endif
     #endif
 }
