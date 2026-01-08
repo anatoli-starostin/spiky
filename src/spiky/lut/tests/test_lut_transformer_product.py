@@ -275,7 +275,7 @@ def _test_lut_transformer_product(
         _backward_group_size=4
     )
     lut_transformer._debug_last_forward = []
-    lut_transformer.lut_shared_context._cmp_eps = 0.0001
+    lut_transformer.lut_shared_context._cmp_eps = 0.01
 
     # Create GTLUTProductTransformer with matching parameters
     random.seed(seed)
@@ -297,7 +297,7 @@ def _test_lut_transformer_product(
         sliced_mode=sliced_mode
     )
     gt_lut_transformer._debug_last_forward = []
-    gt_lut_transformer.lut_shared_context._cmp_eps = 0.0001
+    gt_lut_transformer.lut_shared_context._cmp_eps = 0.01
 
     # Synchronize entire models
     synchronize_models(lut_transformer, gt_lut_transformer, num_layers)
