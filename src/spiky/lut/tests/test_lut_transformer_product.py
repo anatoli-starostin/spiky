@@ -212,7 +212,7 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
 
 
 def diff_outputs(gt_tensor_list, test_tensor_list):
-    batch_size = pytorch_output.shape[0]
+    batch_size = gt_tensor_list[0].shape[0]
     for ti, (gt_t, test_t) in enumerate(zip(gt_tensor_list, test_tensor_list)):
         for i in range(batch_size):
             # Compare with PyTorch output: both are (context_size, vocab_size)
