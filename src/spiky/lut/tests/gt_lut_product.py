@@ -434,6 +434,7 @@ class GTLUTProductTransformer(nn.Module):
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size
         )
+        self._debug_last_forward = None
 
     def forward(self, tokens):
         """
@@ -445,19 +446,28 @@ class GTLUTProductTransformer(nn.Module):
         Returns:
             logits: (batch_size, context_size, vocab_size) tensor of logits
         """
+        if self._debug_last_forward is not None:
+            self._debug_last_forward = []
+
         batch_size = tokens.shape[0]
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
 
         non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
         seq_shape = (batch_size, self.context_size, self.embedding_dim)
+        if self._debug_last_forward is not None:
+            self._debug_last_forward.append(z)
 
         for layer in self.layers:
             # print(f'gt: z {z}')
             attention_output = layer['attention_lut'](z)
-            print(f'gt: z after attention {attention_output.cpu().detach().numpy()}')
+            # print(f'gt: z after attention {attention_output.cpu().detach().numpy()}')
+            if self._debug_last_forward is not None:
+                self._debug_last_forward.append(attention_output)
             z = z + attention_output
             ffn_output = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+            if self._debug_last_forward is not None:
+                self._debug_last_forward.append(ffn_output)
             # print(f'gt: ffn_output {ffn_output}')
             z = z + ffn_output
 

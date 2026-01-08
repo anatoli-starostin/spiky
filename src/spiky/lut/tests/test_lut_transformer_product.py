@@ -211,6 +211,15 @@ def compare_outputs(gt_output, pytorch_output, train_or_eval):
     return True
 
 
+def diff_outputs(gt_tensor_list, test_tensor_list):
+    batch_size = pytorch_output.shape[0]
+    for ti, (gt_t, test_t) in enumerate(zip(gt_tensor_list, test_tensor_list)):
+        for i in range(batch_size):
+            # Compare with PyTorch output: both are (context_size, vocab_size)
+            max_diff = torch.max(torch.abs(test_t[i] - gt_t[i]))
+            print(f"tensor pair {ti}, batch item {i}, max diff: {max_diff:.6f}")
+
+
 def _test_lut_transformer_product(
     vocab_size, embedding_dim,
     context_size, positional_dim,
@@ -265,6 +274,7 @@ def _test_lut_transformer_product(
         _forward_group_size=24,
         _backward_group_size=4
     )
+    lut_transformer._debug_last_forward = []
 
     # Create GTLUTProductTransformer with matching parameters
     random.seed(seed)
@@ -285,6 +295,7 @@ def _test_lut_transformer_product(
         device=torch.device('cpu'), seed=seed,
         sliced_mode=sliced_mode
     )
+    gt_lut_transformer._debug_last_forward = []
 
     # Synchronize entire models
     synchronize_models(lut_transformer, gt_lut_transformer, num_layers)
@@ -311,6 +322,7 @@ def _test_lut_transformer_product(
     gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
 
     if not compare_outputs(gt_y, y, train_or_eval):
+        diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
         print(f"❌ something is wrong after forward pass №1")
         return False
 
@@ -372,7 +384,7 @@ def _test_lut_transformer_product(
         gt_y = gt_lut_transformer(x[:, :context_size].to(device=torch.device('cpu'))).to(device=device)  # (batch_size, context_size, vocab_size)
 
         if not compare_outputs(gt_y, y, train_or_eval):
-            print(f"pos_emb: {gt_lut_transformer.layers[0]['attention_lut'].positional_embeddings}")
+            diff_outputs(gt_lut_transformer._debug_last_forward, lut_transformer._debug_last_forward)
             print(f"❌ something is wrong after forward pass №{i + 2}")
             return False
 

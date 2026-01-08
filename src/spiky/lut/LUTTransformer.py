@@ -210,6 +210,7 @@ class LUTTransformer(nn.Module):
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size
         )
+        self._debug_last_forward = None
 
     def set_external_learning_rate_hook(self, lr_hook):
         # Set hooks for all LUT layers
@@ -228,9 +229,14 @@ class LUTTransformer(nn.Module):
         Returns:
             logits: (batch_size, context_size, vocab_size) tensor of logits
         """
+        if self._debug_last_forward is not None:
+            self._debug_last_forward = []
+
         batch_size = tokens.shape[0]
         # Token embedding: (batch_size, context_size) -> (batch_size, context_size, n_embeddings)
         z = self.token_embedder(tokens)  # (batch_size, context_size, n_embeddings)
+        if self._debug_last_forward is not None:
+            self._debug_last_forward.append(z.detach().clone())
         if isinstance(self.embedding_dim, int):
             non_seq_shape = (batch_size * self.context_size, 1, self.embedding_dim)
             seq_shape = (batch_size, self.context_size, self.embedding_dim)
@@ -244,6 +250,8 @@ class LUTTransformer(nn.Module):
             # Attention with residual connection and dropout
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat.cpu().detach().numpy()}')
+            if self._debug_last_forward is not None:
+                self._debug_last_forward.append(aat.detach().clone())
 
             aat = layer['attention_dropout'](aat)
             if self.layer_norm_d is not None:
@@ -262,6 +270,8 @@ class LUTTransformer(nn.Module):
             if not self.no_ffn:
                 # FFN with residual connection and dropout
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+                if self._debug_last_forward is not None:
+                    self._debug_last_forward.append(ffn_result.detach().clone())
                 # print(f'test: ffn_result {ffn_result}')
                 ffn_result = layer['ffn_dropout'](ffn_result)
 
