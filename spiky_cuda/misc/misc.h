@@ -13,7 +13,6 @@
 //#define SUPER_DETAILED_TRACE
 #define ENABLE_PROFILING
 //#define TRACES_FROM_PROFILER
-#define LUT_PRODUCT_NO_SHARED_MEM
 #define ROUNDED_COMPARISON_GREATER(a, b, cmp_eps) ((cmp_eps == 0.0) ? ((a) > (b)) : (fabs((a) - (b)) < cmp_eps ? false : ((a) > (b))))
 
 #ifndef NO_CUDA
