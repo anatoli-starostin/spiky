@@ -410,7 +410,6 @@ def main():
     devices = ['cpu']
     if torch.cuda.is_available():
         devices.append('cuda:5')
-        devices.append('cuda:7')
 
     for device in devices:
         for summation_dtype in [torch.float32, torch.int32]:
