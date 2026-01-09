@@ -25,9 +25,9 @@ def test_lut_transformer_product(
                             continue
                         success = _test_lut_transformer_product(
                             vocab_size=256,
-                            embedding_dim=32,
+                            embedding_dim=16,
                             context_size=8,
-                            positional_dim=32 if sliced_mode else 4,
+                            positional_dim=16 if sliced_mode else 4,
                             num_layers=2,
                             num_heads=2,
                             n_detectors=4,
@@ -275,7 +275,7 @@ def _test_lut_transformer_product(
         _backward_group_size=4
     )
     lut_transformer._debug_last_forward = []
-    lut_transformer.lut_shared_context._cmp_eps = 0.01
+    lut_transformer.lut_shared_context._cmp_eps = 0.0001
 
     # Create GTLUTProductTransformer with matching parameters
     random.seed(seed)
@@ -297,7 +297,7 @@ def _test_lut_transformer_product(
         sliced_mode=sliced_mode
     )
     gt_lut_transformer._debug_last_forward = []
-    gt_lut_transformer.lut_shared_context._cmp_eps = 0.01
+    gt_lut_transformer.lut_shared_context._cmp_eps = 0.0001
 
     # Synchronize entire models
     synchronize_models(lut_transformer, gt_lut_transformer, num_layers)
