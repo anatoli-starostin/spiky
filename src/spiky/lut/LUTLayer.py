@@ -235,17 +235,6 @@ class LUTLayerBasic(nn.Module):
                     # Initialize with random floats in [-1, 1]
                     positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
                     self._positional_embeddings = nn.Parameter(positional_embeddings_data)
-
-                    # if self._unified_positional_embeddings:
-                    #     max_i = self._sequence_length - 1
-                    #     if max_i >= (1 << self._positional_dim):
-                    #         raise ValueError(
-                    #             f"positional_dim={self._positional_dim} too small to represent up to i={max_i} (need >= {max_i.bit_length()} bits)")
-                    #
-                    #     i = torch.arange(self._sequence_length - 1, device=self.device, dtype=torch.long).unsqueeze(1)  # [L,1]
-                    #     b = torch.arange(self._positional_dim, device=self.device, dtype=torch.long).unsqueeze(0)  # [1,D]
-                    #     pe = ((i >> b) & 1).to(torch.float32)
-                    #     self.register_buffer("_positional_embeddings_mask", pe.flatten())
             else:
                 assert not self._use_sinusoidal_pe
                 self._positional_embeddings = None
@@ -264,6 +253,7 @@ class LUTLayerBasic(nn.Module):
         sliced_product_mode=False,
         positional_dim=None,
         use_sinusoidal_pe=False,
+        unified_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -300,10 +290,7 @@ class LUTLayerBasic(nn.Module):
         if self._sliced_product_mode and n_inputs != positional_dim:
             raise ValueError("if sliced_product_mode == True then n_inputs and positional_dim should be equal")
 
-        if self._concatenation_product:
-            self._unified_positional_embeddings = False
-        else:
-            self._unified_positional_embeddings = True
+        self._unified_positional_embeddings = unified_pe
 
         if shared_context is None:
             self._own_shared_context = True
@@ -1077,11 +1064,6 @@ class LUTLayerBasic(nn.Module):
             self._synchronize()
             target_w_grad = self._process_gradients(target_w_grad, batch_size)
 
-        if self._positional_dim > 0 and self._unified_positional_embeddings:
-            positional_grad = positional_grad.reshape(
-                self._sequence_length - 1, self._n_detectors, self._positional_dim
-            ).sum(dim=1)
-
         if self._positional_dim > 0 and self._weights_gradient_policy.normalized:
             positional_grad /= positional_grad.abs().max().clip(1e-16)
 
@@ -1261,7 +1243,7 @@ class LUTLayerBasic(nn.Module):
                 return x_grad, w_grad, pe_grad, None
 
     def _prepare_positional_embeddings(self):
-        if self._unified_positional_embeddings and self._concatenation_product:
+        if self._unified_positional_embeddings:
             pos_embeddings = self._positional_embeddings.reshape(
                 (self._sequence_length - 1) * (2 if self._use_sinusoidal_pe else 1), 1, self._positional_dim
             ).repeat(1, self._n_detectors, 1).flatten().contiguous()
@@ -1270,8 +1252,7 @@ class LUTLayerBasic(nn.Module):
 
         if self._use_sinusoidal_pe:
             position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
-            position = position.unsqueeze(1).repeat(1, self._positional_dim * (
-                self._n_detectors if self._concatenation_product else 1))
+            position = position.unsqueeze(1).repeat(1, self._positional_dim * self._n_detectors)
             pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
             pos_embeddings = torch.sin(position.flatten() * pos_embeddings[:, 0] + pos_embeddings[:, 1])
             pos_embeddings = pos_embeddings.flatten().contiguous()
@@ -1346,6 +1327,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         sliced_product_mode=False,
         positional_dim=None,
         use_sinusoidal_pe=False,
+        unified_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1418,7 +1400,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
             concatenation_product=concatenation_product, sliced_product_mode=sliced_product_mode,
-            positional_dim=positional_dim, use_sinusoidal_pe=use_sinusoidal_pe,
+            positional_dim=positional_dim, use_sinusoidal_pe=use_sinusoidal_pe, unified_pe=unified_pe,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
@@ -1536,6 +1518,7 @@ class LUTLayer(Conv2DLUTLayer):
         sliced_product_mode=False,
         positional_dim=None,
         use_sinusoidal_pe=False,
+        unified_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1562,6 +1545,7 @@ class LUTLayer(Conv2DLUTLayer):
             sliced_product_mode=sliced_product_mode,
             positional_dim=positional_dim,
             use_sinusoidal_pe=use_sinusoidal_pe,
+            unified_pe=unified_pe,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype,

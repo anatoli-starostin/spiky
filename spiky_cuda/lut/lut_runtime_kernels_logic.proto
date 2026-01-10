@@ -884,6 +884,7 @@ propagate_through_detector_product(
     uint32_t n_inputs_2,
     uint32_t positional_dim,
     EXTERNAL_REAL_DT* w_positional_embeddings_gradients, // can be nullptr when positional_dim == 0
+    uint32_t n_detectors, uint32_t detector_index,
     double int_rescaler
 ) {
     // Compute uncertainty function gradient
@@ -937,7 +938,7 @@ propagate_through_detector_product(
             #endif
         } else if(first_anchor_source == 2) {
             // Propagate to positional embedding gradients
-            uint32_t pe_offset = (j - i - 1) * positional_dim;
+            uint32_t pe_offset = (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
             EXTERNAL_REAL_DT* w_pe_grad = w_positional_embeddings_gradients + pe_offset;
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
@@ -992,7 +993,7 @@ propagate_through_detector_product(
             #endif
         } else if(second_anchor_source == 2) {
             // Propagate to positional embedding gradients
-            uint32_t pe_offset = (j - i - 1) * positional_dim;
+            uint32_t pe_offset = (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
             EXTERNAL_REAL_DT* w_pe_grad = w_positional_embeddings_gradients + pe_offset;
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
             SUMMATION32_DT sum32_delta = static_cast<SUMMATION32_DT>(du * static_cast<double>(DENOMINATOR32) * int_rescaler);
@@ -2020,7 +2021,7 @@ fill_outputs_product_fc_logic(
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
     uint32_t n_inputs_2,
-    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim]
+    EXTERNAL_REAL_DT* r_pos_embedding, // [(sequence_length - 1) * n_detectors * positional_dim] or nullptr
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
     uint32_t n_total_tiles,
@@ -2092,7 +2093,7 @@ fill_outputs_product_fc_logic(
         // Access positional embeddings directly from global memory (if needed)
         EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
         if(positional_dim > 0) {
-            pos_emb_ptr = pos_embedding + (j - i - 1) * positional_dim;
+            pos_emb_ptr = r_pos_embedding + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
         }
 
         PFX(calculate_product_lookup_index)(
@@ -2151,7 +2152,7 @@ fill_outputs_product_cpu_logic(
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
     uint32_t n_inputs_2,
-    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim] or nullptr
+    EXTERNAL_REAL_DT* r_pos_embedding, // [(sequence_length - 1) * n_detectors * positional_dim] or nullptr
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
@@ -2195,7 +2196,7 @@ fill_outputs_product_cpu_logic(
     // Get positional embedding
     EXTERNAL_REAL_DT* pos_emb = nullptr;
     if(positional_dim > 0) {
-        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+        pos_emb = r_pos_embedding + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
     
     // Calculate lookup index by applying detector logic to combined input
@@ -2269,7 +2270,7 @@ fill_outputs_product_sparse_logic(
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
     uint32_t n_inputs_2,
-    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length - 1) * positional_dim]
+    EXTERNAL_REAL_DT* r_pos_embedding, // [(sequence_length - 1) * n_detectors * positional_dim] or nullptr
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
     uint32_t n_total_tiles,
@@ -2340,7 +2341,7 @@ fill_outputs_product_sparse_logic(
     // Access positional embeddings directly from global memory (if needed)
     EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
     if(positional_dim > 0) {
-        pos_emb_ptr = pos_embedding + (j - i - 1) * positional_dim;
+        pos_emb_ptr = r_pos_embedding + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index using helper function
@@ -2399,7 +2400,7 @@ propagate_backward_product_cpu_logic(
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
     uint32_t n_inputs_2,
-    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim] or nullptr
+    EXTERNAL_REAL_DT* r_pos_embedding, // [(sequence_length -1 ) * n_detectors * positional_dim] or nullptr
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
@@ -2448,8 +2449,8 @@ propagate_backward_product_cpu_logic(
     
     // Get positional embedding
     EXTERNAL_REAL_DT* pos_emb = nullptr;
-    if(positional_dim > 0 && pos_embedding != nullptr) {
-        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+    if(positional_dim > 0) {
+        pos_emb = r_pos_embedding + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
     
     // Calculate lookup index and track flipping anchors
@@ -2586,6 +2587,7 @@ propagate_backward_product_cpu_logic(
         n_inputs_2,
         positional_dim,
         w_positional_embeddings_gradients,
+        n_detectors, detector_index,
         int_rescaler
     );
     
@@ -2632,7 +2634,7 @@ gather_w_gradients_internal_product_cpu_logic(
     uint32_t n_inputs_1,
     EXTERNAL_REAL_DT* r_input_2, // [batch_size * sequence_length * n_inputs_2]
     uint32_t n_inputs_2,
-    EXTERNAL_REAL_DT* pos_embedding, // [(sequence_length -1 ) * positional_dim] or nullptr
+    EXTERNAL_REAL_DT* r_pos_embedding, // [(sequence_length - 1) * n_detectors * positional_dim] or nullptr
     AnchorsPair* r_detectors, // [n_detectors * n_anchors_per_detector]
     uint32_t n_detectors,
     uint32_t n_anchors_per_detector,
@@ -2678,8 +2680,8 @@ gather_w_gradients_internal_product_cpu_logic(
 
     // Get positional embedding
     EXTERNAL_REAL_DT* pos_emb = nullptr;
-    if(positional_dim > 0 && pos_embedding != nullptr) {
-        pos_emb = pos_embedding + (j - i - 1) * positional_dim;
+    if(positional_dim > 0) {
+        pos_emb = r_pos_embedding + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index and track flipping anchors
@@ -2829,7 +2831,7 @@ propagate_backward_product_sparse_logic(
     EXTERNAL_REAL_DT* input_2_ptr = r_input_2 + (batch_offset + j) * n_inputs_2;
     EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
     if(positional_dim > 0) {
-        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index using backprop helper function
@@ -2935,6 +2937,7 @@ propagate_backward_product_sparse_logic(
         n_inputs_2,
         positional_dim,
         w_positional_embeddings_gradients,
+        n_detectors, detector_index,
         int_rescaler
     );
     #endif
@@ -3023,7 +3026,7 @@ gather_w_gradients_product_sparse_logic(
     EXTERNAL_REAL_DT* input_2_ptr = r_input_2 + (batch_offset + j) * n_inputs_2;
     EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
     if(positional_dim > 0) {
-        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index using helper function
@@ -3145,7 +3148,7 @@ propagate_backward_product_fc_logic(
     // Access positional embeddings directly from global memory (if needed)
     EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
     if(positional_dim > 0) {
-        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index with backprop info - each thread calculates for its own (i, j) pair
@@ -3230,6 +3233,7 @@ propagate_backward_product_fc_logic(
         n_inputs_2,
         positional_dim,
         w_positional_embeddings_gradients,
+        n_detectors, detector_index,
         int_rescaler
     );
     #endif
@@ -3310,7 +3314,7 @@ gather_w_gradients_product_fc_logic(
     // Access positional embeddings directly from global memory (if needed)
     EXTERNAL_REAL_DT* pos_emb_ptr = nullptr;
     if(positional_dim > 0) {
-        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * positional_dim;
+        pos_emb_ptr = r_positional_embeddings + (j - i - 1) * n_detectors * positional_dim + detector_index * positional_dim;
     }
 
     // Calculate lookup index - each thread calculates for its own (i, j) pair

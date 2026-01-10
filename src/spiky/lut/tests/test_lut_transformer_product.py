@@ -262,6 +262,7 @@ def _test_lut_transformer_product(
         n_detectors=n_detectors,
         n_anchors_per_detector=n_anchors_per_detector,
         concatenation_product=False,
+        unified_pe=True,
         sliced_product_mode=sliced_mode,
         _synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
