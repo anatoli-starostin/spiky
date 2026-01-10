@@ -1452,7 +1452,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
         );
     }
     if(this->positional_dim > 0) {
-        n_items = this->positional_dim * (sequence_length - 1);
+        n_items = this->positional_dim * n_detectors * (sequence_length - 1);
         numBlocks = dim3(LUT_RUNTIME_NUM_BLOCKS(n_items), 1);
         GRID_CALL_ON_STREAM_NO_SHARED_MEM(
             numBlocks, convert_integers_to_floats, LUT_RUNTIME_KERNELS_TPB_OPT(n_items), cuda_streams[2],
