@@ -4,7 +4,7 @@ from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 from enum import Enum
 
-from spiky.lut.LUTLayer import LUTLayerBasic, SynapseMeta
+from spiky.lut.LUTLayer import LUTLayerBasic, SynapseMeta, GradientPolicy, LUTSharedContext
 from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections, create_identity_mapping
 from spiky.andn.ANDNLayer import SynapseMeta as ANDN_sm
