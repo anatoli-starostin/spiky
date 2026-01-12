@@ -701,8 +701,8 @@ class Conv2DANDNLayer(ANDNLayer):
 
         self.add_connections(
             chunk_of_connections=c_helper.grow_synapses(
-                input_ids=self.get_input_neuron_ids().reshape(input_shape) + 1,
-                output_ids=self.get_output_neuron_ids().reshape(c_helper.out_h, c_helper.out_w) + 1,
+                input_ids=self.get_input_neuron_ids().view(input_shape if n_input_channels is None else (input_shape + (n_input_channels,))) + 1,
+                output_ids=self.get_output_neuron_ids().view(c_helper.out_h, c_helper.out_w) + 1,
                 device=device,
                 seed=random_seed
             ),
