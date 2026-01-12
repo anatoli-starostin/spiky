@@ -654,7 +654,7 @@ class Conv2DANDNLayer(ANDNLayer):
             receptive_field_shape[0], receptive_field_shape[1],
             receptive_field_stride_shape[0], receptive_field_stride_shape[1],
             output_kernel_shape[0], output_kernel_shape[1],
-            n_input_channels
+            n_input_channels=n_input_channels
         )
         n_inputs = input_shape[0] * input_shape[1] * (1 if n_input_channels is None else n_input_channels)
         n_outputs = c_helper.out_h * c_helper.out_w
