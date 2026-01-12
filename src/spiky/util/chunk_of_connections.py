@@ -65,7 +65,7 @@ class ChunkOfConnections(object):
         torch.cuda.empty_cache()
 
 
-def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0) -> ChunkOfConnections:
+def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0, device=None) -> ChunkOfConnections:
     """
     Create a ChunkOfConnections representing a mapping in range [1, N] with optional delta offset.
     
@@ -77,6 +77,7 @@ def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0)
         N: Upper bound of the range (neurons 1 to N)
         synapse_meta_index: Synapse meta index to use (default: 0)
         delta: Offset to add to target neuron IDs (default: 0)
+        device: cuda device
     
     Returns:
         ChunkOfConnections with connections from i to (i + delta) for i in [1, N]
@@ -85,10 +86,12 @@ def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0)
     single_group_size = 1
     # Each group: [source_id, meta_index, n_targets, shift, meta_index, target_id]
     # Reshape to (N, 6) for easier manipulation
-    connections = torch.zeros((N, 6), dtype=torch.int32)
+    if device is None:
+        device = torch.device('cpu')
+    connections = torch.zeros((N, 6), dtype=torch.int32, device=device)
     
     # Source IDs: 1, 2, ..., N
-    connections[:, 0] = torch.arange(1, N + 1, dtype=torch.int32)
+    connections[:, 0] = torch.arange(1, N + 1, dtype=torch.int32, device=device)
     
     # Synapse meta index (header)
     connections[:, 1] = synapse_meta_index
