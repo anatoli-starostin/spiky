@@ -637,6 +637,7 @@ class Conv2DANDNLayer(ANDNLayer):
         receptive_field_shape,
         receptive_field_stride_shape,
         output_kernel_shape,
+        n_input_channels=None,
         synapse_meta=SynapseMeta(),
         backprop_hebb_ratio_on_torch_backward=1.0,
         relu_output=False,
@@ -652,11 +653,13 @@ class Conv2DANDNLayer(ANDNLayer):
             input_shape[0], input_shape[1],
             receptive_field_shape[0], receptive_field_shape[1],
             receptive_field_stride_shape[0], receptive_field_stride_shape[1],
-            output_kernel_shape[0], output_kernel_shape[1]
+            output_kernel_shape[0], output_kernel_shape[1],
+            n_input_channels
         )
-        n_inputs = input_shape[0] * input_shape[1]
+        n_inputs = input_shape[0] * input_shape[1] * (1 if n_input_channels is None else n_input_channels)
         n_outputs = c_helper.out_h * c_helper.out_w
         if inhibition_grid_shape is not None:
+            assert n_input_channels is None
             i_helper = InhibitionGrid2DHelper(
                 input_shape[0], input_shape[1],
                 inhibition_grid_shape[0], inhibition_grid_shape[1]

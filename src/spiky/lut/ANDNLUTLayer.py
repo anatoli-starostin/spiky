@@ -129,6 +129,7 @@ class ANDNLUTLayer(LUTLayerBasic):
             lut_receptive_field_shape,
             lut_receptive_field_stride_shape,
             output_kernel_shape,
+            n_input_channels=n_lut_channels,
             synapse_meta=synapse_meta,
             backprop_hebb_ratio_on_torch_backward=backprop_hebb_ratio_on_torch_backward,
             relu_output=False,
