@@ -42,11 +42,10 @@ def test_chunk_of_connections(device, _, __):
 
 def test_create_identity_mapping(delta=0):
     """Test the create_identity_mapping helper function with given delta."""
-    single_group_size = 6
-    N = 10  # Test with neurons 1 to 10
-    
+    N = 10000  # Test with neurons 1 to 10
+
     # Create mapping with delta
-    mapping_chunk = create_identity_mapping(N=N, single_group_size=single_group_size, delta=delta)
+    mapping_chunk = create_identity_mapping(N=N, delta=delta)
     
     # Extract and print source and target connections for inspection
     all_connections, connection_count = unpack_chunk_of_connections(mapping_chunk)

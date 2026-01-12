@@ -65,7 +65,7 @@ class ChunkOfConnections(object):
         torch.cuda.empty_cache()
 
 
-def create_identity_mapping(N: int, single_group_size: int, synapse_meta_index: int = 0, delta: int = 0) -> ChunkOfConnections:
+def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0) -> ChunkOfConnections:
     """
     Create a ChunkOfConnections representing a mapping in range [1, N] with optional delta offset.
     
@@ -75,40 +75,38 @@ def create_identity_mapping(N: int, single_group_size: int, synapse_meta_index: 
     
     Args:
         N: Upper bound of the range (neurons 1 to N)
-        single_group_size: Size of each synapse group
         synapse_meta_index: Synapse meta index to use (default: 0)
         delta: Offset to add to target neuron IDs (default: 0)
     
     Returns:
         ChunkOfConnections with connections from i to (i + delta) for i in [1, N]
+        Uses single_group_size=1 for efficient tensor arithmetic.
     """
-    group_uint_size = 4 + 2 * single_group_size
-    num_groups = N
-    total_size = num_groups * group_uint_size
+    single_group_size = 1
+    # Each group: [source_id, meta_index, n_targets, shift, meta_index, target_id]
+    # Reshape to (N, 6) for easier manipulation
+    connections = torch.zeros((N, 6), dtype=torch.int32)
     
-    connections = torch.zeros(total_size, dtype=torch.int32)
+    # Source IDs: 1, 2, ..., N
+    connections[:, 0] = torch.arange(1, N + 1, dtype=torch.int32)
     
-    for i in range(1, N + 1):
-        group_idx = i - 1
-        group_offset = group_idx * group_uint_size
-        target_id = i + delta
-        
-        # Header: [source_neuron_id, synapse_meta_index, n_target_neurons, shift_to_next_group]
-        connections[group_offset] = i  # source_neuron_id
-        connections[group_offset + 1] = synapse_meta_index  # synapse_meta_index
-        connections[group_offset + 2] = 1  # n_target_neurons (one connection: i -> i+delta)
-        connections[group_offset + 3] = 0  # shift_to_next_group (0 = last group in list)
-        
-        # Body: first pair is the connection
-        body_start = group_offset + 4
-        connections[body_start] = synapse_meta_index  # synapse_meta_index_i
-        connections[body_start + 1] = target_id  # target_neuron_id_i (i -> i+delta)
-        
-        # Fill remaining body slots with (-1, 0) pairs (ignored)
-        for j in range(1, single_group_size):
-            body_offset = body_start + j * 2
-            connections[body_offset] = -1  # synapse_meta_index_i (ignored)
-            connections[body_offset + 1] = 0  # target_neuron_id_i (ignored)
+    # Synapse meta index (header)
+    connections[:, 1] = synapse_meta_index
+    
+    # n_target_neurons = 1
+    connections[:, 2] = 1
+    
+    # shift_to_next_group = 0
+    connections[:, 3] = 0
+    
+    # Body: synapse_meta_index_i
+    connections[:, 4] = synapse_meta_index
+    
+    # Body: target_neuron_id_i = source_id + delta
+    connections[:, 5] = connections[:, 0] + delta
+    
+    # Flatten to 1D
+    connections = connections.flatten()
     
     return ChunkOfConnections(connections, single_group_size)
 
