@@ -142,7 +142,7 @@ class ANDNLUTLayer(LUTLayerBasic):
             random_seed=random_seed,
             device=device
         )
-        self._output_shape = self._andn_layer.output_shape()
+        self._output_shape = (lut_shape[0], lut_shape[1] * n_lut_channels)
         self._inhibition_layer = Grid2DInhibitionLayer(
             self._output_shape,
             output_kernel_shape
