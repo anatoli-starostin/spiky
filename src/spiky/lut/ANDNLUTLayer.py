@@ -86,7 +86,7 @@ class ANDNLUTLayer(LUTLayerBasic):
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
-            _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
+            _initial_synapse_capacity=n_detectors * n_lut_channels,
             _forward_group_size=1,
             _backward_group_size=1,
             random_seed=random_seed
