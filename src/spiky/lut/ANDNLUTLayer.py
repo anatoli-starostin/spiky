@@ -115,7 +115,7 @@ class ANDNLUTLayer(LUTLayerBasic):
 
         self.add_lookup_connections(
             chunk_of_connections=create_identity_mapping(
-                n_detectors * n_lut_channels, 64,
+                n_detectors * n_lut_channels,
                 delta=n_detectors * n_lut_channels,
                 device=device
             ),
