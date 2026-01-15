@@ -13,7 +13,8 @@ public:
     ANDM_CLASS_NAME(
         uint32_t n_inputs, uint32_t n_outputs,
         uint64_t initial_synapse_capacity,
-        uint32_t forward_group_size, uint32_t backward_group_size
+        uint32_t forward_group_size, uint32_t backward_group_size,
+        bool spiking_inhibition
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         , double int_rescaler
         #endif
@@ -27,7 +28,8 @@ public:
         n_inputs(n_inputs),
         n_outputs(n_outputs),
         forward_group_size(forward_group_size),
-        backward_group_size(backward_group_size)
+        backward_group_size(backward_group_size),
+        spiking_inhibition(spiking_inhibition)
     {
         if(this->n_outputs > 0) {
             this->base_synapse_metas_id = host_device_allocator.allocate(MAX_N_SYNAPSE_METAS * sizeof(BaseSynapseMeta), SYNAPSE_METAS_MEMORY_LABEL);
@@ -389,6 +391,7 @@ public:
                 this->max_inputs_per_detector,
                 this->forward_group_size,
                 this->backward_group_size,
+                this->spiking_inhibition,
                 gc_meta->max_forward_groups_per_neuron,
                 gc_meta->max_backward_groups_per_neuron,
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -479,6 +482,7 @@ public:
         const torch::Tensor &output_winner_ids,
         const torch::Tensor &output_prewinner_ids,
         const torch::Tensor &output_winning_stat,
+        bool spiking_output_inhibition,
         torch::Tensor &target_weights_gradients
     ) {
         if(this->n_outputs == 0) {
@@ -515,6 +519,7 @@ public:
             reinterpret_cast<int32_t *>(output_prewinner_ids.data_ptr()),
             reinterpret_cast<int32_t *>(output_winning_stat.data_ptr()),
             output_winner_ids.numel() / batch_size,
+            spiking_output_inhibition,
             reinterpret_cast<EXTERNAL_REAL_DT *>(target_weights_gradients.data_ptr())
         );
     }
@@ -661,6 +666,7 @@ private:
         uint32_t n_outputs,
         uint32_t forward_group_size,
         uint32_t backward_group_size,
+        bool spiking_inhibition,
         NeuronDataId_t base_synapse_metas_id,
         uint32_t n_synapse_metas,
         uint64_t n_synapses,
@@ -685,6 +691,7 @@ private:
         n_outputs(n_outputs),
         forward_group_size(forward_group_size),
         backward_group_size(backward_group_size),
+        spiking_inhibition(spiking_inhibition),
         base_synapse_metas_id(base_synapse_metas_id),
         n_synapse_metas(n_synapse_metas),
         n_synapses(n_synapses),
@@ -727,6 +734,7 @@ private:
     uint32_t n_outputs;
     uint32_t forward_group_size;
     uint32_t backward_group_size;
+    bool spiking_inhibition;
     NeuronDataId_t base_synapse_metas_id;
     uint32_t n_synapse_metas;
     uint64_t n_synapses;
@@ -756,6 +764,7 @@ py::tuple PFX(pickle_andn_neuron_manager)(const ANDM_CLASS_NAME& ndm) {
         ndm.n_outputs,
         ndm.forward_group_size,
         ndm.backward_group_size,
+        ndm.spiking_inhibition,
         ndm.base_synapse_metas_id,
         ndm.n_synapse_metas,
         ndm.n_synapses,
@@ -791,17 +800,18 @@ std::unique_ptr<ANDM_CLASS_NAME> PFX(unpickle_andn_neuron_manager)(py::tuple t) 
             t[3].cast<uint32_t>(),         // n_outputs
             t[4].cast<uint32_t>(),         // forward_group_size
             t[5].cast<uint32_t>(),         // backward_group_size
-            t[6].cast<NeuronDataId_t>(),   // base_synapse_metas_id
-            t[7].cast<uint32_t>(),         // n_synapse_metas
-            t[8].cast<uint64_t>(),         // n_synapses
-            t[9].cast<NeuronDataId_t>(),   // input_neuron_synapses_infos_id
-            t[10].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
-            t[11].cast<NeuronDataId_t>(),  // detectors_id
-            t[12].cast<uint32_t>(),        // n_detectors
-            t[13].cast<uint32_t>(),        // max_inputs_per_detector
-            t[14].cast<NeuronDataId_t>()   // global_connections_meta_id
+            t[6].cast<bool>(),             // spiking_inhibition
+            t[7].cast<NeuronDataId_t>(),   // base_synapse_metas_id
+            t[8].cast<uint32_t>(),         // n_synapse_metas
+            t[9].cast<uint64_t>(),         // n_synapses
+            t[10].cast<NeuronDataId_t>(),  // input_neuron_synapses_infos_id
+            t[11].cast<NeuronDataId_t>(),  // output_neuron_synapses_infos_id
+            t[12].cast<NeuronDataId_t>(),  // detectors_id
+            t[13].cast<uint32_t>(),        // n_detectors
+            t[14].cast<uint32_t>(),        // max_inputs_per_detector
+            t[15].cast<NeuronDataId_t>()   // global_connections_meta_id
             #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , t[15].cast<double>()         // int_rescaler
+            , t[16].cast<double>()         // int_rescaler
             #endif
         )
     );
@@ -811,10 +821,23 @@ std::unique_ptr<ANDM_CLASS_NAME> PFX(unpickle_andn_neuron_manager)(py::tuple t) 
 void PFX(PB_ANDNDataManager)(py::module& m) {
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     py::class_<ANDNDataManagerI>(m, "ANDNDataManagerI")
-        .def(py::init<uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, double>())
+        .def(py::init<uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, bool, double>(),
+            py::arg("n_inputs"),
+            py::arg("n_outputs"),
+            py::arg("initial_synapse_capacity"),
+            py::arg("forward_group_size"),
+            py::arg("backward_group_size"),
+            py::arg("spiking_inhibition"),
+            py::arg("int_rescaler"))
     #else
     py::class_<ANDNDataManagerF>(m, "ANDNDataManagerF")
-        .def(py::init<uint32_t, uint32_t, uint64_t, uint32_t, uint32_t>())
+        .def(py::init<uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, bool>(),
+            py::arg("n_inputs"),
+            py::arg("n_outputs"),
+            py::arg("initial_synapse_capacity"),
+            py::arg("forward_group_size"),
+            py::arg("backward_group_size"),
+            py::arg("spiking_inhibition"))
     #endif
         .def("get_smallest_distinguishable_fraction", &ANDM_CLASS_NAME::get_smallest_distinguishable_fraction,
             "Returns smallest fraction that can exist inside data manager in integers mode. Returns 0.0 in floats mode.")
@@ -894,6 +917,7 @@ void PFX(PB_ANDNDataManager)(py::module& m) {
             py::arg("output_winner_ids"),
             py::arg("output_prewinner_ids"),
             py::arg("output_winning_stat"),
+            py::arg("spiking_output_inhibition"),
             py::arg("target_weights_gradients"))
         .def("count_synapses", &ANDM_CLASS_NAME::count_synapses,
             "Count forward or backward synapses for the set of neurons",

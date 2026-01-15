@@ -27,6 +27,7 @@ class ANDNLayer(nn.Module):
         self, n_inputs, n_outputs,
         n_detectors, max_inputs_per_detector,
         synapse_metas: List[SynapseMeta],
+        spiking_inhibition=True,
         anti_hebb_coeff=0.0,
         backprop_hebb_ratio_on_torch_backward=1.0,
         relu_output=False,
@@ -44,6 +45,7 @@ class ANDNLayer(nn.Module):
         self._n_outputs = n_outputs
 
         self._n_detectors = n_detectors
+        self._spiking_inhibition = spiking_inhibition
         self._max_inputs_per_detector = max_inputs_per_detector
         self._anti_hebb_coeff = anti_hebb_coeff
 
@@ -54,21 +56,17 @@ class ANDNLayer(nn.Module):
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = n_inputs * n_outputs
 
+        dm_args = (
+            n_inputs, n_outputs,
+            _initial_synapse_capacity,
+            _forward_group_size,
+            _backward_group_size,
+            spiking_inhibition
+        )
         if summation_dtype == torch.float32:
-            self._andn_dm = ANDNDataManagerF(
-                n_inputs, n_outputs,
-                _initial_synapse_capacity,
-                _forward_group_size,
-                _backward_group_size
-            )
+            self._andn_dm = ANDNDataManagerF(*dm_args)
         else:
-            self._andn_dm = ANDNDataManagerI(
-                n_inputs, n_outputs,
-                _initial_synapse_capacity,
-                _forward_group_size,
-                _backward_group_size,
-                _int_rescaler
-            )
+            self._andn_dm = ANDNDataManagerI(*dm_args, _int_rescaler)
 
         for i, sm in enumerate(synapse_metas):
             m_id = self._andn_dm.register_synapse_meta(
@@ -295,6 +293,7 @@ class ANDNLayer(nn.Module):
                 output_winner_ids,
                 output_prewinner_ids,
                 output_winning_stat,
+                self._descendant_andn_layer._spiking_inhibition,
                 w_grad_hebb
             )
 
@@ -420,6 +419,7 @@ class InhibitionLayer(nn.Module):
     def __init__(
         self, n_inputs,
         n_detectors, max_inputs_per_detector,
+        spiking_inhibiton=True,
         backprop_hebb_ratio_on_torch_backward=1.0
     ):
         super().__init__()
@@ -429,12 +429,14 @@ class InhibitionLayer(nn.Module):
         self.device = torch.device("cpu")
         self._n_inputs = n_inputs
         self._backprop_hebb_ratio_on_torch_backward = backprop_hebb_ratio_on_torch_backward
+        self._spiking_inhibition = spiking_inhibiton
 
         self._n_detectors = n_detectors
         self._max_inputs_per_detector = max_inputs_per_detector
         self._andn_dm = ANDNDataManagerF(
             n_inputs, 0,
-            0, 1, 1
+            0, 1, 1,
+            spiking_inhibiton
         )
         # TODO support summation_dtype and ANDNDataManagerI (for gradients)
 
@@ -511,8 +513,12 @@ class InhibitionLayer(nn.Module):
             input_winning_stat
         )
 
+        output = (input_winning_stat == 0).to(dtype=torch.float32, device=x.device)
+        if not self._spiking_inhibition:
+            with torch.no_grad():
+                output *= x
         return (
-            (input_winning_stat == 0).to(dtype=torch.float32, device=x.device).reshape(source_x_shape),
+            output.reshape(source_x_shape),
             input_winner_ids.reshape(batch_size, self._n_detectors),
             input_prewinner_ids.reshape(batch_size, self._n_detectors),
             input_winning_stat.reshape(batch_size, self._n_inputs)
@@ -744,6 +750,7 @@ class Grid2DInhibitionLayer(InhibitionLayer):
     def __init__(
         self, input_shape,
         inhibition_grid_shape,
+        spiking_inhibition=True,
         device=None
     ):
         n_inputs = input_shape[0] * input_shape[1]
@@ -758,7 +765,8 @@ class Grid2DInhibitionLayer(InhibitionLayer):
         super().__init__(
             n_inputs=n_inputs,
             n_detectors=n_detectors,
-            max_inputs_per_detector=max_inputs_per_detector
+            max_inputs_per_detector=max_inputs_per_detector,
+            spiking_inhibiton=spiking_inhibition
         )
 
         self.initialize_detectors(

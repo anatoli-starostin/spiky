@@ -146,6 +146,7 @@ class ANDNLUTLayer(LUTLayerBasic):
         self._inhibition_layer = Grid2DInhibitionLayer(
             self._andn_layer.output_shape(),
             output_kernel_shape,
+            spiking_inhibition=False,
             device=device
         )
         self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)

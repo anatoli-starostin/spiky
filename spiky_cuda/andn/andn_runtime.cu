@@ -15,6 +15,7 @@ ANDN_RUNTIME_CONTEXT_CLASS::ANDN_RUNTIME_CONTEXT_CLASS(
     uint32_t max_inputs_per_detector,
     uint32_t forward_group_size,
     uint32_t backward_group_size,
+    bool spiking_inhibition,
     uint32_t max_forward_groups_per_neuron,
     uint32_t max_backward_groups_per_neuron,
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -38,6 +39,7 @@ ANDN_RUNTIME_CONTEXT_CLASS::ANDN_RUNTIME_CONTEXT_CLASS(
     max_inputs_per_detector(max_inputs_per_detector),
     forward_group_size(forward_group_size),
     backward_group_size(backward_group_size),
+    spiking_inhibition(spiking_inhibition),
     batch_size(0),
     #ifdef ENABLE_PROFILING
     profiler(profiler),
@@ -246,6 +248,7 @@ void ANDN_RUNTIME_CONTEXT_CLASS::forward(
             (this->n_outputs > 0) ? firing_buffer->counter_ptr() : nullptr,
             this->forward_group_size,
             this->andn_data,
+            this->spiking_inhibition,
             device
         );
         if(this->n_outputs > 0) {
@@ -359,6 +362,7 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_backprop(
                 numBlocks, fire_detectors_by_input_ids, ANDN_RUNTIME_KERNELS_TPB, ANDN_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
                 input, this->n_inputs,
                 this->n_detectors, input_winner_ids, input_winning_stat, 0,
+                this->spiking_inhibition,
                 reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(input_neuron_synapses_infos),
                 firing_buffer->firings_ptr(),
                 firing_buffer->counter_ptr(),
@@ -416,6 +420,7 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_backprop(
                 numBlocks, fire_detectors_by_input_ids, ANDN_RUNTIME_KERNELS_TPB, ANDN_RUNTIME_KERNELS_TPB * sizeof(uint32_t),
                 input, this->n_inputs,
                 this->n_detectors, input_prewinner_ids, input_winning_stat, -1,
+                this->spiking_inhibition,
                 reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(input_neuron_synapses_infos),
                 firing_buffer->firings_ptr(),
                 firing_buffer->counter_ptr(),
@@ -534,6 +539,7 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_hebb(
     int32_t *output_prewinner_ids,
     int32_t *output_winning_stat,
     uint32_t n_output_detectors,
+    bool spiking_output_inhibition,
     // gradients that we need to calculate
     EXTERNAL_REAL_DT *target_weights_gradients
 ) {
@@ -571,6 +577,8 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_hebb(
         firing_buffer->firings_ptr(),
         n_firings,
         target_weights_gradients,
+        this->spiking_inhibition,
+        spiking_output_inhibition,
         this->n_inputs,
         input_winning_stat,
         input,
@@ -610,6 +618,8 @@ void ANDN_RUNTIME_CONTEXT_CLASS::backward_hebb(
             firing_buffer->firings_ptr(),
             n_firings,
             target_weights_gradients,
+            this->spiking_inhibition,
+            spiking_output_inhibition,
             this->n_inputs,
             input_winning_stat,
             input,

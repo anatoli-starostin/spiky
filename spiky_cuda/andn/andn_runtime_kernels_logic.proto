@@ -118,6 +118,7 @@ fire_detectors_logic(
     uint64_t* firings_counter_ptr,
     uint32_t forward_group_size,
     uint8_t* andn_data,
+    bool spiking_inhibition,
     int device
 ) {
     uint32_t tid = threadIdx.x;
@@ -125,6 +126,7 @@ fire_detectors_logic(
 
     NoDelaysIndexedSynapsesInfo winner_synapses_info;
     winner_synapses_info.n_groups = 0;
+    EXTERNAL_REAL_DT winner_inp;
 
     if(i < n_detectors) {
         detectors += max_inputs_per_detector * i;
@@ -135,7 +137,6 @@ fire_detectors_logic(
 
         int32_t winner_neuron_id = -1;
         int32_t prewinner_neuron_id = -1;
-        EXTERNAL_REAL_DT winner_inp;
         EXTERNAL_REAL_DT pre_winner_inp;
         EXTERNAL_REAL_DT cur_inp;
         int32_t current_neuron_id;
@@ -174,6 +175,9 @@ fire_detectors_logic(
     }
 
     if(firings_buffer != nullptr) {
+        if(spiking_inhibition) {
+            winner_inp = 1.0;
+        }
         uint64_t firings_offset;
         if(device == -1) {
             if(winner_synapses_info.n_groups > 0) {
@@ -233,7 +237,7 @@ fire_detectors_logic(
                 NeuronDataId_t current_group_id = winner_synapses_info.first_group_id;
                 for(uint32_t j=0;j < winner_synapses_info.n_groups;j++) {
                     firings_buffer[firings_offset + j] = Firing{
-                        blockIdx.y, 1.0, current_group_id
+                        blockIdx.y, static_cast<REAL_DT>(winner_inp), current_group_id
                     };
                     current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
                 }
@@ -246,7 +250,7 @@ fire_detectors_logic(
                         NeuronDataId_t current_group_id = winner_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
                         for(uint32_t k=0;k < n_groups;k++) {
                             firings_buffer[firings_offset + k] = Firing{
-                                blockIdx.y, 1.0, current_group_id
+                                blockIdx.y, static_cast<REAL_DT>(winner_inp), current_group_id
                             };
                             current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
                         }
@@ -590,6 +594,8 @@ calculate_hebbian_gradients_logic(
     Firing* firings,
     uint64_t n_firings,
     EXTERNAL_REAL_DT* target_weights_gradients,
+    bool spiking_input_inhibition,
+    bool spiking_output_inhibition,
     uint32_t n_inputs,
     int32_t* input_winning_stat,
     EXTERNAL_REAL_DT* input,
@@ -640,11 +646,14 @@ calculate_hebbian_gradients_logic(
             delta = static_cast<double>(weights[backward_synapse_info.shift_from_anchor]);
             delta *= firing.payload;
             if(input_winning_stat != nullptr) {
-                delta -= ((input_winning_stat[backward_synapse_info.source_neuron_index] == 0) ? 1.0 : 0.0);
+                delta -= ((input_winning_stat[backward_synapse_info.source_neuron_index] == 0) ? (spiking_input_inhibition ? 1.0 : input[backward_synapse_info.source_neuron_index]) : 0.0);
             } else {
                 delta -= input[backward_synapse_info.source_neuron_index];
             }
             delta *= y_k;
+            if(spiking_output_inhibition) {
+                delta *= firing.payload;
+            }
 
             if(fabs(delta) > EPS) {
                 #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -680,6 +689,7 @@ fire_detectors_by_input_ids_logic(
     int32_t* input_ids_to_fire,
     int32_t* input_winning_stat,
     int32_t stat_filter,
+    bool spiking_inhibition,
     NoDelaysIndexedSynapsesInfo* forward_synapses_infos,
     Firing* firings_buffer,
     uint64_t* firings_counter_ptr,
@@ -692,6 +702,7 @@ fire_detectors_by_input_ids_logic(
 
     NoDelaysIndexedSynapsesInfo chosen_forward_synapses_info;
     chosen_forward_synapses_info.n_groups = 0;
+    EXTERNAL_REAL_DT winner_inp;
 
     if(i < n_input_ids_to_fire) {
         input_ids_to_fire += blockIdx.y * n_input_ids_to_fire;
@@ -703,6 +714,7 @@ fire_detectors_by_input_ids_logic(
         int32_t neuron_id = input_ids_to_fire[i];
         if((input_winning_stat == nullptr) || (input_winning_stat[neuron_id] == stat_filter)) {
             chosen_forward_synapses_info = *(forward_synapses_infos + neuron_id);
+            winner_inp = input[neuron_id];
         }
     }
 
@@ -761,11 +773,14 @@ fire_detectors_by_input_ids_logic(
     }
 
     if(chosen_forward_synapses_info.n_groups > 0) {
+        if(spiking_inhibition) {
+            winner_inp = 1.0;
+        }
         if(chosen_forward_synapses_info.n_synapse_metas == 1) {
             NeuronDataId_t current_group_id = chosen_forward_synapses_info.first_group_id;
             for(uint32_t j=0;j < chosen_forward_synapses_info.n_groups;j++) {
                 firings_buffer[firings_offset + j] = Firing{
-                    blockIdx.y, 1.0, current_group_id
+                    blockIdx.y, static_cast<REAL_DT>(winner_inp), current_group_id
                 };
                 current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
             }
@@ -778,7 +793,7 @@ fire_detectors_by_input_ids_logic(
                     NeuronDataId_t current_group_id = chosen_forward_synapses_info.first_group_id + DELAY_INFO_BYTE_SHIFT_FROM_FIRST_GROUP(delay_info);
                     for(uint32_t k=0;k < n_groups;k++) {
                         firings_buffer[firings_offset + k] = Firing{
-                            blockIdx.y, 1.0, current_group_id
+                            blockIdx.y, static_cast<REAL_DT>(winner_inp), current_group_id
                         };
                         current_group_id += SizeOfForwardSynapseGroup(forward_group_size, true);
                     }

@@ -17,6 +17,7 @@ private:
     uint32_t max_inputs_per_detector;
     uint32_t forward_group_size;
     uint32_t backward_group_size;
+    bool spiking_inhibition;
     REAL_DT first_synapse_meta_lr;
 
     uint32_t batch_size;
@@ -54,6 +55,7 @@ public:
         uint32_t max_inputs_per_detector,
         uint32_t forward_group_size,
         uint32_t backward_group_size,
+        bool spiking_inhibition,
         uint32_t max_forward_groups_per_neuron,
         uint32_t max_backward_groups_per_neuron,
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
@@ -120,6 +122,7 @@ public:
         int32_t *output_prewinner_ids,
         int32_t *output_winning_stat,
         uint32_t n_output_detectors,
+        bool spiking_output_inhibition,
         // gradients that we need to calculate
         EXTERNAL_REAL_DT *target_weights_gradients
     );
