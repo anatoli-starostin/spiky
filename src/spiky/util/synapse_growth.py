@@ -480,3 +480,42 @@ class InhibitionGrid2DHelper(object):
                         detectors[win_y * self.num_win_w + win_x, by * self.iw + bx] = input_ids[y + by, x + bx]
 
         return detectors
+
+
+class RandomInhibition2DHelper(object):
+    def __init__(self, h, w, iw, ih, n):
+        """
+        h, w: input grid height and width
+        iw, ih: inhibition window width and height
+        n: number of detectors
+        """
+        self.h = h
+        self.w = w
+        self.iw = iw
+        self.ih = ih
+        self.n = n
+
+    def create_detectors(
+        self, input_ids, seed=None
+    ):
+        assert input_ids.shape == (self.h, self.w,)
+
+        detectors = torch.zeros([self.n, self.ih * self.iw], dtype=torch.int32, device=input_ids.device)
+
+        gen = torch.Generator(device=torch.device('cpu'))
+        if seed is not None:
+            gen.manual_seed(seed)
+
+        top_left_corners = torch.stack([
+            torch.randint(self.w - self.iw + 1, (self.n,), generator=gen, device=torch.device('cpu')),
+            torch.randint(self.h - self.ih + 1, (self.n,), generator=gen, device=torch.device('cpu'))
+        ], dim=1)
+
+        for i in range(n):
+            x = top_left_corners[i, 0]
+            y = top_left_corners[i, 1]
+            for by in range(self.ih):
+                for bx in range(self.iw):
+                    detectors[i, by * self.iw + bx] = input_ids[y + by, x + bx]
+
+        return detectors

@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 
 from spiky_cuda import ANDNDataManagerF, ANDNDataManagerI
-from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper, InhibitionGrid2DHelper
+from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper, InhibitionGrid2DHelper, RandomInhibition2DHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -772,6 +772,47 @@ class Grid2DInhibitionLayer(InhibitionLayer):
         self.initialize_detectors(
             i_helper.create_detectors(
                 input_ids=self.get_input_neuron_ids().reshape(input_shape)
+            )
+        )
+
+        if device is not None:
+            self.to(device=device)
+
+        self._output_shape = input_shape
+
+    def output_shape(self):
+        return self._output_shape
+
+
+class Random2DInhibitionLayer(InhibitionLayer):
+    def __init__(
+        self, input_shape,
+        inhibition_window_shape,
+        n_detectors,
+        spiking_inhibition=True,
+        device=None,
+        seed=None
+    ):
+        assert n_detectors > 0
+        n_inputs = input_shape[0] * input_shape[1]
+        i_helper = RandomInhibition2DHelper(
+            input_shape[0], input_shape[1],
+            inhibition_window_shape[0], inhibition_window_shape[1],
+            n_detectors
+        )
+        max_inputs_per_detector = inhibition_window_shape[0] * inhibition_window_shape[1]
+
+        super().__init__(
+            n_inputs=n_inputs,
+            n_detectors=n_detectors,
+            max_inputs_per_detector=max_inputs_per_detector,
+            spiking_inhibiton=spiking_inhibition
+        )
+
+        self.initialize_detectors(
+            i_helper.create_detectors(
+                input_ids=self.get_input_neuron_ids().reshape(input_shape),
+                seed=seed
             )
         )
 
