@@ -538,7 +538,7 @@ class RandomInhibition2DHelper(object):
 
         input_ids_extended = torch.ones([self.h + 1, self.w + 1], device=device) * (input_ids.max() + 1)
         input_ids_extended[:self.h, :self.w] = input_ids
-        detectors = input_ids_extended[flat_y, flat_x].reshape(n, self.ih * self.iw)
+        detectors = input_ids_extended[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
 
         if self.n_inp is not None:
             # Shuffle detectors along the last dimension and truncate to self.n_inp
