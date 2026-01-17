@@ -514,8 +514,8 @@ class RandomInhibition2DHelper(object):
 
         # shape: [n, 2] (x, y) for top-left corner of each window
         centers = torch.stack([
-            torch.randint(self.w, (self.n,), generator=gen, device=device),
-            torch.randint(self.h, (self.n,), generator=gen, device=device)
+            torch.randint(self.w, (self.n,), generator=gen, device=device).clamp(self.iw // 2, self.w - self.iw // 2 - 1),
+            torch.randint(self.h, (self.n,), generator=gen, device=device).clamp(self.ih // 2, self.h - self.ih // 2 - 1)
         ], dim=1)
 
         # Vectorized coordinates for slicing
@@ -531,19 +531,11 @@ class RandomInhibition2DHelper(object):
         flat_y = abs_y.reshape(-1)
         flat_x = abs_x.reshape(-1)
 
-        flat_y[flat_y < 0] = self.h
-        flat_y[flat_y >= self.h] = self.h
-        flat_x[flat_x < 0] = self.w
-        flat_x[flat_x >= self.w] = self.w
-
-        input_ids_extended = torch.ones([self.h + 1, self.w + 1], dtype=torch.int32, device=device) * (input_ids.max() + 1)
-        input_ids_extended[:self.h, :self.w] = input_ids
-        detectors = input_ids_extended[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
+        detectors = input_ids[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
 
         if self.n_inp is not None:
             # Shuffle detectors along the last dimension and truncate to self.n_inp
             idx = torch.rand(detectors.shape, device=detectors.device).argsort(dim=-1)
             detectors = torch.gather(detectors, 1, idx)[:, :self.n_inp]
 
-        detectors[detectors == input_ids.max() + 1] = -1
         return detectors
