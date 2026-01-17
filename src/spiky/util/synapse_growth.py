@@ -536,7 +536,7 @@ class RandomInhibition2DHelper(object):
         flat_x[flat_x < 0] = self.w
         flat_x[flat_x >= self.w] = self.w
 
-        input_ids_extended = torch.ones([self.h + 1, self.w + 1], device=device) * (input_ids.max() + 1)
+        input_ids_extended = torch.ones([self.h + 1, self.w + 1], dtype=torch.int32, device=device) * (input_ids.max() + 1)
         input_ids_extended[:self.h, :self.w] = input_ids
         detectors = input_ids_extended[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
 
