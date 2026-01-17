@@ -513,29 +513,37 @@ class RandomInhibition2DHelper(object):
             gen.manual_seed(seed)
 
         # shape: [n, 2] (x, y) for top-left corner of each window
-        top_left_corners = torch.stack([
-            torch.randint(self.w - self.iw + 1, (self.n,), generator=gen, device=device),
-            torch.randint(self.h - self.ih + 1, (self.n,), generator=gen, device=device)
+        centers = torch.stack([
+            torch.randint(self.w, (self.n,), generator=gen, device=device),
+            torch.randint(self.h, (self.n,), generator=gen, device=device)
         ], dim=1)
 
         # Vectorized coordinates for slicing
-        by = torch.arange(self.ih, device=device)
-        bx = torch.arange(self.iw, device=device)
+        by = torch.arange(self.ih, device=device) - self.ih // 2
+        bx = torch.arange(self.iw, device=device) - self.iw // 2
         grid_y, grid_x = torch.meshgrid(by, bx, indexing='ij')  # [ih, iw]
 
         # [n, ih, iw] absolute Y and X coordinates for all patches
-        abs_y = top_left_corners[:, 1].unsqueeze(-1).unsqueeze(-1) + grid_y  # [n, ih, iw]
-        abs_x = top_left_corners[:, 0].unsqueeze(-1).unsqueeze(-1) + grid_x  # [n, ih, iw]
+        abs_y = centers[:, 1].unsqueeze(-1).unsqueeze(-1) + grid_y  # [n, ih, iw]
+        abs_x = centers[:, 0].unsqueeze(-1).unsqueeze(-1) + grid_x  # [n, ih, iw]
 
         # Flatten indices for easy advanced indexing
         flat_y = abs_y.reshape(-1)
         flat_x = abs_x.reshape(-1)
 
-        detectors = input_ids[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
+        flat_y[flat_y < 0] = self.h
+        flat_y[flat_y >= self.h] = self.h
+        flat_x[flat_x < 0] = self.w
+        flat_x[flat_x >= self.w] = self.w
+
+        input_ids_extended = torch.ones([self.h + 1, self.w + 1], device=device) * (input_ids.max() + 1)
+        input_ids_extended[:self.h, :self.w] = input_ids
+        detectors = input_ids_extended[flat_y, flat_x].reshape(n, self.ih * self.iw)
 
         if self.n_inp is not None:
             # Shuffle detectors along the last dimension and truncate to self.n_inp
             idx = torch.rand(detectors.shape, device=detectors.device).argsort(dim=-1)
             detectors = torch.gather(detectors, 1, idx)[:, :self.n_inp]
 
+        detectors[detectors == input_ids.max() + 1] = -1
         return detectors
