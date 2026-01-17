@@ -789,6 +789,7 @@ class Random2DInhibitionLayer(InhibitionLayer):
         self, input_shape,
         inhibition_window_shape,
         n_detectors,
+        max_inputs_per_detector,
         spiking_inhibition=True,
         device=None,
         seed=None
@@ -798,9 +799,8 @@ class Random2DInhibitionLayer(InhibitionLayer):
         i_helper = RandomInhibition2DHelper(
             input_shape[0], input_shape[1],
             inhibition_window_shape[0], inhibition_window_shape[1],
-            n_detectors
+            n_detectors, max_inputs_per_detector
         )
-        max_inputs_per_detector = inhibition_window_shape[0] * inhibition_window_shape[1]
 
         super().__init__(
             n_inputs=n_inputs,

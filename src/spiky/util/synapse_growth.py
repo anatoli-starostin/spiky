@@ -483,39 +483,59 @@ class InhibitionGrid2DHelper(object):
 
 
 class RandomInhibition2DHelper(object):
-    def __init__(self, h, w, iw, ih, n):
+    def __init__(self, h, w, iw, ih, n, n_inp=None):
         """
         h, w: input grid height and width
         iw, ih: inhibition window width and height
         n: number of detectors
+        n_inp: number of inputs per detector (if None use all inputs from the window)
         """
+        assert 0 < iw < w
+        assert 0 < ih < h
+        assert 0 < n
+        if n_inp is not None:
+            assert n_inp < iw * ih
         self.h = h
         self.w = w
         self.iw = iw
         self.ih = ih
         self.n = n
+        self.n_inp = n_inp
 
     def create_detectors(
         self, input_ids, seed=None
     ):
         assert input_ids.shape == (self.h, self.w,)
+        device = input_ids.device
 
-        detectors = torch.zeros([self.n, self.ih * self.iw], dtype=torch.int32, device=input_ids.device)
-
-        gen = torch.Generator(device=torch.device('cpu'))
+        gen = torch.Generator(device=device)
         if seed is not None:
             gen.manual_seed(seed)
 
+        # shape: [n, 2] (x, y) for top-left corner of each window
         top_left_corners = torch.stack([
-            torch.randint(self.w - self.iw + 1, (self.n,), generator=gen, device=torch.device('cpu')),
-            torch.randint(self.h - self.ih + 1, (self.n,), generator=gen, device=torch.device('cpu'))
+            torch.randint(self.w - self.iw + 1, (self.n,), generator=gen, device=device),
+            torch.randint(self.h - self.ih + 1, (self.n,), generator=gen, device=device)
         ], dim=1)
 
-        for i in range(n):
-            x = top_left_corners[i, 0]
-            y = top_left_corners[i, 1]
-            for by in range(self.ih):
-                for bx in range(self.iw):
-                    detectors[i, by * self.iw + bx] = input_ids[y + by, x + bx]
+        # Vectorized coordinates for slicing
+        by = torch.arange(self.ih, device=device)
+        bx = torch.arange(self.iw, device=device)
+        grid_y, grid_x = torch.meshgrid(by, bx, indexing='ij')  # [ih, iw]
+
+        # [n, ih, iw] absolute Y and X coordinates for all patches
+        abs_y = top_left_corners[:, 1].unsqueeze(-1).unsqueeze(-1) + grid_y  # [n, ih, iw]
+        abs_x = top_left_corners[:, 0].unsqueeze(-1).unsqueeze(-1) + grid_x  # [n, ih, iw]
+
+        # Flatten indices for easy advanced indexing
+        flat_y = abs_y.reshape(-1)
+        flat_x = abs_x.reshape(-1)
+
+        detectors = input_ids[flat_y, flat_x].reshape(self.n, self.ih * self.iw)
+
+        if self.n_inp is not None:
+            # Shuffle detectors along the last dimension and truncate to self.n_inp
+            idx = torch.rand(detectors.shape, device=detectors.device).argsort(dim=-1)
+            detectors = torch.gather(detectors, 1, idx)[:, :self.n_inp]
 
         return detectors
