@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from spiky.lut.LUTLayer import LUTLayerBasic, SynapseMeta, GradientPolicy, LUTSharedContext
-from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
+from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper
 from spiky.util.chunk_of_connections import ChunkOfConnections, create_identity_mapping
 from spiky.andn.ANDNLayer import SynapseMeta as ANDN_sm
-from spiky.andn.ANDNLayer import Conv2DANDNLayer, Grid2DInhibitionLayer
+from spiky.andn.ANDNLayer import Conv2DANDNLayer, Random2DInhibitionLayer, ANDNLayer
 
 
 class ANDNLUTLayer(LUTLayerBasic):
@@ -148,6 +148,182 @@ class ANDNLUTLayer(LUTLayerBasic):
             output_kernel_shape,
             spiking_inhibition=False,
             device=device
+        )
+        self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
+
+    def forward(self, x):
+        x = super().forward(x)
+        x = self._andn_layer(x)
+        return self._inhibition_layer(x)
+
+    def input_shape(self):
+        return self._input_shape
+
+    def output_shape(self):
+        return self._output_shape
+
+    def detectors_shape(self):
+        return self._detectors_shape
+
+    def __repr__(self):
+        return f'ANDNLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, detectors_shape={self.detectors_shape()}, n_anchors_per_detector={self.n_anchors_per_detector()})'
+
+
+class _AuxANDNLayer(ANDNLayer):
+    def __init__(
+        self, n_inputs, output_shape, connections,
+        synapse_meta,
+        backprop_hebb_ratio_on_torch_backward=1.0,
+        relu_output=False,
+        anti_hebb_coeff=0.0,
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _forward_group_size: int = 64,
+        _backward_group_size: int = 64,
+        random_seed=None,
+        device=None
+    ):
+        super().__init__(
+            n_inputs=n_inputs,
+            n_outputs=output_shape[0] * output_shape[1],
+            n_detectors=0,
+            max_inputs_per_detector=0,
+            synapse_metas=[synapse_meta],
+            backprop_hebb_ratio_on_torch_backward=backprop_hebb_ratio_on_torch_backward,
+            relu_output=relu_output,
+            anti_hebb_coeff=anti_hebb_coeff,
+            summation_dtype=summation_dtype,
+            _int_rescaler=_int_rescaler,
+            _initial_synapse_capacity=c_helper.n_connections(),
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size
+        )
+
+        if device is not None:
+            self.to(device=device)
+
+        self.add_connections(
+            chunk_of_connections=connections,
+            ids_shift=-1,
+            random_seed=random_seed
+        )
+
+        self.compile_andn()
+        self._output_shape = output_shape
+
+    def output_shape(self):
+        return self._output_shape
+
+
+class ANDNLUTLayerEx(LUTLayerBasic):
+    def __init__(
+        self, input_shape, output_shape,
+        n_anchors_per_detector,
+        n_detectors,
+        receptive_shape,
+        projection_shape,
+        n_projections_per_detector,
+        inhibition_window_shape,
+        n_inhibitors,
+        n_neurons_per_inhibitor,
+        synapse_meta=ANDN_sm(),
+        backprop_hebb_ratio_on_torch_backward=0.5,
+        anti_hebb_coeff=0.0,
+        relu_before_inhibition=True,
+        weights_gradient_policy: GradientPolicy = None,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _forward_group_size=32,
+        _backward_group_size=32,
+        _max_groups_in_growth_buffer=2 ** 20,
+        random_seed=None,
+        device=None
+    ):
+        c_helper_1 = RandomRectanglesSynapseGrowthHelper(
+            input_shape[0], input_shape[1],
+            receptive_shape[0], receptive_shape[1],
+            output_shape[0], output_shape[1],
+            n_outputs=n_detectors
+        )
+
+        n_inputs = input_shape[0] * input_shape[1]
+
+        self._input_shape = input_shape
+        n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1)
+
+        super().__init__(
+            n_inputs=n_inputs, n_outputs=output_shape[0] * output_shape[1], n_detectors=n_detectors,
+            n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=False,
+            sequence_length=1, synapse_metas=[SynapseMeta(learning_rate=0.0, initial_weight=1.0)],
+            weights_gradient_policy=weights_gradient_policy,
+            shared_context=shared_context,
+            summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
+            _initial_synapse_capacity=n_detectors * n_lut_channels,
+            _forward_group_size=1,
+            _backward_group_size=1,
+            random_seed=random_seed
+        )
+
+        if device is not None:
+            self.to(device=device)
+        else:
+            device = torch.device("cpu")
+
+        connections, centers = c_helper_1.grow_synapses(
+            input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
+            output_ids=self.get_detector_neuron_ids() + 1,
+            max_groups_in_buffer=_max_groups_in_growth_buffer,
+            device=device,
+            seed=random_seed
+        )
+
+        self.add_detector_connections(
+            chunk_of_connections=connections,
+            ids_shift=-1,
+            random_seed=random_seed
+        )
+
+        self.initialize_detectors(seed=random_seed)
+
+        self.add_lookup_connections(
+            chunk_of_connections=create_identity_mapping(
+                n_detectors * n_lut_channels,
+                delta=n_detectors * n_lut_channels,
+                device=device
+            ),
+            ids_shift=-1,
+            random_seed=random_seed
+        )
+
+        self.compile_lut()
+
+        connections = None  # TODO
+
+        self._andn_layer = _AuxANDNLayer(
+            n_inputs=n_detectors * n_lut_channels,
+            output_shape=output_shape,
+            connections=connections,
+            synapse_meta=synapse_meta,
+            backprop_hebb_ratio_on_torch_backward=backprop_hebb_ratio_on_torch_backward,
+            relu_output=relu_before_inhibition,
+            anti_hebb_coeff=anti_hebb_coeff,
+            summation_dtype=summation_dtype,
+            _int_rescaler=_int_rescaler,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size,
+            random_seed=random_seed,
+            device=device
+        )
+        self._output_shape = output_shape
+        self._inhibition_layer = Random2DInhibitionLayer(
+            self._andn_layer.output_shape(),
+            inhibition_window_shape,
+            n_inhibitors,
+            n_neurons_per_inhibitor,
+            spiking_inhibition=False,
+            device=device,
+            seed=random_seed
         )
         self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
 

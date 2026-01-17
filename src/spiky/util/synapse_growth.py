@@ -448,6 +448,80 @@ class Conv2DSynapseGrowthHelper(object):
         return self.num_win_h * self.num_win_w * self.kh * self.kw * self.rh * self.rw
 
 
+class RandomRectanglesSynapseGrowthHelper(object):
+    def __init__(self, h, w, rh, rw, oh, ow, p=1.0, n_outputs=None, max_synapses_per_input=None):
+        """
+        h, w: input grid height and width
+        rw, rh: rectangle window width and height
+        ow, oh: output grid height and width
+        """
+        self.h = h
+        self.w = w
+        self.rw = rw
+        self.rh = rh
+        self.ow = ow
+        self.oh = oh
+        self.p = p
+        self.n_outputs = n_outputs
+        self.max_synapses_per_input = max_synapses_per_input
+
+    def grow_synapses(
+        self, input_ids, output_ids, device,
+        synapse_group_size=64, max_groups_in_buffer=2**20, seed=None
+    ):
+        assert input_ids.shape == (self.h, self.w,)
+        assert output_ids.shape == (self.n_outputs,)
+        assert (input_ids > 0).all()
+        assert (output_ids > 0).all()
+        growth_engine = SynapseGrowthEngine(device=device, synapse_group_size=synapse_group_size, max_groups_in_buffer=max_groups_in_buffer)
+        growth_command = GrowthCommand(
+            target_type=1,
+            synapse_meta_index=0,
+            x1=-((self.rw - 1) / 2) - 1e-4, y1=-((self.rh - 1) / 2) - 1e-4, z1=0.5,
+            x2=((self.rw - 1) / 2) + 1e-4, y2=((self.rh - 1) / 2) + 1e-4, z2=1.5,
+            p=self.p
+        )
+
+        growth_engine.register_neuron_type(
+            max_synapses=self.n_outputs if self.max_synapses_per_input is None else self.max_synapses_per_input,
+            growth_command_list=[growth_command]
+        )
+        growth_engine.register_neuron_type(
+            max_synapses=0,
+            growth_command_list=[]
+        )
+
+        # we need a torch tensor with (x, y) coordinates in the input grid
+        input_grid_coords = torch.tensor([[x, y, 0] for y in range(self.h) for x in range(self.w) for _ in range(self.n_input_channels)], dtype=torch.float32)
+        growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids.reshape(self.h * self.w * self.n_input_channels), coordinates=input_grid_coords)
+
+        # For each position of a sliding window, compute the center coordinate of its receptive field,
+        # and assign this center coordinate to all output points in the corresponding output block.
+        output_grid_coords = torch.zeros((self.n_outputs, 3), dtype=torch.float32)
+
+        cpu_device = torch.device("cpu")
+        gen = torch.Generator(device=cpu_device)
+        if seed is not None:
+            gen.manual_seed(seed)
+
+        # shape: [n, 2] (x, y) for top-left corner of each window
+        centers = torch.stack([
+            (torch.rand([self.n_outputs], generator=gen, device=cpu_device) * self.ow).clamp(self.rw / 2, self.w - self.rw / 2),
+            (torch.rand([self.n_outputs], generator=gen, device=cpu_device) * self.oh).clamp(self.rh / 2, self.h - self.rh / 2)
+        ], dim=1)
+
+        for i in range(self.n_outputs):
+            # Calculate center coordinate in input grid for this window
+            output_grid_coords[i, 0] = centers[i, 0]
+            output_grid_coords[i, 1] = centers[i, 1]
+            output_grid_coords[i, 2] = 1.0
+        growth_engine.add_neurons(neuron_type_index=1, identifiers=output_ids, coordinates=output_grid_coords)
+        return growth_engine.grow(seed), centers
+
+    def n_connections(self):
+        return self.num_win_h * self.num_win_w * self.kh * self.kw * self.rh * self.rw
+
+
 class InhibitionGrid2DHelper(object):
     def __init__(self, h, w, iw, ih):
         """
@@ -494,7 +568,7 @@ class RandomInhibition2DHelper(object):
         assert 0 < ih < h
         assert 0 < n
         if n_inp is not None:
-            assert n_inp < iw * ih
+            assert n_inp <= iw * ih
         self.h = h
         self.w = w
         self.iw = iw
