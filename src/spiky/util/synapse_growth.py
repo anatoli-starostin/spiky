@@ -562,8 +562,8 @@ class GivenRectanglesSynapseGrowthHelper(object):
 
         input_grid_coords = torch.zeros((self.centers.shape[0], 3), dtype=torch.float32)
 
-        input_grid_coords[:, 0] = centers[:, 0]
-        input_grid_coords[:, 1] = centers[:, 1]
+        input_grid_coords[:, 0] = self.centers[:, 0]
+        input_grid_coords[:, 1] = self.centers[:, 1]
         growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids, coordinates=input_grid_coords)
 
         output_grid_coords = torch.tensor([[x, y, 0] for y in range(self.oh) for x in range(self.ow)], dtype=torch.float32)
