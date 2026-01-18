@@ -532,7 +532,6 @@ class GivenRectanglesSynapseGrowthHelper(object):
         self.ow = ow
         self.oh = oh
         self.p = p
-        self.n_outputs = n_outputs
         self.max_synapses_per_input = max_synapses_per_input
 
     def grow_synapses(
