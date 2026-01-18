@@ -199,7 +199,7 @@ class _AuxANDNLayer(ANDNLayer):
             anti_hebb_coeff=anti_hebb_coeff,
             summation_dtype=summation_dtype,
             _int_rescaler=_int_rescaler,
-            _initial_synapse_capacity=c_helper.n_connections(),
+            _initial_synapse_capacity=None,
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size
         )
