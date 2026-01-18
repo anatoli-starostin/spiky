@@ -303,7 +303,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         self.add_lookup_connections(
             chunk_of_connections=create_identity_mapping(
                 n_detector_groups * n_detectors_in_group * n_lut_channels,
-                delta=n_detectors * n_lut_channels,
+                delta=n_detector_groups * n_detectors_in_group * n_lut_channels,
                 device=device
             ),
             ids_shift=-1,
@@ -333,7 +333,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         connections = repeat_connections_incrementing_source(connections, n_lut_channels * n_detectors_in_group)
 
         self._andn_layer = _AuxANDNLayer(
-            n_inputs=n_detectors * n_lut_channels,
+            n_inputs=n_detector_groups * n_detectors_in_group * n_lut_channels,
             output_shape=output_shape,
             connections=connections,
             synapse_meta=synapse_meta,

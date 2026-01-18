@@ -119,7 +119,7 @@ def repeat_connections_incrementing_source(chunk_of_connections: ChunkOfConnecti
     new_weights = None if chunk_of_connections._weights is None else chunk_of_connections._weights.unsqueeze(0).repeat(n_repeats, 1).flatten()
     g_size = 4 + 2 * chunk_of_connections._single_group_size
     n_groups = chunk_of_connections._connections.numel() // g_size
-    new_connections = new_connections.reshape(n_repeats, n_groups, g_size).cpu()
+    new_connections = new_connections.reshape(n_repeats, n_groups, g_size).cpu().detach()
 
     # TODO rewrite with torch
     for i in range(n_repeats):
