@@ -449,7 +449,7 @@ class Conv2DSynapseGrowthHelper(object):
 
 
 class RandomRectanglesSynapseGrowthHelper(object):
-    def __init__(self, h, w, rh, rw, oh, ow, p=1.0, n_outputs=None):
+    def __init__(self, h, w, rh, rw, oh, ow, p=1.0, n_out_channels=1, n_outputs=None):
         """
         h, w: input grid height and width
         rw, rh: rectangle window width and height
@@ -462,6 +462,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
         self.ow = ow
         self.oh = oh
         self.p = p
+        self.n_out_channels = n_out_channels
         self.n_outputs = n_outputs
 
     def grow_synapses(
@@ -469,7 +470,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
         synapse_group_size=64, max_groups_in_buffer=2**20, seed=None
     ):
         assert input_ids.shape == (self.h, self.w,)
-        assert output_ids.shape == (self.n_outputs,)
+        assert output_ids.shape == (self.n_outputs * self.n_out_channels,)
         assert (input_ids > 0).all()
         assert (output_ids > 0).all()
         growth_engine = SynapseGrowthEngine(device=device, synapse_group_size=synapse_group_size, max_groups_in_buffer=max_groups_in_buffer)
@@ -496,18 +497,20 @@ class RandomRectanglesSynapseGrowthHelper(object):
 
         # For each position of a sliding window, compute the center coordinate of its receptive field,
         # and assign this center coordinate to all output points in the corresponding output block.
-        output_grid_coords = torch.ones((self.n_outputs, 3), dtype=torch.float32)
+        output_grid_coords = torch.ones((self.n_outputs * self.n_out_channels, 3), dtype=torch.float32)
 
-        cpu_device = torch.device("cpu")
-        gen = torch.Generator(device=cpu_device)
+        gen = torch.Generator(device=device)
         if seed is not None:
             gen.manual_seed(seed)
 
         # shape: [n, 2] (x, y) for top-left corner of each window
         centers = torch.stack([
-            (torch.rand([self.n_outputs], generator=gen, device=cpu_device) * self.ow).clamp(self.rw / 2, self.w - self.rw / 2),
-            (torch.rand([self.n_outputs], generator=gen, device=cpu_device) * self.oh).clamp(self.rh / 2, self.h - self.rh / 2)
+            (torch.rand([self.n_outputs], generator=gen, device=device) * self.ow).clamp(self.rw / 2, self.w - self.rw / 2),
+            (torch.rand([self.n_outputs], generator=gen, device=device) * self.oh).clamp(self.rh / 2, self.h - self.rh / 2)
         ], dim=1)
+
+        if self.n_out_channels > 1:
+            centers = centers.view(self.n_outputs, 1, 2).repeat(1, self.n_out_channels, 1).view(self.n_outputs * self.n_out_channels, 2)
 
         output_grid_coords[:, 0] = centers[:, 0]
         output_grid_coords[:, 1] = centers[:, 1]
@@ -566,7 +569,7 @@ class GivenRectanglesSynapseGrowthHelper(object):
         input_grid_coords[:, 1] = self.centers[:, 1]
         growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids, coordinates=input_grid_coords)
 
-        output_grid_coords = torch.tensor([[x, y, 0] for y in range(self.oh) for x in range(self.ow)], dtype=torch.float32)
+        output_grid_coords = torch.tensor([[x, y, 1] for y in range(self.oh) for x in range(self.ow)], dtype=torch.float32)
         growth_engine.add_neurons(neuron_type_index=1, identifiers=output_ids.reshape(self.oh * self.ow), coordinates=output_grid_coords)
 
         return growth_engine.grow(seed)

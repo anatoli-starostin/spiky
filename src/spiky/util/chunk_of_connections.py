@@ -115,17 +115,32 @@ def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0,
 
 
 def repeat_connections_incrementing_source(chunk_of_connections: ChunkOfConnections, n_repeats: int):
-    new_connections = chunk_of_connections._connections.unsqueeze(0).repeat(n_repeats, 1)
-    new_weights = None if chunk_of_connections._weights is None else chunk_of_connections._weights.unsqueeze(0).repeat(n_repeats, 1).flatten()
     g_size = 4 + 2 * chunk_of_connections._single_group_size
-    n_groups = chunk_of_connections._connections.numel() // g_size
+    connections = chunk_of_connections._connections
+    n_groups = connections.numel() // g_size
+    assert n_groups > 0 
+    groups = connections.view(n_groups, g_size)
+    non_empty = torch.any(groups != 0, dim=1)
+    if torch.any(non_empty):
+        last_non_empty_idx = torch.nonzero(non_empty, as_tuple=False)[-1].item()
+        groups = groups[:last_non_empty_idx + 1]
+    else:
+        groups = groups[:0]
+    connections = groups.flatten()
+    n_groups = connections.numel() // g_size
+
+    weights = chunk_of_connections._weights
+    weights = None if weights is None else weights[:n_groups * chunk_of_connections._single_group_size] 
+
+    new_connections = connections.unsqueeze(0).repeat(n_repeats, 1)
+    new_weights = None if weights is None else weights.unsqueeze(0).repeat(n_repeats, 1).flatten()
     new_connections = new_connections.reshape(n_repeats, n_groups, g_size).cpu().detach()
 
-    # TODO rewrite with torch
-    for i in range(n_repeats):
-        for j in range(n_groups):
-            if new_connections[i, j, 0] > 0:
-                new_connections[i, j, 0] += i
+    # Vectorized source increment for head groups only.
+    if n_groups > 0 and n_repeats > 0:
+        head_mask = new_connections[:, :, 0] > 0
+        increments = torch.arange(n_repeats, dtype=new_connections.dtype).view(n_repeats, 1)
+        new_connections[:, :, 0] += head_mask * increments
 
     return ChunkOfConnections(
         new_connections.to(device=chunk_of_connections._connections.device).flatten(),
