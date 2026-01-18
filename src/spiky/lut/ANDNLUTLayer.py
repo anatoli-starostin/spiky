@@ -5,8 +5,12 @@ from dataclasses import dataclass
 from enum import Enum
 
 from spiky.lut.LUTLayer import LUTLayerBasic, SynapseMeta, GradientPolicy, LUTSharedContext
-from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper
-from spiky.util.chunk_of_connections import ChunkOfConnections, create_identity_mapping
+from spiky.util.synapse_growth import (
+    Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper, GivenRectanglesSynapseGrowthHelper
+)
+from spiky.util.chunk_of_connections import (
+    ChunkOfConnections, create_identity_mapping, repeat_connections_incrementing_source
+)
 from spiky.andn.ANDNLayer import SynapseMeta as ANDN_sm
 from spiky.andn.ANDNLayer import Conv2DANDNLayer, Random2DInhibitionLayer, ANDNLayer
 
@@ -177,6 +181,7 @@ class _AuxANDNLayer(ANDNLayer):
         relu_output=False,
         anti_hebb_coeff=0.0,
         summation_dtype=torch.float32,
+        _ids_shift=-1,
         _int_rescaler=0.001,
         _forward_group_size: int = 64,
         _backward_group_size: int = 64,
@@ -204,7 +209,7 @@ class _AuxANDNLayer(ANDNLayer):
 
         self.add_connections(
             chunk_of_connections=connections,
-            ids_shift=-1,
+            ids_shift=_ids_shift,
             random_seed=random_seed
         )
 
@@ -219,7 +224,8 @@ class ANDNLUTLayerEx(LUTLayerBasic):
     def __init__(
         self, input_shape, output_shape,
         n_anchors_per_detector,
-        n_detectors,
+        n_detector_groups,
+        n_detectors_in_group,
         receptive_shape,
         projection_shape,
         n_projections_per_detector,
@@ -230,6 +236,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         backprop_hebb_ratio_on_torch_backward=0.5,
         anti_hebb_coeff=0.0,
         relu_before_inhibition=True,
+        residual=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -240,26 +247,31 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         random_seed=None,
         device=None
     ):
-        c_helper_1 = RandomRectanglesSynapseGrowthHelper(
+        assert n_detector_groups >= 1
+        assert n_detectors_in_group >= 1
+        c_helper = RandomRectanglesSynapseGrowthHelper(
             input_shape[0], input_shape[1],
             receptive_shape[0], receptive_shape[1],
-            output_shape[0], output_shape[1],
-            n_outputs=n_detectors
+            input_shape[0], input_shape[1],
+            n_outputs=n_detector_groups
         )
 
         n_inputs = input_shape[0] * input_shape[1]
 
         self._input_shape = input_shape
+        self._residual = residual
+        if residual:
+            assert input_shape == output_shape
         n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1)
 
         super().__init__(
-            n_inputs=n_inputs, n_outputs=output_shape[0] * output_shape[1], n_detectors=n_detectors,
+            n_inputs=n_inputs, n_outputs=output_shape[0] * output_shape[1], n_detectors=n_detector_groups * n_detectors_in_group,
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=False,
             sequence_length=1, synapse_metas=[SynapseMeta(learning_rate=0.0, initial_weight=1.0)],
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
-            _initial_synapse_capacity=n_detectors * n_lut_channels,
+            _initial_synapse_capacity=(n_detector_groups * n_detectors_in_group) * n_lut_channels,
             _forward_group_size=1,
             _backward_group_size=1,
             random_seed=random_seed
@@ -270,13 +282,15 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         else:
             device = torch.device("cpu")
 
-        connections, centers = c_helper_1.grow_synapses(
+        connections, group_centers = c_helper.grow_synapses(
             input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
-            output_ids=self.get_detector_neuron_ids() + 1,
+            output_ids=self.get_detector_neuron_ids()[::n_detectors_in_group] + 1,
             max_groups_in_buffer=_max_groups_in_growth_buffer,
             device=device,
             seed=random_seed
         )
+        if n_detectors_in_group > 1:
+            connections = repeat_connections_incrementing_source(connections, n_detectors_in_group)
 
         self.add_detector_connections(
             chunk_of_connections=connections,
@@ -298,7 +312,25 @@ class ANDNLUTLayerEx(LUTLayerBasic):
 
         self.compile_lut()
 
-        connections = None  # TODO
+        group_centers[:, 0] *= output_shape[0] / input_shape[0]
+        group_centers[:, 1] *= output_shape[1] / input_shape[1]
+
+        c_helper = GivenRectanglesSynapseGrowthHelper(
+            group_centers,
+            projection_shape[0], projection_shape[1],
+            output_shape[0], output_shape[1],
+            max_synapses_per_input=n_projections_per_detector
+        )
+
+        connections = c_helper.grow_synapses(
+            input_ids=self.get_detector_neuron_ids()[::n_detectors_in_group] * n_lut_channels + 1,
+            output_ids=self.get_output_neuron_ids().reshape(output_shape) + 1,
+            max_groups_in_buffer=_max_groups_in_growth_buffer,
+            device=device,
+            seed=random_seed
+        )
+
+        connections = repeat_connections_incrementing_source(connections, n_lut_channels * n_detectors_in_group)
 
         self._andn_layer = _AuxANDNLayer(
             n_inputs=n_detectors * n_lut_channels,
@@ -328,8 +360,10 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
 
     def forward(self, x):
-        x = super().forward(x)
+        source_x = super().forward(x)
         x = self._andn_layer(x)
+        if self._residual:
+            x = x + source_x
         return self._inhibition_layer(x)
 
     def input_shape(self):

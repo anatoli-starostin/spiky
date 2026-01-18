@@ -114,6 +114,21 @@ def create_identity_mapping(N: int, synapse_meta_index: int = 0, delta: int = 0,
     return ChunkOfConnections(connections, single_group_size)
 
 
+def repeat_connections_incrementing_source(chunk_of_connections: ChunkOfConnections, n_repeats: int):
+    new_connections = chunk_of_connections._connections.unsqueeze(0).repeat(n_repeats, 1)
+    new_weights = None if chunk_of_connections._weights is None else chunk_of_connections._weights.unsqueeze(0).repeat(n_repeats, 1).flatten()
+    g_size = 4 + 2 * chunk_of_connections._single_group_size
+    n_groups = chunk_of_connections._connections.numel() // g_size
+    new_connections = new_connections.reshape(n_repeats, n_groups, g_size)
+    increment = torch.arange(n_repeats, dtype=torch.int32, device=new_connections.device).view(n_repeats, 1)
+    new_connections[:, :, 0] += increment
+    return ChunkOfConnections(
+        new_connections.flatten(),
+        chunk_of_connections._single_group_size,
+        new_weights
+    )
+
+
 class ChunkOfConnectionsValidator:
     """Validation functions to check the consistency of ChunkOfConnections according to its specification."""
 
