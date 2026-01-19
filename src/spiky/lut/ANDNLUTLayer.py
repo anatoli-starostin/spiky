@@ -213,7 +213,7 @@ class _AuxANDNLayer(ANDNLayer):
             self.to(device=device)
 
         c_helper = GivenRectanglesSynapseGrowthHelper(
-            group_centers,
+            group_centers[::n_detectors_in_group],
             projection_shape[0], projection_shape[1],
             output_shape[0], output_shape[1],
             max_synapses_per_input=n_projections_per_detector
@@ -386,4 +386,4 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         return self._detectors_shape
 
     def __repr__(self):
-        return f'ANDNLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, n_anchors_per_detector={self.n_anchors_per_detector()})'
+        return f'ANDNLUTLayerEx(input_shape={self.input_shape()}, output_shape={self.output_shape()}, n_detectors={self._n_detectors}, n_anchors_per_detector={self.n_anchors_per_detector()})'
