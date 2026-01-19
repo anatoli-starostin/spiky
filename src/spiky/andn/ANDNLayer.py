@@ -31,6 +31,8 @@ class ANDNLayer(nn.Module):
         anti_hebb_coeff=0.0,
         backprop_hebb_ratio_on_torch_backward=1.0,
         relu_output=False,
+        normalize_backprop_gradients=False,
+        normalize_hebb_gradients=True,
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _initial_synapse_capacity=None,
@@ -52,6 +54,8 @@ class ANDNLayer(nn.Module):
         self._descendant_andn_layer = None
         self._backprop_hebb_ratio_on_torch_backward = backprop_hebb_ratio_on_torch_backward
         self._relu_output = relu_output
+        self._normalize_backprop_gradients = normalize_backprop_gradients
+        self._normalize_hebb_gradients = normalize_hebb_gradients
 
         if _initial_synapse_capacity is None:
             _initial_synapse_capacity = n_inputs * n_outputs
@@ -259,11 +263,12 @@ class ANDNLayer(nn.Module):
                 x_grad, self._last_w_grad
             )
 
-            with torch.no_grad():
-                m = self._last_w_grad.abs().max()
-                if m < 1e-16:
-                    m = 1e-16
-                self._last_w_grad *= (1.0 - bh_ratio) / m
+            if self._normalize_backprop_gradients:
+                with torch.no_grad():
+                    m = self._last_w_grad.abs().max()
+                    if m < 1e-16:
+                        m = 1e-16
+                    self._last_w_grad *= (1.0 - bh_ratio) / m
 
         if bh_ratio > 0.0:
             assert self._descendant_andn_layer is not None
@@ -297,11 +302,12 @@ class ANDNLayer(nn.Module):
                 w_grad_hebb
             )
 
-            with torch.no_grad():
-                m = w_grad_hebb.abs().max()
-                if m < 1e-16:
-                    m = 1e-16
-                w_grad_hebb /= m
+            if self._normalize_hebb_gradients:
+                with torch.no_grad():
+                    m = w_grad_hebb.abs().max()
+                    if m < 1e-16:
+                        m = 1e-16
+                    w_grad_hebb /= m
 
             if self._last_w_grad is None:
                 # bh_ratio is 1.0
