@@ -368,9 +368,9 @@ class ANDNLUTLayerEx(LUTLayerBasic):
                 device=device,
                 seed=random_seed
             )
+            self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
         else:
             self._inhibition_layer = None
-        self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
 
     def forward(self, x):
         source_x = super().forward(x)
