@@ -70,7 +70,8 @@ def main():
     print(f"Trainable parameters: {lut_trainable_params:,}")
 
     x = torch.rand([2, 28, 28])
-    print(layered_andn_net(x))
+    r = layered_andn_net(x)
+    nn.CrossEntropyLoss()(r, torch.randint(10, [2])).backward()
 
     return 0
 

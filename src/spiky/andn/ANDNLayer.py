@@ -545,7 +545,7 @@ class InhibitionLayer(nn.Module):
 
         if bh_ratio < 1.0:
             assert grad_output.device == self.device
-            assert grad_output.shape == (batch_size, self._n_inputs)
+            assert grad_output.shape == (batch_size,) + self.output_shape()
             assert input_winner_ids.device == self.device
             assert input_winner_ids.shape == (batch_size, self._n_detectors)
             assert input_prewinner_ids.device == self.device
@@ -557,21 +557,16 @@ class InhibitionLayer(nn.Module):
             input_prewinner_ids = input_prewinner_ids.flatten().contiguous()
             input_winning_stat = input_winning_stat.flatten().contiguous()
 
-            self._andn_dm.backward(
+            self._andn_dm.backward_backprop(
                 self._empty_float_tensor,
                 batch_size,
-                bh_ratio,
-                0.0,
                 grad_output,
                 x, input_winner_ids,
                 input_prewinner_ids,
                 input_winning_stat,
-                self._empty_float_tensor,
-                self._empty_int_tensor,
-                self._empty_int_tensor,
-                self._empty_int_tensor,
                 x_grad, self._empty_float_tensor
             )
+
         return x_grad.reshape(source_x_shape)
 
     def to(self, *args, **kwargs):
