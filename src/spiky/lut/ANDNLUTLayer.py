@@ -358,15 +358,18 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             random_seed=random_seed,
             device=device
         )
-        self._inhibition_layer = Random2DInhibitionLayer(
-            self._andn_layer.output_shape(),
-            inhibition_window_shape,
-            n_inhibitors,
-            n_neurons_per_inhibitor,
-            spiking_inhibition=False,
-            device=device,
-            seed=random_seed
-        )
+        if n_inhibitors > 0:
+            self._inhibition_layer = Random2DInhibitionLayer(
+                self._andn_layer.output_shape(),
+                inhibition_window_shape,
+                n_inhibitors,
+                n_neurons_per_inhibitor,
+                spiking_inhibition=False,
+                device=device,
+                seed=random_seed
+            )
+        else:
+            self._inhibition_layer = None
         self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
 
     def forward(self, x):
@@ -374,7 +377,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         x = self._andn_layer(source_x)
         if self._residual:
             x = x + source_x
-        return self._inhibition_layer(x)
+        return x if self._inhibition_layer is None else self._inhibition_layer(x)
 
     def input_shape(self):
         return self._input_shape
