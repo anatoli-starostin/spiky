@@ -383,6 +383,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
                 inhibition_window_shape,
                 n_inhibitors,
                 n_neurons_per_inhibitor,
+                backprop_hebb_ratio_on_torch_backward,
                 spiking_inhibition=False,
                 device=device,
                 seed=random_seed

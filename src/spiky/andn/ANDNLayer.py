@@ -796,6 +796,7 @@ class Random2DInhibitionLayer(InhibitionLayer):
         inhibition_window_shape,
         n_detectors,
         max_inputs_per_detector,
+        backprop_hebb_ratio_on_torch_backward,
         spiking_inhibition=True,
         device=None,
         seed=None
@@ -812,6 +813,7 @@ class Random2DInhibitionLayer(InhibitionLayer):
             n_inputs=n_inputs,
             n_detectors=n_detectors,
             max_inputs_per_detector=max_inputs_per_detector,
+            backprop_hebb_ratio_on_torch_backward=backprop_hebb_ratio_on_torch_backward,
             spiking_inhibiton=spiking_inhibition
         )
 
