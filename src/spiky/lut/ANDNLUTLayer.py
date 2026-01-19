@@ -300,6 +300,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             _backward_group_size=1,
             random_seed=random_seed
         )
+        self._output_shape = (1, n_detector_groups * n_detectors_in_group * n_lut_channels)
 
         if device is not None:
             self.to(device=device)
@@ -357,7 +358,6 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             random_seed=random_seed,
             device=device
         )
-        self._output_shape = output_shape
         self._inhibition_layer = Random2DInhibitionLayer(
             self._andn_layer.output_shape(),
             inhibition_window_shape,
@@ -371,7 +371,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
 
     def forward(self, x):
         source_x = super().forward(x)
-        x = self._andn_layer(x)
+        x = self._andn_layer(source_x)
         if self._residual:
             x = x + source_x
         return self._inhibition_layer(x)
