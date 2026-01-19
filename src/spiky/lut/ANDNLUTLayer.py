@@ -370,6 +370,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             )
             self._andn_layer.set_descendant_andn_layer(self._inhibition_layer)
         else:
+            assert backprop_hebb_ratio_on_torch_backward == 0.0
             self._inhibition_layer = None
 
     def forward(self, x):
