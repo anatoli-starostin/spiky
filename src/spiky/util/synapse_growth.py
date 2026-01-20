@@ -644,8 +644,8 @@ class RandomInhibition2DHelper(object):
 
         # shape: [n, 2] (x, y) for top-left corner of each window
         centers = torch.stack([
-            torch.randint(self.w, (self.n,), generator=gen, device=device).clamp(self.iw // 2, self.w - self.iw // 2 - 1),
-            torch.randint(self.h, (self.n,), generator=gen, device=device).clamp(self.ih // 2, self.h - self.ih // 2 - 1)
+            torch.randint(self.w, (self.n,), generator=gen, device=device).clamp(self.iw // 2, self.w - self.iw // 2 - (self.iw % 2)),
+            torch.randint(self.h, (self.n,), generator=gen, device=device).clamp(self.ih // 2, self.h - self.ih // 2 - (self.ih % 2))
         ], dim=1)
 
         # Vectorized coordinates for slicing
