@@ -290,6 +290,10 @@ class ANDNLUTLayerEx(LUTLayerBasic):
     ):
         assert n_detector_groups >= 1
         assert n_detectors_in_group >= 1
+
+        self._n_detector_groups = n_detector_groups
+        self._n_detectors_in_group = n_detectors_in_group
+
         c_helper = RandomRectanglesSynapseGrowthHelper(
             input_shape[0], input_shape[1],
             receptive_shape[0], receptive_shape[1],
