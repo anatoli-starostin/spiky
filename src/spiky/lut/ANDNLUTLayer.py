@@ -178,7 +178,7 @@ class _AuxANDNLayer(ANDNLayer):
         self, n_inputs, output_shape,
         group_centers,
         projection_shape,
-        n_projections_per_detector,
+        projection_prob,
         n_detectors_in_group,
         n_lut_channels,
         synapse_meta,
@@ -216,7 +216,7 @@ class _AuxANDNLayer(ANDNLayer):
             group_centers[::n_detectors_in_group],
             projection_shape[0], projection_shape[1],
             output_shape[0], output_shape[1],
-            max_synapses_per_input=n_projections_per_detector
+            p=projection_prob
         )
 
         connections = c_helper.grow_synapses(
@@ -269,7 +269,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         n_detectors_in_group,
         receptive_shape,
         projection_shape,
-        n_projections_per_detector,
+        projection_prob,
         inhibition_window_shape,
         n_inhibitors,
         n_neurons_per_inhibitor,
@@ -366,7 +366,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             output_shape=output_shape,
             group_centers=group_centers,
             projection_shape=projection_shape,
-            n_projections_per_detector=n_projections_per_detector,
+            projection_prob=projection_prob,
             n_detectors_in_group=n_detectors_in_group,
             n_lut_channels=n_lut_channels,
             synapse_meta=synapse_meta,
