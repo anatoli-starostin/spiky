@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as nf
 from typing import List, Dict, Tuple, AnyStr
 from dataclasses import dataclass
 from enum import Enum
@@ -277,6 +278,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         backprop_hebb_ratio_on_torch_backward=0.5,
         anti_hebb_coeff=0.0,
         relu_before_inhibition=True,
+        dropout=0.1,
         residual=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
@@ -306,6 +308,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
 
         self._input_shape = input_shape
         self._residual = residual
+        self._dropout = dropout
         if residual:
             assert input_shape == output_shape
         n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1)
@@ -402,6 +405,8 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         x = self._andn_layer(source_x)
         if self._residual:
             x = x + source_x
+        if self._dropout > 0.0:
+            x = nf.dropout(x, self._dropout)
         return x if self._inhibition_layer is None else self._inhibition_layer(x)
 
     def input_shape(self):
