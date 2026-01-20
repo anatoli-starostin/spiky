@@ -451,6 +451,7 @@ class InhibitionLayer(nn.Module):
 
         self._hebbian_history = []
         self._n_hebbian_ancestors = 0
+        self._detectors = None
 
     def initialize_detectors(self, detectors):
         assert self._n_detectors > 0
@@ -459,7 +460,10 @@ class InhibitionLayer(nn.Module):
         # detectors tensor must contain input neuron indices for each detector
         # it has shape [n_detectors, max_inputs_per_detector], -1-s are ignored
         assert (detectors != -1).sum(dim=-1).min() >= 2
-        self._andn_dm.initialize_detectors(detectors.flatten().contiguous(), self._max_inputs_per_detector)
+        self._detectors = detectors.flatten().contiguous()
+        # TODO in the future do not store self._detectors inside _andn_dm, store it here and
+        # TODO pass it to forward and backward methods dynamically
+        self._andn_dm.initialize_detectors(self._detectors, self._max_inputs_per_detector)
 
     def get_input_neuron_ids(self):
         return self._input_neuron_ids
@@ -588,6 +592,7 @@ class InhibitionLayer(nn.Module):
         self._input_neuron_ids = self._input_neuron_ids.to(device=self.device)
         self._empty_int_tensor = self._empty_int_tensor.to(device=self.device)
         self._empty_float_tensor = self._empty_float_tensor.to(device=self.device)
+        self._detectors = self._detectors.to(device=self.device)
 
         self._andn_dm.to_device(device_index)
         return self
