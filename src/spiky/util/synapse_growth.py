@@ -483,7 +483,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
         )
 
         growth_engine.register_neuron_type(
-            max_synapses=self.n_outputs,
+            max_synapses=self.n_outputs * self.n_out_channels,
             growth_command_list=[growth_command]
         )
         growth_engine.register_neuron_type(
