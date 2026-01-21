@@ -347,7 +347,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             random_seed=random_seed
         )
 
-        self.initialize_detectors(seed=random_seed)
+        self.initialize_detectors(seed=random_seed, compact_mode=False)
 
         self.add_lookup_connections(
             chunk_of_connections=create_identity_mapping(
