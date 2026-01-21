@@ -574,9 +574,6 @@ class GivenRectanglesSynapseGrowthHelper(object):
 
         return growth_engine.grow(seed)
 
-    def n_connections(self):
-        return self.num_win_h * self.num_win_w * self.kh * self.kw * self.rh * self.rw
-
 
 class InhibitionGrid2DHelper(object):
     def __init__(self, h, w, iw, ih):

@@ -989,7 +989,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 #endif
             );
         } else {
-            __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
             #ifndef NO_CUDA
             uint32_t tile_grid_w = (sequence_length + TILE - 1) / TILE;
             uint32_t n_total_tiles = tile_grid_w * tile_grid_w;
@@ -1002,8 +1001,6 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
             uint32_t tpb = TILE * TILE;
             uint32_t shared_mem_size = tpb * sizeof(int32_t);
             
-            __DETAILED_TRACE__("[forward_step_product] numBlocks: %d, %d, tbp: %d, shared_mem_size: %d\n", numBlocks.x, numBlocks.y, tpb, shared_mem_size);
-
             GRID_CALL_ON_STREAM_SHARED_MEM(
                 numBlocks, fill_outputs_product_fc, tpb,
                 shared_mem_size, cuda_streams[0],

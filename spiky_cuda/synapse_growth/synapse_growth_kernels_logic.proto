@@ -228,6 +228,7 @@ grow_synapses_logic(
                                 if(0 != target_tp.sorted_axis) {
                                     if(target_coords[0] < cur_coords[0] + cuboid_corners[0]) {
                                         __DETAILED_TRACE__("grow_synapses_logic: filtered by 0 axis, lower bound\n");
+                                        continue;
                                     }
                                     if(target_coords[0] > cur_coords[0] + cuboid_corners[3]) {
                                         __DETAILED_TRACE__("grow_synapses_logic: filtered by 0 axis, upper bound\n");
