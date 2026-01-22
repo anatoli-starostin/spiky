@@ -278,7 +278,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         n_neurons_per_inhibitor,
         synapse_meta=ANDN_sm(),
         projection_prob=1.0,
-        projection_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
+        detectors_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
         input_sparsity_mask=None,
         output_sparsity_mask=None,
         backprop_hebb_ratio_on_torch_backward=0.5,
@@ -309,7 +309,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             n_outputs=n_detector_groups,
             n_out_channels=n_detectors_in_group,
             input_sparsity_mask=input_sparsity_mask,
-            output_sampling_policy=projection_sampling_policy
+            output_sampling_policy=detectors_sampling_policy
         )
 
         n_inputs = input_shape[0] * input_shape[1]
