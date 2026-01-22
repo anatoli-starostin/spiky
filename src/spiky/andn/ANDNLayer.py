@@ -137,10 +137,16 @@ class ANDNLayer(nn.Module):
             random_seed
         )
 
-    def compile_andn(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
+    def compile_andn(
+        self, normalize_backward_connections=False,
+        shuffle_synapses_random_seed: int = None,
+        _only_trainable_backwards=True
+    ):
         n_weights = self._andn_dm.get_weights_dimension()
         self._weights = nn.Parameter(torch.zeros([n_weights], dtype=torch.float32, device=self.device))
         self._andn_dm.compile(_only_trainable_backwards, self._weights.detach(), shuffle_synapses_random_seed)
+        if normalize_backward_connections:
+            self._andn_dm.normalize_backward_synapses(self._weights.detach(), self.get_output_neuron_ids())
         self._andn_dm.to_device(-1)
         if self.device.type == 'cuda':
             self._andn_dm.to_device(self.device.index)

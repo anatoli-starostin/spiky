@@ -316,6 +316,11 @@ public:
         std::optional<torch::Tensor> &target_synapse_meta_indices,
         EXTERNAL_REAL_DT* separate_weights
     );
+    
+    void normalize_backward_synapses(
+        const torch::Tensor &neuron_indices_to_process,
+        EXTERNAL_REAL_DT* separate_weights
+    );
 
     uint32_t count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices);
     uint32_t count_max_input_synapses_per_neuron();

@@ -1292,6 +1292,91 @@ export_backward_synapses_logic(
     }
 }
 
+normalize_backward_synapses_logic(
+    NeuronIndex_t* neuron_ids_to_process,
+    uint32_t n_neurons_to_process,
+    IndexedSynapsesInfo* backward_indexed_synapses_ptr,
+    uint32_t backward_shift,
+    NeuronDataId_t first_synapse_id,
+    EXTERNAL_REAL_DT* separate_weights_ptr,
+    bool separate_weights_mode,
+    uint8_t* net_data
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < n_neurons_to_process) {
+        NeuronIndex_t neuron_id = neuron_ids_to_process[i];
+        if(neuron_id >= backward_shift) {
+            IndexedSynapsesInfo synapses_info = *(backward_indexed_synapses_ptr + neuron_id - backward_shift);
+            if(synapses_info.n_synapses > 0) {
+                NeuronDataId_t current_group_id = synapses_info.first_group_id;
+                uint32_t current_group_meta_info = GetBackwardSynapseGroup(current_group_id, net_data)->meta_info;
+                uint32_t current_group_size = SynapseGroupSize(current_group_meta_info);
+                NeuronIndexAndSynapseId* current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data);
+                NeuronIndexAndSynapseId current_synapse;
+                uint32_t cursor = 0;
+
+                double squared_sum = 0.0;
+                double weight;
+                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr++) {
+                    if(cursor == current_group_size) {
+                        current_group_id = ContinuationBackwardGroupId(current_group_id, current_group_size);
+                        current_group_meta_info = GetBackwardSynapseGroup(current_group_id, net_data)->meta_info;
+                        current_group_size = SynapseGroupSize(current_group_meta_info);
+                        current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data);
+                        cursor = 0;
+                    }
+
+                    current_synapse = *current_synapse_info_ptr;
+                    if(separate_weights_mode) {
+                        weight = static_cast<double>(separate_weights_ptr[current_synapse.shift_from_anchor]);
+                    } else {
+                        SynapseInfo *forward_synapse_info_ptr = SynapseInfoByRelativeShift(
+                            first_synapse_id,
+                            current_synapse.shift_from_anchor,
+                            net_data
+                        );
+                        weight = static_cast<double>(forward_synapse_info_ptr->weight);
+                    }
+                    squared_sum += weight * weight;
+                }
+                squared_sum = sqrt(squared_sum);
+                if(squared_sum < EPS) {
+                    squared_sum = EPS;
+                }
+
+                current_group_id = synapses_info.first_group_id;
+                current_group_meta_info = GetBackwardSynapseGroup(current_group_id, net_data)->meta_info;
+                current_group_size = SynapseGroupSize(current_group_meta_info);
+                current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data);
+                cursor = 0;
+                for(uint32_t j=0;j < synapses_info.n_synapses;j++, cursor++, current_synapse_info_ptr++) {
+                    if(cursor == current_group_size) {
+                        current_group_id = ContinuationBackwardGroupId(current_group_id, current_group_size);
+                        current_group_meta_info = GetBackwardSynapseGroup(current_group_id, net_data)->meta_info;
+                        current_group_size = SynapseGroupSize(current_group_meta_info);
+                        current_synapse_info_ptr = SynapseInfosInBackwardSynapseGroup(current_group_id, net_data);
+                        cursor = 0;
+                    }
+
+                    current_synapse = *current_synapse_info_ptr;
+                    if(separate_weights_mode) {
+                        weight = static_cast<double>(separate_weights_ptr[current_synapse.shift_from_anchor]);
+                        separate_weights_ptr[current_synapse.shift_from_anchor] = static_cast<EXTERNAL_REAL_DT>(weight / squared_sum);
+                    } else {
+                        SynapseInfo *forward_synapse_info_ptr = SynapseInfoByRelativeShift(
+                            first_synapse_id,
+                            current_synapse.shift_from_anchor,
+                            net_data
+                        );
+                        weight = static_cast<double>(forward_synapse_info_ptr->weight);
+                        forward_synapse_info_ptr->weight = static_cast<REAL_DT>(weight / squared_sum);
+                    }
+                }
+            }
+        }
+    }
+}
+
 count_max_synapses_logic(
     NeuronIndex_t* neuron_indices,
     uint32_t n_neuron_indices,

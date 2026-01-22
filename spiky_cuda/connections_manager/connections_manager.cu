@@ -834,6 +834,38 @@ void ConnectionsManager::export_synapses(
     PROF_END(CONNECTIONS_MANAGER_EXPORT_SYNAPSES_PROFILER_OP);
 }
 
+void ConnectionsManager::normalize_backward_synapses(
+    const torch::Tensor &neuron_indices_to_process,
+    EXTERNAL_REAL_DT* separate_weights
+) {
+    if(this->n_backward_neurons == 0) {
+        return;
+    }
+    checkTensor(neuron_indices_to_process, "neuron_indices_to_process", false, allocator.device, sizeof(NeuronIndex_t));
+
+    GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + this->global_connections_meta_id);
+    NeuronIndex_t *neuron_indices_to_process_data = reinterpret_cast<NeuronIndex_t *>(neuron_indices_to_process.data_ptr());
+
+    dim3 numBlocks((neuron_indices_to_process.numel() + CONN_MANAGER_TPB - 1) / CONN_MANAGER_TPB, 1);
+    GRID_CALL_NO_SHARED_MEM(
+        numBlocks, normalize_backward_synapses, CONN_MANAGER_TPB,
+        neuron_indices_to_process_data, neuron_indices_to_process.numel(),
+        IndexedSynapsesInfos(this->backward_neuron_infos_id, allocator.data),
+        this->backward_shift,
+        gc_meta->first_synapse_id,
+        separate_weights,
+        this->separate_weights_mode,
+        allocator.data
+    );
+
+    if(device != -1) {
+        #ifndef NO_CUDA
+        c10::cuda::CUDAGuard guard(device);
+        cudaDeviceSynchronize();
+        #endif
+    }
+}
+
 uint32_t ConnectionsManager::count_max_input_synapses_per_neuron(const torch::Tensor &neuron_indices)
 {
     PROF_START(CONNECTIONS_MANAGER_COUNT_MAX_INPUT_SYNAPSES_PROFILER_OP);

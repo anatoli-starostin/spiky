@@ -185,6 +185,7 @@ class _AuxANDNLayer(ANDNLayer):
         n_detectors_in_group,
         n_lut_channels,
         synapse_meta,
+        do_normalize_weights,
         backprop_hebb_ratio_on_torch_backward=1.0,
         relu_output=False,
         anti_hebb_coeff=0.0,
@@ -239,7 +240,7 @@ class _AuxANDNLayer(ANDNLayer):
             random_seed=random_seed
         )
 
-        self.compile_andn()
+        self.compile_andn(normalize_backward_connections=do_normalize_weights)
         self._output_shape = output_shape
 
     def output_shape(self):
@@ -281,6 +282,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         detectors_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
         input_sparsity_mask=None,
         output_sparsity_mask=None,
+        do_normalize_weights=False,
         backprop_hebb_ratio_on_torch_backward=0.5,
         anti_hebb_coeff=0.0,
         relu_before_inhibition=True,
@@ -382,6 +384,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             n_detectors_in_group=n_detectors_in_group,
             n_lut_channels=n_lut_channels,
             synapse_meta=synapse_meta,
+            do_normalize_weights=do_normalize_weights,
             backprop_hebb_ratio_on_torch_backward=backprop_hebb_ratio_on_torch_backward,
             relu_output=relu_before_inhibition,
             anti_hebb_coeff=anti_hebb_coeff,

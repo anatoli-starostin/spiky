@@ -37,6 +37,7 @@ def main():
                 projection_shape=(10, 10),
                 projection_prob=0.5,
                 inhibition_window_shape=(3, 3),
+                do_normalize_weights=True,
                 n_inhibitors=2048,
                 n_neurons_per_inhibitor=9,
                 dropout=0.0,

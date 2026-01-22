@@ -569,6 +569,24 @@ public:
         );
     }
 
+    void normalize_backward_synapses(
+        const torch::Tensor &weights,
+        const torch::Tensor &neuron_indices_to_process
+    ) {
+        if(this->n_outputs == 0) {
+            throw py::value_error("nothing to normalize in only detectors mode");
+        }
+
+        checkConnectionsManagerIsInitialized();
+        checkTensor(weights, "weights", true, host_device_allocator.device);
+
+        EXTERNAL_REAL_DT* weights_data = reinterpret_cast<EXTERNAL_REAL_DT *>(weights.data_ptr());
+        connections_manager->normalize_backward_synapses(
+            neuron_indices_to_process,
+            weights_data
+        );
+    }
+
     auto __repr__() {
         std::ostringstream os;
         GlobalConnectionsMeta* gc_meta = reinterpret_cast<GlobalConnectionsMeta *>(only_host_allocator.data + global_connections_meta_id);
@@ -932,6 +950,10 @@ void PFX(PB_ANDNDataManager)(py::module& m) {
             py::arg("target_internal_target_indices"),
             py::arg("forward_or_backward"),
             py::arg("target_synapse_meta_indices") = py::none())
+        .def("normalize_backward_synapses", &ANDM_CLASS_NAME::normalize_backward_synapses,
+            "Normalize input synaptic weights for given set of neurons",
+            py::arg("weights"),
+            py::arg("neuron_indices_to_process"))
         .def("__repr__", &ANDM_CLASS_NAME::__repr__)
         .def("get_memory_stats", &ANDM_CLASS_NAME::get_memory_stats)
         .def("get_profiling_stats", &ANDM_CLASS_NAME::get_profiling_stats)
