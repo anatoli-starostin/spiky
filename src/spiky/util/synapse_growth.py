@@ -620,7 +620,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
                 self.n_outputs, self.ow, self.oh,
                 self.output_sampling_policy.grid_w,
                 self.output_sampling_policy.grid_h,
-                self.rw / 2, self.rh / 2, device=device
+                self.rw, self.rh, device=device
             )
 
         if self.n_out_channels > 1:
