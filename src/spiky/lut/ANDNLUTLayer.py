@@ -7,7 +7,8 @@ from enum import Enum
 
 from spiky.lut.LUTLayer import LUTLayerBasic, SynapseMeta, GradientPolicy, LUTSharedContext
 from spiky.util.synapse_growth import (
-    Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper, GivenRectanglesSynapseGrowthHelper
+    Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper, GivenRectanglesSynapseGrowthHelper,
+    PointSamplingPolicy, PointSamplingType
 )
 from spiky.util.chunk_of_connections import (
     ChunkOfConnections, create_identity_mapping, repeat_connections_incrementing_source
@@ -180,6 +181,7 @@ class _AuxANDNLayer(ANDNLayer):
         group_centers,
         projection_shape,
         projection_prob,
+        output_sparsity_mask,
         n_detectors_in_group,
         n_lut_channels,
         synapse_meta,
@@ -217,7 +219,8 @@ class _AuxANDNLayer(ANDNLayer):
             group_centers[::n_detectors_in_group],
             projection_shape[0], projection_shape[1],
             output_shape[0], output_shape[1],
-            p=projection_prob
+            p=projection_prob,
+            output_sparsity_mask=output_sparsity_mask
         )
 
         connections = c_helper.grow_synapses(
@@ -270,11 +273,14 @@ class ANDNLUTLayerEx(LUTLayerBasic):
         n_detectors_in_group,
         receptive_shape,
         projection_shape,
-        projection_prob,
         inhibition_window_shape,
         n_inhibitors,
         n_neurons_per_inhibitor,
         synapse_meta=ANDN_sm(),
+        projection_prob=1.0,
+        projection_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
+        input_sparsity_mask=None,
+        output_sparsity_mask=None,
         backprop_hebb_ratio_on_torch_backward=0.5,
         anti_hebb_coeff=0.0,
         relu_before_inhibition=True,
@@ -301,7 +307,9 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             receptive_shape[0], receptive_shape[1],
             input_shape[0], input_shape[1],
             n_outputs=n_detector_groups,
-            n_out_channels=n_detectors_in_group
+            n_out_channels=n_detectors_in_group,
+            input_sparsity_mask=input_sparsity_mask,
+            output_sampling_policy=projection_sampling_policy
         )
 
         n_inputs = input_shape[0] * input_shape[1]
@@ -370,6 +378,7 @@ class ANDNLUTLayerEx(LUTLayerBasic):
             group_centers=group_centers,
             projection_shape=projection_shape,
             projection_prob=projection_prob,
+            output_sparsity_mask=output_sparsity_mask,
             n_detectors_in_group=n_detectors_in_group,
             n_lut_channels=n_lut_channels,
             synapse_meta=synapse_meta,

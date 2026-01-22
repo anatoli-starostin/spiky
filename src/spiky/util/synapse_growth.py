@@ -1,5 +1,6 @@
 import torch
 import random
+from enum import Enum
 from typing import List, Dict, AnyStr
 from dataclasses import dataclass
 
@@ -448,8 +449,96 @@ class Conv2DSynapseGrowthHelper(object):
         return self.num_win_h * self.num_win_w * self.kh * self.kw * self.rh * self.rw
 
 
+def sample_random_points(
+    N, ow, oh,
+    clamp_x, clamp_y,
+    is_normal=False, mu=None, sigma=None, seed=None,
+    device=None
+):
+    """
+    Returns (x, y) tensors of shape [N] within rectangle [0,ow]x[0,oh].
+    """
+    device = device or "cpu"
+    ow = float(ow)
+    oh = float(oh)
+
+    gen = torch.Generator(device=device)
+    if seed is not None:
+        gen.manual_seed(seed)
+
+    if is_normal:
+        if mu is None:
+            mu = (ow/2.0, oh/2.0)
+        if sigma is None:
+            sigma = (ow/6.0, oh/6.0)
+        mx, my = mu
+        sx, sy = sigma
+        x = torch.randn(N, device=device, generator=gen) * sx + mx
+        y = torch.randn(N, device=device, generator=gen) * sy + my
+        return torch.stack([x.clamp(*clamp_x), y.clamp(*clamp_y)], dim=1)
+    else:
+        x = torch.rand(N, device=device, generator=gen) * ow
+        y = torch.rand(N, device=device, generator=gen) * oh
+        return torch.stack([x.clamp(*clamp_x), y.clamp(*clamp_y)], dim=1)
+
+
+def sample_grid_points(N, ow, oh, Gw, Gh, point_width, point_height, device=None):
+    """
+    Grid of N=Gw*Gh points. Each point represents a rectangle of size
+    (point_width, point_height) centered at (x,y). Ensures all point-rectangles
+    fit inside [0,ow]x[0,oh].
+    """
+    assert Gw * Gh == N
+    device = device or "cpu"
+    ow = float(ow)
+    oh = float(oh)
+    pw = float(point_width)
+    ph = float(point_height)
+
+    if pw > ow or ph > oh:
+        raise ValueError("Point rectangle bigger than source area.")
+
+    # valid center ranges
+    xmin, xmax = pw / 2.0, ow - pw / 2.0
+    ymin, ymax = ph / 2.0, oh - ph / 2.0
+
+    if Gw == 1:
+        xs = torch.tensor([(xmin + xmax) / 2.0], device=device)
+    else:
+        xs = torch.linspace(xmin, xmax, steps=Gw, device=device)
+
+    if Gh == 1:
+        ys = torch.tensor([(ymin + ymax) / 2.0], device=device)
+    else:
+        ys = torch.linspace(ymin, ymax, steps=Gh, device=device)
+
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    x = xx.reshape(-1)
+    y = yy.reshape(-1)
+    return torch.stack([x, y], dim=1)
+
+
+class PointSamplingType(Enum):
+    RandomUniform = 0
+    RandomNormal = 1
+    Grid = 2
+
+
+@dataclass(frozen=True)
+class PointSamplingPolicy:
+    type: PointSamplingType
+    mu: float = None
+    sigma: float = None
+    grid_h: int = None
+    grid_w: int = None
+
+
 class RandomRectanglesSynapseGrowthHelper(object):
-    def __init__(self, h, w, rh, rw, oh, ow, p=1.0, n_out_channels=1, n_outputs=None):
+    def __init__(
+        self, h, w, rh, rw, oh, ow,
+        p=1.0, n_out_channels=1, n_outputs=None, input_sparsity_mask=None,
+        output_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform)
+    ):
         """
         h, w: input grid height and width
         rw, rh: rectangle window width and height
@@ -464,6 +553,8 @@ class RandomRectanglesSynapseGrowthHelper(object):
         self.p = p
         self.n_out_channels = n_out_channels
         self.n_outputs = n_outputs
+        self.input_sparsity_mask = input_sparsity_mask
+        self.output_sampling_policy = output_sampling_policy
 
     def grow_synapses(
         self, input_ids, output_ids, device,
@@ -492,22 +583,45 @@ class RandomRectanglesSynapseGrowthHelper(object):
         )
 
         # we need a torch tensor with (x, y) coordinates in the input grid
-        input_grid_coords = torch.tensor([[x, y, 0] for y in range(self.h) for x in range(self.w)], dtype=torch.float32)
+        input_grid_coords = torch.tensor(
+            [
+                [x, y, 0] if (self.input_sparsity_mask is None or self.input_sparsity_mask[y, x]) else [1e+30, 1e+30, 0]
+                for y in range(self.h) for x in range(self.w)
+            ],
+            dtype=torch.float32
+        )
         growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids.reshape(self.h * self.w), coordinates=input_grid_coords)
 
         # For each position of a sliding window, compute the center coordinate of its receptive field,
         # and assign this center coordinate to all output points in the corresponding output block.
         output_grid_coords = torch.ones((self.n_outputs * self.n_out_channels, 3), dtype=torch.float32)
 
-        gen = torch.Generator(device=device)
-        if seed is not None:
-            gen.manual_seed(seed)
-
-        # shape: [n, 2] (x, y) for top-left corner of each window
-        centers = torch.stack([
-            (torch.rand([self.n_outputs], generator=gen, device=device) * self.ow).clamp(self.rw / 2, self.w - self.rw / 2),
-            (torch.rand([self.n_outputs], generator=gen, device=device) * self.oh).clamp(self.rh / 2, self.h - self.rh / 2)
-        ], dim=1)
+        if self.output_sampling_policy.type == PointSamplingType.RandomUniform:
+            centers = sample_random_points(
+                self.n_outputs, self.ow, self.oh,
+                (self.rw / 2, self.w - self.rw / 2),
+                (self.rh / 2, self.h - self.rh / 2),
+                seed=seed, device=device
+            )
+        elif self.output_sampling_policy.type == PointSamplingType.RandomNormal:
+            centers = sample_random_points(
+                self.n_outputs, self.ow, self.oh,
+                (self.rw / 2, self.w - self.rw / 2),
+                (self.rh / 2, self.h - self.rh / 2),
+                is_normal=True, mu=self.output_sampling_policy.mu,
+                sigma=self.output_sampling_policy.sigma,
+                seed=seed, device=device
+            )
+        else:
+            assert self.output_sampling_policy.grid_h is not None
+            assert self.output_sampling_policy.grid_w is not None
+            assert self.output_sampling_policy.grid_h * self.output_sampling_policy.grid_w == self.n_outputs
+            centers = sample_grid_points(
+                self.n_outputs, self.ow, self.oh,
+                self.output_sampling_policy.grid_w,
+                self.output_sampling_policy.grid_h,
+                self.rw / 2, self.rh / 2, device=device
+            )
 
         if self.n_out_channels > 1:
             centers = centers.view(self.n_outputs, 1, 2).repeat(1, self.n_out_channels, 1).view(self.n_outputs * self.n_out_channels, 2)
@@ -523,7 +637,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
 
 
 class GivenRectanglesSynapseGrowthHelper(object):
-    def __init__(self, centers, rh, rw, oh, ow, p=1.0, max_synapses_per_input=None):
+    def __init__(self, centers, rh, rw, oh, ow, p=1.0, max_synapses_per_input=None, output_sparsity_mask=None):
         """
         centers: [N, 2]
         rw, rh: rectangle window width and height
@@ -536,6 +650,7 @@ class GivenRectanglesSynapseGrowthHelper(object):
         self.oh = oh
         self.p = p
         self.max_synapses_per_input = max_synapses_per_input
+        self.output_sparsity_mask = output_sparsity_mask
 
     def grow_synapses(
         self, input_ids, output_ids, device,
@@ -569,7 +684,13 @@ class GivenRectanglesSynapseGrowthHelper(object):
         input_grid_coords[:, 1] = self.centers[:, 1]
         growth_engine.add_neurons(neuron_type_index=0, identifiers=input_ids, coordinates=input_grid_coords)
 
-        output_grid_coords = torch.tensor([[x, y, 1] for y in range(self.oh) for x in range(self.ow)], dtype=torch.float32)
+        output_grid_coords = torch.tensor(
+            [
+                [x, y, 1] if (self.output_sparsity_mask is None or self.output_sparsity_mask[y, x]) else [1e+30, 1e+30, 1]
+                for y in range(self.oh) for x in range(self.ow)
+            ],
+            dtype=torch.float32
+        )
         growth_engine.add_neurons(neuron_type_index=1, identifiers=output_ids.reshape(self.oh * self.ow), coordinates=output_grid_coords)
 
         return growth_engine.grow(seed)
