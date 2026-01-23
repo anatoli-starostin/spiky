@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as nf
 
 from spiky.lut.LUTLayer import (
     LUTLayer,
@@ -76,6 +77,7 @@ class LUTTransformer(nn.Module):
         use_sinusoidal_pe=False, unified_pe=False, inject_pe_once=False,
         do_normalise_weights=False,
         weights_gradient_policy=None,
+        relu_before_luts=False,
         device=None, _synapse_meta=SynapseMeta(),
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.0,
@@ -96,6 +98,7 @@ class LUTTransformer(nn.Module):
         self.concatenation_product = concatenation_product
         self.sliced_product_mode = sliced_product_mode
         self.weights_gradient_policy = weights_gradient_policy
+        self.relu_before_luts = relu_before_luts
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
         self.layer_norm_d = layer_norm_d
@@ -259,6 +262,8 @@ class LUTTransformer(nn.Module):
             if not isinstance(self.embedding_dim, int):
                 z = z.reshape((batch_size, self.context_size,) + self.embedding_dim)
             # Attention with residual connection and dropout
+            if self.relu_before_luts:
+                z = nf.relu(z)
             aat = layer['attention_lut'](z)
             # print(f'test: aat {aat.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
@@ -280,6 +285,8 @@ class LUTTransformer(nn.Module):
 
             if not self.no_ffn:
                 # FFN with residual connection and dropout
+                if self.relu_before_luts:
+                    z = nf.relu(z)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 if self._debug_last_forward is not None:
                     self._debug_last_forward.append(ffn_result.detach().clone())
@@ -297,6 +304,8 @@ class LUTTransformer(nn.Module):
                 z = z + ffn_result
 
         # Unembedder: (batch_size, context_size, n_embeddings) -> (batch_size, context_size, vocab_size)
+        if self.relu_before_luts:
+            z = nf.relu(z)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
         return logits
 
