@@ -14,7 +14,8 @@ from spiky.lut.LUTLayer import (
 class LUTTransformer(nn.Module):
     def _create_single_attention(
         self, _synapse_meta, summation_dtype, _int_rescaler, seed,
-        _forward_group_size, _backward_group_size, num_heads, inject_pe
+        _forward_group_size, _backward_group_size, num_heads, inject_pe,
+        do_normalise_weights
     ):
         p_dim = self.positional_dim if inject_pe else 0
         if isinstance(self.embedding_dim, int):
@@ -30,6 +31,7 @@ class LUTTransformer(nn.Module):
                 positional_dim=p_dim,
                 use_sinusoidal_pe=p_dim > 0 and self.use_sinusoidal_pe,
                 unified_pe=self.unified_pe,
+                do_normalise_weights=do_normalise_weights,
                 weights_gradient_policy=self.weights_gradient_policy,
                 shared_context=self.lut_shared_context,
                 summation_dtype=summation_dtype,
@@ -52,6 +54,7 @@ class LUTTransformer(nn.Module):
                 positional_dim=p_dim,
                 use_sinusoidal_pe=p_dim > 0 and self.use_sinusoidal_pe,
                 unified_pe=self.unified_pe,
+                do_normalise_weights=do_normalise_weights,
                 weights_gradient_policy=self.weights_gradient_policy,
                 receptive_field_shape=self.embedding_dim,
                 receptive_field_stride_shape=self.embedding_dim,
@@ -71,6 +74,7 @@ class LUTTransformer(nn.Module):
         n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
         no_ffn=False, concatenation_product=True, sliced_product_mode=False,
         use_sinusoidal_pe=False, unified_pe=False, inject_pe_once=False,
+        do_normalise_weights=False,
         weights_gradient_policy=None,
         device=None, _synapse_meta=SynapseMeta(),
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
@@ -137,7 +141,8 @@ class LUTTransformer(nn.Module):
                 seed=None if seed is None else seed + layer_idx * num_heads,
                 _forward_group_size=_forward_group_size,
                 _backward_group_size=_backward_group_size,
-                num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0
+                num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0,
+                do_normalise_weights=do_normalise_weights
             )
 
             # Dropout after attention
@@ -167,6 +172,7 @@ class LUTTransformer(nn.Module):
                     n_anchors_per_detector=n_anchors_per_detector,
                     sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
                     synapse_meta=_synapse_meta,
+                    do_normalise_weights=do_normalise_weights,
                     weights_gradient_policy=weights_gradient_policy,
                     shared_context=self.lut_shared_context,
                     summation_dtype=summation_dtype,
@@ -205,6 +211,7 @@ class LUTTransformer(nn.Module):
             n_anchors_per_detector=n_anchors_per_detector,
             sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
             synapse_meta=_synapse_meta,
+            do_normalise_weights=do_normalise_weights,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=self.lut_shared_context,
             summation_dtype=summation_dtype,

@@ -503,7 +503,10 @@ class LUTLayerBasic(nn.Module):
         self._shared_context = new_context
         self._own_shared_context = False
 
-    def compile_lut(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
+    def compile_lut(
+        self, shuffle_synapses_random_seed: int = None,
+        _only_trainable_backwards=True, do_normalise_weights=False
+    ):
         n_weights = self._lut_dm.get_weights_dimension()
         with torch.no_grad():
             if self._is_fully_connected:
@@ -512,7 +515,12 @@ class LUTLayerBasic(nn.Module):
                 w *= sm.initial_noise_level
                 w += sm.initial_weight
                 w.clip_(sm.min_weight, sm.max_weight)
+                if do_normalise_weights:
+                    w = w.view(self._n_lookup_neurons, self._n_outputs)
+                    w /= w.norm(dim=-1, keepdim=True)
+                    w = w.T.flatten()
             else:
+                assert not self._is_fully_connected
                 w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
                 self._lut_dm.compile(_only_trainable_backwards, w, shuffle_synapses_random_seed)
         self._weights = nn.Parameter(w)
@@ -1328,6 +1336,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         positional_dim=None,
         use_sinusoidal_pe=False,
         unified_pe=False,
+        do_normalise_weights=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1448,7 +1457,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
                 random_seed=random_seed
             )
 
-        self.compile_lut()
+        self.compile_lut(do_normalise_weights=do_normalise_weights)
 
     def input_shape(self):
         return self._input_shape
@@ -1519,6 +1528,7 @@ class LUTLayer(Conv2DLUTLayer):
         positional_dim=None,
         use_sinusoidal_pe=False,
         unified_pe=False,
+        do_normalise_weights=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
         summation_dtype=torch.float32,
@@ -1546,6 +1556,7 @@ class LUTLayer(Conv2DLUTLayer):
             positional_dim=positional_dim,
             use_sinusoidal_pe=use_sinusoidal_pe,
             unified_pe=unified_pe,
+            do_normalise_weights=do_normalise_weights,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype,
