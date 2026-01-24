@@ -149,7 +149,10 @@ class LUTTransformer(nn.Module):
                 do_normalise_weights=do_normalise_weights
             )
             if self.use_biases:
-                layer['attention_bias'] = nn.Parameter(torch.zeros(n_embeddings, device=device))
+                layer.register_parameter(
+                    'attention_bias',
+                    nn.Parameter(torch.zeros(n_embeddings, device=device))
+                )
 
             # Dropout after attention
             layer['attention_dropout'] = nn.Dropout(dropout)
@@ -190,7 +193,10 @@ class LUTTransformer(nn.Module):
                 )
                 layer['ffn'] = ffn_lut
                 if self.use_biases:
-                    layer['ffn_bias'] = nn.Parameter(torch.zeros(n_embeddings, device=device))
+                    layer.register_parameter(
+                        'ffn_bias',
+                        nn.Parameter(torch.zeros(n_embeddings, device=device))
+                    )
 
                 # Dropout after FFN
                 layer['ffn_dropout'] = nn.Dropout(dropout)
@@ -273,7 +279,7 @@ class LUTTransformer(nn.Module):
                 z = nf.relu(z)
             aat = layer['attention_lut'](z)
             if self.use_biases:
-                aat = aat + layer['attention_bias']
+                aat = aat + layer.attention_bias
             # print(f'test: aat {aat.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
                 self._debug_last_forward.append(aat.detach().clone())
@@ -298,7 +304,7 @@ class LUTTransformer(nn.Module):
                     z = nf.relu(z)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
                 if self.use_biases:
-                    ffn_result = ffn_result + layer['ffn_bias']
+                    ffn_result = ffn_result + layer.ffn_bias
                 if self._debug_last_forward is not None:
                     self._debug_last_forward.append(ffn_result.detach().clone())
                 # print(f'test: ffn_result {ffn_result}')
