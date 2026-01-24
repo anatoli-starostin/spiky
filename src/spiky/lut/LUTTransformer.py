@@ -81,7 +81,7 @@ class LUTTransformer(nn.Module):
         device=None, _synapse_meta=SynapseMeta(),
         lut_shared_context=None, seed=None, summation_dtype=torch.float32, _int_rescaler=0.001,
         _forward_group_size=32, _backward_group_size=32, dropout=0.0,
-        use_batch_norm=False, layer_norm_d=None
+        use_batch_norm=False, layer_norm_d=None, use_biases=False
     ):
         super().__init__()
 
@@ -102,6 +102,7 @@ class LUTTransformer(nn.Module):
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
         self.layer_norm_d = layer_norm_d
+        self.use_biases = use_biases
         self.use_sinusoidal_pe = use_sinusoidal_pe
         self.unified_pe = unified_pe
         if device is None:
@@ -147,6 +148,8 @@ class LUTTransformer(nn.Module):
                 num_heads=num_heads, inject_pe=not inject_pe_once or layer_idx == 0,
                 do_normalise_weights=do_normalise_weights
             )
+            if self.use_biases:
+                layer['attention_bias'] = nn.Parameter(torch.zeros(n_embeddings, device=device))
 
             # Dropout after attention
             layer['attention_dropout'] = nn.Dropout(dropout)
@@ -186,6 +189,8 @@ class LUTTransformer(nn.Module):
                     _backward_group_size=_backward_group_size
                 )
                 layer['ffn'] = ffn_lut
+                if self.use_biases:
+                    layer['ffn_bias'] = nn.Parameter(torch.zeros(n_embeddings, device=device))
 
                 # Dropout after FFN
                 layer['ffn_dropout'] = nn.Dropout(dropout)
@@ -224,6 +229,8 @@ class LUTTransformer(nn.Module):
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size
         )
+        if self.use_biases:
+            self.unembedder_bias = nn.Parameter(torch.zeros(vocab_size, device=device))
         self._debug_last_forward = None
 
     def set_external_learning_rate_hook(self, lr_hook):
@@ -265,6 +272,8 @@ class LUTTransformer(nn.Module):
             if self.relu_before_luts:
                 z = nf.relu(z)
             aat = layer['attention_lut'](z)
+            if self.use_biases:
+                aat = aat + layer['attention_bias']
             # print(f'test: aat {aat.cpu().detach().numpy()}')
             if self._debug_last_forward is not None:
                 self._debug_last_forward.append(aat.detach().clone())
@@ -288,6 +297,8 @@ class LUTTransformer(nn.Module):
                 if self.relu_before_luts:
                     z = nf.relu(z)
                 ffn_result = (layer['ffn'](z.reshape(non_seq_shape))).reshape(seq_shape)
+                if self.use_biases:
+                    ffn_result = ffn_result + layer['ffn_bias']
                 if self._debug_last_forward is not None:
                     self._debug_last_forward.append(ffn_result.detach().clone())
                 # print(f'test: ffn_result {ffn_result}')
@@ -307,6 +318,8 @@ class LUTTransformer(nn.Module):
         if self.relu_before_luts:
             z = nf.relu(z)
         logits = self.unembedder(z.reshape(non_seq_shape)).reshape(batch_size, self.context_size, self.vocab_size)
+        if self.use_biases:
+            logits = logits + self.unembedder_bias
         return logits
 
     def _reset_shared_context(self, new_context):
