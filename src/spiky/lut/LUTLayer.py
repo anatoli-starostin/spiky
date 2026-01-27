@@ -208,39 +208,18 @@ class LUTLayerBasic(nn.Module):
                 else:
                     g = None
                 
-                if self._use_sinusoidal_pe:
-                    # position = torch.arange(self._sequence_length - 1, device=self.device).float().unsqueeze(1)
-                    # inv_freq = torch.exp(
-                    #     -torch.arange(0, self._positional_dim, 2, device=self.device).float() * (torch.log(torch.tensor(10000.0)) / self._positional_dim)
-                    # )
-                    # sinusoid = position * inv_freq
-                    # pe = torch.empty(self._sequence_length - 1, self._positional_dim, device=self.device)
-                    # pe[:, 0::2] = torch.sin(sinusoid)
-                    # pe[:, 1::2] = torch.cos(sinusoid)
-                    # self._positional_embeddings = nn.Parameter(pe.flatten(), requires_grad=False)
-                    positional_embeddings_data = torch.empty(
-                        (self._sequence_length - 1) * 2 * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
-                        dtype=torch.float32,
-                        device=self.device
-                    )
-                    # Initialize with random floats in [-1, 1]
-                    positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
-                    self._positional_embeddings = nn.Parameter(positional_embeddings_data)
-                else:
-                    positional_embeddings_data = torch.empty(
-                        (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
-                        dtype=torch.float32,
-                        device=self.device
-                    )
-                    # Initialize with random floats in [-1, 1]
-                    positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
-                    self._positional_embeddings = nn.Parameter(positional_embeddings_data)
+                positional_embeddings_data = torch.empty(
+                    (self._sequence_length - 1) * (1 if self._unified_positional_embeddings else self._n_detectors) * self._positional_dim,
+                    dtype=torch.float32,
+                    device=self.device
+                )
+                # Initialize with random floats in [-1, 1]
+                positional_embeddings_data.uniform_(-1.0, 1.0, generator=g)
+                self._positional_embeddings = nn.Parameter(positional_embeddings_data)
             else:
-                assert not self._use_sinusoidal_pe
                 self._positional_embeddings = None
         else:
             assert self._positional_dim is None, "positional_dim must be None when sequence_length == 1"
-            assert not self._use_sinusoidal_pe
             self._positional_embeddings = None
 
     def __init__(
@@ -252,7 +231,6 @@ class LUTLayerBasic(nn.Module):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
-        use_sinusoidal_pe=False,
         unified_pe=False,
         weights_gradient_policy: GradientPolicy = None,
         shared_context: LUTSharedContext = None,
@@ -310,7 +288,6 @@ class LUTLayerBasic(nn.Module):
         self._external_lr_hook = None
 
         self._positional_dim = positional_dim
-        self._use_sinusoidal_pe = use_sinusoidal_pe
         self._initialize_positional_embeddings(random_seed=random_seed)
 
         if self._is_fully_connected:
@@ -520,7 +497,7 @@ class LUTLayerBasic(nn.Module):
                     w /= w.norm(dim=-1, keepdim=True)
                     w = w.T.flatten()
             else:
-                assert not self._is_fully_connected
+                assert not do_normalise_weights, "weights normalisation is currently supported in fully connected mode only"
                 w = torch.zeros([n_weights], dtype=torch.float32, device=self.device)
                 self._lut_dm.compile(_only_trainable_backwards, w, shuffle_synapses_random_seed)
         self._weights = nn.Parameter(w)
@@ -623,60 +600,6 @@ class LUTLayerBasic(nn.Module):
             target_w_grad /= target_w_grad.abs().max().clip(1e-16)
         
         return target_w_grad
-
-    @staticmethod
-    def _process_multiple_sparse_gradients(
-        shared_context, target_w_grad_list, multi_id_list, densify_buffer_size, do_normalize
-    ):
-        densify_buffers_list = [None] * len(target_w_grad_list)
-        results = [None] * len(target_w_grad_list)
-
-        for i, target_w_grad in enumerate(target_w_grad_list):
-            if target_w_grad is None:
-                continue
-                
-            multi_id = multi_id_list[i]
-            converter = shared_context.get_dense_to_sparse_converter(multi_id)
-            densify_buffers = shared_context.get_densify_buffers(
-                densify_buffer_size,
-                target_w_grad.device,
-                multi_id
-            )
-            stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
-            converter.dense_to_sparse_32(
-                target_w_grad, erase_input=True,
-                densify_buffers=densify_buffers,
-                stream=stream,
-                decouple=False
-            )
-            densify_buffers_list[i] = densify_buffers
-    
-        for i, densify_buffers in enumerate(densify_buffers_list):
-            if densify_buffers is None:
-                continue
-            target_w_grad = target_w_grad_list[i]
-            converter = shared_context.get_dense_to_sparse_converter(multi_id_list[i])
-            stream = shared_context.get_cuda_stream(target_w_grad.device, multi_id, stream_index=0)
-            if stream is not None:
-                stream.synchronize()
-            indices, values = converter.decouple_results(densify_buffers)
-            
-            if indices is not None:
-                if do_normalize:
-                    values /= values.abs().max().clip(1e-16)
-                target_w_grad = torch.sparse_coo_tensor(
-                    indices=indices.unsqueeze(0),
-                    values=values,
-                    size=target_w_grad.shape,
-                    device=target_w_grad.device,
-                    check_invariants=False,
-                    is_coalesced=True,
-                    requires_grad=False
-                )
-            else:
-                target_w_grad = None
-            results[i] = target_w_grad
-        return results
 
     def _set_lookup_indices_callback(self, cb):
         assert self._sequence_length == 1
@@ -1253,17 +1176,10 @@ class LUTLayerBasic(nn.Module):
     def _prepare_positional_embeddings(self):
         if self._unified_positional_embeddings:
             pos_embeddings = self._positional_embeddings.reshape(
-                (self._sequence_length - 1) * (2 if self._use_sinusoidal_pe else 1), 1, self._positional_dim
+                (self._sequence_length - 1), 1, self._positional_dim
             ).repeat(1, self._n_detectors, 1).flatten().contiguous()
         else:
             pos_embeddings = self._positional_embeddings
-
-        if self._use_sinusoidal_pe:
-            position = torch.arange(self._sequence_length - 1, device=self.device).to(dtype=torch.float32)
-            position = position.unsqueeze(1).repeat(1, self._positional_dim * self._n_detectors)
-            pos_embeddings = pos_embeddings.reshape(pos_embeddings.numel() // 2, 2)
-            pos_embeddings = torch.sin(position.flatten() * pos_embeddings[:, 0] + pos_embeddings[:, 1])
-            pos_embeddings = pos_embeddings.flatten().contiguous()
 
         return pos_embeddings
 
@@ -1334,7 +1250,6 @@ class Conv2DLUTLayer(LUTLayerBasic):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
-        use_sinusoidal_pe=False,
         unified_pe=False,
         do_normalise_weights=False,
         weights_gradient_policy: GradientPolicy = None,
@@ -1409,7 +1324,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
             n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=c_helper_2 is None,
             sequence_length=sequence_length, synapse_metas=[synapse_meta],
             concatenation_product=concatenation_product, sliced_product_mode=sliced_product_mode,
-            positional_dim=positional_dim, use_sinusoidal_pe=use_sinusoidal_pe, unified_pe=unified_pe,
+            positional_dim=positional_dim, unified_pe=unified_pe,
             weights_gradient_policy=weights_gradient_policy,
             shared_context=shared_context,
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
@@ -1526,7 +1441,6 @@ class LUTLayer(Conv2DLUTLayer):
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
-        use_sinusoidal_pe=False,
         unified_pe=False,
         do_normalise_weights=False,
         weights_gradient_policy: GradientPolicy = None,
@@ -1554,7 +1468,6 @@ class LUTLayer(Conv2DLUTLayer):
             concatenation_product=concatenation_product,
             sliced_product_mode=sliced_product_mode,
             positional_dim=positional_dim,
-            use_sinusoidal_pe=use_sinusoidal_pe,
             unified_pe=unified_pe,
             do_normalise_weights=do_normalise_weights,
             weights_gradient_policy=weights_gradient_policy,
@@ -1586,250 +1499,3 @@ class LUTLayer(Conv2DLUTLayer):
 
     def __repr__(self):
         return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_outputs()} outputs, {self.n_anchors_per_detector()} anchors per detector)'
-
-#
-# class MultiLUT(nn.Module):
-#     """
-#     A module that runs multiple LUTLayerBasic instances in parallel (cuda kernels work in parallel on different cuda streams, cpu part is synchronous).
-#     All layers must have the same input_shape, output_shape, and sequence_length.
-#     Each layer is assigned a unique multi_id for stream isolation.
-#     """
-#
-#     def __init__(self, luts: List[LUTLayerBasic]):
-#         super().__init__()
-#
-#         if len(luts) < 2:
-#             raise ValueError("MultiLUT requires at least two luts")
-#
-#         # Validate all luts have compatible shapes
-#         first_lut = luts[0]
-#         input_shape = first_lut.input_shape()
-#         output_shape = first_lut.output_shape()
-#         sequence_length = first_lut.sequence_length()
-#         concatenation_product = first_lut._concatenation_product
-#         sliced_product_mode = first_lut._sliced_product_mode
-#         self._shared_context = first_lut._shared_context
-#         self._gradient_policy = first_lut._weights_gradient_policy
-#
-#         for i, lut in enumerate(luts):
-#             if not isinstance(lut, LUTLayerBasic):
-#                 raise ValueError(f"lut {i} is not an instance of LUTLayerBasic")
-#             if lut.input_shape() != input_shape:
-#                 raise ValueError(f"lut {i} has input_shape {lut.input_shape()}, expected {input_shape}")
-#             if lut.output_shape() != output_shape:
-#                 raise ValueError(f"lut {i} has output_shape {lut.output_shape()}, expected {output_shape}")
-#             if lut.sequence_length() != sequence_length:
-#                 raise ValueError(f"lut {i} has sequence_length {lut.sequence_length()}, expected {sequence_length}")
-#             if lut._concatenation_product != concatenation_product:
-#                 raise ValueError(f"lut {i} has _concatenation_product {lut._concatenation_product}, expected {concatenation_product}")
-#             if lut._sliced_product_mode != sliced_product_mode:
-#                 raise ValueError(f"lut {i} has _sliced_product_mode {lut._sliced_product_mode}, expected {sliced_product_mode}")
-#             if lut._shared_context != self._shared_context:
-#                 raise ValueError(f"lut {i} has different shared context than lut 0")
-#             if lut._weights_gradient_policy != self._gradient_policy:
-#                 raise ValueError(f"lut {i} has gradient policy {lut._weights_gradient_policy}, expected {self._gradient_policy}")
-#             if lut.get_summation_type() == torch.int32:
-#                 raise ValueError(f"lut {i} has summation type int32 which is not allowed for MultiLUT")
-#
-#         # Assign multi_id to each lut
-#         for multi_id, lut in enumerate(luts):
-#             lut._multi_id = multi_id
-#
-#         self.luts = nn.ModuleList(luts)
-#         self._input_shape = input_shape
-#         self._output_shape = output_shape
-#         self._sequence_length = sequence_length
-#         self._all_weights = None
-#         self._all_positional_encodings = None
-#
-#     def input_shape(self):
-#         return self._input_shape
-#
-#     def output_shape(self):
-#         return self._output_shape
-#
-#     def sequence_length(self):
-#         return self._sequence_length
-#
-#     def set_external_learning_rate_hook(self, hook_fn):
-#         for lut in self.luts:
-#             lut.set_external_learning_rate_hook(hook_fn)
-#
-#     def _reset_shared_context(self, new_context):
-#         for lut in self.luts:
-#             lut._reset_shared_context(new_context)
-#
-#     def forward(self, x):
-#         """
-#         Forward pass that runs all luts in "parallel".
-#         Returns the sum of outputs from all luts.
-#         """
-#         # Lazy fill weights and positional encodings if needed
-#         if self._all_weights is None:
-#             self._all_weights = []
-#             for lut in self.luts:
-#                 self._all_weights.append(lut._weights)
-#
-#         # Only pass positional encodings if they exist (when sequence_length > 1)
-#         if self._sequence_length > 1:
-#             if self._all_positional_encodings is None:
-#                 self._all_positional_encodings = []
-#                 for lut in self.luts:
-#                     self._all_positional_encodings.append(lut._positional_embeddings)
-#             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights, *self._all_positional_encodings)
-#         else:
-#             return MultiLUT.MultiLUTForwardFN.apply(x, self, *self._all_weights)
-#
-#     class MultiLUTForwardFN(torch.autograd.Function):
-#         @staticmethod
-#         def forward(ctx, *args, **kwargs):
-#             """
-#             Run forward pass for all luts in "parallel"
-#             All luts accumulate into the same output tensor.
-#             """
-#             x, multi_lut = args[0], args[1]
-#
-#             first_lut = multi_lut.luts[0]
-#             batch_size = x.shape[0]
-#
-#             # Create shared output tensor
-#             if multi_lut._sequence_length == 1:
-#                 output = torch.zeros(
-#                     [batch_size * first_lut._n_outputs],
-#                     dtype=torch.float32, device=first_lut.device
-#                 )
-#             else:
-#                 output = torch.zeros(
-#                     [batch_size * multi_lut._sequence_length * first_lut._n_outputs],
-#                     dtype=torch.float32, device=first_lut.device
-#                 )
-#
-#             pos_emb = None
-#             if multi_lut.training:
-#                 results = [None] * len(multi_lut.luts)
-#
-#                 for lut_idx, lut in enumerate(multi_lut.luts):
-#                     if multi_lut._sequence_length == 1:
-#                         results[lut_idx] = lut.forward_step(x, output=output)
-#                     elif lut._concatenation_product:
-#                         pos_emb = lut._prepare_positional_embeddings()
-#                         results[lut_idx] = list(lut.forward_step_concat(x, pos_emb, output=output))
-#                     else:
-#                         pos_emb = lut._prepare_positional_embeddings()
-#                         lut.forward_step_product(x, pos_emb, output=output)
-#
-#                 for lut_idx, lut in enumerate(multi_lut.luts):
-#                     lut._synchronize()
-#                     if lut._lookup_indices_callback is not None:
-#                         lut._lookup_indices_callback(results[lut_idx][0], results[lut_idx][1], results[lut_idx][2])
-#             else:
-#                 for lut_idx, lut in enumerate(multi_lut.luts):
-#                     if multi_lut._sequence_length == 1:
-#                         lut.forward_step(x, output=output)
-#                     elif lut._concatenation_product:
-#                         pos_emb = lut._prepare_positional_embeddings()
-#                         lut.forward_step_concat(x, pos_emb, output=output)
-#                     else:
-#                         pos_emb = lut._prepare_positional_embeddings()
-#                         lut.forward_step_product(x, pos_emb, output=output)
-#
-#                 for lut_idx, lut in enumerate(multi_lut.luts):
-#                     lut._synchronize()
-#
-#             # Reshape output to match expected shape
-#
-#             output = output.view((batch_size, multi_lut._sequence_length) + multi_lut.output_shape())
-#
-#             if multi_lut.training:
-#                 # Save for backward
-#                 ctx.multi_lut = multi_lut
-#                 ctx.save_for_backward(x, pos_emb)
-#                 ctx.results = results  # Store individual results for backward
-#
-#             return output
-#
-#         @staticmethod
-#         def backward(ctx, *grad_outputs):
-#             """
-#             Run backward pass for all luts in "parallel".
-#             All luts accumulate into the same x_grad tensor.
-#             Returns gradients for x, multi_lut, all weights, and all positional encodings.
-#             """
-#             (grad_output,) = grad_outputs
-#             multi_lut = ctx.multi_lut
-#             n_luts = len(multi_lut.luts)
-#
-#             # Extract saved input
-#             x, pos_emb = ctx.saved_tensors
-#             results = ctx.results
-#
-#             # Create shared x_grad tensor
-#             x_grad = torch.zeros_like(x.view(-1))
-#
-#             # Store gradients for each lut
-#             all_weight_grads = [None] * n_luts
-#             all_pe_grads = [None] * n_luts if multi_lut._sequence_length > 1 else []
-#
-#             for lut_idx, lut in enumerate(multi_lut.luts):
-#                 if multi_lut._sequence_length == 1:
-#                     (w_grad,) = lut.backward_step(
-#                         x, grad_output,
-#                         results[lut_idx][0],  # lookup_indices
-#                         results[lut_idx][1],  # min_anchor_deltas
-#                         results[lut_idx][2],  # min_anchor_delta_indices
-#                         x_grad=x_grad
-#                     )
-#                     all_weight_grads[lut_idx] = w_grad
-#                 elif lut._concatenation_product:
-#                     w_grad, pe_grad = lut.backward_step_concat(
-#                         x, grad_output,
-#                         results[lut_idx][0],  # lookup_indices
-#                         results[lut_idx][1],  # min_anchor_deltas
-#                         results[lut_idx][2],  # min_anchor_delta_indices
-#                         results[lut_idx][3],  # positional_lookup_indices
-#                         results[lut_idx][4],  # positional_min_deltas
-#                         results[lut_idx][5],  # positional_min_delta_indices
-#                         x_grad=x_grad
-#                     )
-#                     all_weight_grads[lut_idx] = w_grad
-#                     all_pe_grads[lut_idx] = pe_grad
-#                 else:
-#                     w_grad, pe_grad = lut.backward_step_product(
-#                         x, pos_emb, grad_output,
-#                         x_grad=x_grad
-#                     )
-#                     all_weight_grads[lut_idx] = w_grad
-#                     all_pe_grads[lut_idx] = pe_grad
-#
-#             for i, lut in enumerate(multi_lut.luts):
-#                 lut._synchronize()
-#
-#             batch_size = x.shape[0]
-#
-#             if multi_lut._gradient_policy.type == GradientType.Sparse:
-#                 densify_buffer_size = multi_lut.luts[0]._gradient_densify_buffer_size(batch_size)
-#                 all_weight_grads = LUTLayerBasic._process_multiple_sparse_gradients(
-#                     multi_lut._shared_context, all_weight_grads, [lut._multi_id for lut in multi_lut.luts],
-#                     densify_buffer_size, multi_lut._gradient_policy.normalized
-#                 )
-#             else:
-#                 for lut_idx, lut in enumerate(multi_lut.luts):
-#                     all_weight_grads[lut_idx] = lut._process_gradients(all_weight_grads[lut_idx], batch_size)
-#
-#             if multi_lut._sequence_length > 1:
-#                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads) + tuple(all_pe_grads)
-#             else:
-#                 return (x_grad.view(x.shape), None) + tuple(all_weight_grads)
-#
-#     def to(self, *args, **kwargs):
-#         """
-#         Move the module to a different device/dtype.
-#         Resets cached weights and positional encodings so they are rebuilt on next forward.
-#         """
-#         result = super().to(*args, **kwargs)
-#         self._all_weights = None
-#         self._all_positional_encodings = None
-#         return result
-#
-#     def __repr__(self):
-#         return f'MultiLUT({len(self.luts)} luts, input_shape={self.input_shape()}, output_shape={self.output_shape()}, sequence_length={self.sequence_length()})'

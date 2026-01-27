@@ -311,3 +311,131 @@ flowchart TD
     style D6 fill:#000000,color:#ffffff
     style SC4 fill:#000000,color:#ffffff
 ```
+
+## Product Mode - Forward Pass
+
+Product mode processes two separate input sequences (`input_1` and `input_2`) together, computing lookup indices from pairs (i, j) where i comes from `input_1` and j comes from `input_2`. This is used for attention-like mechanisms.
+
+### Fully Connected Case
+
+```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
+flowchart TD
+    A1["Input 1<br/>[B × S × I<sub>1</sub>]"] --> B1("fill_outputs_product_fc<br/>(processes pairs i,j where i < j)")
+    A2["Input 2<br/>[B × S × I<sub>2</sub>]"] --> B1
+    D7["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B1
+    PE1["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> B1
+    
+    W7["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B1
+    
+    B1 --> G1["Output: Output<br/>[B × S × O]"]
+    
+    style B1 fill:#81c784,color:#000000
+    style G1 fill:#ffffff,color:#000000
+    style A1 fill:#000000,color:#ffffff
+    style A2 fill:#000000,color:#ffffff
+    style D7 fill:#000000,color:#ffffff
+    style PE1 fill:#000000,color:#ffffff
+    style W7 fill:#000000,color:#ffffff
+```
+
+### Sparse Connectivity Case
+
+```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
+flowchart TD
+    A3["Input 1<br/>[B × S × I<sub>1</sub>]"] --> B2("fill_outputs_product_sparse<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A4["Input 2<br/>[B × S × I<sub>2</sub>]"] --> B2
+    D8["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B2
+    PE2["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> B2
+    
+    W8["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B2
+    SC5["Sparse connectivity info"] --> B2
+    
+    B2 --> G2["Output: Output<br/>[B × S × O]"]
+    
+    style B2 fill:#81c784,color:#000000
+    style G2 fill:#ffffff,color:#000000
+    style A3 fill:#000000,color:#ffffff
+    style A4 fill:#000000,color:#ffffff
+    style D8 fill:#000000,color:#ffffff
+    style PE2 fill:#000000,color:#ffffff
+    style SC5 fill:#000000,color:#ffffff
+    style W8 fill:#000000,color:#ffffff
+```
+
+## Product Mode - Backward Pass
+
+### Fully Connected Case
+
+```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
+flowchart TD
+    A5["Output Gradients<br/>[B × S × O]"] --> B3("propagate_backward_product_fc<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A5 --> C1("gather_w_gradients_product_fc<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    
+    W9["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B3
+    
+    D9["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B3
+    IN1["Input 1<br/>[B × S × I<sub>1</sub>]"] --> B3
+    IN2["Input 2<br/>[B × S × I<sub>2</sub>]"] --> B3
+    PE3["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> B3
+    
+    B3 --> D1["Output: Input Gradients 1<br/>[B × S × I<sub>1</sub>]"]
+    B3 --> D2["Output: Input Gradients 2<br/>[B × S × I<sub>2</sub>]"]
+    B3 --> PE4["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
+    
+    C1 --> E1["Output: Weight Gradients<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"]
+    
+    style B3 fill:#81c784,color:#000000
+    style C1 fill:#81c784,color:#000000
+    style D1 fill:#ffffff,color:#000000
+    style D2 fill:#ffffff,color:#000000
+    style E1 fill:#ffffff,color:#000000
+    style PE4 fill:#ffffff,color:#000000
+    style A5 fill:#000000,color:#ffffff
+    style W9 fill:#000000,color:#ffffff
+    style D9 fill:#000000,color:#ffffff
+    style IN1 fill:#000000,color:#ffffff
+    style IN2 fill:#000000,color:#ffffff
+    style PE3 fill:#000000,color:#ffffff
+```
+
+### Sparse Connectivity Case
+
+```mermaid
+%%{init: { "flowchart": { "defaultRenderer": "elk" } }}%%
+flowchart TD
+    A6["Output Gradients<br/>[B × S × O]"] --> B4("propagate_backward_product_sparse<br/>Stream 0<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    A6 --> C2("gather_w_gradients_product_sparse<br/>Stream 1<br/>(processes B×S×(S-1)/2 pairs with tiles)")
+    
+    W10["Weights<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"] --> B4
+    
+    D10["Anchors<br/>[N<sub>t</sub> × 2 × N<sub>c</sub>]"] --> B4
+    IN3["Input 1<br/>[B × S × I<sub>1</sub>]"] --> B4
+    IN4["Input 2<br/>[B × S × I<sub>2</sub>]"] --> B4
+    PE5["Positional Embeddings<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"] --> B4
+    
+    SC6["Sparse connectivity info"] --> B4
+    SC6 --> C2
+    
+    B4 --> D3["Output: Input Gradients 1<br/>[B × S × I<sub>1</sub>]"]
+    B4 --> D4["Output: Input Gradients 2<br/>[B × S × I<sub>2</sub>]"]
+    B4 --> PE6["Output: Positional Embedding Gradients<br/>[(S-1) × N<sub>t</sub> × N<sub>pe</sub>]"]
+    
+    C2 --> E2["Output: Weight Gradients<br/>[N<sub>t</sub> × 2<sup>N<sub>c</sub></sup> × O]"]
+    
+    style B4 fill:#81c784,color:#000000
+    style C2 fill:#81c784,color:#000000
+    style D3 fill:#ffffff,color:#000000
+    style D4 fill:#ffffff,color:#000000
+    style E2 fill:#ffffff,color:#000000
+    style PE6 fill:#ffffff,color:#000000
+    style A6 fill:#000000,color:#ffffff
+    style W10 fill:#000000,color:#ffffff
+    style D10 fill:#000000,color:#ffffff
+    style IN3 fill:#000000,color:#ffffff
+    style IN4 fill:#000000,color:#ffffff
+    style PE5 fill:#000000,color:#ffffff
+    style SC6 fill:#000000,color:#ffffff
+```
