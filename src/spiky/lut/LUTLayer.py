@@ -5,8 +5,13 @@ from dataclasses import dataclass
 from enum import Enum
 
 from spiky_cuda import LUTDataManagerF, LUTDataManagerI
-from spiky.util.synapse_growth import Conv2DSynapseGrowthHelper
-from spiky.util.chunk_of_connections import ChunkOfConnections
+from spiky.util.synapse_growth import (
+    Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper, GivenRectanglesSynapseGrowthHelper,
+    PointSamplingPolicy, PointSamplingType
+)
+from spiky.util.chunk_of_connections import (
+    ChunkOfConnections, repeat_connections_incrementing_source
+)
 from spiky.util.torch_utils import DenseToSparseConverter
 
 
@@ -1499,3 +1504,122 @@ class LUTLayer(Conv2DLUTLayer):
 
     def __repr__(self):
         return f'LUTLayer({self.n_inputs()} inputs, {self.n_detectors()} detectors, {self.n_outputs()} outputs, {self.n_anchors_per_detector()} anchors per detector)'
+
+
+class ProjectionLUTLayer(LUTLayerBasic):
+    def __init__(
+        self, input_shape, output_shape,
+        n_anchors_per_detector,
+        n_detector_groups,
+        n_detectors_in_group,
+        receptive_shape,
+        projection_shape,
+        synapse_meta=SynapseMeta(),
+        projection_prob=1.0,
+        detectors_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
+        input_sparsity_mask=None,
+        output_sparsity_mask=None,
+        weights_gradient_policy: GradientPolicy = None,
+        shared_context: LUTSharedContext = None,
+        summation_dtype=torch.float32,
+        _int_rescaler=0.001,
+        _forward_group_size=32,
+        _backward_group_size=32,
+        _max_groups_in_growth_buffer=2 ** 20,
+        random_seed=None,
+        device=None
+    ):
+        assert n_detector_groups >= 1
+        assert n_detectors_in_group >= 1
+
+        self._n_detector_groups = n_detector_groups
+        self._n_detectors_in_group = n_detectors_in_group
+
+        c_helper = RandomRectanglesSynapseGrowthHelper(
+            input_shape[0], input_shape[1],
+            receptive_shape[0], receptive_shape[1],
+            input_shape[0], input_shape[1],
+            n_outputs=n_detector_groups,
+            n_out_channels=n_detectors_in_group,
+            input_sparsity_mask=input_sparsity_mask,
+            output_sampling_policy=detectors_sampling_policy
+        )
+
+        n_inputs = input_shape[0] * input_shape[1]
+        n_outputs = output_shape[0] * output_shape[1]
+
+        self._input_shape = input_shape
+        self._output_shape = output_shape
+        n_lut_channels = LUTLayerBasic.n_lut_channels(n_anchors_per_detector, 1)
+
+        super().__init__(
+            n_inputs=n_inputs, n_outputs=n_outputs,
+            n_detectors=n_detector_groups * n_detectors_in_group,
+            n_anchors_per_detector=n_anchors_per_detector, is_fully_connected=False,
+            sequence_length=1, synapse_metas=[synapse_meta],
+            weights_gradient_policy=weights_gradient_policy,
+            shared_context=shared_context,
+            summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
+            _forward_group_size=_forward_group_size,
+            _backward_group_size=_backward_group_size,
+            random_seed=random_seed
+        )
+
+        if device is not None:
+            self.to(device=device)
+        else:
+            device = torch.device("cpu")
+
+        connections, group_centers = c_helper.grow_synapses(
+            input_ids=self.get_input_neuron_ids().view(input_shape) + 1,
+            output_ids=self.get_detector_neuron_ids() + 1,
+            max_groups_in_buffer=_max_groups_in_growth_buffer,
+            device=device,
+            seed=random_seed
+        )
+
+        self.add_detector_connections(
+            chunk_of_connections=connections,
+            ids_shift=-1,
+            random_seed=random_seed
+        )
+
+        self.initialize_detectors(seed=random_seed)
+
+        c_helper = GivenRectanglesSynapseGrowthHelper(
+            group_centers[::n_detectors_in_group],
+            projection_shape[0], projection_shape[1],
+            output_shape[0], output_shape[1],
+            p=projection_prob,
+            output_sparsity_mask=output_sparsity_mask
+        )
+
+        connections = c_helper.grow_synapses(
+            input_ids=self.get_lookup_neuron_ids()[::n_detectors_in_group * n_lut_channels] + 1,
+            output_ids=self.get_output_neuron_ids().reshape(output_shape) + 1,
+            max_groups_in_buffer=_max_groups_in_growth_buffer,
+            device=device,
+            seed=random_seed
+        )
+
+        connections = repeat_connections_incrementing_source(connections, n_lut_channels * n_detectors_in_group)
+
+        self.add_lookup_connections(
+            chunk_of_connections=connections,
+            ids_shift=-1,
+            random_seed=random_seed
+        )
+
+        self.compile_lut()
+
+    def input_shape(self):
+        return self._input_shape
+
+    def output_shape(self):
+        return self._output_shape
+
+    def detectors_shape(self):
+        return self._detectors_shape
+
+    def __repr__(self):
+        return f'ProjectionLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, n_detectors={self._n_detectors}, n_anchors_per_detector={self.n_anchors_per_detector()})'
