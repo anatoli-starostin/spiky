@@ -3,6 +3,7 @@
 **/tests/**/*.png
 **/tests/mnist
 workbooks/mnist
+workbooks/data
 spiky_cuda/*/aux/*.cu
 
 # Byte-compiled / optimized / DLL files
