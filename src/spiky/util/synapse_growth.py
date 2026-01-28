@@ -450,13 +450,13 @@ class Conv2DSynapseGrowthHelper(object):
 
 
 def sample_random_points(
-    N, ow, oh,
+    n_points, ow, oh,
     clamp_x, clamp_y,
     is_normal=False, mu=None, sigma=None, seed=None,
     device=None
 ):
     """
-    Returns (x, y) tensors of shape [N] within rectangle [0,ow]x[0,oh].
+    Returns (x, y) tensors of shape [n_points] within rectangle [0,ow]x[0,oh].
     """
     device = device or "cpu"
     ow = float(ow)
@@ -473,49 +473,26 @@ def sample_random_points(
             sigma = (ow/6.0, oh/6.0)
         mx, my = mu
         sx, sy = sigma
-        x = torch.randn(N, device=device, generator=gen) * sx + mx
-        y = torch.randn(N, device=device, generator=gen) * sy + my
+        x = torch.randn(n_points, device=device, generator=gen) * sx + mx
+        y = torch.randn(n_points, device=device, generator=gen) * sy + my
         return torch.stack([x.clamp(*clamp_x), y.clamp(*clamp_y)], dim=1)
     else:
-        x = torch.rand(N, device=device, generator=gen) * ow
-        y = torch.rand(N, device=device, generator=gen) * oh
+        x = torch.rand(n_points, device=device, generator=gen) * ow
+        y = torch.rand(n_points, device=device, generator=gen) * oh
         return torch.stack([x.clamp(*clamp_x), y.clamp(*clamp_y)], dim=1)
 
 
-def sample_grid_points(N, ow, oh, Gw, Gh, point_width, point_height, device=None):
-    """
-    Grid of N=Gw*Gh points. Each point represents a rectangle of size
-    (point_width, point_height) centered at (x,y). Ensures all point-rectangles
-    fit inside [0,ow]x[0,oh].
-    """
-    assert Gw * Gh == N
-    device = device or "cpu"
-    ow = float(ow)
-    oh = float(oh)
-    pw = float(point_width)
-    ph = float(point_height)
-
-    if pw > ow or ph > oh:
-        raise ValueError("Point rectangle bigger than source area.")
-
-    # valid center ranges
-    xmin, xmax = pw / 2.0, ow - pw / 2.0
-    ymin, ymax = ph / 2.0, oh - ph / 2.0
-
-    if Gw == 1:
-        xs = torch.tensor([(xmin + xmax) / 2.0], device=device)
-    else:
-        xs = torch.linspace(xmin, xmax, steps=Gw, device=device)
-
-    if Gh == 1:
-        ys = torch.tensor([(ymin + ymax) / 2.0], device=device)
-    else:
-        ys = torch.linspace(ymin, ymax, steps=Gh, device=device)
+def sample_grid_points(
+    gw, gh,
+    center_x, center_y,
+    stride_x, stride_y,
+    device
+):
+    xs = center_x + stride_x * torch.arange(gw, device=device)
+    ys = center_y + stride_y * torch.arange(gh, device=device)
 
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    x = xx.reshape(-1)
-    y = yy.reshape(-1)
-    return torch.stack([x, y], dim=1)
+    return torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=1)
 
 
 class PointSamplingType(Enum):
@@ -531,19 +508,45 @@ class PointSamplingPolicy:
     sigma: float = None
     grid_h: int = None
     grid_w: int = None
+    stride_h: int = None
+    stride_w: int = None
+
+    def __post_init__(self):
+        if self.sigma is not None:
+            assert self.sigma > 0.0
+        if self.grid_h is not None:
+            assert self.grid_h > 0
+        if self.grid_w is not None:
+            assert self.grid_w > 0
+        if self.stride_h is not None:
+            assert self.stride_h >= 0
+        if self.stride_w is not None:
+            assert self.stride_w >= 0
 
 
 class RandomRectanglesSynapseGrowthHelper(object):
     def __init__(
-        self, h, w, rh, rw, oh, ow,
-        p=1.0, n_out_channels=1, n_outputs=None, input_sparsity_mask=None,
+        self, h, w, rh, rw, oh, ow, n_outputs,
+        p=1.0, n_out_channels=1, input_sparsity_mask=None,
         output_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform)
     ):
         """
         h, w: input grid height and width
         rw, rh: rectangle window width and height
         ow, oh: output grid height and width
+        n_outputs: number of outputs to sample within grid
         """
+        assert w > 0
+        assert h > 0
+        assert rw > 0
+        assert rh > 0
+        assert oh > 0
+        assert ow > 0
+        assert 0.0 < p <= 1.0
+        assert n_outputs > 0
+        assert n_out_channels > 0
+        assert output_sampling_policy is not None
+
         self.h = h
         self.w = w
         self.rw = rw
@@ -565,13 +568,23 @@ class RandomRectanglesSynapseGrowthHelper(object):
         assert (input_ids > 0).all()
         assert (output_ids > 0).all()
         growth_engine = SynapseGrowthEngine(device=device, synapse_group_size=synapse_group_size, max_groups_in_buffer=max_groups_in_buffer)
-        growth_command = GrowthCommand(
-            target_type=1,
-            synapse_meta_index=0,
-            x1=-(self.rw / 2) - 1e-4, y1=-(self.rh / 2) - 1e-4, z1=0.5,
-            x2=(self.rw / 2) + 1e-4, y2=(self.rh / 2) + 1e-4, z2=1.5,
-            p=self.p
-        )
+
+        if self.output_sampling_policy.type == PointSamplingType.Grid:
+            growth_command = GrowthCommand(
+                target_type=1,
+                synapse_meta_index=0,
+                x1=-((self.rw - 1) / 2) - 1e-4, y1=-((self.rh - 1) / 2) - 1e-4, z1=0.5,
+                x2=((self.rw - 1) / 2) + 1e-4, y2=((self.rh - 1) / 2) + 1e-4, z2=1.5,
+                p=self.p
+            )
+        else:
+            growth_command = GrowthCommand(
+                target_type=1,
+                synapse_meta_index=0,
+                x1=-(self.rw / 2) - 1e-4, y1=-(self.rh / 2) - 1e-4, z1=0.5,
+                x2=(self.rw / 2) + 1e-4, y2=(self.rh / 2) + 1e-4, z2=1.5,
+                p=self.p
+            )
 
         growth_engine.register_neuron_type(
             max_synapses=self.n_outputs * self.n_out_channels,
@@ -617,10 +630,12 @@ class RandomRectanglesSynapseGrowthHelper(object):
             assert self.output_sampling_policy.grid_w is not None
             assert self.output_sampling_policy.grid_h * self.output_sampling_policy.grid_w == self.n_outputs
             centers = sample_grid_points(
-                self.n_outputs, self.ow, self.oh,
                 self.output_sampling_policy.grid_w,
                 self.output_sampling_policy.grid_h,
-                self.rw, self.rh, device=device
+                (self.rw - 1) / 2, (self.rh - 1) / 2,
+                self.output_sampling_policy.stride_w,
+                self.output_sampling_policy.stride_h,
+                device=device
             )
 
         if self.n_out_channels > 1:
