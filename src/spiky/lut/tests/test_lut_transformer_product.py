@@ -264,7 +264,7 @@ def _test_lut_transformer_product(
         concatenation_product=False,
         unified_pe=True,
         sliced_product_mode=sliced_mode,
-        _synapse_meta=SynapseMeta(
+        synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
             initial_weight=-1.0, initial_noise_level=2.0
         ),
@@ -410,7 +410,7 @@ def main():
 
     devices = ['cpu']
     if torch.cuda.is_available():
-        devices.append('cuda:5')
+        devices.append('cuda')
 
     for device in devices:
         for summation_dtype in [torch.float32, torch.int32]:

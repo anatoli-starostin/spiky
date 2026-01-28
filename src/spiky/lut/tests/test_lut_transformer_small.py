@@ -279,7 +279,7 @@ def _test_lut_transformer_small(
         num_heads=num_heads,
         n_detectors=n_detectors,
         n_anchors_per_detector=n_anchors_per_detector,
-        _synapse_meta=SynapseMeta(
+        synapse_meta=SynapseMeta(
             min_weight=-1.0, max_weight=1.0,
             initial_weight=-1.0, initial_noise_level=2.0
         ),
@@ -402,9 +402,9 @@ def main():
     print("LUTTransformer SMALL TEST")
     print("=" * 60)
 
-    devices = [] # 'cpu'
+    devices = ['cpu']
     if torch.cuda.is_available():
-        devices.append('cuda:5')
+        devices.append('cuda')
 
     for device in devices:
         for summation_dtype in [torch.float32, torch.int32]:
