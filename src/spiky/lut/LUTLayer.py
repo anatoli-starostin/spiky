@@ -299,7 +299,9 @@ class LUTLayerBasic(nn.Module):
             assert len(synapse_metas) == 1, "fully connected mode is not compatible with multiple synapse metas"
 
         if _initial_synapse_capacity is None:
-            _initial_synapse_capacity = self._n_lookup_neurons * n_outputs
+            _initial_synapse_capacity = LUTLayerBasic.n_lut_channels(
+                n_anchors_per_detector, sequence_length, concatenation_product
+            ) * n_detectors * n_outputs
 
         if summation_dtype == torch.float32:
             self._lut_dm = LUTDataManagerF(
