@@ -1630,7 +1630,7 @@ class ProjectionLUTLayer(LUTLayerBasic):
         weights = torch.zeros([n_synapses], dtype=torch.float32, device=self.device)
 
         self._export_synapses(
-            self.get_output_neuron_ids(),
+            self.get_lookup_neuron_ids(),
             source_ids,
             weights,
             target_ids
