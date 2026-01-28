@@ -1588,6 +1588,9 @@ class ProjectionLUTLayer(LUTLayerBasic):
 
         self.initialize_detectors(seed=random_seed)
 
+        group_centers[:, 0] *= output_shape[0] / input_shape[0]
+        group_centers[:, 1] *= output_shape[1] / input_shape[1]
+
         c_helper = GivenRectanglesSynapseGrowthHelper(
             group_centers[::n_detectors_in_group],
             projection_shape[0], projection_shape[1],
