@@ -1623,5 +1623,23 @@ class ProjectionLUTLayer(LUTLayerBasic):
     def detectors_shape(self):
         return self._detectors_shape
 
+    def export_weights(self):
+        n_synapses = self.n_synapses()
+        source_ids = torch.zeros([n_synapses], dtype=torch.int32, device=self.device)
+        target_ids = torch.zeros([n_synapses], dtype=torch.int32, device=self.device)
+        weights = torch.zeros([n_synapses], dtype=torch.float32, device=self.device)
+
+        self._export_synapses(
+            self.get_output_neuron_ids(),
+            source_ids,
+            weights,
+            target_ids
+        )
+
+        order = torch.argsort(source_ids, stable=True, descending=False)
+        order = order[torch.argsort(target_ids[order], stable=True, descending=False)]
+
+        return weights[order], source_ids[order], target_ids[order]
+
     def __repr__(self):
         return f'ProjectionLUTLayer(input_shape={self.input_shape()}, output_shape={self.output_shape()}, n_detectors={self._n_detectors}, n_anchors_per_detector={self.n_anchors_per_detector()})'
