@@ -25,7 +25,7 @@ def main():
 
     devices = ['cpu']
     if torch.cuda.is_available():
-        devices.append('cuda:5')
+        devices.append('cuda')
 
     for seed in [234654, 42]:
         for device in devices:
