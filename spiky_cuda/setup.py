@@ -1,10 +1,27 @@
 import sys
 import os
 import shutil
+import re
+import subprocess
 import torch
 
 from setuptools import setup
 from kernels_logic_parser import generate_cu_from_proto
+
+
+def _pick_gpp():
+    # Prefer specific versions if present, else fall back to g++
+    candidates = ["g++-13","g++-12","g++-11","g++-10","g++-9","g++-8","g++"]
+    for c in candidates:
+        p = shutil.which(c)
+        if p:
+            return p
+    raise RuntimeError("No g++ found in PATH")
+
+
+GPP_PATH = _pick_gpp()
+GPP_DIR = os.path.dirname(GPP_PATH)
+
 
 generate_cu_from_proto(
     'connections_manager/connections_manager_kernels_logic.proto',
@@ -133,7 +150,7 @@ else:
                            '-I', '/usr/local/cuda/include', "-Ofast"
                         ] + BUILD_INTEGERS_COMPILE_ARGS,
                         'nvcc': [
-                            '-I', '/usr/local/cuda/include', '--compiler-bindir=/usr/bin/g++-9', '-O3', '-Xptxas="-v"'
+                            '-I', '/usr/local/cuda/include', f'--compiler-bindir={GPP_DIR}', '-O3', '-Xptxas="-v"'
                         ] + BUILD_INTEGERS_COMPILE_ARGS
                     },
                     extra_link_args=['-lcuda'],
