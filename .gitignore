@@ -2,6 +2,7 @@
 .idea/
 **/tests/**/*.png
 **/tests/mnist
+workbooks/fineweb_texts.txt
 workbooks/mnist
 workbooks/data
 spiky_cuda/*/aux/*.cu
