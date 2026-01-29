@@ -488,8 +488,8 @@ def sample_grid_points(
     stride_x, stride_y,
     device
 ):
-    xs = center_x + stride_x * torch.arange(gw, device=device)
-    ys = center_y + stride_y * torch.arange(gh, device=device)
+    xs = center_x + stride_x * torch.arange(gw, device=device, dtype=torch.float32)
+    ys = center_y + stride_y * torch.arange(gh, device=device, dtype=torch.float32)
 
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
     return torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=1)
@@ -516,8 +516,8 @@ class PointSamplingPolicy:
     def __post_init__(self):
         if self.sigma is not None:
             assert self.sigma > 0.0
-        assert self.pad_h >= 0
-        assert self.pad_w >= 0
+        assert self.pad_h >= 0.0
+        assert self.pad_w >= 0.0
         if self.grid_h is not None:
             assert self.grid_h > 0
         if self.grid_w is not None:
