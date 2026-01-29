@@ -6,12 +6,11 @@ import subprocess
 import torch
 
 from setuptools import setup
-from kernels_logic_parser import generate_cu_from_proto
 
 
 def _pick_gpp():
     # Prefer specific versions if present, else fall back to g++
-    candidates = ["g++-13","g++-12","g++-11","g++-10","g++-9","g++-8","g++"]
+    candidates = ["g++-13", "g++-12", "g++-11", "g++-10", "g++-9", "g++-8", "g++"]
     for c in candidates:
         p = shutil.which(c)
         if p:
@@ -23,34 +22,37 @@ GPP_PATH = _pick_gpp()
 GPP_DIR = os.path.dirname(GPP_PATH)
 
 
-generate_cu_from_proto(
-    'connections_manager/connections_manager_kernels_logic.proto',
-    'connections_manager/aux/connections_manager_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'spnet/spnet_runtime_kernels_logic.proto',
-    'spnet/aux/spnet_runtime_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'lut/lut_runtime_kernels_logic.proto',
-    'lut/aux/lut_runtime_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'lut/lut_compile_time_kernels_logic.proto',
-    'lut/aux/lut_compile_time_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'synapse_growth/synapse_growth_kernels_logic.proto',
-    'synapse_growth/aux/synapse_growth_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'misc/spike_storage_kernels_logic.proto',
-    'misc/aux/spike_storage_kernels_logic.cu'
-)
-generate_cu_from_proto(
-    'torch_utils/torch_utils_kernels_logic.proto',
-    'torch_utils/aux/torch_utils_kernels_logic.cu'
-)
+def _run_codegen():
+    from kernels_logic_parser import generate_cu_from_proto
+    generate_cu_from_proto(
+        'connections_manager/connections_manager_kernels_logic.proto',
+        'connections_manager/aux/connections_manager_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'spnet/spnet_runtime_kernels_logic.proto',
+        'spnet/aux/spnet_runtime_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'lut/lut_runtime_kernels_logic.proto',
+        'lut/aux/lut_runtime_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'lut/lut_compile_time_kernels_logic.proto',
+        'lut/aux/lut_compile_time_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'synapse_growth/synapse_growth_kernels_logic.proto',
+        'synapse_growth/aux/synapse_growth_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'misc/spike_storage_kernels_logic.proto',
+        'misc/aux/spike_storage_kernels_logic.cu'
+    )
+    generate_cu_from_proto(
+        'torch_utils/torch_utils_kernels_logic.proto',
+        'torch_utils/aux/torch_utils_kernels_logic.cu'
+    )
+
 
 BUILD_INTEGERS_VERSION = True
 BUILD_INTEGERS_COMPILE_ARGS = ['-DBUILD_INTEGERS_VERSION'] if BUILD_INTEGERS_VERSION else []
@@ -176,3 +178,6 @@ else:
                 'build_ext': BuildExtension
             }
         )
+
+if __name__ == "__main__":
+    _run_codegen()
