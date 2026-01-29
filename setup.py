@@ -13,6 +13,7 @@ if __name__ == '__main__':
         package_dir={"": "src"},
         packages=[
             "spiky.util",
+            "spiky.lut",
             "spiky.spnet"
         ],
     )
