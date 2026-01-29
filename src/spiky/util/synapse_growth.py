@@ -506,6 +506,8 @@ class PointSamplingPolicy:
     type: PointSamplingType
     mu: float = None
     sigma: float = None
+    pad_h: float = 0.0
+    pad_w: float = 0.0
     grid_h: int = None
     grid_w: int = None
     stride_h: int = None
@@ -514,6 +516,8 @@ class PointSamplingPolicy:
     def __post_init__(self):
         if self.sigma is not None:
             assert self.sigma > 0.0
+        assert self.pad_h >= 0
+        assert self.pad_w >= 0
         if self.grid_h is not None:
             assert self.grid_h > 0
         if self.grid_w is not None:
@@ -569,22 +573,13 @@ class RandomRectanglesSynapseGrowthHelper(object):
         assert (output_ids > 0).all()
         growth_engine = SynapseGrowthEngine(device=device, synapse_group_size=synapse_group_size, max_groups_in_buffer=max_groups_in_buffer)
 
-        if self.output_sampling_policy.type == PointSamplingType.Grid:
-            growth_command = GrowthCommand(
-                target_type=1,
-                synapse_meta_index=0,
-                x1=-((self.rw - 1) / 2) - 1e-4, y1=-((self.rh - 1) / 2) - 1e-4, z1=0.5,
-                x2=((self.rw - 1) / 2) + 1e-4, y2=((self.rh - 1) / 2) + 1e-4, z2=1.5,
-                p=self.p
-            )
-        else:
-            growth_command = GrowthCommand(
-                target_type=1,
-                synapse_meta_index=0,
-                x1=-(self.rw / 2) - 1e-4, y1=-(self.rh / 2) - 1e-4, z1=0.5,
-                x2=(self.rw / 2) + 1e-4, y2=(self.rh / 2) + 1e-4, z2=1.5,
-                p=self.p
-            )
+        growth_command = GrowthCommand(
+            target_type=1,
+            synapse_meta_index=0,
+            x1=-((self.rw - 1) / 2) - 1e-4, y1=-((self.rh - 1) / 2) - 1e-4, z1=0.5,
+            x2=((self.rw - 1) / 2) + 1e-4, y2=((self.rh - 1) / 2) + 1e-4, z2=1.5,
+            p=self.p
+        )
 
         growth_engine.register_neuron_type(
             max_synapses=self.n_outputs * self.n_out_channels,
@@ -612,15 +607,15 @@ class RandomRectanglesSynapseGrowthHelper(object):
         if self.output_sampling_policy.type == PointSamplingType.RandomUniform:
             centers = sample_random_points(
                 self.n_outputs, self.ow, self.oh,
-                (self.rw / 2, self.w - self.rw / 2),
-                (self.rh / 2, self.h - self.rh / 2),
+                (self.output_sampling_policy.pad_w, self.w - self.output_sampling_policy.pad_w),
+                (self.output_sampling_policy.pad_h, self.h - self.output_sampling_policy.pad_h),
                 seed=seed, device=device
             )
         elif self.output_sampling_policy.type == PointSamplingType.RandomNormal:
             centers = sample_random_points(
                 self.n_outputs, self.ow, self.oh,
-                (self.rw / 2, self.w - self.rw / 2),
-                (self.rh / 2, self.h - self.rh / 2),
+                (self.output_sampling_policy.pad_w, self.w - self.output_sampling_policy.pad_w),
+                (self.output_sampling_policy.pad_h, self.h - self.output_sampling_policy.pad_h),
                 is_normal=True, mu=self.output_sampling_policy.mu,
                 sigma=self.output_sampling_policy.sigma,
                 seed=seed, device=device
@@ -632,7 +627,7 @@ class RandomRectanglesSynapseGrowthHelper(object):
             centers = sample_grid_points(
                 self.output_sampling_policy.grid_w,
                 self.output_sampling_policy.grid_h,
-                (self.rw - 1) / 2, (self.rh - 1) / 2,
+                self.output_sampling_policy.pad_w, self.output_sampling_policy.pad_h,
                 self.output_sampling_policy.stride_w,
                 self.output_sampling_policy.stride_h,
                 device=device
@@ -646,9 +641,6 @@ class RandomRectanglesSynapseGrowthHelper(object):
 
         growth_engine.add_neurons(neuron_type_index=1, identifiers=output_ids, coordinates=output_grid_coords)
         return growth_engine.grow(seed), centers
-
-    def n_connections(self):
-        return self.num_win_h * self.num_win_w * self.kh * self.kw * self.rh * self.rw
 
 
 class GivenRectanglesSynapseGrowthHelper(object):
