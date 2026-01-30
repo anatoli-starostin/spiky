@@ -29,7 +29,9 @@ The core idea behind `LUTLayerBasic` is to define a mapping from an input vector
 
 2. **Connectivity between tables and output**: We connect particular lookup table entries to the outputs. Each entry of the lookup table may be called a "lookup neuron" because it has weighted connections to the outputs.
 
-<img src="abstract_lut.png" alt="Abstract LUT Architecture" style="max-width: 600px; width: 100%; height: auto;" />
+<div style="max-width: 600px; width: 100%;">
+<img src="abstract_lut.png" alt="Abstract LUT Architecture" style="max-width: 100%; height: auto;" />
+</div>
 
 **Abstract Constructor**
 
@@ -152,7 +154,9 @@ layer3 = LUTLayer(...)  # Creates its own LUTSharedContext internally
 
 `LUTLayer` is the simplest LUT layer, processing single-step inputs (no sequence).
 
-<img src="basic_lut.png" alt="Basic LUT Architecture" style="max-width: 600px; width: 100%; height: auto;" />
+<div style="max-width: 600px; width: 100%;">
+<img src="basic_lut.png" alt="Basic LUT Architecture" style="max-width: 100%; height: auto;" />
+</div>
 
 **Note on Implementation**: Currently, `LUTLayer` is derived from `Conv2DLUTLayer`, which may be confusing. `Conv2DLUTLayer` is a class modeling 2D convolutional connectivity with sliding window and strides. Basic `LUTLayer` may be viewed as a special case—a very simple case of convolution with only one position of a sliding window covering the whole 1D input (which can be viewed as a 2D shape with one dimension equal to 1). `Conv2DLUTLayer` is deprecated because all its functionality is now implemented within [ProjectionLUTLayer](#projectionlutlayer).
 
@@ -208,7 +212,9 @@ layer = ProjectionLUTLayer(
 - `projection_prob`: Probability (between 0.0 and 1.0) of connecting to each output position within the projection window. A value of 1.0 means all outputs in the projection window are connected, while lower values create sparser connections.
 - `detectors_sampling_policy`: Policy for positioning detector groups (see [PointSamplingPolicy](#pointsamplingpolicy))
 
-<img src="projection_lut.png" alt="Projection LUT Architecture" style="max-width: 600px; width: 100%; height: auto;" />
+<div style="max-width: 600px; width: 100%;">
+<img src="projection_lut.png" alt="Projection LUT Architecture" style="max-width: 100%; height: auto;" />
+</div>
 
 Detectors are arranged into groups. Each group is positioned on a virtual plane according to the `PointSamplingPolicy`. The group's location, together with given receptive and projective shapes, determines both the set of inputs from which detector anchors are sampled and the set of outputs to which the detectors project; all detectors within a group share the same projection targets.
 
@@ -274,7 +280,9 @@ Positional encodings are learnable embeddings that encode relative positions in 
 - **`positional_dim`**: Dimension of positional embeddings (if > 0). When `positional_dim > 0`, positional encodings are used to incorporate positional information into the lookup process.
 - **`unified_pe`**: If `True`, all detectors share the same positional embeddings; if `False`, each detector has its own set of positional embeddings.
 
-<img src="sequence_processing.png" alt="Sequence Processing" style="max-width: 600px; width: 100%; height: auto;" />
+<div style="max-width: 600px; width: 100%;">
+<img src="sequence_processing.png" alt="Sequence Processing" style="max-width: 100%; height: auto;" />
+</div>
 
 #### Pairwise Processing
 
@@ -540,7 +548,9 @@ The synapse growth engine is a powerful mechanism for establishing connections b
 
 The spatial indexing system automatically selects the most uniform axis for efficient spatial queries, enabling fast connection generation even for large networks.
 
-<img src="synapse_growth.png" alt="Synapse Growth Process" style="max-width: 600px; width: 100%; height: auto;" />
+<div style="max-width: 600px; width: 100%;">
+<img src="synapse_growth.png" alt="Synapse Growth Process" style="max-width: 100%; height: auto;" />
+</div>
 
 ### ChunkOfConnections
 
