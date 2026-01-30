@@ -206,3 +206,87 @@ def make_lr_getter(optimizer):
     return lambda p: (
         cache.setdefault(p, find_group(p))['lr']
     )
+
+
+class LUTLayerBasic:
+    def __init__(
+        self,
+        n_inputs,
+        n_outputs,
+        n_detectors,
+        n_anchors_per_detector,
+        is_fully_connected=True | False
+    ):
+        ...
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_detectors = n_detectors
+        self.n_anchors_per_detector = n_anchors_per_detector
+        self.is_fully_connected = is_fully_connected
+
+    def add_detector_connections(
+        self, chunk_of_connections: ChunkOfConnections
+    ):
+        ...
+
+    def initialize_detectors(self, compact_mode=True, seed=None):
+        ...
+
+    def add_lookup_connections(
+        self, chunk_of_connections: ChunkOfConnections
+    ):
+        ...
+
+    def compile_lut(self):
+        ...
+
+    class LUTForwardFN(torch.autograd.Function):
+        ...
+
+    def forward(self, x):
+        return LUTLayerBasic.LUTForwardFN.apply(x, self._weights, None, self)
+
+
+from spiky.lut.LUTLayer import LUTLayer, GradientPolicy, GradientType
+
+LUTLayer(
+    n_inputs=32,
+    n_outputs=32,
+    n_detectors=16,
+    positional_dim=4,
+    sequence_length=32,
+    n_anchors_per_detector=6,
+    concatenation_product=True | False,
+    weights_gradient_policy=GradientPolicy(GradientType.Dense)
+)
+
+
+from spiky.lut.LUTLayer import GradientPolicy, GradientType, LUTSharedContext, ProjectionLUTLayer, SynapseMeta
+from spiky.util.synapse_growth import PointSamplingPolicy, PointSamplingType
+
+input_shape=(28, 28)
+num_classes = 10
+synapse_meta = SynapseMeta(
+    initial_weight=0.1,
+    initial_noise_level=-0.1
+)
+shared_lut_ctx = LUTSharedContext()
+shared_lut_ctx.to_device(device)
+g_policy = GradientPolicy(GradientType.Dense, normalized=False)
+
+ProjectionLUTLayer(
+    input_shape=(28, 28),
+    output_shape=(56, 56),
+    n_anchors_per_detector=3,
+    n_detector_groups=13 * 13,
+    n_detectors_in_group=4,
+    receptive_shape=(5, 5),
+    projection_shape=(10, 10),
+    projection_prob=1.0,
+    detectors_sampling_policy=PointSamplingPolicy(
+        PointSamplingType.Grid, grid_h=13, grid_w=13,
+        stride_h=2, stride_w=2, pad_h=2, pad_w=2
+    ),
+    weights_gradient_policy=g_policy
+)
+

@@ -74,3 +74,27 @@ To run example notebooks:
    ```
 
 3. Open `http://localhost:8888` in your browser and navigate to the `workbooks` directory for example notebooks (`.ipynb` files).
+
+## Workbooks
+
+The `workbooks` directory contains example Jupyter notebooks demonstrating different aspects of the Spiky library:
+
+- **`lut-mnist.ipynb`**: Demonstrates building a sparse convolutional neural network using LUT (Lookup Table) layers for MNIST digit classification. The notebook shows how to:
+  - Load and preprocess the MNIST dataset
+  - Construct a layered network with `ProjectionLUTLayer` components
+  - Train the network and visualize training progress
+  - Inspect learned weights and network activations
+  - Achieve ~98% test accuracy on MNIST
+
+- **`lut-transformer.ipynb`**: Shows how to build a transformer model using LUT layers for language modeling and text generation. The notebook covers:
+  - Text data preparation from FineWeb dataset
+  - Building a `LUTTransformer` with attention and feed-forward layers
+  - Training for next-token prediction
+  - Generating text samples from the trained model
+
+- **`spnet.ipynb`**: Demonstrates Izhikevich spiking neural network simulations using the SpNet module. The notebook illustrates:
+  - Creating a spiking network with excitatory and inhibitory neurons
+  - Synapse growth using spatial connectivity rules
+  - Running network simulations with spike-timing-dependent plasticity (STDP)
+  - Visualizing spike patterns and neuron voltage traces
+  - Performance profiling and memory usage analysis
