@@ -660,6 +660,7 @@ class Conv2DANDNLayer(ANDNLayer):
         backprop_hebb_ratio_on_torch_backward=1.0,
         relu_output=False,
         anti_hebb_coeff=0.0,
+        do_normalize_weights=False,
         summation_dtype=torch.float32,
         _int_rescaler=0.001,
         _forward_group_size: int = 64,
@@ -728,7 +729,7 @@ class Conv2DANDNLayer(ANDNLayer):
             random_seed=random_seed
         )
 
-        self.compile_andn()
+        self.compile_andn(normalize_backward_connections=do_normalize_weights)
         self._output_shape = (c_helper.out_h, c_helper.out_w)
         self._receptive_field_shape = receptive_field_shape
 
