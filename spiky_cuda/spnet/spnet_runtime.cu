@@ -2,7 +2,7 @@
 #include "spnet_runtime.cuh"
 
 namespace {
-#include "aux/spnet_runtime_kernels_logic.cu"
+#include "aux_/spnet_runtime_kernels_logic.cu"
 }
 namespace py = pybind11;
 

@@ -26,31 +26,31 @@ def _run_codegen():
     from kernels_logic_parser import generate_cu_from_proto
     generate_cu_from_proto(
         'connections_manager/connections_manager_kernels_logic.proto',
-        'connections_manager/aux/connections_manager_kernels_logic.cu'
+        'connections_manager/aux_/connections_manager_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'spnet/spnet_runtime_kernels_logic.proto',
-        'spnet/aux/spnet_runtime_kernels_logic.cu'
+        'spnet/aux_/spnet_runtime_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'lut/lut_runtime_kernels_logic.proto',
-        'lut/aux/lut_runtime_kernels_logic.cu'
+        'lut/aux_/lut_runtime_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'lut/lut_compile_time_kernels_logic.proto',
-        'lut/aux/lut_compile_time_kernels_logic.cu'
+        'lut/aux_/lut_compile_time_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'synapse_growth/synapse_growth_kernels_logic.proto',
-        'synapse_growth/aux/synapse_growth_kernels_logic.cu'
+        'synapse_growth/aux_/synapse_growth_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'misc/spike_storage_kernels_logic.proto',
-        'misc/aux/spike_storage_kernels_logic.cu'
+        'misc/aux_/spike_storage_kernels_logic.cu'
     )
     generate_cu_from_proto(
         'torch_utils/torch_utils_kernels_logic.proto',
-        'torch_utils/aux/torch_utils_kernels_logic.cu'
+        'torch_utils/aux_/torch_utils_kernels_logic.cu'
     )
 
 
@@ -73,32 +73,32 @@ sources_list_cuda = [
 ]
 if BUILD_INTEGERS_VERSION:
     sources_list_cuda += [
-        'spnet/aux/spnet_I.cu',
-        'spnet/aux/spnet_runtime_I.cu',
-        'lut/aux/lut_I.cu',
-        'lut/aux/lut_runtime_I.cu'
+        'spnet/aux_/spnet_I.cu',
+        'spnet/aux_/spnet_runtime_I.cu',
+        'lut/aux_/lut_I.cu',
+        'lut/aux_/lut_runtime_I.cu'
     ]
 
 sources_list_no_cuda = [
-    'connections_manager/aux/connections_manager.cpp',
-    'misc/aux/spike_storage.cpp',
-    'misc/aux/firing_buffer.cpp',
-    'misc/aux/concurrent_ds.cpp',
+    'connections_manager/aux_/connections_manager.cpp',
+    'misc/aux_/spike_storage.cpp',
+    'misc/aux_/firing_buffer.cpp',
+    'misc/aux_/concurrent_ds.cpp',
     'misc/misc.cpp',
-    'spnet/aux/spnet.cpp',
-    'spnet/aux/spnet_runtime.cpp',
-    'lut/aux/lut.cpp',
-    'lut/aux/lut_runtime.cpp',
-    'synapse_growth/aux/synapse_growth.cpp',
-    'torch_utils/aux/torch_utils.cpp',
+    'spnet/aux_/spnet.cpp',
+    'spnet/aux_/spnet_runtime.cpp',
+    'lut/aux_/lut.cpp',
+    'lut/aux_/lut_runtime.cpp',
+    'synapse_growth/aux_/synapse_growth.cpp',
+    'torch_utils/aux_/torch_utils.cpp',
     'spiky_py.cpp',
 ]
 if BUILD_INTEGERS_VERSION:
     sources_list_no_cuda += [
-        'spnet/aux/spnet_I.cpp',
-        'spnet/aux/spnet_runtime_I.cpp',
-        'lut/aux/lut_I.cpp',
-        'lut/aux/lut_runtime_I.cpp'
+        'spnet/aux_/spnet_I.cpp',
+        'spnet/aux_/spnet_runtime_I.cpp',
+        'lut/aux_/lut_I.cpp',
+        'lut/aux_/lut_runtime_I.cpp'
     ]
 
 if hasattr(sys, 'getwindowsversion'):

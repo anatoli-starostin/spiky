@@ -5,7 +5,7 @@
 workbooks/fineweb_texts.txt
 workbooks/mnist
 workbooks/data
-spiky_cuda/*/aux/*.cu
+spiky_cuda/*/aux_/*.cu
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

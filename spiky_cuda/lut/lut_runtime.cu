@@ -2,7 +2,7 @@
 #include "lut_runtime.cuh"
 
 namespace {
-#include "aux/lut_runtime_kernels_logic.cu"
+#include "aux_/lut_runtime_kernels_logic.cu"
 }
 
 namespace py = pybind11;

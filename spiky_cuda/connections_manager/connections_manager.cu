@@ -10,7 +10,7 @@
 #endif
 
 namespace {
-#include "aux/connections_manager_kernels_logic.cu"
+#include "aux_/connections_manager_kernels_logic.cu"
 }
 namespace py = pybind11;
 

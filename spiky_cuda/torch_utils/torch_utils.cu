@@ -3,7 +3,7 @@
 #include "torch_utils.h"
 
 namespace {
-#include "aux/torch_utils_kernels_logic.cu"
+#include "aux_/torch_utils_kernels_logic.cu"
 }
 
 namespace py = pybind11;
