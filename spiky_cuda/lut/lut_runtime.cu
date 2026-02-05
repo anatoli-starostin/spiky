@@ -22,8 +22,8 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     uint32_t max_forward_groups_per_neuron,
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights,
-    double int_rescaler,
     #endif
+    double int_rescaler
     #ifdef ENABLE_PROFILING
     SimpleProfiler& profiler,
     #endif
@@ -50,8 +50,8 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     max_forward_groups_per_neuron(max_forward_groups_per_neuron),
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     n_weights(n_weights),
-    int_rescaler(int_rescaler),
     #endif
+    int_rescaler(int_rescaler),
     first_synapse_id(first_synapse_id)
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
@@ -159,12 +159,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(lookup_neuron_synapses_infos),
             this->first_synapse_id,
             this->lut_data,
-            w_output
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            w_output, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP);
     } else {
@@ -182,12 +177,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step(
             this->n_detectors,
             n_detector_blocks,
             n_lookup_neurons_per_detector,
-            this->backward_group_size
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->backward_group_size, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_FORWARD_NON_SEQ_FILL_OUTPUTS_FC_PROFILER_OP);
     }
@@ -278,12 +268,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->first_synapse_id,
             this->lut_data,
             w_input_gradients,
-            this->n_inputs
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->n_inputs, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_NON_SEQ_PROPAGATE_DETECTORS_SPARSE_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_SPARSE_PROFILER_OP);
@@ -302,12 +287,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             this->first_synapse_id,
             this->lut_data,
             external_lr,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->first_synapse_meta_lr, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_SPARSE_PROFILER_OP);
     } else {
@@ -331,12 +311,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             n_output_blocks,
             n_outputs_per_block,
             w_input_gradients,
-            this->n_inputs
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->n_inputs, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_NON_SEQ_PROPAGATE_DETECTORS_FC_PROFILER_OP);
         PROF_START(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_FC_PROFILER_OP);
@@ -351,12 +326,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop(
             n_outputs_per_block,
             n_lookup_neurons_per_detector,
             external_lr,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->first_synapse_meta_lr, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_NON_SEQ_GATHER_GRADIENTS_FC_PROFILER_OP);
     }
@@ -539,12 +509,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
             this->lut_data,
             n_lookup_neurons_per_detector,
             w_output,
-            this->positional_dim
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->positional_dim, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_SPARSE_PROFILER_OP);
     } else {
@@ -564,12 +529,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_concat(
             this->sequence_length,
             this->n_anchors_per_detector,
             this->positional_dim,
-            n_lookup_neurons_per_detector
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            n_lookup_neurons_per_detector, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_FORWARD_SEQ_FILL_OUTPUTS_FC_PROFILER_OP);
     }
@@ -665,12 +625,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             w_input_gradients,
             w_positional_embeddings_gradients,
             this->n_inputs,
-            this->positional_dim
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->positional_dim, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_SPARSE_PROFILER_OP);
     } else {
@@ -698,12 +653,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             w_input_gradients,
             w_positional_embeddings_gradients,
             this->n_inputs,
-            this->positional_dim
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->positional_dim, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_SEQ_PROPAGATE_THROUGH_DETECTORS_FC_PROFILER_OP);
     }
@@ -731,12 +681,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
             (external_lr >= 0.0) ? r_weights : w_weights_gradients,
             this->positional_dim,
             external_lr,
-            this->first_synapse_meta_lr
-            #ifdef INTEGERS_INSTEAD_OF_FLOATS
-            , this->int_rescaler
-            #else
-            , 0.0
-            #endif
+            this->first_synapse_meta_lr, this->int_rescaler
         );
         PROF_END(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_SPARSE_PROFILER_OP);
     } else {
@@ -759,12 +704,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
                 (external_lr >= 0.0) ? r_weights : w_weights_gradients,
                 this->positional_dim,
                 external_lr,
-                this->first_synapse_meta_lr
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                this->first_synapse_meta_lr, this->int_rescaler
             );
         } else {
             uint32_t n_outputs_aligned = TILE * ((this->n_outputs + TILE - 1) / TILE);
@@ -787,12 +727,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
                 (external_lr >= 0.0) ? r_weights : w_weights_gradients,
                 this->positional_dim,
                 external_lr,
-                this->first_synapse_meta_lr
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                this->first_synapse_meta_lr, this->int_rescaler
             );
         }
         PROF_END(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP);
@@ -906,12 +841,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 this->lut_data,
                 w_output,
                 sliced_mode,
-                cmp_eps
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                cmp_eps, this->int_rescaler
             );
         } else {
             #ifndef NO_CUDA
@@ -945,12 +875,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 this->lut_data,
                 w_output,
                 sliced_mode,
-                cmp_eps
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                cmp_eps, this->int_rescaler
             );
             #endif
         }
@@ -981,12 +906,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 nullptr, // lut_data (not used for FC)
                 w_output,
                 sliced_mode,
-                cmp_eps
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                cmp_eps, this->int_rescaler
             );
         } else {
             #ifndef NO_CUDA
@@ -1022,12 +942,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
                 n_outputs_in_block,
                 w_output,
                 sliced_mode,
-                cmp_eps
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                cmp_eps, this->int_rescaler
             );
             #endif
         }
@@ -1123,12 +1038,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 cmp_eps,
                 (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
-                w_positional_embeddings_gradients
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                w_positional_embeddings_gradients, this->int_rescaler
             );
             if(external_lr >= 0) {
                 GRID_CALL_NO_SHARED_MEM(
@@ -1155,12 +1065,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                     cmp_eps,
                     external_lr,
                     r_weights,
-                    this->first_synapse_meta_lr
-                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    , this->int_rescaler
-                    #else
-                    , 0.0
-                    #endif
+                    this->first_synapse_meta_lr, this->int_rescaler
                 );
             }
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
@@ -1203,12 +1108,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_2,
                 sliced_mode,
                 cmp_eps,
-                w_positional_embeddings_gradients
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                w_positional_embeddings_gradients, this->int_rescaler
             );
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
             
@@ -1239,12 +1139,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 sliced_mode,
                 cmp_eps,
                 external_lr,
-                this->first_synapse_meta_lr
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                this->first_synapse_meta_lr, this->int_rescaler
             );
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_SPARSE_PROFILER_OP);
             #endif
@@ -1283,12 +1178,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 cmp_eps,
                 (external_lr >= 0.0) ? nullptr : w_weights_gradients,
                 this->first_synapse_meta_lr,
-                w_positional_embeddings_gradients
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                w_positional_embeddings_gradients, this->int_rescaler
             );
             if(external_lr >= 0) {
                 GRID_CALL_NO_SHARED_MEM(
@@ -1315,12 +1205,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                     cmp_eps,
                     external_lr,
                     r_weights,
-                    this->first_synapse_meta_lr
-                    #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                    , this->int_rescaler
-                    #else
-                    , 0.0
-                    #endif
+                    this->first_synapse_meta_lr, this->int_rescaler
                 );
             }
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
@@ -1360,12 +1245,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_input_gradients_2,
                 sliced_mode,
                 cmp_eps,
-                w_positional_embeddings_gradients
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
-                , this->int_rescaler
-                #else
-                , 0.0
-                #endif
+                w_positional_embeddings_gradients, this->int_rescaler
             );
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
             PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
@@ -1392,11 +1272,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 cmp_eps,
                 external_lr,
                 this->first_synapse_meta_lr
-                #ifdef INTEGERS_INSTEAD_OF_FLOATS
                 , this->int_rescaler
-                #else
-                , 0.0
-                #endif
             );
             PROF_END(LUT_RUNTIME_BACKWARD_PRODUCT_GATHER_GRADIENTS_FC_PROFILER_OP);
             #endif

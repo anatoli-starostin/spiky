@@ -47,8 +47,8 @@ private:
     uint32_t max_forward_groups_per_neuron;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights;
-    double int_rescaler;
     #endif
+    double int_rescaler;
 
     NeuronDataId_t first_synapse_id;
 public:
@@ -68,8 +68,8 @@ public:
         uint32_t max_forward_groups_per_neuron,
         #ifdef INTEGERS_INSTEAD_OF_FLOATS
         uint64_t n_weights,
-        double int_rescaler,
         #endif
+        double int_rescaler = 0.0,
         #ifdef ENABLE_PROFILING
         SimpleProfiler& profiler,
         #endif
