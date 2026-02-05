@@ -8,7 +8,7 @@
 #include <curand_kernel.h>
 #endif
 namespace {
-#include "aux/synapse_growth_kernels_logic.cu"
+#include "aux_/synapse_growth_kernels_logic.cu"
 }
 
 namespace py = pybind11;

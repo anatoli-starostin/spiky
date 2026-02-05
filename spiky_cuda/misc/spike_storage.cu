@@ -1,7 +1,7 @@
 #include "spike_storage.h"
 
 namespace {
-#include "aux/spike_storage_kernels_logic.cu"
+#include "aux_/spike_storage_kernels_logic.cu"
 }
 namespace py = pybind11;
 

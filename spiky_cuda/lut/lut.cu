@@ -2,7 +2,7 @@
 #include <random>
 
 namespace {
-#include "aux/lut_compile_time_kernels_logic.cu"
+#include "aux_/lut_compile_time_kernels_logic.cu"
 }
 
 namespace py = pybind11;
