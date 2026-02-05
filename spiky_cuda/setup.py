@@ -18,10 +18,6 @@ def _pick_gpp():
     raise RuntimeError("No g++ found in PATH")
 
 
-GPP_PATH = _pick_gpp()
-GPP_DIR = os.path.dirname(GPP_PATH)
-
-
 def _run_codegen():
     from kernels_logic_parser import generate_cu_from_proto
     generate_cu_from_proto(
@@ -140,7 +136,8 @@ if hasattr(sys, 'getwindowsversion'):
 else:
     if torch.cuda.is_available():
         from torch.utils.cpp_extension import BuildExtension, CUDAExtension
-
+        GPP_PATH = _pick_gpp()
+        GPP_DIR = os.path.dirname(GPP_PATH)
         setup(
             name='spiky_cuda',
             version='0.1',

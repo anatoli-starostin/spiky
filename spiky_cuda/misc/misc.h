@@ -8,6 +8,14 @@
 #include <sstream>
 #include <string>
 
+#if defined(_WIN32)
+  #define SPIKY_HIDDEN
+#elif defined(__GNUC__) || defined(__clang__)
+  #define SPIKY_HIDDEN SPIKY_HIDDEN
+#else
+  #define SPIKY_HIDDEN
+#endif
+
 //#define TRACE
 //#define DETAILED_TRACE
 //#define SUPER_DETAILED_TRACE
@@ -150,8 +158,13 @@ static_assert((THREADS_PER_BLOCK % 2) == 0, "THREADS_PER_BLOCK must be even");
         unsigned int x, y, z;
         dim3(unsigned int vx = 1, unsigned int vy = 1, unsigned int vz = 1) : x(vx), y(vy), z(vz) {}
     };
-    #define KERNEL_LOGIC_PREFIX inline __attribute__((always_inline))
-    #define KERNEL_LOGIC_ONLY_HOST_PREFIX inline __attribute__((always_inline))
+    #if defined(_WIN32)
+      #define KERNEL_LOGIC_PREFIX __forceinline
+      #define KERNEL_LOGIC_ONLY_HOST_PREFIX __forceinline
+    #else
+      #define KERNEL_LOGIC_PREFIX inline __attribute__((always_inline))
+      #define KERNEL_LOGIC_ONLY_HOST_PREFIX inline __attribute__((always_inline))
+    #endif
 #else
     #define MAX_CONCURRENT_KERNELS 32
 

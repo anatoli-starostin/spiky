@@ -8,7 +8,7 @@ namespace {
 
 namespace py = pybind11;
 
-class __attribute__((visibility("hidden"))) DenseToSparseConverterNative {
+class SPIKY_HIDDEN DenseToSparseConverterNative {
 public:
     DenseToSparseConverterNative(bool use_new_kernel = false) 
         #ifdef ENABLE_PROFILING
