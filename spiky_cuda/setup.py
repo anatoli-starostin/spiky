@@ -1,8 +1,6 @@
 import sys
 import os
 import shutil
-import re
-import subprocess
 import torch
 
 from setuptools import setup

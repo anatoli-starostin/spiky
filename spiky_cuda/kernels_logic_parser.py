@@ -111,8 +111,8 @@ def generate_cu_from_proto(input_file, output_file):
                         raise RuntimeError(f'function {func_name} without args')
                     cuda_args = ",\n    const dim3& blockIdx, const dim3& blockDim, const dim3& threadIdx" if func_name.endswith('_logic') else ''
                     # Keep the body exactly as it was in source
-                    kernel_logic_prefix = 'KERNEL_LOGIC_ONLY_HOST_PREFIX' if 'ATOMIC' in body else 'KERNEL_LOGIC_PREFIX'
-                    f.write(f"{kernel_logic_prefix} void {new_func_name}(\n    {formatted_args}{cuda_args}\n)\n{{{body.replace('ATOMIC_PFX','PFX')}}}\n\n")
+                    kernel_logic_prefix = 'KERNEL_LOGIC_ONLY_HOST_PREFIX' if ('ATOMIC' in body or func_name.endswith('_cpu_logic')) else 'KERNEL_LOGIC_PREFIX'
+                    f.write(f"{kernel_logic_prefix} void {new_func_name}(\n    {formatted_args}{cuda_args}\n)\n{{{body.replace('ATOMIC_PFX', 'PFX')}}}\n\n")
                     if func_name.endswith('_logic'):
                         param_names = get_param_names(args)
                         param_names_str = ', '.join(param_names)
@@ -145,7 +145,7 @@ def generate_cu_from_proto(input_file, output_file):
                 if parsed:
                     func_name, args, body = parsed
                     atomic_postfix = '_atomic_' if 'ATOMIC' in body else ''
-                    if func_name.endswith('_logic'):
+                    if func_name.endswith('_logic') and not func_name.endswith('_cpu_logic'):
                         param_names = get_param_names(args)
                         param_names_str = ', '.join(param_names)
                         f.write(f"__global__ void PFX({func_name}_cuda)(\n    {format_args(args, False)}\n)\n")

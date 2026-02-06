@@ -61,7 +61,7 @@ static_assert((sizeof(SynapseMetaNeuronIdPair) % 8) == 0, "check sizeof(SynapseM
 #define ConnectionsBlockHeaderIntSize() ((sizeof(ConnectionsBlockHeader) / sizeof(uint32_t)))
 #define ConnectionsBlockIntSize(n_connections_in_group) ((sizeof(ConnectionsBlockHeader) / sizeof(uint32_t)) + (n_connections_in_group) * (sizeof(SynapseMetaNeuronIdPair) / sizeof(uint32_t)))
 
-#define SYNAPSE_GROWTH_TPB 1024
+#define SYNAPSE_GROWTH_TPB 512
 
 //typedef struct alignas(4) {
 //    int32_t synapse_meta_index;

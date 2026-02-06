@@ -22,8 +22,8 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     uint32_t max_forward_groups_per_neuron,
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights,
+    double int_rescaler,
     #endif
-    double int_rescaler
     #ifdef ENABLE_PROFILING
     SimpleProfiler& profiler,
     #endif
@@ -50,8 +50,10 @@ LUT_RUNTIME_CONTEXT_CLASS::LUT_RUNTIME_CONTEXT_CLASS(
     max_forward_groups_per_neuron(max_forward_groups_per_neuron),
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     n_weights(n_weights),
-    #endif
     int_rescaler(int_rescaler),
+    #else
+    int_rescaler(0.0),
+    #endif
     first_synapse_id(first_synapse_id)
 {
     __TRACE__("LUT_RUNTIME_CONTEXT_CLASS constructor\n");
@@ -688,7 +690,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_concat(
         PROF_START(LUT_RUNTIME_BACKWARD_SEQ_GATHER_W_GRADIENTS_FC_PROFILER_OP);
         // Fully connected
         if(device == -1) {
-            GRID_CALL_NO_SHARED_MEM(
+            GRID_CALL_ON_CPU(
                 numBlocks, gather_w_gradients_seq_fc_cpu, tpb_opt,
                 r_output_gradients,
                 r_lookup_indices,
@@ -820,7 +822,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
         if(device == -1) {
             uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
             dim3 numBlocks(n_detector_output_pairs, batch_size);
-            GRID_CALL_NO_SHARED_MEM(
+            GRID_CALL_ON_CPU(
                 numBlocks, fill_outputs_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
@@ -885,7 +887,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::forward_step_product(
         if(device == -1) {
             uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
             dim3 numBlocks(n_detector_output_pairs, batch_size);
-            GRID_CALL_NO_SHARED_MEM(
+            GRID_CALL_ON_CPU(
                 numBlocks, fill_outputs_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
@@ -1011,7 +1013,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_SPARSE_PROFILER_OP);
             uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
             dim3 numBlocks(n_detector_output_pairs, batch_size);
-            GRID_CALL_NO_SHARED_MEM(
+            GRID_CALL_ON_CPU(
                 numBlocks, propagate_backward_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
@@ -1041,7 +1043,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_positional_embeddings_gradients, this->int_rescaler
             );
             if(external_lr >= 0) {
-                GRID_CALL_NO_SHARED_MEM(
+                GRID_CALL_ON_CPU(
                     numBlocks, gather_w_gradients_internal_product_cpu, sequence_length,
                     sequence_length,
                     this->positional_dim,
@@ -1151,7 +1153,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
             PROF_START(LUT_RUNTIME_BACKWARD_PRODUCT_PROPAGATE_FC_PROFILER_OP);
             uint32_t n_detector_output_pairs = this->n_detectors * sequence_length;
             dim3 numBlocks(n_detector_output_pairs, batch_size);
-            GRID_CALL_NO_SHARED_MEM(
+            GRID_CALL_ON_CPU(
                 numBlocks, propagate_backward_product_cpu, sequence_length,
                 sequence_length,
                 this->positional_dim,
@@ -1181,7 +1183,7 @@ void LUT_RUNTIME_CONTEXT_CLASS::backward_backprop_product(
                 w_positional_embeddings_gradients, this->int_rescaler
             );
             if(external_lr >= 0) {
-                GRID_CALL_NO_SHARED_MEM(
+                GRID_CALL_ON_CPU(
                     numBlocks, gather_w_gradients_internal_product_cpu, sequence_length,
                     sequence_length,
                     this->positional_dim,
