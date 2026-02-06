@@ -11,7 +11,7 @@
 #if defined(_WIN32)
   #define SPIKY_HIDDEN
 #elif defined(__GNUC__) || defined(__clang__)
-  #define SPIKY_HIDDEN SPIKY_HIDDEN
+  #define SPIKY_HIDDEN __attribute__((visibility("hidden")))
 #else
   #define SPIKY_HIDDEN
 #endif
