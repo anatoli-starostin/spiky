@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <vector>
 #include "spnet_runtime.cuh"
 
 namespace {
@@ -458,7 +459,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::initialize_neuron_states()
     }
 
     #ifdef USE_CUDA_STREAMS
-    cudaStream_t streams[n_neuron_metas];
+    std::vector<cudaStream_t> streams(n_neuron_metas);
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         for(uint32_t nm_idx = 0; nm_idx < n_neuron_metas; nm_idx++) {
@@ -481,7 +482,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::initialize_neuron_states()
             reinterpret_cast<REAL_QUAD_DT *>(this->V),
             nm_info.first_neuron_id >> 2, n_neuron_quads, n_total_neuron_quads
         );
-        spikes[nm_idx]->clear(streams + nm_idx);
+        spikes[nm_idx]->clear(&streams[nm_idx]);
         #else
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, initialize_neuron_states, SPNET_RUNTIME_KERNELS_TPB,
@@ -525,7 +526,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::scroll_ticks()
 {
     __TRACE__("SPNET_RUNTIME_CONTEXT_CLASS scroll_ticks\n");
     #ifdef USE_CUDA_STREAMS
-    cudaStream_t streams[n_neuron_metas];
+    std::vector<cudaStream_t> streams(n_neuron_metas);
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         for(uint32_t nm_idx = 0; nm_idx < n_neuron_metas; nm_idx++) {
@@ -549,7 +550,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::scroll_ticks()
                 n_ticks_to_process
             );
         }
-        spikes[nm_idx]->scroll_ticks(n_ticks_to_process, streams + nm_idx);
+        spikes[nm_idx]->scroll_ticks(n_ticks_to_process, &streams[nm_idx]);
         #else
         if(is_train()) {
             dim3 numBlocks((n_neuron_quads + SPNET_RUNTIME_KERNELS_TPB - 1) / SPNET_RUNTIME_KERNELS_TPB, this->batch_size);
@@ -696,7 +697,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::export_neuron_state_info(
         );
 
         #ifdef USE_CUDA_STREAMS
-        cudaStream_t streams[n_neuron_metas];
+        std::vector<cudaStream_t> streams(n_neuron_metas);
         if(device != -1) {
             c10::cuda::CUDAGuard guard(device);
             for(uint32_t nm_idx = 0; nm_idx < n_neuron_metas; nm_idx++) {
@@ -798,7 +799,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
     PROF_END(SPNET_RUNTIME_APPLY_INPUT_PROFILER_OP);
 
     #ifdef USE_CUDA_STREAMS
-    cudaStream_t streams[n_neuron_metas];
+    std::vector<cudaStream_t> streams(n_neuron_metas);
     if(device != -1) {
         c10::cuda::CUDAGuard guard(device);
         for(uint32_t nm_idx = 0; nm_idx < n_neuron_metas; nm_idx++) {
@@ -831,7 +832,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
             n_past_ticks + stdp_period - 1,
             device
         );
-        spikes[nm_idx]->update_counters(current_tick, streams + nm_idx);
+        spikes[nm_idx]->update_counters(current_tick, &streams[nm_idx]);
         #else
         GRID_CALL_SHARED_MEM(
             numBlocks, detect_spikes_quads, SPNET_RUNTIME_KERNELS_TPB, sizeof(uint32_t) * SPNET_RUNTIME_KERNELS_TPB,
@@ -992,7 +993,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
                 if((d == stdp_period - 1) || (current_tick == n_past_ticks + n_ticks_to_process - 1)) {
                     dim3 numBlocks(((nm_info.n_neurons >> 2) + SPNET_RUNTIME_KERNELS_TPB - 1) / SPNET_RUNTIME_KERNELS_TPB, this->batch_size);
                     #ifdef USE_CUDA_STREAMS
-                    stdp_dense_buffers[nm_idx]->clear(streams + nm_idx);
+                    stdp_dense_buffers[nm_idx]->clear(&streams[nm_idx]);
                     GRID_CALL_ON_STREAM_SHARED_MEM(
                         numBlocks, densify_by_last_spikes, SPNET_RUNTIME_KERNELS_TPB, sizeof(uint32_t) * SPNET_RUNTIME_KERNELS_TPB, streams[nm_idx],
                         nm_info.first_neuron_id >> 2,
@@ -1005,7 +1006,7 @@ void SPNET_RUNTIME_CONTEXT_CLASS::process_tick()
                         d + 1,
                         device
                     );
-                    stdp_dense_buffers[nm_idx]->update_counter(streams + nm_idx);
+                    stdp_dense_buffers[nm_idx]->update_counter(&streams[nm_idx]);
                     #else
                     stdp_dense_buffers[nm_idx]->clear();
                     GRID_CALL_SHARED_MEM(

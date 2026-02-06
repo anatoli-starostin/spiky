@@ -6,7 +6,7 @@ namespace py = pybind11;
 
 #define SPNDM_CLASS_NAME PFX(SPNetDataManager)
 
-class __attribute__((visibility("hidden"))) SPNDM_CLASS_NAME {
+class SPIKY_HIDDEN SPNDM_CLASS_NAME {
     friend py::tuple PFX(pickle_spnet_neuron_manager)(const SPNDM_CLASS_NAME& ndm);
     friend std::unique_ptr<SPNDM_CLASS_NAME> PFX(unpickle_spnet_neuron_manager)(py::tuple t);
 public:

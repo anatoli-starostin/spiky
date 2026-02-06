@@ -2,7 +2,7 @@
 #include "spnet.h"
 #include "../misc/spike_storage.h"
 
-#define SPNET_RUNTIME_KERNELS_TPB 1024
+#define SPNET_RUNTIME_KERNELS_TPB 512
 static_assert((SPNET_RUNTIME_KERNELS_TPB % 2) == 0, "SPNET_RUNTIME_KERNELS_TPB must be even");
 
 #define SPNET_RUNTIME_CONTEXT_CLASS PFX(SPNETRuntimeContext)

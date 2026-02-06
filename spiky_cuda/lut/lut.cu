@@ -9,7 +9,7 @@ namespace py = pybind11;
 
 #define LUTM_CLASS_NAME PFX(LUTDataManager)
 
-class __attribute__((visibility("hidden"))) LUTM_CLASS_NAME {
+class SPIKY_HIDDEN LUTM_CLASS_NAME {
     friend py::tuple PFX(pickle_lut_neuron_manager)(const LUTM_CLASS_NAME& ldm);
     friend std::unique_ptr<LUTM_CLASS_NAME> PFX(unpickle_lut_neuron_manager)(py::tuple t);
 public:

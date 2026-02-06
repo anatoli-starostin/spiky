@@ -47,8 +47,8 @@ private:
     uint32_t max_forward_groups_per_neuron;
     #ifdef INTEGERS_INSTEAD_OF_FLOATS
     uint64_t n_weights;
-    double int_rescaler;
     #endif
+    double int_rescaler;
 
     NeuronDataId_t first_synapse_id;
 public:

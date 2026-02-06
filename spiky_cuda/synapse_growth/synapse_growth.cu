@@ -13,7 +13,7 @@ namespace {
 
 namespace py = pybind11;
 
-class __attribute__((visibility("hidden"))) SynapseGrowthLowLevelEngine {
+class SPIKY_HIDDEN SynapseGrowthLowLevelEngine {
 public:
     SynapseGrowthLowLevelEngine(
         uint32_t n_neuron_types, uint32_t n_total_growth_commands, uint32_t n_total_neurons, uint32_t max_neuron_id,
