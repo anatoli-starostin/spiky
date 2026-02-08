@@ -53,6 +53,7 @@ class LUTLayerBasic:
 - **`n_detectors`**: Number of detectors, where each detector manages one lookup table
 - **`n_anchors_per_detector`**: Number of anchor pairs per detector (determines lookup table size: 2^n_anchors_per_detector entries)
 - **`is_fully_connected`**: If `True`, all lookup table entries connect to all outputs. If `False`, sparse connections can be configured via `add_lookup_connections()`
+- **`connected_anchors_mode`**: Controls how anchor pairs are selected for each detector (default: `False`). See [Connected Anchors Mode](#connected-anchors-mode) below for details.
 - **`weights_gradient_policy`**: Policy for handling weight gradients during backpropagation (see Gradient Policies section below)
 
 **Methods**
@@ -61,7 +62,7 @@ The class provides methods that subclasses should use:
 
 1. **`add_detector_connections()`**: Defines the pool of inputs for each detector from which anchor pairs are randomly sampled. 
 
-2. **`initialize_detectors()`**: Performs the anchor sampling itself. After detector connections are established, this method randomly samples anchor pairs from the connected inputs for each detector.
+2. **`initialize_detectors()`**: Performs the anchor sampling itself. After detector connections are established, this method randomly samples anchor pairs from the connected inputs for each detector. The sampling behavior depends on the `connected_anchors_mode` parameter (see [Connected Anchors Mode](#connected-anchors-mode)).
 
 3. **`add_lookup_connections()`**: If `is_fully_connected=False`, this method allows you to set up the projection from lookup table entries to the output vector. It uses the synapse growth engine to establish sparse connections from lookup table entries (lookup neurons) to outputs.
 
@@ -118,6 +119,22 @@ policy_internal = GradientPolicy(GradientType.Internal)  # normalized not suppor
 - **`GradientType.Internal`**: An optimization mode for pure SGD without momentum or other optimization techniques. Gradients are updated in place, which saves memory and speeds up training. This mode is most efficient when you only need simple SGD updates without advanced optimizer features. **Note**: `normalized` cannot be combined with `Internal` gradient policy, and `summation_dtype=torch.int32` is incompatible with `Internal` gradient policy.
 
 **Default**: If not specified, `GradientPolicy(GradientType.Dense, normalized=False)` is used.
+
+#### Connected Anchors Mode
+
+The `connected_anchors_mode` parameter controls how anchor pairs are selected for each detector during `initialize_detectors()`. This parameter affects the connectivity structure of the input-to-detector mapping.
+
+**Important**: Anchor pairs are always sampled from the input elements that are connected to each detector, as defined by the `add_detector_connections()` method. Each detector has its own pool of connected inputs, and anchors are selected from this pool, not from all available inputs. Each anchor pair always consists of two distinct input elements. Within one detector, all anchor pairs are unique, with very few exceptions: duplicates may occur only in rare cases when there are not enough connected input elements to create unique pairs.
+
+**`connected_anchors_mode=False`** (default):
+- Anchor pairs are selected independently and randomly from the pool of inputs connected to each detector (as defined by `add_detector_connections()`)
+- Each anchor pair consists of two distinct input neurons chosen from the detector's connected input pool (no self-loops)
+- The anchor pairs may not necessarily form a connected graph (i.e., not all input neurons used by a detector may be reachable from each other through the anchor pairs)
+
+**`connected_anchors_mode=True`**:
+- Anchor pairs are selected from the pool of inputs connected to each detector (as defined by `add_detector_connections()`) such that they form a connected graph within each detector
+- All input neurons used by a detector's anchor pairs (from the detector's connected input pool) are reachable from each other through the anchor pair connections
+
 
 #### LUT Shared Context
 
