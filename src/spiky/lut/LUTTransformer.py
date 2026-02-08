@@ -210,7 +210,8 @@ class LUTTransformer(nn.Module):
         # Set hooks for all LUT layers
         for layer in self.layers:
             layer['attention_lut'].set_external_learning_rate_hook(lr_hook)
-            layer['ffn'].set_external_learning_rate_hook(lr_hook)
+            if not self.no_ffn:
+                layer['ffn'].set_external_learning_rate_hook(lr_hook)
         self.unembedder.set_external_learning_rate_hook(lr_hook)
 
     def forward(self, tokens):
