@@ -233,6 +233,7 @@ class LUTLayerBasic(nn.Module):
         is_fully_connected,
         sequence_length,
         synapse_metas: List[SynapseMeta],
+        connected_anchors_mode=False,
         concatenation_product=True,
         sliced_product_mode=False,
         positional_dim=None,
@@ -261,6 +262,7 @@ class LUTLayerBasic(nn.Module):
         self._backward_group_size = _backward_group_size
         self._sequence_length = sequence_length
         self._multi_id = 0
+        self._connected_anchors_mode = connected_anchors_mode
         if self._sequence_length == 1 and not concatenation_product:
             raise ValueError("concatenation_product == False doesn't make sense with sequence_length == 1")
 
@@ -371,8 +373,8 @@ class LUTLayerBasic(nn.Module):
         )
 
     def initialize_detectors(self, compact_mode=True, seed=None):
-        max_n_inputs_per_detector = self._lut_dm.finalize_detector_connections()
-        assert max_n_inputs_per_detector * (max_n_inputs_per_detector - 1) >= self._n_anchors_per_detector
+        max_inputs_per_detector = self._lut_dm.finalize_detector_connections()
+        assert max_inputs_per_detector * (max_inputs_per_detector - 1) >= self._n_anchors_per_detector
 
         if seed is not None:
             g = torch.Generator(device=self.device)
@@ -386,25 +388,37 @@ class LUTLayerBasic(nn.Module):
             device=self.device
         )
 
-        if compact_mode:
-            encoded_pairs_permutations = torch.randint(
-                max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
-                [self._n_detectors, max_n_inputs_per_detector],
-                dtype=torch.int32, device=self.device, generator=g
-            )
-        else:
+        if self._connected_anchors_mode:
             noise = torch.rand(
-                self._n_detectors, max_n_inputs_per_detector * (max_n_inputs_per_detector - 1),
+                self._n_detectors, max_inputs_per_detector,
                 device=self.device, generator=g
             )
-            encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
+            input_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
+            self._lut_dm.initialize_connected_detectors(
+                input_permutations.flatten().contiguous(),
+                max_inputs_per_detector,
+                self._detector_anchors
+            )
+        else:
+            if compact_mode:
+                encoded_pairs_permutations = torch.randint(
+                    max_inputs_per_detector * (max_inputs_per_detector - 1),
+                    [self._n_detectors, max_inputs_per_detector],
+                    dtype=torch.int32, device=self.device, generator=g
+                )
+            else:
+                noise = torch.rand(
+                    self._n_detectors, max_inputs_per_detector * (max_inputs_per_detector - 1),
+                    device=self.device, generator=g
+                )
+                encoded_pairs_permutations = noise.argsort(dim=1, stable=True).to(dtype=torch.int32)
 
-        self._lut_dm.initialize_detectors(
-            encoded_pairs_permutations.flatten().contiguous(),
-            max_n_inputs_per_detector,
-            self._detector_anchors,
-            compact_mode
-        )
+            self._lut_dm.initialize_detectors(
+                encoded_pairs_permutations.flatten().contiguous(),
+                max_inputs_per_detector,
+                self._detector_anchors,
+                compact_mode
+            )
 
     def get_input_neuron_ids(self):
         return self._input_neuron_ids
@@ -1248,6 +1262,7 @@ class Conv2DLUTLayer(LUTLayerBasic):
         n_anchors_per_detector,
         detectors_shape,
         output_kernel_shape,
+        connected_anchors_mode=False,
         sequence_length=1,
         receptive_field_shape=None,
         receptive_field_stride_shape=None,
@@ -1338,7 +1353,8 @@ class Conv2DLUTLayer(LUTLayerBasic):
             _initial_synapse_capacity=0 if c_helper_2 is None else c_helper_2.n_connections(),
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size,
-            random_seed=random_seed
+            random_seed=random_seed,
+            connected_anchors_mode=connected_anchors_mode
         )
 
         if device is not None:
@@ -1443,6 +1459,7 @@ class LUTLayer(Conv2DLUTLayer):
         n_anchors_per_detector,
         n_detectors,
         n_outputs,
+        connected_anchors_mode=False,
         sequence_length=1,
         synapse_meta=SynapseMeta(),
         concatenation_product=True,
@@ -1486,7 +1503,8 @@ class LUTLayer(Conv2DLUTLayer):
             _backward_group_size=_backward_group_size,
             _max_groups_in_growth_buffer=_max_groups_in_growth_buffer,
             random_seed=random_seed,
-            device=device
+            device=device,
+            connected_anchors_mode=connected_anchors_mode
         )
 
     def input_shape(self):
@@ -1516,6 +1534,7 @@ class ProjectionLUTLayer(LUTLayerBasic):
         n_detectors_in_group,
         receptive_shape,
         projection_shape,
+        connected_anchors_mode=False,
         synapse_meta=SynapseMeta(),
         projection_prob=1.0,
         detectors_sampling_policy: PointSamplingPolicy = PointSamplingPolicy(PointSamplingType.RandomUniform),
@@ -1564,7 +1583,8 @@ class ProjectionLUTLayer(LUTLayerBasic):
             summation_dtype=summation_dtype, _int_rescaler=_int_rescaler,
             _forward_group_size=_forward_group_size,
             _backward_group_size=_backward_group_size,
-            random_seed=random_seed
+            random_seed=random_seed,
+            connected_anchors_mode=connected_anchors_mode
         )
 
         if device is not None:
