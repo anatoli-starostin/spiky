@@ -431,7 +431,7 @@ public:
 
     void initialize_detectors(
         const torch::Tensor &encoded_pairs_permutations,
-        uint32_t max_n_inputs_per_detector,
+        uint32_t max_inputs_per_detector,
         torch::Tensor &detector_anchors,
         bool compact_mode
     ) {
@@ -444,14 +444,14 @@ public:
 
         uint32_t max_pairs_per_detector;
         if(compact_mode) {
-            max_pairs_per_detector = max_n_inputs_per_detector;
+            max_pairs_per_detector = max_inputs_per_detector;
             if((encoded_pairs_permutations.numel() % max_pairs_per_detector) != 0) {
-                throw py::value_error("(encoded_pairs_permutations.numel() % max_n_inputs_per_detector) != 0");
+                throw py::value_error("(encoded_pairs_permutations.numel() % max_inputs_per_detector) != 0");
             }
         } else {
-            max_pairs_per_detector = max_n_inputs_per_detector * (max_n_inputs_per_detector - 1);
+            max_pairs_per_detector = max_inputs_per_detector * (max_inputs_per_detector - 1);
             if((encoded_pairs_permutations.numel() % max_pairs_per_detector) != 0) {
-                throw py::value_error("(encoded_pairs_permutations.numel() % (max_n_inputs_per_detector * (max_n_inputs_per_detector - 1))) != 0");
+                throw py::value_error("(encoded_pairs_permutations.numel() % (max_inputs_per_detector * (max_inputs_per_detector - 1))) != 0");
             }
         }
 
@@ -531,6 +531,113 @@ public:
                 error_counter
             );
         }
+
+        // Check for errors
+        if(device == -1) {
+            if(*error_counter > 0) {
+                PyMem_Free(error_counter);
+                throw py::value_error("Some detectors have <= 1 input synapses");
+            }
+            PyMem_Free(error_counter);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            if(*error_counter > 0) {
+                cudaFreeHost(error_counter);
+                throw py::value_error("Some detectors have <= 1 input synapses");
+            }
+            cudaFreeHost(error_counter);
+            #endif
+        }
+
+        // Finalize and destroy detector connections manager and allocator
+        delete detector_connections_manager;
+        detector_connections_manager = nullptr;
+        delete detector_connections_allocator;
+        detector_connections_allocator = nullptr;
+    }
+
+    void initialize_connected_detectors(
+        const torch::Tensor &input_permutations,
+        uint32_t max_inputs_per_detector,
+        torch::Tensor &detector_anchors
+    ) {
+        int device = host_device_allocator.device;
+        checkTensor(input_permutations, "input_permutations", false, device, sizeof(int32_t));
+        checkTensor(detector_anchors, "detector_anchors", false, device, sizeof(int32_t));
+
+        if(max_inputs_per_detector <= this->n_anchors_per_detector) {
+            throw py::value_error("max_inputs_per_detector <= this->n_anchors_per_detector");
+        }
+
+        if(detector_connections_manager == nullptr) {
+            throw py::value_error("detector_connections_manager not initialized");
+        }
+
+        if((input_permutations.numel() % max_inputs_per_detector) != 0) {
+            throw py::value_error("(input_permutations.numel() % max_inputs_per_detector) != 0");
+        }
+
+        uint32_t provided_n_detectors = input_permutations.numel() / max_inputs_per_detector;
+        if(provided_n_detectors != this->n_detectors) {
+            throw py::value_error("provided_n_detectors != this->n_detectors");
+        }
+
+        // Validate detector_anchors tensor size
+        int64_t expected_anchors_size = static_cast<int64_t>(this->n_detectors) * this->n_anchors_per_detector * 2;
+        if(detector_anchors.numel() != expected_anchors_size) {
+            throw py::value_error("detector_anchors.numel() != n_detectors * n_anchors_per_detector * 2");
+        }
+
+        // Initialize detector_anchors to zero
+        uint64_t detector_infos_memsize = static_cast<uint64_t>(this->n_detectors) * this->n_anchors_per_detector * sizeof(AnchorsPair);
+        AnchorsPair* detector_infos = reinterpret_cast<AnchorsPair *>(detector_anchors.data_ptr());
+        if(device == -1) {
+            memset(detector_infos, 0, detector_infos_memsize);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaMemset(detector_infos, 0, detector_infos_memsize);
+            #endif
+        }
+
+        uint32_t* input_permutations_data = reinterpret_cast<uint32_t *>(input_permutations.data_ptr());
+
+        // Allocate error counter
+        uint32_t* error_counter;
+        if(device == -1) {
+            error_counter = reinterpret_cast<uint32_t *>(PyMem_Malloc(sizeof(uint32_t)));
+            *error_counter = 0;
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaHostAlloc(&error_counter, sizeof(uint32_t), cudaHostAllocMapped);
+            *error_counter = 0;
+            #endif
+        }
+
+        // Call kernel to prepare detectors
+        NeuronDataId_t detector_neuron_synapses_infos_id = detector_connections_manager->get_backward_neuron_infos_id();
+        NoDelaysIndexedSynapsesInfo* backward_indexed_synapses_ptr =
+            reinterpret_cast<NoDelaysIndexedSynapsesInfo *>(
+                IndexedSynapsesInfos(
+                    detector_neuron_synapses_infos_id, detector_connections_allocator->data
+                )
+            );
+
+        dim3 numBlocks((this->n_detectors + LUT_COMPILE_TIME_KERNELS_TPB - 1) / LUT_COMPILE_TIME_KERNELS_TPB, 1);
+        GRID_CALL_NO_SHARED_MEM(
+            numBlocks, prepare_detectors_connected, LUT_COMPILE_TIME_KERNELS_TPB,
+            input_permutations_data,
+            this->n_detectors,
+            max_inputs_per_detector,
+            this->n_anchors_per_detector,
+            backward_indexed_synapses_ptr,
+            this->backward_group_size,
+            detector_infos,
+            detector_connections_allocator->data,
+            error_counter
+        );
 
         // Check for errors
         if(device == -1) {
@@ -1500,9 +1607,14 @@ void PFX(PB_LUTDataManager)(py::module& m) {
         .def("initialize_detectors", &LUTM_CLASS_NAME::initialize_detectors,
             "Initialize detectors",
             py::arg("encoded_pairs_permutations"),
-            py::arg("max_n_inputs_per_detector"),
+            py::arg("max_inputs_per_detector"),
             py::arg("detector_anchors"),
             py::arg("compact_mode"))
+        .def("initialize_connected_detectors", &LUTM_CLASS_NAME::initialize_connected_detectors,
+            "Initialize detectors",
+            py::arg("input_permutations"),
+            py::arg("max_inputs_per_detector"),
+            py::arg("detector_anchors"))
         .def("finalize_detector_connections", &LUTM_CLASS_NAME::finalize_detector_connections,
             "Finalize detector connections and return max number of inputs per detector")
         .def("get_number_of_inputs", &LUTM_CLASS_NAME::get_number_of_inputs,

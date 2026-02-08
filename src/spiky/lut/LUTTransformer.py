@@ -16,7 +16,7 @@ class LUTTransformer(nn.Module):
     def _create_single_attention(
         self, _synapse_meta, summation_dtype, _int_rescaler, seed,
         _forward_group_size, _backward_group_size, num_heads,
-        do_normalise_weights
+        do_normalise_weights, connected_anchors_mode
     ):
         if isinstance(self.embedding_dim, int):
             return LUTLayer(
@@ -24,6 +24,7 @@ class LUTTransformer(nn.Module):
                 n_outputs=self.embedding_dim,
                 n_detectors=self.n_detectors * num_heads,
                 n_anchors_per_detector=self.n_anchors_per_detector_attention,
+                connected_anchors_mode=connected_anchors_mode,
                 sequence_length=self.context_size,
                 synapse_meta=_synapse_meta,
                 concatenation_product=self.concatenation_product,
@@ -47,6 +48,7 @@ class LUTTransformer(nn.Module):
                 n_anchors_per_detector=self.n_anchors_per_detector_attention,
                 detectors_shape=(1, self.n_detectors * num_heads),
                 output_kernel_shape=self.embedding_dim,
+                connected_anchors_mode=connected_anchors_mode,
                 sequence_length=self.context_size,
                 concatenation_product=self.concatenation_product,
                 sliced_product_mode=self.sliced_product_mode,
@@ -69,7 +71,9 @@ class LUTTransformer(nn.Module):
     def __init__(
         self, vocab_size, embedding_dim, context_size,
         positional_dim, num_layers, num_heads,
-        n_detectors, n_anchors_per_detector, n_anchors_per_detector_attention=None,
+        n_detectors, n_anchors_per_detector,
+        connected_anchors_mode=False,
+        n_anchors_per_detector_attention=None,
         no_ffn=False, concatenation_product=True, sliced_product_mode=False,
         unified_pe=False,
         do_normalise_weights=False,
@@ -136,7 +140,8 @@ class LUTTransformer(nn.Module):
                 _forward_group_size=_forward_group_size,
                 _backward_group_size=_backward_group_size,
                 num_heads=num_heads,
-                do_normalise_weights=do_normalise_weights
+                do_normalise_weights=do_normalise_weights,
+                connected_anchors_mode=connected_anchors_mode
             )
 
             # Dropout after attention
@@ -155,6 +160,7 @@ class LUTTransformer(nn.Module):
                     n_outputs=n_embeddings,
                     n_detectors=n_detectors,
                     n_anchors_per_detector=n_anchors_per_detector,
+                    connected_anchors_mode=connected_anchors_mode,
                     sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
                     synapse_meta=synapse_meta,
                     do_normalise_weights=do_normalise_weights,
@@ -185,6 +191,7 @@ class LUTTransformer(nn.Module):
             n_outputs=vocab_size,
             n_detectors=n_detectors,
             n_anchors_per_detector=n_anchors_per_detector,
+            connected_anchors_mode=connected_anchors_mode,
             sequence_length=1,  # sequence is processed via simple reshape: [B, S, E] -> [B * S, 1, E]
             synapse_meta=synapse_meta,
             do_normalise_weights=do_normalise_weights,
@@ -203,7 +210,8 @@ class LUTTransformer(nn.Module):
         # Set hooks for all LUT layers
         for layer in self.layers:
             layer['attention_lut'].set_external_learning_rate_hook(lr_hook)
-            layer['ffn'].set_external_learning_rate_hook(lr_hook)
+            if not self.no_ffn:
+                layer['ffn'].set_external_learning_rate_hook(lr_hook)
         self.unembedder.set_external_learning_rate_hook(lr_hook)
 
     def forward(self, tokens):
