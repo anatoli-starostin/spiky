@@ -1,6 +1,5 @@
 import torch
 
-from spiky.spnet.tests.test_spnet_math import test_simple_math
 from test_synapse_growth_lowlevel import test_synapse_growth_lowlevel
 from test_synapse_growth_simple import test_simple_two_layers
 from test_synapse_growth_convolutions import test_convolutional_topology
@@ -51,5 +50,3 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
-
-# TODO option to run without add_connection calls

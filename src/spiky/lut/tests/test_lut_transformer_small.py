@@ -1,11 +1,10 @@
-import os
 import random
 import torch
 import torch.nn as nn
 from torch.optim import SGD
 from tqdm import tqdm
 
-from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta, LUTSharedContext
+from spiky.lut.LUTLayer import GradientPolicy, GradientType, SynapseMeta
 
 from spiky.lut.LUTTransformer import LUTTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler

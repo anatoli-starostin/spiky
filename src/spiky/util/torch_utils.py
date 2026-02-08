@@ -68,6 +68,8 @@ class DenseToSparseConverter:
         # Create or reuse counter buffer
         if self._counter_buffer is None or self._counter_buffer.device != source.device:
             self._counter_buffer = torch.zeros(1, dtype=torch.int32, device=source.device)
+            if stream is not None:
+                torch.cuda.synchronize()
 
         provided_buffers = densify_buffers is not None
 
@@ -100,7 +102,7 @@ class DenseToSparseConverter:
         stream_handle = stream.cuda_stream if stream is not None else None
         self._native.dense_to_sparse_32(source, indices, values, self._counter_buffer, erase_input, stream_handle)
 
-        if decouple:
+        if decouple and provided_buffers:
             if stream is not None:
                 stream.synchronize()
             return self.decouple_results(densify_buffers)
