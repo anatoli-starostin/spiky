@@ -113,7 +113,7 @@ if hasattr(sys, 'getwindowsversion'):
                     'spiky_cuda', sources_list_cuda,
                     extra_compile_args={
                         'cxx': ["-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
-                        'nvcc': ['-O3'] + BUILD_INTEGERS_COMPILE_ARGS
+                        'nvcc': ['-O3', '-v', '-allow-unsupported-compiler', '-Xptxas="-v"'] + BUILD_INTEGERS_COMPILE_ARGS
                     },
                     libraries=['cuda']
                 ),
