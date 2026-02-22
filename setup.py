@@ -14,6 +14,7 @@ if __name__ == '__main__':
         packages=[
             "spiky.util",
             "spiky.lut",
+            "spiky.lutorch",
             "spiky.spnet"
         ],
     )

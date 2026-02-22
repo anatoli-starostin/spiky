@@ -184,7 +184,7 @@ void ConnectionsManager::finalize(
     GRID_CALL_SHARED_MEM(
         numBlocks, gather_forward_info, CONN_MANAGER_TPB, CONN_MANAGER_TPB * sizeof(uint64_t),
         IndexedSynapsesInfos(this->forward_neuron_infos_id, allocator.data),
-        this->n_forward_neurons, aux_buffer, allocator.data, only_trainable_backwards, device,
+        this->n_forward_neurons, aux_buffer, allocator.data, device,
         this->separate_weights_mode
     );
     if(device != -1) {

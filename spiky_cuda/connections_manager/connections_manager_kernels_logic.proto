@@ -320,7 +320,6 @@ gather_forward_info_logic(
     uint32_t n_forward_neurons,
     uint64_t* aux_buffer,
     uint8_t* net_data,
-    bool only_trainable_backwards,
     int device, bool separate_weights_mode
 ) {
     unsigned int tid = threadIdx.x;
