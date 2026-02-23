@@ -49,8 +49,9 @@ class AnchorPairsLookup(AbstractLookup):
         
         self.n_anchor_pairs = n_anchor_pairs
         self.connected_pairs = connected_pairs
+        assert cmp_eps >= 0.0
         self.cmp_eps = cmp_eps
-        
+
         # Use AnchorSampler to sample anchor pairs
         # AnchorSampler now supports both tensor format (anchor_candidates) and ChunkOfConnections
         anchor_sampler = AnchorSampler(
@@ -64,20 +65,29 @@ class AnchorPairsLookup(AbstractLookup):
             random_seed=random_seed
         )
         
-        # Get anchor pairs from sampler and register as buffer
-        anchor_pairs = anchor_sampler.get_anchor_pairs()
-        # AnchorSampler returns [n_tables, n_anchor_pairs, 2], which is what we need
-        self.register_buffer('anchor_pairs', anchor_pairs)
+        # Get anchor pairs from sampler and split into two separate tensors
+        anchor_pairs = anchor_sampler.get_anchor_pairs()  # [n_tables, n_anchor_pairs, 2]
+        # Split into two tensors: [n_tables, n_anchor_pairs] each
+        self.register_buffer('anchor_pairs_a', anchor_pairs[:, :, 0].contiguous())
+        self.register_buffer('anchor_pairs_b', anchor_pairs[:, :, 1].contiguous())
+        
+        # Pre-compute powers tensor for bit shifting: [1, 1, n_anchor_pairs]
+        powers = torch.arange(n_anchor_pairs, dtype=torch.int32).view(1, 1, -1)
+        if device is not None:
+            powers = powers.to(device)
+        self.register_buffer('powers', powers)
 
     def forward(
         self,
-        x: torch.Tensor
+        x: torch.Tensor,
+        return_alternatives=True
     ) -> Tuple[torch.Tensor, ...]:
         """
         Forward pass.
         
         Args:
             x: Input tensor of shape [B, input_dim]
+            return_alternatives: in eval mode can be set to False
             
         Returns:
             In training mode:
@@ -93,77 +103,80 @@ class AnchorPairsLookup(AbstractLookup):
         batch_size = x.shape[0]
         device = x.device
         
-        # Get anchor pairs (shape: [n_tables, n_anchor_pairs, 2])
-        anchor_pairs = self.anchor_pairs.to(device)
+        # Check that module buffers are on the same device as input
+        assert self.anchor_pairs_a.device == device, \
+            f"Module buffers device ({self.anchor_pairs_a.device}) must match input device ({device})"
+        
+        # Get anchor pairs as separate tensors
+        anchor_pairs_a = self.anchor_pairs_a  # [n_tables, n_anchor_pairs]
+        anchor_pairs_b = self.anchor_pairs_b  # [n_tables, n_anchor_pairs]
         
         if self.training:
-            return self._forward_train(x, anchor_pairs, batch_size, device)
+            assert return_alternatives
+            return self._forward_train(x, anchor_pairs_a, anchor_pairs_b, batch_size)
         else:
-            return self._forward_eval(x, anchor_pairs, batch_size, device)
+            return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives, batch_size, device)
     
     def _forward_eval(
         self,
         x: torch.Tensor,
-        anchor_pairs: torch.Tensor,
+        anchor_pairs_a: torch.Tensor,
+        anchor_pairs_b: torch.Tensor,
+        return_alternatives: bool,
         batch_size: int,
         device: torch.device
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Evaluation forward pass."""
-        # lookup_indices: [B, n_tables]
-        lookup_indices = torch.zeros(
-            (batch_size, self.n_tables),
-            dtype=torch.long,
-            device=device
-        )
+        # anchor_pairs_a: [n_tables, n_anchor_pairs]
+        # anchor_pairs_b: [n_tables, n_anchor_pairs]
         
-        # lookup_alt_indices: [B, n_tables, 1] (same as lookup_indices for anchor pairs)
-        lookup_alt_indices = torch.zeros(
-            (batch_size, self.n_tables, 1),
-            dtype=torch.long,
-            device=device
-        )
+        # Use torch.gather to get anchor values for all tables at once
+        # x: [B, input_dim]
+        # We need: [B, n_tables, n_anchor_pairs]
+        # Expand x: [B, 1, input_dim] then expand to [B, n_tables, input_dim]
+        x_expanded = x.unsqueeze(1).expand(batch_size, self.n_tables, x.shape[1])  # [B, n_tables, input_dim]
         
-        for table_idx in range(self.n_tables):
-            # Get anchor pairs for this table: [n_anchor_pairs, 2]
-            table_pairs = anchor_pairs[table_idx]  # [n_anchor_pairs, 2]
-            
-            # Compute deltas: [B, n_anchor_pairs]
-            anchor1_ids = table_pairs[:, 0]  # [n_anchor_pairs]
-            anchor2_ids = table_pairs[:, 1]  # [n_anchor_pairs]
-            
-            x_anchor1 = x[:, anchor1_ids]  # [B, n_anchor_pairs]
-            x_anchor2 = x[:, anchor2_ids]  # [B, n_anchor_pairs]
-            deltas = x_anchor1 - x_anchor2  # [B, n_anchor_pairs]
-            
-            # Form binary representation
-            # Compare with epsilon
-            bits = (deltas > self.cmp_eps).long()  # [B, n_anchor_pairs]
-            
-            # Convert to integer lookup index
-            # lookup_index = sum(bits[i] * 2^i)
-            powers = torch.arange(
-                self.n_anchor_pairs,
-                device=device,
-                dtype=torch.long
-            )
-            lookup_indices[:, table_idx] = (bits * (2 ** powers)).sum(dim=1)
+        # Expand anchor IDs to match batch dimension: [B, n_tables, n_anchor_pairs]
+        anchor1_ids_expanded = anchor_pairs_a.unsqueeze(0).expand(batch_size, self.n_tables, self.n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
+        anchor2_ids_expanded = anchor_pairs_b.unsqueeze(0).expand(batch_size, self.n_tables, self.n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
         
+        # Gather anchor1 values: [B, n_tables, n_anchor_pairs]
+        x_anchor1 = torch.gather(x_expanded, dim=2, index=anchor1_ids_expanded)
+        
+        # Gather anchor2 values: [B, n_tables, n_anchor_pairs]
+        x_anchor2 = torch.gather(x_expanded, dim=2, index=anchor2_ids_expanded)
+        
+        # Compute deltas: [B, n_tables, n_anchor_pairs]
+        deltas = x_anchor1 - x_anchor2
+        
+        # Form binary representation: [B, n_tables, n_anchor_pairs]
+        # Use in-place operation since deltas is not used after this
+        bits = deltas.gt_(self.cmp_eps).int_()
+        
+        # Convert to integer lookup index: [B, n_tables]
+        # lookup_index = sum(bits[i] << i) for each table
+        lookup_indices = (bits << self.powers).sum(dim=2, dtype=torch.int32)  # [B, n_tables]
+
+        # TODO ALTERNATIVES
         # For anchor pairs, alt_indices is the same as lookup_indices
-        lookup_alt_indices[:, :, 0] = lookup_indices
+        if return_alternatives:
+            lookup_alt_indices = lookup_indices.unsqueeze(2)  # [B, n_tables, 1]
+        else:
+            lookup_alt_indices = torch.empty((batch_size, self.n_tables, 0), dtype=torch.long, device=device)
         
         return lookup_indices, lookup_alt_indices
     
     def _forward_train(
         self,
         x: torch.Tensor,
-        anchor_pairs: torch.Tensor,
-        batch_size: int,
-        _: torch.device
+        anchor_pairs_a: torch.Tensor,
+        anchor_pairs_b: torch.Tensor,
+        batch_size: int
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Training forward pass with gradient carriers."""
         # Use autograd function for custom backward
         return AnchorPairsLookupFunction.apply(
-            x, anchor_pairs, self.n_anchor_pairs, self.cmp_eps,
+            x, anchor_pairs_a, anchor_pairs_b, self.powers, self.cmp_eps,
             batch_size, self.n_tables
         )
 
@@ -178,7 +191,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         
         Args:
             ctx: Context object
-            *args: x, anchor_pairs, n_anchor_pairs, cmp_eps, batch_size, n_tables
+            *args: x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, batch_size, n_tables
         
         Returns:
             lookup_indices: int [B, n_tables]
@@ -187,12 +200,11 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             lookup_indices_grad_c: float [B, n_tables]
             lookup_alt_indices_grad_c: float [B, n_tables, 1]
         """
-        x, anchor_pairs, n_anchor_pairs, cmp_eps, batch_size, n_tables = args
+        x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, batch_size, n_tables = args
         device = x.device
-        # anchor_pairs: [n_tables, n_anchor_pairs, 2]
-        # Extract anchor IDs: [n_tables, n_anchor_pairs]
-        anchor1_ids = anchor_pairs[:, :, 0]  # [n_tables, n_anchor_pairs]
-        anchor2_ids = anchor_pairs[:, :, 1]  # [n_tables, n_anchor_pairs]
+        n_anchor_pairs = powers.shape[-1]
+        # anchor_pairs_a: [n_tables, n_anchor_pairs]
+        # anchor_pairs_b: [n_tables, n_anchor_pairs]
         
         # Use advanced indexing to get anchor values for all tables at once
         # x: [B, input_dim]
@@ -201,8 +213,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         x_expanded = x.unsqueeze(1).expand(batch_size, n_tables, x.shape[1])  # [B, n_tables, input_dim]
         
         # Expand anchor IDs to match batch dimension: [B, n_tables, n_anchor_pairs]
-        anchor1_ids_expanded = anchor1_ids.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
-        anchor2_ids_expanded = anchor2_ids.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
+        anchor1_ids_expanded = anchor_pairs_a.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
+        anchor2_ids_expanded = anchor_pairs_b.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
         
         # Gather anchor1 values: [B, n_tables, n_anchor_pairs]
         x_anchor1 = torch.gather(x_expanded, dim=2, index=anchor1_ids_expanded)
@@ -214,14 +226,14 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         deltas = x_anchor1 - x_anchor2
         
         # Form binary representation: [B, n_tables, n_anchor_pairs]
-        bits = (deltas > cmp_eps).long()
+        bits = deltas.gt(cmp_eps).int()
         
         # Convert to integer lookup index: [B, n_tables]
-        # lookup_index = sum(bits[i] * 2^i) for each table
-        powers = torch.arange(n_anchor_pairs, device=device, dtype=torch.long)
-        powers_expanded = powers.view(1, 1, n_anchor_pairs)  # [1, 1, n_anchor_pairs]
-        lookup_indices = (bits * (2 ** powers_expanded)).sum(dim=2)  # [B, n_tables]
-        
+        # lookup_index = sum(bits[i] << i) for each table
+        lookup_indices = (bits << powers).sum(dim=2, dtype=torch.int32)  # [B, n_tables]
+
+        # TODO ALTERNATIVES
+
         # Find anchor pair with minimum absolute delta: [B, n_tables]
         abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
         min_delta_indices = abs_deltas.argmin(dim=2)  # [B, n_tables]
@@ -246,10 +258,9 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         
         # Save for backward
         ctx.save_for_backward(
-            x, anchor_pairs, min_deltas, min_delta_indices,
+            x, anchor_pairs_a, anchor_pairs_b, min_deltas, min_delta_indices,
             lookup_indices_grad_c, lookup_alt_indices_grad_c
         )
-        ctx.n_anchor_pairs = n_anchor_pairs
         ctx.cmp_eps = cmp_eps
         ctx.batch_size = batch_size
         ctx.n_tables = n_tables
@@ -278,7 +289,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         ) = grad_outputs
         
         (
-            x, anchor_pairs, min_deltas, min_delta_indices,
+            x, anchor_pairs_a, anchor_pairs_b, min_deltas, min_delta_indices,
             lookup_indices_grad_c, lookup_alt_indices_grad_c
         ) = ctx.saved_tensors
         
@@ -313,14 +324,14 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         du = du * grad_diff
         
         # Get anchor IDs for minimum delta pairs: [B, n_tables]
-        # min_delta_indices: [B, n_tables] - indices into anchor_pairs[:, :, 0/1]
+        # min_delta_indices: [B, n_tables] - indices into anchor_pairs_a/b
         # We need to gather the anchor IDs using these indices
         batch_indices = torch.arange(batch_size, device=device).view(batch_size, 1).expand(batch_size, n_tables)
         table_indices = torch.arange(n_tables, device=device).view(1, n_tables).expand(batch_size, n_tables)
         
         # Gather anchor1 and anchor2 IDs: [B, n_tables]
-        anchor1_ids = anchor_pairs[table_indices, min_delta_indices, 0]  # [B, n_tables]
-        anchor2_ids = anchor_pairs[table_indices, min_delta_indices, 1]  # [B, n_tables]
+        anchor1_ids = anchor_pairs_a[table_indices, min_delta_indices]  # [B, n_tables]
+        anchor2_ids = anchor_pairs_b[table_indices, min_delta_indices]  # [B, n_tables]
         
         # Apply EPS check: [B, n_tables]
         eps_mask = du.abs() > 1e-8
@@ -344,4 +355,4 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         x_grad_flat.scatter_add_(0, indices2, -du_flat)
         x_grad = x_grad_flat.view(batch_size, x.shape[1])
         
-        return x_grad, None, None, None, None, None
+        return x_grad, None, None, None, None, None, None
