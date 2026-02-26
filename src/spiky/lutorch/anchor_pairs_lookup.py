@@ -193,7 +193,7 @@ class AnchorPairsLookup(AbstractLookup):
             flip_masks = (1 << min_delta_indices).int()  # [B, n_tables, n_alternatives]
             lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
         else:
-            lookup_alt_indices = torch.empty((batch_size, self.n_tables, 0), dtype=torch.int32, device=device)
+            lookup_alt_indices = None
 
         return lookup_indices, lookup_alt_indices
 
