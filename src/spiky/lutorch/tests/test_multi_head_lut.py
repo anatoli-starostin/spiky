@@ -224,7 +224,9 @@ def main():
         devices.append('cuda')
     
     seed = 42
-    
+
+    # TODO test smooth mode without gt
+
     for device in devices:
         print(f"\nTesting on {device}...")
         
