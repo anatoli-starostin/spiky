@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
 
-from anchor_pairs_lookup import AnchorPairsLookup
-from l_projection import LProjection
+from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
+from spiky.lutorch.l_projection import LProjection
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -23,6 +23,7 @@ class MultiHeadLut(nn.Module):
         n_outputs: Number of output dimensions per head
         n_anchor_pairs: Number of anchor pairs per table (determines n_entries_per_table = 2**n_anchor_pairs)
         tables_per_head: Number of lookup tables per head (default: 1)
+        n_buckets: Number of buckets for bucketized lookup (default: 1). If > 1, forward expects bucket_indices input.
         connected_pairs: If True, anchor pairs form a connected graph (default: False)
         anchor_candidates: Optional. Either:
                           - torch.Tensor: Shape [n_heads, tables_per_head, max_anchors_per_table] with input indices
@@ -42,6 +43,7 @@ class MultiHeadLut(nn.Module):
         n_outputs: int,
         n_anchor_pairs: int,
         tables_per_head: int = 1,
+        n_buckets: int = 1,
         connected_pairs: bool = False,
         anchor_candidates: Optional[Union[torch.Tensor, Tuple[ChunkOfConnections, int]]] = None,
         cmp_eps: float = 0.0,
@@ -57,14 +59,15 @@ class MultiHeadLut(nn.Module):
         self.n_outputs = n_outputs
         self.n_anchor_pairs = n_anchor_pairs
         self.tables_per_head = tables_per_head
+        self.n_buckets = n_buckets
         self.n_alternatives = n_alternatives
         self.smooth_mode = smooth_mode
         
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
         
-        # n_entries_per_table is derived from n_anchor_pairs
-        n_entries_per_table = 2 ** n_anchor_pairs
+        # n_entries_per_table is derived from n_anchor_pairs, multiplied by n_buckets
+        n_entries_per_table = (2 ** n_anchor_pairs) * n_buckets
         
         # Reshape anchor_candidates if it's a tensor: [n_heads, tables_per_head, max_anchors_per_table] -> [n_heads * tables_per_head, max_anchors_per_table]
         reshaped_anchor_candidates = anchor_candidates
@@ -96,17 +99,29 @@ class MultiHeadLut(nn.Module):
     
     def forward(
         self,
-        x: torch.Tensor
+        x: torch.Tensor,
+        bucket_indices: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Forward pass.
         
         Args:
             x: Input tensor of shape [B, input_dim]
+            bucket_indices: Optional integer tensor of shape [B] with bucket indices for each batch element.
+                           Required if n_buckets > 1.
             
         Returns:
             Output tensor of shape [B, n_heads, n_outputs]
         """
+        # Validate bucket_indices if n_buckets > 1
+        if self.n_buckets > 1:
+            if bucket_indices is None:
+                raise ValueError(f"bucket_indices is required when n_buckets={self.n_buckets} > 1")
+            assert bucket_indices.shape == (x.shape[0],), \
+                f"bucket_indices must have shape [B], got {bucket_indices.shape}, expected [{x.shape[0]}]"
+            assert bucket_indices.dtype == torch.int32 or bucket_indices.dtype == torch.int64, \
+                f"bucket_indices must be integer tensor, got {bucket_indices.dtype}"
+
         # Determine return_alternatives: always True in training, only True in eval if smooth_mode
         return_alternatives = self.training or self.smooth_mode
         
@@ -125,6 +140,20 @@ class MultiHeadLut(nn.Module):
             lookup_indices_grad_c = None
             lookup_alt_indices_grad_c = None
         
+        # Apply bucket modification if n_buckets > 1
+        if self.n_buckets > 1:
+            # Ensure bucket_indices has the right dtype and shape for broadcasting
+            bucket_indices = bucket_indices.to(lookup_indices.dtype)  # [B]
+            bucket_indices_expanded = bucket_indices.unsqueeze(1)  # [B, 1]
+            
+            # Modify lookup_indices: lookup_indices = lookup_indices * n_buckets + bucket_indices
+            lookup_indices = lookup_indices * self.n_buckets + bucket_indices_expanded  # [B, n_tables]
+            
+            # Modify lookup_alt_indices similarly
+            if lookup_alt_indices is not None:
+                bucket_indices_alt = bucket_indices.unsqueeze(1).unsqueeze(2)  # [B, 1, 1]
+                lookup_alt_indices = lookup_alt_indices * self.n_buckets + bucket_indices_alt  # [B, n_tables, n_alternatives]
+        
         # Project through LProjection
         # LProjection returns [B, n_lookup_tables, n_outputs]
         output = self.projection(
@@ -142,4 +171,3 @@ class MultiHeadLut(nn.Module):
         output = output.sum(dim=2)  # [B, n_heads, n_outputs]
         
         return output
-

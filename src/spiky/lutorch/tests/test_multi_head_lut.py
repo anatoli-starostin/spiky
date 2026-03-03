@@ -1,0 +1,251 @@
+"""
+Test for MultiHeadLut module.
+"""
+import torch
+import torch.nn as nn
+from tqdm import tqdm
+
+from spiky.lut.LUTLayer import LUTLayer, SynapseMeta
+from spiky.lutorch.multi_head_lut import MultiHeadLut
+
+
+def test_multi_head_lut_simple(device, seed=None):
+    """
+    Simple test for MultiHeadLut with n_heads=1 (equivalent to LUTLayer).
+    Synchronizes anchors and weights to verify exact match.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    batch_size = 4
+    n_inputs = 100
+    n_anchors_per_detector = 4
+    n_detectors = 10
+    n_outputs = 20
+    
+    # Create input
+    x = torch.randn(batch_size, n_inputs, device=device)
+    
+    # Create LUTLayer (baseline)
+    lut_layer = LUTLayer(
+        n_inputs=n_inputs,
+        n_anchors_per_detector=n_anchors_per_detector,
+        n_detectors=n_detectors,
+        n_outputs=n_outputs,
+        synapse_meta=SynapseMeta(
+            initial_weight=1.0,
+            initial_noise_level=-1.0
+        ),
+        random_seed=seed,
+        device=device
+    )
+    lut_layer.eval()
+    
+    # Create MultiHeadLut normally (without anchor_candidates)
+    multi_head_lut = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=1,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors,
+        random_seed=seed,
+        device=device
+    )
+    multi_head_lut.eval()
+    
+    # Extract anchors from LUTLayer: [n_detectors, n_anchors_per_detector, 2]
+    lut_anchors = lut_layer._export_anchors()  # [n_detectors, n_anchors_per_detector, 2]
+    
+    # Synchronize anchors by directly setting the internal buffers
+    # LUTLayer anchors: [n_detectors, n_anchors_per_detector, 2]
+    # MultiHeadLut expects: anchor_pairs_a and anchor_pairs_b: [n_tables, n_anchor_pairs]
+    # Since n_tables = n_detectors and n_anchor_pairs = n_anchors_per_detector
+    anchor_a = lut_anchors[:, :, 0].to(dtype=torch.long).clone()
+    anchor_b = lut_anchors[:, :, 1].to(dtype=torch.long).clone()
+    
+    # Set anchors directly (try original order first)
+    multi_head_lut.lookup.anchor_pairs_a.data = anchor_a
+    multi_head_lut.lookup.anchor_pairs_b.data = anchor_b
+    
+    # Synchronize weights
+    # LUTLayer weights: export_weights(inverse_order=False) returns weights shaped as
+    # [lut_receptive_field_shape, output_shape] = [n_detectors, n_entries_per_table, n_outputs]
+    # MultiHeadLut weights: self.projection.weights: [n_lookup_tables, n_entries_per_table, n_outputs]
+    # where n_lookup_tables = n_detectors, so shapes match directly
+    lut_weights = lut_layer.export_weights(inverse_order=False)  # [n_detectors, n_entries_per_table, n_outputs]
+    # Copy to MultiHeadLut
+    multi_head_lut.projection.weights.data = lut_weights.clone()
+    
+    # Forward pass
+    with torch.no_grad():
+        # Forward through LUTLayer
+        lut_output_raw = lut_layer(x.unsqueeze(1))  # [B, 1, n_outputs]
+        # LUTLayer returns [B, 1, n_outputs], squeeze to [B, n_outputs]
+        lut_output = lut_output_raw.squeeze(1)  # [B, n_outputs]
+        
+        # Forward through MultiHeadLut
+        multi_head_output = multi_head_lut(x)  # [B, n_heads, n_outputs]
+    
+    # Check output shape
+    assert multi_head_output.shape == (batch_size, 1, n_outputs), \
+        f"Expected shape {(batch_size, 1, n_outputs)}, got {multi_head_output.shape}"
+    
+    # Squeeze to compare with LUTLayer output
+    multi_head_output_squeezed = multi_head_output.squeeze(1)  # [B, n_outputs]
+    
+    # Check that outputs match (within numerical precision)
+    max_diff = torch.abs(lut_output - multi_head_output_squeezed).max().item()
+    assert max_diff < 1e-5, \
+        f"Outputs don't match! Max difference: {max_diff:.2e}"
+    
+    print(f"✓ MultiHeadLut (n_heads=1) forward pass successful")
+    
+    return True
+
+
+def test_multi_head_lut_training(device, seed=None):
+    """
+    Test MultiHeadLut in training mode with synchronized anchors and weights.
+    Runs multiple training iterations and verifies outputs and weights match LUTLayer.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    batch_size = 4
+    n_inputs = 100
+    n_anchors_per_detector = 4
+    n_detectors = 10
+    n_outputs = 20
+    n_iterations = 100
+    
+    # Create LUTLayer (baseline)
+    lut_layer = LUTLayer(
+        n_inputs=n_inputs,
+        n_anchors_per_detector=n_anchors_per_detector,
+        n_detectors=n_detectors,
+        n_outputs=n_outputs,
+        synapse_meta=SynapseMeta(
+            initial_weight=1.0,
+            initial_noise_level=-1.0
+        ),
+        random_seed=seed,
+        device=device
+    )
+    lut_layer.train()
+    
+    # Create MultiHeadLut with n_heads=1 (should be equivalent)
+    multi_head_lut = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=1,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors,
+        random_seed=seed,
+        device=device
+    )
+    multi_head_lut.train()
+    
+    # Extract anchors from LUTLayer: [n_detectors, n_anchors_per_detector, 2]
+    lut_anchors = lut_layer._export_anchors()  # [n_detectors, n_anchors_per_detector, 2]
+    
+    # Synchronize anchors by directly setting the internal buffers
+    anchor_a = lut_anchors[:, :, 0].to(dtype=torch.long).clone()
+    anchor_b = lut_anchors[:, :, 1].to(dtype=torch.long).clone()
+    multi_head_lut.lookup.anchor_pairs_a.data = anchor_a
+    multi_head_lut.lookup.anchor_pairs_b.data = anchor_b
+    
+    # Synchronize initial weights
+    lut_weights = lut_layer.export_weights(inverse_order=False)  # [n_detectors, n_entries_per_table, n_outputs]
+    multi_head_lut.projection.weights.data = lut_weights.clone()
+    
+    # Create optimizers
+    lut_optimizer = torch.optim.SGD(lut_layer.parameters(), lr=0.01)
+    multi_head_optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.01)
+    
+    # Run training iterations
+    for iteration in tqdm(range(n_iterations), desc="Training iterations"):
+        # Generate random input
+        x = torch.randn(batch_size, n_inputs, device=device, requires_grad=True)
+        
+        # Forward pass
+        lut_output_raw = lut_layer(x.unsqueeze(1))  # [B, 1, n_outputs]
+        lut_output = lut_output_raw.squeeze(1)  # [B, n_outputs]
+        
+        multi_head_output = multi_head_lut(x)  # [B, n_heads, n_outputs]
+        multi_head_output_squeezed = multi_head_output.squeeze(1)  # [B, n_outputs]
+        
+        # Check outputs match before backward
+        max_diff = torch.abs(lut_output - multi_head_output_squeezed).max().item()
+        assert max_diff < 1e-5, \
+            f"Iteration {iteration}: Outputs don't match before backward! Max difference: {max_diff:.2e}"
+        
+        # Generate random target for loss computation
+        target = torch.randn(batch_size, n_outputs, device=device)
+        
+        # Compute loss
+        lut_loss = ((lut_output - target) ** 2).mean()
+        multi_head_loss = ((multi_head_output_squeezed - target) ** 2).mean()
+        
+        # Backward pass
+        lut_optimizer.zero_grad()
+        lut_loss.backward()
+        lut_optimizer.step()
+        
+        multi_head_optimizer.zero_grad()
+        multi_head_loss.backward()
+        multi_head_optimizer.step()
+        
+        # Get weights after optimizer step
+        lut_weights = lut_layer.export_weights(inverse_order=False)
+        
+        # Check weights match before synchronization
+        weight_diff = torch.abs(multi_head_lut.projection.weights.data - lut_weights).max().item()
+        assert weight_diff < 1e-5, \
+            f"Iteration {iteration}: Weights don't match before sync! Max difference: {weight_diff:.2e}"
+        
+        # Synchronize weights after each iteration to avoid numerical instability
+        multi_head_lut.projection.weights.data = lut_weights.clone()
+    
+    print(f"✓ MultiHeadLut training mode test successful ({n_iterations} iterations)")
+    
+    return True
+
+
+def main():
+    """
+    Run all tests.
+    """
+    print("=" * 60)
+    print("MultiHeadLut TESTS")
+    print("=" * 60)
+    
+    devices = ['cpu']
+    if torch.cuda.is_available():
+        devices.append('cuda')
+    
+    seed = 42
+    
+    for device in devices:
+        print(f"\nTesting on {device}...")
+        
+        # Test 1: Simple test with n_heads=1
+        print("\n1. Testing MultiHeadLut with n_heads=1 (equivalent to LUTLayer)...")
+        success = test_multi_head_lut_simple(device, seed=seed)
+        if not success:
+            print(f"❌ Test failed on {device}")
+            return -1
+        
+        # Test 2: Training mode
+        print("\n2. Testing MultiHeadLut in training mode...")
+        success = test_multi_head_lut_training(device, seed=seed)
+        if not success:
+            print(f"❌ Test failed on {device}")
+            return -1
+
+        print(f"\n✓ All tests passed on {device}!")
+    
+    return 0
+
+
+if __name__ == "__main__":
+    exit(main())

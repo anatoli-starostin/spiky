@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
 
-from abstract_lookup import AbstractLookup
-from anchor_sampler import AnchorSampler
+from spiky.lutorch.abstract_lookup import AbstractLookup
+from spiky.lutorch.anchor_sampler import AnchorSampler
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -74,13 +74,13 @@ class AnchorPairsLookup(AbstractLookup):
         )
 
         # Get anchor pairs from sampler and split into two separate tensors
-        anchor_pairs = anchor_sampler.get_anchor_pairs()  # [n_tables, n_anchor_pairs, 2]
+        anchor_pairs = anchor_sampler.get_anchor_pairs().to(dtype=torch.long)  # [n_tables, n_anchor_pairs, 2]
         # Split into two tensors: [n_tables, n_anchor_pairs] each
         self.register_buffer('anchor_pairs_a', anchor_pairs[:, :, 0].contiguous())
         self.register_buffer('anchor_pairs_b', anchor_pairs[:, :, 1].contiguous())
 
         # Pre-compute powers tensor for bit shifting: [1, 1, n_anchor_pairs]
-        powers = torch.arange(n_anchor_pairs, dtype=torch.int32).view(1, 1, -1)
+        powers = torch.arange(n_anchor_pairs, dtype=torch.long).view(1, 1, -1)
         if device is not None:
             powers = powers.to(device)
         self.register_buffer('powers', powers)
@@ -108,16 +108,16 @@ class AnchorPairsLookup(AbstractLookup):
             
         Returns:
             In training mode:
-                - lookup_indices: int32 [B, n_tables]
-                - lookup_alt_indices: int32 [B, n_tables, n_alternatives]
+                - lookup_indices: int64 [B, n_tables]
+                - lookup_alt_indices: int64 [B, n_tables, n_alternatives]
                   Ordered by ascending absolute delta (smallest first)
                 - lookup_alt_deltas: float [B, n_tables, n_alternatives]
                   Ordered by ascending absolute delta (smallest first)
                 - lookup_indices_grad_c: float [B, n_tables]
                 - lookup_alt_indices_grad_c: float [B, n_tables, n_alternatives]
             In eval mode:
-                - lookup_indices: int32 [B, n_tables]
-                - lookup_alt_indices: int32 [B, n_tables, n_alternatives] (or empty if return_alternatives=False)
+                - lookup_indices: int64 [B, n_tables]
+                - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or empty if return_alternatives=False)
                   Ordered by ascending absolute delta (smallest first)
         """
         batch_size = x.shape[0]
@@ -135,7 +135,7 @@ class AnchorPairsLookup(AbstractLookup):
             assert return_alternatives
             return self._forward_train(x, anchor_pairs_a, anchor_pairs_b, batch_size)
         else:
-            return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives, batch_size, device)
+            return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives, batch_size)
 
     def _forward_eval(
         self,
@@ -143,8 +143,7 @@ class AnchorPairsLookup(AbstractLookup):
         anchor_pairs_a: torch.Tensor,
         anchor_pairs_b: torch.Tensor,
         return_alternatives: bool,
-        batch_size: int,
-        device: torch.device
+        batch_size: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Evaluation forward pass."""
         # anchor_pairs_a: [n_tables, n_anchor_pairs]
@@ -170,11 +169,11 @@ class AnchorPairsLookup(AbstractLookup):
         deltas = x_anchor1 - x_anchor2
 
         # Form binary representation: [B, n_tables, n_anchor_pairs]
-        bits = deltas.gt(self.cmp_eps).int_()
+        bits = deltas.gt(self.cmp_eps).to(dtype=torch.long)
 
         # Convert to integer lookup index: [B, n_tables]
         # lookup_index = sum(bits[i] << i) for each table
-        lookup_indices = (bits << self.powers).sum(dim=2, dtype=torch.int32)  # [B, n_tables]
+        lookup_indices = (bits << self.powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
         # Compute alternative indices by flipping bits at positions with minimal absolute deltas
         if return_alternatives:
@@ -190,7 +189,7 @@ class AnchorPairsLookup(AbstractLookup):
             # For each alternative, flip the bit at the corresponding anchor pair position
             # alt_index = lookup_index ^ (1 << min_delta_index)
             lookup_indices_expanded = lookup_indices.unsqueeze(2)  # [B, n_tables, 1] for broadcasting
-            flip_masks = (1 << min_delta_indices).int()  # [B, n_tables, n_alternatives]
+            flip_masks = (1 << min_delta_indices).long()  # [B, n_tables, n_alternatives]
             lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
         else:
             lookup_alt_indices = None
@@ -214,7 +213,7 @@ class AnchorPairsLookup(AbstractLookup):
         ):
             batch_indices = torch.arange(batch_size, device=x.device).view(batch_size, 1, 1)
             batch_expanded = batch_indices.expand(batch_size, self.n_tables, self.n_alternatives)
-            batch_flat = batch_expanded.view(-1)  # [B * n_tables * n_alternatives]
+            batch_flat = batch_expanded.flatten()  # [B * n_tables * n_alternatives]
             self._cached_batch_offset = batch_flat * x.shape[1]
 
         # Use autograd function for custom backward
@@ -237,8 +236,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             *args: x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, batch_size, table_indices, batch_offset
         
         Returns:
-            lookup_indices: int32 [B, n_tables]
-            lookup_alt_indices: int32 [B, n_tables, n_alternatives]
+            lookup_indices: int64 [B, n_tables]
+            lookup_alt_indices: int64 [B, n_tables, n_alternatives]
               Ordered by ascending absolute delta (smallest first)
             lookup_alt_deltas: float [B, n_tables, n_alternatives]
               Ordered by ascending absolute delta (smallest first)
@@ -272,11 +271,11 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         deltas = x_anchor1 - x_anchor2
 
         # Form binary representation: [B, n_tables, n_anchor_pairs]
-        bits = deltas.gt(cmp_eps).int()
+        bits = deltas.gt(cmp_eps).long()
 
         # Convert to integer lookup index: [B, n_tables]
         # lookup_index = sum(bits[i] << i) for each table
-        lookup_indices = (bits << powers).sum(dim=2, dtype=torch.int32)  # [B, n_tables]
+        lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
         # Find top K minimal absolute deltas for alternatives: [B, n_tables, n_alternatives]
         # Results are sorted in ascending order by absolute delta (smallest first)
@@ -290,7 +289,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         # For each alternative, flip the bit at the corresponding anchor pair position
         # alt_index = lookup_index ^ (1 << min_delta_index)
         lookup_indices_expanded = lookup_indices.unsqueeze(2)  # [B, n_tables, 1] for broadcasting
-        flip_masks = (1 << min_delta_indices).to(torch.int32)  # [B, n_tables, n_alternatives]
+        flip_masks = (1 << min_delta_indices).to(torch.long)  # [B, n_tables, n_alternatives]
         lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
 
         # Gather min deltas using min_delta_indices
