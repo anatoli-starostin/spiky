@@ -187,13 +187,13 @@ class AnchorPairsLookup(AbstractLookup):
 
         # Compute alternative indices by flipping bits at positions with minimal absolute deltas
         if return_alternatives:
-            # Find top K minimal absolute deltas: [B, n_tables, n_alternatives]
-            # Results are sorted in ascending order by absolute delta (smallest first)
             abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-            # Get top K smallest deltas and their indices
-            min_delta_indices = torch.topk(
-                abs_deltas, k=self.n_alternatives, dim=2, largest=False
-            ).indices  # [B, n_tables, n_alternatives] each, sorted by ascending absolute delta
+            if self.n_alternatives == 1:
+                min_delta_indices = abs_deltas.argmin(dim=2, keepdim=True)  # [B, n_tables, 1]
+            else:
+                min_delta_indices = torch.topk(
+                    abs_deltas, k=self.n_alternatives, dim=2, largest=False
+                ).indices  # [B, n_tables, n_alternatives]
             
             # Create alternative indices by flipping bits at minimal delta positions
             # For each alternative, flip the bit at the corresponding anchor pair position
@@ -298,13 +298,14 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         # lookup_index = sum(bits[i] << i) for each table
         lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
-        # Find top K minimal absolute deltas for alternatives: [B, n_tables, n_alternatives]
-        # Results are sorted in ascending order by absolute delta (smallest first)
+        # Find minimal absolute deltas for alternatives: [B, n_tables, n_alternatives]
         abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-        # Get top K smallest deltas and their indices
-        min_delta_indices = torch.topk(
-            abs_deltas, k=n_alternatives, dim=2, largest=False
-        ).indices  # [B, n_tables, n_alternatives] each, sorted by ascending absolute delta
+        if n_alternatives == 1:
+            min_delta_indices = abs_deltas.argmin(dim=2, keepdim=True)  # [B, n_tables, 1]
+        else:
+            min_delta_indices = torch.topk(
+                abs_deltas, k=n_alternatives, dim=2, largest=False
+            ).indices  # [B, n_tables, n_alternatives]
 
         # Create alternative indices by flipping bits at minimal delta positions
         # For each alternative, flip the bit at the corresponding anchor pair position
