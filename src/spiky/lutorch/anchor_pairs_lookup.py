@@ -149,13 +149,13 @@ class AnchorPairsLookup(AbstractLookup):
             - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or None if return_alternatives=False)
             - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
         """
-        # anchor_pairs_a: [n_tables, n_anchor_pairs]
-        # anchor_pairs_b: [n_tables, n_anchor_pairs]
-
-        # x: [B, input_dim], anchor_pairs_a/b: [n_tables, n_anchor_pairs] -> [B, n_tables, n_anchor_pairs]
-        x_anchor1 = x[:, anchor_pairs_a]
-        x_anchor2 = x[:, anchor_pairs_b]
-        deltas = x_anchor1 - x_anchor2
+        # anchor_pairs_a/b: [n_tables, n_anchor_pairs] -> gather on flattened index
+        batch_size = x.shape[0]
+        idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
+        idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
+        x_a = x.gather(1, idx_a).view(batch_size, self.n_tables, self.n_anchor_pairs)
+        x_b = x.gather(1, idx_b).view(batch_size, self.n_tables, self.n_anchor_pairs)
+        deltas = x_a - x_b
 
         # Form binary representation: [B, n_tables, n_anchor_pairs]
         bits = deltas.gt(self.cmp_eps).to(dtype=torch.long)
@@ -234,9 +234,11 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         batch_size = x.shape[0]
         n_anchor_pairs = powers.shape[-1]
         n_tables = anchor_pairs_a.shape[0]
-        x_anchor1 = x[:, anchor_pairs_a]  # [B, n_tables, n_anchor_pairs]
-        x_anchor2 = x[:, anchor_pairs_b]
-        deltas = x_anchor1 - x_anchor2
+        idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
+        idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
+        x_a = x.gather(1, idx_a).view(batch_size, n_tables, n_anchor_pairs)
+        x_b = x.gather(1, idx_b).view(batch_size, n_tables, n_anchor_pairs)
+        deltas = x_a - x_b
 
         bits = deltas.gt(cmp_eps).long()
         lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
