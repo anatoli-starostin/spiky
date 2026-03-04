@@ -7,6 +7,7 @@ from typing import Tuple, Optional, Union
 
 from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
+from spiky.lutorch.lut_helpers import UncertaintyMode
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -50,7 +51,8 @@ class MultiHeadLut(nn.Module):
         random_seed: Optional[int] = None,
         n_alternatives: int = 1,
         smooth_mode: bool = False,
-        device: Optional[torch.device] = None
+        device: Optional[torch.device] = None,
+        uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
     ):
         super().__init__()
         
@@ -62,6 +64,7 @@ class MultiHeadLut(nn.Module):
         self.n_buckets = n_buckets
         self.n_alternatives = n_alternatives
         self.smooth_mode = smooth_mode
+        self.uncertainty_mode = uncertainty_mode
         
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -84,7 +87,8 @@ class MultiHeadLut(nn.Module):
             cmp_eps=cmp_eps,
             random_seed=random_seed,
             device=device,
-            n_alternatives=n_alternatives
+            n_alternatives=n_alternatives,
+            uncertainty_mode=uncertainty_mode,
         )
         
         # Create LProjection: n_lookup_tables total
@@ -94,7 +98,8 @@ class MultiHeadLut(nn.Module):
             n_outputs=n_outputs,
             n_alternatives=n_alternatives,
             smooth_mode=smooth_mode,
-            device=device
+            device=device,
+            uncertainty_mode=uncertainty_mode,
         )
     
     def forward(
@@ -135,8 +140,7 @@ class MultiHeadLut(nn.Module):
                 lookup_alt_indices_grad_c
             ) = self.lookup(x, return_alternatives=return_alternatives)
         else:
-            lookup_indices, lookup_alt_indices = self.lookup(x, return_alternatives=return_alternatives)
-            lookup_alt_deltas = None
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas = self.lookup(x, return_alternatives=return_alternatives)
             lookup_indices_grad_c = None
             lookup_alt_indices_grad_c = None
         

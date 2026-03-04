@@ -7,6 +7,7 @@ from typing import Tuple, Optional, Union
 
 from spiky.lutorch.abstract_lookup import AbstractLookup
 from spiky.lutorch.anchor_sampler import AnchorSampler
+from spiky.lutorch.lut_helpers import UncertaintyMode
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -46,7 +47,8 @@ class AnchorPairsLookup(AbstractLookup):
         cmp_eps: float = 0.0,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
-        n_alternatives: int = 1
+        n_alternatives: int = 1,
+        uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
     ):
         table_dim = 2 ** n_anchor_pairs
         if n_alternatives > n_anchor_pairs:
@@ -59,6 +61,7 @@ class AnchorPairsLookup(AbstractLookup):
         self.connected_pairs = connected_pairs
         assert cmp_eps >= 0.0
         self.cmp_eps = cmp_eps
+        self.uncertainty_mode = uncertainty_mode
 
         # Use AnchorSampler to sample anchor pairs
         # AnchorSampler now supports both tensor format (anchor_candidates) and ChunkOfConnections
@@ -144,8 +147,15 @@ class AnchorPairsLookup(AbstractLookup):
         anchor_pairs_b: torch.Tensor,
         return_alternatives: bool,
         batch_size: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Evaluation forward pass."""
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Evaluation forward pass.
+        
+        Returns:
+            - lookup_indices: int64 [B, n_tables]
+            - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or None if return_alternatives=False)
+            - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
+        """
         # anchor_pairs_a: [n_tables, n_anchor_pairs]
         # anchor_pairs_b: [n_tables, n_anchor_pairs]
 
@@ -184,17 +194,21 @@ class AnchorPairsLookup(AbstractLookup):
             min_delta_indices = torch.topk(
                 abs_deltas, k=self.n_alternatives, dim=2, largest=False
             ).indices  # [B, n_tables, n_alternatives] each, sorted by ascending absolute delta
-
+            
             # Create alternative indices by flipping bits at minimal delta positions
             # For each alternative, flip the bit at the corresponding anchor pair position
             # alt_index = lookup_index ^ (1 << min_delta_index)
             lookup_indices_expanded = lookup_indices.unsqueeze(2)  # [B, n_tables, 1] for broadcasting
             flip_masks = (1 << min_delta_indices).long()  # [B, n_tables, n_alternatives]
             lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
+
+            # Gather corresponding deltas: [B, n_tables, n_alternatives]
+            lookup_alt_deltas = torch.gather(deltas, dim=2, index=min_delta_indices)
         else:
             lookup_alt_indices = None
-
-        return lookup_indices, lookup_alt_indices
+            lookup_alt_deltas = None
+        
+        return lookup_indices, lookup_alt_indices, lookup_alt_deltas
 
     def _forward_train(
         self,
@@ -219,7 +233,8 @@ class AnchorPairsLookup(AbstractLookup):
         # Use autograd function for custom backward
         return AnchorPairsLookupFunction.apply(
             x, anchor_pairs_a, anchor_pairs_b, self.powers, self.cmp_eps,
-            batch_size, self.table_indices, self._cached_batch_offset
+            batch_size, self.table_indices, self._cached_batch_offset,
+            self.uncertainty_mode
         )
 
 
@@ -233,7 +248,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         
         Args:
             ctx: Context object
-            *args: x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, batch_size, table_indices, batch_offset
+            *args: x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps,
+                   batch_size, table_indices, batch_offset, uncertainty_mode
         
         Returns:
             lookup_indices: int64 [B, n_tables]
@@ -244,7 +260,12 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             lookup_indices_grad_c: float [B, n_tables]
             lookup_alt_indices_grad_c: float [B, n_tables, n_alternatives]
         """
-        x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, batch_size, table_indices, batch_offset = args
+        (
+            x, anchor_pairs_a, anchor_pairs_b, 
+            powers, cmp_eps, batch_size, 
+            table_indices, batch_offset, 
+            uncertainty_mode
+        ) = args
         n_anchor_pairs = powers.shape[-1]
         n_tables = anchor_pairs_a.shape[0]
         n_alternatives = batch_offset.shape[0] // (batch_size * n_tables)
@@ -315,6 +336,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         ctx.batch_size = batch_size
         ctx.table_indices = table_indices
         ctx.batch_offset = batch_offset
+        ctx.uncertainty_mode = uncertainty_mode
 
         return (
             lookup_indices,
@@ -345,6 +367,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
 
         batch_size = ctx.batch_size
         table_indices = ctx.table_indices
+        uncertainty_mode = ctx.uncertainty_mode
 
         # Get gradients: [B, n_tables] and [B, n_tables, n_alternatives]
         grad_main = grad_lookup_indices_grad_c  # [B, n_tables]
@@ -355,11 +378,18 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         grad_diff = grad_main_expanded - grad_alt  # [B, n_tables, n_alternatives]
 
         # Compute derivative of uncertainty function
-        # The uncertainty function is: U(delta) = 0.5 / (1 + |delta|)
-        # Its derivative is: U'(delta) = -0.5 * sign(delta) / (1 + |delta|)^2
-        abs_delta = lookup_alt_deltas.abs()
-        one_plus_abs = 1.0 + abs_delta
-        minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)  # [B, n_tables, n_alternatives]
+        if uncertainty_mode == UncertaintyMode.INVERSE_L1:
+            # U(delta) = 0.5 / (1 + |delta|)
+            # -U'(delta) = 0.5 * sign(delta) / (1 + |delta|)^2
+            abs_delta = lookup_alt_deltas.abs()
+            one_plus_abs = 1.0 + abs_delta
+            minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
+        else:
+            # U(delta) = 0.5 / (1 + delta^2)
+            # -U'(delta) = delta / (1 + delta^2)^2
+            delta_sq = lookup_alt_deltas * lookup_alt_deltas
+            one_plus_sq = 1.0 + delta_sq
+            minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
 
         # Multiply gradient difference by uncertainty function derivative
         # This gives the gradient with respect to delta: grad_delta = grad_diff * -u'(delta)
@@ -388,4 +418,17 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         x_grad_flat.scatter_add_(0, indices2, -du_flat)
         x_grad = x_grad_flat.view(batch_size, x.shape[1])
 
-        return x_grad, None, None, None, None, None, None, None
+        # Gradients correspond to:
+        # x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps,
+        # batch_size, table_indices, batch_offset, uncertainty_mode
+        return (
+            x_grad,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )

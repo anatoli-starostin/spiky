@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from spiky.lut.LUTLayer import LUTLayer, SynapseMeta
 from spiky.lutorch.multi_head_lut import MultiHeadLut
+from spiky.lutorch.lut_helpers import UncertaintyMode
 
 
 def test_multi_head_lut_simple(device, seed=None):
@@ -211,6 +212,134 @@ def test_multi_head_lut_training(device, seed=None):
     return True
 
 
+def test_multi_head_lut_smooth_simple(device, seed=None):
+    """
+    Simple smoke test for MultiHeadLut in smooth mode with n_alternatives=4.
+    Verifies forward pass in train and eval modes and tensor shapes/finite outputs.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    batch_size = 4
+    n_inputs = 100
+    n_heads = 2
+    n_anchors_per_detector = 4
+    n_detectors_per_head = 3
+    n_outputs = 20
+    n_alternatives = 4
+    
+    # Create input
+    x = torch.randn(batch_size, n_inputs, device=device)
+    
+    # Create MultiHeadLut in smooth mode
+    multi_head_lut = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=n_heads,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors_per_head,
+        random_seed=seed,
+        device=device,
+        n_alternatives=n_alternatives,
+        smooth_mode=True,
+        uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
+    )
+    
+    # Evaluation mode forward pass
+    multi_head_lut.eval()
+    with torch.no_grad():
+        output_eval = multi_head_lut(x)  # [B, n_heads, n_outputs]
+    
+    assert output_eval.shape == (batch_size, n_heads, n_outputs), \
+        f"Expected eval shape {(batch_size, n_heads, n_outputs)}, got {output_eval.shape}"
+    assert torch.isfinite(output_eval).all(), "Eval output contains non-finite values"
+    
+    # Training mode forward pass
+    multi_head_lut.train()
+    output_train = multi_head_lut(x)  # [B, n_heads, n_outputs]
+    
+    assert output_train.shape == (batch_size, n_heads, n_outputs), \
+        f"Expected train shape {(batch_size, n_heads, n_outputs)}, got {output_train.shape}"
+    assert torch.isfinite(output_train).all(), "Train output contains non-finite values"
+    
+    print("✓ MultiHeadLut smooth mode forward pass successful (n_alternatives=4)")
+    
+    return True
+
+
+def test_multi_head_lut_smooth_training(device, seed=None):
+    """
+    Training test for MultiHeadLut in smooth mode with n_alternatives=4.
+    Runs multiple training iterations and checks that loss decreases.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    batch_size = 4
+    n_inputs = 100
+    n_heads = 2
+    n_anchors_per_detector = 4
+    n_detectors_per_head = 3
+    n_outputs = 20
+    n_iterations = 100
+    n_alternatives = 4
+    
+    # Create MultiHeadLut in smooth mode
+    multi_head_lut = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=n_heads,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors_per_head,
+        random_seed=seed,
+        device=device,
+        n_alternatives=n_alternatives,
+        smooth_mode=True,
+        uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
+    )
+    multi_head_lut.train()
+    
+    optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.01)
+    
+    first_loss = None
+    last_loss = None
+    
+    for iteration in tqdm(range(n_iterations), desc="Training iterations (smooth)"):
+        # Generate random input and target
+        x = torch.randn(batch_size, n_inputs, device=device, requires_grad=True)
+        target = torch.randn(batch_size, n_heads, n_outputs, device=device)
+        
+        # Forward pass
+        output = multi_head_lut(x)  # [B, n_heads, n_outputs]
+        
+        # Compute loss
+        loss = ((output - target) ** 2).mean()
+        
+        # Backward and optimize
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        # Track loss
+        loss_value = loss.item()
+        if first_loss is None:
+            first_loss = loss_value
+        last_loss = loss_value
+        
+        # Ensure loss and parameters remain finite
+        assert torch.isfinite(loss).item(), f"Iteration {iteration}: Loss became non-finite"
+        for name, param in multi_head_lut.named_parameters():
+            assert torch.isfinite(param).all(), f"Iteration {iteration}: Parameter {name} contains non-finite values"
+    
+    # Check that training made progress (loss decreased overall)
+    assert last_loss < first_loss, \
+        f"Smooth training did not decrease loss: first_loss={first_loss:.4f}, last_loss={last_loss:.4f}"
+    
+    print(f"✓ MultiHeadLut smooth mode training test successful ({n_iterations} iterations, n_alternatives=4)")
+    
+    return True
+
+
 def main():
     """
     Run all tests.
@@ -225,8 +354,6 @@ def main():
     
     seed = 42
 
-    # TODO test smooth mode without gt
-
     for device in devices:
         print(f"\nTesting on {device}...")
         
@@ -240,6 +367,20 @@ def main():
         # Test 2: Training mode
         print("\n2. Testing MultiHeadLut in training mode...")
         success = test_multi_head_lut_training(device, seed=seed)
+        if not success:
+            print(f"❌ Test failed on {device}")
+            return -1
+
+        # Test 3: Smooth mode simple test (n_alternatives=4)
+        print("\n3. Testing MultiHeadLut in smooth mode (simple, n_alternatives=4)...")
+        success = test_multi_head_lut_smooth_simple(device, seed=seed)
+        if not success:
+            print(f"❌ Test failed on {device}")
+            return -1
+
+        # Test 4: Smooth mode training test (n_alternatives=4)
+        print("\n4. Testing MultiHeadLut in smooth mode (training, n_alternatives=4)...")
+        success = test_multi_head_lut_smooth_training(device, seed=seed)
         if not success:
             print(f"❌ Test failed on {device}")
             return -1
