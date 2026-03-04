@@ -88,13 +88,7 @@ class AnchorPairsLookup(AbstractLookup):
             powers = powers.to(device)
         self.register_buffer('powers', powers)
 
-        # Pre-compute table indices for backward: [1, n_tables]
-        table_indices = torch.arange(n_tables, dtype=torch.long).view(1, n_tables, 1)
-        if device is not None:
-            table_indices = table_indices.to(device)
-        self.register_buffer('table_indices', table_indices)
-
-        # Cache for batch_offset tensor
+        # Cache for batch_offset in backward; recomputed when batch_size changes
         self._cached_batch_offset = None
 
     def forward(
@@ -136,9 +130,9 @@ class AnchorPairsLookup(AbstractLookup):
 
         if self.training:
             assert return_alternatives
-            return self._forward_train(x, anchor_pairs_a, anchor_pairs_b, batch_size)
+            return self._forward_train(x, anchor_pairs_a, anchor_pairs_b)
         else:
-            return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives, batch_size)
+            return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives)
 
     def _forward_eval(
         self,
@@ -146,7 +140,6 @@ class AnchorPairsLookup(AbstractLookup):
         anchor_pairs_a: torch.Tensor,
         anchor_pairs_b: torch.Tensor,
         return_alternatives: bool,
-        batch_size: int
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
         Evaluation forward pass.
@@ -159,23 +152,9 @@ class AnchorPairsLookup(AbstractLookup):
         # anchor_pairs_a: [n_tables, n_anchor_pairs]
         # anchor_pairs_b: [n_tables, n_anchor_pairs]
 
-        # Use torch.gather to get anchor values for all tables at once
-        # x: [B, input_dim]
-        # We need: [B, n_tables, n_anchor_pairs]
-        # Expand x: [B, 1, input_dim] then expand to [B, n_tables, input_dim]
-        x_expanded = x.unsqueeze(1).expand(batch_size, self.n_tables, x.shape[1])  # [B, n_tables, input_dim]
-
-        # Expand anchor IDs to match batch dimension: [B, n_tables, n_anchor_pairs]
-        anchor1_ids_expanded = anchor_pairs_a.unsqueeze(0).expand(batch_size, self.n_tables, self.n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
-        anchor2_ids_expanded = anchor_pairs_b.unsqueeze(0).expand(batch_size, self.n_tables, self.n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
-
-        # Gather anchor1 values: [B, n_tables, n_anchor_pairs]
-        x_anchor1 = torch.gather(x_expanded, dim=2, index=anchor1_ids_expanded)
-
-        # Gather anchor2 values: [B, n_tables, n_anchor_pairs]
-        x_anchor2 = torch.gather(x_expanded, dim=2, index=anchor2_ids_expanded)
-
-        # Compute deltas: [B, n_tables, n_anchor_pairs]
+        # x: [B, input_dim], anchor_pairs_a/b: [n_tables, n_anchor_pairs] -> [B, n_tables, n_anchor_pairs]
+        x_anchor1 = x[:, anchor_pairs_a]
+        x_anchor2 = x[:, anchor_pairs_b]
         deltas = x_anchor1 - x_anchor2
 
         # Form binary representation: [B, n_tables, n_anchor_pairs]
@@ -189,21 +168,16 @@ class AnchorPairsLookup(AbstractLookup):
         if return_alternatives:
             abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
             if self.n_alternatives == 1:
-                min_delta_indices = abs_deltas.argmin(dim=2, keepdim=True)  # [B, n_tables, 1]
+                _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
             else:
                 min_delta_indices = torch.topk(
                     abs_deltas, k=self.n_alternatives, dim=2, largest=False
-                ).indices  # [B, n_tables, n_alternatives]
-            
-            # Create alternative indices by flipping bits at minimal delta positions
-            # For each alternative, flip the bit at the corresponding anchor pair position
-            # alt_index = lookup_index ^ (1 << min_delta_index)
-            lookup_indices_expanded = lookup_indices.unsqueeze(2)  # [B, n_tables, 1] for broadcasting
-            flip_masks = (1 << min_delta_indices).long()  # [B, n_tables, n_alternatives]
-            lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
-
-            # Gather corresponding deltas: [B, n_tables, n_alternatives]
-            lookup_alt_deltas = torch.gather(deltas, dim=2, index=min_delta_indices)
+                ).indices
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            lookup_indices_expanded = lookup_indices.unsqueeze(2)
+            flip_masks = (1 << min_delta_indices).long()
+            lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
         else:
             lookup_alt_indices = None
             lookup_alt_deltas = None
@@ -215,26 +189,24 @@ class AnchorPairsLookup(AbstractLookup):
         x: torch.Tensor,
         anchor_pairs_a: torch.Tensor,
         anchor_pairs_b: torch.Tensor,
-        batch_size: int
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Training forward pass with gradient carriers."""
-        # Compute or get cached batch_offset
-        expected_size = batch_size * self.n_tables * self.n_alternatives
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
+        expected_len = batch_size * self.n_tables * self.n_alternatives
         if (
-            self._cached_batch_offset is None or
-            self._cached_batch_offset.device != x.device or
-            self._cached_batch_offset.shape[0] != expected_size
+            self._cached_batch_offset is None
+            or self._cached_batch_offset.numel() != expected_len
+            or self._cached_batch_offset.device != x.device
         ):
-            batch_indices = torch.arange(batch_size, device=x.device).view(batch_size, 1, 1)
-            batch_expanded = batch_indices.expand(batch_size, self.n_tables, self.n_alternatives)
-            batch_flat = batch_expanded.flatten()  # [B * n_tables * n_alternatives]
-            self._cached_batch_offset = batch_flat * x.shape[1]
-
-        # Use autograd function for custom backward
+            self._cached_batch_offset = (
+                torch.arange(batch_size, device=x.device, dtype=torch.long)
+                .repeat_interleave(self.n_tables * self.n_alternatives) * input_dim
+            ).contiguous()
+        uncertainty_mode_int = 0 if self.uncertainty_mode == UncertaintyMode.INVERSE_L1 else 1
         return AnchorPairsLookupFunction.apply(
             x, anchor_pairs_a, anchor_pairs_b, self.powers, self.cmp_eps,
-            batch_size, self.table_indices, self._cached_batch_offset,
-            self.uncertainty_mode
+            uncertainty_mode_int, self.n_alternatives, self._cached_batch_offset
         )
 
 
@@ -245,99 +217,55 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
     def forward(ctx, *args):
         """
         Forward pass.
-        
+
         Args:
             ctx: Context object
             *args: x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps,
-                   batch_size, table_indices, batch_offset, uncertainty_mode
-        
+                   uncertainty_mode (Python int), n_alternatives (Python int), batch_offset (tensor)
+
         Returns:
-            lookup_indices: int64 [B, n_tables]
-            lookup_alt_indices: int64 [B, n_tables, n_alternatives]
-              Ordered by ascending absolute delta (smallest first)
-            lookup_alt_deltas: float [B, n_tables, n_alternatives]
-              Ordered by ascending absolute delta (smallest first)
-            lookup_indices_grad_c: float [B, n_tables]
-            lookup_alt_indices_grad_c: float [B, n_tables, n_alternatives]
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas,
+            lookup_indices_grad_c, lookup_alt_indices_grad_c
         """
         (
-            x, anchor_pairs_a, anchor_pairs_b, 
-            powers, cmp_eps, batch_size, 
-            table_indices, batch_offset, 
-            uncertainty_mode
+            x, anchor_pairs_a, anchor_pairs_b,
+            powers, cmp_eps, uncertainty_mode, n_alternatives, batch_offset
         ) = args
+        batch_size = x.shape[0]
         n_anchor_pairs = powers.shape[-1]
         n_tables = anchor_pairs_a.shape[0]
-        n_alternatives = batch_offset.shape[0] // (batch_size * n_tables)
-        # anchor_pairs_a: [n_tables, n_anchor_pairs]
-        # anchor_pairs_b: [n_tables, n_anchor_pairs]
-
-        # Use advanced indexing to get anchor values for all tables at once
-        # x: [B, input_dim]
-        # We need: [B, n_tables, n_anchor_pairs]
-        # Expand x: [B, 1, input_dim] then expand to [B, n_tables, input_dim]
-        x_expanded = x.unsqueeze(1).expand(batch_size, n_tables, x.shape[1])  # [B, n_tables, input_dim]
-
-        # Expand anchor IDs to match batch dimension: [B, n_tables, n_anchor_pairs]
-        anchor1_ids_expanded = anchor_pairs_a.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
-        anchor2_ids_expanded = anchor_pairs_b.unsqueeze(0).expand(batch_size, n_tables, n_anchor_pairs)  # [B, n_tables, n_anchor_pairs]
-
-        # Gather anchor1 values: [B, n_tables, n_anchor_pairs]
-        x_anchor1 = torch.gather(x_expanded, dim=2, index=anchor1_ids_expanded)
-
-        # Gather anchor2 values: [B, n_tables, n_anchor_pairs]
-        x_anchor2 = torch.gather(x_expanded, dim=2, index=anchor2_ids_expanded)
-
-        # Compute deltas: [B, n_tables, n_anchor_pairs]
+        x_anchor1 = x[:, anchor_pairs_a]  # [B, n_tables, n_anchor_pairs]
+        x_anchor2 = x[:, anchor_pairs_b]
         deltas = x_anchor1 - x_anchor2
 
-        # Form binary representation: [B, n_tables, n_anchor_pairs]
         bits = deltas.gt(cmp_eps).long()
-
-        # Convert to integer lookup index: [B, n_tables]
-        # lookup_index = sum(bits[i] << i) for each table
         lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
-        # Find minimal absolute deltas for alternatives: [B, n_tables, n_alternatives]
         abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
         if n_alternatives == 1:
-            min_delta_indices = abs_deltas.argmin(dim=2, keepdim=True)  # [B, n_tables, 1]
+            _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)  # [B, n_tables, 1]
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
         else:
             min_delta_indices = torch.topk(
                 abs_deltas, k=n_alternatives, dim=2, largest=False
             ).indices  # [B, n_tables, n_alternatives]
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
 
-        # Create alternative indices by flipping bits at minimal delta positions
-        # For each alternative, flip the bit at the corresponding anchor pair position
-        # alt_index = lookup_index ^ (1 << min_delta_index)
-        lookup_indices_expanded = lookup_indices.unsqueeze(2)  # [B, n_tables, 1] for broadcasting
-        flip_masks = (1 << min_delta_indices).to(torch.long)  # [B, n_tables, n_alternatives]
-        lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)  # [B, n_tables, n_alternatives]
+        lookup_indices_expanded = lookup_indices.unsqueeze(2)
+        flip_masks = (1 << min_delta_indices).long()
+        lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
 
-        # Gather min deltas using min_delta_indices
-        # min_delta_indices: [B, n_tables, n_alternatives] -> need to use as indices into deltas: [B, n_tables, n_anchor_pairs]
-        # Use gather along the last dimension
-        lookup_alt_deltas = torch.gather(deltas, dim=2, index=min_delta_indices)  # [B, n_tables, n_alternatives]
+        # Per (B, table, alt) take that table's row at that pair-index
+        anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+        anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
 
-        # Gradient carriers (float tensors that mirror the indices)
-        # Connect them to x so they're in the computation graph
-        z = x.view(-1)[0] * 0
+        z = x.sum() * 0
         lookup_indices_grad_c = z.expand(batch_size, n_tables)
         lookup_alt_indices_grad_c = z.expand(batch_size, n_tables, n_alternatives)
 
-        # Save for backward
-        ctx.save_for_backward(
-            x,  # [B, input_dim] - needed for shape and device info
-            anchor_pairs_a,  # [n_tables, n_anchor_pairs] - needed to get anchor IDs for gradient propagation
-            anchor_pairs_b,  # [n_tables, n_anchor_pairs] - needed to get anchor IDs for gradient propagation
-            min_delta_indices,  # [B, n_tables, n_alternatives] - indices of anchor pairs with minimal deltas
-            lookup_alt_deltas  # [B, n_tables, n_alternatives] - actual delta values for uncertainty function
-        )
-        ctx.cmp_eps = cmp_eps
-        ctx.batch_size = batch_size
-        ctx.table_indices = table_indices
-        ctx.batch_offset = batch_offset
-        ctx.uncertainty_mode = uncertainty_mode
+        ctx.inv_l1 = (int(uncertainty_mode) == 0)
+        ctx.batch_offset = batch_offset.to(x.device).long().contiguous()
+        ctx.save_for_backward(x, anchor1_ids, anchor2_ids, lookup_alt_deltas)
 
         return (
             lookup_indices,
@@ -349,11 +277,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, *grad_outputs):
-        """
-        Backward pass.
-        
-        Propagates gradients through the anchor pairs using the uncertainty function.
-        """
+        """Backward pass: propagates gradients through the anchor pairs using the uncertainty function."""
         (
             _,
             _,
@@ -362,74 +286,33 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             grad_lookup_alt_indices_grad_c
         ) = grad_outputs
 
-        (
-            x, anchor_pairs_a, anchor_pairs_b, min_delta_indices, lookup_alt_deltas
-        ) = ctx.saved_tensors
+        x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
+        batch_size, input_dim = x.shape[0], x.shape[1]
 
-        batch_size = ctx.batch_size
-        table_indices = ctx.table_indices
-        uncertainty_mode = ctx.uncertainty_mode
+        grad_main = grad_lookup_indices_grad_c
+        grad_alt = grad_lookup_alt_indices_grad_c
+        grad_diff = grad_main.unsqueeze(2) - grad_alt
 
-        # Get gradients: [B, n_tables] and [B, n_tables, n_alternatives]
-        grad_main = grad_lookup_indices_grad_c  # [B, n_tables]
-        grad_alt = grad_lookup_alt_indices_grad_c  # [B, n_tables, n_alternatives]
-
-        # Compute gradient difference for all alternatives: [B, n_tables, n_alternatives]
-        grad_main_expanded = grad_main.unsqueeze(2)  # [B, n_tables, 1]
-        grad_diff = grad_main_expanded - grad_alt  # [B, n_tables, n_alternatives]
-
-        # Compute derivative of uncertainty function
-        if uncertainty_mode == UncertaintyMode.INVERSE_L1:
-            # U(delta) = 0.5 / (1 + |delta|)
-            # -U'(delta) = 0.5 * sign(delta) / (1 + |delta|)^2
+        if ctx.inv_l1:
             abs_delta = lookup_alt_deltas.abs()
             one_plus_abs = 1.0 + abs_delta
             minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
         else:
-            # U(delta) = 0.5 / (1 + delta^2)
-            # -U'(delta) = delta / (1 + delta^2)^2
             delta_sq = lookup_alt_deltas * lookup_alt_deltas
             one_plus_sq = 1.0 + delta_sq
             minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
 
-        # Multiply gradient difference by uncertainty function derivative
-        # This gives the gradient with respect to delta: grad_delta = grad_diff * -u'(delta)
         du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, n_alternatives]
 
-        # Use advanced indexing to gather anchor IDs for all alternatives
-        anchor1_ids = anchor_pairs_a[table_indices, min_delta_indices]  # [B, n_tables, n_alternatives]
-        anchor2_ids = anchor_pairs_b[table_indices, min_delta_indices]  # [B, n_tables, n_alternatives]
-
-        # Initialize input gradients
-        x_grad = torch.zeros_like(x)
-
-        # Flatten all dimensions for efficient scatter
-        anchor1_flat = anchor1_ids.view(-1)  # [B * n_tables * n_alternatives]
-        anchor2_flat = anchor2_ids.view(-1)  # [B * n_tables * n_alternatives]
-        du_flat = du.view(-1)  # [B * n_tables * n_alternatives]
-
-        # Get batch_offset from context (pre-computed in forward)
-        batch_offset = ctx.batch_offset  # [B * n_tables * n_alternatives]
-
-        # Use scatter_add_ on flattened tensor for efficient accumulation
-        x_grad_flat = x_grad.view(-1)  # [B * input_dim]
-        indices1 = batch_offset + anchor1_flat  # [B * n_tables * n_alternatives]
-        indices2 = batch_offset + anchor2_flat  # [B * n_tables * n_alternatives]
+        batch_offset = ctx.batch_offset
+        anchor1_flat = anchor1_ids.view(-1)
+        anchor2_flat = anchor2_ids.view(-1)
+        du_flat = du.view(-1)
+        x_grad_flat = torch.zeros(batch_size * input_dim, device=x.device, dtype=x.dtype)
+        indices1 = batch_offset + anchor1_flat
+        indices2 = batch_offset + anchor2_flat
         x_grad_flat.scatter_add_(0, indices1, du_flat)
         x_grad_flat.scatter_add_(0, indices2, -du_flat)
-        x_grad = x_grad_flat.view(batch_size, x.shape[1])
 
-        # Gradients correspond to:
-        # x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps,
-        # batch_size, table_indices, batch_offset, uncertainty_mode
-        return (
-            x_grad,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        # 8 inputs -> 8 gradient returns
+        return (x_grad_flat.view(batch_size, input_dim), None, None, None, None, None, None, None)
