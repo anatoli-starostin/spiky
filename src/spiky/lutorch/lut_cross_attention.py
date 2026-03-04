@@ -87,8 +87,8 @@ class LUTCrossAttention(nn.Module):
         # Cache for causal mask
         self._cached_causal_mask = None
         
-        # Cache for RPE matrix
-        self._cached_rpe_matrix = None
+        # Cache for RPE bucket indices [B, S, S]
+        self._cached_bucket_indices = None
     
     def forward(
         self,
@@ -103,7 +103,7 @@ class LUTCrossAttention(nn.Module):
             input2: Input tensor of shape [B, S, n_inputs]
             
         Returns:
-            Attention scores tensor of shape [B, H, S, S]
+            Attention scores tensor of shape [B, S, S, H]
         """
         batch_size, seq_len, feature_dim = input1.shape
         assert input2.shape == input1.shape, f"input1 and input2 must have the same shape, got {input1.shape} and {input2.shape}"
@@ -133,56 +133,42 @@ class LUTCrossAttention(nn.Module):
         bucket_indices = None
         if self.n_positional_buckets > 1:
             device = combined_flat.device
-            # Get or create RPE matrix (cached for efficiency)
+            cached = self._cached_bucket_indices
             if (
-                self._cached_rpe_matrix is None
-                or self._cached_rpe_matrix.shape[0] != seq_len
-                or self._cached_rpe_matrix.device != device
+                cached is None
+                or cached.shape[0] != batch_size
+                or cached.shape[1] != seq_len
+                or cached.shape[2] != seq_len
+                or cached.device != device
             ):
-                # Allocate PE buckets for current sequence length
                 pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                
-                # Compute RPE matrix: [seq_len, seq_len]
                 rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
-                
-                self._cached_rpe_matrix = rpe
-            else:
-                rpe = self._cached_rpe_matrix
-            
-            # Expand to batch dimension: [B, S, S]
-            rpe_expanded = rpe.unsqueeze(0).expand(batch_size, -1, -1)  # [B, S, S]
-            
-            # Flatten to match combined_flat: [B * S * S]
-            bucket_indices = rpe_expanded.view(-1)  # [B * S * S]
+                self._cached_bucket_indices = rpe.unsqueeze(0).repeat(batch_size, 1, 1)  # [B, S, S]
+            bucket_indices = self._cached_bucket_indices.view(-1)  # [B * S * S]
         
         # Apply MultiHeadLut: [B * S * S, n_inputs] -> [B * S * S, H, 1]
         lut_output = self.multi_head_lut(combined_flat, bucket_indices=bucket_indices)  # [B * S * S, H, 1]
         
-        # Reshape to [B, H, S, S]
-        attention_scores = lut_output.view(batch_size, seq_len, seq_len, self.n_heads, 1)  # [B, S, S, H, 1]
-        attention_scores = attention_scores.squeeze(-1).permute(0, 3, 1, 2)  # [B, H, S, S]
+        # Reshape to [B, S, S, H]
+        attention_scores = lut_output.view(batch_size, seq_len, seq_len, self.n_heads, 1).squeeze(-1)  # [B, S, S, H]
         
         # Apply causal mask if needed
         if self.causal:
-            # Get or create causal mask (cached for efficiency)
             device = attention_scores.device
             if (
                 self._cached_causal_mask is None
-                or self._cached_causal_mask.shape[-1] != seq_len
+                or self._cached_causal_mask.shape[1] != seq_len
                 or self._cached_causal_mask.device != device
             ):
-                # Create causal mask: mask[i, j] = 0 if j > i, else 1
-                causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=device))  # [S, S]
-                causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, S, S]
+                # Create causal mask: mask[q, k] = 0 if k > q, else 1; broadcast with [B, S, S, H]
+                causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=device)).unsqueeze(0).unsqueeze(-1)  # [1, S, S, 1]
                 self._cached_causal_mask = causal_mask
             else:
                 causal_mask = self._cached_causal_mask
-            
-            # Set masked positions to -inf before softmax
             attention_scores = attention_scores.masked_fill(causal_mask == 0, float('-inf'))
         
-        # Apply numerically stable softmax along the last dimension (by rows)
-        attention_scores = attention_scores - attention_scores.max(dim=-1, keepdim=True).values
-        attention_scores = torch.softmax(attention_scores, dim=-1)  # [B, H, S, S]
+        # Softmax over key dimension (dim=2)
+        attention_scores = attention_scores - attention_scores.max(dim=2, keepdim=True).values
+        attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
         
         return attention_scores
