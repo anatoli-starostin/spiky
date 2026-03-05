@@ -123,7 +123,7 @@ class MultiHeadLut(nn.Module):
             if bucket_indices is None:
                 raise ValueError(f"bucket_indices is required when n_buckets={self.n_buckets} > 1")
             assert bucket_indices.shape == (x.shape[0],), \
-                f"bucket_indices must have shape [B], got {bucket_indices.shape}, expected [{x.shape[0]}]"
+                f"bucket_indices must have shape [{x.shape[0]}], got {bucket_indices.shape}, expected [{x.shape[0]}]"
             assert bucket_indices.dtype == torch.int32 or bucket_indices.dtype == torch.int64, \
                 f"bucket_indices must be integer tensor, got {bucket_indices.dtype}"
 

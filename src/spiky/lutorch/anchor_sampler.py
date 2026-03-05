@@ -194,8 +194,8 @@ class AnchorSampler:
         """Create default connections: all inputs connect to all detectors."""
         growth_engine = SynapseGrowthEngine(
             device=self._device,
-            synapse_group_size=32,
-            max_groups_in_buffer=1024
+            synapse_group_size=self._n_detectors,
+            max_groups_in_buffer=1
         )
         explicit_triples = torch.stack(
             [

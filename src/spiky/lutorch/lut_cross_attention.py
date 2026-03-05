@@ -53,6 +53,7 @@ class LUTCrossAttention(nn.Module):
         causal: bool = True,
         n_positional_buckets: int = 1,
         pair_config: Optional[PairProcessingConfig] = None,
+        do_sanity_checks: bool = False,
     ):
         super().__init__()
         
@@ -83,6 +84,7 @@ class LUTCrossAttention(nn.Module):
 
         self.causal = causal
         self.n_positional_buckets = n_positional_buckets
+        self.do_sanity_checks = do_sanity_checks
 
         # Caches for causal sparse pairs (batched rows, cols, key indices, and rpe) keyed by (batch_size, seq_len, device)
         self._cached_pair_meta = None  # (batch_size, seq_len, device)
@@ -122,12 +124,12 @@ class LUTCrossAttention(nn.Module):
         input2_flat = input2.view(batch_size * seq_len, feature_dim)
 
         if self.causal:
-            # Build or reuse lower-triangular (strict) indices and RPE pairs for this (B, S, device)
+            # Build or reuse lower-triangular indices (allow self: k <= q) and RPE pairs for this (B, S, device)
             meta = (batch_size, seq_len, device)
             if self._cached_pair_meta != meta:
                 rows_local, cols_local = torch.tril_indices(
-                    seq_len, seq_len, offset=-1, device=device
-                )  # [num_pairs_single]
+                    seq_len, seq_len, offset=0, device=device
+                )  # [num_pairs_single] with k <= q
 
                 offsets = torch.arange(batch_size, device=device) * seq_len  # [B]
                 self._cached_batched_rows = (
@@ -144,7 +146,19 @@ class LUTCrossAttention(nn.Module):
                     pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
                     rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
                     rpe_pairs = rpe[rows_local, cols_local]  # [num_pairs_single]
+                    if self.do_sanity_checks:
+                        # Sanity check: rpe_pairs must agree with distance-based pe_buckets
+                        dist = (rows_local - cols_local).clamp(min=0, max=pe_buckets.shape[0] - 1)
+                        expected_pairs = pe_buckets[dist]
+                        assert torch.equal(rpe_pairs, expected_pairs), "rpe_pairs inconsistent with pe_buckets and (q,k) distance"
                     self._cached_bucket_indices = rpe_pairs.repeat(batch_size).contiguous()  # [P]
+                    if self.do_sanity_checks:
+                        # Sanity check: repeated buckets are identical across batches
+                        P_single = rpe_pairs.shape[0]
+                        P = self._cached_bucket_indices.shape[0]
+                        assert P % P_single == 0, "bucket_indices length mismatch with per-sequence pairs"
+                        cached_view = self._cached_bucket_indices.view(batch_size, P_single)
+                        assert torch.all(cached_view[0] == cached_view), "bucket_indices differ between batches"
                 else:
                     self._cached_bucket_indices = None
 
@@ -186,7 +200,12 @@ class LUTCrossAttention(nn.Module):
             attention_scores = dense_scores.view(batch_size, seq_len, seq_len, H)
             attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
         else:
-            # Non-causal path: fall back to dense all-pairs computation
+            # Non-causal path: fall back to dense all-pairs computation.
+            # For now, positional buckets are only supported in the causal path.
+            if self.n_positional_buckets > 1:
+                raise ValueError(
+                    "LUTCrossAttention: n_positional_buckets > 1 is only supported when causal=True"
+                )
             # Create pair representation for all (i, j): [B, S, S, *]
             input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
             input2_expanded = input2.unsqueeze(1).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
@@ -201,17 +220,8 @@ class LUTCrossAttention(nn.Module):
 
             combined_flat = combined.view(-1, self.multi_head_lut.input_dim)  # [B * S * S, input_dim]
 
-            bucket_indices = None
-            if self.n_positional_buckets > 1:
-                dense_meta = (batch_size, seq_len, device)
-                if self._cached_dense_bucket_meta != dense_meta:
-                    pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                    rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
-                    self._cached_dense_bucket_indices = rpe.view(1, -1).repeat(batch_size, 1).view(-1).contiguous()
-                    self._cached_dense_bucket_meta = dense_meta
-                bucket_indices = self._cached_dense_bucket_indices
-
-            lut_output = self.multi_head_lut(combined_flat, bucket_indices=bucket_indices)  # [B * S * S, H, 1]
+            # No positional buckets in non-causal mode (enforced above), so bucket_indices stays None.
+            lut_output = self.multi_head_lut(combined_flat, bucket_indices=None)  # [B * S * S, H, 1]
             attention_scores = lut_output.view(batch_size, seq_len, seq_len, H, 1).squeeze(-1)  # [B, S, S, H]
             attention_scores = torch.softmax(attention_scores, dim=2)
 
