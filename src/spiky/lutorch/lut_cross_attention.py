@@ -134,7 +134,7 @@ class LUTCrossAttention(nn.Module):
                     rows_local.unsqueeze(0) + offsets.unsqueeze(1)
                 ).reshape(-1)  # [P], where P = B * num_pairs_single
                 self._cached_batched_cols = (
-                    cols_local.unsqueeze(0).expand(batch_size, -1)
+                    cols_local.unsqueeze(0) + offsets.unsqueeze(1)
                 ).reshape(-1)  # [P]
 
                 # Within-sequence key indices for scattering into [B*S, S, H]
