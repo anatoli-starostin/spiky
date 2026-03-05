@@ -54,6 +54,7 @@ class LUTCrossAttention(nn.Module):
         n_positional_buckets: int = 1,
         pair_config: Optional[PairProcessingConfig] = None,
         do_sanity_checks: bool = False,
+        attention_temperature: float = 1.0,
     ):
         super().__init__()
         
@@ -64,7 +65,14 @@ class LUTCrossAttention(nn.Module):
         # Assert that MultiHeadLut has n_buckets matching n_positional_buckets
         assert multi_head_lut.n_buckets == n_positional_buckets, \
             f"MultiHeadLut.n_buckets ({multi_head_lut.n_buckets}) must match n_positional_buckets ({n_positional_buckets})"
-        
+
+        # Non-causal path: fall back to dense all-pairs computation.
+        # For now, positional buckets are only supported in the causal path.
+        if not causal and n_positional_buckets > 1:
+            raise ValueError(
+                "LUTCrossAttention: n_positional_buckets > 1 is only supported when causal=True"
+            )
+
         # Initialize pair-processing configuration (default: linear combination with c1=1.0, c2=-2.0)
         if pair_config is None:
             pair_config = PairProcessingConfig()
@@ -85,6 +93,7 @@ class LUTCrossAttention(nn.Module):
         self.causal = causal
         self.n_positional_buckets = n_positional_buckets
         self.do_sanity_checks = do_sanity_checks
+        self.attention_temperature = float(attention_temperature)
 
         # Caches for causal sparse pairs (batched rows, cols, key indices, and rpe) keyed by (batch_size, seq_len, device)
         self._cached_pair_meta = None  # (batch_size, seq_len, device)
@@ -186,6 +195,8 @@ class LUTCrossAttention(nn.Module):
                 combined_flat, bucket_indices=bucket_indices
             )  # [P, H, 1]
             raw_scores = lut_output.squeeze(-1)  # [P, H]
+            if self.attention_temperature != 1.0:
+                raw_scores = raw_scores / self.attention_temperature
 
             # Densify into [B * S, S, H] filled with -inf, scatter valid scores
             dense_scores = torch.full(
@@ -200,12 +211,6 @@ class LUTCrossAttention(nn.Module):
             attention_scores = dense_scores.view(batch_size, seq_len, seq_len, H)
             attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
         else:
-            # Non-causal path: fall back to dense all-pairs computation.
-            # For now, positional buckets are only supported in the causal path.
-            if self.n_positional_buckets > 1:
-                raise ValueError(
-                    "LUTCrossAttention: n_positional_buckets > 1 is only supported when causal=True"
-                )
             # Create pair representation for all (i, j): [B, S, S, *]
             input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
             input2_expanded = input2.unsqueeze(1).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
@@ -223,6 +228,8 @@ class LUTCrossAttention(nn.Module):
             # No positional buckets in non-causal mode (enforced above), so bucket_indices stays None.
             lut_output = self.multi_head_lut(combined_flat, bucket_indices=None)  # [B * S * S, H, 1]
             attention_scores = lut_output.view(batch_size, seq_len, seq_len, H, 1).squeeze(-1)  # [B, S, S, H]
+            if self.attention_temperature != 1.0:
+                attention_scores = attention_scores / self.attention_temperature
             attention_scores = torch.softmax(attention_scores, dim=2)
 
         return attention_scores
