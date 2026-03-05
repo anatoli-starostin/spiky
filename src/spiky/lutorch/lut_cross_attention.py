@@ -142,7 +142,7 @@ class LUTCrossAttention(nn.Module):
                 or cached.device != device
             ):
                 pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
+                rpe = rpe_matrix(pe_buckets, seq_len, device).T  # [S, S]
                 self._cached_bucket_indices = rpe.unsqueeze(0).repeat(batch_size, 1, 1)  # [B, S, S]
             bucket_indices = self._cached_bucket_indices.view(-1)  # [B * S * S]
         
