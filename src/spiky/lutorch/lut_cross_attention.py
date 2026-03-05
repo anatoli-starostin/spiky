@@ -83,12 +83,16 @@ class LUTCrossAttention(nn.Module):
 
         self.causal = causal
         self.n_positional_buckets = n_positional_buckets
-        
-        # Cache for causal mask
-        self._cached_causal_mask = None
-        
-        # Cache for RPE bucket indices [B, S, S]
+
+        # Caches for causal sparse pairs (batched rows, cols, key indices, and rpe) keyed by (batch_size, seq_len, device)
+        self._cached_pair_meta = None  # (batch_size, seq_len, device)
+        self._cached_batched_rows = None
+        self._cached_batched_cols = None
+        self._cached_key_indices = None
         self._cached_bucket_indices = None
+        # Cache for dense bucket indices in non-causal path keyed by (batch_size, seq_len, device)
+        self._cached_dense_bucket_meta = None
+        self._cached_dense_bucket_indices = None
     
     def forward(
         self,
@@ -109,66 +113,106 @@ class LUTCrossAttention(nn.Module):
         assert input2.shape == input1.shape, f"input1 and input2 must have the same shape, got {input1.shape} and {input2.shape}"
         assert feature_dim == self.n_inputs, \
             f"Expected input feature dim {self.n_inputs}, got {feature_dim}"
-        
-        # Create pair representation for all (i, j): [B, S, S, *]
-        # input1[b, i, :] -> [B, S, 1, n_inputs] -> [B, S, S, n_inputs]
-        input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
-        # input2[b, j, :] -> [B, 1, S, n_inputs] -> [B, S, S, n_inputs]
-        input2_expanded = input2.unsqueeze(1).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
 
-        if self.pair_config.mode == PairProcessingMode.LINEAR_COMBINATION:
-            # Linear combination: c1 * input1 + c2 * input2
-            combined = (
-                self.pair_config.c1 * input1_expanded
-                + self.pair_config.c2 * input2_expanded
-            )  # [B, S, S, n_inputs]
-        else:
-            # Concatenation: [input1, input2] along feature dimension
-            combined = torch.cat([input1_expanded, input2_expanded], dim=-1)  # [B, S, S, 2 * n_inputs]
-        
-        # Reshape to [B * S * S, input_dim_for_lut]
-        combined_flat = combined.view(-1, self.multi_head_lut.input_dim)  # [B * S * S, input_dim]
-        
-        # Compute bucket indices for relative positional encoding if needed
-        bucket_indices = None
-        if self.n_positional_buckets > 1:
-            device = combined_flat.device
-            cached = self._cached_bucket_indices
-            if (
-                cached is None
-                or cached.shape[0] != batch_size
-                or cached.shape[1] != seq_len
-                or cached.shape[2] != seq_len
-                or cached.device != device
-            ):
-                pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                rpe = rpe_matrix(pe_buckets, seq_len, device).T  # [S, S]
-                self._cached_bucket_indices = rpe.unsqueeze(0).repeat(batch_size, 1, 1)  # [B, S, S]
-            bucket_indices = self._cached_bucket_indices.view(-1)  # [B * S * S]
-        
-        # Apply MultiHeadLut: [B * S * S, n_inputs] -> [B * S * S, H, 1]
-        lut_output = self.multi_head_lut(combined_flat, bucket_indices=bucket_indices)  # [B * S * S, H, 1]
-        
-        # Reshape to [B, S, S, H]
-        attention_scores = lut_output.view(batch_size, seq_len, seq_len, self.n_heads, 1).squeeze(-1)  # [B, S, S, H]
-        
-        # Apply causal mask if needed
+        device = input1.device
+        H = self.n_heads
+
+        # Flatten inputs: [B * S, n_inputs]
+        input1_flat = input1.view(batch_size * seq_len, feature_dim)
+        input2_flat = input2.view(batch_size * seq_len, feature_dim)
+
         if self.causal:
-            device = attention_scores.device
-            if (
-                self._cached_causal_mask is None
-                or self._cached_causal_mask.shape[1] != seq_len
-                or self._cached_causal_mask.device != device
-            ):
-                # Create causal mask: mask[q, k] = 0 if k > q, else 1; broadcast with [B, S, S, H]
-                causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=device)).unsqueeze(0).unsqueeze(-1)  # [1, S, S, 1]
-                self._cached_causal_mask = causal_mask
+            # Build or reuse lower-triangular (strict) indices and RPE pairs for this (B, S, device)
+            meta = (batch_size, seq_len, device)
+            if self._cached_pair_meta != meta:
+                rows_local, cols_local = torch.tril_indices(
+                    seq_len, seq_len, offset=-1, device=device
+                )  # [num_pairs_single]
+
+                offsets = torch.arange(batch_size, device=device) * seq_len  # [B]
+                self._cached_batched_rows = (
+                    rows_local.unsqueeze(0) + offsets.unsqueeze(1)
+                ).reshape(-1)  # [P], where P = B * num_pairs_single
+                self._cached_batched_cols = (
+                    cols_local.unsqueeze(0).expand(batch_size, -1)
+                ).reshape(-1)  # [P]
+
+                # Within-sequence key indices for scattering into [B*S, S, H]
+                self._cached_key_indices = (self._cached_batched_cols % seq_len).contiguous()  # [P]
+
+                if self.n_positional_buckets > 1:
+                    pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
+                    rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
+                    rpe_pairs = rpe[rows_local, cols_local]  # [num_pairs_single]
+                    self._cached_bucket_indices = rpe_pairs.repeat(batch_size).contiguous()  # [P]
+                else:
+                    self._cached_bucket_indices = None
+
+                self._cached_pair_meta = meta
+
+            batched_rows = self._cached_batched_rows
+            batched_cols = self._cached_batched_cols
+
+            # Build pair representations only for valid (q, k); P = total number of valid (q,k) pairs across batch
+            q_vecs = input1_flat[batched_rows]  # [P, n_inputs]
+            k_vecs = input2_flat[batched_cols]  # [P, n_inputs]
+
+            if self.pair_config.mode == PairProcessingMode.LINEAR_COMBINATION:
+                combined_flat = (
+                    self.pair_config.c1 * q_vecs + self.pair_config.c2 * k_vecs
+                )  # [P, n_inputs]
             else:
-                causal_mask = self._cached_causal_mask
-            attention_scores = attention_scores.masked_fill(causal_mask == 0, float('-inf'))
-        
-        # Softmax over key dimension (dim=2)
-        attention_scores = attention_scores - attention_scores.max(dim=2, keepdim=True).values
-        attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
-        
+                combined_flat = torch.cat([q_vecs, k_vecs], dim=-1)  # [P, 2 * n_inputs]
+
+            # Bucket indices for relative positional encoding if needed
+            bucket_indices = self._cached_bucket_indices
+
+            # Apply MultiHeadLut: [P, n_inputs] -> [P, H, 1]
+            lut_output = self.multi_head_lut(
+                combined_flat, bucket_indices=bucket_indices
+            )  # [P, H, 1]
+            raw_scores = lut_output.squeeze(-1)  # [P, H]
+
+            # Densify into [B * S, S, H] filled with -inf, scatter valid scores
+            dense_scores = torch.full(
+                (batch_size * seq_len, seq_len, H),
+                float("-inf"),
+                device=device,
+            )
+            key_indices = self._cached_key_indices  # [P]
+            dense_scores[batched_rows, key_indices, :] = raw_scores  # [P, H]
+
+            # Reshape to [B, S, S, H] and apply numerically stable softmax over keys
+            attention_scores = dense_scores.view(batch_size, seq_len, seq_len, H)
+            attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
+        else:
+            # Non-causal path: fall back to dense all-pairs computation
+            # Create pair representation for all (i, j): [B, S, S, *]
+            input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
+            input2_expanded = input2.unsqueeze(1).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
+
+            if self.pair_config.mode == PairProcessingMode.LINEAR_COMBINATION:
+                combined = (
+                    self.pair_config.c1 * input1_expanded
+                    + self.pair_config.c2 * input2_expanded
+                )  # [B, S, S, n_inputs]
+            else:
+                combined = torch.cat([input1_expanded, input2_expanded], dim=-1)  # [B, S, S, 2 * n_inputs]
+
+            combined_flat = combined.view(-1, self.multi_head_lut.input_dim)  # [B * S * S, input_dim]
+
+            bucket_indices = None
+            if self.n_positional_buckets > 1:
+                dense_meta = (batch_size, seq_len, device)
+                if self._cached_dense_bucket_meta != dense_meta:
+                    pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
+                    rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
+                    self._cached_dense_bucket_indices = rpe.view(1, -1).repeat(batch_size, 1).view(-1).contiguous()
+                    self._cached_dense_bucket_meta = dense_meta
+                bucket_indices = self._cached_dense_bucket_indices
+
+            lut_output = self.multi_head_lut(combined_flat, bucket_indices=bucket_indices)  # [B * S * S, H, 1]
+            attention_scores = lut_output.view(batch_size, seq_len, seq_len, H, 1).squeeze(-1)  # [B, S, S, H]
+            attention_scores = torch.softmax(attention_scores, dim=2)
+
         return attention_scores
