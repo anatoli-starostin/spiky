@@ -18,6 +18,17 @@ from typing import List
 
 import torch
 
+# Match spike_QK.ipynb: compile hot-path kernels for speed.
+# Set env SPIKY_GT_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
+import os as _os
+_USE_GT_COMPILE = _os.environ.get("SPIKY_GT_NO_COMPILE", "0") != "1"
+
+
+def _maybe_compile(fn):
+    if _USE_GT_COMPILE and hasattr(torch, "compile"):
+        return torch.compile(fn, dynamic=True)
+    return fn
+
 
 # --- Helpers (mirror notebook) ---
 
@@ -193,6 +204,7 @@ class _JointAttentionCache:
 # --- Kernel-style functions (operate on m's state) ---
 
 
+@_maybe_compile
 def _cache_index_single(lut: _SingleLUT, cache: _LUTCache, x: torch.Tensor) -> None:
     u = x[:, lut.A_stacked] - x[:, lut.B_stacked]
     bits = (u > 0).long()
@@ -202,6 +214,7 @@ def _cache_index_single(lut: _SingleLUT, cache: _LUTCache, x: torch.Tensor) -> N
     cache.u_min[:] = u.gather(2, cache.r_min.unsqueeze(2)).squeeze(2)
 
 
+@_maybe_compile
 def _cache_index_multi(lut: _MultiHeadLUT, cache: _LUTCache, x: torch.Tensor) -> None:
     B = x.shape[0]
     val_a = torch.index_select(x, 1, lut.flat_a).view(B, lut.num_heads, lut.n_t, lut.n_c)
@@ -216,6 +229,7 @@ def _cache_index_multi(lut: _MultiHeadLUT, cache: _LUTCache, x: torch.Tensor) ->
     cache.u_min[:] = u_min.view_as(cache.u_min)
 
 
+@_maybe_compile
 def _cache_index_diff(
     lut: _MultiHeadLUT,
     joint_cache: _JointAttentionCache,
@@ -246,6 +260,7 @@ def _cache_index_diff(
     joint_cache.u_min_joint[:] = u_min
 
 
+@_maybe_compile
 def _grad_backward_single(
     x_gradient: torch.Tensor,
     incoming_grad: torch.Tensor,
@@ -263,6 +278,7 @@ def _grad_backward_single(
     x_gradient.scatter_add_(1, b_idx, -v)
 
 
+@_maybe_compile
 def _grad_backward_diff(
     x_gradient: torch.Tensor,
     incoming_grad: torch.Tensor,
@@ -308,6 +324,7 @@ def _grad_backward_diff(
     x_gradient.index_put_((cols_expanded, b_indices_flat), -v_K_b, accumulate=True)
 
 
+@_maybe_compile
 def _grad_backward_multi(
     x_gradient: torch.Tensor,
     incoming_grad: torch.Tensor,
@@ -338,6 +355,7 @@ def _grad_backward_multi(
     x_gradient.index_put_((token_indices_flat, b_indices_flat), -v_flat, accumulate=True)
 
 
+@_maybe_compile
 def _LUT_forward_single(
     lut: _SingleLUT,
     cache: _LUTCache,
@@ -358,6 +376,7 @@ def _LUT_forward_single(
     y.add_(output.sum(dim=1))
 
 
+@_maybe_compile
 def _LUT_backward_single(
     lut: _SingleLUT,
     cache: _LUTCache,
@@ -390,6 +409,7 @@ def _LUT_backward_single(
     lut.S.view(-1, lut.y_dim).index_add_(0, flat_indices_jbar, update_jbar)
 
 
+@_maybe_compile
 def _unembed_forward(
     z: torch.Tensor,
     W_embed: torch.Tensor,
@@ -435,6 +455,7 @@ def _unembed_backward(
     W_embed.sub_(update * learning_rate * unembed_lr_scale)
 
 
+@_maybe_compile
 def _attention_forward_dense(
     m: "GT_spike_QK_Transformer",
     lut_a: _MultiHeadLUT,
@@ -510,6 +531,7 @@ def _attention_forward_dense(
     y_output[:] = out.view(m.total_tokens, -1)
 
 
+@_maybe_compile
 def _attention_backward_batched(
     m: "GT_spike_QK_Transformer",
     lut_a: _MultiHeadLUT,
@@ -632,6 +654,131 @@ def _attention_backward_batched(
     lut_a.S.view(-1, 1).index_add_(0, idx_A_jbar_flat, update_a_jbar)
 
 
+# --- Picklable checkpoint container ---
+
+
+class SpikeQKCheckpoint:
+    """
+    Picklable container for all anchors and weights of a spike_QK model
+    (notebook Model or GT_spike_QK_Transformer). Tensors are stored on CPU
+    so the pickle is device-independent.
+
+    Use from_notebook_model(m, **config) to build from the notebook's Model,
+    or construct manually. Use as GT_spike_QK_Transformer(..., checkpoint=ckpt)
+    to initialize the GT model from this structure (dimensions must match).
+    """
+
+    def __init__(
+        self,
+        *,
+        context_size: int,
+        vocab_size: int,
+        embedding_dim: int,
+        num_layers: int,
+        num_heads: int,
+        positional_buckets_a: int,
+        attention_a_n_t: int,
+        attention_a_n_c: int,
+        attention_v_n_t: int,
+        attention_v_n_c: int,
+        ffn_n_t: int,
+        ffn_n_c: int,
+        include_ffn: bool,
+        ffn: List[dict],
+        v: List[dict],
+        a: List[dict],
+        w_embed: torch.Tensor,
+    ):
+        self.context_size = context_size
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.positional_buckets_a = positional_buckets_a
+        self.attention_a_n_t = attention_a_n_t
+        self.attention_a_n_c = attention_a_n_c
+        self.attention_v_n_t = attention_v_n_t
+        self.attention_v_n_c = attention_v_n_c
+        self.ffn_n_t = ffn_n_t
+        self.ffn_n_c = ffn_n_c
+        self.include_ffn = include_ffn
+        self.ffn = ffn
+        self.v = v
+        self.a = a
+        self.w_embed = w_embed
+
+    @classmethod
+    def from_notebook_model(
+        cls,
+        m: object,
+        *,
+        context_size: int,
+        vocab_size: int,
+        embedding_dim: int,
+        num_layers: int,
+        num_heads: int,
+        positional_buckets_a: int,
+        attention_a_n_t: int,
+        attention_a_n_c: int,
+        attention_v_n_t: int,
+        attention_v_n_c: int,
+        ffn_n_t: int,
+        ffn_n_c: int,
+        include_ffn: bool = True,
+    ) -> "SpikeQKCheckpoint":
+        """
+        Build a checkpoint from a notebook Model (duck-typed: expects
+        m.FFN, m.V, m.A, m.W_embed and matching LUT attributes).
+        All tensors are copied to CPU.
+        """
+        def _cpu(t: torch.Tensor) -> torch.Tensor:
+            return t.detach().cpu().clone()
+
+        ffn = []
+        for lut in m.FFN:
+            ffn.append({
+                "A_stacked": _cpu(lut.A_stacked),
+                "B_stacked": _cpu(lut.B_stacked),
+                "S": _cpu(lut.S),
+            })
+
+        v = []
+        for lut in m.V:
+            v.append({
+                "anchors_a": _cpu(lut.anchors_a),
+                "anchors_b": _cpu(lut.anchors_b),
+                "S": _cpu(lut.S),
+            })
+
+        a = []
+        for lut in m.A:
+            a.append({
+                "anchors_a": _cpu(lut.anchors_a),
+                "anchors_b": _cpu(lut.anchors_b),
+                "S": _cpu(lut.S),
+            })
+
+        return cls(
+            context_size=context_size,
+            vocab_size=vocab_size,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            positional_buckets_a=positional_buckets_a,
+            attention_a_n_t=attention_a_n_t,
+            attention_a_n_c=attention_a_n_c,
+            attention_v_n_t=attention_v_n_t,
+            attention_v_n_c=attention_v_n_c,
+            ffn_n_t=ffn_n_t,
+            ffn_n_c=ffn_n_c,
+            include_ffn=include_ffn,
+            ffn=ffn,
+            v=v,
+            a=a,
+            w_embed=_cpu(m.W_embed),
+        )
+
+
 # --- Main class ---
 
 
@@ -680,6 +827,8 @@ class GT_spike_QK_Transformer:
         # LR drops (optional)
         learning_rate_drop: float = 0.9,
         learning_rate_drop_times: List[int] | None = None,
+        # Optional: initialize from a SpikeQKCheckpoint (dimensions must match)
+        checkpoint: SpikeQKCheckpoint | None = None,
     ):
         if learning_rate_drop_times is None:
             learning_rate_drop_times = []
@@ -780,6 +929,9 @@ class GT_spike_QK_Transformer:
         self.layer_lr_multipliers = torch.ones(num_layers, device=device)
         self.lr_drop_next_idx = 0
 
+        if checkpoint is not None:
+            self._load_checkpoint(checkpoint)
+
         self.batch_size = 0
         self.total_tokens = 0
         self.input_tokens: torch.Tensor | None = None
@@ -789,6 +941,38 @@ class GT_spike_QK_Transformer:
         self.batched_rows_Q: torch.Tensor | None = None
         self.batched_cols_K: torch.Tensor | None = None
         self.batched_RPE_A: torch.Tensor | None = None
+
+    def _load_checkpoint(self, ckpt: SpikeQKCheckpoint) -> None:
+        """Copy anchors and weights from checkpoint; dimensions must match."""
+        device = self.device
+
+        def _same(a: torch.Tensor, b: torch.Tensor, name: str) -> None:
+            if a.shape != b.shape:
+                raise ValueError(
+                    f"Checkpoint shape mismatch for {name}: expected {a.shape}, got {b.shape}"
+                )
+            a.copy_(b.to(device, dtype=a.dtype))
+
+        for l in range(self.num_layers):
+            # FFN
+            src_f = ckpt.ffn[l]
+            _same(self.FFN[l].A_stacked, src_f["A_stacked"], f"FFN[{l}].A_stacked")
+            _same(self.FFN[l].B_stacked, src_f["B_stacked"], f"FFN[{l}].B_stacked")
+            _same(self.FFN[l].S, src_f["S"], f"FFN[{l}].S")
+
+            # V
+            src_v = ckpt.v[l]
+            _same(self.V[l].anchors_a, src_v["anchors_a"], f"V[{l}].anchors_a")
+            _same(self.V[l].anchors_b, src_v["anchors_b"], f"V[{l}].anchors_b")
+            _same(self.V[l].S, src_v["S"], f"V[{l}].S")
+
+            # A
+            src_a = ckpt.a[l]
+            _same(self.A[l].anchors_a, src_a["anchors_a"], f"A[{l}].anchors_a")
+            _same(self.A[l].anchors_b, src_a["anchors_b"], f"A[{l}].anchors_b")
+            _same(self.A[l].S, src_a["S"], f"A[{l}].S")
+
+        _same(self.W_embed, ckpt.w_embed, "W_embed")
 
     def set_batch_size(self, new_batch_size: int) -> None:
         if self.batch_size == new_batch_size:
