@@ -1,6 +1,7 @@
 """
 Anchor pairs lookup implementation.
 """
+import os
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional, Union
@@ -9,6 +10,15 @@ from spiky.lutorch.abstract_lookup import AbstractLookup
 from spiky.lutorch.anchor_sampler import AnchorSampler
 from spiky.lutorch.lut_helpers import UncertaintyMode, get_balanced_anchor_pairs
 from spiky.util.chunk_of_connections import ChunkOfConnections
+
+# Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
+_USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
+
+
+def _maybe_compile(fn):
+    if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
+        return torch.compile(fn, dynamic=True)
+    return fn
 
 
 class AnchorPairsLookup(AbstractLookup):
@@ -125,7 +135,6 @@ class AnchorPairsLookup(AbstractLookup):
                 - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or empty if return_alternatives=False)
                   Ordered by ascending absolute delta (smallest first)
         """
-        batch_size = x.shape[0]
         device = x.device
 
         # Check that module buffers are on the same device as input
@@ -142,6 +151,7 @@ class AnchorPairsLookup(AbstractLookup):
         else:
             return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives)
 
+    @_maybe_compile
     def _forward_eval(
         self,
         x: torch.Tensor,
@@ -222,7 +232,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
     """Custom autograd function for anchor pairs lookup with gradient propagation."""
 
     @staticmethod
-    @torch.compile(dynamic=True)
+    @_maybe_compile
     def forward(ctx, *args):
         """
         Forward pass.
@@ -298,8 +308,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         ) = grad_outputs
 
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
-        
-        @torch.compile(dynamic=True)
+
         def _anchor_pairs_lookup_backward_impl(
             x,
             anchor1_ids,
@@ -336,6 +345,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             x_grad_flat.scatter_add_(0, indices2, -du_flat)
             return x_grad_flat
 
+        _anchor_pairs_lookup_backward_impl = _maybe_compile(_anchor_pairs_lookup_backward_impl)
+
         x_grad_flat = _anchor_pairs_lookup_backward_impl(
             x,
             anchor1_ids,
@@ -348,4 +359,4 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         )
 
         # 8 inputs -> 8 gradient returns
-        return (x_grad_flat.view(x.shape), None, None, None, None, None, None, None)
+        return x_grad_flat.view(x.shape), None, None, None, None, None, None, None

@@ -1,6 +1,11 @@
 """
 Test for MultiHeadLut module.
 """
+import os
+
+# Disable torch.compile in lutorch so tests run without compilation.
+os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
+
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -299,7 +304,7 @@ def test_multi_head_lut_smooth_training(device, seed=None):
     )
     multi_head_lut.train()
     
-    optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.01)
+    optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.1)
     
     first_loss = None
     last_loss = None

@@ -778,6 +778,32 @@ class SpikeQKCheckpoint:
             w_embed=_cpu(m.W_embed),
         )
 
+    @classmethod
+    def from_gt(cls, gt: "GT_spike_QK_Transformer") -> "SpikeQKCheckpoint":
+        """
+        Build a checkpoint from a GT_spike_QK_Transformer (same structure as
+        from_notebook_model; GT has .FFN, .V, .A, .W_embed). Config is read from gt.
+        """
+        # Infer positional_buckets from A LUT: size = (1 << n_c) * positional_buckets_a
+        a0 = gt.A[0]
+        positional_buckets_a = a0.size // (1 << a0.n_c)
+        return cls.from_notebook_model(
+            gt,
+            context_size=gt.context_size,
+            vocab_size=gt.vocab_size,
+            embedding_dim=gt.embedding_dim,
+            num_layers=gt.num_layers,
+            num_heads=gt.num_heads,
+            positional_buckets_a=positional_buckets_a,
+            attention_a_n_t=gt.A[0].n_t,
+            attention_a_n_c=gt.A[0].n_c,
+            attention_v_n_t=gt.V[0].n_t,
+            attention_v_n_c=gt.V[0].n_c,
+            ffn_n_t=gt.FFN[0].n_t,
+            ffn_n_c=gt.FFN[0].n_c,
+            include_ffn=gt.include_ffn,
+        )
+
 
 # --- Main class ---
 

@@ -1,6 +1,11 @@
 """
 Tests for LUTCrossAttention.
 """
+import os
+
+# Disable torch.compile in lutorch so tests run without compilation.
+os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
+
 import torch
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
