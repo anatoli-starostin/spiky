@@ -299,7 +299,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
 
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
         
-        @torch.compile
+        @torch.compile(dynamic=True)
         def _anchor_pairs_lookup_backward_impl(
             x,
             anchor1_ids,
