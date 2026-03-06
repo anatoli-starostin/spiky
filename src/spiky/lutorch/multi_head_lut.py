@@ -105,6 +105,7 @@ class MultiHeadLut(nn.Module):
             uncertainty_mode=uncertainty_mode,
         )
     
+    @torch.compile(dynamic=True)
     def forward(
         self,
         x: torch.Tensor,
