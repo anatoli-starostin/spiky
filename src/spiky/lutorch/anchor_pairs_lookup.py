@@ -287,7 +287,6 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         )
 
     @staticmethod
-    @torch.compile(dynamic=True)
     def backward(ctx, *grad_outputs):
         """Backward pass: propagates gradients through the anchor pairs using the uncertainty function."""
         (
@@ -299,32 +298,54 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         ) = grad_outputs
 
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
-        batch_size, input_dim = x.shape[0], x.shape[1]
+        
+        @torch.compile
+        def _anchor_pairs_lookup_backward_impl(
+            x,
+            anchor1_ids,
+            anchor2_ids,
+            lookup_alt_deltas,
+            ctx_inv_l1,
+            ctx_batch_offset,
+            grad_main,
+            grad_alt,
+        ):
+            batch_size, input_dim = x.shape[0], x.shape[1]
 
-        grad_main = grad_lookup_indices_grad_c
-        grad_alt = grad_lookup_alt_indices_grad_c
-        grad_diff = grad_main.unsqueeze(2) - grad_alt
+            grad_diff = grad_main.unsqueeze(2) - grad_alt
 
-        if ctx.inv_l1:
-            abs_delta = lookup_alt_deltas.abs()
-            one_plus_abs = 1.0 + abs_delta
-            minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
-        else:
-            delta_sq = lookup_alt_deltas * lookup_alt_deltas
-            one_plus_sq = 1.0 + delta_sq
-            minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
+            if ctx_inv_l1:
+                abs_delta = lookup_alt_deltas.abs()
+                one_plus_abs = 1.0 + abs_delta
+                minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
+            else:
+                delta_sq = lookup_alt_deltas * lookup_alt_deltas
+                one_plus_sq = 1.0 + delta_sq
+                minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
 
-        du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, n_alternatives]
+            du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, n_alternatives]
 
-        batch_offset = ctx.batch_offset
-        anchor1_flat = anchor1_ids.view(-1)
-        anchor2_flat = anchor2_ids.view(-1)
-        du_flat = du.view(-1)
-        x_grad_flat = torch.zeros(batch_size * input_dim, device=x.device, dtype=x.dtype)
-        indices1 = batch_offset + anchor1_flat
-        indices2 = batch_offset + anchor2_flat
-        x_grad_flat.scatter_add_(0, indices1, du_flat)
-        x_grad_flat.scatter_add_(0, indices2, -du_flat)
+            batch_offset = ctx_batch_offset
+            anchor1_flat = anchor1_ids.view(-1)
+            anchor2_flat = anchor2_ids.view(-1)
+            du_flat = du.view(-1)
+            x_grad_flat = torch.zeros(batch_size * input_dim, device=x.device, dtype=x.dtype)
+            indices1 = batch_offset + anchor1_flat
+            indices2 = batch_offset + anchor2_flat
+            x_grad_flat.scatter_add_(0, indices1, du_flat)
+            x_grad_flat.scatter_add_(0, indices2, -du_flat)
+            return x_grad_flat
+
+        x_grad_flat = _anchor_pairs_lookup_backward_impl(
+            x,
+            anchor1_ids,
+            anchor2_ids,
+            lookup_alt_deltas,
+            ctx.inv_l1,
+            ctx.batch_offset,
+            grad_lookup_indices_grad_c,
+            grad_lookup_alt_indices_grad_c,
+        )
 
         # 8 inputs -> 8 gradient returns
-        return (x_grad_flat.view(batch_size, input_dim), None, None, None, None, None, None, None)
+        return (x_grad_flat.view(x.shape), None, None, None, None, None, None, None)
