@@ -7,7 +7,7 @@ from typing import Tuple, Optional, Union
 
 from spiky.lutorch.abstract_lookup import AbstractLookup
 from spiky.lutorch.anchor_sampler import AnchorSampler
-from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch.lut_helpers import UncertaintyMode, get_balanced_anchor_pairs
 from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
@@ -35,6 +35,8 @@ class AnchorPairsLookup(AbstractLookup):
         n_alternatives: Number of alternative lookup indices per table (default: 1)
                         Must be <= n_anchor_pairs. Alternatives are created by flipping bits
                         at positions corresponding to anchor pairs with minimal absolute deltas.
+        anchor_initialization: "default" = use AnchorSampler (uniform/connected); "balanced" =
+                        match spike_QK: indices from concatenated randperms for even dimension coverage.
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class AnchorPairsLookup(AbstractLookup):
         device: Optional[torch.device] = None,
         n_alternatives: int = 1,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
+        anchor_initialization: str = "default",
     ):
         table_dim = 2 ** n_anchor_pairs
         if n_alternatives > n_anchor_pairs:
@@ -63,24 +66,29 @@ class AnchorPairsLookup(AbstractLookup):
         self.cmp_eps = cmp_eps
         self.uncertainty_mode = uncertainty_mode
 
-        # Use AnchorSampler to sample anchor pairs
-        # AnchorSampler now supports both tensor format (anchor_candidates) and ChunkOfConnections
-        anchor_sampler = AnchorSampler(
-            n_inputs=input_dim,
-            n_detectors=n_tables,
-            n_anchors_per_detector=n_anchor_pairs,
-            connected_anchors_mode=connected_pairs,
-            device=device,
-            detector_connections=anchor_candidates,  # Can be tensor, ChunkOfConnections, or None
-            compact_mode=True,
-            random_seed=random_seed
-        )
-
-        # Get anchor pairs from sampler and split into two separate tensors
-        anchor_pairs = anchor_sampler.get_anchor_pairs().to(dtype=torch.long)  # [n_tables, n_anchor_pairs, 2]
-        # Split into two tensors: [n_tables, n_anchor_pairs] each
-        self.register_buffer('anchor_pairs_a', anchor_pairs[:, :, 0].contiguous())
-        self.register_buffer('anchor_pairs_b', anchor_pairs[:, :, 1].contiguous())
+        dev = device or torch.device("cpu")
+        if anchor_initialization == "balanced":
+            # Match spike_QK: balanced coverage over input dimensions (randperm-based)
+            anchor_pairs_a, anchor_pairs_b = get_balanced_anchor_pairs(
+                n_tables, n_anchor_pairs, input_dim, dev, random_seed=random_seed
+            )
+            self.register_buffer("anchor_pairs_a", anchor_pairs_a.contiguous())
+            self.register_buffer("anchor_pairs_b", anchor_pairs_b.contiguous())
+        else:
+            # Use AnchorSampler to sample anchor pairs
+            anchor_sampler = AnchorSampler(
+                n_inputs=input_dim,
+                n_detectors=n_tables,
+                n_anchors_per_detector=n_anchor_pairs,
+                connected_anchors_mode=connected_pairs,
+                device=dev,
+                detector_connections=anchor_candidates,
+                compact_mode=True,
+                random_seed=random_seed
+            )
+            anchor_pairs = anchor_sampler.get_anchor_pairs().to(dtype=torch.long)  # [n_tables, n_anchor_pairs, 2]
+            self.register_buffer('anchor_pairs_a', anchor_pairs[:, :, 0].contiguous())
+            self.register_buffer('anchor_pairs_b', anchor_pairs[:, :, 1].contiguous())
 
         # Pre-compute powers tensor for bit shifting: [1, 1, n_anchor_pairs]
         powers = torch.arange(n_anchor_pairs, dtype=torch.long).view(1, 1, -1)

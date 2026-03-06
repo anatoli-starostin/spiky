@@ -35,6 +35,7 @@ class MultiHeadLut(nn.Module):
         n_alternatives: Number of alternative lookup indices per table (default: 1)
         smooth_mode: If True, use smooth interpolation in LProjection (default: False)
         device: Device to place buffers on
+        anchor_initialization: "default" or "balanced". "balanced" matches spike_QK (randperm-based even coverage).
     """
     
     def __init__(
@@ -53,6 +54,7 @@ class MultiHeadLut(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
+        anchor_initialization: str = "default",
     ):
         super().__init__()
         
@@ -89,6 +91,7 @@ class MultiHeadLut(nn.Module):
             device=device,
             n_alternatives=n_alternatives,
             uncertainty_mode=uncertainty_mode,
+            anchor_initialization=anchor_initialization,
         )
         
         # Create LProjection: n_lookup_tables total
