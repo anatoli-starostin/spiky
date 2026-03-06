@@ -222,6 +222,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
     """Custom autograd function for anchor pairs lookup with gradient propagation."""
 
     @staticmethod
+    @torch.compile(dynamic=True)
     def forward(ctx, *args):
         """
         Forward pass.
@@ -286,6 +287,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         )
 
     @staticmethod
+    @torch.compile(dynamic=True)
     def backward(ctx, *grad_outputs):
         """Backward pass: propagates gradients through the anchor pairs using the uncertainty function."""
         (
