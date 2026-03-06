@@ -8,6 +8,161 @@ from typing import Tuple, Optional
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
 
+# --- Compiled hot-path implementations (torch.compile for fusion) ---
+
+@torch.compile(dynamic=True)
+def _compiled_forward_eval_smooth_impl(
+    weights,
+    table_indices_expanded,
+    table_indices_expanded_alt,
+    lookup_indices,
+    lookup_alt_indices,
+    lookup_alt_deltas,
+    n_alternatives,
+    inv_uncertainty
+):
+    # Apply uncertainty function
+    if inv_uncertainty:
+        abs_deltas = lookup_alt_deltas.abs()
+        uncertainty = 0.5 / (1.0 + abs_deltas)  # [B, n_lookup_tables, n_alternatives]
+    else:
+        squared = lookup_alt_deltas * lookup_alt_deltas
+        uncertainty = 0.5 / (1.0 + squared)  # [B, n_lookup_tables, n_alternatives]
+    
+    # Weight for main indices: sum(1 - U(delta)) / n_alternatives
+    main_weight = (1.0 - uncertainty).sum(dim=2) / n_alternatives  # [B, n_lookup_tables]
+    
+    # Weight for alt indices: U(delta) / n_alternatives
+    alt_weight = uncertainty / n_alternatives  # [B, n_lookup_tables, n_alternatives]
+    
+    # Lookup main weights using pre-computed table indices
+    main_weights = weights[table_indices_expanded, lookup_indices]  # [B, n_lookup_tables, n_outputs]
+    
+    # Lookup alt weights using pre-computed alternative indices
+    alt_weights = weights[table_indices_expanded_alt, lookup_alt_indices]  # [B, n_lookup_tables, n_alternatives, n_outputs]
+    
+    # Weighted combination
+    # main_weights: [B, n_lookup_tables, n_outputs]
+    # main_weight: [B, n_lookup_tables] -> [B, n_lookup_tables, 1]
+    output = main_weights * main_weight.unsqueeze(2)  # [B, n_lookup_tables, n_outputs]
+    
+    # alt_weights: [B, n_lookup_tables, n_alternatives, n_outputs]
+    # alt_weight: [B, n_lookup_tables, n_alternatives] -> [B, n_lookup_tables, n_alternatives, 1]
+    alt_weighted = alt_weights * alt_weight.unsqueeze(3)  # [B, n_lookup_tables, n_alternatives, n_outputs]
+    output = output + alt_weighted.sum(dim=2)  # [B, n_lookup_tables, n_outputs]
+    
+    return output
+
+@torch.compile(dynamic=True)
+def _forward_train_smooth_impl(
+    weights: torch.Tensor,
+    table_indices_expanded: torch.Tensor,
+    table_indices_expanded_alt: torch.Tensor,
+    lookup_indices: torch.Tensor,
+    lookup_alt_indices: torch.Tensor,
+    lookup_alt_deltas: torch.Tensor,
+    n_alternatives: int,
+    inv_uncertainty: bool,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Train forward smooth branch: weighted combination, returns (output, main_weight, alt_weight) for backward."""
+    if inv_uncertainty:
+        abs_deltas = lookup_alt_deltas.abs()
+        uncertainty = 0.5 / (1.0 + abs_deltas)
+    else:
+        squared = lookup_alt_deltas * lookup_alt_deltas
+        uncertainty = 0.5 / (1.0 + squared)
+
+    main_weight = (1.0 - uncertainty).sum(dim=2) / n_alternatives
+    alt_weight = uncertainty / n_alternatives
+
+    main_weights = weights[table_indices_expanded, lookup_indices]
+    alt_weights = weights[table_indices_expanded_alt, lookup_alt_indices]
+
+    output = main_weights * main_weight.unsqueeze(2)
+    output = output + (alt_weights * alt_weight.unsqueeze(3)).sum(dim=2)
+    return output, main_weight, alt_weight
+
+
+@torch.compile(dynamic=True)
+def _backward_train_nonsmooth_impl(
+    grad_output: torch.Tensor,
+    weights: torch.Tensor,
+    lookup_indices: torch.Tensor,
+    table_indices_flat: torch.Tensor,
+    batch_size: int,
+    n_lookup_tables: int,
+    n_alternatives: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Train backward non-smooth branch: weights gradient via scatter_add_, and input gradient carriers."""
+    n_entries = weights.shape[1]
+    n_outputs = weights.shape[2]
+    weights_grad = torch.zeros_like(weights)
+    weights_grad_flat = weights_grad.view(-1, n_outputs)
+    grad_output_flat = grad_output.reshape(batch_size * n_lookup_tables, n_outputs)
+    lookup_indices_flat = lookup_indices.view(-1)
+    indices_flat = table_indices_flat * n_entries + lookup_indices_flat
+    weights_grad_flat.scatter_add_(
+        0, indices_flat.unsqueeze(1).expand(-1, n_outputs), grad_output_flat
+    )
+    weights_grad = weights_grad_flat.view(weights.shape)
+
+    lookup_indices_grad_c_grad = grad_output.sum(dim=2)
+    grad_output_expanded = grad_output.unsqueeze(2).expand(
+        batch_size, n_lookup_tables, n_alternatives, -1
+    )
+    lookup_alt_indices_grad_c_grad = grad_output_expanded.sum(dim=3)
+    return weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad
+
+
+@torch.compile(dynamic=True)
+def _backward_train_smooth_impl(
+    grad_output: torch.Tensor,
+    main_weight: torch.Tensor,
+    alt_weight: torch.Tensor,
+    lookup_indices: torch.Tensor,
+    lookup_alt_indices: torch.Tensor,
+    table_indices_flat: torch.Tensor,
+    table_indices_alt_flat: torch.Tensor,
+    weights: torch.Tensor,
+    batch_size: int,
+    n_lookup_tables: int,
+    n_alternatives: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Train backward smooth branch: weights gradient (main + alt scatter), and input gradient carriers."""
+    n_entries = weights.shape[1]
+    n_outputs = weights.shape[2]
+    weights_grad = torch.zeros_like(weights)
+    weights_grad_flat = weights_grad.view(-1, n_outputs)
+
+    main_weight_expanded = main_weight.unsqueeze(2)
+    grad_main = grad_output * main_weight_expanded
+    alt_weight_expanded = alt_weight.unsqueeze(3)
+    grad_output_expanded = grad_output.unsqueeze(2).expand(
+        batch_size, n_lookup_tables, n_alternatives, -1
+    )
+    grad_alt = grad_output_expanded * alt_weight_expanded
+
+    lookup_indices_flat = lookup_indices.view(-1)
+    indices_main = table_indices_flat * n_entries + lookup_indices_flat
+    grad_main_flat = grad_main.view(-1, n_outputs)
+    weights_grad_flat.scatter_add_(
+        0, indices_main.unsqueeze(1).expand(-1, n_outputs), grad_main_flat
+    )
+
+    lookup_alt_indices_flat = lookup_alt_indices.view(-1)
+    indices_alt = table_indices_alt_flat * n_entries + lookup_alt_indices_flat
+    grad_alt_flat = grad_alt.view(-1, n_outputs)
+    weights_grad_flat.scatter_add_(
+        0, indices_alt.unsqueeze(1).expand(-1, n_outputs), grad_alt_flat
+    )
+
+    weights_grad = weights_grad_flat.view(weights.shape)
+
+    lookup_indices_grad_c_grad = grad_output.sum(dim=2)
+    lookup_alt_indices_grad_c_grad = grad_output_expanded.sum(dim=3)
+    return weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad
+
+
 class LProjection(nn.Module):
     """
     Lookup table projection module.
@@ -126,37 +281,18 @@ class LProjection(nn.Module):
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
             
-            # Apply uncertainty function
-            if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:
-                abs_deltas = lookup_alt_deltas.abs()
-                uncertainty = 0.5 / (1.0 + abs_deltas)  # [B, n_lookup_tables, n_alternatives]
-            else:
-                squared = lookup_alt_deltas * lookup_alt_deltas
-                uncertainty = 0.5 / (1.0 + squared)  # [B, n_lookup_tables, n_alternatives]
+            inv_uncertainty = self.uncertainty_mode == UncertaintyMode.INVERSE_L1
             
-            # Weight for main indices: sum(1 - U(delta)) / n_alternatives
-            main_weight = (1.0 - uncertainty).sum(dim=2) / self.n_alternatives  # [B, n_lookup_tables]
-            
-            # Weight for alt indices: U(delta) / n_alternatives
-            alt_weight = uncertainty / self.n_alternatives  # [B, n_lookup_tables, n_alternatives]
-            
-            # Lookup main weights using pre-computed table indices
-            main_weights = self.weights[self._cached_table_indices_expanded, lookup_indices]  # [B, n_lookup_tables, n_outputs]
-            
-            # Lookup alt weights using pre-computed alternative indices
-            alt_weights = self.weights[self._cached_table_indices_expanded_alt, lookup_alt_indices]  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            
-            # Weighted combination
-            # main_weights: [B, n_lookup_tables, n_outputs]
-            # main_weight: [B, n_lookup_tables] -> [B, n_lookup_tables, 1]
-            output = main_weights * main_weight.unsqueeze(2)  # [B, n_lookup_tables, n_outputs]
-            
-            # alt_weights: [B, n_lookup_tables, n_alternatives, n_outputs]
-            # alt_weight: [B, n_lookup_tables, n_alternatives] -> [B, n_lookup_tables, n_alternatives, 1]
-            alt_weighted = alt_weights * alt_weight.unsqueeze(3)  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            output = output + alt_weighted.sum(dim=2)  # [B, n_lookup_tables, n_outputs]
-            
-            return output
+            return _compiled_forward_eval_smooth_impl(
+                self.weights,
+                self._cached_table_indices_expanded,
+                self._cached_table_indices_expanded_alt,
+                lookup_indices,
+                lookup_alt_indices,
+                lookup_alt_deltas,
+                self.n_alternatives,
+                inv_uncertainty
+            )
     
     def _forward_train(
         self,
@@ -222,32 +358,17 @@ class LProjectionFunction(torch.autograd.Function):
             # Smooth mode: weighted combination
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
-            
-            # Apply uncertainty function
-            if uncertainty_mode == UncertaintyMode.INVERSE_L1:
-                abs_deltas = lookup_alt_deltas.abs()
-                uncertainty = 0.5 / (1.0 + abs_deltas)  # [B, n_lookup_tables, n_alternatives]
-            else:
-                squared = lookup_alt_deltas * lookup_alt_deltas
-                uncertainty = 0.5 / (1.0 + squared)  # [B, n_lookup_tables, n_alternatives]
-            
-            # Weight for main indices: sum(1 - U(delta)) / n_alternatives
-            main_weight = (1.0 - uncertainty).sum(dim=2) / n_alternatives  # [B, n_lookup_tables]
-            
-            # Weight for alt indices: U(delta) / n_alternatives
-            alt_weight = uncertainty / n_alternatives  # [B, n_lookup_tables, n_alternatives]
-            
-            # Lookup main weights using pre-computed table indices
-            main_weights = weights[table_indices_expanded, lookup_indices]  # [B, n_lookup_tables, n_outputs]
-            
-            # Lookup alt weights using pre-computed alternative indices
-            alt_weights = weights[table_indices_expanded_alt, lookup_alt_indices]  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            
-            # Weighted combination
-            output = main_weights * main_weight.unsqueeze(2)  # [B, n_lookup_tables, n_outputs]
-            alt_weighted = alt_weights * alt_weight.unsqueeze(3)  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            output = output + alt_weighted.sum(dim=2)  # [B, n_lookup_tables, n_outputs]
-            
+            inv_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
+            output, main_weight, alt_weight = _forward_train_smooth_impl(
+                weights,
+                table_indices_expanded,
+                table_indices_expanded_alt,
+                lookup_indices,
+                lookup_alt_indices,
+                lookup_alt_deltas,
+                n_alternatives,
+                inv_uncertainty,
+            )
             # Save for backward (include gradient carriers)
             ctx.save_for_backward(
                 weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
@@ -270,22 +391,8 @@ class LProjectionFunction(torch.autograd.Function):
         """
         grad_output, = grad_outputs  # [B, n_lookup_tables, n_outputs]
 
-        # Common input gradient computation (same for both modes).
-        # Note: Uncertainty function is handled in AnchorPairsLookup backward,
-        # so here we just do simple weight projections.
-        def compute_input_gradients(grad_output_local, batch_size, n_lookup_tables, n_alternatives):
-            # Gradient w.r.t. main lookup_indices: sum over output dimension
-            lookup_indices_grad_local = grad_output_local.sum(dim=2)  # [B, n_lookup_tables]
-            # Gradient w.r.t. alt lookup_indices: sum over output dimension
-            grad_output_expanded_local = grad_output_local.unsqueeze(2).expand(
-                batch_size, n_lookup_tables, n_alternatives, -1
-            )  # [B, n_tables, n_alternatives, n_outputs]
-            lookup_alt_indices_grad_local = grad_output_expanded_local.sum(dim=3)  # [B, n_tables, n_alternatives]
-            return lookup_indices_grad_local, lookup_alt_indices_grad_local
-
         if not ctx.smooth_mode:
-            # Non-smooth mode backward
-            # Alternatives affect only input gradients, not weight gradients.
+            # Non-smooth mode backward (compiled impl)
             (
                 weights, lookup_indices, lookup_alt_indices,
                 lookup_indices_grad_c, lookup_alt_indices_grad_c,
@@ -293,24 +400,13 @@ class LProjectionFunction(torch.autograd.Function):
             ) = ctx.saved_tensors
             batch_size = ctx.batch_size
             n_lookup_tables = ctx.n_lookup_tables
-            n_alternatives = lookup_alt_indices_grad_c.shape[2]  # Gradient carriers are always provided
+            n_alternatives = lookup_alt_indices_grad_c.shape[2]
 
-            # Gradient for weights (main indices only)
-            weights_grad = torch.zeros_like(weights)
-            weights_grad_flat = weights_grad.view(-1, weights_grad.shape[-1])  # [n_tables * n_entries, n_outputs]
-            grad_output_flat = grad_output.reshape(batch_size * n_lookup_tables, grad_output.shape[-1])
-            # table_indices_flat is passed via saved_tensors: [B * n_tables]
-            lookup_indices_flat = lookup_indices.view(-1)                     # [B * n_tables]
-            indices_flat = table_indices_flat * weights_grad.shape[1] + lookup_indices_flat
-
-            weights_grad_flat.scatter_add_(0, indices_flat.unsqueeze(1).expand(-1, weights_grad.shape[-1]), grad_output_flat)
-            weights_grad = weights_grad_flat.view(weights_grad.shape)
-
-            # Gradients for lookup indices via gradient carriers (shared logic)
-            lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = compute_input_gradients(
-                grad_output, batch_size, n_lookup_tables, n_alternatives
+            weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = _backward_train_nonsmooth_impl(
+                grad_output, weights, lookup_indices, table_indices_flat,
+                batch_size, n_lookup_tables, n_alternatives,
             )
-            
+
             # Gradients correspond to:
             # weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
             # lookup_indices_grad_c, lookup_alt_indices_grad_c,
@@ -333,52 +429,24 @@ class LProjectionFunction(torch.autograd.Function):
                 None,
             )
         else:
-            # Smooth mode backward
+            # Smooth mode backward (compiled impl)
             (
                 weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
                 main_weight, alt_weight, lookup_indices_grad_c, lookup_alt_indices_grad_c,
                 table_indices_flat, table_indices_alt_flat
             ) = ctx.saved_tensors
-            
+
             batch_size = ctx.batch_size
             n_lookup_tables = ctx.n_lookup_tables
             n_alternatives = ctx.n_alternatives
 
-            # Gradient for weights
-            weights_grad = torch.zeros_like(weights)
-            
-            # Main weights gradient
-            main_weight_expanded = main_weight.unsqueeze(2)  # [B, n_lookup_tables, 1]
-            grad_main = grad_output * main_weight_expanded  # [B, n_lookup_tables, n_outputs]
-            
-            # Alt weights gradient
-            alt_weight_expanded = alt_weight.unsqueeze(3)  # [B, n_lookup_tables, n_alternatives, 1]
-            grad_output_expanded = grad_output.unsqueeze(2).expand(batch_size, n_lookup_tables, n_alternatives, -1)  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            grad_alt = grad_output_expanded * alt_weight_expanded  # [B, n_lookup_tables, n_alternatives, n_outputs]
-            
-            # Flatten for efficient scatter_add_
-            weights_grad_flat = weights_grad.view(-1, weights_grad.shape[-1])  # [n_lookup_tables * n_entries_per_table, n_outputs]
-            
-            # Scatter main gradients using pre-computed table indices
-            # table_indices_flat is passed via saved_tensors: [B * n_lookup_tables]
-            lookup_indices_flat = lookup_indices.view(-1)  # [B * n_lookup_tables]
-            indices_main = table_indices_flat * weights_grad.shape[1] + lookup_indices_flat  # [B * n_lookup_tables]
-            grad_main_flat = grad_main.view(-1, grad_main.shape[-1])  # [B * n_lookup_tables, n_outputs]
-            weights_grad_flat.scatter_add_(0, indices_main.unsqueeze(1).expand(-1, weights_grad.shape[-1]), grad_main_flat)
-            
-            # Scatter alt gradients using pre-computed alternative indices flat
-            lookup_alt_indices_flat = lookup_alt_indices.view(-1)  # [B * n_lookup_tables * n_alternatives]
-            indices_alt = table_indices_alt_flat * weights_grad.shape[1] + lookup_alt_indices_flat  # [B * n_lookup_tables * n_alternatives]
-            grad_alt_flat = grad_alt.view(-1, grad_alt.shape[-1])  # [B * n_lookup_tables * n_alternatives, n_outputs]
-            weights_grad_flat.scatter_add_(0, indices_alt.unsqueeze(1).expand(-1, weights_grad.shape[-1]), grad_alt_flat)
-            
-            weights_grad = weights_grad_flat.view(weights_grad.shape)
-            
-            # Gradients for lookup indices via gradient carriers (shared logic)
-            lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = compute_input_gradients(
-                grad_output, batch_size, n_lookup_tables, n_alternatives
+            weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = _backward_train_smooth_impl(
+                grad_output, main_weight, alt_weight,
+                lookup_indices, lookup_alt_indices,
+                table_indices_flat, table_indices_alt_flat,
+                weights, batch_size, n_lookup_tables, n_alternatives,
             )
-            
+
             return (
                 weights_grad,
                 None,
