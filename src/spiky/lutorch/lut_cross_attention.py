@@ -18,7 +18,7 @@ class PairProcessingMode(str, Enum):
     CONCATENATION = "concatenation"
 
 
-@dataclass
+@dataclass(frozen=True)
 class PairProcessingConfig:
     """
     Configuration for (i, j) pair processing in LUTCrossAttention.

@@ -34,19 +34,17 @@ class AnchorPairsLookup(AbstractLookup):
         input_dim: Dimension of input tensor
         n_tables: Number of lookup tables
         n_anchor_pairs: Number of anchor pairs per table
-        connected_pairs: If True, anchor pairs form a connected graph
+        connected_anchors_mode: If True, anchor pairs form a connected graph (flat_b = flat_a shifted by 1 in balanced path).
         anchor_candidates: Optional. Either:
                           - torch.Tensor: Shape [n_tables, max_anchors_per_table] with input indices
                             (all values must be >= 0, no padding)
                           - Tuple[ChunkOfConnections, int]: ChunkOfConnections with custom ids_shift
-                          - None: Uses all input indices (default)
+                          - None: use balanced coverage (get_balanced_anchor_pairs); otherwise use AnchorSampler
         cmp_eps: Epsilon for comparison (default: 0.0)
         random_seed: Random seed for anchor pair sampling
         n_alternatives: Number of alternative lookup indices per table (default: 1)
                         Must be <= n_anchor_pairs. Alternatives are created by flipping bits
                         at positions corresponding to anchor pairs with minimal absolute deltas.
-        anchor_initialization: "default" = use AnchorSampler (uniform/connected); "balanced" =
-                        match spike_QK: indices from concatenated randperms for even dimension coverage.
     """
 
     def __init__(
@@ -54,14 +52,13 @@ class AnchorPairsLookup(AbstractLookup):
         input_dim: int,
         n_tables: int,
         n_anchor_pairs: int,
-        connected_pairs: bool = False,
+        connected_anchors_mode: bool = False,
         anchor_candidates: Optional[Union[torch.Tensor, Tuple[ChunkOfConnections, int]]] = None,
         cmp_eps: float = 0.0,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         n_alternatives: int = 1,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        anchor_initialization: str = "default",
     ):
         table_dim = 2 ** n_anchor_pairs
         if n_alternatives > n_anchor_pairs:
@@ -71,26 +68,27 @@ class AnchorPairsLookup(AbstractLookup):
         super().__init__(input_dim, n_tables, table_dim, n_alternatives=n_alternatives)
 
         self.n_anchor_pairs = n_anchor_pairs
-        self.connected_pairs = connected_pairs
         assert cmp_eps >= 0.0
         self.cmp_eps = cmp_eps
         self.uncertainty_mode = uncertainty_mode
 
         dev = device or torch.device("cpu")
-        if anchor_initialization == "balanced":
-            # Match spike_QK: balanced coverage over input dimensions (randperm-based)
+        if anchor_candidates is None:
+            # Balanced coverage over input dimensions (randperm-based)
             anchor_pairs_a, anchor_pairs_b = get_balanced_anchor_pairs(
-                n_tables, n_anchor_pairs, input_dim, dev, random_seed=random_seed
+                n_tables, n_anchor_pairs, input_dim, dev,
+                random_seed=random_seed,
+                connected_mode=connected_anchors_mode,
             )
             self.register_buffer("anchor_pairs_a", anchor_pairs_a.contiguous())
             self.register_buffer("anchor_pairs_b", anchor_pairs_b.contiguous())
         else:
-            # Use AnchorSampler to sample anchor pairs
+            # Use AnchorSampler when explicit candidate connections are given
             anchor_sampler = AnchorSampler(
                 n_inputs=input_dim,
                 n_detectors=n_tables,
                 n_anchors_per_detector=n_anchor_pairs,
-                connected_anchors_mode=connected_pairs,
+                connected_anchors_mode=connected_anchors_mode,
                 device=dev,
                 detector_connections=anchor_candidates,
                 compact_mode=True,

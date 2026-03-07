@@ -25,17 +25,17 @@ class MultiHeadLut(nn.Module):
         n_anchor_pairs: Number of anchor pairs per table (determines n_entries_per_table = 2**n_anchor_pairs)
         tables_per_head: Number of lookup tables per head (default: 1)
         n_buckets: Number of buckets for bucketized lookup (default: 1). If > 1, forward expects bucket_indices input.
-        connected_pairs: If True, anchor pairs form a connected graph (default: False)
+        connected_anchors_mode: If True, anchor pairs form a connected graph (default: False)
         anchor_candidates: Optional. Either:
                           - torch.Tensor: Shape [n_heads, tables_per_head, max_anchors_per_table] with input indices
                           - Tuple[ChunkOfConnections, int]: ChunkOfConnections with custom ids_shift
-                          - None: Uses all input indices (default)
+                          - None: balanced coverage over input dims (get_balanced_anchor_pairs); else AnchorSampler
         cmp_eps: Epsilon for comparison (default: 0.0)
         random_seed: Random seed for anchor pair sampling
         n_alternatives: Number of alternative lookup indices per table (default: 1)
         smooth_mode: If True, use smooth interpolation in LProjection (default: False)
         device: Device to place buffers on
-        anchor_initialization: "default" or "balanced". "balanced" matches spike_QK (randperm-based even coverage).
+        initial_weights_noise: Std of zero-mean Gaussian added to projection weights at init (default: 0.0).
     """
     
     def __init__(
@@ -46,7 +46,7 @@ class MultiHeadLut(nn.Module):
         n_anchor_pairs: int,
         tables_per_head: int = 1,
         n_buckets: int = 1,
-        connected_pairs: bool = False,
+        connected_anchors_mode: bool = False,
         anchor_candidates: Optional[Union[torch.Tensor, Tuple[ChunkOfConnections, int]]] = None,
         cmp_eps: float = 0.0,
         random_seed: Optional[int] = None,
@@ -54,7 +54,7 @@ class MultiHeadLut(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        anchor_initialization: str = "default",
+        initial_weights_noise: float = 0.0
     ):
         super().__init__()
         
@@ -84,14 +84,13 @@ class MultiHeadLut(nn.Module):
             input_dim=input_dim,
             n_tables=n_lookup_tables,
             n_anchor_pairs=n_anchor_pairs,
-            connected_pairs=connected_pairs,
+            connected_anchors_mode=connected_anchors_mode,
             anchor_candidates=reshaped_anchor_candidates,
             cmp_eps=cmp_eps,
             random_seed=random_seed,
             device=device,
             n_alternatives=n_alternatives,
             uncertainty_mode=uncertainty_mode,
-            anchor_initialization=anchor_initialization,
         )
         
         # Create LProjection: n_lookup_tables total
@@ -104,6 +103,15 @@ class MultiHeadLut(nn.Module):
             device=device,
             uncertainty_mode=uncertainty_mode,
         )
+        if initial_weights_noise != 0.0:
+            dev = device or torch.device("cpu")
+            with torch.no_grad():
+                rng_kwargs: dict = {"device": dev}
+                if random_seed is not None:
+                    rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed)
+                self.projection.weights.add_(
+                    torch.randn(self.projection.weights.shape, **rng_kwargs) * initial_weights_noise
+                )
     
     def forward(
         self,

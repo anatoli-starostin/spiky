@@ -14,11 +14,15 @@ def get_balanced_anchor_pairs(
     input_dim: int,
     device: torch.device,
     random_seed: Optional[int] = None,
+    connected_mode: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
     Matches spike_QK MultiHeadLUT anchor init: indices from concatenated randperms
     so each dimension 0..input_dim-1 appears roughly equally often.
+
+    Args:
+        connected_mode: If True, flat_b is flat_a circularly shifted by 1 (connected pairs).
 
     Returns:
         anchor_pairs_a: [n_tables, n_anchor_pairs] int64
@@ -33,28 +37,31 @@ def get_balanced_anchor_pairs(
 
     def get_balanced_indices(total: int, dim: int) -> torch.Tensor:
         num_full_perms = math.ceil(total / dim)
-        indices_list = [
-            torch.randperm(dim, device=device, generator=gen)
-            for _ in range(num_full_perms)
-        ]
-        return torch.cat(indices_list)[:total]
+        # Batched randperm: each row is a random permutation of 0..dim-1 (one rand + argsort, no Python loop)
+        perm = torch.rand(num_full_perms, dim, device=device, generator=gen).argsort(dim=1)
+        return perm.reshape(-1)[:total]
 
     flat_a = get_balanced_indices(total_needed, input_dim)
-    flat_b = get_balanced_indices(total_needed, input_dim)
+    if connected_mode:
+        flat_b = torch.roll(flat_a, shifts=-1, dims=0)
+    else:
+        flat_b = get_balanced_indices(total_needed, input_dim)
 
     # Reshape to [n_tables, n_anchor_pairs]
     anchor_pairs_a = flat_a.view(n_tables, n_anchor_pairs)
     anchor_pairs_b = flat_b.view(n_tables, n_anchor_pairs)
 
-    # Ensure a != b everywhere (match spike_QK collision handling)
-    mask = anchor_pairs_a == anchor_pairs_b
-    while mask.any().item():
+    # Ensure a != b everywhere (match spike_QK collision handling), max 10 attempts
+    max_collision_attempts = 10
+    for _ in range(max_collision_attempts):
+        mask = anchor_pairs_a == anchor_pairs_b
+        if not mask.any().item():
+            break
         n_collide = mask.sum().item()
         anchor_pairs_b = anchor_pairs_b.clone()
         anchor_pairs_b[mask] = torch.randint(
             0, input_dim, (n_collide,), device=device, dtype=torch.long, generator=gen
         )
-        mask = anchor_pairs_a == anchor_pairs_b
 
     return anchor_pairs_a, anchor_pairs_b
 

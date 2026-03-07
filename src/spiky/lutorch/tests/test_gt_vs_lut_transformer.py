@@ -61,7 +61,7 @@ class LUTTransformer(nn.Module):
             dropout=0.0,
             smooth_mode=True,
             device=None,
-            anchor_initialization="balanced",
+            connected_anchors_mode=False,
             random_seed=None,
     ):
         super().__init__()
@@ -88,7 +88,7 @@ class LUTTransformer(nn.Module):
                     n_buckets=n_positional_buckets,
                     smooth_mode=smooth_mode,
                     device=dev,
-                    anchor_initialization=anchor_initialization,
+                    connected_anchors_mode=connected_anchors_mode,
                     random_seed=random_seed,
                 )
                 attn_lut.projection.weights.copy_(
@@ -108,7 +108,7 @@ class LUTTransformer(nn.Module):
                     tables_per_head=tables_per_head_value,
                     smooth_mode=smooth_mode,
                     device=dev,
-                    anchor_initialization=anchor_initialization,
+                    connected_anchors_mode=connected_anchors_mode,
                     random_seed=random_seed,
                 )
                 value_lut.projection.weights.copy_(
@@ -122,7 +122,7 @@ class LUTTransformer(nn.Module):
                     tables_per_head=ffn_tables,
                     smooth_mode=smooth_mode,
                     device=dev,
-                    anchor_initialization=anchor_initialization,
+                    connected_anchors_mode=connected_anchors_mode,
                     random_seed=random_seed,
                 )
                 ffn_lut.projection.weights.copy_(
@@ -353,7 +353,7 @@ def test_gt_and_lut_transformer_forward_match(device, seed=None):
         dropout=0.0,
         smooth_mode=True,
         device=dev,
-        anchor_initialization="balanced",
+        connected_anchors_mode=False,
         random_seed=123,
     )
 
@@ -433,7 +433,7 @@ def test_gt_and_lut_transformer_backward_match(device, seed=None, n_iterations=1
         dropout=0.0,
         smooth_mode=True,
         device=dev,
-        anchor_initialization="balanced",
+        connected_anchors_mode=False,
         random_seed=123,
     )
 
