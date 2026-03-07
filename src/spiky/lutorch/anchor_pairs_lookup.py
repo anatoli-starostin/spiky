@@ -270,8 +270,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 n_anchor_pairs, device=x.device, dtype=torch.long
             ).view(1, 1, -1).expand(batch_size, n_tables, -1)
             lookup_alt_deltas = deltas
-            anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1)
-            anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1)
+            anchor1_ids = anchor_pairs_a.unsqueeze(0).repeat(batch_size, 1, 1)
+            anchor2_ids = anchor_pairs_b.unsqueeze(0).repeat(batch_size, 1, 1)
         else:
             abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
             if n_alternatives == 1:
