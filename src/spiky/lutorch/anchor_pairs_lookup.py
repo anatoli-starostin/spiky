@@ -123,15 +123,12 @@ class AnchorPairsLookup(AbstractLookup):
             In training mode:
                 - lookup_indices: int64 [B, n_tables]
                 - lookup_alt_indices: int64 [B, n_tables, n_alternatives]
-                  Ordered by ascending absolute delta (smallest first)
                 - lookup_alt_deltas: float [B, n_tables, n_alternatives]
-                  Ordered by ascending absolute delta (smallest first)
                 - lookup_indices_grad_c: float [B, n_tables]
                 - lookup_alt_indices_grad_c: float [B, n_tables, n_alternatives]
             In eval mode:
                 - lookup_indices: int64 [B, n_tables]
                 - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or empty if return_alternatives=False)
-                  Ordered by ascending absolute delta (smallest first)
         """
         device = x.device
 
@@ -182,15 +179,22 @@ class AnchorPairsLookup(AbstractLookup):
 
         # Compute alternative indices by flipping bits at positions with minimal absolute deltas
         if return_alternatives:
-            abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-            if self.n_alternatives == 1:
-                _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
-                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            if self.n_alternatives == self.n_anchor_pairs:
+                # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
+                min_delta_indices = torch.arange(
+                    self.n_anchor_pairs, device=x.device, dtype=torch.long
+                ).view(1, 1, -1).expand(batch_size, self.n_tables, -1)
+                lookup_alt_deltas = deltas
             else:
-                min_delta_indices = torch.topk(
-                    abs_deltas, k=self.n_alternatives, dim=2, largest=False
-                ).indices
-                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+                abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
+                if self.n_alternatives == 1:
+                    _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
+                    lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+                else:
+                    min_delta_indices = torch.topk(
+                        abs_deltas, k=self.n_alternatives, dim=2, largest=False
+                    ).indices
+                    lookup_alt_deltas = deltas.gather(2, min_delta_indices)
             lookup_indices_expanded = lookup_indices.unsqueeze(2)
             flip_masks = (1 << min_delta_indices).long()
             lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
@@ -260,23 +264,30 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         bits = deltas.gt(cmp_eps).long()
         lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
-        abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-        if n_alternatives == 1:
-            _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)  # [B, n_tables, 1]
-            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        if n_alternatives == n_anchor_pairs:
+            # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
+            min_delta_indices = torch.arange(
+                n_anchor_pairs, device=x.device, dtype=torch.long
+            ).view(1, 1, -1).expand(batch_size, n_tables, -1)
+            lookup_alt_deltas = deltas
+            anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1)
+            anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            min_delta_indices = torch.topk(
-                abs_deltas, k=n_alternatives, dim=2, largest=False
-            ).indices  # [B, n_tables, n_alternatives]
-            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
+            if n_alternatives == 1:
+                _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)  # [B, n_tables, 1]
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            else:
+                min_delta_indices = torch.topk(
+                    abs_deltas, k=n_alternatives, dim=2, largest=False
+                ).indices  # [B, n_tables, n_alternatives]
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+            anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
 
         lookup_indices_expanded = lookup_indices.unsqueeze(2)
         flip_masks = (1 << min_delta_indices).long()
         lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
-
-        # Per (B, table, alt) take that table's row at that pair-index
-        anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
-        anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
 
         z = x.sum() * 0
         lookup_indices_grad_c = z.expand(batch_size, n_tables)
