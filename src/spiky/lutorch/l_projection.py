@@ -31,18 +31,18 @@ def _compiled_forward_eval_smooth_impl(
     lookup_alt_indices,
     lookup_alt_deltas,
     n_alternatives,
-    inv_uncertainty
+    l1_uncertainty
 ):
     # Apply uncertainty function
-    if inv_uncertainty:
+    if l1_uncertainty:
         abs_deltas = lookup_alt_deltas.abs()
         uncertainty = 0.5 / (1.0 + abs_deltas)  # [B, n_lookup_tables, n_alternatives]
     else:
         squared = lookup_alt_deltas * lookup_alt_deltas
         uncertainty = 0.5 / (1.0 + squared)  # [B, n_lookup_tables, n_alternatives]
     
-    # Weight for main indices: sum(1 - U(delta)) / n_alternatives
-    main_weight = (1.0 - uncertainty).sum(dim=2) / n_alternatives  # [B, n_lookup_tables]
+    # Weight for main indices: 1 - (sum(U(delta)) / n_alternatives)
+    main_weight = 1.0 - (uncertainty.sum(dim=2) / n_alternatives)  # [B, n_lookup_tables]
     
     # Weight for alt indices: U(delta) / n_alternatives
     alt_weight = uncertainty / n_alternatives  # [B, n_lookup_tables, n_alternatives]
@@ -75,17 +75,17 @@ def _forward_train_smooth_impl(
     lookup_alt_indices: torch.Tensor,
     lookup_alt_deltas: torch.Tensor,
     n_alternatives: int,
-    inv_uncertainty: bool,
+    l1_uncertainty: bool,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Train forward smooth branch: weighted combination, returns (output, main_weight, alt_weight) for backward."""
-    if inv_uncertainty:
+    if l1_uncertainty:
         abs_deltas = lookup_alt_deltas.abs()
         uncertainty = 0.5 / (1.0 + abs_deltas)
     else:
         squared = lookup_alt_deltas * lookup_alt_deltas
         uncertainty = 0.5 / (1.0 + squared)
 
-    main_weight = (1.0 - uncertainty).sum(dim=2) / n_alternatives
+    main_weight = 1.0 - (uncertainty.sum(dim=2) / n_alternatives)
     alt_weight = uncertainty / n_alternatives
 
     main_weights = weights[table_indices_expanded, lookup_indices]
@@ -277,7 +277,7 @@ class LProjection(nn.Module):
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
             
-            inv_uncertainty = self.uncertainty_mode == UncertaintyMode.INVERSE_L1
+            l1_uncertainty = self.uncertainty_mode == UncertaintyMode.INVERSE_L1
             
             return _compiled_forward_eval_smooth_impl(
                 self.weights,
@@ -287,7 +287,7 @@ class LProjection(nn.Module):
                 lookup_alt_indices,
                 lookup_alt_deltas,
                 self.n_alternatives,
-                inv_uncertainty
+                l1_uncertainty
             )
     
     def _forward_train(
@@ -357,7 +357,7 @@ class LProjectionFunction(torch.autograd.Function):
             # Smooth mode: weighted combination
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
-            inv_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
+            l1_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
             output, main_weight, alt_weight = _forward_train_smooth_impl(
                 weights,
                 table_indices_expanded,
@@ -366,7 +366,7 @@ class LProjectionFunction(torch.autograd.Function):
                 lookup_alt_indices,
                 lookup_alt_deltas,
                 n_alternatives,
-                inv_uncertainty,
+                l1_uncertainty,
             )
             ctx.save_for_backward(
                 weights, lookup_indices, lookup_alt_indices,
