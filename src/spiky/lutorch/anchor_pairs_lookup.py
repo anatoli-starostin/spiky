@@ -341,7 +341,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 one_plus_sq = 1.0 + delta_sq
                 minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
 
-            du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, n_alternatives]
+            du = grad_diff * minus_uncertainty_derivative / lookup_alt_deltas.shape[-1]  # [B, n_tables, n_alternatives]
 
             batch_offset = ctx_batch_offset
             anchor1_flat = anchor1_ids.view(-1)
