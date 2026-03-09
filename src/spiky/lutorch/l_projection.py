@@ -331,13 +331,23 @@ class LProjectionFunction(torch.autograd.Function):
         """
         (
             weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
-            lookup_indices_grad_c, lookup_alt_indices_grad_c, smooth_mode,
+            _, _, smooth_mode,
             n_alternatives, uncertainty_mode, table_indices_expanded, table_indices_flat,
             table_indices_expanded_alt, table_indices_alt_flat
         ) = args
         
         batch_size = lookup_indices.shape[0]
         n_lookup_tables = lookup_indices.shape[1]
+
+        print(
+            (
+                smooth_mode,
+                _USE_LUTORCH_CUSTOM_CUDA_KERNELS,
+                _NativeLUTorchManager is not None,
+                weights.is_cuda,
+                weights.dtype in (torch.float32, torch.float64)
+            )
+        )
 
         if not smooth_mode:
             # Non-smooth: just lookup weights using pre-computed table indices

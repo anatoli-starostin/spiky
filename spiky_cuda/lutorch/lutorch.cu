@@ -775,15 +775,15 @@ public:
         #ifndef NO_CUDA
         profiler.register_operation_type(
             LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP,
-            "lutorch::anchor_pairs_lookup_forward_na1"
+            "lutorch::anchor_pairs_lookup_forward"
         );
         profiler.register_operation_type(
             LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP,
-            "lutorch::anchor_pairs_lookup_eval_forward_no_alternatives"
+            "lutorch::anchor_pairs_lookup_eval_forward"
         );
         profiler.register_operation_type(
             LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP,
-            "lutorch::anchor_pairs_lookup_backward_na"
+            "lutorch::anchor_pairs_lookup_backward"
         );
         profiler.register_operation_type(
             LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP,
