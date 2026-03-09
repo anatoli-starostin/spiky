@@ -46,10 +46,6 @@ def _run_codegen():
         'torch_utils/torch_utils_kernels_logic.proto',
         'torch_utils/aux_/torch_utils_kernels_logic.cu'
     )
-    generate_cu_from_proto(
-        'lprojection/lprojection_runtime_kernels_logic.proto',
-        'lprojection/aux_/lprojection_runtime_kernels_logic.cu'
-    )
 
 
 BUILD_INTEGERS_VERSION = True
@@ -65,8 +61,6 @@ sources_list_cuda = [
     'spnet/spnet_runtime.cu',
     'lut/lut.cu',
     'lut/lut_runtime.cu',
-    'lprojection/lprojection.cu',
-    'lprojection/lprojection_runtime.cu',
     'synapse_growth/synapse_growth.cu',
     'torch_utils/torch_utils.cu',
     'lutorch/lutorch.cu',
@@ -77,9 +71,7 @@ if BUILD_INTEGERS_VERSION:
         'spnet/aux_/spnet_I.cu',
         'spnet/aux_/spnet_runtime_I.cu',
         'lut/aux_/lut_I.cu',
-        'lut/aux_/lut_runtime_I.cu',
-        'lprojection/aux_/lprojection_I.cu',
-        'lprojection/aux_/lprojection_runtime_I.cu'
+        'lut/aux_/lut_runtime_I.cu'
     ]
 
 sources_list_no_cuda = [
@@ -92,8 +84,6 @@ sources_list_no_cuda = [
     'spnet/aux_/spnet_runtime.cpp',
     'lut/aux_/lut.cpp',
     'lut/aux_/lut_runtime.cpp',
-    'lprojection/aux_/lprojection.cpp',
-    'lprojection/aux_/lprojection_runtime.cpp',
     'synapse_growth/aux_/synapse_growth.cpp',
     'torch_utils/aux_/torch_utils.cpp',
     'lutorch/aux_/lutorch.cpp',
@@ -104,9 +94,7 @@ if BUILD_INTEGERS_VERSION:
         'spnet/aux_/spnet_I.cpp',
         'spnet/aux_/spnet_runtime_I.cpp',
         'lut/aux_/lut_I.cpp',
-        'lut/aux_/lut_runtime_I.cpp',
-        'lprojection/aux_/lprojection_I.cpp',
-        'lprojection/aux_/lprojection_runtime_I.cpp'
+        'lut/aux_/lut_runtime_I.cpp'
     ]
 
 if hasattr(sys, 'getwindowsversion'):
