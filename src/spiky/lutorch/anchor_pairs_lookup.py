@@ -23,25 +23,16 @@ if _LUTORCH_CUDA_THREADS_PER_BLOCK < 1 or _LUTORCH_CUDA_THREADS_PER_BLOCK > 1024
     )
 
 try:
-    from spiky_cuda import LUTorchManager as _NativeLUTorchManager
+    from spiky_cuda import get_lutorch_manager as _get_native_lutorch_manager
 except Exception:
-    _NativeLUTorchManager = None
-
-_NATIVE_LUTORCH_MANAGER = None
+    def _get_native_lutorch_manager():
+        return None
 
 
 def _maybe_compile(fn):
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
         return torch.compile(fn, dynamic=True)
     return fn
-
-
-
-def _get_native_lutorch_manager():
-    global _NATIVE_LUTORCH_MANAGER
-    if _NATIVE_LUTORCH_MANAGER is None and _NativeLUTorchManager is not None:
-        _NATIVE_LUTORCH_MANAGER = _NativeLUTorchManager()
-    return _NATIVE_LUTORCH_MANAGER
 
 
 @_maybe_compile
@@ -288,7 +279,7 @@ class AnchorPairsLookup(AbstractLookup):
             self.n_alternatives in (1, 2, 3)
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
-            and _NativeLUTorchManager is not None
+            and _get_native_lutorch_manager() is not None
         )
         if use_native_eval_cuda:
             native = _get_native_lutorch_manager()
@@ -398,7 +389,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             n_alternatives in (1, 2, 3)
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
-            and _NativeLUTorchManager is not None
+            and _get_native_lutorch_manager() is not None
         )
         if use_native_cuda:
             native = _get_native_lutorch_manager()
@@ -496,7 +487,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
-            and _NativeLUTorchManager is not None
+            and _get_native_lutorch_manager() is not None
             and lookup_alt_deltas.shape[-1] in (1, 2, 3)
             and anchor1_ids.numel() > 0
             and anchor2_ids.numel() > 0

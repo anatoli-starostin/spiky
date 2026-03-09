@@ -20,24 +20,16 @@ if _LUTORCH_CUDA_THREADS_PER_BLOCK < 1 or _LUTORCH_CUDA_THREADS_PER_BLOCK > 1024
     )
 
 try:
-    from spiky_cuda import LUTorchManager as _NativeLUTorchManager
+    from spiky_cuda import get_lutorch_manager as _get_native_lutorch_manager
 except Exception:
-    _NativeLUTorchManager = None
-
-_NATIVE_LUTORCH_MANAGER = None
+    def _get_native_lutorch_manager():
+        return None
 
 
 def _maybe_compile(fn):
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
         return torch.compile(fn, dynamic=True)
     return fn
-
-
-def _get_native_lutorch_manager():
-    global _NATIVE_LUTORCH_MANAGER
-    if _NATIVE_LUTORCH_MANAGER is None and _NativeLUTorchManager is not None:
-        _NATIVE_LUTORCH_MANAGER = _NativeLUTorchManager()
-    return _NATIVE_LUTORCH_MANAGER
 
 
 # --- Compiled hot-path implementations (torch.compile for fusion when enabled) ---
@@ -258,7 +250,7 @@ class LProjection(nn.Module):
 
             use_native_eval_cuda = (
                 _USE_LUTORCH_CUSTOM_CUDA_KERNELS
-                and _NativeLUTorchManager is not None
+                and _get_native_lutorch_manager() is not None
                 and self.weights.is_cuda
                 and self.weights.dtype in (torch.float32, torch.float64)
             )
@@ -339,16 +331,6 @@ class LProjectionFunction(torch.autograd.Function):
         batch_size = lookup_indices.shape[0]
         n_lookup_tables = lookup_indices.shape[1]
 
-        print(
-            (
-                smooth_mode,
-                _USE_LUTORCH_CUSTOM_CUDA_KERNELS,
-                _NativeLUTorchManager is not None,
-                weights.is_cuda,
-                weights.dtype in (torch.float32, torch.float64)
-            )
-        )
-
         if not smooth_mode:
             # Non-smooth: just lookup weights using pre-computed table indices
             output = weights[table_indices_expanded, lookup_indices]  # [B, n_lookup_tables, n_outputs]
@@ -368,7 +350,7 @@ class LProjectionFunction(torch.autograd.Function):
             l1_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
             use_native_forward_cuda = (
                 _USE_LUTORCH_CUSTOM_CUDA_KERNELS
-                and _NativeLUTorchManager is not None
+                and _get_native_lutorch_manager() is not None
                 and weights.is_cuda
                 and weights.dtype in (torch.float32, torch.float64)
             )
@@ -427,7 +409,7 @@ class LProjectionFunction(torch.autograd.Function):
 
         use_native_cuda_backward = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
-            and _NativeLUTorchManager is not None
+            and _get_native_lutorch_manager() is not None
             and grad_output.is_cuda
             and grad_output.dtype in (torch.float32, torch.float64)
             and lookup_alt_indices is not None

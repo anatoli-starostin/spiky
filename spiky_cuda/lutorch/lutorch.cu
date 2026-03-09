@@ -2218,4 +2218,14 @@ void PB_LUTorchManager(py::module& m) {
         )
         #endif
         .def("get_profiling_stats", &LUTorchManager::get_profiling_stats);
+
+    // Singleton: one manager for all lutorch ops so profiler sees both lookup and lprojection.
+    m.def(
+        "get_lutorch_manager",
+        []() -> LUTorchManager* {
+            static LUTorchManager instance;
+            return &instance;
+        },
+        py::return_value_policy::reference
+    );
 }
