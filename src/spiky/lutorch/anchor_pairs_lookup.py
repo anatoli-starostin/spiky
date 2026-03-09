@@ -285,7 +285,7 @@ class AnchorPairsLookup(AbstractLookup):
         use_native_eval_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and
-            self.n_alternatives == 1
+            self.n_alternatives in (1, 2)
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _NativeLUTorchManager is not None
@@ -293,22 +293,41 @@ class AnchorPairsLookup(AbstractLookup):
         if use_native_eval_cuda:
             native = _get_native_lutorch_manager()
             if return_alternatives:
-                lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = native.anchor_pairs_lookup_forward_na1(
+                if self.n_alternatives == 1:
+                    lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = native.anchor_pairs_lookup_forward_na1(
+                        x,
+                        anchor_pairs_a,
+                        anchor_pairs_b,
+                        float(self.cmp_eps),
+                        False,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
+                else:
+                    lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = native.anchor_pairs_lookup_forward_na2(
+                        x,
+                        anchor_pairs_a,
+                        anchor_pairs_b,
+                        float(self.cmp_eps),
+                        False,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
+                return lookup_indices, lookup_alt_indices, lookup_alt_deltas
+            if self.n_alternatives == 1:
+                lookup_indices = native.anchor_pairs_lookup_eval_forward_na1(
                     x,
                     anchor_pairs_a,
                     anchor_pairs_b,
                     float(self.cmp_eps),
-                    False,
                     _LUTORCH_CUDA_THREADS_PER_BLOCK,
                 )
-                return lookup_indices, lookup_alt_indices, lookup_alt_deltas
-            lookup_indices = native.anchor_pairs_lookup_eval_forward_na1(
-                x,
-                anchor_pairs_a,
-                anchor_pairs_b,
-                float(self.cmp_eps),
-                _LUTORCH_CUDA_THREADS_PER_BLOCK,
-            )
+            else:
+                lookup_indices = native.anchor_pairs_lookup_eval_forward_na2(
+                    x,
+                    anchor_pairs_a,
+                    anchor_pairs_b,
+                    float(self.cmp_eps),
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
             return lookup_indices, None, None
 
         return _anchor_pairs_lookup_eval_fallback(
@@ -376,27 +395,43 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         use_native_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and
-            n_alternatives == 1
+            n_alternatives in (1, 2)
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _NativeLUTorchManager is not None
         )
         if use_native_cuda:
             native = _get_native_lutorch_manager()
-            (
-                lookup_indices,
-                lookup_alt_indices,
-                lookup_alt_deltas,
-                anchor1_ids,
-                anchor2_ids,
-            ) = native.anchor_pairs_lookup_forward_na1(
-                x,
-                anchor_pairs_a,
-                anchor_pairs_b,
-                float(cmp_eps),
-                True,
-                _LUTORCH_CUDA_THREADS_PER_BLOCK,
-            )
+            if n_alternatives == 1:
+                (
+                    lookup_indices,
+                    lookup_alt_indices,
+                    lookup_alt_deltas,
+                    anchor1_ids,
+                    anchor2_ids,
+                ) = native.anchor_pairs_lookup_forward_na1(
+                    x,
+                    anchor_pairs_a,
+                    anchor_pairs_b,
+                    float(cmp_eps),
+                    True,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                (
+                    lookup_indices,
+                    lookup_alt_indices,
+                    lookup_alt_deltas,
+                    anchor1_ids,
+                    anchor2_ids,
+                ) = native.anchor_pairs_lookup_forward_na2(
+                    x,
+                    anchor_pairs_a,
+                    anchor_pairs_b,
+                    float(cmp_eps),
+                    True,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
         else:
             (
                 lookup_indices,
@@ -447,23 +482,36 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _NativeLUTorchManager is not None
-            and lookup_alt_deltas.shape[-1] == 1
+            and lookup_alt_deltas.shape[-1] in (1, 2)
             and anchor1_ids.numel() > 0
             and anchor2_ids.numel() > 0
         )
         if use_native_backward_cuda:
             native = _get_native_lutorch_manager()
-            x_grad_flat = native.anchor_pairs_lookup_backward_na1(
-                x,
-                anchor1_ids.reshape(-1).contiguous(),
-                anchor2_ids.reshape(-1).contiguous(),
-                lookup_alt_deltas.reshape(-1).contiguous(),
-                ctx.batch_offset.reshape(-1).contiguous(),
-                grad_lookup_indices_grad_c,
-                grad_lookup_alt_indices_grad_c.reshape(-1).contiguous(),
-                ctx.inv_l1,
-                _LUTORCH_CUDA_THREADS_PER_BLOCK,
-            )
+            if lookup_alt_deltas.shape[-1] == 1:
+                x_grad_flat = native.anchor_pairs_lookup_backward_na1(
+                    x,
+                    anchor1_ids.reshape(-1).contiguous(),
+                    anchor2_ids.reshape(-1).contiguous(),
+                    lookup_alt_deltas.reshape(-1).contiguous(),
+                    ctx.batch_offset.reshape(-1).contiguous(),
+                    grad_lookup_indices_grad_c,
+                    grad_lookup_alt_indices_grad_c.reshape(-1).contiguous(),
+                    ctx.inv_l1,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                x_grad_flat = native.anchor_pairs_lookup_backward_na2(
+                    x,
+                    anchor1_ids.reshape(-1).contiguous(),
+                    anchor2_ids.reshape(-1).contiguous(),
+                    lookup_alt_deltas.reshape(-1).contiguous(),
+                    ctx.batch_offset.reshape(-1).contiguous(),
+                    grad_lookup_indices_grad_c,
+                    grad_lookup_alt_indices_grad_c.reshape(-1).contiguous(),
+                    ctx.inv_l1,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
             return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
 
         def _anchor_pairs_lookup_backward_impl(
