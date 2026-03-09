@@ -44,51 +44,7 @@ def _get_native_lutorch_manager():
 
 
 @_maybe_compile
-def _compiled_forward_eval_smooth_impl(
-    weights,
-    table_indices_expanded,
-    table_indices_expanded_alt,
-    lookup_indices,
-    lookup_alt_indices,
-    lookup_alt_deltas,
-    n_alternatives,
-    l1_uncertainty
-):
-    # Apply uncertainty function
-    if l1_uncertainty:
-        abs_deltas = lookup_alt_deltas.abs()
-        uncertainty = 0.5 / (1.0 + abs_deltas)  # [B, n_lookup_tables, n_alternatives]
-    else:
-        squared = lookup_alt_deltas * lookup_alt_deltas
-        uncertainty = 0.5 / (1.0 + squared)  # [B, n_lookup_tables, n_alternatives]
-    
-    # Weight for main indices: 1 - (sum(U(delta)) / n_alternatives)
-    main_weight = 1.0 - (uncertainty.sum(dim=2) / n_alternatives)  # [B, n_lookup_tables]
-    
-    # Weight for alt indices: U(delta) / n_alternatives
-    alt_weight = uncertainty / n_alternatives  # [B, n_lookup_tables, n_alternatives]
-    
-    # Lookup main weights using pre-computed table indices
-    main_weights = weights[table_indices_expanded, lookup_indices]  # [B, n_lookup_tables, n_outputs]
-    
-    # Lookup alt weights using pre-computed alternative indices
-    alt_weights = weights[table_indices_expanded_alt, lookup_alt_indices]  # [B, n_lookup_tables, n_alternatives, n_outputs]
-    
-    # Weighted combination
-    # main_weights: [B, n_lookup_tables, n_outputs]
-    # main_weight: [B, n_lookup_tables] -> [B, n_lookup_tables, 1]
-    output = main_weights * main_weight.unsqueeze(2)  # [B, n_lookup_tables, n_outputs]
-    
-    # alt_weights: [B, n_lookup_tables, n_alternatives, n_outputs]
-    # alt_weight: [B, n_lookup_tables, n_alternatives] -> [B, n_lookup_tables, n_alternatives, 1]
-    alt_weighted = alt_weights * alt_weight.unsqueeze(3)  # [B, n_lookup_tables, n_alternatives, n_outputs]
-    output = output + alt_weighted.sum(dim=2)  # [B, n_lookup_tables, n_outputs]
-    
-    return output
-
-
-@_maybe_compile
-def _forward_train_smooth_impl(
+def _forward_smooth_impl(
     weights: torch.Tensor,
     table_indices_expanded: torch.Tensor,
     table_indices_expanded_alt: torch.Tensor,
@@ -98,7 +54,7 @@ def _forward_train_smooth_impl(
     n_alternatives: int,
     l1_uncertainty: bool,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Train forward smooth branch: weighted combination, returns (output, main_weight, alt_weight) for backward."""
+    """Smooth forward branch, returns (output, main_weight, alt_weight)."""
     if l1_uncertainty:
         abs_deltas = lookup_alt_deltas.abs()
         uncertainty = 0.5 / (1.0 + abs_deltas)
@@ -297,10 +253,30 @@ class LProjection(nn.Module):
             # Smooth mode: weighted combination using uncertainty function
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
-            
+
             l1_uncertainty = self.uncertainty_mode == UncertaintyMode.INVERSE_L1
-            
-            return _compiled_forward_eval_smooth_impl(
+
+            use_native_eval_cuda = (
+                _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+                and _NativeLUTorchManager is not None
+                and self.weights.is_cuda
+                and self.weights.dtype in (torch.float32, torch.float64)
+            )
+            if use_native_eval_cuda:
+                native = _get_native_lutorch_manager()
+                output, _, _ = native.lprojection_forward_smooth(
+                    self.weights,
+                    lookup_indices.contiguous(),
+                    lookup_alt_indices.contiguous(),
+                    lookup_alt_deltas.contiguous(),
+                    self._cached_table_indices_flat.contiguous(),
+                    self._cached_table_indices_alt_flat.contiguous(),
+                    l1_uncertainty,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+                return output
+
+            output, _, _ = _forward_smooth_impl(
                 self.weights,
                 self._cached_table_indices_expanded,
                 self._cached_table_indices_expanded_alt,
@@ -310,6 +286,7 @@ class LProjection(nn.Module):
                 self.n_alternatives,
                 l1_uncertainty
             )
+            return output
     
     def _forward_train(
         self,
@@ -379,16 +356,35 @@ class LProjectionFunction(torch.autograd.Function):
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
             l1_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
-            output, main_weight, alt_weight = _forward_train_smooth_impl(
-                weights,
-                table_indices_expanded,
-                table_indices_expanded_alt,
-                lookup_indices,
-                lookup_alt_indices,
-                lookup_alt_deltas,
-                n_alternatives,
-                l1_uncertainty,
+            use_native_forward_cuda = (
+                _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+                and _NativeLUTorchManager is not None
+                and weights.is_cuda
+                and weights.dtype in (torch.float32, torch.float64)
             )
+            if use_native_forward_cuda:
+                native = _get_native_lutorch_manager()
+                output, main_weight, alt_weight = native.lprojection_forward_smooth(
+                    weights,
+                    lookup_indices.contiguous(),
+                    lookup_alt_indices.contiguous(),
+                    lookup_alt_deltas.contiguous(),
+                    table_indices_flat.contiguous(),
+                    table_indices_alt_flat.contiguous(),
+                    l1_uncertainty,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                output, main_weight, alt_weight = _forward_smooth_impl(
+                    weights,
+                    table_indices_expanded,
+                    table_indices_expanded_alt,
+                    lookup_indices,
+                    lookup_alt_indices,
+                    lookup_alt_deltas,
+                    n_alternatives,
+                    l1_uncertainty,
+                )
             ctx.save_for_backward(
                 weights, lookup_indices, lookup_alt_indices,
                 main_weight, alt_weight, table_indices_flat,

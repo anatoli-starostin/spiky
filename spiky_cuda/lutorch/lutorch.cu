@@ -211,6 +211,78 @@ __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
 }
 
 template <typename scalar_t>
+__global__ void lprojection_forward_smooth_weights_kernel(
+    int64_t total_bt,
+    int64_t n_alternatives,
+    bool l1_uncertainty,
+    const scalar_t* lookup_alt_deltas_ptr, // [B*T*A] contiguous flattened
+    scalar_t* main_weight_ptr,             // [B*T]
+    scalar_t* alt_weight_ptr               // [B*T*A]
+) {
+    int64_t bt = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (bt >= total_bt) {
+        return;
+    }
+    scalar_t inv_n_alt = static_cast<scalar_t>(1.0) / static_cast<scalar_t>(n_alternatives);
+    scalar_t uncertainty_sum = static_cast<scalar_t>(0);
+    int64_t base = bt * n_alternatives;
+    for (int64_t a = 0; a < n_alternatives; ++a) {
+        scalar_t d = lookup_alt_deltas_ptr[base + a];
+        scalar_t u;
+        if (l1_uncertainty) {
+            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + lutorch_abs(d));
+        } else {
+            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + d * d);
+        }
+        alt_weight_ptr[base + a] = u * inv_n_alt;
+        uncertainty_sum += u;
+    }
+    main_weight_ptr[bt] = static_cast<scalar_t>(1.0) - uncertainty_sum * inv_n_alt;
+}
+
+template <typename scalar_t>
+__global__ void lprojection_forward_smooth_output_kernel(
+    int64_t total_bt,
+    int64_t n_tables,
+    int64_t n_outputs,
+    int64_t n_entries,
+    int64_t n_alternatives,
+    const scalar_t* weights_ptr,                 // [T,E,O] contiguous
+    const int64_t* table_indices_flat_ptr,       // [B*T]
+    const int64_t* lookup_indices_flat_ptr,      // [B*T]
+    const int64_t* table_indices_alt_flat_ptr,   // [B*T*A]
+    const int64_t* lookup_alt_indices_flat_ptr,  // [B*T*A]
+    const scalar_t* main_weight_ptr,             // [B*T]
+    const scalar_t* alt_weight_ptr,              // [B*T*A]
+    scalar_t* output_ptr                         // [B,T,O] contiguous
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = total_bt * n_outputs;
+    if (linear_tid >= total) {
+        return;
+    }
+    int64_t bt = linear_tid / n_outputs;
+    int64_t o = linear_tid - bt * n_outputs;
+    int64_t b = bt / n_tables;
+    int64_t t = bt - b * n_tables;
+
+    int64_t table_main = table_indices_flat_ptr[bt];
+    int64_t entry_main = lookup_indices_flat_ptr[bt];
+    scalar_t acc = weights_ptr[(table_main * n_entries + entry_main) * n_outputs + o] * main_weight_ptr[bt];
+
+    int64_t base = bt * n_alternatives;
+    for (int64_t a = 0; a < n_alternatives; ++a) {
+        int64_t bta = base + a;
+        int64_t table_alt = table_indices_alt_flat_ptr[bta];
+        int64_t entry_alt = lookup_alt_indices_flat_ptr[bta];
+        scalar_t w = weights_ptr[(table_alt * n_entries + entry_alt) * n_outputs + o];
+        acc += w * alt_weight_ptr[bta];
+    }
+
+    output_ptr[(b * n_tables + t) * n_outputs + o] = acc;
+}
+
+template <typename scalar_t>
 __global__ void lprojection_backward_na1_smooth_weights_kernel(
     int64_t total_bt,
     int64_t n_tables,
@@ -430,6 +502,10 @@ public:
             LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP,
             "lutorch::lprojection_backward_na1"
         );
+        profiler.register_operation_type(
+            LUTORCH_MANAGER_LPROJECTION_FORWARD_SMOOTH_PROFILER_OP,
+            "lutorch::lprojection_forward_smooth"
+        );
         #endif
         #endif
     }
@@ -625,6 +701,99 @@ public:
 
         PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_NA1_PROFILER_OP);
         return lookup_indices;
+    }
+
+    py::tuple
+    lprojection_forward_smooth(
+        const torch::Tensor& weights,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& lookup_alt_deltas,
+        const torch::Tensor& table_indices_flat,
+        const torch::Tensor& table_indices_alt_flat,
+        bool l1_uncertainty,
+        int64_t threads_per_block = 256
+    ) {
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_FORWARD_SMOOTH_PROFILER_OP);
+
+        if (!weights.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda() ||
+            !lookup_alt_deltas.is_cuda() || !table_indices_flat.is_cuda() || !table_indices_alt_flat.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!weights.is_floating_point() || lookup_alt_deltas.dtype() != weights.dtype()) {
+            throw py::value_error("weights/lookup_alt_deltas must be floating with same dtype");
+        }
+        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
+            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
+            throw py::value_error("indices tensors must be int64");
+        }
+        if (weights.dim() != 3 || lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_deltas.dim() != 3) {
+            throw py::value_error("weights [T,E,O], lookup_indices [B,T], lookup_alt_indices/deltas [B,T,A] required");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+        }
+        if (lookup_indices.device() != weights.device() || lookup_alt_indices.device() != weights.device() ||
+            lookup_alt_deltas.device() != weights.device() || table_indices_flat.device() != weights.device() ||
+            table_indices_alt_flat.device() != weights.device()) {
+            throw py::value_error("all tensors must be on the same CUDA device");
+        }
+
+        int64_t batch_size = lookup_indices.size(0);
+        int64_t n_tables = lookup_indices.size(1);
+        int64_t n_entries = weights.size(1);
+        int64_t n_outputs = weights.size(2);
+        int64_t n_alternatives = lookup_alt_indices.size(2);
+        int64_t total_bt = batch_size * n_tables;
+        int64_t total_bta = total_bt * n_alternatives;
+
+        if (lookup_alt_deltas.numel() != total_bta || lookup_alt_indices.numel() != total_bta) {
+            throw py::value_error("lookup_alt_indices and lookup_alt_deltas numel must be B*T*A");
+        }
+        if (table_indices_flat.numel() != total_bt || table_indices_alt_flat.numel() != total_bta) {
+            throw py::value_error("table_indices_flat must be B*T and table_indices_alt_flat must be B*T*A");
+        }
+
+        auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
+        torch::Tensor main_weight = torch::empty({batch_size, n_tables}, opts);
+        torch::Tensor alt_weight = torch::empty({batch_size, n_tables, n_alternatives}, opts);
+        torch::Tensor output = torch::empty({batch_size, n_tables, n_outputs}, opts);
+
+        int device = weights.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int threads = static_cast<int>(threads_per_block);
+        int blocks_bt = static_cast<int>((total_bt + threads - 1) / threads);
+        int blocks_out = static_cast<int>(((total_bt * n_outputs) + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_forward_smooth", [&] {
+            lprojection_forward_smooth_weights_kernel<scalar_t><<<blocks_bt, threads>>>(
+                total_bt,
+                n_alternatives,
+                l1_uncertainty,
+                reinterpret_cast<const scalar_t*>(lookup_alt_deltas.data_ptr()),
+                reinterpret_cast<scalar_t*>(main_weight.data_ptr()),
+                reinterpret_cast<scalar_t*>(alt_weight.data_ptr())
+            );
+            lprojection_forward_smooth_output_kernel<scalar_t><<<blocks_out, threads>>>(
+                total_bt,
+                n_tables,
+                n_outputs,
+                n_entries,
+                n_alternatives,
+                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
+                reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
+                reinterpret_cast<scalar_t*>(output.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_FORWARD_SMOOTH_PROFILER_OP);
+        return py::make_tuple(output, main_weight, alt_weight);
     }
 
     torch::Tensor
@@ -1272,6 +1441,18 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_alt_indices"),
             py::arg("table_indices_flat"),
             py::arg("table_indices_alt_flat"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "lprojection_forward_smooth",
+            &LUTorchManager::lprojection_forward_smooth,
+            py::arg("weights"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("lookup_alt_deltas"),
+            py::arg("table_indices_flat"),
+            py::arg("table_indices_alt_flat"),
+            py::arg("l1_uncertainty"),
             py::arg("threads_per_block") = 256
         )
         .def(
