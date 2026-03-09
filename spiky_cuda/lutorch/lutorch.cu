@@ -12,18 +12,23 @@ static __device__ __forceinline__ scalar_t lutorch_abs(scalar_t v) {
 
 template <typename scalar_t>
 static __device__ __forceinline__ scalar_t lutorch_delta(
-    const scalar_t* x_row,
+    const scalar_t* x_ptr,
+    int64_t batch_index,
+    int64_t x_stride0,
+    int64_t x_stride1,
     int64_t anchor_a,
     int64_t anchor_b
 ) {
-    return x_row[anchor_a] - x_row[anchor_b];
+    const int64_t base = batch_index * x_stride0;
+    return x_ptr[base + anchor_a * x_stride1] - x_ptr[base + anchor_b * x_stride1];
 }
 
 template <typename scalar_t>
 __global__ void anchor_pairs_lookup_forward_na1_kernel(
     const scalar_t* x_ptr,
     int64_t batch_size,
-    int64_t input_dim,
+    int64_t x_stride0,
+    int64_t x_stride1,
     const int64_t* anchor_pairs_a_ptr,
     const int64_t* anchor_pairs_b_ptr,
     int64_t n_tables,
@@ -43,8 +48,6 @@ __global__ void anchor_pairs_lookup_forward_na1_kernel(
 
     int64_t b = linear_tid / n_tables;
     int64_t t = linear_tid - b * n_tables;
-    const scalar_t* x_row = x_ptr + b * input_dim;
-
     int64_t table_offset = t * n_anchor_pairs;
 
     int64_t lookup_idx = 0;
@@ -57,7 +60,7 @@ __global__ void anchor_pairs_lookup_forward_na1_kernel(
     for (int64_t p = 0; p < n_anchor_pairs; ++p) {
         int64_t anchor_a = anchor_pairs_a_ptr[table_offset + p];
         int64_t anchor_b = anchor_pairs_b_ptr[table_offset + p];
-        scalar_t delta = lutorch_delta(x_row, anchor_a, anchor_b);
+        scalar_t delta = lutorch_delta(x_ptr, b, x_stride0, x_stride1, anchor_a, anchor_b);
 
         if (delta > cmp_eps) {
             lookup_idx |= (static_cast<int64_t>(1) << p);
@@ -86,7 +89,8 @@ template <typename scalar_t>
 __global__ void anchor_pairs_lookup_eval_forward_na1_kernel(
     const scalar_t* x_ptr,
     int64_t batch_size,
-    int64_t input_dim,
+    int64_t x_stride0,
+    int64_t x_stride1,
     const int64_t* anchor_pairs_a_ptr,
     const int64_t* anchor_pairs_b_ptr,
     int64_t n_tables,
@@ -102,7 +106,6 @@ __global__ void anchor_pairs_lookup_eval_forward_na1_kernel(
 
     int64_t b = linear_tid / n_tables;
     int64_t t = linear_tid - b * n_tables;
-    const scalar_t* x_row = x_ptr + b * input_dim;
     int64_t table_offset = t * n_anchor_pairs;
 
     int64_t lookup_idx = 0;
@@ -110,7 +113,7 @@ __global__ void anchor_pairs_lookup_eval_forward_na1_kernel(
     for (int64_t p = 0; p < n_anchor_pairs; ++p) {
         int64_t anchor_a = anchor_pairs_a_ptr[table_offset + p];
         int64_t anchor_b = anchor_pairs_b_ptr[table_offset + p];
-        scalar_t delta = lutorch_delta(x_row, anchor_a, anchor_b);
+        scalar_t delta = lutorch_delta(x_ptr, b, x_stride0, x_stride1, anchor_a, anchor_b);
 
         if (delta > cmp_eps) {
             lookup_idx |= (static_cast<int64_t>(1) << p);
@@ -163,9 +166,6 @@ public:
         if (!x.is_cuda()) {
             throw py::value_error("x must be CUDA tensor");
         }
-        if (!x.is_contiguous()) {
-            throw py::value_error("x must be contiguous");
-        }
         if (!x.is_floating_point()) {
             throw py::value_error("x must be floating point tensor");
         }
@@ -192,7 +192,8 @@ public:
         }
 
         const int64_t batch_size = x.size(0);
-        const int64_t input_dim = x.size(1);
+        const int64_t x_stride0 = x.stride(0);
+        const int64_t x_stride1 = x.stride(1);
         const int64_t n_tables = anchor_pairs_a.size(0);
         const int64_t n_anchor_pairs = anchor_pairs_a.size(1);
         if (threads_per_block <= 0 || threads_per_block > 1024) {
@@ -212,7 +213,6 @@ public:
         int threads = static_cast<int>(threads_per_block);
         int blocks = static_cast<int>((total + threads - 1) / threads);
 
-
         torch::Tensor anchor1_ids;
         torch::Tensor anchor2_ids;
         int64_t* anchor1_ids_ptr = nullptr;
@@ -227,7 +227,8 @@ public:
             anchor_pairs_lookup_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
-                input_dim,
+                x_stride0,
+                x_stride1,
                 reinterpret_cast<const int64_t*>(anchor_pairs_a.data_ptr()),
                 reinterpret_cast<const int64_t*>(anchor_pairs_b.data_ptr()),
                 n_tables,
@@ -272,9 +273,6 @@ public:
         if (!x.is_cuda()) {
             throw py::value_error("x must be CUDA tensor");
         }
-        if (!x.is_contiguous()) {
-            throw py::value_error("x must be contiguous");
-        }
         if (!x.is_floating_point()) {
             throw py::value_error("x must be floating point tensor");
         }
@@ -301,7 +299,8 @@ public:
         }
 
         const int64_t batch_size = x.size(0);
-        const int64_t input_dim = x.size(1);
+        const int64_t x_stride0 = x.stride(0);
+        const int64_t x_stride1 = x.stride(1);
         const int64_t n_tables = anchor_pairs_a.size(0);
         const int64_t n_anchor_pairs = anchor_pairs_a.size(1);
         if (threads_per_block <= 0 || threads_per_block > 1024) {
@@ -323,7 +322,8 @@ public:
             anchor_pairs_lookup_eval_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
-                input_dim,
+                x_stride0,
+                x_stride1,
                 reinterpret_cast<const int64_t*>(anchor_pairs_a.data_ptr()),
                 reinterpret_cast<const int64_t*>(anchor_pairs_b.data_ptr()),
                 n_tables,
