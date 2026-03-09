@@ -278,21 +278,29 @@ class AnchorPairsLookup(AbstractLookup):
             - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
         """
         use_native_eval_cuda = (
-            return_alternatives
-            and self.n_alternatives == 1
+            self.n_alternatives == 1
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _NativeLUTorchManager is not None
         )
         if use_native_eval_cuda:
             native = _get_native_lutorch_manager()
-            lookup_indices, lookup_alt_indices, lookup_alt_deltas = native.anchor_pairs_lookup_eval_forward_na1(
+            if return_alternatives:
+                lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = native.anchor_pairs_lookup_forward_na1(
+                    x,
+                    anchor_pairs_a,
+                    anchor_pairs_b,
+                    float(self.cmp_eps),
+                    False,
+                )
+                return lookup_indices, lookup_alt_indices, lookup_alt_deltas
+            lookup_indices = native.anchor_pairs_lookup_eval_forward_na1(
                 x,
                 anchor_pairs_a,
                 anchor_pairs_b,
                 float(self.cmp_eps),
             )
-            return lookup_indices, lookup_alt_indices, lookup_alt_deltas
+            return lookup_indices, None, None
 
         return _anchor_pairs_lookup_eval_fallback(
             x,
