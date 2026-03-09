@@ -1,13 +1,11 @@
-import sys
 import os
 import shutil
-import torch
+import sys
 
 from setuptools import setup
 
 
 def _pick_gpp():
-    # Prefer specific versions if present, else fall back to g++
     candidates = ["g++-13", "g++-12", "g++-11", "g++-10", "g++-9", "g++-8", "g++"]
     for c in candidates:
         p = shutil.which(c)
@@ -97,84 +95,94 @@ if BUILD_INTEGERS_VERSION:
         'lut/aux_/lut_runtime_I.cpp'
     ]
 
-if hasattr(sys, 'getwindowsversion'):
-    if torch.cuda.is_available():
-        from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-        setup(
-            name='spiky_cuda',
-            version='0.1',
-            ext_modules=[
+def _torch_cuda_available():
+    import torch
+    return torch.cuda.is_available()
+
+
+def _get_build_extension():
+    from torch.utils.cpp_extension import BuildExtension
+    return BuildExtension
+
+
+def _get_ext_modules():
+    if hasattr(sys, "getwindowsversion"):
+        if _torch_cuda_available():
+            from torch.utils.cpp_extension import CUDAExtension
+
+            return [
                 CUDAExtension(
-                    'spiky_cuda', sources_list_cuda,
+                    "spiky_cuda",
+                    sources_list_cuda,
                     extra_compile_args={
-                        'cxx': ["-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
-                        'nvcc': ['-O3', '-v', '-allow-unsupported-compiler', '-Xptxas="-v"'] + BUILD_INTEGERS_COMPILE_ARGS
-                    },
-                    libraries=['cuda']
-                ),
-            ],
-            cmdclass={
-                'build_ext': BuildExtension
-            }
-        )
-    else:
-        from torch.utils.cpp_extension import BuildExtension, CppExtension
-        setup(
-            name='spiky_cuda',
-            version='0.1',
-            ext_modules=[
-                CppExtension(
-                    'spiky_cuda', sources_list_no_cuda,
-                    extra_compile_args=["-DNO_CUDA", "-O2"] + BUILD_INTEGERS_COMPILE_ARGS
-                )
-            ],
-            cmdclass={
-                'build_ext': BuildExtension
-            }
-        )
-else:
-    if torch.cuda.is_available():
-        from torch.utils.cpp_extension import BuildExtension, CUDAExtension
-        GPP_PATH = _pick_gpp()
-        GPP_DIR = os.path.dirname(GPP_PATH)
-        setup(
-            name='spiky_cuda',
-            version='0.1',
-            ext_modules=[
-                CUDAExtension(
-                    'spiky_cuda', sources_list_cuda,
-                    extra_compile_args={
-                        'cxx': [
-                           '-I', '/usr/local/cuda/include', "-Ofast"
+                        "cxx": ["-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
+                        "nvcc": [
+                            "-O3",
+                            "-v",
+                            "-allow-unsupported-compiler",
+                            '-Xptxas="-v"',
                         ] + BUILD_INTEGERS_COMPILE_ARGS,
-                        'nvcc': [
-                            '-I', '/usr/local/cuda/include', f'--compiler-bindir={GPP_DIR}', '-O3', '-Xptxas="-v"'
-                        ] + BUILD_INTEGERS_COMPILE_ARGS
                     },
-                    extra_link_args=['-lcuda'],
-                    library_dirs=['/usr/local/cuda/lib64']
+                    libraries=["cuda"],
                 )
-            ],
-            cmdclass={
-                'build_ext': BuildExtension
-            }
-        )
-    else:
-        from torch.utils.cpp_extension import BuildExtension, CppExtension
-        setup(
-            name='spiky_cuda',
-            version='0.1',
-            ext_modules=[
+            ]
+        else:
+            from torch.utils.cpp_extension import CppExtension
+
+            return [
                 CppExtension(
-                    'spiky_cuda', sources_list_no_cuda,
+                    "spiky_cuda",
+                    sources_list_no_cuda,
+                    extra_compile_args=["-DNO_CUDA", "-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
+                )
+            ]
+    else:
+        if _torch_cuda_available():
+            from torch.utils.cpp_extension import CUDAExtension
+
+            gpp_path = _pick_gpp()
+            gpp_dir = os.path.dirname(gpp_path)
+
+            return [
+                CUDAExtension(
+                    "spiky_cuda",
+                    sources_list_cuda,
+                    extra_compile_args={
+                        "cxx": [
+                            "-I",
+                            "/usr/local/cuda/include",
+                            "-Ofast",
+                        ] + BUILD_INTEGERS_COMPILE_ARGS,
+                        "nvcc": [
+                            "-I",
+                            "/usr/local/cuda/include",
+                            f"--compiler-bindir={gpp_dir}",
+                            "-O3",
+                            '-Xptxas="-v"',
+                        ] + BUILD_INTEGERS_COMPILE_ARGS,
+                    },
+                    extra_link_args=["-lcuda"],
+                    library_dirs=["/usr/local/cuda/lib64"],
+                )
+            ]
+        else:
+            from torch.utils.cpp_extension import CppExtension
+
+            return [
+                CppExtension(
+                    "spiky_cuda",
+                    sources_list_no_cuda,
                     extra_compile_args=["-DNO_CUDA", "-O3"] + BUILD_INTEGERS_COMPILE_ARGS,
                 )
-            ],
-            cmdclass={
-                'build_ext': BuildExtension
-            }
-        )
+            ]
 
-if __name__ == "__main__":
-    _run_codegen()
+
+_run_codegen()
+
+setup(
+    name="spiky_cuda",
+    version="0.1",
+    ext_modules=_get_ext_modules(),
+    cmdclass={"build_ext": _get_build_extension()},
+)
