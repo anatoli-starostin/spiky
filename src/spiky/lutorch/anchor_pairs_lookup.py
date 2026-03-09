@@ -89,6 +89,54 @@ def _anchor_pairs_lookup_forward_fallback(
     return lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids
 
 
+@_maybe_compile
+def _anchor_pairs_lookup_eval_fallback(
+    x: torch.Tensor,
+    anchor_pairs_a: torch.Tensor,
+    anchor_pairs_b: torch.Tensor,
+    powers: torch.Tensor,
+    cmp_eps: float,
+    n_tables: int,
+    n_anchor_pairs: int,
+    n_alternatives: int,
+    return_alternatives: bool,
+):
+    batch_size = x.shape[0]
+    idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
+    idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
+    x_a = x.gather(1, idx_a).view(batch_size, n_tables, n_anchor_pairs)
+    x_b = x.gather(1, idx_b).view(batch_size, n_tables, n_anchor_pairs)
+    deltas = x_a - x_b
+
+    bits = deltas.gt(cmp_eps).to(dtype=torch.long)
+    lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
+
+    if return_alternatives:
+        if n_alternatives == n_anchor_pairs:
+            min_delta_indices = torch.arange(
+                n_anchor_pairs, device=x.device, dtype=torch.long
+            ).view(1, 1, -1).expand(batch_size, n_tables, -1)
+            lookup_alt_deltas = deltas
+        else:
+            abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
+            if n_alternatives == 1:
+                _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+            else:
+                min_delta_indices = torch.topk(
+                    abs_deltas, k=n_alternatives, dim=2, largest=False
+                ).indices
+                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        lookup_indices_expanded = lookup_indices.unsqueeze(2)
+        flip_masks = (1 << min_delta_indices).long()
+        lookup_alt_indices = lookup_indices_expanded ^ flip_masks
+    else:
+        lookup_alt_indices = None
+        lookup_alt_deltas = None
+
+    return lookup_indices, lookup_alt_indices, lookup_alt_deltas
+
+
 class AnchorPairsLookup(AbstractLookup):
     """
     Lookup based on anchor pairs comparison.
@@ -214,7 +262,6 @@ class AnchorPairsLookup(AbstractLookup):
         else:
             return self._forward_eval(x, anchor_pairs_a, anchor_pairs_b, return_alternatives)
 
-    @_maybe_compile
     def _forward_eval(
         self,
         x: torch.Tensor,
@@ -230,47 +277,34 @@ class AnchorPairsLookup(AbstractLookup):
             - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or None if return_alternatives=False)
             - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
         """
-        # anchor_pairs_a/b: [n_tables, n_anchor_pairs] -> gather on flattened index
-        batch_size = x.shape[0]
-        idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
-        idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
-        x_a = x.gather(1, idx_a).view(batch_size, self.n_tables, self.n_anchor_pairs)
-        x_b = x.gather(1, idx_b).view(batch_size, self.n_tables, self.n_anchor_pairs)
-        deltas = x_a - x_b
+        use_native_eval_cuda = (
+            return_alternatives
+            and self.n_alternatives == 1
+            and x.is_cuda
+            and x.dtype in (torch.float32, torch.float64)
+            and _NativeLUTorchManager is not None
+        )
+        if use_native_eval_cuda:
+            native = _get_native_lutorch_manager()
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas = native.anchor_pairs_lookup_eval_forward_na1(
+                x,
+                anchor_pairs_a,
+                anchor_pairs_b,
+                float(self.cmp_eps),
+            )
+            return lookup_indices, lookup_alt_indices, lookup_alt_deltas
 
-        # Form binary representation: [B, n_tables, n_anchor_pairs]
-        bits = deltas.gt(self.cmp_eps).to(dtype=torch.long)
-
-        # Convert to integer lookup index: [B, n_tables]
-        # lookup_index = sum(bits[i] << i) for each table
-        lookup_indices = (bits << self.powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
-
-        # Compute alternative indices by flipping bits at positions with minimal absolute deltas
-        if return_alternatives:
-            if self.n_alternatives == self.n_anchor_pairs:
-                # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
-                min_delta_indices = torch.arange(
-                    self.n_anchor_pairs, device=x.device, dtype=torch.long
-                ).view(1, 1, -1).expand(batch_size, self.n_tables, -1)
-                lookup_alt_deltas = deltas
-            else:
-                abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-                if self.n_alternatives == 1:
-                    _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
-                    lookup_alt_deltas = deltas.gather(2, min_delta_indices)
-                else:
-                    min_delta_indices = torch.topk(
-                        abs_deltas, k=self.n_alternatives, dim=2, largest=False
-                    ).indices
-                    lookup_alt_deltas = deltas.gather(2, min_delta_indices)
-            lookup_indices_expanded = lookup_indices.unsqueeze(2)
-            flip_masks = (1 << min_delta_indices).long()
-            lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
-        else:
-            lookup_alt_indices = None
-            lookup_alt_deltas = None
-        
-        return lookup_indices, lookup_alt_indices, lookup_alt_deltas
+        return _anchor_pairs_lookup_eval_fallback(
+            x,
+            anchor_pairs_a,
+            anchor_pairs_b,
+            self.powers,
+            self.cmp_eps,
+            self.n_tables,
+            self.n_anchor_pairs,
+            self.n_alternatives,
+            return_alternatives,
+        )
 
     def _forward_train(
         self,
