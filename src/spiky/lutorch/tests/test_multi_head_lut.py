@@ -235,7 +235,7 @@ def test_multi_head_lut_training(device, seed=None):
 
 def test_multi_head_lut_smooth_simple(device, seed=None):
     """
-    Simple smoke test for MultiHeadLut in smooth mode with n_alternatives=4.
+    Simple smoke test for MultiHeadLut in smooth mode with n_alternatives=3.
     Verifies forward pass in train and eval modes and tensor shapes/finite outputs.
     """
     if seed is not None:
@@ -247,7 +247,7 @@ def test_multi_head_lut_smooth_simple(device, seed=None):
     n_anchors_per_detector = 4
     n_detectors_per_head = 3
     n_outputs = 20
-    n_alternatives = 4
+    n_alternatives = 3
     
     # Create input
     x = torch.randn(batch_size, n_inputs, device=device)
@@ -277,7 +277,7 @@ def test_multi_head_lut_smooth_simple(device, seed=None):
         output_train = multi_head_lut(x)
         assert output_train.shape == (batch_size, n_heads, n_outputs)
         assert torch.isfinite(output_train).all(), "Train output contains non-finite values"
-        print("✓ MultiHeadLut smooth mode forward pass successful (n_alternatives=4)")
+        print("✓ MultiHeadLut smooth mode forward pass successful (n_alternatives=3)")
         return True
 
     multi_head_lut_no_custom = MultiHeadLut(
@@ -319,14 +319,14 @@ def test_multi_head_lut_smooth_simple(device, seed=None):
         msg="Train outputs differ between custom-kernel and fallback MultiHeadLut smooth mode",
     )
 
-    print("✓ MultiHeadLut smooth mode parity successful (custom CUDA kernels on/off)")
+    print("✓ MultiHeadLut smooth mode parity successful (n_alternatives=3, custom CUDA kernels on/off)")
     
     return True
 
 
 def test_multi_head_lut_smooth_training(device, seed=None):
     """
-    Training test for MultiHeadLut in smooth mode with n_alternatives=4.
+    Training test for MultiHeadLut in smooth mode with n_alternatives=3.
     Runs multiple training iterations and checks that loss decreases.
     """
     if seed is not None:
@@ -339,7 +339,7 @@ def test_multi_head_lut_smooth_training(device, seed=None):
     n_detectors_per_head = 3
     n_outputs = 20
     n_iterations = 100
-    n_alternatives = 4
+    n_alternatives = 3
     
     # Create MultiHeadLut in smooth mode
     multi_head_lut = MultiHeadLut(
@@ -370,7 +370,7 @@ def test_multi_head_lut_smooth_training(device, seed=None):
             assert torch.isfinite(loss).item(), f"Iteration {iteration}: Loss became non-finite"
             for name, param in multi_head_lut.named_parameters():
                 assert torch.isfinite(param).all(), f"Iteration {iteration}: Parameter {name} contains non-finite values"
-        print(f"✓ MultiHeadLut smooth mode training test successful ({n_iterations} iterations, n_alternatives=4)")
+        print(f"✓ MultiHeadLut smooth mode training test successful ({n_iterations} iterations, n_alternatives=3)")
         return True
 
     # CUDA: compare custom kernels ON vs OFF
@@ -427,7 +427,7 @@ def test_multi_head_lut_smooth_training(device, seed=None):
                 msg=f"Iteration {iteration}: parameter mismatch for {name_c}",
             )
 
-    print(f"✓ MultiHeadLut smooth mode CUDA parity successful ({n_iterations} iterations, n_alternatives=4)")
+    print(f"✓ MultiHeadLut smooth mode CUDA parity successful ({n_iterations} iterations, n_alternatives=3)")
     
     return True
 
@@ -463,15 +463,15 @@ def main():
             print(f"❌ Test failed on {device}")
             return -1
 
-        # Test 3: Smooth mode simple test (n_alternatives=4)
-        print("\n3. Testing MultiHeadLut in smooth mode (simple, n_alternatives=4)...")
+        # Test 3: Smooth mode simple test (n_alternatives=3)
+        print("\n3. Testing MultiHeadLut in smooth mode (simple, n_alternatives=3)...")
         success = test_multi_head_lut_smooth_simple(device, seed=seed)
         if not success:
             print(f"❌ Test failed on {device}")
             return -1
 
-        # Test 4: Smooth mode training test (n_alternatives=4)
-        print("\n4. Testing MultiHeadLut in smooth mode (training, n_alternatives=4)...")
+        # Test 4: Smooth mode training test (n_alternatives=3)
+        print("\n4. Testing MultiHeadLut in smooth mode (training, n_alternatives=3)...")
         success = test_multi_head_lut_smooth_training(device, seed=seed)
         if not success:
             print(f"❌ Test failed on {device}")
