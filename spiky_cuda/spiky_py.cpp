@@ -13,6 +13,7 @@ void PB_LProjectionDataManagerI(py::module& m);
 #endif
 void PB_SynapseGrowthLowLevelEngine(py::module& m);
 void PB_DenseToSparseConverter(py::module& m);
+void PB_LUTorchManager(py::module& m);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "Spiky Module";
@@ -26,4 +27,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     #endif
     PB_SynapseGrowthLowLevelEngine(m);
     PB_DenseToSparseConverter(m);
+    PB_LUTorchManager(m);
 }

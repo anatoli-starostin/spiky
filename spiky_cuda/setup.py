@@ -69,6 +69,7 @@ sources_list_cuda = [
     'lprojection/lprojection_runtime.cu',
     'synapse_growth/synapse_growth.cu',
     'torch_utils/torch_utils.cu',
+    'lutorch/lutorch.cu',
     'spiky_py.cpp'
 ]
 if BUILD_INTEGERS_VERSION:
@@ -95,6 +96,7 @@ sources_list_no_cuda = [
     'lprojection/aux_/lprojection_runtime.cpp',
     'synapse_growth/aux_/synapse_growth.cpp',
     'torch_utils/aux_/torch_utils.cpp',
+    'lutorch/aux_/lutorch.cpp',
     'spiky_py.cpp',
 ]
 if BUILD_INTEGERS_VERSION:

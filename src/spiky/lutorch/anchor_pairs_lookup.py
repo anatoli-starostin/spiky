@@ -14,11 +14,79 @@ from spiky.util.chunk_of_connections import ChunkOfConnections
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
 _USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
 
+try:
+    from spiky_cuda import LUTorchManager as _NativeLUTorchManager
+except Exception:
+    _NativeLUTorchManager = None
+
+_NATIVE_LUTORCH_MANAGER = None
+
 
 def _maybe_compile(fn):
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
         return torch.compile(fn, dynamic=True)
     return fn
+
+
+def _is_torch_compiling() -> bool:
+    return hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()
+
+
+def _get_native_lutorch_manager():
+    global _NATIVE_LUTORCH_MANAGER
+    if _NATIVE_LUTORCH_MANAGER is None and _NativeLUTorchManager is not None:
+        _NATIVE_LUTORCH_MANAGER = _NativeLUTorchManager()
+    return _NATIVE_LUTORCH_MANAGER
+
+
+@_maybe_compile
+def _anchor_pairs_lookup_forward_fallback(
+    x: torch.Tensor,
+    anchor_pairs_a: torch.Tensor,
+    anchor_pairs_b: torch.Tensor,
+    powers: torch.Tensor,
+    cmp_eps: float,
+    n_alternatives: int,
+):
+    batch_size = x.shape[0]
+    n_anchor_pairs = powers.shape[-1]
+    n_tables = anchor_pairs_a.shape[0]
+
+    idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
+    idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
+    x_a = x.gather(1, idx_a).view(batch_size, n_tables, n_anchor_pairs)
+    x_b = x.gather(1, idx_b).view(batch_size, n_tables, n_anchor_pairs)
+    deltas = x_a - x_b
+
+    bits = deltas.gt(cmp_eps).long()
+    lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
+
+    if n_alternatives == n_anchor_pairs:
+        # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
+        min_delta_indices = torch.arange(
+            n_anchor_pairs, device=x.device, dtype=torch.long
+        ).view(1, 1, -1).expand(batch_size, n_tables, -1)
+        lookup_alt_deltas = deltas
+        anchor1_ids = anchor_pairs_a.unsqueeze(0).repeat(batch_size, 1, 1)
+        anchor2_ids = anchor_pairs_b.unsqueeze(0).repeat(batch_size, 1, 1)
+    else:
+        abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
+        if n_alternatives == 1:
+            _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)  # [B, n_tables, 1]
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        else:
+            min_delta_indices = torch.topk(
+                abs_deltas, k=n_alternatives, dim=2, largest=False
+            ).indices  # [B, n_tables, n_alternatives]
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+        anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+
+    lookup_indices_expanded = lookup_indices.unsqueeze(2)
+    flip_masks = (1 << min_delta_indices).long()
+    lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
+
+    return lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids
 
 
 class AnchorPairsLookup(AbstractLookup):
@@ -234,7 +302,6 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
     """Custom autograd function for anchor pairs lookup with gradient propagation."""
 
     @staticmethod
-    @_maybe_compile
     def forward(ctx, *args):
         """
         Forward pass.
@@ -253,48 +320,50 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             powers, cmp_eps, uncertainty_mode, n_alternatives, batch_offset
         ) = args
         batch_size = x.shape[0]
-        n_anchor_pairs = powers.shape[-1]
         n_tables = anchor_pairs_a.shape[0]
-        idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)  # [B, n_tables*n_anchor_pairs]
-        idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
-        x_a = x.gather(1, idx_a).view(batch_size, n_tables, n_anchor_pairs)
-        x_b = x.gather(1, idx_b).view(batch_size, n_tables, n_anchor_pairs)
-        deltas = x_a - x_b
 
-        bits = deltas.gt(cmp_eps).long()
-        lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
-
-        if n_alternatives == n_anchor_pairs:
-            # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
-            min_delta_indices = torch.arange(
-                n_anchor_pairs, device=x.device, dtype=torch.long
-            ).view(1, 1, -1).expand(batch_size, n_tables, -1)
-            lookup_alt_deltas = deltas
-            anchor1_ids = anchor_pairs_a.unsqueeze(0).repeat(batch_size, 1, 1)
-            anchor2_ids = anchor_pairs_b.unsqueeze(0).repeat(batch_size, 1, 1)
+        use_native_cuda = (
+            n_alternatives == 1
+            and x.is_cuda
+            and x.dtype in (torch.float32, torch.float64)
+            and _NativeLUTorchManager is not None
+        )
+        if use_native_cuda:
+            native = _get_native_lutorch_manager()
+            (
+                lookup_indices,
+                lookup_alt_indices,
+                lookup_alt_deltas,
+                anchor1_ids,
+                anchor2_ids,
+            ) = native.anchor_pairs_lookup_forward_na1(
+                x,
+                anchor_pairs_a,
+                anchor_pairs_b,
+                float(cmp_eps),
+            )
         else:
-            abs_deltas = deltas.abs()  # [B, n_tables, n_anchor_pairs]
-            if n_alternatives == 1:
-                _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)  # [B, n_tables, 1]
-                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
-            else:
-                min_delta_indices = torch.topk(
-                    abs_deltas, k=n_alternatives, dim=2, largest=False
-                ).indices  # [B, n_tables, n_alternatives]
-                lookup_alt_deltas = deltas.gather(2, min_delta_indices)
-            anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
-            anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
-
-        lookup_indices_expanded = lookup_indices.unsqueeze(2)
-        flip_masks = (1 << min_delta_indices).long()
-        lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
+            (
+                lookup_indices,
+                lookup_alt_indices,
+                lookup_alt_deltas,
+                anchor1_ids,
+                anchor2_ids,
+            ) = _anchor_pairs_lookup_forward_fallback(
+                x,
+                anchor_pairs_a,
+                anchor_pairs_b,
+                powers,
+                cmp_eps,
+                n_alternatives,
+            )
 
         z = x.sum() * 0
         lookup_indices_grad_c = z.expand(batch_size, n_tables)
         lookup_alt_indices_grad_c = z.expand(batch_size, n_tables, n_alternatives)
 
         ctx.inv_l1 = (int(uncertainty_mode) == 0)
-        ctx.batch_offset = batch_offset.to(x.device).long().contiguous()
+        ctx.batch_offset = batch_offset
         ctx.save_for_backward(x, anchor1_ids, anchor2_ids, lookup_alt_deltas)
 
         return (
@@ -341,7 +410,9 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 one_plus_sq = 1.0 + delta_sq
                 minus_uncertainty_derivative = lookup_alt_deltas / (one_plus_sq * one_plus_sq)
 
-            du = grad_diff * minus_uncertainty_derivative / lookup_alt_deltas.shape[-1]  # [B, n_tables, n_alternatives]
+            du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, n_alternatives]
+            if lookup_alt_deltas.shape[-1] > 1:
+                du /= lookup_alt_deltas.shape[-1]
 
             batch_offset = ctx_batch_offset
             anchor1_flat = anchor1_ids.view(-1)
