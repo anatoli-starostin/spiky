@@ -29,7 +29,7 @@ class MultiHeadLut(nn.Module):
         anchor_candidates: Optional. Either:
                           - torch.Tensor: Shape [n_heads, tables_per_head, max_anchors_per_table] with input indices
                           - Tuple[ChunkOfConnections, int]: ChunkOfConnections with custom ids_shift
-                          - None: balanced coverage over input dims (get_balanced_anchor_pairs); else AnchorSampler
+                          - None: balanced coverage over input dims
         cmp_eps: Epsilon for comparison (default: 0.0)
         random_seed: Random seed for anchor pair sampling
         n_alternatives: Number of alternative lookup indices per table (default: 1)

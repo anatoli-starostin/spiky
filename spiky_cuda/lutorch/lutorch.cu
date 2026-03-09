@@ -179,6 +179,119 @@ __global__ void anchor_pairs_lookup_backward_na1_kernel(
     atomicAdd(x_grad_flat_ptr + idx1, du);
     atomicAdd(x_grad_flat_ptr + idx2, -du);
 }
+
+template <typename scalar_t>
+__global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
+    int64_t total_bt,
+    int64_t n_tables,
+    int64_t n_outputs,
+    int64_t n_entries,
+    const scalar_t* grad_output_ptr,
+    const int64_t* table_indices_flat_ptr,
+    const int64_t* lookup_indices_flat_ptr,
+    int64_t grad_output_stride0,
+    int64_t grad_output_stride1,
+    int64_t grad_output_stride2,
+    scalar_t* weights_grad_ptr
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = total_bt * n_outputs;
+    if (linear_tid >= total) {
+        return;
+    }
+    int64_t bt = linear_tid / n_outputs;
+    int64_t o = linear_tid - bt * n_outputs;
+    int64_t b = bt / n_tables;
+    int64_t t = bt - b * n_tables;
+    scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
+    int64_t table = table_indices_flat_ptr[bt];
+    int64_t entry = lookup_indices_flat_ptr[bt];
+    int64_t widx = (table * n_entries + entry) * n_outputs + o;
+    atomicAdd(weights_grad_ptr + widx, g);
+}
+
+template <typename scalar_t>
+__global__ void lprojection_backward_na1_smooth_weights_kernel(
+    int64_t total_bt,
+    int64_t n_tables,
+    int64_t n_outputs,
+    int64_t n_entries,
+    const scalar_t* grad_output_ptr,
+    const int64_t* table_indices_flat_ptr,
+    const int64_t* lookup_indices_flat_ptr,
+    const int64_t* table_indices_alt_flat_ptr,
+    const int64_t* lookup_alt_indices_flat_ptr,
+    const scalar_t* main_weight_flat_ptr,
+    const scalar_t* alt_weight_flat_ptr,
+    int64_t grad_output_stride0,
+    int64_t grad_output_stride1,
+    int64_t grad_output_stride2,
+    scalar_t* weights_grad_ptr
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = total_bt * n_outputs;
+    if (linear_tid >= total) {
+        return;
+    }
+    int64_t bt = linear_tid / n_outputs;
+    int64_t o = linear_tid - bt * n_outputs;
+    int64_t b = bt / n_tables;
+    int64_t t = bt - b * n_tables;
+    scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
+    scalar_t g_main = g * main_weight_flat_ptr[bt];
+    scalar_t g_alt = g * alt_weight_flat_ptr[bt];
+
+    int64_t table_main = table_indices_flat_ptr[bt];
+    int64_t entry_main = lookup_indices_flat_ptr[bt];
+    int64_t widx_main = (table_main * n_entries + entry_main) * n_outputs + o;
+    atomicAdd(weights_grad_ptr + widx_main, g_main);
+
+    int64_t table_alt = table_indices_alt_flat_ptr[bt];
+    int64_t entry_alt = lookup_alt_indices_flat_ptr[bt];
+    int64_t widx_alt = (table_alt * n_entries + entry_alt) * n_outputs + o;
+    atomicAdd(weights_grad_ptr + widx_alt, g_alt);
+}
+
+template <typename scalar_t>
+__global__ void lprojection_backward_na1_carriers_kernel(
+    int64_t total_bt,
+    int64_t n_tables,
+    int64_t n_outputs,
+    int64_t n_entries,
+    const scalar_t* grad_output_ptr,
+    const scalar_t* weights_ptr,
+    const int64_t* table_indices_flat_ptr,
+    const int64_t* lookup_indices_flat_ptr,
+    const int64_t* table_indices_alt_flat_ptr,
+    const int64_t* lookup_alt_indices_flat_ptr,
+    int64_t grad_output_stride0,
+    int64_t grad_output_stride1,
+    int64_t grad_output_stride2,
+    scalar_t* lookup_indices_grad_c_grad_ptr,
+    scalar_t* lookup_alt_indices_grad_c_grad_ptr
+) {
+    int64_t bt = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (bt >= total_bt) {
+        return;
+    }
+    int64_t b = bt / n_tables;
+    int64_t t = bt - b * n_tables;
+    int64_t table_main = table_indices_flat_ptr[bt];
+    int64_t entry_main = lookup_indices_flat_ptr[bt];
+    int64_t table_alt = table_indices_alt_flat_ptr[bt];
+    int64_t entry_alt = lookup_alt_indices_flat_ptr[bt];
+    scalar_t acc_main = static_cast<scalar_t>(0);
+    scalar_t acc_alt = static_cast<scalar_t>(0);
+    for (int64_t o = 0; o < n_outputs; ++o) {
+        scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
+        int64_t widx_main = (table_main * n_entries + entry_main) * n_outputs + o;
+        int64_t widx_alt = (table_alt * n_entries + entry_alt) * n_outputs + o;
+        acc_main += g * weights_ptr[widx_main];
+        acc_alt += g * weights_ptr[widx_alt];
+    }
+    lookup_indices_grad_c_grad_ptr[bt] = acc_main;
+    lookup_alt_indices_grad_c_grad_ptr[bt] = acc_alt;
+}
 #endif
 
 class SPIKY_HIDDEN LUTorchManager {
@@ -201,6 +314,10 @@ public:
         profiler.register_operation_type(
             LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP,
             "lutorch::anchor_pairs_lookup_backward_na1"
+        );
+        profiler.register_operation_type(
+            LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP,
+            "lutorch::lprojection_backward_na1"
         );
         #endif
         #endif
@@ -493,6 +610,231 @@ public:
         PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
         return x_grad_flat;
     }
+
+    py::tuple
+    lprojection_backward_na1_nonsmooth(
+        const torch::Tensor& grad_output,
+        const torch::Tensor& weights,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& table_indices_flat,
+        const torch::Tensor& table_indices_alt_flat,
+        int64_t threads_per_block = 256
+    ) {
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+
+        if (!grad_output.is_cuda() || !weights.is_cuda() || !lookup_indices.is_cuda() ||
+            !lookup_alt_indices.is_cuda() || !table_indices_flat.is_cuda() || !table_indices_alt_flat.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_output.dtype() != weights.dtype()) {
+            throw py::value_error("grad_output and weights must have same dtype");
+        }
+        if (!grad_output.is_floating_point()) {
+            throw py::value_error("grad_output/weights must be floating point");
+        }
+        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
+            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
+            throw py::value_error("indices tensors must be int64");
+        }
+        if (lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(2) != 1) {
+            throw py::value_error("lookup_indices must be [B,T], lookup_alt_indices must be [B,T,1]");
+        }
+        if (weights.dim() != 3 || grad_output.dim() != 3) {
+            throw py::value_error("weights must be [T,E,O], grad_output must be [B,T,O]");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+        }
+        if (grad_output.device() != weights.device()) {
+            throw py::value_error("grad_output and weights must be on same device");
+        }
+        if (lookup_indices.device() != weights.device() || lookup_alt_indices.device() != weights.device() ||
+            table_indices_flat.device() != weights.device() || table_indices_alt_flat.device() != weights.device()) {
+            throw py::value_error("all tensors must be on the same CUDA device");
+        }
+
+        int64_t batch_size = lookup_indices.size(0);
+        int64_t n_tables = lookup_indices.size(1);
+        int64_t n_entries = weights.size(1);
+        int64_t n_outputs = weights.size(2);
+        int64_t total_bt = batch_size * n_tables;
+        if (table_indices_flat.numel() != total_bt || table_indices_alt_flat.numel() != total_bt) {
+            throw py::value_error("table_indices_*_flat must have numel == B*T");
+        }
+        if (grad_output.size(0) != batch_size || grad_output.size(1) != n_tables || grad_output.size(2) != n_outputs) {
+            throw py::value_error("grad_output shape mismatch");
+        }
+        if (lookup_alt_indices.numel() != total_bt) {
+            throw py::value_error("lookup_alt_indices numel mismatch for n_alternatives=1");
+        }
+
+        auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
+        torch::Tensor weights_grad = torch::zeros_like(weights);
+        torch::Tensor lookup_indices_grad_c_grad = torch::empty({batch_size, n_tables}, opts);
+        torch::Tensor lookup_alt_indices_grad_c_grad = torch::empty({batch_size, n_tables, 1}, opts);
+
+        int device = weights.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int threads = static_cast<int>(threads_per_block);
+        int blocks_w = static_cast<int>(((total_bt * n_outputs) + threads - 1) / threads);
+        int blocks_c = static_cast<int>((total_bt + threads - 1) / threads);
+        int64_t go_s0 = grad_output.stride(0);
+        int64_t go_s1 = grad_output.stride(1);
+        int64_t go_s2 = grad_output.stride(2);
+
+        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_nonsmooth", [&] {
+            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+                total_bt,
+                n_tables,
+                n_outputs,
+                n_entries,
+                reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                go_s0, go_s1, go_s2,
+                reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
+            );
+            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+                total_bt,
+                n_tables,
+                n_outputs,
+                n_entries,
+                reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
+                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                go_s0, go_s1, go_s2,
+                reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr()),
+                reinterpret_cast<scalar_t*>(lookup_alt_indices_grad_c_grad.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
+    }
+
+    py::tuple
+    lprojection_backward_na1_smooth(
+        const torch::Tensor& grad_output,
+        const torch::Tensor& weights,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& table_indices_flat,
+        const torch::Tensor& table_indices_alt_flat,
+        const torch::Tensor& main_weight,
+        const torch::Tensor& alt_weight,
+        int64_t threads_per_block = 256
+    ) {
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+
+        if (!main_weight.is_cuda() || !alt_weight.is_cuda()) {
+            throw py::value_error("main_weight and alt_weight must be CUDA");
+        }
+        if (main_weight.dtype() != weights.dtype() || alt_weight.dtype() != weights.dtype()) {
+            throw py::value_error("main_weight/alt_weight must have same dtype as weights");
+        }
+        if (main_weight.device() != weights.device() || alt_weight.device() != weights.device()) {
+            throw py::value_error("main_weight and alt_weight must be on same device as weights");
+        }
+        if (main_weight.dim() != 2 || alt_weight.dim() != 3 || alt_weight.size(2) != 1) {
+            throw py::value_error("main_weight must be [B,T], alt_weight must be [B,T,1]");
+        }
+
+        if (!grad_output.is_cuda() || !weights.is_cuda() || !lookup_indices.is_cuda() ||
+            !lookup_alt_indices.is_cuda() || !table_indices_flat.is_cuda() || !table_indices_alt_flat.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_output.dtype() != weights.dtype()) {
+            throw py::value_error("grad_output and weights must have same dtype");
+        }
+        if (!grad_output.is_floating_point()) {
+            throw py::value_error("grad_output/weights must be floating point");
+        }
+        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
+            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
+            throw py::value_error("indices tensors must be int64");
+        }
+        if (lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(2) != 1) {
+            throw py::value_error("lookup_indices must be [B,T], lookup_alt_indices must be [B,T,1]");
+        }
+        if (weights.dim() != 3 || grad_output.dim() != 3) {
+            throw py::value_error("weights must be [T,E,O], grad_output must be [B,T,O]");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+        }
+        if (grad_output.device() != weights.device()) {
+            throw py::value_error("grad_output and weights must be on same device");
+        }
+
+        int64_t batch_size = lookup_indices.size(0);
+        int64_t n_tables = lookup_indices.size(1);
+        int64_t n_entries = weights.size(1);
+        int64_t n_outputs = weights.size(2);
+        int64_t total_bt = batch_size * n_tables;
+        if (table_indices_flat.numel() != total_bt || table_indices_alt_flat.numel() != total_bt) {
+            throw py::value_error("table_indices_*_flat must have numel == B*T");
+        }
+        if (grad_output.size(0) != batch_size || grad_output.size(1) != n_tables || grad_output.size(2) != n_outputs) {
+            throw py::value_error("grad_output shape mismatch");
+        }
+        if (lookup_alt_indices.numel() != total_bt) {
+            throw py::value_error("lookup_alt_indices numel mismatch for n_alternatives=1");
+        }
+
+        auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
+        torch::Tensor weights_grad = torch::zeros_like(weights);
+        torch::Tensor lookup_indices_grad_c_grad = torch::empty({batch_size, n_tables}, opts);
+        torch::Tensor lookup_alt_indices_grad_c_grad = torch::empty({batch_size, n_tables, 1}, opts);
+
+        int threads = static_cast<int>(threads_per_block);
+        int blocks_w = static_cast<int>(((total_bt * n_outputs) + threads - 1) / threads);
+        int blocks_c = static_cast<int>((total_bt + threads - 1) / threads);
+        int64_t go_s0 = grad_output.stride(0);
+        int64_t go_s1 = grad_output.stride(1);
+        int64_t go_s2 = grad_output.stride(2);
+
+        int device = weights.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_smooth_weights", [&] {
+            lprojection_backward_na1_smooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+                total_bt,
+                n_tables,
+                n_outputs,
+                n_entries,
+                reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
+                reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
+                go_s0, go_s1, go_s2,
+                reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
+            );
+            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+                total_bt,
+                n_tables,
+                n_outputs,
+                n_entries,
+                reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
+                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                go_s0, go_s1, go_s2,
+                reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr()),
+                reinterpret_cast<scalar_t*>(lookup_alt_indices_grad_c_grad.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
+    }
 #endif
 
     std::string get_profiling_stats() {
@@ -543,6 +885,30 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("grad_main"),
             py::arg("grad_alt"),
             py::arg("inv_l1"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "lprojection_backward_na1_nonsmooth",
+            &LUTorchManager::lprojection_backward_na1_nonsmooth,
+            py::arg("grad_output"),
+            py::arg("weights"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("table_indices_flat"),
+            py::arg("table_indices_alt_flat"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "lprojection_backward_na1_smooth",
+            &LUTorchManager::lprojection_backward_na1_smooth,
+            py::arg("grad_output"),
+            py::arg("weights"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("table_indices_flat"),
+            py::arg("table_indices_alt_flat"),
+            py::arg("main_weight"),
+            py::arg("alt_weight"),
             py::arg("threads_per_block") = 256
         )
         #endif

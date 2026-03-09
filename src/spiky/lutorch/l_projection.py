@@ -11,12 +11,33 @@ from spiky.lutorch.lut_helpers import UncertaintyMode
 
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
 _USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
+_USE_LUTORCH_CUSTOM_CUDA_KERNELS = os.environ.get("SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS", "0") != "1"
+_LUTORCH_CUDA_THREADS_PER_BLOCK = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
+if _LUTORCH_CUDA_THREADS_PER_BLOCK < 1 or _LUTORCH_CUDA_THREADS_PER_BLOCK > 1024:
+    raise ValueError(
+        "SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK must be in range [1, 1024], "
+        f"got {_LUTORCH_CUDA_THREADS_PER_BLOCK}"
+    )
+
+try:
+    from spiky_cuda import LUTorchManager as _NativeLUTorchManager
+except Exception:
+    _NativeLUTorchManager = None
+
+_NATIVE_LUTORCH_MANAGER = None
 
 
 def _maybe_compile(fn):
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
         return torch.compile(fn, dynamic=True)
     return fn
+
+
+def _get_native_lutorch_manager():
+    global _NATIVE_LUTORCH_MANAGER
+    if _NATIVE_LUTORCH_MANAGER is None and _NativeLUTorchManager is not None:
+        _NATIVE_LUTORCH_MANAGER = _NativeLUTorchManager()
+    return _NATIVE_LUTORCH_MANAGER
 
 
 # --- Compiled hot-path implementations (torch.compile for fusion when enabled) ---
@@ -398,11 +419,50 @@ class LProjectionFunction(torch.autograd.Function):
         n_lookup_tables = ctx.n_lookup_tables
         n_alternatives = ctx.n_alternatives
 
-        weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = _backward_train_impl(
-            grad_output, weights, lookup_indices, table_indices_flat,
-            batch_size, n_lookup_tables, n_alternatives,
-            main_weight, alt_weight, lookup_alt_indices, table_indices_alt_flat,
+        use_native_cuda_backward = (
+            _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+            and _NativeLUTorchManager is not None
+            and grad_output.is_cuda
+            and grad_output.dtype in (torch.float32, torch.float64)
+            and n_alternatives == 1
+            and lookup_alt_indices is not None
         )
+        if use_native_cuda_backward:
+            native = _get_native_lutorch_manager()
+            lookup_indices_c = lookup_indices.contiguous()
+            lookup_alt_indices_c = lookup_alt_indices.contiguous()
+            table_indices_flat_c = table_indices_flat.contiguous()
+            table_indices_alt_flat_c = table_indices_alt_flat.contiguous()
+            if ctx.smooth_mode:
+                main_weight_c = main_weight.contiguous()
+                alt_weight_c = alt_weight.contiguous()
+                weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_smooth(
+                    grad_output,
+                    weights,
+                    lookup_indices_c,
+                    lookup_alt_indices_c,
+                    table_indices_flat_c,
+                    table_indices_alt_flat_c,
+                    main_weight_c,
+                    alt_weight_c,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_nonsmooth(
+                    grad_output,
+                    weights,
+                    lookup_indices_c,
+                    lookup_alt_indices_c,
+                    table_indices_flat_c,
+                    table_indices_alt_flat_c,
+                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+        else:
+            weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = _backward_train_impl(
+                grad_output, weights, lookup_indices, table_indices_flat,
+                batch_size, n_lookup_tables, n_alternatives,
+                main_weight, alt_weight, lookup_alt_indices, table_indices_alt_flat,
+            )
 
         return (
             weights_grad,
