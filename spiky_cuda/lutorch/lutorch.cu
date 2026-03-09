@@ -2220,11 +2220,12 @@ void PB_LUTorchManager(py::module& m) {
         .def("get_profiling_stats", &LUTorchManager::get_profiling_stats);
 
     // Singleton: one manager for all lutorch ops so profiler sees both lookup and lprojection.
+    // Never destroyed (intentional leak) to avoid segfault on exit when CUDA/PyTorch tear down first.
     m.def(
         "get_lutorch_manager",
         []() -> LUTorchManager* {
-            static LUTorchManager instance;
-            return &instance;
+            static LUTorchManager* instance = new LUTorchManager();
+            return instance;
         },
         py::return_value_policy::reference
     );
