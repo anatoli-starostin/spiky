@@ -774,20 +774,20 @@ public:
         #ifdef ENABLE_PROFILING
         #ifndef NO_CUDA
         profiler.register_operation_type(
-            LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP,
+            LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP,
             "lutorch::anchor_pairs_lookup_forward_na1"
         );
         profiler.register_operation_type(
-            LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_NA1_PROFILER_OP,
+            LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP,
             "lutorch::anchor_pairs_lookup_eval_forward_no_alternatives"
         );
         profiler.register_operation_type(
-            LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP,
-            "lutorch::anchor_pairs_lookup_backward_na1"
+            LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP,
+            "lutorch::anchor_pairs_lookup_backward_na"
         );
         profiler.register_operation_type(
-            LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP,
-            "lutorch::lprojection_backward_na1"
+            LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP,
+            "lutorch::lprojection_backward"
         );
         profiler.register_operation_type(
             LUTORCH_MANAGER_LPROJECTION_FORWARD_SMOOTH_PROFILER_OP,
@@ -810,7 +810,7 @@ public:
         bool save_anchor_ids = true,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -905,7 +905,7 @@ public:
             out[3] = py::none();
             out[4] = py::none();
         }
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
         return out;
     }
 
@@ -917,7 +917,7 @@ public:
         double cmp_eps,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -986,7 +986,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
 
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP);
         return lookup_indices;
     }
 
@@ -999,7 +999,7 @@ public:
         bool save_anchor_ids = true,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -1099,7 +1099,7 @@ public:
             out[3] = py::none();
             out[4] = py::none();
         }
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
         return out;
     }
 
@@ -1112,7 +1112,7 @@ public:
         bool save_anchor_ids = true,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -1209,7 +1209,7 @@ public:
             out[3] = py::none();
             out[4] = py::none();
         }
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_FORWARD_PROFILER_OP);
         return out;
     }
 
@@ -1322,7 +1322,7 @@ public:
         bool inv_l1,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -1401,7 +1401,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
 
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
         return x_grad_flat;
     }
 
@@ -1417,7 +1417,7 @@ public:
         bool inv_l1,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -1495,7 +1495,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
 
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
         return x_grad_flat;
     }
 
@@ -1511,7 +1511,7 @@ public:
         bool inv_l1,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
 
         if (x.dim() != 2) {
             throw py::value_error("x must be 2D [batch_size, input_dim]");
@@ -1589,7 +1589,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
 
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
         return x_grad_flat;
     }
 
@@ -1603,7 +1603,7 @@ public:
         const torch::Tensor& table_indices_alt_flat,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
 
         if (!grad_output.is_cuda() || !weights.is_cuda() || !lookup_indices.is_cuda() ||
             !lookup_alt_indices.is_cuda() || !table_indices_flat.is_cuda() || !table_indices_alt_flat.is_cuda()) {
@@ -1694,7 +1694,7 @@ public:
             );
         });
         CU_CHECK(cudaGetLastError());
-        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 
@@ -1710,7 +1710,7 @@ public:
         const torch::Tensor& alt_weight,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
 
         if (!main_weight.is_cuda() || !alt_weight.is_cuda()) {
             throw py::value_error("main_weight and alt_weight must be CUDA");
@@ -1814,7 +1814,7 @@ public:
             );
         });
         CU_CHECK(cudaGetLastError());
-        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 
@@ -1828,7 +1828,7 @@ public:
         const torch::Tensor& table_indices_alt_flat,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         if (!grad_output.is_cuda() || !weights.is_cuda() || !lookup_indices.is_cuda() ||
             !lookup_alt_indices.is_cuda() || !table_indices_flat.is_cuda() || !table_indices_alt_flat.is_cuda()) {
             throw py::value_error("all tensors must be CUDA");
@@ -1926,7 +1926,7 @@ public:
             );
         });
         CU_CHECK(cudaGetLastError());
-        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 
@@ -1942,7 +1942,7 @@ public:
         const torch::Tensor& alt_weight,
         int64_t threads_per_block = 256
     ) {
-        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_START(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         if (!main_weight.is_cuda() || !alt_weight.is_cuda() ||
             main_weight.dtype() != weights.dtype() || alt_weight.dtype() != weights.dtype()) {
             throw py::value_error("main_weight and alt_weight must be CUDA and same dtype as weights");
@@ -2055,7 +2055,7 @@ public:
             );
         });
         CU_CHECK(cudaGetLastError());
-        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_NA1_PROFILER_OP);
+        PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 #endif
