@@ -13,6 +13,8 @@ from spiky.util.chunk_of_connections import ChunkOfConnections
 
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
 _USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
+# Optional native CUDA kernels in lutorch; set SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS=1 to disable.
+_USE_LUTORCH_CUSTOM_CUDA_KERNELS = os.environ.get("SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS", "0") != "1"
 
 try:
     from spiky_cuda import LUTorchManager as _NativeLUTorchManager
@@ -27,9 +29,6 @@ def _maybe_compile(fn):
         return torch.compile(fn, dynamic=True)
     return fn
 
-
-def _is_torch_compiling() -> bool:
-    return hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()
 
 
 def _get_native_lutorch_manager():
@@ -278,6 +277,8 @@ class AnchorPairsLookup(AbstractLookup):
             - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
         """
         use_native_eval_cuda = (
+            _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+            and
             self.n_alternatives == 1
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
@@ -365,6 +366,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         n_tables = anchor_pairs_a.shape[0]
 
         use_native_cuda = (
+            _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+            and
             n_alternatives == 1
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
