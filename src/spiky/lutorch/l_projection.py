@@ -424,7 +424,6 @@ class LProjectionFunction(torch.autograd.Function):
             and _NativeLUTorchManager is not None
             and grad_output.is_cuda
             and grad_output.dtype in (torch.float32, torch.float64)
-            and n_alternatives == 1
             and lookup_alt_indices is not None
         )
         if use_native_cuda_backward:
@@ -436,27 +435,51 @@ class LProjectionFunction(torch.autograd.Function):
             if ctx.smooth_mode:
                 main_weight_c = main_weight.contiguous()
                 alt_weight_c = alt_weight.contiguous()
-                weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_smooth(
-                    grad_output,
-                    weights,
-                    lookup_indices_c,
-                    lookup_alt_indices_c,
-                    table_indices_flat_c,
-                    table_indices_alt_flat_c,
-                    main_weight_c,
-                    alt_weight_c,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
+                if n_alternatives == 1:
+                    weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_smooth(
+                        grad_output,
+                        weights,
+                        lookup_indices_c,
+                        lookup_alt_indices_c,
+                        table_indices_flat_c,
+                        table_indices_alt_flat_c,
+                        main_weight_c,
+                        alt_weight_c,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
+                else:
+                    weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_smooth(
+                        grad_output,
+                        weights,
+                        lookup_indices_c,
+                        lookup_alt_indices_c,
+                        table_indices_flat_c,
+                        table_indices_alt_flat_c,
+                        main_weight_c,
+                        alt_weight_c,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
             else:
-                weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_nonsmooth(
-                    grad_output,
-                    weights,
-                    lookup_indices_c,
-                    lookup_alt_indices_c,
-                    table_indices_flat_c,
-                    table_indices_alt_flat_c,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
+                if n_alternatives == 1:
+                    weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_na1_nonsmooth(
+                        grad_output,
+                        weights,
+                        lookup_indices_c,
+                        lookup_alt_indices_c,
+                        table_indices_flat_c,
+                        table_indices_alt_flat_c,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
+                else:
+                    weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = native.lprojection_backward_nonsmooth(
+                        grad_output,
+                        weights,
+                        lookup_indices_c,
+                        lookup_alt_indices_c,
+                        table_indices_flat_c,
+                        table_indices_alt_flat_c,
+                        _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                    )
         else:
             weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = _backward_train_impl(
                 grad_output, weights, lookup_indices, table_indices_flat,

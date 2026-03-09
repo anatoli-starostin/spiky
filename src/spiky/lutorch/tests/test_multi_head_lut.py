@@ -2,6 +2,7 @@
 Test for MultiHeadLut module.
 """
 import os
+from contextlib import contextmanager
 
 # Disable torch.compile in lutorch so tests run without compilation.
 os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
@@ -13,6 +14,21 @@ from tqdm import tqdm
 from spiky.lut.LUTLayer import LUTLayer, SynapseMeta
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch import anchor_pairs_lookup as anchor_pairs_lookup_mod
+from spiky.lutorch import l_projection as l_projection_mod
+
+
+@contextmanager
+def _use_lutorch_custom_cuda_kernels(enabled: bool):
+    prev_lookup = anchor_pairs_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS
+    prev_proj = l_projection_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS
+    anchor_pairs_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = enabled
+    l_projection_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = enabled
+    try:
+        yield
+    finally:
+        anchor_pairs_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = prev_lookup
+        l_projection_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = prev_proj
 
 
 def test_multi_head_lut_simple(device, seed=None):
@@ -235,8 +251,8 @@ def test_multi_head_lut_smooth_simple(device, seed=None):
     
     # Create input
     x = torch.randn(batch_size, n_inputs, device=device)
-    
-    # Create MultiHeadLut in smooth mode
+
+    # Create baseline model and clone params into comparison model
     multi_head_lut = MultiHeadLut(
         input_dim=n_inputs,
         n_heads=n_heads,
@@ -249,25 +265,61 @@ def test_multi_head_lut_smooth_simple(device, seed=None):
         smooth_mode=True,
         uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
     )
-    
-    # Evaluation mode forward pass
+
+    # CPU: keep smoke behavior
+    if device != "cuda":
+        multi_head_lut.eval()
+        with torch.no_grad():
+            output_eval = multi_head_lut(x)
+        assert output_eval.shape == (batch_size, n_heads, n_outputs)
+        assert torch.isfinite(output_eval).all(), "Eval output contains non-finite values"
+        multi_head_lut.train()
+        output_train = multi_head_lut(x)
+        assert output_train.shape == (batch_size, n_heads, n_outputs)
+        assert torch.isfinite(output_train).all(), "Train output contains non-finite values"
+        print("✓ MultiHeadLut smooth mode forward pass successful (n_alternatives=4)")
+        return True
+
+    multi_head_lut_no_custom = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=n_heads,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors_per_head,
+        random_seed=seed,
+        device=device,
+        n_alternatives=n_alternatives,
+        smooth_mode=True,
+        uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
+    )
+    multi_head_lut_no_custom.load_state_dict(multi_head_lut.state_dict())
+
+    # Evaluation comparison
     multi_head_lut.eval()
+    multi_head_lut_no_custom.eval()
     with torch.no_grad():
-        output_eval = multi_head_lut(x)  # [B, n_heads, n_outputs]
-    
-    assert output_eval.shape == (batch_size, n_heads, n_outputs), \
-        f"Expected eval shape {(batch_size, n_heads, n_outputs)}, got {output_eval.shape}"
-    assert torch.isfinite(output_eval).all(), "Eval output contains non-finite values"
-    
-    # Training mode forward pass
+        with _use_lutorch_custom_cuda_kernels(True):
+            output_eval_custom = multi_head_lut(x)
+        with _use_lutorch_custom_cuda_kernels(False):
+            output_eval_ref = multi_head_lut_no_custom(x)
+    torch.testing.assert_close(
+        output_eval_custom, output_eval_ref, atol=1e-5, rtol=1e-4,
+        msg="Eval outputs differ between custom-kernel and fallback MultiHeadLut smooth mode",
+    )
+
+    # Training forward comparison
     multi_head_lut.train()
-    output_train = multi_head_lut(x)  # [B, n_heads, n_outputs]
-    
-    assert output_train.shape == (batch_size, n_heads, n_outputs), \
-        f"Expected train shape {(batch_size, n_heads, n_outputs)}, got {output_train.shape}"
-    assert torch.isfinite(output_train).all(), "Train output contains non-finite values"
-    
-    print("✓ MultiHeadLut smooth mode forward pass successful (n_alternatives=4)")
+    multi_head_lut_no_custom.train()
+    with _use_lutorch_custom_cuda_kernels(True):
+        output_train_custom = multi_head_lut(x)
+    with _use_lutorch_custom_cuda_kernels(False):
+        output_train_ref = multi_head_lut_no_custom(x)
+    torch.testing.assert_close(
+        output_train_custom, output_train_ref, atol=1e-5, rtol=1e-4,
+        msg="Train outputs differ between custom-kernel and fallback MultiHeadLut smooth mode",
+    )
+
+    print("✓ MultiHeadLut smooth mode parity successful (custom CUDA kernels on/off)")
     
     return True
 
@@ -302,41 +354,80 @@ def test_multi_head_lut_smooth_training(device, seed=None):
         smooth_mode=True,
         uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
     )
+
+    # CPU: keep original single-model smoke behavior
+    if device != "cuda":
+        multi_head_lut.train()
+        optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.1)
+        for iteration in tqdm(range(n_iterations), desc="Training iterations (smooth)"):
+            x = torch.randn(batch_size, n_inputs, device=device, requires_grad=True)
+            target = torch.randn(batch_size, n_heads, n_outputs, device=device)
+            output = multi_head_lut(x)
+            loss = ((output - target) ** 2).mean()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            assert torch.isfinite(loss).item(), f"Iteration {iteration}: Loss became non-finite"
+            for name, param in multi_head_lut.named_parameters():
+                assert torch.isfinite(param).all(), f"Iteration {iteration}: Parameter {name} contains non-finite values"
+        print(f"✓ MultiHeadLut smooth mode training test successful ({n_iterations} iterations, n_alternatives=4)")
+        return True
+
+    # CUDA: compare custom kernels ON vs OFF
+    multi_head_lut_ref = MultiHeadLut(
+        input_dim=n_inputs,
+        n_heads=n_heads,
+        n_outputs=n_outputs,
+        n_anchor_pairs=n_anchors_per_detector,
+        tables_per_head=n_detectors_per_head,
+        random_seed=seed,
+        device=device,
+        n_alternatives=n_alternatives,
+        smooth_mode=True,
+        uncertainty_mode=UncertaintyMode.INVERSE_QUADRATIC
+    )
+    multi_head_lut_ref.load_state_dict(multi_head_lut.state_dict())
     multi_head_lut.train()
-    
-    optimizer = torch.optim.SGD(multi_head_lut.parameters(), lr=0.1)
-    
-    first_loss = None
-    last_loss = None
-    
-    for iteration in tqdm(range(n_iterations), desc="Training iterations (smooth)"):
-        # Generate random input and target
+    multi_head_lut_ref.train()
+    optimizer_custom = torch.optim.SGD(multi_head_lut.parameters(), lr=0.1)
+    optimizer_ref = torch.optim.SGD(multi_head_lut_ref.parameters(), lr=0.1)
+
+    for iteration in tqdm(range(n_iterations), desc="Training iterations (smooth, custom-vs-fallback)"):
         x = torch.randn(batch_size, n_inputs, device=device, requires_grad=True)
         target = torch.randn(batch_size, n_heads, n_outputs, device=device)
-        
-        # Forward pass
-        output = multi_head_lut(x)  # [B, n_heads, n_outputs]
-        
-        # Compute loss
-        loss = ((output - target) ** 2).mean()
-        
-        # Backward and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        # Track loss
-        loss_value = loss.item()
-        if first_loss is None:
-            first_loss = loss_value
-        last_loss = loss_value
-        
-        # Ensure loss and parameters remain finite
-        assert torch.isfinite(loss).item(), f"Iteration {iteration}: Loss became non-finite"
-        for name, param in multi_head_lut.named_parameters():
-            assert torch.isfinite(param).all(), f"Iteration {iteration}: Parameter {name} contains non-finite values"
-    
-    print(f"✓ MultiHeadLut smooth mode training test successful ({n_iterations} iterations, n_alternatives=4)")
+
+        with _use_lutorch_custom_cuda_kernels(True):
+            output_custom = multi_head_lut(x)
+            loss_custom = ((output_custom - target) ** 2).mean()
+            optimizer_custom.zero_grad()
+            loss_custom.backward()
+            optimizer_custom.step()
+
+        with _use_lutorch_custom_cuda_kernels(False):
+            output_ref = multi_head_lut_ref(x)
+            loss_ref = ((output_ref - target) ** 2).mean()
+            optimizer_ref.zero_grad()
+            loss_ref.backward()
+            optimizer_ref.step()
+
+        torch.testing.assert_close(
+            output_custom, output_ref, atol=2e-4, rtol=2e-4,
+            msg=f"Iteration {iteration}: outputs differ between custom and fallback smooth training",
+        )
+        torch.testing.assert_close(
+            loss_custom, loss_ref, atol=2e-5, rtol=2e-4,
+            msg=f"Iteration {iteration}: losses differ between custom and fallback smooth training",
+        )
+        for (name_c, p_custom), (name_r, p_ref) in zip(
+            multi_head_lut.named_parameters(), multi_head_lut_ref.named_parameters()
+        ):
+            assert name_c == name_r
+            torch.testing.assert_close(
+                p_custom, p_ref, atol=5e-4, rtol=5e-4,
+                msg=f"Iteration {iteration}: parameter mismatch for {name_c}",
+            )
+
+    print(f"✓ MultiHeadLut smooth mode CUDA parity successful ({n_iterations} iterations, n_alternatives=4)")
     
     return True
 

@@ -6,7 +6,7 @@ from enum import Enum
 
 import torch
 import torch.nn as nn
-from typing import Optional, Union
+from typing import Optional
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.util.chunk_of_connections import ChunkOfConnections
