@@ -320,6 +320,8 @@ def test_multi_head_lut_smooth_simple(device, seed=None, n_alternatives=3):
 
     print(f"✓ MultiHeadLut smooth mode parity successful (n_alternatives={n_alternatives}, custom CUDA kernels on/off)")
     
+    from spiky.lutorch.anchor_pairs_lookup import _get_native_lutorch_manager
+    print(_get_native_lutorch_manager().get_profiling_stats())
     return True
 
 
@@ -426,7 +428,8 @@ def test_multi_head_lut_smooth_training(device, seed=None, n_alternatives=3):
             )
 
     print(f"✓ MultiHeadLut smooth mode CUDA parity successful ({n_iterations} iterations, n_alternatives={n_alternatives})")
-    
+    from spiky.lutorch.anchor_pairs_lookup import _get_native_lutorch_manager
+    print(_get_native_lutorch_manager().get_profiling_stats())
     return True
 
 
