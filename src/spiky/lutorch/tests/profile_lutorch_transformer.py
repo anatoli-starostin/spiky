@@ -487,26 +487,22 @@ def run_single_configuration(
         optimizer_embedder.step()
     print("[DEBUG] warmup iterations finished", flush=True)
 
-    # Profiling iterations.
-    activities = [ProfilerActivity.CPU]
+    # Profiling iterations: CPU time on CPU, CUDA time on GPU (only what we care about).
     if backend.device == "cuda" and torch.cuda.is_available():
-        activities.append(ProfilerActivity.CUDA)
+        activities = [ProfilerActivity.CUDA]
+    else:
+        activities = [ProfilerActivity.CPU]
 
     print("[DEBUG] starting profiling block...", flush=True)
     # Reset native LUTorchManager profiler so stats reflect only this run (singleton accumulates otherwise).
     try:
         from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
         mgr = get_lutorch_manager()
-        if hasattr(mgr, "reset_profiling_stats"):
-            mgr.reset_profiling_stats()
+        mgr.reset_profiling_stats()
     except Exception:
         pass
     start_time = time.time()
-    with profile(
-        activities=activities,
-        record_shapes=True,
-        profile_memory=True,
-    ) as prof:
+    with profile(activities=activities) as prof:
         for step in tqdm(
             range(profile_steps),
             desc=f"{backend.name}, smooth={smooth_mode}, n_alt={n_alternatives_spec}",
