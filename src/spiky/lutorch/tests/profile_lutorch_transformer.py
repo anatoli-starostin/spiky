@@ -1,32 +1,23 @@
 """
 Profiling script for LUTorch-based transformer.
 
-This script replicates the training job from `workbooks/lutorch_transformer.ipynb`
-in a distilled form and runs a grid of configurations:
+Replicates the training job from `workbooks/lutorch_transformer.ipynb` in a
+distilled form and runs a grid of configurations:
 
 - smooth_mode: True / False
 - n_alternatives: 1 / 3 / "all" (== n_anchor_pairs)
-- compilation / backend mode:
-    CPU:
-      - cpu_pure         (no torch.compile, no custom CUDA kernels)
-      - cpu_compiled     (torch.compile enabled)
-    GPU (if available):
-      - gpu_pure             (no torch.compile, no custom CUDA kernels)
-      - gpu_compiled_no_k    (torch.compile, no custom CUDA kernels)
-      - gpu_compiled_anchor  (torch.compile, anchor lookup custom kernels only)
-      - gpu_compiled_all     (torch.compile, all custom kernels)
+- Backends (GPU only when CUDA available): gpu_pure, gpu_compiled_no_k,
+  gpu_compiled_anchor, gpu_compiled_all (see BackendConfig).
 
 For each configuration the script:
-  - loads text snippets via TextSnippetSampler
-  - constructs a LUTTransformer
-  - evaluates the untrained model
-  - runs 10 warmup training iterations (no profiling)
-  - runs 100 training iterations under torch.profiler
-  - stores PyTorch profiler stats and (if applicable) native LUTorchManager
-    profiling stats
+  - loads text snippets via TextSnippetSampler, builds LUTTransformer
+  - runs warmup steps then a timed loop: forward, backward, optimizer step
+  - reports mean wall-clock time per step (ms); on CUDA, torch.cuda.synchronize()
+    is used so times reflect GPU work
+  - when custom kernels are used, fetches native LUTorchManager profiling stats
 
-Results are written to `workbooks/lutorch_profile_results.md` as raw markdown.
-Run from repository root, e.g.:
+Results are written to `lutorch_profile_results.md` (summary table + per-run
+details with native stats when present). Run from repo root with PYTHONPATH=src:
 
     python -m spiky.lutorch.tests.profile_lutorch_transformer
 """
@@ -42,7 +33,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.profiler import ProfilerActivity, profile, record_function
 from tqdm.auto import tqdm
 
 from spiky.util.text_snippet_sampler import TextSnippetSampler
@@ -493,75 +483,72 @@ def run_single_configuration(
         optimizer_embedder.step()
     print("[DEBUG] warmup iterations finished", flush=True)
 
-    # Profiling iterations: CPU time on CPU, CUDA time on GPU (only what we care about).
-    if backend.device == "cuda" and torch.cuda.is_available():
-        activities = [ProfilerActivity.CUDA]
-    else:
-        activities = [ProfilerActivity.CPU]
+    # Timed loop: forward, backward, optimizer step (sync on CUDA for accurate GPU time).
+    def _sync():
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-    print("[DEBUG] starting profiling block...", flush=True)
-    # Reset native LUTorchManager profiler so stats reflect only this run (singleton accumulates otherwise).
+    print("[DEBUG] starting timed loop...", flush=True)
     try:
         from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
         mgr = get_lutorch_manager()
         mgr.reset_profiling_stats()
     except Exception:
         pass
-    start_time = time.time()
-    with profile(activities=activities) as prof:
-        for step in tqdm(
-            range(profile_steps),
-            desc=f"{backend.name}, smooth={smooth_mode}, n_alt={n_alternatives_spec}",
-            leave=False,
-        ):
-            with record_function("sample_batch"):
-                x = _sample_training_batch(batch_size, device, sampler)
-                inp = torch.empty_like(x)
-                inp[:, 0] = BOS_ID
-                inp[:, 1:] = x[:, :-1]
-                tgt = x
 
-            with record_function("forward"):
-                logits = model(inp)
+    forward_ms_list: List[float] = []
+    backward_ms_list: List[float] = []
+    optimizer_step_ms_list: List[float] = []
 
-            with record_function("loss"):
-                B, T, V = logits.shape
-                loss = F.cross_entropy(
-                    logits.reshape(B * T, V),
-                    tgt.reshape(B * T),
-                    reduction="sum",
-                )
+    for step in tqdm(
+        range(profile_steps),
+        desc=f"{backend.name}, smooth={smooth_mode}, n_alt={n_alternatives_spec}",
+        leave=False,
+    ):
+        x = _sample_training_batch(batch_size, device, sampler)
+        inp = torch.empty_like(x)
+        inp[:, 0] = BOS_ID
+        inp[:, 1:] = x[:, :-1]
+        tgt = x
 
-            with record_function("backward+step"):
-                optimizer_layers.zero_grad(set_to_none=True)
-                optimizer_embedder.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=1.0
-                )
-                optimizer_layers.step()
-                optimizer_embedder.step()
-
-            prof.step()
-
-    elapsed_s = time.time() - start_time
-    print(f"[DEBUG] profiling block finished in {elapsed_s:.3f}s", flush=True)
-
-    # Summaries: when CUDA is enabled, only CUDA table; otherwise only CPU table.
-    table_cpu = None
-    table_cuda = None
-    if backend.device == "cuda" and torch.cuda.is_available():
-        table_cuda = prof.key_averages().table(
-            sort_by="cuda_time_total", row_limit=80
+        _sync()
+        t0 = time.perf_counter()
+        logits = model(inp)
+        _sync()
+        t1 = time.perf_counter()
+        B, T, V = logits.shape
+        loss = F.cross_entropy(
+            logits.reshape(B * T, V),
+            tgt.reshape(B * T),
+            reduction="sum",
         )
-    else:
-        table_cpu = prof.key_averages().table(
-            sort_by="cpu_time_total", row_limit=80
-        )
+
+        optimizer_layers.zero_grad(set_to_none=True)
+        optimizer_embedder.zero_grad(set_to_none=True)
+        _sync()
+        t2 = time.perf_counter()
+        loss.backward()
+        _sync()
+        t3 = time.perf_counter()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer_layers.step()
+        optimizer_embedder.step()
+        _sync()
+        t4 = time.perf_counter()
+
+        forward_ms_list.append((t1 - t0) * 1000.0)
+        backward_ms_list.append((t3 - t2) * 1000.0)
+        optimizer_step_ms_list.append((t4 - t3) * 1000.0)
+
+    elapsed_s = sum(forward_ms_list) / 1000.0 + sum(backward_ms_list) / 1000.0 + sum(optimizer_step_ms_list) / 1000.0
+    print(f"[DEBUG] timed loop finished, elapsed={elapsed_s:.3f}s", flush=True)
 
     native_stats = None
     if backend.device == "cuda" and backend.custom_kernel_mode != "none":
         native_stats = _get_native_lutorch_stats()
+
+    def _mean(lst: List[float]) -> float:
+        return sum(lst) / len(lst) if lst else 0.0
 
     result: Dict[str, object] = {
         "backend_name": backend.name,
@@ -573,9 +560,10 @@ def run_single_configuration(
         "batch_size": batch_size,
         "warmup_steps": warmup_steps,
         "profile_steps": profile_steps,
+        "forward_ms_mean": _mean(forward_ms_list),
+        "backward_ms_mean": _mean(backward_ms_list),
+        "optimizer_step_ms_mean": _mean(optimizer_step_ms_list),
         "elapsed_s": elapsed_s,
-        "profiler_cpu_table": table_cpu,
-        "profiler_cuda_table": table_cuda,
         "native_lutorch_stats": native_stats,
     }
     return result
@@ -622,54 +610,48 @@ def _build_backend_grid() -> List[BackendConfig]:
 
 def _write_markdown(results: List[Dict[str, object]], path: str) -> None:
     lines: List[str] = []
-    lines.append("# LUTorch Transformer Profiling\n")
+    lines.append("# LUTorch Transformer Profiling")
     lines.append("")
-    lines.append(f"- Total runs: {len(results)}")
+    lines.append("Wall-clock mean time per step (ms); on CUDA, `torch.cuda.synchronize()` is used so times reflect GPU work.")
+    lines.append("")
+    lines.append("| backend | smooth | n_alt | forward_ms | backward_ms | optimizer_step_ms | elapsed_s |")
+    lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: |")
+    for res in results:
+        lines.append(
+            "| {} | {} | {} | {:.2f} | {:.2f} | {:.2f} | {:.3f} |".format(
+                res["backend_name"],
+                res["smooth_mode"],
+                res["n_alternatives_spec"],
+                res["forward_ms_mean"],
+                res["backward_ms_mean"],
+                res["optimizer_step_ms_mean"],
+                res["elapsed_s"],
+            )
+        )
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("## Per-run details (native profiler when present)")
     lines.append("")
 
     for res in results:
-        lines.append("---")
-        lines.append("")
         lines.append(
-            f"## Backend `{res['backend_name']}`, "
-            f"smooth_mode={res['smooth_mode']}, "
-            f"n_alternatives_spec={res['n_alternatives_spec']}"
+            f"### Backend `{res['backend_name']}`, smooth={res['smooth_mode']}, n_alt={res['n_alternatives_spec']}"
         )
         lines.append("")
-        lines.append("### Configuration")
+        lines.append(f"- device: `{res['device']}`, batch_size: {res['batch_size']}, profile_steps: {res['profile_steps']}")
+        lines.append(f"- forward_ms: {res['forward_ms_mean']:.2f}, backward_ms: {res['backward_ms_mean']:.2f}, optimizer_step_ms: {res['optimizer_step_ms_mean']:.2f}, elapsed_s: {res['elapsed_s']:.3f}")
+        lines.append(f"- untrained_loss: {res['untrained_loss']:.6f}")
         lines.append("")
-        lines.append(f"- device: `{res['device']}`")
-        lines.append(f"- batch_size: {res['batch_size']}")
-        lines.append(f"- warmup_steps: {res['warmup_steps']}")
-        lines.append(f"- profile_steps: {res['profile_steps']}")
-        lines.append(f"- elapsed_s: {res['elapsed_s']:.3f}")
-        lines.append(f"- untrained_loss (last_position_only): {res['untrained_loss']:.6f}")
-        lines.append("")
-
-        if res.get("profiler_cpu_table") is not None:
-            lines.append("### PyTorch profiler (CPU, top 80)")
-            lines.append("")
-            lines.append("```")
-            lines.append(str(res["profiler_cpu_table"]))
-            lines.append("```")
-            lines.append("")
-
-        if res.get("profiler_cuda_table") is not None:
-            lines.append("### PyTorch profiler (CUDA, top 80)")
-            lines.append("")
-            lines.append("```")
-            lines.append(str(res["profiler_cuda_table"]))
-            lines.append("```")
-            lines.append("")
-
         native_stats = res.get("native_lutorch_stats")
         if native_stats:
-            lines.append("### Native LUTorchManager profiling stats")
+            lines.append("**Native LUTorchManager profiling stats:**")
             lines.append("")
             lines.append("```")
             lines.append(str(native_stats))
             lines.append("```")
             lines.append("")
+        lines.append("")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
