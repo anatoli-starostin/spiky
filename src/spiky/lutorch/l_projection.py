@@ -292,11 +292,13 @@ class LProjection(nn.Module):
 
             l1_uncertainty = self.uncertainty_mode == UncertaintyMode.INVERSE_L1
 
+            # For smooth + n_alternatives > 3 ("all"), PyTorch fallback is faster (see PROFILE_N_ALT_ALL.md).
             use_native_eval_cuda = (
                 _USE_LUTORCH_CUSTOM_CUDA_KERNELS
                 and _get_native_lutorch_manager() is not None
                 and self.weights.is_cuda
                 and self.weights.dtype in (torch.float32, torch.float64)
+                and self.n_alternatives <= 3
             )
             if use_native_eval_cuda:
                 native = _get_native_lutorch_manager()
@@ -392,11 +394,13 @@ class LProjectionFunction(torch.autograd.Function):
             assert lookup_alt_indices is not None, "lookup_alt_indices required in smooth mode"
             assert lookup_alt_deltas is not None, "lookup_alt_deltas required in smooth mode"
             l1_uncertainty = uncertainty_mode == UncertaintyMode.INVERSE_L1
+            # For smooth + n_alternatives > 3 ("all"), PyTorch fallback is faster (see PROFILE_N_ALT_ALL.md).
             use_native_forward_cuda = (
                 _USE_LUTORCH_CUSTOM_CUDA_KERNELS
                 and _get_native_lutorch_manager() is not None
                 and weights.is_cuda
                 and weights.dtype in (torch.float32, torch.float64)
+                and n_alternatives <= 3
             )
             if use_native_forward_cuda:
                 native = _get_native_lutorch_manager()
@@ -451,12 +455,14 @@ class LProjectionFunction(torch.autograd.Function):
         n_lookup_tables = ctx.n_lookup_tables
         n_alternatives = ctx.n_alternatives
 
+        # For smooth + n_alternatives > 3 ("all"), PyTorch fallback is faster (see PROFILE_N_ALT_ALL.md).
         use_native_cuda_backward = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and _get_native_lutorch_manager() is not None
             and grad_output.is_cuda
             and grad_output.dtype in (torch.float32, torch.float64)
             and lookup_alt_indices is not None
+            and (not ctx.smooth_mode or n_alternatives <= 3)
         )
         if use_native_cuda_backward:
             native = _get_native_lutorch_manager()
