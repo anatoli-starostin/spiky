@@ -39,12 +39,12 @@ def _run_codegen():
         os.path.join(spiky_root, "spnet", "aux_", "spnet_runtime_kernels_logic.cu"),
     )
     generate_cu_from_proto(
-        os.path.join(spiky_root, "lut", "lut_runtime_kernels_logic.proto"),
-        os.path.join(spiky_root, "lut", "aux_", "lut_runtime_kernels_logic.cu"),
+        os.path.join(spiky_root, "lut_fused", "lut_runtime_kernels_logic.proto"),
+        os.path.join(spiky_root, "lut_fused", "aux_", "lut_runtime_kernels_logic.cu"),
     )
     generate_cu_from_proto(
-        os.path.join(spiky_root, "lut", "lut_compile_time_kernels_logic.proto"),
-        os.path.join(spiky_root, "lut", "aux_", "lut_compile_time_kernels_logic.cu"),
+        os.path.join(spiky_root, "lut_fused", "lut_compile_time_kernels_logic.proto"),
+        os.path.join(spiky_root, "lut_fused", "aux_", "lut_compile_time_kernels_logic.cu"),
     )
     generate_cu_from_proto(
         os.path.join(spiky_root, "synapse_growth", "synapse_growth_kernels_logic.proto"),
@@ -74,8 +74,8 @@ sources_list_cuda = [
     os.path.join(spiky_root, 'misc', 'misc.cpp'),
     os.path.join(spiky_root, 'spnet', 'spnet.cu'),
     os.path.join(spiky_root, 'spnet', 'spnet_runtime.cu'),
-    os.path.join(spiky_root, 'lut', 'lut.cu'),
-    os.path.join(spiky_root, 'lut', 'lut_runtime.cu'),
+    os.path.join(spiky_root, 'lut_fused', 'lut.cu'),
+    os.path.join(spiky_root, 'lut_fused', 'lut_runtime.cu'),
     os.path.join(spiky_root, 'synapse_growth', 'synapse_growth.cu'),
     os.path.join(spiky_root, 'torch_utils', 'torch_utils.cu'),
     # LUTorch kernels are built as part of the dedicated `lutorch_cuda` module.
@@ -85,8 +85,8 @@ if BUILD_INTEGERS_VERSION:
     sources_list_cuda += [
         'spnet/aux_/spnet_I.cu',
         'spnet/aux_/spnet_runtime_I.cu',
-        'lut/aux_/lut_I.cu',
-        'lut/aux_/lut_runtime_I.cu'
+        'lut_fused/aux_/lut_I.cu',
+        'lut_fused/aux_/lut_runtime_I.cu'
     ]
 
 sources_list_no_cuda = [
@@ -97,8 +97,8 @@ sources_list_no_cuda = [
     os.path.join(spiky_root, 'misc', 'misc.cpp'),
     os.path.join(spiky_root, 'spnet', 'aux_', 'spnet.cpp'),
     os.path.join(spiky_root, 'spnet', 'aux_', 'spnet_runtime.cpp'),
-    os.path.join(spiky_root, 'lut', 'aux_', 'lut.cpp'),
-    os.path.join(spiky_root, 'lut', 'aux_', 'lut_runtime.cpp'),
+    os.path.join(spiky_root, 'lut_fused', 'aux_', 'lut.cpp'),
+    os.path.join(spiky_root, 'lut_fused', 'aux_', 'lut_runtime.cpp'),
     os.path.join(spiky_root, 'synapse_growth', 'aux_', 'synapse_growth.cpp'),
     os.path.join(spiky_root, 'torch_utils', 'aux_', 'torch_utils.cpp'),
     os.path.join(spiky_root, 'spiky_py.cpp'),
@@ -107,8 +107,8 @@ if BUILD_INTEGERS_VERSION:
     sources_list_no_cuda += [
         'spnet/aux_/spnet_I.cpp',
         'spnet/aux_/spnet_runtime_I.cpp',
-        'lut/aux_/lut_I.cpp',
-        'lut/aux_/lut_runtime_I.cpp'
+        'lut_fused/aux_/lut_I.cpp',
+        'lut_fused/aux_/lut_runtime_I.cpp'
     ]
 
 
