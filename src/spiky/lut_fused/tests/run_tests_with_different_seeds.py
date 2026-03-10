@@ -1,11 +1,11 @@
 import torch
 
-from test_lut_forward_simple import test_lut_forward_simple
-from test_lut_fully_connected_small import test_lut_fully_connected_small
-from test_lut_fully_connected import test_lut_fully_connected
-from test_lut_backward import test_lut_backward
-from test_lut_transformer_small import test_lut_transformer_small
-from test_lut_transformer_product import test_lut_transformer_product
+from spiky.lut_fused.tests.test_lut_forward_simple import test_lut_forward_simple
+from spiky.lut_fused.tests.test_lut_fully_connected_small import test_lut_fully_connected_small
+from spiky.lut_fused.tests.test_lut_fully_connected import test_lut_fully_connected
+from spiky.lut_fused.tests.test_lut_backward import test_lut_backward
+from spiky.lut_fused.tests.test_lut_transformer_small import test_lut_transformer_small
+from spiky.lut_fused.tests.test_lut_transformer_product import test_lut_transformer_product
 from spiky.util.torch_utils import test_dense_to_sparse_converter
 
 
