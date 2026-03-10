@@ -529,7 +529,6 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             n_alternatives = lookup_alt_deltas.shape[-1]
             flat_anchor1 = anchor1_ids.reshape(-1).contiguous()
             flat_anchor2 = anchor2_ids.reshape(-1).contiguous()
-            flat_deltas = lookup_alt_deltas.reshape(-1).contiguous()
             flat_batch_offset = ctx.batch_offset.reshape(-1).contiguous()
             flat_grad_alt = grad_lookup_alt_indices_grad_c.reshape(-1).contiguous()
 
@@ -538,7 +537,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                     x,
                     flat_anchor1,
                     flat_anchor2,
-                    flat_deltas,
+                    lookup_alt_deltas.reshape(-1).contiguous(),
                     flat_batch_offset,
                     grad_lookup_indices_grad_c,
                     flat_grad_alt,
@@ -550,7 +549,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                     x,
                     flat_anchor1,
                     flat_anchor2,
-                    flat_deltas,
+                    lookup_alt_deltas.reshape(-1).contiguous(),
                     flat_batch_offset,
                     grad_lookup_indices_grad_c,
                     flat_grad_alt,
@@ -562,7 +561,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                     x,
                     flat_anchor1,
                     flat_anchor2,
-                    flat_deltas,
+                    lookup_alt_deltas.reshape(-1).contiguous(),
                     flat_batch_offset,
                     grad_lookup_indices_grad_c,
                     flat_grad_alt,
@@ -570,11 +569,13 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                     _LUTORCH_CUDA_THREADS_PER_BLOCK,
                 )
             else:
+                # Generic CUDA backward path expects lookup_alt_deltas with shape [B, T, A],
+                # but flattened anchor ids / batch_offset / grad_alt.
                 x_grad_flat = native.anchor_pairs_lookup_backward_all(
                     x,
                     flat_anchor1,
                     flat_anchor2,
-                    flat_deltas,
+                    lookup_alt_deltas,
                     flat_batch_offset,
                     grad_lookup_indices_grad_c,
                     flat_grad_alt,
