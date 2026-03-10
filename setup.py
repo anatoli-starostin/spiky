@@ -15,7 +15,6 @@ if __name__ == '__main__':
             "spiky.util",
             "spiky.lut_fused",
             "spiky.lutorch",
-            "spiky.lutorch.tests",
             "spiky.spnet"
         ],
     )
