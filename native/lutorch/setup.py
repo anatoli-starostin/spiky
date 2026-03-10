@@ -40,10 +40,12 @@ def _get_ext_modules():
     sources_cuda = [
         os.path.join(project_root, "native", "common", "misc.cpp"),
         os.path.join(project_root, "native", "lutorch", "lutorch.cu"),
+        os.path.join(project_root, "native", "lutorch", "lutorch_py.cpp"),
     ]
     sources_no_cuda = [
         os.path.join(project_root, "native", "common", "misc.cpp"),
         os.path.join(project_root, "native", "lutorch", "aux_", "lutorch.cpp"),
+        os.path.join(project_root, "native", "lutorch", "lutorch_py.cpp"),
     ]
 
     if hasattr(sys, "getwindowsversion"):

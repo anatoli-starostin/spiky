@@ -33,7 +33,6 @@ def _get_native_lutorch_manager():
         is used.
     """
     try:
-        import torch
         from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
         return get_lutorch_manager()
     except Exception:
