@@ -51,6 +51,8 @@ from spiky.util.text_snippet_sampler import TextSnippetSampler
 # re-evaluate environment-driven flags (_USE_LUTORCH_COMPILE, custom CUDA, etc.).
 import importlib
 
+import spiky.lutorch.anchor_pairs_lookup as anchor_pairs_lookup_mod
+import spiky.lutorch.l_projection as l_projection_mod
 import spiky.lutorch.multi_head_lut as mhl
 import spiky.lutorch.lut_cross_attention as lca
 
@@ -237,8 +239,12 @@ def _configure_lutorch_environment(backend: BackendConfig) -> None:
     else:
         raise ValueError(f"Unknown custom_kernel_mode: {backend.custom_kernel_mode}")
 
-    # Reload modules so they re-read env-controlled flags.
+    # Reload modules so they re-read env-controlled flags. Must reload
+    # anchor_pairs_lookup and l_projection first (they read NO_CUSTOM_CUDA_KERNELS
+    # at import time); then mhl/lca so they pick up the updated submodules.
     global mhl, lca
+    importlib.reload(anchor_pairs_lookup_mod)
+    importlib.reload(l_projection_mod)
     mhl = importlib.reload(mhl)
     lca = importlib.reload(lca)
 
@@ -541,14 +547,16 @@ def run_single_configuration(
     elapsed_s = time.time() - start_time
     print(f"[DEBUG] profiling block finished in {elapsed_s:.3f}s", flush=True)
 
-    # Summaries.
-    table_cpu = prof.key_averages().table(
-        sort_by="cpu_time_total", row_limit=80
-    )
+    # Summaries: when CUDA is enabled, only CUDA table; otherwise only CPU table.
+    table_cpu = None
     table_cuda = None
-    if any(act == ProfilerActivity.CUDA for act in activities):
+    if backend.device == "cuda" and torch.cuda.is_available():
         table_cuda = prof.key_averages().table(
             sort_by="cuda_time_total", row_limit=80
+        )
+    else:
+        table_cpu = prof.key_averages().table(
+            sort_by="cpu_time_total", row_limit=80
         )
 
     native_stats = None
@@ -574,47 +582,42 @@ def run_single_configuration(
 
 
 def _build_backend_grid() -> List[BackendConfig]:
-    backends: List[BackendConfig] = [
+    if torch.cuda.is_available():
+        return [
+            BackendConfig(
+                name="gpu_pure",
+                device="cuda",
+                use_torch_compile=False,
+                custom_kernel_mode="none",
+            ),
+            BackendConfig(
+                name="gpu_compiled_no_k",
+                device="cuda",
+                use_torch_compile=True,
+                custom_kernel_mode="none",
+            ),
+            BackendConfig(
+                name="gpu_compiled_anchor",
+                device="cuda",
+                use_torch_compile=True,
+                custom_kernel_mode="anchor_only",
+            ),
+            BackendConfig(
+                name="gpu_compiled_all",
+                device="cuda",
+                use_torch_compile=True,
+                custom_kernel_mode="all",
+            ),
+        ]
+    print("[INFO] CUDA not available; running CPU backends only.")
+    return [
         BackendConfig(
             name="cpu_pure",
             device="cpu",
             use_torch_compile=False,
             custom_kernel_mode="none",
-        )
+        ),
     ]
-
-    if torch.cuda.is_available():
-        backends.extend(
-            [
-                BackendConfig(
-                    name="gpu_pure",
-                    device="cuda",
-                    use_torch_compile=False,
-                    custom_kernel_mode="none",
-                ),
-                BackendConfig(
-                    name="gpu_compiled_no_k",
-                    device="cuda",
-                    use_torch_compile=True,
-                    custom_kernel_mode="none",
-                ),
-                BackendConfig(
-                    name="gpu_compiled_anchor",
-                    device="cuda",
-                    use_torch_compile=True,
-                    custom_kernel_mode="anchor_only",
-                ),
-                BackendConfig(
-                    name="gpu_compiled_all",
-                    device="cuda",
-                    use_torch_compile=True,
-                    custom_kernel_mode="all",
-                ),
-            ]
-        )
-    else:
-        print("[INFO] CUDA not available; skipping GPU backends.")
-    return backends
 
 
 def _write_markdown(results: List[Dict[str, object]], path: str) -> None:
@@ -643,12 +646,13 @@ def _write_markdown(results: List[Dict[str, object]], path: str) -> None:
         lines.append(f"- untrained_loss (last_position_only): {res['untrained_loss']:.6f}")
         lines.append("")
 
-        lines.append("### PyTorch profiler (CPU, top 80)")
-        lines.append("")
-        lines.append("```")
-        lines.append(str(res["profiler_cpu_table"]))
-        lines.append("```")
-        lines.append("")
+        if res.get("profiler_cpu_table") is not None:
+            lines.append("### PyTorch profiler (CPU, top 80)")
+            lines.append("")
+            lines.append("```")
+            lines.append(str(res["profiler_cpu_table"]))
+            lines.append("```")
+            lines.append("")
 
         if res.get("profiler_cuda_table") is not None:
             lines.append("### PyTorch profiler (CUDA, top 80)")
