@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from spiky.lut.LUTLayer import LUTLayer, SynapseMeta
+from spiky.lut_fused.LUTLayer import LUTLayer, SynapseMeta
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.lutorch.lut_helpers import UncertaintyMode
 from spiky.lutorch import anchor_pairs_lookup as anchor_pairs_lookup_mod

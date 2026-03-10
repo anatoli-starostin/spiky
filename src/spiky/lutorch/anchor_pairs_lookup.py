@@ -22,17 +22,51 @@ if _LUTORCH_CUDA_THREADS_PER_BLOCK < 1 or _LUTORCH_CUDA_THREADS_PER_BLOCK > 1024
         f"got {_LUTORCH_CUDA_THREADS_PER_BLOCK}"
     )
 
-try:
-    from spiky_cuda import get_lutorch_manager as _get_native_lutorch_manager
-except Exception:
-    def _get_native_lutorch_manager():
+
+def _get_native_lutorch_manager():
+    """
+    Prefer a dedicated `lutorch_cuda` module if available.
+
+    Returns:
+        LUTorchManager* from the `lutorch_cuda` extension if import succeeds;
+        otherwise returns None and the pure PyTorch fallback implementation
+        is used.
+    """
+    try:
+        from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
+        return get_lutorch_manager()
+    except Exception:
         return None
 
 
+def _first_tensor_device(args, kwargs):
+    """Return the device of the first tensor in args or kwargs, or None."""
+    for a in args:
+        if isinstance(a, torch.Tensor):
+            return a.device
+    for v in kwargs.values():
+        if isinstance(v, torch.Tensor):
+            return v.device
+    return None
+
+
 def _maybe_compile(fn):
+    # Use torch.compile only when LUTorch compile is enabled and the current
+    # call uses CUDA tensors. On CPU, torch.compile can introduce heavy
+    # multiprocessing overhead with little benefit.
+    compiled_fn = None
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
-        return torch.compile(fn, dynamic=True)
-    return fn
+        compiled_fn = torch.compile(fn, dynamic=True)
+
+    def wrapper(*args, **kwargs):
+        device = _first_tensor_device(args, kwargs)
+        if device is not None and device.type == "cuda" and compiled_fn is not None:
+            return compiled_fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
 
 
 @_maybe_compile

@@ -36,11 +36,14 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
    pip install -e .
    ```
 
-4. Install CUDA extension:
+4. Build and install native CUDA extensions:
    ```bash
-   cd ./spiky_cuda
-   pip install -e . --no-build-isolation -v
-   cd ..
+   # From project root
+   # (a) LUTorch CUDA backend – this is what you normally need for LUT-based models
+   pip install -v ./native/lutorch --no-build-isolation
+
+   # (b) Full engine (SpNet, synapse growth, etc.) – only needed for advanced / spiking use cases
+   pip install -v ./native/spiky  --no-build-isolation
    ```
 
 ## Running Tests
@@ -56,6 +59,12 @@ Run the test suites with different seeds:
 2. **LUT tests:**
    ```bash
    cd ../../lut/tests/
+   python run_tests_with_different_seeds.py
+   ```
+
+3. **LUTorch tests:**
+   ```bash
+   cd ../../lutorch/tests/
    python run_tests_with_different_seeds.py
    ```
 

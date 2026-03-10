@@ -5,7 +5,20 @@
 workbooks/fineweb_texts.txt
 workbooks/mnist
 workbooks/data
-spiky_cuda/*/aux_/*.cu
+spiky_cuda_deprecated/*/aux_/*.cu
+
+# Native spiky generated kernels (from .proto / logic)
+native/spiky/connections_manager/aux_/connections_manager_kernels_logic.cu
+native/spiky/lut_fused/aux_/lut_compile_time_kernels_logic.cu
+native/spiky/lut_fused/aux_/lut_runtime_kernels_logic.cu
+native/spiky/misc/aux_/spike_storage_kernels_logic.cu
+native/spiky/spnet/aux_/spnet_runtime_kernels_logic.cu
+native/spiky/synapse_growth/aux_/synapse_growth_kernels_logic.cu
+native/spiky/torch_utils/aux_/torch_utils_kernels_logic.cu
+
+# LUTorch profiling (downloaded data + generated report)
+src/spiky/lutorch/tests/fineweb_texts.txt
+src/spiky/lutorch/tests/lutorch_profile_results.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

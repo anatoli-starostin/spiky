@@ -93,7 +93,7 @@ def forward(self, x):
 The `weights_gradient_policy` parameter controls how weight gradients are computed and stored during backpropagation. It accepts a `GradientPolicy` object with the following options:
 
 ```python
-from spiky.lut.LUTLayer import GradientPolicy, GradientType
+from spiky.lut_fused.LUTLayer import GradientPolicy, GradientType
 
 # Available gradient types:
 # - GradientType.Dense: Computes gradients in dense format (default)
@@ -149,7 +149,7 @@ If a `shared_context` is not passed to the constructor, a new instance is create
 - **CUDA Streams**: Manages CUDA streams for parallel operations
 
 ```python
-from spiky.lut.LUTLayer import LUTSharedContext
+from spiky.lut_fused.LUTLayer import LUTSharedContext
 
 # Create a shared context (typically one per model)
 shared_context = LUTSharedContext()
@@ -176,7 +176,7 @@ layer3 = LUTLayer(...)  # Creates its own LUTSharedContext internally
 #### Constructor Example
 
 ```python
-from spiky.lut.LUTLayer import LUTLayer, SynapseMeta, GradientPolicy, GradientType
+from spiky.lut_fused.LUTLayer import LUTLayer, SynapseMeta, GradientPolicy, GradientType
 import torch
 
 layer = LUTLayer(
@@ -197,7 +197,7 @@ layer = LUTLayer(
 #### Constructor Example
 
 ```python
-from spiky.lut.LUTLayer import ProjectionLUTLayer, PointSamplingPolicy, PointSamplingType, GradientPolicy, GradientType
+from spiky.lut_fused.LUTLayer import ProjectionLUTLayer, PointSamplingPolicy, PointSamplingType, GradientPolicy, GradientType
 
 layer = ProjectionLUTLayer(
     input_shape=(28, 28),
@@ -264,7 +264,7 @@ For sequence processing, `LUTLayer` supports multi-step sequences with positiona
 #### Constructor Example
 
 ```python
-from spiky.lut.LUTLayer import LUTLayer, GradientPolicy, GradientType
+from spiky.lut_fused.LUTLayer import LUTLayer, GradientPolicy, GradientType
 import torch
 
 layer = LUTLayer(
@@ -331,8 +331,8 @@ For each detector:
 #### Constructor Example
 
 ```python
-from spiky.lut.LUTTransformer import LUTTransformer
-from spiky.lut.LUTLayer import SynapseMeta, GradientPolicy, GradientType
+from spiky.lut_fused.LUTTransformer import LUTTransformer
+from spiky.lut_fused.LUTLayer import SynapseMeta, GradientPolicy, GradientType
 import torch
 
 transformer = LUTTransformer(
