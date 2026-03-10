@@ -465,7 +465,8 @@ def main():
             return -1
 
         # Test 3/4: Smooth mode tests for multiple n_alternatives values
-        for n_alternatives in (2, 3):
+        # Includes n_alternatives == n_anchor_pairs (4) to exercise the generic CUDA fast path.
+        for n_alternatives in (2, 3, 4):
             print(f"\n3. Testing MultiHeadLut in smooth mode (simple, n_alternatives={n_alternatives})...")
             success = test_multi_head_lut_smooth_simple(device, seed=seed, n_alternatives=n_alternatives)
             if not success:
