@@ -2376,6 +2376,12 @@ public:
         #endif
     }
 
+    void reset_profiling_stats() {
+        #ifdef ENABLE_PROFILING
+        profiler.reset();
+        #endif
+    }
+
 private:
     #ifdef ENABLE_PROFILING
     SimpleProfiler profiler;
@@ -2548,7 +2554,8 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("threads_per_block") = 256
         )
         #endif
-        .def("get_profiling_stats", &LUTorchManager::get_profiling_stats);
+        .def("get_profiling_stats", &LUTorchManager::get_profiling_stats)
+        .def("reset_profiling_stats", &LUTorchManager::reset_profiling_stats);
 
     // Singleton: one manager for all lutorch ops so profiler sees both lookup and lprojection.
     // Never destroyed (intentional leak) to avoid segfault on exit when CUDA/PyTorch tear down first.

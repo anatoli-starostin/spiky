@@ -493,6 +493,14 @@ def run_single_configuration(
         activities.append(ProfilerActivity.CUDA)
 
     print("[DEBUG] starting profiling block...", flush=True)
+    # Reset native LUTorchManager profiler so stats reflect only this run (singleton accumulates otherwise).
+    try:
+        from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
+        mgr = get_lutorch_manager()
+        if hasattr(mgr, "reset_profiling_stats"):
+            mgr.reset_profiling_stats()
+    except Exception:
+        pass
     start_time = time.time()
     with profile(
         activities=activities,
