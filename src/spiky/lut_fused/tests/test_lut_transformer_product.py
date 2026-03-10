@@ -7,7 +7,7 @@ from tqdm import tqdm
 from spiky.lut_fused.LUTLayer import GradientPolicy, GradientType, SynapseMeta
 
 from spiky.lut_fused.LUTTransformer import LUTTransformer
-from spiky.lut_fused.tests.gt_lut_product import GTLUTProductTransformer
+from gt_lut_product import GTLUTProductTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 
 
