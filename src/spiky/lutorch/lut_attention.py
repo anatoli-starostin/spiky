@@ -160,13 +160,19 @@ class LUTAttention(nn.Module):
                 self._cached_key_indices = (self._cached_batched_cols % seq_len).contiguous()  # [P]
 
                 if self.n_positional_buckets > 1:
-                    pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                    rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
+                    buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
+                    # When include_diagonal=False, we never use distance 0 (self-attention).
+                    # To keep the effective distance-to-bucket mapping aligned with the original
+                    # causal setup (where distance 1 used bucket 0, etc.), shift buckets by 1:
+                    # distance 1 -> old bucket[0], distance 2 -> old bucket[1], ...
+                    if not self.include_diagonal and seq_len > 1:
+                        buckets = torch.cat([buckets[1:], buckets[-1:]], dim=0)
+                    rpe = rpe_matrix(buckets, seq_len, device)  # [S, S]
                     rpe_pairs = rpe[rows_local, cols_local]  # [num_pairs_single]
                     if self.do_sanity_checks:
-                        # Sanity check: rpe_pairs must agree with distance-based pe_buckets
-                        dist = (rows_local - cols_local).clamp(min=0, max=pe_buckets.shape[0] - 1)
-                        expected_pairs = pe_buckets[dist]
+                        # Sanity check: rpe_pairs must agree with distance-based buckets
+                        dist = (rows_local - cols_local).clamp(min=0, max=buckets.shape[0] - 1)
+                        expected_pairs = buckets[dist]
                         assert torch.equal(rpe_pairs, expected_pairs), "rpe_pairs inconsistent with pe_buckets and (q,k) distance"
                     self._cached_bucket_indices = rpe_pairs.repeat(batch_size).contiguous()  # [P]
                     if self.do_sanity_checks:
