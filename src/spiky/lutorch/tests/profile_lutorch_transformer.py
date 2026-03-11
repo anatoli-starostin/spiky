@@ -44,7 +44,7 @@ import importlib
 import spiky.lutorch.anchor_pairs_lookup as anchor_pairs_lookup_mod
 import spiky.lutorch.l_projection as l_projection_mod
 import spiky.lutorch.multi_head_lut as mhl
-import spiky.lutorch.lut_cross_attention as lca
+import spiky.lutorch.lut_attention as lca
 
 
 # --- Constants and simple caches matching lutorch_transformer.ipynb ---
@@ -96,12 +96,12 @@ class LUTTransformerConfig:
 
 
 class LUTTransformer(nn.Module):
-    """Transformer with LUTorch primitives: MultiHeadLut + LUTCrossAttention."""
+    """Transformer with LUTorch primitives: MultiHeadLut + LUTAttention."""
 
     class Block(nn.Module):
         def __init__(self, c: LUTTransformerConfig) -> None:
             super().__init__()
-            self.cross_attn = lca.LUTCrossAttention(
+            self.cross_attn = lca.LUTAttention(
                 mhl.MultiHeadLut(
                     input_dim=c.embedding_dim,
                     n_heads=c.num_heads,

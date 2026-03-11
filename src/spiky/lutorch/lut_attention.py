@@ -21,7 +21,7 @@ class PairProcessingMode(str, Enum):
 @dataclass(frozen=True)
 class PairProcessingConfig:
     """
-    Configuration for (i, j) pair processing in LUTCrossAttention.
+    Configuration for (i, j) pair processing in LUTAttention.
     
     mode:
         - LINEAR_COMBINATION: uses c1 * input1[i] + c2 * input2[j]
@@ -32,7 +32,7 @@ class PairProcessingConfig:
     c2: float = -2.0
 
 
-class LUTCrossAttention(nn.Module):
+class LUTAttention(nn.Module):
     """
     Cross-attention module using lookup tables.
     
@@ -60,7 +60,7 @@ class LUTCrossAttention(nn.Module):
         
         # Assert that MultiHeadLut has n_outputs=1
         assert multi_head_lut.n_outputs == 1, \
-            f"LUTCrossAttention requires MultiHeadLut with n_outputs=1, got {multi_head_lut.n_outputs}"
+            f"LUTAttention requires MultiHeadLut with n_outputs=1, got {multi_head_lut.n_outputs}"
         
         # Assert that MultiHeadLut has n_buckets matching n_positional_buckets
         assert multi_head_lut.n_buckets == n_positional_buckets, \
@@ -70,7 +70,7 @@ class LUTCrossAttention(nn.Module):
         # For now, positional buckets are only supported in the causal path.
         if not causal and n_positional_buckets > 1:
             raise ValueError(
-                "LUTCrossAttention: n_positional_buckets > 1 is only supported when causal=True"
+                "LUTAttention: n_positional_buckets > 1 is only supported when causal=True"
             )
 
         # Initialize pair-processing configuration (default: linear combination with c1=1.0, c2=-2.0)

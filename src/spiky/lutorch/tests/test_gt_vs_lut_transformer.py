@@ -16,7 +16,7 @@ os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
 os.environ["SPIKY_GT_NO_COMPILE"] = "1"
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
-from spiky.lutorch.lut_cross_attention import LUTCrossAttention
+from spiky.lutorch.lut_attention import LUTAttention
 from spiky.lutorch.tests.gt_spike_qk_transformer import (
     GT_spike_QK_Transformer,
     SpikeQKCheckpoint,
@@ -43,7 +43,7 @@ UNEMBED_TEMPERATURE = 0.1
 
 
 class LUTTransformer(nn.Module):
-    """LUTTransformer with same forward as spike_QK (MultiHeadLut + LUTCrossAttention)."""
+    """LUTTransformer with same forward as spike_QK (MultiHeadLut + LUTAttention)."""
 
     def __init__(
             self,
@@ -94,7 +94,7 @@ class LUTTransformer(nn.Module):
                 attn_lut.projection.weights.copy_(
                     torch.randn(attn_lut.projection.weights.shape, device=dev) * 0.001
                 )
-                cross_attn = LUTCrossAttention(
+                cross_attn = LUTAttention(
                     attn_lut,
                     causal=True,
                     attention_temperature=ATTENTION_TEMPERATURE,

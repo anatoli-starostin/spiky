@@ -1,5 +1,5 @@
 """
-Tests for LUTCrossAttention.
+Tests for LUTAttention.
 """
 import os
 
@@ -9,13 +9,13 @@ os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
 import torch
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
-from spiky.lutorch.lut_cross_attention import LUTCrossAttention
+from spiky.lutorch.lut_attention import LUTAttention
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
 
-def test_lut_cross_attention_finite_scores(device, seed=None):
+def test_lut_attention_finite_scores(device, seed=None):
     """
-    Basic sanity test for LUTCrossAttention:
+    Basic sanity test for LUTAttention:
     - small batch/sequence
     - tiny LUTs
     - verify all attention scores are finite (no NaN/inf)
@@ -50,7 +50,7 @@ def test_lut_cross_attention_finite_scores(device, seed=None):
     with torch.no_grad():
         attn_lut.projection.weights.normal_(mean=0.0, std=0.01)
 
-    cross_attn = LUTCrossAttention(
+    cross_attn = LUTAttention(
         multi_head_lut=attn_lut,
         causal=True,
         n_positional_buckets=N_BUCKETS,
@@ -65,13 +65,13 @@ def test_lut_cross_attention_finite_scores(device, seed=None):
     assert scores.shape == (B, S, S, H)
     assert torch.isfinite(scores).all(), "Attention scores contain NaN or inf"
 
-    print("✓ LUTCrossAttention finite-scores sanity test passed")
+    print("✓ LUTAttention finite-scores sanity test passed")
     return True
 
 
-def test_lut_cross_attention_finite_scores_non_causal(device, seed=None):
+def test_lut_attention_finite_scores_non_causal(device, seed=None):
     """
-    Sanity test for LUTCrossAttention in non-causal mode (no positional buckets).
+    Sanity test for LUTAttention in non-causal mode (no positional buckets).
     Verifies all attention scores are finite.
     """
     if seed is not None:
@@ -101,7 +101,7 @@ def test_lut_cross_attention_finite_scores_non_causal(device, seed=None):
     with torch.no_grad():
         attn_lut.projection.weights.normal_(mean=0.0, std=0.01)
 
-    cross_attn = LUTCrossAttention(
+    cross_attn = LUTAttention(
         multi_head_lut=attn_lut,
         causal=False,
         n_positional_buckets=1,
@@ -114,15 +114,15 @@ def test_lut_cross_attention_finite_scores_non_causal(device, seed=None):
     assert scores.shape == (B, S, S, H)
     assert torch.isfinite(scores).all(), "Non-causal attention scores contain NaN or inf"
 
-    print("✓ LUTCrossAttention non-causal finite-scores test passed")
+    print("✓ LUTAttention non-causal finite-scores test passed")
     return True
 
 def main():
     """
-    Run LUTCrossAttention tests on available devices.
+    Run LUTAttention tests on available devices.
     """
     print("=" * 60)
-    print("LUTCrossAttention TESTS")
+    print("LUTAttention TESTS")
     print("=" * 60)
 
     devices = ["cpu"]
@@ -135,18 +135,18 @@ def main():
         print(f"\nTesting on {device}...")
 
         print("\n1. Finite-scores sanity test...")
-        success = test_lut_cross_attention_finite_scores(device, seed=seed)
+        success = test_lut_attention_finite_scores(device, seed=seed)
         if not success:
             print(f"❌ Test failed on {device}")
             return -1
 
         print("\n2. Non-causal finite-scores sanity test...")
-        success = test_lut_cross_attention_finite_scores_non_causal(device, seed=seed)
+        success = test_lut_attention_finite_scores_non_causal(device, seed=seed)
         if not success:
             print(f"❌ Non-causal test failed on {device}")
             return -1
 
-        print(f"\n✓ All LUTCrossAttention tests passed on {device}!")
+        print(f"\n✓ All LUTAttention tests passed on {device}!")
 
     return 0
 
