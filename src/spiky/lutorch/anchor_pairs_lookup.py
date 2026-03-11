@@ -307,15 +307,14 @@ class AnchorPairsLookup(AbstractLookup):
             - lookup_alt_indices: int64 [B, n_tables, n_alternatives] (or None if return_alternatives=False)
             - lookup_alt_deltas: float [B, n_tables, n_alternatives] (or None if return_alternatives=False)
         """
+        # For n_alternatives == n_anchor_pairs ("all"), we prefer the PyTorch fallback;
+        # native CUDA is only used for the small specialized cases 1, 2, 3.
         use_native_eval_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _get_native_lutorch_manager() is not None
-            and (
-                self.n_alternatives == self.n_anchor_pairs
-                or self.n_alternatives in (1, 2, 3)
-            )
+            and self.n_alternatives in (1, 2, 3)
         )
         if use_native_eval_cuda:
             native = _get_native_lutorch_manager()
@@ -430,15 +429,14 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         n_tables = anchor_pairs_a.shape[0]
         n_anchor_pairs = anchor_pairs_a.shape[1]
 
+        # For n_alternatives == n_anchor_pairs ("all"), we prefer the PyTorch fallback;
+        # native CUDA is only used for the small specialized cases 1, 2, 3.
         use_native_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and x.is_cuda
             and x.dtype in (torch.float32, torch.float64)
             and _get_native_lutorch_manager() is not None
-            and (
-                n_alternatives == n_anchor_pairs
-                or n_alternatives in (1, 2, 3)
-            )
+            and n_alternatives in (1, 2, 3)
         )
         if use_native_cuda:
             native = _get_native_lutorch_manager()
@@ -550,6 +548,9 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
 
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
 
+        n_alternatives = lookup_alt_deltas.shape[-1]
+        # For n_alternatives == n_anchor_pairs ("all"), we prefer the PyTorch fallback;
+        # native CUDA is only used for the small specialized cases 1, 2, 3.
         use_native_backward_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and x.is_cuda
@@ -557,10 +558,10 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             and _get_native_lutorch_manager() is not None
             and anchor1_ids.numel() > 0
             and anchor2_ids.numel() > 0
+            and n_alternatives in (1, 2, 3)
         )
         if use_native_backward_cuda:
             native = _get_native_lutorch_manager()
-            n_alternatives = lookup_alt_deltas.shape[-1]
             flat_anchor1 = anchor1_ids.reshape(-1).contiguous()
             flat_anchor2 = anchor2_ids.reshape(-1).contiguous()
             flat_batch_offset = ctx.batch_offset.reshape(-1).contiguous()
