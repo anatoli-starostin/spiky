@@ -10,7 +10,6 @@ their own device/seed logic is reused:
 - spiky.lutorch.tests.test_gt_vs_lut_transformer
 """
 
-from spiky.lut_fused.tests.test_anchor_sampler import main as _run_anchor_sampler
 from spiky.lutorch.tests.test_multi_head_lut import main as _run_multi_head_lut
 from spiky.lutorch.tests.test_lut_cross_attention import main as _run_lut_cross_attention
 from spiky.lutorch.tests.test_gt_vs_lut_transformer import main as _run_gt_vs_lut_transformer
@@ -18,7 +17,6 @@ from spiky.lutorch.tests.test_gt_vs_lut_transformer import main as _run_gt_vs_lu
 
 def main() -> int:
     runners = [
-        ("anchor_sampler", _run_anchor_sampler),
         ("multi_head_lut", _run_multi_head_lut),
         ("lut_cross_attention", _run_lut_cross_attention),
         ("gt_vs_lut_transformer", _run_gt_vs_lut_transformer),
