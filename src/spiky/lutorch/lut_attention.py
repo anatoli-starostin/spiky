@@ -106,9 +106,6 @@ class LUTAttention(nn.Module):
         # Cache for dense bucket indices in non-causal path keyed by (batch_size, seq_len, device)
         self._cached_dense_bucket_meta = None
         self._cached_dense_bucket_indices = None
-        # Cache for zero-row mask used when include_diagonal=False in causal mode
-        self._cached_zero_row_mask_meta = None
-        self._cached_zero_row_mask = None
     
     def forward(
         self,
@@ -160,13 +157,13 @@ class LUTAttention(nn.Module):
                 self._cached_key_indices = (self._cached_batched_cols % seq_len).contiguous()  # [P]
 
                 if self.n_positional_buckets > 1:
-                    buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
-                    # When include_diagonal=False, we never use distance 0 (self-attention).
-                    # To keep the effective distance-to-bucket mapping aligned with the original
-                    # causal setup (where distance 1 used bucket 0, etc.), shift buckets by 1:
-                    # distance 1 -> old bucket[0], distance 2 -> old bucket[1], ...
+                    pe_buckets = logarithmic_pe_buckets(self.n_positional_buckets, seq_len, device)
+                    # When include_diagonal=False we never have distance 0. Shift buckets so
+                    # distance 1 -> bucket 0, distance 2 -> bucket 1, ... to use the full weight budget.
                     if not self.include_diagonal and seq_len > 1:
-                        buckets = torch.cat([buckets[1:], buckets[-1:]], dim=0)
+                        buckets = torch.cat([pe_buckets[0:1], pe_buckets[0:-1]], dim=0)
+                    else:
+                        buckets = pe_buckets
                     rpe = rpe_matrix(buckets, seq_len, device)  # [S, S]
                     rpe_pairs = rpe[rows_local, cols_local]  # [num_pairs_single]
                     if self.do_sanity_checks:
@@ -224,27 +221,18 @@ class LUTAttention(nn.Module):
             # Reshape to [B, S, S, H]
             attention_scores = dense_scores.view(batch_size, seq_len, seq_len, H)
 
-            # When include_diagonal=False, the very first query position (q=0) has no valid keys
-            # (since we used a strictly lower-triangular mask k < q). Without adjustment this row
-            # would be all -inf, and softmax would produce NaNs. To avoid this:
-            #   1) set that logits row to 0 BEFORE softmax (so softmax sees a finite vector),
-            #   2) then, as requested, zero out the corresponding probabilities AFTER softmax.
+            # Special-case q=0 when include_diagonal=False: there are no valid keys under the
+            # strict causal mask (k < q). Let it attend deterministically to itself (non-inplace
+            # so autograd is not broken).
             if not self.include_diagonal and seq_len > 0:
-                zero_row_meta = (batch_size, seq_len, device, H)
-                if self._cached_zero_row_mask_meta != zero_row_meta:
-                    zero_row_mask = torch.zeros_like(attention_scores, dtype=torch.bool)
-                    zero_row_mask[:, 0, :, :] = True
-                    self._cached_zero_row_mask = zero_row_mask
-                    self._cached_zero_row_mask_meta = zero_row_meta
-                # Step 1: clean logits (avoid all -inf before softmax)
-                attention_scores = attention_scores.masked_fill(self._cached_zero_row_mask, 0.0)
+                q0_k0 = (
+                    (torch.arange(seq_len, device=device) == 0).view(1, 1, seq_len, 1).expand(batch_size, seq_len, seq_len, H)
+                    & (torch.arange(seq_len, device=device) == 0).view(1, seq_len, 1, 1).expand(batch_size, seq_len, seq_len, H)
+                )
+                attention_scores = attention_scores.masked_fill(q0_k0, 0.0)
 
             # Apply numerically stable softmax over keys
             attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
-
-            # Step 2: enforce zero probabilities on the first row when diagonal is excluded.
-            if not self.include_diagonal and seq_len > 0:
-                attention_scores = attention_scores.masked_fill(self._cached_zero_row_mask, 0.0)
         else:
             # Create pair representation for all (i, j): [B, S, S, *]
             input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
