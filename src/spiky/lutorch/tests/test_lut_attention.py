@@ -54,6 +54,7 @@ def test_lut_attention_finite_scores(device, seed=None):
         multi_head_lut=attn_lut,
         causal=True,
         n_positional_buckets=N_BUCKETS,
+        include_diagonal=True,
         do_sanity_checks=True,
     ).to(device)
 
@@ -66,6 +67,58 @@ def test_lut_attention_finite_scores(device, seed=None):
     assert torch.isfinite(scores).all(), "Attention scores contain NaN or inf"
 
     print("✓ LUTAttention finite-scores sanity test passed")
+    return True
+
+
+def test_lut_attention_finite_scores_exclude_diagonal(device, seed=None):
+    """
+    Sanity test for LUTAttention with include_diagonal=False:
+    - verifies all attention scores are finite
+    - exercises the path where the first query position has no valid keys
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    B = 2
+    S = 8
+    E = 16
+    H = 2
+    N_BUCKETS = 4
+
+    attn_lut = MultiHeadLut(
+        input_dim=E,
+        n_heads=H,
+        n_outputs=1,
+        n_anchor_pairs=4,
+        tables_per_head=2,
+        n_buckets=N_BUCKETS,
+        connected_anchors_mode=False,
+        anchor_candidates=None,
+        cmp_eps=0.0,
+        random_seed=seed,
+        n_alternatives=1,
+        smooth_mode=False,
+        device=device,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1,
+    )
+    with torch.no_grad():
+        attn_lut.projection.weights.normal_(mean=0.0, std=0.01)
+
+    cross_attn = LUTAttention(
+        multi_head_lut=attn_lut,
+        causal=True,
+        n_positional_buckets=N_BUCKETS,
+        include_diagonal=False,
+        do_sanity_checks=True,
+    ).to(device)
+
+    x = torch.randn(B, S, E, device=device)
+    scores = cross_attn(x, x)  # [B, S, S, H]
+
+    assert scores.shape == (B, S, S, H)
+    assert torch.isfinite(scores).all(), "Attention scores (exclude_diagonal) contain NaN or inf"
+
+    print("✓ LUTAttention finite-scores sanity test (include_diagonal=False) passed")
     return True
 
 
@@ -117,6 +170,7 @@ def test_lut_attention_finite_scores_non_causal(device, seed=None):
     print("✓ LUTAttention non-causal finite-scores test passed")
     return True
 
+
 def main():
     """
     Run LUTAttention tests on available devices.
@@ -144,6 +198,12 @@ def main():
         success = test_lut_attention_finite_scores_non_causal(device, seed=seed)
         if not success:
             print(f"❌ Non-causal test failed on {device}")
+            return -1
+
+        print("\n3. Finite-scores sanity test with include_diagonal=False...")
+        success = test_lut_attention_finite_scores_exclude_diagonal(device, seed=seed)
+        if not success:
+            print(f"❌ Exclude-diagonal test failed on {device}")
             return -1
 
         print(f"\n✓ All LUTAttention tests passed on {device}!")

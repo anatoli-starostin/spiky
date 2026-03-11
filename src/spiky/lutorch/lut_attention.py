@@ -52,6 +52,7 @@ class LUTAttention(nn.Module):
         multi_head_lut: MultiHeadLut,
         causal: bool = True,
         n_positional_buckets: int = 1,
+        include_diagonal: bool = True,
         pair_config: Optional[PairProcessingConfig] = None,
         do_sanity_checks: bool = False,
         attention_temperature: float = 1.0,
@@ -91,6 +92,7 @@ class LUTAttention(nn.Module):
             self.n_inputs = multi_head_lut.input_dim
 
         self.causal = causal
+        self.include_diagonal = bool(include_diagonal)
         self.n_positional_buckets = n_positional_buckets
         self.do_sanity_checks = do_sanity_checks
         self.attention_temperature = float(attention_temperature)
@@ -133,12 +135,15 @@ class LUTAttention(nn.Module):
         input2_flat = input2.view(batch_size * seq_len, feature_dim)
 
         if self.causal:
-            # Build or reuse lower-triangular indices (allow self: k <= q) and RPE pairs for this (B, S, device)
-            meta = (batch_size, seq_len, device)
+            # Build or reuse lower-triangular indices and RPE pairs for this (B, S, device, include_diagonal)
+            # - include_diagonal=True  -> allow self: k <= q  (offset=0)
+            # - include_diagonal=False -> strictly causal: k < q (offset=-1)
+            meta = (batch_size, seq_len, device, self.include_diagonal)
             if self._cached_pair_meta != meta:
+                offset = 0 if self.include_diagonal else -1
                 rows_local, cols_local = torch.tril_indices(
-                    seq_len, seq_len, offset=0, device=device
-                )  # [num_pairs_single] with k <= q
+                    seq_len, seq_len, offset=offset, device=device
+                )  # [num_pairs_single] with k <= q (or k < q if exclude diagonal)
 
                 offsets = torch.arange(batch_size, device=device) * seq_len  # [B]
                 self._cached_batched_rows = (
@@ -207,9 +212,17 @@ class LUTAttention(nn.Module):
             key_indices = self._cached_key_indices  # [P]
             dense_scores[batched_rows, key_indices, :] = raw_scores  # [P, H]
 
-            # Reshape to [B, S, S, H] and apply numerically stable softmax over keys
+            # Reshape to [B, S, S, H]
             attention_scores = dense_scores.view(batch_size, seq_len, seq_len, H)
+
+            # Apply numerically stable softmax over keys
             attention_scores = torch.softmax(attention_scores, dim=2)  # [B, S, S, H]
+
+            # When include_diagonal=False, the very first query position (q=0) has no valid keys
+            # (since we used a strictly lower-triangular mask k < q), so its row corresponds to
+            # softmax over all -inf. Explicitly set that entire row to 0 in the probabilities.
+            if not self.include_diagonal and seq_len > 0:
+                attention_scores[:, 0, :, :] = 0.0
         else:
             # Create pair representation for all (i, j): [B, S, S, *]
             input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]
