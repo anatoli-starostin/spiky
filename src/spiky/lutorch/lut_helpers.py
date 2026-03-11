@@ -15,6 +15,7 @@ def get_balanced_anchor_pairs(
     device: torch.device,
     random_seed: Optional[int] = None,
     connected_mode: bool = False,
+    anchor_candidates: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -33,23 +34,44 @@ def get_balanced_anchor_pairs(
         gen = torch.Generator(device=device)
         gen.manual_seed(random_seed)
 
-    total_needed = n_tables * n_anchor_pairs
-
     def get_balanced_indices(total: int, dim: int) -> torch.Tensor:
         num_full_perms = math.ceil(total / dim)
         # Batched randperm: each row is a random permutation of 0..dim-1 (one rand + argsort, no Python loop)
         perm = torch.rand(num_full_perms, dim, device=device, generator=gen).argsort(dim=1)
         return perm.reshape(-1)[:total]
 
-    flat_a = get_balanced_indices(total_needed, input_dim)
-    if connected_mode:
-        flat_b = torch.roll(flat_a, shifts=-1, dims=0)
-    else:
-        flat_b = get_balanced_indices(total_needed, input_dim)
+    if anchor_candidates is not None:
+        if anchor_candidates.shape[0] != n_tables:
+            raise ValueError(
+                f"anchor_candidates first dimension ({anchor_candidates.shape[0]}) "
+                f"must match n_tables ({n_tables})"
+            )
+        anchor_candidates = anchor_candidates.to(device=device, dtype=torch.long)
+        max_anchors_per_table = anchor_candidates.shape[1]
 
-    # Reshape to [n_tables, n_anchor_pairs]
-    anchor_pairs_a = flat_a.view(n_tables, n_anchor_pairs)
-    anchor_pairs_b = flat_b.view(n_tables, n_anchor_pairs)
+        anchor_pairs_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+        anchor_pairs_b = torch.empty_like(anchor_pairs_a)
+
+        for t in range(n_tables):
+            idx_a = get_balanced_indices(n_anchor_pairs, max_anchors_per_table)
+            if connected_mode:
+                idx_b = torch.roll(idx_a, shifts=-1, dims=0)
+            else:
+                idx_b = get_balanced_indices(n_anchor_pairs, max_anchors_per_table)
+
+            anchor_pairs_a[t] = anchor_candidates[t, idx_a]
+            anchor_pairs_b[t] = anchor_candidates[t, idx_b]
+    else:
+        total_needed = n_tables * n_anchor_pairs
+        flat_a = get_balanced_indices(total_needed, input_dim)
+        if connected_mode:
+            flat_b = torch.roll(flat_a, shifts=-1, dims=0)
+        else:
+            flat_b = get_balanced_indices(total_needed, input_dim)
+
+        # Reshape to [n_tables, n_anchor_pairs]
+        anchor_pairs_a = flat_a.view(n_tables, n_anchor_pairs)
+        anchor_pairs_b = flat_b.view(n_tables, n_anchor_pairs)
 
     # Ensure a != b everywhere (match spike_QK collision handling), max 10 attempts
     max_collision_attempts = 10

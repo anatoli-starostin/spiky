@@ -6,6 +6,10 @@ from test_lut_fully_connected import test_lut_fully_connected
 from test_lut_backward import test_lut_backward
 from test_lut_transformer_small import test_lut_transformer_small
 from test_lut_transformer_product import test_lut_transformer_product
+from test_anchor_sampler import (
+    test_anchor_sampler,
+    test_anchor_sampler_with_tensor,
+)
 from spiky.util.torch_utils import test_dense_to_sparse_converter
 
 
@@ -19,7 +23,9 @@ def main():
             test_lut_backward,
             test_dense_to_sparse_converter,
             test_lut_transformer_small,
-            test_lut_transformer_product
+            test_lut_transformer_product,
+            test_anchor_sampler,
+            test_anchor_sampler_with_tensor,
         ]
     }
 

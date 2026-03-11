@@ -1,16 +1,13 @@
+from typing import Tuple, Union
+
 import torch
-import torch.nn as nn
-from typing import List, Dict, Tuple, AnyStr, Union
-from dataclasses import dataclass
-from enum import Enum
 
 from spiky_cuda import LUTDataManagerF
 from spiky.util.synapse_growth import (
-    Conv2DSynapseGrowthHelper, RandomRectanglesSynapseGrowthHelper, GivenRectanglesSynapseGrowthHelper,
-    PointSamplingPolicy, PointSamplingType, SynapseGrowthEngine
+    SynapseGrowthEngine,
 )
 from spiky.util.chunk_of_connections import (
-    ChunkOfConnections, create_identity_mapping, repeat_connections_incrementing_source
+    ChunkOfConnections,
 )
 
 
@@ -267,3 +264,4 @@ class AnchorSampler:
         growth_engine._max_neuron_id = explicit_triples[:, 1:].max().item()
         
         return growth_engine._grow_explicit(explicit_triples, 1)
+

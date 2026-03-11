@@ -5,7 +5,7 @@ os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
 
 import torch
 
-from spiky.lutorch.anchor_sampler import AnchorSampler
+from spiky.lut_fused.anchor_sampler import AnchorSampler
 
 
 def test_anchor_sampler(device, _, seed):
@@ -26,7 +26,7 @@ def test_anchor_sampler_with_tensor(device, _, seed):
     max_anchors_per_detector = n_inputs
     
     # Create anchor_candidates tensor: [n_detectors, max_anchors_per_detector]
-    # Each detector has specific input indices (all >= 0, no padding)
+    # Each detector has specific input indices (all values must be >= 0, no padding)
     anchor_candidates = torch.zeros(
         (n_detectors, max_anchors_per_detector),
         dtype=torch.int32,
@@ -119,3 +119,4 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
+
