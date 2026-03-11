@@ -106,6 +106,9 @@ class LUTAttention(nn.Module):
         # Cache for dense bucket indices in non-causal path keyed by (batch_size, seq_len, device)
         self._cached_dense_bucket_meta = None
         self._cached_dense_bucket_indices = None
+        # Cache for zero-row mask used when include_diagonal=False in causal mode
+        self._cached_zero_row_mask_meta = None
+        self._cached_zero_row_mask = None
     
     def forward(
         self,
@@ -220,9 +223,16 @@ class LUTAttention(nn.Module):
 
             # When include_diagonal=False, the very first query position (q=0) has no valid keys
             # (since we used a strictly lower-triangular mask k < q), so its row corresponds to
-            # softmax over all -inf. Explicitly set that entire row to 0 in the probabilities.
+            # softmax over all -inf. Explicitly set that entire row to 0 in the probabilities,
+            # using a cached non-inplace mask to keep autograd happy and avoid reallocations.
             if not self.include_diagonal and seq_len > 0:
-                attention_scores[:, 0, :, :] = 0.0
+                zero_row_meta = (batch_size, seq_len, device, H)
+                if self._cached_zero_row_mask_meta != zero_row_meta:
+                    zero_row_mask = torch.zeros_like(attention_scores, dtype=torch.bool)
+                    zero_row_mask[:, 0, :, :] = True
+                    self._cached_zero_row_mask = zero_row_mask
+                    self._cached_zero_row_mask_meta = zero_row_meta
+                attention_scores = attention_scores.masked_fill(self._cached_zero_row_mask, 0.0)
         else:
             # Create pair representation for all (i, j): [B, S, S, *]
             input1_expanded = input1.unsqueeze(2).expand(batch_size, seq_len, seq_len, -1)  # [B, S, S, n_inputs]

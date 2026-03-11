@@ -112,11 +112,15 @@ def test_lut_attention_finite_scores_exclude_diagonal(device, seed=None):
         do_sanity_checks=True,
     ).to(device)
 
-    x = torch.randn(B, S, E, device=device)
+    x = torch.randn(B, S, E, device=device, requires_grad=True)
     scores = cross_attn(x, x)  # [B, S, S, H]
 
     assert scores.shape == (B, S, S, H)
     assert torch.isfinite(scores).all(), "Attention scores (exclude_diagonal) contain NaN or inf"
+
+    # Single backward step to ensure there are no autograd issues (e.g. from masking)
+    loss = scores.sum()
+    loss.backward()
 
     print("✓ LUTAttention finite-scores sanity test (include_diagonal=False) passed")
     return True
