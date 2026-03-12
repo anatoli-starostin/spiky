@@ -56,7 +56,7 @@ class MultiHeadLut(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        initial_weights_noise: float = 0.0
+        initial_weights_noise: float = 0.001
     ):
         super().__init__()
         
