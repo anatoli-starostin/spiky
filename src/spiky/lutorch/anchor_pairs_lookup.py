@@ -3,9 +3,9 @@ Anchor pairs lookup implementation.
 """
 import os
 import torch
+import torch.nn as nn
 from typing import Optional, Tuple
 
-from spiky.lutorch.abstract_lookup import AbstractLookup
 from spiky.lutorch.lut_helpers import UncertaintyMode, get_balanced_anchor_pairs
 
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
@@ -164,7 +164,7 @@ def _anchor_pairs_lookup_eval_fallback(
     return lookup_indices, lookup_alt_indices, lookup_alt_deltas
 
 
-class AnchorPairsLookup(AbstractLookup):
+class AnchorPairsLookup(nn.Module):
     """
     Lookup based on anchor pairs comparison.
     
@@ -207,7 +207,12 @@ class AnchorPairsLookup(AbstractLookup):
             raise ValueError(
                 f"n_alternatives ({n_alternatives}) must be <= n_anchor_pairs ({n_anchor_pairs})"
             )
-        super().__init__(input_dim, n_tables, table_dim, n_alternatives=n_alternatives)
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.n_tables = n_tables
+        self.table_dim = table_dim
+        self.n_alternatives = n_alternatives
 
         self.n_anchor_pairs = n_anchor_pairs
         assert cmp_eps >= 0.0
