@@ -339,7 +339,13 @@ class ProjectionLUT(nn.Module):
                 dilation=1,
                 stride=(sH_f, sW_f),
             )  # [1, K_f, n_patches]
-            patches_out = patches_out.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K_f]
+            # Squeeze batch dimension to get [K_f, n_patches], then transpose to [n_patches, K_f]
+            patches_out = (
+                patches_out.squeeze(0)
+                .to(dtype=torch.long)
+                .transpose(0, 1)
+                .contiguous()
+            )  # [n_patches, K_f]
 
             K_f = patches_out.shape[1]
             if K_f < self.O:
