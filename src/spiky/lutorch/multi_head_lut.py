@@ -76,10 +76,27 @@ class MultiHeadLut(nn.Module):
         # n_entries_per_table is derived from n_anchor_pairs, multiplied by n_buckets
         n_entries_per_table = (2 ** n_anchor_pairs) * n_buckets
         
-        # Reshape anchor_candidates if it's a tensor: [n_heads, tables_per_head, max_anchors_per_table] -> [n_heads * tables_per_head, max_anchors_per_table]
+        # Reshape anchor_candidates if it's a tensor.
+        # New expected layout when provided as a tensor:
+        #   [tables_per_head, n_heads, max_anchors_per_table]
+        # which we convert to [n_heads * tables_per_head, max_anchors_per_table]
         reshaped_anchor_candidates = anchor_candidates
         if isinstance(anchor_candidates, torch.Tensor):
-            reshaped_anchor_candidates = anchor_candidates.view(n_lookup_tables, -1)
+            if anchor_candidates.dim() == 3:
+                if anchor_candidates.shape[0] != tables_per_head or anchor_candidates.shape[1] != n_heads:
+                    raise ValueError(
+                        "anchor_candidates tensor must have shape "
+                        f"[tables_per_head={tables_per_head}, n_heads={n_heads}, max_anchors_per_table], "
+                        f"got {tuple(anchor_candidates.shape)}"
+                    )
+                reshaped_anchor_candidates = (
+                    anchor_candidates.permute(1, 0, 2).contiguous().view(n_lookup_tables, -1)
+                )
+            else:
+                raise ValueError(
+                    "anchor_candidates tensor must 3D; "
+                    "expected shape [tables_per_head, n_heads, max_anchors_per_table]"
+                )
         
         # Create AnchorPairsLookup: n_lookup_tables total
         self.lookup = AnchorPairsLookup(
@@ -308,9 +325,12 @@ class ProjectionLUT(nn.Module):
         )
         patches = patches.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K]
 
-        # anchor_candidates: [n_heads * tables_per_head, K] (all indices are valid)
-        K = patches.shape[1]
-        anchor_candidates = patches.repeat_interleave(tables_per_head, dim=0).to(device=dev)
+        # anchor_candidates: [tables_per_head, n_heads, K] (all indices are valid and shared across tables in a head)
+        anchor_candidates = (
+            patches.unsqueeze(0)
+            .repeat(tables_per_head, 1, 1)
+            .to(device=dev)
+        )
 
         # Optional folding configuration: map per-patch outputs back to an
         # output spatial grid using scatter-add.
