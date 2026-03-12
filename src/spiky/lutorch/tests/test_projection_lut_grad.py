@@ -23,6 +23,16 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _make_torch_generator(seed: int, device: torch.device) -> torch.Generator:
+    """
+    Create a torch.Generator on the given device, initialised with the given seed.
+    This is used explicitly for randn / randint calls in the tests.
+    """
+    g = torch.Generator(device=device)
+    g.manual_seed(seed)
+    return g
+
+
 class _ToyNet(nn.Module):
     def __init__(
         self,
@@ -204,12 +214,13 @@ def test_projection_lut_gradients_nonzero(device):
     ProjectionLUTs are non-zero after a single backward pass.
     """
     _set_seed(1234)
+    gen = _make_torch_generator(1234, device)
     net = _ToyNet(device=device).to(device)
     net.train()
 
     B = 4
-    x = torch.randn(B, net.H, net.W, device=device)
-    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device)
+    x = torch.randn(B, net.H, net.W, device=device, generator=gen)
+    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device, generator=gen)
 
     logits = net(x)
     loss = F.cross_entropy(logits, targets)
@@ -237,12 +248,13 @@ def test_single_projection_lut_gradients_nonzero(device):
     single backward pass.
     """
     _set_seed(1234)
+    gen = _make_torch_generator(1234, device)
     net = _ToyNetSingle(device=device).to(device)
     net.train()
 
     B = 4
-    x = torch.randn(B, net.H, net.W, device=device)
-    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device)
+    x = torch.randn(B, net.H, net.W, device=device, generator=gen)
+    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device, generator=gen)
 
     logits = net(x)
     loss = F.cross_entropy(logits, targets)
@@ -262,12 +274,13 @@ def test_fold_only_projection_lut_gradients_nonzero(device):
     to reach the ProjectionLUT projection weights.
     """
     _set_seed(1234)
+    gen = _make_torch_generator(1234, device)
     net = _ToyNetFoldOnly(device=device).to(device)
     net.train()
 
     B = 4
-    x = torch.randn(B, net.H, net.W, device=device)
-    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device)
+    x = torch.randn(B, net.H, net.W, device=device, generator=gen)
+    targets = torch.randint(0, net.final_layer.out_features, (B,), device=device, generator=gen)
 
     logits = net(x)
     loss = F.cross_entropy(logits, targets)
