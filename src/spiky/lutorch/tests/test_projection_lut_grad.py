@@ -37,7 +37,7 @@ class _ToyNet(nn.Module):
             n_outputs=O1,
             n_anchor_pairs=3,
             tables_per_head=2,
-            initial_weights_noise=0.001,
+            initial_weights_noise=0.01,
             fold_config=fold1,
             device=device,
         )
@@ -61,7 +61,7 @@ class _ToyNet(nn.Module):
             n_outputs=O2,
             n_anchor_pairs=3,
             tables_per_head=2,
-            initial_weights_noise=0.001,
+            initial_weights_noise=0.01,
             fold_config=fold2,
             device=device,
         )
@@ -99,7 +99,7 @@ class _ToyNetSingle(nn.Module):
             n_outputs=O,
             n_anchor_pairs=3,
             tables_per_head=2,
-            initial_weights_noise=0.001,
+            initial_weights_noise=0.01,
             fold_config=None,
             device=device,
         )
@@ -145,7 +145,7 @@ class _ToyNetFoldOnly(nn.Module):
             n_outputs=O,
             n_anchor_pairs=3,
             tables_per_head=2,
-            initial_weights_noise=0.001,
+            initial_weights_noise=0.01,
             fold_config=fold,
             device=device,
         )
