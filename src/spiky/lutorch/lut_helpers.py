@@ -40,7 +40,8 @@ def get_balanced_anchor_pairs(
         perm = torch.rand(num_full_perms, dim, device=device, generator=gen).argsort(dim=1)
         return perm.reshape(-1)[:total]
 
-    if anchor_candidates is not None:
+    using_anchor_candidates = anchor_candidates is not None
+    if using_anchor_candidates:
         if anchor_candidates.shape[0] != n_tables:
             raise ValueError(
                 f"anchor_candidates first dimension ({anchor_candidates.shape[0]}) "
@@ -81,9 +82,24 @@ def get_balanced_anchor_pairs(
             break
         n_collide = mask.sum().item()
         anchor_pairs_b = anchor_pairs_b.clone()
-        anchor_pairs_b[mask] = torch.randint(
-            0, input_dim, (n_collide,), device=device, dtype=torch.long, generator=gen
-        )
+        if using_anchor_candidates:
+            # When using anchor_candidates, resample b from the per-table candidate sets
+            table_idx, pair_idx = mask.nonzero(as_tuple=True)
+            # Sample indices within each table's candidate list
+            idx_in_candidates = torch.randint(
+                0,
+                anchor_candidates.shape[1],
+                (n_collide,),
+                device=device,
+                dtype=torch.long,
+                generator=gen,
+            )
+            anchor_pairs_b[table_idx, pair_idx] = anchor_candidates[table_idx, idx_in_candidates]
+        else:
+            # Fallback: sample directly over full input_dim
+            anchor_pairs_b[mask] = torch.randint(
+                0, input_dim, (n_collide,), device=device, dtype=torch.long, generator=gen
+            )
 
     return anchor_pairs_a, anchor_pairs_b
 
