@@ -469,3 +469,155 @@ class ProjectionLUT(nn.Module):
         out_flat.scatter_add_(0, scatter_indices, values_flat)
 
         return out_flat.view(B, self.H_out, self.W_out)
+
+
+class Conv2DLut(nn.Module):
+    """
+    2D convolution-style LUT built on top of ``MultiHeadLut`` for inputs
+    of shape ``[B, C, H, W]``.
+
+    This module:
+      - Takes an input of shape ``[B, C, H, W]``.
+      - Uses an ``UnfoldConfiguration`` (same as ``ProjectionLUT``) to define
+        spatial patches over ``(H, W)`` with kernel / stride.
+      - Computes ``n_patches = H_p * W_p`` where ``(H_p, W_p)`` is the unfolded
+        patch grid.
+      - For each patch, constructs a flattened vector of size
+        ``patch_dim = C * kH * kW`` using ``torch.nn.functional.unfold``.
+      - Builds a ``MultiHeadLut`` with:
+          * ``input_dim = patch_dim``
+          * ``n_heads = n_heads`` (typically small, default 1)
+          * ``n_outputs = out_channels // n_heads``
+        and no explicit ``anchor_candidates`` so anchors are sampled from
+        the range ``[0, patch_dim)`` by default.
+      - In forward:
+          * Reshapes patches to ``[B * n_patches, patch_dim]``.
+          * Applies the internal ``MultiHeadLut`` to obtain
+            ``[B * n_patches, n_heads, out_channels // n_heads]``.
+          * Reshapes to ``[B, out_channels, H_p, W_p]`` as the final output.
+    """
+
+    def __init__(
+        self,
+        unfold_config: UnfoldConfiguration,
+        in_channels: int,
+        out_channels: int,
+        n_anchor_pairs: int,
+        n_heads: int = 1,
+        tables_per_head: int = 1,
+        device: Optional[torch.device] = None,
+        **multi_head_lut_kwargs,
+    ):
+        super().__init__()
+
+        if out_channels % n_heads != 0:
+            raise ValueError(
+                f"out_channels must be divisible by n_heads; got "
+                f"out_channels={out_channels}, n_heads={n_heads}"
+            )
+
+        self.unfold_config = unfold_config
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.n_heads = n_heads
+
+        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+
+        # Compute patch grid size as in conv2d / unfold (zero padding, dilation=1).
+        H_p, W_p = self.unfold_config.output_spatial_shape()
+        if H_p <= 0 or W_p <= 0:
+            raise ValueError(
+                f"Invalid patch grid size computed from H={self.unfold_config.H}, W={self.unfold_config.W}, "
+                f"kernel_size={self.unfold_config.kernel_size}, "
+                f"stride={self.unfold_config.stride}"
+            )
+
+        self.H_p = H_p
+        self.W_p = W_p
+        self.n_patches = H_p * W_p
+
+        # Each patch is C * kH * kW features.
+        patch_dim = in_channels * kH * kW
+        self.patch_dim = patch_dim
+
+        # MultiHeadLut operates on individual patch vectors.
+        per_head_outputs = out_channels // n_heads
+
+        self.lut = MultiHeadLut(
+            input_dim=patch_dim,
+            n_heads=n_heads,
+            n_outputs=per_head_outputs,
+            n_anchor_pairs=n_anchor_pairs,
+            tables_per_head=tables_per_head,
+            device=device,
+            **multi_head_lut_kwargs,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Args:
+            x: Input tensor of shape [B, C, H, W] where (H, W) match
+               ``unfold_config.H`` and ``unfold_config.W``.
+
+        Returns:
+            Tensor of shape [B, out_channels, H_p, W_p].
+        """
+        if x.dim() != 4:
+            raise ValueError(f"Expected 4D input [B, C, H, W], got shape {x.shape}")
+
+        B, C, H, W = x.shape
+        if C != self.in_channels:
+            raise ValueError(
+                f"Input channels C={C} do not match Conv2DLut configuration "
+                f"in_channels={self.in_channels}"
+            )
+        if (H, W) != (self.unfold_config.H, self.unfold_config.W):
+            raise ValueError(
+                f"Input spatial size {(H, W)} does not match Conv2DLut configuration "
+                f"({self.unfold_config.H}, {self.unfold_config.W})"
+            )
+
+        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+
+        # Unfold input into patches: [B, C * kH * kW, n_patches]
+        patches = F.unfold(
+            x,
+            kernel_size=(kH, kW),
+            dilation=1,
+            stride=(sH, sW),
+        )  # [B, C * kH * kW, n_patches]
+
+        # Rearrange to [B * n_patches, patch_dim]
+        patches = patches.transpose(1, 2).contiguous()  # [B, n_patches, patch_dim]
+        if patches.shape[1] != self.n_patches or patches.shape[2] != self.patch_dim:
+            raise RuntimeError(
+                f"Unexpected unfolded shape {patches.shape}; expected "
+                f"[B, {self.n_patches}, {self.patch_dim}]"
+            )
+        patches_flat = patches.view(B * self.n_patches, self.patch_dim)
+
+        # Apply MultiHeadLut: [B * n_patches, n_heads, out_channels // n_heads]
+        lut_out = self.lut(patches_flat)
+        if lut_out.dim() != 3 or lut_out.shape[0] != B * self.n_patches or lut_out.shape[1] != self.n_heads:
+            raise RuntimeError(
+                f"Unexpected MultiHeadLut output shape {lut_out.shape}; "
+                f"expected [B * n_patches={B * self.n_patches}, n_heads={self.n_heads}, -1]"
+            )
+
+        BnP, n_heads, per_head_outputs = lut_out.shape
+        total_outputs = n_heads * per_head_outputs
+        if total_outputs != self.out_channels:
+            raise RuntimeError(
+                f"Product n_heads * per_head_outputs ({total_outputs}) does not "
+                f"match configured out_channels={self.out_channels}"
+            )
+
+        # [B * n_patches, n_heads, per_head_outputs] -> [B * n_patches, out_channels]
+        lut_out_flat = lut_out.view(BnP, total_outputs)
+
+        # Reshape to [B, n_patches, out_channels] then [B, out_channels, H_p, W_p]
+        lut_out_patches = lut_out_flat.view(B, self.n_patches, total_outputs)
+        lut_out_spatial = lut_out_patches.view(B, self.H_p, self.W_p, total_outputs)
+        return lut_out_spatial.permute(0, 3, 1, 2).contiguous()
