@@ -316,21 +316,19 @@ class ProjectionLUT(nn.Module):
         ).view(1, 1, self.unfold_config.H, self.unfold_config.W)
 
         # Unfold directly (zero padding, dilation=1).
-        # Result shape: [1, K, n_patches] where K = kH * kW
+        # Result shape from unfold: [1, K, n_patches] where K = kH * kW
         patches = F.unfold(
             index_grid.to(dtype=torch.float32),
             kernel_size=(kH, kW),
             dilation=1,
             stride=(sH, sW),
         )
-        patches = patches.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K]
+        # After transpose: [1, n_patches, K]
+        patches = patches.to(dtype=torch.long).transpose(1, 2).contiguous()
 
         # anchor_candidates: [tables_per_head, n_heads, K] (all indices are valid and shared across tables in a head)
-        anchor_candidates = (
-            patches.unsqueeze(0)
-            .repeat(tables_per_head, 1, 1)
-            .to(device=dev)
-        )
+        # Repeat along the batch dimension to create one candidate set per table_per_head.
+        anchor_candidates = patches.repeat(tables_per_head, 1, 1).to(device=dev)
 
         # Optional folding configuration: map per-patch outputs back to an
         # output spatial grid using scatter-add.
