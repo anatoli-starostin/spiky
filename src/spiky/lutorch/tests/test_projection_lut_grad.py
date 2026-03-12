@@ -2,17 +2,36 @@
 Gradient propagation test for ProjectionLUT in a folded two-layer architecture.
 """
 
-import torch
 import os
+import random
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 from spiky.lutorch.multi_head_lut import ProjectionLUT, UnfoldConfiguration
 os.environ["SPIKY_LUTORCH_NO_COMPILE"] = "1"
 
 
+def _set_seed(seed: int) -> None:
+    """Set all relevant random seeds for deterministic behavior in this test module."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 class _ToyNet(nn.Module):
-    def __init__(self, device: torch.device, H: int = 8, W: int = 8, num_classes: int = 5):
+    def __init__(
+        self,
+        device: torch.device,
+        H: int = 8,
+        W: int = 8,
+        num_classes: int = 5,
+        random_seed: int = 1234,
+    ):
         super().__init__()
 
         self.H = H
@@ -37,6 +56,7 @@ class _ToyNet(nn.Module):
             n_outputs=O1,
             n_anchor_pairs=3,
             tables_per_head=2,
+            random_seed=random_seed,
             initial_weights_noise=0.01,
             fold_config=fold1,
             device=device,
@@ -61,6 +81,7 @@ class _ToyNet(nn.Module):
             n_outputs=O2,
             n_anchor_pairs=3,
             tables_per_head=2,
+            random_seed=random_seed + 1,
             initial_weights_noise=0.01,
             fold_config=fold2,
             device=device,
@@ -81,7 +102,14 @@ class _ToyNetSingle(nn.Module):
     Used to isolate gradient issues unrelated to the folding/scatter_add path.
     """
 
-    def __init__(self, device: torch.device, H: int = 8, W: int = 8, num_classes: int = 5):
+    def __init__(
+        self,
+        device: torch.device,
+        H: int = 8,
+        W: int = 8,
+        num_classes: int = 5,
+        random_seed: int = 1234,
+    ):
         super().__init__()
 
         self.H = H
@@ -99,6 +127,7 @@ class _ToyNetSingle(nn.Module):
             n_outputs=O,
             n_anchor_pairs=3,
             tables_per_head=2,
+            random_seed=random_seed,
             initial_weights_noise=0.01,
             fold_config=None,
             device=device,
@@ -120,7 +149,14 @@ class _ToyNetFoldOnly(nn.Module):
     This isolates the folding/scatter_add path without a second ProjectionLUT.
     """
 
-    def __init__(self, device: torch.device, H: int = 8, W: int = 8, num_classes: int = 5):
+    def __init__(
+        self,
+        device: torch.device,
+        H: int = 8,
+        W: int = 8,
+        num_classes: int = 5,
+        random_seed: int = 1234,
+    ):
         super().__init__()
 
         self.H = H
@@ -145,6 +181,7 @@ class _ToyNetFoldOnly(nn.Module):
             n_outputs=O,
             n_anchor_pairs=3,
             tables_per_head=2,
+            random_seed=random_seed,
             initial_weights_noise=0.01,
             fold_config=fold,
             device=device,
@@ -166,6 +203,7 @@ def test_projection_lut_gradients_nonzero(device):
     Uses random inputs/targets; we only check that weight gradients on both
     ProjectionLUTs are non-zero after a single backward pass.
     """
+    _set_seed(1234)
     net = _ToyNet(device=device).to(device)
     net.train()
 
@@ -198,6 +236,7 @@ def test_single_projection_lut_gradients_nonzero(device):
     Checks that the projection weights receive a non-zero gradient after a
     single backward pass.
     """
+    _set_seed(1234)
     net = _ToyNetSingle(device=device).to(device)
     net.train()
 
@@ -222,6 +261,7 @@ def test_fold_only_projection_lut_gradients_nonzero(device):
     This checks whether the folding/scatter_add path itself allows gradients
     to reach the ProjectionLUT projection weights.
     """
+    _set_seed(1234)
     net = _ToyNetFoldOnly(device=device).to(device)
     net.train()
 

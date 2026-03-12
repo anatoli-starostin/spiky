@@ -402,6 +402,7 @@ class ProjectionLUT(nn.Module):
             device=device,
             **multi_head_lut_kwargs,
         )
+        self._cached_batch_offsets = None
 
     def forward(
         self,
