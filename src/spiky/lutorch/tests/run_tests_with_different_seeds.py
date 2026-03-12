@@ -13,6 +13,7 @@ their own device/seed logic is reused:
 from spiky.lutorch.tests.test_multi_head_lut import main as _run_multi_head_lut
 from spiky.lutorch.tests.test_lut_attention import main as _run_lut_attention
 from spiky.lutorch.tests.test_gt_vs_lut_transformer import main as _run_gt_vs_lut_transformer
+from spiky.lutorch.tests.test_projection_lut_grad import main as _run_projection_lut_grad
 
 
 def main() -> int:
@@ -20,6 +21,7 @@ def main() -> int:
         ("multi_head_lut", _run_multi_head_lut),
         ("lut_attention", _run_lut_attention),
         ("gt_vs_lut_transformer", _run_gt_vs_lut_transformer),
+        ("projection_lut_grad", _run_projection_lut_grad),
     ]
 
     for name, runner in runners:

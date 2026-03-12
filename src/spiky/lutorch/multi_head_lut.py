@@ -222,12 +222,13 @@ class UnfoldConfiguration:
     kernel_size: Union[int, Tuple[int, int]]
     stride: Union[int, Tuple[int, int]] = 1
 
-    def _to_2d(self, v: Union[int, Tuple[int, int]]) -> Tuple[int, int]:
+    @staticmethod
+    def _to_2d(v: Union[int, Tuple[int, int]]) -> Tuple[int, int]:
         if isinstance(v, tuple):
             if len(v) != 2:
                 raise ValueError(f"Expected a tuple of length 2, got {v}")
             return v
-        return (v, v)
+        return v, v
 
     def normalized(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
         """
@@ -264,7 +265,7 @@ class ProjectionLUT(nn.Module):
       - Builds a ``MultiHeadLut`` with:
           * ``input_dim = H * W`` (flattened spatial grid)
           * ``n_heads = n_patches`` (one head per patch)
-          * ``n_outputs = O``
+          * ``n_outputs = n_outputs``
         and per-table ``anchor_candidates`` restricted to the indices of the
         corresponding patch.
       - In forward, applies this ``MultiHeadLut`` to the flattened input and
@@ -275,7 +276,7 @@ class ProjectionLUT(nn.Module):
     def __init__(
         self,
         unfold_config: UnfoldConfiguration,
-        O: int,
+        n_outputs: int,
         n_anchor_pairs: int,
         tables_per_head: int = 1,
         fold_config: Optional[UnfoldConfiguration] = None,
@@ -286,7 +287,7 @@ class ProjectionLUT(nn.Module):
 
         self.unfold_config = unfold_config
         self.fold_config = fold_config
-        self.O = O
+        self.n_outputs = n_outputs
 
         (kH, kW), (sH, sW) = self.unfold_config.normalized()
 
@@ -366,16 +367,16 @@ class ProjectionLUT(nn.Module):
             )  # [n_patches, K_f]
 
             K_f = patches_out.shape[1]
-            if K_f < self.O:
+            if K_f < self.n_outputs:
                 raise ValueError(
                     f"Each fold patch must contain at least O indices; got K_f={K_f} < O={self.O}"
                 )
 
-            # Select O random, unique kernel positions (columns) per patch in a
+            # Select n_outputs random, unique kernel positions (columns) per patch in a
             # fully vectorised way. We generate random scores per (patch, pos)
-            # and take top-O columns for each patch.
+            # and take top-n_outputs columns for each patch.
             rnd = torch.rand(self.n_patches, K_f, device=dev)
-            selected_cols = torch.topk(rnd, k=self.O, dim=1, largest=True).indices  # [n_patches, O]
+            selected_cols = torch.topk(rnd, k=self.n_outputs, dim=1, largest=True).indices  # [n_patches, O]
 
             # Map to flat output indices for each patch: [n_patches, O]
             fold_output_indices = patches_out.gather(1, selected_cols).contiguous()
@@ -386,12 +387,15 @@ class ProjectionLUT(nn.Module):
                 "fold_output_indices_flat",
                 fold_output_indices.view(1, -1),
             )
+            # Cache for batch offsets used in flattened scatter_add; recomputed
+            # when batch size or device changes.
+            self.register_buffer("_cached_batch_offsets", None)
 
         # Construct MultiHeadLut; we control input_dim / n_heads / n_outputs here.
         self.lut = MultiHeadLut(
             input_dim=input_dim,
             n_heads=n_heads,
-            n_outputs=O,
+            n_outputs=self.n_outputs,
             n_anchor_pairs=n_anchor_pairs,
             tables_per_head=tables_per_head,
             anchor_candidates=anchor_candidates,
@@ -425,26 +429,42 @@ class ProjectionLUT(nn.Module):
             )
 
         x_flat = x.view(B, H * W)
-        lut_out = self.lut(x_flat)  # [B, n_patches, O]
+        lut_out = self.lut(x_flat)  # [B, n_patches, n_outputs]
 
         if self.fold_config is None:
             # Return per-patch outputs.
-            return lut_out.view(B, self.H_p, self.W_p, self.O)
+            return lut_out.view(B, self.H_p, self.W_p, self.n_outputs)
 
-        B, P, O = lut_out.shape  # P == n_patches
+        B, P, O = lut_out.shape  # P == n_patches, O == n_outputs
         flat_out_dim = self.H_out * self.W_out
 
-        # Prepare indices for batched scatter-add using precomputed base indices.
-        # fold_output_indices_flat: [1, P * O]
-        indices_2d = self.fold_output_indices_flat.expand(B, -1)  # [B, P * O]
-        values_2d = lut_out.view(B, P * O)
+        # Flattened 1D scatter_add over all batches for robust gradient flow.
+        # fold_output_indices: [P, O] with flat spatial indices.
+        indices = self.fold_output_indices  # [P, O]
+        indices_exp = indices.unsqueeze(0).expand(B, -1, -1)  # [B, P, O]
+        values = lut_out  # [B, P, O]
 
-        out = torch.zeros(
-            B,
-            flat_out_dim,
+        indices_flat = indices_exp.reshape(-1)  # [B * P * O]
+        values_flat = values.reshape(-1)        # [B * P * O]
+
+        expected_len = B * P * O
+        if (
+            self._cached_batch_offsets is None
+            or self._cached_batch_offsets.numel() != expected_len
+            or self._cached_batch_offsets.device != lut_out.device
+        ):
+            self._cached_batch_offsets = (
+                torch.arange(B, device=lut_out.device, dtype=torch.long)
+                .repeat_interleave(P * O) * flat_out_dim
+            )
+
+        scatter_indices = indices_flat + self._cached_batch_offsets  # [B * P * O]
+
+        out_flat = torch.zeros(
+            B * flat_out_dim,
             device=lut_out.device,
             dtype=lut_out.dtype,
         )
-        out.scatter_add_(1, indices_2d, values_2d)
+        out_flat.scatter_add_(0, scatter_indices, values_flat)
 
-        return out.view(B, self.H_out, self.W_out)
+        return out_flat.view(B, self.H_out, self.W_out)
