@@ -3,6 +3,8 @@ Multi-head lookup table module combining AnchorPairsLookup and LProjection.
 """
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from dataclasses import dataclass
 from typing import Tuple, Optional, Union
 
 from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
@@ -186,3 +188,239 @@ class MultiHeadLut(nn.Module):
         output = output.sum(dim=2)  # [B, n_heads, n_outputs]
         
         return output
+
+
+@dataclass(frozen=True)
+class UnfoldConfiguration:
+    """
+    Configuration of 2D unfold-style patches.
+
+    All spatial parameters mirror a simplified conv2d / unfold API (with zero padding
+    and dilation fixed to 1).
+    Each field can be either an int (applied to both dimensions) or a (height, width) tuple.
+    """
+
+    H: int
+    W: int
+    kernel_size: Union[int, Tuple[int, int]]
+    stride: Union[int, Tuple[int, int]] = 1
+
+    def _to_2d(self, v: Union[int, Tuple[int, int]]) -> Tuple[int, int]:
+        if isinstance(v, tuple):
+            if len(v) != 2:
+                raise ValueError(f"Expected a tuple of length 2, got {v}")
+            return v
+        return (v, v)
+
+    def normalized(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """
+        Returns:
+            (kernel_size_2d, stride_2d), each as (H, W) tuples.
+        """
+        kH, kW = self._to_2d(self.kernel_size)
+        sH, sW = self._to_2d(self.stride)
+        return (kH, kW), (sH, sW)
+
+    def output_spatial_shape(self) -> Tuple[int, int]:
+        """
+        Compute the unfolded patch grid size (H_p, W_p) for an input of size (H, W).
+        """
+        (kH, kW), (sH, sW) = self.normalized()
+
+        def _out_dim(in_size: int, kernel: int, stride: int) -> int:
+            return (in_size - (kernel - 1) - 1) // stride + 1
+
+        H_p = _out_dim(self.H, kH, sH)
+        W_p = _out_dim(self.W, kW, sW)
+        return H_p, W_p
+
+
+class ProjectionLUT(nn.Module):
+    """
+    Projection LUT built on top of ``MultiHeadLut`` using a flat 2D input and
+    unfold-style patching.
+
+    This module:
+      - Takes a flat spatial input of shape ``[B, H, W]``.
+      - Defines patches using unfold parameters (kernel_size / stride /
+        padding / dilation).
+      - Builds a ``MultiHeadLut`` with:
+          * ``input_dim = H * W`` (flattened spatial grid)
+          * ``n_heads = n_patches`` (one head per patch)
+          * ``n_outputs = O``
+        and per-table ``anchor_candidates`` restricted to the indices of the
+        corresponding patch.
+      - In forward, applies this ``MultiHeadLut`` to the flattened input and
+        reshapes the result to ``[B, H_p, W_p, O]`` where ``H_p, W_p`` are the
+        number of patches along height and width.
+    """
+
+    def __init__(
+        self,
+        unfold_config: UnfoldConfiguration,
+        O: int,
+        n_anchor_pairs: int,
+        tables_per_head: int = 1,
+        fold_config: Optional[UnfoldConfiguration] = None,
+        device: Optional[torch.device] = None,
+        **multi_head_lut_kwargs,
+    ):
+        super().__init__()
+
+        self.unfold_config = unfold_config
+        self.fold_config = fold_config
+        self.O = O
+
+        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+
+        # Compute patch grid size as in conv2d / unfold (zero padding, dilation=1)
+        H_p, W_p = self.unfold_config.output_spatial_shape()
+        if H_p <= 0 or W_p <= 0:
+            raise ValueError(
+                f"Invalid patch grid size computed from H={self.unfold_config.H}, W={self.unfold_config.W}, "
+                f"kernel_size={self.unfold_config.kernel_size}, "
+                f"stride={self.unfold_config.stride}"
+            )
+
+        self.H_p = H_p
+        self.W_p = W_p
+        self.n_patches = H_p * W_p
+
+        input_dim = self.unfold_config.H * self.unfold_config.W
+        n_heads = self.n_patches
+
+        # Build per-head candidate indices corresponding to each patch window
+        # using vectorized unfold over a grid of flat indices.
+        dev = device or torch.device("cpu")
+        index_grid = torch.arange(
+            input_dim,
+            device=dev,
+            dtype=torch.long,
+        ).view(1, 1, self.unfold_config.H, self.unfold_config.W)
+
+        # Unfold directly (zero padding, dilation=1).
+        # Result shape: [1, K, n_patches] where K = kH * kW
+        patches = F.unfold(
+            index_grid.to(dtype=torch.float32),
+            kernel_size=(kH, kW),
+            dilation=1,
+            stride=(sH, sW),
+        )
+        patches = patches.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K]
+
+        # anchor_candidates: [n_heads * tables_per_head, K] (all indices are valid)
+        K = patches.shape[1]
+        anchor_candidates = patches.repeat_interleave(tables_per_head, dim=0).to(device=dev)
+
+        # Optional folding configuration: map per-patch outputs back to an
+        # output spatial grid using scatter-add.
+        if self.fold_config is not None:
+            (kH_f, kW_f), (sH_f, sW_f) = self.fold_config.normalized()
+            H_p_f, W_p_f = self.fold_config.output_spatial_shape()
+            n_patches_f = H_p_f * W_p_f
+            if n_patches_f != self.n_patches:
+                raise ValueError(
+                    f"fold_config must produce the same number of patches as unfold_config "
+                    f"({n_patches_f} != {self.n_patches})"
+                )
+
+            self.H_out = self.fold_config.H
+            self.W_out = self.fold_config.W
+
+            index_grid_out = torch.arange(
+                self.H_out * self.W_out,
+                device=dev,
+                dtype=torch.long,
+            ).view(1, 1, self.H_out, self.W_out)
+
+            patches_out = F.unfold(
+                index_grid_out.to(dtype=torch.float32),
+                kernel_size=(kH_f, kW_f),
+                dilation=1,
+                stride=(sH_f, sW_f),
+            )  # [1, K_f, n_patches]
+            patches_out = patches_out.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K_f]
+
+            K_f = patches_out.shape[1]
+            if K_f < self.O:
+                raise ValueError(
+                    f"Each fold patch must contain at least O indices; got K_f={K_f} < O={self.O}"
+                )
+
+            # Select O random, unique kernel positions (columns) per patch in a
+            # fully vectorised way. We generate random scores per (patch, pos)
+            # and take top-O columns for each patch.
+            rnd = torch.rand(self.n_patches, K_f, device=dev)
+            selected_cols = torch.topk(rnd, k=self.O, dim=1, largest=True).indices  # [n_patches, O]
+
+            # Map to flat output indices for each patch: [n_patches, O]
+            fold_output_indices = patches_out.gather(1, selected_cols).contiguous()
+            self.register_buffer("fold_output_indices", fold_output_indices)
+            # Also store a flattened, per-position base index vector for efficient
+            # batched scatter-add in forward.
+            self.register_buffer(
+                "fold_output_indices_flat",
+                fold_output_indices.view(1, -1),
+            )
+
+        # Construct MultiHeadLut; we control input_dim / n_heads / n_outputs here.
+        self.lut = MultiHeadLut(
+            input_dim=input_dim,
+            n_heads=n_heads,
+            n_outputs=O,
+            n_anchor_pairs=n_anchor_pairs,
+            tables_per_head=tables_per_head,
+            anchor_candidates=anchor_candidates,
+            device=device,
+            **multi_head_lut_kwargs,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Args:
+            x: Input tensor of shape [B, H, W] where (H, W) match
+               ``unfold_config.H`` and ``unfold_config.W``.
+
+        Returns:
+            - If ``fold_config`` is None: tensor of shape [B, H_p, W_p, O].
+            - If ``fold_config`` is set: tensor of shape [B, H_out, W_out].
+        """
+        if x.dim() != 3:
+            raise ValueError(f"Expected 3D input [B, H, W], got shape {x.shape}")
+
+        B, H, W = x.shape
+        if (H, W) != (self.unfold_config.H, self.unfold_config.W):
+            raise ValueError(
+                f"Input spatial size {(H, W)} does not match ProjectionLUT configuration "
+                f"({self.unfold_config.H}, {self.unfold_config.W})"
+            )
+
+        x_flat = x.view(B, H * W)
+        lut_out = self.lut(x_flat)  # [B, n_patches, O]
+
+        if self.fold_config is None:
+            # Return per-patch outputs.
+            return lut_out.view(B, self.H_p, self.W_p, self.O)
+
+        B, P, O = lut_out.shape  # P == n_patches
+        flat_out_dim = self.H_out * self.W_out
+
+        # Prepare indices for batched scatter-add using precomputed base indices.
+        # fold_output_indices_flat: [1, P * O]
+        indices_2d = self.fold_output_indices_flat.expand(B, -1)  # [B, P * O]
+        values_2d = lut_out.view(B, P * O)
+
+        out = torch.zeros(
+            B,
+            flat_out_dim,
+            device=lut_out.device,
+            dtype=lut_out.dtype,
+        )
+        out.scatter_add_(1, indices_2d, values_2d)
+
+        return out.view(B, self.H_out, self.W_out)

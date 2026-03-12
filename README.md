@@ -42,7 +42,7 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
    # (a) LUTorch CUDA backend – this is what you normally need for LUT-based models
    pip install -v ./native/lutorch
 
-   # (b) Full engine (SpNet, synapse growth, etc.) – only needed for advanced / spiking use cases
+   # (b) Full engine (SpNet, ANDN, synapse growth, etc.) – only needed for advanced / spiking use cases
    pip install -v ./native/spiky
    ```
 
