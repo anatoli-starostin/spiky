@@ -272,6 +272,124 @@ for epoch in range(num_epochs):
 
 
 # %% [markdown]
+# # AlexNet
+
+# %%
+class AlexNetCIFAR(nn.Module):
+    def __init__(self, num_classes=100):
+        super().__init__()
+
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),      # 32 → 16
+
+            nn.Conv2d(64, 192, 3, padding=1),
+            nn.BatchNorm2d(192),
+            nn.ReLU(),
+            nn.MaxPool2d(2),      # 16 → 8
+
+            nn.Conv2d(192, 384, 3, padding=1),
+            nn.BatchNorm2d(384),
+            nn.ReLU(),
+
+            nn.Conv2d(384, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.MaxPool2d(2),      # 8 → 4
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(256 * 4 * 4, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(1024, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
+
+
+# %%
+alex_net = AlexNetCIFAR()
+alex_net = alex_net.to(device)
+
+# Count parameters
+total_params = sum(p.numel() for p in alex_net.parameters())
+trainable_params = sum(p.numel() for p in alex_net.parameters() if p.requires_grad)
+
+print(f"Model: {alex_net}")
+print(f"Total parameters: {total_params:,}")
+print(f"Trainable parameters: {trainable_params:,}")
+print(f"Number of classes: {num_classes}")
+
+# %% [markdown]
+# ## Training Setup
+#
+# Define loss function, optimizer, and learning rate scheduler.
+#
+
+# %%
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(
+    alex_net.parameters(),
+    lr=0.001
+)
+
+# Learning rate scheduler
+scheduler = torch.optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=30,
+    gamma=0.1
+)
+
+# %% [markdown]
+# ## Training Loop
+#
+
+# %%
+num_epochs = 100  # Adjust as needed
+train_losses = []
+train_accs = []
+val_losses = []
+val_accs = []
+
+print(f"Starting training for {num_epochs} epochs...")
+print(f"Batch size: {batch_size}")
+print(f"Device: {device}\n")
+
+for epoch in range(num_epochs):
+    print(f'Epoch {epoch+1}/{num_epochs}')
+    print(f'Learning rate: {scheduler.get_last_lr()[0]:.6f}')
+    
+    # Train
+    train_loss, train_acc = train_one_epoch(alex_net, train_loader, criterion, optimizer, device)
+    train_losses.append(train_loss)
+    train_accs.append(train_acc)
+    
+    # Validate
+    val_loss, val_acc = evaluate(alex_net, val_loader, criterion, device)
+    val_losses.append(val_loss)
+    val_accs.append(val_acc)
+    
+    # Update learning rate
+    scheduler.step()
+    
+    print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
+    print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
+    print('-' * 60)
+
+
+# %% [markdown]
 # # LUTAlexNet
 #
 # AlexNet analogue built on LUT convolutions (`Conv2DLut`).
@@ -512,122 +630,4 @@ plt.tight_layout()
 plt.show()
 
 print(f"Best validation accuracy: {max(val_accs):.2f}% at epoch {val_accs.index(max(val_accs))+1}")
-
-
-# %% [markdown]
-# # AlexNet
-
-# %%
-class AlexNetCIFAR(nn.Module):
-    def __init__(self, num_classes=100):
-        super().__init__()
-
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),      # 32 → 16
-
-            nn.Conv2d(64, 192, 3, padding=1),
-            nn.BatchNorm2d(192),
-            nn.ReLU(),
-            nn.MaxPool2d(2),      # 16 → 8
-
-            nn.Conv2d(192, 384, 3, padding=1),
-            nn.BatchNorm2d(384),
-            nn.ReLU(),
-
-            nn.Conv2d(384, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.MaxPool2d(2),      # 8 → 4
-        )
-
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(256 * 4 * 4, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(1024, num_classes),
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
-
-
-# %%
-alex_net = AlexNetCIFAR()
-alex_net = alex_net.to(device)
-
-# Count parameters
-total_params = sum(p.numel() for p in alex_net.parameters())
-trainable_params = sum(p.numel() for p in alex_net.parameters() if p.requires_grad)
-
-print(f"Model: {alex_net}")
-print(f"Total parameters: {total_params:,}")
-print(f"Trainable parameters: {trainable_params:,}")
-print(f"Number of classes: {num_classes}")
-
-# %% [markdown]
-# ## Training Setup
-#
-# Define loss function, optimizer, and learning rate scheduler.
-#
-
-# %%
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(
-    alex_net.parameters(),
-    lr=0.001
-)
-
-# Learning rate scheduler
-scheduler = torch.optim.lr_scheduler.StepLR(
-    optimizer,
-    step_size=30,
-    gamma=0.1
-)
-
-# %% [markdown]
-# ## Training Loop
-#
-
-# %%
-num_epochs = 100  # Adjust as needed
-train_losses = []
-train_accs = []
-val_losses = []
-val_accs = []
-
-print(f"Starting training for {num_epochs} epochs...")
-print(f"Batch size: {batch_size}")
-print(f"Device: {device}\n")
-
-for epoch in range(num_epochs):
-    print(f'Epoch {epoch+1}/{num_epochs}')
-    print(f'Learning rate: {scheduler.get_last_lr()[0]:.6f}')
-    
-    # Train
-    train_loss, train_acc = train_one_epoch(alex_net, train_loader, criterion, optimizer, device)
-    train_losses.append(train_loss)
-    train_accs.append(train_acc)
-    
-    # Validate
-    val_loss, val_acc = evaluate(alex_net, val_loader, criterion, device)
-    val_losses.append(val_loss)
-    val_accs.append(val_acc)
-    
-    # Update learning rate
-    scheduler.step()
-    
-    print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
-    print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
-    print('-' * 60)
 
