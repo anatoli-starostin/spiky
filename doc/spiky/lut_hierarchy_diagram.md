@@ -1,6 +1,8 @@
 # LUT Hierarchy Diagram
 
-This diagram shows the class hierarchy and organization of LUT components at the Python level.
+> **Deprecated:** This hierarchy describes classes in the **`spiky.lut_fused`** package, which is **deprecated** and kept only for **backward compatibility**. For the current LUT API, see **LUTorch** (`spiky.lutorch`) and `doc/lutorch/`.
+
+This diagram shows the class hierarchy and organization of LUT components at the Python level (lut_fused).
 
 ```mermaid
 graph TB

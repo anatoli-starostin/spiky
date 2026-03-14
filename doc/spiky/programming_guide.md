@@ -2,6 +2,8 @@
 
 This guide provides a comprehensive overview of how to use the spiky library for building neural networks with synapse growth, LUT layers, and spiking networks.
 
+> **Note on LUT layers:** The LUT layers described in this document (`LUTLayerBasic`, `LUTLayer`, `ProjectionLUTLayer`, `LUTTransformer`, etc.) live in the **`spiky.lut_fused`** package. The `lut_fused` package is **deprecated** and is kept in the project only for **backward compatibility**. For new code, use **LUTorch** (`spiky.lutorch`); see documentation in `doc/lutorch/`.
+
 ## Table of Contents
 
 1. [LUTs](#luts)
@@ -15,7 +17,9 @@ This guide provides a comprehensive overview of how to use the spiky library for
 
 ---
 
-## LUTs
+## LUTs (deprecated: `spiky.lut_fused`)
+
+All classes in this section are in the deprecated **`spiky.lut_fused`** package. Imports in the examples use `spiky.lut_fused.LUTLayer` and `spiky.lut_fused.LUTTransformer` for backward compatibility only.
 
 ### LUTLayerBasic
 

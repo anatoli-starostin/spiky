@@ -10,7 +10,6 @@ from typing import Tuple, Optional, Union
 from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
 from spiky.lutorch.lut_helpers import UncertaintyMode
-from spiky.util.chunk_of_connections import ChunkOfConnections
 
 
 class MultiHeadLut(nn.Module):
@@ -28,10 +27,8 @@ class MultiHeadLut(nn.Module):
         tables_per_head: Number of lookup tables per head (default: 1)
         n_buckets: Number of buckets for bucketized lookup (default: 1). If > 1, forward expects bucket_indices input.
         connected_anchors_mode: If True, anchor pairs form a connected graph (default: False)
-        anchor_candidates: Optional. Either:
-                          - torch.Tensor: Shape [n_heads, tables_per_head, max_anchors_per_table] with input indices
-                          - Tuple[ChunkOfConnections, int]: ChunkOfConnections with custom ids_shift
-                          - None: balanced coverage over input dims
+        anchor_candidates: Optional tensor of shape [tables_per_head, n_heads, max_anchors_per_table]
+                          with input indices. If None, balanced coverage over input dims is used.
         cmp_eps: Epsilon for comparison (default: 0.0)
         random_seed: Random seed for anchor pair sampling
         n_alternatives: Number of alternative lookup indices per table (default: 1)
@@ -49,14 +46,14 @@ class MultiHeadLut(nn.Module):
         tables_per_head: int = 1,
         n_buckets: int = 1,
         connected_anchors_mode: bool = False,
-        anchor_candidates: Optional[Union[torch.Tensor, Tuple[ChunkOfConnections, int]]] = None,
+        anchor_candidates: Optional[torch.Tensor] = None,
         cmp_eps: float = 0.0,
         random_seed: Optional[int] = None,
         n_alternatives: int = 1,
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        initial_weights_noise: float = 0.0
+        initial_weights_noise: float = 0.001
     ):
         super().__init__()
         
@@ -76,27 +73,24 @@ class MultiHeadLut(nn.Module):
         # n_entries_per_table is derived from n_anchor_pairs, multiplied by n_buckets
         n_entries_per_table = (2 ** n_anchor_pairs) * n_buckets
         
-        # Reshape anchor_candidates if it's a tensor.
-        # New expected layout when provided as a tensor:
-        #   [tables_per_head, n_heads, max_anchors_per_table]
-        # which we convert to [n_heads * tables_per_head, max_anchors_per_table]
-        reshaped_anchor_candidates = anchor_candidates
-        if isinstance(anchor_candidates, torch.Tensor):
-            if anchor_candidates.dim() == 3:
-                if anchor_candidates.shape[0] != tables_per_head or anchor_candidates.shape[1] != n_heads:
-                    raise ValueError(
-                        "anchor_candidates tensor must have shape "
-                        f"[tables_per_head={tables_per_head}, n_heads={n_heads}, max_anchors_per_table], "
-                        f"got {tuple(anchor_candidates.shape)}"
-                    )
-                reshaped_anchor_candidates = (
-                    anchor_candidates.permute(1, 0, 2).contiguous().view(n_lookup_tables, -1)
-                )
-            else:
+        # Reshape anchor_candidates when provided: [tables_per_head, n_heads, max_anchors_per_table]
+        # -> [n_heads * tables_per_head, max_anchors_per_table] for AnchorPairsLookup.
+        reshaped_anchor_candidates = None
+        if anchor_candidates is not None:
+            if not isinstance(anchor_candidates, torch.Tensor) or anchor_candidates.dim() != 3:
                 raise ValueError(
-                    "anchor_candidates tensor must 3D; "
-                    "expected shape [tables_per_head, n_heads, max_anchors_per_table]"
+                    "anchor_candidates must be a 3D tensor of shape "
+                    "[tables_per_head, n_heads, max_anchors_per_table], or None"
                 )
+            if anchor_candidates.shape[0] != tables_per_head or anchor_candidates.shape[1] != n_heads:
+                raise ValueError(
+                    "anchor_candidates tensor must have shape "
+                    f"[tables_per_head={tables_per_head}, n_heads={n_heads}, max_anchors_per_table], "
+                    f"got {tuple(anchor_candidates.shape)}"
+                )
+            reshaped_anchor_candidates = (
+                anchor_candidates.permute(1, 0, 2).contiguous().view(n_lookup_tables, -1)
+            )
         
         # Create AnchorPairsLookup: n_lookup_tables total
         self.lookup = AnchorPairsLookup(
@@ -526,7 +520,7 @@ class Conv2DLut(nn.Module):
         self.out_channels = out_channels
         self.n_heads = n_heads
 
-        (kH, kW), (sH, sW), (pH, pW) = self.unfold_config.normalized()
+        (kH, kW), _, _ = self.unfold_config.normalized()
 
         # Compute patch grid size (supports padding).
         H_p, W_p = self.unfold_config.output_spatial_shape()

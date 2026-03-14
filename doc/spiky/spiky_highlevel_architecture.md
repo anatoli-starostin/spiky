@@ -1,5 +1,7 @@
 # LUT Architecture Diagrams
 
+> **Deprecated LUT stack:** The "LUT Module" and "LUT CUDA Implementation" described below correspond to the **`spiky.lut_fused`** package and its native backend. The `lut_fused` package is **deprecated** and kept only for **backward compatibility**. For the current LUT-based stack, see **LUTorch** (`spiky.lutorch`) and `doc/lutorch/`.
+
 ## Project Architecture Overview
 
 This diagram shows the complete architecture of the spiky project, including both Python and C++/CUDA layers.
@@ -7,7 +9,7 @@ This diagram shows the complete architecture of the spiky project, including bot
 ```mermaid
 graph TB
     subgraph "Python Layer"
-        subgraph "LUT Module"
+        subgraph "LUT Module (lut_fused, deprecated)"
             LUT_LAYER["LUTLayer<br/>(PyTorch Modules)<br/>• LUTLayerBasic<br/>• Conv2DLUTLayer<br/>• LUTTransformer<br/>• Backpropagation Support"]
         end
         
@@ -67,7 +69,7 @@ graph TB
 
 ### Python Layer
 
-**LUT Module**: Full-fledged PyTorch modules implementing different versions of LUT networks with backpropagation support. Includes basic layers, convolutional and projection layers, and transformer like architecture. Supports gradient computation and integration with PyTorch's autograd system.
+**LUT Module (lut_fused, deprecated)**: Full-fledged PyTorch modules implementing different versions of LUT networks with backpropagation support. Lives in `spiky.lut_fused`. Includes basic layers, convolutional and projection layers, and transformer-like architecture. Kept for backward compatibility only; for new code use LUTorch (`spiky.lutorch`).
 
 **SPNet Module**: Implementation of spiking network model from polychronization paper (Izhikevitch, 2003). Handles neuron dynamics using the Izhikevich model, implements STDP (Spike-Timing-Dependent Plasticity) learning, but does not support backpropagation.
 
@@ -75,7 +77,7 @@ graph TB
 
 ### C++/CUDA Layer
 
-**LUT CUDA Implementation**: CUDA implementation of LUT networks. Includes data managers, runtime context, and CUDA kernels for forward and backward pass computations. Manages structure, compilation, and GPU execution.
+**LUT CUDA Implementation (lut_fused backend)**: CUDA implementation backing the deprecated `lut_fused` LUT layers. Includes data managers, runtime context, and CUDA kernels for forward and backward pass computations. Manages structure, compilation, and GPU execution.
 
 **SPNet CUDA Implementation**: CUDA implementation of Izhkevitch spiking network model. Includes data managers, runtime context, and CUDA kernels for neuron dynamics, spike detection, and STDP weight updates.
 

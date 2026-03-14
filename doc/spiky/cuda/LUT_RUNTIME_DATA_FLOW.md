@@ -1,5 +1,7 @@
 # LUT Runtime Data Flow
 
+> **Deprecated backend:** This document describes the CUDA runtime data flow for the **`spiky.lut_fused`** LUT implementation. The `lut_fused` package is **deprecated** and kept only for **backward compatibility**. For the current LUT stack, see **LUTorch** (`spiky.lutorch`) and `doc/lutorch/`.
+
 ## Notation
 
 - **B**: Batch size

@@ -11,6 +11,11 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
 - **Spiking Manifesto:** [arXiv Paper](https://arxiv.org/pdf/2512.11843)
 - **Project Presentation:** [Google Slides](https://docs.google.com/presentation/d/16ZdLnLGjpVy9oCk1FHdEsVbEQv1eOe_jI-SrzM3srmc/edit?usp=sharing)
 
+## Documentation
+
+- **`doc/lutorch/`** — LUTorch (LUT-based, PyTorch-compatible layers and training).
+- **`doc/spiky/`** — Spiky engine (SpNet, synapse growth, programming guide, architecture).
+
 ## Requirements
 
 - **Python:** 3.12
