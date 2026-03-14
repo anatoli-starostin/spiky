@@ -14,7 +14,7 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
 ## Documentation
 
 - **`doc/lutorch/`** — LUTorch (LUT-based, PyTorch-compatible layers and training).
-- **`doc/spiky/`** — Spiky engine (SpNet, synapse growth, programming guide, architecture).
+- **`doc/spiky/`** — Spiky engine (SpNet, synapse growth, deprecated old LUT implemenation).
 
 ## Requirements
 
@@ -91,20 +91,20 @@ To run example notebooks:
 
 ## Workbooks
 
-The `workbooks` directory contains example Jupyter notebooks demonstrating different aspects of the Spiky library:
+The `workbooks` directory contains example Jupyter notebooks demonstrating different aspects of the Spiky library. Notebooks use [Jupytext](https://jupytext.readthedocs.io/): each `.ipynb` is paired with a `.py` file for version control and editing in a plain editor.
 
-- **`lut-mnist.ipynb`**: Demonstrates building a sparse convolutional neural network using LUT (Lookup Table) layers for MNIST digit classification. The notebook shows how to:
+- **`lutorch_mnist.ipynb`**: MNIST digit classification using LUTorch’s `ProjectionLUT` layers. The notebook shows how to:
   - Load and preprocess the MNIST dataset
-  - Construct a layered network with `ProjectionLUTLayer` components
-  - Train the network and visualize training progress
-  - Inspect learned weights and network activations
-  - Achieve ~98% test accuracy on MNIST
+  - Build a two-layer conv-like network (`TwoLayerProjectionLUT`) with `ProjectionLUT` and `UnfoldConfiguration`
+  - Train the model and track train/test accuracy
+  - Optionally explore an `MNIST_LUT_CNN` variant using `MultiHeadLut`
+  - Reach ~99% test accuracy on MNIST
 
-- **`lut-transformer.ipynb`**: Shows how to build a transformer model using LUT layers for language modeling and text generation. The notebook covers:
-  - Text data preparation from FineWeb dataset
-  - Building a `LUTTransformer` with attention and feed-forward layers
-  - Training for next-token prediction
-  - Generating text samples from the trained model
+- **`lutorch_transformer.ipynb`**: Byte-level language modeling with a LUT-based transformer. The notebook covers:
+  - Text data preparation (FineWeb snippet sampler, byte vocab + BOS)
+  - Building a `LUTTransformer` from LUTorch primitives: `LUTAttention` (causal) and `MultiHeadLut` for attention scores, value projection, and feed-forward blocks
+  - Training with full-sequence cross-entropy loss and evaluation
+  - Autoregressive text generation from the trained model
 
 - **`spnet.ipynb`**: Demonstrates Izhikevich spiking neural network simulations using the SpNet module. The notebook illustrates:
   - Creating a spiking network with excitatory and inhibitory neurons
