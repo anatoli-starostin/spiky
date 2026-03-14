@@ -70,7 +70,6 @@ if size < 233 * 1024 * 1024:
 
 # %%
 CONTEXT_SIZE = 32
-# Match spike_QK: BOS at index 256, vocab 257 (bytes 0-255 + BOS)
 RAW_VOCAB_SIZE = 256
 BOS_ID = RAW_VOCAB_SIZE  # 256
 VOCAB_SIZE = RAW_VOCAB_SIZE + 1  # 257
@@ -234,9 +233,8 @@ class LUTTransformer(nn.Module):
 lut_transformer = None
 optimizer = None
 sched = None
-if device != 'cpu':
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
+torch.cuda.empty_cache()
+torch.cuda.ipc_collect()
 lut_transformer = LUTTransformer()
 print(lut_transformer)
 
@@ -252,26 +250,23 @@ print("frozen:", total - trainable)
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 
+batch_size = 256
+test_batch_size = 256
+
 SCALE = 5.0
 MAX_RATE = 0.01
 def lr_func(t):
-    return min(MAX_RATE, SCALE / (1 + t)**0.5)
+    return min(MAX_RATE, SCALE / (1 + t * batch_size)**0.5)
 
 print(f"Crossover point for LR: {(SCALE / MAX_RATE )**2:,}")
 
 lr = 1.0
 optimizer = optim.SGD(lut_transformer.layers.parameters(), lr=lr)
-# Match spike_QK: embedder uses global LR scale (0.01); 0.001 was 10x too small
-optimizer_embedder = optim.Adam(lut_transformer.token_embedder.parameters(), lr=0.01)
+optimizer_embedder = optim.Adam(lut_transformer.token_embedder.parameters(), lr=1.0)
 
-steps=1000000
-# sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-#     optimizer, T_max=steps
-# )
-# sched = None
+n_steps=100000
 sched = LambdaLR(optimizer, lr_lambda=lr_func)
-# sched_embedder = LambdaLR(optimizer_embedder, lr_lambda=lr_func)
-# LUTTransformerLutorch has no set_external_learning_rate_hook
+sched_embedder = LambdaLR(optimizer_embedder, lr_lambda=lr_func)
 
 # %%
 lut_train_losses = []
@@ -281,7 +276,6 @@ lut_test_losses = []
 import torch
 import torch.nn.functional as F
 
-test_batch_size = 128
 
 def generate_text_lut(lut_model, prefix, length, device):
     # Model operates on byte IDs; decode final byte stream as UTF-8 for display.
@@ -314,7 +308,7 @@ def evaluate_model(model, sampler, B):
 
     with torch.no_grad():
         for batch in sampler.testing_batches_iterator(B):   # [B, C]
-            # Prepend BOS at position 0 (match spike_QK)
+            # Prepend BOS at position 0
             inp = torch.empty(batch.shape[0], batch.shape[1], dtype=torch.long, device=batch.device)
             inp[:, 0] = BOS_ID
             inp[:, 1:] = batch[:, :-1].long()
@@ -347,15 +341,13 @@ test_loss
 test_every=1000
 train_loss = None
 alpha = 0.01
-batch_size = 128
 
-pbar = tqdm(total=steps)
+pbar = tqdm(total=n_steps)
 lut_transformer.train()
 
-for step in range(0, steps + 1):
+for step in range(n_steps):
     x = snippet_sampler.sample_training_batch(batch_size)   # [B, 32] bytes
     x = x.long() if x.dtype != torch.long else x
-    # Match spike_QK: position 0 = BOS, positions 1..31 = x[:,0..30]; targets = all 32 bytes
     inp = torch.empty(batch_size, x.shape[1], dtype=torch.long, device=x.device)
     inp[:, 0] = BOS_ID
     inp[:, 1:] = x[:, :-1]
@@ -376,16 +368,15 @@ for step in range(0, steps + 1):
     loss.backward()
     optimizer.step()
     optimizer_embedder.step()
-    if sched is not None:
-        for _ in range(x.shape[0]):
-            sched.step()  # once per batch (was range(x.shape[0]) = 128 steps/batch, making cosine decay 128x too fast)
+    sched.step()
+    sched_embedder.step()
 
     # Report full-sequence mean loss (same as above, just mean instead of sum)
     loss_value = loss.item() / (B * T)
     train_loss = loss_value if train_loss is None else (1 - alpha) * train_loss + alpha * loss_value
     pbar.update(1)
     if step % 10 == 0:
-        pbar.set_description(f"loss={train_loss:.4f}, lr {lr if sched is None else sched.get_last_lr()[0]:.8f}")
+        pbar.set_description(f"loss={train_loss:.4f}, lr {sched.get_last_lr()[0]:.6f}")
 
     if step % test_every == 0:
         test_loss = evaluate_model(lut_transformer, snippet_sampler, test_batch_size)
@@ -393,9 +384,6 @@ for step in range(0, steps + 1):
             lut_train_losses.append(train_loss)
             lut_test_losses.append(test_loss)
         print(f"[TEST] step {step}: loss={test_loss:.4f}")
-#         if step > 0 and batch_size < 384:
-#             print(f"batch_size {batch_size} -> {batch_size + 32}")
-#             batch_size += 32
 
 # %%
 import matplotlib.pyplot as plt
@@ -416,151 +404,4 @@ plt.tight_layout()
 plt.show()
 
 # %%
-test_loss
-
-# %%
-import torch
-from torch.profiler import profile, record_function, ProfilerActivity
-
-profile_steps = 200
-
-with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    record_shapes=True,
-    profile_memory=True,
-) as prof:
-    for step in range(profile_steps):
-
-        with record_function("sample_batch"):
-            x = snippet_sampler.sample_training_batch(batch_size)
-            x = x.long() if x.dtype != torch.long else x
-            inp = torch.empty(batch_size, x.shape[1], dtype=torch.long, device=x.device)
-            inp[:, 0] = BOS_ID
-            inp[:, 1:] = x[:, :-1]
-            tgt = x
-
-        with record_function("forward"):
-            logits = lut_transformer(inp)
-
-        with record_function("loss"):
-            B, T, V = logits.shape
-            loss = F.cross_entropy(
-                logits.reshape(B * T, V),
-                tgt.reshape(B * T),
-                reduction="none"
-            ).sum()
-
-        with record_function("backward+step"):
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-
-        with record_function("scheduler"):
-            if sched is not None:
-                for _ in range(x.shape[0]):
-                    sched.step()
-
-        prof.step()
-
-print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=40))
-prof.export_chrome_trace("trace.json")
-
-# %%
-steps=1000000
-
-
-# %%
-from spiky.lutorch.lut_helpers import logarithmic_pe_buckets, rpe_matrix
-
-# %%
-pe_buckets = logarithmic_pe_buckets(8, 32, device)
-
-# %%
-pe_buckets
-
-# %%
-rpe_matrix(pe_buckets, 32, device).T
-
-# %%
-causal_mask = torch.tril(torch.ones(32, 32, device=device), diagonal=-1).unsqueeze(0).unsqueeze(-1)
-causal_mask == 0
-
-# %%
-attention_scores = torch.zeros([2, 32, 32, 1], device=device)
-
-# %%
-attention_scores = attention_scores.masked_fill(causal_mask == 0, float('-inf')).squeeze(3)    
-
-# %%
-F.softmax(attention_scores[:, 0])
-
-# %%
-attention_scores.shape
-
-# %%
-seq_len = 32
-batch_size = 3
-rows_local, cols_local = torch.tril_indices(
-    seq_len, seq_len, offset=-1, device=device
-)  # [num_pairs_single]
-
-offsets = torch.arange(batch_size, device=device) * seq_len  # [B]
-_cached_batched_rows = (
-    rows_local.unsqueeze(0) + offsets.unsqueeze(1)
-).reshape(-1)  # [P], where P = B * num_pairs_single
-_cached_batched_cols = (
-    cols_local.unsqueeze(0).expand(batch_size, -1)
-).reshape(-1)  # [P]
-
-# Within-sequence key indices for scattering into [B*S, S, H]
-_cached_key_indices = (_cached_batched_cols % seq_len).contiguous()  # [P]
-
-pe_buckets = logarithmic_pe_buckets(8, seq_len, device)
-rpe = rpe_matrix(pe_buckets, seq_len, device)  # [S, S]
-rpe_pairs = rpe[rows_local, cols_local]  # [num_pairs_single]
-_cached_bucket_indices = rpe_pairs.repeat(batch_size).contiguous()  # [P]
-
-# %%
-_cached_batched_rows[:16], _cached_batched_cols[:16]
-
-# %%
-_cached_batched_rows[-16:], _cached_batched_cols[-16:]
-
-# %%
-H = 28
-W = 28
-kH = 5
-kW = 5
-sH = 1
-sW = 1
-index_grid = torch.arange(H * W, device=device, dtype=torch.long).view(1, 1, H, W)
-
-# Unfold directly (zero padding, dilation=1).
-# Result shape: [1, K, n_patches] where K = kH * kW
-patches = F.unfold(
-    index_grid.to(dtype=torch.float32),
-    kernel_size=(kH, kW),
-    dilation=1,
-    stride=(sH, sW),
-)
-patches = patches.to(dtype=torch.long).transpose(1, 2).contiguous()  # [n_patches, K]
-
-# anchor_candidates: [n_heads * tables_per_head, K] (all indices are valid)
-K = patches.shape[1]
-anchor_candidates = patches.repeat_interleave(4, dim=0).to(device=device)
-anchor_candidates.shape
-
-
-# %%
-576 ** 0.5
-
-# %%
-patches.shape
-
-# %%
-index_grid.shape
-
-# %%
-anchor_candidates[0][1], anchor_candidates[0][2]
-
-# %%
+lut_train_losses[-1], lut_test_losses[-1]

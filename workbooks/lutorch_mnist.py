@@ -53,7 +53,7 @@ warnings.filterwarnings(
     message=".*has_mkldnn.*deprecated.*"
 )
 
-device = 'cuda:7'
+device = 'cuda'
 summation_dtype = torch.float32
 random_seed = 1
 torch.manual_seed(random_seed)
@@ -142,7 +142,7 @@ class TwoLayerProjectionLUT(nn.Module):
             n_alternatives=3,
             initial_weights_noise=0.001,
             n_anchor_pairs=4,
-            tables_per_head=16,
+            tables_per_head=32,
             device=device,
         )
 
@@ -170,7 +170,7 @@ class TwoLayerProjectionLUT(nn.Module):
             device=device,
         )
         
-        self.drop = nn.Dropout(0.1)
+        self.drop = nn.Dropout(0.2)
 
         self.final_layer = nn.Linear(H * W, num_classes, device=device)
 
@@ -275,11 +275,6 @@ test_accuracies = []
 # %%
 optimizer = torch.optim.Adam(proj_lut_net.parameters(), lr=0.001)
 n_epochs = 24
-# scheduler = torch.optim.lr_scheduler.StepLR(
-#     optimizer,
-#     step_size=8,
-#     gamma=0.1
-# )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=n_epochs
 )
@@ -365,7 +360,7 @@ class MNIST_LUT_CNN(nn.Module):
             n_anchor_pairs=4,
             smooth_mode=True,
             n_alternatives=3,
-            tables_per_head=4,
+            tables_per_head=16,
             initial_weights_noise=0.001,
             device=device,
         )
@@ -385,10 +380,10 @@ class MNIST_LUT_CNN(nn.Module):
             unfold_config=unfold2,
             in_channels=8,
             out_channels=8,
-            n_anchor_pairs=8,
+            n_anchor_pairs=4,
             smooth_mode=True,
             n_alternatives=3,
-            tables_per_head=8,
+            tables_per_head=16,
             initial_weights_noise=0.001,
             device=device,
         )
@@ -450,15 +445,13 @@ lut_cnn_train_accuracies = []
 lut_cnn_test_accuracies = []
 
 optimizer_lut_cnn = torch.optim.Adam(lut_cnn_net.parameters(), lr=0.001)
-
-scheduler_lut_cnn = torch.optim.lr_scheduler.StepLR(
-    optimizer_lut_cnn,
-    step_size=8,
-    gamma=0.1,
+n_epochs = 16
+scheduler_lut_cnn = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer_lut_cnn, T_max=n_epochs
 )
 
 loss_func = nn.CrossEntropyLoss(reduction='sum')
-for epoch in range(16):
+for epoch in range(n_epochs):
     lut_cnn_net.train()
     train_loader = torch.utils.data.DataLoader(mnist_train_dataset, batch_size=256, shuffle=True)
     correct = 0
@@ -486,7 +479,7 @@ for epoch in range(16):
     lut_cnn_test_accuracies.append(test_acc)
     print(
         f"Epoch {epoch+1} Train/test accuracy: {train_acc:.2f}/{test_acc:.2f}, "
-        f"lr: {scheduler_lut_cnn.get_last_lr()}"
+        f"lr: {scheduler_lut_cnn.get_last_lr()[0]:.4f}"
     )
     scheduler_lut_cnn.step()
 
