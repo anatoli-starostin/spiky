@@ -56,7 +56,7 @@ class MultiHeadLut(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        initial_weights_noise: float = 0.001
+        initial_weights_noise: float = 0.0
     ):
         super().__init__()
         
@@ -212,8 +212,7 @@ class UnfoldConfiguration:
     """
     Configuration of 2D unfold-style patches.
 
-    All spatial parameters mirror a simplified conv2d / unfold API (with zero padding
-    and dilation fixed to 1).
+    All spatial parameters mirror a simplified conv2d / unfold API (dilation fixed to 1).
     Each field can be either an int (applied to both dimensions) or a (height, width) tuple.
     """
 
@@ -221,6 +220,7 @@ class UnfoldConfiguration:
     W: int
     kernel_size: Union[int, Tuple[int, int]]
     stride: Union[int, Tuple[int, int]] = 1
+    padding: Union[int, Tuple[int, int]] = 0
 
     @staticmethod
     def _to_2d(v: Union[int, Tuple[int, int]]) -> Tuple[int, int]:
@@ -230,26 +230,28 @@ class UnfoldConfiguration:
             return v
         return v, v
 
-    def normalized(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+    def normalized(self) -> Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]:
         """
         Returns:
-            (kernel_size_2d, stride_2d), each as (H, W) tuples.
+            (kernel_size_2d, stride_2d, padding_2d), each as (H, W) tuples.
         """
         kH, kW = self._to_2d(self.kernel_size)
         sH, sW = self._to_2d(self.stride)
-        return (kH, kW), (sH, sW)
+        pH, pW = self._to_2d(self.padding)
+        return (kH, kW), (sH, sW), (pH, pW)
 
     def output_spatial_shape(self) -> Tuple[int, int]:
         """
         Compute the unfolded patch grid size (H_p, W_p) for an input of size (H, W).
+        Uses same formula as conv2d with dilation=1: (in + 2*pad - kernel) // stride + 1.
         """
-        (kH, kW), (sH, sW) = self.normalized()
+        (kH, kW), (sH, sW), (pH, pW) = self.normalized()
 
-        def _out_dim(in_size: int, kernel: int, stride: int) -> int:
-            return (in_size - (kernel - 1) - 1) // stride + 1
+        def _out_dim(in_size: int, kernel: int, stride: int, pad: int) -> int:
+            return (in_size + 2 * pad - kernel) // stride + 1
 
-        H_p = _out_dim(self.H, kH, sH)
-        W_p = _out_dim(self.W, kW, sW)
+        H_p = _out_dim(self.H, kH, sH, pH)
+        W_p = _out_dim(self.W, kW, sW, pW)
         return H_p, W_p
 
 
@@ -289,7 +291,11 @@ class ProjectionLUT(nn.Module):
         self.fold_config = fold_config
         self.n_outputs = n_outputs
 
-        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+        (kH, kW), (sH, sW), (pH, pW) = self.unfold_config.normalized()
+        if (pH, pW) != (0, 0):
+            raise ValueError(
+                f"ProjectionLUT requires unfold_config padding to be 0; got padding=({pH}, {pW})"
+            )
 
         # Compute patch grid size as in conv2d / unfold (zero padding, dilation=1)
         H_p, W_p = self.unfold_config.output_spatial_shape()
@@ -334,7 +340,7 @@ class ProjectionLUT(nn.Module):
         # Optional folding configuration: map per-patch outputs back to an
         # output spatial grid using scatter-add.
         if self.fold_config is not None:
-            (kH_f, kW_f), (sH_f, sW_f) = self.fold_config.normalized()
+            (kH_f, kW_f), (sH_f, sW_f), _ = self.fold_config.normalized()
             H_p_f, W_p_f = self.fold_config.output_spatial_shape()
             n_patches_f = H_p_f * W_p_f
             if n_patches_f != self.n_patches:
@@ -488,9 +494,8 @@ class Conv2DLut(nn.Module):
           * ``input_dim = patch_dim``
           * ``n_heads = n_heads`` (typically small, default 1)
           * ``n_outputs = out_channels // n_heads``
-        and no explicit ``anchor_candidates`` so anchors are sampled from
-        the range ``[0, patch_dim)`` by default.
       - In forward:
+          * unfold the input into patches
           * Reshapes patches to ``[B * n_patches, patch_dim]``.
           * Applies the internal ``MultiHeadLut`` to obtain
             ``[B * n_patches, n_heads, out_channels // n_heads]``.
@@ -521,9 +526,9 @@ class Conv2DLut(nn.Module):
         self.out_channels = out_channels
         self.n_heads = n_heads
 
-        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+        (kH, kW), (sH, sW), (pH, pW) = self.unfold_config.normalized()
 
-        # Compute patch grid size as in conv2d / unfold (zero padding, dilation=1).
+        # Compute patch grid size (supports padding).
         H_p, W_p = self.unfold_config.output_spatial_shape()
         if H_p <= 0 or W_p <= 0:
             raise ValueError(
@@ -579,41 +584,25 @@ class Conv2DLut(nn.Module):
                 f"({self.unfold_config.H}, {self.unfold_config.W})"
             )
 
-        (kH, kW), (sH, sW) = self.unfold_config.normalized()
+        (kH, kW), (sH, sW), (pH, pW) = self.unfold_config.normalized()
 
         # Unfold input into patches: [B, C * kH * kW, n_patches]
         patches = F.unfold(
             x,
             kernel_size=(kH, kW),
             dilation=1,
+            padding=(pH, pW),
             stride=(sH, sW),
         )  # [B, C * kH * kW, n_patches]
 
         # Rearrange to [B * n_patches, patch_dim]
         patches = patches.transpose(1, 2).contiguous()  # [B, n_patches, patch_dim]
-        if patches.shape[1] != self.n_patches or patches.shape[2] != self.patch_dim:
-            raise RuntimeError(
-                f"Unexpected unfolded shape {patches.shape}; expected "
-                f"[B, {self.n_patches}, {self.patch_dim}]"
-            )
         patches_flat = patches.view(B * self.n_patches, self.patch_dim)
 
         # Apply MultiHeadLut: [B * n_patches, n_heads, out_channels // n_heads]
         lut_out = self.lut(patches_flat)
-        if lut_out.dim() != 3 or lut_out.shape[0] != B * self.n_patches or lut_out.shape[1] != self.n_heads:
-            raise RuntimeError(
-                f"Unexpected MultiHeadLut output shape {lut_out.shape}; "
-                f"expected [B * n_patches={B * self.n_patches}, n_heads={self.n_heads}, -1]"
-            )
-
         BnP, n_heads, per_head_outputs = lut_out.shape
         total_outputs = n_heads * per_head_outputs
-        if total_outputs != self.out_channels:
-            raise RuntimeError(
-                f"Product n_heads * per_head_outputs ({total_outputs}) does not "
-                f"match configured out_channels={self.out_channels}"
-            )
-
         # [B * n_patches, n_heads, per_head_outputs] -> [B * n_patches, out_channels]
         lut_out_flat = lut_out.view(BnP, total_outputs)
 
