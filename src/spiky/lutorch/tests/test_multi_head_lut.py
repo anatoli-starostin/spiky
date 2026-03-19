@@ -1,4 +1,5 @@
 """Tests for MultiHeadLut module."""
+import warnings
 from contextlib import contextmanager
 
 import pytest
@@ -52,6 +53,11 @@ def test_multi_head_lut_simple(device):
     ).eval()
 
     if not _HAS_SPIKY_CUDA:
+        warnings.warn(
+            "spiky_cuda (required by LUTLayer baseline) is not available; "
+            "running MultiHeadLut simple test as a finite-output smoke test only.",
+            UserWarning, stacklevel=2,
+        )
         with torch.no_grad():
             out = mhl(x)
         assert out.shape == (B, 1, n_out)
@@ -95,6 +101,11 @@ def test_multi_head_lut_training(device):
     ).train()
 
     if not _HAS_SPIKY_CUDA:
+        warnings.warn(
+            "spiky_cuda (required by LUTLayer baseline) is not available; "
+            "running MultiHeadLut training test as a finite-loss smoke test only.",
+            UserWarning, stacklevel=2,
+        )
         opt = torch.optim.SGD(mhl.parameters(), lr=0.01)
         for i in range(min(n_iter, 50)):
             x = torch.randn(B, n_inputs, device=device)
