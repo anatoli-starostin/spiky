@@ -889,72 +889,70 @@ static __device__ __forceinline__ scalar_t conv2d_read(
     return x_ptr[b * (C * H * W) + c * (H * W) + h_in * W + w_in];
 }
 
+// Decoded-coordinate variant: (c, kr, kc) pre-decoded, no integer division.
 template <typename scalar_t>
-static __device__ __forceinline__ scalar_t conv2d_delta(
+static __device__ __forceinline__ scalar_t conv2d_delta_decoded(
     const scalar_t* x_ptr,
     int64_t b,
     int64_t h_out, int64_t w_out,
-    int64_t anchor_flat_a, int64_t anchor_flat_b,
+    int64_t c_a, int64_t kr_a, int64_t kc_a,
+    int64_t c_b, int64_t kr_b, int64_t kc_b,
     int64_t C, int64_t H, int64_t W,
-    int64_t kH, int64_t kW,
     int64_t sH, int64_t sW,
     int64_t pH, int64_t pW
 ) {
-    int64_t kHkW = kH * kW;
-    int64_t c_a  = anchor_flat_a / kHkW;
-    int64_t kr_a = (anchor_flat_a % kHkW) / kW;
-    int64_t kc_a = anchor_flat_a % kW;
-    int64_t h_a  = h_out * sH + kr_a - pH;
-    int64_t w_a  = w_out * sW + kc_a - pW;
-
-    int64_t c_b  = anchor_flat_b / kHkW;
-    int64_t kr_b = (anchor_flat_b % kHkW) / kW;
-    int64_t kc_b = anchor_flat_b % kW;
-    int64_t h_b  = h_out * sH + kr_b - pH;
-    int64_t w_b  = w_out * sW + kc_b - pW;
-
+    int64_t h_a = h_out * sH + kr_a - pH;
+    int64_t w_a = w_out * sW + kc_a - pW;
+    int64_t h_b = h_out * sH + kr_b - pH;
+    int64_t w_b = w_out * sW + kc_b - pW;
     scalar_t va = conv2d_read(x_ptr, b, c_a, h_a, w_a, C, H, W);
     scalar_t vb = conv2d_read(x_ptr, b, c_b, h_b, w_b, C, H, W);
     return va - vb;
 }
 
 template <typename scalar_t>
+// Forward kernel with pre-decoded anchor coordinates — no integer division in hot loop.
+// anchor_pairs_a/b_c/kr/kc: [n_tables, n_anchor_pairs] int32 decoded coords.
 __global__ void conv2d_anchor_pairs_lookup_forward_na3_kernel(
-    const scalar_t* x_ptr,        // [B, C, H, W] contiguous
+    const scalar_t* x_ptr,          // [B, C, H, W] contiguous
     int64_t B, int64_t C, int64_t H, int64_t W,
     int64_t H_out, int64_t W_out,
-    int64_t kH, int64_t kW,
     int64_t sH, int64_t sW,
     int64_t pH, int64_t pW,
-    const int64_t* anchor_pairs_a_ptr,  // [n_tables, n_anchor_pairs]
+    const int32_t* anc_a_c_ptr,    // [n_tables, nap] channel of anchor_a
+    const int32_t* anc_a_kr_ptr,   // [n_tables, nap] kernel-row of anchor_a
+    const int32_t* anc_a_kc_ptr,   // [n_tables, nap] kernel-col of anchor_a
+    const int32_t* anc_b_c_ptr,
+    const int32_t* anc_b_kr_ptr,
+    const int32_t* anc_b_kc_ptr,
+    const int64_t* anchor_pairs_a_ptr,  // [n_tables, nap] flat (saved for anchor ids output)
     const int64_t* anchor_pairs_b_ptr,
     int64_t n_tables,
     int64_t n_anchor_pairs,
     scalar_t cmp_eps,
     int64_t* lookup_indices_ptr,        // [B*H_out*W_out, n_tables]
     int64_t* lookup_alt_indices_ptr,    // [B*H_out*W_out*n_tables*3]
-    scalar_t* lookup_alt_deltas_ptr,    // [B*H_out*W_out*n_tables*3]
-    int64_t* anchor1_ids_ptr,           // [B*H_out*W_out*n_tables*3]
+    scalar_t* lookup_alt_deltas_ptr,
+    int64_t* anchor1_ids_ptr,
     int64_t* anchor2_ids_ptr
 ) {
-    // One thread per (spatial_pos, table) = (b*H_out*W_out + h_out*W_out + w_out, t)
-    // Flatten as: linear_tid = b*H_out*W_out*n_tables + h_out*W_out*n_tables + w_out*n_tables + t
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t total = B * H_out * W_out * n_tables;
     if (linear_tid >= total) return;
 
-    // Decode: linear_tid = (b * H_out * W_out + h_out * W_out + w_out) * n_tables + t
-    int64_t t           = linear_tid % n_tables;
-    int64_t spatial     = linear_tid / n_tables;
-    int64_t w_out       = spatial % W_out;
-    int64_t hw          = spatial / W_out;
-    int64_t h_out       = hw % H_out;
-    int64_t b           = hw / H_out;
+    int64_t t       = linear_tid % n_tables;
+    int64_t spatial = linear_tid / n_tables;
+    int64_t w_out   = spatial % W_out;
+    int64_t hw      = spatial / W_out;
+    int64_t h_out   = hw % H_out;
+    int64_t b       = hw / H_out;
+
+    // Precompute base input row/col offsets for this spatial position (no per-pair division)
+    int64_t h_base = h_out * sH - pH;
+    int64_t w_base = w_out * sW - pW;
 
     int64_t table_offset = t * n_anchor_pairs;
-
-    // Patch index: b*H_out*W_out + h_out*W_out + w_out
-    int64_t patch_idx = b * H_out * W_out + h_out * W_out + w_out;
+    int64_t patch_idx    = b * H_out * W_out + h_out * W_out + w_out;
 
     int64_t lookup_idx = 0;
     scalar_t big = static_cast<scalar_t>(1e30);
@@ -966,31 +964,40 @@ __global__ void conv2d_anchor_pairs_lookup_forward_na3_kernel(
     int64_t min1_bit = 0, min2_bit = 0, min3_bit = 0;
 
     for (int64_t p = 0; p < n_anchor_pairs; ++p) {
-        int64_t anc_a = anchor_pairs_a_ptr[table_offset + p];
-        int64_t anc_b = anchor_pairs_b_ptr[table_offset + p];
-        scalar_t delta = conv2d_delta(x_ptr, b, h_out, w_out,
-                                       anc_a, anc_b, C, H, W, kH, kW, sH, sW, pH, pW);
+        int64_t off = table_offset + p;
+        // Load pre-decoded coordinates — no integer division
+        int64_t c_a  = anc_a_c_ptr[off];
+        int64_t h_a  = h_base + anc_a_kr_ptr[off];
+        int64_t w_a  = w_base + anc_a_kc_ptr[off];
+        int64_t c_b  = anc_b_c_ptr[off];
+        int64_t h_b  = h_base + anc_b_kr_ptr[off];
+        int64_t w_b  = w_base + anc_b_kc_ptr[off];
+
+        scalar_t va = conv2d_read(x_ptr, b, c_a, h_a, w_a, C, H, W);
+        scalar_t vb = conv2d_read(x_ptr, b, c_b, h_b, w_b, C, H, W);
+        scalar_t delta = va - vb;
+
         if (delta > cmp_eps) {
             lookup_idx |= (static_cast<int64_t>(1) << p);
         }
         scalar_t abs_d = lutorch_abs(delta);
+        int64_t anc_a_flat = anchor_pairs_a_ptr[off];
+        int64_t anc_b_flat = anchor_pairs_b_ptr[off];
         if (abs_d < min1_abs) {
             min3_abs = min2_abs; min3_d = min2_d; min3_a = min2_a; min3_b_ = min2_b_; min3_bit = min2_bit;
             min2_abs = min1_abs; min2_d = min1_d; min2_a = min1_a; min2_b_ = min1_b_; min2_bit = min1_bit;
-            min1_abs = abs_d; min1_d = delta; min1_a = anc_a; min1_b_ = anc_b; min1_bit = p;
+            min1_abs = abs_d; min1_d = delta; min1_a = anc_a_flat; min1_b_ = anc_b_flat; min1_bit = p;
         } else if (abs_d < min2_abs) {
             min3_abs = min2_abs; min3_d = min2_d; min3_a = min2_a; min3_b_ = min2_b_; min3_bit = min2_bit;
-            min2_abs = abs_d; min2_d = delta; min2_a = anc_a; min2_b_ = anc_b; min2_bit = p;
+            min2_abs = abs_d; min2_d = delta; min2_a = anc_a_flat; min2_b_ = anc_b_flat; min2_bit = p;
         } else if (abs_d < min3_abs) {
-            min3_abs = abs_d; min3_d = delta; min3_a = anc_a; min3_b_ = anc_b; min3_bit = p;
+            min3_abs = abs_d; min3_d = delta; min3_a = anc_a_flat; min3_b_ = anc_b_flat; min3_bit = p;
         }
     }
 
-    // lookup_indices: [B*H_out*W_out, n_tables] -> index = patch_idx * n_tables + t
     int64_t out_main = patch_idx * n_tables + t;
     lookup_indices_ptr[out_main] = lookup_idx;
 
-    // alt/anchor arrays: [B*H_out*W_out*n_tables*3] -> base = out_main * 3
     int64_t base3 = out_main * 3;
     lookup_alt_indices_ptr[base3 + 0] = lookup_idx ^ (static_cast<int64_t>(1) << min1_bit);
     lookup_alt_indices_ptr[base3 + 1] = lookup_idx ^ (static_cast<int64_t>(1) << min2_bit);
@@ -2027,11 +2034,16 @@ public:
 
     py::tuple
     conv2d_anchor_pairs_lookup_na3_forward(
-        const torch::Tensor& x,           // [B, C, H, W] float32 contiguous
-        const torch::Tensor& anchors_a,   // [n_tables, nap] int64
-        const torch::Tensor& anchors_b,   // [n_tables, nap] int64
+        const torch::Tensor& x,            // [B, C, H, W] float32 contiguous
+        const torch::Tensor& anchors_a,    // [n_tables, nap] int64 flat
+        const torch::Tensor& anchors_b,    // [n_tables, nap] int64 flat
+        const torch::Tensor& anc_a_c,     // [n_tables, nap] int32 decoded channel
+        const torch::Tensor& anc_a_kr,    // [n_tables, nap] int32 decoded kernel-row
+        const torch::Tensor& anc_a_kc,    // [n_tables, nap] int32 decoded kernel-col
+        const torch::Tensor& anc_b_c,
+        const torch::Tensor& anc_b_kr,
+        const torch::Tensor& anc_b_kc,
         int64_t H_out, int64_t W_out,
-        int64_t kH, int64_t kW,
         int64_t sH, int64_t sW,
         int64_t pH, int64_t pW,
         double cmp_eps
@@ -2060,8 +2072,8 @@ public:
         if (n_anchor_pairs < 3)
             throw py::value_error("conv2d_na3 requires n_anchor_pairs >= 3");
 
-        int64_t n_patches = B * H_out * W_out;
-        int64_t n_total_bt = n_patches * n_tables;  // B*H_out*W_out*n_tables
+        int64_t n_patches  = B * H_out * W_out;
+        int64_t n_total_bt = n_patches * n_tables;
 
         auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
         auto opts_x   = torch::TensorOptions().dtype(x.dtype()).device(x.device());
@@ -2074,14 +2086,20 @@ public:
 
         int dev = x.device().index();
         c10::cuda::CUDAGuard guard(dev);
-        int64_t total = n_total_bt;  // one thread per (patch, table)
+        int64_t total = n_total_bt;
         int threads = 256;
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "conv2d_anchor_pairs_lookup_forward_na3_kernel", [&] {
             conv2d_anchor_pairs_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
-                B, C, H, W, H_out, W_out, kH, kW, sH, sW, pH, pW,
+                B, C, H, W, H_out, W_out, sH, sW, pH, pW,
+                reinterpret_cast<const int32_t*>(anc_a_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(anc_a_kr.data_ptr()),
+                reinterpret_cast<const int32_t*>(anc_a_kc.data_ptr()),
+                reinterpret_cast<const int32_t*>(anc_b_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(anc_b_kr.data_ptr()),
+                reinterpret_cast<const int32_t*>(anc_b_kc.data_ptr()),
                 reinterpret_cast<const int64_t*>(anchors_a.data_ptr()),
                 reinterpret_cast<const int64_t*>(anchors_b.data_ptr()),
                 n_tables, n_anchor_pairs,
@@ -2920,10 +2938,14 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("x"),
             py::arg("anchors_a"),
             py::arg("anchors_b"),
+            py::arg("anc_a_c"),
+            py::arg("anc_a_kr"),
+            py::arg("anc_a_kc"),
+            py::arg("anc_b_c"),
+            py::arg("anc_b_kr"),
+            py::arg("anc_b_kc"),
             py::arg("H_out"),
             py::arg("W_out"),
-            py::arg("kH"),
-            py::arg("kW"),
             py::arg("sH"),
             py::arg("sW"),
             py::arg("pH"),

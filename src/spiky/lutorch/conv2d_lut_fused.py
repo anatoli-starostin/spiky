@@ -61,14 +61,17 @@ class Conv2DAnchorPairsLookupFunctionNa3(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, anchors_a, anchors_b,
+                anc_a_c, anc_a_kr, anc_a_kc,
+                anc_b_c, anc_b_kr, anc_b_kc,
                 B, C, H, W, H_out, W_out,
                 kH, kW, sH, sW, pH, pW,
                 cmp_eps, inv_l1):
         """
         Args:
             x:         [B, C, H, W] float32, contiguous, CUDA
-            anchors_a: [n_tables, nap] int64
-            anchors_b: [n_tables, nap] int64
+            anchors_a: [n_tables, nap] int64 flat
+            anchors_b: [n_tables, nap] int64 flat
+            anc_a_c/kr/kc: [n_tables, nap] int32 decoded coords (no div in kernel)
         """
         native = _get_native_lutorch_manager()
         (
@@ -79,8 +82,10 @@ class Conv2DAnchorPairsLookupFunctionNa3(torch.autograd.Function):
             anchor2_ids,
         ) = native.conv2d_anchor_pairs_lookup_na3_forward(
             x, anchors_a, anchors_b,
+            anc_a_c, anc_a_kr, anc_a_kc,
+            anc_b_c, anc_b_kr, anc_b_kc,
             H_out, W_out,
-            kH, kW, sH, sW, pH, pW,
+            sH, sW, pH, pW,
             float(cmp_eps),
         )
 
@@ -137,15 +142,19 @@ class Conv2DAnchorPairsLookupFunctionNa3(torch.autograd.Function):
             ctx.inv_l1,
         )
 
-        # 17 inputs to forward → 17 gradients (None for non-tensor/int args)
+        # 22 inputs to forward → 22 gradients (None for non-tensor/int args)
         return (
             grad_input,  # x
             None,        # anchors_a
             None,        # anchors_b
-            None, None, None, None, None, None,  # B,C,H,W,H_out,W_out
-            None, None, None, None, None, None,  # kH,kW,sH,sW,pH,pW
-            None,        # cmp_eps
-            None,        # inv_l1
+            None, None, None,        # anc_a_c, anc_a_kr, anc_a_kc
+            None, None, None,        # anc_b_c, anc_b_kr, anc_b_kc
+            None, None, None, None,  # B, C, H, W
+            None, None,              # H_out, W_out
+            None, None,              # kH, kW
+            None, None, None, None,  # sH, sW, pH, pW
+            None,                    # cmp_eps
+            None,                    # inv_l1
         )
 
 
@@ -253,6 +262,22 @@ class Conv2DLutFused(nn.Module):
         self.register_buffer("anchor_pairs_a", anchor_pairs_a.contiguous())
         self.register_buffer("anchor_pairs_b", anchor_pairs_b.contiguous())
 
+        # Precompute decoded (c, kr, kc) for each anchor — avoids integer division in CUDA kernel.
+        kHkW = kH * kW
+        def _decode(flat):  # flat: [n_tables, nap] int64
+            c  = (flat // kHkW).to(torch.int32)
+            kr = ((flat % kHkW) // kW).to(torch.int32)
+            kc = (flat % kW).to(torch.int32)
+            return c.contiguous(), kr.contiguous(), kc.contiguous()
+        a_c, a_kr, a_kc = _decode(anchor_pairs_a)
+        b_c, b_kr, b_kc = _decode(anchor_pairs_b)
+        self.register_buffer("anc_a_c",  a_c)
+        self.register_buffer("anc_a_kr", a_kr)
+        self.register_buffer("anc_a_kc", a_kc)
+        self.register_buffer("anc_b_c",  b_c)
+        self.register_buffer("anc_b_kr", b_kr)
+        self.register_buffer("anc_b_kc", b_kc)
+
         # LProjection handles weight lookup and weight gradients.
         self.projection = LProjection(
             n_lookup_tables=n_lookup_tables,
@@ -328,6 +353,8 @@ class Conv2DLutFused(nn.Module):
                 x_c,
                 self.anchor_pairs_a,
                 self.anchor_pairs_b,
+                self.anc_a_c, self.anc_a_kr, self.anc_a_kc,
+                self.anc_b_c, self.anc_b_kr, self.anc_b_kc,
                 B, C, H, W,
                 self.H_p, self.W_p,
                 self.kH, self.kW,
@@ -349,8 +376,9 @@ class Conv2DLutFused(nn.Module):
                 x_c,
                 self.anchor_pairs_a,
                 self.anchor_pairs_b,
+                self.anc_a_c, self.anc_a_kr, self.anc_a_kc,
+                self.anc_b_c, self.anc_b_kr, self.anc_b_kc,
                 self.H_p, self.W_p,
-                self.kH, self.kW,
                 self.sH, self.sW,
                 self.pH, self.pW,
                 float(self.cmp_eps),
