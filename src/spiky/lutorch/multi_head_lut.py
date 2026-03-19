@@ -53,7 +53,9 @@ class MultiHeadLut(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
-        initial_weights_noise: float = 0.001
+        initial_weights_noise: float = 0.001,
+        table_dropout: float = 0.0,
+        dropout: float = 0.0,
     ):
         super().__init__()
         
@@ -66,7 +68,9 @@ class MultiHeadLut(nn.Module):
         self.n_alternatives = n_alternatives
         self.smooth_mode = smooth_mode
         self.uncertainty_mode = uncertainty_mode
-        
+        self.table_dropout = table_dropout
+        self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
+
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
         
@@ -195,6 +199,15 @@ class MultiHeadLut(nn.Module):
         # Reshape and sum: [B, n_lookup_tables, n_outputs] -> [B, n_heads, tables_per_head, n_outputs] -> [B, n_heads, n_outputs]
         # output: [B, n_heads * tables_per_head, n_outputs]
         output = output.view(-1, self.n_heads, self.tables_per_head, self.n_outputs)
+        # Apply table dropout: randomly zero entire tables during training
+        if self.training and self.table_dropout > 0.0:
+            mask = torch.bernoulli(
+                torch.full((output.shape[0], self.n_heads, self.tables_per_head, 1),
+                           1.0 - self.table_dropout, device=output.device)
+            )
+            output = output * mask / (1.0 - self.table_dropout)
+        if self.dropout is not None:
+            output = self.dropout(output)
         # Sum over tables_per_head dimension
         output = output.sum(dim=2)  # [B, n_heads, n_outputs]
         
