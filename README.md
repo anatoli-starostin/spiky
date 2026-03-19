@@ -14,7 +14,7 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
 ## Documentation
 
 - **`doc/lutorch/`** — LUTorch (LUT-based, PyTorch-compatible layers and training).
-- **`doc/spiky/`** — Spiky engine (SpNet, synapse growth, deprecated old LUT implemenation).
+- **`doc/spiky/`** — Spiky engine (SpNet, synapse growth, deprecated old LUT implementation).
 
 ## Requirements
 
@@ -53,25 +53,32 @@ An experimental CUDA-enabled, PyTorch-compatible Python library inspired by the 
 
 ## Running Tests
 
-Run the test suites with different seeds:
+**LUTorch tests** use [pytest](https://docs.pytest.org/). Install it once into your virtual environment:
 
-1. **SpNet tests:**
-   ```bash
-   cd src/spiky/spnet/tests/
-   python run_tests_with_different_seeds.py
-   ```
+```bash
+pip install pytest
+```
 
-2. **LUT tests:**
-   ```bash
-   cd ../../lut/tests/
-   python run_tests_with_different_seeds.py
-   ```
+```bash
+# All tests (CPU + CUDA)
+.venv/bin/python -m pytest src/spiky/lutorch/tests/ -v
 
-3. **LUTorch tests:**
-   ```bash
-   cd ../../lutorch/tests/
-   python run_tests_with_different_seeds.py
-   ```
+# CPU only (fast, ~40 s)
+.venv/bin/python -m pytest src/spiky/lutorch/tests/ -v -k cpu
+
+# Single file
+.venv/bin/python -m pytest src/spiky/lutorch/tests/test_lut_attention.py -v
+```
+
+**SpNet / LUT tests** use their own runner scripts:
+
+```bash
+# SpNet
+cd src/spiky/spnet/tests/ && python run_tests_with_different_seeds.py
+
+# LUT
+cd src/spiky/lut/tests/ && python run_tests_with_different_seeds.py
+```
 
 ## Jupyter Notebooks
 
