@@ -865,6 +865,223 @@ __global__ void lprojection_backward_smooth_weights_kernel(
         atomicAdd(weights_grad_ptr + widx_alt, g_alt);
     }
 }
+
+// ============================================================
+// Conv2D fused kernels (na3 only)
+// Reads directly from 4D input [B, C, H, W] — no F.unfold intermediate.
+// anchor_flat ∈ [0, C*kH*kW) encodes (c, kr, kc):
+//   c  = anchor_flat / (kH*kW)
+//   kr = (anchor_flat % (kH*kW)) / kW
+//   kc = anchor_flat % kW
+// Spatial: h_in = h_out*sH + kr - pH,  w_in = w_out*sW + kc - pW
+// ============================================================
+
+template <typename scalar_t>
+static __device__ __forceinline__ scalar_t conv2d_read(
+    const scalar_t* x_ptr,
+    int64_t b,
+    int64_t c, int64_t h_in, int64_t w_in,
+    int64_t C, int64_t H, int64_t W
+) {
+    if (h_in < 0 || h_in >= H || w_in < 0 || w_in >= W) {
+        return static_cast<scalar_t>(0);
+    }
+    return x_ptr[b * (C * H * W) + c * (H * W) + h_in * W + w_in];
+}
+
+template <typename scalar_t>
+static __device__ __forceinline__ scalar_t conv2d_delta(
+    const scalar_t* x_ptr,
+    int64_t b,
+    int64_t h_out, int64_t w_out,
+    int64_t anchor_flat_a, int64_t anchor_flat_b,
+    int64_t C, int64_t H, int64_t W,
+    int64_t kH, int64_t kW,
+    int64_t sH, int64_t sW,
+    int64_t pH, int64_t pW
+) {
+    int64_t kHkW = kH * kW;
+    int64_t c_a  = anchor_flat_a / kHkW;
+    int64_t kr_a = (anchor_flat_a % kHkW) / kW;
+    int64_t kc_a = anchor_flat_a % kW;
+    int64_t h_a  = h_out * sH + kr_a - pH;
+    int64_t w_a  = w_out * sW + kc_a - pW;
+
+    int64_t c_b  = anchor_flat_b / kHkW;
+    int64_t kr_b = (anchor_flat_b % kHkW) / kW;
+    int64_t kc_b = anchor_flat_b % kW;
+    int64_t h_b  = h_out * sH + kr_b - pH;
+    int64_t w_b  = w_out * sW + kc_b - pW;
+
+    scalar_t va = conv2d_read(x_ptr, b, c_a, h_a, w_a, C, H, W);
+    scalar_t vb = conv2d_read(x_ptr, b, c_b, h_b, w_b, C, H, W);
+    return va - vb;
+}
+
+template <typename scalar_t>
+__global__ void conv2d_anchor_pairs_lookup_forward_na3_kernel(
+    const scalar_t* x_ptr,        // [B, C, H, W] contiguous
+    int64_t B, int64_t C, int64_t H, int64_t W,
+    int64_t H_out, int64_t W_out,
+    int64_t kH, int64_t kW,
+    int64_t sH, int64_t sW,
+    int64_t pH, int64_t pW,
+    const int64_t* anchor_pairs_a_ptr,  // [n_tables, n_anchor_pairs]
+    const int64_t* anchor_pairs_b_ptr,
+    int64_t n_tables,
+    int64_t n_anchor_pairs,
+    scalar_t cmp_eps,
+    int64_t* lookup_indices_ptr,        // [B*H_out*W_out, n_tables]
+    int64_t* lookup_alt_indices_ptr,    // [B*H_out*W_out*n_tables*3]
+    scalar_t* lookup_alt_deltas_ptr,    // [B*H_out*W_out*n_tables*3]
+    int64_t* anchor1_ids_ptr,           // [B*H_out*W_out*n_tables*3]
+    int64_t* anchor2_ids_ptr
+) {
+    // One thread per (spatial_pos, table) = (b*H_out*W_out + h_out*W_out + w_out, t)
+    // Flatten as: linear_tid = b*H_out*W_out*n_tables + h_out*W_out*n_tables + w_out*n_tables + t
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = B * H_out * W_out * n_tables;
+    if (linear_tid >= total) return;
+
+    // Decode: linear_tid = (b * H_out * W_out + h_out * W_out + w_out) * n_tables + t
+    int64_t t           = linear_tid % n_tables;
+    int64_t spatial     = linear_tid / n_tables;
+    int64_t w_out       = spatial % W_out;
+    int64_t hw          = spatial / W_out;
+    int64_t h_out       = hw % H_out;
+    int64_t b           = hw / H_out;
+
+    int64_t table_offset = t * n_anchor_pairs;
+
+    // Patch index: b*H_out*W_out + h_out*W_out + w_out
+    int64_t patch_idx = b * H_out * W_out + h_out * W_out + w_out;
+
+    int64_t lookup_idx = 0;
+    scalar_t big = static_cast<scalar_t>(1e30);
+    scalar_t min1_abs = big, min2_abs = big, min3_abs = big;
+    scalar_t min1_d = 0, min2_d = 0, min3_d = 0;
+    int64_t min1_a = 0, min1_b_ = 0;
+    int64_t min2_a = 0, min2_b_ = 0;
+    int64_t min3_a = 0, min3_b_ = 0;
+    int64_t min1_bit = 0, min2_bit = 0, min3_bit = 0;
+
+    for (int64_t p = 0; p < n_anchor_pairs; ++p) {
+        int64_t anc_a = anchor_pairs_a_ptr[table_offset + p];
+        int64_t anc_b = anchor_pairs_b_ptr[table_offset + p];
+        scalar_t delta = conv2d_delta(x_ptr, b, h_out, w_out,
+                                       anc_a, anc_b, C, H, W, kH, kW, sH, sW, pH, pW);
+        if (delta > cmp_eps) {
+            lookup_idx |= (static_cast<int64_t>(1) << p);
+        }
+        scalar_t abs_d = lutorch_abs(delta);
+        if (abs_d < min1_abs) {
+            min3_abs = min2_abs; min3_d = min2_d; min3_a = min2_a; min3_b_ = min2_b_; min3_bit = min2_bit;
+            min2_abs = min1_abs; min2_d = min1_d; min2_a = min1_a; min2_b_ = min1_b_; min2_bit = min1_bit;
+            min1_abs = abs_d; min1_d = delta; min1_a = anc_a; min1_b_ = anc_b; min1_bit = p;
+        } else if (abs_d < min2_abs) {
+            min3_abs = min2_abs; min3_d = min2_d; min3_a = min2_a; min3_b_ = min2_b_; min3_bit = min2_bit;
+            min2_abs = abs_d; min2_d = delta; min2_a = anc_a; min2_b_ = anc_b; min2_bit = p;
+        } else if (abs_d < min3_abs) {
+            min3_abs = abs_d; min3_d = delta; min3_a = anc_a; min3_b_ = anc_b; min3_bit = p;
+        }
+    }
+
+    // lookup_indices: [B*H_out*W_out, n_tables] -> index = patch_idx * n_tables + t
+    int64_t out_main = patch_idx * n_tables + t;
+    lookup_indices_ptr[out_main] = lookup_idx;
+
+    // alt/anchor arrays: [B*H_out*W_out*n_tables*3] -> base = out_main * 3
+    int64_t base3 = out_main * 3;
+    lookup_alt_indices_ptr[base3 + 0] = lookup_idx ^ (static_cast<int64_t>(1) << min1_bit);
+    lookup_alt_indices_ptr[base3 + 1] = lookup_idx ^ (static_cast<int64_t>(1) << min2_bit);
+    lookup_alt_indices_ptr[base3 + 2] = lookup_idx ^ (static_cast<int64_t>(1) << min3_bit);
+    lookup_alt_deltas_ptr[base3 + 0]  = min1_d;
+    lookup_alt_deltas_ptr[base3 + 1]  = min2_d;
+    lookup_alt_deltas_ptr[base3 + 2]  = min3_d;
+    if (anchor1_ids_ptr != nullptr) {
+        anchor1_ids_ptr[base3 + 0] = min1_a;  anchor2_ids_ptr[base3 + 0] = min1_b_;
+        anchor1_ids_ptr[base3 + 1] = min2_a;  anchor2_ids_ptr[base3 + 1] = min2_b_;
+        anchor1_ids_ptr[base3 + 2] = min3_a;  anchor2_ids_ptr[base3 + 2] = min3_b_;
+    }
+}
+
+template <typename scalar_t>
+__global__ void conv2d_anchor_pairs_lookup_backward_na3_kernel(
+    int64_t total,               // B*H_out*W_out*n_tables*3
+    const int64_t* anchor1_ids_ptr,
+    const int64_t* anchor2_ids_ptr,
+    const scalar_t* lookup_alt_deltas_ptr,
+    const scalar_t* grad_main_ptr,    // [B*H_out*W_out, n_tables] contiguous
+    const scalar_t* grad_alt_ptr,     // [B*H_out*W_out*n_tables*3]
+    int64_t B, int64_t C, int64_t H, int64_t W,
+    int64_t H_out, int64_t W_out,
+    int64_t kH, int64_t kW,
+    int64_t sH, int64_t sW,
+    int64_t pH, int64_t pW,
+    int64_t n_tables,
+    bool inv_l1,
+    scalar_t* grad_input_ptr   // [B, C, H, W] zero-initialised
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear_tid >= total) return;
+
+    // Decode: linear_tid = patch_idx * n_tables * 3 + t * 3 + alt_idx
+    int64_t alt_idx  = linear_tid % 3;
+    int64_t pt       = linear_tid / 3;       // patch_idx * n_tables + t
+    int64_t t        = pt % n_tables;
+    int64_t patch    = pt / n_tables;        // b * H_out * W_out + h_out * W_out + w_out
+    int64_t w_out    = patch % W_out;
+    int64_t hw       = patch / W_out;
+    int64_t h_out    = hw % H_out;
+    int64_t b        = hw / H_out;
+
+    scalar_t delta = lookup_alt_deltas_ptr[linear_tid];
+    scalar_t minus_uncertainty_derivative;
+    if (inv_l1) {
+        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
+        minus_uncertainty_derivative =
+            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
+    } else {
+        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
+        minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
+    }
+
+    // grad_main has shape [B*H_out*W_out, n_tables] with strides (n_tables, 1)
+    int64_t patch_t  = patch * n_tables + t;
+    scalar_t gm      = grad_main_ptr[patch_t];
+    scalar_t ga      = grad_alt_ptr[linear_tid];
+    scalar_t du      = (gm - ga) * minus_uncertainty_derivative / static_cast<scalar_t>(3.0);
+
+    // Decode anchor flat index to 4D coordinates and atomicAdd
+    int64_t kHkW = kH * kW;
+
+    // anchor1
+    {
+        int64_t af  = anchor1_ids_ptr[linear_tid];
+        int64_t c   = af / kHkW;
+        int64_t kr  = (af % kHkW) / kW;
+        int64_t kc  = af % kW;
+        int64_t hi  = h_out * sH + kr - pH;
+        int64_t wi  = w_out * sW + kc - pW;
+        if (hi >= 0 && hi < H && wi >= 0 && wi < W) {
+            int64_t idx = b * (C * H * W) + c * (H * W) + hi * W + wi;
+            atomicAdd(grad_input_ptr + idx, du);
+        }
+    }
+    // anchor2
+    {
+        int64_t af  = anchor2_ids_ptr[linear_tid];
+        int64_t c   = af / kHkW;
+        int64_t kr  = (af % kHkW) / kW;
+        int64_t kc  = af % kW;
+        int64_t hi  = h_out * sH + kr - pH;
+        int64_t wi  = w_out * sW + kc - pW;
+        if (hi >= 0 && hi < H && wi >= 0 && wi < W) {
+            int64_t idx = b * (C * H * W) + c * (H * W) + hi * W + wi;
+            atomicAdd(grad_input_ptr + idx, -du);
+        }
+    }
+}
 #endif
 
 class SPIKY_HIDDEN LUTorchManager {
@@ -1804,6 +2021,150 @@ public:
         return x_grad_flat;
     }
 
+    // ============================================================
+    // Conv2D fused methods (na3 only)
+    // ============================================================
+
+    py::tuple
+    conv2d_anchor_pairs_lookup_na3_forward(
+        const torch::Tensor& x,           // [B, C, H, W] float32 contiguous
+        const torch::Tensor& anchors_a,   // [n_tables, nap] int64
+        const torch::Tensor& anchors_b,   // [n_tables, nap] int64
+        int64_t H_out, int64_t W_out,
+        int64_t kH, int64_t kW,
+        int64_t sH, int64_t sW,
+        int64_t pH, int64_t pW,
+        double cmp_eps
+    ) {
+        if (x.dim() != 4) throw py::value_error("x must be 4D [B, C, H, W]");
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
+        if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
+        if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
+        if (anchors_a.dim() != 2 || anchors_b.dim() != 2)
+            throw py::value_error("anchors_a/b must be 2D [n_tables, nap]");
+        if (anchors_a.sizes() != anchors_b.sizes())
+            throw py::value_error("anchors_a and anchors_b must have the same shape");
+        if (anchors_a.dtype() != torch::kInt64 || anchors_b.dtype() != torch::kInt64)
+            throw py::value_error("anchors_a/b must be int64");
+        if (!anchors_a.is_contiguous() || !anchors_b.is_contiguous())
+            throw py::value_error("anchors_a/b must be contiguous");
+        if (anchors_a.device() != x.device() || anchors_b.device() != x.device())
+            throw py::value_error("All tensors must be on the same CUDA device");
+
+        const int64_t B  = x.size(0);
+        const int64_t C  = x.size(1);
+        const int64_t H  = x.size(2);
+        const int64_t W  = x.size(3);
+        const int64_t n_tables     = anchors_a.size(0);
+        const int64_t n_anchor_pairs = anchors_a.size(1);
+        if (n_anchor_pairs < 3)
+            throw py::value_error("conv2d_na3 requires n_anchor_pairs >= 3");
+
+        int64_t n_patches = B * H_out * W_out;
+        int64_t n_total_bt = n_patches * n_tables;  // B*H_out*W_out*n_tables
+
+        auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
+        auto opts_x   = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+
+        torch::Tensor lookup_indices     = torch::empty({n_patches, n_tables}, opts_i64);
+        torch::Tensor lookup_alt_indices = torch::empty({n_total_bt * 3}, opts_i64);
+        torch::Tensor lookup_alt_deltas  = torch::empty({n_total_bt * 3}, opts_x);
+        torch::Tensor anchor1_ids        = torch::empty({n_total_bt * 3}, opts_i64);
+        torch::Tensor anchor2_ids        = torch::empty({n_total_bt * 3}, opts_i64);
+
+        int dev = x.device().index();
+        c10::cuda::CUDAGuard guard(dev);
+        int64_t total = n_total_bt;  // one thread per (patch, table)
+        int threads = 256;
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "conv2d_anchor_pairs_lookup_forward_na3_kernel", [&] {
+            conv2d_anchor_pairs_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                B, C, H, W, H_out, W_out, kH, kW, sH, sW, pH, pW,
+                reinterpret_cast<const int64_t*>(anchors_a.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchors_b.data_ptr()),
+                n_tables, n_anchor_pairs,
+                static_cast<scalar_t>(cmp_eps),
+                reinterpret_cast<int64_t*>(lookup_indices.data_ptr()),
+                reinterpret_cast<int64_t*>(lookup_alt_indices.data_ptr()),
+                reinterpret_cast<scalar_t*>(lookup_alt_deltas.data_ptr()),
+                reinterpret_cast<int64_t*>(anchor1_ids.data_ptr()),
+                reinterpret_cast<int64_t*>(anchor2_ids.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        // Reshape to match LProjection expectations:
+        //   lookup_indices:     [B*H_out*W_out, n_tables]
+        //   lookup_alt_indices: [B*H_out*W_out, n_tables, 3]
+        //   lookup_alt_deltas:  [B*H_out*W_out, n_tables, 3]
+        //   anchor1/2_ids:      [B*H_out*W_out*n_tables*3] (flat, used in backward)
+        lookup_alt_indices = lookup_alt_indices.view({n_patches, n_tables, 3});
+        lookup_alt_deltas  = lookup_alt_deltas.view({n_patches, n_tables, 3});
+
+        py::tuple out(5);
+        out[0] = lookup_indices;
+        out[1] = lookup_alt_indices;
+        out[2] = lookup_alt_deltas;
+        out[3] = anchor1_ids;
+        out[4] = anchor2_ids;
+        return out;
+    }
+
+    torch::Tensor
+    conv2d_anchor_pairs_lookup_na3_backward(
+        const torch::Tensor& anchor1_ids,       // [B*H_out*W_out*n_tables*3]
+        const torch::Tensor& anchor2_ids,
+        const torch::Tensor& lookup_alt_deltas, // [B*H_out*W_out*n_tables*3]
+        const torch::Tensor& grad_main,         // [B*H_out*W_out, n_tables]
+        const torch::Tensor& grad_alt,          // [B*H_out*W_out*n_tables*3]
+        int64_t B, int64_t C, int64_t H, int64_t W,
+        int64_t H_out, int64_t W_out,
+        int64_t kH, int64_t kW,
+        int64_t sH, int64_t sW,
+        int64_t pH, int64_t pW,
+        int64_t n_tables, bool inv_l1
+    ) {
+        if (!anchor1_ids.is_cuda()) throw py::value_error("tensors must be CUDA");
+        if (anchor1_ids.dtype() != torch::kInt64 || anchor2_ids.dtype() != torch::kInt64)
+            throw py::value_error("anchor ids must be int64");
+        if (!grad_main.is_floating_point())
+            throw py::value_error("grad_main must be floating point");
+
+        auto opts_x = torch::TensorOptions().dtype(grad_main.dtype()).device(grad_main.device());
+        torch::Tensor grad_input = torch::zeros({B, C, H, W}, opts_x);
+
+        // Flatten inputs to 1D
+        torch::Tensor a1_flat      = anchor1_ids.reshape({-1}).contiguous();
+        torch::Tensor a2_flat      = anchor2_ids.reshape({-1}).contiguous();
+        torch::Tensor deltas_flat  = lookup_alt_deltas.reshape({-1}).contiguous();
+        torch::Tensor gm_flat      = grad_main.reshape({-1}).contiguous();  // [B*H_out*W_out*n_tables]
+        torch::Tensor ga_flat      = grad_alt.reshape({-1}).contiguous();   // [B*H_out*W_out*n_tables*3]
+
+        int64_t total = B * H_out * W_out * n_tables * 3;
+        int dev = grad_main.device().index();
+        c10::cuda::CUDAGuard guard(dev);
+        int threads = 256;
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(grad_main.scalar_type(), "conv2d_anchor_pairs_lookup_backward_na3_kernel", [&] {
+            conv2d_anchor_pairs_lookup_backward_na3_kernel<scalar_t><<<blocks, threads>>>(
+                total,
+                reinterpret_cast<const int64_t*>(a1_flat.data_ptr()),
+                reinterpret_cast<const int64_t*>(a2_flat.data_ptr()),
+                reinterpret_cast<const scalar_t*>(deltas_flat.data_ptr()),
+                reinterpret_cast<const scalar_t*>(gm_flat.data_ptr()),
+                reinterpret_cast<const scalar_t*>(ga_flat.data_ptr()),
+                B, C, H, W, H_out, W_out, kH, kW, sH, sW, pH, pW,
+                n_tables, inv_l1,
+                reinterpret_cast<scalar_t*>(grad_input.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return grad_input;
+    }
+
     // Backward for generic n_alternatives (matching Python fallback semantics).
     torch::Tensor
     anchor_pairs_lookup_backward_all(
@@ -2552,6 +2913,45 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("main_weight"),
             py::arg("alt_weight"),
             py::arg("threads_per_block") = 256
+        )
+        .def(
+            "conv2d_anchor_pairs_lookup_na3_forward",
+            &LUTorchManager::conv2d_anchor_pairs_lookup_na3_forward,
+            py::arg("x"),
+            py::arg("anchors_a"),
+            py::arg("anchors_b"),
+            py::arg("H_out"),
+            py::arg("W_out"),
+            py::arg("kH"),
+            py::arg("kW"),
+            py::arg("sH"),
+            py::arg("sW"),
+            py::arg("pH"),
+            py::arg("pW"),
+            py::arg("cmp_eps")
+        )
+        .def(
+            "conv2d_anchor_pairs_lookup_na3_backward",
+            &LUTorchManager::conv2d_anchor_pairs_lookup_na3_backward,
+            py::arg("anchor1_ids"),
+            py::arg("anchor2_ids"),
+            py::arg("lookup_alt_deltas"),
+            py::arg("grad_main"),
+            py::arg("grad_alt"),
+            py::arg("B"),
+            py::arg("C"),
+            py::arg("H"),
+            py::arg("W"),
+            py::arg("H_out"),
+            py::arg("W_out"),
+            py::arg("kH"),
+            py::arg("kW"),
+            py::arg("sH"),
+            py::arg("sW"),
+            py::arg("pH"),
+            py::arg("pW"),
+            py::arg("n_tables"),
+            py::arg("inv_l1")
         )
         #endif
         .def("get_profiling_stats", &LUTorchManager::get_profiling_stats)
