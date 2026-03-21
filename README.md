@@ -63,7 +63,7 @@ pip install pytest
 # All tests (CPU + CUDA)
 .venv/bin/python -m pytest src/spiky/lutorch/tests/ -v
 
-# CPU only (fast, ~40 s)
+# CPU only
 .venv/bin/python -m pytest src/spiky/lutorch/tests/ -v -k cpu
 
 # Single file
