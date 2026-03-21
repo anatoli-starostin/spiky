@@ -484,7 +484,7 @@ class ProjectionLUT(nn.Module):
         return out_flat.view(B, self.H_out, self.W_out)
 
 
-class Conv2DLut(nn.Module):
+class Conv2DLUT(nn.Module):
     """
     2D convolution-style LUT built on top of ``MultiHeadLut`` for inputs
     of shape ``[B, C, H, W]``.
@@ -582,12 +582,12 @@ class Conv2DLut(nn.Module):
         B, C, H, W = x.shape
         if C != self.in_channels:
             raise ValueError(
-                f"Input channels C={C} do not match Conv2DLut configuration "
+                f"Input channels C={C} do not match Conv2DLUT configuration "
                 f"in_channels={self.in_channels}"
             )
         if (H, W) != (self.unfold_config.H, self.unfold_config.W):
             raise ValueError(
-                f"Input spatial size {(H, W)} does not match Conv2DLut configuration "
+                f"Input spatial size {(H, W)} does not match Conv2DLUT configuration "
                 f"({self.unfold_config.H}, {self.unfold_config.W})"
             )
 
@@ -617,3 +617,7 @@ class Conv2DLut(nn.Module):
         lut_out_patches = lut_out_flat.view(B, self.n_patches, total_outputs)
         lut_out_spatial = lut_out_patches.view(B, self.H_p, self.W_p, total_outputs)
         return lut_out_spatial.permute(0, 3, 1, 2).contiguous()
+
+
+# Backward-compatible alias.
+Conv2DLut = Conv2DLUT
