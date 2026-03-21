@@ -539,8 +539,6 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas = ctx.saved_tensors
 
         n_alternatives = lookup_alt_deltas.shape[-1]
-        # For n_alternatives == n_anchor_pairs ("all"), we prefer the PyTorch fallback;
-        # native CUDA is only used for the small specialized cases 1, 2, 3.
         use_native_backward_cuda = (
             _USE_LUTORCH_CUSTOM_CUDA_KERNELS
             and x.is_cuda
@@ -548,7 +546,6 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             and _get_native_lutorch_manager() is not None
             and anchor1_ids.numel() > 0
             and anchor2_ids.numel() > 0
-            and n_alternatives in (1, 2, 3)
         )
         if use_native_backward_cuda:
             native = _get_native_lutorch_manager()
@@ -556,57 +553,17 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             flat_anchor2 = anchor2_ids.reshape(-1).contiguous()
             flat_batch_offset = ctx.batch_offset.reshape(-1).contiguous()
             flat_grad_alt = grad_lookup_alt_indices_grad_c.reshape(-1).contiguous()
-
-            if n_alternatives == 1:
-                x_grad_flat = native.anchor_pairs_lookup_backward_na1(
-                    x,
-                    flat_anchor1,
-                    flat_anchor2,
-                    lookup_alt_deltas.reshape(-1).contiguous(),
-                    flat_batch_offset,
-                    grad_lookup_indices_grad_c,
-                    flat_grad_alt,
-                    ctx.inv_l1,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
-            elif n_alternatives == 2:
-                x_grad_flat = native.anchor_pairs_lookup_backward_na2(
-                    x,
-                    flat_anchor1,
-                    flat_anchor2,
-                    lookup_alt_deltas.reshape(-1).contiguous(),
-                    flat_batch_offset,
-                    grad_lookup_indices_grad_c,
-                    flat_grad_alt,
-                    ctx.inv_l1,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
-            elif n_alternatives == 3:
-                x_grad_flat = native.anchor_pairs_lookup_backward_na3(
-                    x,
-                    flat_anchor1,
-                    flat_anchor2,
-                    lookup_alt_deltas.reshape(-1).contiguous(),
-                    flat_batch_offset,
-                    grad_lookup_indices_grad_c,
-                    flat_grad_alt,
-                    ctx.inv_l1,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
-            else:
-                # Generic CUDA backward path expects lookup_alt_deltas with shape [B, T, A],
-                # but flattened anchor ids / batch_offset / grad_alt.
-                x_grad_flat = native.anchor_pairs_lookup_backward_all(
-                    x,
-                    flat_anchor1,
-                    flat_anchor2,
-                    lookup_alt_deltas,
-                    flat_batch_offset,
-                    grad_lookup_indices_grad_c,
-                    flat_grad_alt,
-                    ctx.inv_l1,
-                    _LUTORCH_CUDA_THREADS_PER_BLOCK,
-                )
+            x_grad_flat = native.anchor_pairs_lookup_backward_all(
+                x,
+                flat_anchor1,
+                flat_anchor2,
+                lookup_alt_deltas,
+                flat_batch_offset,
+                grad_lookup_indices_grad_c,
+                flat_grad_alt,
+                ctx.inv_l1,
+                _LUTORCH_CUDA_THREADS_PER_BLOCK,
+            )
             return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
 
         def _anchor_pairs_lookup_backward_impl(
