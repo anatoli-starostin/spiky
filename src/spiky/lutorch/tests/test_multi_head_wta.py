@@ -31,7 +31,7 @@ def test_wta_modules_smoke(device, smooth_mode, n_alternatives):
     out = wta(x_wta)
     assert out.shape == (B, n_channels, n_outputs) and torch.isfinite(out).all()
     out.sum().backward()
-    assert torch.isfinite(wta.projection.weights.grad).all()
+    assert wta.projection.weights.grad.norm() > 0
 
     wta.eval()
     with torch.no_grad():
@@ -49,7 +49,7 @@ def test_wta_modules_smoke(device, smooth_mode, n_alternatives):
     out = pwta(x_proj)
     assert out.shape == (B, H_p, W_p, n_out_proj) and torch.isfinite(out).all()
     out.sum().backward()
-    assert torch.isfinite(pwta.wta.projection.weights.grad).all()
+    assert pwta.wta.projection.weights.grad.norm() > 0
 
     pwta.eval()
     with torch.no_grad():
@@ -67,7 +67,7 @@ def test_wta_modules_smoke(device, smooth_mode, n_alternatives):
     out = cwta(x_conv)
     assert out.shape == (B, out_channels, H_p2, W_p2) and torch.isfinite(out).all()
     out.sum().backward()
-    assert torch.isfinite(cwta.wta.projection.weights.grad).all()
+    assert cwta.wta.projection.weights.grad.norm() > 0
 
     cwta.eval()
     with torch.no_grad():
@@ -128,7 +128,7 @@ def test_wta_backward(device, smooth_mode):
     m(torch.randn(B, n_channels, n_inputs, device=device)).sum().backward()
 
     assert m.projection.weights.grad is not None
-    assert torch.isfinite(m.projection.weights.grad).all()
+    assert m.projection.weights.grad.norm() > 0
 
 
 def test_wta_training_stays_finite(device):
@@ -180,7 +180,7 @@ def test_wta_uncertainty_modes(device, uncertainty_mode):
     out = m(torch.randn(B, n_channels, n_inputs, device=device))
     assert torch.isfinite(out).all()
     out.sum().backward()
-    assert torch.isfinite(m.projection.weights.grad).all()
+    assert m.projection.weights.grad.norm() > 0
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ def test_projection_wta_backward(device):
     ).train()
 
     m(torch.randn(B, H, W, device=device)).sum().backward()
-    assert torch.isfinite(m.wta.projection.weights.grad).all()
+    assert m.wta.projection.weights.grad.norm() > 0
 
 
 # ---------------------------------------------------------------------------
@@ -357,4 +357,4 @@ def test_conv2d_wta_backward(device):
     ).train()
 
     m(torch.randn(B, C, H, W, device=device)).sum().backward()
-    assert torch.isfinite(m.wta.projection.weights.grad).all()
+    assert m.wta.projection.weights.grad.norm() > 0
