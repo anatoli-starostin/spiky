@@ -134,51 +134,6 @@ __global__ void anchor_pairs_lookup_eval_forward_kernel(
     lookup_indices_ptr[linear_tid] = lookup_idx;
 }
 
-template <typename scalar_t>
-__global__ void anchor_pairs_lookup_backward_na1_kernel(
-    int64_t total,
-    const int64_t* anchor1_ids_ptr,
-    const int64_t* anchor2_ids_ptr,
-    const scalar_t* lookup_alt_deltas_ptr,
-    const int64_t* batch_offset_ptr,
-    const scalar_t* grad_main_ptr,
-    const scalar_t* grad_alt_ptr,
-    int64_t grad_main_stride0,
-    int64_t grad_main_stride1,
-    int64_t batch_size,
-    int64_t n_tables,
-    bool inv_l1,
-    scalar_t* x_grad_flat_ptr
-) {
-    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (linear_tid >= total) {
-        return;
-    }
-
-    int64_t bt = linear_tid;
-    int64_t b = bt / n_tables;
-    int64_t t = bt - b * n_tables;
-
-    scalar_t delta = lookup_alt_deltas_ptr[linear_tid];
-    scalar_t minus_uncertainty_derivative = static_cast<scalar_t>(0);
-    if (inv_l1) {
-        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
-        minus_uncertainty_derivative =
-            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
-    } else {
-        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
-        minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
-    }
-
-    scalar_t grad_main = grad_main_ptr[b * grad_main_stride0 + t * grad_main_stride1];
-    scalar_t grad_alt = grad_alt_ptr[linear_tid];
-    scalar_t du = (grad_main - grad_alt) * minus_uncertainty_derivative;
-
-    int64_t idx1 = batch_offset_ptr[linear_tid] + anchor1_ids_ptr[linear_tid];
-    int64_t idx2 = batch_offset_ptr[linear_tid] + anchor2_ids_ptr[linear_tid];
-    atomicAdd(x_grad_flat_ptr + idx1, du);
-    atomicAdd(x_grad_flat_ptr + idx2, -du);
-}
 
 template <typename scalar_t>
 __global__ void anchor_pairs_lookup_forward_na2_kernel(
@@ -265,50 +220,6 @@ __global__ void anchor_pairs_lookup_forward_na2_kernel(
     }
 }
 
-template <typename scalar_t>
-__global__ void anchor_pairs_lookup_backward_na2_kernel(
-    int64_t total,
-    const int64_t* anchor1_ids_ptr,
-    const int64_t* anchor2_ids_ptr,
-    const scalar_t* lookup_alt_deltas_ptr,
-    const int64_t* batch_offset_ptr,
-    const scalar_t* grad_main_ptr,
-    const scalar_t* grad_alt_ptr,
-    int64_t grad_main_stride0,
-    int64_t grad_main_stride1,
-    int64_t n_tables,
-    bool inv_l1,
-    scalar_t* x_grad_flat_ptr
-) {
-    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (linear_tid >= total) {
-        return;
-    }
-
-    int64_t bt = linear_tid / 2;
-    int64_t b = bt / n_tables;
-    int64_t t = bt - b * n_tables;
-
-    scalar_t delta = lookup_alt_deltas_ptr[linear_tid];
-    scalar_t minus_uncertainty_derivative = static_cast<scalar_t>(0);
-    if (inv_l1) {
-        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
-        minus_uncertainty_derivative =
-            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
-    } else {
-        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
-        minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
-    }
-
-    scalar_t grad_main = grad_main_ptr[b * grad_main_stride0 + t * grad_main_stride1];
-    scalar_t grad_alt = grad_alt_ptr[linear_tid];
-    scalar_t du = (grad_main - grad_alt) * minus_uncertainty_derivative * static_cast<scalar_t>(0.5);
-
-    int64_t idx1 = batch_offset_ptr[linear_tid] + anchor1_ids_ptr[linear_tid];
-    int64_t idx2 = batch_offset_ptr[linear_tid] + anchor2_ids_ptr[linear_tid];
-    atomicAdd(x_grad_flat_ptr + idx1, du);
-    atomicAdd(x_grad_flat_ptr + idx2, -du);
-}
 
 template <typename scalar_t>
 __global__ void anchor_pairs_lookup_forward_na3_kernel(
@@ -422,50 +333,6 @@ __global__ void anchor_pairs_lookup_forward_na3_kernel(
     }
 }
 
-template <typename scalar_t>
-__global__ void anchor_pairs_lookup_backward_na3_kernel(
-    int64_t total,
-    const int64_t* anchor1_ids_ptr,
-    const int64_t* anchor2_ids_ptr,
-    const scalar_t* lookup_alt_deltas_ptr,
-    const int64_t* batch_offset_ptr,
-    const scalar_t* grad_main_ptr,
-    const scalar_t* grad_alt_ptr,
-    int64_t grad_main_stride0,
-    int64_t grad_main_stride1,
-    int64_t n_tables,
-    bool inv_l1,
-    scalar_t* x_grad_flat_ptr
-) {
-    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (linear_tid >= total) {
-        return;
-    }
-
-    int64_t bt = linear_tid / 3;
-    int64_t b = bt / n_tables;
-    int64_t t = bt - b * n_tables;
-
-    scalar_t delta = lookup_alt_deltas_ptr[linear_tid];
-    scalar_t minus_uncertainty_derivative = static_cast<scalar_t>(0);
-    if (inv_l1) {
-        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
-        minus_uncertainty_derivative =
-            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
-    } else {
-        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
-        minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
-    }
-
-    scalar_t grad_main = grad_main_ptr[b * grad_main_stride0 + t * grad_main_stride1];
-    scalar_t grad_alt = grad_alt_ptr[linear_tid];
-    scalar_t du = (grad_main - grad_alt) * minus_uncertainty_derivative / static_cast<scalar_t>(3.0);
-
-    int64_t idx1 = batch_offset_ptr[linear_tid] + anchor1_ids_ptr[linear_tid];
-    int64_t idx2 = batch_offset_ptr[linear_tid] + anchor2_ids_ptr[linear_tid];
-    atomicAdd(x_grad_flat_ptr + idx1, du);
-    atomicAdd(x_grad_flat_ptr + idx2, -du);
-}
 
 // Generic forward kernel for n_alternatives == n_anchor_pairs.
 // Produces all alternatives by flipping each bit position once, without sorting.
@@ -568,6 +435,197 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
     int64_t idx2 = batch_offset_ptr[linear_tid] + anchor2_ids_ptr[linear_tid];
     atomicAdd(x_grad_flat_ptr + idx1, du);
     atomicAdd(x_grad_flat_ptr + idx2, -du);
+}
+
+// WTA (Winner-Take-All) Lookup Kernels
+// Input x is contiguous [B, C, N]. One thread per (b, c) pair.
+// Forward kernels find the winner (argmax) and n_alternatives runner-ups in a single pass.
+// Backward kernels scatter gradients to the winner and alt positions using the uncertainty function.
+
+template <typename scalar_t>
+__global__ void wta_lookup_forward_na1_kernel(
+    const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
+    int64_t n_channels,
+    int64_t n_inputs,
+    int64_t total,
+    int64_t* winner_inds_ptr,   // [B, C] flat
+    int64_t* alt_inds_ptr,      // [B, C, 1] flat
+    scalar_t* alt_deltas_ptr    // [B, C, 1] flat  (winner_val - alt_val)
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear_tid >= total) return;
+
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
+    scalar_t neg_big = -static_cast<scalar_t>(1e30);
+
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
+
+    for (int64_t n = 1; n < n_inputs; ++n) {
+        scalar_t val = x_ptr[x_base + n * x_stride2];
+        if (val > max1_val) {
+            max2_val = max1_val; max2_idx = max1_idx;
+            max1_val = val;      max1_idx = n;
+        } else if (val > max2_val) {
+            max2_val = val; max2_idx = n;
+        }
+    }
+
+    winner_inds_ptr[linear_tid] = max1_idx;
+    alt_inds_ptr[linear_tid]    = max2_idx;
+    alt_deltas_ptr[linear_tid]  = max1_val - max2_val;
+}
+
+template <typename scalar_t>
+__global__ void wta_lookup_forward_na2_kernel(
+    const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
+    int64_t n_channels,
+    int64_t n_inputs,
+    int64_t total,
+    int64_t* winner_inds_ptr,   // [B, C] flat
+    int64_t* alt_inds_ptr,      // [B, C, 2] flat
+    scalar_t* alt_deltas_ptr    // [B, C, 2] flat
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear_tid >= total) return;
+
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
+    scalar_t neg_big = -static_cast<scalar_t>(1e30);
+
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
+    scalar_t max3_val = neg_big;       int64_t max3_idx = 0;
+
+    for (int64_t n = 1; n < n_inputs; ++n) {
+        scalar_t val = x_ptr[x_base + n * x_stride2];
+        if (val > max1_val) {
+            max3_val = max2_val; max3_idx = max2_idx;
+            max2_val = max1_val; max2_idx = max1_idx;
+            max1_val = val;      max1_idx = n;
+        } else if (val > max2_val) {
+            max3_val = max2_val; max3_idx = max2_idx;
+            max2_val = val;      max2_idx = n;
+        } else if (val > max3_val) {
+            max3_val = val; max3_idx = n;
+        }
+    }
+
+    int64_t base_alt = linear_tid * 2;
+    winner_inds_ptr[linear_tid]  = max1_idx;
+    alt_inds_ptr[base_alt]       = max2_idx;
+    alt_inds_ptr[base_alt + 1]   = max3_idx;
+    alt_deltas_ptr[base_alt]     = max1_val - max2_val;
+    alt_deltas_ptr[base_alt + 1] = max1_val - max3_val;
+}
+
+template <typename scalar_t>
+__global__ void wta_lookup_forward_na3_kernel(
+    const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
+    int64_t n_channels,
+    int64_t n_inputs,
+    int64_t total,
+    int64_t* winner_inds_ptr,   // [B, C] flat
+    int64_t* alt_inds_ptr,      // [B, C, 3] flat
+    scalar_t* alt_deltas_ptr    // [B, C, 3] flat
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear_tid >= total) return;
+
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
+    scalar_t neg_big = -static_cast<scalar_t>(1e30);
+
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
+    scalar_t max3_val = neg_big;       int64_t max3_idx = 0;
+    scalar_t max4_val = neg_big;       int64_t max4_idx = 0;
+
+    for (int64_t n = 1; n < n_inputs; ++n) {
+        scalar_t val = x_ptr[x_base + n * x_stride2];
+        if (val > max1_val) {
+            max4_val = max3_val; max4_idx = max3_idx;
+            max3_val = max2_val; max3_idx = max2_idx;
+            max2_val = max1_val; max2_idx = max1_idx;
+            max1_val = val;      max1_idx = n;
+        } else if (val > max2_val) {
+            max4_val = max3_val; max4_idx = max3_idx;
+            max3_val = max2_val; max3_idx = max2_idx;
+            max2_val = val;      max2_idx = n;
+        } else if (val > max3_val) {
+            max4_val = max3_val; max4_idx = max3_idx;
+            max3_val = val;      max3_idx = n;
+        } else if (val > max4_val) {
+            max4_val = val; max4_idx = n;
+        }
+    }
+
+    int64_t base_alt = linear_tid * 3;
+    winner_inds_ptr[linear_tid]  = max1_idx;
+    alt_inds_ptr[base_alt]       = max2_idx;
+    alt_inds_ptr[base_alt + 1]   = max3_idx;
+    alt_inds_ptr[base_alt + 2]   = max4_idx;
+    alt_deltas_ptr[base_alt]     = max1_val - max2_val;
+    alt_deltas_ptr[base_alt + 1] = max1_val - max3_val;
+    alt_deltas_ptr[base_alt + 2] = max1_val - max4_val;
+}
+
+template <typename scalar_t>
+__global__ void wta_lookup_backward_kernel(
+    int64_t total,
+    const int64_t* winner_ids_ptr,
+    const int64_t* alt_ids_ptr,
+    const scalar_t* alt_deltas_ptr,
+    const int64_t* batch_offset_ptr,
+    const scalar_t* grad_main_ptr,
+    const scalar_t* grad_alt_ptr,
+    int64_t grad_main_stride0,
+    int64_t grad_main_stride1,
+    int64_t n_channels,
+    int64_t n_alternatives,
+    bool inv_l1,
+    scalar_t* x_grad_flat_ptr
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear_tid >= total) return;
+
+    int64_t bc = linear_tid / n_alternatives;
+    int64_t b  = bc / n_channels;
+    int64_t c  = bc - b * n_channels;
+
+    scalar_t delta = alt_deltas_ptr[linear_tid];
+    scalar_t minus_uncertainty_derivative;
+    if (inv_l1) {
+        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
+        minus_uncertainty_derivative =
+            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
+    } else {
+        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
+        minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
+    }
+
+    scalar_t grad_main = grad_main_ptr[b * grad_main_stride0 + c * grad_main_stride1];
+    scalar_t grad_alt  = grad_alt_ptr[linear_tid];
+    scalar_t du = (grad_main - grad_alt) * minus_uncertainty_derivative
+                  / static_cast<scalar_t>(n_alternatives);
+
+    int64_t idx_winner = batch_offset_ptr[linear_tid] + winner_ids_ptr[linear_tid];
+    int64_t idx_alt    = batch_offset_ptr[linear_tid] + alt_ids_ptr[linear_tid];
+    atomicAdd(x_grad_flat_ptr + idx_winner,  du);
+    atomicAdd(x_grad_flat_ptr + idx_alt,    -du);
 }
 
 template <typename scalar_t>
@@ -1521,289 +1579,6 @@ public:
         return py::make_tuple(output, main_weight, alt_weight);
     }
 
-    torch::Tensor
-    anchor_pairs_lookup_backward_na1(
-        const torch::Tensor& x,
-        const torch::Tensor& anchor1_ids,
-        const torch::Tensor& anchor2_ids,
-        const torch::Tensor& lookup_alt_deltas,
-        const torch::Tensor& batch_offset,
-        const torch::Tensor& grad_main,
-        const torch::Tensor& grad_alt,
-        bool inv_l1,
-        int64_t threads_per_block = 256
-    ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-
-        if (x.dim() != 2) {
-            throw py::value_error("x must be 2D [batch_size, input_dim]");
-        }
-        if (!x.is_cuda()) {
-            throw py::value_error("x must be CUDA tensor");
-        }
-        if (!x.is_floating_point()) {
-            throw py::value_error("x must be floating point tensor");
-        }
-        if (anchor1_ids.dtype() != torch::kInt64 || anchor2_ids.dtype() != torch::kInt64) {
-            throw py::value_error("anchor1_ids and anchor2_ids must be int64");
-        }
-        if (batch_offset.dtype() != torch::kInt64) {
-            throw py::value_error("batch_offset must be int64");
-        }
-        if (grad_main.dtype() != x.dtype() || grad_alt.dtype() != x.dtype()) {
-            throw py::value_error("grad_main and grad_alt must have the same dtype as x");
-        }
-        if (lookup_alt_deltas.dtype() != x.dtype()) {
-            throw py::value_error("lookup_alt_deltas must have the same dtype as x");
-        }
-        if (anchor1_ids.device() != x.device() || anchor2_ids.device() != x.device() ||
-            lookup_alt_deltas.device() != x.device() || batch_offset.device() != x.device() ||
-            grad_main.device() != x.device() || grad_alt.device() != x.device()) {
-            throw py::value_error("All tensors must be on the same CUDA device");
-        }
-        if (anchor1_ids.numel() != anchor2_ids.numel() ||
-            anchor1_ids.numel() != lookup_alt_deltas.numel() ||
-            anchor1_ids.numel() != batch_offset.numel() ||
-            anchor1_ids.numel() != grad_alt.numel()) {
-            throw py::value_error("anchor1_ids, anchor2_ids, lookup_alt_deltas, batch_offset, grad_alt must have equal numel");
-        }
-        if (threads_per_block <= 0 || threads_per_block > 1024) {
-            throw py::value_error("threads_per_block must be in range [1, 1024]");
-        }
-
-        int64_t batch_size = x.size(0);
-        int64_t input_dim = x.size(1);
-        int64_t n_tables = grad_main.size(1);
-        if (grad_main.size(0) != batch_size) {
-            throw py::value_error("grad_main first dimension must match x batch size");
-        }
-        if (grad_alt.numel() != batch_size * n_tables) {
-            throw py::value_error("grad_alt numel must be batch_size * n_tables for n_alternatives=1");
-        }
-
-        auto opts_x = torch::TensorOptions().dtype(x.dtype()).device(x.device());
-        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_x);
-
-        int device = x.device().index();
-        c10::cuda::CUDAGuard guard(device);
-        int64_t total = batch_size * n_tables;
-        int threads = static_cast<int>(threads_per_block);
-        int blocks = static_cast<int>((total + threads - 1) / threads);
-
-        int64_t grad_main_stride0 = grad_main.stride(0);
-        int64_t grad_main_stride1 = grad_main.stride(1);
-
-        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_backward_na1_kernel", [&] {
-            anchor_pairs_lookup_backward_na1_kernel<scalar_t><<<blocks, threads>>>(
-                total,
-                reinterpret_cast<const int64_t*>(anchor1_ids.data_ptr()),
-                reinterpret_cast<const int64_t*>(anchor2_ids.data_ptr()),
-                reinterpret_cast<const scalar_t*>(lookup_alt_deltas.data_ptr()),
-                reinterpret_cast<const int64_t*>(batch_offset.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_main.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_alt.data_ptr()),
-                grad_main_stride0,
-                grad_main_stride1,
-                batch_size,
-                n_tables,
-                inv_l1,
-                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
-            );
-        });
-        CU_CHECK(cudaGetLastError());
-
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-        return x_grad_flat;
-    }
-
-    torch::Tensor
-    anchor_pairs_lookup_backward_na2(
-        const torch::Tensor& x,
-        const torch::Tensor& anchor1_ids,
-        const torch::Tensor& anchor2_ids,
-        const torch::Tensor& lookup_alt_deltas,
-        const torch::Tensor& batch_offset,
-        const torch::Tensor& grad_main,
-        const torch::Tensor& grad_alt,
-        bool inv_l1,
-        int64_t threads_per_block = 256
-    ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-
-        if (x.dim() != 2) {
-            throw py::value_error("x must be 2D [batch_size, input_dim]");
-        }
-        if (!x.is_cuda()) {
-            throw py::value_error("x must be CUDA tensor");
-        }
-        if (!x.is_floating_point()) {
-            throw py::value_error("x must be floating point tensor");
-        }
-        if (anchor1_ids.dtype() != torch::kInt64 || anchor2_ids.dtype() != torch::kInt64) {
-            throw py::value_error("anchor1_ids and anchor2_ids must be int64");
-        }
-        if (batch_offset.dtype() != torch::kInt64) {
-            throw py::value_error("batch_offset must be int64");
-        }
-        if (grad_main.dtype() != x.dtype() || grad_alt.dtype() != x.dtype()) {
-            throw py::value_error("grad_main and grad_alt must have the same dtype as x");
-        }
-        if (lookup_alt_deltas.dtype() != x.dtype()) {
-            throw py::value_error("lookup_alt_deltas must have the same dtype as x");
-        }
-        if (anchor1_ids.device() != x.device() || anchor2_ids.device() != x.device() ||
-            lookup_alt_deltas.device() != x.device() || batch_offset.device() != x.device() ||
-            grad_main.device() != x.device() || grad_alt.device() != x.device()) {
-            throw py::value_error("All tensors must be on the same CUDA device");
-        }
-        if (anchor1_ids.numel() != anchor2_ids.numel() ||
-            anchor1_ids.numel() != lookup_alt_deltas.numel() ||
-            anchor1_ids.numel() != batch_offset.numel() ||
-            anchor1_ids.numel() != grad_alt.numel()) {
-            throw py::value_error("anchor1_ids, anchor2_ids, lookup_alt_deltas, batch_offset, grad_alt must have equal numel");
-        }
-        if (threads_per_block <= 0 || threads_per_block > 1024) {
-            throw py::value_error("threads_per_block must be in range [1, 1024]");
-        }
-
-        int64_t batch_size = x.size(0);
-        int64_t input_dim = x.size(1);
-        int64_t n_tables = grad_main.size(1);
-        if (grad_main.size(0) != batch_size) {
-            throw py::value_error("grad_main first dimension must match x batch size");
-        }
-        if (grad_alt.numel() != batch_size * n_tables * 2) {
-            throw py::value_error("grad_alt numel must be batch_size * n_tables * 2 for n_alternatives=2");
-        }
-
-        auto opts_x = torch::TensorOptions().dtype(x.dtype()).device(x.device());
-        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_x);
-
-        int device = x.device().index();
-        c10::cuda::CUDAGuard guard(device);
-        int64_t total = batch_size * n_tables * 2;
-        int threads = static_cast<int>(threads_per_block);
-        int blocks = static_cast<int>((total + threads - 1) / threads);
-
-        int64_t grad_main_stride0 = grad_main.stride(0);
-        int64_t grad_main_stride1 = grad_main.stride(1);
-
-        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_backward_na2_kernel", [&] {
-            anchor_pairs_lookup_backward_na2_kernel<scalar_t><<<blocks, threads>>>(
-                total,
-                reinterpret_cast<const int64_t*>(anchor1_ids.data_ptr()),
-                reinterpret_cast<const int64_t*>(anchor2_ids.data_ptr()),
-                reinterpret_cast<const scalar_t*>(lookup_alt_deltas.data_ptr()),
-                reinterpret_cast<const int64_t*>(batch_offset.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_main.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_alt.data_ptr()),
-                grad_main_stride0,
-                grad_main_stride1,
-                n_tables,
-                inv_l1,
-                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
-            );
-        });
-        CU_CHECK(cudaGetLastError());
-
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-        return x_grad_flat;
-    }
-
-    torch::Tensor
-    anchor_pairs_lookup_backward_na3(
-        const torch::Tensor& x,
-        const torch::Tensor& anchor1_ids,
-        const torch::Tensor& anchor2_ids,
-        const torch::Tensor& lookup_alt_deltas,
-        const torch::Tensor& batch_offset,
-        const torch::Tensor& grad_main,
-        const torch::Tensor& grad_alt,
-        bool inv_l1,
-        int64_t threads_per_block = 256
-    ) {
-        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-
-        if (x.dim() != 2) {
-            throw py::value_error("x must be 2D [batch_size, input_dim]");
-        }
-        if (!x.is_cuda()) {
-            throw py::value_error("x must be CUDA tensor");
-        }
-        if (!x.is_floating_point()) {
-            throw py::value_error("x must be floating point tensor");
-        }
-        if (anchor1_ids.dtype() != torch::kInt64 || anchor2_ids.dtype() != torch::kInt64) {
-            throw py::value_error("anchor1_ids and anchor2_ids must be int64");
-        }
-        if (batch_offset.dtype() != torch::kInt64) {
-            throw py::value_error("batch_offset must be int64");
-        }
-        if (grad_main.dtype() != x.dtype() || grad_alt.dtype() != x.dtype()) {
-            throw py::value_error("grad_main and grad_alt must have the same dtype as x");
-        }
-        if (lookup_alt_deltas.dtype() != x.dtype()) {
-            throw py::value_error("lookup_alt_deltas must have the same dtype as x");
-        }
-        if (anchor1_ids.device() != x.device() || anchor2_ids.device() != x.device() ||
-            lookup_alt_deltas.device() != x.device() || batch_offset.device() != x.device() ||
-            grad_main.device() != x.device() || grad_alt.device() != x.device()) {
-            throw py::value_error("All tensors must be on the same CUDA device");
-        }
-        if (anchor1_ids.numel() != anchor2_ids.numel() ||
-            anchor1_ids.numel() != lookup_alt_deltas.numel() ||
-            anchor1_ids.numel() != batch_offset.numel() ||
-            anchor1_ids.numel() != grad_alt.numel()) {
-            throw py::value_error("anchor1_ids, anchor2_ids, lookup_alt_deltas, batch_offset, grad_alt must have equal numel");
-        }
-        if (threads_per_block <= 0 || threads_per_block > 1024) {
-            throw py::value_error("threads_per_block must be in range [1, 1024]");
-        }
-
-        int64_t batch_size = x.size(0);
-        int64_t input_dim = x.size(1);
-        int64_t n_tables = grad_main.size(1);
-        if (grad_main.size(0) != batch_size) {
-            throw py::value_error("grad_main first dimension must match x batch size");
-        }
-        if (grad_alt.numel() != batch_size * n_tables * 3) {
-            throw py::value_error("grad_alt numel must be batch_size * n_tables * 3 for n_alternatives=3");
-        }
-
-        auto opts_x = torch::TensorOptions().dtype(x.dtype()).device(x.device());
-        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_x);
-
-        int device = x.device().index();
-        c10::cuda::CUDAGuard guard(device);
-        int64_t total = batch_size * n_tables * 3;
-        int threads = static_cast<int>(threads_per_block);
-        int blocks = static_cast<int>((total + threads - 1) / threads);
-
-        int64_t grad_main_stride0 = grad_main.stride(0);
-        int64_t grad_main_stride1 = grad_main.stride(1);
-
-        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_backward_na3_kernel", [&] {
-            anchor_pairs_lookup_backward_na3_kernel<scalar_t><<<blocks, threads>>>(
-                total,
-                reinterpret_cast<const int64_t*>(anchor1_ids.data_ptr()),
-                reinterpret_cast<const int64_t*>(anchor2_ids.data_ptr()),
-                reinterpret_cast<const scalar_t*>(lookup_alt_deltas.data_ptr()),
-                reinterpret_cast<const int64_t*>(batch_offset.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_main.data_ptr()),
-                reinterpret_cast<const scalar_t*>(grad_alt.data_ptr()),
-                grad_main_stride0,
-                grad_main_stride1,
-                n_tables,
-                inv_l1,
-                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
-            );
-        });
-        CU_CHECK(cudaGetLastError());
-
-        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-        return x_grad_flat;
-    }
-
     // Backward for generic n_alternatives (matching Python fallback semantics).
     torch::Tensor
     anchor_pairs_lookup_backward_all(
@@ -1898,6 +1673,211 @@ public:
         CU_CHECK(cudaGetLastError());
 
         PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
+        return x_grad_flat;
+    }
+
+    // ---- WTA Lookup ----
+
+    py::tuple
+    wta_lookup_forward_na1(
+        const torch::Tensor& x,
+        int64_t threads_per_block = 256
+    ) {
+        if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
+        if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
+        if (x.size(2) < 2) throw py::value_error("n_inputs must be >= 2 for n_alternatives=1");
+        if (threads_per_block <= 0 || threads_per_block > 1024)
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+
+        const int64_t batch_size = x.size(0);
+        const int64_t n_channels = x.size(1);
+        const int64_t n_inputs   = x.size(2);
+        auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
+        auto opts_x   = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+
+        torch::Tensor winner_inds = torch::empty({batch_size, n_channels},    opts_i64);
+        torch::Tensor alt_inds    = torch::empty({batch_size, n_channels, 1}, opts_i64);
+        torch::Tensor alt_deltas  = torch::empty({batch_size, n_channels, 1}, opts_x);
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int64_t total = batch_size * n_channels;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na1_kernel", [&] {
+            wta_lookup_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
+                n_channels, n_inputs, total,
+                reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
+                reinterpret_cast<int64_t*>(alt_inds.data_ptr()),
+                reinterpret_cast<scalar_t*>(alt_deltas.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        py::tuple out(3);
+        out[0] = winner_inds;
+        out[1] = alt_inds;
+        out[2] = alt_deltas;
+        return out;
+    }
+
+    py::tuple
+    wta_lookup_forward_na2(
+        const torch::Tensor& x,
+        int64_t threads_per_block = 256
+    ) {
+        if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
+        if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
+        if (x.size(2) < 3) throw py::value_error("n_inputs must be >= 3 for n_alternatives=2");
+        if (threads_per_block <= 0 || threads_per_block > 1024)
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+
+        const int64_t batch_size = x.size(0);
+        const int64_t n_channels = x.size(1);
+        const int64_t n_inputs   = x.size(2);
+        auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
+        auto opts_x   = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+
+        torch::Tensor winner_inds = torch::empty({batch_size, n_channels},    opts_i64);
+        torch::Tensor alt_inds    = torch::empty({batch_size, n_channels, 2}, opts_i64);
+        torch::Tensor alt_deltas  = torch::empty({batch_size, n_channels, 2}, opts_x);
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int64_t total = batch_size * n_channels;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na2_kernel", [&] {
+            wta_lookup_forward_na2_kernel<scalar_t><<<blocks, threads>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
+                n_channels, n_inputs, total,
+                reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
+                reinterpret_cast<int64_t*>(alt_inds.data_ptr()),
+                reinterpret_cast<scalar_t*>(alt_deltas.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        py::tuple out(3);
+        out[0] = winner_inds;
+        out[1] = alt_inds;
+        out[2] = alt_deltas;
+        return out;
+    }
+
+    py::tuple
+    wta_lookup_forward_na3(
+        const torch::Tensor& x,
+        int64_t threads_per_block = 256
+    ) {
+        if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
+        if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
+        if (x.size(2) < 4) throw py::value_error("n_inputs must be >= 4 for n_alternatives=3");
+        if (threads_per_block <= 0 || threads_per_block > 1024)
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+
+        const int64_t batch_size = x.size(0);
+        const int64_t n_channels = x.size(1);
+        const int64_t n_inputs   = x.size(2);
+        auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
+        auto opts_x   = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+
+        torch::Tensor winner_inds = torch::empty({batch_size, n_channels},    opts_i64);
+        torch::Tensor alt_inds    = torch::empty({batch_size, n_channels, 3}, opts_i64);
+        torch::Tensor alt_deltas  = torch::empty({batch_size, n_channels, 3}, opts_x);
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int64_t total = batch_size * n_channels;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na3_kernel", [&] {
+            wta_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
+                n_channels, n_inputs, total,
+                reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
+                reinterpret_cast<int64_t*>(alt_inds.data_ptr()),
+                reinterpret_cast<scalar_t*>(alt_deltas.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        py::tuple out(3);
+        out[0] = winner_inds;
+        out[1] = alt_inds;
+        out[2] = alt_deltas;
+        return out;
+    }
+
+    torch::Tensor
+    wta_lookup_backward(
+        const torch::Tensor& x,
+        const torch::Tensor& winner_ids,
+        const torch::Tensor& alt_ids,
+        const torch::Tensor& alt_deltas,
+        const torch::Tensor& batch_offset,
+        const torch::Tensor& grad_main,
+        const torch::Tensor& grad_alt,
+        int64_t n_alternatives,
+        bool inv_l1,
+        int64_t threads_per_block = 256
+    ) {
+        if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
+        if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
+        if (winner_ids.dtype() != torch::kInt64 || alt_ids.dtype() != torch::kInt64)
+            throw py::value_error("winner_ids and alt_ids must be int64");
+        if (batch_offset.dtype() != torch::kInt64)
+            throw py::value_error("batch_offset must be int64");
+        if (grad_main.dtype() != x.dtype() || grad_alt.dtype() != x.dtype() || alt_deltas.dtype() != x.dtype())
+            throw py::value_error("grad_main, grad_alt, alt_deltas must have the same dtype as x");
+        if (winner_ids.numel() != alt_ids.numel() ||
+            winner_ids.numel() != alt_deltas.numel() ||
+            winner_ids.numel() != batch_offset.numel() ||
+            winner_ids.numel() != grad_alt.numel())
+            throw py::value_error("winner_ids, alt_ids, alt_deltas, batch_offset, grad_alt must have equal numel");
+        if (n_alternatives < 1 || n_alternatives > 3)
+            throw py::value_error("n_alternatives must be 1, 2, or 3");
+        if (threads_per_block <= 0 || threads_per_block > 1024)
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+
+        const int64_t batch_size = x.size(0);
+        const int64_t n_channels = x.size(1);
+        const int64_t n_inputs   = x.size(2);
+        auto opts_x = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+        torch::Tensor x_grad_flat = torch::zeros({batch_size * n_channels * n_inputs}, opts_x);
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+        int64_t total = batch_size * n_channels * n_alternatives;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_backward_kernel", [&] {
+            wta_lookup_backward_kernel<scalar_t><<<blocks, threads>>>(
+                total,
+                reinterpret_cast<const int64_t*>(winner_ids.data_ptr()),
+                reinterpret_cast<const int64_t*>(alt_ids.data_ptr()),
+                reinterpret_cast<const scalar_t*>(alt_deltas.data_ptr()),
+                reinterpret_cast<const int64_t*>(batch_offset.data_ptr()),
+                reinterpret_cast<const scalar_t*>(grad_main.data_ptr()),
+                reinterpret_cast<const scalar_t*>(grad_alt.data_ptr()),
+                grad_main.stride(0), grad_main.stride(1),
+                n_channels, n_alternatives, inv_l1,
+                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
         return x_grad_flat;
     }
 
@@ -2442,45 +2422,6 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("threads_per_block") = 256
         )
         .def(
-            "anchor_pairs_lookup_backward_na1",
-            &LUTorchManager::anchor_pairs_lookup_backward_na1,
-            py::arg("x"),
-            py::arg("anchor1_ids"),
-            py::arg("anchor2_ids"),
-            py::arg("lookup_alt_deltas"),
-            py::arg("batch_offset"),
-            py::arg("grad_main"),
-            py::arg("grad_alt"),
-            py::arg("inv_l1"),
-            py::arg("threads_per_block") = 256
-        )
-        .def(
-            "anchor_pairs_lookup_backward_na2",
-            &LUTorchManager::anchor_pairs_lookup_backward_na2,
-            py::arg("x"),
-            py::arg("anchor1_ids"),
-            py::arg("anchor2_ids"),
-            py::arg("lookup_alt_deltas"),
-            py::arg("batch_offset"),
-            py::arg("grad_main"),
-            py::arg("grad_alt"),
-            py::arg("inv_l1"),
-            py::arg("threads_per_block") = 256
-        )
-        .def(
-            "anchor_pairs_lookup_backward_na3",
-            &LUTorchManager::anchor_pairs_lookup_backward_na3,
-            py::arg("x"),
-            py::arg("anchor1_ids"),
-            py::arg("anchor2_ids"),
-            py::arg("lookup_alt_deltas"),
-            py::arg("batch_offset"),
-            py::arg("grad_main"),
-            py::arg("grad_alt"),
-            py::arg("inv_l1"),
-            py::arg("threads_per_block") = 256
-        )
-        .def(
             "anchor_pairs_lookup_backward_all",
             &LUTorchManager::anchor_pairs_lookup_backward_all,
             py::arg("x"),
@@ -2490,6 +2431,38 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("batch_offset"),
             py::arg("grad_main"),
             py::arg("grad_alt"),
+            py::arg("inv_l1"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "wta_lookup_forward_na1",
+            &LUTorchManager::wta_lookup_forward_na1,
+            py::arg("x"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "wta_lookup_forward_na2",
+            &LUTorchManager::wta_lookup_forward_na2,
+            py::arg("x"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "wta_lookup_forward_na3",
+            &LUTorchManager::wta_lookup_forward_na3,
+            py::arg("x"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "wta_lookup_backward",
+            &LUTorchManager::wta_lookup_backward,
+            py::arg("x"),
+            py::arg("winner_ids"),
+            py::arg("alt_ids"),
+            py::arg("alt_deltas"),
+            py::arg("batch_offset"),
+            py::arg("grad_main"),
+            py::arg("grad_alt"),
+            py::arg("n_alternatives"),
             py::arg("inv_l1"),
             py::arg("threads_per_block") = 256
         )
