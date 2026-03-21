@@ -114,19 +114,18 @@ class WTALookup(nn.Module):
 
     def _native_forward(self, x: torch.Tensor):
         """Call the native CUDA kernel for forward pass (na1/na2/na3)."""
-        x_c = x.contiguous()
         native = _get_native_lutorch_manager()
         if self.n_alternatives == 1:
             winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na1(
-                x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                x, _LUTORCH_CUDA_THREADS_PER_BLOCK
             )
         elif self.n_alternatives == 2:
             winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na2(
-                x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                x, _LUTORCH_CUDA_THREADS_PER_BLOCK
             )
         else:
             winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na3(
-                x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                x, _LUTORCH_CUDA_THREADS_PER_BLOCK
             )
         return winner_inds, alt_inds, alt_deltas
 
@@ -165,19 +164,18 @@ class WTALookupFunction(torch.autograd.Function):
             and n_alternatives in (1, 2, 3)
         )
         if use_native:
-            x_c = x.contiguous()
             native = _get_native_lutorch_manager()
             if n_alternatives == 1:
                 winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na1(
-                    x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                    x, _LUTORCH_CUDA_THREADS_PER_BLOCK
                 )
             elif n_alternatives == 2:
                 winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na2(
-                    x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                    x, _LUTORCH_CUDA_THREADS_PER_BLOCK
                 )
             else:
                 winner_inds, alt_inds, alt_deltas = native.wta_lookup_forward_na3(
-                    x_c, _LUTORCH_CUDA_THREADS_PER_BLOCK
+                    x, _LUTORCH_CUDA_THREADS_PER_BLOCK
                 )
             # winner_inds: [B, C]; alt_inds: [B, C, n_alt]; alt_deltas: [B, C, n_alt]
             # Flatten to [BC] / [BC, n_alt] for save_for_backward

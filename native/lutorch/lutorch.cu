@@ -445,6 +445,9 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
 template <typename scalar_t>
 __global__ void wta_lookup_forward_na1_kernel(
     const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
     int64_t n_channels,
     int64_t n_inputs,
     int64_t total,
@@ -455,14 +458,16 @@ __global__ void wta_lookup_forward_na1_kernel(
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear_tid >= total) return;
 
-    const int64_t base = linear_tid * n_inputs;
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
     scalar_t neg_big = -static_cast<scalar_t>(1e30);
 
-    scalar_t max1_val = x_ptr[base]; int64_t max1_idx = 0;
-    scalar_t max2_val = neg_big;     int64_t max2_idx = 0;
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
 
     for (int64_t n = 1; n < n_inputs; ++n) {
-        scalar_t val = x_ptr[base + n];
+        scalar_t val = x_ptr[x_base + n * x_stride2];
         if (val > max1_val) {
             max2_val = max1_val; max2_idx = max1_idx;
             max1_val = val;      max1_idx = n;
@@ -479,6 +484,9 @@ __global__ void wta_lookup_forward_na1_kernel(
 template <typename scalar_t>
 __global__ void wta_lookup_forward_na2_kernel(
     const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
     int64_t n_channels,
     int64_t n_inputs,
     int64_t total,
@@ -489,15 +497,17 @@ __global__ void wta_lookup_forward_na2_kernel(
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear_tid >= total) return;
 
-    const int64_t base = linear_tid * n_inputs;
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
     scalar_t neg_big = -static_cast<scalar_t>(1e30);
 
-    scalar_t max1_val = x_ptr[base]; int64_t max1_idx = 0;
-    scalar_t max2_val = neg_big;     int64_t max2_idx = 0;
-    scalar_t max3_val = neg_big;     int64_t max3_idx = 0;
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
+    scalar_t max3_val = neg_big;       int64_t max3_idx = 0;
 
     for (int64_t n = 1; n < n_inputs; ++n) {
-        scalar_t val = x_ptr[base + n];
+        scalar_t val = x_ptr[x_base + n * x_stride2];
         if (val > max1_val) {
             max3_val = max2_val; max3_idx = max2_idx;
             max2_val = max1_val; max2_idx = max1_idx;
@@ -521,6 +531,9 @@ __global__ void wta_lookup_forward_na2_kernel(
 template <typename scalar_t>
 __global__ void wta_lookup_forward_na3_kernel(
     const scalar_t* x_ptr,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    int64_t x_stride2,
     int64_t n_channels,
     int64_t n_inputs,
     int64_t total,
@@ -531,16 +544,18 @@ __global__ void wta_lookup_forward_na3_kernel(
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear_tid >= total) return;
 
-    const int64_t base = linear_tid * n_inputs;
+    int64_t b = linear_tid / n_channels;
+    int64_t c = linear_tid - b * n_channels;
+    int64_t x_base = b * x_stride0 + c * x_stride1;
     scalar_t neg_big = -static_cast<scalar_t>(1e30);
 
-    scalar_t max1_val = x_ptr[base]; int64_t max1_idx = 0;
-    scalar_t max2_val = neg_big;     int64_t max2_idx = 0;
-    scalar_t max3_val = neg_big;     int64_t max3_idx = 0;
-    scalar_t max4_val = neg_big;     int64_t max4_idx = 0;
+    scalar_t max1_val = x_ptr[x_base]; int64_t max1_idx = 0;
+    scalar_t max2_val = neg_big;       int64_t max2_idx = 0;
+    scalar_t max3_val = neg_big;       int64_t max3_idx = 0;
+    scalar_t max4_val = neg_big;       int64_t max4_idx = 0;
 
     for (int64_t n = 1; n < n_inputs; ++n) {
-        scalar_t val = x_ptr[base + n];
+        scalar_t val = x_ptr[x_base + n * x_stride2];
         if (val > max1_val) {
             max4_val = max3_val; max4_idx = max3_idx;
             max3_val = max2_val; max3_idx = max2_idx;
@@ -1671,7 +1686,6 @@ public:
         if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
         if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
         if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
-        if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
         if (x.size(2) < 2) throw py::value_error("n_inputs must be >= 2 for n_alternatives=1");
         if (threads_per_block <= 0 || threads_per_block > 1024)
             throw py::value_error("threads_per_block must be in range [1, 1024]");
@@ -1695,6 +1709,7 @@ public:
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na1_kernel", [&] {
             wta_lookup_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
                 reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
                 reinterpret_cast<int64_t*>(alt_inds.data_ptr()),
@@ -1718,7 +1733,6 @@ public:
         if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
         if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
         if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
-        if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
         if (x.size(2) < 3) throw py::value_error("n_inputs must be >= 3 for n_alternatives=2");
         if (threads_per_block <= 0 || threads_per_block > 1024)
             throw py::value_error("threads_per_block must be in range [1, 1024]");
@@ -1742,6 +1756,7 @@ public:
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na2_kernel", [&] {
             wta_lookup_forward_na2_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
                 reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
                 reinterpret_cast<int64_t*>(alt_inds.data_ptr()),
@@ -1765,7 +1780,6 @@ public:
         if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
         if (!x.is_cuda()) throw py::value_error("x must be CUDA tensor");
         if (!x.is_floating_point()) throw py::value_error("x must be floating point tensor");
-        if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
         if (x.size(2) < 4) throw py::value_error("n_inputs must be >= 4 for n_alternatives=3");
         if (threads_per_block <= 0 || threads_per_block > 1024)
             throw py::value_error("threads_per_block must be in range [1, 1024]");
@@ -1789,6 +1803,7 @@ public:
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na3_kernel", [&] {
             wta_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
                 reinterpret_cast<int64_t*>(winner_inds.data_ptr()),
                 reinterpret_cast<int64_t*>(alt_inds.data_ptr()),

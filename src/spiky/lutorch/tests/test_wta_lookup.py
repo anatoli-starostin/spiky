@@ -1,9 +1,21 @@
 """Tests for WTALookup module."""
+import contextlib
 import pytest
 import torch
 
 from spiky.lutorch.wta_lookup import WTALookup
+import spiky.lutorch.wta_lookup as wta_lookup_mod
 from spiky.lutorch.lut_helpers import UncertaintyMode
+
+
+@contextlib.contextmanager
+def _use_wta_custom_cuda_kernels(enabled: bool):
+    prev = wta_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS
+    wta_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = enabled
+    try:
+        yield
+    finally:
+        wta_lookup_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = prev
 
 SEED = 42
 
@@ -145,3 +157,69 @@ def test_wta_lookup_eval_shapes(device):
     assert lookup_indices.shape == (B, C)
     assert lookup_alt_indices.shape == (B, C, nalt)
     assert lookup_alt_deltas.shape == (B, C, nalt)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alternatives", [1, 2, 3])
+def test_wta_lookup_cuda_matches_fallback_eval(n_alternatives):
+    """Native CUDA forward (eval) must exactly match the PyTorch fallback."""
+    torch.manual_seed(SEED)
+    B, C, N = 5, 7, 20
+    x = torch.randn(B, C, N, device="cuda")
+
+    wta = WTALookup(n_inputs=N, n_alternatives=n_alternatives).cuda().eval()
+    with _use_wta_custom_cuda_kernels(True):
+        wi_cuda, ai_cuda, ad_cuda = wta(x)
+    with _use_wta_custom_cuda_kernels(False):
+        wi_ref, ai_ref, ad_ref = wta(x)
+
+    assert (wi_cuda == wi_ref).all(), "winner indices mismatch"
+    assert (ai_cuda == ai_ref).all(), "alt indices mismatch"
+    torch.testing.assert_close(ad_cuda, ad_ref)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alternatives", [1, 2, 3])
+def test_wta_lookup_cuda_matches_fallback_train(n_alternatives):
+    """Native CUDA forward+backward (train) must match the PyTorch fallback."""
+    torch.manual_seed(SEED)
+    B, C, N = 4, 6, 16
+    x_cuda = torch.randn(B, C, N, device="cuda", requires_grad=True)
+    x_ref  = x_cuda.detach().clone().requires_grad_(True)
+
+    wta = WTALookup(n_inputs=N, n_alternatives=n_alternatives).cuda().train()
+
+    with _use_wta_custom_cuda_kernels(True):
+        wi_c, ai_c, ad_c, gc_c, gac_c = wta(x_cuda)
+    with _use_wta_custom_cuda_kernels(False):
+        wi_r, ai_r, ad_r, gc_r, gac_r = wta(x_ref)
+
+    assert (wi_c == wi_r).all(), "winner indices mismatch"
+    assert (ai_c == ai_r).all(), "alt indices mismatch"
+    torch.testing.assert_close(ad_c, ad_r)
+
+    (gc_c.sum()).backward()
+    (gc_r.sum()).backward()
+    torch.testing.assert_close(x_cuda.grad, x_ref.grad)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alternatives", [1, 2, 3])
+def test_wta_lookup_cuda_strided_input(n_alternatives):
+    """Native CUDA kernels must handle non-contiguous (strided) input correctly."""
+    torch.manual_seed(SEED)
+    B, C, N = 3, 5, 16
+    # Create a strided view by transposing a [C, B, N] tensor → [B, C, N] non-contiguous
+    x_base = torch.randn(C, B, N, device="cuda")
+    x_strided = x_base.permute(1, 0, 2)  # [B, C, N], non-contiguous
+    assert not x_strided.is_contiguous()
+
+    wta = WTALookup(n_inputs=N, n_alternatives=n_alternatives).cuda().eval()
+    with _use_wta_custom_cuda_kernels(True):
+        wi_cuda, ai_cuda, ad_cuda = wta(x_strided)
+    with _use_wta_custom_cuda_kernels(False):
+        wi_ref, ai_ref, ad_ref = wta(x_strided)
+
+    assert (wi_cuda == wi_ref).all(), "winner indices mismatch on strided input"
+    assert (ai_cuda == ai_ref).all(), "alt indices mismatch on strided input"
+    torch.testing.assert_close(ad_cuda, ad_ref)
