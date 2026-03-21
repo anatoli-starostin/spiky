@@ -57,7 +57,7 @@ def _maybe_compile(fn):
 
     def wrapper(*args, **kwargs):
         device = _first_tensor_device(args, kwargs)
-        if device is not None and device.type == "cuda" and compiled_fn is not None:
+        if device is not None and device.type == "cuda" and compiled_fn is not None and _USE_LUTORCH_COMPILE:
             return compiled_fn(*args, **kwargs)
         return fn(*args, **kwargs)
 
