@@ -8,6 +8,9 @@ from typing import Optional, Tuple
 
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
+# Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
+_USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
+# Optional native CUDA kernels in lutorch; set SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS=1 to disable.
 _USE_LUTORCH_CUSTOM_CUDA_KERNELS = os.environ.get("SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS", "0") != "1"
 _LUTORCH_CUDA_THREADS_PER_BLOCK = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 if _LUTORCH_CUDA_THREADS_PER_BLOCK < 1 or _LUTORCH_CUDA_THREADS_PER_BLOCK > 1024:
@@ -23,6 +26,56 @@ def _get_native_lutorch_manager():
         return get_lutorch_manager()
     except Exception:
         return None
+
+
+def _first_tensor_device(args, kwargs):
+    for a in args:
+        if isinstance(a, torch.Tensor):
+            return a.device
+    for v in kwargs.values():
+        if isinstance(v, torch.Tensor):
+            return v.device
+    return None
+
+
+def _maybe_compile(fn):
+    # Use torch.compile only when LUTorch compile is enabled and the current
+    # call uses CUDA tensors. On CPU, torch.compile can introduce heavy
+    # multiprocessing overhead with little benefit.
+    compiled_fn = None
+    if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
+        compiled_fn = torch.compile(fn, dynamic=True)
+
+    def wrapper(*args, **kwargs):
+        device = _first_tensor_device(args, kwargs)
+        if device is not None and device.type == "cuda" and compiled_fn is not None:
+            return compiled_fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
+
+
+@_maybe_compile
+def _wta_lookup_forward_fallback(x: torch.Tensor, n_alternatives: int):
+    """
+    Pure-PyTorch WTA forward. Returns flat tensors for save_for_backward.
+
+    Returns:
+        winner_inds_flat: int64 [BC]
+        alt_inds_flat:    int64 [BC, n_alternatives]
+        alt_deltas_flat:  float [BC, n_alternatives]
+    """
+    B, C, N = x.shape
+    BC = B * C
+    topk_vals, topk_inds = torch.topk(
+        x.reshape(BC, N), k=n_alternatives + 1, dim=-1, largest=True
+    )
+    winner_inds_flat = topk_inds[:, 0].contiguous()
+    alt_inds_flat    = topk_inds[:, 1:].contiguous()
+    alt_deltas_flat  = (topk_vals[:, 0:1] - topk_vals[:, 1:]).contiguous()
+    return winner_inds_flat, alt_inds_flat, alt_deltas_flat
 
 
 class WTALookup(nn.Module):
@@ -89,7 +142,9 @@ class WTALookup(nn.Module):
         )
         if use_native:
             return self._native_forward(x)
-        return self._fallback_forward(x)
+        B, C, N = x.shape
+        wi, ai, ad = _wta_lookup_forward_fallback(x, self.n_alternatives)
+        return wi.view(B, C), ai.view(B, C, self.n_alternatives), ad.view(B, C, self.n_alternatives)
 
     def _forward_train(
         self, x: torch.Tensor
@@ -128,10 +183,6 @@ class WTALookup(nn.Module):
                 x, _LUTORCH_CUDA_THREADS_PER_BLOCK
             )
         return winner_inds, alt_inds, alt_deltas
-
-    def _fallback_forward(self, x: torch.Tensor):
-        topk_vals, topk_inds = torch.topk(x, k=self.n_alternatives + 1, dim=-1, largest=True)
-        return topk_inds[:, :, 0], topk_inds[:, :, 1:], topk_vals[:, :, 0:1] - topk_vals[:, :, 1:]
 
 
 class WTALookupFunction(torch.autograd.Function):
@@ -183,12 +234,9 @@ class WTALookupFunction(torch.autograd.Function):
             alt_inds_flat    = alt_inds.view(BC, n_alternatives).contiguous()
             alt_deltas_flat  = alt_deltas.view(BC, n_alternatives).contiguous()
         else:
-            topk_vals, topk_inds = torch.topk(
-                x.view(BC, N), k=n_alternatives + 1, dim=-1, largest=True
+            winner_inds_flat, alt_inds_flat, alt_deltas_flat = _wta_lookup_forward_fallback(
+                x, n_alternatives
             )
-            winner_inds_flat = topk_inds[:, 0].contiguous()                        # [BC]
-            alt_inds_flat    = topk_inds[:, 1:].contiguous()                       # [BC, n_alt]
-            alt_deltas_flat  = (topk_vals[:, 0:1] - topk_vals[:, 1:]).contiguous() # [BC, n_alt]
             winner_inds = winner_inds_flat.view(B, C)
             alt_inds    = alt_inds_flat.view(B, C, n_alternatives)
             alt_deltas  = alt_deltas_flat.view(B, C, n_alternatives)
@@ -264,34 +312,59 @@ class WTALookupFunction(torch.autograd.Function):
             )
             return x_grad_flat.view(B, C, N), None, None, None
 
-        alt_deltas_bca = alt_deltas_flat.view(B, C, n_alternatives)
-        grad_main = grad_lookup_indices_grad_c          # [B, C]
-        grad_alt  = grad_lookup_alt_indices_grad_c      # [B, C, n_alternatives]
+        def _wta_lookup_backward_impl(
+            x,
+            winner_inds_flat,
+            alt_inds_flat,
+            alt_deltas_flat,
+            batch_offset,
+            grad_main,
+            grad_alt,
+            inv_l1,
+            n_alternatives,
+        ):
+            BC = winner_inds_flat.shape[0]
+            N = x.shape[2]
+            alt_deltas_bca = alt_deltas_flat.view(BC, n_alternatives)
 
-        grad_diff = grad_main.unsqueeze(2) - grad_alt   # [B, C, n_alternatives]
+            grad_diff = grad_main.unsqueeze(2) - grad_alt   # [B, C, n_alternatives]
 
-        if ctx.inv_l1:
-            abs_delta = alt_deltas_bca.abs()
-            one_plus_abs = 1.0 + abs_delta
-            minus_uncertainty_derivative = (
-                0.5 * alt_deltas_bca.sign() / (one_plus_abs * one_plus_abs)
-            )
-        else:
-            delta_sq = alt_deltas_bca * alt_deltas_bca
-            one_plus_sq = 1.0 + delta_sq
-            minus_uncertainty_derivative = alt_deltas_bca / (one_plus_sq * one_plus_sq)
+            if inv_l1:
+                abs_delta = alt_deltas_bca.abs()
+                one_plus_abs = 1.0 + abs_delta
+                minus_uncertainty_derivative = (
+                    0.5 * alt_deltas_bca.sign() / (one_plus_abs * one_plus_abs)
+                )
+            else:
+                delta_sq = alt_deltas_bca * alt_deltas_bca
+                one_plus_sq = 1.0 + delta_sq
+                minus_uncertainty_derivative = alt_deltas_bca / (one_plus_sq * one_plus_sq)
 
-        du = grad_diff * minus_uncertainty_derivative   # [B, C, n_alternatives]
-        if n_alternatives > 1:
-            du = du / n_alternatives
+            du = grad_diff.view(BC, n_alternatives) * minus_uncertainty_derivative
+            if n_alternatives > 1:
+                du = du / n_alternatives
 
-        batch_offset  = ctx.batch_offset
-        winner_repeated = winner_inds_flat.repeat_interleave(n_alternatives)
-        alt_flat      = alt_inds_flat.reshape(-1)
-        du_flat       = du.reshape(-1)
+            winner_repeated = winner_inds_flat.repeat_interleave(n_alternatives)
+            alt_flat        = alt_inds_flat.reshape(-1)
+            du_flat         = du.reshape(-1)
 
-        x_grad_flat = torch.zeros(BC * N, device=x.device, dtype=x.dtype)
-        x_grad_flat.scatter_add_(0, batch_offset + winner_repeated, du_flat)
-        x_grad_flat.scatter_add_(0, batch_offset + alt_flat, -du_flat)
+            x_grad_flat = torch.zeros(BC * N, device=x.device, dtype=x.dtype)
+            x_grad_flat.scatter_add_(0, batch_offset + winner_repeated, du_flat)
+            x_grad_flat.scatter_add_(0, batch_offset + alt_flat, -du_flat)
+            return x_grad_flat
+
+        _wta_lookup_backward_impl = _maybe_compile(_wta_lookup_backward_impl)
+
+        x_grad_flat = _wta_lookup_backward_impl(
+            x,
+            winner_inds_flat,
+            alt_inds_flat,
+            alt_deltas_flat,
+            ctx.batch_offset,
+            grad_lookup_indices_grad_c,
+            grad_lookup_alt_indices_grad_c,
+            ctx.inv_l1,
+            n_alternatives,
+        )
 
         return x_grad_flat.view(B, C, N), None, None, None
