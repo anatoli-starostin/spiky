@@ -8,7 +8,6 @@ from typing import Tuple, Optional
 
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
-
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
 _USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
 
@@ -185,7 +184,8 @@ class LProjection(nn.Module):
         n_alternatives: Number of alternative indices per table (default: 1)
         n_outputs: Number of output dimensions
         smooth_mode: If True, use smooth interpolation with uncertainty function (default: False)
-        normalize_weights: If True, L2-normalize each weight column (over tables × entries) after each backward.
+        normalize_weights: If True, L2-normalize each weight column (over tables × entries) at the start of
+            :meth:`forward` while ``self.training`` is True (before the lookup).
     """
     
     def __init__(
@@ -217,22 +217,14 @@ class LProjection(nn.Module):
         self._cached_table_indices_expanded_alt = None
         self._cached_table_indices_alt_flat = None
 
-        self._backward_hook_handle = None
-        if self.normalize_weights:
-            self._backward_hook_handle = self.register_full_backward_hook(
-                LProjection._normalize_weights_after_backward
-            )
-
-    @staticmethod
-    def _normalize_weights_after_backward(module: "LProjection", grad_input, grad_output) -> None:
-        if not module.normalize_weights:
-            return
+    def apply_weight_column_norm(self) -> None:
+        """L2-normalize each weight column (over tables × entries). Used automatically at forward start when ``normalize_weights`` and training; callable manually if needed."""
         with torch.no_grad():
-            w = module.weights
+            w = self.weights
             flat = w.view(-1, w.shape[-1])
             norms = torch.linalg.norm(flat, dim=0, keepdim=True).clamp_min(1e-20)
-            w.div_(norms.view(1, 1, -1))
-    
+            w.data.copy_(w.detach() / norms.view(1, 1, -1))
+
     def forward(
         self,
         lookup_indices: torch.Tensor,
@@ -254,6 +246,8 @@ class LProjection(nn.Module):
         Returns:
             Output tensor of shape [B, n_lookup_tables, n_outputs]
         """
+        if self.training and self.normalize_weights:
+            self.apply_weight_column_norm()
         if self.training:
             return self._forward_train(
                 lookup_indices, lookup_alt_indices, lookup_alt_deltas,

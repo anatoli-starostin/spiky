@@ -11,9 +11,6 @@ from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
-_CALIBRATE_OUTPUT_EPS = 1e-20
-
-
 def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
     """
     For each batch row and each head, scale that row's outputs by (max − min) over ``n_outputs`` only.
@@ -23,7 +20,7 @@ def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
     """
     vmin = output.min(dim=-1, keepdim=True)[0]
     vmax = output.max(dim=-1, keepdim=True)[0]
-    scale = (vmax - vmin).clamp_min(_CALIBRATE_OUTPUT_EPS)
+    scale = (vmax - vmin).clamp_min(1e-20)
     return output / scale
 
 
