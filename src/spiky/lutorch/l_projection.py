@@ -185,6 +185,7 @@ class LProjection(nn.Module):
         n_alternatives: Number of alternative indices per table (default: 1)
         n_outputs: Number of output dimensions
         smooth_mode: If True, use smooth interpolation with uncertainty function (default: False)
+        normalize_weights: If True, L2-normalize each weight column (over tables × entries) after each backward.
     """
     
     def __init__(
@@ -196,6 +197,7 @@ class LProjection(nn.Module):
         smooth_mode: bool = False,
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
+        normalize_weights: bool = False,
     ):
         super().__init__()
         self.n_lookup_tables = n_lookup_tables
@@ -204,6 +206,7 @@ class LProjection(nn.Module):
         self.n_outputs = n_outputs
         self.smooth_mode = smooth_mode
         self.uncertainty_mode = uncertainty_mode
+        self.normalize_weights = normalize_weights
         
         # Initialize weight tensor: [n_lookup_tables, n_entries_per_table, n_outputs]
         self.weights = nn.Parameter(torch.zeros(n_lookup_tables, n_entries_per_table, n_outputs, device=device))
@@ -213,6 +216,22 @@ class LProjection(nn.Module):
         self._cached_table_indices_flat = None
         self._cached_table_indices_expanded_alt = None
         self._cached_table_indices_alt_flat = None
+
+        self._backward_hook_handle = None
+        if self.normalize_weights:
+            self._backward_hook_handle = self.register_full_backward_hook(
+                LProjection._normalize_weights_after_backward
+            )
+
+    @staticmethod
+    def _normalize_weights_after_backward(module: "LProjection", grad_input, grad_output) -> None:
+        if not module.normalize_weights:
+            return
+        with torch.no_grad():
+            w = module.weights
+            flat = w.view(-1, w.shape[-1])
+            norms = torch.linalg.norm(flat, dim=0, keepdim=True).clamp_min(1e-20)
+            w.div_(norms.view(1, 1, -1))
     
     def forward(
         self,

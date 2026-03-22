@@ -11,6 +11,21 @@ from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
+_CALIBRATE_OUTPUT_EPS = 1e-20
+
+
+def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
+    """
+    For each batch row and each head, scale that row's outputs by (max − min) over ``n_outputs`` only.
+
+    Args:
+        output: [B, n_heads, n_outputs]
+    """
+    vmin = output.min(dim=-1, keepdim=True)[0]
+    vmax = output.max(dim=-1, keepdim=True)[0]
+    scale = (vmax - vmin).clamp_min(_CALIBRATE_OUTPUT_EPS)
+    return output / scale
+
 
 class MultiHeadLut(nn.Module):
     """
@@ -35,6 +50,8 @@ class MultiHeadLut(nn.Module):
         smooth_mode: If True, use smooth interpolation in LProjection (default: False)
         device: Device to place buffers on
         initial_weights_noise: Std of zero-mean Gaussian added to projection weights at init (default: 0.0).
+        normalize_weights: Passed to LProjection: L2 column-normalize weights after each backward.
+        calibrate_output: If True, per (batch, head) divide by (max − min) over ``n_outputs`` only (after dropout and sum).
     """
     
     def __init__(
@@ -56,6 +73,8 @@ class MultiHeadLut(nn.Module):
         initial_weights_noise: float = 0.001,
         table_dropout: float = 0.0,
         dropout: float = 0.0,
+        normalize_weights: bool = False,
+        calibrate_output: bool = False,
     ):
         super().__init__()
         
@@ -70,6 +89,8 @@ class MultiHeadLut(nn.Module):
         self.uncertainty_mode = uncertainty_mode
         self.table_dropout = table_dropout
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
+        self.normalize_weights = normalize_weights
+        self.calibrate_output = calibrate_output
 
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -119,6 +140,7 @@ class MultiHeadLut(nn.Module):
             smooth_mode=smooth_mode,
             device=device,
             uncertainty_mode=uncertainty_mode,
+            normalize_weights=normalize_weights,
         )
         if initial_weights_noise != 0.0:
             dev = device or torch.device("cpu")
@@ -129,7 +151,7 @@ class MultiHeadLut(nn.Module):
                 self.projection.weights.add_(
                     torch.randn(self.projection.weights.shape, **rng_kwargs) * initial_weights_noise
                 )
-    
+
     def forward(
         self,
         x: torch.Tensor,
@@ -210,7 +232,8 @@ class MultiHeadLut(nn.Module):
             output = self.dropout(output)
         # Sum over tables_per_head dimension
         output = output.sum(dim=2)  # [B, n_heads, n_outputs]
-        
+        if self.calibrate_output:
+            output = _calibrate_per_head_output(output)
         return output
 
 
@@ -280,6 +303,7 @@ class ProjectionLUT(nn.Module):
       - In forward, applies this ``MultiHeadLut`` to the flattened input and
         reshapes the result to ``[B, H_p, W_p, O]`` where ``H_p, W_p`` are the
         number of patches along height and width.
+      - Optional ``calibrate_output``: forwarded to ``MultiHeadLut`` (per-batch, per-head scaling over features at end of its forward).
     """
 
     def __init__(
@@ -290,6 +314,7 @@ class ProjectionLUT(nn.Module):
         tables_per_head: int = 1,
         fold_config: Optional[UnfoldConfiguration] = None,
         device: Optional[torch.device] = None,
+        calibrate_output: bool = False,
         **multi_head_lut_kwargs,
     ):
         super().__init__()
@@ -413,6 +438,7 @@ class ProjectionLUT(nn.Module):
             tables_per_head=tables_per_head,
             anchor_candidates=anchor_candidates,
             device=device,
+            calibrate_output=calibrate_output,
             **multi_head_lut_kwargs,
         )
         self._cached_batch_offsets = None
