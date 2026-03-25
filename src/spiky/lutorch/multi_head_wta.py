@@ -31,6 +31,8 @@ class WTA(nn.Module):
         initial_weights_noise: Std of Gaussian added to LProjection weights at init.
         dropout: Dropout probability applied to the output (default: 0.0).
         random_seed: Seed for weight initialisation noise.
+        normalize_weights: Passed to LProjection: L2 column-normalize projection weights at the start
+            of each forward while training (see :class:`~spiky.lutorch.l_projection.LProjection`).
     """
 
     def __init__(
@@ -45,6 +47,7 @@ class WTA(nn.Module):
         initial_weights_noise: float = 0.001,
         dropout: float = 0.0,
         random_seed: Optional[int] = None,
+        normalize_weights: bool = False,
     ):
         super().__init__()
         self.n_channels = n_channels
@@ -53,6 +56,7 @@ class WTA(nn.Module):
         self.n_alternatives = n_alternatives
         self.smooth_mode = smooth_mode
         self.uncertainty_mode = uncertainty_mode
+        self.normalize_weights = normalize_weights
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
         self.wta_lookup = WTALookup(n_inputs, n_alternatives, uncertainty_mode)
@@ -64,6 +68,7 @@ class WTA(nn.Module):
             smooth_mode=smooth_mode,
             device=device,
             uncertainty_mode=uncertainty_mode,
+            normalize_weights=normalize_weights,
         )
         if initial_weights_noise != 0.0:
             dev = device or torch.device("cpu")
@@ -134,7 +139,7 @@ class ProjectionWTA(nn.Module):
         fold_config: Optional UnfoldConfiguration for the output grid. Must
             produce the same number of patches as unfold_config.
         device: Device for weight buffers.
-        **wta_kwargs: Forwarded to WTA (e.g. n_alternatives, smooth_mode, etc.).
+        **wta_kwargs: Forwarded to WTA (e.g. n_alternatives, smooth_mode, normalize_weights, etc.).
     """
 
     def __init__(
@@ -299,7 +304,7 @@ class Conv2DWTA(nn.Module):
         in_channels: Number of input channels C.
         out_channels: Number of output channels.
         device: Device for weight buffers.
-        **wta_kwargs: Forwarded to WTA.
+        **wta_kwargs: Forwarded to WTA (including normalize_weights).
     """
 
     def __init__(
