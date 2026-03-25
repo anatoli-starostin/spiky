@@ -11,6 +11,7 @@ from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
+
 def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
     """
     For each batch row and each head, scale that row's outputs by (max − min) over ``n_outputs`` only.
@@ -72,6 +73,8 @@ class MultiHeadLut(nn.Module):
         dropout: float = 0.0,
         normalize_weights: bool = False,
         calibrate_output: bool = False,
+        post_processor: nn.Module = None,
+        n_post_processor_inputs: int = 0
     ):
         super().__init__()
         
@@ -88,6 +91,8 @@ class MultiHeadLut(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
         self.normalize_weights = normalize_weights
         self.calibrate_output = calibrate_output
+        self.post_processor = post_processor
+        self.n_post_processor_inputs = n_post_processor_inputs
 
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -132,7 +137,7 @@ class MultiHeadLut(nn.Module):
         self.projection = LProjection(
             n_lookup_tables=n_lookup_tables,
             n_entries_per_table=n_entries_per_table,
-            n_outputs=n_outputs,
+            n_outputs=n_outputs if post_processor is None else n_post_processor_inputs,
             n_alternatives=n_alternatives,
             smooth_mode=smooth_mode,
             device=device,
@@ -206,7 +211,7 @@ class MultiHeadLut(nn.Module):
                 lookup_alt_indices = lookup_alt_indices * self.n_buckets + bucket_indices_alt  # [B, n_tables, n_alternatives]
         
         # Project through LProjection
-        # LProjection returns [B, n_lookup_tables, n_outputs]
+        # LProjection returns [B, n_lookup_tables, n_o], n_o == n_outputs if there is no post processor, else n_o == n_post_processor_inputs
         output = self.projection(
             lookup_indices=lookup_indices,
             lookup_alt_indices=lookup_alt_indices,
@@ -214,10 +219,12 @@ class MultiHeadLut(nn.Module):
             lookup_indices_grad_c=lookup_indices_grad_c,
             lookup_alt_indices_grad_c=lookup_alt_indices_grad_c
         )
+
+        n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
         
-        # Reshape and sum: [B, n_lookup_tables, n_outputs] -> [B, n_heads, tables_per_head, n_outputs] -> [B, n_heads, n_outputs]
-        # output: [B, n_heads * tables_per_head, n_outputs]
-        output = output.view(-1, self.n_heads, self.tables_per_head, self.n_outputs)
+        # Reshape and sum: [B, n_lookup_tables, n_o] -> [B, n_heads, tables_per_head, n_o] -> [B, n_heads, n_o]
+        # output: [B, n_heads * tables_per_head, n_o]
+        output = output.view(-1, self.n_heads, self.tables_per_head, n_o)
         # Apply table dropout: randomly zero entire tables during training
         if self.training and self.table_dropout > 0.0:
             mask = torch.bernoulli(
@@ -228,7 +235,9 @@ class MultiHeadLut(nn.Module):
         if self.dropout is not None:
             output = self.dropout(output)
         # Sum over tables_per_head dimension
-        output = output.sum(dim=2)  # [B, n_heads, n_outputs]
+        output = output.sum(dim=2)  # [B, n_heads, n_o]
+        if self.post_processor is not None:
+            output = self.post_processor(output)  # [B, n_heads, n_post_processor_inputs] -> [B, n_heads, n_outputs]
         if self.calibrate_output:
             output = _calibrate_per_head_output(output)
         return output
