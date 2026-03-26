@@ -609,3 +609,180 @@ for token_id in model.generate(prompt_ids, max_tokens=GENERATE_TOKENS, temperatu
 
 print("\n" + "-" * 60)
 print(f"\nGenerated {len(generated)} tokens.")
+
+# %% [markdown]
+# ---
+# ## Part 4 — Minimal GPT (vanilla baseline)
+#
+# The same experiment with all optimisations stripped out.
+# Vanilla GPT-2 style: learned positional embeddings, standard SDPA, LayerNorm, GELU, AdamW.
+# No RoPE, no QK-Norm, no sliding window, no value residual, no smear, no backout, no softcap.
+
+# %%
+class MinimalAttention(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        self.n_head = n_head
+        self.qkv  = nn.Linear(n_embd, 3 * n_embd, bias=False)
+        self.proj = nn.Linear(n_embd, n_embd, bias=False)
+
+    def forward(self, x):
+        B, T, C = x.size()
+        q, k, v = self.qkv(x).split(C, dim=2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
+
+
+class MinimalBlock(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        self.ln1  = nn.LayerNorm(n_embd)
+        self.attn = MinimalAttention(n_embd, n_head)
+        self.ln2  = nn.LayerNorm(n_embd)
+        self.mlp  = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd, bias=False),
+            nn.GELU(),
+            nn.Linear(4 * n_embd, n_embd, bias=False),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+
+class MinimalGPT(nn.Module):
+    def __init__(self, vocab_size, n_embd, n_head, n_layer, seq_len):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)
+        self.pos_emb = nn.Embedding(seq_len, n_embd)
+        self.blocks  = nn.ModuleList([MinimalBlock(n_embd, n_head) for _ in range(n_layer)])
+        self.ln_f    = nn.LayerNorm(n_embd)
+        self.head    = nn.Linear(n_embd, vocab_size, bias=False)
+        # weight tying
+        self.head.weight = self.tok_emb.weight
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(m.weight, std=0.02)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.size()
+        pos = torch.arange(T, device=idx.device)
+        x = self.tok_emb(idx) + self.pos_emb(pos)
+        for block in self.blocks:
+            x = block(x)
+        logits = self.head(self.ln_f(x))
+        if targets is not None:
+            return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits
+
+    @torch.inference_mode()
+    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, seq_len=512, seed=42):
+        rng = torch.Generator(device=tokens.device).manual_seed(seed)
+        ids = tokens
+        for _ in range(max_tokens):
+            ids_cond = ids[:, -seq_len:]
+            logits = self.forward(ids_cond)[:, -1, :]
+            if top_k:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            next_id = torch.multinomial(F.softmax(logits / temperature, dim=-1),
+                                        num_samples=1, generator=rng)
+            ids = torch.cat((ids, next_id), dim=1)
+            yield next_id.item()
+
+# %%
+MIN_DEPTH  = 6
+MIN_DIM    = 384
+MIN_HEADS  = 6
+MIN_ITERS  = 8000
+
+mini = MinimalGPT(
+    vocab_size=tokenizer.get_vocab_size(),
+    n_embd=MIN_DIM,
+    n_head=MIN_HEADS,
+    n_layer=MIN_DEPTH,
+    seq_len=SEQ_LEN,
+).to(DEVICE)
+
+mini_params = sum(p.numel() for p in mini.parameters())
+print(f"MinimalGPT params: {mini_params:,}")
+
+mini_optimizer = torch.optim.AdamW(mini.parameters(), lr=3e-4, weight_decay=0.1)
+
+mini_train_loader = tokenizing_distributed_data_loader_bos_bestfit(
+    tokenizer, DEVICE_BATCH_SIZE, SEQ_LEN, split="train", device=DEVICE
+)
+
+# %%
+mini_train_losses = []
+mini_val_bpbs     = []
+mini_val_steps    = []
+
+pbar = tqdm(range(1, MIN_ITERS + 1), desc="MinimalGPT", unit="step")
+for step in pbar:
+    lr_scale = get_lr_scale(step, MIN_ITERS)
+    for group in mini_optimizer.param_groups:
+        group["lr"] = 3e-4 * lr_scale
+
+    mini_optimizer.zero_grad(set_to_none=True)
+    x, y = next(mini_train_loader)
+    loss = mini(x, y)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(mini.parameters(), 1.0)
+    mini_optimizer.step()
+    mini_train_losses.append(loss.item())
+
+    pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{lr_scale:.3f}")
+
+    if step % EVAL_EVERY == 0 or step == MIN_ITERS:
+        mini.eval()
+        val_loader = val_loader_factory()
+        bpb = evaluate_bpb(mini, val_loader, EVAL_STEPS, token_bytes)
+        mini_val_bpbs.append(bpb)
+        mini_val_steps.append(step)
+        tqdm.write(f"  Step {step:04d} | train_loss={loss.item():.4f} | val_bpb={bpb:.4f}")
+        mini.train()
+
+print("MinimalGPT training complete.")
+
+# %%
+# Compare the two models
+try:
+    import matplotlib.pyplot as plt
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4))
+
+    ax1.plot(train_losses,       alpha=0.4, label=f"Nanochat GPT (depth={DEPTH})")
+    ax1.plot(mini_train_losses,  alpha=0.4, label=f"Minimal GPT (depth={MIN_DEPTH})")
+    ax1.set(xlabel="step", ylabel="cross-entropy loss", title="Training Loss")
+    ax1.legend()
+
+    ax2.plot(val_steps,      val_bpbs,      "o-", label=f"Nanochat GPT (depth={DEPTH})")
+    ax2.plot(mini_val_steps, mini_val_bpbs, "s-", label=f"Minimal GPT (depth={MIN_DEPTH})")
+    ax2.set(xlabel="step", ylabel="bits per byte", title="Validation BPB")
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig("comparison_curves.png", dpi=120)
+    plt.show()
+except ImportError:
+    print("matplotlib not installed — skipping plot.")
+
+# %%
+# Generation demo for MinimalGPT
+mini.eval()
+prompt_ids_tensor = torch.tensor(
+    [tokenizer.encode(PROMPT, prepend="<|bos|>")], dtype=torch.long, device=DEVICE
+)
+print(f"MinimalGPT generation:\n{'-'*60}")
+print(PROMPT, end="", flush=True)
+for token_id in mini.generate(prompt_ids_tensor, max_tokens=200, temperature=TEMPERATURE,
+                               top_k=TOP_K, seq_len=SEQ_LEN):
+    print(tokenizer.decode([token_id]), end="", flush=True)
+print(f"\n{'-'*60}")
