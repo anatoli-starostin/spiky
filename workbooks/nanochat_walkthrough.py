@@ -670,18 +670,15 @@ class MinimalGPT(nn.Module):
         return self.tok_emb.weight.device
 
     def setup_optimizer(self, lr=3e-4, weight_decay=0.1):
-        # Split into two groups: matrix weights (Muon) and everything else (AdamW).
-        # Matrices are 2-D weight tensors inside attention and MLP layers.
-        # Embeddings, LayerNorm, and biases go to AdamW.
-        matrix_params = [p for m in self.blocks
-                         for p in m.parameters() if p.ndim == 2]
-        other_params  = [p for p in self.parameters()
-                         if not any(p is q for q in matrix_params)]
+        # Two AdamW groups: weight matrices (with decay) and everything else (no decay).
+        # Embeddings, LayerNorm params, and 1-D tensors generally should not be decayed.
+        decay_params  = [p for p in self.parameters() if p.ndim >= 2]
+        nodecay_params = [p for p in self.parameters() if p.ndim < 2]
         param_groups = [
-            dict(kind='adamw', params=other_params,  lr=lr,          betas=(0.9, 0.95), weight_decay=weight_decay),
-            dict(kind='muon',  params=matrix_params, lr=lr * 0.5,    momentum=0.95, ns_steps=5, beta2=0.9, weight_decay=0.0),
+            dict(params=decay_params,   lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
+            dict(params=nodecay_params, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
         ]
-        optimizer = MuonAdamW(param_groups)
+        optimizer = torch.optim.AdamW(param_groups)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
         return optimizer
