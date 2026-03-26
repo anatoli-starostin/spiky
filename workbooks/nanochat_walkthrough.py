@@ -665,6 +665,10 @@ class MinimalGPT(nn.Module):
         # weight tying
         self.head.weight = self.tok_emb.weight
         self.apply(self._init_weights)
+        # Zero-init output projections so residual branches start as identity
+        for block in self.blocks:
+            nn.init.zeros_(block.attn.proj.weight)
+            nn.init.zeros_(block.mlp[-1].weight)
 
     def get_device(self):
         return self.tok_emb.weight.device
