@@ -669,6 +669,23 @@ class MinimalGPT(nn.Module):
     def get_device(self):
         return self.tok_emb.weight.device
 
+    def setup_optimizer(self, lr=3e-4, weight_decay=0.1):
+        # Split into two groups: matrix weights (Muon) and everything else (AdamW).
+        # Matrices are 2-D weight tensors inside attention and MLP layers.
+        # Embeddings, LayerNorm, and biases go to AdamW.
+        matrix_params = [p for m in self.blocks
+                         for p in m.parameters() if p.ndim == 2]
+        other_params  = [p for p in self.parameters()
+                         if not any(p is q for q in matrix_params)]
+        param_groups = [
+            dict(kind='adamw', params=other_params,  lr=lr,          betas=(0.9, 0.95), weight_decay=weight_decay),
+            dict(kind='muon',  params=matrix_params, lr=lr * 0.5,    momentum=0.95, ns_steps=5, beta2=0.9, weight_decay=0.0),
+        ]
+        optimizer = MuonAdamW(param_groups)
+        for group in optimizer.param_groups:
+            group["initial_lr"] = group["lr"]
+        return optimizer
+
     def _init_weights(self, m):
         if isinstance(m, (nn.Linear, nn.Embedding)):
             nn.init.normal_(m.weight, std=0.02)
@@ -717,7 +734,7 @@ mini = MinimalGPT(
 mini_params = sum(p.numel() for p in mini.parameters())
 print(f"MinimalGPT params: {mini_params:,}")
 
-mini_optimizer = torch.optim.AdamW(mini.parameters(), lr=3e-4, weight_decay=0.1)
+mini_optimizer = mini.setup_optimizer(lr=3e-4, weight_decay=0.1)
 
 mini_train_loader = tokenizing_distributed_data_loader_bos_bestfit(
     tokenizer, DEVICE_BATCH_SIZE, SEQ_LEN, split="train", device=DEVICE
@@ -732,7 +749,7 @@ pbar = tqdm(range(1, MIN_ITERS + 1), desc="MinimalGPT", unit="step")
 for step in pbar:
     lr_scale = get_lr_scale(step, MIN_ITERS)
     for group in mini_optimizer.param_groups:
-        group["lr"] = 3e-4 * lr_scale
+        group["lr"] = group["initial_lr"] * lr_scale
 
     mini_optimizer.zero_grad(set_to_none=True)
     x, y = next(mini_train_loader)
