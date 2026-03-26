@@ -102,6 +102,22 @@ else:
     print(f"Tokenizer trained in {time.time() - t0:.1f}s")
     tokenizer.save(TOKENIZER_DIR)
 
+# Generate token_bytes.pt if missing (needed for bits-per-byte evaluation).
+# This maps each token id to the number of UTF-8 bytes it represents (0 for special tokens).
+token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
+if not os.path.exists(token_bytes_path):
+    print("Generating token_bytes.pt ...")
+    vocab_size = tokenizer.get_vocab_size()
+    special_set = set(tokenizer.get_special_tokens())
+    token_bytes_list = []
+    for token_id in range(vocab_size):
+        token_str = tokenizer.decode([token_id])
+        token_bytes_list.append(0 if token_str in special_set else len(token_str.encode("utf-8")))
+    token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
+    with open(token_bytes_path, "wb") as f:
+        torch.save(token_bytes_tensor, f)
+    print(f"Saved token_bytes.pt  ({vocab_size:,} entries)")
+
 print(f"Vocab size: {tokenizer.get_vocab_size():,}")
 print(f"Special tokens: {tokenizer.get_special_tokens()}")
 
