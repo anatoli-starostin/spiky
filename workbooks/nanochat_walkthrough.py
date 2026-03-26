@@ -9,8 +9,14 @@
 # %%
 import os, sys, math, time
 import torch
+import torch._dynamo
 import pyarrow.parquet as pq
 from tqdm.auto import tqdm
+
+# Disable torch.compile for the notebook — the fused optimizer kernel requires
+# extra VRAM during compilation warmup which can OOM on a busy / small GPU.
+# Eager mode is slightly slower but perfectly fine for this small demo model.
+torch._dynamo.config.disable = True
 
 # Make sure we run from the nanochat project root
 PROJECT_ROOT = os.path.dirname(os.path.abspath("walkthrough.py"))
