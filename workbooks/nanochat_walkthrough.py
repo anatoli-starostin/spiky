@@ -666,11 +666,14 @@ class MinimalGPT(nn.Module):
         self.head.weight = self.tok_emb.weight
         self.apply(self._init_weights)
 
+    def get_device(self):
+        return self.tok_emb.weight.device
+
     def _init_weights(self, m):
         if isinstance(m, (nn.Linear, nn.Embedding)):
             nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, loss_reduction='mean'):
         B, T = idx.size()
         pos = torch.arange(T, device=idx.device)
         x = self.tok_emb(idx) + self.pos_emb(pos)
@@ -678,7 +681,8 @@ class MinimalGPT(nn.Module):
             x = block(x)
         logits = self.head(self.ln_f(x))
         if targets is not None:
-            return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
+                                   reduction=loss_reduction)
         return logits
 
     @torch.inference_mode()
