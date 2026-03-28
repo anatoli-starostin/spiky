@@ -45,7 +45,7 @@ warnings.filterwarnings(
     message=".*has_mkldnn.*deprecated.*"
 )
 
-device = 'cuda:7'
+device = 'cuda:5'
 summation_dtype = torch.float32
 random_seed = 1
 torch.manual_seed(random_seed)
@@ -111,34 +111,96 @@ from dataclasses import dataclass
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.lutorch.lut_attention import LUTAttention, PairProcessingConfig, PairProcessingMode
 from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch.multi_head_wta import WTA
 
+class Reshape(nn.Module):
+    def __init__(self, *shape):
+        super().__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.reshape(x.shape[0], *self.shape)
+
+class Merge(nn.Module):
+    def forward(self, x):
+        B, H, E = x.shape
+        return x.reshape(B * H, E)
+    
+class Unmerge(nn.Module):
+    def __init__(self, H):
+        super().__init__()
+        self.H = H
+
+    def forward(self, x):
+        return x.reshape(x.shape[0] // self.H, self.H, *x.shape[1:])
 
 @dataclass(frozen=True)
 class LUTTransformerConfig:
     """Full configuration for LUTTransformer (embedding, layers, block params, temperatures)."""
     vocab_size: int = VOCAB_SIZE
-    embedding_dim: int = 32
+    embedding_dim: int = 64
     num_layers: int = 6
     num_heads: int = 4
-    n_anchor_pairs_attn: int = 14
-    n_anchor_pairs_ffn: int = 14
-    n_positional_buckets: int = 8
-    tables_per_head_attn: int = 32
-    tables_per_head_value: int = 16
-    ffn_tables: int = 16
+    hidden_dim_attn: int = 16
+    hidden_dim_value: int = 256
+    hidden_dim_ffn: int = 256
+    n_anchor_pairs_attn: int = 10
+    n_anchor_pairs_ffn: int = 12
+    n_positional_buckets: int = 1
+    tables_per_head_attn: int = 96
+    tables_per_head_value: int = 96
+    ffn_tables: int = 96
     dropout: float = 0.0
-    smooth_mode: bool = True
+    smooth_mode: bool = False
+    n_alternatives: int = 1
     device: object = device
     connected_anchors_mode: bool = False
     random_seed: object = 42
     attention_temperature: float = 0.25
     embedding_temperature: float = 0.1
     initial_weights_noise: float = 0.001
+    normalise_weights: bool = False
+    calibrate_output: bool = False
     uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1
     pair_config: PairProcessingConfig = PairProcessingConfig(c1=1.0, c2=-2.0)
 
     def __post_init__(self):
         assert (self.embedding_dim % self.num_heads) == 0
+
+class LUTLinearReluPostProcessor(nn.Module):
+    def __init__(self, num_heads, hdim, odim):
+        super().__init__()
+        self.pp = nn.Sequential(
+            nn.ReLU(),
+            Reshape(num_heads * hdim),
+            nn.Linear(num_heads * hdim, num_heads * odim, device=device),
+            Reshape(num_heads, odim)
+        )
+
+    def forward(self, x):
+        return self.pp(x)
+    
+class LUTWTAPostProcessor(nn.Module):
+    def __init__(self, num_heads, n_channels, hdim, odim, smooth_mode, n_alternatives, device):
+        super().__init__()
+        n_inputs = (num_heads * hdim) // n_channels
+        self.pp = nn.Sequential(
+            Reshape(n_channels, n_inputs),
+            WTA(
+                n_channels=n_channels,
+                n_inputs=n_inputs,
+                n_outputs=num_heads * odim,
+                n_alternatives=n_alternatives,
+                smooth_mode=smooth_mode,
+                initial_weights_noise=0.001,
+                normalize_weights=False,
+                device=device
+            ),
+            Reshape(n_channels, num_heads, odim),
+        )
+
+    def forward(self, x):
+        return self.pp(x).sum(dim=-3)
 
 
 class LUTTransformer(nn.Module):
@@ -158,11 +220,22 @@ class LUTTransformer(nn.Module):
                     tables_per_head=c.tables_per_head_attn,
                     n_buckets=c.n_positional_buckets,
                     smooth_mode=c.smooth_mode,
+                    n_alternatives=c.n_alternatives,
+                    normalize_weights=c.normalise_weights,
+                    calibrate_output=False,
                     device=c.device,
                     connected_anchors_mode=c.connected_anchors_mode,
                     random_seed=c.random_seed,
                     initial_weights_noise=c.initial_weights_noise,
                     uncertainty_mode=c.uncertainty_mode,
+#                     n_post_processor_inputs=c.hidden_dim_attn,
+#                     # post_processor=LUTLinearReluPostProcessor(c.num_heads, c.hidden_dim_attn, 1)
+#                     post_processor=LUTWTAPostProcessor(
+#                         c.num_heads, 4, c.hidden_dim_attn, 1,
+#                         smooth_mode=c.smooth_mode,
+#                         n_alternatives=c.n_alternatives,
+#                         device=device
+#                     )
                 ),
                 causal=True,
                 include_diagonal=False,
@@ -177,11 +250,22 @@ class LUTTransformer(nn.Module):
                 n_anchor_pairs=c.n_anchor_pairs_attn,
                 tables_per_head=c.tables_per_head_value,
                 smooth_mode=c.smooth_mode,
+                n_alternatives=c.n_alternatives,
+                normalize_weights=c.normalise_weights,
+                calibrate_output=c.calibrate_output,
                 device=c.device,
                 connected_anchors_mode=c.connected_anchors_mode,
                 random_seed=c.random_seed,
                 initial_weights_noise=c.initial_weights_noise,
                 uncertainty_mode=c.uncertainty_mode,
+#                 n_post_processor_inputs=c.hidden_dim_value,
+#                 # post_processor=LUTLinearReluPostProcessor(c.num_heads, c.hidden_dim_value, c.embedding_dim // c.num_heads)
+#                 post_processor=LUTWTAPostProcessor(
+#                     c.num_heads, 16, c.hidden_dim_value, c.embedding_dim // c.num_heads,
+#                     smooth_mode=c.smooth_mode,
+#                     n_alternatives=c.n_alternatives,
+#                     device=device
+#                 )
             )
             self.attn_dropout = nn.Dropout(c.dropout)
             self.ffn = MultiHeadLut(
@@ -191,11 +275,22 @@ class LUTTransformer(nn.Module):
                 n_anchor_pairs=c.n_anchor_pairs_ffn,
                 tables_per_head=c.ffn_tables,
                 smooth_mode=c.smooth_mode,
+                n_alternatives=c.n_alternatives,
+                normalize_weights=c.normalise_weights,
+                calibrate_output=c.calibrate_output,
                 device=c.device,
                 connected_anchors_mode=c.connected_anchors_mode,
                 random_seed=c.random_seed,
                 initial_weights_noise=c.initial_weights_noise,
                 uncertainty_mode=c.uncertainty_mode,
+                n_post_processor_inputs=c.hidden_dim_ffn,
+#                 # post_processor=LUTLinearReluPostProcessor(1, c.hidden_dim_ffn, c.embedding_dim)
+#                 post_processor=LUTWTAPostProcessor(
+#                     1, 16, c.hidden_dim_ffn, c.embedding_dim,
+#                     smooth_mode=c.smooth_mode,
+#                     n_alternatives=c.n_alternatives,
+#                     device=device
+#                 )
             )
             self.ffn_dropout = nn.Dropout(c.dropout)
 
@@ -212,22 +307,30 @@ class LUTTransformer(nn.Module):
             z = z + self.ffn_dropout(ffn_out)  # [B, S, E]
             return z
 
-    def __init__(self, c: LUTTransformerConfig = LUTTransformerConfig()):
+    def __init__(self, c: LUTTransformerConfig = LUTTransformerConfig(), maxlen=CONTEXT_SIZE):
         super().__init__()
         self.config = c
         with torch.no_grad():
-            self.token_embedder = nn.Embedding(c.vocab_size, c.embedding_dim, device=c.device)
+            self.token_embedder = nn.Embedding(c.vocab_size, c.embedding_dim // 2, device=c.device)
             self.token_embedder.weight.copy_(torch.randn(self.token_embedder.weight.shape, device=c.device) * 0.1)
+            self.token_unembedder = nn.Embedding(c.vocab_size, c.embedding_dim, device=c.device)
+            self.token_unembedder.weight.copy_(torch.randn(self.token_unembedder.weight.shape, device=c.device) * 0.1)
         self.layers = nn.ModuleList([LUTTransformer.Block(c) for _ in range(c.num_layers)])
+        self.register_buffer("pos_emb", torch.randn([1, maxlen, c.embedding_dim // 2], device=device) * 0.1)
+
 
     def forward(self, tokens):
         z = self.token_embedder(tokens)  # [B, S, E]
+        # z = z * torch.sign(self.pos_emb[:,:tokens.shape[1]])
+        # z = z * torch.tanh(self.pos_emb[:,:tokens.shape[1]] * 10)
+        # z = z * self.pos_emb[:,:tokens.shape[1]]
+        z = torch.cat([z, self.pos_emb[:,:tokens.shape[1]].repeat(tokens.shape[0], 1, 1)], dim=-1)
         for layer in self.layers:
             z = layer(z)
         z = z / (z.norm(dim=-1, keepdim=True) + 1e-6)
-        logits = z @ self.token_embedder.weight.T / self.config.embedding_temperature  # [B, S, E] @ [E, V] -> [B, S, V]
+        # logits = z @ self.token_unembedder.weight.T / self.config.embedding_temperature  # [B, S, E] @ [E, V] -> [B, S, V]
+        logits = z @ self.token_unembedder.weight.T # [B, S, E] @ [E, V] -> [B, S, V]
         return logits
-
 
 # %%
 lut_transformer = None
@@ -250,7 +353,7 @@ print("frozen:", total - trainable)
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR
 
-batch_size = 256
+batch_size = 128
 test_batch_size = 256
 
 SCALE = 5.0
@@ -260,13 +363,21 @@ def lr_func(t):
 
 print(f"Crossover point for LR: {(SCALE / MAX_RATE )**2:,}")
 
-lr = 1.0
-optimizer = optim.SGD(lut_transformer.layers.parameters(), lr=lr)
-optimizer_embedder = optim.Adam(lut_transformer.token_embedder.parameters(), lr=1.0)
+lr = 0.00001
+# optimizer = optim.SGD(lut_transformer.layers.parameters(), lr=lr)
+# optimizer = optim.Adam(lut_transformer.layers.parameters(), lr=lr, weight_decay=3e-4)
+# optimizer_embedder = optim.Adam(lut_transformer.token_embedder.parameters(), lr=lr, weight_decay=3e-4)
+optimizer = optim.Adam(lut_transformer.parameters(), lr=lr)
 
-n_steps=100000
-sched = LambdaLR(optimizer, lr_lambda=lr_func)
-sched_embedder = LambdaLR(optimizer_embedder, lr_lambda=lr_func)
+n_steps=500000
+# sched = LambdaLR(optimizer, lr_lambda=lr_func)
+# sched_embedder = LambdaLR(optimizer_embedder, lr_lambda=lr_func)
+sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=n_steps
+)
+# sched_embedder = torch.optim.lr_scheduler.CosineAnnealingLR(
+#     optimizer_embedder, T_max=n_steps
+# )
 
 # %%
 lut_train_losses = []
@@ -360,19 +471,18 @@ for step in range(n_steps):
     loss = F.cross_entropy(
         logits.reshape(B * T, V),
         tgt.reshape(B * T),
-        reduction="sum",
+        reduction="mean",
     )
 
     optimizer.zero_grad()
-    optimizer_embedder.zero_grad()
+    #optimizer_embedder.zero_grad()
     loss.backward()
     optimizer.step()
-    optimizer_embedder.step()
+    #optimizer_embedder.step()
     sched.step()
-    sched_embedder.step()
+    #sched_embedder.step()
 
-    # Report full-sequence mean loss (same as above, just mean instead of sum)
-    loss_value = loss.item() / (B * T)
+    loss_value = loss.item()
     train_loss = loss_value if train_loss is None else (1 - alpha) * train_loss + alpha * loss_value
     pbar.update(1)
     if step % 10 == 0:
@@ -403,5 +513,155 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
+# %% [markdown]
+# # ------------
+
+# %%
+import matplotlib.pyplot as plt
+
+# assume train_losses and test_losses are Python lists of equal length
+
+steps = [i * 1000 for i in range(len(lut_train_losses))]
+
+plt.figure(figsize=(6,4))
+plt.plot(steps, lut_train_losses, label="train")
+plt.plot(steps, lut_test_losses, label="test")
+plt.ylim(top=3.0)
+plt.xlabel("steps")
+plt.ylabel("loss")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
 # %%
 lut_train_losses[-1], lut_test_losses[-1]
+
+# %%
+# [TEST] step 100000: loss=1.6232 (calibration on, initial noise 0.1, SGD)
+
+# (calibration off, intial_noise=0.0, SGD)
+
+# [TEST] step 0: loss=4.7863
+
+# [GEN]: Once upon a time be echecespolarlno locksspacry of allowerk. Stry mets men ind indid for bysh a m 
+
+# [TEST] step 1000: loss=2.0473
+
+# [GEN]: Once upon a time 2005 know.
+# Theroud Twun, Ent wasted every doc sub to kverter–iling werey great 
+
+# [TEST] step 2000: loss=1.9209
+
+# [GEN]: Once upon a time NMC BLEThes. Saffice (a
+# Në Sot Rakene of IO000 Chroughdacte in a tathemance ave 
+
+# [TEST] step 3000: loss=1.8512
+
+# [GEN]: Once upon a time Step be��deo./Brains of rt when its areaatural member heining aced affects with 
+
+# [TEST] step 4000: loss=1.8066
+
+# [GEN]: Once upon a time see exteply grouption of maan poinums. Witwinn astures from it collecting up tha 
+
+# [TEST] step 5000: loss=1.7724
+
+# [GEN]: Once upon a time thanges gen last govern essays and for cansal plentify organic everyone. Imber a 
+
+# [TEST] step 6000: loss=1.7516
+
+# [GEN]: Once upon a time Ama Masaformountries Yuliastic JHO gramt, I hean thirds those familitation or th 
+
+# [TEST] step 7000: loss=1.7278
+
+# [GEN]: Once upon a time decipaning medical sensor and actually knowledge concern that lookeblled neurik  
+
+# [TEST] step 8000: loss=1.7116
+
+# [GEN]: Once upon a time and e-say for leaving pollading raise can to it continuidance on Qualized Studie 
+
+# [TEST] step 9000: loss=1.6977
+
+# [GEN]: Once upon a time and he service of China (SMS6, or New Aynic:
+# 1806-3: Ang some Kong Laqqueus may  
+
+# [TEST] step 10000: loss=1.6811
+
+# [GEN]: Once upon a time never convever paid by a people site host-may, Morian Posal have Zonking-termy,  
+
+# [TEST] step 11000: loss=1.6748
+
+# [GEN]: Once upon a time theory or ack with ET ICANAPN SAN: American.
+# Recepter 12017 1 X�Stedasedivaion ( 
+
+# [TEST] step 12000: loss=1.6628
+
+# [GEN]: Once upon a time longs.
+# Other One could not humany design, cent every conclusion across and birth 
+
+# [TEST] step 13000: loss=1.6562
+
+# [GEN]: Once upon a time reproving interust is metaping found the were aghere. This is a cities as some l 
+
+# [TEST] step 14000: loss=1.6528
+
+# [GEN]: Once upon a time usel though neith to pay to favo the passenged – Dichallock of Sidge internati 
+
+# [TEST] step 15000: loss=1.6457
+
+# [GEN]: Once upon a time from heart health and on processes around.
+# The discussion from the expengton thi 
+
+# [TEST] step 16000: loss=1.6351
+
+# [GEN]: Once upon a time estimence current in gleased economic, at the wax these revotation zell selled c 
+
+# [TEST] step 17000: loss=1.6255
+
+# [GEN]: Once upon a time school penutility algined a challand low regarding [—accular malmap about lowo 
+
+# [TEST] step 18000: loss=1.6227
+
+# [GEN]: Once upon a time to defix transe to owhere the back planet. (�1) Garder Ptovidually who imbatax c 
+
+# [TEST] step 19000: loss=1.6193
+
+# [GEN]: Once upon a time should a family status regions the semestificit to their eight to math shall sch 
+
+# [TEST] step 20000: loss=1.6120
+
+# [GEN]: Once upon a time homent. By Mongue is zetti soft time. "If of Headows ColumJer's such smart one w 
+
+# [TEST] step 21000: loss=1.6051
+
+# [GEN]: Once upon a time of all best implemention and directly enhances in conspace to the release of noy 
+
+# [TEST] step 22000: loss=1.6029
+
+# [GEN]: Once upon a time approved that is either and well called the power, once the decision, but the le 
+
+# [TEST] step 23000: loss=1.5956
+
+# [GEN]: Once upon a time the pup wage or preventutional social straitration of genssical specific versal  
+
+# [TEST] step 24000: loss=1.5964
+
+# %%
+import matplotlib.pyplot as plt
+
+# assume train_losses and test_losses are Python lists of equal length
+
+steps = [i * 1000 for i in range(len(lut_train_losses))]
+
+plt.figure(figsize=(6,4))
+plt.plot(steps, lut_train_losses, label="train")
+plt.plot(steps, lut_test_losses, label="test")
+plt.ylim(top=3.0)
+plt.xlabel("steps")
+plt.ylabel("loss")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# %%
