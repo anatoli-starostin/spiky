@@ -138,3 +138,12 @@ class RankProjection(nn.Module):
         proj = self.soft_rank_projection if self.smooth_mode else self.ste_rank_projection
         r = proj(x)  # (B, M)
         return self.linear(r)  # (B, d_out)
+
+
+def add_rank_preserving_noise(x, scale=0.1):
+    # x: (..., d)
+    sorted_x, _ = x.sort(dim=-1)
+    # minimum gap between adjacent elements
+    min_gap = (sorted_x[..., 1:] - sorted_x[..., :-1]).min(dim=-1, keepdim=True).values  # (..., 1)
+    noise = torch.rand_like(x) * min_gap * scale
+    return x + noise
