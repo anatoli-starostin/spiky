@@ -11,3 +11,4 @@ jupyterlab
 ipykernel
 ipympl
 gdown
+pytest>=8.0
