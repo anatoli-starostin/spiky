@@ -153,6 +153,19 @@ class MultiHeadLut(nn.Module):
                 self.projection.weights.add_(
                     torch.randn(self.projection.weights.shape, **rng_kwargs) * initial_weights_noise
                 )
+        self._internal_loss: Optional[torch.Tensor] = None
+
+    def internal_loss(self) -> Optional[torch.Tensor]:
+        """
+        Returns the uncertainty regularization loss from the last forward pass (training only).
+
+        The loss is mean(0.5 / (1 + |lookup_alt_deltas|)) over all alternative deltas —
+        high when deltas are small (uncertain routing), low when deltas are large (confident).
+        Penalizing this drives the network toward confident, hard-mode-like routing.
+
+        Returns None if not in training mode or smooth_mode is False.
+        """
+        return self._internal_loss
 
     def forward(
         self,
@@ -196,6 +209,16 @@ class MultiHeadLut(nn.Module):
             lookup_indices_grad_c = None
             lookup_alt_indices_grad_c = None
         
+        # Compute internal regularization loss from alternative deltas (uncertainty penalty)
+        # Uses the same uncertainty function as LProjection, keyed by uncertainty_mode.
+        if self.training and lookup_alt_deltas is not None:
+            if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:
+                self._internal_loss = (0.5 / (1.0 + lookup_alt_deltas.abs())).mean()
+            else:  # INVERSE_QUADRATIC
+                self._internal_loss = (0.5 / (1.0 + lookup_alt_deltas ** 2)).mean()
+        else:
+            self._internal_loss = None
+
         # Apply bucket modification if n_buckets > 1
         if self.n_buckets > 1:
             # Ensure bucket_indices has the right dtype and shape for broadcasting
