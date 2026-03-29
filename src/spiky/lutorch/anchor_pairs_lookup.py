@@ -531,7 +531,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         (
             _,
             _,
-            _,
+            grad_lookup_alt_deltas,
             grad_lookup_indices_grad_c,
             grad_lookup_alt_indices_grad_c
         ) = grad_outputs
@@ -564,6 +564,12 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 ctx.inv_l1,
                 _LUTORCH_CUDA_THREADS_PER_BLOCK,
             )
+            if grad_lookup_alt_deltas is not None:
+                direct_flat = grad_lookup_alt_deltas.reshape(-1)
+                flat_anchor1 = anchor1_ids.reshape(-1)
+                flat_anchor2 = anchor2_ids.reshape(-1)
+                x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor1, direct_flat)
+                x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor2, -direct_flat)
             return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
 
         def _anchor_pairs_lookup_backward_impl(
@@ -616,6 +622,13 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             grad_lookup_indices_grad_c,
             grad_lookup_alt_indices_grad_c,
         )
+
+        if grad_lookup_alt_deltas is not None:
+            direct_flat = grad_lookup_alt_deltas.reshape(-1)
+            flat_anchor1 = anchor1_ids.reshape(-1)
+            flat_anchor2 = anchor2_ids.reshape(-1)
+            x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor1, direct_flat)
+            x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor2, -direct_flat)
 
         # 8 inputs -> 8 gradient returns
         return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
