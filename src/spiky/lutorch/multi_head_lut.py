@@ -9,7 +9,7 @@ from typing import Tuple, Optional, Union
 
 from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
 from spiky.lutorch.l_projection import LProjection
-from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch.lut_helpers import UncertaintyMode, AnchorSamplingPolicy
 
 
 def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
@@ -73,11 +73,25 @@ class MultiHeadLut(nn.Module):
         dropout: float = 0.0,
         normalize_weights: bool = False,
         calibrate_output: bool = False,
+        output_scale_noise: float = 0.0,
+        input_scale_noise: float = 0.0,
         post_processor: nn.Module = None,
-        n_post_processor_inputs: int = 0
+        n_post_processor_inputs: int = 0,
+        uncertainty_bias: float = 0.5,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        sparse_output_dim: Optional[int] = None,
     ):
         super().__init__()
         
+        if sparse_output_dim is not None and sparse_output_dim >= n_outputs:
+            raise ValueError(
+                f"sparse_output_dim ({sparse_output_dim}) must be less than n_outputs ({n_outputs})"
+            )
+        if sparse_output_dim is not None and post_processor is not None:
+            raise ValueError(
+                "sparse_output_dim and post_processor cannot be used together"
+            )
+        self.sparse_output_dim = sparse_output_dim
         self.input_dim = input_dim
         self.n_heads = n_heads
         self.n_outputs = n_outputs
@@ -91,8 +105,11 @@ class MultiHeadLut(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
         self.normalize_weights = normalize_weights
         self.calibrate_output = calibrate_output
+        self.output_scale_noise = output_scale_noise
+        self.input_scale_noise = input_scale_noise
         self.post_processor = post_processor
         self.n_post_processor_inputs = n_post_processor_inputs
+        self.uncertainty_bias = uncertainty_bias
 
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -131,19 +148,43 @@ class MultiHeadLut(nn.Module):
             device=device,
             n_alternatives=n_alternatives,
             uncertainty_mode=uncertainty_mode,
+            uncertainty_bias=uncertainty_bias,
+            anchor_sampling_policy=anchor_sampling_policy,
         )
-        
+
+        # Determine internal output dim for LProjection
+        _lproj_n_outputs = (
+            sparse_output_dim if sparse_output_dim is not None
+            else (n_outputs if post_processor is None else n_post_processor_inputs)
+        )
+        self._lproj_n_outputs = _lproj_n_outputs
+
         # Create LProjection: n_lookup_tables total
         self.projection = LProjection(
             n_lookup_tables=n_lookup_tables,
             n_entries_per_table=n_entries_per_table,
-            n_outputs=n_outputs if post_processor is None else n_post_processor_inputs,
+            n_outputs=_lproj_n_outputs,
             n_alternatives=n_alternatives,
             smooth_mode=smooth_mode,
             device=device,
             uncertainty_mode=uncertainty_mode,
             normalize_weights=normalize_weights,
+            uncertainty_bias=uncertainty_bias,
         )
+
+        # Precompute random scatter indices for sparse output mode
+        if sparse_output_dim is not None:
+            dev = device or torch.device("cpu")
+            gen = torch.Generator(device=dev)
+            gen.manual_seed(random_seed if random_seed is not None else 0)
+            scatter_indices = torch.randint(
+                0, n_outputs,
+                (n_heads, tables_per_head, sparse_output_dim),
+                generator=gen, device=dev,
+            )
+            self.register_buffer('scatter_indices', scatter_indices)
+        else:
+            self.scatter_indices = None
         if initial_weights_noise != 0.0:
             dev = device or torch.device("cpu")
             with torch.no_grad():
@@ -192,6 +233,10 @@ class MultiHeadLut(nn.Module):
             assert bucket_indices.dtype == torch.int32 or bucket_indices.dtype == torch.int64, \
                 f"bucket_indices must be integer tensor, got {bucket_indices.dtype}"
 
+        if self.training and self.input_scale_noise > 0.0:
+            scale = 1.0 + (torch.rand(x.shape[0], 1, device=x.device) * 2 - 1) * self.input_scale_noise
+            x = x * scale
+
         # Determine return_alternatives: always True in training, only True in eval if smooth_mode
         return_alternatives = self.training or self.smooth_mode
         
@@ -213,9 +258,9 @@ class MultiHeadLut(nn.Module):
         # Uses the same uncertainty function as LProjection, keyed by uncertainty_mode.
         if self.training and lookup_alt_deltas is not None:
             if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:
-                self._internal_loss = (0.5 / (1.0 + lookup_alt_deltas.abs())).mean()
+                self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas.abs())).mean()
             else:  # INVERSE_QUADRATIC
-                self._internal_loss = (0.5 / (1.0 + lookup_alt_deltas ** 2)).mean()
+                self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas ** 2)).mean()
         else:
             self._internal_loss = None
 
@@ -243,22 +288,36 @@ class MultiHeadLut(nn.Module):
             lookup_alt_indices_grad_c=lookup_alt_indices_grad_c
         )
 
-        n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
-        
-        # Reshape and sum: [B, n_lookup_tables, n_o] -> [B, n_heads, tables_per_head, n_o] -> [B, n_heads, n_o]
-        # output: [B, n_heads * tables_per_head, n_o]
-        output = output.view(-1, self.n_heads, self.tables_per_head, n_o)
+        # Reshape: [B, n_lookup_tables, _lproj_n_outputs] -> [B, n_heads, tables_per_head, _lproj_n_outputs]
+        output = output.view(-1, self.n_heads, self.tables_per_head, self._lproj_n_outputs)
+        B = output.shape[0]
         # Apply table dropout: randomly zero entire tables during training
         if self.training and self.table_dropout > 0.0:
             mask = torch.bernoulli(
-                torch.full((output.shape[0], self.n_heads, self.tables_per_head, 1),
+                torch.full((B, self.n_heads, self.tables_per_head, 1),
                            1.0 - self.table_dropout, device=output.device)
             )
             output = output * mask / (1.0 - self.table_dropout)
         if self.dropout is not None:
             output = self.dropout(output)
-        # Sum over tables_per_head dimension
-        output = output.sum(dim=2)  # [B, n_heads, n_o]
+
+        if self.scatter_indices is not None:
+            # Sparse mode: scatter_add each table's outputs into [B, n_heads, n_outputs]
+            # scatter_indices: [n_heads, tables_per_head, sparse_output_dim]
+            # output: [B, n_heads, tables_per_head, sparse_output_dim]
+            idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1)  # [B, n_heads, tph, sparse_output_dim]
+            idx_flat = idx.reshape(B, self.n_heads, -1)      # [B, n_heads, tph * sparse_output_dim]
+            src_flat = output.reshape(B, self.n_heads, -1)   # [B, n_heads, tph * sparse_output_dim]
+            output = torch.zeros(B, self.n_heads, self.n_outputs, device=output.device, dtype=output.dtype)
+            output.scatter_add_(2, idx_flat, src_flat)       # [B, n_heads, n_outputs]
+        else:
+            # Normal mode: sum over tables_per_head dimension
+            n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
+            output = output.sum(dim=2)  # [B, n_heads, n_o]
+        if self.training and self.output_scale_noise > 0.0:
+            # Multiply each (batch, head) by an independent U(1-s, 1+s) scalar
+            scale = 1.0 + (torch.rand(output.shape[0], output.shape[1], 1, device=output.device) * 2 - 1) * self.output_scale_noise
+            output = output * scale
         if self.post_processor is not None:
             output = self.post_processor(output)  # [B, n_heads, n_post_processor_inputs] -> [B, n_heads, n_outputs]
         if self.calibrate_output:

@@ -405,6 +405,7 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
     int64_t n_tables,
     int64_t n_alternatives,
     bool inv_l1,
+    scalar_t uncertainty_bias,
     scalar_t* x_grad_flat_ptr
 ) {
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -597,6 +598,7 @@ __global__ void wta_lookup_backward_kernel(
     int64_t n_channels,
     int64_t n_alternatives,
     bool inv_l1,
+    scalar_t uncertainty_bias,
     scalar_t* x_grad_flat_ptr
 ) {
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -663,6 +665,7 @@ __global__ void lprojection_forward_smooth_weights_kernel(
     int64_t total_bt,
     int64_t n_alternatives,
     bool l1_uncertainty,
+    scalar_t uncertainty_bias,
     const scalar_t* lookup_alt_deltas_ptr, // [B*T*A] contiguous flattened
     scalar_t* main_weight_ptr,             // [B*T]
     scalar_t* alt_weight_ptr               // [B*T*A]
@@ -678,9 +681,9 @@ __global__ void lprojection_forward_smooth_weights_kernel(
         scalar_t d = lookup_alt_deltas_ptr[base + a];
         scalar_t u;
         if (l1_uncertainty) {
-            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + lutorch_abs(d));
+            u = uncertainty_bias / (static_cast<scalar_t>(1.0) + lutorch_abs(d));
         } else {
-            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + d * d);
+            u = uncertainty_bias / (static_cast<scalar_t>(1.0) + d * d);
         }
         alt_weight_ptr[base + a] = u * inv_n_alt;
         uncertainty_sum += u;
@@ -1495,6 +1498,7 @@ public:
         const torch::Tensor& table_indices_flat,
         const torch::Tensor& table_indices_alt_flat,
         bool l1_uncertainty,
+        double uncertainty_bias = 0.5,
         int64_t threads_per_block = 256
     ) {
         PROF_START(LUTORCH_MANAGER_LPROJECTION_FORWARD_SMOOTH_PROFILER_OP);
@@ -1553,6 +1557,7 @@ public:
                 total_bt,
                 n_alternatives,
                 l1_uncertainty,
+                static_cast<scalar_t>(uncertainty_bias),
                 reinterpret_cast<const scalar_t*>(lookup_alt_deltas.data_ptr()),
                 reinterpret_cast<scalar_t*>(main_weight.data_ptr()),
                 reinterpret_cast<scalar_t*>(alt_weight.data_ptr())
@@ -1590,6 +1595,7 @@ public:
         const torch::Tensor& grad_main,
         const torch::Tensor& grad_alt,
         bool inv_l1,
+        double uncertainty_bias = 0.5,
         int64_t threads_per_block = 256
     ) {
         PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
@@ -1667,6 +1673,7 @@ public:
                 n_tables,
                 n_alternatives,
                 inv_l1,
+                static_cast<scalar_t>(uncertainty_bias),
                 reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
             );
         });
@@ -1830,6 +1837,7 @@ public:
         const torch::Tensor& grad_alt,
         int64_t n_alternatives,
         bool inv_l1,
+        double uncertainty_bias = 0.5,
         int64_t threads_per_block = 256
     ) {
         if (x.dim() != 3) throw py::value_error("x must be 3D [batch_size, n_channels, n_inputs]");
@@ -1874,6 +1882,7 @@ public:
                 reinterpret_cast<const scalar_t*>(grad_alt.data_ptr()),
                 grad_main.stride(0), grad_main.stride(1),
                 n_channels, n_alternatives, inv_l1,
+                static_cast<scalar_t>(uncertainty_bias),
                 reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
             );
         });
@@ -2432,6 +2441,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("grad_main"),
             py::arg("grad_alt"),
             py::arg("inv_l1"),
+            py::arg("uncertainty_bias") = 0.5,
             py::arg("threads_per_block") = 256
         )
         .def(
@@ -2464,6 +2474,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("grad_alt"),
             py::arg("n_alternatives"),
             py::arg("inv_l1"),
+            py::arg("uncertainty_bias") = 0.5,
             py::arg("threads_per_block") = 256
         )
         .def(
@@ -2511,6 +2522,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("table_indices_flat"),
             py::arg("table_indices_alt_flat"),
             py::arg("l1_uncertainty"),
+            py::arg("uncertainty_bias") = 0.5,
             py::arg("threads_per_block") = 256
         )
         .def(

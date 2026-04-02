@@ -266,3 +266,49 @@ def test_multi_head_lut_smooth_training(device, n_alternatives):
             assert nc == nr
             torch.testing.assert_close(pc, pr, atol=5e-4, rtol=5e-4,
                                        msg=f"iter {i}: param mismatch for {nc}")
+
+
+def test_sparse_output_dim_shape(device):
+    """sparse_output_dim: output shape is [B, n_heads, n_outputs], not sparse_output_dim."""
+    lut = MultiHeadLut(
+        input_dim=32, n_heads=4, n_outputs=16, n_anchor_pairs=4,
+        tables_per_head=8, sparse_output_dim=6,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        device=torch.device("cpu"),
+    ).to(device)
+    x = torch.randn(8, 32, device=device)
+    out = lut(x)
+    assert out.shape == (8, 4, 16), f"expected (8, 4, 16), got {out.shape}"
+    assert not torch.isnan(out).any()
+
+
+def test_sparse_output_dim_backward(device):
+    """sparse_output_dim: gradients flow back to projection weights."""
+    lut = MultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=16, n_anchor_pairs=4,
+        tables_per_head=8, sparse_output_dim=4,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        device=torch.device("cpu"),
+    ).to(device)
+    x = torch.randn(4, 32, device=device)
+    out = lut(x)
+    out.sum().backward()
+    assert lut.projection.weights.grad is not None
+    assert not torch.isnan(lut.projection.weights.grad).any()
+
+
+def test_sparse_output_dim_validation():
+    """sparse_output_dim must be < n_outputs; cannot combine with post_processor."""
+    with pytest.raises(ValueError, match="sparse_output_dim"):
+        MultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=8, n_anchor_pairs=4,
+            tables_per_head=4, sparse_output_dim=8,
+            uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        )
+    with pytest.raises(ValueError, match="post_processor"):
+        MultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=16, n_anchor_pairs=4,
+            tables_per_head=4, sparse_output_dim=4,
+            post_processor=nn.Identity(), n_post_processor_inputs=4,
+            uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        )

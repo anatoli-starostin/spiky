@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple
 
-from spiky.lutorch.lut_helpers import UncertaintyMode, get_balanced_anchor_pairs
+from spiky.lutorch.lut_helpers import UncertaintyMode, AnchorSamplingPolicy, get_balanced_anchor_pairs
 
 # Optional torch.compile; set SPIKY_LUTORCH_NO_COMPILE=1 to disable (e.g. debugging or older PyTorch).
 _USE_LUTORCH_COMPILE = os.environ.get("SPIKY_LUTORCH_NO_COMPILE", "0") != "1"
@@ -201,6 +201,8 @@ class AnchorPairsLookup(nn.Module):
         device: Optional[torch.device] = None,
         n_alternatives: int = 1,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
+        uncertainty_bias: float = 0.5,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
     ):
         table_dim = 2 ** n_anchor_pairs
         if n_alternatives > n_anchor_pairs:
@@ -218,6 +220,7 @@ class AnchorPairsLookup(nn.Module):
         assert cmp_eps >= 0.0
         self.cmp_eps = cmp_eps
         self.uncertainty_mode = uncertainty_mode
+        self.uncertainty_bias = uncertainty_bias
 
         dev = device or torch.device("cpu")
         # Balanced coverage over input dimensions (randperm-based), optionally restricted
@@ -230,6 +233,7 @@ class AnchorPairsLookup(nn.Module):
             random_seed=random_seed,
             connected_mode=connected_anchors_mode,
             anchor_candidates=anchor_candidates,
+            policy=anchor_sampling_policy,
         )
         self.register_buffer("anchor_pairs_a", anchor_pairs_a.contiguous())
         self.register_buffer("anchor_pairs_b", anchor_pairs_b.contiguous())
@@ -390,7 +394,8 @@ class AnchorPairsLookup(nn.Module):
         uncertainty_mode_int = 0 if self.uncertainty_mode == UncertaintyMode.INVERSE_L1 else 1
         return AnchorPairsLookupFunction.apply(
             x, anchor_pairs_a, anchor_pairs_b, self.powers, self.cmp_eps,
-            uncertainty_mode_int, self.n_alternatives, self._cached_batch_offset
+            uncertainty_mode_int, self.n_alternatives, self._cached_batch_offset,
+            self.uncertainty_bias
         )
 
 
@@ -413,7 +418,8 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         """
         (
             x, anchor_pairs_a, anchor_pairs_b,
-            powers, cmp_eps, uncertainty_mode, n_alternatives, batch_offset
+            powers, cmp_eps, uncertainty_mode, n_alternatives, batch_offset,
+            uncertainty_bias
         ) = args
         batch_size = x.shape[0]
         n_tables = anchor_pairs_a.shape[0]
@@ -515,6 +521,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
         ctx.batch_offset = batch_offset
         ctx.n_tables = n_tables
         ctx.n_alternatives = n_alternatives
+        ctx.uncertainty_bias = float(uncertainty_bias)
         ctx.save_for_backward(x, anchor1_ids, anchor2_ids, lookup_alt_deltas)
 
         return (
@@ -562,6 +569,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 grad_lookup_indices_grad_c,
                 flat_grad_alt,
                 ctx.inv_l1,
+                ctx.uncertainty_bias,
                 _LUTORCH_CUDA_THREADS_PER_BLOCK,
             )
             if grad_lookup_alt_deltas is not None:
@@ -570,7 +578,9 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
                 flat_anchor2 = anchor2_ids.reshape(-1)
                 x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor1, direct_flat)
                 x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor2, -direct_flat)
-            return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
+            return x_grad_flat.view(x.shape), None, None, None, None, None, None, None, None
+
+        uncertainty_bias = ctx.uncertainty_bias
 
         def _anchor_pairs_lookup_backward_impl(
             x,
@@ -581,6 +591,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             ctx_batch_offset,
             grad_main,
             grad_alt,
+            uncertainty_bias,
         ):
             batch_size, input_dim = x.shape[0], x.shape[1]
 
@@ -621,6 +632,7 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             ctx.batch_offset,
             grad_lookup_indices_grad_c,
             grad_lookup_alt_indices_grad_c,
+            uncertainty_bias,
         )
 
         if grad_lookup_alt_deltas is not None:
@@ -630,5 +642,5 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
             x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor1, direct_flat)
             x_grad_flat.scatter_add_(0, ctx.batch_offset + flat_anchor2, -direct_flat)
 
-        # 8 inputs -> 8 gradient returns
-        return x_grad_flat.view(x.shape), None, None, None, None, None, None, None
+        # 9 inputs -> 9 gradient returns
+        return x_grad_flat.view(x.shape), None, None, None, None, None, None, None, None

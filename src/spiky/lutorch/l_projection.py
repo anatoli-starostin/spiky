@@ -88,14 +88,15 @@ def _forward_smooth_impl(
     lookup_alt_deltas: torch.Tensor,
     n_alternatives: int,
     l1_uncertainty: bool,
+    uncertainty_bias: float = 0.5,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Smooth forward branch, returns (output, main_weight, alt_weight)."""
     if l1_uncertainty:
         abs_deltas = lookup_alt_deltas.abs()
-        uncertainty = 0.5 / (1.0 + abs_deltas)
+        uncertainty = uncertainty_bias / (1.0 + abs_deltas)
     else:
         squared = lookup_alt_deltas * lookup_alt_deltas
-        uncertainty = 0.5 / (1.0 + squared)
+        uncertainty = uncertainty_bias / (1.0 + squared)
 
     main_weight = 1.0 - (uncertainty.sum(dim=2) / n_alternatives)
     alt_weight = uncertainty / n_alternatives
@@ -198,6 +199,7 @@ class LProjection(nn.Module):
         device: Optional[torch.device] = None,
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
         normalize_weights: bool = False,
+        uncertainty_bias: float = 0.5,
     ):
         super().__init__()
         self.n_lookup_tables = n_lookup_tables
@@ -207,6 +209,7 @@ class LProjection(nn.Module):
         self.smooth_mode = smooth_mode
         self.uncertainty_mode = uncertainty_mode
         self.normalize_weights = normalize_weights
+        self.uncertainty_bias = uncertainty_bias
         
         # Initialize weight tensor: [n_lookup_tables, n_entries_per_table, n_outputs]
         self.weights = nn.Parameter(torch.zeros(n_lookup_tables, n_entries_per_table, n_outputs, device=device))
@@ -323,6 +326,7 @@ class LProjection(nn.Module):
                     self._cached_table_indices_flat.contiguous(),
                     self._cached_table_indices_alt_flat.contiguous(),
                     l1_uncertainty,
+                    self.uncertainty_bias,
                     _LUTORCH_CUDA_THREADS_PER_BLOCK,
                 )
                 return output
@@ -335,7 +339,8 @@ class LProjection(nn.Module):
                 lookup_alt_indices,
                 lookup_alt_deltas,
                 self.n_alternatives,
-                l1_uncertainty
+                l1_uncertainty,
+                self.uncertainty_bias,
             )
             return output
     
@@ -356,7 +361,7 @@ class LProjection(nn.Module):
         return LProjectionFunction.apply(
             self.weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
             lookup_indices_grad_c, lookup_alt_indices_grad_c,
-            self.smooth_mode, self.n_alternatives, self.uncertainty_mode,
+            self.smooth_mode, self.n_alternatives, self.uncertainty_mode, self.uncertainty_bias,
             self._cached_table_indices_expanded, self._cached_table_indices_flat,
             self._cached_table_indices_expanded_alt, self._cached_table_indices_alt_flat
         )
@@ -383,7 +388,7 @@ class LProjectionFunction(torch.autograd.Function):
         (
             weights, lookup_indices, lookup_alt_indices, lookup_alt_deltas,
             _, _, smooth_mode,
-            n_alternatives, uncertainty_mode, table_indices_expanded, table_indices_flat,
+            n_alternatives, uncertainty_mode, uncertainty_bias, table_indices_expanded, table_indices_flat,
             table_indices_expanded_alt, table_indices_alt_flat
         ) = args
         
@@ -425,6 +430,7 @@ class LProjectionFunction(torch.autograd.Function):
                     table_indices_flat.contiguous(),
                     table_indices_alt_flat.contiguous(),
                     l1_uncertainty,
+                    uncertainty_bias,
                     _LUTORCH_CUDA_THREADS_PER_BLOCK,
                 )
             else:
@@ -437,6 +443,7 @@ class LProjectionFunction(torch.autograd.Function):
                     lookup_alt_deltas,
                     n_alternatives,
                     l1_uncertainty,
+                    uncertainty_bias,
                 )
             ctx.save_for_backward(
                 weights, lookup_indices, lookup_alt_indices,
@@ -545,6 +552,7 @@ class LProjectionFunction(torch.autograd.Function):
             None,
             lookup_indices_grad_c_grad,
             lookup_alt_indices_grad_c_grad,
+            None,
             None,
             None,
             None,
