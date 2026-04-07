@@ -16,6 +16,13 @@ _LUTORCH_COMPILE_MODULES = [
 ]
 
 
+@pytest.fixture(autouse=True, params=[False, True], ids=["recompute-off", "recompute-on"])
+def _force_recompute_in_backward(request, monkeypatch):
+    if request.param:
+        import spiky.lutorch.multi_head_lut as mod
+        monkeypatch.setattr(mod, "_FORCE_RECOMPUTE_IN_BACKWARD", True)
+
+
 @pytest.fixture(
     params=[
         "cpu",

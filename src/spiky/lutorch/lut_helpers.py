@@ -14,6 +14,89 @@ class AnchorSamplingPolicy(str, Enum):
     DISCONNECTED = "disconnected" # per table: 2*nap distinct indices, no index reuse
     FULL_COVERAGE = "full_coverage" # all unique pairs tiled across tables, a != b guaranteed
     DISCONNECTED_FULL_COVERAGE = "disconnected_full_coverage"  # DISCONNECTED + greedy resampling to cover all pairs
+    HIERARCHICAL = "hierarchical"  # multi-scale fragments; tph is upper bound, actual count auto-computed
+    MULTISCALE = "multiscale"      # sliding windows at all integer anchor distances; tph is upper bound
+    CONV2D = "conv2d"              # 2D conv-style; input_dim must be perfect square; nap must be 8; tph is upper bound
+
+
+def compute_multiscale_n_tables(
+    input_dim: int,
+    n_anchor_pairs: int,
+    tph: Optional[int] = None,
+) -> int:
+    """
+    Compute the actual number of tables used by MULTISCALE anchor sampling.
+
+    For distance d=1,2,3,...: n_tables_d = input_dim - n_anchor_pairs * d.
+    Accumulates until n_tables_d <= 0, then caps at tph if provided.
+    """
+    total = 0
+    d = 1
+    while True:
+        n = input_dim - n_anchor_pairs * d
+        if n <= 0:
+            break
+        total += n
+        d += 1
+    if tph is not None:
+        total = min(total, tph)
+    return total
+
+
+def compute_hierarchical_n_tables(
+    input_dim: int,
+    n_anchor_pairs: int,
+    tph: Optional[int] = None,
+) -> int:
+    """
+    Compute the actual number of tables used by HIERARCHICAL anchor sampling.
+
+    Window always slides by 1. Distance between anchors doubles each level:
+    level s (distance = 2^(s-1)): n_tables_s = input_dim - n_anchor_pairs * 2^(s-1).
+    Accumulates until n_tables_s <= 0, then caps at tph if provided.
+    """
+    total = 0
+    s = 1
+    while True:
+        dist = 2 ** (s - 1)
+        n = input_dim - n_anchor_pairs * dist
+        if n <= 0:
+            break
+        total += n
+        s += 1
+    if tph is not None:
+        total = min(total, tph)
+    return total
+
+
+def compute_conv2d_n_tables(
+    input_dim: int,
+    tph: Optional[int] = None,
+) -> int:
+    """
+    Compute the actual number of tables used by CONV2D anchor sampling.
+
+    Treats input_dim as an H×H grid (H = sqrt(input_dim)).
+    For dilation d=1,2,3,...: slides a 3×3 dilated kernel (stride=1) over all valid top-left
+    positions (rows 0..H-1-2d, cols 0..H-1-2d).
+    nap is always 8: 9 grid points sorted by 1D index → 8 sequential (a[i], a[i+1]) pairs.
+    Accumulates until no valid positions remain, then caps at tph if provided.
+    """
+    H = int(math.isqrt(input_dim))
+    if H * H != input_dim:
+        raise ValueError(f"CONV2D requires input_dim to be a perfect square, got {input_dim}")
+    total = 0
+    d = 1
+    while True:
+        max_r = H - 1 - 2 * d
+        max_c = H - 1 - 2 * d
+        if max_r < 0 or max_c < 0:
+            break
+        total += (max_r + 1) * (max_c + 1)
+        d += 1
+    if tph is not None:
+        total = min(total, tph)
+    return total
 
 
 def get_balanced_anchor_pairs(
@@ -25,6 +108,8 @@ def get_balanced_anchor_pairs(
     connected_mode: bool = False,
     anchor_candidates: Optional[torch.Tensor] = None,
     policy: Optional["AnchorSamplingPolicy"] = None,
+    n_heads: int = 1,
+    shuffle_per_head: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -50,6 +135,126 @@ def get_balanced_anchor_pairs(
     if random_seed is not None:
         gen = torch.Generator(device=device)
         gen.manual_seed(random_seed)
+
+    # ── HIERARCHICAL ────────────────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.HIERARCHICAL:
+        all_a = []
+        all_b = []
+        s = 1
+        while True:
+            dist = 2 ** (s - 1)
+            n_s = input_dim - n_anchor_pairs * dist
+            if n_s <= 0:
+                break
+            for k in range(n_s):
+                # Window slides by 1; distance between anchors = dist (doubles each level)
+                all_a.append(torch.tensor(
+                    [k + i * dist for i in range(n_anchor_pairs)],
+                    dtype=torch.long, device=device,
+                ))
+                all_b.append(torch.tensor(
+                    [k + (i + 1) * dist for i in range(n_anchor_pairs)],
+                    dtype=torch.long, device=device,
+                ))
+            s += 1
+        base_a = torch.stack(all_a)
+        base_b = torch.stack(all_b)
+        per_head = n_tables // n_heads
+        base_a = base_a[:per_head]
+        base_b = base_b[:per_head]
+        if not shuffle_per_head:
+            return base_a.repeat(n_heads, 1), base_b.repeat(n_heads, 1)
+        chunks_a, chunks_b = [], []
+        for h in range(n_heads):
+            if h == 0:
+                chunks_a.append(base_a)
+                chunks_b.append(base_b)
+            else:
+                perm = torch.randperm(input_dim, device=device, generator=gen)
+                chunks_a.append(perm[base_a])
+                chunks_b.append(perm[base_b])
+        return torch.cat(chunks_a, dim=0), torch.cat(chunks_b, dim=0)
+
+    # ── MULTISCALE ──────────────────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.MULTISCALE:
+        all_a = []
+        all_b = []
+        d = 1
+        while True:
+            n_d = input_dim - n_anchor_pairs * d
+            if n_d <= 0:
+                break
+            for k in range(n_d):
+                all_a.append(torch.tensor(
+                    [k + i * d for i in range(n_anchor_pairs)],
+                    dtype=torch.long, device=device,
+                ))
+                all_b.append(torch.tensor(
+                    [k + (i + 1) * d for i in range(n_anchor_pairs)],
+                    dtype=torch.long, device=device,
+                ))
+            d += 1
+        base_a = torch.stack(all_a)
+        base_b = torch.stack(all_b)
+        per_head = n_tables // n_heads
+        base_a = base_a[:per_head]
+        base_b = base_b[:per_head]
+        if not shuffle_per_head:
+            return base_a.repeat(n_heads, 1), base_b.repeat(n_heads, 1)
+        chunks_a, chunks_b = [], []
+        for h in range(n_heads):
+            if h == 0:
+                chunks_a.append(base_a)
+                chunks_b.append(base_b)
+            else:
+                perm = torch.randperm(input_dim, device=device, generator=gen)
+                chunks_a.append(perm[base_a])
+                chunks_b.append(perm[base_b])
+        return torch.cat(chunks_a, dim=0), torch.cat(chunks_b, dim=0)
+
+    # ── CONV2D ──────────────────────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.CONV2D:
+        if n_anchor_pairs != 8:
+            raise ValueError(
+                f"CONV2D policy requires n_anchor_pairs == 8, got {n_anchor_pairs}"
+            )
+        H = int(math.isqrt(input_dim))
+        if H * H != input_dim:
+            raise ValueError(f"CONV2D requires input_dim to be a perfect square, got {input_dim}")
+        all_a = []
+        all_b = []
+        d = 1
+        while True:
+            max_r = H - 1 - 2 * d
+            max_c = H - 1 - 2 * d
+            if max_r < 0 or max_c < 0:
+                break
+            for r in range(max_r + 1):
+                for c in range(max_c + 1):
+                    pts = sorted(
+                        (r + dr * d) * H + (c + dc * d)
+                        for dr in range(3) for dc in range(3)
+                    )
+                    all_a.append(torch.tensor(pts[:8], dtype=torch.long, device=device))
+                    all_b.append(torch.tensor(pts[1:], dtype=torch.long, device=device))
+            d += 1
+        base_a = torch.stack(all_a)
+        base_b = torch.stack(all_b)
+        per_head = n_tables // n_heads
+        base_a = base_a[:per_head]
+        base_b = base_b[:per_head]
+        if not shuffle_per_head:
+            return base_a.repeat(n_heads, 1), base_b.repeat(n_heads, 1)
+        chunks_a, chunks_b = [], []
+        for h in range(n_heads):
+            if h == 0:
+                chunks_a.append(base_a)
+                chunks_b.append(base_b)
+            else:
+                perm = torch.randperm(input_dim, device=device, generator=gen)
+                chunks_a.append(perm[base_a])
+                chunks_b.append(perm[base_b])
+        return torch.cat(chunks_a, dim=0), torch.cat(chunks_b, dim=0)
 
     # ── DISCONNECTED ────────────────────────────────────────────────────────────
     if effective_policy == AnchorSamplingPolicy.DISCONNECTED:

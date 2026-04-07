@@ -172,6 +172,78 @@ def _backward_train_impl(
     return weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad
 
 
+def _lprojection_backward(
+    grad_output: torch.Tensor,
+    weights: torch.Tensor,
+    lookup_indices: torch.Tensor,
+    lookup_alt_indices: Optional[torch.Tensor],
+    main_weight: Optional[torch.Tensor],
+    alt_weight: Optional[torch.Tensor],
+    smooth_mode: bool,
+    n_alternatives: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Compute (weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad).
+    Reconstructs table_indices_flat internally using arange — no need to save them.
+    Handles both native CUDA and PyTorch fallback.
+    """
+    batch_size = lookup_indices.shape[0]
+    n_tables = lookup_indices.shape[1]
+    dev = lookup_indices.device
+
+    # Reconstruct deterministic table indices cheaply
+    table_indices_flat = torch.arange(n_tables, device=dev, dtype=torch.long).repeat(batch_size)
+    table_indices_alt_flat = (
+        torch.arange(n_tables, device=dev, dtype=torch.long)
+        .unsqueeze(1).expand(-1, n_alternatives).reshape(-1).repeat(batch_size)
+    )
+
+    use_native_cuda = (
+        _USE_LUTORCH_CUSTOM_CUDA_KERNELS
+        and _get_native_lutorch_manager() is not None
+        and grad_output.is_cuda
+        and grad_output.dtype in (torch.float32, torch.float64)
+        and lookup_alt_indices is not None
+        and (not smooth_mode or n_alternatives <= 3)
+    )
+    if use_native_cuda:
+        native = _get_native_lutorch_manager()
+        lookup_indices_c = lookup_indices.contiguous()
+        lookup_alt_indices_c = lookup_alt_indices.contiguous()
+        tif = table_indices_flat.contiguous()
+        tiaf = table_indices_alt_flat.contiguous()
+        if smooth_mode:
+            mw = main_weight.contiguous()
+            aw = alt_weight.contiguous()
+            if n_alternatives == 1:
+                return native.lprojection_backward_na1_smooth(
+                    grad_output, weights, lookup_indices_c, lookup_alt_indices_c,
+                    tif, tiaf, mw, aw, _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                return native.lprojection_backward_smooth(
+                    grad_output, weights, lookup_indices_c, lookup_alt_indices_c,
+                    tif, tiaf, mw, aw, _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+        else:
+            if n_alternatives == 1:
+                return native.lprojection_backward_na1_nonsmooth(
+                    grad_output, weights, lookup_indices_c, lookup_alt_indices_c,
+                    tif, tiaf, _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+            else:
+                return native.lprojection_backward_nonsmooth(
+                    grad_output, weights, lookup_indices_c, lookup_alt_indices_c,
+                    tif, tiaf, _LUTORCH_CUDA_THREADS_PER_BLOCK,
+                )
+
+    return _backward_train_impl(
+        grad_output, weights, lookup_indices, table_indices_flat,
+        batch_size, n_tables, n_alternatives,
+        main_weight, alt_weight, lookup_alt_indices, table_indices_alt_flat,
+    )
+
+
 class LProjection(nn.Module):
     """
     Lookup table projection module.

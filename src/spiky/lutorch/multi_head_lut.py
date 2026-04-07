@@ -7,9 +7,108 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Tuple, Optional, Union
 
-from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup
-from spiky.lutorch.l_projection import LProjection
-from spiky.lutorch.lut_helpers import UncertaintyMode, AnchorSamplingPolicy
+# When True, all MultiHeadLut instances use recompute_in_backward regardless of constructor arg.
+# Set by monkeypatching in tests (e.g. via the autouse fixture in conftest.py).
+_FORCE_RECOMPUTE_IN_BACKWARD = False
+
+from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup, _compute_anchor_data, _anchor_pairs_backward
+from spiky.lutorch.l_projection import LProjection, _lprojection_backward, _forward_smooth_impl, _get_native_lutorch_manager as _lp_native, _USE_LUTORCH_CUSTOM_CUDA_KERNELS as _LP_CUDA, _LUTORCH_CUDA_THREADS_PER_BLOCK as _LP_TPB
+from spiky.lutorch.lut_helpers import UncertaintyMode, AnchorSamplingPolicy, compute_hierarchical_n_tables, compute_multiscale_n_tables, compute_conv2d_n_tables
+
+
+class MultiHeadLutFunction(torch.autograd.Function):
+    """
+    Fused autograd function for AnchorPairsLookup + LProjection.
+
+    Saves only (x, weights, anchor_pairs_a, anchor_pairs_b, powers, main_weight, alt_weight).
+    Recomputes lookup_indices / anchor ids in backward from the small anchor buffers,
+    avoiding ~264 MB of saved tensors per block.
+
+    Non-smooth mode uses F.embedding_bag (lookup + sum fused) to avoid materialising
+    the [B, n_tables, n_outputs] intermediate (~2 GB) during forward.
+    Returns output already summed over tables_per_head: [B, n_heads, n_outputs].
+    Smooth mode returns [B, n_tables, n_outputs] as before (requires per-table weights).
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, anchor_pairs_a, anchor_pairs_b, powers,
+                cmp_eps, n_alternatives, smooth_mode, uncertainty_mode_int,
+                uncertainty_bias, batch_offset):
+        lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = \
+            _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, n_alternatives)
+
+        batch_size = x.shape[0]
+        n_tables = weights.shape[0]
+        l1_uncertainty = (uncertainty_mode_int == 0)
+
+        table_indices_flat = torch.arange(n_tables, device=x.device, dtype=torch.long).repeat(batch_size)
+        table_indices_alt_flat = (
+            torch.arange(n_tables, device=x.device, dtype=torch.long)
+            .unsqueeze(1).expand(-1, n_alternatives).reshape(-1).repeat(batch_size)
+        )
+        table_indices_expanded = table_indices_flat.view(batch_size, n_tables)
+        table_indices_expanded_alt = table_indices_alt_flat.view(batch_size, n_tables, n_alternatives)
+
+        if not smooth_mode:
+            output = weights[table_indices_expanded, lookup_indices]
+            main_weight = alt_weight = None
+        else:
+            use_native = (
+                _LP_CUDA and _lp_native() is not None
+                and weights.is_cuda and weights.dtype in (torch.float32, torch.float64)
+                and n_alternatives <= 3
+            )
+            if use_native:
+                output, main_weight, alt_weight = _lp_native().lprojection_forward_smooth(
+                    weights,
+                    lookup_indices.contiguous(), lookup_alt_indices.contiguous(),
+                    lookup_alt_deltas.contiguous(),
+                    table_indices_flat.contiguous(), table_indices_alt_flat.contiguous(),
+                    l1_uncertainty, uncertainty_bias, _LP_TPB,
+                )
+            else:
+                output, main_weight, alt_weight = _forward_smooth_impl(
+                    weights, table_indices_expanded, table_indices_expanded_alt,
+                    lookup_indices, lookup_alt_indices, lookup_alt_deltas,
+                    n_alternatives, l1_uncertainty, uncertainty_bias,
+                )
+
+        ctx.save_for_backward(x, weights, anchor_pairs_a, anchor_pairs_b, powers,
+                              main_weight, alt_weight)
+        ctx.cmp_eps = cmp_eps
+        ctx.n_alternatives = n_alternatives
+        ctx.smooth_mode = smooth_mode
+        ctx.inv_l1 = l1_uncertainty
+        ctx.uncertainty_bias = float(uncertainty_bias)
+        ctx.batch_offset = batch_offset
+
+        return output, lookup_alt_deltas
+
+    @staticmethod
+    def backward(ctx, grad_output, grad_lookup_alt_deltas):
+        x, weights, anchor_pairs_a, anchor_pairs_b, powers, main_weight, alt_weight = ctx.saved_tensors
+
+        with torch.no_grad():
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids = \
+                _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers,
+                                     ctx.cmp_eps, ctx.n_alternatives)
+
+        weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = \
+            _lprojection_backward(
+                grad_output, weights, lookup_indices, lookup_alt_indices,
+                main_weight, alt_weight, ctx.smooth_mode, ctx.n_alternatives,
+            )
+
+        x_grad_flat = _anchor_pairs_backward(
+            x, anchor1_ids, anchor2_ids, lookup_alt_deltas,
+            ctx.inv_l1, ctx.batch_offset, ctx.uncertainty_bias,
+            lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad,
+            grad_lookup_alt_deltas,
+        )
+
+        # 11 inputs -> 11 gradient returns
+        return (x_grad_flat.view(x.shape), weights_grad,
+                None, None, None, None, None, None, None, None, None)
 
 
 def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
@@ -80,12 +179,23 @@ class MultiHeadLut(nn.Module):
         uncertainty_bias: float = 0.5,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         sparse_output_dim: Optional[int] = None,
+        shuffle_per_head: bool = True,
+        prebuilt_anchor_pairs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        recompute_in_backward: bool = False,
     ):
         super().__init__()
-        
-        if sparse_output_dim is not None and sparse_output_dim >= n_outputs:
+
+        # Auto-compute tables_per_head for policies with fixed table counts.
+        if anchor_sampling_policy == AnchorSamplingPolicy.HIERARCHICAL:
+            tables_per_head = compute_hierarchical_n_tables(input_dim, n_anchor_pairs, tables_per_head)
+        elif anchor_sampling_policy == AnchorSamplingPolicy.MULTISCALE:
+            tables_per_head = compute_multiscale_n_tables(input_dim, n_anchor_pairs, tables_per_head)
+        elif anchor_sampling_policy == AnchorSamplingPolicy.CONV2D:
+            tables_per_head = compute_conv2d_n_tables(input_dim, tables_per_head)
+
+        if sparse_output_dim is not None and sparse_output_dim > n_outputs:
             raise ValueError(
-                f"sparse_output_dim ({sparse_output_dim}) must be less than n_outputs ({n_outputs})"
+                f"sparse_output_dim ({sparse_output_dim}) must be <= n_outputs ({n_outputs})"
             )
         if sparse_output_dim is not None and post_processor is not None:
             raise ValueError(
@@ -110,6 +220,7 @@ class MultiHeadLut(nn.Module):
         self.post_processor = post_processor
         self.n_post_processor_inputs = n_post_processor_inputs
         self.uncertainty_bias = uncertainty_bias
+        self.recompute_in_backward = recompute_in_backward or _FORCE_RECOMPUTE_IN_BACKWARD
 
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -150,6 +261,9 @@ class MultiHeadLut(nn.Module):
             uncertainty_mode=uncertainty_mode,
             uncertainty_bias=uncertainty_bias,
             anchor_sampling_policy=anchor_sampling_policy,
+            n_heads=n_heads,
+            shuffle_per_head=shuffle_per_head,
+            prebuilt_anchor_pairs=prebuilt_anchor_pairs,
         )
 
         # Determine internal output dim for LProjection
@@ -172,16 +286,20 @@ class MultiHeadLut(nn.Module):
             uncertainty_bias=uncertainty_bias,
         )
 
-        # Precompute random scatter indices for sparse output mode
+        # Precompute random scatter indices for sparse output mode.
+        # When sparse_output_dim == n_outputs use identity indices [0,1,...,n_outputs-1]
+        # so results match the dense (sparse_output_dim=None) path exactly.
         if sparse_output_dim is not None:
             dev = device or torch.device("cpu")
-            gen = torch.Generator(device=dev)
-            gen.manual_seed(random_seed if random_seed is not None else 0)
-            scatter_indices = torch.randint(
-                0, n_outputs,
-                (n_heads, tables_per_head, sparse_output_dim),
-                generator=gen, device=dev,
-            )
+            if sparse_output_dim == n_outputs:
+                identity = torch.arange(n_outputs, device=dev)
+                scatter_indices = identity.expand(n_heads, tables_per_head, n_outputs).clone()
+            else:
+                gen = torch.Generator(device=dev)
+                gen.manual_seed(random_seed if random_seed is not None else 0)
+                # Sample without replacement: argsort random scores, take first sparse_output_dim
+                noise = torch.rand(n_heads, tables_per_head, n_outputs, generator=gen, device=dev)
+                scatter_indices = noise.argsort(dim=-1)[..., :sparse_output_dim]
             self.register_buffer('scatter_indices', scatter_indices)
         else:
             self.scatter_indices = None
@@ -237,83 +355,102 @@ class MultiHeadLut(nn.Module):
             scale = 1.0 + (torch.rand(x.shape[0], 1, device=x.device) * 2 - 1) * self.input_scale_noise
             x = x * scale
 
-        # Determine return_alternatives: always True in training, only True in eval if smooth_mode
-        return_alternatives = self.training or self.smooth_mode
-        
-        # Get lookup indices from AnchorPairsLookup
-        if self.training:
-            (
-                lookup_indices,
-                lookup_alt_indices,
-                lookup_alt_deltas,
-                lookup_indices_grad_c,
-                lookup_alt_indices_grad_c
-            ) = self.lookup(x, return_alternatives=return_alternatives)
-        else:
-            lookup_indices, lookup_alt_indices, lookup_alt_deltas = self.lookup(x, return_alternatives=return_alternatives)
-            lookup_indices_grad_c = None
-            lookup_alt_indices_grad_c = None
-        
-        # Compute internal regularization loss from alternative deltas (uncertainty penalty)
-        # Uses the same uncertainty function as LProjection, keyed by uncertainty_mode.
-        if self.training and lookup_alt_deltas is not None:
+        if self.training and self.recompute_in_backward and self.n_buckets == 1 and self.scatter_indices is None:
+            # --- Fused path: AnchorPairsLookup + LProjection in one Function ---
+            # Saves ~264 MB per block by recomputing lookup_indices in backward.
+            if self.projection.normalize_weights:
+                self.projection.apply_weight_column_norm()
+
+            batch_size = x.shape[0]
+            input_dim = x.shape[1]
+            n_lookup_tables = self.n_heads * self.tables_per_head
+            expected_len = batch_size * n_lookup_tables * self.n_alternatives
+            if (
+                self.lookup._cached_batch_offset is None
+                or self.lookup._cached_batch_offset.numel() != expected_len
+                or self.lookup._cached_batch_offset.device != x.device
+            ):
+                self.lookup._cached_batch_offset = (
+                    torch.arange(batch_size, device=x.device, dtype=torch.long)
+                    .repeat_interleave(n_lookup_tables * self.n_alternatives) * input_dim
+                ).contiguous()
+
+            output, lookup_alt_deltas = MultiHeadLutFunction.apply(
+                x, self.projection.weights,
+                self.lookup.anchor_pairs_a, self.lookup.anchor_pairs_b, self.lookup.powers,
+                self.lookup.cmp_eps, self.n_alternatives, self.smooth_mode,
+                0 if self.uncertainty_mode == UncertaintyMode.INVERSE_L1 else 1,
+                self.uncertainty_bias,
+                self.lookup._cached_batch_offset,
+            )
+
             if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:
                 self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas.abs())).mean()
-            else:  # INVERSE_QUADRATIC
+            else:
                 self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas ** 2)).mean()
+
         else:
-            self._internal_loss = None
+            # --- Original path ---
+            return_alternatives = self.training or self.smooth_mode
 
-        # Apply bucket modification if n_buckets > 1
-        if self.n_buckets > 1:
-            # Ensure bucket_indices has the right dtype and shape for broadcasting
-            bucket_indices = bucket_indices.to(lookup_indices.dtype)  # [B]
-            bucket_indices_expanded = bucket_indices.unsqueeze(1)  # [B, 1]
-            
-            # Modify lookup_indices: lookup_indices = lookup_indices * n_buckets + bucket_indices
-            lookup_indices = lookup_indices * self.n_buckets + bucket_indices_expanded  # [B, n_tables]
-            
-            # Modify lookup_alt_indices similarly
-            if lookup_alt_indices is not None:
-                bucket_indices_alt = bucket_indices.unsqueeze(1).unsqueeze(2)  # [B, 1, 1]
-                lookup_alt_indices = lookup_alt_indices * self.n_buckets + bucket_indices_alt  # [B, n_tables, n_alternatives]
-        
-        # Project through LProjection
-        # LProjection returns [B, n_lookup_tables, n_o], n_o == n_outputs if there is no post processor, else n_o == n_post_processor_inputs
-        output = self.projection(
-            lookup_indices=lookup_indices,
-            lookup_alt_indices=lookup_alt_indices,
-            lookup_alt_deltas=lookup_alt_deltas,
-            lookup_indices_grad_c=lookup_indices_grad_c,
-            lookup_alt_indices_grad_c=lookup_alt_indices_grad_c
-        )
+            if self.training:
+                (
+                    lookup_indices, lookup_alt_indices, lookup_alt_deltas,
+                    lookup_indices_grad_c, lookup_alt_indices_grad_c
+                ) = self.lookup(x, return_alternatives=return_alternatives)
+            else:
+                lookup_indices, lookup_alt_indices, lookup_alt_deltas = self.lookup(
+                    x, return_alternatives=return_alternatives)
+                lookup_indices_grad_c = None
+                lookup_alt_indices_grad_c = None
 
-        # Reshape: [B, n_lookup_tables, _lproj_n_outputs] -> [B, n_heads, tables_per_head, _lproj_n_outputs]
-        output = output.view(-1, self.n_heads, self.tables_per_head, self._lproj_n_outputs)
-        B = output.shape[0]
-        # Apply table dropout: randomly zero entire tables during training
-        if self.training and self.table_dropout > 0.0:
-            mask = torch.bernoulli(
-                torch.full((B, self.n_heads, self.tables_per_head, 1),
-                           1.0 - self.table_dropout, device=output.device)
+            if self.training and lookup_alt_deltas is not None:
+                if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:
+                    self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas.abs())).mean()
+                else:
+                    self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas ** 2)).mean()
+            else:
+                self._internal_loss = None
+
+            if self.n_buckets > 1:
+                bucket_indices = bucket_indices.to(lookup_indices.dtype)
+                lookup_indices = lookup_indices * self.n_buckets + bucket_indices.unsqueeze(1)
+                if lookup_alt_indices is not None:
+                    lookup_alt_indices = (
+                        lookup_alt_indices * self.n_buckets + bucket_indices.unsqueeze(1).unsqueeze(2)
+                    )
+
+            output = self.projection(
+                lookup_indices=lookup_indices,
+                lookup_alt_indices=lookup_alt_indices,
+                lookup_alt_deltas=lookup_alt_deltas,
+                lookup_indices_grad_c=lookup_indices_grad_c,
+                lookup_alt_indices_grad_c=lookup_alt_indices_grad_c,
             )
-            output = output * mask / (1.0 - self.table_dropout)
-        if self.dropout is not None:
-            output = self.dropout(output)
 
-        if self.scatter_indices is not None:
-            # Sparse mode: scatter_add each table's outputs into [B, n_heads, n_outputs]
-            # scatter_indices: [n_heads, tables_per_head, sparse_output_dim]
-            # output: [B, n_heads, tables_per_head, sparse_output_dim]
-            idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1)  # [B, n_heads, tph, sparse_output_dim]
-            idx_flat = idx.reshape(B, self.n_heads, -1)      # [B, n_heads, tph * sparse_output_dim]
-            src_flat = output.reshape(B, self.n_heads, -1)   # [B, n_heads, tph * sparse_output_dim]
-            output = torch.zeros(B, self.n_heads, self.n_outputs, device=output.device, dtype=output.dtype)
-            output.scatter_add_(2, idx_flat, src_flat)       # [B, n_heads, n_outputs]
-        else:
-            # Normal mode: sum over tables_per_head dimension
-            n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
-            output = output.sum(dim=2)  # [B, n_heads, n_o]
+        B = x.shape[0]
+        if True:
+            # Reshape: [B, n_lookup_tables, _lproj_n_outputs] -> [B, n_heads, tables_per_head, _lproj_n_outputs]
+            output = output.view(B, self.n_heads, self.tables_per_head, self._lproj_n_outputs)
+            # Apply table dropout: randomly zero entire tables during training
+            if self.training and self.table_dropout > 0.0:
+                mask = torch.bernoulli(
+                    torch.full((B, self.n_heads, self.tables_per_head, 1),
+                               1.0 - self.table_dropout, device=output.device)
+                )
+                output = output * mask / (1.0 - self.table_dropout)
+            if self.dropout is not None:
+                output = self.dropout(output)
+
+            if self.scatter_indices is not None:
+                idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1)
+                idx_flat = idx.reshape(B, self.n_heads, -1)
+                src_flat = output.reshape(B, self.n_heads, -1)
+                output = torch.zeros(B, self.n_heads, self.n_outputs, device=output.device, dtype=output.dtype)
+                output.scatter_add_(2, idx_flat, src_flat)
+            else:
+                n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
+                output = output.sum(dim=2)  # [B, n_heads, n_o]
         if self.training and self.output_scale_noise > 0.0:
             # Multiply each (batch, head) by an independent U(1-s, 1+s) scalar
             scale = 1.0 + (torch.rand(output.shape[0], output.shape[1], 1, device=output.device) * 2 - 1) * self.output_scale_noise

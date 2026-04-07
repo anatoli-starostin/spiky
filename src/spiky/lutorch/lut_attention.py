@@ -11,6 +11,7 @@ from typing import Optional
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.util.chunk_of_connections import ChunkOfConnections
 from spiky.lutorch.lut_helpers import logarithmic_pe_buckets, rpe_matrix
+from spiky.lutorch.l_projection import _get_native_lutorch_manager, _USE_LUTORCH_CUSTOM_CUDA_KERNELS
 
 
 class PairProcessingMode(str, Enum):
@@ -256,3 +257,173 @@ class LUTAttention(nn.Module):
             attention_scores = torch.softmax(attention_scores, dim=2)
 
         return attention_scores
+
+
+class LUTAttnFwdBwdNa1(torch.autograd.Function):
+    """
+    Fused autograd function for LUTAttentionV2 forward+backward.
+    Handles n_alternatives=1, non-smooth mode, single pass over pairs on the GPU.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, anchor_a, anchor_b, pair_rows, pair_cols, rel_pe,
+                H, tables_per_head, causal, self_excitement, cmp_eps, uncertainty_bias):
+        mgr = _get_native_lutorch_manager()
+        pair_out_buf, result = mgr.lut_attn_fwd_na1(
+            x.contiguous(), weights, anchor_a, anchor_b,
+            pair_rows, pair_cols, rel_pe,
+            H, tables_per_head, causal, self_excitement, float(cmp_eps),
+        )
+        ctx.save_for_backward(x, weights, anchor_a, anchor_b, pair_rows, pair_cols, rel_pe, pair_out_buf)
+        ctx.H = H
+        ctx.tables_per_head = tables_per_head
+        ctx.causal = causal
+        ctx.self_excitement = self_excitement
+        ctx.cmp_eps = cmp_eps
+        ctx.uncertainty_bias = uncertainty_bias
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, weights, anchor_a, anchor_b, pair_rows, pair_cols, rel_pe, pair_out_buf = ctx.saved_tensors
+        mgr = _get_native_lutorch_manager()
+        x_grad, weights_grad, rel_pe_grad = mgr.lut_attn_bwd_na1(
+            x, weights, anchor_a, anchor_b,
+            pair_rows, pair_cols, rel_pe,
+            pair_out_buf, grad_output.contiguous(),
+            ctx.H, ctx.tables_per_head, ctx.causal, ctx.self_excitement,
+            float(ctx.cmp_eps), float(ctx.uncertainty_bias),
+        )
+        return (x_grad, weights_grad, None, None, None, None, rel_pe_grad,
+                None, None, None, None, None, None)
+
+
+class LUTAttentionV2(nn.Module):
+    """
+    Pairwise LUT attention with explicit relative positional encoding.
+
+    For a sequence of T tokens, enumerates M valid position pairs (i, j),
+    concatenates [x_i, x_j, RelPE[dist(i,j)]], and feeds through a MultiHeadLut.
+    The results are summed over all M pairs to produce [B, H, O].
+
+    Pair enumeration:
+        causal=True,  include_diagonal=True  → j ≤ i   (M = T*(T+1)/2)
+        causal=True,  include_diagonal=False → j < i   (M = T*(T-1)/2)
+        causal=False, include_diagonal=True  → all     (M = T^2)
+        causal=False, include_diagonal=False → i ≠ j   (M = T*(T-1))
+
+    RelPE indexing:
+        Causal: dist = i - j  ≥ 0;  rel_pe[0] = diagonal, rel_pe[k] = distance k, …
+        Non-causal: dist = |i - j|; rel_pe[0] = diagonal, rel_pe[k] = distance k, …
+        Required size: T (with diagonal) or T-1 (without diagonal).
+
+    Args:
+        multi_head_lut: Pre-built MultiHeadLut with input_dim = 2*E + pos_dim,
+                        n_heads = H, n_outputs = O.
+        seq_len:        Fixed sequence length used to pre-compute pair indices.
+        causal:         If True, only include pairs with j ≤ i (or j < i).
+        include_diagonal: If True, include pairs where i == j.
+    """
+
+    def __init__(
+        self,
+        multi_head_lut: MultiHeadLut,
+        seq_len: int,
+        causal: bool = True,
+        include_diagonal: bool = True,
+        self_excitement: bool = False,
+    ):
+        super().__init__()
+        self.multi_head_lut = multi_head_lut
+        self.causal = causal
+        self.include_diagonal = include_diagonal
+        self.self_excitement = self_excitement
+
+        rows, cols = [], []
+        for i in range(seq_len):
+            for j in range(seq_len):
+                if causal and j > i:
+                    continue
+                if not include_diagonal and i == j:
+                    continue
+                rows.append(i)
+                cols.append(j)
+
+        self.register_buffer('pair_rows', torch.tensor(rows, dtype=torch.long))
+        self.register_buffer('pair_cols', torch.tensor(cols, dtype=torch.long))
+
+    def forward(self, x: torch.Tensor, rel_pe: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x:      Input sequence [B, T, E].
+            rel_pe: Relative position embeddings [D, pos_dim] where D ≥ max distance + 1.
+                    rel_pe[0] = same position (diagonal), rel_pe[k] = distance k.
+
+        Returns:
+            [B, T, H, O] — per-token scatter-sum of MultiHeadLut outputs.
+                           Output at position i = sum of LUT outputs over all pairs (i, j).
+        """
+        B, T, E = x.shape
+        M = self.pair_rows.shape[0]
+
+        # --- Fast path: fused CUDA kernel (n_alternatives=1, non-smooth) ---
+        lut = self.multi_head_lut
+        H = lut.n_heads
+        _mgr = _get_native_lutorch_manager() if _USE_LUTORCH_CUSTOM_CUDA_KERNELS else None
+        if (
+            _mgr is not None
+            and x.is_cuda
+            and x.dtype == torch.float32
+            and not lut.smooth_mode
+            and lut.n_alternatives == 1
+            and lut.n_buckets == 1
+            and lut.table_dropout == 0.0
+            and lut.scatter_indices is None
+            and lut.post_processor is None
+            and not lut.calibrate_output
+            and not lut.projection.normalize_weights
+            and (H == 1 or not self.self_excitement)
+        ):
+            if lut.training and lut.input_scale_noise > 0.0:
+                scale = 1.0 + (torch.rand(B, 1, 1, device=x.device) * 2 - 1) * lut.input_scale_noise
+                x = x * scale
+            result = LUTAttnFwdBwdNa1.apply(
+                x.contiguous(), lut.projection.weights,
+                lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b,
+                self.pair_rows, self.pair_cols, rel_pe,
+                H, lut.tables_per_head, self.causal, self.self_excitement,
+                float(lut.lookup.cmp_eps), float(lut.lookup.uncertainty_bias),
+            )
+            return result  # [B, T, H, O]
+        # --- End fast path ---
+
+        x_i = x[:, self.pair_rows, :]   # [B, M, E]
+        x_j = x[:, self.pair_cols, :]   # [B, M, E]
+
+        # Distance: non-negative for causal; |i-j| for non-causal
+        if self.causal:
+            dists = self.pair_rows - self.pair_cols   # [M], range [0, T-1]
+        else:
+            dists = (self.pair_rows - self.pair_cols).abs()  # [M]
+
+        rpe = rel_pe[dists].unsqueeze(0).expand(B, -1, -1)  # [B, M, pos_dim]
+
+        # Concatenate and flatten: [B*M, 2E + pos_dim]
+        pairs = torch.cat([x_i, x_j, rpe], dim=-1)
+        pairs_flat = pairs.reshape(B * M, -1)
+
+        # Apply LUT: [B*M, H, O]
+        out = self.multi_head_lut(pairs_flat)
+        H, O = out.shape[1], out.shape[2]
+
+        # Scatter-sum by query position: [B, M, H*O] → [B, T, H*O] → [B, T, H, O]
+        out_flat = out.reshape(B, M, H * O)
+        if self.self_excitement:
+            # Weight each pair's contribution by its own mean absolute activation.
+            # Pairs with stronger/more contrastive patterns dominate the sum.
+            weight = out_flat.abs().mean(dim=-1, keepdim=True)  # [B, M, 1]
+            out_flat = out_flat * weight
+        result = torch.zeros(B, T, H * O, device=x.device, dtype=x.dtype)
+        idx = self.pair_rows.unsqueeze(0).unsqueeze(-1).expand(B, M, H * O)
+        result.scatter_add_(1, idx, out_flat)
+        return result.reshape(B, T, H, O)

@@ -1,6 +1,7 @@
 #include <tuple>
 #include "../common/misc.h"
 #include "lutorch.h"
+#include <ATen/cuda/CUDAContext.h>
 
 namespace py = pybind11;
 
@@ -926,6 +927,230 @@ __global__ void lprojection_backward_smooth_weights_kernel(
         atomicAdd(weights_grad_ptr + widx_alt, g_alt);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fused LUT Attention kernels (na1, non-smooth, n_alternatives=1)
+// Feature-cached design: each block caches [x_i | x_j | rel_pe] in shared
+// memory and loops over tables, eliminating redundant global memory reads.
+// ---------------------------------------------------------------------------
+
+// Helper: block-level reduction of sh[0..O-1] into sh[0].
+template <typename scalar_t>
+static __device__ __forceinline__ void block_reduce_sum(scalar_t* sh, int64_t o, int64_t O) {
+    for (int64_t stride = O >> 1; stride > 0; stride >>= 1) {
+        if (o < stride) sh[o] += sh[o + stride];
+        __syncthreads();
+    }
+}
+
+// ---- Forward kernel: feature-cached, loops over tables ----
+// Grid: (B*M, H), Block: (O)
+// Shared memory: (input_dim + O) * sizeof(scalar_t)
+template <typename scalar_t>
+__global__ void lut_attn_fwd_na1_kernel(
+    const scalar_t* __restrict__ x,
+    const scalar_t* __restrict__ weights,
+    const int64_t* __restrict__ anchor_a,
+    const int64_t* __restrict__ anchor_b,
+    const int64_t* __restrict__ pair_rows,
+    const int64_t* __restrict__ pair_cols,
+    const scalar_t* __restrict__ rel_pe,
+    scalar_t* __restrict__ pair_out_buf,       // [B*M, H, O]
+    scalar_t* __restrict__ result,             // [B, T, H, O]
+    int64_t B, int64_t T, int64_t E,
+    int64_t M, int64_t H,
+    int64_t tables_per_head,
+    int64_t n_entries, int64_t n_anchor_pairs,
+    int64_t O, int64_t pos_dim,
+    bool causal, bool self_excitement,
+    scalar_t cmp_eps
+) {
+    extern __shared__ char sh_raw[];
+    int64_t input_dim = 2 * E + pos_dim;
+    scalar_t* feat = reinterpret_cast<scalar_t*>(sh_raw);
+    scalar_t* sh   = feat + input_dim;
+
+    int64_t bm = static_cast<int64_t>(blockIdx.x);
+    int64_t h  = static_cast<int64_t>(blockIdx.y);
+    int64_t o  = static_cast<int64_t>(threadIdx.x);
+    if (bm >= B * M || h >= H || o >= O) return;
+
+    int64_t b = bm / M;
+    int64_t m = bm - b * M;
+    int64_t row_i = pair_rows[m];
+    int64_t col_j = pair_cols[m];
+    int64_t dist = causal ? (row_i - col_j) : lutorch_abs(row_i - col_j);
+
+    // Cooperatively load feature cache [x_i | x_j | rel_pe_dist]
+    const scalar_t* xi_ptr  = x + b * T * E + row_i * E;
+    const scalar_t* xj_ptr  = x + b * T * E + col_j * E;
+    const scalar_t* rpe_ptr = (rel_pe != nullptr) ? rel_pe + dist * pos_dim : nullptr;
+    for (int64_t f = o; f < input_dim; f += O) {
+        if (f < E)          feat[f] = xi_ptr[f];
+        else if (f < 2 * E) feat[f] = xj_ptr[f - E];
+        else                 feat[f] = rpe_ptr[f - 2 * E];
+    }
+    __syncthreads();
+
+    // Loop over tables, accumulate weights in register
+    scalar_t acc = static_cast<scalar_t>(0);
+    int64_t t_start = h * tables_per_head;
+    for (int64_t tl = 0; tl < tables_per_head; ++tl) {
+        int64_t t = t_start + tl;
+        int64_t ta_off = t * n_anchor_pairs;
+        int64_t lookup_idx = 0;
+        for (int64_t p = 0; p < n_anchor_pairs; ++p) {
+            if (feat[anchor_a[ta_off + p]] - feat[anchor_b[ta_off + p]] > cmp_eps)
+                lookup_idx |= (static_cast<int64_t>(1) << p);
+        }
+        acc += weights[t * n_entries * O + lookup_idx * O + o];
+    }
+
+    // Save pre-SE activation for backward
+    pair_out_buf[bm * H * O + h * O + o] = acc;
+
+    // Self-excitement: y_o = f_o * mean(|f|)
+    scalar_t y_o = acc;
+    if (self_excitement) {
+        sh[o] = lutorch_abs(acc);
+        __syncthreads();
+        block_reduce_sum(sh, o, O);
+        y_o = acc * (sh[0] / static_cast<scalar_t>(O));
+    }
+
+    // Scatter-add to result at row_i
+    atomicAdd(&result[b * T * H * O + row_i * H * O + h * O + o], y_o);
+}
+
+// ---- Backward kernel: feature-cached, loops over tables ----
+// Grid: (B*M, H), Block: (O)
+// Shared memory: (input_dim + O) * sizeof(scalar_t)
+template <typename scalar_t>
+__global__ void lut_attn_bwd_na1_kernel(
+    const scalar_t* __restrict__ x,
+    const scalar_t* __restrict__ weights,
+    const int64_t* __restrict__ anchor_a,
+    const int64_t* __restrict__ anchor_b,
+    const int64_t* __restrict__ pair_rows,
+    const int64_t* __restrict__ pair_cols,
+    const scalar_t* __restrict__ rel_pe,
+    const scalar_t* __restrict__ pair_out_buf,   // [B*M, H, O]
+    const scalar_t* __restrict__ result_grad,    // [B, T, H, O]
+    scalar_t* __restrict__ weights_grad,
+    scalar_t* __restrict__ x_grad,
+    scalar_t* __restrict__ rel_pe_grad,
+    int64_t B, int64_t T, int64_t E,
+    int64_t M, int64_t H,
+    int64_t tables_per_head,
+    int64_t n_entries, int64_t n_anchor_pairs,
+    int64_t O, int64_t pos_dim,
+    bool causal, bool self_excitement,
+    scalar_t cmp_eps, scalar_t uncertainty_bias
+) {
+    extern __shared__ char sh_raw[];
+    int64_t input_dim = 2 * E + pos_dim;
+    scalar_t* feat = reinterpret_cast<scalar_t*>(sh_raw);
+    scalar_t* sh   = feat + input_dim;
+
+    int64_t bm = static_cast<int64_t>(blockIdx.x);
+    int64_t h  = static_cast<int64_t>(blockIdx.y);
+    int64_t o  = static_cast<int64_t>(threadIdx.x);
+    if (bm >= B * M || h >= H || o >= O) return;
+
+    int64_t b = bm / M;
+    int64_t m = bm - b * M;
+    int64_t row_i = pair_rows[m];
+    int64_t col_j = pair_cols[m];
+    int64_t dist = causal ? (row_i - col_j) : lutorch_abs(row_i - col_j);
+
+    // Load feature cache
+    const scalar_t* xi_ptr  = x + b * T * E + row_i * E;
+    const scalar_t* xj_ptr  = x + b * T * E + col_j * E;
+    const scalar_t* rpe_ptr = (rel_pe != nullptr) ? rel_pe + dist * pos_dim : nullptr;
+    for (int64_t f = o; f < input_dim; f += O) {
+        if (f < E)          feat[f] = xi_ptr[f];
+        else if (f < 2 * E) feat[f] = xj_ptr[f - E];
+        else                 feat[f] = rpe_ptr[f - 2 * E];
+    }
+    __syncthreads();
+
+    // Compute SE gradient
+    scalar_t f_o = pair_out_buf[bm * H * O + h * O + o];
+    scalar_t g_o = result_grad[b * T * H * O + row_i * H * O + h * O + o];
+    scalar_t se_grad_o;
+    if (self_excitement) {
+        sh[o] = f_o * g_o;
+        __syncthreads();
+        block_reduce_sum(sh, o, O);
+        scalar_t dot_fg = sh[0];
+        sh[o] = lutorch_abs(f_o);
+        __syncthreads();
+        block_reduce_sum(sh, o, O);
+        scalar_t mean_abs = sh[0] / static_cast<scalar_t>(O);
+        se_grad_o = g_o * mean_abs + lutorch_sign(f_o) * dot_fg / static_cast<scalar_t>(O);
+    } else {
+        se_grad_o = g_o;
+    }
+
+    // Loop over tables: weight grad + x grad
+    int64_t t_start = h * tables_per_head;
+    for (int64_t tl = 0; tl < tables_per_head; ++tl) {
+        int64_t t = t_start + tl;
+        int64_t ta_off = t * n_anchor_pairs;
+
+        // Recompute lookup + find min-delta anchor pair
+        int64_t lookup_idx = 0;
+        scalar_t min_abs_delta = static_cast<scalar_t>(0);
+        scalar_t min_delta = static_cast<scalar_t>(0);
+        int64_t min_anc_a = 0, min_anc_b = 0, min_bit_pos = 0;
+
+        for (int64_t p = 0; p < n_anchor_pairs; ++p) {
+            int64_t a_idx = anchor_a[ta_off + p];
+            int64_t b_idx = anchor_b[ta_off + p];
+            scalar_t delta = feat[a_idx] - feat[b_idx];
+            if (delta > cmp_eps) lookup_idx |= (static_cast<int64_t>(1) << p);
+            scalar_t abs_d = lutorch_abs(delta);
+            if (p == 0 || abs_d < min_abs_delta) {
+                min_abs_delta = abs_d;
+                min_delta = delta;
+                min_anc_a = a_idx;
+                min_anc_b = b_idx;
+                min_bit_pos = p;
+            }
+        }
+
+        // Weight gradient
+        int64_t w_main = t * n_entries * O + lookup_idx * O + o;
+        atomicAdd(&weights_grad[w_main], se_grad_o);
+
+        // X gradient: reduce se_grad * (W[main] - W[alt]) over outputs
+        int64_t alt_idx = lookup_idx ^ (static_cast<int64_t>(1) << min_bit_pos);
+        int64_t w_alt = t * n_entries * O + alt_idx * O + o;
+        sh[o] = se_grad_o * (weights[w_main] - weights[w_alt]);
+        __syncthreads();
+        block_reduce_sum(sh, o, O);
+        if (o == 0) {
+            scalar_t grad_diff = sh[0];
+            scalar_t one_plus_abs = static_cast<scalar_t>(1) + min_abs_delta;
+            scalar_t du = grad_diff * uncertainty_bias * lutorch_sign(min_delta)
+                          / (one_plus_abs * one_plus_abs);
+
+            auto propagate = [&](int64_t anc, scalar_t sign) {
+                scalar_t g = du * sign;
+                if (anc < E)
+                    atomicAdd(&x_grad[b * T * E + row_i * E + anc], g);
+                else if (anc < 2*E)
+                    atomicAdd(&x_grad[b * T * E + col_j * E + (anc - E)], g);
+                else if (rel_pe_grad != nullptr)
+                    atomicAdd(&rel_pe_grad[dist * pos_dim + (anc - 2*E)], g);
+            };
+            propagate(min_anc_a, static_cast<scalar_t>(1));
+            propagate(min_anc_b, static_cast<scalar_t>(-1));
+        }
+        // Must sync before next iteration reuses sh[]
+        __syncthreads();
+    }
+}
 #endif
 
 class SPIKY_HIDDEN LUTorchManager {
@@ -1040,7 +1265,7 @@ public:
             anchor2_ids_ptr = reinterpret_cast<int64_t*>(anchor2_ids.data_ptr());
         }
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_forward_na1_kernel", [&] {
-            anchor_pairs_lookup_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_forward_na1_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -1135,7 +1360,7 @@ public:
         int blocks = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_eval_forward_kernel", [&] {
-            anchor_pairs_lookup_eval_forward_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_eval_forward_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -1233,7 +1458,7 @@ public:
         }
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_forward_na2_kernel", [&] {
-            anchor_pairs_lookup_forward_na2_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_forward_na2_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -1343,7 +1568,7 @@ public:
         }
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_forward_na3_kernel", [&] {
-            anchor_pairs_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_forward_na3_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -1451,7 +1676,7 @@ public:
         }
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_forward_all_kernel", [&] {
-            anchor_pairs_lookup_forward_all_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_forward_all_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -1553,7 +1778,7 @@ public:
         int blocks_out = static_cast<int>(((total_bt * n_outputs) + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_forward_smooth", [&] {
-            lprojection_forward_smooth_weights_kernel<scalar_t><<<blocks_bt, threads>>>(
+            lprojection_forward_smooth_weights_kernel<scalar_t><<<blocks_bt, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_alternatives,
                 l1_uncertainty,
@@ -1562,7 +1787,7 @@ public:
                 reinterpret_cast<scalar_t*>(main_weight.data_ptr()),
                 reinterpret_cast<scalar_t*>(alt_weight.data_ptr())
             );
-            lprojection_forward_smooth_output_kernel<scalar_t><<<blocks_out, threads>>>(
+            lprojection_forward_smooth_output_kernel<scalar_t><<<blocks_out, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -1660,7 +1885,7 @@ public:
         int64_t grad_main_stride1 = grad_main.stride(1);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_backward_all_kernel", [&] {
-            anchor_pairs_lookup_backward_all_kernel<scalar_t><<<blocks, threads>>>(
+            anchor_pairs_lookup_backward_all_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total,
                 reinterpret_cast<const int64_t*>(anchor1_ids.data_ptr()),
                 reinterpret_cast<const int64_t*>(anchor2_ids.data_ptr()),
@@ -1714,7 +1939,7 @@ public:
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na1_kernel", [&] {
-            wta_lookup_forward_na1_kernel<scalar_t><<<blocks, threads>>>(
+            wta_lookup_forward_na1_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
@@ -1761,7 +1986,7 @@ public:
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na2_kernel", [&] {
-            wta_lookup_forward_na2_kernel<scalar_t><<<blocks, threads>>>(
+            wta_lookup_forward_na2_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
@@ -1808,7 +2033,7 @@ public:
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_forward_na3_kernel", [&] {
-            wta_lookup_forward_na3_kernel<scalar_t><<<blocks, threads>>>(
+            wta_lookup_forward_na3_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 x.stride(0), x.stride(1), x.stride(2),
                 n_channels, n_inputs, total,
@@ -1872,7 +2097,7 @@ public:
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "wta_lookup_backward_kernel", [&] {
-            wta_lookup_backward_kernel<scalar_t><<<blocks, threads>>>(
+            wta_lookup_backward_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total,
                 reinterpret_cast<const int64_t*>(winner_ids.data_ptr()),
                 reinterpret_cast<const int64_t*>(alt_ids.data_ptr()),
@@ -1963,7 +2188,7 @@ public:
         int64_t go_s2 = grad_output.stride(2);
 
         AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_nonsmooth", [&] {
-            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -1974,7 +2199,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
             );
-            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2079,7 +2304,7 @@ public:
         int device = weights.device().index();
         c10::cuda::CUDAGuard guard(device);
         AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_smooth_weights", [&] {
-            lprojection_backward_na1_smooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+            lprojection_backward_na1_smooth_weights_kernel<scalar_t><<<blocks_w, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2094,7 +2319,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
             );
-            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2185,7 +2410,7 @@ public:
         int64_t go_s2 = grad_output.stride(2);
 
         AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_nonsmooth", [&] {
-            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2196,7 +2421,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
             );
-            lprojection_backward_main_carriers_kernel<scalar_t><<<blocks_main, threads>>>(
+            lprojection_backward_main_carriers_kernel<scalar_t><<<blocks_main, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2208,7 +2433,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr())
             );
-            lprojection_backward_alt_carriers_kernel<scalar_t><<<blocks_alt, threads>>>(
+            lprojection_backward_alt_carriers_kernel<scalar_t><<<blocks_alt, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bta,
                 n_tables,
                 n_alternatives,
@@ -2309,7 +2534,7 @@ public:
         int device = weights.device().index();
         c10::cuda::CUDAGuard guard(device);
         AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_smooth", [&] {
-            lprojection_backward_smooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+            lprojection_backward_smooth_weights_kernel<scalar_t><<<blocks_w, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2325,7 +2550,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
             );
-            lprojection_backward_main_carriers_kernel<scalar_t><<<blocks_main, threads>>>(
+            lprojection_backward_main_carriers_kernel<scalar_t><<<blocks_main, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
@@ -2337,7 +2562,7 @@ public:
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr())
             );
-            lprojection_backward_alt_carriers_kernel<scalar_t><<<blocks_alt, threads>>>(
+            lprojection_backward_alt_carriers_kernel<scalar_t><<<blocks_alt, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 total_bta,
                 n_tables,
                 n_alternatives,
@@ -2354,6 +2579,167 @@ public:
         CU_CHECK(cudaGetLastError());
         PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
         return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fused LUT Attention forward (n_alternatives=1, non-smooth)
+    // -----------------------------------------------------------------------
+    // Returns (pair_out_buf [B*M, H, O], result [B, T, H, O])
+    py::tuple
+    lut_attn_fwd_na1(
+        const torch::Tensor& x,           // [B, T, E]  float32, CUDA
+        const torch::Tensor& weights,     // [n_tables, n_entries, O]
+        const torch::Tensor& anchor_a,    // [n_tables, n_anchor_pairs]
+        const torch::Tensor& anchor_b,    // [n_tables, n_anchor_pairs]
+        const torch::Tensor& pair_rows,   // [M]
+        const torch::Tensor& pair_cols,   // [M]
+        const c10::optional<torch::Tensor>& rel_pe_opt,  // [T, pos_dim] or nullopt
+        int64_t H,
+        int64_t tables_per_head,
+        bool causal,
+        bool self_excitement,
+        double cmp_eps
+    ) {
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA");
+        if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
+        if (!weights.is_contiguous()) throw py::value_error("weights must be contiguous");
+        if (!anchor_a.is_contiguous() || !anchor_b.is_contiguous()) throw py::value_error("anchor_a/b must be contiguous");
+        if (!pair_rows.is_contiguous() || !pair_cols.is_contiguous()) throw py::value_error("pair_rows/cols must be contiguous");
+
+        const int64_t B = x.size(0);
+        const int64_t T = x.size(1);
+        const int64_t E = x.size(2);
+        const int64_t M = pair_rows.size(0);
+        const int64_t n_tables = anchor_a.size(0);
+        const int64_t n_anchor_pairs = anchor_a.size(1);
+        const int64_t n_entries = weights.size(1);
+        const int64_t O = weights.size(2);
+        const int64_t pos_dim = rel_pe_opt.has_value() ? rel_pe_opt.value().size(1) : 0;
+
+        auto opts = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+        torch::Tensor pair_out_buf = torch::zeros({B * M, H, O}, opts);
+        torch::Tensor result = torch::zeros({B, T, H, O}, opts);
+
+        torch::Tensor rel_pe;
+        if (rel_pe_opt.has_value()) {
+            rel_pe = rel_pe_opt.value().contiguous();
+        }
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+
+        int64_t input_dim = 2 * E + pos_dim;
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "lut_attn_fwd_na1", [&] {
+            const scalar_t* rpe_ptr = rel_pe_opt.has_value()
+                ? reinterpret_cast<const scalar_t*>(rel_pe.data_ptr()) : nullptr;
+            dim3 grid(static_cast<unsigned>(B * M), static_cast<unsigned>(H));
+            dim3 block(static_cast<unsigned>(O));
+            size_t smem = static_cast<size_t>(input_dim + O) * sizeof(scalar_t);
+            lut_attn_fwd_na1_kernel<scalar_t><<<grid, block, smem, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchor_a.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchor_b.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_rows.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_cols.data_ptr()),
+                rpe_ptr,
+                reinterpret_cast<scalar_t*>(pair_out_buf.data_ptr()),
+                reinterpret_cast<scalar_t*>(result.data_ptr()),
+                B, T, E, M, H,
+                tables_per_head,
+                n_entries, n_anchor_pairs, O, pos_dim,
+                causal, self_excitement,
+                static_cast<scalar_t>(cmp_eps)
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return py::make_tuple(pair_out_buf, result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fused LUT Attention backward (n_alternatives=1, non-smooth)
+    // -----------------------------------------------------------------------
+    // Returns (x_grad [B, T, E], weights_grad [n_tables, n_entries, O], rel_pe_grad or None)
+    py::tuple
+    lut_attn_bwd_na1(
+        const torch::Tensor& x,
+        const torch::Tensor& weights,
+        const torch::Tensor& anchor_a,
+        const torch::Tensor& anchor_b,
+        const torch::Tensor& pair_rows,
+        const torch::Tensor& pair_cols,
+        const c10::optional<torch::Tensor>& rel_pe_opt,
+        const torch::Tensor& pair_out_buf,   // [B*M, H, O]
+        const torch::Tensor& result_grad,    // [B, T, H, O]
+        int64_t H,
+        int64_t tables_per_head,
+        bool causal,
+        bool self_excitement,
+        double cmp_eps,
+        double uncertainty_bias
+    ) {
+        if (!x.is_cuda()) throw py::value_error("x must be CUDA");
+
+        const int64_t B = x.size(0);
+        const int64_t T = x.size(1);
+        const int64_t E = x.size(2);
+        const int64_t M = pair_rows.size(0);
+        const int64_t n_tables = anchor_a.size(0);
+        const int64_t n_anchor_pairs = anchor_a.size(1);
+        const int64_t n_entries = weights.size(1);
+        const int64_t O = weights.size(2);
+        const int64_t pos_dim = rel_pe_opt.has_value() ? rel_pe_opt.value().size(1) : 0;
+
+        auto opts = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+        torch::Tensor x_grad = torch::zeros_like(x);
+        torch::Tensor weights_grad = torch::zeros_like(weights);
+
+        torch::Tensor rel_pe;
+        torch::Tensor rel_pe_grad;
+        if (rel_pe_opt.has_value()) {
+            rel_pe = rel_pe_opt.value().contiguous();
+            rel_pe_grad = torch::zeros_like(rel_pe);
+        }
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+
+        int64_t input_dim = 2 * E + pos_dim;
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "lut_attn_bwd_na1", [&] {
+            const scalar_t* rpe_ptr = rel_pe_opt.has_value()
+                ? reinterpret_cast<const scalar_t*>(rel_pe.data_ptr()) : nullptr;
+            scalar_t* rpe_grad_ptr = rel_pe_opt.has_value()
+                ? reinterpret_cast<scalar_t*>(rel_pe_grad.data_ptr()) : nullptr;
+            dim3 grid(static_cast<unsigned>(B * M), static_cast<unsigned>(H));
+            dim3 block(static_cast<unsigned>(O));
+            size_t smem = static_cast<size_t>(input_dim + O) * sizeof(scalar_t);
+            lut_attn_bwd_na1_kernel<scalar_t><<<grid, block, smem, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchor_a.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchor_b.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_rows.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_cols.data_ptr()),
+                rpe_ptr,
+                reinterpret_cast<const scalar_t*>(pair_out_buf.data_ptr()),
+                reinterpret_cast<const scalar_t*>(result_grad.data_ptr()),
+                reinterpret_cast<scalar_t*>(weights_grad.data_ptr()),
+                reinterpret_cast<scalar_t*>(x_grad.data_ptr()),
+                rpe_grad_ptr,
+                B, T, E, M, H,
+                tables_per_head,
+                n_entries, n_anchor_pairs, O, pos_dim,
+                causal, self_excitement,
+                static_cast<scalar_t>(cmp_eps),
+                static_cast<scalar_t>(uncertainty_bias)
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        if (rel_pe_opt.has_value()) {
+            return py::make_tuple(x_grad, weights_grad, rel_pe_grad);
+        } else {
+            return py::make_tuple(x_grad, weights_grad, py::none());
+        }
     }
 #endif
 
@@ -2537,6 +2923,41 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("main_weight"),
             py::arg("alt_weight"),
             py::arg("threads_per_block") = 256
+        )
+        .def(
+            "lut_attn_fwd_na1",
+            &LUTorchManager::lut_attn_fwd_na1,
+            py::arg("x"),
+            py::arg("weights"),
+            py::arg("anchor_a"),
+            py::arg("anchor_b"),
+            py::arg("pair_rows"),
+            py::arg("pair_cols"),
+            py::arg("rel_pe"),
+            py::arg("H"),
+            py::arg("tables_per_head"),
+            py::arg("causal"),
+            py::arg("self_excitement"),
+            py::arg("cmp_eps")
+        )
+        .def(
+            "lut_attn_bwd_na1",
+            &LUTorchManager::lut_attn_bwd_na1,
+            py::arg("x"),
+            py::arg("weights"),
+            py::arg("anchor_a"),
+            py::arg("anchor_b"),
+            py::arg("pair_rows"),
+            py::arg("pair_cols"),
+            py::arg("rel_pe"),
+            py::arg("pair_out_buf"),
+            py::arg("result_grad"),
+            py::arg("H"),
+            py::arg("tables_per_head"),
+            py::arg("causal"),
+            py::arg("self_excitement"),
+            py::arg("cmp_eps"),
+            py::arg("uncertainty_bias")
         )
         #endif
         .def("get_profiling_stats", &LUTorchManager::get_profiling_stats)

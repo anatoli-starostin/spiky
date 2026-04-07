@@ -298,11 +298,11 @@ def test_sparse_output_dim_backward(device):
 
 
 def test_sparse_output_dim_validation():
-    """sparse_output_dim must be < n_outputs; cannot combine with post_processor."""
+    """sparse_output_dim must be <= n_outputs; cannot combine with post_processor."""
     with pytest.raises(ValueError, match="sparse_output_dim"):
         MultiHeadLut(
             input_dim=32, n_heads=1, n_outputs=8, n_anchor_pairs=4,
-            tables_per_head=4, sparse_output_dim=8,
+            tables_per_head=4, sparse_output_dim=9,
             uncertainty_mode=UncertaintyMode.INVERSE_L1,
         )
     with pytest.raises(ValueError, match="post_processor"):
@@ -312,3 +312,33 @@ def test_sparse_output_dim_validation():
             post_processor=nn.Identity(), n_post_processor_inputs=4,
             uncertainty_mode=UncertaintyMode.INVERSE_L1,
         )
+
+
+def test_sparse_output_dim_equals_n_outputs(device):
+    """sparse_output_dim=n_outputs uses identity scatter and matches sparse_output_dim=None exactly."""
+    common = dict(
+        input_dim=16, n_heads=2, n_outputs=8, n_anchor_pairs=4,
+        tables_per_head=6, uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        random_seed=0, device=torch.device("cpu"),
+    )
+    dense = MultiHeadLut(**common).to(device)
+    sparse = MultiHeadLut(**common, sparse_output_dim=8).to(device)
+
+    # Copy weights so both models are identical
+    sparse.projection.weights.data.copy_(dense.projection.weights.data)
+
+    x = torch.randn(5, 16, device=device)
+
+    out_dense = dense(x)
+    out_sparse = sparse(x)
+    assert torch.allclose(out_dense, out_sparse, atol=1e-6), \
+        f"outputs differ: max abs diff = {(out_dense - out_sparse).abs().max()}"
+
+    # Gradients should also match
+    out_dense.sum().backward()
+    out_sparse.sum().backward()
+    assert torch.allclose(
+        dense.projection.weights.grad,
+        sparse.projection.weights.grad,
+        atol=1e-6,
+    ), f"gradients differ: max abs diff = {(dense.projection.weights.grad - sparse.projection.weights.grad).abs().max()}"

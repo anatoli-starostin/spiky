@@ -51,10 +51,23 @@ def _pair_stats(lut):
     return n_covered, all_disconnected
 
 
+def _make_lut_for_policy(policy):
+    """Return a lut appropriate for the given policy (CONV2D needs input_dim=64, nap=8)."""
+    if policy == AnchorSamplingPolicy.CONV2D:
+        return MultiHeadLut(
+            input_dim=64, n_heads=1, n_outputs=64, n_anchor_pairs=8,
+            tables_per_head=9999, smooth_mode=False, n_alternatives=1,
+            normalize_weights=False, calibrate_output=False, initial_weights_noise=0.001,
+            uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
+            device=torch.device("cpu"), anchor_sampling_policy=policy,
+        )
+    return _make_lut(policy)
+
+
 def test_no_collisions_all_policies():
     """All policies must produce a != b for every pair."""
     for policy in AnchorSamplingPolicy:
-        lut = _make_lut(policy)
+        lut = _make_lut_for_policy(policy)
         a, b = lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b
         assert (a == b).sum().item() == 0, f"{policy.value}: collision detected"
 
@@ -97,12 +110,17 @@ def test_disconnected_not_full_coverage():
 
 def test_forward_all_policies(device):
     """All policies produce valid forward pass output."""
-    x = torch.randn(8, INPUT_DIM, device=device)
+    x_default = torch.randn(8, INPUT_DIM, device=device)
+    x_conv2d = torch.randn(8, 64, device=device)
     for policy in AnchorSamplingPolicy:
-        lut = _make_lut(policy)
-        lut = lut.to(device)
-        out = lut(x)
-        assert out.shape == (8, 1, INPUT_DIM), f"{policy.value}: unexpected output shape {out.shape}"
+        if policy == AnchorSamplingPolicy.CONV2D:
+            lut = _make_lut_for_policy(policy).to(device)
+            out = lut(x_conv2d)
+            assert out.shape == (8, 1, 64), f"{policy.value}: unexpected output shape {out.shape}"
+        else:
+            lut = _make_lut(policy).to(device)
+            out = lut(x_default)
+            assert out.shape == (8, 1, INPUT_DIM), f"{policy.value}: unexpected output shape {out.shape}"
         assert not torch.isnan(out).any(), f"{policy.value}: NaN in output"
 
 
@@ -164,3 +182,153 @@ def test_disconnected_full_coverage_requires_sufficient_input_dim():
             device=torch.device("cpu"),
             anchor_sampling_policy=AnchorSamplingPolicy.DISCONNECTED_FULL_COVERAGE,
         )
+
+
+# ── HIERARCHICAL tests ──────────────────────────────────────────────────────────
+
+def test_hierarchical_table_count_small():
+    """
+    compute_hierarchical_n_tables for input_dim=8, nap=4.
+
+    dist=1: 8 - 4*1 = 4
+    dist=2: 8 - 4*2 = 0 → stop
+    Total = 4.
+    """
+    from spiky.lutorch.lut_helpers import compute_hierarchical_n_tables
+    assert compute_hierarchical_n_tables(8, 4) == 4
+
+
+def test_hierarchical_table_count_tph_cap():
+    """tph=3 caps the 4-table result to 3."""
+    from spiky.lutorch.lut_helpers import compute_hierarchical_n_tables
+    assert compute_hierarchical_n_tables(8, 4, tph=3) == 3
+
+
+def test_hierarchical_anchor_pairs_exact():
+    """
+    Verify structural properties of HIERARCHICAL anchor pairs for input_dim=8, nap=4.
+
+    Canonical layout (before per-head permutation):
+      dist=1: 8 - 4*1 = 4 tables
+      dist=2: 8 - 4*2 = 0 → stop
+    """
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
+    a, b = get_balanced_anchor_pairs(
+        n_tables=4, n_anchor_pairs=4, input_dim=8,
+        device=torch.device("cpu"),
+        policy=AnchorSamplingPolicy.HIERARCHICAL,
+    )
+    assert a.shape == (4, 4)
+    assert b.shape == (4, 4)
+    assert a.min() >= 0 and a.max() < 8
+    assert b.min() >= 0 and b.max() < 8
+    assert (a == b).sum().item() == 0
+
+
+def test_hierarchical_anchor_pairs_exact_dim16():
+    """
+    Verify structural properties of HIERARCHICAL anchor pairs for input_dim=16, nap=4.
+
+    Canonical layout (before per-head permutation):
+      dist=1: 16 - 4*1 = 12 tables
+      dist=2: 16 - 4*2 = 8  tables
+      dist=4: 16 - 4*4 = 0 → stop
+    Total: 20 tables per head.
+    """
+    from spiky.lutorch.lut_helpers import compute_hierarchical_n_tables, get_balanced_anchor_pairs
+    assert compute_hierarchical_n_tables(16, 4) == 20
+
+    a, b = get_balanced_anchor_pairs(
+        n_tables=20, n_anchor_pairs=4, input_dim=16,
+        device=torch.device("cpu"),
+        policy=AnchorSamplingPolicy.HIERARCHICAL,
+    )
+    assert a.shape == (20, 4)
+    assert b.shape == (20, 4)
+    assert a.min() >= 0 and a.max() < 16
+    assert b.min() >= 0 and b.max() < 16
+    assert (a == b).sum().item() == 0
+
+
+def test_hierarchical_heads_get_different_anchors():
+    """Each head must have different anchor pairs (independent permutations)."""
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs, compute_hierarchical_n_tables
+    n_heads = 4
+    per_head = compute_hierarchical_n_tables(16, 4)  # 20
+    a, b = get_balanced_anchor_pairs(
+        n_tables=n_heads * per_head, n_anchor_pairs=4, input_dim=16,
+        device=torch.device("cpu"), random_seed=42,
+        policy=AnchorSamplingPolicy.HIERARCHICAL, n_heads=n_heads,
+    )
+    assert a.shape == (n_heads * per_head, 4)
+    head_anchors = [a[h * per_head:(h + 1) * per_head] for h in range(n_heads)]
+    # All heads should have different anchor patterns
+    for i in range(n_heads):
+        for j in range(i + 1, n_heads):
+            assert not torch.equal(head_anchors[i], head_anchors[j]), \
+                f"heads {i} and {j} have identical anchor pairs"
+
+
+def test_multiscale_heads_get_different_anchors():
+    """Each head must have different anchor pairs (independent permutations)."""
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs, compute_multiscale_n_tables
+    n_heads = 4
+    per_head = compute_multiscale_n_tables(16, 4)
+    a, b = get_balanced_anchor_pairs(
+        n_tables=n_heads * per_head, n_anchor_pairs=4, input_dim=16,
+        device=torch.device("cpu"), random_seed=42,
+        policy=AnchorSamplingPolicy.MULTISCALE, n_heads=n_heads,
+    )
+    assert a.shape == (n_heads * per_head, 4)
+    head_anchors = [a[h * per_head:(h + 1) * per_head] for h in range(n_heads)]
+    for i in range(n_heads):
+        for j in range(i + 1, n_heads):
+            assert not torch.equal(head_anchors[i], head_anchors[j]), \
+                f"heads {i} and {j} have identical anchor pairs"
+
+
+def test_hierarchical_tables_per_head_overridden():
+    """MultiHeadLut with HIERARCHICAL sets tables_per_head=4 for input_dim=8, nap=4."""
+    lut = MultiHeadLut(
+        input_dim=8, n_heads=2, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=1000,  # large tph, should be capped to 4 (8-4*1=4, 8-4*2=0→stop)
+        smooth_mode=False, n_alternatives=1,
+        normalize_weights=False, calibrate_output=False, initial_weights_noise=0.0,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
+        device=torch.device("cpu"),
+        anchor_sampling_policy=AnchorSamplingPolicy.HIERARCHICAL,
+    )
+    assert lut.tables_per_head == 4
+
+
+def test_hierarchical_no_out_of_bounds():
+    """All anchor indices must be within [0, input_dim)."""
+    lut = MultiHeadLut(
+        input_dim=8, n_heads=2, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=1000,
+        smooth_mode=False, n_alternatives=1,
+        normalize_weights=False, calibrate_output=False, initial_weights_noise=0.0,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
+        device=torch.device("cpu"),
+        anchor_sampling_policy=AnchorSamplingPolicy.HIERARCHICAL,
+    )
+    a, b = lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b
+    assert a.min() >= 0 and a.max() < 8
+    assert b.min() >= 0 and b.max() < 8
+
+
+def test_hierarchical_forward():
+    """HIERARCHICAL produces valid forward output for input_dim=8, nap=4."""
+    lut = MultiHeadLut(
+        input_dim=8, n_heads=2, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=1000,
+        smooth_mode=False, n_alternatives=1,
+        normalize_weights=False, calibrate_output=False, initial_weights_noise=0.0,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
+        device=torch.device("cpu"),
+        anchor_sampling_policy=AnchorSamplingPolicy.HIERARCHICAL,
+    )
+    x = torch.randn(4, 8)
+    out = lut(x)
+    assert out.shape == (4, 2, 4)
+    assert not torch.isnan(out).any()

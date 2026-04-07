@@ -1,9 +1,13 @@
 """Tests for LUTAttention."""
+from contextlib import contextmanager
+
+import pytest
 import torch
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
-from spiky.lutorch.lut_attention import LUTAttention
+from spiky.lutorch.lut_attention import LUTAttention, LUTAttentionV2
 from spiky.lutorch.lut_helpers import UncertaintyMode
+import spiky.lutorch.lut_attention as lut_attn_mod
 
 SEED = 123
 
@@ -75,3 +79,93 @@ def test_lut_attention_finite_scores_non_causal(device):
 
     assert scores.shape == (B, S, S, H)
     assert torch.isfinite(scores).all(), "Non-causal attention scores contain NaN or inf"
+
+
+# ---------------------------------------------------------------------------
+# LUTAttentionV2 fused kernel tests
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _fused_kernel_enabled(enabled: bool):
+    prev = lut_attn_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS
+    lut_attn_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = enabled
+    try:
+        yield
+    finally:
+        lut_attn_mod._USE_LUTORCH_CUSTOM_CUDA_KERNELS = prev
+
+
+def _make_lut_attn_v2(device, T, E, pos_dim, H, O, tph, nap, self_excitement, seed=SEED):
+    lut = MultiHeadLut(
+        input_dim=2 * E + pos_dim,
+        n_heads=H,
+        n_outputs=O,
+        n_anchor_pairs=nap,
+        tables_per_head=tph,
+        n_alternatives=1,
+        smooth_mode=False,
+        calibrate_output=False,
+        normalize_weights=False,
+        table_dropout=0.0,
+        random_seed=seed,
+        device=device,
+    )
+    with torch.no_grad():
+        lut.projection.weights.normal_(mean=0.0, std=0.01)
+    return LUTAttentionV2(lut, seq_len=T, causal=True, self_excitement=self_excitement).to(device)
+
+
+@pytest.mark.parametrize("self_excitement", [False, True])
+def test_lut_attention_v2_fused_fwd_matches_ref(device, self_excitement):
+    """Fused CUDA kernel forward matches Python reference on cuda."""
+    if device != "cuda":
+        pytest.skip("fused kernel only runs on CUDA float32")
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O, tph, nap = 2, 8, 16, 8, 1, 32, 4, 4
+
+    attn = _make_lut_attn_v2(device, T, E, pos_dim, H, O, tph, nap, self_excitement)
+    attn.eval()
+    x = torch.randn(B, T, E, device=device)
+    rel_pe = torch.randn(T, pos_dim, device=device)
+
+    with _fused_kernel_enabled(False):
+        ref = attn(x.clone(), rel_pe.clone())
+    with _fused_kernel_enabled(True):
+        fast = attn(x.clone(), rel_pe.clone())
+
+    assert fast.shape == ref.shape
+    assert torch.allclose(fast, ref, atol=1e-4), \
+        f"fwd max diff = {(fast - ref).abs().max().item()}"
+
+
+@pytest.mark.parametrize("self_excitement", [False, True])
+def test_lut_attention_v2_fused_bwd_matches_ref(device, self_excitement):
+    """Fused CUDA kernel backward gradients match Python reference."""
+    if device != "cuda":
+        pytest.skip("fused kernel only runs on CUDA float32")
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O, tph, nap = 2, 8, 16, 8, 1, 32, 4, 4
+
+    attn = _make_lut_attn_v2(device, T, E, pos_dim, H, O, tph, nap, self_excitement)
+    attn.train()
+    x_base = torch.randn(B, T, E, device=device)
+    rpe_base = torch.randn(T, pos_dim, device=device)
+
+    def run(enabled):
+        x = x_base.clone().requires_grad_(True)
+        rpe = rpe_base.clone().requires_grad_(True)
+        attn.multi_head_lut.projection.weights.grad = None
+        with _fused_kernel_enabled(enabled):
+            out = attn(x, rpe)
+        out.sum().backward()
+        return x.grad.clone(), attn.multi_head_lut.projection.weights.grad.clone(), rpe.grad.clone()
+
+    x_g_ref, w_g_ref, rpe_g_ref = run(False)
+    x_g_fast, w_g_fast, rpe_g_fast = run(True)
+
+    assert torch.allclose(x_g_fast, x_g_ref, atol=1e-4), \
+        f"x_grad max diff = {(x_g_fast - x_g_ref).abs().max().item()}"
+    assert torch.allclose(w_g_fast, w_g_ref, atol=1e-4), \
+        f"w_grad max diff = {(w_g_fast - w_g_ref).abs().max().item()}"
+    assert torch.allclose(rpe_g_fast, rpe_g_ref, atol=1e-4), \
+        f"rpe_grad max diff = {(rpe_g_fast - rpe_g_ref).abs().max().item()}"
