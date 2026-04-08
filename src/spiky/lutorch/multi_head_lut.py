@@ -182,6 +182,7 @@ class MultiHeadLut(nn.Module):
         shuffle_per_head: bool = True,
         prebuilt_anchor_pairs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         recompute_in_backward: bool = False,
+        exclusion_sets: Optional[list] = None,
     ):
         super().__init__()
 
@@ -264,6 +265,7 @@ class MultiHeadLut(nn.Module):
             n_heads=n_heads,
             shuffle_per_head=shuffle_per_head,
             prebuilt_anchor_pairs=prebuilt_anchor_pairs,
+            exclusion_sets=exclusion_sets,
         )
 
         # Determine internal output dim for LProjection

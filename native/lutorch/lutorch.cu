@@ -930,22 +930,16 @@ __global__ void lprojection_backward_smooth_weights_kernel(
 
 // ---------------------------------------------------------------------------
 // Fused LUT Attention kernels (na1, non-smooth, n_alternatives=1)
-// Feature-cached design: each block caches [x_i | x_j | rel_pe] in shared
-// memory and loops over tables, eliminating redundant global memory reads.
+// Two-phase design inspired by PRODUCT kernels:
+//   Block: (O, TILE_TPH) — threadIdx.x = output dim, threadIdx.y = table slice
+//   Phase 1: all threads cooperatively load feature cache
+//   Phase 2: each (o, ty) accumulates weights for output o across its table slice
+//   Then reduce partial sums across ty, apply SE, scatter.
 // ---------------------------------------------------------------------------
 
-// Helper: block-level reduction of sh[0..O-1] into sh[0].
-template <typename scalar_t>
-static __device__ __forceinline__ void block_reduce_sum(scalar_t* sh, int64_t o, int64_t O) {
-    for (int64_t stride = O >> 1; stride > 0; stride >>= 1) {
-        if (o < stride) sh[o] += sh[o + stride];
-        __syncthreads();
-    }
-}
-
-// ---- Forward kernel: feature-cached, loops over tables ----
-// Grid: (B*M, H), Block: (O)
-// Shared memory: (input_dim + O) * sizeof(scalar_t)
+// ---- Forward kernel ----
+// Grid: (B*M, H), Block: (O, TILE_TPH)
+// Shared: (input_dim + TILE_TPH * O) * sizeof(scalar_t)
 template <typename scalar_t>
 __global__ void lut_attn_fwd_na1_kernel(
     const scalar_t* __restrict__ x,
@@ -963,17 +957,20 @@ __global__ void lut_attn_fwd_na1_kernel(
     int64_t n_entries, int64_t n_anchor_pairs,
     int64_t O, int64_t pos_dim,
     bool causal, bool self_excitement,
-    scalar_t cmp_eps
+    scalar_t cmp_eps,
+    int se_mode   // 0=linear, 1=quadratic, 2=exponential
 ) {
     extern __shared__ char sh_raw[];
     int64_t input_dim = 2 * E + pos_dim;
     scalar_t* feat = reinterpret_cast<scalar_t*>(sh_raw);
-    scalar_t* sh   = feat + input_dim;
+    scalar_t* rb   = feat + input_dim;   // reduce buffer [TILE_TPH][O]
 
+    int64_t o  = static_cast<int64_t>(threadIdx.x);   // output dim
+    int64_t ty = static_cast<int64_t>(threadIdx.y);    // table slice
+    int64_t TILE_TPH = static_cast<int64_t>(blockDim.y);
     int64_t bm = static_cast<int64_t>(blockIdx.x);
     int64_t h  = static_cast<int64_t>(blockIdx.y);
-    int64_t o  = static_cast<int64_t>(threadIdx.x);
-    if (bm >= B * M || h >= H || o >= O) return;
+    if (bm >= B * M || h >= H) return;
 
     int64_t b = bm / M;
     int64_t m = bm - b * M;
@@ -981,21 +978,23 @@ __global__ void lut_attn_fwd_na1_kernel(
     int64_t col_j = pair_cols[m];
     int64_t dist = causal ? (row_i - col_j) : lutorch_abs(row_i - col_j);
 
-    // Cooperatively load feature cache [x_i | x_j | rel_pe_dist]
+    // Phase 1: cooperatively load feature cache
+    int64_t linear_tid = ty * O + o;
+    int64_t block_size = TILE_TPH * O;
     const scalar_t* xi_ptr  = x + b * T * E + row_i * E;
     const scalar_t* xj_ptr  = x + b * T * E + col_j * E;
     const scalar_t* rpe_ptr = (rel_pe != nullptr) ? rel_pe + dist * pos_dim : nullptr;
-    for (int64_t f = o; f < input_dim; f += O) {
+    for (int64_t f = linear_tid; f < input_dim; f += block_size) {
         if (f < E)          feat[f] = xi_ptr[f];
         else if (f < 2 * E) feat[f] = xj_ptr[f - E];
         else                 feat[f] = rpe_ptr[f - 2 * E];
     }
     __syncthreads();
 
-    // Loop over tables, accumulate weights in register
+    // Phase 2: each thread accumulates weights for its table slice
     scalar_t acc = static_cast<scalar_t>(0);
     int64_t t_start = h * tables_per_head;
-    for (int64_t tl = 0; tl < tables_per_head; ++tl) {
+    for (int64_t tl = ty; tl < tables_per_head; tl += TILE_TPH) {
         int64_t t = t_start + tl;
         int64_t ta_off = t * n_anchor_pairs;
         int64_t lookup_idx = 0;
@@ -1006,25 +1005,47 @@ __global__ void lut_attn_fwd_na1_kernel(
         acc += weights[t * n_entries * O + lookup_idx * O + o];
     }
 
-    // Save pre-SE activation for backward
-    pair_out_buf[bm * H * O + h * O + o] = acc;
-
-    // Self-excitement: y_o = f_o * mean(|f|)
-    scalar_t y_o = acc;
-    if (self_excitement) {
-        sh[o] = lutorch_abs(acc);
+    // Reduce partial sums across ty
+    rb[ty * O + o] = acc;
+    __syncthreads();
+    for (int64_t stride = TILE_TPH >> 1; stride > 0; stride >>= 1) {
+        if (ty < stride)
+            rb[ty * O + o] += rb[(ty + stride) * O + o];
         __syncthreads();
-        block_reduce_sum(sh, o, O);
-        y_o = acc * (sh[0] / static_cast<scalar_t>(O));
     }
 
-    // Scatter-add to result at row_i
-    atomicAdd(&result[b * T * H * O + row_i * H * O + h * O + o], y_o);
+    // rb[0..O-1] now has final per-output accumulated value
+    scalar_t f_o = rb[o];
+    if (ty == 0)
+        pair_out_buf[bm * H * O + h * O + o] = f_o;
+
+    // Self-excitement: y_o = f_o * scale(mean(|f|))
+    scalar_t y_o = f_o;
+    if (self_excitement) {
+        if (ty == 0)
+            rb[o] = lutorch_abs(f_o);
+        __syncthreads();
+        for (int64_t stride = O >> 1; stride > 0; stride >>= 1) {
+            if (ty == 0 && o < stride)
+                rb[o] += rb[o + stride];
+            __syncthreads();
+        }
+        scalar_t s = rb[0] / static_cast<scalar_t>(O);  // mean_abs
+        scalar_t scale;
+        if (se_mode == 0)      scale = s;           // linear
+        else if (se_mode == 1) scale = s * s;        // quadratic
+        else                    scale = exp(s);       // exponential
+        y_o = f_o * scale;
+    }
+
+    // Scatter-add to result
+    if (ty == 0)
+        atomicAdd(&result[b * T * H * O + row_i * H * O + h * O + o], y_o);
 }
 
-// ---- Backward kernel: feature-cached, loops over tables ----
-// Grid: (B*M, H), Block: (O)
-// Shared memory: (input_dim + O) * sizeof(scalar_t)
+// ---- Backward kernel ----
+// Grid: (B*M, H), Block: (O, TILE_TPH)
+// Shared: (input_dim + TILE_TPH * O) * sizeof(scalar_t)
 template <typename scalar_t>
 __global__ void lut_attn_bwd_na1_kernel(
     const scalar_t* __restrict__ x,
@@ -1045,17 +1066,21 @@ __global__ void lut_attn_bwd_na1_kernel(
     int64_t n_entries, int64_t n_anchor_pairs,
     int64_t O, int64_t pos_dim,
     bool causal, bool self_excitement,
-    scalar_t cmp_eps, scalar_t uncertainty_bias
+    scalar_t cmp_eps, scalar_t uncertainty_bias,
+    int se_mode   // 0=linear, 1=quadratic, 2=exponential
 ) {
     extern __shared__ char sh_raw[];
     int64_t input_dim = 2 * E + pos_dim;
-    scalar_t* feat = reinterpret_cast<scalar_t*>(sh_raw);
-    scalar_t* sh   = feat + input_dim;
+    scalar_t* feat     = reinterpret_cast<scalar_t*>(sh_raw);
+    scalar_t* rb       = feat + input_dim;                      // [TILE_TPH * O]
+    scalar_t* sh_xgrad = rb + static_cast<int64_t>(blockDim.y) * O;  // [input_dim]
 
+    int64_t o  = static_cast<int64_t>(threadIdx.x);
+    int64_t ty = static_cast<int64_t>(threadIdx.y);
+    int64_t TILE_TPH = static_cast<int64_t>(blockDim.y);
     int64_t bm = static_cast<int64_t>(blockIdx.x);
     int64_t h  = static_cast<int64_t>(blockIdx.y);
-    int64_t o  = static_cast<int64_t>(threadIdx.x);
-    if (bm >= B * M || h >= H || o >= O) return;
+    if (bm >= B * M || h >= H) return;
 
     int64_t b = bm / M;
     int64_t m = bm - b * M;
@@ -1063,42 +1088,62 @@ __global__ void lut_attn_bwd_na1_kernel(
     int64_t col_j = pair_cols[m];
     int64_t dist = causal ? (row_i - col_j) : lutorch_abs(row_i - col_j);
 
-    // Load feature cache
+    // Cooperatively zero sh_xgrad and load feature cache
+    int64_t linear_tid = ty * O + o;
+    int64_t block_size = TILE_TPH * O;
+    for (int64_t f = linear_tid; f < input_dim; f += block_size)
+        sh_xgrad[f] = static_cast<scalar_t>(0);
     const scalar_t* xi_ptr  = x + b * T * E + row_i * E;
     const scalar_t* xj_ptr  = x + b * T * E + col_j * E;
     const scalar_t* rpe_ptr = (rel_pe != nullptr) ? rel_pe + dist * pos_dim : nullptr;
-    for (int64_t f = o; f < input_dim; f += O) {
+    for (int64_t f = linear_tid; f < input_dim; f += block_size) {
         if (f < E)          feat[f] = xi_ptr[f];
         else if (f < 2 * E) feat[f] = xj_ptr[f - E];
         else                 feat[f] = rpe_ptr[f - 2 * E];
     }
     __syncthreads();
 
-    // Compute SE gradient
+    // Compute SE gradient (uses rb[0..O-1] only, ty==0 does reductions)
     scalar_t f_o = pair_out_buf[bm * H * O + h * O + o];
     scalar_t g_o = result_grad[b * T * H * O + row_i * H * O + h * O + o];
     scalar_t se_grad_o;
     if (self_excitement) {
-        sh[o] = f_o * g_o;
+        if (ty == 0) rb[o] = f_o * g_o;
         __syncthreads();
-        block_reduce_sum(sh, o, O);
-        scalar_t dot_fg = sh[0];
-        sh[o] = lutorch_abs(f_o);
+        for (int64_t stride = O >> 1; stride > 0; stride >>= 1) {
+            if (ty == 0 && o < stride) rb[o] += rb[o + stride];
+            __syncthreads();
+        }
+        scalar_t dot_fg = rb[0];
+        __syncthreads();  // ensure all threads read dot_fg before ty=0 overwrites rb
+        if (ty == 0) rb[o] = lutorch_abs(f_o);
         __syncthreads();
-        block_reduce_sum(sh, o, O);
-        scalar_t mean_abs = sh[0] / static_cast<scalar_t>(O);
-        se_grad_o = g_o * mean_abs + lutorch_sign(f_o) * dot_fg / static_cast<scalar_t>(O);
+        for (int64_t stride = O >> 1; stride > 0; stride >>= 1) {
+            if (ty == 0 && o < stride) rb[o] += rb[o + stride];
+            __syncthreads();
+        }
+        scalar_t s = rb[0] / static_cast<scalar_t>(O);  // mean_abs
+        // se_grad_o = g_o * A + sign(f_o) * B * dot_fg / O
+        scalar_t A, B;
+        if (se_mode == 0)      { A = s; B = static_cast<scalar_t>(1); }           // linear
+        else if (se_mode == 1) { A = s * s; B = static_cast<scalar_t>(2) * s; }   // quadratic
+        else                    { scalar_t e = exp(s); A = e; B = e; }             // exponential
+        se_grad_o = g_o * A + lutorch_sign(f_o) * B * dot_fg / static_cast<scalar_t>(O);
     } else {
         se_grad_o = g_o;
     }
 
-    // Loop over tables: weight grad + x grad
+    // Table loop: TILE_TPH tables processed in parallel per iteration.
+    // For O <= 32 each ty-row is one warp → use __shfl_down_sync (no syncs).
+    // For O > 32 fall back to shared memory reduction.
     int64_t t_start = h * tables_per_head;
-    for (int64_t tl = 0; tl < tables_per_head; ++tl) {
+    bool use_warp_shuffle = (O <= 32);
+
+    for (int64_t tl = ty; tl < tables_per_head; tl += TILE_TPH) {
         int64_t t = t_start + tl;
         int64_t ta_off = t * n_anchor_pairs;
 
-        // Recompute lookup + find min-delta anchor pair
+        // Compute lookup + min-delta from feat cache
         int64_t lookup_idx = 0;
         scalar_t min_abs_delta = static_cast<scalar_t>(0);
         scalar_t min_delta = static_cast<scalar_t>(0);
@@ -1123,32 +1168,60 @@ __global__ void lut_attn_bwd_na1_kernel(
         int64_t w_main = t * n_entries * O + lookup_idx * O + o;
         atomicAdd(&weights_grad[w_main], se_grad_o);
 
-        // X gradient: reduce se_grad * (W[main] - W[alt]) over outputs
+        // X gradient: reduce se_grad * (W[main] - W[alt]) across outputs
         int64_t alt_idx = lookup_idx ^ (static_cast<int64_t>(1) << min_bit_pos);
         int64_t w_alt = t * n_entries * O + alt_idx * O + o;
-        sh[o] = se_grad_o * (weights[w_main] - weights[w_alt]);
-        __syncthreads();
-        block_reduce_sum(sh, o, O);
+        scalar_t val = se_grad_o * (weights[w_main] - weights[w_alt]);
+
+        // Two-stage reduction: warp shuffle first, then cross-warp via shared mem
+        // Stage 1: intra-warp reduction with width=O for sub-warp groups
+        scalar_t grad_diff;
+        {
+            unsigned mask = 0xffffffff;
+            int shfl_width = (O <= 32) ? static_cast<int>(O) : 32;
+            for (int offset = shfl_width >> 1; offset > 0; offset >>= 1)
+                val += __shfl_down_sync(mask, val, offset, shfl_width);
+        }
+        if (O <= 32) {
+            grad_diff = val;  // single warp, done
+        } else {
+            // Stage 2: lane 0 of each warp writes partial sum, combine
+            int64_t lane = o & 31;
+            int64_t warp_in_row = o >> 5;
+            int64_t n_warps = O >> 5;
+            if (lane == 0)
+                rb[ty * n_warps + warp_in_row] = val;
+            __syncthreads();
+            if (o == 0) {
+                grad_diff = rb[ty * n_warps];
+                for (int64_t w = 1; w < n_warps; ++w)
+                    grad_diff += rb[ty * n_warps + w];
+            }
+            __syncthreads();
+        }
+
         if (o == 0) {
-            scalar_t grad_diff = sh[0];
             scalar_t one_plus_abs = static_cast<scalar_t>(1) + min_abs_delta;
             scalar_t du = grad_diff * uncertainty_bias * lutorch_sign(min_delta)
                           / (one_plus_abs * one_plus_abs);
-
-            auto propagate = [&](int64_t anc, scalar_t sign) {
-                scalar_t g = du * sign;
-                if (anc < E)
-                    atomicAdd(&x_grad[b * T * E + row_i * E + anc], g);
-                else if (anc < 2*E)
-                    atomicAdd(&x_grad[b * T * E + col_j * E + (anc - E)], g);
-                else if (rel_pe_grad != nullptr)
-                    atomicAdd(&rel_pe_grad[dist * pos_dim + (anc - 2*E)], g);
-            };
-            propagate(min_anc_a, static_cast<scalar_t>(1));
-            propagate(min_anc_b, static_cast<scalar_t>(-1));
+            // Accumulate into shared memory (fast ~10 cycle atomics)
+            atomicAdd(&sh_xgrad[min_anc_a], du);
+            atomicAdd(&sh_xgrad[min_anc_b], -du);
         }
-        // Must sync before next iteration reuses sh[]
-        __syncthreads();
+    }
+
+    // Flush sh_xgrad to global memory — one sync, then cooperative write
+    __syncthreads();
+    for (int64_t f = linear_tid; f < input_dim; f += block_size) {
+        scalar_t g = sh_xgrad[f];
+        if (g != static_cast<scalar_t>(0)) {
+            if (f < E)
+                atomicAdd(&x_grad[b * T * E + row_i * E + f], g);
+            else if (f < 2 * E)
+                atomicAdd(&x_grad[b * T * E + col_j * E + (f - E)], g);
+            else if (rel_pe_grad != nullptr)
+                atomicAdd(&rel_pe_grad[dist * pos_dim + (f - 2 * E)], g);
+        }
     }
 }
 #endif
@@ -2598,7 +2671,8 @@ public:
         int64_t tables_per_head,
         bool causal,
         bool self_excitement,
-        double cmp_eps
+        double cmp_eps,
+        int se_mode
     ) {
         if (!x.is_cuda()) throw py::value_error("x must be CUDA");
         if (!x.is_contiguous()) throw py::value_error("x must be contiguous");
@@ -2629,12 +2703,21 @@ public:
         c10::cuda::CUDAGuard guard(device);
 
         int64_t input_dim = 2 * E + pos_dim;
+        int64_t tile_tph = std::min(static_cast<int64_t>(1024) / O, tables_per_head);
+        // Round down to power of 2
+        {
+            int64_t v = tile_tph;
+            v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+            tile_tph = (v + 1) >> 1;
+        }
+        if (tile_tph < 1) tile_tph = 1;
+
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "lut_attn_fwd_na1", [&] {
             const scalar_t* rpe_ptr = rel_pe_opt.has_value()
                 ? reinterpret_cast<const scalar_t*>(rel_pe.data_ptr()) : nullptr;
             dim3 grid(static_cast<unsigned>(B * M), static_cast<unsigned>(H));
-            dim3 block(static_cast<unsigned>(O));
-            size_t smem = static_cast<size_t>(input_dim + O) * sizeof(scalar_t);
+            dim3 block(static_cast<unsigned>(O), static_cast<unsigned>(tile_tph));
+            size_t smem = static_cast<size_t>(input_dim + tile_tph * O) * sizeof(scalar_t);
             lut_attn_fwd_na1_kernel<scalar_t><<<grid, block, smem, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 reinterpret_cast<const scalar_t*>(weights.data_ptr()),
@@ -2649,7 +2732,8 @@ public:
                 tables_per_head,
                 n_entries, n_anchor_pairs, O, pos_dim,
                 causal, self_excitement,
-                static_cast<scalar_t>(cmp_eps)
+                static_cast<scalar_t>(cmp_eps),
+                se_mode
             );
         });
         CU_CHECK(cudaGetLastError());
@@ -2676,7 +2760,8 @@ public:
         bool causal,
         bool self_excitement,
         double cmp_eps,
-        double uncertainty_bias
+        double uncertainty_bias,
+        int se_mode
     ) {
         if (!x.is_cuda()) throw py::value_error("x must be CUDA");
 
@@ -2705,14 +2790,22 @@ public:
         c10::cuda::CUDAGuard guard(device);
 
         int64_t input_dim = 2 * E + pos_dim;
+        int64_t tile_tph = std::min(static_cast<int64_t>(1024) / O, tables_per_head);
+        {
+            int64_t v = tile_tph;
+            v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+            tile_tph = (v + 1) >> 1;
+        }
+        if (tile_tph < 1) tile_tph = 1;
+
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "lut_attn_bwd_na1", [&] {
             const scalar_t* rpe_ptr = rel_pe_opt.has_value()
                 ? reinterpret_cast<const scalar_t*>(rel_pe.data_ptr()) : nullptr;
             scalar_t* rpe_grad_ptr = rel_pe_opt.has_value()
                 ? reinterpret_cast<scalar_t*>(rel_pe_grad.data_ptr()) : nullptr;
             dim3 grid(static_cast<unsigned>(B * M), static_cast<unsigned>(H));
-            dim3 block(static_cast<unsigned>(O));
-            size_t smem = static_cast<size_t>(input_dim + O) * sizeof(scalar_t);
+            dim3 block(static_cast<unsigned>(O), static_cast<unsigned>(tile_tph));
+            size_t smem = static_cast<size_t>(input_dim + tile_tph * O + input_dim) * sizeof(scalar_t);
             lut_attn_bwd_na1_kernel<scalar_t><<<grid, block, smem, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 reinterpret_cast<const scalar_t*>(weights.data_ptr()),
@@ -2731,7 +2824,8 @@ public:
                 n_entries, n_anchor_pairs, O, pos_dim,
                 causal, self_excitement,
                 static_cast<scalar_t>(cmp_eps),
-                static_cast<scalar_t>(uncertainty_bias)
+                static_cast<scalar_t>(uncertainty_bias),
+                se_mode
             );
         });
         CU_CHECK(cudaGetLastError());
@@ -2938,7 +3032,8 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("tables_per_head"),
             py::arg("causal"),
             py::arg("self_excitement"),
-            py::arg("cmp_eps")
+            py::arg("cmp_eps"),
+            py::arg("se_mode")
         )
         .def(
             "lut_attn_bwd_na1",
@@ -2957,7 +3052,8 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("causal"),
             py::arg("self_excitement"),
             py::arg("cmp_eps"),
-            py::arg("uncertainty_bias")
+            py::arg("uncertainty_bias"),
+            py::arg("se_mode")
         )
         #endif
         .def("get_profiling_stats", &LUTorchManager::get_profiling_stats)

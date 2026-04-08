@@ -19,6 +19,12 @@ class AnchorSamplingPolicy(str, Enum):
     CONV2D = "conv2d"              # 2D conv-style; input_dim must be perfect square; nap must be 8; tph is upper bound
 
 
+class SelfExcitementMode(str, Enum):
+    LINEAR = "linear"           # y_o = f_o * mean(|f|)
+    QUADRATIC = "quadratic"     # y_o = f_o * mean(|f|)^2
+    EXPONENTIAL = "exponential" # y_o = f_o * exp(mean(|f|))
+
+
 def compute_multiscale_n_tables(
     input_dim: int,
     n_anchor_pairs: int,
@@ -110,6 +116,7 @@ def get_balanced_anchor_pairs(
     policy: Optional["AnchorSamplingPolicy"] = None,
     n_heads: int = 1,
     shuffle_per_head: bool = True,
+    exclusion_sets: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -120,6 +127,9 @@ def get_balanced_anchor_pairs(
         connected_mode: Deprecated. Use policy=AnchorSamplingPolicy.CONNECTED instead.
         policy: AnchorSamplingPolicy controlling how pairs are sampled. When provided,
                 takes precedence over connected_mode.
+        exclusion_sets: Optional list of index sets (lists/tuples of ints). A pair (a, b)
+                is excluded if both a and b belong to the same set. Only applies to
+                FULL_COVERAGE and DISCONNECTED_FULL_COVERAGE policies.
 
     Returns:
         anchor_pairs_a: [n_tables, n_anchor_pairs] int64
@@ -274,7 +284,24 @@ def get_balanced_anchor_pairs(
     if effective_policy == AnchorSamplingPolicy.FULL_COVERAGE:
         # Enumerate all unique pairs from upper triangle
         all_i, all_j = torch.triu_indices(input_dim, input_dim, offset=1, device=device)
+
+        # Filter out pairs where both indices belong to the same exclusion set
+        if exclusion_sets is not None:
+            # Build per-index set membership: set_id[idx] = bitmask of sets it belongs to
+            set_mask = torch.zeros(input_dim, dtype=torch.long, device=device)
+            for s_idx, s in enumerate(exclusion_sets):
+                for idx in s:
+                    set_mask[idx] |= (1 << s_idx)
+            # A pair is excluded if set_mask[i] & set_mask[j] != 0
+            # (i.e., they share at least one common set)
+            shared = set_mask[all_i] & set_mask[all_j]
+            keep = shared == 0
+            all_i = all_i[keep]
+            all_j = all_j[keep]
+
         n_unique = all_i.shape[0]
+        if n_unique == 0:
+            raise ValueError("exclusion_sets filtered out all pairs — no valid anchor pairs remain")
         total_slots = n_tables * n_anchor_pairs
         # Tile shuffled pairs to fill all slots
         repeats = math.ceil(total_slots / n_unique)

@@ -332,3 +332,85 @@ def test_hierarchical_forward():
     out = lut(x)
     assert out.shape == (4, 2, 4)
     assert not torch.isnan(out).any()
+
+
+def test_full_coverage_exclusion_sets_no_within_set_pairs():
+    """With exclusion_sets, no anchor pair should have both indices in the same set."""
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
+
+    E, pos_dim = 32, 16
+    input_dim = 2 * E + pos_dim
+    sets = [list(range(E)), list(range(E, 2 * E)), list(range(2 * E, input_dim))]
+
+    a, b = get_balanced_anchor_pairs(
+        n_tables=64, n_anchor_pairs=5, input_dim=input_dim,
+        device=torch.device("cpu"), random_seed=42,
+        policy=AnchorSamplingPolicy.FULL_COVERAGE,
+        exclusion_sets=sets,
+    )
+    # Check no pair has both indices in the same set
+    for s in sets:
+        s_set = set(s)
+        for t in range(a.shape[0]):
+            for p in range(a.shape[1]):
+                ai, bi = a[t, p].item(), b[t, p].item()
+                assert not (ai in s_set and bi in s_set), \
+                    f"table {t} pair {p}: ({ai}, {bi}) both in set {s[:3]}..."
+
+
+def test_full_coverage_exclusion_sets_preserves_coverage():
+    """Exclusion sets should still tile all valid cross-set pairs."""
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
+
+    input_dim = 16
+    sets = [list(range(8)), list(range(8, 16))]
+    # Cross-set pairs: 8 * 8 = 64. Within-set: C(8,2)*2 = 56. Total: C(16,2)=120.
+    n_cross = 8 * 8  # pairs where one in [0..7], other in [8..15]
+
+    a, b = get_balanced_anchor_pairs(
+        n_tables=32, n_anchor_pairs=4, input_dim=input_dim,
+        device=torch.device("cpu"), random_seed=42,
+        policy=AnchorSamplingPolicy.FULL_COVERAGE,
+        exclusion_sets=sets,
+    )
+    # All generated pairs must be cross-set
+    for t in range(a.shape[0]):
+        for p in range(a.shape[1]):
+            ai, bi = a[t, p].item(), b[t, p].item()
+            same_set = (ai < 8 and bi < 8) or (ai >= 8 and bi >= 8)
+            assert not same_set, f"({ai}, {bi}) in same set"
+
+    # With enough tables, all cross-set pairs should appear at least once
+    seen = set()
+    for t in range(a.shape[0]):
+        for p in range(a.shape[1]):
+            pair = (min(a[t, p].item(), b[t, p].item()), max(a[t, p].item(), b[t, p].item()))
+            seen.add(pair)
+    assert len(seen) == n_cross, f"Expected {n_cross} unique cross-set pairs, got {len(seen)}"
+
+
+def test_exclusion_sets_via_multi_head_lut():
+    """MultiHeadLut correctly passes exclusion_sets to anchor pair generation."""
+    E, pos_dim = 16, 8
+    input_dim = 2 * E + pos_dim
+    sets = [list(range(E)), list(range(E, 2 * E)), list(range(2 * E, input_dim))]
+
+    lut = MultiHeadLut(
+        input_dim=input_dim, n_heads=1, n_outputs=16,
+        n_anchor_pairs=4, tables_per_head=32,
+        smooth_mode=False, n_alternatives=1,
+        normalize_weights=False, calibrate_output=False,
+        initial_weights_noise=0.001,
+        uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        random_seed=42, device=torch.device("cpu"),
+        anchor_sampling_policy=AnchorSamplingPolicy.FULL_COVERAGE,
+        exclusion_sets=sets,
+    )
+    a = lut.lookup.anchor_pairs_a
+    b = lut.lookup.anchor_pairs_b
+    for s in sets:
+        s_set = set(s)
+        for t in range(a.shape[0]):
+            for p in range(a.shape[1]):
+                ai, bi = a[t, p].item(), b[t, p].item()
+                assert not (ai in s_set and bi in s_set)

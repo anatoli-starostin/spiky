@@ -6,7 +6,7 @@ import torch
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.lutorch.lut_attention import LUTAttention, LUTAttentionV2
-from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch.lut_helpers import UncertaintyMode, SelfExcitementMode
 import spiky.lutorch.lut_attention as lut_attn_mod
 
 SEED = 123
@@ -169,3 +169,106 @@ def test_lut_attention_v2_fused_bwd_matches_ref(device, self_excitement):
         f"w_grad max diff = {(w_g_fast - w_g_ref).abs().max().item()}"
     assert torch.allclose(rpe_g_fast, rpe_g_ref, atol=1e-4), \
         f"rpe_grad max diff = {(rpe_g_fast - rpe_g_ref).abs().max().item()}"
+
+
+@pytest.mark.parametrize("H,O", [(2, 64), (4, 8), (1, 32), (4, 32)])
+def test_lut_attention_v2_fused_multihead_se(device, H, O):
+    """Fused kernel with multi-head self_excitement matches Python reference.
+
+    With small tph the two paths are bitwise-close.  At larger tph the tree
+    reduction (fused) vs linear sum (Python embedding_bag) gives slightly
+    different pair_out_buf values.  SE's sign() discontinuity amplifies those
+    differences in the backward, so we use a small tph to keep things tight.
+    """
+    if device != "cuda":
+        pytest.skip("fused kernel only runs on CUDA float32")
+    torch.manual_seed(SEED)
+    E = H * O
+    B, T, pos_dim, tph, nap = 2, 8, 16, 8, 4
+
+    attn = _make_lut_attn_v2(device, T, E, pos_dim, H, O, tph, nap,
+                              self_excitement=True)
+    attn.train()
+    x_base = torch.randn(B, T, E, device=device)
+    rpe_base = torch.randn(T, pos_dim, device=device)
+
+    def run(enabled):
+        x = x_base.clone().requires_grad_(True)
+        rpe = rpe_base.clone().requires_grad_(True)
+        attn.multi_head_lut.projection.weights.grad = None
+        with _fused_kernel_enabled(enabled):
+            out = attn(x, rpe)
+        out.sum().backward()
+        return (out.detach().clone(),
+                x.grad.clone(),
+                attn.multi_head_lut.projection.weights.grad.clone(),
+                rpe.grad.clone())
+
+    out_ref, x_g_ref, w_g_ref, rpe_g_ref = run(False)
+    out_fast, x_g_fast, w_g_fast, rpe_g_fast = run(True)
+
+    assert torch.allclose(out_fast, out_ref, atol=1e-4), \
+        f"H={H} O={O} fwd max diff = {(out_fast - out_ref).abs().max().item()}"
+    assert torch.allclose(x_g_fast, x_g_ref, atol=1e-4), \
+        f"H={H} O={O} x_grad max diff = {(x_g_fast - x_g_ref).abs().max().item()}"
+    assert torch.allclose(w_g_fast, w_g_ref, atol=1e-4), \
+        f"H={H} O={O} w_grad max diff = {(w_g_fast - w_g_ref).abs().max().item()}"
+    assert torch.allclose(rpe_g_fast, rpe_g_ref, atol=1e-4), \
+        f"H={H} O={O} rpe_grad max diff = {(rpe_g_fast - rpe_g_ref).abs().max().item()}"
+
+
+@pytest.mark.parametrize("se_mode", [
+    SelfExcitementMode.LINEAR,
+    SelfExcitementMode.QUADRATIC,
+    SelfExcitementMode.EXPONENTIAL,
+])
+@pytest.mark.parametrize("H,O", [(1, 32), (4, 8)])
+def test_lut_attention_v2_fused_se_modes(device, se_mode, H, O):
+    """Fused kernel SE modes (linear/quadratic/exponential) match Python reference."""
+    if device != "cuda":
+        pytest.skip("fused kernel only runs on CUDA float32")
+    torch.manual_seed(SEED)
+    E = H * O
+    B, T, pos_dim, tph, nap = 2, 8, 16, 8, 4
+
+    lut = MultiHeadLut(
+        input_dim=2 * E + pos_dim, n_heads=H, n_outputs=O,
+        n_anchor_pairs=nap, tables_per_head=tph,
+        n_alternatives=1, smooth_mode=False,
+        calibrate_output=False, normalize_weights=False,
+        table_dropout=0.0, random_seed=SEED, device=device,
+    )
+    with torch.no_grad():
+        lut.projection.weights.normal_(mean=0.0, std=0.01)
+    attn = LUTAttentionV2(
+        lut, seq_len=T, causal=True,
+        self_excitement=True, self_excitement_mode=se_mode,
+    ).to(device)
+    attn.train()
+    x_base = torch.randn(B, T, E, device=device)
+    rpe_base = torch.randn(T, pos_dim, device=device)
+
+    def run(enabled):
+        x = x_base.clone().requires_grad_(True)
+        rpe = rpe_base.clone().requires_grad_(True)
+        attn.multi_head_lut.projection.weights.grad = None
+        with _fused_kernel_enabled(enabled):
+            out = attn(x, rpe)
+        out.sum().backward()
+        return (out.detach().clone(),
+                x.grad.clone(),
+                attn.multi_head_lut.projection.weights.grad.clone(),
+                rpe.grad.clone())
+
+    out_ref, x_g_ref, w_g_ref, rpe_g_ref = run(False)
+    out_fast, x_g_fast, w_g_fast, rpe_g_fast = run(True)
+
+    tag = f"H={H} O={O} mode={se_mode.value}"
+    assert torch.allclose(out_fast, out_ref, atol=1e-4), \
+        f"{tag} fwd max diff = {(out_fast - out_ref).abs().max().item()}"
+    assert torch.allclose(x_g_fast, x_g_ref, atol=1e-4), \
+        f"{tag} x_grad max diff = {(x_g_fast - x_g_ref).abs().max().item()}"
+    assert torch.allclose(w_g_fast, w_g_ref, atol=1e-4), \
+        f"{tag} w_grad max diff = {(w_g_fast - w_g_ref).abs().max().item()}"
+    assert torch.allclose(rpe_g_fast, rpe_g_ref, atol=1e-4), \
+        f"{tag} rpe_grad max diff = {(rpe_g_fast - rpe_g_ref).abs().max().item()}"

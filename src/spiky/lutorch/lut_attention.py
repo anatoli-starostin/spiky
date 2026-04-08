@@ -10,7 +10,7 @@ from typing import Optional
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.util.chunk_of_connections import ChunkOfConnections
-from spiky.lutorch.lut_helpers import logarithmic_pe_buckets, rpe_matrix
+from spiky.lutorch.lut_helpers import logarithmic_pe_buckets, rpe_matrix, SelfExcitementMode
 from spiky.lutorch.l_projection import _get_native_lutorch_manager, _USE_LUTORCH_CUSTOM_CUDA_KERNELS
 
 
@@ -267,12 +267,14 @@ class LUTAttnFwdBwdNa1(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, weights, anchor_a, anchor_b, pair_rows, pair_cols, rel_pe,
-                H, tables_per_head, causal, self_excitement, cmp_eps, uncertainty_bias):
+                H, tables_per_head, causal, self_excitement, cmp_eps, uncertainty_bias,
+                se_mode_int):
         mgr = _get_native_lutorch_manager()
         pair_out_buf, result = mgr.lut_attn_fwd_na1(
             x.contiguous(), weights, anchor_a, anchor_b,
             pair_rows, pair_cols, rel_pe,
             H, tables_per_head, causal, self_excitement, float(cmp_eps),
+            se_mode_int,
         )
         ctx.save_for_backward(x, weights, anchor_a, anchor_b, pair_rows, pair_cols, rel_pe, pair_out_buf)
         ctx.H = H
@@ -281,6 +283,7 @@ class LUTAttnFwdBwdNa1(torch.autograd.Function):
         ctx.self_excitement = self_excitement
         ctx.cmp_eps = cmp_eps
         ctx.uncertainty_bias = uncertainty_bias
+        ctx.se_mode_int = se_mode_int
         return result
 
     @staticmethod
@@ -293,9 +296,10 @@ class LUTAttnFwdBwdNa1(torch.autograd.Function):
             pair_out_buf, grad_output.contiguous(),
             ctx.H, ctx.tables_per_head, ctx.causal, ctx.self_excitement,
             float(ctx.cmp_eps), float(ctx.uncertainty_bias),
+            ctx.se_mode_int,
         )
         return (x_grad, weights_grad, None, None, None, None, rel_pe_grad,
-                None, None, None, None, None, None)
+                None, None, None, None, None, None, None)
 
 
 class LUTAttentionV2(nn.Module):
@@ -332,12 +336,14 @@ class LUTAttentionV2(nn.Module):
         causal: bool = True,
         include_diagonal: bool = True,
         self_excitement: bool = False,
+        self_excitement_mode: SelfExcitementMode = SelfExcitementMode.LINEAR,
     ):
         super().__init__()
         self.multi_head_lut = multi_head_lut
         self.causal = causal
         self.include_diagonal = include_diagonal
         self.self_excitement = self_excitement
+        self.self_excitement_mode = self_excitement_mode
 
         rows, cols = [], []
         for i in range(seq_len):
@@ -382,17 +388,22 @@ class LUTAttentionV2(nn.Module):
             and lut.post_processor is None
             and not lut.calibrate_output
             and not lut.projection.normalize_weights
-            and (H == 1 or not self.self_excitement)
         ):
             if lut.training and lut.input_scale_noise > 0.0:
                 scale = 1.0 + (torch.rand(B, 1, 1, device=x.device) * 2 - 1) * lut.input_scale_noise
                 x = x * scale
+            se_mode_int = {
+                SelfExcitementMode.LINEAR: 0,
+                SelfExcitementMode.QUADRATIC: 1,
+                SelfExcitementMode.EXPONENTIAL: 2,
+            }[self.self_excitement_mode]
             result = LUTAttnFwdBwdNa1.apply(
                 x.contiguous(), lut.projection.weights,
                 lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b,
                 self.pair_rows, self.pair_cols, rel_pe,
                 H, lut.tables_per_head, self.causal, self.self_excitement,
                 float(lut.lookup.cmp_eps), float(lut.lookup.uncertainty_bias),
+                se_mode_int,
             )
             return result  # [B, T, H, O]
         # --- End fast path ---
@@ -417,12 +428,16 @@ class LUTAttentionV2(nn.Module):
         H, O = out.shape[1], out.shape[2]
 
         # Scatter-sum by query position: [B, M, H*O] → [B, T, H*O] → [B, T, H, O]
-        out_flat = out.reshape(B, M, H * O)
         if self.self_excitement:
-            # Weight each pair's contribution by its own mean absolute activation.
-            # Pairs with stronger/more contrastive patterns dominate the sum.
-            weight = out_flat.abs().mean(dim=-1, keepdim=True)  # [B, M, 1]
-            out_flat = out_flat * weight
+            # Per-head SE: scale each head's outputs based on mean absolute activation.
+            s = out.abs().mean(dim=-1, keepdim=True)  # [B*M, H, 1]
+            if self.self_excitement_mode == SelfExcitementMode.LINEAR:
+                out = out * s
+            elif self.self_excitement_mode == SelfExcitementMode.QUADRATIC:
+                out = out * s * s
+            elif self.self_excitement_mode == SelfExcitementMode.EXPONENTIAL:
+                out = out * torch.exp(s)
+        out_flat = out.reshape(B, M, H * O)
         result = torch.zeros(B, T, H * O, device=x.device, dtype=x.dtype)
         idx = self.pair_rows.unsqueeze(0).unsqueeze(-1).expand(B, M, H * O)
         result.scatter_add_(1, idx, out_flat)

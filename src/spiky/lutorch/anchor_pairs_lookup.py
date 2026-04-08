@@ -284,6 +284,7 @@ class AnchorPairsLookup(nn.Module):
         n_heads: int = 1,
         shuffle_per_head: bool = True,
         prebuilt_anchor_pairs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        exclusion_sets: Optional[list] = None,
     ):
         table_dim = 2 ** n_anchor_pairs
         if n_alternatives > n_anchor_pairs:
@@ -321,6 +322,7 @@ class AnchorPairsLookup(nn.Module):
                 policy=anchor_sampling_policy,
                 n_heads=n_heads,
                 shuffle_per_head=shuffle_per_head,
+                exclusion_sets=exclusion_sets,
             )
         self.register_buffer("anchor_pairs_a", anchor_pairs_a.contiguous())
         self.register_buffer("anchor_pairs_b", anchor_pairs_b.contiguous())
