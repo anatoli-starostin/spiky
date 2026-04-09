@@ -442,3 +442,107 @@ class LUTAttentionV2(nn.Module):
         idx = self.pair_rows.unsqueeze(0).unsqueeze(-1).expand(B, M, H * O)
         result.scatter_add_(1, idx, out_flat)
         return result.reshape(B, T, H, O)
+
+
+class LUTAttentionV3(nn.Module):
+    """
+    Raw pairwise attention score generator using lookup tables.
+
+    For a sequence of T tokens, enumerates M valid position pairs (i, j),
+    concatenates [x_i, x_j, RelPE[dist(i,j)]], feeds through a MultiHeadLut,
+    and places the result into a dense [B, T, T, H, O] tensor (invalid
+    positions filled with -inf).
+
+    Unlike LUTAttentionV2, this class does NOT perform scatter-sum or
+    self-excitement. It returns raw per-pair LUT outputs in square form.
+
+    Pair enumeration:
+        causal=True,  include_diagonal=True  → j ≤ i   (M = T*(T+1)/2)
+        causal=True,  include_diagonal=False → j < i   (M = T*(T-1)/2)
+        causal=False, include_diagonal=True  → all     (M = T^2)
+        causal=False, include_diagonal=False → i ≠ j   (M = T*(T-1))
+
+    RelPE indexing:
+        rel_pe[k] corresponds to distance k + (0 if include_diagonal else 1).
+        include_diagonal=True:  rel_pe[0] = distance 0 (same position), rel_pe[1] = distance 1, …
+        include_diagonal=False: rel_pe[0] = distance 1, rel_pe[1] = distance 2, …
+        Required size: T (with diagonal) or T-1 (without diagonal).
+
+    Args:
+        multi_head_lut: Pre-built MultiHeadLut with input_dim = 2*E + pos_dim,
+                        n_heads = H, n_outputs = O.
+        seq_len:        Fixed sequence length used to pre-compute pair indices.
+        causal:         If True, only include pairs with j ≤ i (or j < i).
+        include_diagonal: If True, include pairs where i == j.
+    """
+
+    def __init__(
+        self,
+        multi_head_lut: MultiHeadLut,
+        seq_len: int,
+        causal: bool = True,
+        include_diagonal: bool = True,
+    ):
+        super().__init__()
+        self.multi_head_lut = multi_head_lut
+        self.causal = causal
+        self.include_diagonal = include_diagonal
+        self.seq_len = seq_len
+
+        rows, cols = [], []
+        for i in range(seq_len):
+            for j in range(seq_len):
+                if causal and j > i:
+                    continue
+                if not include_diagonal and i == j:
+                    continue
+                rows.append(i)
+                cols.append(j)
+
+        self.register_buffer('pair_rows', torch.tensor(rows, dtype=torch.long))
+        self.register_buffer('pair_cols', torch.tensor(cols, dtype=torch.long))
+
+        # Pre-compute distances for RelPE indexing.
+        # When include_diagonal=False, shift by 1 so rel_pe[0] = distance 1.
+        if causal:
+            dists = self.pair_rows - self.pair_cols  # [M], non-negative
+        else:
+            dists = (self.pair_rows - self.pair_cols).abs()  # [M]
+        if not include_diagonal:
+            dists = dists - 1
+        self.register_buffer('pair_dists', dists)
+
+    def forward(self, x: torch.Tensor, rel_pe: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x:      Input sequence [B, T, E].
+            rel_pe: Relative position embeddings [T, pos_dim] (include_diagonal)
+                    or [T-1, pos_dim] (exclude diagonal).
+
+        Returns:
+            [B, T, T, H, O] — dense pairwise LUT outputs.
+            Invalid positions (masked by causality / diagonal exclusion) are -inf.
+        """
+        B, T, E = x.shape
+        assert T == self.seq_len, f"Expected seq_len={self.seq_len}, got T={T}"
+        M = self.pair_rows.shape[0]
+
+        x_i = x[:, self.pair_rows, :]   # [B, M, E]
+        x_j = x[:, self.pair_cols, :]   # [B, M, E]
+
+        rpe = rel_pe[self.pair_dists].unsqueeze(0).expand(B, -1, -1)  # [B, M, pos_dim]
+
+        # Concatenate and flatten: [B*M, 2E + pos_dim]
+        pairs = torch.cat([x_i, x_j, rpe], dim=-1)
+        pairs_flat = pairs.reshape(B * M, -1)
+
+        # Apply LUT: [B*M, H, O]
+        out = self.multi_head_lut(pairs_flat)
+        H, O = out.shape[1], out.shape[2]
+        out = out.reshape(B, M, H, O)
+
+        # Place into dense [B, T, T, H, O] tensor
+        result = torch.full((B, T, T, H, O), float('-inf'), device=x.device, dtype=x.dtype)
+        result[:, self.pair_rows, self.pair_cols, :, :] = out
+
+        return result

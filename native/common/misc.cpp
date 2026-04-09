@@ -17,7 +17,12 @@ TCudaContext::TCudaContext(int gpu, unsigned int flags) {
     CU_CHECK(cuDeviceGet(&cuDevice, gpu));
     char szDeviceName[80];
     CU_CHECK(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
+#if CUDA_VERSION >= 13000
+    CUctxCreateParams ctxParams = {};
+    CU_CHECK(cuCtxCreate(&Context_, &ctxParams, flags, cuDevice));
+#else
     CU_CHECK(cuCtxCreate(&Context_, flags, cuDevice));
+#endif
 }
 
 void TCudaContext::Reset() {

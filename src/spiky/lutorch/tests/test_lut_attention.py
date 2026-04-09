@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from spiky.lutorch.multi_head_lut import MultiHeadLut
-from spiky.lutorch.lut_attention import LUTAttention, LUTAttentionV2
+from spiky.lutorch.lut_attention import LUTAttention, LUTAttentionV2, LUTAttentionV3
 from spiky.lutorch.lut_helpers import UncertaintyMode, SelfExcitementMode
 import spiky.lutorch.lut_attention as lut_attn_mod
 
@@ -272,3 +272,83 @@ def test_lut_attention_v2_fused_se_modes(device, se_mode, H, O):
         f"{tag} w_grad max diff = {(w_g_fast - w_g_ref).abs().max().item()}"
     assert torch.allclose(rpe_g_fast, rpe_g_ref, atol=1e-4), \
         f"{tag} rpe_grad max diff = {(rpe_g_fast - rpe_g_ref).abs().max().item()}"
+
+
+# ---------------------------------------------------------------------------
+# LUTAttentionV3 tests
+# ---------------------------------------------------------------------------
+
+def _make_lut_attn_v3(device, T, E, pos_dim, H, O, tph, nap, causal, include_diagonal, seed=SEED):
+    lut = MultiHeadLut(
+        input_dim=2 * E + pos_dim,
+        n_heads=H,
+        n_outputs=O,
+        n_anchor_pairs=nap,
+        tables_per_head=tph,
+        n_alternatives=1,
+        smooth_mode=False,
+        calibrate_output=False,
+        normalize_weights=False,
+        table_dropout=0.0,
+        random_seed=seed,
+        device=device,
+    )
+    with torch.no_grad():
+        lut.projection.weights.normal_(mean=0.0, std=0.01)
+    return LUTAttentionV3(lut, seq_len=T, causal=causal, include_diagonal=include_diagonal).to(device)
+
+
+@pytest.mark.parametrize("causal,include_diagonal", [
+    (True, True), (True, False), (False, True), (False, False),
+])
+def test_lut_attention_v3_shape_and_mask(device, causal, include_diagonal):
+    """V3 output has correct shape and -inf pattern."""
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O = 2, 6, 8, 4, 2, 3
+    tph, nap = 4, 4
+
+    attn = _make_lut_attn_v3(device, T, E, pos_dim, H, O, tph, nap, causal, include_diagonal)
+    x = torch.randn(B, T, E, device=device)
+    rpe_len = T if include_diagonal else T - 1
+    rel_pe = torch.randn(rpe_len, pos_dim, device=device)
+
+    out = attn(x, rel_pe)
+    assert out.shape == (B, T, T, H, O)
+
+    # Check mask pattern: valid positions should be finite, invalid should be -inf
+    for i in range(T):
+        for j in range(T):
+            is_valid = True
+            if causal and j > i:
+                is_valid = False
+            if not include_diagonal and i == j:
+                is_valid = False
+
+            vals = out[0, i, j, :, :]
+            if is_valid:
+                assert torch.isfinite(vals).all(), f"Expected finite at ({i},{j}), got {vals}"
+            else:
+                assert (vals == float('-inf')).all(), f"Expected -inf at ({i},{j}), got {vals}"
+
+
+@pytest.mark.parametrize("causal,include_diagonal", [
+    (True, True), (True, False), (False, True), (False, False),
+])
+def test_lut_attention_v3_backward(device, causal, include_diagonal):
+    """V3 backward produces finite gradients."""
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O = 2, 6, 8, 4, 2, 3
+    tph, nap = 4, 4
+
+    attn = _make_lut_attn_v3(device, T, E, pos_dim, H, O, tph, nap, causal, include_diagonal)
+    x = torch.randn(B, T, E, device=device, requires_grad=True)
+    rpe_len = T if include_diagonal else T - 1
+    rel_pe = torch.randn(rpe_len, pos_dim, device=device, requires_grad=True)
+
+    out = attn(x, rel_pe)
+    # Only backprop through finite values
+    loss = out[out.isfinite()].sum()
+    loss.backward()
+
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    assert rel_pe.grad is not None and torch.isfinite(rel_pe.grad).all()

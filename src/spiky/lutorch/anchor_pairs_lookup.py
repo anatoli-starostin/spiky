@@ -47,12 +47,23 @@ def _first_tensor_device(args, kwargs):
     return None
 
 
+def _patch_torch_cse_generic():
+    """Work around torch 2.11 bug: CSE[Any] passes 1 type arg but CSE expects 2."""
+    try:
+        from torch._inductor.codegen.common import CSE
+        if len(CSE.__parameters__) > 1:
+            CSE.__class_getitem__ = classmethod(lambda cls, params: cls)
+    except Exception:
+        pass
+
+
 def _maybe_compile(fn):
     # Use torch.compile only when LUTorch compile is enabled and the current
     # call uses CUDA tensors. On CPU, torch.compile can introduce heavy
     # multiprocessing overhead with little benefit.
     compiled_fn = None
     if _USE_LUTORCH_COMPILE and hasattr(torch, "compile"):
+        _patch_torch_cse_generic()
         compiled_fn = torch.compile(fn, dynamic=True)
 
     def wrapper(*args, **kwargs):
@@ -614,3 +625,4 @@ class AnchorPairsLookupFunction(torch.autograd.Function):
 
         # 9 inputs -> 9 gradient returns
         return x_grad_flat.view(x.shape), None, None, None, None, None, None, None, None
+
