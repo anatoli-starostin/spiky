@@ -675,4 +675,214 @@ plt.show()
 
 print(f"Final val loss: {val_losses[-1]:.4f}")
 
+# %% [markdown]
+# # Model 2: LUT RankAttention (exp197/198 style)
+#
+# Q/K LUTs take cat(x, pos_emb), V LUT takes x, standard SDPA, out_proj LUT, no FFN.
+
+# %%
+rank_cfg = {
+    'embedding_dim': 32, 'positional_dim': 16, 'num_layers': 6,
+    'n_heads': 4, 'd_qk': 16, 'd_v': 16,
+    'qk_nap': 4, 'qk_tph': 128,
+    'v_nap': 4, 'v_tph': 256,
+    'outproj_nap': 5, 'outproj_tph': 768,
+}
+
+
+def _make_rank_lut(input_dim, n_heads, n_outputs, nap, tph, seed_offset):
+    return MultiHeadLut(
+        input_dim=input_dim, n_heads=n_heads, n_outputs=n_outputs,
+        n_anchor_pairs=nap, tables_per_head=tph,
+        smooth_mode=False, n_alternatives=1,
+        normalize_weights=False, calibrate_output=False,
+        anchor_sampling_policy=AnchorSamplingPolicy.FULL_COVERAGE,
+        initial_weights_noise=0.001, uncertainty_mode=UncertaintyMode.INVERSE_L1,
+        random_seed=42+seed_offset, device=device, recompute_in_backward=True,
+    )
+
+
+class RankAttnBlock(nn.Module):
+    def __init__(self, layer_idx):
+        super().__init__()
+        E, P = rank_cfg['embedding_dim'], rank_cfg['positional_dim']
+        H, d_qk, d_v = rank_cfg['n_heads'], rank_cfg['d_qk'], rank_cfg['d_v']
+        self.q_lut = _make_rank_lut(E+P, H, d_qk, rank_cfg['qk_nap'], rank_cfg['qk_tph'], layer_idx)
+        self.k_lut = _make_rank_lut(E+P, H, d_qk, rank_cfg['qk_nap'], rank_cfg['qk_tph'], 100+layer_idx)
+        self.v_lut = _make_rank_lut(E, H, d_v, rank_cfg['v_nap'], rank_cfg['v_tph'], 200+layer_idx)
+        self.out_proj = _make_rank_lut(H*d_v, 1, E, rank_cfg['outproj_nap'], rank_cfg['outproj_tph'], 400+layer_idx)
+        self.norm = nn.LayerNorm(E)
+        self.H, self.d_qk, self.d_v = H, d_qk, d_v
+
+    def forward(self, x, pos_emb):
+        B, T, E = x.shape
+        H, d_qk, d_v = self.H, self.d_qk, self.d_v
+        xp = torch.cat([x, pos_emb.unsqueeze(0).expand(B, -1, -1)], dim=-1)
+        q = self.q_lut(xp.reshape(B*T, -1)).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
+        k = self.k_lut(xp.reshape(B*T, -1)).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
+        v = self.v_lut(x.reshape(B*T, E)).reshape(B, T, H, d_v).permute(0, 2, 1, 3)
+        attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        proj = self.out_proj(attn.permute(0, 2, 1, 3).reshape(B*T, H*d_v)).squeeze(1).reshape(B, T, E)
+        return x + self.norm(proj)
+
+
+class LUTRankAttnTransformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        E, P = rank_cfg['embedding_dim'], rank_cfg['positional_dim']
+        self.token_embedder = nn.Embedding(VOCAB_SIZE, E)
+        self.token_embedder.weight.data.uniform_(-0.1, 0.1)
+        self.pos_emb = nn.Parameter(torch.randn(CONTEXT_SIZE, P) * 0.1)
+        self.layers = nn.ModuleList([RankAttnBlock(i) for i in range(rank_cfg['num_layers'])])
+        self.unembedder = nn.Linear(E, VOCAB_SIZE, bias=False)
+
+    def forward(self, tokens):
+        x = self.token_embedder(tokens)
+        for layer in self.layers:
+            x = layer(x, self.pos_emb)
+        return self.unembedder(x)
+
+# %%
+rank_model = LUTRankAttnTransformer().to(device)
+print(f"RankAttn Parameters: {sum(p.numel() for p in rank_model.parameters()):,}")
+
+# %%
+rank_optimizer = torch.optim.Adam(rank_model.parameters(), lr=lr)
+rank_scheduler = torch.optim.lr_scheduler.LambdaLR(rank_optimizer, get_lr_scale)
+
+rank_train_losses, rank_val_losses, rank_val_steps = [], [], []
+rank_ema = None
+
+rank_model.train()
+for step in tqdm(range(n_steps)):
+    x = sampler.sample_training_batch(batch_size).long()
+    inp = torch.empty_like(x)
+    inp[:, 0] = BOS_ID
+    inp[:, 1:] = x[:, :-1]
+
+    logits = rank_model(inp)
+    B, T, V = logits.shape
+    loss = F.cross_entropy(logits.reshape(B*T, V), x.reshape(B*T))
+
+    rank_optimizer.zero_grad()
+    loss.backward()
+    rank_optimizer.step()
+    rank_scheduler.step()
+
+    lv = loss.item()
+    rank_ema = lv if rank_ema is None else 0.99 * rank_ema + 0.01 * lv
+
+    if step % 100 == 0:
+        print(f"step {step:6d} | loss={rank_ema:.4f}")
+
+    if step % 1000 == 0:
+        val = evaluate(rank_model)
+        print(f"[VAL] step {step}: {val:.4f}")
+        rank_train_losses.append(rank_ema)
+        rank_val_losses.append(val)
+        rank_val_steps.append(step)
+
+# %% [markdown]
+# # Model 3: HyperLUT RankAttention (exp199/202 style)
+#
+# Same architecture as RankAttention but all MultiHeadLuts replaced with HyperLUTs.
+
+# %%
+from spiky.lutorch.hyper_lut import HyperLUT
+
+hyper_cfg = {
+    'embedding_dim': 32, 'positional_dim': 16, 'num_layers': 6,
+    'n_heads': 4, 'd_qk': 16, 'd_v': 16,
+    'qk_n_pairs': 512, 'qk_hidden': 32,
+    'v_n_pairs': 496, 'v_hidden': 96,
+    'outproj_n_pairs': 2016, 'outproj_hidden': 192,
+    'temperature': 0.1, 'soft_mode': 'rational',
+}
+
+
+class HyperRankBlock(nn.Module):
+    def __init__(self, layer_idx):
+        super().__init__()
+        E, P = hyper_cfg['embedding_dim'], hyper_cfg['positional_dim']
+        H, d_qk, d_v = hyper_cfg['n_heads'], hyper_cfg['d_qk'], hyper_cfg['d_v']
+        t, sm = hyper_cfg['temperature'], hyper_cfg['soft_mode']
+        self.q = HyperLUT(E+P, H, d_qk, hyper_cfg['qk_n_pairs'], hyper_cfg['qk_hidden'],
+                          temperature=t, soft_mode=sm, random_seed=42+layer_idx, device=device)
+        self.k = HyperLUT(E+P, H, d_qk, hyper_cfg['qk_n_pairs'], hyper_cfg['qk_hidden'],
+                          temperature=t, soft_mode=sm, random_seed=42+100+layer_idx, device=device)
+        self.v = HyperLUT(E, H, d_v, hyper_cfg['v_n_pairs'], hyper_cfg['v_hidden'],
+                          temperature=t, soft_mode=sm, random_seed=42+200+layer_idx, device=device)
+        self.out_proj = HyperLUT(H*d_v, 1, E, hyper_cfg['outproj_n_pairs'], hyper_cfg['outproj_hidden'],
+                                 temperature=t, soft_mode=sm, random_seed=42+400+layer_idx, device=device)
+        self.norm = nn.LayerNorm(E)
+        self.H, self.d_qk, self.d_v = H, d_qk, d_v
+
+    def forward(self, x, pos_emb):
+        B, T, E = x.shape
+        H, d_qk, d_v = self.H, self.d_qk, self.d_v
+        xp = torch.cat([x, pos_emb.unsqueeze(0).expand(B, -1, -1)], dim=-1)
+        q = self.q(xp.reshape(B*T, -1)).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
+        k = self.k(xp.reshape(B*T, -1)).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
+        v = self.v(x.reshape(B*T, E)).reshape(B, T, H, d_v).permute(0, 2, 1, 3)
+        attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        proj = self.out_proj(attn.permute(0, 2, 1, 3).reshape(B*T, H*d_v)).squeeze(1).reshape(B, T, E)
+        return x + self.norm(proj)
+
+
+class HyperRankAttnTransformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        E, P = hyper_cfg['embedding_dim'], hyper_cfg['positional_dim']
+        self.token_embedder = nn.Embedding(VOCAB_SIZE, E)
+        self.token_embedder.weight.data.uniform_(-0.1, 0.1)
+        self.pos_emb = nn.Parameter(torch.randn(CONTEXT_SIZE, P) * 0.1)
+        self.layers = nn.ModuleList([HyperRankBlock(i) for i in range(hyper_cfg['num_layers'])])
+        self.unembedder = nn.Linear(E, VOCAB_SIZE, bias=False)
+
+    def forward(self, tokens):
+        x = self.token_embedder(tokens)
+        for layer in self.layers:
+            x = layer(x, self.pos_emb)
+        return self.unembedder(x)
+
+# %%
+hyper_model = HyperRankAttnTransformer().to(device)
+print(f"HyperLUT RankAttn Parameters: {sum(p.numel() for p in hyper_model.parameters()):,}")
+
+# %%
+hyper_optimizer = torch.optim.Adam(hyper_model.parameters(), lr=lr)
+hyper_scheduler = torch.optim.lr_scheduler.LambdaLR(hyper_optimizer, get_lr_scale)
+
+hyper_train_losses, hyper_val_losses, hyper_val_steps = [], [], []
+hyper_ema = None
+
+hyper_model.train()
+for step in tqdm(range(n_steps)):
+    x = sampler.sample_training_batch(batch_size).long()
+    inp = torch.empty_like(x)
+    inp[:, 0] = BOS_ID
+    inp[:, 1:] = x[:, :-1]
+
+    logits = hyper_model(inp)
+    B, T, V = logits.shape
+    loss = F.cross_entropy(logits.reshape(B*T, V), x.reshape(B*T))
+
+    hyper_optimizer.zero_grad()
+    loss.backward()
+    hyper_optimizer.step()
+    hyper_scheduler.step()
+
+    lv = loss.item()
+    hyper_ema = lv if hyper_ema is None else 0.99 * hyper_ema + 0.01 * lv
+
+    if step % 100 == 0:
+        print(f"step {step:6d} | loss={hyper_ema:.4f}")
+
+    if step % 1000 == 0:
+        val = evaluate(hyper_model)
+        print(f"[VAL] step {step}: {val:.4f}")
+        hyper_train_losses.append(hyper_ema)
+        hyper_val_losses.append(val)
+        hyper_val_steps.append(step)
+
 # %%
