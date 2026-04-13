@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp018_lut_k8_t128",
+  "best_val_loss": 1.5004292994737625,
+  "final_val_loss": 1.5004292994737625,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.9,
+  "virtual_bandwidth_MB": 23.09,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.003907
+}

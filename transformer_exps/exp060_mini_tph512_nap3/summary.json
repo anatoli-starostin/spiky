@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp060_mini_tph512_nap3",
+  "best_val_loss": 1.7057826161384582,
+  "final_val_loss": 1.7057826161384582,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4993056,
+  "trainable_params": 4993056,
+  "training_time_hours": 1.586,
+  "virtual_bandwidth_MB": 79.76,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.125
+}

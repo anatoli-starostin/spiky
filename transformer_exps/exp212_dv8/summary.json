@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp212_dv8",
+  "best_val_loss": 1.4545049130916596,
+  "final_val_loss": 1.4545049130916596,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 7326752,
+  "trainable_params": 7326752,
+  "training_time_hours": 0.498
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp010_lut_additive_pe",
+  "best_val_loss": 1.4926406025886536,
+  "final_val_loss": 1.4932628005743027,
+  "best_step": 97000,
+  "total_steps": 100000,
+  "total_params": 214024256,
+  "trainable_params": 214024256,
+  "training_time_hours": 1.153,
+  "virtual_bandwidth_MB": 26.76,
+  "dense_bandwidth_MB": 27393.07,
+  "bandwidth_ratio": 0.000977
+}

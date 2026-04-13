@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp034_uncertainty_bias01",
+  "best_val_loss": 1.4722567647695541,
+  "final_val_loss": 1.4722567647695541,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.892,
+  "virtual_bandwidth_MB": 46.17,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.007813
+}

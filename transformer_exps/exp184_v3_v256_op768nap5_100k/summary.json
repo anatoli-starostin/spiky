@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp184_v3_v256_op768nap5_100k",
+  "best_val_loss": 1.4411119011384022,
+  "final_val_loss": 1.4413683127753343,
+  "best_step": 97000,
+  "total_steps": 100000,
+  "total_params": 6506176,
+  "trainable_params": 6506176,
+  "training_time_hours": 2.867
+}

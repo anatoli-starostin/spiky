@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp165_fused_kernel",
+  "best_val_loss": 1.5317034843249824,
+  "final_val_loss": 1.5321904348489195,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 3192352,
+  "trainable_params": 3192352,
+  "training_time_hours": 1.464
+}

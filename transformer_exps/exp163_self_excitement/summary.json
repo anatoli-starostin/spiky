@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp163_self_excitement",
+  "best_val_loss": 1.5326364059417774,
+  "final_val_loss": 1.5326364059417774,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 3163072,
+  "trainable_params": 3163072,
+  "training_time_hours": 1.265
+}

@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp206_v3_ffn_gelu_100k",
+  "best_val_loss": 1.4157656506647038,
+  "final_val_loss": 1.4157656506647038,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 11254048,
+  "trainable_params": 11254048,
+  "training_time_hours": 3.999
+}

@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp173_v3_softmax",
+  "best_val_loss": 1.5491032668957696,
+  "final_val_loss": 1.5503355287515317,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 3262144,
+  "trainable_params": 3262144,
+  "training_time_hours": 0.413
+}

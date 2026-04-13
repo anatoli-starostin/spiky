@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp107_residual_mlp",
+  "best_val_loss": 1.658124992251396,
+  "final_val_loss": 1.658124992251396,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 44138592,
+  "trainable_params": 44138592,
+  "training_time_hours": 0.376,
+  "virtual_bandwidth_MB": 99.63,
+  "dense_bandwidth_MB": 5648.72,
+  "bandwidth_ratio": 0.017637
+}

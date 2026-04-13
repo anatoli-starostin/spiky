@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp172_excl_sets",
+  "best_val_loss": 1.5742266703718386,
+  "final_val_loss": 1.5742266703718386,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 2012416,
+  "trainable_params": 2012416,
+  "training_time_hours": 1.034
+}

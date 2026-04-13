@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp130_residual_linear_unemb_lr1e3_bs32",
+  "best_val_loss": 1.597977101802826,
+  "final_val_loss": 1.597977101802826,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 8667200,
+  "trainable_params": 8667200,
+  "training_time_hours": 0.398,
+  "virtual_bandwidth_MB": 70.26,
+  "dense_bandwidth_MB": 1108.38,
+  "bandwidth_ratio": 0.063392
+}

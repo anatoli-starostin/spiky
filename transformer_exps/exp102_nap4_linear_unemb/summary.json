@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp102_nap4_linear_unemb",
+  "best_val_loss": 1.6872303247451783,
+  "final_val_loss": 1.6872303247451783,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 11026496,
+  "trainable_params": 11026496,
+  "training_time_hours": 0.333,
+  "virtual_bandwidth_MB": 89.14,
+  "dense_bandwidth_MB": 1410.37,
+  "bandwidth_ratio": 0.063201
+}

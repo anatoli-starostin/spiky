@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp002_vanilla_lr1e3",
+  "best_val_loss": 1.355919063091278,
+  "final_val_loss": 1.355919063091278,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 4870401,
+  "trainable_params": 4870401,
+  "training_time_hours": 0.186
+}

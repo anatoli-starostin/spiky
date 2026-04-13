@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp038_rank_single_ffn_t1",
+  "best_val_loss": 1.5594031751155852,
+  "final_val_loss": 1.5606285005807876,
+  "best_step": 96000,
+  "total_steps": 100000,
+  "total_params": 39886880,
+  "trainable_params": 39886880,
+  "training_time_hours": 0.841,
+  "virtual_bandwidth_MB": 19.94,
+  "dense_bandwidth_MB": 5104.5,
+  "bandwidth_ratio": 0.003907
+}

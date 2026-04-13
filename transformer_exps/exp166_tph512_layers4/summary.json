@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp166_tph512_layers4",
+  "best_val_loss": 1.5729744601935243,
+  "final_val_loss": 1.5729744601935243,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 1094688,
+  "trainable_params": 1094688,
+  "training_time_hours": 0.499
+}

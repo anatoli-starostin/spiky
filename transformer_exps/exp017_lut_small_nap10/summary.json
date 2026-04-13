@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp017_lut_small_nap10",
+  "best_val_loss": 1.6187727749347687,
+  "final_val_loss": 1.6222957462072372,
+  "best_step": 95000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.427,
+  "virtual_bandwidth_MB": 5.78,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.000977
+}

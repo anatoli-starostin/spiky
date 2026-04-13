@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp003_vanilla_wd1e4",
+  "description": "Vanilla causal transformer, lr=0.001 + AdamW weight_decay=1e-4.",
+  "model": "CharTransformer",
+  "d_model": 256,
+  "n_heads": 4,
+  "num_layers": 6,
+  "dim_feedforward_multiplier": 4,
+  "dropout": 0.0,
+  "context_size": 32,
+  "vocab_size": 257,
+  "optimizer": "AdamW",
+  "lr": 0.001,
+  "weight_decay": 1e-4,
+  "n_steps": 100000,
+  "batch_size": 128,
+  "test_batch_size": 256,
+  "test_every": 1000,
+  "lr_schedule": "warmup_cosine",
+  "lr_warmup_fraction": 0.1,
+  "random_seed": 1
+}

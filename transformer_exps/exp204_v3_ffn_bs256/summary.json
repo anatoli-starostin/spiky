@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp204_v3_ffn_bs256",
+  "best_val_loss": 1.415622502565384,
+  "final_val_loss": 1.415622502565384,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 11225152,
+  "trainable_params": 11225152,
+  "training_time_hours": 3.38
+}

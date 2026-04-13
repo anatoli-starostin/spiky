@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp020_rank_attention",
+  "best_val_loss": 1.5677078872919084,
+  "final_val_loss": 1.5692027509212494,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.992,
+  "virtual_bandwidth_MB": 23.09,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.003907
+}

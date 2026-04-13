@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp047_rank_d16_8l",
+  "best_val_loss": 1.588670939207077,
+  "final_val_loss": 1.588670939207077,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 46174224,
+  "trainable_params": 46174224,
+  "training_time_hours": 1.27,
+  "virtual_bandwidth_MB": 23.09,
+  "dense_bandwidth_MB": 5909.79,
+  "bandwidth_ratio": 0.003907
+}

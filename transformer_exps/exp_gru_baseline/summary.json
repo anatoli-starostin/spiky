@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_gru_baseline",
+  "best_val_loss": 1.4420642018318177,
+  "final_val_loss": 1.4424665987491607,
+  "total_params": 919809,
+  "training_time_hours": 0.765
+}

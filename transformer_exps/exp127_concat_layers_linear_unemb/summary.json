@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp127_concat_layers_linear_unemb",
+  "best_val_loss": 1.7022472381591798,
+  "final_val_loss": 1.7023701906204223,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 8716544,
+  "trainable_params": 8716544,
+  "training_time_hours": 0.391,
+  "virtual_bandwidth_MB": 76.58,
+  "dense_bandwidth_MB": 1114.7,
+  "bandwidth_ratio": 0.068699
+}

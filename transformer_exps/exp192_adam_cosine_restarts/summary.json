@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp192_adam_cosine_restarts",
+  "best_val_loss": 1.4768297543191606,
+  "final_val_loss": 1.5072178278759027,
+  "best_step": 69000,
+  "total_steps": 100000,
+  "total_params": 6505408,
+  "trainable_params": 6505408,
+  "training_time_hours": 1.07
+}

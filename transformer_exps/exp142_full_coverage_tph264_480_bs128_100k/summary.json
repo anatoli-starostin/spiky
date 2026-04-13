@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp142_full_coverage_tph264_480_bs128_100k",
+  "best_val_loss": 1.5112704813480378,
+  "final_val_loss": 1.5112704813480378,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 6357056,
+  "trainable_params": 6357056,
+  "training_time_hours": 1.863,
+  "virtual_bandwidth_MB": 51.78,
+  "dense_bandwidth_MB": 812.68,
+  "bandwidth_ratio": 0.063717
+}

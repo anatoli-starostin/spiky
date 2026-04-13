@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp161_lut_attn_v2",
+  "best_val_loss": 1.626150735270101,
+  "final_val_loss": 1.6275858395396712,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 3163072,
+  "trainable_params": 3163072,
+  "training_time_hours": 2.187
+}

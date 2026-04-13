@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp170_4head_outproj",
+  "best_val_loss": 1.550417214155959,
+  "final_val_loss": 1.5511305335992442,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 3192064,
+  "trainable_params": 3192064,
+  "training_time_hours": 1.651
+}

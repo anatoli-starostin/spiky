@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp028_smooth_osn_nalt3",
+  "best_val_loss": 1.4589623630046844,
+  "final_val_loss": 1.4589623630046844,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 1.332,
+  "virtual_bandwidth_MB": 92.34,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.015626
+}

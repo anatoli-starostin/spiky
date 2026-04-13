@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp006_lut_unembedder_nalt3",
+  "best_val_loss": 1.5030873775482179,
+  "final_val_loss": 1.5030873775482179,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 292167712,
+  "trainable_params": 292167712,
+  "training_time_hours": 1.51,
+  "virtual_bandwidth_MB": 12.89,
+  "dense_bandwidth_MB": 37396.45,
+  "bandwidth_ratio": 0.000345
+}

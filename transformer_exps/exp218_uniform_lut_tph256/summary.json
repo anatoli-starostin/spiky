@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp218_uniform_lut_tph256",
+  "best_val_loss": 1.5073490887880325,
+  "final_val_loss": 1.5073490887880325,
+  "total_params": 7916576,
+  "trainable_params": 7916576,
+  "training_time_hours": 0.967
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp076_mini_embed24_pos8_dqk16_tph128",
+  "best_val_loss": 1.6865857243537903,
+  "final_val_loss": 1.6865857243537903,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4857880,
+  "trainable_params": 4857880,
+  "training_time_hours": 0.749,
+  "virtual_bandwidth_MB": 38.82,
+  "dense_bandwidth_MB": 621.04,
+  "bandwidth_ratio": 0.062502
+}

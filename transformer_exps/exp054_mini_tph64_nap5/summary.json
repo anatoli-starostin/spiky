@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp054_mini_tph64_nap5",
+  "best_val_loss": 1.8293665379285813,
+  "final_val_loss": 1.8293665379285813,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 2500640,
+  "trainable_params": 2500640,
+  "training_time_hours": 0.307,
+  "virtual_bandwidth_MB": 9.97,
+  "dense_bandwidth_MB": 319.06,
+  "bandwidth_ratio": 0.03126
+}

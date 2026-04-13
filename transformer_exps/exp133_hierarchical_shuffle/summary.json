@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp133_hierarchical_shuffle",
+  "best_val_loss": 1.7498639523983002,
+  "final_val_loss": 1.7498639523983002,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 3051584,
+  "trainable_params": 3051584,
+  "training_time_hours": 0.265,
+  "virtual_bandwidth_MB": 25.34,
+  "dense_bandwidth_MB": 389.58,
+  "bandwidth_ratio": 0.065038
+}

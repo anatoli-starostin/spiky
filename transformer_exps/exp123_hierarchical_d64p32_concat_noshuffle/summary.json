@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp123_hierarchical_d64p32_concat_noshuffle",
+  "best_val_loss": 1.7236822634935378,
+  "final_val_loss": 1.72390114068985,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 7798912,
+  "trainable_params": 7798912,
+  "training_time_hours": 0.788,
+  "virtual_bandwidth_MB": 64.24,
+  "dense_bandwidth_MB": 996.22,
+  "bandwidth_ratio": 0.064485
+}

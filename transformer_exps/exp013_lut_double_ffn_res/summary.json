@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp013_lut_double_ffn_res",
+  "best_val_loss": 1.47279591858387,
+  "final_val_loss": 1.47279591858387,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 251772992,
+  "trainable_params": 251772992,
+  "training_time_hours": 1.322,
+  "virtual_bandwidth_MB": 31.48,
+  "dense_bandwidth_MB": 32224.9,
+  "bandwidth_ratio": 0.000977
+}

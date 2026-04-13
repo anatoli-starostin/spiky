@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp068_mini_tph124_nap4_fullcoverage",
+  "best_val_loss": 1.8261117666959763,
+  "final_val_loss": 1.8261117666959763,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 2422752,
+  "trainable_params": 2422752,
+  "training_time_hours": 0.377,
+  "virtual_bandwidth_MB": 19.32,
+  "dense_bandwidth_MB": 309.09,
+  "bandwidth_ratio": 0.062507
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp051_mini_recursive_no_sharing",
+  "best_val_loss": 1.8813452571630478,
+  "final_val_loss": 1.8827089965343475,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 8925216,
+  "trainable_params": 8925216,
+  "training_time_hours": 0.477,
+  "virtual_bandwidth_MB": 4.46,
+  "dense_bandwidth_MB": 1141.41,
+  "bandwidth_ratio": 0.00391
+}

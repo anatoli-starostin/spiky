@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp122_hierarchical_d64_dqk16_nap4",
+  "best_val_loss": 1.7637294679880142,
+  "final_val_loss": 1.7637294679880142,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 10748032,
+  "trainable_params": 10748032,
+  "training_time_hours": 1.017,
+  "virtual_bandwidth_MB": 87.83,
+  "dense_bandwidth_MB": 1373.71,
+  "bandwidth_ratio": 0.06394
+}

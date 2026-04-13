@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp091_d32_pos16_no_ffn",
+  "best_val_loss": 1.5625542134046555,
+  "final_val_loss": 1.5625542134046555,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 9711648,
+  "trainable_params": 9711648,
+  "training_time_hours": 1.261,
+  "virtual_bandwidth_MB": 77.63,
+  "dense_bandwidth_MB": 1242.07,
+  "bandwidth_ratio": 0.062502
+}

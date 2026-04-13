@@ -1,0 +1,12 @@
+{
+  "exp_name": "exp149_layer_norm",
+  "best_val_loss": 1.5011596113443375,
+  "final_val_loss": 1.5014230996370315,
+  "best_step": 90000,
+  "total_steps": 100000,
+  "total_params": 6358016,
+  "trainable_params": 6358016,
+  "training_time_hours": 2.048,
+  "quant_reg_D": 256,
+  "quant_reg_lambda_max": 0.01
+}

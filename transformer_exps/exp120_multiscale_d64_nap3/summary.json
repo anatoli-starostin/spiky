@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp120_multiscale_d64_nap3",
+  "best_val_loss": 1.8059307843446732,
+  "final_val_loss": 1.8059307843446732,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 5064832,
+  "trainable_params": 5064832,
+  "training_time_hours": 0.53,
+  "virtual_bandwidth_MB": 82.62,
+  "dense_bandwidth_MB": 646.26,
+  "bandwidth_ratio": 0.12785
+}

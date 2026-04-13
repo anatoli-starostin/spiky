@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp169_meta_attention",
+  "best_val_loss": 1.5893556336625316,
+  "final_val_loss": 1.5893556336625316,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 1881408,
+  "trainable_params": 1881408,
+  "training_time_hours": 0.913
+}

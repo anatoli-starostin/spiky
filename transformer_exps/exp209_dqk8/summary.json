@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp209_dqk8",
+  "best_val_loss": 1.4444067299365997,
+  "final_val_loss": 1.445529690384865,
+  "best_step": 46000,
+  "total_steps": 50000,
+  "total_params": 8113184,
+  "trainable_params": 8113184,
+  "training_time_hours": 0.541
+}

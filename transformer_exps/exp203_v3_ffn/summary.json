@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp203_v3_ffn",
+  "best_val_loss": 1.4201546696167957,
+  "final_val_loss": 1.4201546696167957,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 11225152,
+  "trainable_params": 11225152,
+  "training_time_hours": 2.332
+}

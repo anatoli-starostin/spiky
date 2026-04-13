@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp216_uniform_lut",
+  "best_val_loss": 1.513237115740776,
+  "final_val_loss": 1.513237115740776,
+  "total_params": 3984416,
+  "trainable_params": 3984416,
+  "training_time_hours": 0.519
+}

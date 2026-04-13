@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp094_batch16_t01",
+  "best_val_loss": 1.6964325934648514,
+  "final_val_loss": 1.6969227969646454,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 10498080,
+  "trainable_params": 10498080,
+  "training_time_hours": 0.345,
+  "virtual_bandwidth_MB": 83.92,
+  "dense_bandwidth_MB": 1342.73,
+  "bandwidth_ratio": 0.062502
+}

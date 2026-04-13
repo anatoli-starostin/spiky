@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp049_mini_double_ffn",
+  "best_val_loss": 1.9411771088838576,
+  "final_val_loss": 1.9419965147972107,
+  "best_step": 46000,
+  "total_steps": 50000,
+  "total_params": 5779488,
+  "trainable_params": 5779488,
+  "training_time_hours": 0.347,
+  "virtual_bandwidth_MB": 2.89,
+  "dense_bandwidth_MB": 738.75,
+  "bandwidth_ratio": 0.003912
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp089_d32_pos16_wider",
+  "best_val_loss": 1.5581658273935317,
+  "final_val_loss": 1.5603017896413802,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 10498080,
+  "trainable_params": 10498080,
+  "training_time_hours": 1.331,
+  "virtual_bandwidth_MB": 83.92,
+  "dense_bandwidth_MB": 1342.73,
+  "bandwidth_ratio": 0.062502
+}

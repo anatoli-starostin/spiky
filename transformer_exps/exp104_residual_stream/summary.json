@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp104_residual_stream",
+  "best_val_loss": 1.6455870687961578,
+  "final_val_loss": 1.6455870687961578,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 44105888,
+  "trainable_params": 44105888,
+  "training_time_hours": 0.376,
+  "virtual_bandwidth_MB": 95.44,
+  "dense_bandwidth_MB": 5644.53,
+  "bandwidth_ratio": 0.016909
+}

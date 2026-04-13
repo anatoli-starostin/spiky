@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp224_dqk16",
+  "best_val_loss": 1.444295483827591,
+  "final_val_loss": 1.445405089855194,
+  "total_params": 11062688,
+  "trainable_params": 11062688,
+  "training_time_hours": 1.334
+}

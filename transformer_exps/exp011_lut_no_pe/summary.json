@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp011_lut_no_pe",
+  "best_val_loss": 1.6618029445409774,
+  "final_val_loss": 1.6643303006887435,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 214024256,
+  "trainable_params": 214024256,
+  "training_time_hours": 1.155,
+  "virtual_bandwidth_MB": 26.76,
+  "dense_bandwidth_MB": 27393.07,
+  "bandwidth_ratio": 0.000977
+}

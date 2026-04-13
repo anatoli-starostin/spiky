@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp007_lut_sum_reduction",
+  "best_val_loss": 1.5110712319612503,
+  "final_val_loss": 1.5115609914064407,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 292167712,
+  "trainable_params": 292167712,
+  "training_time_hours": 1.508,
+  "virtual_bandwidth_MB": 12.89,
+  "dense_bandwidth_MB": 37396.45,
+  "bandwidth_ratio": 0.000345
+}

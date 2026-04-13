@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp088_dv16_rank_smooth",
+  "best_val_loss": 1.6258960396051407,
+  "final_val_loss": 1.627060240507126,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 7546904,
+  "trainable_params": 7546904,
+  "training_time_hours": 0.958,
+  "virtual_bandwidth_MB": 60.33,
+  "dense_bandwidth_MB": 965.24,
+  "bandwidth_ratio": 0.062502
+}

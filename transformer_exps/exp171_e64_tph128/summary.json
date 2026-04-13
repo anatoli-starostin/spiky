@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp171_e64_tph128",
+  "best_val_loss": 1.5265743995246035,
+  "final_val_loss": 1.52742146683958,
+  "best_step": 96000,
+  "total_steps": 100000,
+  "total_params": 3246080,
+  "trainable_params": 3246080,
+  "training_time_hours": 3.571
+}

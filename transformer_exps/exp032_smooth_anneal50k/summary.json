@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp032_smooth_anneal50k",
+  "best_val_loss": 1.4955792397260665,
+  "final_val_loss": 1.5058842480182648,
+  "best_step": 49000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.885,
+  "virtual_bandwidth_MB": 46.17,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.007813
+}

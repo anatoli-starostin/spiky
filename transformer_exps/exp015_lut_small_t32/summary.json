@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp015_lut_small_t32",
+  "best_val_loss": 1.86188246011734,
+  "final_val_loss": 1.868811172246933,
+  "best_step": 90000,
+  "total_steps": 100000,
+  "total_params": 2893856,
+  "trainable_params": 2893856,
+  "training_time_hours": 0.406,
+  "virtual_bandwidth_MB": 5.78,
+  "dense_bandwidth_MB": 369.39,
+  "bandwidth_ratio": 0.015635
+}

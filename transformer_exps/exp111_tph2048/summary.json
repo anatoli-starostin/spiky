@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp111_tph2048",
+  "best_val_loss": 1.5020675003528594,
+  "final_val_loss": 1.5020675003528594,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 176226368,
+  "trainable_params": 176226368,
+  "training_time_hours": 1.728,
+  "virtual_bandwidth_MB": 359.67,
+  "dense_bandwidth_MB": 22555.96,
+  "bandwidth_ratio": 0.015946
+}

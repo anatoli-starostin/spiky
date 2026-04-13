@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_lut_rnn",
+  "best_val_loss": 1.4720721393823624,
+  "final_val_loss": 1.4720721393823624,
+  "total_params": 4218976,
+  "training_time_hours": 1.041
+}

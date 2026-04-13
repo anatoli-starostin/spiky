@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp186_v3_high_nap_100k",
+  "best_val_loss": 1.4575907580460175,
+  "final_val_loss": 1.4581159277807307,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 7096000,
+  "trainable_params": 7096000,
+  "training_time_hours": 1.703
+}

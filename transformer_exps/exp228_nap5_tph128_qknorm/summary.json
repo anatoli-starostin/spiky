@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp228_nap5_tph128_qknorm",
+  "best_val_loss": 1.4954636693000793,
+  "final_val_loss": 1.4954636693000793,
+  "total_params": 3984608,
+  "trainable_params": 3984608,
+  "training_time_hours": 1.192
+}

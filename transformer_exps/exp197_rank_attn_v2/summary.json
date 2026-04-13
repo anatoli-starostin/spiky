@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp197_rank_attn_v2",
+  "best_val_loss": 1.5051119704789753,
+  "final_val_loss": 1.5051119704789753,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 6308800,
+  "trainable_params": 6308800,
+  "training_time_hours": 1.219
+}

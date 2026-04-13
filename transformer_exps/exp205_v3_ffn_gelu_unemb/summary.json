@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp205_v3_ffn_gelu_unemb",
+  "best_val_loss": 1.4099933892488479,
+  "final_val_loss": 1.4102700620889663,
+  "best_step": 47000,
+  "total_steps": 50000,
+  "total_params": 11254048,
+  "trainable_params": 11254048,
+  "training_time_hours": 2.174
+}

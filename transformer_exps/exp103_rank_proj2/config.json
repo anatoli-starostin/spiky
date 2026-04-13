@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp103_rank_proj2",
+  "description": "LUTs replaced by RankProjection2. smooth_mode=False (STE). d_in=48, d_qk=16, d_v=16, d_out=32. Linear unembedder. batch=16, 50k steps.",
+  "rank_proj_smooth_mode": false,
+  "vocab_size": 257,
+  "embedding_dim": 32,
+  "positional_dim": 16,
+  "num_layers": 6,
+  "num_heads": 4,
+  "d_qk": 16,
+  "d_v": 16,
+  "random_seed": 42,
+  "optimizer": "Adam",
+  "lr": 0.0001,
+  "lr_unembedder": 0.001,
+  "n_steps": 50000,
+  "batch_size": 16,
+  "test_batch_size": 256,
+  "test_every": 1000,
+  "lr_schedule": "warmup_cosine",
+  "lr_warmup_fraction": 0.1
+}

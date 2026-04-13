@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp044_rank_dqk_half_hard_200k",
+  "best_val_loss": 1.4820856720209121,
+  "final_val_loss": 1.4831900984048842,
+  "best_step": 194000,
+  "total_steps": 200000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 2.871,
+  "virtual_bandwidth_MB": 23.09,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.003907
+}

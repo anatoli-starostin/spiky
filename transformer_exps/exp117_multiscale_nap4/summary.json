@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp117_multiscale_nap4",
+  "best_val_loss": 1.7249522000551223,
+  "final_val_loss": 1.7249522000551223,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 6357056,
+  "trainable_params": 6357056,
+  "training_time_hours": 0.338,
+  "virtual_bandwidth_MB": 51.78,
+  "dense_bandwidth_MB": 812.68,
+  "bandwidth_ratio": 0.063717
+}

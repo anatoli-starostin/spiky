@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp112_tph4096",
+  "best_val_loss": 1.483357200026512,
+  "final_val_loss": 1.483357200026512,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 352387136,
+  "trainable_params": 352387136,
+  "training_time_hours": 3.602,
+  "virtual_bandwidth_MB": 711.99,
+  "dense_bandwidth_MB": 45104.53,
+  "bandwidth_ratio": 0.015785
+}

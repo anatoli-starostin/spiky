@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp048_mini",
+  "best_val_loss": 1.9421048969030381,
+  "final_val_loss": 1.9421048969030381,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4993056,
+  "trainable_params": 4993056,
+  "training_time_hours": 0.302,
+  "virtual_bandwidth_MB": 2.5,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.003912
+}

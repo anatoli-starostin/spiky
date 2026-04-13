@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp200_rank_attn_qk_nap5",
+  "best_val_loss": 1.5058091546915755,
+  "final_val_loss": 1.5058091546915755,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 12600256,
+  "trainable_params": 12600256,
+  "training_time_hours": 3.084
+}

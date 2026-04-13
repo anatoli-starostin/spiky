@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp121_multiscale_d64_dqk16_nap4",
+  "best_val_loss": 1.6511989831924438,
+  "final_val_loss": 1.6511989831924438,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 39551104,
+  "trainable_params": 39551104,
+  "training_time_hours": 2.449,
+  "virtual_bandwidth_MB": 318.26,
+  "dense_bandwidth_MB": 5060.5,
+  "bandwidth_ratio": 0.062891
+}

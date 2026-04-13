@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp030_rank_input_noise",
+  "best_val_loss": 1.4613857597112656,
+  "final_val_loss": 1.4613857597112656,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 46178336,
+  "trainable_params": 46178336,
+  "training_time_hours": 0.992,
+  "virtual_bandwidth_MB": 46.17,
+  "dense_bandwidth_MB": 5909.81,
+  "bandwidth_ratio": 0.007813
+}

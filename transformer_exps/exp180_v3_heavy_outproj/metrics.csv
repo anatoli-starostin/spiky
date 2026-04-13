@@ -1,0 +1,2 @@
+step,train_loss,qreg_loss,lambda,val_loss,val_loss_snapped
+0,6.369137,0.362759,0.000000,6.391786,

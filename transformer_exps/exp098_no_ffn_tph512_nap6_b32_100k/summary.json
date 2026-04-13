@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp098_no_ffn_tph512_nap6_b32_100k",
+  "best_val_loss": 1.5374797701835632,
+  "final_val_loss": 1.5374797701835632,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 52469792,
+  "trainable_params": 52469792,
+  "training_time_hours": 1.075,
+  "virtual_bandwidth_MB": 104.93,
+  "dense_bandwidth_MB": 6715.11,
+  "bandwidth_ratio": 0.015626
+}

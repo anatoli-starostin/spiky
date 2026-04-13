@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp069_mini_tph512_nap4_fullcoverage",
+  "best_val_loss": 1.6228239804506301,
+  "final_val_loss": 1.6241202652454376,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 9977888,
+  "trainable_params": 9977888,
+  "training_time_hours": 1.145,
+  "virtual_bandwidth_MB": 79.76,
+  "dense_bandwidth_MB": 1276.15,
+  "bandwidth_ratio": 0.062502
+}

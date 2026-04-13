@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp199_hyper_rank_attn",
+  "best_val_loss": 1.5132114132748375,
+  "final_val_loss": 1.513238873662828,
+  "best_step": 97000,
+  "total_steps": 100000,
+  "total_params": 4326688,
+  "trainable_params": 4326688,
+  "training_time_hours": 3.609
+}

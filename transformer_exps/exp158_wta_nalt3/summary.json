@@ -1,0 +1,12 @@
+{
+  "exp_name": "exp158_wta_nalt3",
+  "best_val_loss": 1.7585612535476685,
+  "final_val_loss": 1.7602545738220214,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 6357440,
+  "trainable_params": 6357440,
+  "training_time_hours": 0.655,
+  "quant_reg_D": 256,
+  "quant_reg_lambda_max": 0.01
+}

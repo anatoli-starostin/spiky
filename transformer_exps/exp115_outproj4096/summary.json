@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp115_outproj4096",
+  "best_val_loss": 1.4855831503868102,
+  "final_val_loss": 1.4855831503868102,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 201343040,
+  "trainable_params": 201343040,
+  "training_time_hours": 1.892,
+  "virtual_bandwidth_MB": 403.71,
+  "dense_bandwidth_MB": 25770.89,
+  "bandwidth_ratio": 0.015665
+}

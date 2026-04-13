@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp144_batch_schedule_100k",
+  "best_val_loss": 1.5415017157793045,
+  "final_val_loss": 1.542108702659607,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 6357056,
+  "trainable_params": 6357056,
+  "training_time_hours": 1.602,
+  "virtual_bandwidth_MB": 51.78,
+  "dense_bandwidth_MB": 812.68,
+  "bandwidth_ratio": 0.063717
+}

@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp168_tph256_nap5_bs128",
+  "best_val_loss": 1.5047854320912422,
+  "final_val_loss": 1.5047854320912422,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 1619104,
+  "trainable_params": 1619104,
+  "training_time_hours": 1.941
+}

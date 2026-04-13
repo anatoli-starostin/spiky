@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp073_mini_tph256_nap4_fc_sparse8",
+  "best_val_loss": 2.0061141312122346,
+  "final_val_loss": 2.0061141312122346,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 2793504,
+  "trainable_params": 2793504,
+  "training_time_hours": 0.843,
+  "virtual_bandwidth_MB": 39.88,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.062503
+}

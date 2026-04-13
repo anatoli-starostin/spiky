@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp210_dqk8_wide_unemb",
+  "best_val_loss": 1.4449675172567367,
+  "final_val_loss": 1.4449675172567367,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 8150304,
+  "trainable_params": 8150304,
+  "training_time_hours": 0.541
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp108_ffn",
+  "best_val_loss": 1.604712289571762,
+  "final_val_loss": 1.604712289571762,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 44105792,
+  "trainable_params": 44105792,
+  "training_time_hours": 0.375,
+  "virtual_bandwidth_MB": 95.43,
+  "dense_bandwidth_MB": 5644.52,
+  "bandwidth_ratio": 0.016906
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp116_hierarchical_nap4",
+  "best_val_loss": 1.9707921683788299,
+  "final_val_loss": 1.9722158581018447,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 1699904,
+  "trainable_params": 1699904,
+  "training_time_hours": 0.253,
+  "virtual_bandwidth_MB": 14.52,
+  "dense_bandwidth_MB": 216.57,
+  "bandwidth_ratio": 0.067066
+}

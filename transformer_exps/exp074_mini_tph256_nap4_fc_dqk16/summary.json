@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp074_mini_tph256_nap4_fc_dqk16",
+  "best_val_loss": 1.63898823261261,
+  "final_val_loss": 1.63898823261261,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 6565920,
+  "trainable_params": 6565920,
+  "training_time_hours": 1.297,
+  "virtual_bandwidth_MB": 52.47,
+  "dense_bandwidth_MB": 839.42,
+  "bandwidth_ratio": 0.062502
+}

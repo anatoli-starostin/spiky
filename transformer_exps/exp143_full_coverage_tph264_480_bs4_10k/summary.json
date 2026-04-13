@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp143_full_coverage_tph264_480_bs4_10k",
+  "best_val_loss": 2.1133245885372163,
+  "final_val_loss": 2.1133245885372163,
+  "best_step": 9000,
+  "total_steps": 10000,
+  "total_params": 6357056,
+  "trainable_params": 6357056,
+  "training_time_hours": 0.086,
+  "virtual_bandwidth_MB": 51.78,
+  "dense_bandwidth_MB": 812.68,
+  "bandwidth_ratio": 0.063717
+}

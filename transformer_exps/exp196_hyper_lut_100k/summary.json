@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp196_hyper_lut_100k",
+  "best_val_loss": 1.450001402746273,
+  "final_val_loss": 1.4501179713237136,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 4714246,
+  "trainable_params": 4714246,
+  "training_time_hours": 8.963
+}

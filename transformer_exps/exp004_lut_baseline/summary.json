@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp004_lut_baseline",
+  "best_val_loss": 1.4628519982099533,
+  "final_val_loss": 1.4632381528615952,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 191127648,
+  "trainable_params": 191127648,
+  "training_time_hours": 0.916
+}

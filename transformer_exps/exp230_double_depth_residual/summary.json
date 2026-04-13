@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp230_double_depth_residual",
+  "best_val_loss": 1.4811987191438676,
+  "final_val_loss": 1.4811987191438676,
+  "total_params": 7918688,
+  "trainable_params": 7918688,
+  "training_time_hours": 1.576
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp226_nap10_tph128_100k",
+  "best_val_loss": 1.380672612786293,
+  "final_val_loss": 1.3806781738996505,
+  "total_params": 125881568,
+  "trainable_params": 125881568,
+  "training_time_hours": 0.778
+}

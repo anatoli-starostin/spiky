@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp164_se_recompute_mlp",
+  "best_val_loss": 1.5186576218650745,
+  "final_val_loss": 1.5186576218650745,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 3191968,
+  "trainable_params": 3191968,
+  "training_time_hours": 1.242
+}

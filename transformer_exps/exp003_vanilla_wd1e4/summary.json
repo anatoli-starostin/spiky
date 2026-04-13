@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp003_vanilla_wd1e4",
+  "best_val_loss": 1.3545013695955277,
+  "final_val_loss": 1.3548004060983658,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 4870401,
+  "trainable_params": 4870401,
+  "training_time_hours": 0.186
+}

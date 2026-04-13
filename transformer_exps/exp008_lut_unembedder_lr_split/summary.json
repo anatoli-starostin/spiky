@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp008_lut_unembedder_lr_split",
+  "best_val_loss": 1.4869441002607346,
+  "final_val_loss": 1.4869441002607346,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 292167712,
+  "trainable_params": 292167712,
+  "training_time_hours": 1.523,
+  "virtual_bandwidth_MB": 12.89,
+  "dense_bandwidth_MB": 37396.45,
+  "bandwidth_ratio": 0.000345
+}

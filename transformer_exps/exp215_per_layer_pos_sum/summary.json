@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp215_per_layer_pos_sum",
+  "best_val_loss": 1.4513384610414506,
+  "final_val_loss": 1.4513384610414506,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 8113184,
+  "trainable_params": 8113184,
+  "training_time_hours": 0.541
+}

@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp182_v3_sdiff_op1536",
+  "best_val_loss": 1.4657091053226325,
+  "final_val_loss": 1.4657091053226325,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 5719744,
+  "trainable_params": 5719744,
+  "training_time_hours": 1.195
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp057_mini_tph128_nap5",
+  "best_val_loss": 1.7289348751306535,
+  "final_val_loss": 1.7289348751306535,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4993056,
+  "trainable_params": 4993056,
+  "training_time_hours": 0.551,
+  "virtual_bandwidth_MB": 19.94,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.031255
+}

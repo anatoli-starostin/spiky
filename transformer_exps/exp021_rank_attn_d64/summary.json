@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp021_rank_attn_d64",
+  "best_val_loss": 1.5455861061811447,
+  "final_val_loss": 1.5456463068723678,
+  "best_step": 97000,
+  "total_steps": 100000,
+  "total_params": 41975872,
+  "trainable_params": 41975872,
+  "training_time_hours": 1.099,
+  "virtual_bandwidth_MB": 20.99,
+  "dense_bandwidth_MB": 5370.87,
+  "bandwidth_ratio": 0.003908
+}

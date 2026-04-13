@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp125_hierarchical_d32p16_concat_noshuffle_bs128",
+  "best_val_loss": 1.7855291187763214,
+  "final_val_loss": 1.7915803879499435,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 3051584,
+  "trainable_params": 3051584,
+  "training_time_hours": 0.539,
+  "virtual_bandwidth_MB": 25.34,
+  "dense_bandwidth_MB": 389.58,
+  "bandwidth_ratio": 0.065038
+}

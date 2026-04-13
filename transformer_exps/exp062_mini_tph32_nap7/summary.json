@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp062_mini_tph32_nap7",
+  "best_val_loss": 1.8270616769790649,
+  "final_val_loss": 1.8270616769790649,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4993056,
+  "trainable_params": 4993056,
+  "training_time_hours": 0.422,
+  "virtual_bandwidth_MB": 4.99,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.007819
+}

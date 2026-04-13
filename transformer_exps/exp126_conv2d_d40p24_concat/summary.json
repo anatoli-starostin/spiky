@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp126_conv2d_d40p24_concat",
+  "best_val_loss": 1.8168388187885285,
+  "final_val_loss": 1.8168388187885285,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 19976272,
+  "trainable_params": 19976272,
+  "training_time_hours": 0.252,
+  "virtual_bandwidth_MB": 11.3,
+  "dense_bandwidth_MB": 2555.69,
+  "bandwidth_ratio": 0.004421
+}

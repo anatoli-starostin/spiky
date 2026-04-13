@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp071_mini_tph256_nap4_fc_nopos",
+  "best_val_loss": 1.9286223202943802,
+  "final_val_loss": 1.9286223202943802,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 4993056,
+  "trainable_params": 4993056,
+  "training_time_hours": 1.226,
+  "virtual_bandwidth_MB": 39.88,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.062503
+}

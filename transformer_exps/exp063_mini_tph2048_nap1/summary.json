@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp063_mini_tph2048_nap1",
+  "best_val_loss": 1.9652065843343736,
+  "final_val_loss": 1.9668891698122024,
+  "best_step": 46000,
+  "total_steps": 50000,
+  "total_params": 1215488,
+  "trainable_params": 1215488,
+  "training_time_hours": 1.032,
+  "virtual_bandwidth_MB": 77.27,
+  "dense_bandwidth_MB": 154.56,
+  "bandwidth_ratio": 0.49992
+}

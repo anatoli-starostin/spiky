@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp109_dqk32",
+  "best_val_loss": 1.6163333028554916,
+  "final_val_loss": 1.6163333028554916,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 69271616,
+  "trainable_params": 69271616,
+  "training_time_hours": 0.531,
+  "virtual_bandwidth_MB": 145.76,
+  "dense_bandwidth_MB": 8865.75,
+  "bandwidth_ratio": 0.016441
+}

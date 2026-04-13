@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp136_disconnected_tph264_480",
+  "best_val_loss": 1.6134403467178344,
+  "final_val_loss": 1.6142454773187638,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 6357056,
+  "trainable_params": 6357056,
+  "training_time_hours": 0.341,
+  "virtual_bandwidth_MB": 51.78,
+  "dense_bandwidth_MB": 812.68,
+  "bandwidth_ratio": 0.063717
+}

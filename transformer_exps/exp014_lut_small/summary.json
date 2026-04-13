@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp014_lut_small",
+  "best_val_loss": 2.0576190888881682,
+  "final_val_loss": 2.0606962025165556,
+  "best_step": 98000,
+  "total_steps": 100000,
+  "total_params": 1451040,
+  "trainable_params": 1451040,
+  "training_time_hours": 0.419,
+  "virtual_bandwidth_MB": 2.89,
+  "dense_bandwidth_MB": 184.71,
+  "bandwidth_ratio": 0.015644
+}

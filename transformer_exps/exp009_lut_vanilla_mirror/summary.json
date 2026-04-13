@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp009_lut_vanilla_mirror",
+  "best_val_loss": 1.479056978225708,
+  "final_val_loss": 1.479056978225708,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 214016032,
+  "trainable_params": 214016032,
+  "training_time_hours": 1.152,
+  "virtual_bandwidth_MB": 26.76,
+  "dense_bandwidth_MB": 27393.03,
+  "bandwidth_ratio": 0.000977
+}

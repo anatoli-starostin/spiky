@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp052_mini_tph32",
+  "best_val_loss": 1.7684752702713014,
+  "final_val_loss": 1.7684752702713014,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 9977888,
+  "trainable_params": 9977888,
+  "training_time_hours": 0.303,
+  "virtual_bandwidth_MB": 4.99,
+  "dense_bandwidth_MB": 1276.15,
+  "bandwidth_ratio": 0.003909
+}

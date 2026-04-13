@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp022_smooth_nalt1",
+  "best_val_loss": 1.5140741914510727,
+  "final_val_loss": 1.5140741914510727,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 23093280,
+  "trainable_params": 23093280,
+  "training_time_hours": 0.444,
+  "virtual_bandwidth_MB": 23.09,
+  "dense_bandwidth_MB": 2954.92,
+  "bandwidth_ratio": 0.007814
+}

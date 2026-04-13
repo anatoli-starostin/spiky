@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp128_residual_linear_unemb",
+  "best_val_loss": 1.5804320365190505,
+  "final_val_loss": 1.5804320365190505,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 8667200,
+  "trainable_params": 8667200,
+  "training_time_hours": 1.177,
+  "virtual_bandwidth_MB": 70.26,
+  "dense_bandwidth_MB": 1108.38,
+  "bandwidth_ratio": 0.063392
+}

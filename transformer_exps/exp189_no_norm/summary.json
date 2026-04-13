@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp189_no_norm",
+  "best_val_loss": 1.5766567136532963,
+  "final_val_loss": 1.5766567136532963,
+  "best_step": 24000,
+  "total_steps": 25000,
+  "total_params": 6505024,
+  "trainable_params": 6505024,
+  "training_time_hours": 0.192
+}

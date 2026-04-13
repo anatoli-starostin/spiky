@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp198_rank_attn_ln_op768",
+  "best_val_loss": 1.4723935927016825,
+  "final_val_loss": 1.4723935927016825,
+  "best_step": 99000,
+  "total_steps": 100000,
+  "total_params": 7881664,
+  "trainable_params": 7881664,
+  "training_time_hours": 3.809
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp103_rank_proj2",
+  "best_val_loss": 2.1671158730983735,
+  "final_val_loss": 2.1671158730983735,
+  "best_step": 49000,
+  "total_steps": 50000,
+  "total_params": 46988192,
+  "trainable_params": 46988192,
+  "training_time_hours": 0.414,
+  "virtual_bandwidth_MB": 6008.41,
+  "dense_bandwidth_MB": 6008.44,
+  "bandwidth_ratio": 0.999995
+}

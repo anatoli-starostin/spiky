@@ -1,0 +1,12 @@
+{
+  "exp_name": "exp151_layer_norm_50k",
+  "best_val_loss": 1.5863678932189942,
+  "final_val_loss": 1.5869928300380707,
+  "best_step": 48000,
+  "total_steps": 50000,
+  "total_params": 6358016,
+  "trainable_params": 6358016,
+  "training_time_hours": 0.411,
+  "quant_reg_D": 256,
+  "quant_reg_lambda_max": 0.01
+}

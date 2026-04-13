@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp072_mini_tph256_nap4_fc_learnedperm",
+  "best_val_loss": 1.8475277155637742,
+  "final_val_loss": 1.8549755930900573,
+  "best_step": 47000,
+  "total_steps": 50000,
+  "total_params": 5005344,
+  "trainable_params": 5005344,
+  "training_time_hours": 1.075,
+  "virtual_bandwidth_MB": 39.88,
+  "dense_bandwidth_MB": 638.09,
+  "bandwidth_ratio": 0.062503
+}
