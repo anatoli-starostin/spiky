@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp238_no_ffn_nap10_tph256",
+  "best_val_loss": 1.3795601546764373,
+  "final_val_loss": 1.3795601546764373,
+  "total_params": 53529440,
+  "trainable_params": 53529440,
+  "training_time_hours": 0.651
+}

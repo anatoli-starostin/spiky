@@ -204,7 +204,8 @@ def _lprojection_backward(
         and grad_output.is_cuda
         and grad_output.dtype in (torch.float32, torch.float64)
         and lookup_alt_indices is not None
-        and (not smooth_mode or n_alternatives <= 3)
+        and smooth_mode  # non-smooth backward is faster with PyTorch
+        and n_alternatives <= 3
     )
     if use_native_cuda:
         native = _get_native_lutorch_manager()

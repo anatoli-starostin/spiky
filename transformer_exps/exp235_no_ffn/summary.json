@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp235_no_ffn",
+  "best_val_loss": 1.3800373941659927,
+  "final_val_loss": 1.3803827553987502,
+  "total_params": 103074656,
+  "trainable_params": 103074656,
+  "training_time_hours": 0.636
+}

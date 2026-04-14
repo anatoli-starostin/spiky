@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp232_nap12_tph128",
+  "best_val_loss": 1.363284420967102,
+  "final_val_loss": 1.3638123154640198,
+  "total_params": 503368928,
+  "trainable_params": 503368928,
+  "training_time_hours": 1.142
+}

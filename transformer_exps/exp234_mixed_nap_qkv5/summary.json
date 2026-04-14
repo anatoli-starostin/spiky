@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp234_mixed_nap_qkv5",
+  "best_val_loss": 1.366670948266983,
+  "final_val_loss": 1.366670948266983,
+  "total_params": 203738336,
+  "trainable_params": 203738336,
+  "training_time_hours": 0.813
+}

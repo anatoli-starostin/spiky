@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp236_no_ffn_v_nap6",
+  "best_val_loss": 1.4066405564546585,
+  "final_val_loss": 1.4066405564546585,
+  "total_params": 103861088,
+  "trainable_params": 103861088,
+  "training_time_hours": 0.602
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp239_no_ffn_nap6_tph2048",
+  "best_val_loss": 1.3856161117553711,
+  "final_val_loss": 1.385783502459526,
+  "total_params": 28363616,
+  "trainable_params": 28363616,
+  "training_time_hours": 1.578
+}
