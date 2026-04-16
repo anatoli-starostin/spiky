@@ -31,6 +31,23 @@ from spiky.lutorch.lut_helpers import (
     UncertaintyMode, AnchorSamplingPolicy, get_balanced_anchor_pairs,
 )
 
+_FP8_DTYPE = getattr(torch, 'float8_e4m3fn', None)
+_FP8_AMAX = 448.0  # max representable value in e4m3fn
+
+
+def _quantize_to_fp8(w: torch.Tensor) -> torch.Tensor:
+    """Quantize fp32 tensor to fp8 precision with per-tensor dynamic scaling + STE.
+
+    Scales weights to fill the fp8 range before casting, then scales back.
+    This avoids small weights being rounded to zero.
+    """
+    if _FP8_DTYPE is None:
+        return w
+    amax = w.detach().abs().amax().clamp(min=1e-8)
+    scale = _FP8_AMAX / amax
+    fp8 = (w * scale).to(_FP8_DTYPE).to(w.dtype) / scale
+    return w + (fp8 - w).detach()
+
 
 _USE_PERMLUT_CUSTOM_CUDA = os.environ.get("SPIKY_PERMLUT_NO_CUSTOM_CUDA", "0") != "1"
 _USE_PERMLUT_COMPILE = os.environ.get("SPIKY_PERMLUT_NO_COMPILE", "0") != "1"
@@ -245,6 +262,8 @@ class PermutationalLut(nn.Module):
         soft_mode: str = 'rational',
         aggregation: str = 'matmul',
         temperature: float = 0.1,
+        use_fp8: bool = False,
+        return_dominance: bool = False,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         **mhlut_kwargs,
@@ -279,6 +298,8 @@ class PermutationalLut(nn.Module):
         self.soft_mode = soft_mode
         self.aggregation = aggregation
         self.temperature = temperature
+        self.use_fp8 = use_fp8
+        self.return_dominance = return_dominance
 
         # Inner LUT: each table outputs `output_nap` values (one signed vote per output pair)
         self.inner = MultiHeadLut(
@@ -338,6 +359,34 @@ class PermutationalLut(nn.Module):
             M[h_idx, tp_idx, self.idx_b] = -1.0
             self.register_buffer('proj_matrix', M)
 
+        if return_dominance:
+            P = n_outputs * (n_outputs - 1) // 2
+            self._dom_n_pairs = P
+            # Map each scrambled pair (a, b) to its canonical pair index.
+            # Canonical pairs: triu_indices(n_outputs, n_outputs, offset=1)
+            # Build lookup: pair_index_of[i, j] = canonical index for (min(i,j), max(i,j))
+            pair_map = torch.full((n_outputs, n_outputs), -1, dtype=torch.long)
+            tri_i, tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1)
+            for p_idx in range(P):
+                pair_map[tri_i[p_idx], tri_j[p_idx]] = p_idx
+                pair_map[tri_j[p_idx], tri_i[p_idx]] = p_idx
+
+            TP = tph * output_nap
+            D = torch.zeros(n_heads, TP, P, device=self.idx_a.device)
+            for h in range(n_heads):
+                for k in range(TP):
+                    a, b = int(self.idx_a[h, k]), int(self.idx_b[h, k])
+                    p_idx = int(pair_map[a, b])
+                    # +1 if a < b (canonical order), -1 if a > b (flipped)
+                    D[h, k, p_idx] = 1.0 if a < b else -1.0
+            self.register_buffer('dom_proj_matrix', D)
+            # Borda matrix for converting dominance back to ranks
+            borda_m = torch.zeros(n_outputs, P, device=self.idx_a.device)
+            for p_idx in range(P):
+                borda_m[int(tri_i[p_idx]), p_idx] = 1.0
+                borda_m[int(tri_j[p_idx]), p_idx] = -1.0
+            self.register_buffer('dom_borda_m', borda_m)
+
     def _signed_vote(self, raw: torch.Tensor) -> torch.Tensor:
         """Compute centred per-pair signed vote in (-0.5, +0.5)."""
         if self.soft_mode == 'sigmoid':
@@ -356,6 +405,21 @@ class PermutationalLut(nn.Module):
             and raw.dtype in (torch.float32, torch.float64)
             and _get_permlut_native() is not None
         )
+
+    def _forward_dominance(self, raw: torch.Tensor) -> torch.Tensor:
+        """Return dominance pair scores [B, H, P] instead of Borda scores."""
+        T = float(self.temperature)
+        if self.soft_mode == 'sigmoid':
+            d = torch.sigmoid(raw / T) - 0.5
+        elif self.soft_mode == 'rational':
+            d = 0.5 * raw / (T + raw.abs())
+        else:  # ste
+            hard = torch.where(raw > 0, 0.5, -0.5).to(raw.dtype)
+            soft = 0.5 * raw / (T + raw.abs())
+            d = hard.detach() + (soft - soft.detach())
+        B, H, Tdim, P = raw.shape
+        d_flat = d.reshape(B, H, Tdim * P)
+        return torch.einsum('bhk,hkp->bhp', d_flat, self.dom_proj_matrix)
 
     def _forward_matmul(self, raw: torch.Tensor) -> torch.Tensor:
         """Matmul forward + fused CUDA backward (hybrid)."""
@@ -391,15 +455,23 @@ class PermutationalLut(nn.Module):
             [B, n_heads, n_outputs] — per-output net dominance scores (real-valued,
             centred around 0). Their ranking defines the output permutation.
         """
+        if self.use_fp8:
+            orig_data = self.inner.projection.weights.data
+            self.inner.projection.weights.data = _quantize_to_fp8(orig_data)
+
         # Per-table raw outputs: [B, n_heads, tph, output_nap]
         raw = self.inner(x)
 
+        if self.use_fp8:
+            self.inner.projection.weights.data = orig_data
+
+        if self.return_dominance:
+            return self._forward_dominance(raw)
+
         if self.aggregation == 'matmul':
-            # Pure PyTorch path: einsum vs precomputed projection matrix.
-            # Autograd handles backward natively (via cuBLAS gemm).
             return self._forward_matmul(raw)
 
-        # Scatter path (default): compiled forward + custom CUDA backward (if available)
+        # Scatter path: compiled forward + custom CUDA backward (if available)
         B = raw.shape[0]
         raw_flat = raw.reshape(B, self.n_heads * self.tph, self.output_nap)
         if self._can_use_native(raw):

@@ -307,3 +307,90 @@ def test_aligned_uses_inner_anchor_pairs(device):
     expected_b = lut.inner.lookup.anchor_pairs_b.view(4, 16, 5).reshape(4, 16 * 5).long()
     assert torch.equal(lut.idx_a, expected_a)
     assert torch.equal(lut.idx_b, expected_b)
+
+
+# -----------------------------------------------------------------------------
+# fp8 quantization
+# -----------------------------------------------------------------------------
+
+def test_fp8_forward_backward(device):
+    """use_fp8=True should produce valid forward/backward, and weights should differ from fp32."""
+    lut_fp8 = PermutationalLut(
+        n_inputs=32, n_outputs=32, input_nap=6, output_nap=8,
+        n_heads=2, tph=16, pair_mode='scrambled', soft_mode='ste',
+        use_fp8=True, random_seed=42, device=device,
+        initial_weights_noise=0.1,
+    )
+    lut_fp32 = PermutationalLut(
+        n_inputs=32, n_outputs=32, input_nap=6, output_nap=8,
+        n_heads=2, tph=16, pair_mode='scrambled', soft_mode='ste',
+        use_fp8=False, random_seed=42, device=device,
+        initial_weights_noise=0.1,
+    )
+    x = torch.randn(4, 32, device=device)
+    out_fp8 = lut_fp8(x)
+    out_fp32 = lut_fp32(x)
+    assert out_fp8.shape == out_fp32.shape
+    # fp8 quantization changes the raw values, so outputs may differ
+    # but should still be finite and close
+    assert torch.isfinite(out_fp8).all()
+    assert (out_fp8 - out_fp32).abs().max() < 1.0
+    # backward should work
+    out_fp8.sum().backward()
+    assert lut_fp8.inner.projection.weights.grad is not None
+
+
+def test_fp8_weights_restored_after_forward(device):
+    """After forward, the original fp32 weights should be restored."""
+    lut = PermutationalLut(
+        n_inputs=32, n_outputs=32, input_nap=6, output_nap=8,
+        n_heads=2, tph=16, pair_mode='scrambled', soft_mode='rational',
+        use_fp8=True, random_seed=42, device=device,
+        initial_weights_noise=0.1,
+    )
+    w_before = lut.inner.projection.weights.data.clone()
+    x = torch.randn(4, 32, device=device)
+    lut(x)
+    w_after = lut.inner.projection.weights.data
+    assert torch.equal(w_before, w_after), "fp32 weights should be restored after forward"
+
+
+# -----------------------------------------------------------------------------
+# return_dominance
+# -----------------------------------------------------------------------------
+
+def test_return_dominance_shape(device):
+    d_v = 8
+    P = d_v * (d_v - 1) // 2  # 28
+    lut = PermutationalLut(
+        n_inputs=32, n_outputs=d_v, input_nap=5, output_nap=4,
+        n_heads=4, tph=16, pair_mode='scrambled', soft_mode='ste',
+        return_dominance=True, random_seed=42, device=device,
+        initial_weights_noise=0.1,
+    )
+    x = torch.randn(8, 32, device=device)
+    out = lut(x)
+    assert out.shape == (8, 4, P), f"expected (8, 4, {P}), got {out.shape}"
+    assert torch.isfinite(out).all()
+    out.sum().backward()
+    assert lut.inner.projection.weights.grad is not None
+
+
+def test_return_dominance_vs_borda(device):
+    """Dominance output, when Borda-projected, should match normal Borda output."""
+    d_v = 8
+    P = d_v * (d_v - 1) // 2
+    kwargs = dict(
+        n_inputs=32, n_outputs=d_v, input_nap=5, output_nap=4,
+        n_heads=4, tph=16, pair_mode='scrambled', soft_mode='rational',
+        random_seed=42, device=device, initial_weights_noise=0.1,
+    )
+    lut_dom = PermutationalLut(return_dominance=True, **kwargs)
+    lut_borda = PermutationalLut(return_dominance=False, **kwargs)
+    x = torch.randn(8, 32, device=device)
+    dom = lut_dom(x)  # [8, 4, P]
+    borda = lut_borda(x)  # [8, 4, d_v]
+    # Borda-project dominance: einsum('...p,kp->...k', dom, borda_m)
+    borda_from_dom = torch.einsum('bhp,kp->bhk', dom, lut_dom.dom_borda_m)
+    assert torch.allclose(borda_from_dom, borda, atol=1e-5), \
+        f"max diff: {(borda_from_dom - borda).abs().max()}"

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp277_domv_dqk16",
+  "best_val_loss": 1.2384789139032364,
+  "final_val_loss": 1.2384789139032364,
+  "total_params": 205638177,
+  "training_time_hours": 1.919
+}
