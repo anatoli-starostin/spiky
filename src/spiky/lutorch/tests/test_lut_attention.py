@@ -352,3 +352,76 @@ def test_lut_attention_v3_backward(device, causal, include_diagonal):
 
     assert x.grad is not None and torch.isfinite(x.grad).all()
     assert rel_pe.grad is not None and torch.isfinite(rel_pe.grad).all()
+
+
+def test_lut_attention_v3_pairs_processor(device):
+    """V3 with custom pairs_processor produces correct shape and matches manual computation."""
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O = 2, 6, 8, 4, 2, 3
+    tph, nap = 4, 4
+
+    # pairs_processor that computes |x_i - x_j| and concatenates with rpe
+    # Output dim = E + pos_dim = 12
+    class DiffProcessor(torch.nn.Module):
+        def forward(self, x_i, x_j, rpe):
+            return torch.cat([(x_i - x_j).abs(), rpe], dim=-1)
+
+    proc = DiffProcessor()
+    input_dim = E + pos_dim  # 12
+
+    lut = MultiHeadLut(
+        input_dim=input_dim, n_heads=H, n_outputs=O,
+        n_anchor_pairs=nap, tables_per_head=tph,
+        n_alternatives=1, smooth_mode=False,
+        calibrate_output=False, normalize_weights=False,
+        table_dropout=0.0, random_seed=SEED, device=device,
+    )
+    with torch.no_grad():
+        lut.projection.weights.normal_(mean=0.0, std=0.01)
+
+    attn = LUTAttentionV3(lut, seq_len=T, causal=True, include_diagonal=True,
+                           pairs_processor=proc).to(device)
+
+    x = torch.randn(B, T, E, device=device, requires_grad=True)
+    rel_pe = torch.randn(T, pos_dim, device=device, requires_grad=True)
+
+    out = attn(x, rel_pe)
+    assert out.shape == (B, T, T, H, O)
+
+    # Check finite values exist in valid positions
+    assert torch.isfinite(out[0, 1, 0, :, :]).all()
+    # Check -inf in masked positions
+    assert (out[0, 0, 1, :, :] == float('-inf')).all()
+
+    # Backward should work
+    loss = out[out.isfinite()].sum()
+    loss.backward()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    assert rel_pe.grad is not None and torch.isfinite(rel_pe.grad).all()
+
+
+def test_lut_attention_v3_pairs_processor_dim_mismatch(device):
+    """V3 raises assertion when pairs_processor output dim doesn't match LUT input_dim."""
+    torch.manual_seed(SEED)
+    B, T, E, pos_dim, H, O = 2, 4, 8, 4, 1, 2
+    tph, nap = 2, 3
+
+    class BadProcessor(torch.nn.Module):
+        def forward(self, x_i, x_j, rpe):
+            return x_i  # dim E, not 2E+pos_dim
+
+    lut = MultiHeadLut(
+        input_dim=2 * E + pos_dim, n_heads=H, n_outputs=O,
+        n_anchor_pairs=nap, tables_per_head=tph,
+        n_alternatives=1, smooth_mode=False,
+        calibrate_output=False, normalize_weights=False,
+        table_dropout=0.0, random_seed=SEED, device=device,
+    )
+    attn = LUTAttentionV3(lut, seq_len=T, causal=True, include_diagonal=True,
+                           pairs_processor=BadProcessor()).to(device)
+
+    x = torch.randn(B, T, E, device=device)
+    rel_pe = torch.randn(T, pos_dim, device=device)
+
+    with pytest.raises(AssertionError, match="pairs_processor output dim"):
+        attn(x, rel_pe)

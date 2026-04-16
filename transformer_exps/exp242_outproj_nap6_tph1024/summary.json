@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp242_outproj_nap6_tph1024",
+  "best_val_loss": 1.402642649412155,
+  "final_val_loss": 1.4032001882791518,
+  "total_params": 15780704,
+  "trainable_params": 15780704,
+  "training_time_hours": 1.21
+}

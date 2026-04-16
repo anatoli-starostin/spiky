@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp254_concat_ctx128",
+  "best_val_loss": 1.243452176451683,
+  "final_val_loss": 1.243452176451683,
+  "total_params": 53070177,
+  "trainable_params": 53070177,
+  "training_time_hours": 0.636
+}

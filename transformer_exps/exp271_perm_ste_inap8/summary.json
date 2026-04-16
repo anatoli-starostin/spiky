@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp271_perm_ste_inap8",
+  "best_val_loss": 1.3854092746973037,
+  "final_val_loss": 1.3854092746973037,
+  "total_params": 105742689,
+  "trainable_params": 105742689,
+  "training_time_hours": 2.148
+}

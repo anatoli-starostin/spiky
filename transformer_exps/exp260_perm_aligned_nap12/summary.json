@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp260_perm_aligned_nap12",
+  "best_val_loss": 1.5620223611593247,
+  "final_val_loss": 1.5620223611593247,
+  "total_params": 21594465,
+  "trainable_params": 21594465,
+  "training_time_hours": 0.164
+}

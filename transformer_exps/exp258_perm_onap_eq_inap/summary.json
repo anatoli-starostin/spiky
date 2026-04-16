@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp258_perm_onap_eq_inap",
+  "best_val_loss": 1.5012665510177612,
+  "final_val_loss": 1.5012665510177612,
+  "total_params": 34177377,
+  "trainable_params": 34177377,
+  "training_time_hours": 0.157
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp263_perm_scram_in10_out16",
+  "best_val_loss": 1.4785791844129563,
+  "final_val_loss": 1.4785791844129563,
+  "total_params": 53051745,
+  "trainable_params": 53051745,
+  "training_time_hours": 0.163
+}

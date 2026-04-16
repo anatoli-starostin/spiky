@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp255_ctx128_tph1024",
+  "best_val_loss": 1.2020949363708495,
+  "final_val_loss": 1.2021876573562622,
+  "total_params": 204065121,
+  "trainable_params": 204065121,
+  "training_time_hours": 0.987
+}

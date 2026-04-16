@@ -384,8 +384,6 @@ class LUTAttentionV2(nn.Module):
             and lut.n_alternatives == 1
             and lut.n_buckets == 1
             and lut.table_dropout == 0.0
-            and lut.scatter_indices is None
-            and lut.post_processor is None
             and not lut.calibrate_output
             and not lut.projection.normalize_weights
         ):
@@ -446,15 +444,23 @@ class LUTAttentionV2(nn.Module):
 
 class LUTAttentionV3(nn.Module):
     """
-    Raw pairwise attention score generator using lookup tables.
+    Raw pairwise LUT output generator — returns dense [B, T, T, H, O] tensor.
 
     For a sequence of T tokens, enumerates M valid position pairs (i, j),
-    concatenates [x_i, x_j, RelPE[dist(i,j)]], feeds through a MultiHeadLut,
-    and places the result into a dense [B, T, T, H, O] tensor (invalid
-    positions filled with -inf).
+    builds pair features from x_i, x_j, and RelPE[dist(i,j)], feeds through
+    a MultiHeadLut, and places results into a dense [B, T, T, H, O] tensor
+    (invalid positions filled with -inf).
 
     Unlike LUTAttentionV2, this class does NOT perform scatter-sum or
-    self-excitement. It returns raw per-pair LUT outputs in square form.
+    self-excitement. It returns raw per-pair LUT outputs in square form,
+    suitable for use as attention scores (with n_outputs=1) or any other
+    pairwise computation.
+
+    Pair feature construction:
+        By default, features are ``cat([x_i, x_j, rpe])`` giving dim = 2*E + pos_dim.
+        An optional ``pairs_processor`` module can replace this with any custom
+        aggregation: ``pairs_processor(x_i, x_j, rpe) → [B, M, E']``. The only
+        requirement is that E' must match ``multi_head_lut.input_dim``.
 
     Pair enumeration:
         causal=True,  include_diagonal=True  → j ≤ i   (M = T*(T+1)/2)
@@ -464,16 +470,20 @@ class LUTAttentionV3(nn.Module):
 
     RelPE indexing:
         rel_pe[k] corresponds to distance k + (0 if include_diagonal else 1).
-        include_diagonal=True:  rel_pe[0] = distance 0 (same position), rel_pe[1] = distance 1, …
+        include_diagonal=True:  rel_pe[0] = distance 0, rel_pe[1] = distance 1, …
         include_diagonal=False: rel_pe[0] = distance 1, rel_pe[1] = distance 2, …
         Required size: T (with diagonal) or T-1 (without diagonal).
 
     Args:
-        multi_head_lut: Pre-built MultiHeadLut with input_dim = 2*E + pos_dim,
-                        n_heads = H, n_outputs = O.
-        seq_len:        Fixed sequence length used to pre-compute pair indices.
-        causal:         If True, only include pairs with j ≤ i (or j < i).
+        multi_head_lut:   Pre-built MultiHeadLut. input_dim must match the pair
+                          feature dimension (2*E + pos_dim by default, or whatever
+                          pairs_processor outputs).
+        seq_len:          Fixed sequence length used to pre-compute pair indices.
+        causal:           If True, only include pairs with j ≤ i (or j < i).
         include_diagonal: If True, include pairs where i == j.
+        pairs_processor:  Optional nn.Module with signature
+                          ``forward(x_i, x_j, rpe) → [B, M, E']``.
+                          When None, uses default concatenation.
     """
 
     def __init__(
@@ -482,13 +492,16 @@ class LUTAttentionV3(nn.Module):
         seq_len: int,
         causal: bool = True,
         include_diagonal: bool = True,
+        pairs_processor: Optional[nn.Module] = None,
     ):
         super().__init__()
         self.multi_head_lut = multi_head_lut
+        self.pairs_processor = pairs_processor
         self.causal = causal
         self.include_diagonal = include_diagonal
         self.seq_len = seq_len
 
+        # Pre-compute pair indices (i, j) for all valid positions.
         rows, cols = [], []
         for i in range(seq_len):
             for j in range(seq_len):
@@ -505,9 +518,9 @@ class LUTAttentionV3(nn.Module):
         # Pre-compute distances for RelPE indexing.
         # When include_diagonal=False, shift by 1 so rel_pe[0] = distance 1.
         if causal:
-            dists = self.pair_rows - self.pair_cols  # [M], non-negative
+            dists = self.pair_rows - self.pair_cols
         else:
-            dists = (self.pair_rows - self.pair_cols).abs()  # [M]
+            dists = (self.pair_rows - self.pair_cols).abs()
         if not include_diagonal:
             dists = dists - 1
         self.register_buffer('pair_dists', dists)
@@ -527,21 +540,26 @@ class LUTAttentionV3(nn.Module):
         assert T == self.seq_len, f"Expected seq_len={self.seq_len}, got T={T}"
         M = self.pair_rows.shape[0]
 
+        # Gather token pairs and relative positional embeddings
         x_i = x[:, self.pair_rows, :]   # [B, M, E]
         x_j = x[:, self.pair_cols, :]   # [B, M, E]
-
         rpe = rel_pe[self.pair_dists].unsqueeze(0).expand(B, -1, -1)  # [B, M, pos_dim]
 
-        # Concatenate and flatten: [B*M, 2E + pos_dim]
-        pairs = torch.cat([x_i, x_j, rpe], dim=-1)
+        # Build pair features via custom processor or default concatenation
+        if self.pairs_processor is not None:
+            pairs = self.pairs_processor(x_i, x_j, rpe)  # [B, M, E']
+        else:
+            pairs = torch.cat([x_i, x_j, rpe], dim=-1)   # [B, M, 2E + pos_dim]
         pairs_flat = pairs.reshape(B * M, -1)
+        assert pairs_flat.shape[1] == self.multi_head_lut.input_dim, \
+            f"pairs_processor output dim {pairs_flat.shape[1]} != multi_head_lut input_dim {self.multi_head_lut.input_dim}"
 
-        # Apply LUT: [B*M, H, O]
-        out = self.multi_head_lut(pairs_flat)
+        # Apply LUT and reshape to per-pair outputs
+        out = self.multi_head_lut(pairs_flat)              # [B*M, H, O]
         H, O = out.shape[1], out.shape[2]
         out = out.reshape(B, M, H, O)
 
-        # Place into dense [B, T, T, H, O] tensor
+        # Place into dense [B, T, T, H, O] tensor; invalid positions are -inf
         result = torch.full((B, T, T, H, O), float('-inf'), device=x.device, dtype=x.dtype)
         result[:, self.pair_rows, self.pair_cols, :, :] = out
 

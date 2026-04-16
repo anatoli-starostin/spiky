@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp252_concat_mlp_unemb",
+  "best_val_loss": 1.389744371175766,
+  "final_val_loss": 1.3900629967451095,
+  "total_params": 53051745,
+  "trainable_params": 53051745,
+  "training_time_hours": 1.054
+}

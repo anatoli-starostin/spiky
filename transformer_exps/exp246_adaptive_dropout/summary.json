@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp246_adaptive_dropout",
+  "best_val_loss": 1.3997814655303955,
+  "final_val_loss": 1.4000376611948013,
+  "total_params": 303615200,
+  "trainable_params": 303615200,
+  "training_time_hours": 1.138
+}

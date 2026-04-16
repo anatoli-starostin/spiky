@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp243_vanilla_ctx128",
+  "best_val_loss": 1.2030948519706726,
+  "final_val_loss": 1.2030948519706726,
+  "total_params": 4870401,
+  "trainable_params": 4870401,
+  "training_time_hours": 0.373
+}

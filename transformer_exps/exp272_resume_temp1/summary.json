@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp272_resume_temp1",
+  "best_val_loss": 1.4253940403461456,
+  "initial_val_loss": 1.4277456611394883,
+  "total_params": 30245217,
+  "training_time_hours": 0.388,
+  "note": "Resumed exp270 with temperature=1.0, lr=1e-4 constant"
+}

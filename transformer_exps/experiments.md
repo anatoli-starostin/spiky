@@ -1659,3 +1659,360 @@ Key advantage: MLP sees all M comparisons at once (vs LUT where each table sees 
 **Results:** Running.
 
 ---
+
+## Batch 37 — Context 128, Architecture Search (exp240–255)
+
+### exp240_no_ffn_v_tph256
+
+**Description:** No FFN, V tph=256. ctx=32, 100K bs=64.
+
+**Parameters:** 17.4M | **Best val:** **1.4040**
+
+---
+
+### exp241_progressive_outproj
+
+**Description:** Progressive out_proj: L0 nap4/tph2048 … L5 nap9/tph64. No FFN.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp242_outproj_nap6_tph1024
+
+**Description:** Out_proj nap=6, tph=1024. ctx=32, 100K bs=64.
+
+**Parameters:** 15.8M | **Best val:** **1.4027**
+
+---
+
+### exp243_vanilla_ctx128
+
+**Description:** Vanilla transformer baseline at ctx=128, 100K bs=32.
+
+**Parameters:** 4.87M | **Best val:** **1.2031**
+
+Key reference — this is the SDPA baseline for ctx=128.
+
+---
+
+### exp244_mixed_nap_fp16
+
+**Description:** exp233 with fp16 weights. Q/K nap=5, V/OutProj/FFN nap=12, tph=128.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp245_gated_tables
+
+**Description:** exp233 + table_gating with noise for closed gates.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp246_adaptive_dropout
+
+**Description:** Adaptive dropout. ctx=32, 100K bs=64.
+
+**Parameters:** 303.6M | **Best val:** **1.3998**
+
+---
+
+### exp247_no_residual
+
+**Description:** exp233 but no residual connections. Pure permutational flow.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp248_backward_pred
+
+**Description:** No residuals + backward prediction loss.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp249_no_res_small
+
+**Description:** No residuals + backward ranking prediction. All nap=5, tph=128. Small and pure.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp250_dual_stream
+
+**Description:** Dual stream architecture. ctx=32, 100K bs=64.
+
+**Parameters:** 53.0M | **Best val:** **1.4001**
+
+---
+
+### exp251_concat_layers
+
+**Description:** Pure permutational stream, concatenate all 6 layer outputs → Linear(192, 257). No residuals.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp252_concat_mlp_unemb
+
+**Description:** Concat all layer outputs → MLP unembedder. No residuals. ctx=32, 100K bs=64.
+
+**Parameters:** 53.1M | **Best val:** **1.3897**
+
+Key architecture — concat-layers + MLP unembedder becomes the standard going forward.
+
+---
+
+### exp253_permutational_lut
+
+**Description:** exp252 but PermutationalLut instead of MultiHeadLut out_proj. Rank-quantized outputs.
+
+**Result:** Did not finish / no summary.
+
+---
+
+### exp254_concat_ctx128
+
+**Description:** Concat-layers arch at ctx=128. 50K bs=32.
+
+**Parameters:** 53.1M | **Best val:** **1.2435**
+
+---
+
+### exp255_ctx128_tph1024
+
+**Description:** ctx=128, out_proj nap=10 tph=1024. Concat-layers + MLP unembedder. 100K bs=32.
+
+**Parameters:** 204.1M | **Best val:** **1.2021**
+
+Matches vanilla baseline (exp243: 1.2031). Key reference for all subsequent experiments.
+
+---
+
+## Batch 38 — PermutationalLut Out_proj (exp256–269)
+
+### exp256_perm_lut
+
+**Description:** exp252 arch, out_proj replaced with PermutationalLut (scrambled mode, rational). ctx=32, 50K bs=64.
+
+**Parameters:** 53.1M | **Best val:** **1.4309**
+
+---
+
+### exp257_baseline_fast
+
+**Description:** Baseline fast run for comparison. ctx=32.
+
+**Parameters:** 53.1M | **Best val:** **1.4547**
+
+---
+
+### exp258_perm_onap_eq_inap
+
+**Description:** PermLut output_nap = input_nap. ctx=32.
+
+**Parameters:** 34.2M | **Best val:** **1.5013**
+
+---
+
+### exp259_perm_aligned
+
+**Description:** PermLut aligned mode. ctx=32.
+
+**Parameters:** 34.2M | **Best val:** **1.4976**
+
+---
+
+### exp260_perm_aligned_nap12
+
+**Description:** PermLut aligned, nap=12. ctx=32.
+
+**Parameters:** 21.6M | **Best val:** **1.5620**
+
+---
+
+### exp261_perm_aligned_nap6
+
+**Description:** PermLut aligned, nap=6. ctx=32.
+
+**Parameters:** 5.1M | **Best val:** **1.5560**
+
+---
+
+### exp262_perm_scram_in6_out12
+
+**Description:** PermLut scrambled, input_nap=6, output_nap=12. ctx=32.
+
+**Parameters:** 5.1M | **Best val:** **1.5592**
+
+---
+
+### exp263_perm_scram_in10_out16
+
+**Description:** PermLut scrambled, input_nap=10, output_nap=16. ctx=32.
+
+**Parameters:** 53.1M | **Best val:** **1.4786**
+
+---
+
+### exp264_perm_scram_in10_out32
+
+**Description:** PermLut scrambled, input_nap=10, output_nap=32. ctx=32.
+
+**Parameters:** 27.9M | **Best val:** **1.5124**
+
+---
+
+### exp265_perm_scram_in6_out32_tph2048
+
+**Description:** PermLut scrambled, input_nap=6, output_nap=32, tph=2048. ctx=32.
+
+**Parameters:** 27.9M | **Best val:** **1.4768**
+
+---
+
+### exp266_perm_ste
+
+**Description:** PermLut STE mode (hard forward, rational backward). Matmul aggregation. ctx=32.
+
+**Parameters:** 27.9M | **Best val:** **1.4853**
+
+---
+
+### exp267_perm_ste_tph1024_out64
+
+**Description:** PermLut STE, tph=1024, output_nap=64. ctx=32.
+
+**Parameters:** 27.9M | **Best val:** **1.5012**
+
+---
+
+### exp268_perm_ste_tph2048_out16
+
+**Description:** PermLut STE, tph=2048, output_nap=16. ctx=32.
+
+**Parameters:** 15.3M | **Best val:** **1.5120**
+
+---
+
+### exp269_perm_ste_fp8_qat
+
+**Description:** PermLut STE matmul + fp8 QAT on inner LUT weights (e4m3fn). 25K bs=64. ctx=32.
+
+**Result:** Did not finish / no summary.
+
+---
+
+## Batch 39 — Full-scale PermLut & Temperature (exp270–274)
+
+### exp270_perm_ste_full
+
+**Description:** Full-scale PermLut STE. input_nap=6, output_nap=32, tph=2048. 100K bs=128. ctx=32.
+
+**Parameters:** 30.2M | **Best val:** **1.4274**
+
+---
+
+### exp271_perm_ste_inap8
+
+**Description:** PermLut STE with input_nap=8. 100K bs=128. ctx=32.
+
+**Parameters:** 105.7M | **Best val:** **1.3854**
+
+Best PermLut result at ctx=32.
+
+---
+
+### exp272_resume_temp1
+
+**Description:** Resumed exp270 checkpoint with temperature=1.0, lr=1e-4 constant, 10K steps.
+
+**Parameters:** 30.2M | **Best val:** **1.4254** (from initial 1.4277)
+
+Marginal improvement from temperature increase.
+
+---
+
+### exp273_temp_anneal
+
+**Description:** exp270 arch from scratch, temperature annealed 0.1→1.0 linearly. 50K bs=64. ctx=32.
+
+**Parameters:** 30.2M | **Best val:** **1.4578**
+
+Temperature annealing did not help — worse than constant temperature.
+
+---
+
+### exp274_dominance_v
+
+**Description:** Dominance-V conversion around SDPA: V rank → dominance pairs before SDPA, Borda-aggregate back after. PermLut out_proj. 50K bs=64. ctx=32.
+
+**Parameters:** 30.2M | **Best val:** **1.4649**
+
+Dominance-V added overhead without benefit in PermLut context.
+
+---
+
+## Batch 40 — RankAttention Restoration (exp275–278)
+
+Discovered that RankAttention (pair-dominance projection on Q/K) had been accidentally dropped when transitioning to concat-layers architecture around exp250. These experiments restore it.
+
+### exp275_rankattn_ctx128
+
+**Description:** exp255 clone with ONLY Q/K attention changed to RankAttention. Same MultiHeadLut out_proj (nap=10 tph=1024). ctx=128, 100K bs=32. d_qk=8, d_v=8. QK LayerNorm preserved before RankAttention.
+
+**Parameters:** 204.1M | **Best val:** **1.3099** | **Final:** 1.3110 | **Time:** 1.79h
+
+Clean comparison: RankAttention costs ~0.11 vs plain SDPA (exp255: 1.2021).
+
+---
+
+### exp276_rankattn_domv_ctx128
+
+**Description:** exp275 + dominance-V: V rank vectors converted to centred signed dominance pairs (STE) before SDPA, Borda-aggregated back after. RankAttention with d_v=C(8,2)=28 for dominance V dimension. ctx=128, 100K bs=32.
+
+**Parameters:** 204.1M | **Best val:** **1.3134** | **Final:** 1.3138 | **Time:** 2.22h
+
+Dominance-V is essentially neutral vs exp275 (+0.004).
+
+---
+
+### exp277_domv_dqk16
+
+**Description:** exp276 fork with d_qk=16 (was 8). RankAttention pair count goes from C(8,2)=28 to C(16,2)=120. d_v=8 unchanged. ctx=128, 100K bs=32.
+
+**Parameters:** 205.6M | **Running** — step 86K: **1.2432**
+
+Massive improvement from larger d_qk. Already best rank-attention result.
+
+---
+
+### exp278_domv_dqk16_qknap6
+
+**Description:** exp277 fork with Q/K/V nap=6 tph=256 (was nap=5 tph=128). d_qk=16, RankAttn + domV. ctx=128, 100K bs=32.
+
+**Parameters:** 217.4M | **Running** — step 7K: 1.4555
+
+---
+
+## Summary Table — ctx=128 Comparison
+
+| Exp | Architecture | Best Val | Params |
+|-----|-------------|----------|--------|
+| exp243 | Vanilla SDPA baseline | **1.2031** | 4.87M |
+| exp255 | LUT + SDPA + LUT out_proj | **1.2021** | 204M |
+| exp275 | LUT + RankAttn(d_qk=8) | 1.3099 | 204M |
+| exp276 | LUT + RankAttn(d_qk=8) + domV | 1.3134 | 204M |
+| exp277 | LUT + RankAttn(d_qk=16) + domV | **1.2432*** | 206M |
+| exp278 | LUT + RankAttn(d_qk=16) + domV, nap6/tph256 | running | 217M |
+
+*still running
+
+---

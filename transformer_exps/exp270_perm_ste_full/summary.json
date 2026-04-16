@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp270_perm_ste_full",
+  "best_val_loss": 1.4274275779724122,
+  "final_val_loss": 1.4274275779724122,
+  "total_params": 30245217,
+  "trainable_params": 30245217,
+  "training_time_hours": 1.8
+}

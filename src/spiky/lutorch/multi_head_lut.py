@@ -88,6 +88,11 @@ class MultiHeadLutFunction(torch.autograd.Function):
     def backward(ctx, grad_output, grad_lookup_alt_deltas):
         x, weights, anchor_pairs_a, anchor_pairs_b, powers, main_weight, alt_weight = ctx.saved_tensors
 
+        # Ensure grad_output matches weights dtype for lprojection backward,
+        # and fp32 for anchor backward (which needs to match x dtype)
+        if grad_output.dtype != weights.dtype:
+            grad_output = grad_output.to(weights.dtype)
+
         with torch.no_grad():
             lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids = \
                 _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers,
@@ -99,10 +104,11 @@ class MultiHeadLutFunction(torch.autograd.Function):
                 main_weight, alt_weight, ctx.smooth_mode, ctx.n_alternatives,
             )
 
+        # anchor backward needs fp32 (same dtype as x)
         x_grad_flat = _anchor_pairs_backward(
             x, anchor1_ids, anchor2_ids, lookup_alt_deltas,
             ctx.inv_l1, ctx.batch_offset, ctx.uncertainty_bias,
-            lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad,
+            lookup_indices_grad_c_grad.float(), lookup_alt_indices_grad_c_grad.float(),
             grad_lookup_alt_deltas,
         )
 
@@ -174,15 +180,17 @@ class MultiHeadLut(nn.Module):
         calibrate_output: bool = False,
         output_scale_noise: float = 0.0,
         input_scale_noise: float = 0.0,
-        post_processor: nn.Module = None,
-        n_post_processor_inputs: int = 0,
         uncertainty_bias: float = 0.5,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
-        sparse_output_dim: Optional[int] = None,
         shuffle_per_head: bool = True,
         prebuilt_anchor_pairs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         recompute_in_backward: bool = False,
         exclusion_sets: Optional[list] = None,
+        use_fp16_weights: bool = False,
+        table_gating: bool = False,
+        table_gating_init: float = -5.0,
+        table_gating_leak: float = 0.01,
+        return_per_table_outputs: bool = False,
     ):
         super().__init__()
 
@@ -194,15 +202,7 @@ class MultiHeadLut(nn.Module):
         elif anchor_sampling_policy == AnchorSamplingPolicy.CONV2D:
             tables_per_head = compute_conv2d_n_tables(input_dim, tables_per_head)
 
-        if sparse_output_dim is not None and sparse_output_dim > n_outputs:
-            raise ValueError(
-                f"sparse_output_dim ({sparse_output_dim}) must be <= n_outputs ({n_outputs})"
-            )
-        if sparse_output_dim is not None and post_processor is not None:
-            raise ValueError(
-                "sparse_output_dim and post_processor cannot be used together"
-            )
-        self.sparse_output_dim = sparse_output_dim
+        self.return_per_table_outputs = return_per_table_outputs
         self.input_dim = input_dim
         self.n_heads = n_heads
         self.n_outputs = n_outputs
@@ -218,8 +218,6 @@ class MultiHeadLut(nn.Module):
         self.calibrate_output = calibrate_output
         self.output_scale_noise = output_scale_noise
         self.input_scale_noise = input_scale_noise
-        self.post_processor = post_processor
-        self.n_post_processor_inputs = n_post_processor_inputs
         self.uncertainty_bias = uncertainty_bias
         self.recompute_in_backward = recompute_in_backward or _FORCE_RECOMPUTE_IN_BACKWARD
 
@@ -268,43 +266,31 @@ class MultiHeadLut(nn.Module):
             exclusion_sets=exclusion_sets,
         )
 
-        # Determine internal output dim for LProjection
-        _lproj_n_outputs = (
-            sparse_output_dim if sparse_output_dim is not None
-            else (n_outputs if post_processor is None else n_post_processor_inputs)
-        )
-        self._lproj_n_outputs = _lproj_n_outputs
-
         # Create LProjection: n_lookup_tables total
         self.projection = LProjection(
             n_lookup_tables=n_lookup_tables,
             n_entries_per_table=n_entries_per_table,
-            n_outputs=_lproj_n_outputs,
+            n_outputs=n_outputs,
             n_alternatives=n_alternatives,
             smooth_mode=smooth_mode,
             device=device,
             uncertainty_mode=uncertainty_mode,
             normalize_weights=normalize_weights,
             uncertainty_bias=uncertainty_bias,
+            use_fp16_weights=use_fp16_weights,
         )
 
-        # Precompute random scatter indices for sparse output mode.
-        # When sparse_output_dim == n_outputs use identity indices [0,1,...,n_outputs-1]
-        # so results match the dense (sparse_output_dim=None) path exactly.
-        if sparse_output_dim is not None:
-            dev = device or torch.device("cpu")
-            if sparse_output_dim == n_outputs:
-                identity = torch.arange(n_outputs, device=dev)
-                scatter_indices = identity.expand(n_heads, tables_per_head, n_outputs).clone()
-            else:
-                gen = torch.Generator(device=dev)
-                gen.manual_seed(random_seed if random_seed is not None else 0)
-                # Sample without replacement: argsort random scores, take first sparse_output_dim
-                noise = torch.rand(n_heads, tables_per_head, n_outputs, generator=gen, device=dev)
-                scatter_indices = noise.argsort(dim=-1)[..., :sparse_output_dim]
-            self.register_buffer('scatter_indices', scatter_indices)
-        else:
-            self.scatter_indices = None
+        # Table gating: learnable per-table gate with hard forward / soft backward (STE)
+        self.table_gating = table_gating
+        self.table_gating_leak = table_gating_leak
+        if table_gating:
+            self.gate_logits = nn.Parameter(
+                torch.full((n_lookup_tables,), table_gating_init, device=device)
+            )
+            self._gate_temperature = 1.0
+            self._gate_noise_scale = initial_weights_noise * 0.01
+
+
         if initial_weights_noise != 0.0:
             dev = device or torch.device("cpu")
             with torch.no_grad():
@@ -357,7 +343,7 @@ class MultiHeadLut(nn.Module):
             scale = 1.0 + (torch.rand(x.shape[0], 1, device=x.device) * 2 - 1) * self.input_scale_noise
             x = x * scale
 
-        if self.training and self.recompute_in_backward and self.n_buckets == 1 and self.scatter_indices is None:
+        if self.training and self.recompute_in_backward and self.n_buckets == 1:
             # --- Fused path: AnchorPairsLookup + LProjection in one Function ---
             # Saves ~264 MB per block by recomputing lookup_indices in backward.
             if self.projection.normalize_weights:
@@ -431,34 +417,29 @@ class MultiHeadLut(nn.Module):
             )
 
         B = x.shape[0]
-        if True:
-            # Reshape: [B, n_lookup_tables, _lproj_n_outputs] -> [B, n_heads, tables_per_head, _lproj_n_outputs]
-            output = output.view(B, self.n_heads, self.tables_per_head, self._lproj_n_outputs)
-            # Apply table dropout: randomly zero entire tables during training
-            if self.training and self.table_dropout > 0.0:
-                mask = torch.bernoulli(
-                    torch.full((B, self.n_heads, self.tables_per_head, 1),
-                               1.0 - self.table_dropout, device=output.device)
-                )
-                output = output * mask / (1.0 - self.table_dropout)
-            if self.dropout is not None:
-                output = self.dropout(output)
+        # Reshape: [B, n_lookup_tables, n_outputs] -> [B, n_heads, tables_per_head, n_outputs]
+        output = output.view(B, self.n_heads, self.tables_per_head, self.n_outputs)
+        # Apply table dropout: randomly zero entire tables during training
+        if self.training and self.table_dropout > 0.0:
+            mask = torch.bernoulli(
+                torch.full((B, self.n_heads, self.tables_per_head, 1),
+                           1.0 - self.table_dropout, device=output.device)
+            )
+            output = output * mask / (1.0 - self.table_dropout)
+        if self.dropout is not None:
+            output = self.dropout(output)
 
-            if self.scatter_indices is not None:
-                idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1)
-                idx_flat = idx.reshape(B, self.n_heads, -1)
-                src_flat = output.reshape(B, self.n_heads, -1)
-                output = torch.zeros(B, self.n_heads, self.n_outputs, device=output.device, dtype=output.dtype)
-                output.scatter_add_(2, idx_flat, src_flat)
-            else:
-                n_o = self.n_outputs if self.post_processor is None else self.n_post_processor_inputs
-                output = output.sum(dim=2)  # [B, n_heads, n_o]
+        if self.return_per_table_outputs:
+            # Return raw per-table outputs without reduction.
+            # Shape: [B, n_heads, tables_per_head, n_outputs]
+            return output
+
+        # Default: sum over tables_per_head -> [B, n_heads, n_outputs]
+        output = output.sum(dim=2)
         if self.training and self.output_scale_noise > 0.0:
             # Multiply each (batch, head) by an independent U(1-s, 1+s) scalar
             scale = 1.0 + (torch.rand(output.shape[0], output.shape[1], 1, device=output.device) * 2 - 1) * self.output_scale_noise
             output = output * scale
-        if self.post_processor is not None:
-            output = self.post_processor(output)  # [B, n_heads, n_post_processor_inputs] -> [B, n_heads, n_outputs]
         if self.calibrate_output:
             output = _calibrate_per_head_output(output)
         return output

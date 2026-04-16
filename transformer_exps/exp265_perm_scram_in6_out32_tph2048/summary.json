@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp265_perm_scram_in6_out32_tph2048",
+  "best_val_loss": 1.4768181771039963,
+  "final_val_loss": 1.4768181771039963,
+  "total_params": 27885921,
+  "trainable_params": 27885921,
+  "training_time_hours": 0.745
+}

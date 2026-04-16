@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp276_rankattn_domv_ctx128",
+  "best_val_loss": 1.3133532971143722,
+  "final_val_loss": 1.3138475596904755,
+  "total_params": 204065121,
+  "training_time_hours": 2.222
+}

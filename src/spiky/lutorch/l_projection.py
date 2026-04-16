@@ -273,6 +273,7 @@ class LProjection(nn.Module):
         uncertainty_mode: UncertaintyMode = UncertaintyMode.INVERSE_L1,
         normalize_weights: bool = False,
         uncertainty_bias: float = 0.5,
+        use_fp16_weights: bool = False,
     ):
         super().__init__()
         self.n_lookup_tables = n_lookup_tables
@@ -283,9 +284,11 @@ class LProjection(nn.Module):
         self.uncertainty_mode = uncertainty_mode
         self.normalize_weights = normalize_weights
         self.uncertainty_bias = uncertainty_bias
-        
+        self.use_fp16_weights = use_fp16_weights
+
         # Initialize weight tensor: [n_lookup_tables, n_entries_per_table, n_outputs]
-        self.weights = nn.Parameter(torch.zeros(n_lookup_tables, n_entries_per_table, n_outputs, device=device))
+        dtype = torch.float16 if use_fp16_weights else torch.float32
+        self.weights = nn.Parameter(torch.zeros(n_lookup_tables, n_entries_per_table, n_outputs, device=device, dtype=dtype))
         
         # Cache for expanded table indices (recalculated when batch_size changes)
         self._cached_table_indices_expanded = None

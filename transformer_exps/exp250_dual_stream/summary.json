@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp250_dual_stream",
+  "best_val_loss": 1.4000744849443436,
+  "final_val_loss": 1.4000744849443436,
+  "total_params": 52995425,
+  "trainable_params": 52995425,
+  "training_time_hours": 1.139
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp256_perm_lut",
+  "best_val_loss": 1.4308675438165666,
+  "final_val_loss": 1.4319325715303421,
+  "total_params": 53051745,
+  "trainable_params": 53051745,
+  "training_time_hours": 1.08
+}
