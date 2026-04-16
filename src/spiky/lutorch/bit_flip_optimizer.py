@@ -150,18 +150,32 @@ class BitFlipOptimizer:
             pm = pool_minus_count[tpi_flat].view(n_tables, output_nap).clamp_(min=1)
             pp = pool_plus_count[tpi_flat].view(n_tables, output_nap).clamp_(min=1)
 
-            # Prob: [B, n_tables, output_nap]
-            prob_per_sample = (
-                sample_flips_up * (gathered_contrib < 0).float() / pm.unsqueeze(0) +
-                sample_flips_down * (gathered_contrib > 0).float() / pp.unsqueeze(0)
-            )
+            # Prob weighted by |weight_grad| for entry-level prioritization
+            # gathered_contrib tells us pool membership, sample_flips tells us pair-level budget
+            # |weight_grad| tells us which entries the data most wants to flip
+            is_pm = (gathered_contrib < 0).float()  # [B, n_tables, output_nap]
+            is_pp = (gathered_contrib > 0).float()
+            pair_prob_up = sample_flips_up / pm.unsqueeze(0) * is_pm    # pair-level prob
+            pair_prob_down = sample_flips_down / pp.unsqueeze(0) * is_pp
+            pair_prob = pair_prob_up + pair_prob_down  # [B, n_tables, output_nap]
+
+            # Weight by |grad| at accessed entry for within-pool prioritization
+            # w.grad: [n_tables, n_entries, output_nap]
+            if w.grad is not None:
+                gathered_grad_abs = w.grad.abs()[table_idx.unsqueeze(0), lookup_indices]  # [B, n_tables, output_nap]
+                # Normalize per pair: each entry's weight = |grad| / mean(|grad| in pool)
+                # Approximate: normalize per (table, output_pos) across batch
+                grad_mean = gathered_grad_abs.mean(dim=0, keepdim=True).clamp(min=1e-8)
+                grad_weight = gathered_grad_abs / grad_mean  # [B, n_tables, output_nap]
+                prob_per_sample = pair_prob * grad_weight
+            else:
+                prob_per_sample = pair_prob
 
             # --- Step 7: scatter to weight tensor ---
             li_exp = lookup_indices.unsqueeze(-1).expand(B, n_tables, output_nap)
             flat_target = (
                 table_idx.view(1, n_tables, 1) * n_entries + li_exp
             ) * output_nap + torch.arange(output_nap, device=dev).view(1, 1, output_nap)
-            # flat_target: [B, n_tables, output_nap] — broadcasts, no expand needed
 
             N = n_tables * n_entries * output_nap
             agg_prob = torch.zeros(N, device=dev)

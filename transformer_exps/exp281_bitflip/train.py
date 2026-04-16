@@ -162,28 +162,29 @@ def get_lr_scale(step):
 sampler = make_sampler(DEVICE, random_seed=1)
 model = FullPermTransformer().to(DEVICE)
 
-# Separate dense params (Adam) from PermLut weights (BitFlip)
-dense_params = []
-perm_modules = []
+# Q/K/V use Adam (continuous weights), out_proj uses BitFlip (binary ±1)
+adam_params = []
+bitflip_modules = []
 for n, p in model.named_parameters():
-    if 'inner.projection.weights' not in n:
-        dense_params.append(p)
+    if 'out_proj.inner.projection.weights' in n:
+        continue  # handled by BitFlip
+    adam_params.append(p)
 for layer in model.layers:
-    perm_modules.extend([layer.q_perm, layer.k_perm, layer.v_perm, layer.out_proj])
+    bitflip_modules.append(layer.out_proj)
 
-optimizer = torch.optim.Adam(dense_params, lr=cfg['lr'])
+optimizer = torch.optim.Adam(adam_params, lr=cfg['lr'])
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr_scale)
 
 bit_opt = BitFlipOptimizer(
-    perm_modules,
+    bitflip_modules,
     lr=0.01,
     lr_schedule_fn=get_lr_scale,
 )
 
 total_params, trainable_params = count_params(model)
-n_perm = sum(m.inner.projection.weights.numel() for m in perm_modules)
-n_dense = sum(p.numel() for p in dense_params)
-print(f'Parameters: {total_params:,} (dense={n_dense:,}, perm_binary={n_perm:,})')
+n_bitflip = sum(m.inner.projection.weights.numel() for m in bitflip_modules)
+n_adam = sum(p.numel() for p in adam_params)
+print(f'Parameters: {total_params:,} (adam={n_adam:,}, bitflip_binary={n_bitflip:,})')
 print(f'Context size: {SEQ_LEN}, batch size: {cfg["batch_size"]}')
 print(f'Embedding: {E}, pos_dim: {POS_DIM} (concat)')
 print(f'Q/K PermLut: in_nap={cfg["qk_input_nap"]} out_nap={cfg["qk_output_nap"]} tph={cfg["qk_tph"]} d_qk={d_qk}')
