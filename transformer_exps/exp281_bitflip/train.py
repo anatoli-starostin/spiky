@@ -176,7 +176,7 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr_scale)
 
 bit_opt = BitFlipOptimizer(
     perm_modules,
-    lr=0.001,
+    lr=0.01,
     lr_schedule_fn=get_lr_scale,
 )
 

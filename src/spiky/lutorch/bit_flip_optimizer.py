@@ -1,18 +1,8 @@
 """
 BitFlipOptimizer — Discrete optimizer for PermutationalLut binary weights.
 
-Per-sample pair gradients → directed flip counts → batch reduce → execute.
-Uses weight gradient (grad*w > 0) for flip direction (verified correct),
-with per-pair adaptive lr from output gradient variance.
-
-Usage:
-    perm_modules = [layer.q_perm, layer.k_perm, ...]
-    bit_opt = BitFlipOptimizer(perm_modules, lr=0.001)
-
-    loss.backward()
-    adam_optimizer.step()
-    bit_opt.step()
-    adam_optimizer.zero_grad()
+Per-sample pair gradients → directed flip counts → scatter to weight tensor → flip.
+Per-pair adaptive lr: lr / sqrt(EMA(grad_pair²))
 """
 import torch
 
@@ -28,9 +18,14 @@ class BitFlipOptimizer:
         self._step_count = 0
 
         self._pair_var = []
-        self._pair_maps = []
         self._n_pair_slots = []
         self._proj_for_pairs = []
+
+        # Precomputed per-module constants
+        self._tpi_flat = []        # [n_tables * output_nap] pair index
+        self._orient_exp = []      # [n_tables, n_entries, output_nap]
+        self._tpi_exp_flat = []    # [N] pair index for every weight element
+        self._table_idx = []       # [n_tables]
 
         for m in self.modules:
             m.enable_bitflip_cache()
@@ -43,27 +38,39 @@ class BitFlipOptimizer:
             n_pairs = n_outputs * (n_outputs - 1) // 2
             self._n_pair_slots.append(n_heads * n_pairs)
 
-            # Build pair map for adaptive variance
             pair_id = torch.full((n_outputs, n_outputs), -1, dtype=torch.long, device=w.device)
+            pair_orient = torch.zeros((n_outputs, n_outputs), device=w.device)
             tri_i, tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1)
             for p_idx in range(n_pairs):
                 ii, jj = int(tri_i[p_idx]), int(tri_j[p_idx])
                 pair_id[ii, jj] = p_idx
                 pair_id[jj, ii] = p_idx
+                pair_orient[ii, jj] = 1.0
+                pair_orient[jj, ii] = -1.0
 
             idx_a = m.idx_a
             idx_b = m.idx_b
-            pair_indices = pair_id[idx_a, idx_b] + \
+            pi = pair_id[idx_a, idx_b] + \
                 torch.arange(n_heads, device=w.device).unsqueeze(1) * n_pairs
+            po = pair_orient[idx_a, idx_b]
 
             n_tables = n_heads * m.tph
             n_entries = w.shape[1]
-            pair_map = pair_indices.reshape(n_tables, m.output_nap) \
-                .unsqueeze(1).expand(n_tables, n_entries, m.output_nap).reshape(-1)
-            self._pair_maps.append(pair_map)
+            output_nap = m.output_nap
+
+            tpi = pi.reshape(n_tables, output_nap)
+            tpo = po.reshape(n_tables, output_nap)
+
+            # Precompute constants
+            self._tpi_flat.append(tpi.reshape(-1))
+            self._orient_exp.append(tpo.unsqueeze(1).expand(n_tables, n_entries, output_nap).contiguous())
+            self._tpi_exp_flat.append(
+                tpi.unsqueeze(1).expand(n_tables, n_entries, output_nap).reshape(-1).contiguous()
+            )
+            self._table_idx.append(torch.arange(n_tables, device=w.device))
+
             self._pair_var.append(torch.ones(n_heads * n_pairs, device=w.device))
 
-            # Projection for output → pair gradient
             if m.return_dominance:
                 self._proj_for_pairs.append(None)
             else:
@@ -85,52 +92,89 @@ class BitFlipOptimizer:
         for i, m in enumerate(self.modules):
             w = m.inner.projection.weights
             grad_out = m._cached_grad_output
-            if w.grad is None:
+            lookup_indices = m._cached_lookup_indices
+            if grad_out is None or lookup_indices is None:
                 m._cached_raw = None
                 m._cached_grad_output = None
+                m._cached_lookup_indices = None
                 continue
 
-            flat_w = w.data.view(-1)
-            flat_g = w.grad.view(-1)
-            pair_map = self._pair_maps[i]
-            N = flat_w.numel()
+            n_tables = m.n_heads * m.tph
+            n_entries = w.shape[1]
+            output_nap = m.output_nap
+            H = m.n_heads
+            n_pair_slots = self._n_pair_slots[i]
+            n_pairs = n_pair_slots // H
+            B = grad_out.shape[0]
+            dev = w.device
 
-            # Flip direction from weight gradient (verified: grad*w > 0 = correct)
-            flip_pressure = flat_g * flat_w
-            want_flip = flip_pressure > 0
-            flip_score = flat_g.abs() * want_flip.float()
+            tpi_flat = self._tpi_flat[i]
+            orient_exp = self._orient_exp[i]
+            tpi_exp_flat = self._tpi_exp_flat[i]
+            table_idx = self._table_idx[i]
 
-            # Per-pair adaptive lr from output gradient
-            if grad_out is not None:
-                H = m.n_heads
-                n_pairs = self._n_pair_slots[i] // H
-
-                if m.return_dominance:
-                    grad_pair = grad_out  # [B, H, n_pairs]
-                else:
-                    grad_pair = torch.einsum('bhn,hnp->bhp', grad_out, self._proj_for_pairs[i])
-
-                # Update per-pair variance
+            # --- Steps 1-4: pair gradient → dv → split ---
+            if m.return_dominance:
+                grad_pair_flat = grad_out.reshape(B, n_pair_slots)
+                pair_grad_sq = (grad_out ** 2).mean(dim=0).reshape(-1)
+            else:
+                grad_pair = torch.einsum('bhn,hnp->bhp', grad_out, self._proj_for_pairs[i])
+                grad_pair_flat = grad_pair.reshape(B, n_pair_slots)
                 pair_grad_sq = (grad_pair ** 2).mean(dim=0).reshape(-1)
-                self._pair_var[i].mul_(beta2).add_(pair_grad_sq, alpha=1 - beta2)
 
-                # Per-entry adaptive scale from pair variance
-                pair_std = self._pair_var[i].sqrt() + self.eps
-                entry_scale = 1.0 / pair_std[pair_map]  # [N]
-                flip_score = flip_score * entry_scale
+            self._pair_var[i].mul_(beta2).add_(pair_grad_sq, alpha=1 - beta2)
+            eff_lr = lr / (self._pair_var[i].sqrt() + self.eps)
 
-            # Budget: lr * total_votes
-            budget = lr * m.n_heads * m.tph * m.output_nap
+            dv = -(eff_lr.unsqueeze(0) * grad_pair_flat)  # [B, H*n_pairs]
+            flips_up = dv.clamp(min=0)
+            flips_down = (-dv).clamp(min=0)
 
-            # Normalize flip_score to probability summing to budget
-            score_sum = flip_score.sum()
-            if score_sum > 0:
-                flip_prob = (flip_score * (budget / score_sum)).clamp(max=1.0)
-                do_flip = torch.rand(N, device=w.device) < flip_prob
-                flat_w[do_flip] *= -1
+            # --- Step 5: pools (contribution changes each step) ---
+            contribution = w.data * orient_exp  # [n_tables, n_entries, output_nap]
+            contrib_flat = contribution.reshape(-1)
+
+            pool_minus_count = torch.zeros(n_pair_slots, device=dev)
+            pool_minus_count.scatter_add_(0, tpi_exp_flat, (contrib_flat < 0).float())
+            pool_plus_count = torch.zeros(n_pair_slots, device=dev)
+            pool_plus_count.scatter_add_(0, tpi_exp_flat, (contrib_flat > 0).float())
+
+            # --- Step 6: per-sample prob for accessed entries ---
+            # Lookup per-table pair flips: [B, n_tables, output_nap]
+            sample_flips_up = flips_up[:, tpi_flat].view(B, n_tables, output_nap)
+            sample_flips_down = flips_down[:, tpi_flat].view(B, n_tables, output_nap)
+
+            # Contribution at accessed entries: [B, n_tables, output_nap]
+            gathered_contrib = contribution[table_idx.unsqueeze(0), lookup_indices]
+
+            # Pool counts per (table, output_pos): [n_tables, output_nap]
+            pm = pool_minus_count[tpi_flat].view(n_tables, output_nap).clamp_(min=1)
+            pp = pool_plus_count[tpi_flat].view(n_tables, output_nap).clamp_(min=1)
+
+            # Prob: [B, n_tables, output_nap]
+            prob_per_sample = (
+                sample_flips_up * (gathered_contrib < 0).float() / pm.unsqueeze(0) +
+                sample_flips_down * (gathered_contrib > 0).float() / pp.unsqueeze(0)
+            )
+
+            # --- Step 7: scatter to weight tensor ---
+            li_exp = lookup_indices.unsqueeze(-1).expand(B, n_tables, output_nap)
+            flat_target = (
+                table_idx.view(1, n_tables, 1) * n_entries + li_exp
+            ) * output_nap + torch.arange(output_nap, device=dev).view(1, 1, output_nap)
+            # flat_target: [B, n_tables, output_nap] — broadcasts, no expand needed
+
+            N = n_tables * n_entries * output_nap
+            agg_prob = torch.zeros(N, device=dev)
+            agg_prob.scatter_add_(0, flat_target.reshape(-1), prob_per_sample.reshape(-1))
+
+            # --- Step 8: clamp and flip ---
+            agg_prob.clamp_(max=1.0)
+            do_flip = torch.rand(N, device=dev) < agg_prob
+            w.data.view(-1)[do_flip] *= -1
 
             m._cached_raw = None
             m._cached_grad_output = None
+            m._cached_lookup_indices = None
 
     def zero_grad(self):
         for m in self.modules:

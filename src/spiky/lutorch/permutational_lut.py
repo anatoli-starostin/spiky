@@ -302,6 +302,7 @@ class PermutationalLut(nn.Module):
         self.return_dominance = return_dominance
         self._cached_raw = None
         self._cached_grad_output = None
+        self._cached_lookup_indices = None
         self._bitflip_hooks_registered = False
 
         # Inner LUT: each table outputs `output_nap` values (one signed vote per output pair)
@@ -474,6 +475,15 @@ class PermutationalLut(nn.Module):
 
         if self._bitflip_hooks_registered:
             self._cached_raw = raw.detach()
+            # Compute and cache lookup indices (cheap: just anchor pair comparisons)
+            with torch.no_grad():
+                from spiky.lutorch.anchor_pairs_lookup import _compute_anchor_data
+                li, _, _, _, _ = _compute_anchor_data(
+                    x, self.inner.lookup.anchor_pairs_a,
+                    self.inner.lookup.anchor_pairs_b,
+                    self.inner.lookup.powers, self.inner.lookup.cmp_eps, 1,
+                )
+                self._cached_lookup_indices = li  # [B, n_tables]
 
         if self.return_dominance:
             out = self._forward_dominance(raw)

@@ -29,7 +29,7 @@
   "optimizer": "Adam+BitFlip",
   "lr": 0.001,
   "n_steps": 25000,
-  "batch_size": 64,
+  "batch_size": 128,
   "test_batch_size": 256,
   "test_every": 1000,
   "lr_schedule": "warmup_cosine",

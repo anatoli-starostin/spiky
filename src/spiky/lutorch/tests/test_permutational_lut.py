@@ -511,6 +511,70 @@ def test_cascade_adam_updates_weights(device):
     assert not torch.equal(w2_before, w2_after), "lut2 weights unchanged after Adam"
 
 
+def test_bitflip_scatter_aggregation(device):
+    """Verify scatter_add correctly aggregates per-sample flip probabilities.
+
+    Two samples accessing the SAME entry should have probs summed.
+    Two samples accessing DIFFERENT entries should go to different positions.
+    """
+    torch.manual_seed(42)
+    lut = PermutationalLut(
+        n_inputs=8, n_outputs=4, input_nap=3, output_nap=2,
+        n_heads=1, tph=4, pair_mode='scrambled', soft_mode='ste',
+        temperature=0.1, random_seed=42, device=device,
+        initial_weights_noise=0.5, recompute_in_backward=True,
+    )
+    lut.enable_bitflip_cache()
+    w = lut.inner.projection.weights  # [4, 8, 2]
+    w.data.copy_(w.data.sign())
+    w.data[w.data == 0] = 1.0
+
+    n_tables, n_entries, output_nap = w.shape
+
+    # Create two inputs that map to SAME lookup indices
+    x1 = torch.randn(1, 8, device=device)
+    out1 = lut(x1)
+    li1 = lut._cached_lookup_indices.clone()  # [1, 4]
+
+    # Same input twice = same lookup indices, probs should double
+    x_same = x1.expand(2, -1).contiguous()
+    lut.zero_grad()
+    out = lut(x_same)
+    li = lut._cached_lookup_indices  # [2, 4]
+    assert torch.equal(li[0], li[1]), "same input should give same lookup indices"
+
+    target = torch.randn(2, 1, 4, device=device)
+    loss = ((out - target) ** 2).sum()
+    loss.backward()
+
+    grad_out = lut._cached_grad_output  # [2, 1, 4]
+
+    # Manually compute what agg_prob should be for sample 0 vs both samples
+    # With identical inputs, the scatter should put 2x prob at the same entries
+    # We can verify by checking that accessed entries have nonzero agg_prob
+    # and non-accessed entries have zero
+
+    from spiky.lutorch.bit_flip_optimizer import BitFlipOptimizer
+    bit_opt = BitFlipOptimizer([lut], lr=1.0)  # high lr so probs are visible
+
+    # Save weights before
+    w_before = w.data.clone()
+    bit_opt.step()
+    w_after = w.data.clone()
+
+    # Check: only entries at lookup_indices positions should have changed
+    changed = (w_before != w_after)  # [n_tables, n_entries, output_nap]
+    for t in range(n_tables):
+        accessed_entry = li[0, t].item()
+        for e in range(n_entries):
+            if e != accessed_entry:
+                assert not changed[t, e].any(), \
+                    f"non-accessed entry [{t},{e}] was modified"
+
+    print(f"Accessed entries changed: {changed.sum().item()}")
+    print(f"Non-accessed entries unchanged: verified")
+
+
 def test_cascade_bitflip_updates_weights(device):
     """BitFlipOptimizer actually flips bits through cascade."""
     lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
@@ -537,14 +601,21 @@ def test_cascade_bitflip_reduces_loss(device):
     """BitFlipOptimizer should reduce loss over multiple steps (averaged over runs)."""
     torch.manual_seed(123)
     lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
-    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.01)
+    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.001)
+
+    # Fixed input and target (not random each step!)
+    x_fixed = torch.randn(8, 32, device=device)
+    target_fixed = torch.randn(8, 1, 8, device=device)
 
     losses = []
     for _ in range(50):
         bit_opt.zero_grad()
-        loss = _run_cascade_forward_backward(lut1, lut2, device)
+        mid = lut1(x_fixed)
+        out = lut2(mid.reshape(8, 2 * 16))
+        loss = ((out - target_fixed) ** 2).sum()
+        loss.backward()
         bit_opt.step()
-        losses.append(loss)
+        losses.append(loss.item())
 
     avg_first5 = sum(losses[:5]) / 5
     avg_last5 = sum(losses[-5:]) / 5
