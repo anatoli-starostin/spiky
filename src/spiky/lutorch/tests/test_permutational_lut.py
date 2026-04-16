@@ -1,9 +1,11 @@
 """Tests for PermutationalLut."""
+import os
 import pytest
 import torch
 import torch.nn as nn
 
 from spiky.lutorch.permutational_lut import PermutationalLut
+from spiky.lutorch.bit_flip_optimizer import BitFlipOptimizer
 
 
 @pytest.fixture
@@ -394,3 +396,157 @@ def test_return_dominance_vs_borda(device):
     borda_from_dom = torch.einsum('bhp,kp->bhk', dom, lut_dom.dom_borda_m)
     assert torch.allclose(borda_from_dom, borda, atol=1e-5), \
         f"max diff: {(borda_from_dom - borda).abs().max()}"
+
+
+# -----------------------------------------------------------------------------
+# Gradient flow through cascade of two PermutationalLuts
+# -----------------------------------------------------------------------------
+
+def _make_cascade(device, soft_mode='ste', tph=16, **extra_kwargs):
+    """Two PermLuts in sequence: lut1(x) -> reshape -> lut2 -> MSE loss."""
+    lut1 = PermutationalLut(
+        n_inputs=32, n_outputs=16, input_nap=5, output_nap=4,
+        n_heads=2, tph=tph, pair_mode='scrambled', soft_mode=soft_mode,
+        temperature=0.1, random_seed=42, device=device,
+        initial_weights_noise=0.1, recompute_in_backward=True,
+        **extra_kwargs,
+    )
+    lut2 = PermutationalLut(
+        n_inputs=2 * 16, n_outputs=8, input_nap=5, output_nap=4,
+        n_heads=1, tph=tph, pair_mode='scrambled', soft_mode=soft_mode,
+        temperature=0.1, random_seed=99, device=device,
+        initial_weights_noise=0.1, recompute_in_backward=True,
+        **extra_kwargs,
+    )
+    return lut1, lut2
+
+
+def _run_cascade_forward_backward(lut1, lut2, device):
+    """Forward through cascade, backward with non-uniform loss, return weight grads."""
+    x = torch.randn(8, 32, device=device)
+    mid = lut1(x)  # [8, 2, 16]
+    mid_flat = mid.reshape(8, 2 * 16)
+    out = lut2(mid_flat)  # [8, 1, 8]
+    target = torch.randn_like(out)
+    loss = ((out - target) ** 2).sum()
+    loss.backward()
+    return loss.item()
+
+
+@pytest.mark.parametrize("soft_mode", ["ste", "rational", "sigmoid"])
+def test_cascade_gradient_flow_all_soft_modes(device, soft_mode):
+    """Gradients flow through cascade for all soft modes."""
+    lut1, lut2 = _make_cascade(device, soft_mode=soft_mode)
+    _run_cascade_forward_backward(lut1, lut2, device)
+
+    g1 = lut1.inner.projection.weights.grad
+    g2 = lut2.inner.projection.weights.grad
+    assert g1 is not None, "lut1 weight grad is None"
+    assert g2 is not None, "lut2 weight grad is None"
+    n1 = g1.nonzero().shape[0]
+    n2 = g2.nonzero().shape[0]
+    assert n1 > 0, f"lut1 weight grad all zeros ({g1.numel()} elements)"
+    assert n2 > 0, f"lut2 weight grad all zeros ({g2.numel()} elements)"
+
+
+def test_cascade_gradient_flow_matmul_no_cuda(device):
+    """Gradients flow through matmul path with CUDA backward disabled."""
+    import spiky.lutorch.permutational_lut as pmod
+    old_val = pmod._USE_PERMLUT_CUSTOM_CUDA
+    pmod._USE_PERMLUT_CUSTOM_CUDA = False
+    try:
+        lut1, lut2 = _make_cascade(device, soft_mode='ste')
+        _run_cascade_forward_backward(lut1, lut2, device)
+        g1 = lut1.inner.projection.weights.grad
+        g2 = lut2.inner.projection.weights.grad
+        assert g1.nonzero().shape[0] > 0, "lut1 grad zeros (no CUDA)"
+        assert g2.nonzero().shape[0] > 0, "lut2 grad zeros (no CUDA)"
+    finally:
+        pmod._USE_PERMLUT_CUSTOM_CUDA = old_val
+
+
+def test_cascade_gradient_flow_matmul_with_cuda(device):
+    """Gradients flow through matmul path with CUDA backward enabled."""
+    import spiky.lutorch.permutational_lut as pmod
+    old_val = pmod._USE_PERMLUT_CUSTOM_CUDA
+    pmod._USE_PERMLUT_CUSTOM_CUDA = True
+    try:
+        lut1, lut2 = _make_cascade(device, soft_mode='ste')
+        _run_cascade_forward_backward(lut1, lut2, device)
+        g1 = lut1.inner.projection.weights.grad
+        g2 = lut2.inner.projection.weights.grad
+        assert g1.nonzero().shape[0] > 0, "lut1 grad zeros (CUDA)"
+        assert g2.nonzero().shape[0] > 0, "lut2 grad zeros (CUDA)"
+    finally:
+        pmod._USE_PERMLUT_CUSTOM_CUDA = old_val
+
+
+def test_cascade_gradient_flow_scatter(device):
+    """Gradients flow through scatter aggregation path."""
+    lut1, lut2 = _make_cascade(device, soft_mode='ste', aggregation='scatter')
+    _run_cascade_forward_backward(lut1, lut2, device)
+    g1 = lut1.inner.projection.weights.grad
+    g2 = lut2.inner.projection.weights.grad
+    assert g1.nonzero().shape[0] > 0, "lut1 grad zeros (scatter)"
+    assert g2.nonzero().shape[0] > 0, "lut2 grad zeros (scatter)"
+
+
+def test_cascade_adam_updates_weights(device):
+    """Adam optimizer actually changes PermLut weights through cascade."""
+    lut1, lut2 = _make_cascade(device, soft_mode='ste')
+    params = list(lut1.parameters()) + list(lut2.parameters())
+    optimizer = torch.optim.Adam(params, lr=0.01)
+
+    w1_before = lut1.inner.projection.weights.data.clone()
+    w2_before = lut2.inner.projection.weights.data.clone()
+
+    for _ in range(5):
+        optimizer.zero_grad()
+        _run_cascade_forward_backward(lut1, lut2, device)
+        optimizer.step()
+
+    w1_after = lut1.inner.projection.weights.data
+    w2_after = lut2.inner.projection.weights.data
+    assert not torch.equal(w1_before, w1_after), "lut1 weights unchanged after Adam"
+    assert not torch.equal(w2_before, w2_after), "lut2 weights unchanged after Adam"
+
+
+def test_cascade_bitflip_updates_weights(device):
+    """BitFlipOptimizer actually flips bits through cascade."""
+    lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
+    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.01)
+
+    w1_before = lut1.inner.projection.weights.data.clone()
+    w2_before = lut2.inner.projection.weights.data.clone()
+
+    for _ in range(10):
+        bit_opt.zero_grad()
+        _run_cascade_forward_backward(lut1, lut2, device)
+        bit_opt.step()
+
+    w1_after = lut1.inner.projection.weights.data
+    w2_after = lut2.inner.projection.weights.data
+    # Weights should be ±1 and some should have flipped
+    assert ((w1_after == 1.0) | (w1_after == -1.0)).all(), "lut1 weights not binary"
+    assert ((w2_after == 1.0) | (w2_after == -1.0)).all(), "lut2 weights not binary"
+    assert not torch.equal(w1_before, w1_after), "lut1 bits unchanged after BitFlip"
+    assert not torch.equal(w2_before, w2_after), "lut2 bits unchanged after BitFlip"
+
+
+def test_cascade_bitflip_reduces_loss(device):
+    """BitFlipOptimizer should reduce loss over multiple steps (averaged over runs)."""
+    torch.manual_seed(123)
+    lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
+    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.01)
+
+    losses = []
+    for _ in range(50):
+        bit_opt.zero_grad()
+        loss = _run_cascade_forward_backward(lut1, lut2, device)
+        bit_opt.step()
+        losses.append(loss)
+
+    avg_first5 = sum(losses[:5]) / 5
+    avg_last5 = sum(losses[-5:]) / 5
+    assert avg_last5 < avg_first5, \
+        f"loss didn't decrease: first5={avg_first5:.4f} -> last5={avg_last5:.4f}"

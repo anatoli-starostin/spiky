@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp280_full_perm",
+  "best_val_loss": 1.5416873306035996,
+  "final_val_loss": 1.5416873306035996,
+  "total_params": 82146849,
+  "trainable_params": 82146849,
+  "training_time_hours": 1.127
+}

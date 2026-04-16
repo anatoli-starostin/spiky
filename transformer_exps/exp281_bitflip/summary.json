@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp281_bitflip",
+  "best_val_loss": 2.347148931026459,
+  "final_val_loss": 2.347148931026459,
+  "total_params": 39679521,
+  "trainable_params": 39679521,
+  "training_time_hours": 0.989
+}

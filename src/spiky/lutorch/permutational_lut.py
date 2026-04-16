@@ -300,6 +300,9 @@ class PermutationalLut(nn.Module):
         self.temperature = temperature
         self.use_fp8 = use_fp8
         self.return_dominance = return_dominance
+        self._cached_raw = None
+        self._cached_grad_output = None
+        self._bitflip_hooks_registered = False
 
         # Inner LUT: each table outputs `output_nap` values (one signed vote per output pair)
         self.inner = MultiHeadLut(
@@ -387,6 +390,10 @@ class PermutationalLut(nn.Module):
                 borda_m[int(tri_j[p_idx]), p_idx] = -1.0
             self.register_buffer('dom_borda_m', borda_m)
 
+    def enable_bitflip_cache(self):
+        """Enable caching of raw outputs and output gradients for BitFlipOptimizer."""
+        self._bitflip_hooks_registered = True
+
     def _signed_vote(self, raw: torch.Tensor) -> torch.Tensor:
         """Compute centred per-pair signed vote in (-0.5, +0.5)."""
         if self.soft_mode == 'sigmoid':
@@ -465,18 +472,25 @@ class PermutationalLut(nn.Module):
         if self.use_fp8:
             self.inner.projection.weights.data = orig_data
 
+        if self._bitflip_hooks_registered:
+            self._cached_raw = raw.detach()
+
         if self.return_dominance:
-            return self._forward_dominance(raw)
+            out = self._forward_dominance(raw)
+        elif self.aggregation == 'matmul':
+            out = self._forward_matmul(raw)
+        else:
+            B = raw.shape[0]
+            raw_flat = raw.reshape(B, self.n_heads * self.tph, self.output_nap)
+            if self._can_use_native(raw):
+                out = _PermLutFunction.apply(
+                    raw_flat, self.idx_a, self.idx_b,
+                    self.n_outputs, _SOFT_MODE_INT[self.soft_mode], self.temperature,
+                )
+            else:
+                out = self._forward_pytorch(raw)
 
-        if self.aggregation == 'matmul':
-            return self._forward_matmul(raw)
+        if self._bitflip_hooks_registered and out.requires_grad:
+            out.register_hook(lambda g: setattr(self, '_cached_grad_output', g.detach()))
 
-        # Scatter path: compiled forward + custom CUDA backward (if available)
-        B = raw.shape[0]
-        raw_flat = raw.reshape(B, self.n_heads * self.tph, self.output_nap)
-        if self._can_use_native(raw):
-            return _PermLutFunction.apply(
-                raw_flat, self.idx_a, self.idx_b,
-                self.n_outputs, _SOFT_MODE_INT[self.soft_mode], self.temperature,
-            )
-        return self._forward_pytorch(raw)
+        return out
