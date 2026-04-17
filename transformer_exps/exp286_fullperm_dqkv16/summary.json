@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp286_fullperm_dqkv16",
+  "best_val_loss": 1.2769873797893525,
+  "final_val_loss": 1.2769873797893525,
+  "total_params": 206424609,
+  "training_time_hours": 2.94
+}

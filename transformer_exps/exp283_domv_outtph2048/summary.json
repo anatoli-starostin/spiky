@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp283_domv_outtph2048",
+  "best_val_loss": 1.3405985891819001,
+  "final_val_loss": 1.3446767628192902,
+  "total_params": 405391713,
+  "training_time_hours": 1.786
+}

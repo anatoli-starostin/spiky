@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp285_fullperm_rankattn_domv",
+  "best_val_loss": 1.328365784883499,
+  "final_val_loss": 1.328365784883499,
+  "total_params": 206424417,
+  "training_time_hours": 2.67
+}
