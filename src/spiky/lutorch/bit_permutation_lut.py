@@ -36,26 +36,69 @@ def _get_bit_permlut_native():
         return None
 
 
-def _build_inv_idx(
+def _build_output_structures_from_pairs(
+    idx_a: torch.Tensor,             # [H, tph, output_nap] long
+    idx_b: torch.Tensor,
     n_heads: int,
     tph: int,
     output_nap: int,
     n_outputs: int,
-    random_seed: Optional[int],
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
-    """Sample output pairs via CANONICAL_DISTINCT, build (idx_a, idx_b), a
-    per-pair inverse index `inv_idx` [n_heads, P, K_max] pointing to slot
-    indices (slot_idx = t*output_nap+k), and a per-slot pair index
-    `pair_idx_per_slot` [n_heads, tph, output_nap] int32.
+) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """Build (idx_a, idx_b canonicalized, inv_idx, K_max, pair_idx_per_slot)
+    from given idx_a/idx_b. If any pair has a > b, swap to canonical a < b.
+    Duplicate pairs per table are allowed -- K_max simply grows.
+    """
+    P = n_outputs * (n_outputs - 1) // 2
+    # Canonicalize: min(a, b) < max(a, b).
+    a_can = torch.minimum(idx_a, idx_b)
+    b_can = torch.maximum(idx_a, idx_b)
 
-    Returns (idx_a, idx_b, inv_idx [int32], K_max, pair_idx_per_slot [int32])."""
+    tri_i = torch.triu_indices(n_outputs, n_outputs, offset=1, device=device)[0]
+    tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1, device=device)[1]
+    pair_map = torch.full((n_outputs, n_outputs), -1, dtype=torch.long, device=device)
+    pair_range = torch.arange(P, device=device)
+    pair_map[tri_i, tri_j] = pair_range
+    pair_map[tri_j, tri_i] = pair_range
+    pair_idx_per_slot = pair_map[a_can, b_can]                   # [H, tph, output_nap]
+
+    pair_idx = pair_idx_per_slot.reshape(n_heads, tph * output_nap)  # [H, TP]
+    counts = torch.stack(
+        [torch.bincount(pair_idx[h], minlength=P) for h in range(n_heads)], dim=0
+    )  # [H, P]
+    K_max = int(counts.max().item())
+
+    TP = tph * output_nap
+    inv_idx = torch.full((n_heads, P, K_max), -1, dtype=torch.int32, device=device)
+    sort_order = pair_idx.argsort(dim=1, stable=True)            # [H, TP]
+    pair_sorted = pair_idx.gather(1, sort_order)
+    starts = torch.cat(
+        [torch.zeros(n_heads, 1, dtype=counts.dtype, device=device), counts.cumsum(dim=1)[:, :-1]],
+        dim=1,
+    )  # [H, P]
+    pos = torch.arange(TP, device=device).unsqueeze(0).expand(n_heads, -1)
+    within_group = pos - starts.gather(1, pair_sorted)
+    h_idx = torch.arange(n_heads, device=device).unsqueeze(1).expand(-1, TP)
+    inv_idx[h_idx, pair_sorted, within_group] = sort_order.to(torch.int32)
+
+    return (
+        a_can.contiguous(),
+        b_can.contiguous(),
+        inv_idx.contiguous(),
+        K_max,
+        pair_idx_per_slot.to(torch.int32).contiguous(),
+    )
+
+
+def _sample_canonical_distinct_output_pairs(
+    n_heads: int, tph: int, output_nap: int, n_outputs: int,
+    random_seed: Optional[int], device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample output pairs via CANONICAL_DISTINCT policy. Returns (idx_a, idx_b)
+    each shaped [n_heads, tph, output_nap] long, with a < b and distinct per table."""
     from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
 
-    P = n_outputs * (n_outputs - 1) // 2
     seed = (random_seed + 2_000_003) if random_seed is not None else None
-
-    # CANONICAL_DISTINCT: per table, output_nap distinct canonical (a<b) pairs.
     idx_a_flat, idx_b_flat = get_balanced_anchor_pairs(
         n_tables=n_heads * tph,
         n_anchor_pairs=output_nap,
@@ -66,50 +109,30 @@ def _build_inv_idx(
         n_heads=n_heads,
         shuffle_per_head=True,
     )
-    idx_a = idx_a_flat.view(n_heads, tph, output_nap).long()
-    idx_b = idx_b_flat.view(n_heads, tph, output_nap).long()
-    # Canonical by construction: idx_a < idx_b.
-
-    # Map each (a, b) → canonical pair index p; pair_map lives on `device`.
-    tri_i = torch.triu_indices(n_outputs, n_outputs, offset=1, device=device)[0]
-    tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1, device=device)[1]
-    pair_map = torch.full((n_outputs, n_outputs), -1, dtype=torch.long, device=device)
-    pair_range = torch.arange(P, device=device)
-    pair_map[tri_i, tri_j] = pair_range
-    pair_map[tri_j, tri_i] = pair_range
-    pair_idx_per_slot = pair_map[idx_a, idx_b]       # [H, tph, output_nap]
-
-    # Counts via bincount; K_max = max slots per (h, p).
-    pair_idx = pair_idx_per_slot.reshape(n_heads, tph * output_nap)  # [H, TP]
-    counts = torch.stack(
-        [torch.bincount(pair_idx[h], minlength=P) for h in range(n_heads)], dim=0
-    )  # [H, P]
-    K_max = int(counts.max().item())
-
-    # Fill inv_idx by sorting slots by pair within each head.
-    TP = tph * output_nap
-    inv_idx = torch.full((n_heads, P, K_max), -1, dtype=torch.int32, device=device)
-    sort_order = pair_idx.argsort(dim=1, stable=True)  # [H, TP] — slots grouped by p
-    pair_sorted = pair_idx.gather(1, sort_order)       # [H, TP]
-    # Positional rank of each slot within its pair-group = index within head − start-of-group.
-    starts = torch.cat(
-        [torch.zeros(n_heads, 1, dtype=counts.dtype, device=device), counts.cumsum(dim=1)[:, :-1]],
-        dim=1,
-    )  # [H, P]
-    # For each position in sort_order, its within-group rank = (arange % TP) − starts[pair_sorted].
-    pos = torch.arange(TP, device=device).unsqueeze(0).expand(n_heads, -1)
-    within_group = pos - starts.gather(1, pair_sorted)
-    # Scatter slot index into inv_idx[h, pair_sorted[h, i], within_group[h, i]] = sort_order[h, i].
-    h_idx = torch.arange(n_heads, device=device).unsqueeze(1).expand(-1, TP)
-    inv_idx[h_idx, pair_sorted, within_group] = sort_order.to(torch.int32)
-
     return (
-        idx_a,
-        idx_b,
-        inv_idx.contiguous(),
-        K_max,
-        pair_idx_per_slot.to(torch.int32).contiguous(),
+        idx_a_flat.view(n_heads, tph, output_nap).long(),
+        idx_b_flat.view(n_heads, tph, output_nap).long(),
     )
+
+
+def _build_inv_idx(
+    n_heads: int,
+    tph: int,
+    output_nap: int,
+    n_outputs: int,
+    random_seed: Optional[int],
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """Sample output pairs via CANONICAL_DISTINCT and build full structures.
+
+    Returns (idx_a, idx_b, inv_idx [int32], K_max, pair_idx_per_slot [int32])."""
+    idx_a, idx_b = _sample_canonical_distinct_output_pairs(
+        n_heads, tph, output_nap, n_outputs, random_seed, device,
+    )
+    a, b, inv_idx, K_max, pair_idx_per_slot = _build_output_structures_from_pairs(
+        idx_a, idx_b, n_heads, tph, output_nap, n_outputs, device,
+    )
+    return a, b, inv_idx, K_max, pair_idx_per_slot
 
 
 def _canonical_borda_m(n_outputs: int, device: torch.device) -> torch.Tensor:
@@ -285,6 +308,50 @@ class BitPermutationLUT(nn.Module):
         )
         self.register_buffer('bit_weights', bit_weights.contiguous())
 
+    def load_pairs(
+        self,
+        anchor_pairs_a: torch.Tensor,        # [n_tables, input_nap] integer
+        anchor_pairs_b: torch.Tensor,
+        idx_a: torch.Tensor,                  # [n_heads, tph*output_nap] OR [n_heads, tph, output_nap] integer
+        idx_b: torch.Tensor,
+    ) -> None:
+        """Replace the module's anchor_pairs and output-pair buffers with
+        externally-provided values and rebuild all derived structures.
+
+        Non-canonical pairs (a > b) are silently swapped to canonical form
+        (min, max). Duplicate pairs within a table are permitted (K_max just
+        grows).
+
+        Useful for reproducing experiments where a student must share anchor
+        layout with a teacher PermutationalLut (same `anchor_pairs_a/b`,
+        `idx_a/b` from dataset.pt).
+        """
+        N = self.n_heads * self.tph
+        dev = self.bit_weights.device
+
+        # --- anchor pairs ---
+        if anchor_pairs_a.shape != (N, self.input_nap) or anchor_pairs_b.shape != (N, self.input_nap):
+            raise ValueError(
+                f"anchor_pairs_{{a,b}} must have shape [n_heads*tph, input_nap] = [{N}, {self.input_nap}]"
+            )
+        a_in = torch.minimum(anchor_pairs_a, anchor_pairs_b).to(dev, dtype=torch.int16)
+        b_in = torch.maximum(anchor_pairs_a, anchor_pairs_b).to(dev, dtype=torch.int16)
+        self.anchor.anchor_pairs_a.copy_(a_in)
+        self.anchor.anchor_pairs_b.copy_(b_in)
+
+        # --- output pairs + derived structures ---
+        idx_a_r = idx_a.reshape(self.n_heads, self.tph, self.output_nap).to(dev, dtype=torch.long)
+        idx_b_r = idx_b.reshape(self.n_heads, self.tph, self.output_nap).to(dev, dtype=torch.long)
+        a, b, inv_idx, K_max, pair_idx_per_slot = _build_output_structures_from_pairs(
+            idx_a_r, idx_b_r, self.n_heads, self.tph, self.output_nap, self.n_outputs, dev,
+        )
+        # Replace buffers. `inv_idx` shape may change (new K_max), so use setattr via register_buffer.
+        self.idx_a = a
+        self.idx_b = b
+        self.register_buffer('inv_idx', inv_idx)
+        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot)
+        self.K_max = K_max
+
     def set_bit_weights_from_signs(self, signs: torch.Tensor) -> None:
         """Update bit_weights from a ±1 (or >0 / <=0) float tensor.
 
@@ -324,6 +391,11 @@ class BitPermutationLUT(nn.Module):
 
         x: float [B, input_dim]
         returns: float [B, n_heads, P]  (dominance scores)
+
+        The most recent batch's `lookup_indices` is exposed as
+        `self.last_lookup_indices` (detached, int16) for use by downstream
+        optimizers that need to project output gradients back to weight
+        space without re-running the anchor lookup. Cleared on next call.
         """
         if not x.is_cuda:
             raise RuntimeError("BitPermutationLUT is CUDA-only")
@@ -331,6 +403,7 @@ class BitPermutationLUT(nn.Module):
             raise RuntimeError("lutorch_cuda native extension not available")
 
         lookup_indices, lookup_alt_indices, _, carriers_main, carriers_alt = self.anchor(x)
+        self.last_lookup_indices = lookup_indices.detach()
         if carriers_main is None:
             # Eval / no-grad path: bypass autograd Function.
             native = _get_bit_permlut_native()
