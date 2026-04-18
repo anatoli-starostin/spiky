@@ -3,6 +3,10 @@
 #include "lutorch.h"
 #include <ATen/cuda/CUDAContext.h>
 
+#ifndef NO_CUDA
+#include <cuda_fp8.h>
+#endif
+
 namespace py = pybind11;
 
 #ifndef NO_CUDA
@@ -677,6 +681,145 @@ __global__ void bit_perm_lut_dom_gather_bwd_kernel(
 
     grad_main_ptr[b * n_heads * tph + n] = grad_main;
     grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+}
+
+// =====================================================================
+// Bit packing kernel: pack ±1 signs into int32 blocks of 32 bits each.
+// One thread per (n, e, block_idx). Replaces a Python loop that issued
+// one GPU op per bit.
+//   signs:       [N, table_dim, output_nap] float32; positive → 1, else → 0
+//   bit_weights: [N, table_dim, n_blocks]   int32    (output)
+// =====================================================================
+__global__ void bit_pack_signs_kernel(
+    int32_t N, int32_t table_dim, int32_t output_nap, int32_t n_blocks,
+    const float*   __restrict__ signs_ptr,
+    int32_t*       __restrict__ bit_weights_ptr
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = N * table_dim * n_blocks;
+    if (tid >= total) return;
+
+    int32_t bi = tid % n_blocks;
+    int32_t e_n = tid / n_blocks;
+    int32_t e = e_n % table_dim;
+    int32_t n = e_n / table_dim;
+
+    int32_t k_start = bi * 32;
+    int32_t k_end = k_start + 32;
+    if (k_end > output_nap) k_end = output_nap;
+
+    int32_t block = 0;
+    int32_t sign_base = (n * table_dim + e) * output_nap;
+    #pragma unroll 1
+    for (int32_t k = k_start; k < k_end; ++k) {
+        int32_t bit = (signs_ptr[sign_base + k] > 0.0f) ? 1 : 0;
+        block |= (bit << (k - k_start));
+    }
+    bit_weights_ptr[(n * table_dim + e) * n_blocks + bi] = block;
+}
+
+// =====================================================================
+// Weight-gradient projection: atomicAdd grad_out contributions into
+// weight_grad at only the touched (n, entry_main, k) positions.
+// One thread per (b, n); caller must pre-zero weight_grad.
+//
+//   grad_out:       [B, n_heads, P]      float32
+//   lookup_indices: [B, n_heads*tph]     int16
+//   pair_idx:       [n_heads, tph, output_nap] int32
+//   weight_grad:    [n_heads*tph, table_dim, output_nap] float32 (zeroed)
+// =====================================================================
+__global__ void bit_perm_lut_weight_grad_kernel(
+    int32_t B, int32_t n_heads, int32_t tph, int32_t table_dim,
+    int32_t output_nap, int32_t P,
+    float scale,
+    const int16_t* __restrict__ lookup_indices,
+    const int32_t* __restrict__ pair_idx,
+    const float*   __restrict__ grad_out,
+    float*         __restrict__ weight_grad
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t N = n_heads * tph;
+    if (tid >= B * N) return;
+
+    int32_t b = tid / N;
+    int32_t n = tid - b * N;
+    int32_t h = n / tph;
+    int32_t t = n - h * tph;
+
+    int32_t entry = static_cast<int32_t>(lookup_indices[b * N + n]);
+    int32_t pair_base = (h * tph + t) * output_nap;
+    int32_t grad_base = b * n_heads * P + h * P;
+    int32_t wg_base = (n * table_dim + entry) * output_nap;
+
+    #pragma unroll 1
+    for (int32_t k = 0; k < output_nap; ++k) {
+        int32_t p = pair_idx[pair_base + k];
+        float g = scale * grad_out[grad_base + p];
+        atomicAdd(&weight_grad[wg_base + k], g);
+    }
+}
+
+// =====================================================================
+// Fused fp8-latent Adam step: dequant latent/m/v, update m/v, update latent,
+// clamp + requant latent to fp8 (fixed scale = 1/448), emit new m/v as float32
+// scratch (per-table quantization happens in a separate pass).
+//
+// One thread per element at (n, e, k). Per-table Adam uses shared m/v scales
+// from float32 arrays of shape [N, 1, 1] indexed by n.
+//
+//   latent_fp8 (inplace): [N, td, ona] fp8 (fixed scale AMAX=448)
+//   m_fp8                 [N, td, ona] fp8
+//   m_scale               [N] float32
+//   v_fp8                 [N, td, ona] fp8
+//   v_scale               [N] float32
+//   weight_grad           [N, td, ona] float32 (zeroed after this call)
+//   m_f32_out (written)   [N, td, ona] float32
+//   v_f32_out (written)   [N, td, ona] float32
+//
+// Hparams are packed as fused scalars:
+//   lr_over_bias1_times_b2sqrt = -lr * sqrt(bias2) / bias1
+//   eps_times_b2sqrt           = eps * sqrt(bias2)
+// =====================================================================
+__global__ void fused_fp8_adam_kernel(
+    int32_t total,
+    int32_t per_table,
+    float beta1, float beta2,
+    float one_minus_b1, float one_minus_b2,
+    float eps_times_b2sqrt,
+    float lr_step_coef,     // = -lr * sqrt(bias2) / bias1
+    __nv_fp8_e4m3* __restrict__ latent_fp8,    // inplace
+    const __nv_fp8_e4m3* __restrict__ m_fp8,
+    const float*         __restrict__ m_scale,
+    const __nv_fp8_e4m3* __restrict__ v_fp8,
+    const float*         __restrict__ v_scale,
+    const float*         __restrict__ weight_grad,
+    float*               __restrict__ m_f32_out,
+    float*               __restrict__ v_f32_out
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+    int32_t n = tid / per_table;
+
+    const float AMAX = 448.0f;
+    // Dequant.
+    float latent_f = static_cast<float>(latent_fp8[tid]) / AMAX;
+    float m_f = static_cast<float>(m_fp8[tid]) / m_scale[n];
+    float v_f = static_cast<float>(v_fp8[tid]) / v_scale[n];
+    float g = weight_grad[tid];
+
+    // Adam update.
+    float m_new = beta1 * m_f + one_minus_b1 * g;
+    float v_new = beta2 * v_f + one_minus_b2 * g * g;
+    float denom = sqrtf(fmaxf(v_new, 0.0f)) + eps_times_b2sqrt;
+    float latent_new = latent_f + lr_step_coef * m_new / denom;
+
+    // Clamp + requant latent (fixed scale).
+    latent_new = fminf(1.0f, fmaxf(-1.0f, latent_new));
+    latent_fp8[tid] = __nv_fp8_e4m3(latent_new * AMAX);
+
+    // Emit f32 m, v for per-table quantization in a follow-up kernel.
+    m_f32_out[tid] = m_new;
+    v_f32_out[tid] = v_new;
 }
 
 // WTA (Winner-Take-All) Lookup Kernels
@@ -4072,6 +4215,186 @@ public:
         CU_CHECK(cudaGetLastError());
         return std::make_tuple(grad_main, grad_alt);
     }
+
+    // -----------------------------------------------------------------
+    // Pack ±1 signs into int32 bit_weights blocks.
+    //   signs:       [N, table_dim, output_nap] float32
+    //   bit_weights: [N, table_dim, n_blocks]   int32 (output, pre-allocated
+    //                                                  with n_blocks = ceil(output_nap/32))
+    // -----------------------------------------------------------------
+    void bit_pack_signs(
+        const torch::Tensor& signs,
+        torch::Tensor& bit_weights,
+        int64_t output_nap,
+        int64_t threads_per_block = 256
+    ) {
+        if (!signs.is_cuda() || !bit_weights.is_cuda()) throw py::value_error("tensors must be CUDA");
+        if (signs.dtype() != torch::kFloat32) throw py::value_error("signs must be float32");
+        if (bit_weights.dtype() != torch::kInt32) throw py::value_error("bit_weights must be int32");
+        if (signs.dim() != 3) throw py::value_error("signs must be [N, table_dim, output_nap]");
+        if (bit_weights.dim() != 3) throw py::value_error("bit_weights must be [N, table_dim, n_blocks]");
+        int64_t N = signs.size(0);
+        int64_t table_dim = signs.size(1);
+        if (signs.size(2) != output_nap) throw py::value_error("signs.size(2) must equal output_nap");
+        int64_t n_blocks = bit_weights.size(2);
+        if (bit_weights.size(0) != N || bit_weights.size(1) != table_dim) throw py::value_error("bit_weights shape mismatch");
+        if (n_blocks != (output_nap + 31) / 32) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap/32)");
+
+        auto sc = signs.contiguous();
+        auto bc = bit_weights.contiguous();
+        c10::cuda::CUDAGuard guard(signs.device().index());
+        int64_t total = N * table_dim * n_blocks;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+        bit_pack_signs_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(N),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<int32_t>(n_blocks),
+            reinterpret_cast<const float*>(sc.data_ptr()),
+            reinterpret_cast<int32_t*>(bc.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+    }
+
+    // -----------------------------------------------------------------
+    // Fused fp8-latent Adam step (single kernel over all elements):
+    //   Dequantize latent / m / v from fp8 (latent has fixed scale 1/448;
+    //   m and v use per-table float32 scales). Update m, v with grad.
+    //   Update latent, clamp to [-1, 1], requantize to fp8 (fixed scale).
+    //   Emit new m, v as float32 scratch tensors (per-table requantization
+    //   happens in a separate pass).
+    // -----------------------------------------------------------------
+    std::tuple<torch::Tensor, torch::Tensor> fused_fp8_adam(
+        torch::Tensor& latent_fp8,              // [N, td, ona] fp8 (inplace)
+        const torch::Tensor& m_fp8,             // [N, td, ona] fp8
+        const torch::Tensor& m_scale,           // [N, 1, 1] float32
+        const torch::Tensor& v_fp8,             // [N, td, ona] fp8
+        const torch::Tensor& v_scale,           // [N, 1, 1] float32
+        const torch::Tensor& weight_grad,       // [N, td, ona] float32
+        double beta1, double beta2,
+        double eps, double bias1, double bias2,
+        double lr,
+        int64_t threads_per_block = 256
+    ) {
+        if (!latent_fp8.is_cuda() || !m_fp8.is_cuda() || !v_fp8.is_cuda()
+            || !m_scale.is_cuda() || !v_scale.is_cuda() || !weight_grad.is_cuda())
+            throw py::value_error("tensors must be CUDA");
+        if (latent_fp8.dtype() != torch::kFloat8_e4m3fn) throw py::value_error("latent_fp8 must be float8_e4m3fn");
+        if (m_fp8.dtype()      != torch::kFloat8_e4m3fn) throw py::value_error("m_fp8 must be float8_e4m3fn");
+        if (v_fp8.dtype()      != torch::kFloat8_e4m3fn) throw py::value_error("v_fp8 must be float8_e4m3fn");
+        if (m_scale.dtype()    != torch::kFloat32) throw py::value_error("m_scale must be float32");
+        if (v_scale.dtype()    != torch::kFloat32) throw py::value_error("v_scale must be float32");
+        if (weight_grad.dtype()!= torch::kFloat32) throw py::value_error("weight_grad must be float32");
+        if (latent_fp8.sizes() != m_fp8.sizes() || latent_fp8.sizes() != v_fp8.sizes()
+            || latent_fp8.sizes() != weight_grad.sizes())
+            throw py::value_error("latent/m/v/weight_grad shape mismatch");
+        if (latent_fp8.dim() != 3) throw py::value_error("tensors must be [N, table_dim, output_nap]");
+
+        int64_t N = latent_fp8.size(0);
+        int64_t per_table = latent_fp8.size(1) * latent_fp8.size(2);
+        int64_t total = N * per_table;
+
+        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(latent_fp8.device());
+        auto m_out = torch::empty_like(weight_grad);
+        auto v_out = torch::empty_like(weight_grad);
+
+        auto lc = latent_fp8.contiguous();
+        auto mc = m_fp8.contiguous();
+        auto vc = v_fp8.contiguous();
+        auto msc = m_scale.contiguous();
+        auto vsc = v_scale.contiguous();
+        auto gc = weight_grad.contiguous();
+
+        // 1/bias1 could overflow if bias1 -> 0 (very early step with beta1^1 ~ 0.1,
+        // so bias1 = 0.9 — not actually tiny). Caller supplies bias1/bias2 already
+        // computed from the step counter; we just fuse the coefficients here.
+        float bias2_sqrt = std::sqrt(std::max(bias2, 1e-30));
+        float eps_times_b2sqrt = static_cast<float>(eps * bias2_sqrt);
+        float lr_step_coef = static_cast<float>(-lr * bias2_sqrt / bias1);
+
+        c10::cuda::CUDAGuard guard(latent_fp8.device().index());
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+        fused_fp8_adam_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(total),
+            static_cast<int32_t>(per_table),
+            static_cast<float>(beta1),
+            static_cast<float>(beta2),
+            static_cast<float>(1.0 - beta1),
+            static_cast<float>(1.0 - beta2),
+            eps_times_b2sqrt,
+            lr_step_coef,
+            reinterpret_cast<__nv_fp8_e4m3*>(lc.data_ptr()),
+            reinterpret_cast<const __nv_fp8_e4m3*>(mc.data_ptr()),
+            reinterpret_cast<const float*>(msc.data_ptr()),
+            reinterpret_cast<const __nv_fp8_e4m3*>(vc.data_ptr()),
+            reinterpret_cast<const float*>(vsc.data_ptr()),
+            reinterpret_cast<const float*>(gc.data_ptr()),
+            reinterpret_cast<float*>(m_out.data_ptr()),
+            reinterpret_cast<float*>(v_out.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(m_out, v_out);
+    }
+
+    // -----------------------------------------------------------------
+    // Project grad_out [B, n_heads, P] through (lookup_indices, pair_idx)
+    // into weight_grad [n_heads*tph, table_dim, output_nap]. Caller owns
+    // weight_grad (typically pre-zeroed); kernel atomicAdds into touched
+    // (n, entry_main(b, n), k) positions only.
+    // -----------------------------------------------------------------
+    void bit_perm_lut_weight_grad(
+        const torch::Tensor& grad_out,         // [B, H, P] float32
+        const torch::Tensor& lookup_indices,   // int16 [B, H*tph]
+        const torch::Tensor& pair_idx,          // int32 [H, tph, output_nap]
+        torch::Tensor& weight_grad,             // float32 [N, table_dim, output_nap] (pre-zeroed)
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t table_dim,
+        int64_t n_pairs,
+        double scale,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !pair_idx.is_cuda() || !weight_grad.is_cuda())
+            throw py::value_error("tensors must be CUDA");
+        if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
+        if (lookup_indices.dtype() != torch::kInt16) throw py::value_error("lookup_indices must be int16");
+        if (pair_idx.dtype() != torch::kInt32) throw py::value_error("pair_idx must be int32");
+        if (weight_grad.dtype() != torch::kFloat32) throw py::value_error("weight_grad must be float32");
+        int64_t B = grad_out.size(0);
+        int64_t N = n_heads * tph;
+        if (grad_out.size(1) != n_heads || grad_out.size(2) != n_pairs) throw py::value_error("grad_out shape mismatch");
+        if (lookup_indices.size(0) != B || lookup_indices.size(1) != N) throw py::value_error("lookup_indices shape mismatch");
+        if (pair_idx.size(0) != n_heads || pair_idx.size(1) != tph || pair_idx.size(2) != output_nap)
+            throw py::value_error("pair_idx shape mismatch");
+        if (weight_grad.size(0) != N || weight_grad.size(1) != table_dim || weight_grad.size(2) != output_nap)
+            throw py::value_error("weight_grad shape mismatch");
+
+        auto go = grad_out.contiguous();
+        auto li = lookup_indices.contiguous();
+        auto pi = pair_idx.contiguous();
+        auto wg = weight_grad.contiguous();
+        c10::cuda::CUDAGuard guard(grad_out.device().index());
+        int64_t total = B * N;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+        bit_perm_lut_weight_grad_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<int32_t>(n_pairs),
+            static_cast<float>(scale),
+            reinterpret_cast<const int16_t*>(li.data_ptr()),
+            reinterpret_cast<const int32_t*>(pi.data_ptr()),
+            reinterpret_cast<const float*>(go.data_ptr()),
+            reinterpret_cast<float*>(wg.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+    }
     #endif
 
 private:
@@ -4377,6 +4700,46 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("scale"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_pack_signs",
+            &LUTorchManager::bit_pack_signs,
+            py::arg("signs"),
+            py::arg("bit_weights"),
+            py::arg("output_nap"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "fused_fp8_adam",
+            &LUTorchManager::fused_fp8_adam,
+            py::arg("latent_fp8"),
+            py::arg("m_fp8"),
+            py::arg("m_scale"),
+            py::arg("v_fp8"),
+            py::arg("v_scale"),
+            py::arg("weight_grad"),
+            py::arg("beta1"),
+            py::arg("beta2"),
+            py::arg("eps"),
+            py::arg("bias1"),
+            py::arg("bias2"),
+            py::arg("lr"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_perm_lut_weight_grad",
+            &LUTorchManager::bit_perm_lut_weight_grad,
+            py::arg("grad_out"),
+            py::arg("lookup_indices"),
+            py::arg("pair_idx"),
+            py::arg("weight_grad"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("table_dim"),
             py::arg("n_pairs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256

@@ -67,6 +67,14 @@ def _from_fp8_per_table(t_fp8: torch.Tensor, scale: torch.Tensor) -> torch.Tenso
     return t_fp8.to(torch.float32) / scale
 
 
+def _get_bit_permlut_native():
+    try:
+        from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
+        return get_lutorch_manager()
+    except Exception:
+        return None
+
+
 def _project_grad_out_to_weight_grad(
     grad_out: torch.Tensor,            # [B, H, P] float
     lookup_indices: torch.Tensor,      # int16 [B, N]    (N = H*tph)
@@ -76,26 +84,54 @@ def _project_grad_out_to_weight_grad(
     output_nap: int,
     table_dim: int,
     scale: float,
+    wg_buffer: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Project dominance-output gradient back to per-entry weight gradient.
 
-    For each (b, n=h*tph+t) the forward read a single row
-    bit_weights[n, entry_main(b, n), :]. Only that row receives gradient:
-      weight_grad[n, e, k] += scale * grad_out[b, h, pair_idx[h, t, k]]
-         iff entry_main(b, n) == e
+    CUDA path: small table_dim -> custom kernel atomicAdds into touched
+    (n, entry_main(b, n), k) positions. Large table_dim -> torch's
+    vectorized index_add_ is faster than the atomic loop.
+    `wg_buffer` may be supplied to avoid per-step allocation; it will be
+    zeroed in-place.
     """
     B, N = lookup_indices.shape
     assert N == n_heads * tph, "lookup_indices last dim must equal n_heads*tph"
+
+    if wg_buffer is None:
+        wg = torch.zeros(N, table_dim, output_nap, device=grad_out.device, dtype=torch.float32)
+    else:
+        wg = wg_buffer
+        wg.zero_()
+
+    native = _get_bit_permlut_native()
+    # Crossover: for small table_dim the kernel wins; for large table_dim
+    # (e.g. out_proj with table_dim=1024) index_add_ vectorized scatter wins.
+    use_kernel = (
+        grad_out.is_cuda and native is not None
+        and table_dim <= 64
+    )
+    if use_kernel:
+        n_pairs = grad_out.size(2)
+        native.bit_perm_lut_weight_grad(
+            grad_out.contiguous().to(torch.float32),
+            lookup_indices.contiguous(),
+            pair_idx_per_slot.contiguous(),
+            wg,
+            int(n_heads), int(tph), int(output_nap), int(table_dim),
+            int(n_pairs),
+            float(scale),
+        )
+        return wg
+
+    # Fallback: vectorized scatter via index_add_.
     pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
     g_slot = grad_out.gather(2, pair_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     g_slot = g_slot.reshape(B, N, output_nap).to(torch.float32)
-
     entries = lookup_indices.long()
     N_idx = torch.arange(N, device=grad_out.device).unsqueeze(0).expand(B, -1)
     flat_idx = (N_idx * table_dim + entries).reshape(-1)
-    wg = torch.zeros(N * table_dim, output_nap, device=grad_out.device, dtype=torch.float32)
-    wg.index_add_(0, flat_idx, g_slot.reshape(-1, output_nap))
-    return wg.view(N, table_dim, output_nap)
+    wg.view(N * table_dim, output_nap).index_add_(0, flat_idx, g_slot.reshape(-1, output_nap))
+    return wg
 
 
 class BitPermutationLUTOptimizer:
@@ -142,7 +178,6 @@ class BitPermutationLUTOptimizer:
         self.eps = eps
         self.lr_schedule_fn = lr_schedule_fn
         self._step_count = 0
-        self._skip_count = 0            # count of modules skipped due to non-finite grad
         self._handles: List = []
         self._states: List[dict] = []
 
@@ -163,12 +198,18 @@ class BitPermutationLUTOptimizer:
             m_scale = torch.full((N, 1, 1), _FP8_AMAX / 1e-20, device=dev, dtype=torch.float32)
             v_scale = m_scale.clone()
 
+            # Persistent weight-grad buffer avoids per-step torch.zeros() alloc
+            # (especially meaningful for large out_proj LUTs -- 132 MB alloc
+            # per step otherwise).
+            wg_buffer = torch.zeros(shape, device=dev, dtype=torch.float32)
+
             state = {
                 "latent_fp8": latent_fp8,   # fp8, fixed scale
                 "m_fp8": m_fp8,             # fp8
                 "m_scale": m_scale,         # float32 [N, 1, 1]
                 "v_fp8": v_fp8,
                 "v_scale": v_scale,
+                "wg_buffer": wg_buffer,     # float32 [N, table_dim, output_nap]
                 "grad_out": None,
             }
             self._states.append(state)
@@ -181,6 +222,13 @@ class BitPermutationLUTOptimizer:
     def _make_hook(state: dict):
         def hook(module, inputs, output):
             if output.requires_grad:
+                x = inputs[0]
+                # Re-run the (cheap) anchor lookup on the forward input to get
+                # lookup_indices for the optimizer's weight-grad projection.
+                # ~0.04 ms per call; simpler than caching from forward().
+                with torch.no_grad():
+                    li, _, _, _, _ = module.anchor(x)
+                state["lookup_indices"] = li
                 output.register_hook(lambda g: state.__setitem__("grad_out", g.detach()))
         return hook
 
@@ -195,6 +243,7 @@ class BitPermutationLUTOptimizer:
     def zero_grad(self) -> None:
         for state in self._states:
             state["grad_out"] = None
+            state["lookup_indices"] = None
 
     def close(self) -> None:
         """Detach forward hooks. After this, the optimizer is inert."""
@@ -215,7 +264,7 @@ class BitPermutationLUTOptimizer:
 
         for lut, state in zip(self.modules, self._states):
             go = state["grad_out"]
-            li = getattr(lut, "last_lookup_indices", None)
+            li = state.get("lookup_indices")
             if go is None or li is None:
                 continue
 
@@ -223,39 +272,46 @@ class BitPermutationLUTOptimizer:
                 go, li,
                 lut.pair_idx_per_slot,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
+                wg_buffer=state["wg_buffer"],
             )
 
-            # Safety: reject non-finite grads rather than corrupt fp8 state.
-            if not torch.isfinite(weight_grad).all():
-                self._skip_count += 1
-                state["grad_out"] = None
-                continue
+            # Safety: replace any non-finite gradient entries with 0 in-place.
+            # Element-wise masking keeps the update on the GPU (no d2h sync).
+            torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-            latent_f = _from_fp8_fixed(state["latent_fp8"], mx=1.0)
-            m_f = _from_fp8_per_table(state["m_fp8"], state["m_scale"])
-            v_f = _from_fp8_per_table(state["v_fp8"], state["v_scale"])
-
-            # Moments (in-place).
-            m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
-            v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
-            del weight_grad                           # done with it; free early
-
-            # Fused Adam update without materializing mhat/vhat:
-            #   update = -lr * (m/bias1) / (sqrt(v/bias2) + eps)
-            #          = -(lr/bias1) * m / (sqrt(v)/sqrt(bias2) + eps)
-            #          = -(lr * sqrt(bias2) / bias1) * m / (sqrt(v) + eps*sqrt(bias2))
-            denom = v_f.sqrt().add_(self.eps * bias2_sqrt)    # one extra alloc
-            latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
-            del denom
-
-            # Requantize.
-            state["latent_fp8"] = _to_fp8_fixed(latent_f, mx=1.0)
-            state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
-            state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
-            del latent_f, m_f, v_f
+            native = _get_bit_permlut_native()
+            if native is not None:
+                # Fused kernel: dequant fp8 latent/m/v -> Adam update ->
+                # requant latent (fixed scale) + emit f32 m, v for per-table
+                # quantization below.
+                m_f, v_f = native.fused_fp8_adam(
+                    state["latent_fp8"],
+                    state["m_fp8"], state["m_scale"],
+                    state["v_fp8"], state["v_scale"],
+                    weight_grad,
+                    float(self.beta1), float(self.beta2),
+                    float(self.eps), float(bias1), float(bias2),
+                    float(lr),
+                )
+                # Per-table fp8 requantization for m, v (amax reduction).
+                state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
+                state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
+            else:
+                # CPU / fallback path (no fp8 support).
+                latent_f = _from_fp8_fixed(state["latent_fp8"], mx=1.0)
+                m_f = _from_fp8_per_table(state["m_fp8"], state["m_scale"])
+                v_f = _from_fp8_per_table(state["v_fp8"], state["v_scale"])
+                m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
+                v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
+                denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
+                latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
+                state["latent_fp8"] = _to_fp8_fixed(latent_f, mx=1.0)
+                state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
+                state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
 
             self._refresh_weights(lut, state)
             state["grad_out"] = None
+            state["lookup_indices"] = None
 
     # --- introspection ---
     def state_as_float(self, idx: int = 0) -> dict:

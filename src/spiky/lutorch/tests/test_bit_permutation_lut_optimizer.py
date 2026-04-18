@@ -218,11 +218,10 @@ def test_optimizer_close_detaches_hooks():
 
 
 @CUDA_ONLY
-def test_optimizer_skips_nan_grad():
-    """A batch that produces non-finite grad_out must NOT corrupt fp8 state.
-
-    Construct a contrived forward that injects NaN into the output, run one
-    step, verify that bit_weights / latent / moments are unchanged.
+def test_optimizer_nan_grad_does_not_corrupt_state():
+    """Non-finite grad_out entries must not propagate NaN/Inf into fp8 state.
+    Element-wise masking (torch.nan_to_num_) replaces bad entries with 0
+    on the GPU; other elements update normally.
     """
     dev = torch.device("cuda:0")
     lut = BitPermutationLUT(
@@ -230,59 +229,43 @@ def test_optimizer_skips_nan_grad():
         random_seed=0, device=dev,
     )
     opt = BitPermutationLUTOptimizer([lut], lr=1e-2, seed=0)
-    bw_before = lut.bit_weights.clone()
-    latent_before = opt.state_as_float(0)["latent"].clone()
 
     x = torch.randn(4, 16, device=dev, requires_grad=True)
     opt.zero_grad()
     out = lut(x)
-    # Poison: multiply output by inf to make grad_out non-finite.
+    # Poison: multiply output by inf -> grad_out becomes non-finite.
     poison = torch.full_like(out, float("inf"))
     (out * poison).sum().backward()
     opt.step()
 
-    assert opt._skip_count == 1, f"expected 1 skip, got {opt._skip_count}"
-    assert torch.equal(lut.bit_weights, bw_before), "bit_weights changed despite NaN guard"
-    latent_after = opt.state_as_float(0)["latent"]
-    assert torch.equal(latent_after, latent_before), "latent changed despite NaN guard"
+    st = opt.state_as_float(0)
+    assert torch.isfinite(st["latent"]).all(), "latent went non-finite"
+    assert torch.isfinite(st["m"]).all(), "m went non-finite"
+    assert torch.isfinite(st["v"]).all(), "v went non-finite"
     opt.close()
 
 
 @CUDA_ONLY
-def test_optimizer_uses_cached_lookup_indices_not_rerun():
-    """Forward hook relies on `lut.last_lookup_indices`; anchor shouldn't be called
-    a second time inside the optimizer step."""
+def test_optimizer_hook_captures_lookup_indices():
+    """Forward hook re-runs anchor (in no_grad) to capture lookup_indices."""
     dev = torch.device("cuda:0")
     lut = BitPermutationLUT(
         n_inputs=16, n_outputs=8, n_heads=2, input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
     )
-    # Count anchor forwards.
-    original_anchor_fwd = lut.anchor.forward
-    call_count = {"n": 0}
-
-    def counting(*args, **kwargs):
-        call_count["n"] += 1
-        return original_anchor_fwd(*args, **kwargs)
-    lut.anchor.forward = counting
-
     opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=0)
-    # After construction: one anchor call for the forward-hook eval path? No --
-    # we no longer re-run anchor in the hook, so the anchor should only fire
-    # when `lut(x)` is called during model forward.
-    call_count["n"] = 0
 
     x = torch.randn(3, 16, device=dev, requires_grad=True)
     opt.zero_grad()
-    loss = lut(x).sum()
-    loss.backward()
+    lut(x).sum().backward()
+    # After forward+backward: hook fired, captured lookup_indices in state.
+    li = opt._states[0]["lookup_indices"]
+    assert li is not None
+    assert li.shape == (3, lut.n_heads * lut.tph)
+    assert li.dtype == torch.int16
     opt.step()
-
-    # One forward -> one anchor call. Zero extra from optimizer.
-    assert call_count["n"] == 1, f"anchor ran {call_count['n']} times; expected 1"
-    # last_lookup_indices must be populated and match shape.
-    assert lut.last_lookup_indices is not None
-    assert lut.last_lookup_indices.shape == (3, lut.n_heads * lut.tph)
+    # After step: state is cleared.
+    assert opt._states[0]["lookup_indices"] is None
     opt.close()
 
 

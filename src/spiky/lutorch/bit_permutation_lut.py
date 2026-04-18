@@ -362,7 +362,16 @@ class BitPermutationLUT(nn.Module):
                 f"signs shape must be [n_heads*tph, table_dim, output_nap] = "
                 f"({self.n_heads * self.tph}, {self.table_dim}, {self.output_nap}), got {tuple(signs.shape)}"
             )
-        bits = (signs > 0).to(torch.int32)  # [N, table_dim, output_nap]
+        native = _get_bit_permlut_native()
+        if signs.is_cuda and native is not None:
+            native.bit_pack_signs(
+                signs.to(torch.float32).contiguous(),
+                self.bit_weights,
+                int(self.output_nap),
+            )
+            return
+        # CPU / fallback: Python loop.
+        bits = (signs > 0).to(torch.int32)
         packed = torch.zeros(
             self.n_heads * self.tph, self.table_dim, self.n_blocks,
             device=signs.device, dtype=torch.int32,
@@ -391,11 +400,6 @@ class BitPermutationLUT(nn.Module):
 
         x: float [B, input_dim]
         returns: float [B, n_heads, P]  (dominance scores)
-
-        The most recent batch's `lookup_indices` is exposed as
-        `self.last_lookup_indices` (detached, int16) for use by downstream
-        optimizers that need to project output gradients back to weight
-        space without re-running the anchor lookup. Cleared on next call.
         """
         if not x.is_cuda:
             raise RuntimeError("BitPermutationLUT is CUDA-only")
@@ -403,7 +407,6 @@ class BitPermutationLUT(nn.Module):
             raise RuntimeError("lutorch_cuda native extension not available")
 
         lookup_indices, lookup_alt_indices, _, carriers_main, carriers_alt = self.anchor(x)
-        self.last_lookup_indices = lookup_indices.detach()
         if carriers_main is None:
             # Eval / no-grad path: bypass autograd Function.
             native = _get_bit_permlut_native()
