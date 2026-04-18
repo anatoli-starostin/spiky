@@ -367,10 +367,6 @@ class PermutationalLut(nn.Module):
         self.temperature = temperature
         self.use_fp8 = use_fp8
         self.return_dominance = return_dominance
-        self._cached_raw = None
-        self._cached_grad_output = None
-        self._cached_lookup_indices = None
-        self._bitflip_hooks_registered = False
 
         # Inner LUT: each table outputs `output_nap` values (one signed vote per output pair)
         self.inner = MultiHeadLut(
@@ -485,10 +481,6 @@ class PermutationalLut(nn.Module):
             borda_m = borda_m / math.sqrt(max(n_outputs - 1, 1))
             self.register_buffer('dom_borda_m', borda_m)
 
-    def enable_bitflip_cache(self):
-        """Enable caching of raw outputs and output gradients for BitFlipOptimizer."""
-        self._bitflip_hooks_registered = True
-
     def _signed_vote(self, raw: torch.Tensor) -> torch.Tensor:
         """Compute centred per-pair signed vote in (-0.5, +0.5)."""
         if self.soft_mode == 'sigmoid':
@@ -593,18 +585,6 @@ class PermutationalLut(nn.Module):
         if self.use_fp8:
             self.inner.projection.weights.data = orig_data
 
-        if self._bitflip_hooks_registered:
-            self._cached_raw = raw.detach()
-            # Compute and cache lookup indices (cheap: just anchor pair comparisons)
-            with torch.no_grad():
-                from spiky.lutorch.anchor_pairs_lookup import _compute_anchor_data
-                li, _, _, _, _ = _compute_anchor_data(
-                    x, self.inner.lookup.anchor_pairs_a,
-                    self.inner.lookup.anchor_pairs_b,
-                    self.inner.lookup.powers, self.inner.lookup.cmp_eps, 1,
-                )
-                self._cached_lookup_indices = li  # [B, n_tables]
-
         if self.return_dominance:
             out = self._forward_dominance(raw)
         elif self.aggregation == 'matmul':
@@ -620,8 +600,5 @@ class PermutationalLut(nn.Module):
                 out = out / self._borda_scale()
             else:
                 out = self._forward_pytorch(raw)
-
-        if self._bitflip_hooks_registered and out.requires_grad:
-            out.register_hook(lambda g: setattr(self, '_cached_grad_output', g.detach()))
 
         return out

@@ -3,7 +3,7 @@ Generate synthetic dataset from exp282's trained out_proj PermutationalLut.
 
 Samples random inputs, runs through the trained out_proj, saves (input, output) pairs.
 This gives a target function that a PermLut CAN represent perfectly (since it was
-produced by one), making it ideal for testing BitFlipOptimizer convergence.
+produced by one), making it ideal for testing discrete-weight training convergence.
 """
 import sys, os, torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
