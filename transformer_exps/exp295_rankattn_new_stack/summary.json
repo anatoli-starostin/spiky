@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp295_rankattn_new_stack",
+  "best_val_loss": 1.4239639699459077,
+  "final_val_loss": 1.4239639699459077,
+  "total_params": 206424993,
+  "training_time_hours": 0.399
+}

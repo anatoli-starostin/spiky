@@ -17,6 +17,7 @@ class AnchorSamplingPolicy(str, Enum):
     HIERARCHICAL = "hierarchical"  # multi-scale fragments; tph is upper bound, actual count auto-computed
     MULTISCALE = "multiscale"      # sliding windows at all integer anchor distances; tph is upper bound
     CONV2D = "conv2d"              # 2D conv-style; input_dim must be perfect square; nap must be 8; tph is upper bound
+    CANONICAL_DISTINCT = "canonical_distinct"  # each table: output_nap distinct canonical (a<b) pairs, sampled without replacement
 
 
 class SelfExcitementMode(str, Enum):
@@ -105,6 +106,59 @@ def compute_conv2d_n_tables(
     return total
 
 
+def _get_canonical_distinct_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    device: torch.device,
+    random_seed: Optional[int],
+    n_heads: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample `n_anchor_pairs` distinct canonical pairs (a<b) per table.
+
+    Uses balanced coverage via concatenated randperms over the P = C(N,2)
+    canonical pair space. Each table's `n_anchor_pairs` pairs are all
+    distinct (no within-table duplicates at the canonical level).
+
+    Returns (anchor_pairs_a, anchor_pairs_b), both [n_tables, n_anchor_pairs],
+    with a < b in every entry.
+    """
+    P = input_dim * (input_dim - 1) // 2
+    if n_anchor_pairs > P:
+        raise ValueError(
+            f"CANONICAL_DISTINCT requires n_anchor_pairs <= C(input_dim, 2) = {P}; "
+            f"got n_anchor_pairs={n_anchor_pairs}."
+        )
+    gen = None
+    if random_seed is not None:
+        gen = torch.Generator(device=device)
+        gen.manual_seed(random_seed)
+
+    tri_i, tri_j = torch.triu_indices(input_dim, input_dim, offset=1)  # [2, P]
+    tri_i = tri_i.to(device).long()
+    tri_j = tri_j.to(device).long()
+
+    per_head = n_tables // n_heads
+    needed = per_head * n_anchor_pairs
+
+    all_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+    all_b = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+
+    for h in range(n_heads):
+        # Build a balanced sequence over pair indices. Concatenate a fresh
+        # randperm(P) for each table so every table picks n_anchor_pairs
+        # distinct indices (without replacement within the table).
+        per_table_indices = torch.stack([
+            torch.randperm(P, device=device, generator=gen)[:n_anchor_pairs]
+            for _ in range(per_head)
+        ])  # [per_head, n_anchor_pairs]
+        base = h * per_head
+        all_a[base:base + per_head] = tri_i[per_table_indices]
+        all_b[base:base + per_head] = tri_j[per_table_indices]
+
+    return all_a, all_b
+
+
 def get_balanced_anchor_pairs(
     n_tables: int,
     n_anchor_pairs: int,
@@ -145,6 +199,12 @@ def get_balanced_anchor_pairs(
     if random_seed is not None:
         gen = torch.Generator(device=device)
         gen.manual_seed(random_seed)
+
+    # ── CANONICAL_DISTINCT ─────────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.CANONICAL_DISTINCT:
+        return _get_canonical_distinct_pairs(
+            n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
+        )
 
     # ── HIERARCHICAL ────────────────────────────────────────────────────────────
     if effective_policy == AnchorSamplingPolicy.HIERARCHICAL:

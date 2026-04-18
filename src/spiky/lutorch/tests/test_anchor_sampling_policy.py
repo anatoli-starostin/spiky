@@ -99,6 +99,41 @@ def test_balanced_partial_coverage():
     assert not all_disconnected
 
 
+def test_canonical_distinct_all_canonical():
+    """CANONICAL_DISTINCT: every pair has a < b (canonical orientation)."""
+    lut = _make_lut(AnchorSamplingPolicy.CANONICAL_DISTINCT)
+    a, b = lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b
+    assert (a < b).all().item(), "some pair has a >= b in CANONICAL_DISTINCT mode"
+
+
+def test_canonical_distinct_pairs_distinct_per_table():
+    """CANONICAL_DISTINCT: each table has nap distinct canonical pairs."""
+    lut = _make_lut(AnchorSamplingPolicy.CANONICAL_DISTINCT)
+    a, b = lut.lookup.anchor_pairs_a, lut.lookup.anchor_pairs_b
+    n_tables, nap = a.shape
+    for t in range(n_tables):
+        pairs_in_table = {
+            (min(a[t, p].item(), b[t, p].item()), max(a[t, p].item(), b[t, p].item()))
+            for p in range(nap)
+        }
+        assert len(pairs_in_table) == nap, \
+            f"table {t}: expected {nap} distinct canonical pairs, got {len(pairs_in_table)}"
+
+
+def test_canonical_distinct_rejects_too_many_pairs():
+    """CANONICAL_DISTINCT: must raise if n_anchor_pairs > C(input_dim, 2)."""
+    with pytest.raises(ValueError, match="CANONICAL_DISTINCT"):
+        MultiHeadLut(
+            input_dim=4, n_heads=1, n_outputs=4,
+            n_anchor_pairs=7,  # > C(4,2) = 6
+            tables_per_head=8, smooth_mode=False, n_alternatives=1,
+            normalize_weights=False, calibrate_output=False, initial_weights_noise=0.001,
+            uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
+            device=torch.device("cpu"),
+            anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        )
+
+
 def test_disconnected_not_full_coverage():
     """DISCONNECTED does not guarantee full pair coverage."""
     lut = _make_lut(AnchorSamplingPolicy.DISCONNECTED)

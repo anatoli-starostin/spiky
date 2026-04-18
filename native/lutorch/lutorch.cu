@@ -1416,6 +1416,57 @@ __global__ void perm_lut_dom_fwd_kernel(
     atomicAdd(out_ptr + out_base + p_out, d * s);
 }
 
+// Gather-style forward: one thread per output (b, h, p).
+// No atomics — each thread accumulates contributions from ~N_votes_per_pair
+// slots that map to canonical pair p, then writes a unique output location.
+// inv_idx  [H, P, K]: raw-slot index (or -1 padding) for each (h, p, k).
+// inv_sign [H, P, K]: ±1 sign for that contribution.
+template <typename scalar_t>
+__global__ void perm_lut_dom_gather_fwd_kernel(
+    int64_t B,
+    int64_t H,
+    int64_t TP,        // tph * output_nap
+    int64_t P,         // canonical pair count
+    int64_t K,         // padded max contributions per pair (inv_idx last dim)
+    int soft_mode,
+    scalar_t T_val,
+    scalar_t inv_T,
+    const scalar_t* __restrict__ raw_ptr,      // [B, H*TP] (flat over H and TP)
+    const int64_t*   __restrict__ inv_idx_ptr,  // [H, P, K]
+    const scalar_t*  __restrict__ inv_sign_ptr, // [H, P, K]
+    scalar_t*        __restrict__ out_ptr       // [B, H, P]
+) {
+    int64_t total = B * H * P;
+    int64_t tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    int64_t p = tid % P;
+    int64_t rest = tid / P;
+    int64_t h = rest % H;
+    int64_t b = rest / H;
+
+    int64_t raw_base = b * H * TP + h * TP;
+    int64_t inv_base = h * P * K + p * K;
+
+    scalar_t sum = static_cast<scalar_t>(0);
+    #pragma unroll 1
+    for (int64_t k = 0; k < K; ++k) {
+        int64_t slot = inv_idx_ptr[inv_base + k];
+        if (slot < 0) break;  // padding marker; remaining are all -1
+        scalar_t s = inv_sign_ptr[inv_base + k];
+        scalar_t raw = raw_ptr[raw_base + slot];
+        scalar_t d;
+        if (soft_mode == 2) {
+            d = raw > static_cast<scalar_t>(0) ? static_cast<scalar_t>(0.5)
+                                                : static_cast<scalar_t>(-0.5);
+        } else {
+            d = perm_signed_vote<scalar_t>(raw, inv_T, T_val, soft_mode);
+        }
+        sum += s * d;
+    }
+    out_ptr[b * H * P + h * P + p] = sum;
+}
+
 // Backward: each thread handles one (b, h, t, p_slot) element.
 // grad_d = sign * grad_out[pair_idx]; grad_raw = grad_d * jac(raw)
 template <typename scalar_t>
@@ -3336,6 +3387,81 @@ public:
     }
 
     // -----------------------------------------------------------------
+    // Dominance-path forward (gather variant): no atomics, one thread per
+    // output. Forward only — reuse perm_lut_dom_backward for backward.
+    // raw:      [B, H*TP] float  (TP = tph * output_nap)
+    // inv_idx:  [H, P, K] int64  (raw slot index or -1 padding)
+    // inv_sign: [H, P, K] float  (±1 sign)
+    // returns:  [B, H, P]
+    // -----------------------------------------------------------------
+    torch::Tensor perm_lut_dom_gather_forward(
+        const torch::Tensor& raw,
+        const torch::Tensor& inv_idx,
+        const torch::Tensor& inv_sign,
+        int64_t n_pairs,
+        int64_t soft_mode,
+        double temperature,
+        int64_t threads_per_block = 256
+    ) {
+        if (!raw.is_cuda() || !inv_idx.is_cuda() || !inv_sign.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!raw.is_floating_point()) {
+            throw py::value_error("raw must be floating point");
+        }
+        if (inv_idx.dtype() != torch::kInt64) {
+            throw py::value_error("inv_idx must be int64");
+        }
+        if (inv_sign.dtype() != raw.dtype()) {
+            throw py::value_error("inv_sign must match raw dtype");
+        }
+        if (inv_idx.dim() != 3 || inv_sign.dim() != 3) {
+            throw py::value_error("inv_idx/inv_sign must be [H, P, K]");
+        }
+
+        int64_t B = raw.size(0);
+        int64_t HTP = raw.size(1) * raw.size(2);  // flat over H*TP
+        int64_t H = inv_idx.size(0);
+        int64_t P = inv_idx.size(1);
+        int64_t K = inv_idx.size(2);
+        if (HTP % H != 0) {
+            throw py::value_error("raw total must be divisible by H");
+        }
+        int64_t TP = HTP / H;
+        if (P != n_pairs) {
+            throw py::value_error("inv_idx.size(1) must equal n_pairs");
+        }
+
+        auto raw_c = raw.contiguous().view({B, HTP});
+        auto inv_idx_c = inv_idx.contiguous();
+        auto inv_sign_c = inv_sign.contiguous();
+
+        auto opts = torch::TensorOptions().dtype(raw.dtype()).device(raw.device());
+        torch::Tensor out = torch::empty({B, H, P}, opts);
+
+        c10::cuda::CUDAGuard guard(raw.device().index());
+        int64_t total = B * H * P;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(raw.scalar_type(), "perm_lut_dom_gather_forward", [&] {
+            scalar_t T_val = static_cast<scalar_t>(temperature);
+            scalar_t inv_T = static_cast<scalar_t>(1.0 / temperature);
+            perm_lut_dom_gather_fwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                B, H, TP, P, K,
+                static_cast<int>(soft_mode),
+                T_val, inv_T,
+                reinterpret_cast<const scalar_t*>(raw_c.data_ptr()),
+                reinterpret_cast<const int64_t*>(inv_idx_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(inv_sign_c.data_ptr()),
+                reinterpret_cast<scalar_t*>(out.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return out;
+    }
+
+    // -----------------------------------------------------------------
     // Dominance-path backward
     // -----------------------------------------------------------------
     torch::Tensor perm_lut_dom_backward(
@@ -3631,6 +3757,17 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("raw"),
             py::arg("pair_idx"),
             py::arg("sign"),
+            py::arg("n_pairs"),
+            py::arg("soft_mode"),
+            py::arg("temperature"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "perm_lut_dom_gather_forward",
+            &LUTorchManager::perm_lut_dom_gather_forward,
+            py::arg("raw"),
+            py::arg("inv_idx"),
+            py::arg("inv_sign"),
             py::arg("n_pairs"),
             py::arg("soft_mode"),
             py::arg("temperature"),

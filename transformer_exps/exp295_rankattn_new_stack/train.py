@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from spiky.util.text_snippet_sampler import TextSnippetSampler
 from spiky.lutorch.permutational_lut import PermutationalLut
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.ranking_tools import RankAttention
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(EXP_DIR, 'config.json')) as f:
@@ -42,10 +44,15 @@ TEMP = cfg['temperature']
 D_QK_P = d_qk * (d_qk - 1) // 2
 D_V_P = d_v * (d_v - 1) // 2
 
+SCRAMBLED_POLICY = AnchorSamplingPolicy(cfg.get('scrambled_policy', 'full_coverage'))
+INPUT_ANCHOR_POLICY = AnchorSamplingPolicy(cfg.get('input_anchor_policy', 'full_coverage'))
+
 PERM_KWARGS = dict(
     pair_mode='scrambled',
     soft_mode=SOFT_MODE,
     temperature=TEMP,
+    scrambled_policy=SCRAMBLED_POLICY,
+    input_anchor_policy=INPUT_ANCHOR_POLICY,
     device=DEVICE,
     recompute_in_backward=True,
     initial_weights_noise=0.001,
@@ -57,7 +64,6 @@ def _make_qk_perm(seed_offset):
         n_inputs=E, n_outputs=d_qk, n_heads=H,
         input_nap=cfg['qk_input_nap'], output_nap=cfg['qk_output_nap'],
         tph=cfg['qk_tph'],
-        return_dominance=True,
         random_seed=cfg['random_seed'] + seed_offset,
         **PERM_KWARGS,
     )
@@ -89,7 +95,16 @@ class LUTBlock(nn.Module):
         super().__init__()
         self.q_perm = _make_qk_perm(layer_idx)
         self.k_perm = _make_qk_perm(100 + layer_idx)
+        self.q_norm = nn.LayerNorm(d_qk)
+        self.k_norm = nn.LayerNorm(d_qk)
         self.v_perm = _make_v_perm(200 + layer_idx)
+        self.rank_attn = RankAttention(
+            d_qk=d_qk, d_v=D_V_P,
+            smooth_mode=False,
+            temperature=cfg.get('rank_attn_temperature', 0.1),
+            sdpa_temperature=1.0,
+            sdpa_forward_temperature=1.0,
+        )
         self.out_proj = _make_out_perm(400 + layer_idx)
         self.out_norm = nn.LayerNorm(E)
         self.register_buffer('borda_m', self.v_perm.dom_borda_m.clone())
@@ -99,12 +114,18 @@ class LUTBlock(nn.Module):
         xp = (x + pos_emb.unsqueeze(0)).reshape(B * T, _E)
         x_flat = x.reshape(B * T, _E)
 
-        q = self.q_perm(xp).reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)  # [B, H, T, P_qk]
-        k = self.k_perm(xp).reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)  # [B, H, T, P_qk]
+        # Q/K output ranks (not dominance), normalized per head-dim
+        q = self.q_perm(xp).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)  # [B, H, T, d_qk]
+        k = self.k_perm(xp).reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        # V still dominance
         v_dom = self.v_perm(x_flat).reshape(B, T, H, D_V_P).permute(0, 2, 1, 3)  # [B, H, T, P_v]
 
-        attn_dom = F.scaled_dot_product_attention(q, k, v_dom, is_causal=True)  # [B, H, T, P_v]
-        attn = torch.einsum('bhtp,kp->bhtk', attn_dom, self.borda_m)  # [B, H, T, d_v]; borda_m pre-scaled by 1/sqrt(d_v-1)
+        # RankAttention projects q/k ranks into pair-dominance space internally, then SDPA
+        attn_dom = self.rank_attn(q, k, v_dom, is_causal=True)  # [B, H, T, P_v]
+        attn = torch.einsum('bhtp,kp->bhtk', attn_dom, self.borda_m)  # [B, H, T, d_v]; borda_m pre-scaled
 
         x = self.out_proj(attn.permute(0, 2, 1, 3).reshape(B * T, H * d_v)).squeeze(1).reshape(B, T, _E)
         x = self.out_norm(x)

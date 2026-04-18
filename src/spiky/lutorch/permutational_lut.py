@@ -128,17 +128,15 @@ _PERM_FORWARD_DISPATCH = {
 
 class _PermLutDomFunction(torch.autograd.Function):
     """Dominance-path autograd: fused CUDA forward+backward.
-    Forward: out[b, h, p] = sum over slots mapping to p of sign * signed_vote(raw).
-    Single atomicAdd per slot (vs 2 in the remap trick)."""
+    Forward uses the gather kernel (no atomics — one thread per output).
+    Backward is slot-centric and reuses the per-slot pair_idx / sign arrays."""
 
     @staticmethod
-    def forward(ctx, raw, pair_idx, sign, n_pairs, soft_mode_int, temperature):
+    def forward(ctx, raw, pair_idx, sign, inv_idx, inv_sign, n_pairs, soft_mode_int, temperature):
         native = _get_permlut_native()
-        B, HT, P_slots = raw.shape
-        H = pair_idx.shape[0]
         raw_c = raw.contiguous()
-        out = native.perm_lut_dom_forward(
-            raw_c, pair_idx, sign, int(n_pairs),
+        out = native.perm_lut_dom_gather_forward(
+            raw_c, inv_idx, inv_sign, int(n_pairs),
             int(soft_mode_int), float(temperature),
         )
         ctx.save_for_backward(raw_c, pair_idx, sign)
@@ -154,7 +152,7 @@ class _PermLutDomFunction(torch.autograd.Function):
             grad_out.contiguous(), raw, pair_idx, sign,
             ctx.soft_mode_int, ctx.temperature,
         )
-        return grad_raw, None, None, None, None, None
+        return grad_raw, None, None, None, None, None, None, None
 
 
 class _PermLutFunction(torch.autograd.Function):
@@ -331,6 +329,8 @@ class PermutationalLut(nn.Module):
         temperature: float = 0.1,
         use_fp8: bool = False,
         return_dominance: bool = False,
+        scrambled_policy: AnchorSamplingPolicy = AnchorSamplingPolicy.FULL_COVERAGE,
+        input_anchor_policy: AnchorSamplingPolicy = AnchorSamplingPolicy.FULL_COVERAGE,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         **mhlut_kwargs,
@@ -379,7 +379,7 @@ class PermutationalLut(nn.Module):
             n_outputs=output_nap,
             n_anchor_pairs=input_nap,
             tables_per_head=tph,
-            anchor_sampling_policy=AnchorSamplingPolicy.FULL_COVERAGE,
+            anchor_sampling_policy=input_anchor_policy,
             uncertainty_mode=UncertaintyMode.INVERSE_L1,
             random_seed=random_seed,
             device=device,
@@ -403,7 +403,7 @@ class PermutationalLut(nn.Module):
                 input_dim=n_outputs,
                 device=dev,
                 random_seed=seed,
-                policy=AnchorSamplingPolicy.FULL_COVERAGE,
+                policy=scrambled_policy,
                 n_heads=n_heads,
                 shuffle_per_head=True,
             )
@@ -444,6 +444,37 @@ class PermutationalLut(nn.Module):
             sign = torch.where(self.idx_a < self.idx_b, 1.0, -1.0).float()
             self.register_buffer('dom_pair_idx', pair_idx.contiguous())  # [H, TP]
             self.register_buffer('dom_sign', sign.contiguous())          # [H, TP]
+
+            # Inverse index for the gather kernel: for each (h, p), list of raw
+            # slot indices (within that head) that contribute, plus their ±1 sign.
+            # Padded with -1. Assertion: within a single table, all output_nap
+            # slots must map to DISTINCT canonical pairs (satisfied by scrambled
+            # + full_coverage policy).
+            TP_ = pair_idx.shape[1]
+            counts_cpu = torch.zeros(n_heads, P, dtype=torch.long)
+            pair_idx_cpu = pair_idx.cpu()
+            sign_cpu = sign.cpu()
+            for h in range(n_heads):
+                for slot in range(TP_):
+                    counts_cpu[h, pair_idx_cpu[h, slot].item()] += 1
+            # Note: under FULL_COVERAGE scrambled sampling, a single table can
+            # have multiple slots mapping to the same canonical pair (e.g. one
+            # slot (0,5) and another (5,0)). The gather kernel sums them.
+            # When we switch to a canonical-distinct-pairs sampler (option C),
+            # K_max will drop to ~N_votes_per_pair.
+            K_max = int(counts_cpu.max().item())
+            inv_idx_cpu = torch.full((n_heads, P, K_max), -1, dtype=torch.long)
+            inv_sign_cpu = torch.zeros(n_heads, P, K_max)
+            cursor = torch.zeros(n_heads, P, dtype=torch.long)
+            for h in range(n_heads):
+                for slot in range(TP_):
+                    p = int(pair_idx_cpu[h, slot].item())
+                    k = int(cursor[h, p].item())
+                    inv_idx_cpu[h, p, k] = slot
+                    inv_sign_cpu[h, p, k] = float(sign_cpu[h, slot].item())
+                    cursor[h, p] += 1
+            self.register_buffer('dom_inv_idx', inv_idx_cpu.to(self.idx_a.device).contiguous())   # [H, P, K]
+            self.register_buffer('dom_inv_sign', inv_sign_cpu.to(self.idx_a.device).float().contiguous())  # [H, P, K]
             # Borda matrix for converting dominance back to ranks
             # Borda matrix: each row sums d_v - 1 non-zero ±1 entries → divide
             # by sqrt(n_outputs - 1) for CLT-stable unit scale on Borda output.
@@ -484,9 +515,11 @@ class PermutationalLut(nn.Module):
         raw_flat = raw.reshape(B, self.n_heads * self.tph, self.output_nap)
         P = self._dom_n_pairs
         sign = self.dom_sign.to(raw.dtype)
+        inv_sign = self.dom_inv_sign.to(raw.dtype)
         if self._can_use_native(raw):
             out = _PermLutDomFunction.apply(
                 raw_flat, self.dom_pair_idx, sign,
+                self.dom_inv_idx, inv_sign,
                 P, _SOFT_MODE_INT[self.soft_mode], self.temperature,
             )
         else:
