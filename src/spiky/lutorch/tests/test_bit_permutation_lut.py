@@ -1,9 +1,9 @@
-"""Tests for BitPermutationalLUT.
+"""Tests for BitPermutationLUT.
 
 Two correctness tests:
   1. CUDA kernel vs a vectorized PyTorch reference that uses the exact same
      inputs (lookup_indices, decoded ±1 signs, inv_idx). Isolates the kernel.
-  2. BitPermutationalLUT vs a matched PermutationalLut (pair_mode='scrambled',
+  2. BitPermutationLUT vs a matched PermutationalLut (pair_mode='scrambled',
      soft_mode='ste', return_dominance=True, CANONICAL_DISTINCT policies),
      with identical anchor pairs, output pair indices, and ±1 weights.
 """
@@ -12,7 +12,7 @@ import math
 import pytest
 import torch
 
-from spiky.lutorch.bit_permutational_lut import BitPermutationalLUT
+from spiky.lutorch.bit_permutation_lut import BitPermutationLUT
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.permutational_lut import PermutationalLut
 
@@ -78,7 +78,7 @@ def test_bit_kernel_matches_pytorch_reference(
 ):
     dev = torch.device("cuda:0")
     torch.manual_seed(0)
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=n_inputs, n_outputs=n_outputs,
         n_heads=n_heads, input_nap=input_nap, output_nap=output_nap, tph=tph,
         random_seed=42, device=dev,
@@ -120,7 +120,7 @@ def test_bit_matches_permutational_lut_with_sign_weights(
     and both share the same anchor pairs + output pair assignments."""
     dev = torch.device("cuda:0")
     torch.manual_seed(0)
-    bit_lut = BitPermutationalLUT(
+    bit_lut = BitPermutationLUT(
         n_inputs=n_inputs, n_outputs=n_outputs,
         n_heads=n_heads, input_nap=input_nap, output_nap=output_nap, tph=tph,
         random_seed=42, device=dev,
@@ -224,7 +224,7 @@ def _rewire_perm_lut_outputs_to_bitlut(perm_lut, bit_lut, n_heads, tph, output_n
 def test_forward_is_integer_sum_times_scale():
     """Every value in the output must be k * scale for some integer k in [-K_max, K_max]."""
     dev = torch.device("cuda:0")
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=16, n_outputs=8, n_heads=2,
         input_nap=4, output_nap=5, tph=4,
         random_seed=7, device=dev,
@@ -241,7 +241,7 @@ def test_forward_is_integer_sum_times_scale():
 @CUDA_ONLY
 def test_set_get_bit_weights_roundtrip():
     dev = torch.device("cuda:0")
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=16, n_outputs=12, n_heads=2,
         input_nap=4, output_nap=33, tph=3,        # straddle 32-bit block boundary
         random_seed=0, device=dev,
@@ -257,7 +257,7 @@ def test_set_get_bit_weights_roundtrip():
 @CUDA_ONLY
 def test_forward_is_deterministic():
     dev = torch.device("cuda:0")
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=32, n_outputs=16, n_heads=4,
         input_nap=5, output_nap=8, tph=4,
         random_seed=3, device=dev,
@@ -314,7 +314,7 @@ def test_backward_kernel_matches_pytorch_reference(
     from lutorch_cuda import get_lutorch_manager
     native = get_lutorch_manager()
 
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=n_inputs, n_outputs=n_outputs,
         n_heads=n_heads, input_nap=input_nap, output_nap=output_nap, tph=tph,
         random_seed=7, device=dev,
@@ -346,7 +346,7 @@ def test_backward_kernel_matches_pytorch_reference(
 def test_backward_x_grad_flows():
     """End-to-end: x.grad is finite, non-zero, and has no nn.Parameter gradients."""
     dev = torch.device("cuda:0")
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=16, n_outputs=8, n_heads=2,
         input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
@@ -367,7 +367,7 @@ def test_backward_end_to_end_matches_manual_tiny_apl_route():
     from spiky.lutorch.tiny_anchor_pairs_lookup import _tiny_backward_pytorch
 
     dev = torch.device("cuda:0")
-    lut = BitPermutationalLUT(
+    lut = BitPermutationLUT(
         n_inputs=32, n_outputs=12, n_heads=2,
         input_nap=5, output_nap=8, tph=4,
         random_seed=11, device=dev,

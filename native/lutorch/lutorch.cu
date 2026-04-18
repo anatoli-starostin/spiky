@@ -441,7 +441,7 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
 
 // =====================================================================
 // Tiny Anchor Pairs Lookup — int16/int32 specialization for the
-// BitPermutationalLUT path. Fixed: n_alternatives=1, cmp_eps=0,
+// BitPermutationLUT path. Fixed: n_alternatives=1, cmp_eps=0,
 // uncertainty_mode=INVERSE_L1, uncertainty_bias=0.5, n_anchor_pairs <= 16,
 // input_dim <= 32767.
 // =====================================================================
@@ -546,7 +546,7 @@ __global__ void tiny_apl_bwd_kernel(
 }
 
 // =====================================================================
-// BitPermutationalLUT dominance-gather forward kernel.
+// BitPermutationLUT dominance-gather forward kernel.
 // Reads 1-bit weights packed as int32 blocks (output_nap bits per entry,
 // padded to ceil(output_nap/32) blocks), accumulates signed votes into
 // per-head canonical-pair dominance outputs. Int all the way — every
@@ -3914,7 +3914,7 @@ public:
     }
 
     // -----------------------------------------------------------------
-    // BitPermutationalLUT forward (int32 output, no float math in kernel).
+    // BitPermutationLUT forward (int32 output, no float math in kernel).
     // Assumes CANONICAL_DISTINCT output pair sampling (no inv_sign needed).
     // lookup_indices: [B, n_heads*tph] int16 (from TinyAnchorPairsLookup)
     // bit_weights:    [n_heads*tph, table_dim, n_blocks] int32 (bitset)
@@ -3984,7 +3984,7 @@ public:
     }
 
     // -----------------------------------------------------------------
-    // BitPermutationalLUT backward:
+    // BitPermutationLUT backward:
     //   grad_out            [B, n_heads, P]    float32
     //   lookup_indices      [B, n_heads*tph]    int16
     //   lookup_alt_indices  [B, n_heads*tph, 1] int16

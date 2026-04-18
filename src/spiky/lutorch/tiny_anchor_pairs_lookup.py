@@ -1,5 +1,5 @@
 """
-TinyAnchorPairsLookup: minimal anchor-pairs lookup for BitPermutationalLUT.
+TinyAnchorPairsLookup: minimal anchor-pairs lookup for BitPermutationLUT.
 
 This is a stripped-down sibling of `AnchorPairsLookup`, built for bit-level
 inference with fixed design choices.

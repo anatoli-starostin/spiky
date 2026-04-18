@@ -1,4 +1,4 @@
-"""Profile BitPermutationalLUT vs PermutationalLut (dominance, STE).
+"""Profile BitPermutationLUT vs PermutationalLut (dominance, STE).
 
 Measures forward (no_grad) and forward+backward (train) times, and reports
 weight-memory footprint (bit vs float32).
@@ -7,7 +7,7 @@ import time
 
 import torch
 
-from spiky.lutorch.bit_permutational_lut import BitPermutationalLUT
+from spiky.lutorch.bit_permutation_lut import BitPermutationLUT
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.permutational_lut import PermutationalLut
 
@@ -39,7 +39,7 @@ def bench_config(n_inputs, n_outputs, n_heads, input_nap, output_nap, tph, batch
         f"input_nap={input_nap}, output_nap={output_nap}, tph={tph}, B={batch} ==="
     )
 
-    bit_lut = BitPermutationalLUT(
+    bit_lut = BitPermutationLUT(
         n_inputs=n_inputs, n_outputs=n_outputs,
         n_heads=n_heads, input_nap=input_nap, output_nap=output_nap, tph=tph,
         random_seed=42, device=DEVICE,

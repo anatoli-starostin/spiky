@@ -1,4 +1,4 @@
-"""BitPermutationalLUT — 1-bit-weight PermutationalLut for bit-level inference.
+"""BitPermutationLUT — 1-bit-weight PermutationalLut for bit-level inference.
 
 Design:
   - Inner anchor lookup: TinyAnchorPairsLookup (int16 indices, CANONICAL_DISTINCT,
@@ -190,7 +190,7 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         )
 
 
-class BitPermutationalLUT(nn.Module):
+class BitPermutationLUT(nn.Module):
     """1-bit-weight PermutationalLut for bit-level inference.
 
     Forward: x (float) -> dominance (float [B, n_heads, P]).
@@ -221,7 +221,7 @@ class BitPermutationalLUT(nn.Module):
         super().__init__()
         dev = device or torch.device("cpu")
         if not (1 <= input_nap <= 16):
-            raise ValueError(f"BitPermutationalLUT requires 1 <= input_nap <= 16, got {input_nap}")
+            raise ValueError(f"BitPermutationLUT requires 1 <= input_nap <= 16, got {input_nap}")
         if output_nap <= 0:
             raise ValueError(f"output_nap must be positive, got {output_nap}")
         if n_outputs < 2:
@@ -326,7 +326,7 @@ class BitPermutationalLUT(nn.Module):
         returns: float [B, n_heads, P]  (dominance scores)
         """
         if not x.is_cuda:
-            raise RuntimeError("BitPermutationalLUT is CUDA-only")
+            raise RuntimeError("BitPermutationLUT is CUDA-only")
         if _get_bit_permlut_native() is None:
             raise RuntimeError("lutorch_cuda native extension not available")
 
