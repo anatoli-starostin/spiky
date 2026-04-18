@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp296_rankattn_dqk24",
+  "best_val_loss": 1.4442954987287522,
+  "final_val_loss": 1.4442954987287522,
+  "total_params": 210357345,
+  "training_time_hours": 0.456
+}

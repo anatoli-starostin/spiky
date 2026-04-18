@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp297_rankattn_soft_sdpa",
+  "best_val_loss": 1.3750567734241486,
+  "final_val_loss": 1.3750567734241486,
+  "total_params": 210357351,
+  "training_time_hours": 0.456
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp292_full_newstack_100k",
+  "best_val_loss": 1.2260270833969116,
+  "final_val_loss": 1.2282806158065795,
+  "total_params": 206424609,
+  "training_time_hours": 4.898
+}

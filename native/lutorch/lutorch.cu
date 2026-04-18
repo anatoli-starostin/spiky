@@ -439,6 +439,112 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
     atomicAdd(x_grad_flat_ptr + idx2, -du);
 }
 
+// =====================================================================
+// Tiny Anchor Pairs Lookup — int16/int32 specialization for the
+// BitPermutationalLUT path. Fixed: n_alternatives=1, cmp_eps=0,
+// uncertainty_mode=INVERSE_L1, uncertainty_bias=0.5, n_anchor_pairs <= 16,
+// input_dim <= 32767.
+// =====================================================================
+
+// Forward: one thread per (b, t). Writes int16 indices + float delta + int16
+// anchor1/2 ids (used for scatter in backward).
+template <typename scalar_t>
+__global__ void tiny_apl_fwd_kernel(
+    const scalar_t* __restrict__ x_ptr,
+    int32_t batch_size,
+    int32_t input_dim,
+    const int16_t* __restrict__ a_ptr,         // [n_tables, n_anchor_pairs]
+    const int16_t* __restrict__ b_ptr,
+    int32_t n_tables,
+    int32_t n_anchor_pairs,
+    int16_t*       __restrict__ lookup_idx_ptr,   // [B, n_tables]
+    int16_t*       __restrict__ alt_idx_ptr,      // [B, n_tables]
+    scalar_t*      __restrict__ alt_delta_ptr,    // [B, n_tables]
+    int16_t*       __restrict__ anchor1_ids_ptr,  // [B, n_tables]
+    int16_t*       __restrict__ anchor2_ids_ptr
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_tables;
+    if (tid >= total) return;
+
+    int32_t b = tid / n_tables;
+    int32_t t = tid - b * n_tables;
+    int32_t table_offset = t * n_anchor_pairs;
+    const scalar_t* xb = x_ptr + b * input_dim;
+
+    int32_t lookup_idx = 0;
+    scalar_t min_abs_delta = static_cast<scalar_t>(0);
+    scalar_t min_delta = static_cast<scalar_t>(0);
+    int16_t min_a = 0, min_b = 0;
+    int32_t min_pos = 0;
+
+    #pragma unroll 1
+    for (int32_t p = 0; p < n_anchor_pairs; ++p) {
+        int16_t aa = a_ptr[table_offset + p];
+        int16_t bb = b_ptr[table_offset + p];
+        scalar_t delta = xb[aa] - xb[bb];
+
+        if (delta > static_cast<scalar_t>(0)) {
+            lookup_idx |= (1 << p);
+        }
+
+        scalar_t abs_d = delta > static_cast<scalar_t>(0) ? delta : -delta;
+        if (p == 0 || abs_d < min_abs_delta) {
+            min_abs_delta = abs_d;
+            min_delta = delta;
+            min_a = aa;
+            min_b = bb;
+            min_pos = p;
+        }
+    }
+
+    lookup_idx_ptr[tid]  = static_cast<int16_t>(lookup_idx);
+    alt_idx_ptr[tid]     = static_cast<int16_t>(lookup_idx ^ (1 << min_pos));
+    alt_delta_ptr[tid]   = min_delta;
+    anchor1_ids_ptr[tid] = min_a;
+    anchor2_ids_ptr[tid] = min_b;
+}
+
+// Backward: one thread per (b, t). INVERSE_L1 (bias=0.5 fixed), n_alt=1.
+template <typename scalar_t>
+__global__ void tiny_apl_bwd_kernel(
+    int32_t total,   // B * n_tables
+    int32_t input_dim,
+    int32_t n_tables,
+    const int16_t* __restrict__ anchor1_ids_ptr,   // [B, n_tables]
+    const int16_t* __restrict__ anchor2_ids_ptr,
+    const scalar_t* __restrict__ lookup_alt_deltas_ptr,  // [B, n_tables]
+    const scalar_t* __restrict__ grad_main_ptr,          // [B, n_tables]
+    const scalar_t* __restrict__ grad_alt_ptr,           // [B, n_tables]
+    const scalar_t* __restrict__ grad_direct_ptr,        // [B, n_tables] or nullptr
+    scalar_t*       __restrict__ x_grad_flat_ptr         // [B * input_dim]
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    int32_t b = tid / n_tables;
+
+    scalar_t delta = lookup_alt_deltas_ptr[tid];
+    scalar_t abs_d = delta > static_cast<scalar_t>(0) ? delta : -delta;
+    scalar_t sign_d = delta > static_cast<scalar_t>(0) ? static_cast<scalar_t>(1)
+                      : (delta < static_cast<scalar_t>(0) ? static_cast<scalar_t>(-1) : static_cast<scalar_t>(0));
+    scalar_t one_plus_abs = static_cast<scalar_t>(1) + abs_d;
+    scalar_t minus_uncertainty_derivative =
+        static_cast<scalar_t>(0.5) * sign_d / (one_plus_abs * one_plus_abs);
+
+    scalar_t gmain = grad_main_ptr[tid];
+    scalar_t galt  = grad_alt_ptr[tid];
+    scalar_t du = (gmain - galt) * minus_uncertainty_derivative;
+    if (grad_direct_ptr != nullptr) {
+        du += grad_direct_ptr[tid];
+    }
+
+    int32_t idx1 = b * input_dim + static_cast<int32_t>(anchor1_ids_ptr[tid]);
+    int32_t idx2 = b * input_dim + static_cast<int32_t>(anchor2_ids_ptr[tid]);
+    atomicAdd(x_grad_flat_ptr + idx1, du);
+    atomicAdd(x_grad_flat_ptr + idx2, -du);
+}
+
 // WTA (Winner-Take-All) Lookup Kernels
 // Input x is contiguous [B, C, N]. One thread per (b, c) pair.
 // Forward kernels find the winner (argmax) and n_alternatives runner-ups in a single pass.
@@ -3523,6 +3629,155 @@ public:
         CU_CHECK(cudaGetLastError());
         return grad_raw;
     }
+
+    // -----------------------------------------------------------------
+    // TinyAnchorPairsLookup forward
+    // x:        [B, input_dim] float (contiguous)
+    // a/b:      [n_tables, n_anchor_pairs] int16
+    // returns: (lookup_idx [B,n_tables] int16,
+    //           alt_idx    [B,n_tables] int16,
+    //           alt_delta  [B,n_tables] float,
+    //           anchor1_ids[B,n_tables] int16,
+    //           anchor2_ids[B,n_tables] int16)
+    // -----------------------------------------------------------------
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+    tiny_apl_forward(
+        const torch::Tensor& x,
+        const torch::Tensor& anchor_pairs_a,
+        const torch::Tensor& anchor_pairs_b,
+        int64_t threads_per_block = 256
+    ) {
+        if (!x.is_cuda() || !anchor_pairs_a.is_cuda() || !anchor_pairs_b.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!x.is_floating_point()) {
+            throw py::value_error("x must be floating point");
+        }
+        if (anchor_pairs_a.dtype() != torch::kInt16 || anchor_pairs_b.dtype() != torch::kInt16) {
+            throw py::value_error("anchor_pairs_a/b must be int16");
+        }
+        if (x.dim() != 2) {
+            throw py::value_error("x must be [B, input_dim]");
+        }
+        if (anchor_pairs_a.dim() != 2 || anchor_pairs_b.dim() != 2) {
+            throw py::value_error("anchor_pairs_a/b must be 2D");
+        }
+
+        int64_t B = x.size(0);
+        int64_t input_dim = x.size(1);
+        int64_t n_tables = anchor_pairs_a.size(0);
+        int64_t n_anchor_pairs = anchor_pairs_a.size(1);
+        if (anchor_pairs_b.size(0) != n_tables || anchor_pairs_b.size(1) != n_anchor_pairs) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b shapes must match");
+        }
+        if (input_dim > 32767) {
+            throw py::value_error("input_dim must be <= 32767 (int16 limit)");
+        }
+        if (n_anchor_pairs > 16) {
+            throw py::value_error("n_anchor_pairs must be <= 16");
+        }
+
+        auto x_c = x.contiguous();
+        auto a_c = anchor_pairs_a.contiguous();
+        auto b_c = anchor_pairs_b.contiguous();
+
+        auto opts_float = torch::TensorOptions().dtype(x.dtype()).device(x.device());
+        auto opts_int16 = torch::TensorOptions().dtype(torch::kInt16).device(x.device());
+
+        torch::Tensor lookup_idx = torch::empty({B, n_tables}, opts_int16);
+        torch::Tensor alt_idx    = torch::empty({B, n_tables}, opts_int16);
+        torch::Tensor alt_delta  = torch::empty({B, n_tables}, opts_float);
+        torch::Tensor anchor1_ids = torch::empty({B, n_tables}, opts_int16);
+        torch::Tensor anchor2_ids = torch::empty({B, n_tables}, opts_int16);
+
+        c10::cuda::CUDAGuard guard(x.device().index());
+        int64_t total = B * n_tables;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "tiny_apl_forward", [&] {
+            tiny_apl_fwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const scalar_t*>(x_c.data_ptr()),
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(input_dim),
+                reinterpret_cast<const int16_t*>(a_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(b_c.data_ptr()),
+                static_cast<int32_t>(n_tables),
+                static_cast<int32_t>(n_anchor_pairs),
+                reinterpret_cast<int16_t*>(lookup_idx.data_ptr()),
+                reinterpret_cast<int16_t*>(alt_idx.data_ptr()),
+                reinterpret_cast<scalar_t*>(alt_delta.data_ptr()),
+                reinterpret_cast<int16_t*>(anchor1_ids.data_ptr()),
+                reinterpret_cast<int16_t*>(anchor2_ids.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(lookup_idx, alt_idx, alt_delta, anchor1_ids, anchor2_ids);
+    }
+
+    // -----------------------------------------------------------------
+    // TinyAnchorPairsLookup backward
+    // -----------------------------------------------------------------
+    torch::Tensor tiny_apl_backward(
+        int64_t batch_size,
+        int64_t input_dim,
+        const torch::Tensor& anchor1_ids,                // int16 [B, n_tables]
+        const torch::Tensor& anchor2_ids,                // int16 [B, n_tables]
+        const torch::Tensor& lookup_alt_deltas,          // float [B, n_tables]
+        const torch::Tensor& grad_main,                  // float [B, n_tables]
+        const torch::Tensor& grad_alt,                   // float [B, n_tables]
+        c10::optional<torch::Tensor> grad_direct,        // float [B, n_tables] or None
+        int64_t threads_per_block = 256
+    ) {
+        if (!anchor1_ids.is_cuda() || !lookup_alt_deltas.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (anchor1_ids.dtype() != torch::kInt16 || anchor2_ids.dtype() != torch::kInt16) {
+            throw py::value_error("anchor1/2_ids must be int16");
+        }
+        if (!lookup_alt_deltas.is_floating_point()) {
+            throw py::value_error("lookup_alt_deltas must be floating point");
+        }
+
+        int64_t n_tables = lookup_alt_deltas.size(-1) / 1;  // B * n_tables = total
+        if (anchor1_ids.dim() == 2) n_tables = anchor1_ids.size(1);
+
+        auto a1_c = anchor1_ids.contiguous();
+        auto a2_c = anchor2_ids.contiguous();
+        auto d_c = lookup_alt_deltas.contiguous();
+        auto gm_c = grad_main.contiguous();
+        auto ga_c = grad_alt.contiguous();
+
+        auto opts_float = torch::TensorOptions().dtype(lookup_alt_deltas.dtype()).device(lookup_alt_deltas.device());
+        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_float);
+
+        c10::cuda::CUDAGuard guard(lookup_alt_deltas.device().index());
+        int64_t total = batch_size * n_tables;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        const bool has_direct = grad_direct.has_value();
+        torch::Tensor gd_c;
+        if (has_direct) gd_c = grad_direct.value().contiguous();
+
+        AT_DISPATCH_FLOATING_TYPES(lookup_alt_deltas.scalar_type(), "tiny_apl_backward", [&] {
+            const scalar_t* gd_ptr = has_direct ? reinterpret_cast<const scalar_t*>(gd_c.data_ptr()) : nullptr;
+            tiny_apl_bwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(total),
+                static_cast<int32_t>(input_dim),
+                static_cast<int32_t>(n_tables),
+                reinterpret_cast<const int16_t*>(a1_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(a2_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(d_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(gm_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(ga_c.data_ptr()),
+                gd_ptr,
+                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return x_grad_flat;
+    }
     #endif
 
 private:
@@ -3782,6 +4037,27 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("sign"),
             py::arg("soft_mode"),
             py::arg("temperature"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "tiny_apl_forward",
+            &LUTorchManager::tiny_apl_forward,
+            py::arg("x"),
+            py::arg("anchor_pairs_a"),
+            py::arg("anchor_pairs_b"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "tiny_apl_backward",
+            &LUTorchManager::tiny_apl_backward,
+            py::arg("batch_size"),
+            py::arg("input_dim"),
+            py::arg("anchor1_ids"),
+            py::arg("anchor2_ids"),
+            py::arg("lookup_alt_deltas"),
+            py::arg("grad_main"),
+            py::arg("grad_alt"),
+            py::arg("grad_direct") = py::none(),
             py::arg("threads_per_block") = 256
         )
         #endif

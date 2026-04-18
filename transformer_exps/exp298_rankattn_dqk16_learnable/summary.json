@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp298_rankattn_dqk16_learnable",
+  "best_val_loss": 1.4527881443500519,
+  "final_val_loss": 1.4527881443500519,
+  "total_params": 206424999,
+  "training_time_hours": 0.402
+}

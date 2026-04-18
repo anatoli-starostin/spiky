@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -66,6 +68,7 @@ class RankAttention(nn.Module):
         temperature: float = 0.1,
         sdpa_temperature: float = 1.0,
         sdpa_forward_temperature: float = 1.0,
+        learnable_attn_scale_init: Optional[float] = None,
         generator: Optional[torch.Generator] = None,
     ):
         super().__init__()
@@ -78,6 +81,15 @@ class RankAttention(nn.Module):
         self.sdpa_temperature = sdpa_temperature
         self.sdpa_forward_temperature = sdpa_forward_temperature
         self.register_buffer("pairs", pairs)
+        # Optional learnable softmax-sharpness scalar. When set, overrides the
+        # default SDPA 1/sqrt(M) scale via scale = attn_scale / sqrt(M).
+        # So softmax-input std ≈ attn_scale · std(rq)·std(rk) regardless of M.
+        # Useful for bit attention where rq, rk are ±1 and we want to keep them
+        # as bits while still controlling attention sharpness.
+        if learnable_attn_scale_init is not None:
+            self.attn_scale = nn.Parameter(torch.tensor(float(learnable_attn_scale_init)))
+        else:
+            self.attn_scale = None
 
     def soft_rank_projection(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, H, T, d_qk); self.pairs: (2, M)
@@ -111,6 +123,11 @@ class RankAttention(nn.Module):
         proj = self.soft_rank_projection if self.smooth_mode else self.ste_rank_projection
         rq = proj(q)  # (B, H, T, M)
         rk = proj(k)  # (B, H, T, M)
+        # Apply learnable softmax-sharpness by pre-scaling rq. Multiplying rq
+        # by s makes softmax input = s * rq·rk / sqrt(M) (SDPA's default scale).
+        # At deployment this can be folded into a post-popcount scalar multiply.
+        if self.attn_scale is not None:
+            rq = rq * self.attn_scale
         t_soft = self.sdpa_temperature ** 0.5
         if self.smooth_mode:
             return F.scaled_dot_product_attention(
