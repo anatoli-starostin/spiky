@@ -578,7 +578,10 @@ def test_bitflip_scatter_aggregation(device):
 def test_cascade_bitflip_updates_weights(device):
     """BitFlipOptimizer actually flips bits through cascade."""
     lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
-    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.01)
+    # PermLut outputs are CLT-scaled by 1/sqrt(n_votes_per_output) (~11-16x for
+    # this config). Flip probabilities are proportional to dv and shrink with
+    # tph via pool_count, so bump lr enough to reliably flip bits in 10 steps.
+    bit_opt = BitFlipOptimizer([lut1, lut2], lr=1.0)
 
     w1_before = lut1.inner.projection.weights.data.clone()
     w2_before = lut2.inner.projection.weights.data.clone()
@@ -601,7 +604,9 @@ def test_cascade_bitflip_reduces_loss(device):
     """BitFlipOptimizer should reduce loss over multiple steps (averaged over runs)."""
     torch.manual_seed(123)
     lut1, lut2 = _make_cascade(device, soft_mode='ste', tph=256)
-    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.001)
+    # See comment in test_cascade_bitflip_updates_weights re: lr scaling after
+    # the CLT /sqrt(n_votes_per_output) change.
+    bit_opt = BitFlipOptimizer([lut1, lut2], lr=0.1)
 
     # Fixed input and target (not random each step!)
     x_fixed = torch.randn(8, 32, device=device)
