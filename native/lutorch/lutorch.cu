@@ -545,6 +545,140 @@ __global__ void tiny_apl_bwd_kernel(
     atomicAdd(x_grad_flat_ptr + idx2, -du);
 }
 
+// =====================================================================
+// BitPermutationalLUT dominance-gather forward kernel.
+// Reads 1-bit weights packed as int32 blocks (output_nap bits per entry,
+// padded to ceil(output_nap/32) blocks), accumulates signed votes into
+// per-head canonical-pair dominance outputs. Int all the way — every
+// weight ∈ {±1}, sum of K terms is in [-K, K]. Caller applies any float
+// scaling (e.g. 0.5/sqrt(N_votes_per_pair)).
+// Assumes CANONICAL_DISTINCT sampling → per-slot sign is always +1, so
+// no sign tensor is needed.
+// One thread per (b, h, p). No atomics.
+// =====================================================================
+
+__global__ void bit_perm_lut_dom_gather_fwd_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t n_blocks,          // ceil(output_nap / 32)
+    int32_t P,                 // canonical pair count
+    int32_t K,                 // inv_idx last dim
+    int32_t table_dim,         // 2 ** n_anchor_pairs (entries per table)
+    int32_t output_nap,
+    const int16_t* __restrict__ lookup_indices_ptr,  // [B, n_heads*tph]
+    const int32_t* __restrict__ bit_weights_ptr,     // [n_heads*tph, table_dim, n_blocks]
+    const int32_t* __restrict__ inv_idx_ptr,         // [n_heads, P, K]; -1 is padding
+    int32_t*       __restrict__ out_ptr              // [B, n_heads, P] int32
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_heads * P;
+    if (tid >= total) return;
+
+    int32_t p = tid % P;
+    int32_t rest = tid / P;
+    int32_t h = rest % n_heads;
+    int32_t b = rest / n_heads;
+
+    int32_t inv_base = h * P * K + p * K;
+    int32_t li_base = b * n_heads * tph + h * tph;
+
+    int32_t sum = 0;
+    #pragma unroll 1
+    for (int32_t k = 0; k < K; ++k) {
+        int32_t slot_idx = inv_idx_ptr[inv_base + k];
+        if (slot_idx < 0) break;  // padding marker
+
+        int32_t table_within = slot_idx / output_nap;
+        int32_t slot_within  = slot_idx - table_within * output_nap;
+        int32_t table_global = h * tph + table_within;
+
+        int16_t entry = lookup_indices_ptr[li_base + table_within];
+
+        int32_t block_idx = slot_within >> 5;            // / 32
+        int32_t bit_idx   = slot_within & 31;            // % 32
+        int32_t w_offset  = (table_global * table_dim + static_cast<int32_t>(entry)) * n_blocks + block_idx;
+        int32_t block     = bit_weights_ptr[w_offset];
+        int32_t bit       = (block >> bit_idx) & 1;
+        int32_t w_val     = 2 * bit - 1;                 // 0 -> -1, 1 -> +1
+
+        sum += w_val;
+    }
+    out_ptr[b * n_heads * P + h * P + p] = sum;
+}
+
+// Backward: project grad_out through bit weights to lookup-index carriers.
+// One thread per (b, n) where n = h*tph + t. Each thread accumulates over k
+// in [0, output_nap): sign_main/alt ∈ {-1, +1} from bit_weights at entry_main/alt,
+// grad_slot = scale * grad_out[b, h, pair_idx_per_slot[h, t, k]].
+//   grad_main[b, n]    = sum_k grad_slot * sign_main[b, n, k]
+//   grad_alt [b, n, 0] = sum_k grad_slot * sign_alt [b, n, k]
+// Bit weights carry NO gradient (discrete); returned through carriers only.
+__global__ void bit_perm_lut_dom_gather_bwd_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t n_blocks,          // ceil(output_nap / 32)
+    int32_t P,                 // canonical pair count
+    int32_t table_dim,         // 2 ** input_nap
+    int32_t output_nap,
+    float scale,
+    const int16_t* __restrict__ lookup_indices_ptr,      // [B, n_heads*tph]
+    const int16_t* __restrict__ lookup_alt_indices_ptr,  // [B, n_heads*tph, 1]
+    const int32_t* __restrict__ bit_weights_ptr,         // [n_heads*tph, table_dim, n_blocks]
+    const int32_t* __restrict__ pair_idx_ptr,            // [n_heads, tph, output_nap]
+    const float*   __restrict__ grad_out_ptr,            // [B, n_heads, P]
+    float*         __restrict__ grad_main_ptr,           // [B, n_heads*tph]
+    float*         __restrict__ grad_alt_ptr             // [B, n_heads*tph, 1]
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_heads * tph;
+    if (tid >= total) return;
+
+    int32_t n = tid % (n_heads * tph);
+    int32_t b = tid / (n_heads * tph);
+    int32_t h = n / tph;
+    int32_t t = n - h * tph;
+
+    int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+
+    int32_t w_base_main = (n * table_dim + entry_main) * n_blocks;
+    int32_t w_base_alt  = (n * table_dim + entry_alt)  * n_blocks;
+    int32_t pair_base   = (h * tph + t) * output_nap;
+    int32_t grad_base   = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+
+    int32_t cached_block_idx = -1;
+    int32_t block_main = 0;
+    int32_t block_alt  = 0;
+
+    for (int32_t k = 0; k < output_nap; ++k) {
+        int32_t block_idx = k >> 5;         // / 32
+        int32_t bit_idx   = k & 31;         // % 32
+        if (block_idx != cached_block_idx) {
+            block_main = bit_weights_ptr[w_base_main + block_idx];
+            block_alt  = bit_weights_ptr[w_base_alt  + block_idx];
+            cached_block_idx = block_idx;
+        }
+        int32_t bit_main = (block_main >> bit_idx) & 1;
+        int32_t bit_alt  = (block_alt  >> bit_idx) & 1;
+        float sign_main = 2.0f * static_cast<float>(bit_main) - 1.0f;
+        float sign_alt  = 2.0f * static_cast<float>(bit_alt)  - 1.0f;
+
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+
+        grad_main += g_slot * sign_main;
+        grad_alt  += g_slot * sign_alt;
+    }
+
+    grad_main_ptr[b * n_heads * tph + n] = grad_main;
+    grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+}
+
 // WTA (Winner-Take-All) Lookup Kernels
 // Input x is contiguous [B, C, N]. One thread per (b, c) pair.
 // Forward kernels find the winner (argmax) and n_alternatives runner-ups in a single pass.
@@ -3778,6 +3912,166 @@ public:
         CU_CHECK(cudaGetLastError());
         return x_grad_flat;
     }
+
+    // -----------------------------------------------------------------
+    // BitPermutationalLUT forward (int32 output, no float math in kernel).
+    // Assumes CANONICAL_DISTINCT output pair sampling (no inv_sign needed).
+    // lookup_indices: [B, n_heads*tph] int16 (from TinyAnchorPairsLookup)
+    // bit_weights:    [n_heads*tph, table_dim, n_blocks] int32 (bitset)
+    // inv_idx:        [n_heads, P, K] int32 (-1 padding; values in [0, tph*output_nap))
+    // returns:        [B, n_heads, P] int32
+    // -----------------------------------------------------------------
+    torch::Tensor bit_perm_lut_dom_gather_forward(
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& bit_weights,
+        const torch::Tensor& inv_idx,
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t n_pairs,
+        int64_t threads_per_block = 256
+    ) {
+        if (!lookup_indices.is_cuda() || !bit_weights.is_cuda() || !inv_idx.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (lookup_indices.dtype() != torch::kInt16) throw py::value_error("lookup_indices must be int16");
+        if (bit_weights.dtype()    != torch::kInt32) throw py::value_error("bit_weights must be int32");
+        if (inv_idx.dtype()        != torch::kInt32) throw py::value_error("inv_idx must be int32");
+
+        if (lookup_indices.dim() != 2) throw py::value_error("lookup_indices must be [B, n_heads*tph]");
+        if (bit_weights.dim() != 3) throw py::value_error("bit_weights must be [n_heads*tph, table_dim, n_blocks]");
+        if (inv_idx.dim() != 3) throw py::value_error("inv_idx must be [n_heads, P, K]");
+
+        int64_t B = lookup_indices.size(0);
+        if (lookup_indices.size(1) != n_heads * tph) throw py::value_error("lookup_indices.size(1) must equal n_heads*tph");
+        if (bit_weights.size(0) != n_heads * tph) throw py::value_error("bit_weights.size(0) must equal n_heads*tph");
+
+        int64_t table_dim = bit_weights.size(1);
+        int64_t n_blocks = bit_weights.size(2);
+        int64_t expected_n_blocks = (output_nap + 31) / 32;
+        if (n_blocks != expected_n_blocks) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap / 32)");
+        if (inv_idx.size(0) != n_heads || inv_idx.size(1) != n_pairs) throw py::value_error("inv_idx shape mismatch");
+        int64_t K = inv_idx.size(2);
+
+        auto li_c = lookup_indices.contiguous();
+        auto bw_c = bit_weights.contiguous();
+        auto ii_c = inv_idx.contiguous();
+
+        auto opts_i32 = torch::TensorOptions().dtype(torch::kInt32).device(lookup_indices.device());
+        torch::Tensor out = torch::empty({B, n_heads, n_pairs}, opts_i32);
+
+        c10::cuda::CUDAGuard guard(lookup_indices.device().index());
+        int64_t total = B * n_heads * n_pairs;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        bit_perm_lut_dom_gather_fwd_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(n_blocks),
+            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(K),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(ii_c.data_ptr()),
+            reinterpret_cast<int32_t*>(out.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return out;
+    }
+
+    // -----------------------------------------------------------------
+    // BitPermutationalLUT backward:
+    //   grad_out            [B, n_heads, P]    float32
+    //   lookup_indices      [B, n_heads*tph]    int16
+    //   lookup_alt_indices  [B, n_heads*tph, 1] int16
+    //   bit_weights         [n_heads*tph, table_dim, n_blocks] int32
+    //   pair_idx_per_slot   [n_heads, tph, output_nap] int32
+    //   scale                scalar (0.5 / sqrt(n_votes_per_pair))
+    // Returns (grad_main [B, n_heads*tph],
+    //          grad_alt  [B, n_heads*tph, 1])  float32.
+    // No weight gradient — bits are discrete.
+    // -----------------------------------------------------------------
+    std::tuple<torch::Tensor, torch::Tensor> bit_perm_lut_dom_gather_backward(
+        const torch::Tensor& grad_out,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& bit_weights,
+        const torch::Tensor& pair_idx_per_slot,
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t n_pairs,
+        double scale,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
+            || !bit_weights.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
+        if (lookup_indices.dtype()     != torch::kInt16) throw py::value_error("lookup_indices must be int16");
+        if (lookup_alt_indices.dtype() != torch::kInt16) throw py::value_error("lookup_alt_indices must be int16");
+        if (bit_weights.dtype()        != torch::kInt32) throw py::value_error("bit_weights must be int32");
+        if (pair_idx_per_slot.dtype()  != torch::kInt32) throw py::value_error("pair_idx_per_slot must be int32");
+
+        int64_t B = grad_out.size(0);
+        if (grad_out.dim() != 3 || grad_out.size(1) != n_heads || grad_out.size(2) != n_pairs)
+            throw py::value_error("grad_out must be [B, n_heads, n_pairs]");
+        if (lookup_indices.dim() != 2 || lookup_indices.size(0) != B || lookup_indices.size(1) != n_heads * tph)
+            throw py::value_error("lookup_indices must be [B, n_heads*tph]");
+        if (lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(0) != B
+            || lookup_alt_indices.size(1) != n_heads * tph || lookup_alt_indices.size(2) != 1)
+            throw py::value_error("lookup_alt_indices must be [B, n_heads*tph, 1]");
+        if (bit_weights.dim() != 3 || bit_weights.size(0) != n_heads * tph)
+            throw py::value_error("bit_weights.size(0) must equal n_heads*tph");
+        int64_t table_dim = bit_weights.size(1);
+        int64_t n_blocks  = bit_weights.size(2);
+        if (n_blocks != (output_nap + 31) / 32) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap/32)");
+        if (pair_idx_per_slot.dim() != 3
+            || pair_idx_per_slot.size(0) != n_heads
+            || pair_idx_per_slot.size(1) != tph
+            || pair_idx_per_slot.size(2) != output_nap)
+            throw py::value_error("pair_idx_per_slot must be [n_heads, tph, output_nap]");
+
+        auto go_c  = grad_out.contiguous();
+        auto li_c  = lookup_indices.contiguous();
+        auto lai_c = lookup_alt_indices.contiguous();
+        auto bw_c  = bit_weights.contiguous();
+        auto pi_c  = pair_idx_per_slot.contiguous();
+
+        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
+        torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
+        torch::Tensor grad_alt  = torch::empty({B, n_heads * tph, 1}, opts_f);
+
+        c10::cuda::CUDAGuard guard(grad_out.device().index());
+        int64_t total = B * n_heads * tph;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        bit_perm_lut_dom_gather_bwd_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(n_blocks),
+            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<float>(scale),
+            reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+            reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+            reinterpret_cast<const float*>(go_c.data_ptr()),
+            reinterpret_cast<float*>(grad_main.data_ptr()),
+            reinterpret_cast<float*>(grad_alt.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(grad_main, grad_alt);
+    }
     #endif
 
 private:
@@ -4058,6 +4352,33 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("grad_main"),
             py::arg("grad_alt"),
             py::arg("grad_direct") = py::none(),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_perm_lut_dom_gather_forward",
+            &LUTorchManager::bit_perm_lut_dom_gather_forward,
+            py::arg("lookup_indices"),
+            py::arg("bit_weights"),
+            py::arg("inv_idx"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_perm_lut_dom_gather_backward",
+            &LUTorchManager::bit_perm_lut_dom_gather_backward,
+            py::arg("grad_out"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("bit_weights"),
+            py::arg("pair_idx_per_slot"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
         #endif
