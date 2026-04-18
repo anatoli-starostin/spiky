@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp288_small_ref_bs8_25k",
+  "best_val_loss": 1.4485970348119737,
+  "final_val_loss": 1.4485970348119737,
+  "total_params": 206424609,
+  "training_time_hours": 0.459
+}

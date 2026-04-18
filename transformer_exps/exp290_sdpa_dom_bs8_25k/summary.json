@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp290_sdpa_dom_bs8_25k",
+  "best_val_loss": 1.3807904720306396,
+  "final_val_loss": 1.3807904720306396,
+  "total_params": 206424225,
+  "training_time_hours": 0.304
+}

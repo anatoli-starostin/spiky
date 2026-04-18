@@ -21,6 +21,7 @@ Three soft modes for the per-pair vote:
 Forward output: [B, n_heads, n_outputs] (same shape as a regular MultiHeadLut output).
 The output is naturally centred around 0 — no LayerNorm needed afterwards.
 """
+import math
 import os
 from typing import Optional
 import torch
@@ -125,6 +126,37 @@ _PERM_FORWARD_DISPATCH = {
 }
 
 
+class _PermLutDomFunction(torch.autograd.Function):
+    """Dominance-path autograd: fused CUDA forward+backward.
+    Forward: out[b, h, p] = sum over slots mapping to p of sign * signed_vote(raw).
+    Single atomicAdd per slot (vs 2 in the remap trick)."""
+
+    @staticmethod
+    def forward(ctx, raw, pair_idx, sign, n_pairs, soft_mode_int, temperature):
+        native = _get_permlut_native()
+        B, HT, P_slots = raw.shape
+        H = pair_idx.shape[0]
+        raw_c = raw.contiguous()
+        out = native.perm_lut_dom_forward(
+            raw_c, pair_idx, sign, int(n_pairs),
+            int(soft_mode_int), float(temperature),
+        )
+        ctx.save_for_backward(raw_c, pair_idx, sign)
+        ctx.soft_mode_int = int(soft_mode_int)
+        ctx.temperature = float(temperature)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        raw, pair_idx, sign = ctx.saved_tensors
+        native = _get_permlut_native()
+        grad_raw = native.perm_lut_dom_backward(
+            grad_out.contiguous(), raw, pair_idx, sign,
+            ctx.soft_mode_int, ctx.temperature,
+        )
+        return grad_raw, None, None, None, None, None
+
+
 class _PermLutFunction(torch.autograd.Function):
     """Custom autograd: PyTorch forward + fused CUDA backward.
 
@@ -154,6 +186,48 @@ class _PermLutFunction(torch.autograd.Function):
         return grad_raw, None, None, None, None, None
 
 
+# ---- Matmul-path forward bodies (signed_vote + einsum), optionally compiled ----
+
+def _perm_matmul_forward_eager_sigmoid(raw, proj_matrix, T):
+    d = torch.sigmoid(raw / T) - 0.5
+    B, H, Tdim, P = raw.shape
+    d_flat = d.reshape(B, H, Tdim * P)
+    return torch.einsum('bhk,hkn->bhn', d_flat, proj_matrix)
+
+
+def _perm_matmul_forward_eager_rational(raw, proj_matrix, T):
+    d = 0.5 * raw / (T + raw.abs())
+    B, H, Tdim, P = raw.shape
+    d_flat = d.reshape(B, H, Tdim * P)
+    return torch.einsum('bhk,hkn->bhn', d_flat, proj_matrix)
+
+
+def _perm_matmul_forward_eager_ste(raw, proj_matrix, T):
+    # STE hard forward only; backward is handled by the custom CUDA kernel
+    # (autograd.Function). `T` kept in signature for a uniform dispatch table.
+    d = torch.where(raw > 0, 0.5, -0.5).to(raw.dtype)
+    B, H, Tdim, P = raw.shape
+    d_flat = d.reshape(B, H, Tdim * P)
+    return torch.einsum('bhk,hkn->bhn', d_flat, proj_matrix)
+
+
+if _USE_PERMLUT_COMPILE:
+    _perm_matmul_forward_compiled_sigmoid = torch.compile(_perm_matmul_forward_eager_sigmoid, dynamic=True)
+    _perm_matmul_forward_compiled_rational = torch.compile(_perm_matmul_forward_eager_rational, dynamic=True)
+    _perm_matmul_forward_compiled_ste = torch.compile(_perm_matmul_forward_eager_ste, dynamic=True)
+else:
+    _perm_matmul_forward_compiled_sigmoid = _perm_matmul_forward_eager_sigmoid
+    _perm_matmul_forward_compiled_rational = _perm_matmul_forward_eager_rational
+    _perm_matmul_forward_compiled_ste = _perm_matmul_forward_eager_ste
+
+
+_PERM_MATMUL_FORWARD_DISPATCH = {
+    0: _perm_matmul_forward_compiled_sigmoid,
+    1: _perm_matmul_forward_compiled_rational,
+    2: _perm_matmul_forward_compiled_ste,
+}
+
+
 def _signed_vote_jacobian(raw: torch.Tensor, soft_mode_int: int, T: float) -> torch.Tensor:
     """Jacobian d(d)/d(raw) for each soft mode. Used for explicit matmul backward."""
     if soft_mode_int == 0:  # sigmoid
@@ -178,17 +252,10 @@ class _PermLutMatmulFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, raw, proj_matrix, idx_a, idx_b, soft_mode_int, temperature):
-        # raw: [B, H, T, P]
+        # raw: [B, H, T, P]. Forward delegated to a (optionally) compiled function.
         T = float(temperature)
-        if soft_mode_int == 0:
-            d = torch.sigmoid(raw / T) - 0.5
-        elif soft_mode_int == 1:
-            d = 0.5 * raw / (T + raw.abs())
-        else:  # ste
-            d = torch.where(raw > 0, 0.5, -0.5).to(raw.dtype)
-        B, H, Tdim, P = raw.shape
-        d_flat = d.reshape(B, H, Tdim * P)
-        out = torch.einsum('bhk,hkn->bhn', d_flat, proj_matrix)
+        fn = _PERM_MATMUL_FORWARD_DISPATCH[int(soft_mode_int)]
+        out = fn(raw, proj_matrix, T)
 
         ctx.save_for_backward(raw, proj_matrix, idx_a, idx_b)
         ctx.soft_mode_int = int(soft_mode_int)
@@ -367,28 +434,24 @@ class PermutationalLut(nn.Module):
             P = n_outputs * (n_outputs - 1) // 2
             self._dom_n_pairs = P
             # Map each scrambled pair (a, b) to its canonical pair index.
-            # Canonical pairs: triu_indices(n_outputs, n_outputs, offset=1)
-            # Build lookup: pair_index_of[i, j] = canonical index for (min(i,j), max(i,j))
             pair_map = torch.full((n_outputs, n_outputs), -1, dtype=torch.long)
             tri_i, tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1)
-            for p_idx in range(P):
-                pair_map[tri_i[p_idx], tri_j[p_idx]] = p_idx
-                pair_map[tri_j[p_idx], tri_i[p_idx]] = p_idx
+            pair_map[tri_i, tri_j] = torch.arange(P)
+            pair_map[tri_j, tri_i] = torch.arange(P)
 
-            TP = tph * output_nap
-            D = torch.zeros(n_heads, TP, P, device=self.idx_a.device)
-            for h in range(n_heads):
-                for k in range(TP):
-                    a, b = int(self.idx_a[h, k]), int(self.idx_b[h, k])
-                    p_idx = int(pair_map[a, b])
-                    # +1 if a < b (canonical order), -1 if a > b (flipped)
-                    D[h, k, p_idx] = 1.0 if a < b else -1.0
-            self.register_buffer('dom_proj_matrix', D)
+            # Dedicated dominance kernel: one atomicAdd per slot.
+            pair_idx = pair_map[self.idx_a.cpu(), self.idx_b.cpu()].to(self.idx_a.device).long()
+            sign = torch.where(self.idx_a < self.idx_b, 1.0, -1.0).float()
+            self.register_buffer('dom_pair_idx', pair_idx.contiguous())  # [H, TP]
+            self.register_buffer('dom_sign', sign.contiguous())          # [H, TP]
             # Borda matrix for converting dominance back to ranks
+            # Borda matrix: each row sums d_v - 1 non-zero ±1 entries → divide
+            # by sqrt(n_outputs - 1) for CLT-stable unit scale on Borda output.
             borda_m = torch.zeros(n_outputs, P, device=self.idx_a.device)
             for p_idx in range(P):
                 borda_m[int(tri_i[p_idx]), p_idx] = 1.0
                 borda_m[int(tri_j[p_idx]), p_idx] = -1.0
+            borda_m = borda_m / math.sqrt(max(n_outputs - 1, 1))
             self.register_buffer('dom_borda_m', borda_m)
 
     def enable_bitflip_cache(self):
@@ -415,26 +478,50 @@ class PermutationalLut(nn.Module):
         )
 
     def _forward_dominance(self, raw: torch.Tensor) -> torch.Tensor:
-        """Return dominance pair scores [B, H, P] instead of Borda scores."""
-        T = float(self.temperature)
-        if self.soft_mode == 'sigmoid':
-            d = torch.sigmoid(raw / T) - 0.5
-        elif self.soft_mode == 'rational':
-            d = 0.5 * raw / (T + raw.abs())
-        else:  # ste
-            hard = torch.where(raw > 0, 0.5, -0.5).to(raw.dtype)
-            soft = 0.5 * raw / (T + raw.abs())
-            d = hard.detach() + (soft - soft.detach())
-        B, H, Tdim, P = raw.shape
-        d_flat = d.reshape(B, H, Tdim * P)
-        return torch.einsum('bhk,hkp->bhp', d_flat, self.dom_proj_matrix)
+        """Return dominance pair scores [B, H, P] via dedicated fused CUDA kernel
+        (one atomicAdd per slot). Falls back to pure PyTorch on CPU/fp16."""
+        B = raw.shape[0]
+        raw_flat = raw.reshape(B, self.n_heads * self.tph, self.output_nap)
+        P = self._dom_n_pairs
+        sign = self.dom_sign.to(raw.dtype)
+        if self._can_use_native(raw):
+            out = _PermLutDomFunction.apply(
+                raw_flat, self.dom_pair_idx, sign,
+                P, _SOFT_MODE_INT[self.soft_mode], self.temperature,
+            )
+        else:
+            # PyTorch fallback: compute signed_vote then scatter_add with sign.
+            T = float(self.temperature)
+            if self.soft_mode == 'sigmoid':
+                d = torch.sigmoid(raw / T) - 0.5
+            elif self.soft_mode == 'rational':
+                d = 0.5 * raw / (T + raw.abs())
+            else:
+                hard = torch.where(raw > 0, 0.5, -0.5).to(raw.dtype)
+                soft = 0.5 * raw / (T + raw.abs())
+                d = hard.detach() + (soft - soft.detach())
+            H = self.n_heads
+            TP = self.tph * self.output_nap
+            src = d.reshape(B, H, TP) * sign.unsqueeze(0)
+            idx = self.dom_pair_idx.view(1, H, TP).expand(B, -1, -1)
+            out = torch.zeros(B, H, P, device=raw.device, dtype=raw.dtype)
+            out.scatter_add_(2, idx, src)
+        n_votes_per_pair = self.tph * self.output_nap / float(P)
+        return out / math.sqrt(n_votes_per_pair)
+
+    def _borda_scale(self) -> float:
+        """CLT-stable scale for implicit-Borda aggregation: each output dim sums
+        ~tph*output_nap*2/n_outputs independent ±0.5 votes."""
+        n_votes_per_output = self.tph * self.output_nap * 2 / float(self.n_outputs)
+        return math.sqrt(n_votes_per_output)
 
     def _forward_matmul(self, raw: torch.Tensor) -> torch.Tensor:
         """Matmul forward + fused CUDA backward (hybrid)."""
-        return _PermLutMatmulFunction.apply(
+        out = _PermLutMatmulFunction.apply(
             raw, self.proj_matrix, self.idx_a, self.idx_b,
             _SOFT_MODE_INT[self.soft_mode], self.temperature,
         )
+        return out / self._borda_scale()
 
     def _forward_pytorch(self, raw: torch.Tensor) -> torch.Tensor:
         """Pure PyTorch path: signed_vote + scatter_add. CPU/fp16/debug fallback."""
@@ -452,7 +539,7 @@ class PermutationalLut(nn.Module):
         out = torch.zeros(B, H, N, device=raw.device, dtype=raw.dtype)
         out.scatter_add_(2, idx_a, src)
         out.scatter_add_(2, idx_b, -src)
-        return out
+        return out / self._borda_scale()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -497,6 +584,7 @@ class PermutationalLut(nn.Module):
                     raw_flat, self.idx_a, self.idx_b,
                     self.n_outputs, _SOFT_MODE_INT[self.soft_mode], self.temperature,
                 )
+                out = out / self._borda_scale()
             else:
                 out = self._forward_pytorch(raw)
 

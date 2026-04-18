@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp291_unified_no_outnorm",
+  "best_val_loss": 1.3727039724588395,
+  "final_val_loss": 1.3727039724588395,
+  "total_params": 206424609,
+  "training_time_hours": 0.303
+}

@@ -1360,6 +1360,105 @@ __global__ void perm_lut_bwd_kernel(
 
     grad_raw_ptr[raw_idx] = upstream * jac;
 }
+
+// =====================================================================
+// Dominance-path variants: each pair slot contributes to ONE output
+// (canonical pair index) with a precomputed sign. Halves atomics vs
+// the remap trick that uses the non-dominance kernel with a dummy bucket.
+// =====================================================================
+
+// Forward: each thread handles one (b, h, t, p_slot) element.
+// raw layout:      [B, H*T, P_slots] contiguous.
+// pair_idx layout: [H, T*P_slots] (int64, canonical pair index ∈ [0, P_out))
+// sign layout:     [H, T*P_slots] (scalar, ±1)
+// out layout:      [B, H, P_out]
+template <typename scalar_t>
+__global__ void perm_lut_dom_fwd_kernel(
+    int64_t B,
+    int64_t H,
+    int64_t T,         // tph
+    int64_t P_slots,   // output_nap
+    int64_t P_out,     // canonical pair count
+    int soft_mode,
+    scalar_t T_val,
+    scalar_t inv_T,
+    const scalar_t* __restrict__ raw_ptr,
+    const int64_t*   __restrict__ pair_idx_ptr,
+    const scalar_t*  __restrict__ sign_ptr,
+    scalar_t*        __restrict__ out_ptr
+) {
+    int64_t total = B * H * T * P_slots;
+    int64_t tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    int64_t p = tid % P_slots;
+    int64_t rest = tid / P_slots;
+    int64_t t = rest % T;
+    int64_t rest2 = rest / T;
+    int64_t h = rest2 % H;
+    int64_t b = rest2 / H;
+
+    int64_t raw_idx = (b * H + h) * T * P_slots + t * P_slots + p;
+    int64_t idx_pos = h * (T * P_slots) + t * P_slots + p;
+    int64_t p_out = pair_idx_ptr[idx_pos];
+    scalar_t s = sign_ptr[idx_pos];
+
+    scalar_t raw = raw_ptr[raw_idx];
+    scalar_t d;
+    if (soft_mode == 2) {
+        d = raw > static_cast<scalar_t>(0) ? static_cast<scalar_t>(0.5)
+                                            : static_cast<scalar_t>(-0.5);
+    } else {
+        d = perm_signed_vote<scalar_t>(raw, inv_T, T_val, soft_mode);
+    }
+
+    int64_t out_base = (b * H + h) * P_out;
+    atomicAdd(out_ptr + out_base + p_out, d * s);
+}
+
+// Backward: each thread handles one (b, h, t, p_slot) element.
+// grad_d = sign * grad_out[pair_idx]; grad_raw = grad_d * jac(raw)
+template <typename scalar_t>
+__global__ void perm_lut_dom_bwd_kernel(
+    int64_t B,
+    int64_t H,
+    int64_t T,
+    int64_t P_slots,
+    int64_t P_out,
+    int soft_mode,
+    scalar_t T_val,
+    scalar_t inv_T,
+    const scalar_t* __restrict__ grad_out_ptr,
+    const scalar_t* __restrict__ raw_ptr,
+    const int64_t*   __restrict__ pair_idx_ptr,
+    const scalar_t*  __restrict__ sign_ptr,
+    scalar_t*        __restrict__ grad_raw_ptr
+) {
+    int64_t total = B * H * T * P_slots;
+    int64_t tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    int64_t p = tid % P_slots;
+    int64_t rest = tid / P_slots;
+    int64_t t = rest % T;
+    int64_t rest2 = rest / T;
+    int64_t h = rest2 % H;
+    int64_t b = rest2 / H;
+
+    int64_t raw_idx = (b * H + h) * T * P_slots + t * P_slots + p;
+    int64_t idx_pos = h * (T * P_slots) + t * P_slots + p;
+    int64_t p_out = pair_idx_ptr[idx_pos];
+    scalar_t s = sign_ptr[idx_pos];
+
+    int64_t out_base = (b * H + h) * P_out;
+    scalar_t upstream = s * grad_out_ptr[out_base + p_out];
+
+    scalar_t raw = raw_ptr[raw_idx];
+    int jac_mode = (soft_mode == 2) ? 1 : soft_mode;
+    scalar_t jac = perm_signed_vote_jac<scalar_t>(raw, inv_T, T_val, jac_mode);
+
+    grad_raw_ptr[raw_idx] = upstream * jac;
+}
 #endif
 
 class SPIKY_HIDDEN LUTorchManager {
@@ -3149,6 +3248,155 @@ public:
         CU_CHECK(cudaGetLastError());
         return grad_raw;
     }
+
+    // -----------------------------------------------------------------
+    // Dominance-path forward: halves atomics vs remap trick.
+    // raw:      [B, H*T, P_slots] float  (P_slots = output_nap)
+    // pair_idx: [H, T*P_slots] int64   (canonical pair index in [0, P_out))
+    // sign:     [H, T*P_slots] float   (±1; same dtype as raw)
+    // returns:  [B, H, P_out]
+    // -----------------------------------------------------------------
+    torch::Tensor perm_lut_dom_forward(
+        const torch::Tensor& raw,
+        const torch::Tensor& pair_idx,
+        const torch::Tensor& sign,
+        int64_t n_pairs,
+        int64_t soft_mode,
+        double temperature,
+        int64_t threads_per_block = 256
+    ) {
+        if (!raw.is_cuda() || !pair_idx.is_cuda() || !sign.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!raw.is_floating_point()) {
+            throw py::value_error("raw must be floating point");
+        }
+        if (pair_idx.dtype() != torch::kInt64) {
+            throw py::value_error("pair_idx must be int64");
+        }
+        if (sign.dtype() != raw.dtype()) {
+            throw py::value_error("sign must match raw dtype");
+        }
+        if (raw.dim() != 3) {
+            throw py::value_error("raw must be [B, H*T, P_slots]");
+        }
+        if (pair_idx.dim() != 2 || sign.dim() != 2) {
+            throw py::value_error("pair_idx/sign must be 2D [H, T*P_slots]");
+        }
+        if (soft_mode < 0 || soft_mode > 2) {
+            throw py::value_error("soft_mode must be 0=sigmoid, 1=rational, 2=ste");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in [1, 1024]");
+        }
+
+        int64_t B = raw.size(0);
+        int64_t HT = raw.size(1);
+        int64_t P_slots = raw.size(2);
+        int64_t H = pair_idx.size(0);
+        int64_t TP = pair_idx.size(1);
+        if (HT % H != 0) {
+            throw py::value_error("raw.size(1) must be divisible by H = pair_idx.size(0)");
+        }
+        int64_t T = HT / H;
+        if (TP != T * P_slots) {
+            throw py::value_error("pair_idx.size(1) must equal T*P_slots");
+        }
+        if (sign.size(0) != H || sign.size(1) != TP) {
+            throw py::value_error("sign shape must match pair_idx");
+        }
+
+        auto raw_c = raw.contiguous();
+        auto pair_idx_c = pair_idx.contiguous();
+        auto sign_c = sign.contiguous();
+
+        auto opts = torch::TensorOptions().dtype(raw.dtype()).device(raw.device());
+        torch::Tensor out = torch::zeros({B, H, n_pairs}, opts);
+
+        c10::cuda::CUDAGuard guard(raw.device().index());
+        int64_t total = B * H * T * P_slots;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(raw.scalar_type(), "perm_lut_dom_forward", [&] {
+            scalar_t T_val = static_cast<scalar_t>(temperature);
+            scalar_t inv_T = static_cast<scalar_t>(1.0 / temperature);
+            perm_lut_dom_fwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                B, H, T, P_slots, n_pairs,
+                static_cast<int>(soft_mode),
+                T_val, inv_T,
+                reinterpret_cast<const scalar_t*>(raw_c.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_idx_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(sign_c.data_ptr()),
+                reinterpret_cast<scalar_t*>(out.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return out;
+    }
+
+    // -----------------------------------------------------------------
+    // Dominance-path backward
+    // -----------------------------------------------------------------
+    torch::Tensor perm_lut_dom_backward(
+        const torch::Tensor& grad_out,
+        const torch::Tensor& raw,
+        const torch::Tensor& pair_idx,
+        const torch::Tensor& sign,
+        int64_t soft_mode,
+        double temperature,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !raw.is_cuda() || !pair_idx.is_cuda() || !sign.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!grad_out.is_floating_point() || !raw.is_floating_point()) {
+            throw py::value_error("grad_out and raw must be floating point");
+        }
+        if (grad_out.dtype() != raw.dtype() || sign.dtype() != raw.dtype()) {
+            throw py::value_error("grad_out/raw/sign must share dtype");
+        }
+        if (pair_idx.dtype() != torch::kInt64) {
+            throw py::value_error("pair_idx must be int64");
+        }
+
+        int64_t B = raw.size(0);
+        int64_t HT = raw.size(1);
+        int64_t P_slots = raw.size(2);
+        int64_t H = pair_idx.size(0);
+        int64_t TP = pair_idx.size(1);
+        int64_t T = HT / H;
+        int64_t P_out = grad_out.size(2);
+
+        auto grad_out_c = grad_out.contiguous();
+        auto raw_c = raw.contiguous();
+        auto pair_idx_c = pair_idx.contiguous();
+        auto sign_c = sign.contiguous();
+
+        torch::Tensor grad_raw = torch::empty_like(raw_c);
+
+        c10::cuda::CUDAGuard guard(raw.device().index());
+        int64_t total = B * H * T * P_slots;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(raw.scalar_type(), "perm_lut_dom_backward", [&] {
+            scalar_t T_val = static_cast<scalar_t>(temperature);
+            scalar_t inv_T = static_cast<scalar_t>(1.0 / temperature);
+            perm_lut_dom_bwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                B, H, T, P_slots, P_out,
+                static_cast<int>(soft_mode),
+                T_val, inv_T,
+                reinterpret_cast<const scalar_t*>(grad_out_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(raw_c.data_ptr()),
+                reinterpret_cast<const int64_t*>(pair_idx_c.data_ptr()),
+                reinterpret_cast<const scalar_t*>(sign_c.data_ptr()),
+                reinterpret_cast<scalar_t*>(grad_raw.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+        return grad_raw;
+    }
     #endif
 
 private:
@@ -3373,6 +3621,28 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("raw"),
             py::arg("idx_a"),
             py::arg("idx_b"),
+            py::arg("soft_mode"),
+            py::arg("temperature"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "perm_lut_dom_forward",
+            &LUTorchManager::perm_lut_dom_forward,
+            py::arg("raw"),
+            py::arg("pair_idx"),
+            py::arg("sign"),
+            py::arg("n_pairs"),
+            py::arg("soft_mode"),
+            py::arg("temperature"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "perm_lut_dom_backward",
+            &LUTorchManager::perm_lut_dom_backward,
+            py::arg("grad_out"),
+            py::arg("raw"),
+            py::arg("pair_idx"),
+            py::arg("sign"),
             py::arg("soft_mode"),
             py::arg("temperature"),
             py::arg("threads_per_block") = 256

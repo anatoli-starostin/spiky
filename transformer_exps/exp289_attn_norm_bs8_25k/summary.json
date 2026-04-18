@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp289_attn_norm_bs8_25k",
+  "best_val_loss": 1.449544933438301,
+  "final_val_loss": 1.449544933438301,
+  "total_params": 206424801,
+  "training_time_hours": 0.534
+}

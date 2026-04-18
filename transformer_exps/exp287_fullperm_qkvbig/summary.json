@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp287_fullperm_qkvbig",
+  "best_val_loss": 1.2825845986604691,
+  "final_val_loss": 1.283155581355095,
+  "total_params": 239454753,
+  "training_time_hours": 5.135
+}
