@@ -195,6 +195,18 @@ class BitPermutationLUTOptimizer:
         self._handles: List = []
         self._states: List[dict] = []
 
+        # Shared f32 scratch sized to the largest LUT. Step() processes LUTs
+        # sequentially so one pair is enough for all — no per-LUT duplication.
+        max_numel = max(
+            lut.n_heads * lut.tph * lut.table_dim * lut.output_nap
+            for lut in self.modules
+        )
+        dev = self.modules[0].bit_weights.device
+        self._m_f32_scratch = torch.empty(max_numel, device=dev, dtype=torch.float32)
+        self._v_f32_scratch = torch.empty(max_numel, device=dev, dtype=torch.float32)
+        self._m_amax_scratch = torch.zeros(1, device=dev, dtype=torch.float32)
+        self._v_amax_scratch = torch.zeros(1, device=dev, dtype=torch.float32)
+
         for lut in self.modules:
             dev = lut.bit_weights.device
             N = lut.n_heads * lut.tph
@@ -315,12 +327,41 @@ class BitPermutationLUTOptimizer:
                 lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
 
             native = _get_bit_permlut_native()
-            if native is not None:
-                # Fused kernel: dequant fp8 latent (fixed-scale 448) + m, v
-                # (per-table) -> Adam update -> emit f32 scratch.
-                # lut.latent_scale is a constant _FP8_AMAX buffer; the kernel's
-                # internal ±10 clamp is a harmless no-op since we re-quantize
-                # latent via _to_fp8_fixed (implicit ±1 clamp) below.
+            if native is not None and hasattr(native, "fused_fp8_adam_full_inkernel"):
+                # Fully fused: kernel 1 does dequant + Adam + latent in-kernel
+                # quant (in-place) + atomic-reduce of |m|, |v| to global amax
+                # scalars; kernel 2 quantizes m, v to fp8 using those scalars.
+                # All state updated in-place; no Python post-quant. Shared
+                # f32 scratch (sized to the largest LUT) reused across LUTs.
+                numel = state["m_fp8"].numel()
+                m_scratch = self._m_f32_scratch[:numel].view_as(state["m_fp8"])
+                v_scratch = self._v_f32_scratch[:numel].view_as(state["v_fp8"])
+                native.fused_fp8_adam_full_inkernel(
+                    lut.latent_fp8, lut.latent_scale,
+                    state["m_fp8"], state["m_scale"],
+                    state["v_fp8"], state["v_scale"],
+                    weight_grad,
+                    m_scratch, v_scratch,
+                    self._m_amax_scratch, self._v_amax_scratch,
+                    float(self.beta1), float(self.beta2),
+                    float(self.eps), float(bias1), float(bias2),
+                    float(lr),
+                )
+            elif native is not None and hasattr(native, "fused_fp8_adam_latent_inplace"):
+                # Intermediate variant (still has Python per-LUT requant of m, v).
+                m_f, v_f = native.fused_fp8_adam_latent_inplace(
+                    lut.latent_fp8, lut.latent_scale,
+                    state["m_fp8"], state["m_scale"],
+                    state["v_fp8"], state["v_scale"],
+                    weight_grad,
+                    float(self.beta1), float(self.beta2),
+                    float(self.eps), float(bias1), float(bias2),
+                    float(lr),
+                )
+                state["m_fp8"], state["m_scale"] = _to_fp8_per_lut(m_f)
+                state["v_fp8"], state["v_scale"] = _to_fp8_per_lut(v_f)
+            elif native is not None:
+                # Legacy fused kernel fallback (pre-rebuild or older .so).
                 latent_f, m_f, v_f = native.fused_fp8_adam(
                     lut.latent_fp8, lut.latent_scale,
                     state["m_fp8"], state["m_scale"],
@@ -330,8 +371,6 @@ class BitPermutationLUTOptimizer:
                     float(self.eps), float(bias1), float(bias2),
                     float(lr),
                 )
-                # latent: fixed-scale fp8 (scale=448 constant; don't touch
-                # lut.latent_scale — it stays at _FP8_AMAX everywhere).
                 lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
                 state["m_fp8"], state["m_scale"] = _to_fp8_per_lut(m_f)
                 state["v_fp8"], state["v_scale"] = _to_fp8_per_lut(v_f)
