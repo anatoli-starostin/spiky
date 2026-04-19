@@ -179,6 +179,7 @@ class BitPermutationLUTOptimizer:
         weight_decay: float = 0.0,
         weight_grad_gate: bool = True,
         weight_grad_gate_temperature: float = 0.1,
+        weight_grad_gate_scale_matched: bool = True,
         lr_schedule_fn: Optional[Callable[[int], float]] = None,
     ):
         if _FP8 is None:
@@ -194,6 +195,7 @@ class BitPermutationLUTOptimizer:
         self.weight_decay = weight_decay
         self.weight_grad_gate = bool(weight_grad_gate)
         self.weight_grad_gate_temperature = float(weight_grad_gate_temperature)
+        self.weight_grad_gate_scale_matched = bool(weight_grad_gate_scale_matched)
         if self.weight_grad_gate_temperature <= 0:
             raise ValueError(
                 f"weight_grad_gate_temperature must be > 0, got {weight_grad_gate_temperature}"
@@ -370,8 +372,17 @@ class BitPermutationLUTOptimizer:
             #
             # fp8 and bf16 modes apply the gate INSIDE the fused Adam kernel
             # (per-thread, no extra Python op). fp32 mode does it here.
+            #
+            # `weight_grad_gate_scale_matched`: use the LUT's forward scale
+            # (0.5/√N) as the gate prefactor instead of 0.5. Equivalent to
+            # deriving the gate as d/dlatent[scale · rational(latent, T)] =
+            # scale · T / (T+|latent|)², matching the Jacobian of the actual
+            # scaled forward. Implemented by pre-multiplying weight_grad by
+            # (scale/0.5) = 1/√N.
             gate_T_kernel = 0.0   # >0 signals "apply gate" to fused kernel
             dtype_mode = getattr(lut, 'latent_dtype', 'fp8')
+            if self.weight_grad_gate and self.weight_grad_gate_scale_matched:
+                weight_grad.mul_(lut.scale / 0.5)   # 1/√N_votes_per_pair
             if self.weight_grad_gate:
                 T = self.weight_grad_gate_temperature
                 if dtype_mode == 'fp32':
