@@ -562,19 +562,23 @@ __global__ void tiny_apl_bwd_kernel(
 // One thread per (b, h, p). No atomics.
 // =====================================================================
 
-__global__ void bit_perm_lut_dom_gather_fwd_kernel(
+// Thread-per-output: one thread per (b, h, p) with a serial K-loop.
+// Fast when K is small (≲ 32) — no warp-reduce / atomic overhead, and the
+// per-thread sequential loop stays cache-friendly (same lookup_indices row).
+// Used for q/k and v where K ~ 15..30.
+__global__ void bit_perm_lut_dom_gather_fwd_small_k_kernel(
     int32_t batch_size,
     int32_t n_heads,
     int32_t tph,
-    int32_t n_blocks,          // ceil(output_nap / 32)
-    int32_t P,                 // canonical pair count
-    int32_t K,                 // inv_idx last dim
-    int32_t table_dim,         // 2 ** n_anchor_pairs (entries per table)
+    int32_t n_blocks,
+    int32_t P,
+    int32_t K,
+    int32_t table_dim,
     int32_t output_nap,
-    const int16_t* __restrict__ lookup_indices_ptr,  // [B, n_heads*tph]
-    const int32_t* __restrict__ bit_weights_ptr,     // [n_heads*tph, table_dim, n_blocks]
-    const int32_t* __restrict__ inv_idx_ptr,         // [n_heads, P, K]; -1 is padding
-    int32_t*       __restrict__ out_ptr              // [B, n_heads, P] int32
+    const int16_t* __restrict__ lookup_indices_ptr,
+    const int32_t* __restrict__ bit_weights_ptr,
+    const int32_t* __restrict__ inv_idx_ptr,
+    int32_t*       __restrict__ out_ptr
 ) {
     int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int32_t total = batch_size * n_heads * P;
@@ -586,13 +590,13 @@ __global__ void bit_perm_lut_dom_gather_fwd_kernel(
     int32_t b = rest / n_heads;
 
     int32_t inv_base = h * P * K + p * K;
-    int32_t li_base = b * n_heads * tph + h * tph;
+    int32_t li_base  = b * n_heads * tph + h * tph;
 
     int32_t sum = 0;
     #pragma unroll 1
     for (int32_t k = 0; k < K; ++k) {
         int32_t slot_idx = inv_idx_ptr[inv_base + k];
-        if (slot_idx < 0) break;  // padding marker
+        if (slot_idx < 0) break;
 
         int32_t table_within = slot_idx / output_nap;
         int32_t slot_within  = slot_idx - table_within * output_nap;
@@ -600,16 +604,96 @@ __global__ void bit_perm_lut_dom_gather_fwd_kernel(
 
         int16_t entry = lookup_indices_ptr[li_base + table_within];
 
-        int32_t block_idx = slot_within >> 5;            // / 32
-        int32_t bit_idx   = slot_within & 31;            // % 32
-        int32_t w_offset  = (table_global * table_dim + static_cast<int32_t>(entry)) * n_blocks + block_idx;
+        int32_t block_idx = slot_within >> 5;
+        int32_t bit_idx   = slot_within & 31;
+        int32_t w_offset  = (table_global * table_dim
+                             + static_cast<int32_t>(entry)) * n_blocks + block_idx;
         int32_t block     = bit_weights_ptr[w_offset];
         int32_t bit       = (block >> bit_idx) & 1;
-        int32_t w_val     = 2 * bit - 1;                 // 0 -> -1, 1 -> +1
-
-        sum += w_val;
+        sum += (2 * bit - 1);
     }
     out_ptr[b * n_heads * P + h * P + p] = sum;
+}
+
+// K-split warp-cooperative: each (b, h, p) output is produced by
+// `blocks_per_out` warps working on disjoint sub-ranges of the K slots.
+// Each warp strides its sub-range 32-wide, warp-reduces the ±1 sum, and
+// a single `atomicAdd` per warp emits its partial total. The output
+// tensor MUST be pre-zeroed so the atomicAdds accumulate from 0.
+//
+// Scaling:
+//   blocks_per_out == 1              -> one warp per output (no contention)
+//   blocks_per_out == ceildiv(K, 32) -> each warp handles exactly 32 slots
+//                                       with 1 iter per lane (best for K >> 32)
+//
+// Atomics are rare: one per warp per output, at most blocks_per_out per
+// (b, h, p). For tph=4096 out_proj (K ~ 260, blocks_per_out = 9) that's
+// 9 atomics per output, vs the ~260-iter serial loop otherwise.
+__global__ void bit_perm_lut_dom_gather_fwd_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t n_blocks,          // ceil(output_nap / 32)
+    int32_t P,                 // canonical pair count
+    int32_t K,                 // inv_idx last dim
+    int32_t table_dim,         // 2 ** n_anchor_pairs (entries per table)
+    int32_t output_nap,
+    int32_t blocks_per_out,    // warps that share one (b, h, p) output
+    int32_t chunk,             // K slots per warp = ceildiv(K, blocks_per_out)
+    const int16_t* __restrict__ lookup_indices_ptr,  // [B, n_heads*tph]
+    const int32_t* __restrict__ bit_weights_ptr,     // [n_heads*tph, table_dim, n_blocks]
+    const int32_t* __restrict__ inv_idx_ptr,         // [n_heads, P, K]; -1 is padding
+    int32_t*       __restrict__ out_ptr              // [B, n_heads, P] int32 (pre-zeroed)
+) {
+    constexpr int32_t WARP_SIZE = 32;
+    const int32_t lane            = threadIdx.x & (WARP_SIZE - 1);
+    const int32_t warp_in_block   = threadIdx.x >> 5;
+    const int32_t warps_per_block = blockDim.x >> 5;
+    const int32_t primary_warp    = blockIdx.x * warps_per_block + warp_in_block;
+    const int32_t sub_block       = blockIdx.y;
+
+    if (primary_warp >= batch_size * n_heads * P) return;
+
+    const int32_t p    = primary_warp % P;
+    const int32_t rest = primary_warp / P;
+    const int32_t h    = rest % n_heads;
+    const int32_t b    = rest / n_heads;
+
+    const int32_t inv_base = h * P * K + p * K;
+    const int32_t li_base  = b * n_heads * tph + h * tph;
+
+    const int32_t k_start = sub_block * chunk;
+    const int32_t k_end   = (k_start + chunk < K) ? (k_start + chunk) : K;
+
+    int32_t sum = 0;
+    for (int32_t k = k_start + lane; k < k_end; k += WARP_SIZE) {
+        int32_t slot_idx = inv_idx_ptr[inv_base + k];
+        if (slot_idx < 0) break;  // padding tail is contiguous within a sub-block
+
+        int32_t table_within = slot_idx / output_nap;
+        int32_t slot_within  = slot_idx - table_within * output_nap;
+        int32_t table_global = h * tph + table_within;
+
+        int16_t entry = lookup_indices_ptr[li_base + table_within];
+
+        int32_t block_idx = slot_within >> 5;
+        int32_t bit_idx   = slot_within & 31;
+        int32_t w_offset  = (table_global * table_dim
+                             + static_cast<int32_t>(entry)) * n_blocks + block_idx;
+        int32_t block     = bit_weights_ptr[w_offset];
+        int32_t bit       = (block >> bit_idx) & 1;
+        sum += (2 * bit - 1);                           // 0 -> -1, 1 -> +1
+    }
+
+    // Warp-reduce. Lanes that broke out still participate in the shuffles.
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        sum += __shfl_xor_sync(0xFFFFFFFFu, sum, offset);
+    }
+
+    if (lane == 0 && sum != 0) {
+        atomicAdd(&out_ptr[b * n_heads * P + h * P + p], sum);
+    }
 }
 
 // Backward (hard STE): project grad_out through discretized +/-1 bit_weights
@@ -4790,22 +4874,64 @@ public:
         auto ii_c = inv_idx.contiguous();
 
         auto opts_i32 = torch::TensorOptions().dtype(torch::kInt32).device(lookup_indices.device());
-        torch::Tensor out = torch::empty({B, n_heads, n_pairs}, opts_i32);
-
         c10::cuda::CUDAGuard guard(lookup_indices.device().index());
-        int64_t total = B * n_heads * n_pairs;
-        int threads = static_cast<int>(threads_per_block);
-        int blocks = static_cast<int>((total + threads - 1) / threads);
 
-        bit_perm_lut_dom_gather_fwd_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+        int32_t K32 = static_cast<int32_t>(K);
+
+        // Dispatch by K:
+        //   Small K (<= 32): thread-per-output serial loop — no warp-reduce,
+        //     no atomic, cache-friendly (same lookup_indices row per thread).
+        //     Faster for q/k and v where K ~ 15..30.
+        //   Large K (> 32): warp-cooperative K-split with atomicAdd on the
+        //     partial warp sums. Faster when K >> 32 (e.g. tph=4096 out_proj
+        //     where K ~ 260).
+        // Crossover ~32: measured on H100 with exp315 config.
+        constexpr int32_t K_CROSSOVER = 32;
+        int64_t total_primary = B * n_heads * n_pairs;
+
+        if (K32 <= K_CROSSOVER) {
+            torch::Tensor out = torch::empty({B, n_heads, n_pairs}, opts_i32);
+            int threads = static_cast<int>(threads_per_block);
+            int blocks = static_cast<int>((total_primary + threads - 1) / threads);
+            bit_perm_lut_dom_gather_fwd_small_k_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(n_heads),
+                static_cast<int32_t>(tph),
+                static_cast<int32_t>(n_blocks),
+                static_cast<int32_t>(n_pairs),
+                K32,
+                static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(output_nap),
+                reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(ii_c.data_ptr()),
+                reinterpret_cast<int32_t*>(out.data_ptr())
+            );
+            CU_CHECK(cudaGetLastError());
+            return out;
+        }
+
+        // Large-K path: pre-zero (atomicAdd accumulates), 4 warps/block.
+        torch::Tensor out = torch::zeros({B, n_heads, n_pairs}, opts_i32);
+        constexpr int32_t WARPS_PER_BLOCK = 4;
+        constexpr int32_t CHUNK = 32;
+        int32_t blocks_per_out = (K32 + CHUNK - 1) / CHUNK;
+        dim3 grid(
+            static_cast<unsigned>((total_primary + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK),
+            static_cast<unsigned>(blocks_per_out)
+        );
+        dim3 block(WARPS_PER_BLOCK * 32);
+        bit_perm_lut_dom_gather_fwd_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
             static_cast<int32_t>(n_blocks),
             static_cast<int32_t>(n_pairs),
-            static_cast<int32_t>(K),
+            K32,
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
+            blocks_per_out,
+            CHUNK,
             reinterpret_cast<const int16_t*>(li_c.data_ptr()),
             reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
             reinterpret_cast<const int32_t*>(ii_c.data_ptr()),
