@@ -21,6 +21,9 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
+_FP8 = getattr(torch, "float8_e4m3fn", None)
+_FP8_AMAX = 448.0  # float8_e4m3fn representable maximum
+
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.tiny_anchor_pairs_lookup import (
     TinyAnchorPairsLookup,
@@ -150,10 +153,11 @@ class _BitPermLutDomFunction(torch.autograd.Function):
     """Custom autograd for the bit dominance gather.
 
     Forward : one thread per (b, h, p); sums ±1 bits through the inverse index.
-    Backward: one thread per (b, n = h*tph+t); projects grad_out back through
-              bit weights at `entry_main` and `entry_alt` to produce
-              grad_main [B, N] and grad_alt [B, N, 1] for the lookup carriers.
-              Bits themselves carry no gradient (discrete).
+    Backward: dispatches between two STE variants:
+      - hard (default) : uses discrete ±1 from `bit_weights` (full magnitude).
+      - soft (opt-in)  : uses continuous fp8 `latent_fp8` in [-1, 1]. Can
+                         under-train early when latent magnitudes are small;
+                         good for late-training refinement.
     """
 
     @staticmethod
@@ -163,7 +167,9 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         lookup_alt_indices,      # int16 [B, n_heads*tph, 1]    (no grad; saved for bwd)
         carriers_main,           # float [B, n_heads*tph]       (zeros, autograd link to x)
         carriers_alt,            # float [B, n_heads*tph, 1]    (zeros, autograd link to x)
-        bit_weights,             # int32 [n_heads*tph, table_dim, n_blocks]
+        bit_weights,             # int32 [n_heads*tph, table_dim, n_blocks] (forward)
+        latent_fp8,              # fp8   [n_heads*tph, table_dim, output_nap] (soft backward)
+        latent_scale,            # float32 [n_heads*tph, 1, 1] per-table scale
         inv_idx,                 # int32 [n_heads, P, K]
         pair_idx_per_slot,       # int32 [n_heads, tph, output_nap]
         n_heads,
@@ -171,6 +177,7 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         output_nap,
         n_pairs,
         scale,                   # float (0.5 / sqrt(N_votes_per_pair))
+        soft_backward,           # bool
     ):
         native = _get_bit_permlut_native()
         out_int = native.bit_perm_lut_dom_gather_forward(
@@ -183,33 +190,52 @@ class _BitPermLutDomFunction(torch.autograd.Function):
             int(n_pairs),
         )
         out_float = out_int.to(carriers_main.dtype) * scale
-        ctx.save_for_backward(lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot)
+        if soft_backward:
+            # Soft backward needs latent + its per-table scale.
+            ctx.save_for_backward(
+                lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot,
+            )
+        else:
+            ctx.save_for_backward(
+                lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot,
+            )
         ctx.n_heads = int(n_heads)
         ctx.tph = int(tph)
         ctx.output_nap = int(output_nap)
         ctx.n_pairs = int(n_pairs)
         ctx.scale = float(scale)
+        ctx.soft_backward = bool(soft_backward)
         return out_float
 
     @staticmethod
     def backward(ctx, grad_out):
-        lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot = ctx.saved_tensors
         native = _get_bit_permlut_native()
-        grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward(
-            grad_out.contiguous().to(torch.float32),
-            lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot,
-            ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
-        )
-        # 12 forward inputs → 12 gradient returns. Only the two carriers receive gradient.
+        if ctx.soft_backward:
+            lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot = ctx.saved_tensors
+            grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward_latent(
+                grad_out.contiguous().to(torch.float32),
+                lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot,
+                ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
+            )
+        else:
+            lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot = ctx.saved_tensors
+            grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward(
+                grad_out.contiguous().to(torch.float32),
+                lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot,
+                ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
+            )
+        # 15 forward inputs → 15 gradient returns. Only the two carriers receive gradient.
         return (
             None,         # lookup_indices
             None,         # lookup_alt_indices
             grad_main,    # carriers_main
             grad_alt,     # carriers_alt
-            None,         # bit_weights (discrete)
+            None,         # bit_weights
+            None,         # latent_fp8
+            None,         # latent_scale
             None,         # inv_idx
             None,         # pair_idx_per_slot
-            None, None, None, None, None,  # scalars
+            None, None, None, None, None, None,  # scalars incl. soft_backward
         )
 
 
@@ -239,10 +265,12 @@ class BitPermutationLUT(nn.Module):
         output_nap: int,
         tph: int,
         random_seed: Optional[int] = None,
+        initial_weights_noise: float = 0.001,
+        soft_backward: bool = False,
         device: Optional[torch.device] = None,
     ):
         super().__init__()
-        dev = device or torch.device("cpu")
+        dev = torch.device(device) if device is not None else torch.device("cpu")
         if not (1 <= input_nap <= 16):
             raise ValueError(f"BitPermutationLUT requires 1 <= input_nap <= 16, got {input_nap}")
         if output_nap <= 0:
@@ -289,24 +317,49 @@ class BitPermutationLUT(nn.Module):
         n_votes_per_pair = tph * output_nap / float(self.n_pairs)
         self.scale = 0.5 / math.sqrt(n_votes_per_pair)
 
+        # STE variant for the autograd backward: hard ±1 (default) or soft
+        # continuous latent. See `_BitPermLutDomFunction`.
+        self.soft_backward = bool(soft_backward)
+
         # Borda matrix for optional dominance→rank projection (pre-scaled).
         self.register_buffer('dom_borda_m', _canonical_borda_m(n_outputs, dev))
 
-        # Bit weights — stored as int32 blocks. Initialized uniformly at ±1.
-        # Not a Parameter: autograd does not train them; updates happen via
-        # latent fp optimizer (e.g. fp8 Adam) that calls `set_bit_weights`.
+        # `latent_fp8` is the authoritative weight state: fp8 tensor of shape
+        # [n_heads*tph, table_dim, output_nap] holding continuous values in
+        # [-1, 1] (fixed scale = 1/_FP8_AMAX). `bit_weights` is derived by
+        # packing sign(latent). Backward uses `latent_fp8` directly (STE-soft).
+        if _FP8 is None or dev.type != "cuda":
+            raise RuntimeError("BitPermutationLUT requires CUDA + fp8 support")
+
         if random_seed is not None:
-            gen = torch.Generator(device=dev)
-            gen.manual_seed(random_seed + 4_000_003)
+            gen = torch.Generator(device=dev).manual_seed(random_seed + 4_000_003)
         else:
             gen = None
-        bit_weights = torch.randint(
-            low=torch.iinfo(torch.int32).min,
-            high=torch.iinfo(torch.int32).max,
-            size=(n_heads * tph, self.table_dim, self.n_blocks),
-            device=dev, dtype=torch.int32, generator=gen,
+        shape = (n_heads * tph, self.table_dim, self.output_nap)
+        # Uniform init in [-initial_weights_noise, +initial_weights_noise] for
+        # both hard and soft backward modes. For soft backward, a larger noise
+        # value gives bigger initial gradient magnitude through the carriers.
+        latent_init_f32 = (
+            torch.rand(shape, device=dev, generator=gen) - 0.5
+        ) * (2.0 * float(initial_weights_noise))
+        # Per-table fp8 storage: latent_scale[n] = _FP8_AMAX / amax(latent[n]).
+        # Latents can grow (bounded by +-10 safety clamp in the fused Adam
+        # kernel); scale is re-derived every step from the new amax.
+        amax = latent_init_f32.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-20)
+        latent_scale = _FP8_AMAX / amax                      # [N, 1, 1] float32
+        latent_fp8 = (latent_init_f32 * latent_scale).to(_FP8)
+        self.register_buffer('latent_fp8', latent_fp8.contiguous())
+        self.register_buffer('latent_scale', latent_scale.contiguous())
+
+        # bit_weights derived from sign(latent) via the native pack kernel.
+        bit_weights = torch.zeros(
+            n_heads * tph, self.table_dim, self.n_blocks,
+            device=dev, dtype=torch.int32,
         )
         self.register_buffer('bit_weights', bit_weights.contiguous())
+        _get_bit_permlut_native().bit_pack_signs(
+            latent_init_f32.contiguous(), self.bit_weights, int(self.output_nap),
+        )
 
     def load_pairs(
         self,
@@ -421,7 +474,8 @@ class BitPermutationLUT(nn.Module):
         return _BitPermLutDomFunction.apply(
             lookup_indices, lookup_alt_indices,
             carriers_main, carriers_alt,
-            self.bit_weights, self.inv_idx, self.pair_idx_per_slot,
+            self.bit_weights, self.latent_fp8, self.latent_scale,
+            self.inv_idx, self.pair_idx_per_slot,
             self.n_heads, self.tph, self.output_nap, self.n_pairs,
-            self.scale,
+            self.scale, self.soft_backward,
         )

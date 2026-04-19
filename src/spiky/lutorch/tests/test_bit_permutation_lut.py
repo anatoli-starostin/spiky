@@ -325,12 +325,12 @@ def test_backward_kernel_matches_pytorch_reference(
     P = n_outputs * (n_outputs - 1) // 2
     grad_out = torch.randn(B, n_heads, P, device=dev)
 
+    # Hard STE (default): uses ±1 from bit_weights.
     grad_main_n, grad_alt_n = native.bit_perm_lut_dom_gather_backward(
         grad_out.contiguous(), lookup_indices, lookup_alt_indices,
         lut.bit_weights, lut.pair_idx_per_slot,
         int(n_heads), int(tph), int(output_nap), int(P), float(lut.scale),
     )
-
     signs = lut.get_bit_weights_as_signs()
     grad_main_p, grad_alt_p = _reference_carrier_grads(
         grad_out, lookup_indices, lookup_alt_indices, signs,
@@ -340,6 +340,82 @@ def test_backward_kernel_matches_pytorch_reference(
         f"grad_main max|diff| = {(grad_main_n - grad_main_p).abs().max().item()}"
     assert torch.allclose(grad_alt_n, grad_alt_p, atol=1e-5, rtol=1e-5), \
         f"grad_alt  max|diff| = {(grad_alt_n - grad_alt_p).abs().max().item()}"
+
+
+@CUDA_ONLY
+def test_backward_latent_kernel_matches_reference():
+    """Opt-in STE-soft backward kernel: uses dequantized fp8 latent in [-1, 1]
+    instead of ±1, and matches a PyTorch reference built the same way."""
+    dev = torch.device("cuda:0")
+    from lutorch_cuda import get_lutorch_manager
+    native = get_lutorch_manager()
+
+    lut = BitPermutationLUT(
+        n_inputs=32, n_outputs=12, n_heads=2, input_nap=5, output_nap=8, tph=4,
+        random_seed=11, device=dev,
+    )
+    B, n_outputs = 3, 12
+    x = torch.randn(B, 32, device=dev)
+    li, lai, _, _, _ = lut.anchor(x)
+    P = n_outputs * (n_outputs - 1) // 2
+    grad_out = torch.randn(B, lut.n_heads, P, device=dev)
+
+    grad_main_n, grad_alt_n = native.bit_perm_lut_dom_gather_backward_latent(
+        grad_out.contiguous(), li, lai, lut.latent_fp8, lut.latent_scale,
+        lut.pair_idx_per_slot,
+        int(lut.n_heads), int(lut.tph), int(lut.output_nap), int(P), float(lut.scale),
+    )
+    latent_f32 = lut.latent_fp8.to(torch.float32) / lut.latent_scale
+    grad_main_p, grad_alt_p = _reference_carrier_grads(
+        grad_out, li, lai, latent_f32, lut.pair_idx_per_slot.long(), lut.scale,
+    )
+    assert torch.allclose(grad_main_n, grad_main_p, atol=1e-5, rtol=1e-5)
+    assert torch.allclose(grad_alt_n, grad_alt_p, atol=1e-5, rtol=1e-5)
+
+
+@CUDA_ONLY
+def test_backward_soft_flag_routes_to_latent_kernel():
+    """BitPermutationLUT(soft_backward=True) routes backward through the latent
+    kernel. We force latents to an intermediate magnitude (±0.5) so the soft
+    path's gradient demonstrably differs from the hard (±1) path."""
+    dev = torch.device("cuda:0")
+    kwargs = dict(
+        n_inputs=32, n_outputs=12, n_heads=2, input_nap=5, output_nap=8, tph=4,
+        random_seed=0, device=dev,
+    )
+    from spiky.lutorch.bit_permutation_lut_optimizer import _to_fp8_per_table
+
+    lut_hard = BitPermutationLUT(soft_backward=False, **kwargs)
+    lut_soft = BitPermutationLUT(soft_backward=True, **kwargs)
+    # Align both to the same bit pattern and force latents to ±0.5 (mid range).
+    signs = lut_hard.get_bit_weights_as_signs()
+    half_latent = (signs * 0.5).contiguous()
+    fp8, scale = _to_fp8_per_table(half_latent)
+    for lut in (lut_hard, lut_soft):
+        lut.latent_fp8 = fp8.clone()
+        lut.latent_scale = scale.clone()
+        lut.set_bit_weights_from_signs(signs)
+    assert torch.equal(lut_hard.bit_weights, lut_soft.bit_weights)
+
+    x = torch.randn(4, 32, device=dev, requires_grad=True)
+    grad_out = torch.randn(4, lut_hard.n_heads, lut_hard.n_pairs, device=dev)
+
+    out_hard = lut_hard(x)
+    out_hard.backward(grad_out)
+    g_hard = x.grad.clone()
+    x.grad = None
+
+    out_soft = lut_soft(x)
+    out_soft.backward(grad_out)
+    g_soft = x.grad.clone()
+
+    # Forward output matches (bits are identical).
+    assert torch.equal(out_hard, out_soft)
+    # Soft gradient is ~0.5 × hard gradient at this latent magnitude.
+    assert not torch.allclose(g_hard, g_soft)
+    ratio = (g_soft[g_hard.abs() > 1e-6] / g_hard[g_hard.abs() > 1e-6])
+    assert (ratio.abs() - 0.5).abs().max().item() < 0.2, \
+        f"soft/hard ratio not near 0.5: {ratio.abs().mean().item():.3f}"
 
 
 @CUDA_ONLY
@@ -386,6 +462,7 @@ def test_backward_end_to_end_matches_manual_tiny_apl_route():
     a1 = lut.anchor.anchor_pairs_a[
         torch.arange(lut.n_heads * lut.tph, device=dev), 0
     ]  # placeholder; properly recomputed below
+    # Default backward is hard ±1 from bit_weights.
     signs = lut.get_bit_weights_as_signs()
     grad_main, grad_alt = _reference_carrier_grads(
         grad_out, lookup_indices, lookup_alt_indices, signs,

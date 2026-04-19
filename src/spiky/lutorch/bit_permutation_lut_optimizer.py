@@ -141,9 +141,11 @@ class BitPermutationLUTOptimizer:
         bit_luts:             iterable of BitPermutationLUT modules to optimize.
         lr:                   base learning rate (scaled by lr_schedule_fn).
         beta1, beta2, eps:    Adam hyper-parameters.
-        latent_init_std:      half-width of uniform latent init (default 0.001).
         lr_schedule_fn:       optional callable step -> multiplier on `lr`.
-        seed:                 optional seed for latent initialization (per-module).
+
+    Latent state (`lut.latent_fp8`) is owned by the BitPermutationLUT itself
+    and is initialized in its constructor (see `initial_weights_noise` there).
+    The optimizer only holds the Adam moments and transient buffers.
 
     Usage:
         opt = BitPermutationLUTOptimizer([bit_lut], lr=1e-3)
@@ -162,9 +164,7 @@ class BitPermutationLUTOptimizer:
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
-        latent_init_std: float = 0.001,
         lr_schedule_fn: Optional[Callable[[int], float]] = None,
-        seed: Optional[int] = None,
     ):
         if _FP8 is None:
             raise RuntimeError(
@@ -181,16 +181,10 @@ class BitPermutationLUTOptimizer:
         self._handles: List = []
         self._states: List[dict] = []
 
-        for i, lut in enumerate(self.modules):
+        for lut in self.modules:
             dev = lut.bit_weights.device
             N = lut.n_heads * lut.tph
             shape = (N, lut.table_dim, lut.output_nap)
-
-            gen = torch.Generator(device=dev).manual_seed(seed + 100_003 * i) if seed is not None else None
-            # Build latent in fp8 directly (avoid holding a full float32 copy).
-            latent_f32 = (torch.rand(shape, device=dev, generator=gen) - 0.5) * (2 * latent_init_std)
-            latent_fp8 = _to_fp8_fixed(latent_f32, mx=1.0)
-            del latent_f32
 
             # m, v initialised to zero in fp8 directly (scale floor handles zeros).
             m_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
@@ -204,17 +198,18 @@ class BitPermutationLUTOptimizer:
             wg_buffer = torch.zeros(shape, device=dev, dtype=torch.float32)
 
             state = {
-                "latent_fp8": latent_fp8,   # fp8, fixed scale
                 "m_fp8": m_fp8,             # fp8
                 "m_scale": m_scale,         # float32 [N, 1, 1]
                 "v_fp8": v_fp8,
                 "v_scale": v_scale,
                 "wg_buffer": wg_buffer,     # float32 [N, table_dim, output_nap]
                 "grad_out": None,
+                "lookup_indices": None,
             }
             self._states.append(state)
 
-            self._refresh_weights(lut, state)
+            # Ensure bit_weights are consistent with the initial latent.
+            self._refresh_weights(lut)
             self._handles.append(lut.register_forward_hook(self._make_hook(state)))
 
     # --- hook ---
@@ -234,16 +229,27 @@ class BitPermutationLUTOptimizer:
 
     # --- housekeeping ---
     @staticmethod
-    def _refresh_weights(lut, state: dict) -> None:
-        latent_f32 = _from_fp8_fixed(state["latent_fp8"], mx=1.0)
-        signs = latent_f32.sign()
-        signs[signs == 0] = 1.0
-        lut.set_bit_weights_from_signs(signs)
+    def _refresh_weights(lut) -> None:
+        """Pack sign(latent_fp8) into bit_weights directly from the fp8 bytes
+        (no float materialization). sign of (latent_fp8 / latent_scale) is the
+        same as sign of latent_fp8 since latent_scale > 0 by construction.
+        """
+        native = _get_bit_permlut_native()
+        if native is not None and hasattr(native, "bit_pack_fp8_signs"):
+            native.bit_pack_fp8_signs(
+                lut.latent_fp8, lut.bit_weights, int(lut.output_nap),
+            )
+        else:
+            # Fallback: dequant to float32 then pack.
+            latent_f32 = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
+            lut.set_bit_weights_from_signs(latent_f32)
 
     def zero_grad(self) -> None:
-        for state in self._states:
-            state["grad_out"] = None
-            state["lookup_indices"] = None
+        """No-op. `grad_out` and `lookup_indices` are filled by hooks during
+        forward/backward and consumed/cleared by `step()`. Zeroing them here
+        would wipe state captured by the forward hook if `zero_grad` is called
+        between forward and backward (as is common in training loops)."""
+        return
 
     def close(self) -> None:
         """Detach forward hooks. After this, the optimizer is inert."""
@@ -281,11 +287,11 @@ class BitPermutationLUTOptimizer:
 
             native = _get_bit_permlut_native()
             if native is not None:
-                # Fused kernel: dequant fp8 latent/m/v -> Adam update ->
-                # requant latent (fixed scale) + emit f32 m, v for per-table
-                # quantization below.
-                m_f, v_f = native.fused_fp8_adam(
-                    state["latent_fp8"],
+                # Fused kernel: dequant fp8 latent/m/v (all per-table scaled)
+                # -> Adam update (safety-clamp latent to +/-10) -> emit f32
+                # latent, m, v scratch. Per-table fp8 requantization below.
+                latent_f, m_f, v_f = native.fused_fp8_adam(
+                    lut.latent_fp8, lut.latent_scale,
                     state["m_fp8"], state["m_scale"],
                     state["v_fp8"], state["v_scale"],
                     weight_grad,
@@ -293,23 +299,28 @@ class BitPermutationLUTOptimizer:
                     float(self.eps), float(bias1), float(bias2),
                     float(lr),
                 )
-                # Per-table fp8 requantization for m, v (amax reduction).
+                lat_fp8, lat_scale = _to_fp8_per_table(latent_f)
+                lut.latent_fp8.copy_(lat_fp8)
+                lut.latent_scale.copy_(lat_scale)
                 state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
                 state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
             else:
-                # CPU / fallback path (no fp8 support).
-                latent_f = _from_fp8_fixed(state["latent_fp8"], mx=1.0)
+                # CPU / fallback path (no fused kernel available).
+                latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
                 m_f = _from_fp8_per_table(state["m_fp8"], state["m_scale"])
                 v_f = _from_fp8_per_table(state["v_fp8"], state["v_scale"])
                 m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
                 v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
                 denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
                 latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
-                state["latent_fp8"] = _to_fp8_fixed(latent_f, mx=1.0)
+                latent_f.clamp_(-10.0, 10.0)
+                lat_fp8, lat_scale = _to_fp8_per_table(latent_f)
+                lut.latent_fp8.copy_(lat_fp8)
+                lut.latent_scale.copy_(lat_scale)
                 state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
                 state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
 
-            self._refresh_weights(lut, state)
+            self._refresh_weights(lut)
             state["grad_out"] = None
             state["lookup_indices"] = None
 
@@ -317,8 +328,9 @@ class BitPermutationLUTOptimizer:
     def state_as_float(self, idx: int = 0) -> dict:
         """Return dequantized float32 state for module `idx` (for tests / debug)."""
         s = self._states[idx]
+        lut = self.modules[idx]
         return {
-            "latent": _from_fp8_fixed(s["latent_fp8"], mx=1.0),
+            "latent": _from_fp8_per_table(lut.latent_fp8, lut.latent_scale),
             "m": _from_fp8_per_table(s["m_fp8"], s["m_scale"]),
             "v": _from_fp8_per_table(s["v_fp8"], s["v_scale"]),
         }

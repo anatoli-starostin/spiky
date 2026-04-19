@@ -98,9 +98,9 @@ def test_optimizer_storage_is_fp8():
         n_inputs=32, n_outputs=12, n_heads=2, input_nap=5, output_nap=8, tph=8,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=42)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-3)
     s = opt._states[0]
-    assert s["latent_fp8"].dtype == torch.float8_e4m3fn
+    assert lut.latent_fp8.dtype == torch.float8_e4m3fn
     assert s["m_fp8"].dtype == torch.float8_e4m3fn
     assert s["v_fp8"].dtype == torch.float8_e4m3fn
     # Per-table scales: [N, 1, 1] float32
@@ -117,10 +117,10 @@ def test_optimizer_initial_bit_weights_match_latent_sign():
         n_inputs=32, n_outputs=12, n_heads=2, input_nap=5, output_nap=8, tph=8,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=42)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-3)
     latent = opt.state_as_float(0)["latent"]
-    expected_signs = latent.sign()
-    expected_signs[expected_signs == 0] = 1.0
+    # bit_pack_signs kernel uses `signs > 0 ? 1 : 0` → 0 latent decodes to -1.
+    expected_signs = torch.where(latent > 0, 1.0, -1.0)
     actual_signs = lut.get_bit_weights_as_signs()
     assert torch.equal(actual_signs, expected_signs)
     opt.close()
@@ -138,17 +138,21 @@ def test_optimizer_step_reduces_synthetic_loss():
         input_nap=5, output_nap=8, tph=16,
         random_seed=7, device=dev,
     )
+    # Force random bits on the teacher so student can't match at init.
+    signs = torch.where(
+        torch.randn_like(target_lut.get_bit_weights_as_signs()) > 0, 1.0, -1.0,
+    )
+    target_lut.set_bit_weights_from_signs(signs)
     target_lut.eval()
 
-    # Student BitPermLUT — same architecture, different initial bits.
+    # Student BitPermLUT — same anchor layout (same seed) but its own latent
+    # init (small uniform -> ~50% sign match to teacher at step 0).
     student = BitPermutationLUT(
         n_inputs=32, n_outputs=16, n_heads=2,
         input_nap=5, output_nap=8, tph=16,
         random_seed=7, device=dev,
     )
-    # Align student's anchor pairs with target so they share the same lookups.
-    # (Same random_seed already guarantees this.)
-    opt = BitPermutationLUTOptimizer([student], lr=1e-2, seed=123)
+    opt = BitPermutationLUTOptimizer([student], lr=1e-2)
 
     torch.manual_seed(0)
     N_TRAIN = 2048
@@ -184,7 +188,7 @@ def test_optimizer_bit_weights_change_over_steps():
         input_nap=5, output_nap=8, tph=16,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-2, seed=1)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-2)
     bw_before = lut.bit_weights.clone()
 
     x = torch.randn(16, 32, device=dev, requires_grad=True)
@@ -206,7 +210,7 @@ def test_optimizer_close_detaches_hooks():
         n_inputs=16, n_outputs=8, n_heads=2, input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=0)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-3)
     assert len(opt._handles) == 1
     opt.close()
     assert len(opt._handles) == 0
@@ -228,7 +232,7 @@ def test_optimizer_nan_grad_does_not_corrupt_state():
         n_inputs=16, n_outputs=8, n_heads=2, input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-2, seed=0)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-2)
 
     x = torch.randn(4, 16, device=dev, requires_grad=True)
     opt.zero_grad()
@@ -253,7 +257,7 @@ def test_optimizer_hook_captures_lookup_indices():
         n_inputs=16, n_outputs=8, n_heads=2, input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=0)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-3)
 
     x = torch.randn(3, 16, device=dev, requires_grad=True)
     opt.zero_grad()
@@ -277,13 +281,13 @@ def test_optimizer_state_memory_is_fp8_only():
         n_inputs=32, n_outputs=12, n_heads=2, input_nap=5, output_nap=8, tph=16,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-3, seed=0)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-3)
     s = opt._states[0]
     N = lut.n_heads * lut.tph  # 32
     W = N * lut.table_dim * lut.output_nap  # 32 * 32 * 8 = 8192
-    # fp8 tensors: 1 byte/elem.
+    # fp8 tensors: 1 byte/elem. Latent lives on lut, m/v on optimizer state.
     bytes_fp8 = (
-        s["latent_fp8"].numel() * s["latent_fp8"].element_size()
+        lut.latent_fp8.numel() * lut.latent_fp8.element_size()
         + s["m_fp8"].numel() * s["m_fp8"].element_size()
         + s["v_fp8"].numel() * s["v_fp8"].element_size()
     )
@@ -303,7 +307,7 @@ def test_optimizer_tolerates_huge_grad_without_blowup():
         n_inputs=16, n_outputs=8, n_heads=2, input_nap=4, output_nap=5, tph=4,
         random_seed=0, device=dev,
     )
-    opt = BitPermutationLUTOptimizer([lut], lr=1e-2, seed=0)
+    opt = BitPermutationLUTOptimizer([lut], lr=1e-2)
     x = torch.randn(4, 16, device=dev, requires_grad=True)
     for _ in range(5):
         opt.zero_grad()
@@ -330,7 +334,7 @@ def test_optimizer_lr_schedule():
 
     calls = []
     opt = BitPermutationLUTOptimizer(
-        [lut], lr=1e-2, seed=0,
+        [lut], lr=1e-2,
         lr_schedule_fn=lambda s: (calls.append(s), 0.0)[1],  # lr multiplier = 0
     )
     x = torch.randn(4, 16, device=dev, requires_grad=True)

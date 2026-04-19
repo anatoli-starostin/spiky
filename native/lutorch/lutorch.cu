@@ -611,29 +611,25 @@ __global__ void bit_perm_lut_dom_gather_fwd_kernel(
     out_ptr[b * n_heads * P + h * P + p] = sum;
 }
 
-// Backward: project grad_out through bit weights to lookup-index carriers.
-// One thread per (b, n) where n = h*tph + t. Each thread accumulates over k
-// in [0, output_nap): sign_main/alt ∈ {-1, +1} from bit_weights at entry_main/alt,
-// grad_slot = scale * grad_out[b, h, pair_idx_per_slot[h, t, k]].
-//   grad_main[b, n]    = sum_k grad_slot * sign_main[b, n, k]
-//   grad_alt [b, n, 0] = sum_k grad_slot * sign_alt [b, n, k]
-// Bit weights carry NO gradient (discrete); returned through carriers only.
+// Backward (hard STE): project grad_out through discretized +/-1 bit_weights
+// into lookup-index carriers. One thread per (b, n) where n = h*tph + t.
+// Reads 32 bits at a time from the packed int32 blocks.
 __global__ void bit_perm_lut_dom_gather_bwd_kernel(
     int32_t batch_size,
     int32_t n_heads,
     int32_t tph,
     int32_t n_blocks,          // ceil(output_nap / 32)
-    int32_t P,                 // canonical pair count
-    int32_t table_dim,         // 2 ** input_nap
+    int32_t P,
+    int32_t table_dim,
     int32_t output_nap,
     float scale,
-    const int16_t* __restrict__ lookup_indices_ptr,      // [B, n_heads*tph]
-    const int16_t* __restrict__ lookup_alt_indices_ptr,  // [B, n_heads*tph, 1]
-    const int32_t* __restrict__ bit_weights_ptr,         // [n_heads*tph, table_dim, n_blocks]
-    const int32_t* __restrict__ pair_idx_ptr,            // [n_heads, tph, output_nap]
-    const float*   __restrict__ grad_out_ptr,            // [B, n_heads, P]
-    float*         __restrict__ grad_main_ptr,           // [B, n_heads*tph]
-    float*         __restrict__ grad_alt_ptr             // [B, n_heads*tph, 1]
+    const int16_t* __restrict__ lookup_indices_ptr,
+    const int16_t* __restrict__ lookup_alt_indices_ptr,
+    const int32_t* __restrict__ bit_weights_ptr,          // [N, table_dim, n_blocks]
+    const int32_t* __restrict__ pair_idx_ptr,
+    const float*   __restrict__ grad_out_ptr,
+    float*         __restrict__ grad_main_ptr,
+    float*         __restrict__ grad_alt_ptr
 ) {
     int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int32_t total = batch_size * n_heads * tph;
@@ -660,23 +656,80 @@ __global__ void bit_perm_lut_dom_gather_bwd_kernel(
     int32_t block_alt  = 0;
 
     for (int32_t k = 0; k < output_nap; ++k) {
-        int32_t block_idx = k >> 5;         // / 32
-        int32_t bit_idx   = k & 31;         // % 32
+        int32_t block_idx = k >> 5;
+        int32_t bit_idx   = k & 31;
         if (block_idx != cached_block_idx) {
             block_main = bit_weights_ptr[w_base_main + block_idx];
             block_alt  = bit_weights_ptr[w_base_alt  + block_idx];
             cached_block_idx = block_idx;
         }
-        int32_t bit_main = (block_main >> bit_idx) & 1;
-        int32_t bit_alt  = (block_alt  >> bit_idx) & 1;
-        float sign_main = 2.0f * static_cast<float>(bit_main) - 1.0f;
-        float sign_alt  = 2.0f * static_cast<float>(bit_alt)  - 1.0f;
+        float sign_main = 2.0f * static_cast<float>((block_main >> bit_idx) & 1) - 1.0f;
+        float sign_alt  = 2.0f * static_cast<float>((block_alt  >> bit_idx) & 1) - 1.0f;
 
         int32_t p = pair_idx_ptr[pair_base + k];
         float g_slot = scale * grad_out_ptr[grad_base + p];
 
         grad_main += g_slot * sign_main;
         grad_alt  += g_slot * sign_alt;
+    }
+
+    grad_main_ptr[b * n_heads * tph + n] = grad_main;
+    grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+}
+
+// Backward (STE-soft / latent): same structure as the hard kernel above, but
+// uses the continuous fp8 latent value (dequantized to [-1, 1]) in place of
+// the discrete +/-1 sign. Near-zero latents contribute small gradient;
+// confident (near +/-1) latents contribute full magnitude. Useful late in
+// training after bits have settled; can under-train early when latent
+// magnitudes are still small.
+__global__ void bit_perm_lut_dom_gather_bwd_latent_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t P,
+    int32_t table_dim,
+    int32_t output_nap,
+    float scale,
+    const int16_t*       __restrict__ lookup_indices_ptr,
+    const int16_t*       __restrict__ lookup_alt_indices_ptr,
+    const __nv_fp8_e4m3* __restrict__ latent_fp8_ptr,     // [N, table_dim, output_nap] fp8
+    const float*         __restrict__ latent_scale_ptr,   // [N] float32 (per-table amax scale)
+    const int32_t*       __restrict__ pair_idx_ptr,
+    const float*         __restrict__ grad_out_ptr,
+    float*               __restrict__ grad_main_ptr,
+    float*               __restrict__ grad_alt_ptr
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_heads * tph;
+    if (tid >= total) return;
+
+    int32_t n = tid % (n_heads * tph);
+    int32_t b = tid / (n_heads * tph);
+    int32_t h = n / tph;
+    int32_t t = n - h * tph;
+
+    int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+
+    int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    int32_t pair_base     = (h * tph + t) * output_nap;
+    int32_t grad_base     = b * n_heads * P + h * P;
+
+    float inv_scale = 1.0f / latent_scale_ptr[n];
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+
+    for (int32_t k = 0; k < output_nap; ++k) {
+        float lat_main = static_cast<float>(latent_fp8_ptr[lat_base_main + k]) * inv_scale;
+        float lat_alt  = static_cast<float>(latent_fp8_ptr[lat_base_alt  + k]) * inv_scale;
+
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
     }
 
     grad_main_ptr[b * n_heads * tph + n] = grad_main;
@@ -713,6 +766,48 @@ __global__ void bit_pack_signs_kernel(
     #pragma unroll 1
     for (int32_t k = k_start; k < k_end; ++k) {
         int32_t bit = (signs_ptr[sign_base + k] > 0.0f) ? 1 : 0;
+        block |= (bit << (k - k_start));
+    }
+    bit_weights_ptr[(n * table_dim + e) * n_blocks + bi] = block;
+}
+
+// =====================================================================
+// Pack bit_weights from fp8 sign bits directly -- no float materialization.
+// fp8_e4m3fn encodes sign in bit 7 (reinterpret as uint8): bit_7 == 1 means
+// negative value (except fp8 -0 = 0x80, treated as +1 to match "> 0" logic
+// used elsewhere). We use `> 0` semantics: byte != 0x80 AND bit_7 == 1 -> -1.
+// For simplicity and consistency we match bit_pack_signs_kernel:
+//   fp8 byte -> float sign via "> 0" test.
+// One thread per (n, e, block_idx).
+// =====================================================================
+__global__ void bit_pack_fp8_signs_kernel(
+    int32_t N, int32_t table_dim, int32_t output_nap, int32_t n_blocks,
+    const __nv_fp8_e4m3* __restrict__ latent_fp8_ptr,   // [N, td, ona] fp8
+    int32_t*             __restrict__ bit_weights_ptr   // [N, td, n_blocks] int32
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = N * table_dim * n_blocks;
+    if (tid >= total) return;
+
+    int32_t bi = tid % n_blocks;
+    int32_t e_n = tid / n_blocks;
+    int32_t e = e_n % table_dim;
+    int32_t n = e_n / table_dim;
+
+    int32_t k_start = bi * 32;
+    int32_t k_end = k_start + 32;
+    if (k_end > output_nap) k_end = output_nap;
+
+    int32_t block = 0;
+    int32_t base = (n * table_dim + e) * output_nap;
+    // Reinterpret fp8 byte as uint8 to inspect the sign bit without any math.
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(latent_fp8_ptr);
+    #pragma unroll 1
+    for (int32_t k = k_start; k < k_end; ++k) {
+        uint8_t b = bytes[base + k];
+        // sign bit = bit 7; positive (> 0) iff bit 7 is clear AND byte != 0x00
+        // (strict `> 0` matches bit_pack_signs_kernel semantics).
+        int32_t bit = ((b & 0x80u) == 0 && b != 0) ? 1 : 0;
         block |= (bit << (k - k_start));
     }
     bit_weights_ptr[(n * table_dim + e) * n_blocks + bi] = block;
@@ -760,25 +855,22 @@ __global__ void bit_perm_lut_weight_grad_kernel(
 }
 
 // =====================================================================
-// Fused fp8-latent Adam step: dequant latent/m/v, update m/v, update latent,
-// clamp + requant latent to fp8 (fixed scale = 1/448), emit new m/v as float32
-// scratch (per-table quantization happens in a separate pass).
+// Fused fp8-latent Adam step. All three tensors (latent, m, v) use per-table
+// dynamic fp8 scaling. Kernel dequantizes, runs Adam math, and emits all
+// three new values as float32 scratch buffers. Per-table fp8 quantization
+// of each scratch buffer happens in a separate pass via _to_fp8_per_table.
 //
-// One thread per element at (n, e, k). Per-table Adam uses shared m/v scales
-// from float32 arrays of shape [N, 1, 1] indexed by n.
+// Latent is safety-clamped to +/-10 (see commit notes): protects against
+// runaway latents under pathological gradient sequences. Normal Adam
+// dynamics keep latents well within [-1, 1] for reasonable training lengths.
 //
-//   latent_fp8 (inplace): [N, td, ona] fp8 (fixed scale AMAX=448)
-//   m_fp8                 [N, td, ona] fp8
-//   m_scale               [N] float32
-//   v_fp8                 [N, td, ona] fp8
-//   v_scale               [N] float32
-//   weight_grad           [N, td, ona] float32 (zeroed after this call)
-//   m_f32_out (written)   [N, td, ona] float32
-//   v_f32_out (written)   [N, td, ona] float32
+//   latent_fp8, m_fp8, v_fp8: [N, td, ona] fp8; per-table scales [N]
+//   weight_grad              [N, td, ona] float32
+//   latent_f32_out, m_f32_out, v_f32_out (written) [N, td, ona] float32
 //
-// Hparams are packed as fused scalars:
-//   lr_over_bias1_times_b2sqrt = -lr * sqrt(bias2) / bias1
-//   eps_times_b2sqrt           = eps * sqrt(bias2)
+// TODO: fuse in-kernel per-table amax reduction + fp8 requant to eliminate
+// the 3x f32 scratch allocation. Prototype exists in the commit history but
+// needs multi-block or per-pair granularity for tables > 32K elements.
 // =====================================================================
 __global__ void fused_fp8_adam_kernel(
     int32_t total,
@@ -786,13 +878,15 @@ __global__ void fused_fp8_adam_kernel(
     float beta1, float beta2,
     float one_minus_b1, float one_minus_b2,
     float eps_times_b2sqrt,
-    float lr_step_coef,     // = -lr * sqrt(bias2) / bias1
-    __nv_fp8_e4m3* __restrict__ latent_fp8,    // inplace
+    float lr_step_coef,
+    const __nv_fp8_e4m3* __restrict__ latent_fp8,
+    const float*         __restrict__ latent_scale,
     const __nv_fp8_e4m3* __restrict__ m_fp8,
     const float*         __restrict__ m_scale,
     const __nv_fp8_e4m3* __restrict__ v_fp8,
     const float*         __restrict__ v_scale,
     const float*         __restrict__ weight_grad,
+    float*               __restrict__ latent_f32_out,
     float*               __restrict__ m_f32_out,
     float*               __restrict__ v_f32_out
 ) {
@@ -800,24 +894,21 @@ __global__ void fused_fp8_adam_kernel(
     if (tid >= total) return;
     int32_t n = tid / per_table;
 
-    const float AMAX = 448.0f;
-    // Dequant.
-    float latent_f = static_cast<float>(latent_fp8[tid]) / AMAX;
+    // Dequant (per-table scales for all three tensors).
+    float latent_f = static_cast<float>(latent_fp8[tid]) / latent_scale[n];
     float m_f = static_cast<float>(m_fp8[tid]) / m_scale[n];
     float v_f = static_cast<float>(v_fp8[tid]) / v_scale[n];
     float g = weight_grad[tid];
 
-    // Adam update.
+    // Adam update; safety-clamp latent to +/-10.
     float m_new = beta1 * m_f + one_minus_b1 * g;
     float v_new = beta2 * v_f + one_minus_b2 * g * g;
     float denom = sqrtf(fmaxf(v_new, 0.0f)) + eps_times_b2sqrt;
     float latent_new = latent_f + lr_step_coef * m_new / denom;
+    const float LATENT_SAFETY_CLAMP = 10.0f;
+    latent_new = fminf(LATENT_SAFETY_CLAMP, fmaxf(-LATENT_SAFETY_CLAMP, latent_new));
 
-    // Clamp + requant latent (fixed scale).
-    latent_new = fminf(1.0f, fmaxf(-1.0f, latent_new));
-    latent_fp8[tid] = __nv_fp8_e4m3(latent_new * AMAX);
-
-    // Emit f32 m, v for per-table quantization in a follow-up kernel.
+    latent_f32_out[tid] = latent_new;
     m_f32_out[tid] = m_new;
     v_f32_out[tid] = v_new;
 }
@@ -4138,11 +4229,12 @@ public:
     //          grad_alt  [B, n_heads*tph, 1])  float32.
     // No weight gradient — bits are discrete.
     // -----------------------------------------------------------------
+    // Hard STE backward: project grad_out through +/-1 bit_weights to carriers.
     std::tuple<torch::Tensor, torch::Tensor> bit_perm_lut_dom_gather_backward(
         const torch::Tensor& grad_out,
         const torch::Tensor& lookup_indices,
         const torch::Tensor& lookup_alt_indices,
-        const torch::Tensor& bit_weights,
+        const torch::Tensor& bit_weights,            // [N, table_dim, n_blocks] int32
         const torch::Tensor& pair_idx_per_slot,
         int64_t n_heads,
         int64_t tph,
@@ -4164,21 +4256,11 @@ public:
         int64_t B = grad_out.size(0);
         if (grad_out.dim() != 3 || grad_out.size(1) != n_heads || grad_out.size(2) != n_pairs)
             throw py::value_error("grad_out must be [B, n_heads, n_pairs]");
-        if (lookup_indices.dim() != 2 || lookup_indices.size(0) != B || lookup_indices.size(1) != n_heads * tph)
-            throw py::value_error("lookup_indices must be [B, n_heads*tph]");
-        if (lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(0) != B
-            || lookup_alt_indices.size(1) != n_heads * tph || lookup_alt_indices.size(2) != 1)
-            throw py::value_error("lookup_alt_indices must be [B, n_heads*tph, 1]");
         if (bit_weights.dim() != 3 || bit_weights.size(0) != n_heads * tph)
             throw py::value_error("bit_weights.size(0) must equal n_heads*tph");
         int64_t table_dim = bit_weights.size(1);
         int64_t n_blocks  = bit_weights.size(2);
         if (n_blocks != (output_nap + 31) / 32) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap/32)");
-        if (pair_idx_per_slot.dim() != 3
-            || pair_idx_per_slot.size(0) != n_heads
-            || pair_idx_per_slot.size(1) != tph
-            || pair_idx_per_slot.size(2) != output_nap)
-            throw py::value_error("pair_idx_per_slot must be [n_heads, tph, output_nap]");
 
         auto go_c  = grad_out.contiguous();
         auto li_c  = lookup_indices.contiguous();
@@ -4207,6 +4289,72 @@ public:
             reinterpret_cast<const int16_t*>(li_c.data_ptr()),
             reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
             reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+            reinterpret_cast<const float*>(go_c.data_ptr()),
+            reinterpret_cast<float*>(grad_main.data_ptr()),
+            reinterpret_cast<float*>(grad_alt.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(grad_main, grad_alt);
+    }
+
+    // STE-soft backward: uses continuous fp8 latent (per-table scaled) instead
+    // of discrete +/-1. Gradient magnitude scales with latent magnitude.
+    std::tuple<torch::Tensor, torch::Tensor> bit_perm_lut_dom_gather_backward_latent(
+        const torch::Tensor& grad_out,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& latent_fp8,         // [N, table_dim, output_nap] fp8
+        const torch::Tensor& latent_scale,        // [N, 1, 1] float32
+        const torch::Tensor& pair_idx_per_slot,
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t n_pairs,
+        double scale,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
+            || !latent_fp8.is_cuda() || !latent_scale.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
+        if (latent_fp8.dtype() != torch::kFloat8_e4m3fn) throw py::value_error("latent_fp8 must be float8_e4m3fn");
+        if (latent_scale.dtype() != torch::kFloat32) throw py::value_error("latent_scale must be float32");
+        if (latent_fp8.dim() != 3 || latent_fp8.size(0) != n_heads * tph
+            || latent_fp8.size(2) != output_nap)
+            throw py::value_error("latent_fp8 must be [n_heads*tph, table_dim, output_nap]");
+        int64_t B = grad_out.size(0);
+        int64_t table_dim = latent_fp8.size(1);
+
+        auto go_c  = grad_out.contiguous();
+        auto li_c  = lookup_indices.contiguous();
+        auto lai_c = lookup_alt_indices.contiguous();
+        auto lat_c = latent_fp8.contiguous();
+        auto lsc   = latent_scale.contiguous();
+        auto pi_c  = pair_idx_per_slot.contiguous();
+
+        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
+        torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
+        torch::Tensor grad_alt  = torch::empty({B, n_heads * tph, 1}, opts_f);
+
+        c10::cuda::CUDAGuard guard(grad_out.device().index());
+        int64_t total = B * n_heads * tph;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        bit_perm_lut_dom_gather_bwd_latent_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<float>(scale),
+            reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+            reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+            reinterpret_cast<const __nv_fp8_e4m3*>(lat_c.data_ptr()),
+            reinterpret_cast<const float*>(lsc.data_ptr()),
             reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
             reinterpret_cast<const float*>(go_c.data_ptr()),
             reinterpret_cast<float*>(grad_main.data_ptr()),
@@ -4257,16 +4405,52 @@ public:
         CU_CHECK(cudaGetLastError());
     }
 
+    // Same as bit_pack_signs but reads fp8 directly -- avoids materializing
+    // a float32 latent tensor just to take its sign.
+    void bit_pack_fp8_signs(
+        const torch::Tensor& latent_fp8,
+        torch::Tensor& bit_weights,
+        int64_t output_nap,
+        int64_t threads_per_block = 256
+    ) {
+        if (!latent_fp8.is_cuda() || !bit_weights.is_cuda()) throw py::value_error("tensors must be CUDA");
+        if (latent_fp8.dtype() != torch::kFloat8_e4m3fn) throw py::value_error("latent_fp8 must be float8_e4m3fn");
+        if (bit_weights.dtype() != torch::kInt32) throw py::value_error("bit_weights must be int32");
+        if (latent_fp8.dim() != 3) throw py::value_error("latent_fp8 must be [N, table_dim, output_nap]");
+        int64_t N = latent_fp8.size(0);
+        int64_t table_dim = latent_fp8.size(1);
+        if (latent_fp8.size(2) != output_nap) throw py::value_error("latent_fp8.size(2) must equal output_nap");
+        int64_t n_blocks = bit_weights.size(2);
+        if (bit_weights.size(0) != N || bit_weights.size(1) != table_dim) throw py::value_error("bit_weights shape mismatch");
+        if (n_blocks != (output_nap + 31) / 32) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap/32)");
+
+        auto lc = latent_fp8.contiguous();
+        auto bc = bit_weights.contiguous();
+        c10::cuda::CUDAGuard guard(latent_fp8.device().index());
+        int64_t total = N * table_dim * n_blocks;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+        bit_pack_fp8_signs_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(N),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<int32_t>(n_blocks),
+            reinterpret_cast<const __nv_fp8_e4m3*>(lc.data_ptr()),
+            reinterpret_cast<int32_t*>(bc.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+    }
+
     // -----------------------------------------------------------------
     // Fused fp8-latent Adam step (single kernel over all elements):
-    //   Dequantize latent / m / v from fp8 (latent has fixed scale 1/448;
-    //   m and v use per-table float32 scales). Update m, v with grad.
-    //   Update latent, clamp to [-1, 1], requantize to fp8 (fixed scale).
-    //   Emit new m, v as float32 scratch tensors (per-table requantization
-    //   happens in a separate pass).
+    // dequantize latent/m/v from fp8 with per-table scales, run Adam math,
+    // safety-clamp latent to +-10, and emit new latent/m/v as float32 scratch
+    // tensors. Per-table fp8 requantization for each happens in a separate
+    // pass via _to_fp8_per_table.
     // -----------------------------------------------------------------
-    std::tuple<torch::Tensor, torch::Tensor> fused_fp8_adam(
-        torch::Tensor& latent_fp8,              // [N, td, ona] fp8 (inplace)
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> fused_fp8_adam(
+        const torch::Tensor& latent_fp8,        // [N, td, ona] fp8
+        const torch::Tensor& latent_scale,      // [N, 1, 1] float32
         const torch::Tensor& m_fp8,             // [N, td, ona] fp8
         const torch::Tensor& m_scale,           // [N, 1, 1] float32
         const torch::Tensor& v_fp8,             // [N, td, ona] fp8
@@ -4277,15 +4461,16 @@ public:
         double lr,
         int64_t threads_per_block = 256
     ) {
-        if (!latent_fp8.is_cuda() || !m_fp8.is_cuda() || !v_fp8.is_cuda()
+        if (!latent_fp8.is_cuda() || !latent_scale.is_cuda() || !m_fp8.is_cuda() || !v_fp8.is_cuda()
             || !m_scale.is_cuda() || !v_scale.is_cuda() || !weight_grad.is_cuda())
             throw py::value_error("tensors must be CUDA");
         if (latent_fp8.dtype() != torch::kFloat8_e4m3fn) throw py::value_error("latent_fp8 must be float8_e4m3fn");
         if (m_fp8.dtype()      != torch::kFloat8_e4m3fn) throw py::value_error("m_fp8 must be float8_e4m3fn");
         if (v_fp8.dtype()      != torch::kFloat8_e4m3fn) throw py::value_error("v_fp8 must be float8_e4m3fn");
-        if (m_scale.dtype()    != torch::kFloat32) throw py::value_error("m_scale must be float32");
-        if (v_scale.dtype()    != torch::kFloat32) throw py::value_error("v_scale must be float32");
-        if (weight_grad.dtype()!= torch::kFloat32) throw py::value_error("weight_grad must be float32");
+        if (latent_scale.dtype() != torch::kFloat32) throw py::value_error("latent_scale must be float32");
+        if (m_scale.dtype()      != torch::kFloat32) throw py::value_error("m_scale must be float32");
+        if (v_scale.dtype()      != torch::kFloat32) throw py::value_error("v_scale must be float32");
+        if (weight_grad.dtype()  != torch::kFloat32) throw py::value_error("weight_grad must be float32");
         if (latent_fp8.sizes() != m_fp8.sizes() || latent_fp8.sizes() != v_fp8.sizes()
             || latent_fp8.sizes() != weight_grad.sizes())
             throw py::value_error("latent/m/v/weight_grad shape mismatch");
@@ -4295,20 +4480,18 @@ public:
         int64_t per_table = latent_fp8.size(1) * latent_fp8.size(2);
         int64_t total = N * per_table;
 
-        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(latent_fp8.device());
+        auto latent_out = torch::empty_like(weight_grad);
         auto m_out = torch::empty_like(weight_grad);
         auto v_out = torch::empty_like(weight_grad);
 
-        auto lc = latent_fp8.contiguous();
-        auto mc = m_fp8.contiguous();
-        auto vc = v_fp8.contiguous();
+        auto lc  = latent_fp8.contiguous();
+        auto lsc = latent_scale.contiguous();
+        auto mc  = m_fp8.contiguous();
+        auto vc  = v_fp8.contiguous();
         auto msc = m_scale.contiguous();
         auto vsc = v_scale.contiguous();
-        auto gc = weight_grad.contiguous();
+        auto gc  = weight_grad.contiguous();
 
-        // 1/bias1 could overflow if bias1 -> 0 (very early step with beta1^1 ~ 0.1,
-        // so bias1 = 0.9 — not actually tiny). Caller supplies bias1/bias2 already
-        // computed from the step counter; we just fuse the coefficients here.
         float bias2_sqrt = std::sqrt(std::max(bias2, 1e-30));
         float eps_times_b2sqrt = static_cast<float>(eps * bias2_sqrt);
         float lr_step_coef = static_cast<float>(-lr * bias2_sqrt / bias1);
@@ -4325,17 +4508,19 @@ public:
             static_cast<float>(1.0 - beta2),
             eps_times_b2sqrt,
             lr_step_coef,
-            reinterpret_cast<__nv_fp8_e4m3*>(lc.data_ptr()),
+            reinterpret_cast<const __nv_fp8_e4m3*>(lc.data_ptr()),
+            reinterpret_cast<const float*>(lsc.data_ptr()),
             reinterpret_cast<const __nv_fp8_e4m3*>(mc.data_ptr()),
             reinterpret_cast<const float*>(msc.data_ptr()),
             reinterpret_cast<const __nv_fp8_e4m3*>(vc.data_ptr()),
             reinterpret_cast<const float*>(vsc.data_ptr()),
             reinterpret_cast<const float*>(gc.data_ptr()),
+            reinterpret_cast<float*>(latent_out.data_ptr()),
             reinterpret_cast<float*>(m_out.data_ptr()),
             reinterpret_cast<float*>(v_out.data_ptr())
         );
         CU_CHECK(cudaGetLastError());
-        return std::make_tuple(m_out, v_out);
+        return std::make_tuple(latent_out, m_out, v_out);
     }
 
     // -----------------------------------------------------------------
@@ -4705,6 +4890,22 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("threads_per_block") = 256
         )
         .def(
+            "bit_perm_lut_dom_gather_backward_latent",
+            &LUTorchManager::bit_perm_lut_dom_gather_backward_latent,
+            py::arg("grad_out"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("latent_fp8"),
+            py::arg("latent_scale"),
+            py::arg("pair_idx_per_slot"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("scale"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
             "bit_pack_signs",
             &LUTorchManager::bit_pack_signs,
             py::arg("signs"),
@@ -4713,9 +4914,18 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("threads_per_block") = 256
         )
         .def(
+            "bit_pack_fp8_signs",
+            &LUTorchManager::bit_pack_fp8_signs,
+            py::arg("latent_fp8"),
+            py::arg("bit_weights"),
+            py::arg("output_nap"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
             "fused_fp8_adam",
             &LUTorchManager::fused_fp8_adam,
             py::arg("latent_fp8"),
+            py::arg("latent_scale"),
             py::arg("m_fp8"),
             py::arg("m_scale"),
             py::arg("v_fp8"),

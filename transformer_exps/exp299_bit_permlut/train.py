@@ -223,6 +223,8 @@ adam_scheduler = torch.optim.lr_scheduler.LambdaLR(adam_opt, get_lr_scale)
 bit_opt = BitPermutationLUTOptimizer(
     bit_luts,
     lr=cfg['bit_lut_lr'],
+    beta1=cfg.get('bit_lut_beta1', 0.9),
+    beta2=cfg.get('bit_lut_beta2', 0.999),
     latent_init_std=cfg['bit_lut_latent_init_std'],
     lr_schedule_fn=get_lr_scale,
     seed=cfg['random_seed'] + 7777,

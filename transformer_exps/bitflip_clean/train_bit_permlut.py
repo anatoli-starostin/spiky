@@ -65,7 +65,11 @@ print(f"y std={y.std().item():.3f}, |y|_max={y.abs().max().item():.3f}, "
       f"baseline predict-0 MSE = {(y ** 2).mean().item():.3f}")
 
 # ---- Student: BitPermLUT with teacher's anchor / output-pair layout ----
-student = BitPermutationLUT(random_seed=STUDENT_SEED, device=device, **CFG)
+student = BitPermutationLUT(
+    random_seed=STUDENT_SEED, device=device,
+    initial_weights_noise=LATENT_INIT_STD,
+    **CFG,
+)
 student.load_pairs(
     anchor_pairs_a=data["anchor_pairs_a"],
     anchor_pairs_b=data["anchor_pairs_b"],
@@ -95,9 +99,7 @@ def lr_schedule(step: int) -> float:
 opt = BitPermutationLUTOptimizer(
     [student],
     lr=PEAK_LR,
-    latent_init_std=LATENT_INIT_STD,
     lr_schedule_fn=lr_schedule,
-    seed=123,
 )
 
 
