@@ -5,6 +5,7 @@
 
 #ifndef NO_CUDA
 #include <cuda_fp8.h>
+#include <cuda_bf16.h>
 #endif
 
 namespace py = pybind11;
@@ -724,6 +725,114 @@ __global__ void bit_perm_lut_dom_gather_bwd_latent_kernel(
     for (int32_t k = 0; k < output_nap; ++k) {
         float lat_main = static_cast<float>(latent_fp8_ptr[lat_base_main + k]) * inv_scale;
         float lat_alt  = static_cast<float>(latent_fp8_ptr[lat_base_alt  + k]) * inv_scale;
+
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
+    }
+
+    grad_main_ptr[b * n_heads * tph + n] = grad_main;
+    grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+}
+
+
+// Soft-backward variant for latent_dtype='bf16': reads the continuous latent
+// from a bfloat16 buffer, casts to float for accumulation.
+__global__ void bit_perm_lut_dom_gather_bwd_latent_bf16_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t P,
+    int32_t table_dim,
+    int32_t output_nap,
+    float scale,
+    const int16_t*       __restrict__ lookup_indices_ptr,
+    const int16_t*       __restrict__ lookup_alt_indices_ptr,
+    const __nv_bfloat16* __restrict__ latent_bf16_ptr,   // [N, table_dim, output_nap] bf16
+    const int32_t*       __restrict__ pair_idx_ptr,
+    const float*         __restrict__ grad_out_ptr,
+    float*               __restrict__ grad_main_ptr,
+    float*               __restrict__ grad_alt_ptr
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_heads * tph;
+    if (tid >= total) return;
+
+    int32_t n = tid % (n_heads * tph);
+    int32_t b = tid / (n_heads * tph);
+    int32_t h = n / tph;
+    int32_t t = n - h * tph;
+
+    int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+
+    int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    int32_t pair_base     = (h * tph + t) * output_nap;
+    int32_t grad_base     = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+
+    for (int32_t k = 0; k < output_nap; ++k) {
+        float lat_main = __bfloat162float(latent_bf16_ptr[lat_base_main + k]);
+        float lat_alt  = __bfloat162float(latent_bf16_ptr[lat_base_alt  + k]);
+
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
+    }
+
+    grad_main_ptr[b * n_heads * tph + n] = grad_main;
+    grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+}
+
+
+// Soft-backward variant for latent_dtype='fp32': reads the continuous latent
+// directly from a float32 buffer, no dequantization.
+__global__ void bit_perm_lut_dom_gather_bwd_latent_f32_kernel(
+    int32_t batch_size,
+    int32_t n_heads,
+    int32_t tph,
+    int32_t P,
+    int32_t table_dim,
+    int32_t output_nap,
+    float scale,
+    const int16_t*       __restrict__ lookup_indices_ptr,
+    const int16_t*       __restrict__ lookup_alt_indices_ptr,
+    const float*         __restrict__ latent_f32_ptr,     // [N, table_dim, output_nap] float32
+    const int32_t*       __restrict__ pair_idx_ptr,
+    const float*         __restrict__ grad_out_ptr,
+    float*               __restrict__ grad_main_ptr,
+    float*               __restrict__ grad_alt_ptr
+) {
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int32_t total = batch_size * n_heads * tph;
+    if (tid >= total) return;
+
+    int32_t n = tid % (n_heads * tph);
+    int32_t b = tid / (n_heads * tph);
+    int32_t h = n / tph;
+    int32_t t = n - h * tph;
+
+    int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+
+    int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    int32_t pair_base     = (h * tph + t) * output_nap;
+    int32_t grad_base     = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+
+    for (int32_t k = 0; k < output_nap; ++k) {
+        float lat_main = latent_f32_ptr[lat_base_main + k];
+        float lat_alt  = latent_f32_ptr[lat_base_alt  + k];
 
         int32_t p = pair_idx_ptr[pair_base + k];
         float g_slot = scale * grad_out_ptr[grad_base + p];
@@ -4543,6 +4652,128 @@ public:
         return std::make_tuple(grad_main, grad_alt);
     }
 
+    // bf16-latent soft backward.
+    std::tuple<torch::Tensor, torch::Tensor> bit_perm_lut_dom_gather_backward_latent_bf16(
+        const torch::Tensor& grad_out,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& latent_bf16,        // [N, table_dim, output_nap] bf16
+        const torch::Tensor& pair_idx_per_slot,
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t n_pairs,
+        double scale,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
+            || !latent_bf16.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
+        if (latent_bf16.dtype() != torch::kBFloat16) throw py::value_error("latent_bf16 must be bfloat16");
+        if (latent_bf16.dim() != 3 || latent_bf16.size(0) != n_heads * tph
+            || latent_bf16.size(2) != output_nap)
+            throw py::value_error("latent_bf16 must be [n_heads*tph, table_dim, output_nap]");
+        int64_t B = grad_out.size(0);
+        int64_t table_dim = latent_bf16.size(1);
+
+        auto go_c  = grad_out.contiguous();
+        auto li_c  = lookup_indices.contiguous();
+        auto lai_c = lookup_alt_indices.contiguous();
+        auto lat_c = latent_bf16.contiguous();
+        auto pi_c  = pair_idx_per_slot.contiguous();
+
+        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
+        torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
+        torch::Tensor grad_alt  = torch::empty({B, n_heads * tph, 1}, opts_f);
+
+        c10::cuda::CUDAGuard guard(grad_out.device().index());
+        int64_t total = B * n_heads * tph;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        bit_perm_lut_dom_gather_bwd_latent_bf16_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<float>(scale),
+            reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+            reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(lat_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+            reinterpret_cast<const float*>(go_c.data_ptr()),
+            reinterpret_cast<float*>(grad_main.data_ptr()),
+            reinterpret_cast<float*>(grad_alt.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(grad_main, grad_alt);
+    }
+
+    // f32-latent soft backward: reads the continuous latent directly (no dequant).
+    std::tuple<torch::Tensor, torch::Tensor> bit_perm_lut_dom_gather_backward_latent_f32(
+        const torch::Tensor& grad_out,
+        const torch::Tensor& lookup_indices,
+        const torch::Tensor& lookup_alt_indices,
+        const torch::Tensor& latent_f32,         // [N, table_dim, output_nap] float32
+        const torch::Tensor& pair_idx_per_slot,
+        int64_t n_heads,
+        int64_t tph,
+        int64_t output_nap,
+        int64_t n_pairs,
+        double scale,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
+            || !latent_f32.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
+        if (latent_f32.dtype() != torch::kFloat32) throw py::value_error("latent_f32 must be float32");
+        if (latent_f32.dim() != 3 || latent_f32.size(0) != n_heads * tph
+            || latent_f32.size(2) != output_nap)
+            throw py::value_error("latent_f32 must be [n_heads*tph, table_dim, output_nap]");
+        int64_t B = grad_out.size(0);
+        int64_t table_dim = latent_f32.size(1);
+
+        auto go_c  = grad_out.contiguous();
+        auto li_c  = lookup_indices.contiguous();
+        auto lai_c = lookup_alt_indices.contiguous();
+        auto lat_c = latent_f32.contiguous();
+        auto pi_c  = pair_idx_per_slot.contiguous();
+
+        auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
+        torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
+        torch::Tensor grad_alt  = torch::empty({B, n_heads * tph, 1}, opts_f);
+
+        c10::cuda::CUDAGuard guard(grad_out.device().index());
+        int64_t total = B * n_heads * tph;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks  = static_cast<int>((total + threads - 1) / threads);
+
+        bit_perm_lut_dom_gather_bwd_latent_f32_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            static_cast<int32_t>(B),
+            static_cast<int32_t>(n_heads),
+            static_cast<int32_t>(tph),
+            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(table_dim),
+            static_cast<int32_t>(output_nap),
+            static_cast<float>(scale),
+            reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+            reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+            reinterpret_cast<const float*>(lat_c.data_ptr()),
+            reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+            reinterpret_cast<const float*>(go_c.data_ptr()),
+            reinterpret_cast<float*>(grad_main.data_ptr()),
+            reinterpret_cast<float*>(grad_alt.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+        return std::make_tuple(grad_main, grad_alt);
+    }
+
     // -----------------------------------------------------------------
     // Pack ±1 signs into int32 bit_weights blocks.
     //   signs:       [N, table_dim, output_nap] float32
@@ -5234,6 +5465,36 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_indices"),
             py::arg("lookup_alt_indices"),
             py::arg("bit_weights"),
+            py::arg("pair_idx_per_slot"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("scale"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_perm_lut_dom_gather_backward_latent_bf16",
+            &LUTorchManager::bit_perm_lut_dom_gather_backward_latent_bf16,
+            py::arg("grad_out"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("latent_bf16"),
+            py::arg("pair_idx_per_slot"),
+            py::arg("n_heads"),
+            py::arg("tph"),
+            py::arg("output_nap"),
+            py::arg("n_pairs"),
+            py::arg("scale"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "bit_perm_lut_dom_gather_backward_latent_f32",
+            &LUTorchManager::bit_perm_lut_dom_gather_backward_latent_f32,
+            py::arg("grad_out"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("latent_f32"),
             py::arg("pair_idx_per_slot"),
             py::arg("n_heads"),
             py::arg("tph"),

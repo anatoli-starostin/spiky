@@ -195,13 +195,15 @@ class BitPermutationLUTOptimizer:
         self._handles: List = []
         self._states: List[dict] = []
 
-        # Shared f32 scratch sized to the largest LUT. Step() processes LUTs
-        # sequentially so one pair is enough for all — no per-LUT duplication.
+        # Shared f32 scratches sized to the largest LUT. Step() processes
+        # LUTs sequentially so one buffer of each kind suffices for all
+        # (vs one-per-LUT duplication that would waste ~N_luts × max_size).
         max_numel = max(
             lut.n_heads * lut.tph * lut.table_dim * lut.output_nap
             for lut in self.modules
         )
         dev = self.modules[0].bit_weights.device
+        self._wg_buffer = torch.zeros(max_numel, device=dev, dtype=torch.float32)
         self._m_f32_scratch = torch.empty(max_numel, device=dev, dtype=torch.float32)
         self._v_f32_scratch = torch.empty(max_numel, device=dev, dtype=torch.float32)
         self._m_amax_scratch = torch.zeros(1, device=dev, dtype=torch.float32)
@@ -212,37 +214,59 @@ class BitPermutationLUTOptimizer:
             N = lut.n_heads * lut.tph
             shape = (N, lut.table_dim, lut.output_nap)
 
-            # m, v initialised to zero in fp8 directly (scale floor handles zeros).
-            m_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
-            v_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
-            m_scale = torch.full((N, 1, 1), _FP8_AMAX / 1e-20, device=dev, dtype=torch.float32)
-            v_scale = m_scale.clone()
-
-            # Persistent weight-grad buffer avoids per-step torch.zeros() alloc
-            # (especially meaningful for large out_proj LUTs -- 132 MB alloc
-            # per step otherwise).
-            wg_buffer = torch.zeros(shape, device=dev, dtype=torch.float32)
-
-            # Re-quantize the module's initial latent onto the fixed-scale
-            # grid (mx=1.0, scale=_FP8_AMAX constant). Overwrite lut.latent_scale
-            # to the constant so dequant paths (including the fused kernel and
-            # the soft-backward kernel) see a consistent fixed scale.
-            latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
-            lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
-            lut.latent_scale.fill_(_FP8_AMAX)
-
-            state = {
-                "m_fp8": m_fp8,             # fp8
-                "m_scale": m_scale,         # float32 [N, 1, 1]
-                "v_fp8": v_fp8,
-                "v_scale": v_scale,
-                "wg_buffer": wg_buffer,     # float32 [N, table_dim, output_nap]
-                "grad_out": None,
-                "lookup_indices": None,
-            }
+            mode = getattr(lut, 'latent_dtype', 'fp8')
+            if mode == 'fp8':
+                # m, v initialised to zero in fp8 directly (scale floor handles zeros).
+                m_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
+                v_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
+                m_scale = torch.full((N, 1, 1), _FP8_AMAX / 1e-20, device=dev, dtype=torch.float32)
+                v_scale = m_scale.clone()
+                # Re-quantize the module's initial latent onto the fixed-scale
+                # grid (mx=1.0, scale=_FP8_AMAX constant).
+                latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
+                lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+                lut.latent_scale.fill_(_FP8_AMAX)
+                state = {
+                    "mode": "fp8",
+                    "m_fp8": m_fp8, "m_scale": m_scale,
+                    "v_fp8": v_fp8, "v_scale": v_scale,
+                    "grad_out": None,
+                    "lookup_indices": None,
+                }
+            elif mode == 'fp32':
+                # Standard Adam state: per-weight f32 m, v. No fp8 anywhere.
+                m_f32 = torch.zeros(shape, device=dev, dtype=torch.float32)
+                v_f32 = torch.zeros(shape, device=dev, dtype=torch.float32)
+                state = {
+                    "mode": "fp32",
+                    "m_f32": m_f32,
+                    "v_f32": v_f32,
+                    "grad_out": None,
+                    "lookup_indices": None,
+                }
+            elif mode == 'bf16':
+                # bf16 latent + m + v (6 bytes/weight). m and v use per-LUT
+                # scalar scale (f32) so that stored bf16 values span [-1, 1]
+                # using the full mantissa precision.
+                m_bf16 = torch.zeros(shape, device=dev, dtype=torch.bfloat16)
+                v_bf16 = torch.zeros(shape, device=dev, dtype=torch.bfloat16)
+                # amax scales start at 1.0 (neutral — bf16 ≈ f32 at small scale).
+                m_scale = torch.ones(1, device=dev, dtype=torch.float32)
+                v_scale = m_scale.clone()
+                state = {
+                    "mode": "bf16",
+                    "m_bf16": m_bf16, "m_scale": m_scale,
+                    "v_bf16": v_bf16, "v_scale": v_scale,
+                    "grad_out": None,
+                    "lookup_indices": None,
+                }
+            else:
+                raise NotImplementedError(
+                    f"BitPermutationLUTOptimizer does not yet support latent_dtype={mode!r}"
+                )
             self._states.append(state)
 
-            # Ensure bit_weights are consistent with the (requantized) latent.
+            # Ensure bit_weights are consistent with the initial latent.
             self._refresh_weights(lut)
             self._handles.append(lut.register_forward_hook(self._make_hook(state)))
 
@@ -264,10 +288,17 @@ class BitPermutationLUTOptimizer:
     # --- housekeeping ---
     @staticmethod
     def _refresh_weights(lut) -> None:
-        """Pack sign(latent_fp8) into bit_weights directly from the fp8 bytes
-        (no float materialization). sign of (latent_fp8 / latent_scale) is the
-        same as sign of latent_fp8 since latent_scale > 0 by construction.
-        """
+        """Pack sign(latent) into bit_weights."""
+        mode = getattr(lut, 'latent_dtype', 'fp8')
+        if mode == 'fp32':
+            lut.set_bit_weights_from_signs(lut.latent_fp32)
+            return
+        if mode == 'bf16':
+            lut.set_bit_weights_from_signs(lut.latent_bf16.to(torch.float32))
+            return
+        # fp8 mode: pack sign(latent_fp8) directly from the fp8 bytes
+        # (no float materialization). sign of (latent_fp8 / latent_scale) is
+        # the same as sign of latent_fp8 since latent_scale > 0.
         native = _get_bit_permlut_native()
         if native is not None and hasattr(native, "bit_pack_fp8_signs"):
             native.bit_pack_fp8_signs(
@@ -308,19 +339,65 @@ class BitPermutationLUTOptimizer:
             if go is None or li is None:
                 continue
 
+            N = lut.n_heads * lut.tph
+            numel = N * lut.table_dim * lut.output_nap
+            wg_view = self._wg_buffer[:numel].view(N, lut.table_dim, lut.output_nap)
             weight_grad = _project_grad_out_to_weight_grad(
                 go, li,
                 lut.pair_idx_per_slot,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
-                wg_buffer=state["wg_buffer"],
+                wg_buffer=wg_view,
             )
 
             # Safety: replace any non-finite gradient entries with 0 in-place.
             # Element-wise masking keeps the update on the GPU (no d2h sync).
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-            # AdamW-style decoupled weight decay on latent (pre-step). Done
-            # via an fp8 → f32 → shrink → fp8 round-trip when wd != 0.
+            if state["mode"] == "fp32":
+                # Standard Adam on f32 latent — identical to torch.optim.Adam
+                # (and AdamW when weight_decay != 0).
+                m = state["m_f32"]
+                v = state["v_f32"]
+                m.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
+                v.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
+                if self.weight_decay != 0.0:
+                    lut.latent_fp32.mul_(1.0 - lr * self.weight_decay)
+                denom = v.sqrt().add_(self.eps * bias2_sqrt)
+                lut.latent_fp32.addcdiv_(m, denom, value=-lr * bias2_sqrt / bias1)
+                self._refresh_weights(lut)
+                state["grad_out"] = None
+                state["lookup_indices"] = None
+                continue
+
+            if state["mode"] == "bf16":
+                # bf16 mode: dequant m, v with per-LUT scalar scale; latent
+                # has no scale (stays in [-1, 1] naturally). Adam in f32,
+                # requant with fresh per-LUT amax.
+                m_f = state["m_bf16"].to(torch.float32) * state["m_scale"]
+                v_f = state["v_bf16"].to(torch.float32) * state["v_scale"]
+                latent_f = lut.latent_bf16.to(torch.float32)
+                m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
+                v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
+                if self.weight_decay != 0.0:
+                    latent_f.mul_(1.0 - lr * self.weight_decay)
+                denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
+                latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
+
+                # Fresh per-LUT amax scales; bf16 stores normalised to ±1.
+                m_amax = m_f.abs().amax().clamp_(min=1e-20)
+                v_amax = v_f.abs().amax().clamp_(min=1e-20)
+                state["m_scale"].copy_(m_amax.view(1))
+                state["v_scale"].copy_(v_amax.view(1))
+                state["m_bf16"].copy_((m_f / m_amax).to(torch.bfloat16))
+                state["v_bf16"].copy_((v_f / v_amax).to(torch.bfloat16))
+                lut.latent_bf16.copy_(latent_f.to(torch.bfloat16))
+                self._refresh_weights(lut)
+                state["grad_out"] = None
+                state["lookup_indices"] = None
+                continue
+
+            # fp8 mode: AdamW-style decoupled weight decay on latent (pre-step).
+            # Done via an fp8 → f32 → shrink → fp8 round-trip when wd != 0.
             if self.weight_decay != 0.0:
                 latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
                 latent_f.mul_(1.0 - lr * self.weight_decay)
