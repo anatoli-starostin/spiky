@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp313_bf16_100k_bs32",
+  "best_val_loss": 1.2419135987758636,
+  "final_val_loss": 1.2419135987758636,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 2.939
+}

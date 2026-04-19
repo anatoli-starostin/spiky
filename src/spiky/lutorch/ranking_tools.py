@@ -18,6 +18,25 @@ from spiky.lutorch.wta_lookup import WTALookupFunction
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
 
+def _canonical_borda_m(n_outputs: int, device: Optional[torch.device] = None) -> torch.Tensor:
+    """Canonical Borda matrix B ∈ ℝ^{N × P}, P = N·(N−1)/2, pre-scaled by 1/√(N−1).
+
+    B[i, p] = +1 if i == tri_i[p]   (winner-slot of pair p)
+              −1 if i == tri_j[p]   (loser-slot)
+               0 otherwise
+    so `B @ d` converts a dominance vector `d ∈ ℝ^P` (±1 bits per canonical
+    upper-tri pair) into a Borda rank vector with unit-variance components
+    under CLT (each row sums `N−1` non-zero ±1 entries).
+    """
+    P = n_outputs * (n_outputs - 1) // 2
+    tri_i, tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1)
+    m = torch.zeros(n_outputs, P, device=device)
+    for p in range(P):
+        m[int(tri_i[p]), p] = 1.0
+        m[int(tri_j[p]), p] = -1.0
+    return m / math.sqrt(max(n_outputs - 1, 1))
+
+
 def _sample_upper_tri_pairs(
     d_head: int,
     M: Optional[int],
@@ -460,6 +479,120 @@ class LearnedSoftPermutations(nn.Module):
 
         return torch.einsum('bpi,pij->bpj', x, P)               # (B, n_perms, n)
 
+
+
+class DominanceToVector(nn.Module):
+    """Borda projection (optionally followed by LayerNorm) for all-pairs
+    dominance vectors.
+
+    Input:  d (..., P) with P = d_head·(d_head−1)/2
+    Output: v (..., d_head)
+
+    With `normalise=True` (default): v = LayerNorm(B @ d).
+    With `normalise=False`: v = B @ d (raw Borda, no LN — identical to the
+        manual `torch.einsum('...p,kp->...k', d, borda_m)` pattern).
+
+    B is the canonical Borda matrix pre-scaled by 1/√(d_head−1). When LN is
+    enabled it standardises across the d_head axis; `elementwise_affine`
+    controls LN's affine parameters (ignored when `normalise=False`).
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        normalise: bool = True,
+        elementwise_affine: bool = True,
+    ):
+        super().__init__()
+        self.d_head = d_head
+        self.normalise = normalise
+        self.register_buffer('borda_m', _canonical_borda_m(d_head))
+        if normalise:
+            self.ln = nn.LayerNorm(d_head, elementwise_affine=elementwise_affine)
+        else:
+            self.ln = None
+
+    def forward(self, d: torch.Tensor) -> torch.Tensor:
+        # d: (..., P). einsum supports any leading dims.
+        v = torch.einsum('...p,kp->...k', d, self.borda_m)
+        if self.ln is not None:
+            v = self.ln(v)
+        return v
+
+
+class VectorToDominance(nn.Module):
+    """All-pairs rank projection x → dominance vector.
+
+    Input:  x (..., d_head)
+    Output: d (..., P) with P = d_head·(d_head−1)/2
+
+    soft: d_p = (x_a − x_b) / (t + |x_a − x_b|)    in (−1, 1)
+    hard: d_p = +1 if x_a > x_b else −1            in {−1, +1}
+    ste:  hard forward, soft backward (non-smooth mode).
+
+    Ties (x_a == x_b) are broken toward −1, matching RankAttention's
+    convention and keeping the output strictly binary. A true `sign()` would
+    emit 0 at ties — a "dead feature" in the downstream SDPA dot product —
+    which hurts convergence, especially at init where the upstream Borda
+    vector has integer components and exact ties are frequent.
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        smooth_mode: bool = False,
+        temperature: float = 0.1,
+    ):
+        super().__init__()
+        self.d_head = d_head
+        self.smooth_mode = smooth_mode
+        self.temperature = temperature
+        tri_i, tri_j = torch.triu_indices(d_head, d_head, offset=1)
+        pairs = torch.stack([tri_i, tri_j])   # (2, P)
+        self.register_buffer('pairs', pairs)
+
+    def _soft(self, x: torch.Tensor) -> torch.Tensor:
+        d = x[..., self.pairs[0]] - x[..., self.pairs[1]]
+        return d / (self.temperature + d.abs())
+
+    def _hard(self, x: torch.Tensor) -> torch.Tensor:
+        a = x[..., self.pairs[0]]
+        b = x[..., self.pairs[1]]
+        return (a > b).to(x.dtype) * 2.0 - 1.0
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.smooth_mode:
+            return self._soft(x)
+        soft = self._soft(x)
+        hard = self._hard(x)
+        return (hard - soft).detach() + soft
+
+
+class DominanceCanonicalize(nn.Module):
+    """Differentiable projection onto the realizable-dominance manifold.
+
+    d → DominanceToVector → VectorToDominance → d'
+
+    Inconsistent (non-transitive) dominance inputs collapse to the nearest
+    consistent (totally-ordered) dominance via the Borda-rank bottleneck.
+    Useful for cleaning up bit-vote outputs before passing them on.
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        smooth_mode: bool = False,
+        temperature: float = 0.1,
+        elementwise_affine: bool = True,
+    ):
+        super().__init__()
+        self.d2v = DominanceToVector(d_head, elementwise_affine=elementwise_affine)
+        self.v2d = VectorToDominance(
+            d_head, smooth_mode=smooth_mode, temperature=temperature,
+        )
+
+    def forward(self, d: torch.Tensor) -> torch.Tensor:
+        return self.v2d(self.d2v(d))
 
 
 def add_rank_preserving_noise(x, scale=0.1):

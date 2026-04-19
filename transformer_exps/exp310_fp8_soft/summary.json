@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp310_fp8_soft",
+  "best_val_loss": 1.526838520169258,
+  "final_val_loss": 1.526838520169258,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.356
+}

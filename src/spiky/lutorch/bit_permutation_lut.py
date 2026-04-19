@@ -25,6 +25,7 @@ _FP8 = getattr(torch, "float8_e4m3fn", None)
 _FP8_AMAX = 448.0  # float8_e4m3fn representable maximum
 
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.ranking_tools import _canonical_borda_m
 from spiky.lutorch.tiny_anchor_pairs_lookup import (
     TinyAnchorPairsLookup,
     _get_tiny_apl_native,
@@ -136,17 +137,6 @@ def _build_inv_idx(
         idx_a, idx_b, n_heads, tph, output_nap, n_outputs, device,
     )
     return a, b, inv_idx, K_max, pair_idx_per_slot
-
-
-def _canonical_borda_m(n_outputs: int, device: torch.device) -> torch.Tensor:
-    """Canonical Borda matrix, pre-scaled by 1/sqrt(N-1) (matches PermLut lib)."""
-    P = n_outputs * (n_outputs - 1) // 2
-    tri_i, tri_j = torch.triu_indices(n_outputs, n_outputs, offset=1)
-    m = torch.zeros(n_outputs, P, device=device)
-    for p in range(P):
-        m[int(tri_i[p]), p] = 1.0
-        m[int(tri_j[p]), p] = -1.0
-    return m / math.sqrt(max(n_outputs - 1, 1))
 
 
 class _BitPermLutDomFunction(torch.autograd.Function):
