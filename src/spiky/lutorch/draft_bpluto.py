@@ -37,6 +37,22 @@ def _from_fp8_per_table(t_fp8: torch.Tensor, scale: torch.Tensor) -> torch.Tenso
     return t_fp8.to(torch.float32) / scale
 
 
+def _to_fp8_fixed(t_f32: torch.Tensor, mx: float = 1.0) -> torch.Tensor:
+    """Quantize float32 → fp8 with a FIXED scale = 448/mx. Clamps to [-mx, mx]
+    before casting. Used for latent, which stays in a bounded range throughout
+    training — fixed scale keeps the fp8 quantum constant (no resolution
+    degradation as amax drifts). Returns fp8 bytes only; caller stores the
+    scale as a `[N, 1, 1]` constant buffer (`_FP8_AMAX/mx` replicated).
+    """
+    s = _FP8_AMAX / mx
+    return (t_f32.clamp(-mx, mx) * s).to(_FP8)
+
+
+def _from_fp8_fixed(t_fp8: torch.Tensor, mx: float = 1.0) -> torch.Tensor:
+    s = _FP8_AMAX / mx
+    return t_fp8.to(torch.float32) / s
+
+
 def _to_fp8_per_lut(t_f32: torch.Tensor):
     """Quantize float32 → (fp8, scale) using a SINGLE global amax over the
     whole tensor. Returns scale shape [N, 1, 1] (broadcast of one scalar) so
@@ -160,11 +176,16 @@ class DraftBPLUTO:
             N = lut.n_heads * lut.tph
             shape = (N, lut.table_dim, lut.output_nap)
 
-            # m, v zero-initialized in fp8; per-table scales start at "all zeros" floor.
+            # m, v per-weight fp8 with per-table dynamic scale.
             m_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
             v_fp8 = torch.zeros(shape, device=dev, dtype=_FP8)
             m_scale = torch.full((N, 1, 1), _FP8_AMAX / 1e-20, device=dev, dtype=torch.float32)
             v_scale = m_scale.clone()
+
+            # Force latent onto the fixed-scale grid (mx=1.0, scale=448 constant).
+            latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
+            lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+            lut.latent_scale.fill_(_FP8_AMAX)        # 448 everywhere
 
             state = {
                 "m_fp8": m_fp8, "m_scale": m_scale,
@@ -235,34 +256,35 @@ class DraftBPLUTO:
             # Non-finite grads → 0 (one bad batch should not poison fp8 state).
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
 
-            # (b) dequantize latent / m / v to float32 (per-table scales).
+            # (b) dequantize to float32.
+            #   latent: fixed-scale (lut.latent_scale = 448 constant).
+            #   m, v  : per-weight fp8 (per-table scale).
             latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
             m_f = _from_fp8_per_table(state["m_fp8"], state["m_scale"])
             v_f = _from_fp8_per_table(state["v_fp8"], state["v_scale"])
 
-            # (c) standard Adam (explicit mhat / vhat form).
+            # (c) standard Adam (per-weight m, v).
             m_f.mul_(self.beta1).add_(weight_grad, alpha=1.0 - self.beta1)
             v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1.0 - self.beta2)
             mhat = m_f / bias1
             vhat = v_f / bias2
-            # AdamW-style decoupled weight decay on latent.
+
             if self.weight_decay != 0.0:
                 latent_f.mul_(1.0 - lr * self.weight_decay)
             latent_f -= lr * mhat / (vhat.sqrt() + self.eps)
 
-            # (d) safety clamp: keeps amax bounded.
-            latent_f.clamp_(-256.0, 256.0)
+            # (d) latent: FIXED-scale fp8 (mx=1.0). Implicit clamp to [-1, 1]
+            # via `_to_fp8_fixed`. Fixed scale keeps fp8 quantum constant so
+            # small updates don't get lost as amax drifts (per-table dynamic
+            # scale regressed bitflip_clean convergence — see commit 202f237).
+            lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+            # lut.latent_scale stays at _FP8_AMAX (set in __init__), unchanged.
 
-            # (e) requantize to fp8 with fresh scales:
-            #   latent : per-LUT global scale (one scalar per module; uniform
-            #            coarsening helps unstick weights from rounding traps).
-            #   m, v   : per-table scales (fine resolution for Adam moments
-            #            grouped by the natural anchor-lookup structure).
-            lat_fp8, lat_scale = _to_fp8_per_lut(latent_f)
-            lut.latent_fp8.copy_(lat_fp8)
-            lut.latent_scale.copy_(lat_scale)
-            state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
-            state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
+            # (e) m, v: per-LUT dynamic scale (single global amax per module).
+            # Scale tensor is [N, 1, 1] but every row carries the same scalar,
+            # so a future in-kernel quantize needs no per-table reduction.
+            state["m_fp8"], state["m_scale"] = _to_fp8_per_lut(m_f)
+            state["v_fp8"], state["v_scale"] = _to_fp8_per_lut(v_f)
 
             # (f) bit_weights := sign(latent).
             self._refresh_weights(lut)

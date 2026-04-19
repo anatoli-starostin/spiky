@@ -67,6 +67,18 @@ def _from_fp8_per_table(t_fp8: torch.Tensor, scale: torch.Tensor) -> torch.Tenso
     return t_fp8.to(torch.float32) / scale
 
 
+def _to_fp8_per_lut(t_f32: torch.Tensor):
+    """Quantize with a single global amax over the whole tensor. Returns scale
+    shape [N, 1, 1] (broadcast of one scalar) so it plugs into the existing
+    per-table dequant path — "uniform per-table" is a special case of
+    per-table, so the fused CUDA Adam kernel reads it transparently.
+    """
+    amax = t_f32.abs().amax().clamp(min=1e-20)
+    scalar = _FP8_AMAX / amax
+    scale = scalar.view(1, 1, 1).expand(t_f32.size(0), 1, 1).contiguous()
+    return (t_f32 * scalar).to(_FP8), scale
+
+
 def _get_bit_permlut_native():
     try:
         from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
@@ -164,6 +176,7 @@ class BitPermutationLUTOptimizer:
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
+        weight_decay: float = 0.0,
         lr_schedule_fn: Optional[Callable[[int], float]] = None,
     ):
         if _FP8 is None:
@@ -176,6 +189,7 @@ class BitPermutationLUTOptimizer:
         self.beta1 = beta1
         self.beta2 = beta2
         self.eps = eps
+        self.weight_decay = weight_decay
         self.lr_schedule_fn = lr_schedule_fn
         self._step_count = 0
         self._handles: List = []
@@ -197,6 +211,14 @@ class BitPermutationLUTOptimizer:
             # per step otherwise).
             wg_buffer = torch.zeros(shape, device=dev, dtype=torch.float32)
 
+            # Re-quantize the module's initial latent onto the fixed-scale
+            # grid (mx=1.0, scale=_FP8_AMAX constant). Overwrite lut.latent_scale
+            # to the constant so dequant paths (including the fused kernel and
+            # the soft-backward kernel) see a consistent fixed scale.
+            latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
+            lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+            lut.latent_scale.fill_(_FP8_AMAX)
+
             state = {
                 "m_fp8": m_fp8,             # fp8
                 "m_scale": m_scale,         # float32 [N, 1, 1]
@@ -208,7 +230,7 @@ class BitPermutationLUTOptimizer:
             }
             self._states.append(state)
 
-            # Ensure bit_weights are consistent with the initial latent.
+            # Ensure bit_weights are consistent with the (requantized) latent.
             self._refresh_weights(lut)
             self._handles.append(lut.register_forward_hook(self._make_hook(state)))
 
@@ -285,11 +307,20 @@ class BitPermutationLUTOptimizer:
             # Element-wise masking keeps the update on the GPU (no d2h sync).
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
 
+            # AdamW-style decoupled weight decay on latent (pre-step). Done
+            # via an fp8 → f32 → shrink → fp8 round-trip when wd != 0.
+            if self.weight_decay != 0.0:
+                latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
+                latent_f.mul_(1.0 - lr * self.weight_decay)
+                lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+
             native = _get_bit_permlut_native()
             if native is not None:
-                # Fused kernel: dequant fp8 latent/m/v (all per-table scaled)
-                # -> Adam update (safety-clamp latent to +/-10) -> emit f32
-                # latent, m, v scratch. Per-table fp8 requantization below.
+                # Fused kernel: dequant fp8 latent (fixed-scale 448) + m, v
+                # (per-table) -> Adam update -> emit f32 scratch.
+                # lut.latent_scale is a constant _FP8_AMAX buffer; the kernel's
+                # internal ±10 clamp is a harmless no-op since we re-quantize
+                # latent via _to_fp8_fixed (implicit ±1 clamp) below.
                 latent_f, m_f, v_f = native.fused_fp8_adam(
                     lut.latent_fp8, lut.latent_scale,
                     state["m_fp8"], state["m_scale"],
@@ -299,11 +330,11 @@ class BitPermutationLUTOptimizer:
                     float(self.eps), float(bias1), float(bias2),
                     float(lr),
                 )
-                lat_fp8, lat_scale = _to_fp8_per_table(latent_f)
-                lut.latent_fp8.copy_(lat_fp8)
-                lut.latent_scale.copy_(lat_scale)
-                state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
-                state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
+                # latent: fixed-scale fp8 (scale=448 constant; don't touch
+                # lut.latent_scale — it stays at _FP8_AMAX everywhere).
+                lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+                state["m_fp8"], state["m_scale"] = _to_fp8_per_lut(m_f)
+                state["v_fp8"], state["v_scale"] = _to_fp8_per_lut(v_f)
             else:
                 # CPU / fallback path (no fused kernel available).
                 latent_f = _from_fp8_per_table(lut.latent_fp8, lut.latent_scale)
@@ -313,12 +344,10 @@ class BitPermutationLUTOptimizer:
                 v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
                 denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
                 latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
-                latent_f.clamp_(-10.0, 10.0)
-                lat_fp8, lat_scale = _to_fp8_per_table(latent_f)
-                lut.latent_fp8.copy_(lat_fp8)
-                lut.latent_scale.copy_(lat_scale)
-                state["m_fp8"], state["m_scale"] = _to_fp8_per_table(m_f)
-                state["v_fp8"], state["v_scale"] = _to_fp8_per_table(v_f)
+                # fixed-scale fp8 quantization clamps to ±1 inside.
+                lut.latent_fp8.copy_(_to_fp8_fixed(latent_f, mx=1.0))
+                state["m_fp8"], state["m_scale"] = _to_fp8_per_lut(m_f)
+                state["v_fp8"], state["v_scale"] = _to_fp8_per_lut(v_f)
 
             self._refresh_weights(lut)
             state["grad_out"] = None
