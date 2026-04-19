@@ -177,6 +177,8 @@ class BitPermutationLUTOptimizer:
         beta2: float = 0.999,
         eps: float = 1e-8,
         weight_decay: float = 0.0,
+        weight_grad_gate: bool = True,
+        weight_grad_gate_temperature: float = 0.1,
         lr_schedule_fn: Optional[Callable[[int], float]] = None,
     ):
         if _FP8 is None:
@@ -190,6 +192,12 @@ class BitPermutationLUTOptimizer:
         self.beta2 = beta2
         self.eps = eps
         self.weight_decay = weight_decay
+        self.weight_grad_gate = bool(weight_grad_gate)
+        self.weight_grad_gate_temperature = float(weight_grad_gate_temperature)
+        if self.weight_grad_gate_temperature <= 0:
+            raise ValueError(
+                f"weight_grad_gate_temperature must be > 0, got {weight_grad_gate_temperature}"
+            )
         self.lr_schedule_fn = lr_schedule_fn
         self._step_count = 0
         self._handles: List = []
@@ -353,6 +361,28 @@ class BitPermutationLUTOptimizer:
             # Element-wise masking keeps the update on the GPU (no d2h sync).
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
 
+            # PermLut-style STE Jacobian gate on weight_grad (matches
+            # soft_mode='ste' in PermutationalLut): gradient fades as |latent|
+            # grows, concentrating updates on "undecided" bits near zero.
+            #   gate(x) = 0.5 * T / (T + |x|)^2
+            # At x=0: 0.5/T (peak). At |x|→∞: 0 (locked-in weight).
+            # Lower T → sharper peak; higher T → gentler gating.
+            #
+            # fp8 and bf16 modes apply the gate INSIDE the fused Adam kernel
+            # (per-thread, no extra Python op). fp32 mode does it here.
+            gate_T_kernel = 0.0   # >0 signals "apply gate" to fused kernel
+            dtype_mode = getattr(lut, 'latent_dtype', 'fp8')
+            if self.weight_grad_gate:
+                T = self.weight_grad_gate_temperature
+                if dtype_mode == 'fp32':
+                    latent_f = lut.latent_fp32
+                    denom = T + latent_f.abs()
+                    gate = (0.5 * T) / (denom * denom)
+                    weight_grad.mul_(gate)
+                else:
+                    # fp8 / bf16: let the kernel handle it.
+                    gate_T_kernel = T
+
             if state["mode"] == "fp32":
                 # Standard Adam on f32 latent — identical to torch.optim.Adam
                 # (and AdamW when weight_decay != 0).
@@ -370,27 +400,44 @@ class BitPermutationLUTOptimizer:
                 continue
 
             if state["mode"] == "bf16":
-                # bf16 mode: dequant m, v with per-LUT scalar scale; latent
-                # has no scale (stays in [-1, 1] naturally). Adam in f32,
-                # requant with fresh per-LUT amax.
-                m_f = state["m_bf16"].to(torch.float32) * state["m_scale"]
-                v_f = state["v_bf16"].to(torch.float32) * state["v_scale"]
-                latent_f = lut.latent_bf16.to(torch.float32)
-                m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
-                v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
-                if self.weight_decay != 0.0:
-                    latent_f.mul_(1.0 - lr * self.weight_decay)
-                denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
-                latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
-
-                # Fresh per-LUT amax scales; bf16 stores normalised to ±1.
-                m_amax = m_f.abs().amax().clamp_(min=1e-20)
-                v_amax = v_f.abs().amax().clamp_(min=1e-20)
-                state["m_scale"].copy_(m_amax.view(1))
-                state["v_scale"].copy_(v_amax.view(1))
-                state["m_bf16"].copy_((m_f / m_amax).to(torch.bfloat16))
-                state["v_bf16"].copy_((v_f / v_amax).to(torch.bfloat16))
-                lut.latent_bf16.copy_(latent_f.to(torch.bfloat16))
+                native = _get_bit_permlut_native()
+                if native is not None and hasattr(native, "fused_bf16_adam_full_inkernel"):
+                    # Fully fused CUDA kernel (mirrors fused_fp8_adam_full_inkernel).
+                    if self.weight_decay != 0.0:
+                        lut.latent_bf16.mul_(1.0 - lr * self.weight_decay)
+                    numel = state["m_bf16"].numel()
+                    m_scratch = self._m_f32_scratch[:numel].view_as(state["m_bf16"])
+                    v_scratch = self._v_f32_scratch[:numel].view_as(state["v_bf16"])
+                    native.fused_bf16_adam_full_inkernel(
+                        lut.latent_bf16,
+                        state["m_bf16"], state["m_scale"],
+                        state["v_bf16"], state["v_scale"],
+                        weight_grad,
+                        m_scratch, v_scratch,
+                        self._m_amax_scratch, self._v_amax_scratch,
+                        float(self.beta1), float(self.beta2),
+                        float(self.eps), float(bias1), float(bias2),
+                        float(lr),
+                        gate_T=float(gate_T_kernel),
+                    )
+                else:
+                    # Python fallback (slow).
+                    m_f = state["m_bf16"].to(torch.float32) * state["m_scale"]
+                    v_f = state["v_bf16"].to(torch.float32) * state["v_scale"]
+                    latent_f = lut.latent_bf16.to(torch.float32)
+                    m_f.mul_(self.beta1).add_(weight_grad, alpha=1 - self.beta1)
+                    v_f.mul_(self.beta2).addcmul_(weight_grad, weight_grad, value=1 - self.beta2)
+                    if self.weight_decay != 0.0:
+                        latent_f.mul_(1.0 - lr * self.weight_decay)
+                    denom = v_f.sqrt().add_(self.eps * bias2_sqrt)
+                    latent_f.addcdiv_(m_f, denom, value=-lr * bias2_sqrt / bias1)
+                    m_amax = m_f.abs().amax().clamp_(min=1e-20)
+                    v_amax = v_f.abs().amax().clamp_(min=1e-20)
+                    state["m_scale"].copy_(m_amax.view(1))
+                    state["v_scale"].copy_(v_amax.view(1))
+                    state["m_bf16"].copy_((m_f / m_amax).to(torch.bfloat16))
+                    state["v_bf16"].copy_((v_f / v_amax).to(torch.bfloat16))
+                    lut.latent_bf16.copy_(latent_f.to(torch.bfloat16))
                 self._refresh_weights(lut)
                 state["grad_out"] = None
                 state["lookup_indices"] = None
@@ -423,6 +470,7 @@ class BitPermutationLUTOptimizer:
                     float(self.beta1), float(self.beta2),
                     float(self.eps), float(bias1), float(bias2),
                     float(lr),
+                    gate_T=float(gate_T_kernel),
                 )
             elif native is not None and hasattr(native, "fused_fp8_adam_latent_inplace"):
                 # Intermediate variant (still has Python per-LUT requant of m, v).

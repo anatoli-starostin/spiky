@@ -1059,6 +1059,7 @@ __global__ void fused_fp8_adam_full_inkernel_kernel(
     float one_minus_b1, float one_minus_b2,
     float eps_times_b2sqrt,
     float lr_step_coef,
+    float gate_T,                                   // PermLut-style STE gate; T<=0 disables
     __nv_fp8_e4m3*       __restrict__ latent_fp8,   // in+out
     const float*         __restrict__ latent_scale, // constant (typically 448)
     const __nv_fp8_e4m3* __restrict__ m_fp8,
@@ -1082,6 +1083,12 @@ __global__ void fused_fp8_adam_full_inkernel_kernel(
         float m_f = static_cast<float>(m_fp8[tid]) / m_scale[n];
         float v_f = static_cast<float>(v_fp8[tid]) / v_scale[n];
         float g = weight_grad[tid];
+
+        // PermLut STE gate on g: 0.5·T / (T+|lat|)². T<=0 disables.
+        if (gate_T > 0.0f) {
+            float denom = gate_T + fabsf(latent_f);
+            g *= 0.5f * gate_T / (denom * denom);
+        }
 
         m_new = beta1 * m_f + one_minus_b1 * g;
         v_new = beta2 * v_f + one_minus_b2 * g * g;
@@ -1117,6 +1124,123 @@ __global__ void fused_fp8_adam_full_inkernel_kernel(
         }
     }
 }
+
+// Fully fused bf16 Adam step. Same structure as the fp8 version:
+// per-thread dequant (bf16 + scalar scale) → Adam in registers → latent_bf16
+// in-kernel store (no scale; bf16 handles range) → m, v f32 scratch for
+// kernel 2 → block-reduce |m|, |v| → atomicMaxFloat into globals.
+__global__ void fused_bf16_adam_full_inkernel_kernel(
+    int32_t total,
+    float beta1, float beta2,
+    float one_minus_b1, float one_minus_b2,
+    float eps_times_b2sqrt,
+    float lr_step_coef,
+    float gate_T,                                   // PermLut-style STE gate; T<=0 disables
+    __nv_bfloat16*       __restrict__ latent_bf16,   // in+out
+    const __nv_bfloat16* __restrict__ m_bf16,
+    const float*         __restrict__ m_scale,       // [1] scalar
+    const __nv_bfloat16* __restrict__ v_bf16,
+    const float*         __restrict__ v_scale,
+    const float*         __restrict__ weight_grad,
+    float*               __restrict__ m_f32_out,
+    float*               __restrict__ v_f32_out,
+    float*               __restrict__ m_amax_global,
+    float*               __restrict__ v_amax_global
+) {
+    // Hoist scalar scales once per block (thread 0 loads, broadcast via smem).
+    __shared__ float m_sc_sh, v_sc_sh;
+    if (threadIdx.x == 0) {
+        m_sc_sh = *m_scale;
+        v_sc_sh = *v_scale;
+    }
+    __syncthreads();
+
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    float m_abs = 0.0f, v_abs = 0.0f;
+
+    if (tid < total) {
+        float latent_f = __bfloat162float(latent_bf16[tid]);
+        float m_f = __bfloat162float(m_bf16[tid]) * m_sc_sh;
+        float v_f = __bfloat162float(v_bf16[tid]) * v_sc_sh;
+        float g = weight_grad[tid];
+
+        // PermLut STE gate on g: 0.5·T / (T+|lat|)². T<=0 disables.
+        if (gate_T > 0.0f) {
+            float denom = gate_T + fabsf(latent_f);
+            g *= 0.5f * gate_T / (denom * denom);
+        }
+
+        float m_new = beta1 * m_f + one_minus_b1 * g;
+        float v_new = beta2 * v_f + one_minus_b2 * g * g;
+        float denom = sqrtf(fmaxf(v_new, 0.0f)) + eps_times_b2sqrt;
+        float latent_new = latent_f + lr_step_coef * m_new / denom;
+
+        // bf16 has ~fp32 dynamic range; no clamp needed.
+        latent_bf16[tid] = __float2bfloat16(latent_new);
+
+        m_f32_out[tid] = m_new;
+        v_f32_out[tid] = v_new;
+
+        m_abs = fabsf(m_new);
+        v_abs = fabsf(v_new);
+    }
+
+    // Block-level reduction of |m|, |v| amax, then one atomic per block.
+    int32_t lane = threadIdx.x & 31;
+    int32_t warp = threadIdx.x >> 5;
+    m_abs = warp_max(m_abs);
+    v_abs = warp_max(v_abs);
+    __shared__ float sm[32];
+    __shared__ float sv[32];
+    if (lane == 0) { sm[warp] = m_abs; sv[warp] = v_abs; }
+    __syncthreads();
+    if (warp == 0) {
+        int32_t n_warps = (blockDim.x + 31) / 32;
+        m_abs = (lane < n_warps) ? sm[lane] : 0.0f;
+        v_abs = (lane < n_warps) ? sv[lane] : 0.0f;
+        m_abs = warp_max(m_abs);
+        v_abs = warp_max(v_abs);
+        if (lane == 0) {
+            atomicMaxFloat(m_amax_global, m_abs);
+            atomicMaxFloat(v_amax_global, v_abs);
+        }
+    }
+}
+
+
+// Quantize m_f32, v_f32 → bf16 using one global amax scalar per tensor.
+// Scale convention: amax stored directly in scale buffer; bf16 values are
+// normalized so they span [-1, 1] (m_bf16[i] = m_f32[i] / amax).
+__global__ void quantize_per_lut_mv_bf16_kernel(
+    int32_t total,
+    const float*         __restrict__ m_f32,
+    const float*         __restrict__ v_f32,
+    const float*         __restrict__ m_amax,        // [1]
+    const float*         __restrict__ v_amax,
+    __nv_bfloat16*       __restrict__ m_bf16_out,
+    __nv_bfloat16*       __restrict__ v_bf16_out,
+    float*               __restrict__ m_scale_out,   // [1]
+    float*               __restrict__ v_scale_out
+) {
+    __shared__ float m_sc, v_sc;
+    if (threadIdx.x == 0) {
+        m_sc = fmaxf(*m_amax, 1e-20f);
+        v_sc = fmaxf(*v_amax, 1e-20f);
+    }
+    __syncthreads();
+
+    int32_t tid = static_cast<int32_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    m_bf16_out[tid] = __float2bfloat16(m_f32[tid] / m_sc);
+    v_bf16_out[tid] = __float2bfloat16(v_f32[tid] / v_sc);
+
+    if (tid == 0) {
+        m_scale_out[0] = m_sc;
+        v_scale_out[0] = v_sc;
+    }
+}
+
 
 // Quantize m_f32, v_f32 → fp8 using one global amax scalar per tensor.
 // Also writes the scale (= _FP8_AMAX / max(amax, 1e-20)) into the [N, 1, 1]
@@ -4933,6 +5057,93 @@ public:
         return std::make_tuple(latent_out, m_out, v_out);
     }
 
+    // Fully fused bf16 Adam step. Same shape API as the fp8 variant but
+    // for bf16 storage; latent has no scale (bf16 handles range natively);
+    // m, v have scalar per-LUT scale (shape [1] fp32).
+    void fused_bf16_adam_full_inkernel(
+        torch::Tensor latent_bf16,              // [N, td, ona] bf16 (in+out)
+        torch::Tensor m_bf16,                   // [N, td, ona] bf16 (in+out)
+        torch::Tensor m_scale,                  // [1] float32 (in+out)
+        torch::Tensor v_bf16,                   // [N, td, ona] bf16 (in+out)
+        torch::Tensor v_scale,                  // [1] float32 (in+out)
+        const torch::Tensor& weight_grad,       // [N, td, ona] float32
+        torch::Tensor m_f32_scratch,
+        torch::Tensor v_f32_scratch,
+        torch::Tensor m_amax_scratch,           // [1]
+        torch::Tensor v_amax_scratch,
+        double beta1, double beta2,
+        double eps, double bias1, double bias2,
+        double lr,
+        double gate_T = 0.0,                    // PermLut STE gate on g; <=0 disables
+        int64_t threads_per_block = 256
+    ) {
+        if (!latent_bf16.is_cuda()) throw py::value_error("tensors must be CUDA");
+        if (latent_bf16.dtype() != torch::kBFloat16) throw py::value_error("latent_bf16 must be bfloat16");
+        if (m_bf16.dtype()      != torch::kBFloat16) throw py::value_error("m_bf16 must be bfloat16");
+        if (v_bf16.dtype()      != torch::kBFloat16) throw py::value_error("v_bf16 must be bfloat16");
+        if (m_scale.dtype()     != torch::kFloat32) throw py::value_error("m_scale must be float32");
+        if (v_scale.dtype()     != torch::kFloat32) throw py::value_error("v_scale must be float32");
+        if (weight_grad.dtype() != torch::kFloat32) throw py::value_error("weight_grad must be float32");
+        if (m_f32_scratch.dtype() != torch::kFloat32) throw py::value_error("m_f32_scratch must be float32");
+        if (v_f32_scratch.dtype() != torch::kFloat32) throw py::value_error("v_f32_scratch must be float32");
+        if (m_amax_scratch.dtype() != torch::kFloat32) throw py::value_error("m_amax_scratch must be float32");
+        if (v_amax_scratch.dtype() != torch::kFloat32) throw py::value_error("v_amax_scratch must be float32");
+        if (latent_bf16.sizes() != m_bf16.sizes() || latent_bf16.sizes() != v_bf16.sizes()
+            || latent_bf16.sizes() != weight_grad.sizes()
+            || latent_bf16.sizes() != m_f32_scratch.sizes()
+            || latent_bf16.sizes() != v_f32_scratch.sizes())
+            throw py::value_error("shape mismatch");
+
+        int64_t total = latent_bf16.numel();
+
+        m_amax_scratch.zero_();
+        v_amax_scratch.zero_();
+
+        float bias2_sqrt = std::sqrt(std::max(bias2, 1e-30));
+        float eps_times_b2sqrt = static_cast<float>(eps * bias2_sqrt);
+        float lr_step_coef = static_cast<float>(-lr * bias2_sqrt / bias1);
+
+        c10::cuda::CUDAGuard guard(latent_bf16.device().index());
+        auto stream = at::cuda::getCurrentCUDAStream();
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        fused_bf16_adam_full_inkernel_kernel<<<blocks, threads, 0, stream>>>(
+            static_cast<int32_t>(total),
+            static_cast<float>(beta1),
+            static_cast<float>(beta2),
+            static_cast<float>(1.0 - beta1),
+            static_cast<float>(1.0 - beta2),
+            eps_times_b2sqrt,
+            lr_step_coef,
+            static_cast<float>(gate_T),
+            reinterpret_cast<__nv_bfloat16*>(latent_bf16.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(m_bf16.data_ptr()),
+            reinterpret_cast<const float*>(m_scale.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v_bf16.data_ptr()),
+            reinterpret_cast<const float*>(v_scale.data_ptr()),
+            reinterpret_cast<const float*>(weight_grad.data_ptr()),
+            reinterpret_cast<float*>(m_f32_scratch.data_ptr()),
+            reinterpret_cast<float*>(v_f32_scratch.data_ptr()),
+            reinterpret_cast<float*>(m_amax_scratch.data_ptr()),
+            reinterpret_cast<float*>(v_amax_scratch.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+
+        quantize_per_lut_mv_bf16_kernel<<<blocks, threads, 0, stream>>>(
+            static_cast<int32_t>(total),
+            reinterpret_cast<const float*>(m_f32_scratch.data_ptr()),
+            reinterpret_cast<const float*>(v_f32_scratch.data_ptr()),
+            reinterpret_cast<const float*>(m_amax_scratch.data_ptr()),
+            reinterpret_cast<const float*>(v_amax_scratch.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(m_bf16.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(v_bf16.data_ptr()),
+            reinterpret_cast<float*>(m_scale.data_ptr()),
+            reinterpret_cast<float*>(v_scale.data_ptr())
+        );
+        CU_CHECK(cudaGetLastError());
+    }
+
     // Fully fused: writes latent_fp8 in-place + quantizes m, v to fp8
     // in-kernel using per-LUT amax (computed via block reduce + atomic).
     // Updates m_fp8/v_fp8/m_scale/v_scale in-place. No returned scratch.
@@ -4953,6 +5164,7 @@ public:
         double beta1, double beta2,
         double eps, double bias1, double bias2,
         double lr,
+        double gate_T = 0.0,                    // PermLut STE gate on g; <=0 disables
         int64_t threads_per_block = 256
     ) {
         if (!latent_fp8.is_cuda()) throw py::value_error("tensors must be CUDA");
@@ -5000,6 +5212,7 @@ public:
             static_cast<float>(1.0 - beta2),
             eps_times_b2sqrt,
             lr_step_coef,
+            static_cast<float>(gate_T),
             reinterpret_cast<__nv_fp8_e4m3*>(latent_fp8.data_ptr()),
             reinterpret_cast<const float*>(latent_scale.data_ptr()),
             reinterpret_cast<const __nv_fp8_e4m3*>(m_fp8.data_ptr()),
@@ -5572,6 +5785,28 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("threads_per_block") = 256
         )
         .def(
+            "fused_bf16_adam_full_inkernel",
+            &LUTorchManager::fused_bf16_adam_full_inkernel,
+            py::arg("latent_bf16"),
+            py::arg("m_bf16"),
+            py::arg("m_scale"),
+            py::arg("v_bf16"),
+            py::arg("v_scale"),
+            py::arg("weight_grad"),
+            py::arg("m_f32_scratch"),
+            py::arg("v_f32_scratch"),
+            py::arg("m_amax_scratch"),
+            py::arg("v_amax_scratch"),
+            py::arg("beta1"),
+            py::arg("beta2"),
+            py::arg("eps"),
+            py::arg("bias1"),
+            py::arg("bias2"),
+            py::arg("lr"),
+            py::arg("gate_T") = 0.0,
+            py::arg("threads_per_block") = 256
+        )
+        .def(
             "fused_fp8_adam_full_inkernel",
             &LUTorchManager::fused_fp8_adam_full_inkernel,
             py::arg("latent_fp8"),
@@ -5591,6 +5826,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("bias1"),
             py::arg("bias2"),
             py::arg("lr"),
+            py::arg("gate_T") = 0.0,
             py::arg("threads_per_block") = 256
         )
         .def(
