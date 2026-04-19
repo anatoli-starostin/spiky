@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp305_draft_bpluto_vperpair",
+  "best_val_loss": 1.865375778079033,
+  "final_val_loss": 1.8655042469501495,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.397
+}
