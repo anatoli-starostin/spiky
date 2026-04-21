@@ -1,0 +1,24 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 20971520,
+  "n_luts": 1,
+  "final_mse": 0.049321863920457905,
+  "final_sign_acc": 0.9842725569202054,
+  "best_sign_acc": 0.9848960138136341,
+  "best_step": 25000,
+  "best_mse": 0.047783396897777435,
+  "time_min": 1.49,
+  "candidate": {
+    "name": "l0_s_teacher_shape",
+    "description": "21M: teacher shape (in=10, tph=2048, on=10)",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

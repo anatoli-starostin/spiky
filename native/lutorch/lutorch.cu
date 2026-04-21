@@ -821,6 +821,225 @@ __global__ void bit_perm_lut_dom_gather_bwd_latent_kernel(
     grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
 }
 
+// Warp-cooperative variant: each warp owns one (b, n) and splits the
+// `output_nap` inner loop across its 32 lanes, then warp-reduces
+// grad_main/grad_alt. Fast when output_nap is large (≳ 128) and the
+// thread-per-output kernel would otherwise have each thread loop over
+// many slots serially.
+__global__ void bit_perm_lut_dom_gather_bwd_latent_f32_kernel_warp(
+    int32_t batch_size, int32_t n_heads, int32_t tph,
+    int32_t P, int32_t table_dim, int32_t output_nap, float scale,
+    const int16_t* __restrict__ lookup_indices_ptr,
+    const int16_t* __restrict__ lookup_alt_indices_ptr,
+    const float*   __restrict__ latent_f32_ptr,
+    const int32_t* __restrict__ pair_idx_ptr,
+    const float*   __restrict__ grad_out_ptr,
+    float*         __restrict__ grad_main_ptr,
+    float*         __restrict__ grad_alt_ptr
+) {
+    constexpr int32_t WARP_SIZE = 32;
+    const int32_t lane = threadIdx.x & (WARP_SIZE - 1);
+    const int32_t warp_in_block = threadIdx.x >> 5;
+    const int32_t warps_per_block = blockDim.x >> 5;
+    const int32_t warp_id = blockIdx.x * warps_per_block + warp_in_block;
+    const int32_t total_warps = batch_size * n_heads * tph;
+    if (warp_id >= total_warps) return;
+
+    const int32_t n = warp_id % (n_heads * tph);
+    const int32_t b = warp_id / (n_heads * tph);
+    const int32_t h = n / tph;
+    const int32_t t = n - h * tph;
+
+    const int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    const int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+    const int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    const int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    const int32_t pair_base     = (h * tph + t) * output_nap;
+    const int32_t grad_base     = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+    for (int32_t k = lane; k < output_nap; k += WARP_SIZE) {
+        float lat_main = latent_f32_ptr[lat_base_main + k];
+        float lat_alt  = latent_f32_ptr[lat_base_alt  + k];
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
+    }
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        grad_main += __shfl_xor_sync(0xFFFFFFFFu, grad_main, offset);
+        grad_alt  += __shfl_xor_sync(0xFFFFFFFFu, grad_alt,  offset);
+    }
+    if (lane == 0) {
+        grad_main_ptr[b * n_heads * tph + n] = grad_main;
+        grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+    }
+}
+
+__global__ void bit_perm_lut_dom_gather_bwd_latent_bf16_kernel_warp(
+    int32_t batch_size, int32_t n_heads, int32_t tph,
+    int32_t P, int32_t table_dim, int32_t output_nap, float scale,
+    const int16_t*       __restrict__ lookup_indices_ptr,
+    const int16_t*       __restrict__ lookup_alt_indices_ptr,
+    const __nv_bfloat16* __restrict__ latent_bf16_ptr,
+    const int32_t*       __restrict__ pair_idx_ptr,
+    const float*         __restrict__ grad_out_ptr,
+    float*               __restrict__ grad_main_ptr,
+    float*               __restrict__ grad_alt_ptr
+) {
+    constexpr int32_t WARP_SIZE = 32;
+    const int32_t lane = threadIdx.x & (WARP_SIZE - 1);
+    const int32_t warp_in_block = threadIdx.x >> 5;
+    const int32_t warps_per_block = blockDim.x >> 5;
+    const int32_t warp_id = blockIdx.x * warps_per_block + warp_in_block;
+    const int32_t total_warps = batch_size * n_heads * tph;
+    if (warp_id >= total_warps) return;
+
+    const int32_t n = warp_id % (n_heads * tph);
+    const int32_t b = warp_id / (n_heads * tph);
+    const int32_t h = n / tph;
+    const int32_t t = n - h * tph;
+
+    const int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    const int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+    const int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    const int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    const int32_t pair_base     = (h * tph + t) * output_nap;
+    const int32_t grad_base     = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+    for (int32_t k = lane; k < output_nap; k += WARP_SIZE) {
+        float lat_main = __bfloat162float(latent_bf16_ptr[lat_base_main + k]);
+        float lat_alt  = __bfloat162float(latent_bf16_ptr[lat_base_alt  + k]);
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
+    }
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        grad_main += __shfl_xor_sync(0xFFFFFFFFu, grad_main, offset);
+        grad_alt  += __shfl_xor_sync(0xFFFFFFFFu, grad_alt,  offset);
+    }
+    if (lane == 0) {
+        grad_main_ptr[b * n_heads * tph + n] = grad_main;
+        grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+    }
+}
+
+__global__ void bit_perm_lut_dom_gather_bwd_latent_kernel_warp(
+    int32_t batch_size, int32_t n_heads, int32_t tph,
+    int32_t P, int32_t table_dim, int32_t output_nap, float scale,
+    const int16_t*       __restrict__ lookup_indices_ptr,
+    const int16_t*       __restrict__ lookup_alt_indices_ptr,
+    const __nv_fp8_e4m3* __restrict__ latent_fp8_ptr,
+    const float*         __restrict__ latent_scale_ptr,
+    const int32_t*       __restrict__ pair_idx_ptr,
+    const float*         __restrict__ grad_out_ptr,
+    float*               __restrict__ grad_main_ptr,
+    float*               __restrict__ grad_alt_ptr
+) {
+    constexpr int32_t WARP_SIZE = 32;
+    const int32_t lane = threadIdx.x & (WARP_SIZE - 1);
+    const int32_t warp_in_block = threadIdx.x >> 5;
+    const int32_t warps_per_block = blockDim.x >> 5;
+    const int32_t warp_id = blockIdx.x * warps_per_block + warp_in_block;
+    const int32_t total_warps = batch_size * n_heads * tph;
+    if (warp_id >= total_warps) return;
+
+    const int32_t n = warp_id % (n_heads * tph);
+    const int32_t b = warp_id / (n_heads * tph);
+    const int32_t h = n / tph;
+    const int32_t t = n - h * tph;
+
+    const int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    const int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+    const int32_t lat_base_main = (n * table_dim + entry_main) * output_nap;
+    const int32_t lat_base_alt  = (n * table_dim + entry_alt)  * output_nap;
+    const int32_t pair_base     = (h * tph + t) * output_nap;
+    const int32_t grad_base     = b * n_heads * P + h * P;
+    const float   inv_scale     = 1.0f / latent_scale_ptr[n];
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+    for (int32_t k = lane; k < output_nap; k += WARP_SIZE) {
+        float lat_main = static_cast<float>(latent_fp8_ptr[lat_base_main + k]) * inv_scale;
+        float lat_alt  = static_cast<float>(latent_fp8_ptr[lat_base_alt  + k]) * inv_scale;
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+        grad_main += g_slot * lat_main;
+        grad_alt  += g_slot * lat_alt;
+    }
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        grad_main += __shfl_xor_sync(0xFFFFFFFFu, grad_main, offset);
+        grad_alt  += __shfl_xor_sync(0xFFFFFFFFu, grad_alt,  offset);
+    }
+    if (lane == 0) {
+        grad_main_ptr[b * n_heads * tph + n] = grad_main;
+        grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+    }
+}
+
+__global__ void bit_perm_lut_dom_gather_bwd_kernel_warp(
+    int32_t batch_size, int32_t n_heads, int32_t tph, int32_t n_blocks,
+    int32_t P, int32_t table_dim, int32_t output_nap, float scale,
+    const int16_t* __restrict__ lookup_indices_ptr,
+    const int16_t* __restrict__ lookup_alt_indices_ptr,
+    const int32_t* __restrict__ bit_weights_ptr,
+    const int32_t* __restrict__ pair_idx_ptr,
+    const float*   __restrict__ grad_out_ptr,
+    float*         __restrict__ grad_main_ptr,
+    float*         __restrict__ grad_alt_ptr
+) {
+    constexpr int32_t WARP_SIZE = 32;
+    const int32_t lane = threadIdx.x & (WARP_SIZE - 1);
+    const int32_t warp_in_block = threadIdx.x >> 5;
+    const int32_t warps_per_block = blockDim.x >> 5;
+    const int32_t warp_id = blockIdx.x * warps_per_block + warp_in_block;
+    const int32_t total_warps = batch_size * n_heads * tph;
+    if (warp_id >= total_warps) return;
+
+    const int32_t n = warp_id % (n_heads * tph);
+    const int32_t b = warp_id / (n_heads * tph);
+    const int32_t h = n / tph;
+    const int32_t t = n - h * tph;
+
+    const int32_t entry_main = static_cast<int32_t>(lookup_indices_ptr[b * n_heads * tph + n]);
+    const int32_t entry_alt  = static_cast<int32_t>(lookup_alt_indices_ptr[b * n_heads * tph + n]);
+    const int32_t w_base_main = (n * table_dim + entry_main) * n_blocks;
+    const int32_t w_base_alt  = (n * table_dim + entry_alt)  * n_blocks;
+    const int32_t pair_base   = (h * tph + t) * output_nap;
+    const int32_t grad_base   = b * n_heads * P + h * P;
+
+    float grad_main = 0.0f;
+    float grad_alt  = 0.0f;
+    for (int32_t k = lane; k < output_nap; k += WARP_SIZE) {
+        int32_t block_idx = k >> 5;
+        int32_t bit_idx   = k & 31;
+        int32_t word_main = bit_weights_ptr[w_base_main + block_idx];
+        int32_t word_alt  = bit_weights_ptr[w_base_alt  + block_idx];
+        float sign_main = 2.0f * static_cast<float>((word_main >> bit_idx) & 1) - 1.0f;
+        float sign_alt  = 2.0f * static_cast<float>((word_alt  >> bit_idx) & 1) - 1.0f;
+        int32_t p = pair_idx_ptr[pair_base + k];
+        float g_slot = scale * grad_out_ptr[grad_base + p];
+        grad_main += g_slot * sign_main;
+        grad_alt  += g_slot * sign_alt;
+    }
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        grad_main += __shfl_xor_sync(0xFFFFFFFFu, grad_main, offset);
+        grad_alt  += __shfl_xor_sync(0xFFFFFFFFu, grad_alt,  offset);
+    }
+    if (lane == 0) {
+        grad_main_ptr[b * n_heads * tph + n] = grad_main;
+        grad_alt_ptr [b * n_heads * tph + n] = grad_alt;
+    }
+}
+
 
 // Soft-backward variant for latent_dtype='bf16': reads the continuous latent
 // from a bfloat16 buffer, casts to float for accumulation.
@@ -4886,7 +5105,11 @@ public:
         //     partial warp sums. Faster when K >> 32 (e.g. tph=4096 out_proj
         //     where K ~ 260).
         // Crossover ~32: measured on H100 with exp315 config.
-        constexpr int32_t K_CROSSOVER = 32;
+        // K-crossover. Warp-cooperative path is only worthwhile when K is
+        // large enough that per-warp work >> warp-reduce + atomicAdd overhead.
+        // Empirically K>~128 wins; below that, thread-per-output is faster
+        // because it keeps block-count manageable (especially when V is big).
+        constexpr int32_t K_CROSSOVER = 128;
         int64_t total_primary = B * n_heads * n_pairs;
 
         if (K32 <= K_CROSSOVER) {
@@ -4998,9 +5221,32 @@ public:
 
         c10::cuda::CUDAGuard guard(grad_out.device().index());
         int64_t total = B * n_heads * tph;
+
+        // Dispatch: warp-coop across output_nap when it's large.
+        constexpr int32_t BWD_WARPS_PER_BLOCK = 4;
+        constexpr int32_t BWD_ONAP_CROSSOVER = 128;
+        if (output_nap > BWD_ONAP_CROSSOVER) {
+            int blocks = static_cast<int>((total + BWD_WARPS_PER_BLOCK - 1) / BWD_WARPS_PER_BLOCK);
+            int threads = BWD_WARPS_PER_BLOCK * 32;
+            bit_perm_lut_dom_gather_bwd_kernel_warp<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
+                static_cast<int32_t>(n_blocks), static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(table_dim), static_cast<int32_t>(output_nap),
+                static_cast<float>(scale),
+                reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(bw_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+                reinterpret_cast<const float*>(go_c.data_ptr()),
+                reinterpret_cast<float*>(grad_main.data_ptr()),
+                reinterpret_cast<float*>(grad_alt.data_ptr())
+            );
+            CU_CHECK(cudaGetLastError());
+            return std::make_tuple(grad_main, grad_alt);
+        }
         int threads = static_cast<int>(threads_per_block);
         int blocks  = static_cast<int>((total + threads - 1) / threads);
-
         bit_perm_lut_dom_gather_bwd_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
@@ -5067,6 +5313,28 @@ public:
         int threads = static_cast<int>(threads_per_block);
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
+        constexpr int32_t BWD_WARPS_PER_BLOCK = 4;
+        constexpr int32_t BWD_ONAP_CROSSOVER = 128;
+        if (output_nap > BWD_ONAP_CROSSOVER) {
+            int wblocks = static_cast<int>((total + BWD_WARPS_PER_BLOCK - 1) / BWD_WARPS_PER_BLOCK);
+            int wthreads = BWD_WARPS_PER_BLOCK * 32;
+            bit_perm_lut_dom_gather_bwd_latent_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
+                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(output_nap), static_cast<float>(scale),
+                reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+                reinterpret_cast<const __nv_fp8_e4m3*>(lat_c.data_ptr()),
+                reinterpret_cast<const float*>(lsc.data_ptr()),
+                reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+                reinterpret_cast<const float*>(go_c.data_ptr()),
+                reinterpret_cast<float*>(grad_main.data_ptr()),
+                reinterpret_cast<float*>(grad_alt.data_ptr())
+            );
+            CU_CHECK(cudaGetLastError());
+            return std::make_tuple(grad_main, grad_alt);
+        }
         bit_perm_lut_dom_gather_bwd_latent_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
@@ -5129,6 +5397,27 @@ public:
         int threads = static_cast<int>(threads_per_block);
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
+        constexpr int32_t BWD_WARPS_PER_BLOCK = 4;
+        constexpr int32_t BWD_ONAP_CROSSOVER = 128;
+        if (output_nap > BWD_ONAP_CROSSOVER) {
+            int wblocks = static_cast<int>((total + BWD_WARPS_PER_BLOCK - 1) / BWD_WARPS_PER_BLOCK);
+            int wthreads = BWD_WARPS_PER_BLOCK * 32;
+            bit_perm_lut_dom_gather_bwd_latent_bf16_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
+                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(output_nap), static_cast<float>(scale),
+                reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+                reinterpret_cast<const __nv_bfloat16*>(lat_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+                reinterpret_cast<const float*>(go_c.data_ptr()),
+                reinterpret_cast<float*>(grad_main.data_ptr()),
+                reinterpret_cast<float*>(grad_alt.data_ptr())
+            );
+            CU_CHECK(cudaGetLastError());
+            return std::make_tuple(grad_main, grad_alt);
+        }
         bit_perm_lut_dom_gather_bwd_latent_bf16_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
@@ -5190,6 +5479,27 @@ public:
         int threads = static_cast<int>(threads_per_block);
         int blocks  = static_cast<int>((total + threads - 1) / threads);
 
+        constexpr int32_t BWD_WARPS_PER_BLOCK = 4;
+        constexpr int32_t BWD_ONAP_CROSSOVER = 128;
+        if (output_nap > BWD_ONAP_CROSSOVER) {
+            int wblocks = static_cast<int>((total + BWD_WARPS_PER_BLOCK - 1) / BWD_WARPS_PER_BLOCK);
+            int wthreads = BWD_WARPS_PER_BLOCK * 32;
+            bit_perm_lut_dom_gather_bwd_latent_f32_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                static_cast<int32_t>(B),
+                static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
+                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(output_nap), static_cast<float>(scale),
+                reinterpret_cast<const int16_t*>(li_c.data_ptr()),
+                reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
+                reinterpret_cast<const float*>(lat_c.data_ptr()),
+                reinterpret_cast<const int32_t*>(pi_c.data_ptr()),
+                reinterpret_cast<const float*>(go_c.data_ptr()),
+                reinterpret_cast<float*>(grad_main.data_ptr()),
+                reinterpret_cast<float*>(grad_alt.data_ptr())
+            );
+            CU_CHECK(cudaGetLastError());
+            return std::make_tuple(grad_main, grad_alt);
+        }
         bit_perm_lut_dom_gather_bwd_latent_f32_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),

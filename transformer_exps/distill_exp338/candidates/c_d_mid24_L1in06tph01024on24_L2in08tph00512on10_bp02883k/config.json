@@ -1,0 +1,19 @@
+{
+  "name": "c_d_mid24_L1in06tph01024on24_L2in08tph00512on10_bp02883k",
+  "description": "Axis D: 2-LUT stack, d_mid=24, L1={'input_nap': 6, 'tph': 1024, 'output_nap': 24}, L2={'input_nap': 8, 'tph': 512, 'output_nap': 10}",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 1024,
+      "output_nap": 24
+    },
+    {
+      "input_nap": 8,
+      "tph": 512,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": [
+    24
+  ]
+}

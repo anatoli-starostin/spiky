@@ -1,0 +1,25 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 10485760,
+  "n_luts": 1,
+  "final_mse": 0.0377511449398533,
+  "final_sign_acc": 0.9981116633261403,
+  "best_sign_acc": 0.9981116633261403,
+  "best_step": 50000,
+  "best_mse": 0.0377511449398533,
+  "time_min": 4.16,
+  "candidate": {
+    "name": "p1_in07_tph8192_on10",
+    "module_type": "perm",
+    "description": "PermLut smooth-rational at matched shape",
+    "luts": [
+      {
+        "input_nap": 7,
+        "tph": 8192,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

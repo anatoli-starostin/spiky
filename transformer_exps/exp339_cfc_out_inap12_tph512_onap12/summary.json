@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp339_cfc_out_inap12_tph512_onap12",
+  "best_val_loss": 1.5726957678794862,
+  "final_val_loss": 1.5726957678794862,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.468
+}

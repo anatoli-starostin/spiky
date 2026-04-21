@@ -34,12 +34,14 @@ def _make_lut(device, input_dim=32, n_tables=8, n_anchor_pairs=6, n_heads=1, see
 
 
 def test_rejects_n_anchor_pairs_too_large():
-    with pytest.raises(ValueError, match="1 <= n_anchor_pairs <= 16"):
-        TinyAnchorPairsLookup(input_dim=64, n_tables=4, n_anchor_pairs=17, device=torch.device("cpu"))
+    # 16 is now rejected (int16 lookup-index overflow); 15 is the max.
+    for bad in (16, 17):
+        with pytest.raises(ValueError, match="1 <= n_anchor_pairs <= 15"):
+            TinyAnchorPairsLookup(input_dim=64, n_tables=4, n_anchor_pairs=bad, device=torch.device("cpu"))
 
 
 def test_rejects_n_anchor_pairs_zero():
-    with pytest.raises(ValueError, match="1 <= n_anchor_pairs <= 16"):
+    with pytest.raises(ValueError, match="1 <= n_anchor_pairs <= 15"):
         TinyAnchorPairsLookup(input_dim=64, n_tables=4, n_anchor_pairs=0, device=torch.device("cpu"))
 
 

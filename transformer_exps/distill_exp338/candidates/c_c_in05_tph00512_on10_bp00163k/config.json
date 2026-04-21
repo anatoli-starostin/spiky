@@ -1,0 +1,12 @@
+{
+  "name": "c_c_in05_tph00512_on10_bp00163k",
+  "description": "Axis C (small): single LUT, in=5, tph=512, on=10",
+  "luts": [
+    {
+      "input_nap": 5,
+      "tph": 512,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": []
+}

@@ -1,0 +1,31 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 2621440,
+  "n_luts": 2,
+  "final_mse": 0.11145671529154624,
+  "final_sign_acc": 0.9648319982713268,
+  "best_sign_acc": 0.965590077061807,
+  "best_step": 30000,
+  "best_mse": 0.10886870276543402,
+  "time_min": 1.78,
+  "candidate": {
+    "name": "c10_d_in6_mid16_in8_on16",
+    "description": "2-LUT stack: 64 -> LUT1(in=6, tph=512, on=16) -> D2V(16) -> LUT2(in=8, tph=512, on=16) -> 32. Total ~2.6M bit-params, matches c04 budget.",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 512,
+        "output_nap": 16
+      },
+      {
+        "input_nap": 8,
+        "tph": 512,
+        "output_nap": 16
+      }
+    ],
+    "d_intermediate": [
+      16
+    ]
+  }
+}

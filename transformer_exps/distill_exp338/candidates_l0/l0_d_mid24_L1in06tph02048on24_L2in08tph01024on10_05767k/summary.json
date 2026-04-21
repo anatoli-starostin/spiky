@@ -1,0 +1,31 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 5767168,
+  "n_luts": 2,
+  "final_mse": 0.2129608469624673,
+  "final_sign_acc": 0.9303272001204952,
+  "best_sign_acc": 0.9310700816492881,
+  "best_step": 25000,
+  "best_mse": 0.2104816859768283,
+  "time_min": 2.22,
+  "candidate": {
+    "name": "l0_d_mid24_L1in06tph02048on24_L2in08tph01024on10_05767k",
+    "description": "2-LUT stack mid=24",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 2048,
+        "output_nap": 24
+      },
+      {
+        "input_nap": 8,
+        "tph": 1024,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": [
+      24
+    ]
+  }
+}

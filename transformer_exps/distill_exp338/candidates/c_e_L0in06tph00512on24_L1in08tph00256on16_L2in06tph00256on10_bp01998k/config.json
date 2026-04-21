@@ -1,0 +1,25 @@
+{
+  "name": "c_e_L0in06tph00512on24_L1in08tph00256on16_L2in06tph00256on10_bp01998k",
+  "description": "Axis E: 3-LUT stack",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 512,
+      "output_nap": 24
+    },
+    {
+      "input_nap": 8,
+      "tph": 256,
+      "output_nap": 16
+    },
+    {
+      "input_nap": 6,
+      "tph": 256,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": [
+    24,
+    16
+  ]
+}

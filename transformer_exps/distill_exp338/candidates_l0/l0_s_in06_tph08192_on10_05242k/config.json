@@ -1,0 +1,12 @@
+{
+  "name": "l0_s_in06_tph08192_on10_05242k",
+  "description": "5.2M: in=6, tph=8192, on=10",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 8192,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": []
+}

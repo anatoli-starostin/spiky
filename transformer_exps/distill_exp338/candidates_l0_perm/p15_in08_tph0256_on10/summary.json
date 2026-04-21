@@ -1,0 +1,25 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 655360,
+  "n_luts": 1,
+  "final_mse": 0.27859154824287663,
+  "final_sign_acc": 0.9133837299962198,
+  "best_sign_acc": 0.9133837299962198,
+  "best_step": 50000,
+  "best_mse": 0.27859154824287663,
+  "time_min": 1.34,
+  "candidate": {
+    "name": "p15_in08_tph0256_on10",
+    "module_type": "perm",
+    "description": "PermLut small-tph",
+    "luts": [
+      {
+        "input_nap": 8,
+        "tph": 256,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

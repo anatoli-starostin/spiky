@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 10485760,
+  "n_luts": 1,
+  "final_mse": 0.10874652093456637,
+  "final_sign_acc": 0.9647162652784779,
+  "best_sign_acc": 0.9687408324210874,
+  "best_step": 20000,
+  "best_mse": 0.09508900488576581,
+  "time_min": 1.02,
+  "candidate": {
+    "name": "c02_s_in10_tph1024_on10",
+    "description": "Single LUT, half tph of teacher. 10.5M bit-params.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 1024,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

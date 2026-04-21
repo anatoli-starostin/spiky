@@ -6,14 +6,21 @@ inference with fixed design choices.
 
 Hardcoded constraints:
   - n_alternatives = 1 (single flip carrier for backward).
-  - n_anchor_pairs <= 16 (primary lookup index fits in int16).
+  - n_anchor_pairs <= 15. The lookup index (0..2^n_anchor_pairs−1) is
+    stored as signed int16; 2^16 − 1 = 65535 overflows int16's positive
+    range, corrupting downstream gather indexing and producing NaN
+    gradients. Until the kernel path is migrated to int32 lookup indices,
+    keep n_anchor_pairs ≤ 15.
   - cmp_eps = 0 (exact comparison).
   - uncertainty_mode = INVERSE_L1, uncertainty_bias = 0.5.
-  - anchor_sampling_policy = CANONICAL_DISTINCT (only).
+  - anchor_sampling_policy = CANONICAL_FULL_COVERAGE (only).
   - shuffle_per_head = True.
   - smooth_mode = False.
   - No prebuilt_anchor_pairs, no anchor_candidates, no exclusion_sets,
     no connected_anchors_mode.
+  - Optional `partition_sets` restricts CANONICAL_DISTINCT sampling to
+    within-partition pairs (e.g. forbid cross-head pairs when the input
+    is H heads concatenated).
 
 Forward signature:
   x: float [B, input_dim]
@@ -29,6 +36,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
+from spiky.lutorch.determinism import is_deterministic
 from spiky.lutorch.lut_helpers import (
     AnchorSamplingPolicy,
     get_balanced_anchor_pairs,
@@ -99,8 +107,13 @@ def _tiny_backward_pytorch(
     batch_offset: torch.Tensor,  # int32 [B * n_tables]
     grad_main: torch.Tensor,
     grad_alt: torch.Tensor,
+    grad_direct: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """INVERSE_L1 backward with uncertainty_bias=0.5 (fixed).
+
+    Computes du per (b, table) as a dense tensor, then scatters it into
+    x_grad via two `scatter_add_` calls — deterministic under
+    `torch.use_deterministic_algorithms(True)`.
 
     anchor1/2_ids stored as int16; batch_offset as int32. Both are cast to
     int64 here only at the scatter_add_ call (PyTorch API requirement)."""
@@ -111,12 +124,15 @@ def _tiny_backward_pytorch(
     one_plus_abs = 1.0 + abs_delta
     minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
     du = grad_diff * minus_uncertainty_derivative  # [B, n_tables, 1]
+    if grad_direct is not None:
+        du = du + grad_direct
 
     x_grad_flat = torch.zeros(batch_size * input_dim, device=x.device, dtype=x.dtype)
     flat_a = (batch_offset + anchor1_ids.reshape(-1).to(torch.int32)).to(torch.int64)
     flat_b = (batch_offset + anchor2_ids.reshape(-1).to(torch.int32)).to(torch.int64)
-    x_grad_flat.scatter_add_(0, flat_a, du.reshape(-1))
-    x_grad_flat.scatter_add_(0, flat_b, -du.reshape(-1))
+    du_flat = du.reshape(-1)
+    x_grad_flat.scatter_add_(0, flat_a, du_flat)
+    x_grad_flat.scatter_add_(0, flat_b, -du_flat)
     return x_grad_flat
 
 
@@ -206,7 +222,11 @@ class _TinyAnchorPairsLookupFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_li, grad_lai, grad_lad, grad_lig, grad_laig):
         x, anchor1_ids, anchor2_ids, lookup_alt_deltas, batch_offset = ctx.saved_tensors
-        if ctx.use_native:
+        # Nondeterminism source: the custom CUDA kernel uses float atomicAdds
+        # to scatter into x_grad. The PyTorch path computes `du` densely and
+        # calls scatter_add_, which is deterministic under
+        # `torch.use_deterministic_algorithms(True)`.
+        if ctx.use_native and not is_deterministic():
             x_grad_flat = _tiny_backward_cuda(
                 x, anchor1_ids, anchor2_ids, lookup_alt_deltas,
                 grad_lig, grad_laig, grad_direct=grad_lad,
@@ -214,14 +234,8 @@ class _TinyAnchorPairsLookupFunction(torch.autograd.Function):
         else:
             x_grad_flat = _tiny_backward_pytorch(
                 x, anchor1_ids, anchor2_ids, lookup_alt_deltas, batch_offset,
-                grad_lig, grad_laig,
+                grad_lig, grad_laig, grad_direct=grad_lad,
             )
-            if grad_lad is not None:
-                d = grad_lad.reshape(-1)
-                flat_a = (batch_offset + anchor1_ids.reshape(-1).to(torch.int32)).to(torch.int64)
-                flat_b = (batch_offset + anchor2_ids.reshape(-1).to(torch.int32)).to(torch.int64)
-                x_grad_flat.scatter_add_(0, flat_a, d)
-                x_grad_flat.scatter_add_(0, flat_b, -d)
         return x_grad_flat.view(x.shape), None, None, None, None
 
 
@@ -241,11 +255,14 @@ class TinyAnchorPairsLookup(nn.Module):
         n_heads: int = 1,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
+        partition_sets: Optional[list] = None,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
     ):
         super().__init__()
-        if not (1 <= n_anchor_pairs <= 16):
+        if not (1 <= n_anchor_pairs <= 15):
             raise ValueError(
-                f"TinyAnchorPairsLookup requires 1 <= n_anchor_pairs <= 16, "
+                f"TinyAnchorPairsLookup requires 1 <= n_anchor_pairs <= 15 "
+                f"(int16 lookup-index range; see module docstring), "
                 f"got {n_anchor_pairs}"
             )
         self.input_dim = input_dim
@@ -254,15 +271,30 @@ class TinyAnchorPairsLookup(nn.Module):
         self.table_dim = 1 << n_anchor_pairs  # 2 ** n_anchor_pairs
 
         dev = device or torch.device("cpu")
+        policy = (
+            anchor_sampling_policy
+            if anchor_sampling_policy is not None
+            else AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
+        )
+        if policy not in (
+            AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+            AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        ):
+            raise ValueError(
+                f"TinyAnchorPairsLookup supports CANONICAL_FULL_COVERAGE or "
+                f"CANONICAL_DISTINCT, got {policy}"
+            )
+        self.anchor_sampling_policy = policy
         anchor_pairs_a, anchor_pairs_b = get_balanced_anchor_pairs(
             n_tables=n_tables,
             n_anchor_pairs=n_anchor_pairs,
             input_dim=input_dim,
             device=dev,
             random_seed=random_seed,
-            policy=AnchorSamplingPolicy.CANONICAL_DISTINCT,
+            policy=policy,
             n_heads=n_heads,
             shuffle_per_head=True,
+            partition_sets=partition_sets,
         )
         if input_dim > 32767:
             raise ValueError(

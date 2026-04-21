@@ -1,0 +1,25 @@
+{
+  "name": "l0_e_L0in06tph01024on16_L1in06tph01024on16_L2in06tph01024on10_02752k",
+  "description": "3-LUT stack",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 1024,
+      "output_nap": 16
+    },
+    {
+      "input_nap": 6,
+      "tph": 1024,
+      "output_nap": 16
+    },
+    {
+      "input_nap": 6,
+      "tph": 1024,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": [
+    16,
+    16
+  ]
+}

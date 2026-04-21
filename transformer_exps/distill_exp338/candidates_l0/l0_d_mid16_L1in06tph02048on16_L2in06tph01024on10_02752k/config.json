@@ -1,0 +1,19 @@
+{
+  "name": "l0_d_mid16_L1in06tph02048on16_L2in06tph01024on10_02752k",
+  "description": "2-LUT stack mid=16",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 2048,
+      "output_nap": 16
+    },
+    {
+      "input_nap": 6,
+      "tph": 1024,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": [
+    16
+  ]
+}

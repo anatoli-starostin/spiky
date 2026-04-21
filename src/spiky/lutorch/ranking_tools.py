@@ -595,6 +595,107 @@ class DominanceCanonicalize(nn.Module):
         return self.v2d(self.d2v(d))
 
 
+class BordaCanonicalize(nn.Module):
+    """Canonicalize an entangled Borda vector through the ±1 dominance bottleneck.
+
+    Input : Borda [..., d]
+    Steps : V2D(d, STE)  -- Borda -> ±1 dominance [..., P]
+            D2V(d)       -- dominance -> Borda [..., d] (Borda + LN)
+    Output: Borda [..., d]  (same dim; cleaned through the ±1 step)
+
+    Complement of DominanceCanonicalize (which takes dominance and returns
+    dominance). Use when the surrounding code keeps features in Borda
+    (n_outputs=d_head) between stages but still wants the canonicalising
+    effect of the ±1 bottleneck.
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        temperature: float = 0.1,
+        elementwise_affine: bool = True,
+    ):
+        super().__init__()
+        self.v2d = VectorToDominance(d_head, smooth_mode=False, temperature=temperature)
+        self.d2v = DominanceToVector(d_head, normalise=True, elementwise_affine=elementwise_affine)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.d2v(self.v2d(x))
+
+
+class BordaFFN(nn.Module):
+    """Simple float-only replacement for a BitPermutationLUT / PermutationalLUT.
+
+    Pipeline:
+        x [..., n_inputs]
+          -> borda:  Linear(n_inputs -> n_heads·n_outputs)       # "make borda"
+          -> ffn:    Linear(d -> 4·d) -> ReLU -> Linear(4·d -> d) # standard x4 FFN
+          -> norm:   LayerNorm(d)
+          -> reshape to [..., n_heads, n_outputs]
+
+    Motivated by: what's the cheapest non-LUT baseline that plugs into the
+    same attention plumbing as exp314's q/k/v/out_proj? This module keeps
+    the same I/O shape convention (n_inputs in, n_heads·n_outputs out with
+    head split) and spends its parameters on a single linear "Borda"
+    projection plus a feed-forward block at the borda dimension.
+    """
+
+    def __init__(
+        self,
+        n_inputs: int,
+        n_outputs: int,
+        n_heads: int = 1,
+        ffn_mult: int = 4,
+        sparsity_k: Optional[int] = None,
+    ):
+        """
+        sparsity_k: if set, after ReLU on the hidden layer, keep only the
+          top-k largest activations per sample; zero the rest (K-WTA).
+          Deterministic hard sparsity; differentiable through the selected
+          top-k values. Typical choice: k = hidden_dim // 4.
+        """
+        super().__init__()
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_heads = n_heads
+        d = n_heads * n_outputs
+        hidden_dim = ffn_mult * d
+        if sparsity_k is not None and not (0 < sparsity_k <= hidden_dim):
+            raise ValueError(
+                f"sparsity_k must be in (0, hidden_dim={hidden_dim}], got {sparsity_k}"
+            )
+        self.sparsity_k = sparsity_k
+
+        self.borda = nn.Linear(n_inputs, d)
+        self.ffn_expand = nn.Linear(d, hidden_dim)
+        self.ffn_contract = nn.Linear(hidden_dim, d)
+        self.norm = nn.LayerNorm(d)
+
+        # Kaiming-normal init tailored to each linear's successor:
+        #   borda        — no immediate nonlinearity, 'linear' gain.
+        #   ffn_expand   — followed by ReLU, 'relu' gain (std = √(2/fan_in)).
+        #   ffn_contract — output linear (pre-LN), 'linear'.
+        # Biases zeroed.
+        nn.init.kaiming_normal_(self.borda.weight,       nonlinearity='linear')
+        nn.init.kaiming_normal_(self.ffn_expand.weight,  nonlinearity='relu')
+        nn.init.kaiming_normal_(self.ffn_contract.weight, nonlinearity='linear')
+        nn.init.zeros_(self.borda.bias)
+        nn.init.zeros_(self.ffn_expand.bias)
+        nn.init.zeros_(self.ffn_contract.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b = self.borda(x)
+        h = F.relu(self.ffn_expand(b))
+        if self.sparsity_k is not None and self.sparsity_k < h.shape[-1]:
+            # K-WTA: hard top-k mask on the hidden activations.
+            _, top_idx = h.topk(self.sparsity_k, dim=-1)
+            mask = torch.zeros_like(h).scatter_(-1, top_idx, 1.0)
+            h = h * mask
+        b = self.norm(self.ffn_contract(h))
+        out_shape = x.shape[:-1] + (self.n_heads, self.n_outputs)
+        return b.view(*out_shape)
+
+
 def add_rank_preserving_noise(x, scale=0.1):
     # x: (..., d)
     sorted_x, _ = x.sort(dim=-1)

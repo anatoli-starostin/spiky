@@ -331,10 +331,38 @@ class PermutationalLut(nn.Module):
         return_dominance: bool = False,
         scrambled_policy: AnchorSamplingPolicy = AnchorSamplingPolicy.FULL_COVERAGE,
         input_anchor_policy: AnchorSamplingPolicy = AnchorSamplingPolicy.FULL_COVERAGE,
+        partition_sets: Optional[list] = None,
+        output_partition_sets: Optional[list] = None,
+        borda_scale_mode: str = 'borda',
+        vote_quant_levels: Optional[int] = None,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         **mhlut_kwargs,
     ):
+        # borda_scale_mode:
+        #   'clt'   (default): divide scatter output by √(n_votes_per_output) —
+        #           keeps per-output std ≈ 0.5/√3 under uniform-random init.
+        #   'borda': divide by √(n_outputs - 1), matching BitPermLUT+DominanceToVector's
+        #           Borda projection. Produces pre-LN magnitudes comparable to the
+        #           BitPermLUT path (useful for hybrid networks with LN downstream).
+        if borda_scale_mode not in ('clt', 'borda'):
+            raise ValueError(f"borda_scale_mode must be 'clt' or 'borda', got {borda_scale_mode!r}")
+        # `partition_sets` restricts input-side anchor pairs (MultiHeadLut's
+        # input anchors) to within-partition pairs. `output_partition_sets`
+        # does the same for scrambled output pairs when `pair_mode='scrambled'`.
+        # In 'aligned' mode output pairs are inherited from input pairs, so
+        # only `partition_sets` applies.
+        # partition_sets only works with CANONICAL_* policies; auto-upgrade.
+        if partition_sets is not None and input_anchor_policy not in (
+            AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+            AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        ):
+            input_anchor_policy = AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
+        if output_partition_sets is not None and scrambled_policy not in (
+            AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+            AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        ):
+            scrambled_policy = AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
         super().__init__()
 
         if pair_mode not in ('aligned', 'scrambled'):
@@ -367,6 +395,14 @@ class PermutationalLut(nn.Module):
         self.temperature = temperature
         self.use_fp8 = use_fp8
         self.return_dominance = return_dominance
+        self.borda_scale_mode = borda_scale_mode
+        # `vote_quant_levels`: if set, quantize each per-vote soft-sign value
+        # (in [-0.5, 0.5]) to N equispaced levels before scatter, with STE
+        # backward. Tests the "biological-synapse" hypothesis: a few bits of
+        # precision per vote instead of 1 (BitPermLUT) or full float (PermLut).
+        if vote_quant_levels is not None and vote_quant_levels < 2:
+            raise ValueError(f"vote_quant_levels must be >= 2, got {vote_quant_levels}")
+        self.vote_quant_levels = vote_quant_levels
 
         # Inner LUT: each table outputs `output_nap` values (one signed vote per output pair)
         self.inner = MultiHeadLut(
@@ -380,6 +416,7 @@ class PermutationalLut(nn.Module):
             random_seed=random_seed,
             device=device,
             return_per_table_outputs=True,
+            partition_sets=partition_sets,
             **mhlut_kwargs,
         )
 
@@ -402,6 +439,7 @@ class PermutationalLut(nn.Module):
                 policy=scrambled_policy,
                 n_heads=n_heads,
                 shuffle_per_head=True,
+                partition_sets=output_partition_sets,
             )
             idx_a = idx_a_flat.view(n_heads, tph, output_nap).long()
             idx_b = idx_b_flat.view(n_heads, tph, output_nap).long()
@@ -535,8 +573,16 @@ class PermutationalLut(nn.Module):
         return out / math.sqrt(n_votes_per_pair)
 
     def _borda_scale(self) -> float:
-        """CLT-stable scale for implicit-Borda aggregation: each output dim sums
-        ~tph*output_nap*2/n_outputs independent ±0.5 votes."""
+        """Divisor for implicit-Borda aggregation.
+
+        'clt'   : √(tph * output_nap * 2 / n_outputs) — CLT-stable under
+                  uniform-random init.
+        'borda' : √(n_outputs − 1)  — matches BitPermLUT's DominanceToVector
+                  Borda-projection convention (1/√(n_outputs−1) entries), giving
+                  comparable pre-LN magnitudes in hybrid networks.
+        """
+        if self.borda_scale_mode == 'borda':
+            return math.sqrt(max(1, self.n_outputs - 1))
         n_votes_per_output = self.tph * self.output_nap * 2 / float(self.n_outputs)
         return math.sqrt(n_votes_per_output)
 
@@ -548,9 +594,24 @@ class PermutationalLut(nn.Module):
         )
         return out / self._borda_scale()
 
+    def _quantize_vote(self, v: torch.Tensor) -> torch.Tensor:
+        """Quantize each per-vote soft-sign (in [-0.5, 0.5]) to `vote_quant_levels`
+        equispaced values with STE backward. No-op if not quantizing."""
+        N = self.vote_quant_levels
+        if N is None:
+            return v
+        step = 1.0 / (N - 1)
+        # Levels: -0.5, -0.5 + step, ..., +0.5 (N values).
+        vc = v.clamp(-0.5, 0.5)
+        vq = torch.round((vc + 0.5) / step) * step - 0.5
+        return v + (vq - v).detach()     # STE: forward quantized, backward smooth
+
     def _forward_pytorch(self, raw: torch.Tensor) -> torch.Tensor:
-        """Pure PyTorch path: signed_vote + scatter_add. CPU/fp16/debug fallback."""
+        """Pure PyTorch path: signed_vote + scatter_add. CPU/fp16/debug fallback
+        and also the path used when `vote_quant_levels` is set (inserts STE
+        quantization between signed_vote and scatter)."""
         d = self._signed_vote(raw)  # [B, H, T, P], in (-0.5, +0.5)
+        d = self._quantize_vote(d)  # STE quantize to `vote_quant_levels` if set
 
         B = raw.shape[0]
         H = self.n_heads
@@ -585,7 +646,11 @@ class PermutationalLut(nn.Module):
         if self.use_fp8:
             self.inner.projection.weights.data = orig_data
 
-        if self.return_dominance:
+        if self.vote_quant_levels is not None:
+            # Quantization lives in the PyTorch path (rational → STE quantize →
+            # scatter). CUDA/matmul paths don't yet support the quantize step.
+            out = self._forward_pytorch(raw)
+        elif self.return_dominance:
             out = self._forward_dominance(raw)
         elif self.aggregation == 'matmul':
             out = self._forward_matmul(raw)

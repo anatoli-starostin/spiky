@@ -1,0 +1,25 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 8388608,
+  "n_luts": 1,
+  "final_mse": 0.06181440430302774,
+  "final_sign_acc": 0.994081312610257,
+  "best_sign_acc": 0.994081312610257,
+  "best_step": 50000,
+  "best_mse": 0.06181440430302774,
+  "time_min": 5.67,
+  "candidate": {
+    "name": "p2_in06_tph4096_on32",
+    "module_type": "perm",
+    "description": "PermLut smooth-rational at matched shape",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 4096,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

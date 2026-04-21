@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 20971520,
+  "n_luts": 1,
+  "final_mse": 0.059588934144666116,
+  "final_sign_acc": 0.9800446418023878,
+  "best_sign_acc": 0.9839322490076865,
+  "best_step": 7500,
+  "best_mse": 0.047466252119310444,
+  "time_min": 1.4,
+  "candidate": {
+    "name": "c00_teacher_shape",
+    "description": "Matches exp338 out_proj shape exactly: single LUT, partition, input_nap=10, tph=2048, output_nap=10. Ceiling check \u2014 should hit very high sign_acc.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

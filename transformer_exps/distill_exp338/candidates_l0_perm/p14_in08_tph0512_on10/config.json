@@ -1,0 +1,1 @@
+{"name":"p14_in08_tph0512_on10","module_type":"perm","description":"PermLut small-tph","luts":[{"input_nap":8,"tph":512,"output_nap":10}],"d_intermediate":[]}

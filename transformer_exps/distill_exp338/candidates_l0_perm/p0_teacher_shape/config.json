@@ -1,0 +1,1 @@
+{"name":"p0_teacher_shape","module_type":"perm","description":"PermutationalLut smooth-rational at teacher shape; direct comparison vs BitPermLUT l0_s_teacher_shape (0.985).","luts":[{"input_nap":10,"tph":2048,"output_nap":10}],"d_intermediate":[]}

@@ -1,0 +1,25 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 20971520,
+  "n_luts": 1,
+  "final_mse": 0.020031499766534375,
+  "final_sign_acc": 0.9990737668929561,
+  "best_sign_acc": 0.9990737668929561,
+  "best_step": 50000,
+  "best_mse": 0.020031499766534375,
+  "time_min": 1.77,
+  "candidate": {
+    "name": "p0_teacher_shape",
+    "module_type": "perm",
+    "description": "PermutationalLut smooth-rational at teacher shape; direct comparison vs BitPermLUT l0_s_teacher_shape (0.985).",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

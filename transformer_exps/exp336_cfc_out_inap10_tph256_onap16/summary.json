@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp336_cfc_out_inap10_tph256_onap16",
+  "best_val_loss": 1.4935660183429718,
+  "final_val_loss": 1.4935660183429718,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.235
+}

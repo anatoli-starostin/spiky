@@ -1,0 +1,8 @@
+{
+  "name": "c00_teacher_shape",
+  "description": "Matches exp338 out_proj shape exactly: single LUT, partition, input_nap=10, tph=2048, output_nap=10. Ceiling check — should hit very high sign_acc.",
+  "luts": [
+    {"input_nap": 10, "tph": 2048, "output_nap": 10}
+  ],
+  "d_intermediate": []
+}

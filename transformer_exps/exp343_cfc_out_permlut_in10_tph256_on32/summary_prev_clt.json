@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp343_cfc_out_permlut_in10_tph256_on32",
+  "best_val_loss": 1.4609733819961548,
+  "final_val_loss": 1.4609733819961548,
+  "adam_params": 50711655,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.283
+}

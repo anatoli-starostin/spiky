@@ -1,0 +1,1 @@
+{"name":"p4_in06_tph4096_on10","module_type":"perm","description":"PermLut smooth-rational at matched shape","luts":[{"input_nap":6,"tph":4096,"output_nap":10}],"d_intermediate":[]}

@@ -1,0 +1,1 @@
+{"name":"c06_s_in6_tph2048_on10","description":"Single LUT, narrow tables (in=6, table_dim=64), many tables (tph=2048). 1.3M bit-params.","luts":[{"input_nap":6,"tph":2048,"output_nap":10}],"d_intermediate":[]}

@@ -1,0 +1,12 @@
+{
+  "name": "c_b_in06_tph02048_on08_bp01048k",
+  "description": "Axis B: in=6, tph=2048, on=8",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 2048,
+      "output_nap": 8
+    }
+  ],
+  "d_intermediate": []
+}

@@ -231,3 +231,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Experiment artifacts (checkpoints, collected datasets, bulky outputs)
+transformer_exps/**/checkpoint*.pt
+transformer_exps/**/checkpoint*.ckpt
+transformer_exps/distill_exp338/data/*.pt
+transformer_exps/distill_exp338/candidates_l0_perm/*/checkpoint*.pt
+transformer_exps/sweep_out_proj/cfg_*/checkpoint*.pt
+
+# Video / notebook artifacts
+transformer_exps/**/*.mp4
+conversation-summary.html
+spikelm_notes.pdf

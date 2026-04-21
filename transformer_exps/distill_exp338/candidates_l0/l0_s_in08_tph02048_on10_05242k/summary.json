@@ -1,0 +1,24 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 5242880,
+  "n_luts": 1,
+  "final_mse": 0.17072791437948903,
+  "final_sign_acc": 0.9426629466395224,
+  "best_sign_acc": 0.9444002336071383,
+  "best_step": 25000,
+  "best_mse": 0.16539454075597948,
+  "time_min": 1.0,
+  "candidate": {
+    "name": "l0_s_in08_tph02048_on10_05242k",
+    "description": "5.2M: in=8, tph=2048, on=10",
+    "luts": [
+      {
+        "input_nap": 8,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

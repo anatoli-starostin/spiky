@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp337_cfc_out_inap6_tph2048_onap6",
+  "best_val_loss": 1.530154785513878,
+  "final_val_loss": 1.530154785513878,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.416
+}

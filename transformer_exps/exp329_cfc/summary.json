@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp329_cfc",
+  "best_val_loss": 1.3787373155355453,
+  "final_val_loss": 1.3787373155355453,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.26
+}

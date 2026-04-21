@@ -127,14 +127,16 @@ def test_bit_matches_permutational_lut_with_sign_weights(
     )
     signs = bit_lut.get_bit_weights_as_signs()  # ±1 float [N, table_dim, output_nap]
 
-    # Matched PermLut: same policies (CANONICAL_DISTINCT), STE hard vote, dominance return.
+    # Matched PermLut: same policies (CANONICAL_FULL_COVERAGE, which is what
+    # BitPermutationLUT uses for input and output anchor sampling), STE hard
+    # vote, dominance return.
     perm_lut = PermutationalLut(
         n_inputs=n_inputs, n_outputs=n_outputs,
         input_nap=input_nap, output_nap=output_nap,
         n_heads=n_heads, tph=tph,
         pair_mode='scrambled', soft_mode='ste', return_dominance=True,
-        scrambled_policy=AnchorSamplingPolicy.CANONICAL_DISTINCT,
-        input_anchor_policy=AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        scrambled_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        input_anchor_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
         random_seed=42, device=dev,
     ).to(dev)
     # Anchor seeds already match (same random_seed path); output seeds differ

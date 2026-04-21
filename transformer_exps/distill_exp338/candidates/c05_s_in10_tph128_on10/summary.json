@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 1310720,
+  "n_luts": 1,
+  "final_mse": 0.27998582778438447,
+  "final_sign_acc": 0.9095897059286794,
+  "best_sign_acc": 0.9204465804561492,
+  "best_step": 10000,
+  "best_mse": 0.24207485106683546,
+  "time_min": 0.99,
+  "candidate": {
+    "name": "c05_s_in10_tph128_on10",
+    "description": "Single LUT, 1/16 tph of teacher. 1.3M bit-params.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 128,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

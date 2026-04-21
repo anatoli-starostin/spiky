@@ -1,0 +1,12 @@
+{
+  "name": "l0_s_teacher_shape",
+  "description": "21M: teacher shape (in=10, tph=2048, on=10)",
+  "luts": [
+    {
+      "input_nap": 10,
+      "tph": 2048,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": []
+}

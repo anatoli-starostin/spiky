@@ -59,6 +59,11 @@ class TextSnippetSampler:
         else:
             gen = None
 
+        # Per-instance Python RNG for training-batch start positions; avoids
+        # touching the global `random` state so two samplers don't interfere,
+        # and makes the training sequence reproducible under `random_seed`.
+        self._py_rng = random.Random(random_seed)
+
         # Centers are sampled uniformly in [min_center, max_center] (inclusive)
         self.test_region_centers_tensor = torch.randint(
             low=min_center,
@@ -97,7 +102,7 @@ class TextSnippetSampler:
 
         while len(batch) < batch_size and attempts < max_attempts:
             # Sample random start position
-            start = random.randint(0, self.text_length - self.context_size - 1)
+            start = self._py_rng.randint(0, self.text_length - self.context_size - 1)
 
             if not self.testing_mask[start].item():
                 batch.append(self.text[start:start + self.context_size])

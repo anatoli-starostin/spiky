@@ -1,0 +1,8 @@
+{
+  "name": "c01_alt_pairs",
+  "description": "Same shape as c00 (input_nap=10, tph=2048, output_nap=10, head partition), but anchor/output pairs are freshly sampled from a different seed (no --load-teacher-pairs). Tests whether teacher's specific pair connectivity is special or if random alternatives fit equally well.",
+  "luts": [
+    {"input_nap": 10, "tph": 2048, "output_nap": 10}
+  ],
+  "d_intermediate": []
+}

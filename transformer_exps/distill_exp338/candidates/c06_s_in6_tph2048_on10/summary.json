@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 1310720,
+  "n_luts": 1,
+  "final_mse": 0.10392084429340978,
+  "final_sign_acc": 0.9658712571667086,
+  "best_sign_acc": 0.9682076361871534,
+  "best_step": 10000,
+  "best_mse": 0.09591262186727216,
+  "time_min": 0.98,
+  "candidate": {
+    "name": "c06_s_in6_tph2048_on10",
+    "description": "Single LUT, narrow tables (in=6, table_dim=64), many tables (tph=2048). 1.3M bit-params.",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

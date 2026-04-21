@@ -1,0 +1,24 @@
+{
+  "layer": 2,
+  "steps": 50000,
+  "bit_params": 1310720,
+  "n_luts": 1,
+  "final_mse": 0.16115676203081686,
+  "final_sign_acc": 0.9473333666401524,
+  "best_sign_acc": 0.9486154740856539,
+  "best_step": 25000,
+  "best_mse": 0.15633324653871597,
+  "time_min": 5.97,
+  "candidate": {
+    "name": "c_a_in04_tph08192_on10_bp01310k",
+    "description": "Axis A (1.3M budget): single LUT, in=4, tph=8192, on=10",
+    "luts": [
+      {
+        "input_nap": 4,
+        "tph": 8192,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

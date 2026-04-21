@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp332_cfc_out_partition",
+  "best_val_loss": 1.412096944451332,
+  "final_val_loss": 1.412096944451332,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.264
+}

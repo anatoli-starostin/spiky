@@ -1,0 +1,24 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 8388608,
+  "n_luts": 1,
+  "final_mse": 0.11807660133607926,
+  "final_sign_acc": 0.9606469062066847,
+  "best_sign_acc": 0.9624309539794922,
+  "best_step": 25000,
+  "best_mse": 0.11346357868563745,
+  "time_min": 4.73,
+  "candidate": {
+    "name": "l0_b_in06_tph04096_on32_08388k",
+    "description": "output_nap scan at (in=6, tph=4096): on=32",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 4096,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

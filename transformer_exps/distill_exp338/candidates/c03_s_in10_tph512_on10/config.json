@@ -1,0 +1,1 @@
+{"name":"c03_s_in10_tph512_on10","description":"Single LUT, 1/4 tph of teacher. 5.2M bit-params.","luts":[{"input_nap":10,"tph":512,"output_nap":10}],"d_intermediate":[]}

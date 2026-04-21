@@ -30,6 +30,8 @@ from typing import Callable, Iterable, List, Optional
 
 import torch
 
+from spiky.lutorch.determinism import is_deterministic
+
 
 _FP8 = getattr(torch, "float8_e4m3fn", None)
 _FP8_AMAX = 448.0
@@ -100,9 +102,10 @@ def _project_grad_out_to_weight_grad(
 ) -> torch.Tensor:
     """Project dominance-output gradient back to per-entry weight gradient.
 
-    CUDA path: small table_dim -> custom kernel atomicAdds into touched
-    (n, entry_main(b, n), k) positions. Large table_dim -> torch's
-    vectorized index_add_ is faster than the atomic loop.
+    Default path: custom CUDA kernel with float `atomicAdd`s into touched
+    (n, entry_main(b, n), k) positions. Under `is_deterministic()` the path
+    switches to `torch.index_add_`, which has a deterministic implementation
+    under `torch.use_deterministic_algorithms(True)`.
     `wg_buffer` may be supplied to avoid per-step allocation; it will be
     zeroed in-place.
     """
@@ -116,11 +119,10 @@ def _project_grad_out_to_weight_grad(
         wg.zero_()
 
     native = _get_bit_permlut_native()
-    # Crossover: for small table_dim the kernel wins; for large table_dim
-    # (e.g. out_proj with table_dim=1024) index_add_ vectorized scatter wins.
     use_kernel = (
-        grad_out.is_cuda and native is not None
-        and table_dim <= 64
+        not is_deterministic()
+        and grad_out.is_cuda
+        and native is not None
     )
     if use_kernel:
         n_pairs = grad_out.size(2)
@@ -135,7 +137,7 @@ def _project_grad_out_to_weight_grad(
         )
         return wg
 
-    # Fallback: vectorized scatter via index_add_.
+    # Deterministic fallback: vectorized scatter via index_add_.
     pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
     g_slot = grad_out.gather(2, pair_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     g_slot = g_slot.reshape(B, N, output_nap).to(torch.float32)

@@ -186,6 +186,7 @@ class MultiHeadLut(nn.Module):
         prebuilt_anchor_pairs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         recompute_in_backward: bool = False,
         exclusion_sets: Optional[list] = None,
+        partition_sets: Optional[list] = None,
         use_fp16_weights: bool = False,
         table_gating: bool = False,
         table_gating_init: float = -5.0,
@@ -264,6 +265,7 @@ class MultiHeadLut(nn.Module):
             shuffle_per_head=shuffle_per_head,
             prebuilt_anchor_pairs=prebuilt_anchor_pairs,
             exclusion_sets=exclusion_sets,
+            partition_sets=partition_sets,
         )
 
         # Create LProjection: n_lookup_tables total
@@ -292,13 +294,17 @@ class MultiHeadLut(nn.Module):
 
 
         if initial_weights_noise != 0.0:
+            # Uniform on [-initial_weights_noise, +initial_weights_noise] to
+            # match BitPermutationLUT's latent init (same distribution shape).
+            # std = initial_weights_noise / sqrt(3).
             dev = device or torch.device("cpu")
             with torch.no_grad():
                 rng_kwargs: dict = {"device": dev}
                 if random_seed is not None:
                     rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed)
                 self.projection.weights.add_(
-                    torch.randn(self.projection.weights.shape, **rng_kwargs) * initial_weights_noise
+                    (torch.rand(self.projection.weights.shape, **rng_kwargs) - 0.5)
+                    * (2.0 * initial_weights_noise)
                 )
         self._internal_loss: Optional[torch.Tensor] = None
 

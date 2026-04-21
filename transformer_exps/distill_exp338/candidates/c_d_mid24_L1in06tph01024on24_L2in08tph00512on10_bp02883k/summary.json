@@ -1,0 +1,31 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 2883584,
+  "n_luts": 2,
+  "final_mse": 0.09810220426128756,
+  "final_sign_acc": 0.9685230870400706,
+  "best_sign_acc": 0.9693949299473916,
+  "best_step": 25000,
+  "best_mse": 0.09516042663205054,
+  "time_min": 1.7,
+  "candidate": {
+    "name": "c_d_mid24_L1in06tph01024on24_L2in08tph00512on10_bp02883k",
+    "description": "Axis D: 2-LUT stack, d_mid=24, L1={'input_nap': 6, 'tph': 1024, 'output_nap': 24}, L2={'input_nap': 8, 'tph': 512, 'output_nap': 10}",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 1024,
+        "output_nap": 24
+      },
+      {
+        "input_nap": 8,
+        "tph": 512,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": [
+      24
+    ]
+  }
+}

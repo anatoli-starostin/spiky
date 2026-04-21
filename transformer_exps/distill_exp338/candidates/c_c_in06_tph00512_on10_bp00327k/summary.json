@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 327680,
+  "n_luts": 1,
+  "final_mse": 0.17092537495397753,
+  "final_sign_acc": 0.944443610406691,
+  "best_sign_acc": 0.944443610406691,
+  "best_step": 50000,
+  "best_mse": 0.17092537495397753,
+  "time_min": 0.96,
+  "candidate": {
+    "name": "c_c_in06_tph00512_on10_bp00327k",
+    "description": "Axis C (small): single LUT, in=6, tph=512, on=10",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 512,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

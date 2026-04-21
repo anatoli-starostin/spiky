@@ -18,6 +18,7 @@ class AnchorSamplingPolicy(str, Enum):
     MULTISCALE = "multiscale"      # sliding windows at all integer anchor distances; tph is upper bound
     CONV2D = "conv2d"              # 2D conv-style; input_dim must be perfect square; nap must be 8; tph is upper bound
     CANONICAL_DISTINCT = "canonical_distinct"  # each table: output_nap distinct canonical (a<b) pairs, sampled without replacement
+    CANONICAL_FULL_COVERAGE = "canonical_full_coverage"  # canonical pool, tiled randperm -> full coverage when slots >= P, with within-table distinctness
 
 
 class SelfExcitementMode(str, Enum):
@@ -106,6 +107,162 @@ def compute_conv2d_n_tables(
     return total
 
 
+def _build_canonical_pool(
+    input_dim: int,
+    device: torch.device,
+    partition_sets: Optional[list] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return (tri_i, tri_j) — the canonical (a<b) pair pool, optionally
+    filtered to within-partition pairs. Both tensors are [P] long, on device."""
+    tri_i, tri_j = torch.triu_indices(input_dim, input_dim, offset=1)
+    tri_i = tri_i.to(device).long()
+    tri_j = tri_j.to(device).long()
+
+    if partition_sets is None:
+        return tri_i, tri_j
+
+    part_id = torch.full((input_dim,), -1, dtype=torch.long, device=device)
+    for s_idx, s in enumerate(partition_sets):
+        s_tensor = torch.as_tensor(list(s), dtype=torch.long, device=device)
+        if s_tensor.numel() == 0:
+            continue
+        if (s_tensor < 0).any() or (s_tensor >= input_dim).any():
+            raise ValueError(
+                f"partition_sets[{s_idx}] has indices outside [0, {input_dim})"
+            )
+        if (part_id[s_tensor] >= 0).any():
+            raise ValueError("partition_sets must be disjoint")
+        part_id[s_tensor] = s_idx
+    if (part_id < 0).any():
+        missing = (part_id < 0).nonzero(as_tuple=False).flatten().tolist()
+        preview = ", ".join(str(m) for m in missing[:10])
+        more = "..." if len(missing) > 10 else ""
+        raise ValueError(
+            f"partition_sets must cover every index in [0, {input_dim}); "
+            f"missing: [{preview}{more}]"
+        )
+    valid_mask = part_id[tri_i] == part_id[tri_j]
+    return tri_i[valid_mask], tri_j[valid_mask]
+
+
+def _repair_intra_table_duplicates(pairs_table: torch.Tensor) -> None:
+    """In-place greedy repair: for each table with an intra-row duplicate,
+    swap one duplicate slot with a slot in another table such that both
+    tables become (or stay) duplicate-free after the swap.
+
+    Only tables spanning a randperm-tile boundary can carry duplicates, so
+    the number of affected rows is small in practice. Raises RuntimeError
+    if no valid swap partner exists (can happen when the pool is very
+    tight, e.g. n_tables * n_anchor_pairs close to P with many boundaries).
+    """
+    n_tables, nap = pairs_table.shape
+    for t in range(n_tables):
+        # Loop until this row has no duplicates.
+        while True:
+            row_list = pairs_table[t].tolist()
+            seen = {}
+            dup_pos = -1
+            for k, v in enumerate(row_list):
+                if v in seen:
+                    dup_pos = k
+                    break
+                seen[v] = k
+            if dup_pos == -1:
+                break
+            dup_val = row_list[dup_pos]
+            row_set_excl = set(row_list)
+            row_set_excl.discard(dup_val)  # after swap, dup_val leaves this row
+
+            swapped = False
+            for t2 in range(n_tables):
+                if t2 == t:
+                    continue
+                row2_list = pairs_table[t2].tolist()
+                if dup_val in row2_list:
+                    continue
+                row2_set = set(row2_list)
+                for k2, v2 in enumerate(row2_list):
+                    if v2 in row_set_excl:
+                        continue  # v2 would collide in row t
+                    row2_set_after = (row2_set - {v2}) | {dup_val}
+                    if len(row2_set_after) != len(row2_list):
+                        continue  # would create a duplicate in row t2
+                    tmp = pairs_table[t, dup_pos].clone()
+                    pairs_table[t, dup_pos] = pairs_table[t2, k2]
+                    pairs_table[t2, k2] = tmp
+                    swapped = True
+                    break
+                if swapped:
+                    break
+            if not swapped:
+                raise RuntimeError(
+                    f"CANONICAL_FULL_COVERAGE: failed to repair duplicate in "
+                    f"table {t} pos {dup_pos} (val={dup_val}); pool too tight "
+                    f"(n_tables={n_tables}, n_anchor_pairs={nap})"
+                )
+
+
+def _get_canonical_full_coverage_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    device: torch.device,
+    random_seed: Optional[int],
+    n_heads: int,
+    partition_sets: Optional[list] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample `n_anchor_pairs` distinct canonical pairs per table, with
+    full coverage of the canonical pool whenever `n_tables * n_anchor_pairs
+    >= P`.
+
+    Algorithm: tile concatenated randperm(P)'s to fill n_tables * n_anchor_pairs
+    slots (FULL_COVERAGE-style coverage guarantee). When n_anchor_pairs divides
+    P, table boundaries align with perm boundaries and within-table distinctness
+    holds for free. Otherwise a greedy swap-repair pass fixes boundary tables
+    where two independent perms mix.
+
+    Returns (anchor_pairs_a, anchor_pairs_b), both [n_tables, n_anchor_pairs]
+    long, with a < b in every entry.
+    """
+    tri_i, tri_j = _build_canonical_pool(input_dim, device, partition_sets)
+    P = tri_i.shape[0]
+    if n_anchor_pairs > P:
+        if partition_sets is None:
+            raise ValueError(
+                f"CANONICAL_FULL_COVERAGE requires n_anchor_pairs <= "
+                f"C(input_dim, 2) = {P}; got n_anchor_pairs={n_anchor_pairs}."
+            )
+        raise ValueError(
+            f"CANONICAL_FULL_COVERAGE with partition_sets: need n_anchor_pairs "
+            f"({n_anchor_pairs}) <= {P} valid within-partition pairs."
+        )
+
+    gen = None
+    if random_seed is not None:
+        gen = torch.Generator(device=device)
+        gen.manual_seed(random_seed)
+
+    per_head = n_tables // n_heads
+    slots_per_head = per_head * n_anchor_pairs
+
+    all_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+    all_b = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+
+    for h in range(n_heads):
+        repeats = (slots_per_head + P - 1) // P
+        perm_cat = torch.cat([
+            torch.randperm(P, device=device, generator=gen) for _ in range(repeats)
+        ])[:slots_per_head]
+        pairs_table = perm_cat.view(per_head, n_anchor_pairs).contiguous()
+        _repair_intra_table_duplicates(pairs_table)
+
+        base = h * per_head
+        all_a[base:base + per_head] = tri_i[pairs_table]
+        all_b[base:base + per_head] = tri_j[pairs_table]
+
+    return all_a, all_b
+
+
 def _get_canonical_distinct_pairs(
     n_tables: int,
     n_anchor_pairs: int,
@@ -113,6 +270,7 @@ def _get_canonical_distinct_pairs(
     device: torch.device,
     random_seed: Optional[int],
     n_heads: int,
+    partition_sets: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Sample `n_anchor_pairs` distinct canonical pairs (a<b) per table.
 
@@ -120,26 +278,32 @@ def _get_canonical_distinct_pairs(
     canonical pair space. Each table's `n_anchor_pairs` pairs are all
     distinct (no within-table duplicates at the canonical level).
 
+    If `partition_sets` is given, the canonical pool is restricted to
+    within-partition pairs (both endpoints in the same set). Every index in
+    [0, input_dim) must belong to exactly one partition set.
+
     Returns (anchor_pairs_a, anchor_pairs_b), both [n_tables, n_anchor_pairs],
     with a < b in every entry.
     """
-    P = input_dim * (input_dim - 1) // 2
+    tri_i, tri_j = _build_canonical_pool(input_dim, device, partition_sets)
+    P = tri_i.shape[0]
     if n_anchor_pairs > P:
+        if partition_sets is None:
+            raise ValueError(
+                f"CANONICAL_DISTINCT requires n_anchor_pairs <= C(input_dim, 2) = {P}; "
+                f"got n_anchor_pairs={n_anchor_pairs}."
+            )
         raise ValueError(
-            f"CANONICAL_DISTINCT requires n_anchor_pairs <= C(input_dim, 2) = {P}; "
-            f"got n_anchor_pairs={n_anchor_pairs}."
+            f"CANONICAL_DISTINCT with partition_sets: need n_anchor_pairs "
+            f"({n_anchor_pairs}) <= {P} valid within-partition pairs."
         )
+
     gen = None
     if random_seed is not None:
         gen = torch.Generator(device=device)
         gen.manual_seed(random_seed)
 
-    tri_i, tri_j = torch.triu_indices(input_dim, input_dim, offset=1)  # [2, P]
-    tri_i = tri_i.to(device).long()
-    tri_j = tri_j.to(device).long()
-
     per_head = n_tables // n_heads
-    needed = per_head * n_anchor_pairs
 
     all_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
     all_b = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
@@ -171,6 +335,7 @@ def get_balanced_anchor_pairs(
     n_heads: int = 1,
     shuffle_per_head: bool = True,
     exclusion_sets: Optional[list] = None,
+    partition_sets: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -184,6 +349,11 @@ def get_balanced_anchor_pairs(
         exclusion_sets: Optional list of index sets (lists/tuples of ints). A pair (a, b)
                 is excluded if both a and b belong to the same set. Only applies to
                 FULL_COVERAGE and DISCONNECTED_FULL_COVERAGE policies.
+        partition_sets: Optional list of index sets that partition [0, input_dim).
+                A pair (a, b) is KEPT only if a and b are in the same partition
+                (cross-partition pairs are excluded). Every input index must
+                belong to exactly one partition set. Supported by CANONICAL_DISTINCT
+                and CANONICAL_FULL_COVERAGE; rejected for other policies.
 
     Returns:
         anchor_pairs_a: [n_tables, n_anchor_pairs] int64
@@ -204,6 +374,20 @@ def get_balanced_anchor_pairs(
     if effective_policy == AnchorSamplingPolicy.CANONICAL_DISTINCT:
         return _get_canonical_distinct_pairs(
             n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
+            partition_sets=partition_sets,
+        )
+
+    # ── CANONICAL_FULL_COVERAGE ────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE:
+        return _get_canonical_full_coverage_pairs(
+            n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
+            partition_sets=partition_sets,
+        )
+
+    if partition_sets is not None:
+        raise ValueError(
+            f"partition_sets is only supported with CANONICAL_DISTINCT or "
+            f"CANONICAL_FULL_COVERAGE, got policy {effective_policy}"
         )
 
     # ── HIERARCHICAL ────────────────────────────────────────────────────────────

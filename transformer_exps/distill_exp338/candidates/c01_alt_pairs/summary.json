@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 20971520,
+  "n_luts": 1,
+  "final_mse": 0.07695638748907274,
+  "final_sign_acc": 0.9746613041047127,
+  "best_sign_acc": 0.9769656888900264,
+  "best_step": 10000,
+  "best_mse": 0.0694210010190164,
+  "time_min": 1.39,
+  "candidate": {
+    "name": "c01_alt_pairs",
+    "description": "Same shape as c00 (input_nap=10, tph=2048, output_nap=10, head partition), but anchor/output pairs are freshly sampled from a different seed (no --load-teacher-pairs). Tests whether teacher's specific pair connectivity is special or if random alternatives fit equally well.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 2048,
+        "output_nap": 10
+      }
+    ],
+    "d_intermediate": []
+  }
+}

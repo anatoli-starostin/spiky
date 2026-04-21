@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp338_cfc_out_inap10_tph2048_onap10",
+  "best_val_loss": 1.4009699672460556,
+  "final_val_loss": 1.4009699672460556,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.484
+}

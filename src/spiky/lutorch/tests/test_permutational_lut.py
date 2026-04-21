@@ -378,12 +378,20 @@ def test_return_dominance_shape(device):
 
 
 def test_return_dominance_vs_borda(device):
-    """Dominance output, when Borda-projected, should match normal Borda output."""
+    """Dominance output, when Borda-projected, should match normal Borda output.
+
+    Pinned to borda_scale_mode='clt': under 'clt' the direct-path scatter is
+    normalised by √(n_votes_per_output), which algebraically agrees with
+    dominance × borda_m. The default 'borda' mode normalises by √(n_outputs−1)
+    instead (to match BitPermLUT+DominanceToVector scale), so the two paths
+    differ by a known factor there.
+    """
     d_v = 8
     P = d_v * (d_v - 1) // 2
     kwargs = dict(
         n_inputs=32, n_outputs=d_v, input_nap=5, output_nap=4,
         n_heads=4, tph=16, pair_mode='scrambled', soft_mode='rational',
+        borda_scale_mode='clt',
         random_seed=42, device=device, initial_weights_noise=0.1,
     )
     lut_dom = PermutationalLut(return_dominance=True, **kwargs)

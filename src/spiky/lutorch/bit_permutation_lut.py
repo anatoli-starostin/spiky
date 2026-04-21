@@ -1,13 +1,13 @@
 """BitPermutationLUT — 1-bit-weight PermutationalLut for bit-level inference.
 
 Design:
-  - Inner anchor lookup: TinyAnchorPairsLookup (int16 indices, CANONICAL_DISTINCT,
+  - Inner anchor lookup: TinyAnchorPairsLookup (int16 indices, CANONICAL_FULL_COVERAGE,
     n_alternatives=1, uncertainty=INVERSE_L1 with bias=0.5).
   - Bit weights: one ±1 bit per (table, entry, output_nap slot), packed as
     int32 blocks of 32 bits. `n_blocks = ceil(output_nap / 32)`.
   - Output: per-canonical-pair dominance from summing signed bit votes. Sum
     is kept as int32 inside the kernel — every term is ±1, so sum ∈ [-K, K].
-  - CANONICAL_DISTINCT sampling of output pairs ⇒ no per-slot sign tensor
+  - CANONICAL_FULL_COVERAGE sampling of output pairs ⇒ no per-slot sign tensor
     is needed (all signs are +1).
   - Forward: custom CUDA kernel only (no PyTorch fallback). Backward is
     stubbed for this implementation.
@@ -97,11 +97,20 @@ def _build_output_structures_from_pairs(
 def _sample_canonical_distinct_output_pairs(
     n_heads: int, tph: int, output_nap: int, n_outputs: int,
     random_seed: Optional[int], device: torch.device,
+    anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Sample output pairs via CANONICAL_DISTINCT policy. Returns (idx_a, idx_b)
-    each shaped [n_heads, tph, output_nap] long, with a < b and distinct per table."""
+    """Sample output pairs. Default policy is CANONICAL_FULL_COVERAGE, which
+    gives (idx_a, idx_b) each shaped [n_heads, tph, output_nap] long, with
+    a < b, distinct per table, and guaranteed coverage of the canonical pool
+    when tph * output_nap >= C(n_outputs, 2). Callers may pass
+    CANONICAL_DISTINCT for the legacy per-table i.i.d. sampling."""
     from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
 
+    policy = (
+        anchor_sampling_policy
+        if anchor_sampling_policy is not None
+        else AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
+    )
     seed = (random_seed + 2_000_003) if random_seed is not None else None
     idx_a_flat, idx_b_flat = get_balanced_anchor_pairs(
         n_tables=n_heads * tph,
@@ -109,7 +118,7 @@ def _sample_canonical_distinct_output_pairs(
         input_dim=n_outputs,
         device=device,
         random_seed=seed,
-        policy=AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        policy=policy,
         n_heads=n_heads,
         shuffle_per_head=True,
     )
@@ -126,17 +135,92 @@ def _build_inv_idx(
     n_outputs: int,
     random_seed: Optional[int],
     device: torch.device,
+    anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
-    """Sample output pairs via CANONICAL_DISTINCT and build full structures.
+    """Sample output pairs (default CANONICAL_FULL_COVERAGE) and build full
+    structures.
 
     Returns (idx_a, idx_b, inv_idx [int32], K_max, pair_idx_per_slot [int32])."""
     idx_a, idx_b = _sample_canonical_distinct_output_pairs(
         n_heads, tph, output_nap, n_outputs, random_seed, device,
+        anchor_sampling_policy=anchor_sampling_policy,
     )
     a, b, inv_idx, K_max, pair_idx_per_slot = _build_output_structures_from_pairs(
         idx_a, idx_b, n_heads, tph, output_nap, n_outputs, device,
     )
     return a, b, inv_idx, K_max, pair_idx_per_slot
+
+
+class _VoteGatherFn(torch.autograd.Function):
+    """Gather ±1 votes from packed `bit_weights` at looked-up entries.
+
+    The primitive behind "Part 1" of a bit-LUT forward: given the winning
+    table entry per head-table (``lookup_indices``), return the ±1 votes
+    at those entries as a float tensor.
+
+    Forward : PyTorch gather + bit-unpack from ``bit_weights``.
+              Output: [B, N, output_nap] ±1 float, where N = n_heads·tph.
+    Backward : STE + rational Jacobian gate. ``gate = T/(T+|latent|)²``.
+              Gradient is scattered into `latent.grad` at the positions
+              read in forward (``(n, lookup_indices[b,n], v)``).
+              `bit_weights` itself carries no gradient.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        latent: torch.Tensor,            # [N, D, output_nap] — for STE gate
+        bit_weights: torch.Tensor,        # [N, D, n_blocks] int32 packed ±1
+        lookup_indices: torch.Tensor,     # [B, N] int16
+        ste_gate_temperature: float,
+        output_nap: int,
+    ) -> torch.Tensor:
+        B, N = lookup_indices.shape
+        dev = bit_weights.device
+        li = lookup_indices.long()                                     # [B, N]
+        n_ix = torch.arange(N, device=dev).view(1, N).expand(B, N)     # [B, N]
+        rows = bit_weights[n_ix, li]                                   # [B, N, n_blocks]
+        v_ix = torch.arange(output_nap, device=dev)
+        block_per = v_ix >> 5
+        bit_per = v_ix & 31
+        words = rows[..., block_per]                                   # [B, N, output_nap]
+        bits = (words >> bit_per) & 1
+        out = bits.to(torch.float32) * 2.0 - 1.0
+
+        ctx.save_for_backward(latent, lookup_indices)
+        ctx.ste_gate_temperature = float(ste_gate_temperature)
+        ctx.output_nap = int(output_nap)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out: torch.Tensor):
+        latent, lookup_indices = ctx.saved_tensors
+        if not latent.requires_grad:
+            return None, None, None, None, None
+        T = ctx.ste_gate_temperature
+        on = ctx.output_nap
+        B, N = lookup_indices.shape
+        dev = grad_out.device
+
+        latent_f32 = latent if latent.dtype == torch.float32 else latent.to(torch.float32)
+        li = lookup_indices.long()
+        n_ix = torch.arange(N, device=dev).view(1, N, 1).expand(B, N, on)
+        v_ix = torch.arange(on, device=dev).view(1, 1, on).expand(B, N, on)
+        li_ix = li.unsqueeze(-1).expand(B, N, on)
+
+        latent_at = latent_f32[n_ix, li_ix, v_ix]                      # [B, N, on]
+        denom = T + latent_at.abs()
+        gate = T / (denom * denom)
+        gated = grad_out.to(torch.float32) * gate
+
+        D = latent_f32.shape[1]
+        latent_grad = torch.zeros_like(latent_f32)
+        flat_idx = (n_ix * D * on + li_ix * on + v_ix).reshape(-1)
+        latent_grad.view(-1).index_add_(0, flat_idx, gated.reshape(-1))
+
+        if latent.dtype != torch.float32:
+            latent_grad = latent_grad.to(latent.dtype)
+        return latent_grad, None, None, None, None
 
 
 class _BitPermLutDomFunction(torch.autograd.Function):
@@ -243,7 +327,191 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         )
 
 
-class BitPermutationLUT(nn.Module):
+class BitPermutationLUTInput(nn.Module):
+    """Shared input-side state for BitPermutationLUT and BitPermutationLUTEx.
+
+    Owns the pieces that are identical across both flavours of bit-LUT:
+      - `TinyAnchorPairsLookup` for input anchor lookup.
+      - Latent storage (fp8 / bf16 / fp32).
+      - Packed ±1 `bit_weights` buffer (signs of the latent).
+
+    Common helpers:
+      - `set_bit_weights_from_signs(signs)` packs a float sign tensor.
+      - `refresh_bit_weights()` re-packs from the current latent.
+      - `gather_votes(x)` runs anchor lookup + returns gathered ±1 votes
+        (float [B, n_heads·tph, output_nap]) with STE-gate gradient to the
+        latent. This is the "Part 1 primitive" of any bit-LUT forward.
+
+    Subclasses supply the aggregation from gathered votes to the final
+    output (Part 2). `BitPermutationLUT` uses a fused CUDA kernel that
+    folds Part 1+2 into one pass (`_BitPermLutDomFunction`); newer variants
+    like `BitPermutationLUTEx` call `gather_votes` and build their own
+    aggregation on top.
+    """
+
+    def __init__(
+        self,
+        n_inputs: int,
+        n_heads: int,
+        input_nap: int,
+        output_nap: int,
+        tph: int,
+        random_seed: Optional[int] = None,
+        initial_weights_noise: float = 0.001,
+        latent_dtype: str = 'fp8',
+        ste_gate_temperature: float = 0.1,
+        device: Optional[torch.device] = None,
+        partition_sets: Optional[list] = None,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+    ):
+        super().__init__()
+        if latent_dtype not in ('fp8', 'bf16', 'fp32'):
+            raise ValueError(
+                f"latent_dtype must be one of 'fp8', 'bf16', 'fp32', got {latent_dtype!r}"
+            )
+        dev = torch.device(device) if device is not None else torch.device("cpu")
+        if not (1 <= input_nap <= 15):
+            raise ValueError(
+                f"BitPermutationLUTInput requires 1 <= input_nap <= 15 "
+                f"(TinyAnchorPairsLookup int16 lookup index), got {input_nap}"
+            )
+        if output_nap <= 0:
+            raise ValueError(f"output_nap must be positive, got {output_nap}")
+
+        self.n_inputs = n_inputs
+        self.n_heads = n_heads
+        self.input_nap = input_nap
+        self.output_nap = output_nap
+        self.tph = tph
+        self.table_dim = 1 << input_nap
+        self.n_blocks = (output_nap + 31) // 32
+        self.latent_dtype = latent_dtype
+        self.ste_gate_temperature = float(ste_gate_temperature)
+
+        # Anchor lookup (flat tables, n_heads×tph rows).
+        self.anchor = TinyAnchorPairsLookup(
+            input_dim=n_inputs,
+            n_tables=n_heads * tph,
+            n_anchor_pairs=input_nap,
+            n_heads=n_heads,
+            random_seed=random_seed,
+            device=dev,
+            partition_sets=partition_sets,
+            anchor_sampling_policy=anchor_sampling_policy,
+        )
+        self._anchor_sampling_policy_opt = anchor_sampling_policy
+
+        if _FP8 is None or dev.type != "cuda":
+            raise RuntimeError("BitPermutationLUTInput requires CUDA + fp8 support")
+
+        # Latent init: uniform in [-initial_weights_noise, +initial_weights_noise].
+        if random_seed is not None:
+            gen = torch.Generator(device=dev).manual_seed(random_seed + 4_000_003)
+        else:
+            gen = None
+        shape = (n_heads * tph, self.table_dim, output_nap)
+        latent_init_f32 = (
+            torch.rand(shape, device=dev, generator=gen) - 0.5
+        ) * (2.0 * float(initial_weights_noise))
+
+        if latent_dtype == 'fp8':
+            amax = latent_init_f32.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-20)
+            latent_scale = _FP8_AMAX / amax
+            latent_fp8 = (latent_init_f32 * latent_scale).to(_FP8)
+            self.register_buffer('latent_fp8', latent_fp8.contiguous())
+            self.register_buffer('latent_scale', latent_scale.contiguous())
+        elif latent_dtype == 'bf16':
+            self.register_buffer(
+                'latent_bf16',
+                latent_init_f32.to(torch.bfloat16).contiguous(),
+            )
+        else:
+            self.register_buffer('latent_fp32', latent_init_f32.contiguous())
+
+        bit_weights = torch.zeros(
+            n_heads * tph, self.table_dim, self.n_blocks,
+            device=dev, dtype=torch.int32,
+        )
+        self.register_buffer('bit_weights', bit_weights.contiguous())
+        _get_bit_permlut_native().bit_pack_signs(
+            latent_init_f32.contiguous(), self.bit_weights, int(output_nap),
+        )
+
+    # --- helpers ---------------------------------------------------------
+
+    def _latent_for_gate(self) -> torch.Tensor:
+        """Return a float-typed view of the latent for the STE gate."""
+        if self.latent_dtype == 'fp32':
+            return self.latent_fp32
+        if self.latent_dtype == 'bf16':
+            return self.latent_bf16
+        # fp8 — dequantize per-table for the gate's |·| magnitude.
+        return self.latent_fp8.to(torch.float32) / self.latent_scale
+
+    def _latent_for_pack(self) -> torch.Tensor:
+        """Return a float-typed view of the latent for re-packing signs."""
+        if self.latent_dtype == 'fp32':
+            return self.latent_fp32
+        if self.latent_dtype == 'bf16':
+            return self.latent_bf16.to(torch.float32)
+        return self.latent_fp8.to(torch.float32) / self.latent_scale
+
+    def refresh_bit_weights(self) -> None:
+        """Re-pack `bit_weights` from the current latent. Call after the
+        latent changes (e.g. after an optimizer step when training with
+        standard torch.optim.Adam on a Parameter-promoted latent)."""
+        self.set_bit_weights_from_signs(self._latent_for_pack().contiguous())
+
+    def gather_votes(self, x: torch.Tensor):
+        """Part 1 primitive: anchor lookup + gathered ±1 votes.
+
+        Returns
+        -------
+        lookup_indices : int16 [B, n_heads·tph]
+        votes          : float32 [B, n_heads·tph, output_nap]  (±1)
+        """
+        lookup_tuple = self.anchor(x)
+        lookup_indices = lookup_tuple[0]
+        votes = _VoteGatherFn.apply(
+            self._latent_for_gate(),
+            self.bit_weights,
+            lookup_indices,
+            self.ste_gate_temperature,
+            self.output_nap,
+        )
+        return lookup_indices, votes
+
+    def set_bit_weights_from_signs(self, signs: torch.Tensor) -> None:
+        """Update bit_weights from a ±1 (or >0 / <=0) float tensor.
+
+        signs: [n_heads * tph, table_dim, output_nap]  (float; positive → bit 1)
+        """
+        if signs.shape != (self.n_heads * self.tph, self.table_dim, self.output_nap):
+            raise ValueError(
+                f"signs shape must be [n_heads*tph, table_dim, output_nap] = "
+                f"({self.n_heads * self.tph}, {self.table_dim}, {self.output_nap}), got {tuple(signs.shape)}"
+            )
+        native = _get_bit_permlut_native()
+        if signs.is_cuda and native is not None:
+            native.bit_pack_signs(
+                signs.to(torch.float32).contiguous(),
+                self.bit_weights,
+                int(self.output_nap),
+            )
+            return
+        bits = (signs > 0).to(torch.int32)
+        packed = torch.zeros(
+            self.n_heads * self.tph, self.table_dim, self.n_blocks,
+            device=signs.device, dtype=torch.int32,
+        )
+        for k in range(self.output_nap):
+            block_idx = k // 32
+            bit_pos = k % 32
+            packed[:, :, block_idx] |= (bits[:, :, k] << bit_pos)
+        self.bit_weights.copy_(packed.to(self.bit_weights.device))
+
+
+class BitPermutationLUT(BitPermutationLUTInput):
     """1-bit-weight PermutationalLut for bit-level inference.
 
     Forward: x (float) -> dominance (float [B, n_heads, P]).
@@ -273,113 +541,57 @@ class BitPermutationLUT(nn.Module):
         soft_backward: bool = False,
         latent_dtype: str = 'fp8',
         device: Optional[torch.device] = None,
+        partition_sets: Optional[list] = None,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        input_anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        output_anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
     ):
-        super().__init__()
-        if latent_dtype not in ('fp8', 'bf16', 'fp32'):
-            raise ValueError(
-                f"latent_dtype must be one of 'fp8', 'bf16', 'fp32', got {latent_dtype!r}"
-            )
-        dev = torch.device(device) if device is not None else torch.device("cpu")
-        if not (1 <= input_nap <= 16):
-            raise ValueError(f"BitPermutationLUT requires 1 <= input_nap <= 16, got {input_nap}")
-        if output_nap <= 0:
-            raise ValueError(f"output_nap must be positive, got {output_nap}")
+        # `anchor_sampling_policy` is a shortcut that sets both sides.
+        # The split kwargs take precedence when both are given.
+        input_policy = (
+            input_anchor_sampling_policy
+            if input_anchor_sampling_policy is not None
+            else anchor_sampling_policy
+        )
+        output_policy = (
+            output_anchor_sampling_policy
+            if output_anchor_sampling_policy is not None
+            else anchor_sampling_policy
+        )
+        super().__init__(
+            n_inputs=n_inputs, n_heads=n_heads,
+            input_nap=input_nap, output_nap=output_nap, tph=tph,
+            random_seed=random_seed,
+            initial_weights_noise=initial_weights_noise,
+            latent_dtype=latent_dtype, device=device,
+            partition_sets=partition_sets,
+            anchor_sampling_policy=input_policy,
+        )
+        dev = self.bit_weights.device
+
         if n_outputs < 2:
             raise ValueError(f"n_outputs must be >= 2, got {n_outputs}")
 
-        self.n_inputs = n_inputs
         self.n_outputs = n_outputs
-        self.n_heads = n_heads
-        self.input_nap = input_nap
-        self.output_nap = output_nap
-        self.tph = tph
-        self.table_dim = 1 << input_nap
-        self.n_blocks = (output_nap + 31) // 32
         self.n_pairs = n_outputs * (n_outputs - 1) // 2
 
-        # Anchor lookup (shared-style: flat tables, no head separation).
-        self.anchor = TinyAnchorPairsLookup(
-            input_dim=n_inputs,
-            n_tables=n_heads * tph,
-            n_anchor_pairs=input_nap,
-            n_heads=n_heads,
-            random_seed=random_seed,
-            device=dev,
-        )
-
-        # Output pair sampling (CANONICAL_DISTINCT) + inverse index.
+        # Output pair sampling (CANONICAL_FULL_COVERAGE by default) + inverse index.
         idx_a, idx_b, inv_idx, K_max, pair_idx_per_slot = _build_inv_idx(
             n_heads=n_heads, tph=tph, output_nap=output_nap,
             n_outputs=n_outputs, random_seed=random_seed, device=dev,
+            anchor_sampling_policy=output_policy,
         )
-        self.register_buffer('idx_a', idx_a.contiguous())          # [H, tph, output_nap] long (reference)
+        self.register_buffer('idx_a', idx_a.contiguous())
         self.register_buffer('idx_b', idx_b.contiguous())
-        self.register_buffer('inv_idx', inv_idx.contiguous())      # [H, P, K_max] int32
-        # Reverse of inv_idx: used by backward kernel to map slot → canonical pair.
-        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot.contiguous())  # [H, tph, output_nap] int32
+        self.register_buffer('inv_idx', inv_idx.contiguous())
+        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot.contiguous())
         self.K_max = K_max
 
-        # Per-output scaling. Input to gather kernel is a signed-vote ±1 count
-        # (n_alt=1 STE forward produces ±1 magnitude pre-0.5-scaling). Applying
-        # 0.5 here matches the /output_nap-era PermLut convention; the final
-        # /sqrt(N_votes_per_pair) normalizes for CLT consistency.
         n_votes_per_pair = tph * output_nap / float(self.n_pairs)
         self.scale = 0.5 / math.sqrt(n_votes_per_pair)
 
-        # STE variant for the autograd backward: hard ±1 (default) or soft
-        # continuous latent. See `_BitPermLutDomFunction`.
         self.soft_backward = bool(soft_backward)
-
-        # Borda matrix for optional dominance→rank projection (pre-scaled).
         self.register_buffer('dom_borda_m', _canonical_borda_m(n_outputs, dev))
-
-        # `latent_dtype` selects the latent storage precision:
-        #   'fp8'  — per-weight fp8 + per-table fp32 scale (default).
-        #            Backward uses `latent_fp8` for STE-soft.
-        #   'fp32' — plain float32 latent, matches standard Adam exactly.
-        #            Soft backward not supported with fp32 (hard only).
-        self.latent_dtype = latent_dtype
-        if _FP8 is None or dev.type != "cuda":
-            raise RuntimeError("BitPermutationLUT requires CUDA + fp8 support")
-
-        if random_seed is not None:
-            gen = torch.Generator(device=dev).manual_seed(random_seed + 4_000_003)
-        else:
-            gen = None
-        shape = (n_heads * tph, self.table_dim, self.output_nap)
-        # Uniform init in [-initial_weights_noise, +initial_weights_noise].
-        latent_init_f32 = (
-            torch.rand(shape, device=dev, generator=gen) - 0.5
-        ) * (2.0 * float(initial_weights_noise))
-
-        if latent_dtype == 'fp8':
-            # Per-table fp8 storage: latent_scale[n] = _FP8_AMAX / amax(latent[n]).
-            amax = latent_init_f32.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-20)
-            latent_scale = _FP8_AMAX / amax                      # [N, 1, 1] float32
-            latent_fp8 = (latent_init_f32 * latent_scale).to(_FP8)
-            self.register_buffer('latent_fp8', latent_fp8.contiguous())
-            self.register_buffer('latent_scale', latent_scale.contiguous())
-        elif latent_dtype == 'bf16':
-            # bf16 latent: float16 (brain-float). Values stay in [-1, 1],
-            # no scale needed (bf16 has fp32-like dynamic range).
-            self.register_buffer(
-                'latent_bf16',
-                latent_init_f32.to(torch.bfloat16).contiguous(),
-            )
-        else:
-            # fp32 latent: plain float32, no per-table scale. `latent_fp32` is
-            # the authoritative weight state; `bit_weights = sign(latent_fp32)`.
-            self.register_buffer('latent_fp32', latent_init_f32.contiguous())
-
-        # bit_weights derived from sign(latent) via the native pack kernel.
-        bit_weights = torch.zeros(
-            n_heads * tph, self.table_dim, self.n_blocks,
-            device=dev, dtype=torch.int32,
-        )
-        self.register_buffer('bit_weights', bit_weights.contiguous())
-        _get_bit_permlut_native().bit_pack_signs(
-            latent_init_f32.contiguous(), self.bit_weights, int(self.output_nap),
-        )
 
     def load_pairs(
         self,
@@ -424,36 +636,6 @@ class BitPermutationLUT(nn.Module):
         self.register_buffer('inv_idx', inv_idx)
         self.register_buffer('pair_idx_per_slot', pair_idx_per_slot)
         self.K_max = K_max
-
-    def set_bit_weights_from_signs(self, signs: torch.Tensor) -> None:
-        """Update bit_weights from a ±1 (or >0 / <=0) float tensor.
-
-        signs: [n_heads * tph, table_dim, output_nap]  (float; positive → bit 1)
-        """
-        if signs.shape != (self.n_heads * self.tph, self.table_dim, self.output_nap):
-            raise ValueError(
-                f"signs shape must be [n_heads*tph, table_dim, output_nap] = "
-                f"({self.n_heads * self.tph}, {self.table_dim}, {self.output_nap}), got {tuple(signs.shape)}"
-            )
-        native = _get_bit_permlut_native()
-        if signs.is_cuda and native is not None:
-            native.bit_pack_signs(
-                signs.to(torch.float32).contiguous(),
-                self.bit_weights,
-                int(self.output_nap),
-            )
-            return
-        # CPU / fallback: Python loop.
-        bits = (signs > 0).to(torch.int32)
-        packed = torch.zeros(
-            self.n_heads * self.tph, self.table_dim, self.n_blocks,
-            device=signs.device, dtype=torch.int32,
-        )
-        for k in range(self.output_nap):
-            block_idx = k // 32
-            bit_pos = k % 32
-            packed[:, :, block_idx] |= (bits[:, :, k] << bit_pos)
-        self.bit_weights.copy_(packed.to(self.bit_weights.device))
 
     def get_bit_weights_as_signs(self) -> torch.Tensor:
         """Decode bit_weights to ±1 float tensor [N, table_dim, output_nap]."""

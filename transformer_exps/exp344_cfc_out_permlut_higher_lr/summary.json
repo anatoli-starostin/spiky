@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp344_cfc_out_permlut_higher_lr",
+  "best_val_loss": 1.466557377576828,
+  "final_val_loss": 1.466557377576828,
+  "adam_params": 50711655,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.272
+}

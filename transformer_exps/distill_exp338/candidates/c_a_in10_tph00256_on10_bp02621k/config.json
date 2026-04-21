@@ -1,0 +1,12 @@
+{
+  "name": "c_a_in10_tph00256_on10_bp02621k",
+  "description": "Axis A (2.6M budget): single LUT, in=10, tph=256, on=10",
+  "luts": [
+    {
+      "input_nap": 10,
+      "tph": 256,
+      "output_nap": 10
+    }
+  ],
+  "d_intermediate": []
+}

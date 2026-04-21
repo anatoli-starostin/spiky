@@ -1,0 +1,24 @@
+{
+  "layer": 3,
+  "steps": 50000,
+  "bit_params": 1048576,
+  "n_luts": 1,
+  "final_mse": 0.12183112867416875,
+  "final_sign_acc": 0.960022464875252,
+  "best_sign_acc": 0.9662973957677041,
+  "best_step": 25000,
+  "best_mse": 0.10058157290181806,
+  "time_min": 0.96,
+  "candidate": {
+    "name": "c_b_in06_tph02048_on08_bp01048k",
+    "description": "Axis B: in=6, tph=2048, on=8",
+    "luts": [
+      {
+        "input_nap": 6,
+        "tph": 2048,
+        "output_nap": 8
+      }
+    ],
+    "d_intermediate": []
+  }
+}

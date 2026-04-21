@@ -1,0 +1,1 @@
+{"name":"p19_in10_tph0128_on32","module_type":"perm","description":"PermLut small-tph","luts":[{"input_nap":10,"tph":128,"output_nap":32}],"d_intermediate":[]}
