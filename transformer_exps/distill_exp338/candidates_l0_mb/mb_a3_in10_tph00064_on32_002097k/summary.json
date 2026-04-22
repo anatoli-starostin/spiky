@@ -1,0 +1,27 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 2097152,
+  "n_luts": 1,
+  "final_mse": 0.21103835105895996,
+  "final_sign_acc": 0.9398565599995274,
+  "best_sign_acc": 0.9398565599995274,
+  "best_step": 50000,
+  "best_mse": 0.21103835105895996,
+  "time_min": 1.09,
+  "candidate": {
+    "name": "mb_a3_in10_tph00064_on32_002097k",
+    "module_type": "multibit",
+    "bit_width": 4,
+    "init_std": 0.001,
+    "description": "Axis 3: in=10, tph=64, on=32, K=4",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 64,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

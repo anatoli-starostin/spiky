@@ -23,6 +23,8 @@ import torch.nn.functional as F
 
 from spiky.lutorch.bit_permutation_lut import BitPermutationLUT
 from spiky.lutorch.bit_permutation_lut_optimizer import BitPermutationLUTOptimizer
+from spiky.lutorch.multi_bit_permutation_lut import MultiBitPermutationLUT
+from spiky.lutorch.multi_bit_permutation_lut_optimizer import MultiBitPermutationLUTOptimizer
 from spiky.lutorch.permutational_lut import PermutationalLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.ranking_tools import DominanceToVector, _canonical_borda_m
@@ -79,7 +81,19 @@ def build_stack(candidate_cfg, base_seed):
                 pair_mode='scrambled', soft_mode='rational',
                 aggregation='matmul',
                 random_seed=base_seed + i,
-                initial_weights_noise=1e-3,
+                initial_weights_noise=L.get('init_std', candidate_cfg.get('init_std', 1e-3)),
+                device=DEVICE,
+                partition_sets=part,
+                vote_quant_levels=L.get('vote_quant_levels',
+                                        candidate_cfg.get('vote_quant_levels')),
+            )
+        elif module_type == 'multibit':
+            lut = MultiBitPermutationLUT(
+                n_inputs=n_in, n_outputs=n_out, n_heads=1,
+                input_nap=L['input_nap'], output_nap=L['output_nap'], tph=L['tph'],
+                bit_width=int(L.get('bit_width', candidate_cfg.get('bit_width', 4))),
+                random_seed=base_seed + i,
+                initial_weights_noise=L.get('init_std', candidate_cfg.get('init_std', 1e-3)),
                 device=DEVICE,
                 partition_sets=part,
             )
@@ -87,9 +101,9 @@ def build_stack(candidate_cfg, base_seed):
             raise ValueError(f"unknown module_type={module_type}")
         modules.append(lut)
         if not is_last:
-            # BitPermLUT emits pair-dominance -> need D2V; PermLut emits a
-            # vector directly -> no D2V needed between stages.
-            if module_type == 'bit':
+            # BitPermLUT / MultiBit emit pair-dominance -> need D2V between stages;
+            # PermLut emits a vector directly -> no D2V.
+            if module_type in ('bit', 'multibit'):
                 d2v = DominanceToVector(n_out).to(DEVICE)
                 modules.append(d2v)
             n_in = n_out
@@ -106,15 +120,15 @@ def stack_forward(modules, x):
     out = x
     last_module = None
     for mod in modules:
-        if isinstance(mod, BitPermutationLUT):
-            out = mod(out)             # [B, 1, P_i]
+        if isinstance(mod, (BitPermutationLUT, MultiBitPermutationLUT)):
+            out = mod(out)             # [B, 1, P_i]  — pair dominance
             last_module = mod
         elif isinstance(mod, PermutationalLut):
             out = mod(out)             # [B, 1, d_i]  — already a vector
             last_module = mod
         else:  # D2V
             out = mod(out).squeeze(1)  # [B, d_i]
-    if isinstance(last_module, BitPermutationLUT):
+    if isinstance(last_module, (BitPermutationLUT, MultiBitPermutationLUT)):
         return torch.einsum('bhp,kp->bhk', out, last_module.dom_borda_m).squeeze(1)
     # PermLut: drop the size-1 heads dim and return [B, n_outputs].
     return out.squeeze(1)
@@ -156,8 +170,9 @@ def main():
 
     modules = build_stack(cand, base_seed=args.seed + 1000)
     bit_luts = [m for m in modules if isinstance(m, BitPermutationLUT)]
+    multi_bit_luts = [m for m in modules if isinstance(m, MultiBitPermutationLUT)]
     perm_luts = [m for m in modules if isinstance(m, PermutationalLut)]
-    luts = bit_luts + perm_luts
+    luts = bit_luts + multi_bit_luts + perm_luts
     n_bit_params = bit_params_count(luts)
 
     # Borda-project teacher dominance -> E-dim, then take the pairwise sign
@@ -188,13 +203,15 @@ def main():
 
     # Parameter groups.
     adam_params = [p for m in modules for p in m.parameters() if p.requires_grad]
-    print(f'bit LUTs: {len(bit_luts)}, perm LUTs: {len(perm_luts)}  |  '
+    print(f'bit LUTs: {len(bit_luts)}, multi-bit LUTs: {len(multi_bit_luts)}, '
+          f'perm LUTs: {len(perm_luts)}  |  '
           f'bit-params (logical signs): {n_bit_params:,}  |  '
           f'Adam params: {sum(p.numel() for p in adam_params):,}')
     for i, L in enumerate(luts):
         tag = '(partition)' if i == 0 else ''
+        extra = f' bw={L.bit_width}' if isinstance(L, MultiBitPermutationLUT) else ''
         print(f'  LUT[{i}] {tag}: n_in={L.n_inputs} n_out={L.n_outputs} '
-              f'in_nap={L.input_nap} tph={L.tph} out_nap={L.output_nap}')
+              f'in_nap={L.input_nap} tph={L.tph} out_nap={L.output_nap}{extra}')
 
     # LR schedule.
     total_steps = args.steps
@@ -220,6 +237,11 @@ def main():
         BitPermutationLUTOptimizer(
             bit_luts, lr=args.lr, beta1=0.9, beta2=0.999, lr_schedule_fn=lr_scale,
         ) if bit_luts else None
+    )
+    multi_bit_opt = (
+        MultiBitPermutationLUTOptimizer(
+            multi_bit_luts, lr=args.lr, beta1=0.9, beta2=0.999, lr_schedule_fn=lr_scale,
+        ) if multi_bit_luts else None
     )
 
     csv_path = os.path.join(out_dir, 'metrics.csv')
@@ -254,11 +276,13 @@ def main():
 
         if adam_opt is not None: adam_opt.zero_grad()
         if bit_opt is not None: bit_opt.zero_grad()
+        if multi_bit_opt is not None: multi_bit_opt.zero_grad()
         loss.backward()
         if adam_opt is not None:
             adam_opt.step()
             adam_sched.step()
         if bit_opt is not None: bit_opt.step()
+        if multi_bit_opt is not None: multi_bit_opt.step()
 
         if (step + 1) % args.log_every == 0 or step == 0:
             with torch.no_grad():
@@ -282,6 +306,7 @@ def main():
                 best = {'step': step+1, 'mse': mse_eval, 'sign_acc': sgn_eval}
     csv_f.close()
     if bit_opt is not None: bit_opt.close()
+    if multi_bit_opt is not None: multi_bit_opt.close()
 
     elapsed = time.time() - t0
     summary = {

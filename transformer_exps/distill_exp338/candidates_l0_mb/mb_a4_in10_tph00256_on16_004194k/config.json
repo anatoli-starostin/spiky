@@ -1,0 +1,15 @@
+{
+  "name": "mb_a4_in10_tph00256_on16_004194k",
+  "module_type": "multibit",
+  "bit_width": 4,
+  "init_std": 0.001,
+  "description": "Axis 4: in=10, tph=256, on=16, K=4",
+  "luts": [
+    {
+      "input_nap": 10,
+      "tph": 256,
+      "output_nap": 16
+    }
+  ],
+  "d_intermediate": []
+}

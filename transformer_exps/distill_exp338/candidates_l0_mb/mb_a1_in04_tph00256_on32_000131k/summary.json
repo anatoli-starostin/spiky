@@ -1,0 +1,27 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 131072,
+  "n_luts": 1,
+  "final_mse": 0.4620650814425561,
+  "final_sign_acc": 0.8398201850152784,
+  "best_sign_acc": 0.8398201850152784,
+  "best_step": 50000,
+  "best_mse": 0.4620650814425561,
+  "time_min": 1.14,
+  "candidate": {
+    "name": "mb_a1_in04_tph00256_on32_000131k",
+    "module_type": "multibit",
+    "bit_width": 4,
+    "init_std": 0.001,
+    "description": "Axis 1: in=4, tph=256, on=32, K=4",
+    "luts": [
+      {
+        "input_nap": 4,
+        "tph": 256,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

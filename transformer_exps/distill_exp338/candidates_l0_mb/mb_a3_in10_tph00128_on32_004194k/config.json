@@ -1,0 +1,15 @@
+{
+  "name": "mb_a3_in10_tph00128_on32_004194k",
+  "module_type": "multibit",
+  "bit_width": 4,
+  "init_std": 0.001,
+  "description": "Axis 3: in=10, tph=128, on=32, K=4",
+  "luts": [
+    {
+      "input_nap": 10,
+      "tph": 128,
+      "output_nap": 32
+    }
+  ],
+  "d_intermediate": []
+}

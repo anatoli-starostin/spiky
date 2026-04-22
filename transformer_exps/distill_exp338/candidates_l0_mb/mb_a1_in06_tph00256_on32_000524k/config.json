@@ -1,0 +1,15 @@
+{
+  "name": "mb_a1_in06_tph00256_on32_000524k",
+  "module_type": "multibit",
+  "bit_width": 4,
+  "init_std": 0.001,
+  "description": "Axis 1: in=6, tph=256, on=32, K=4",
+  "luts": [
+    {
+      "input_nap": 6,
+      "tph": 256,
+      "output_nap": 32
+    }
+  ],
+  "d_intermediate": []
+}

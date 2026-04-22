@@ -1,0 +1,93 @@
+=== [14:22:59] l0_b_in05_tph02048_on32_02097k ===
+bit LUTs: 1  | bit-params: 2,097,152  | Adam params: 0
+  "final_sign_acc": 0.9055623700541835,
+  "best_sign_acc": 0.9079325891310169,
+=== [14:25:29] l0_b_in05_tph04096_on32_04194k ===
+bit LUTs: 1  | bit-params: 4,194,304  | Adam params: 0
+  "final_sign_acc": 0.9325947300080331,
+  "best_sign_acc": 0.9341880429175592,
+=== [14:30:05] l0_b_in06_tph04096_on16_04194k ===
+bit LUTs: 1  | bit-params: 4,194,304  | Adam params: 0
+  "final_sign_acc": 0.9359373277233493,
+  "best_sign_acc": 0.9380841409006426,
+=== [14:32:35] l0_b_in06_tph04096_on24_06291k ===
+bit LUTs: 1  | bit-params: 6,291,456  | Adam params: 0
+  "final_sign_acc": 0.9510330692414315,
+  "best_sign_acc": 0.9533810769357989,
+=== [14:36:02] l0_b_in06_tph04096_on32_08388k ===
+bit LUTs: 1  | bit-params: 8,388,608  | Adam params: 0
+  "final_sign_acc": 0.9606469062066847,
+  "best_sign_acc": 0.9624309539794922,
+=== [14:40:51] l0_d_mid16_L1in04tph04096on16_L2in08tph02048on10_06291k ===
+bit LUTs: 2  | bit-params: 6,291,456  | Adam params: 32
+  "final_sign_acc": 0.9337970979752079,
+  "best_sign_acc": 0.934753664078251,
+=== [14:44:04] l0_d_mid16_L1in06tph02048on16_L2in06tph01024on10_02752k ===
+bit LUTs: 2  | bit-params: 2,752,512  | Adam params: 32
+  "final_sign_acc": 0.8990489590552545,
+  "best_sign_acc": 0.8999324306364982,
+=== [14:45:52] l0_d_mid16_L1in06tph04096on16_L2in08tph01024on10_06815k ===
+bit LUTs: 2  | bit-params: 6,815,744  | Adam params: 32
+  "final_sign_acc": 0.9314842224121094,
+  "best_sign_acc": 0.9314842224121094,
+=== [14:48:37] l0_d_mid24_L1in06tph02048on24_L2in08tph01024on10_05767k ===
+bit LUTs: 2  | bit-params: 5,767,168  | Adam params: 48
+  "final_sign_acc": 0.9303272001204952,
+  "best_sign_acc": 0.9310700816492881,
+=== [14:50:55] l0_d_mid32_L1in06tph02048on32_L2in06tph01024on10_04849k ===
+bit LUTs: 2  | bit-params: 4,849,664  | Adam params: 64
+  "final_sign_acc": 0.9154540646460748,
+  "best_sign_acc": 0.9154540646460748,
+=== [14:53:49] l0_d_mid32_L1in06tph04096on32_L2in08tph01024on10_11010k ===
+bit LUTs: 2  | bit-params: 11,010,048  | Adam params: 64
+  "final_sign_acc": 0.9449187247983871,
+  "best_sign_acc": 0.9449187247983871,
+=== [14:58:59] l0_e_L0in06tph01024on16_L1in06tph01024on16_L2in06tph01024on10_02752k ===
+bit LUTs: 3  | bit-params: 2,752,512  | Adam params: 64
+  "final_sign_acc": 0.8900553180325416,
+  "best_sign_acc": 0.8900553180325416,
+=== [15:01:16] l0_e_L0in06tph01024on32_L1in06tph01024on16_L2in06tph01024on10_03801k ===
+bit LUTs: 3  | bit-params: 3,801,088  | Adam params: 96
+  "final_sign_acc": 0.8971385955810547,
+  "best_sign_acc": 0.8971385955810547,
+=== [15:03:33] l0_s_in05_tph08192_on10_02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9161233594340663,
+  "best_sign_acc": 0.918075930687689,
+=== [15:06:36] l0_s_in06_tph04096_on10_02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9181313668527911,
+  "best_sign_acc": 0.9202874706637475,
+=== [15:08:10] l0_s_in06_tph08192_on10_05242k ===
+bit LUTs: 1  | bit-params: 5,242,880  | Adam params: 0
+  "final_sign_acc": 0.9457057214552357,
+  "best_sign_acc": 0.9472841447399508,
+=== [15:11:25] l0_s_in07_tph04096_on10_05242k ===
+bit LUTs: 1  | bit-params: 5,242,880  | Adam params: 0
+  "final_sign_acc": 0.9452267923662739,
+  "best_sign_acc": 0.9471003009426978,
+=== [15:13:04] l0_s_in07_tph08192_on10_10485k ===
+bit LUTs: 1  | bit-params: 10,485,760  | Adam params: 0
+  "final_sign_acc": 0.9708480219687184,
+  "best_sign_acc": 0.9722063003047821,
+=== [15:16:33] l0_s_in08_tph02048_on10_05242k ===
+bit LUTs: 1  | bit-params: 5,242,880  | Adam params: 0
+  "final_sign_acc": 0.9426629466395224,
+  "best_sign_acc": 0.9444002336071383,
+=== [15:17:37] l0_s_in08_tph04096_on10_10485k ===
+bit LUTs: 1  | bit-params: 10,485,760  | Adam params: 0
+  "final_sign_acc": 0.9691622949415638,
+  "best_sign_acc": 0.9709692308979649,
+=== [15:19:26] l0_s_in10_tph01024_on10_10485k ===
+bit LUTs: 1  | bit-params: 10,485,760  | Adam params: 0
+  "final_sign_acc": 0.9603650493006552,
+  "best_sign_acc": 0.9617697808050341,
+=== [15:20:30] l0_s_teacher_shape ===
+bit LUTs: 1  | bit-params: 20,971,520  | Adam params: 0
+  "final_sign_acc": 0.9842725569202054,
+  "best_sign_acc": 0.9848960138136341,
+=== [15:22:04] teacher_shape + teacher_pairs ===
+bit LUTs: 1  | bit-params: 20,971,520  | Adam params: 0
+  "final_sign_acc": 0.9899322140601373,
+  "best_sign_acc": 0.9903402020854335,
+=== [15:23:37] sweep done ===

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp346_cfc_out_permlut_q16",
+  "best_val_loss": 1.4699265599250793,
+  "final_val_loss": 1.4699265599250793,
+  "adam_params": 50711655,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.257
+}

@@ -1,0 +1,133 @@
+=== [12:43:52] training c_a_in04_tph08192_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.9761948739328692,
+  "best_sign_acc": 0.9770341073313067,
+=== [12:46:41] training c_a_in05_tph04096_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.9719688661636845,
+  "best_sign_acc": 0.9735384295063634,
+=== [12:48:12] training c_a_in05_tph08192_on10_bp02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9784198268767326,
+  "best_sign_acc": 0.9790154118691722,
+=== [12:51:15] training c_a_in06_tph02048_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.9644081977105909,
+  "best_sign_acc": 0.9644081977105909,
+=== [12:52:16] training c_a_in06_tph04096_on10_bp02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9758076821604083,
+  "best_sign_acc": 0.9758076821604083,
+=== [12:53:52] training c_a_in07_tph01024_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.9592414363738029,
+  "best_sign_acc": 0.9592414363738029,
+=== [12:54:54] training c_a_in07_tph02048_on10_bp02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9695564393074282,
+  "best_sign_acc": 0.9712961258426789,
+=== [12:55:56] training c_a_in08_tph00512_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.9488306353169103,
+  "best_sign_acc": 0.9501812227310673,
+=== [12:56:59] training c_a_in08_tph01024_on10_bp02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9599867174702306,
+  "best_sign_acc": 0.9631996770058909,
+=== [12:58:00] training c_a_in10_tph00128_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.91413817867156,
+  "best_sign_acc": 0.9225523548741494,
+=== [12:59:07] training c_a_in10_tph00256_on10_bp02621k ===
+bit LUTs: 1  | bit-params: 2,621,440  | Adam params: 0
+  "final_sign_acc": 0.9382828127953314,
+  "best_sign_acc": 0.941299315421812,
+=== [13:00:09] training c_a_in12_tph00032_on10_bp01310k ===
+bit LUTs: 1  | bit-params: 1,310,720  | Adam params: 0
+  "final_sign_acc": 0.8672647168559413,
+  "best_sign_acc": 0.8672647168559413,
+=== [13:01:12] training c_b_in06_tph02048_on06_bp00786k ===
+bit LUTs: 1  | bit-params: 786,432  | Adam params: 0
+  "final_sign_acc": 0.9595124644617881,
+  "best_sign_acc": 0.9595124644617881,
+=== [13:02:14] training c_b_in06_tph02048_on08_bp01048k ===
+bit LUTs: 1  | bit-params: 1,048,576  | Adam params: 0
+  "final_sign_acc": 0.960022464875252,
+  "best_sign_acc": 0.9662973957677041,
+=== [13:03:16] training c_b_in06_tph02048_on12_bp01572k ===
+bit LUTs: 1  | bit-params: 1,572,864  | Adam params: 0
+  "final_sign_acc": 0.9672620834842804,
+  "best_sign_acc": 0.9687352949573148,
+=== [13:04:19] training c_b_in06_tph02048_on16_bp02097k ===
+bit LUTs: 1  | bit-params: 2,097,152  | Adam params: 0
+  "final_sign_acc": 0.9721252072241998,
+  "best_sign_acc": 0.9735681472286102,
+=== [13:05:35] training c_b_in06_tph02048_on24_bp03145k ===
+bit LUTs: 1  | bit-params: 3,145,728  | Adam params: 0
+  "final_sign_acc": 0.9754395023469002,
+  "best_sign_acc": 0.9766590364517704,
+=== [13:07:21] training c_b_in06_tph02048_on32_bp04194k ===
+bit LUTs: 1  | bit-params: 4,194,304  | Adam params: 0
+  "final_sign_acc": 0.9792139607091104,
+  "best_sign_acc": 0.9792139607091104,
+=== [13:09:59] training c_c_in04_tph04096_on10_bp00655k ===
+bit LUTs: 1  | bit-params: 655,360  | Adam params: 0
+  "final_sign_acc": 0.9682521820068359,
+  "best_sign_acc": 0.9693549371534779,
+=== [13:11:25] training c_c_in05_tph00512_on10_bp00163k ===
+bit LUTs: 1  | bit-params: 163,840  | Adam params: 0
+  "final_sign_acc": 0.9320945739746094,
+  "best_sign_acc": 0.9320945739746094,
+=== [13:12:26] training c_c_in05_tph01024_on10_bp00327k ===
+bit LUTs: 1  | bit-params: 327,680  | Adam params: 0
+  "final_sign_acc": 0.9508633767404864,
+  "best_sign_acc": 0.9508633767404864,
+=== [13:13:28] training c_c_in05_tph02048_on10_bp00655k ===
+bit LUTs: 1  | bit-params: 655,360  | Adam params: 0
+  "final_sign_acc": 0.9617558756182271,
+  "best_sign_acc": 0.9665745765932144,
+=== [13:14:29] training c_c_in06_tph00512_on10_bp00327k ===
+bit LUTs: 1  | bit-params: 327,680  | Adam params: 0
+  "final_sign_acc": 0.944443610406691,
+  "best_sign_acc": 0.944443610406691,
+=== [13:15:31] training c_c_in06_tph01024_on10_bp00655k ===
+bit LUTs: 1  | bit-params: 655,360  | Adam params: 0
+  "final_sign_acc": 0.9536636106429561,
+  "best_sign_acc": 0.9541982835338961,
+=== [13:16:33] training c_d_mid08_L1in06tph01024on08_L2in04tph02048on10_bp00851k ===
+bit LUTs: 2  | bit-params: 851,968  | Adam params: 16
+  "final_sign_acc": 0.9438717134537236,
+  "best_sign_acc": 0.9440001210858745,
+=== [13:18:22] training c_d_mid16_L1in04tph02048on16_L2in06tph01024on10_bp01179k ===
+bit LUTs: 2  | bit-params: 1,179,648  | Adam params: 32
+  "final_sign_acc": 0.9661582823722593,
+  "best_sign_acc": 0.9664266032557334,
+=== [13:20:10] training c_d_mid16_L1in06tph00512on16_L2in08tph00512on10_bp01835k ===
+bit LUTs: 2  | bit-params: 1,835,008  | Adam params: 32
+  "final_sign_acc": 0.9599803186232044,
+  "best_sign_acc": 0.961989248952558,
+=== [13:21:57] training c_d_mid16_L1in06tph01024on16_L2in06tph01024on16_bp02097k ===
+bit LUTs: 2  | bit-params: 2,097,152  | Adam params: 32
+  "final_sign_acc": 0.9680608933971774,
+  "best_sign_acc": 0.9686176546158329,
+=== [13:23:47] training c_d_mid24_L1in06tph00512on24_L2in10tph00256on10_bp03407k ===
+bit LUTs: 2  | bit-params: 3,407,872  | Adam params: 48
+  "final_sign_acc": 0.961074952156313,
+  "best_sign_acc": 0.9620400090371409,
+=== [13:25:37] training c_d_mid24_L1in06tph01024on24_L2in08tph00512on10_bp02883k ===
+bit LUTs: 2  | bit-params: 2,883,584  | Adam params: 48
+  "final_sign_acc": 0.9685230870400706,
+  "best_sign_acc": 0.9693949299473916,
+=== [13:27:24] training c_d_mid32_L1in06tph01024on32_L2in06tph00512on10_bp02424k ===
+bit LUTs: 2  | bit-params: 2,424,832  | Adam params: 64
+  "final_sign_acc": 0.9672961696501701,
+  "best_sign_acc": 0.968490231421686,
+=== [13:29:12] training c_e_L0in06tph00512on16_L1in06tph00512on16_L2in06tph00512on10_bp01376k ===
+bit LUTs: 3  | bit-params: 1,376,256  | Adam params: 64
+  "final_sign_acc": 0.9559815314508253,
+  "best_sign_acc": 0.9559815314508253,
+=== [13:31:26] training c_e_L0in06tph00512on24_L1in08tph00256on16_L2in06tph00256on10_bp01998k ===
+bit LUTs: 3  | bit-params: 1,998,848  | Adam params: 80
+  "final_sign_acc": 0.9540302522720829,
+  "best_sign_acc": 0.954603502827306,
+=== [13:33:42] sweep done ===

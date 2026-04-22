@@ -391,17 +391,122 @@ Clear scaling law but diminishing returns. 1024→2048 gave −0.082; 2048→409
 
 ---
 
-## Updated Overall Progression
+## Overall Progression (ctx=32 era)
 
 | Milestone | Exp | Val Loss | Params | Notes |
 |-----------|-----|----------|--------|-------|
-| Vanilla baseline | exp002 | 1.3559 | 4.87M | Target |
+| Vanilla baseline | exp002 | 1.3559 | 4.87M | Target (ctx=32) |
 | Smooth LUT + RankAttn | exp024 | 1.4371 | 46.2M | |
 | d_v=16 redesign | exp084 | 1.5845 | 7.55M | Prior SOTA |
 | Linear unembedder | exp100 | 1.6195 | 44.1M | New reference |
 | + FFN | exp108 | 1.6047 | 44.1M | |
-| tph=1024 | exp110 | 1.5845 | 88.1M | |
-| tph=2048, b=32 | exp111 | 1.5021 | 176.2M | |
-| **tph=4096, b=32** | **exp112** | **1.4834** | **352.4M** | **Current SOTA** |
+| tph=4096, b=32 | exp112 | **1.4834** | 352.4M | ctx=32 SOTA |
 
-**Gap to vanilla: 0.129** (exp112 vs exp003, 72× more params)
+---
+
+## Phase 13: ctx=128 migration, QK LayerNorm, nap scaling (exp200–246)
+
+Moved to **ctx=128**. New vanilla baseline: 1.3556 @ 4.87M.
+
+**QK LayerNorm (exp218→220)**: LN on Q and K before the dot product is critical for scaling LUT capacity. Without it, tph=256 barely beats tph=128; with it, dramatic improvement. LUT outputs have erratic magnitudes — LN stabilizes the gradient scales.
+
+**nap scaling**: more anchor pairs (larger tables) is the strongest lever. nap=10 (table_dim=1024) dramatically beats nap=5 (32). Sublinear gain: each doubling helps less.
+
+**Best results with residuals** (ctx=128):
+| Exp | Config | Params | Val Loss |
+|-----|--------|--------|----------|
+| **exp233** | Q/K nap=5, V/Out/FFN nap=12, tph=128 | 304M | **1.3562** |
+| exp232 | All nap=12, tph=128 | 503M | 1.3633 |
+| exp238 | No FFN, OutProj nap=10/tph=256 | 53.5M | 1.3796 |
+
+**Mixed nap finding**: Q/K don't need big tables (nap=5 suffices — attention is a soft routing mechanism). Heavy lifting is in OutProj/FFN (nap=12).
+
+---
+
+## Phase 14: No-residual, ranking-based (exp247–249)
+
+Core idea: residual connections break permutational consistency (`rank(x+y) ≠ f(rank(x), rank(y))`). Remove residuals; add backward ranking-prediction loss to recover gradient flow. See [project_permutational_architecture](project_permutational_architecture.md).
+
+**exp249** architecture: Q/K LUT(nap=5,tph=128) → QK-LN → SDPA → OutProj LUT(nap=5,tph=256) → LN → next layer. No FFN, no residuals. 5.56M params. Reached CE~1.88 at step 6K — first successful pure-ranking 6-layer training.
+
+---
+
+## Phase 15: BitPermutationLUT era (exp299–342)
+
+Architecture family **FullBitPermRankAttn_ctx128**: 6 layers, E=32, 4 heads, d_qk=24, d_v=16, ctx=128. Core primitive is `BitPermutationLUT` (1-bit packed weights, fused CUDA forward/backward, fp8/bf16 latent + STE-gated Adam via `BitPermutationLUTOptimizer`).
+
+**Key design choices**:
+- `CANONICAL_FULL_COVERAGE` anchor-sampling policy (default): guarantees coverage of pair pool when slots ≥ C(N,2). Tile-and-repair algorithm.
+- `partition_sets`: restricts out_proj input anchors to within-head pairs (the `H·d_v` concat has no cross-head ordering meaning).
+- `DominanceCanonicalize` + `SDPA` (replaced earlier `RankAttention`).
+- `DominanceToVector` (Borda+LN) after attention and out_proj.
+
+| Exp | Config | Val Loss | Notes |
+|-----|--------|----------|-------|
+| exp329 | BitPermLUT (in=10, tph=2048, on=10), no partition | **1.379** | CFC default reference |
+| exp338 | + partition_sets | 1.401 | Partition alone slightly worse |
+| exp332 | Narrower partition config | 1.412 | |
+| exp336 | BitPermLUT (in=10, tph=256, on=16) | 1.494 | Small tph hurts |
+| exp342 | BitPermLUT (in=4, tph=8192, on=10) | 1.529 | Distill-winner shape, but e2e regresses |
+
+**Distillation framework** (`transformer_exps/distill_exp338/`): extract `(out_proj_input, out_proj_output)` pairs from exp338 per layer, train candidates to match pair-wise sign of Borda-projected E-dim output. Key lessons:
+1. Target must be rank of Borda-projected output, not raw 496-dim dominance.
+2. `src/spiky/lutorch/determinism.py` added — `set_deterministic(True)` gives bitwise-identical checkpoints.
+
+**Per-layer difficulty** (at 1.3M bit-params): layer 0 = 0.887, layer 5 = 0.986 sign-acc. Layer 0's heavily-local attention (78% within 4 tokens) makes its out_proj input info-dense.
+
+**Layer-0 Pareto** (BitPermLUT): 21M = 0.985; 10.5M = 0.972 (in=7, tph=8192); 2.1M = 0.908.
+
+---
+
+## Phase 16: PermutationalLut (smooth-rational) (exp343–346)
+
+`PermutationalLut` (`src/spiky/lutorch/permutational_lut.py`): fp32 weights, soft-rational forward `0.5·x/(T+|x|)` → scatter_add. Emits E-dim vector directly (no Borda+LN needed). Standard Adam on `nn.Parameter`. `borda_scale_mode='borda'` (default) divides scatter by √(E−1) to match BitPermLUT's post-LN magnitude.
+
+`vote_quant_levels` kwarg adds STE quantization between rational and scatter (tests the "quantized synapse" hypothesis).
+
+| Exp | out_proj | Val Loss | Notes |
+|-----|----------|----------|-------|
+| exp343 borda | PermLut fp32, in=10, tph=256, on=32 | **1.450** | Smooth-rational closes gap by 30% |
+| exp346 | PermLut + vote_quant_levels=16 (4-bit) | 1.470 | K=4 quant costs only 0.02 val-loss |
+
+**Layer-0 distill Pareto (PermLut)**: 21M = 0.9991; **8.4M (in=10, tph=256, on=32) = 0.9956** (best tph-efficient); 5.2M = 0.9917. Much better than BitPermLUT at same bit-count due to fp32 weight expressivity.
+
+---
+
+## Phase 17: MultiBitPermutationLUT (exp347–350+)
+
+New primitive `MultiBitPermutationLUT` (`src/spiky/lutorch/multi_bit_permutation_lut.py`): K-bit packed signed ints (K∈{2,4,8}) in int32 blocks. Semantically matches PermLut+vote_quant_levels=2^K but stored efficiently. Features:
+- Rational-pre-quant (T=0.1) in pack kernel.
+- **Midrise quantizer** (no level at 0) — fixes "dead zone" bootstrap issue.
+- Per-pair bias added in forward to compensate for midrise shift.
+- Own optimizer `MultiBitPermutationLUTOptimizer` (bf16 latent + STE gate + multi_bit_pack repack).
+
+Forward perf at same shape as BitPermLUT: within 5% at tph=256–2048; up to 2× faster at tph=8192 (BitPermLUT's warp-coop path not cost-effective there).
+
+| Exp | Config | Val Loss | Notes |
+|-----|--------|----------|-------|
+| **exp347** | **Hybrid: BitPermLUT q/k/v + MultiBit K=4 out_proj** | **1.432** | **Beats exp346 (same shape PermLut+q16) by 0.04** |
+| exp349 | All-MultiBit K=4, qk_tph=192 | ~1.48 | q/k "too heavy" — uniform K=4 hurts |
+| exp350 | All-MultiBit K=4, qk_tph=64 | 1.492 | Reduced q/k tph partially recovers but still worse than exp347 |
+
+**Lesson**: q/k don't benefit from K>1 — their output feeds SDPA + DominanceCanonicalize which wants crisp ±-ish dominance. out_proj (wide fan-in, 64→32 across 4 heads) does benefit.
+
+**Matched-shape distill (in=10, tph=256, on=32)**: PermLut fp32 = 0.9956; MultiBit K=4 midrise = 0.9898. Close, with 8× less storage for MultiBit.
+
+---
+
+## Updated Overall Progression (ctx=128 era)
+
+| Milestone | Exp | Val Loss | Storage | Notes |
+|-----------|-----|----------|---------|-------|
+| Vanilla ctx=128 | — | 1.3556 | 4.87M fp32 params | Target |
+| exp233 (ctx=128 LUT SOTA, nap sweep) | exp233 | 1.3562 | 304M fp16 | Matches vanilla with 60× more params |
+| No-residual (exp249) | exp249 | ~1.88 @ 6k | 5.56M | Proof-of-concept |
+| BitPermLUT + partition | **exp329** | **1.379** | 210M bits ≈ 26MB | BitPermutationLUT baseline |
+| Distill-winner shape, e2e | exp342 | 1.529 | 17M bits ≈ 2MB | Shape transfer failed |
+| PermLut smooth-rational | exp343 | 1.450 | 50M fp32 = 200MB | |
+| PermLut + vote_q16 | exp346 | 1.470 | 50M fp32 = 200MB | |
+| **Hybrid MultiBit K=4** | **exp347** | **1.432** | **8.6M bit + 34Mbit ≈ 5.4MB** | **Current best at small tph out_proj** |
+
+**Current frontier**: exp329 is the accuracy target (1.379, all-BitPermLUT). exp347 is the storage-efficient trade-off (1.432 with 5× smaller out_proj).

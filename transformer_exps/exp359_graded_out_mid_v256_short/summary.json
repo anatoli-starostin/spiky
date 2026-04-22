@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp359_graded_out_mid_v256_short",
+  "best_val_loss": 1.355942004919052,
+  "final_val_loss": 1.355942004919052,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.262
+}

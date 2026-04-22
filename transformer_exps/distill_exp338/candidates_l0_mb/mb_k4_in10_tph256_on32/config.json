@@ -1,0 +1,1 @@
+{"name":"mb_k4_in10_tph256_on32","module_type":"multibit","bit_width":4,"init_std":0.001,"description":"MultiBit K=4 + rational pre-quant (T=0.1) at PermLut p20 shape. Direct comparison to perm_q16.","luts":[{"input_nap":10,"tph":256,"output_nap":32}],"d_intermediate":[]}

@@ -1,0 +1,33 @@
+=== [15:44:02] p0_teacher_shape ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 20,971,520  |  Adam params: 20,971,520
+  "final_sign_acc": 0.9990737668929561,
+  "best_sign_acc": 0.9990737668929561,
+=== [15:45:52] p1_in07_tph8192_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 10,485,760  |  Adam params: 10,485,760
+  "final_sign_acc": 0.9981116633261403,
+  "best_sign_acc": 0.9981116633261403,
+=== [15:50:07] p2_in06_tph4096_on32 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 8,388,608  |  Adam params: 8,388,608
+  "final_sign_acc": 0.994081312610257,
+  "best_sign_acc": 0.994081312610257,
+=== [15:55:51] p3_in06_tph8192_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 5,242,880  |  Adam params: 5,242,880
+  "final_sign_acc": 0.9904495977586315,
+  "best_sign_acc": 0.9904495977586315,
+=== [15:59:44] p4_in06_tph4096_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 2,621,440  |  Adam params: 2,621,440
+  "final_sign_acc": 0.9713100925568612,
+  "best_sign_acc": 0.9713100925568612,
+=== [16:01:49] p5_in05_tph8192_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 2,621,440  |  Adam params: 2,621,440
+  "final_sign_acc": 0.9647779157084804,
+  "best_sign_acc": 0.9647779157084804,
+=== [16:05:32] p6_in06_tph2048_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 1,310,720  |  Adam params: 1,310,720
+  "final_sign_acc": 0.9444829263994771,
+  "best_sign_acc": 0.9444829263994771,
+=== [16:06:55] p7_in04_tph8192_on10 ===
+bit LUTs: 0, perm LUTs: 1  |  bit-params (logical signs): 1,310,720  |  Adam params: 1,310,720
+  "final_sign_acc": 0.9294020745062059,
+  "best_sign_acc": 0.9294020745062059,
+=== done ===

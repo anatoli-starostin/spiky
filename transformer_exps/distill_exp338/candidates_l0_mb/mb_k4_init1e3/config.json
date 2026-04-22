@@ -1,0 +1,1 @@
+{"name":"mb_k4_init1e3","module_type":"multibit","bit_width":4,"init_std":0.001,"description":"MultiBit K=4, init_std=1e-3 (matches PermLut init).","luts":[{"input_nap":10,"tph":256,"output_nap":32}],"d_intermediate":[]}

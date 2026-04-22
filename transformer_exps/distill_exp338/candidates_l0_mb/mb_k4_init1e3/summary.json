@@ -1,0 +1,27 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 8388608,
+  "n_luts": 1,
+  "final_mse": 0.17829898095900013,
+  "final_sign_acc": 0.9643837713426159,
+  "best_sign_acc": 0.9643837713426159,
+  "best_step": 50000,
+  "best_mse": 0.17829898095900013,
+  "time_min": 1.07,
+  "candidate": {
+    "name": "mb_k4_init1e3",
+    "module_type": "multibit",
+    "bit_width": 4,
+    "init_std": 0.001,
+    "description": "MultiBit K=4, init_std=1e-3 (matches PermLut init).",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 256,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

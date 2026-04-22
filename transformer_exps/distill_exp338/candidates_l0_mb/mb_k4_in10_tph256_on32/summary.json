@@ -1,0 +1,27 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 8388608,
+  "n_luts": 1,
+  "final_mse": 0.08331013687195317,
+  "final_sign_acc": 0.9898340163692352,
+  "best_sign_acc": 0.9898340163692352,
+  "best_step": 50000,
+  "best_mse": 0.08331013687195317,
+  "time_min": 1.08,
+  "candidate": {
+    "name": "mb_k4_in10_tph256_on32",
+    "module_type": "multibit",
+    "bit_width": 4,
+    "init_std": 0.001,
+    "description": "MultiBit K=4 + rational pre-quant (T=0.1) at PermLut p20 shape. Direct comparison to perm_q16.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 256,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

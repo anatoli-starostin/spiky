@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp358_graded_upper_v256_partsets_short",
+  "best_val_loss": 1.3604115843772888,
+  "final_val_loss": 1.3604115843772888,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.288
+}

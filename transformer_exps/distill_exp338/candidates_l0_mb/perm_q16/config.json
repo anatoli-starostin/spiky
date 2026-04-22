@@ -1,0 +1,1 @@
+{"name":"perm_q16","module_type":"perm","vote_quant_levels":16,"description":"PermLut with vote_quant_levels=16 (= K=4), shape matches p20. Reference for MultiBit K=4 comparison.","luts":[{"input_nap":10,"tph":256,"output_nap":32}],"d_intermediate":[]}

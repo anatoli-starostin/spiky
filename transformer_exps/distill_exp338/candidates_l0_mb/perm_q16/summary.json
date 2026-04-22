@@ -1,0 +1,26 @@
+{
+  "layer": 0,
+  "steps": 50000,
+  "bit_params": 8388608,
+  "n_luts": 1,
+  "final_mse": 0.02204444812190148,
+  "final_sign_acc": 0.9954757690429688,
+  "best_sign_acc": 0.9954757690429688,
+  "best_step": 50000,
+  "best_mse": 0.02204444812190148,
+  "time_min": 1.5,
+  "candidate": {
+    "name": "perm_q16",
+    "module_type": "perm",
+    "vote_quant_levels": 16,
+    "description": "PermLut with vote_quant_levels=16 (= K=4), shape matches p20. Reference for MultiBit K=4 comparison.",
+    "luts": [
+      {
+        "input_nap": 10,
+        "tph": 256,
+        "output_nap": 32
+      }
+    ],
+    "d_intermediate": []
+  }
+}

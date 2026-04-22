@@ -1,0 +1,1 @@
+{"name":"mb_smoke","module_type":"multibit","bit_width":4,"init_std":0.5,"description":"Smoke test MultiBit K=4","luts":[{"input_nap":10,"tph":256,"output_nap":32}],"d_intermediate":[]}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp351_cfc_full_scale",
+  "best_val_loss": 1.2456910341978074,
+  "final_val_loss": 1.2465301960706712,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 2.458
+}
