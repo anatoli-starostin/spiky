@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp369_front2_graded_v_qk256_short",
+  "best_val_loss": 1.3467546224594116,
+  "final_val_loss": 1.3467546224594116,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.41
+}

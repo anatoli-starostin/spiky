@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp371_grad_diagnostic_short",
+  "best_val_loss": 1.6044922173023224,
+  "final_val_loss": 1.6044922173023224,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.12
+}

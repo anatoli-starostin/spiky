@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp373_graded_v_qk_L0up_short",
+  "best_val_loss": 1.347746905684471,
+  "final_val_loss": 1.347746905684471,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.579
+}

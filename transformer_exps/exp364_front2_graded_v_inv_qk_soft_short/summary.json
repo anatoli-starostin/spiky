@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp364_front2_graded_v_inv_qk_soft_short",
+  "best_val_loss": 1.3525228202342987,
+  "final_val_loss": 1.3525228202342987,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.275
+}
