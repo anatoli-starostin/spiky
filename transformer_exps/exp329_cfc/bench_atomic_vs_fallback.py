@@ -126,7 +126,7 @@ def run_bench(force_fallback: bool, warmup: int, steps: int, label: str):
     # the index_add_ fallback (table_dim=65 causes the `<= 64` check to fail).
     original_fn = bplo._project_grad_out_to_weight_grad
     if force_fallback:
-        def forced(grad_out, lookup_indices, pair_idx_per_slot,
+        def forced(grad_out, lookup_indices, output_idx_per_table,
                    n_heads, tph, output_nap, table_dim, scale, wg_buffer=None):
             B, N = lookup_indices.shape
             if wg_buffer is None:
@@ -135,7 +135,7 @@ def run_bench(force_fallback: bool, warmup: int, steps: int, label: str):
             else:
                 wg = wg_buffer
                 wg.zero_()
-            pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
+            pair_flat = output_idx_per_table.reshape(n_heads, tph * output_nap).long()
             g_slot = grad_out.gather(
                 2, pair_flat.unsqueeze(0).expand(B, -1, -1)
             ) * scale

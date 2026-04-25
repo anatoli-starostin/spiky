@@ -24,7 +24,7 @@ import torch.nn as nn
 _FP8 = getattr(torch, "float8_e4m3fn", None)
 _FP8_AMAX = 448.0  # float8_e4m3fn representable maximum
 
-from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy, _repair_intra_table_duplicates
 from spiky.lutorch.ranking_tools import _canonical_borda_m
 from spiky.lutorch.tiny_anchor_pairs_lookup import (
     TinyAnchorPairsLookup,
@@ -49,7 +49,7 @@ def _build_output_structures_from_pairs(
     n_outputs: int,
     device: torch.device,
 ) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
-    """Build (idx_a, idx_b canonicalized, inv_idx, K_max, pair_idx_per_slot)
+    """Build (idx_a, idx_b canonicalized, inv_idx, K_max, output_idx_per_table)
     from given idx_a/idx_b. If any pair has a > b, swap to canonical a < b.
     Duplicate pairs per table are allowed -- K_max simply grows.
     """
@@ -64,9 +64,9 @@ def _build_output_structures_from_pairs(
     pair_range = torch.arange(P, device=device)
     pair_map[tri_i, tri_j] = pair_range
     pair_map[tri_j, tri_i] = pair_range
-    pair_idx_per_slot = pair_map[a_can, b_can]                   # [H, tph, output_nap]
+    output_idx_per_table = pair_map[a_can, b_can]                   # [H, tph, output_nap]
 
-    pair_idx = pair_idx_per_slot.reshape(n_heads, tph * output_nap)  # [H, TP]
+    pair_idx = output_idx_per_table.reshape(n_heads, tph * output_nap)  # [H, TP]
     counts = torch.stack(
         [torch.bincount(pair_idx[h], minlength=P) for h in range(n_heads)], dim=0
     )  # [H, P]
@@ -90,7 +90,7 @@ def _build_output_structures_from_pairs(
         b_can.contiguous(),
         inv_idx.contiguous(),
         K_max,
-        pair_idx_per_slot.to(torch.int32).contiguous(),
+        output_idx_per_table.to(torch.int32).contiguous(),
     )
 
 
@@ -140,15 +140,121 @@ def _build_inv_idx(
     """Sample output pairs (default CANONICAL_FULL_COVERAGE) and build full
     structures.
 
-    Returns (idx_a, idx_b, inv_idx [int32], K_max, pair_idx_per_slot [int32])."""
+    Returns (idx_a, idx_b, inv_idx [int32], K_max, output_idx_per_table [int32])."""
     idx_a, idx_b = _sample_canonical_distinct_output_pairs(
         n_heads, tph, output_nap, n_outputs, random_seed, device,
         anchor_sampling_policy=anchor_sampling_policy,
     )
-    a, b, inv_idx, K_max, pair_idx_per_slot = _build_output_structures_from_pairs(
+    a, b, inv_idx, K_max, output_idx_per_table = _build_output_structures_from_pairs(
         idx_a, idx_b, n_heads, tph, output_nap, n_outputs, device,
     )
-    return a, b, inv_idx, K_max, pair_idx_per_slot
+    return a, b, inv_idx, K_max, output_idx_per_table
+
+
+def _sample_canonical_output_indices(
+    n_heads: int,
+    tph: int,
+    output_nap: int,
+    n_outputs: int,
+    random_seed: Optional[int],
+    device: torch.device,
+) -> torch.Tensor:
+    """Balanced full-coverage sampling of flat output channel indices with
+    per-table distinctness.
+
+    Returns: int64 [n_heads, tph, output_nap], values in [0, n_outputs).
+
+    Algorithm: per-head, concatenate `ceil(tph*output_nap / n_outputs)`
+    random permutations of [0, n_outputs) and reshape into [tph, output_nap].
+    When `n_outputs % output_nap == 0` (e.g. the frequent case
+    `output_nap == n_outputs`, or any divisor), table boundaries align with
+    permutation boundaries and every row is distinct by construction — no
+    repair pass is needed. Otherwise a greedy swap pass
+    (`_repair_intra_table_duplicates`) fixes the boundary tables where two
+    independent randperms mix. Mirrors `_get_canonical_full_coverage_pairs`
+    in lut_helpers but operates on flat output indices instead of pair
+    indices.
+
+    Requires `output_nap <= n_outputs`: a table with more vote slots than
+    distinct outputs would burn latent capacity on duplicate vote channels
+    (two slots in the same table contributing to the same output) — the
+    duplicates would alias gradient and waste bit budget — so this mode is
+    rejected at construction time.
+    """
+    if output_nap > n_outputs:
+        raise ValueError(
+            f"output_nap ({output_nap}) must be <= n_outputs ({n_outputs}); "
+            "with output_nap > n_outputs the per-table distinctness invariant "
+            "is infeasible (pigeonhole) and the LUT would burn latent bits on "
+            "duplicate vote channels — use a larger n_outputs or smaller output_nap."
+        )
+
+    if output_nap == n_outputs:
+        # Every table must be a full permutation of [0, n_outputs); since the
+        # bit_weights latents are independent per (head, table, slot), any
+        # constant per-head output permutation is equivalent up to relabeling
+        # of output channels. Use the identity arange and skip the randperm
+        # loop entirely.
+        base = torch.arange(n_outputs, device=device, dtype=torch.long)
+        return base.view(1, 1, n_outputs).expand(n_heads, tph, n_outputs).contiguous()
+
+    seed = (random_seed + 2_000_003) if random_seed is not None else None
+    gen = (
+        torch.Generator(device=device).manual_seed(seed)
+        if seed is not None else None
+    )
+    P = n_outputs
+    slots_per_head = tph * output_nap
+    repeats = (slots_per_head + P - 1) // P
+    aligned = (P % output_nap == 0)
+    out = torch.empty(n_heads, tph, output_nap, dtype=torch.long, device=device)
+    for h in range(n_heads):
+        perm_cat = torch.cat([
+            torch.randperm(P, device=device, generator=gen)
+            for _ in range(repeats)
+        ])[:slots_per_head]
+        per_head_table = perm_cat.view(tph, output_nap).contiguous()
+        if not aligned:
+            _repair_intra_table_duplicates(per_head_table)
+        out[h] = per_head_table
+    return out
+
+
+def _build_inv_idx_flat(
+    output_idx_per_table: torch.Tensor,
+    n_outputs: int,
+    n_heads: int,
+    tph: int,
+    output_nap: int,
+    device: torch.device,
+) -> Tuple[torch.Tensor, int]:
+    """Build inv_idx from a pre-existing flat output-index assignment.
+
+    output_idx_per_table : long [n_heads, tph, output_nap], values in [0, n_outputs).
+    Returns (inv_idx [n_heads, n_outputs, K_max] int32, K_max).
+    Same algorithm as `_build_output_structures_from_pairs`, generalized to
+    any flat output-index map (no pair semantics).
+    """
+    P = n_outputs
+    flat = output_idx_per_table.reshape(n_heads, tph * output_nap)
+    counts = torch.stack(
+        [torch.bincount(flat[h], minlength=P) for h in range(n_heads)], dim=0
+    )
+    K_max = int(counts.max().item())
+    TP = tph * output_nap
+    inv_idx = torch.full((n_heads, P, K_max), -1, dtype=torch.int32, device=device)
+    sort_order = flat.argsort(dim=1, stable=True)
+    sorted_idx = flat.gather(1, sort_order)
+    starts = torch.cat(
+        [torch.zeros(n_heads, 1, dtype=counts.dtype, device=device),
+         counts.cumsum(dim=1)[:, :-1]],
+        dim=1,
+    )
+    pos = torch.arange(TP, device=device).unsqueeze(0).expand(n_heads, -1)
+    within_group = pos - starts.gather(1, sorted_idx)
+    h_idx = torch.arange(n_heads, device=device).unsqueeze(1).expand(-1, TP)
+    inv_idx[h_idx, sorted_idx, within_group] = sort_order.to(torch.int32)
+    return inv_idx.contiguous(), K_max
 
 
 class _VoteGatherFn(torch.autograd.Function):
@@ -245,7 +351,7 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         latent_fp8,              # fp8   [n_heads*tph, table_dim, output_nap] (soft backward)
         latent_scale,            # float32 [n_heads*tph, 1, 1] per-table scale
         inv_idx,                 # int32 [n_heads, P, K]
-        pair_idx_per_slot,       # int32 [n_heads, tph, output_nap]
+        output_idx_per_table,       # int32 [n_heads, tph, output_nap]
         n_heads,
         tph,
         output_nap,
@@ -267,11 +373,11 @@ class _BitPermLutDomFunction(torch.autograd.Function):
         if soft_backward:
             # Soft backward needs latent + its per-table scale.
             ctx.save_for_backward(
-                lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot,
+                lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, output_idx_per_table,
             )
         else:
             ctx.save_for_backward(
-                lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot,
+                lookup_indices, lookup_alt_indices, bit_weights, output_idx_per_table,
             )
         ctx.n_heads = int(n_heads)
         ctx.tph = int(tph)
@@ -285,31 +391,31 @@ class _BitPermLutDomFunction(torch.autograd.Function):
     def backward(ctx, grad_out):
         native = _get_bit_permlut_native()
         if ctx.soft_backward:
-            lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot = ctx.saved_tensors
+            lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, output_idx_per_table = ctx.saved_tensors
             # Dispatch on latent dtype.
             if latent_fp8.dtype == torch.float32:
                 grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward_latent_f32(
                     grad_out.contiguous().to(torch.float32),
-                    lookup_indices, lookup_alt_indices, latent_fp8, pair_idx_per_slot,
+                    lookup_indices, lookup_alt_indices, latent_fp8, output_idx_per_table,
                     ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
                 )
             elif latent_fp8.dtype == torch.bfloat16:
                 grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward_latent_bf16(
                     grad_out.contiguous().to(torch.float32),
-                    lookup_indices, lookup_alt_indices, latent_fp8, pair_idx_per_slot,
+                    lookup_indices, lookup_alt_indices, latent_fp8, output_idx_per_table,
                     ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
                 )
             else:
                 grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward_latent(
                     grad_out.contiguous().to(torch.float32),
-                    lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, pair_idx_per_slot,
+                    lookup_indices, lookup_alt_indices, latent_fp8, latent_scale, output_idx_per_table,
                     ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
                 )
         else:
-            lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot = ctx.saved_tensors
+            lookup_indices, lookup_alt_indices, bit_weights, output_idx_per_table = ctx.saved_tensors
             grad_main, grad_alt = native.bit_perm_lut_dom_gather_backward(
                 grad_out.contiguous().to(torch.float32),
-                lookup_indices, lookup_alt_indices, bit_weights, pair_idx_per_slot,
+                lookup_indices, lookup_alt_indices, bit_weights, output_idx_per_table,
                 ctx.n_heads, ctx.tph, ctx.output_nap, ctx.n_pairs, ctx.scale,
             )
         # 15 forward inputs → 15 gradient returns. Only the two carriers receive gradient.
@@ -322,7 +428,7 @@ class _BitPermLutDomFunction(torch.autograd.Function):
             None,         # latent_fp8
             None,         # latent_scale
             None,         # inv_idx
-            None,         # pair_idx_per_slot
+            None,         # output_idx_per_table
             None, None, None, None, None, None,  # scalars incl. soft_backward
         )
 
@@ -511,21 +617,174 @@ class BitPermutationLUTInput(nn.Module):
         self.bit_weights.copy_(packed.to(self.bit_weights.device))
 
 
-class BitPermutationLUT(BitPermutationLUTInput):
-    """1-bit-weight PermutationalLut for bit-level inference.
+class BitMultiHeadLUT(BitPermutationLUTInput):
+    """Generic multi-head bit-LUT mapping input to output via sparse voting.
 
-    Forward: x (float) -> dominance (float [B, n_heads, P]).
-    Backward is stubbed — `bit_weights` is a buffer (not a Parameter).
+    Forward: x (float [B, n_inputs]) -> votes (float [B, n_heads, n_outputs]).
+    Each output channel accumulates the sum of ±1 bit votes drawn from
+    `tph * output_nap` table slots through `inv_idx`. The output is purely a
+    flat voting space; downstream is free to interpret it as pair-dominance,
+    logits, or any other vector.
 
     Args:
-        n_inputs:      input dimension
-        n_outputs:     output dimension (embedding of the downstream block)
-        n_heads:       number of heads (logical — n_tables = n_heads * tph)
-        input_nap:     anchor pairs per table for input lookup (<= 16)
-        output_nap:    signed votes per table (packed as bits)
-        tph:           tables per head
-        random_seed:   seed for anchor and output-pair sampling
-        device:        target device
+        n_inputs:               input dimension.
+        n_outputs:              flat output dimension P (number of voting
+                                channels).
+        n_heads:                number of heads (logical — n_tables = n_heads * tph).
+        input_nap:              anchor pairs per table for input lookup (<= 15).
+        output_nap:             signed votes per table (packed as bits).
+        tph:                    tables per head.
+        random_seed:            seed for anchor and output-channel sampling.
+        output_idx_per_table:   optional override for the
+                                [n_heads, tph, output_nap] integer tensor
+                                mapping (head, table, anchor-pair-slot) ->
+                                output channel in [0, n_outputs). If None,
+                                balanced canonical-coverage sampling is used.
+                                Wrappers (e.g. BitPermutationLUT) pass a
+                                pre-built map to layer pair semantics on top
+                                of this generic core.
+    """
+
+    def __init__(
+        self,
+        n_inputs: int,
+        n_outputs: int,
+        n_heads: int,
+        input_nap: int,
+        output_nap: int,
+        tph: int,
+        random_seed: Optional[int] = None,
+        initial_weights_noise: float = 0.001,
+        soft_backward: bool = False,
+        latent_dtype: str = 'fp8',
+        device: Optional[torch.device] = None,
+        partition_sets: Optional[list] = None,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        input_anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        output_idx_per_table: Optional[torch.Tensor] = None,
+        scale: float = 1.0,
+    ):
+        input_policy = (
+            input_anchor_sampling_policy
+            if input_anchor_sampling_policy is not None
+            else anchor_sampling_policy
+        )
+        super().__init__(
+            n_inputs=n_inputs, n_heads=n_heads,
+            input_nap=input_nap, output_nap=output_nap, tph=tph,
+            random_seed=random_seed,
+            initial_weights_noise=initial_weights_noise,
+            latent_dtype=latent_dtype, device=device,
+            partition_sets=partition_sets,
+            anchor_sampling_policy=input_policy,
+        )
+        dev = self.bit_weights.device
+        if n_outputs < 1:
+            raise ValueError(f"n_outputs must be >= 1, got {n_outputs}")
+        self.n_outputs = int(n_outputs)
+
+        if output_idx_per_table is None:
+            output_idx_per_table = _sample_canonical_output_indices(
+                n_heads=n_heads, tph=tph, output_nap=output_nap,
+                n_outputs=n_outputs, random_seed=random_seed, device=dev,
+            )
+        else:
+            if tuple(output_idx_per_table.shape) != (n_heads, tph, output_nap):
+                raise ValueError(
+                    "output_idx_per_table must have shape "
+                    f"[n_heads={n_heads}, tph={tph}, output_nap={output_nap}], "
+                    f"got {tuple(output_idx_per_table.shape)}"
+                )
+            output_idx_per_table = output_idx_per_table.to(dev, dtype=torch.long)
+
+        inv_idx, K_max = _build_inv_idx_flat(
+            output_idx_per_table, self.n_outputs, n_heads, tph, output_nap, dev,
+        )
+        self.register_buffer('inv_idx', inv_idx.contiguous())
+        self.register_buffer(
+            'output_idx_per_table',
+            output_idx_per_table.to(torch.int32).contiguous(),
+        )
+        self.K_max = K_max
+
+        # `self.scale` is applied to the int vote-sum kernel output (forward
+        # and backward). Default 1.0 = raw sums in [-K, +K] with K ≤ K_max;
+        # the caller is free to follow up with normalization / learnable
+        # scale / LayerNorm. Wrappers with a fixed downstream interpretation
+        # (e.g. BitPermutationLUT for pair-dominance) pass an explicit value.
+        self.scale = float(scale)
+        self.soft_backward = bool(soft_backward)
+
+    def get_bit_weights_as_signs(self) -> torch.Tensor:
+        """Decode bit_weights to ±1 float tensor [N, table_dim, output_nap]."""
+        out = torch.empty(
+            self.n_heads * self.tph, self.table_dim, self.output_nap,
+            device=self.bit_weights.device, dtype=torch.float32,
+        )
+        for k in range(self.output_nap):
+            block_idx = k // 32
+            bit_pos = k % 32
+            bit = (self.bit_weights[:, :, block_idx] >> bit_pos) & 1
+            out[:, :, k] = (2 * bit - 1).to(torch.float32)
+        return out
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run anchor lookup, then bit gather.
+
+        x: float [B, input_dim]
+        returns: float [B, n_heads, n_outputs]
+        """
+        if not x.is_cuda:
+            raise RuntimeError("BitMultiHeadLUT is CUDA-only")
+        if _get_bit_permlut_native() is None:
+            raise RuntimeError("lutorch_cuda native extension not available")
+
+        lookup_indices, lookup_alt_indices, _, carriers_main, carriers_alt = self.anchor(x)
+        if carriers_main is None:
+            # Eval / no-grad path: bypass autograd Function.
+            native = _get_bit_permlut_native()
+            out_int = native.bit_perm_lut_dom_gather_forward(
+                lookup_indices.contiguous(),
+                self.bit_weights.contiguous(),
+                self.inv_idx.contiguous(),
+                int(self.n_heads), int(self.tph), int(self.output_nap), int(self.n_outputs),
+            )
+            return out_int.to(x.dtype) * self.scale
+
+        # The autograd Function only reads the latent tensors in the soft
+        # backward path. For fp32 mode we pass latent_fp32 into the
+        # `latent_fp8` slot (dtype check happens at dispatch, downstream);
+        # `latent_scale` is unused for fp32.
+        if self.latent_dtype == 'fp8':
+            latent_fp8 = self.latent_fp8
+            latent_scale = self.latent_scale
+        elif self.latent_dtype == 'fp32':
+            latent_fp8 = self.latent_fp32
+            latent_scale = self.bit_weights   # placeholder
+        else:  # 'bf16'
+            latent_fp8 = self.latent_bf16
+            latent_scale = self.bit_weights   # placeholder
+        return _BitPermLutDomFunction.apply(
+            lookup_indices, lookup_alt_indices,
+            carriers_main, carriers_alt,
+            self.bit_weights, latent_fp8, latent_scale,
+            self.inv_idx, self.output_idx_per_table,
+            self.n_heads, self.tph, self.output_nap, self.n_outputs,
+            self.scale, self.soft_backward,
+        )
+
+
+class BitPermutationLUT(BitMultiHeadLUT):
+    """Pair-dominance specialization of BitMultiHeadLUT (legacy API).
+
+    Treats the output as the C(d_head, 2) pair-dominance vector for d_head
+    ranked items: each output channel corresponds to a canonical (a, b) pair
+    with a < b. Constructor signature is identical to the original
+    BitPermutationLUT — `n_outputs` here means the rank dim d_head, and the
+    actual output dim is P = d_head*(d_head-1)/2 (exposed as `n_pairs`).
+
+    For non-dominance use cases (logits, generic feature voting, etc.) use
+    BitMultiHeadLUT directly with `n_outputs` set to the literal output dim.
     """
 
     def __init__(
@@ -546,8 +805,11 @@ class BitPermutationLUT(BitPermutationLUTInput):
         input_anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         output_anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
     ):
-        # `anchor_sampling_policy` is a shortcut that sets both sides.
-        # The split kwargs take precedence when both are given.
+        if n_outputs < 2:
+            raise ValueError(f"n_outputs must be >= 2, got {n_outputs}")
+        d_head = int(n_outputs)
+        n_pairs = d_head * (d_head - 1) // 2
+
         input_policy = (
             input_anchor_sampling_policy
             if input_anchor_sampling_policy is not None
@@ -558,40 +820,60 @@ class BitPermutationLUT(BitPermutationLUTInput):
             if output_anchor_sampling_policy is not None
             else anchor_sampling_policy
         )
-        super().__init__(
-            n_inputs=n_inputs, n_heads=n_heads,
-            input_nap=input_nap, output_nap=output_nap, tph=tph,
-            random_seed=random_seed,
-            initial_weights_noise=initial_weights_noise,
-            latent_dtype=latent_dtype, device=device,
-            partition_sets=partition_sets,
-            anchor_sampling_policy=input_policy,
-        )
-        dev = self.bit_weights.device
 
-        if n_outputs < 2:
-            raise ValueError(f"n_outputs must be >= 2, got {n_outputs}")
-
-        self.n_outputs = n_outputs
-        self.n_pairs = n_outputs * (n_outputs - 1) // 2
-
-        # Output pair sampling (CANONICAL_FULL_COVERAGE by default) + inverse index.
-        idx_a, idx_b, inv_idx, K_max, pair_idx_per_slot = _build_inv_idx(
-            n_heads=n_heads, tph=tph, output_nap=output_nap,
-            n_outputs=n_outputs, random_seed=random_seed, device=dev,
+        # Sample (idx_a, idx_b) using the canonical pair sampler so seed
+        # determinism / pair coverage match the pre-redesign behaviour, then
+        # map (a, b) -> canonical triu pair index in [0, n_pairs) and pass
+        # the resulting flat index map to the BitMultiHeadLUT core.
+        dev = torch.device(device) if device is not None else torch.device("cpu")
+        idx_a, idx_b = _sample_canonical_distinct_output_pairs(
+            n_heads, tph, output_nap, d_head, random_seed, dev,
             anchor_sampling_policy=output_policy,
         )
-        self.register_buffer('idx_a', idx_a.contiguous())
-        self.register_buffer('idx_b', idx_b.contiguous())
-        self.register_buffer('inv_idx', inv_idx.contiguous())
-        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot.contiguous())
-        self.K_max = K_max
+        a_can = torch.minimum(idx_a, idx_b)
+        b_can = torch.maximum(idx_a, idx_b)
+        tri_i = torch.triu_indices(d_head, d_head, offset=1, device=dev)[0]
+        tri_j = torch.triu_indices(d_head, d_head, offset=1, device=dev)[1]
+        pair_map = torch.full((d_head, d_head), -1, dtype=torch.long, device=dev)
+        pair_range = torch.arange(n_pairs, device=dev)
+        pair_map[tri_i, tri_j] = pair_range
+        pair_map[tri_j, tri_i] = pair_range
+        output_idx_per_table = pair_map[a_can, b_can]
 
-        n_votes_per_pair = tph * output_nap / float(self.n_pairs)
-        self.scale = 0.5 / math.sqrt(n_votes_per_pair)
+        # Pair-dominance interpretation: each output is a sum of N ±1 votes
+        # where N ≈ tph*output_nap/n_pairs. CLT-normalize so the per-pair
+        # dominance lives at unit-variance scale (matching the legacy
+        # BitPermutationLUT contract that downstream Borda / DominanceToVector
+        # consumers depend on).
+        n_votes_per_pair = tph * output_nap / float(n_pairs)
+        dom_scale = 0.5 / math.sqrt(n_votes_per_pair)
+        super().__init__(
+            n_inputs=n_inputs,
+            n_outputs=n_pairs,
+            n_heads=n_heads,
+            input_nap=input_nap,
+            output_nap=output_nap,
+            tph=tph,
+            random_seed=random_seed,
+            initial_weights_noise=initial_weights_noise,
+            soft_backward=soft_backward,
+            latent_dtype=latent_dtype,
+            device=device,
+            partition_sets=partition_sets,
+            input_anchor_sampling_policy=input_policy,
+            output_idx_per_table=output_idx_per_table,
+            scale=dom_scale,
+        )
 
-        self.soft_backward = bool(soft_backward)
-        self.register_buffer('dom_borda_m', _canonical_borda_m(n_outputs, dev))
+        # Pair-dominance specifics. `self.n_outputs` from the parent equals
+        # n_pairs (the kernel output dim) and is required by the kernel call
+        # in `forward`; we also expose `n_pairs` and `d_head` so callers can
+        # query the rank dim explicitly.
+        self.d_head = d_head
+        self.n_pairs = n_pairs
+        self.register_buffer('idx_a', a_can.contiguous())
+        self.register_buffer('idx_b', b_can.contiguous())
+        self.register_buffer('dom_borda_m', _canonical_borda_m(d_head, dev))
 
     def load_pairs(
         self,
@@ -600,8 +882,8 @@ class BitPermutationLUT(BitPermutationLUTInput):
         idx_a: torch.Tensor,                  # [n_heads, tph*output_nap] OR [n_heads, tph, output_nap] integer
         idx_b: torch.Tensor,
     ) -> None:
-        """Replace the module's anchor_pairs and output-pair buffers with
-        externally-provided values and rebuild all derived structures.
+        """Replace anchor_pairs and output-pair buffers with externally
+        provided values and rebuild all derived structures.
 
         Non-canonical pairs (a > b) are silently swapped to canonical form
         (min, max). Duplicate pairs within a table are permitted (K_max just
@@ -627,70 +909,12 @@ class BitPermutationLUT(BitPermutationLUTInput):
         # --- output pairs + derived structures ---
         idx_a_r = idx_a.reshape(self.n_heads, self.tph, self.output_nap).to(dev, dtype=torch.long)
         idx_b_r = idx_b.reshape(self.n_heads, self.tph, self.output_nap).to(dev, dtype=torch.long)
-        a, b, inv_idx, K_max, pair_idx_per_slot = _build_output_structures_from_pairs(
-            idx_a_r, idx_b_r, self.n_heads, self.tph, self.output_nap, self.n_outputs, dev,
+        a, b, inv_idx, K_max, output_idx_per_table = _build_output_structures_from_pairs(
+            idx_a_r, idx_b_r, self.n_heads, self.tph, self.output_nap, self.d_head, dev,
         )
         # Replace buffers. `inv_idx` shape may change (new K_max), so use setattr via register_buffer.
         self.idx_a = a
         self.idx_b = b
         self.register_buffer('inv_idx', inv_idx)
-        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot)
+        self.register_buffer('output_idx_per_table', output_idx_per_table)
         self.K_max = K_max
-
-    def get_bit_weights_as_signs(self) -> torch.Tensor:
-        """Decode bit_weights to ±1 float tensor [N, table_dim, output_nap]."""
-        out = torch.empty(
-            self.n_heads * self.tph, self.table_dim, self.output_nap,
-            device=self.bit_weights.device, dtype=torch.float32,
-        )
-        for k in range(self.output_nap):
-            block_idx = k // 32
-            bit_pos = k % 32
-            bit = (self.bit_weights[:, :, block_idx] >> bit_pos) & 1
-            out[:, :, k] = (2 * bit - 1).to(torch.float32)
-        return out
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run anchor lookup, then bit gather.
-
-        x: float [B, input_dim]
-        returns: float [B, n_heads, P]  (dominance scores)
-        """
-        if not x.is_cuda:
-            raise RuntimeError("BitPermutationLUT is CUDA-only")
-        if _get_bit_permlut_native() is None:
-            raise RuntimeError("lutorch_cuda native extension not available")
-
-        lookup_indices, lookup_alt_indices, _, carriers_main, carriers_alt = self.anchor(x)
-        if carriers_main is None:
-            # Eval / no-grad path: bypass autograd Function.
-            native = _get_bit_permlut_native()
-            out_int = native.bit_perm_lut_dom_gather_forward(
-                lookup_indices.contiguous(),
-                self.bit_weights.contiguous(),
-                self.inv_idx.contiguous(),
-                int(self.n_heads), int(self.tph), int(self.output_nap), int(self.n_pairs),
-            )
-            return out_int.to(x.dtype) * self.scale
-
-        # The autograd Function only reads the latent tensors in the soft
-        # backward path. For fp32 mode we pass latent_fp32 into the
-        # `latent_fp8` slot (dtype check happens at dispatch, downstream);
-        # `latent_scale` is unused for fp32.
-        if self.latent_dtype == 'fp8':
-            latent_fp8 = self.latent_fp8
-            latent_scale = self.latent_scale
-        elif self.latent_dtype == 'fp32':
-            latent_fp8 = self.latent_fp32
-            latent_scale = self.bit_weights   # placeholder
-        else:  # 'bf16'
-            latent_fp8 = self.latent_bf16
-            latent_scale = self.bit_weights   # placeholder
-        return _BitPermLutDomFunction.apply(
-            lookup_indices, lookup_alt_indices,
-            carriers_main, carriers_alt,
-            self.bit_weights, latent_fp8, latent_scale,
-            self.inv_idx, self.pair_idx_per_slot,
-            self.n_heads, self.tph, self.output_nap, self.n_pairs,
-            self.scale, self.soft_backward,
-        )

@@ -8,13 +8,13 @@ Architecture (two sequential steps):
 Part 1 is the same fused kernel that powers BitPermutationLUT. The only
 differences are the voting-space size ``V_ex = output_tph · 2^output_nap``
 and the routing (per-table, not per-canonical-pair), both expressed via
-``pair_idx_per_slot_ex`` / ``inv_idx_ex`` buffers. This means:
+``output_idx_per_table_ex`` / ``inv_idx_ex`` buffers. This means:
 
   - the kernel is reused verbatim (no new CUDA code);
   - ``BitPermutationLUTOptimizer`` trains the latent unchanged — pass
     ``[lut.voting]`` to it; the optimizer's `grad_out` hook and
     `_project_grad_out_to_weight_grad` operate on whatever "pair" space
-    ``pair_idx_per_slot`` defines.
+    ``output_idx_per_table`` defines.
 
 Part 2:
   1. Reshape [B, H, V_ex] -> [B, H, output_tph, 2^output_nap].
@@ -58,7 +58,7 @@ def _build_routing_and_inv_idx(
 
     Returns
     -------
-    pair_idx_per_slot : int32 [H, input_tph, voting_nap]
+    output_idx_per_table : int32 [H, input_tph, voting_nap]
         target[h, t, v] ∈ [0, V) — the virtual pair each (table, slot)
         contributes to.
     inv_idx : int32 [H, V, K_max]
@@ -73,7 +73,7 @@ def _build_routing_and_inv_idx(
         0, V, (n_heads, input_tph, voting_nap),
         generator=gen, device=device, dtype=torch.long,
     )
-    pair_idx_per_slot = routing.to(torch.int32).contiguous()
+    output_idx_per_table = routing.to(torch.int32).contiguous()
 
     TP = input_tph * voting_nap
     routing_flat = routing.reshape(n_heads, TP)
@@ -95,7 +95,7 @@ def _build_routing_and_inv_idx(
     within_group = pos - starts.gather(1, routing_sorted)
     h_idx = torch.arange(n_heads, device=device).unsqueeze(1).expand(-1, TP)
     inv_idx[h_idx, routing_sorted, within_group] = sort_order.to(torch.int32)
-    return pair_idx_per_slot, inv_idx.contiguous(), K_max
+    return output_idx_per_table, inv_idx.contiguous(), K_max
 
 
 def _build_output_table_pairs(
@@ -136,7 +136,7 @@ class BitPermutationLUTVoting(BitPermutationLUTInput):
 
     This module is intentionally hookable by `BitPermutationLUTOptimizer`:
     pass `[ex.voting]` to the optimizer and it trains the latent normally.
-    `pair_idx_per_slot` and `inv_idx` are supplied externally so the parent
+    `output_idx_per_table` and `inv_idx` are supplied externally so the parent
     class (Ex) controls the routing.
     """
 
@@ -148,7 +148,7 @@ class BitPermutationLUTVoting(BitPermutationLUTInput):
         voting_nap: int,
         input_tph: int,
         V: int,
-        pair_idx_per_slot: torch.Tensor,   # int32 [H, input_tph, voting_nap]
+        output_idx_per_table: torch.Tensor,   # int32 [H, input_tph, voting_nap]
         inv_idx: torch.Tensor,              # int32 [H, V, K_max]
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
@@ -168,7 +168,7 @@ class BitPermutationLUTVoting(BitPermutationLUTInput):
         self.V = int(V)
         self.soft_backward = bool(soft_backward)
 
-        self.register_buffer('pair_idx_per_slot', pair_idx_per_slot.contiguous())
+        self.register_buffer('output_idx_per_table', output_idx_per_table.contiguous())
         self.register_buffer('inv_idx', inv_idx.contiguous())
 
         n_votes_per_V = input_tph * voting_nap / float(max(V, 1))
@@ -204,7 +204,7 @@ class BitPermutationLUTVoting(BitPermutationLUTInput):
         return _BitPermLutDomFunction.apply(
             lookup_indices, lookup_alt_indices, carriers_main, carriers_alt,
             self.bit_weights, latent_fp8, latent_scale,
-            self.inv_idx, self.pair_idx_per_slot,
+            self.inv_idx, self.output_idx_per_table,
             self.n_heads, self.tph, self.output_nap,
             self.V, self.scale, self.soft_backward,
         )
@@ -277,7 +277,7 @@ class BitPermutationLUTEx(nn.Module):
         self._uncertainty_mode_int = 0 if uncertainty_mode == UncertaintyMode.INVERSE_L1 else 1
 
         # Per-table routing + inv_idx over the virtual-pair space V_ex.
-        pair_idx_per_slot_ex, inv_idx_ex, K_max = _build_routing_and_inv_idx(
+        output_idx_per_table_ex, inv_idx_ex, K_max = _build_routing_and_inv_idx(
             n_heads=n_heads, input_tph=input_tph, voting_nap=voting_nap,
             V=self.V_ex, random_seed=random_seed, device=dev,
         )
@@ -288,7 +288,7 @@ class BitPermutationLUTEx(nn.Module):
             n_inputs=n_inputs, n_heads=n_heads,
             input_nap=input_nap, voting_nap=voting_nap, input_tph=input_tph,
             V=self.V_ex,
-            pair_idx_per_slot=pair_idx_per_slot_ex,
+            output_idx_per_table=output_idx_per_table_ex,
             inv_idx=inv_idx_ex,
             random_seed=random_seed,
             initial_weights_noise=initial_weights_noise,
@@ -419,7 +419,7 @@ class BitPermutationLUTLin(nn.Module):
         self.n_pairs = n_outputs * (n_outputs - 1) // 2
         self.V = int(V)
 
-        pair_idx_per_slot_ex, inv_idx_ex, K_max = _build_routing_and_inv_idx(
+        output_idx_per_table_ex, inv_idx_ex, K_max = _build_routing_and_inv_idx(
             n_heads=n_heads, input_tph=input_tph, voting_nap=voting_nap,
             V=self.V, random_seed=random_seed, device=dev,
         )
@@ -429,7 +429,7 @@ class BitPermutationLUTLin(nn.Module):
             n_inputs=n_inputs, n_heads=n_heads,
             input_nap=input_nap, voting_nap=voting_nap, input_tph=input_tph,
             V=self.V,
-            pair_idx_per_slot=pair_idx_per_slot_ex,
+            output_idx_per_table=output_idx_per_table_ex,
             inv_idx=inv_idx_ex,
             random_seed=random_seed,
             initial_weights_noise=initial_weights_noise,

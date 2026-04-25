@@ -90,7 +90,7 @@ def profile_one(name, cfg):
 
     def _dom_bwd():
         _ = native.bit_perm_lut_dom_gather_backward(
-            grad_out, li, lai, lut.bit_weights, lut.pair_idx_per_slot,
+            grad_out, li, lai, lut.bit_weights, lut.output_idx_per_table,
             int(lut.n_heads), int(lut.tph), int(lut.output_nap), int(lut.n_pairs), float(lut.scale),
         )
     t_dom_bwd = bench("  bit_perm_lut_dom_gather_backward", _dom_bwd)
@@ -99,7 +99,7 @@ def profile_one(name, cfg):
     wg_buf = opt._states[0]["wg_buffer"]
     def _proj():
         _ = _project_grad_out_to_weight_grad(
-            grad_out, li, lut.pair_idx_per_slot,
+            grad_out, li, lut.output_idx_per_table,
             lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             wg_buffer=wg_buf,
         )

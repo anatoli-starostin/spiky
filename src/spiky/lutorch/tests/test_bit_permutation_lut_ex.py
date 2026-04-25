@@ -71,7 +71,7 @@ def test_output_pair_indices_distinct_per_table():
 
 @CUDA_MARK
 def test_inv_idx_routing_consistency():
-    """For every (h, slot_idx) in inv_idx[v], pair_idx_per_slot at slot must equal v."""
+    """For every (h, slot_idx) in inv_idx[v], output_idx_per_table at slot must equal v."""
     lut = _make()
     voting_nap = lut.voting.output_nap
     input_tph = lut.voting.tph
@@ -83,7 +83,7 @@ def test_inv_idx_routing_consistency():
                     break
                 t = s // voting_nap
                 slot = s % voting_nap
-                assert lut.voting.pair_idx_per_slot[h, t, slot].item() == v
+                assert lut.voting.output_idx_per_table[h, t, slot].item() == v
 
 
 # ---------- gradient flow ----------

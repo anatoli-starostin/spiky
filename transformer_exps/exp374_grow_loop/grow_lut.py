@@ -61,7 +61,7 @@ def grow_lut(old: BitPermutationLUT, new_tph: int, seed: int) -> BitPermutationL
     new_idx_a_3d[:, :old_tph] = old_idx_a
     new_idx_b_3d[:, :old_tph] = old_idx_b
 
-    # Rebuild derived structures (inv_idx, pair_idx_per_slot, K_max) from the
+    # Rebuild derived structures (inv_idx, output_idx_per_table, K_max) from the
     # merged layout. `load_pairs` also canonicalizes anchors (min, max).
     new.load_pairs(
         anchor_pairs_a=new.anchor.anchor_pairs_a,

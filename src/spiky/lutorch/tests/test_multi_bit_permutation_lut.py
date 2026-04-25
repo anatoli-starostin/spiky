@@ -101,7 +101,7 @@ def test_forward_shape_and_finite(bit_width):
 
 def _forward_reference(m: MultiBitPermutationLUT, x: torch.Tensor) -> torch.Tensor:
     """Reference that decodes bit_weights as signed K-bit ints, gathers,
-    scatter-sums, and applies the midrise pair_bias. Matches the CUDA forward."""
+    scatter-sums, and applies the midrise output_bias. Matches the CUDA forward."""
     K = m.bit_width
     slots_per_block = 32 // K
     kmask = (1 << K) - 1
@@ -124,14 +124,14 @@ def _forward_reference(m: MultiBitPermutationLUT, x: torch.Tensor) -> torch.Tens
         B, N = li.shape
         n_ix = torch.arange(N, device=DEVICE).unsqueeze(0).expand(B, N)
         votes = W[n_ix, li]
-        pair_idx = m.pair_idx_per_slot.long()
+        pair_idx = m.output_idx_per_table.long()
         pair_flat = pair_idx.reshape(1, m.n_heads, m.tph * m.output_nap).expand(B, -1, -1)
         votes_h = votes.view(B, m.n_heads, m.tph * m.output_nap).to(torch.int32)
         out_int = torch.zeros(
             B, m.n_heads, m.n_pairs, dtype=torch.int32, device=DEVICE,
         )
         out_int.scatter_add_(2, pair_flat, votes_h)
-        return out_int.float() * m.scale + m.pair_bias
+        return out_int.float() * m.scale + m.output_bias
 
 
 @pytest.mark.parametrize("bit_width", [2, 4, 8])

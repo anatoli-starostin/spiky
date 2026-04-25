@@ -102,14 +102,14 @@ def _from_fp8_per_pair(
 def _project_grad_out_to_weight_grad(
     grad_out: torch.Tensor,            # [B, H, P] float
     lookup_indices: torch.Tensor,      # int16 [B, N]    (N = H*tph)
-    pair_idx_per_slot: torch.Tensor,   # int32 [H, tph, output_nap]
+    output_idx_per_table: torch.Tensor,   # int32 [H, tph, output_nap]
     n_heads: int, tph: int, output_nap: int, table_dim: int,
     scale: float,
 ) -> torch.Tensor:
     """Project dominance-output gradient back to per-entry weight gradient.
 
     Pure PyTorch scatter-add:
-      - Gather per-slot gradient from `grad_out` via `pair_idx_per_slot`.
+      - Gather per-slot gradient from `grad_out` via `output_idx_per_table`.
       - Scatter into the (entry_main(b, n)) row of wg[n] using index_add_.
 
     Shape of returned weight_grad: [N, table_dim, output_nap] float32.
@@ -121,7 +121,7 @@ def _project_grad_out_to_weight_grad(
     wg = torch.zeros(N, table_dim, output_nap, device=device, dtype=torch.float32)
 
     # For each (h, slot, k in output_nap): which canonical pair does this slot write?
-    pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
+    pair_flat = output_idx_per_table.reshape(n_heads, tph * output_nap).long()
     # Gather grad for each slot: g_slot[b, h, slot*nap + k] = grad_out[b, h, pair_flat[h, slot*nap + k]]
     g_slot = grad_out.gather(2, pair_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     g_slot = g_slot.reshape(B, N, output_nap).to(torch.float32)
@@ -250,7 +250,7 @@ class DraftBPLUTO:
 
             # (a) dY -> dW projection.
             weight_grad = _project_grad_out_to_weight_grad(
-                go, li, lut.pair_idx_per_slot,
+                go, li, lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             )
             # Non-finite grads → 0 (one bad batch should not poison fp8 state).
@@ -359,7 +359,7 @@ class DraftBPLUTOPerPair:
             # Global pair id for each (n, k): pair_id_per_slot[n, k] ∈ [0, H*P).
             # Does NOT depend on `entry` — all table_dim entries of the same
             # (n, k) write into the same canonical pair.
-            pair_local = lut.pair_idx_per_slot.long()        # [H, tph, nap]
+            pair_local = lut.output_idx_per_table.long()        # [H, tph, nap]
             h_idx = torch.arange(H, device=dev).view(-1, 1, 1)
             pair_global = pair_local + h_idx * P             # [H, tph, nap]
             pair_id_per_slot = pair_global.reshape(N, nap).contiguous()
@@ -486,7 +486,7 @@ class DraftBPLUTOPerPair:
 
             # (a) per-weight grad.
             weight_grad = _project_grad_out_to_weight_grad(
-                go, li, lut.pair_idx_per_slot,
+                go, li, lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             )
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
@@ -674,7 +674,7 @@ class DraftBPLUTOPerTable:
 
             # (a) per-weight grad.
             weight_grad = _project_grad_out_to_weight_grad(
-                go, li, lut.pair_idx_per_slot,
+                go, li, lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             )
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
@@ -832,7 +832,7 @@ class DraftBPLUTOPerSlot:
                 continue
 
             weight_grad = _project_grad_out_to_weight_grad(
-                go, li, lut.pair_idx_per_slot,
+                go, li, lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             )
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)
@@ -924,7 +924,7 @@ class DraftBPLUTOVPerPair:
             P = lut.n_pairs
             n_pairs_total = H * P
 
-            pair_local = lut.pair_idx_per_slot.long()
+            pair_local = lut.output_idx_per_table.long()
             h_idx = torch.arange(H, device=dev).view(-1, 1, 1)
             pair_id_per_slot = (pair_local + h_idx * P).reshape(N, nap).contiguous()
 
@@ -998,7 +998,7 @@ class DraftBPLUTOVPerPair:
 
             # (a) per-weight gradient.
             weight_grad = _project_grad_out_to_weight_grad(
-                go, li, lut.pair_idx_per_slot,
+                go, li, lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
             )
             torch.nan_to_num_(weight_grad, nan=0.0, posinf=0.0, neginf=0.0)

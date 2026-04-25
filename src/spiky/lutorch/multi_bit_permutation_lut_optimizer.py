@@ -31,7 +31,7 @@ def _get_native():
 def _project_grad_out_to_weight_grad_mb(
     grad_out: torch.Tensor,            # [B, n_heads, P] float32
     lookup_indices: torch.Tensor,      # int16 [B, n_heads*tph]
-    pair_idx_per_slot: torch.Tensor,   # int32 [n_heads, tph, output_nap]
+    output_idx_per_table: torch.Tensor,   # int32 [n_heads, tph, output_nap]
     n_heads: int,
     tph: int,
     output_nap: int,
@@ -62,7 +62,7 @@ def _project_grad_out_to_weight_grad_mb(
         native.bit_perm_lut_weight_grad(
             grad_out.contiguous().to(torch.float32),
             lookup_indices.contiguous(),
-            pair_idx_per_slot.contiguous(),
+            output_idx_per_table.contiguous(),
             wg,
             int(n_heads), int(tph), int(output_nap), int(table_dim),
             int(n_pairs),
@@ -71,7 +71,7 @@ def _project_grad_out_to_weight_grad_mb(
         return wg
 
     # Deterministic fallback: index_add_ scatter.
-    pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
+    pair_flat = output_idx_per_table.reshape(n_heads, tph * output_nap).long()
     g_slot = grad_out.gather(2, pair_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     g_slot = g_slot.reshape(B, N, output_nap).to(torch.float32)
     entries = lookup_indices.long()
@@ -177,7 +177,7 @@ class MultiBitPermutationLUTOptimizer:
 
             weight_grad = _project_grad_out_to_weight_grad_mb(
                 go, li,
-                lut.pair_idx_per_slot,
+                lut.output_idx_per_table,
                 lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
                 wg_buffer=state["wg_buffer"],
             )

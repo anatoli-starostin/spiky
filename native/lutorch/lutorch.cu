@@ -4871,7 +4871,7 @@ public:
         const torch::Tensor& raw,
         const torch::Tensor& pair_idx,
         const torch::Tensor& sign,
-        int64_t n_pairs,
+        int64_t n_outputs,
         int64_t soft_mode,
         double temperature,
         int64_t threads_per_block = 256
@@ -4922,7 +4922,7 @@ public:
         auto sign_c = sign.contiguous();
 
         auto opts = torch::TensorOptions().dtype(raw.dtype()).device(raw.device());
-        torch::Tensor out = torch::zeros({B, H, n_pairs}, opts);
+        torch::Tensor out = torch::zeros({B, H, n_outputs}, opts);
 
         c10::cuda::CUDAGuard guard(raw.device().index());
         int64_t total = B * H * T * P_slots;
@@ -4933,7 +4933,7 @@ public:
             scalar_t T_val = static_cast<scalar_t>(temperature);
             scalar_t inv_T = static_cast<scalar_t>(1.0 / temperature);
             perm_lut_dom_fwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
-                B, H, T, P_slots, n_pairs,
+                B, H, T, P_slots, n_outputs,
                 static_cast<int>(soft_mode),
                 T_val, inv_T,
                 reinterpret_cast<const scalar_t*>(raw_c.data_ptr()),
@@ -4958,7 +4958,7 @@ public:
         const torch::Tensor& raw,
         const torch::Tensor& inv_idx,
         const torch::Tensor& inv_sign,
-        int64_t n_pairs,
+        int64_t n_outputs,
         int64_t soft_mode,
         double temperature,
         int64_t threads_per_block = 256
@@ -4988,8 +4988,8 @@ public:
             throw py::value_error("raw total must be divisible by H");
         }
         int64_t TP = HTP / H;
-        if (P != n_pairs) {
-            throw py::value_error("inv_idx.size(1) must equal n_pairs");
+        if (P != n_outputs) {
+            throw py::value_error("inv_idx.size(1) must equal n_outputs");
         }
 
         auto raw_c = raw.contiguous().view({B, HTP});
@@ -5248,7 +5248,7 @@ public:
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         int64_t threads_per_block = 256
     ) {
         if (!lookup_indices.is_cuda() || !bit_weights.is_cuda() || !inv_idx.is_cuda()) {
@@ -5270,7 +5270,7 @@ public:
         int64_t n_blocks = bit_weights.size(2);
         int64_t expected_n_blocks = (output_nap + 31) / 32;
         if (n_blocks != expected_n_blocks) throw py::value_error("bit_weights.size(2) must equal ceil(output_nap / 32)");
-        if (inv_idx.size(0) != n_heads || inv_idx.size(1) != n_pairs) throw py::value_error("inv_idx shape mismatch");
+        if (inv_idx.size(0) != n_heads || inv_idx.size(1) != n_outputs) throw py::value_error("inv_idx shape mismatch");
         int64_t K = inv_idx.size(2);
 
         auto li_c = lookup_indices.contiguous();
@@ -5295,10 +5295,10 @@ public:
         // Empirically K>~128 wins; below that, thread-per-output is faster
         // because it keeps block-count manageable (especially when V is big).
         constexpr int32_t K_CROSSOVER = 128;
-        int64_t total_primary = B * n_heads * n_pairs;
+        int64_t total_primary = B * n_heads * n_outputs;
 
         if (K32 <= K_CROSSOVER) {
-            torch::Tensor out = torch::empty({B, n_heads, n_pairs}, opts_i32);
+            torch::Tensor out = torch::empty({B, n_heads, n_outputs}, opts_i32);
             int threads = static_cast<int>(threads_per_block);
             int blocks = static_cast<int>((total_primary + threads - 1) / threads);
             bit_perm_lut_dom_gather_fwd_small_k_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
@@ -5306,7 +5306,7 @@ public:
                 static_cast<int32_t>(n_heads),
                 static_cast<int32_t>(tph),
                 static_cast<int32_t>(n_blocks),
-                static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(n_outputs),
                 K32,
                 static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap),
@@ -5320,7 +5320,7 @@ public:
         }
 
         // Large-K path: pre-zero (atomicAdd accumulates), 4 warps/block.
-        torch::Tensor out = torch::zeros({B, n_heads, n_pairs}, opts_i32);
+        torch::Tensor out = torch::zeros({B, n_heads, n_outputs}, opts_i32);
         constexpr int32_t WARPS_PER_BLOCK = 4;
         constexpr int32_t CHUNK = 32;
         int32_t blocks_per_out = (K32 + CHUNK - 1) / CHUNK;
@@ -5334,7 +5334,7 @@ public:
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
             static_cast<int32_t>(n_blocks),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             K32,
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
@@ -5355,7 +5355,7 @@ public:
     //   lookup_indices      [B, n_heads*tph]    int16
     //   lookup_alt_indices  [B, n_heads*tph, 1] int16
     //   bit_weights         [n_heads*tph, table_dim, n_blocks] int32
-    //   pair_idx_per_slot   [n_heads, tph, output_nap] int32
+    //   output_idx_per_table   [n_heads, tph, output_nap] int32
     //   scale                scalar (0.5 / sqrt(n_votes_per_pair))
     // Returns (grad_main [B, n_heads*tph],
     //          grad_alt  [B, n_heads*tph, 1])  float32.
@@ -5367,27 +5367,27 @@ public:
         const torch::Tensor& lookup_indices,
         const torch::Tensor& lookup_alt_indices,
         const torch::Tensor& bit_weights,            // [N, table_dim, n_blocks] int32
-        const torch::Tensor& pair_idx_per_slot,
+        const torch::Tensor& output_idx_per_table,
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         int64_t threads_per_block = 256
     ) {
         if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
-            || !bit_weights.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            || !bit_weights.is_cuda() || !output_idx_per_table.is_cuda()) {
             throw py::value_error("all tensors must be CUDA");
         }
         if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
         if (lookup_indices.dtype()     != torch::kInt16) throw py::value_error("lookup_indices must be int16");
         if (lookup_alt_indices.dtype() != torch::kInt16) throw py::value_error("lookup_alt_indices must be int16");
         if (bit_weights.dtype()        != torch::kInt32) throw py::value_error("bit_weights must be int32");
-        if (pair_idx_per_slot.dtype()  != torch::kInt32) throw py::value_error("pair_idx_per_slot must be int32");
+        if (output_idx_per_table.dtype()  != torch::kInt32) throw py::value_error("output_idx_per_table must be int32");
 
         int64_t B = grad_out.size(0);
-        if (grad_out.dim() != 3 || grad_out.size(1) != n_heads || grad_out.size(2) != n_pairs)
-            throw py::value_error("grad_out must be [B, n_heads, n_pairs]");
+        if (grad_out.dim() != 3 || grad_out.size(1) != n_heads || grad_out.size(2) != n_outputs)
+            throw py::value_error("grad_out must be [B, n_heads, n_outputs]");
         if (bit_weights.dim() != 3 || bit_weights.size(0) != n_heads * tph)
             throw py::value_error("bit_weights.size(0) must equal n_heads*tph");
         int64_t table_dim = bit_weights.size(1);
@@ -5398,7 +5398,7 @@ public:
         auto li_c  = lookup_indices.contiguous();
         auto lai_c = lookup_alt_indices.contiguous();
         auto bw_c  = bit_weights.contiguous();
-        auto pi_c  = pair_idx_per_slot.contiguous();
+        auto pi_c  = output_idx_per_table.contiguous();
 
         auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
         torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
@@ -5416,7 +5416,7 @@ public:
             bit_perm_lut_dom_gather_bwd_kernel_warp<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_blocks), static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(n_blocks), static_cast<int32_t>(n_outputs),
                 static_cast<int32_t>(table_dim), static_cast<int32_t>(output_nap),
                 static_cast<float>(scale),
                 reinterpret_cast<const int16_t*>(li_c.data_ptr()),
@@ -5437,7 +5437,7 @@ public:
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
             static_cast<int32_t>(n_blocks),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
             static_cast<float>(scale),
@@ -5461,16 +5461,16 @@ public:
         const torch::Tensor& lookup_alt_indices,
         const torch::Tensor& latent_fp8,         // [N, table_dim, output_nap] fp8
         const torch::Tensor& latent_scale,        // [N, 1, 1] float32
-        const torch::Tensor& pair_idx_per_slot,
+        const torch::Tensor& output_idx_per_table,
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         int64_t threads_per_block = 256
     ) {
         if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
-            || !latent_fp8.is_cuda() || !latent_scale.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            || !latent_fp8.is_cuda() || !latent_scale.is_cuda() || !output_idx_per_table.is_cuda()) {
             throw py::value_error("all tensors must be CUDA");
         }
         if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
@@ -5487,7 +5487,7 @@ public:
         auto lai_c = lookup_alt_indices.contiguous();
         auto lat_c = latent_fp8.contiguous();
         auto lsc   = latent_scale.contiguous();
-        auto pi_c  = pair_idx_per_slot.contiguous();
+        auto pi_c  = output_idx_per_table.contiguous();
 
         auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
         torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
@@ -5506,7 +5506,7 @@ public:
             bit_perm_lut_dom_gather_bwd_latent_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(n_outputs), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap), static_cast<float>(scale),
                 reinterpret_cast<const int16_t*>(li_c.data_ptr()),
                 reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
@@ -5524,7 +5524,7 @@ public:
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
             static_cast<float>(scale),
@@ -5547,16 +5547,16 @@ public:
         const torch::Tensor& lookup_indices,
         const torch::Tensor& lookup_alt_indices,
         const torch::Tensor& latent_bf16,        // [N, table_dim, output_nap] bf16
-        const torch::Tensor& pair_idx_per_slot,
+        const torch::Tensor& output_idx_per_table,
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         int64_t threads_per_block = 256
     ) {
         if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
-            || !latent_bf16.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            || !latent_bf16.is_cuda() || !output_idx_per_table.is_cuda()) {
             throw py::value_error("all tensors must be CUDA");
         }
         if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
@@ -5571,7 +5571,7 @@ public:
         auto li_c  = lookup_indices.contiguous();
         auto lai_c = lookup_alt_indices.contiguous();
         auto lat_c = latent_bf16.contiguous();
-        auto pi_c  = pair_idx_per_slot.contiguous();
+        auto pi_c  = output_idx_per_table.contiguous();
 
         auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
         torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
@@ -5590,7 +5590,7 @@ public:
             bit_perm_lut_dom_gather_bwd_latent_bf16_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(n_outputs), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap), static_cast<float>(scale),
                 reinterpret_cast<const int16_t*>(li_c.data_ptr()),
                 reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
@@ -5607,7 +5607,7 @@ public:
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
             static_cast<float>(scale),
@@ -5629,16 +5629,16 @@ public:
         const torch::Tensor& lookup_indices,
         const torch::Tensor& lookup_alt_indices,
         const torch::Tensor& latent_f32,         // [N, table_dim, output_nap] float32
-        const torch::Tensor& pair_idx_per_slot,
+        const torch::Tensor& output_idx_per_table,
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         int64_t threads_per_block = 256
     ) {
         if (!grad_out.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()
-            || !latent_f32.is_cuda() || !pair_idx_per_slot.is_cuda()) {
+            || !latent_f32.is_cuda() || !output_idx_per_table.is_cuda()) {
             throw py::value_error("all tensors must be CUDA");
         }
         if (grad_out.dtype() != torch::kFloat32) throw py::value_error("grad_out must be float32");
@@ -5653,7 +5653,7 @@ public:
         auto li_c  = lookup_indices.contiguous();
         auto lai_c = lookup_alt_indices.contiguous();
         auto lat_c = latent_f32.contiguous();
-        auto pi_c  = pair_idx_per_slot.contiguous();
+        auto pi_c  = output_idx_per_table.contiguous();
 
         auto opts_f = torch::TensorOptions().dtype(torch::kFloat32).device(grad_out.device());
         torch::Tensor grad_main = torch::empty({B, n_heads * tph}, opts_f);
@@ -5672,7 +5672,7 @@ public:
             bit_perm_lut_dom_gather_bwd_latent_f32_kernel_warp<<<wblocks, wthreads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_pairs), static_cast<int32_t>(table_dim),
+                static_cast<int32_t>(n_outputs), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap), static_cast<float>(scale),
                 reinterpret_cast<const int16_t*>(li_c.data_ptr()),
                 reinterpret_cast<const int16_t*>(lai_c.data_ptr()),
@@ -5689,7 +5689,7 @@ public:
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads),
             static_cast<int32_t>(tph),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
             static_cast<float>(scale),
@@ -6230,7 +6230,7 @@ public:
         int64_t tph,
         int64_t output_nap,
         int64_t table_dim,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         int64_t threads_per_block = 256
     ) {
@@ -6242,7 +6242,7 @@ public:
         if (weight_grad.dtype() != torch::kFloat32) throw py::value_error("weight_grad must be float32");
         int64_t B = grad_out.size(0);
         int64_t N = n_heads * tph;
-        if (grad_out.size(1) != n_heads || grad_out.size(2) != n_pairs) throw py::value_error("grad_out shape mismatch");
+        if (grad_out.size(1) != n_heads || grad_out.size(2) != n_outputs) throw py::value_error("grad_out shape mismatch");
         if (lookup_indices.size(0) != B || lookup_indices.size(1) != N) throw py::value_error("lookup_indices shape mismatch");
         if (pair_idx.size(0) != n_heads || pair_idx.size(1) != tph || pair_idx.size(2) != output_nap)
             throw py::value_error("pair_idx shape mismatch");
@@ -6263,7 +6263,7 @@ public:
             static_cast<int32_t>(tph),
             static_cast<int32_t>(table_dim),
             static_cast<int32_t>(output_nap),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<float>(scale),
             reinterpret_cast<const int16_t*>(li.data_ptr()),
             reinterpret_cast<const int32_t*>(pi.data_ptr()),
@@ -6353,7 +6353,7 @@ public:
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         int64_t bit_width,
         int64_t threads_per_block = 256
     ) {
@@ -6375,7 +6375,7 @@ public:
         int64_t expected_blocks = (output_nap * bit_width + 31) / 32;
         if (bit_weights.size(0) != n_heads * tph || n_blocks_k != expected_blocks)
             throw py::value_error("bit_weights shape mismatch");
-        if (inv_idx.size(0) != n_heads || inv_idx.size(1) != n_pairs)
+        if (inv_idx.size(0) != n_heads || inv_idx.size(1) != n_outputs)
             throw py::value_error("inv_idx shape mismatch");
         int64_t K_inv = inv_idx.size(2);
 
@@ -6384,10 +6384,10 @@ public:
         auto iv = inv_idx.contiguous();
 
         auto opts = torch::TensorOptions().dtype(torch::kInt32).device(bit_weights.device());
-        torch::Tensor out = torch::empty({B, n_heads, n_pairs}, opts);
+        torch::Tensor out = torch::empty({B, n_heads, n_outputs}, opts);
 
         c10::cuda::CUDAGuard guard(bit_weights.device().index());
-        int64_t total = B * n_heads * n_pairs;
+        int64_t total = B * n_heads * n_outputs;
         int threads = static_cast<int>(threads_per_block);
         int blocks = static_cast<int>((total + threads - 1) / threads);
         auto stream = at::cuda::getCurrentCUDAStream();
@@ -6396,7 +6396,7 @@ public:
             multi_bit_dom_gather_fwd_kernel<2><<<blocks, threads, 0, stream>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_outputs),
                 static_cast<int32_t>(K_inv), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap),
                 reinterpret_cast<const int16_t*>(li.data_ptr()),
@@ -6408,7 +6408,7 @@ public:
             multi_bit_dom_gather_fwd_kernel<4><<<blocks, threads, 0, stream>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_outputs),
                 static_cast<int32_t>(K_inv), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap),
                 reinterpret_cast<const int16_t*>(li.data_ptr()),
@@ -6420,7 +6420,7 @@ public:
             multi_bit_dom_gather_fwd_kernel<8><<<blocks, threads, 0, stream>>>(
                 static_cast<int32_t>(B),
                 static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_pairs),
+                static_cast<int32_t>(n_blocks_k), static_cast<int32_t>(n_outputs),
                 static_cast<int32_t>(K_inv), static_cast<int32_t>(table_dim),
                 static_cast<int32_t>(output_nap),
                 reinterpret_cast<const int16_t*>(li.data_ptr()),
@@ -6444,7 +6444,7 @@ public:
         int64_t n_heads,
         int64_t tph,
         int64_t output_nap,
-        int64_t n_pairs,
+        int64_t n_outputs,
         double scale,
         double temperature = 0.0,
         int64_t threads_per_block = 256
@@ -6479,7 +6479,7 @@ public:
         multi_bit_dom_gather_bwd_latent_bf16_kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int32_t>(B),
             static_cast<int32_t>(n_heads), static_cast<int32_t>(tph),
-            static_cast<int32_t>(n_pairs),
+            static_cast<int32_t>(n_outputs),
             static_cast<int32_t>(table_dim), static_cast<int32_t>(output_nap),
             static_cast<float>(scale),
             static_cast<float>(temperature),
@@ -6737,7 +6737,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("raw"),
             py::arg("pair_idx"),
             py::arg("sign"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("soft_mode"),
             py::arg("temperature"),
             py::arg("threads_per_block") = 256
@@ -6748,7 +6748,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("raw"),
             py::arg("inv_idx"),
             py::arg("inv_sign"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("soft_mode"),
             py::arg("temperature"),
             py::arg("threads_per_block") = 256
@@ -6794,7 +6794,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("threads_per_block") = 256
         )
         .def(
@@ -6804,11 +6804,11 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_indices"),
             py::arg("lookup_alt_indices"),
             py::arg("bit_weights"),
-            py::arg("pair_idx_per_slot"),
+            py::arg("output_idx_per_table"),
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
@@ -6819,11 +6819,11 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_indices"),
             py::arg("lookup_alt_indices"),
             py::arg("latent_bf16"),
-            py::arg("pair_idx_per_slot"),
+            py::arg("output_idx_per_table"),
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
@@ -6834,11 +6834,11 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_indices"),
             py::arg("lookup_alt_indices"),
             py::arg("latent_f32"),
-            py::arg("pair_idx_per_slot"),
+            py::arg("output_idx_per_table"),
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
@@ -6850,11 +6850,11 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_alt_indices"),
             py::arg("latent_fp8"),
             py::arg("latent_scale"),
-            py::arg("pair_idx_per_slot"),
+            py::arg("output_idx_per_table"),
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
@@ -6966,7 +6966,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("tph"),
             py::arg("output_nap"),
             py::arg("table_dim"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("threads_per_block") = 256
         )
@@ -6989,7 +6989,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("bit_width"),
             py::arg("threads_per_block") = 256
         )
@@ -7004,7 +7004,7 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("n_heads"),
             py::arg("tph"),
             py::arg("output_nap"),
-            py::arg("n_pairs"),
+            py::arg("n_outputs"),
             py::arg("scale"),
             py::arg("temperature") = 0.0,
             py::arg("threads_per_block") = 256

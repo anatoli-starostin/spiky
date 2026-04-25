@@ -92,7 +92,7 @@ def _get_bit_permlut_native():
 def _project_grad_out_to_weight_grad(
     grad_out: torch.Tensor,            # [B, H, P] float
     lookup_indices: torch.Tensor,      # int16 [B, N]    (N = H*tph)
-    pair_idx_per_slot: torch.Tensor,   # int32 [H, tph, output_nap]
+    output_idx_per_table: torch.Tensor,   # int32 [H, tph, output_nap]
     n_heads: int,
     tph: int,
     output_nap: int,
@@ -129,7 +129,7 @@ def _project_grad_out_to_weight_grad(
         native.bit_perm_lut_weight_grad(
             grad_out.contiguous().to(torch.float32),
             lookup_indices.contiguous(),
-            pair_idx_per_slot.contiguous(),
+            output_idx_per_table.contiguous(),
             wg,
             int(n_heads), int(tph), int(output_nap), int(table_dim),
             int(n_pairs),
@@ -138,7 +138,7 @@ def _project_grad_out_to_weight_grad(
         return wg
 
     # Deterministic fallback: vectorized scatter via index_add_.
-    pair_flat = pair_idx_per_slot.reshape(n_heads, tph * output_nap).long()
+    pair_flat = output_idx_per_table.reshape(n_heads, tph * output_nap).long()
     g_slot = grad_out.gather(2, pair_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     g_slot = g_slot.reshape(B, N, output_nap).to(torch.float32)
     entries = lookup_indices.long()
@@ -183,6 +183,7 @@ class BitPermutationLUTOptimizer:
         weight_grad_gate_temperature: float = 0.1,
         weight_grad_gate_scale_matched: bool = True,
         lr_schedule_fn: Optional[Callable[[int], float]] = None,
+        grad_clip_norm: Optional[float] = None,
     ):
         if _FP8 is None:
             raise RuntimeError(
@@ -203,6 +204,7 @@ class BitPermutationLUTOptimizer:
                 f"weight_grad_gate_temperature must be > 0, got {weight_grad_gate_temperature}"
             )
         self.lr_schedule_fn = lr_schedule_fn
+        self.grad_clip_norm = grad_clip_norm
         self._step_count = 0
         self._handles: List = []
         self._states: List[dict] = []
@@ -293,8 +295,15 @@ class BitPermutationLUTOptimizer:
                 # ~0.04 ms per call; simpler than caching from forward().
                 with torch.no_grad():
                     li, _, _, _, _ = module.anchor(x)
+                # Also populate the legacy single-forward fields so callers
+                # that peek at state["grad_out"] continue to see the most
+                # recent values.
                 state["lookup_indices"] = li
-                output.register_hook(lambda g: state.__setitem__("grad_out", g.detach()))
+                def grad_hook(g):
+                    g_det = g.detach()
+                    state["grad_out"] = g_det
+                    state.setdefault("pairs", []).append((g_det, li))
+                output.register_hook(grad_hook)
         return hook
 
     # --- housekeeping ---
@@ -345,21 +354,58 @@ class BitPermutationLUTOptimizer:
         bias2 = 1.0 - self.beta2 ** self._step_count
         bias2_sqrt = math.sqrt(max(bias2, 1e-30))
 
+        # Global gradient clipping on grad_out across all modules AND all
+        # accumulated micro-batches. Computes total_norm across every (g, _)
+        # pair in every module's pairs list, then uniformly scales.
+        if self.grad_clip_norm is not None:
+            sq_sum = 0.0
+            for st in self._states:
+                for g, _ in st.get("pairs", []):
+                    sq_sum = sq_sum + float(g.float().pow(2).sum().item())
+            total_norm = math.sqrt(sq_sum)
+            if total_norm > self.grad_clip_norm:
+                scale = self.grad_clip_norm / (total_norm + 1e-12)
+                for st in self._states:
+                    for g, _ in st.get("pairs", []):
+                        g.mul_(scale)
+
         for lut, state in zip(self.modules, self._states):
-            go = state["grad_out"]
-            li = state.get("lookup_indices")
-            if go is None or li is None:
+            pairs = state.get("pairs", [])
+            if not pairs:
                 continue
 
             N = lut.n_heads * lut.tph
             numel = N * lut.table_dim * lut.output_nap
             wg_view = self._wg_buffer[:numel].view(N, lut.table_dim, lut.output_nap)
-            weight_grad = _project_grad_out_to_weight_grad(
-                go, li,
-                lut.pair_idx_per_slot,
-                lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
-                wg_buffer=wg_view,
-            )
+            # Project every accumulated (grad_out, lookup_indices) pair and
+            # sum into wg_view. For K=1 (no accumulation), this reduces to
+            # the original single-projection behavior.
+            wg_view.zero_()
+            _wg_scratch = None
+            for gi, (g_k, li_k) in enumerate(pairs):
+                if gi == 0:
+                    weight_grad = _project_grad_out_to_weight_grad(
+                        g_k, li_k,
+                        lut.output_idx_per_table,
+                        lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
+                        wg_buffer=wg_view,
+                    )
+                else:
+                    # Allocate per-call scratch for extra micro-batches; same
+                    # shape as wg_view. Keeps the shared buffer usable and
+                    # avoids re-zeroing.
+                    if _wg_scratch is None:
+                        _wg_scratch = torch.zeros_like(wg_view)
+                    else:
+                        _wg_scratch.zero_()
+                    extra = _project_grad_out_to_weight_grad(
+                        g_k, li_k,
+                        lut.output_idx_per_table,
+                        lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
+                        wg_buffer=_wg_scratch,
+                    )
+                    wg_view.add_(extra)
+            weight_grad = wg_view
 
             # Safety: replace any non-finite gradient entries with 0 in-place.
             # Element-wise masking keeps the update on the GPU (no d2h sync).
@@ -410,6 +456,7 @@ class BitPermutationLUTOptimizer:
                 self._refresh_weights(lut)
                 state["grad_out"] = None
                 state["lookup_indices"] = None
+                state["pairs"] = []
                 continue
 
             if state["mode"] == "bf16":
@@ -454,6 +501,7 @@ class BitPermutationLUTOptimizer:
                 self._refresh_weights(lut)
                 state["grad_out"] = None
                 state["lookup_indices"] = None
+                state["pairs"] = []
                 continue
 
             # fp8 mode: AdamW-style decoupled weight decay on latent (pre-step).
@@ -529,6 +577,7 @@ class BitPermutationLUTOptimizer:
             self._refresh_weights(lut)
             state["grad_out"] = None
             state["lookup_indices"] = None
+            state["pairs"] = []
 
     # --- introspection ---
     def state_as_float(self, idx: int = 0) -> dict:

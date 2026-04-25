@@ -275,14 +275,14 @@ def _reference_carrier_grads(
     lookup_indices: torch.Tensor,      # int16 [B, N]
     lookup_alt_indices: torch.Tensor,  # int16 [B, N, 1]
     signs: torch.Tensor,                # ±1 float [N, table_dim, output_nap]
-    pair_idx_per_slot: torch.Tensor,   # long [H, tph, output_nap]
+    output_idx_per_table: torch.Tensor,   # long [H, tph, output_nap]
     scale: float,
 ):
     B, H, _ = grad_out.shape
-    _, tph, output_nap = pair_idx_per_slot.shape
+    _, tph, output_nap = output_idx_per_table.shape
     N = H * tph
     # Per-slot gradient = scale * grad_out[b, h, pair_of(t, k)].
-    pair_idx_flat = pair_idx_per_slot.reshape(H, tph * output_nap)
+    pair_idx_flat = output_idx_per_table.reshape(H, tph * output_nap)
     grad_per_slot = grad_out.gather(2, pair_idx_flat.unsqueeze(0).expand(B, -1, -1)) * scale
     grad_per_slot = grad_per_slot.reshape(B, N, output_nap)
     # Gather ±1 signs for entry_main / entry_alt.
@@ -330,13 +330,13 @@ def test_backward_kernel_matches_pytorch_reference(
     # Hard STE (default): uses ±1 from bit_weights.
     grad_main_n, grad_alt_n = native.bit_perm_lut_dom_gather_backward(
         grad_out.contiguous(), lookup_indices, lookup_alt_indices,
-        lut.bit_weights, lut.pair_idx_per_slot,
+        lut.bit_weights, lut.output_idx_per_table,
         int(n_heads), int(tph), int(output_nap), int(P), float(lut.scale),
     )
     signs = lut.get_bit_weights_as_signs()
     grad_main_p, grad_alt_p = _reference_carrier_grads(
         grad_out, lookup_indices, lookup_alt_indices, signs,
-        lut.pair_idx_per_slot.long(), lut.scale,
+        lut.output_idx_per_table.long(), lut.scale,
     )
     assert torch.allclose(grad_main_n, grad_main_p, atol=1e-5, rtol=1e-5), \
         f"grad_main max|diff| = {(grad_main_n - grad_main_p).abs().max().item()}"
@@ -364,12 +364,12 @@ def test_backward_latent_kernel_matches_reference():
 
     grad_main_n, grad_alt_n = native.bit_perm_lut_dom_gather_backward_latent(
         grad_out.contiguous(), li, lai, lut.latent_fp8, lut.latent_scale,
-        lut.pair_idx_per_slot,
+        lut.output_idx_per_table,
         int(lut.n_heads), int(lut.tph), int(lut.output_nap), int(P), float(lut.scale),
     )
     latent_f32 = lut.latent_fp8.to(torch.float32) / lut.latent_scale
     grad_main_p, grad_alt_p = _reference_carrier_grads(
-        grad_out, li, lai, latent_f32, lut.pair_idx_per_slot.long(), lut.scale,
+        grad_out, li, lai, latent_f32, lut.output_idx_per_table.long(), lut.scale,
     )
     assert torch.allclose(grad_main_n, grad_main_p, atol=1e-5, rtol=1e-5)
     assert torch.allclose(grad_alt_n, grad_alt_p, atol=1e-5, rtol=1e-5)
@@ -468,7 +468,7 @@ def test_backward_end_to_end_matches_manual_tiny_apl_route():
     signs = lut.get_bit_weights_as_signs()
     grad_main, grad_alt = _reference_carrier_grads(
         grad_out, lookup_indices, lookup_alt_indices, signs,
-        lut.pair_idx_per_slot.long(), lut.scale,
+        lut.output_idx_per_table.long(), lut.scale,
     )
 
     # Feed grad_main, grad_alt through TinyAnchorPairsLookup's PyTorch backward.

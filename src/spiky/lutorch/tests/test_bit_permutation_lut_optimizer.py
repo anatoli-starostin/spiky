@@ -70,14 +70,14 @@ def test_weight_grad_projection_matches_bruteforce(
     grad_out = torch.randn(B, n_heads, P, device=dev)
 
     wg_vec = _project_grad_out_to_weight_grad(
-        grad_out, li, lut.pair_idx_per_slot,
+        grad_out, li, lut.output_idx_per_table,
         lut.n_heads, lut.tph, lut.output_nap, lut.table_dim, lut.scale,
     )
 
     # Brute-force reference
     N = n_heads * tph
     wg_ref = torch.zeros_like(wg_vec)
-    pair = lut.pair_idx_per_slot.long()
+    pair = lut.output_idx_per_table.long()
     for b in range(B):
         for n in range(N):
             h = n // tph
