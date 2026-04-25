@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp426_multibit_full",
+  "best_val_loss": 1.254476287961006,
+  "final_val_loss": 1.254476287961006,
+  "adam_params": 34792,
+  "n_bit_luts": 24,
+  "training_time_hours": 4.299
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp423_bit_nap64",
+  "best_val_loss": 1.40042205452919,
+  "final_val_loss": 1.40042205452919,
+  "adam_params": 34792,
+  "n_bit_luts": 25,
+  "training_time_hours": 0.622
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp414_atanh_head",
+  "best_val_loss": 1.5583552092313766,
+  "final_val_loss": 1.5583552092313766,
+  "adam_params": 34792,
+  "n_bit_luts": 25,
+  "training_time_hours": 0.384
+}

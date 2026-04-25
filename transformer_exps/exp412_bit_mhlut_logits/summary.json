@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp412_bit_mhlut_logits",
+  "best_val_loss": 1.4129406452178954,
+  "final_val_loss": 1.4129406452178954,
+  "adam_params": 34792,
+  "n_bit_luts": 25,
+  "training_time_hours": 0.384
+}

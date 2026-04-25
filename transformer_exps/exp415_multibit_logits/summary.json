@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp415_multibit_logits",
+  "best_val_loss": 1.3721052885055542,
+  "final_val_loss": 1.3721052885055542,
+  "adam_params": 34792,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.598
+}

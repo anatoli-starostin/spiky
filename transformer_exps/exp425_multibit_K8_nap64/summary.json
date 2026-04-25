@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp425_multibit_K8_nap64",
+  "best_val_loss": 1.413922694325447,
+  "final_val_loss": 1.413922694325447,
+  "adam_params": 34792,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.408
+}

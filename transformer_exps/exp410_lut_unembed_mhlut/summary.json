@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp410_lut_unembed_mhlut",
+  "best_val_loss": 1.4280824452638625,
+  "final_val_loss": 1.4280824452638625,
+  "adam_params": 2139942,
+  "n_bit_luts": 25,
+  "training_time_hours": 0.417
+}

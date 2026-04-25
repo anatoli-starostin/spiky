@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp422_multibit_in6_tph1536_nap128",
+  "best_val_loss": 1.3786806344985962,
+  "final_val_loss": 1.3786806344985962,
+  "adam_params": 34792,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.441
+}
