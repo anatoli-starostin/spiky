@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp041_vanilla_48k",
+  "description": "Capacity test for vanilla MinimalGPT baseline: exp001 (depth=6, n_embd=384, H=6, bs=8, lr=3e-4, final 1.6256 at 8k) extended to 48k steps. Direct comparison point for exp039 (rank-flow LUT, 48k → 1.6610). Tests whether vanilla also keeps descending or has plateaued well below.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 8,
+  "total_batch_size": 4096,
+  "n_steps": 48000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

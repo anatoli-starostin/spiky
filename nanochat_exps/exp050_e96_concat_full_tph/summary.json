@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp050_e96_concat_full_tph",
+  "best_val_bpb": 1.750867228717272,
+  "final_val_bpb": 1.751127478460974,
+  "adam_params": 60099974,
+  "n_bit_luts": 12,
+  "training_time_hours": 2.038
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp010_hybrid_linear_qk",
+  "best_val_bpb": 1.925303784837499,
+  "final_val_bpb": 1.925303784837499,
+  "adam_params": 14985472,
+  "n_bit_luts": 12,
+  "training_time_hours": 0.507
+}

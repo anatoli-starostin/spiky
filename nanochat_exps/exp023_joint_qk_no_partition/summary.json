@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp023_joint_qk_no_partition",
+  "best_val_bpb": 1.8167462011470346,
+  "final_val_bpb": 1.8167462011470346,
+  "adam_params": 14912518,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.763
+}

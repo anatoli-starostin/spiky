@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp012_out_l01_8192",
+  "best_val_bpb": 1.8356143075654336,
+  "final_val_bpb": 1.8359140993125747,
+  "adam_params": 14912518,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.577
+}

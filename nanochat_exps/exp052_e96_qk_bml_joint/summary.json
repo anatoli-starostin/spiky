@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp052_e96_qk_bml_joint",
+  "best_val_bpb": 1.7757711814232173,
+  "final_val_bpb": 1.7757711814232173,
+  "adam_params": 22352006,
+  "n_bit_luts": 18,
+  "training_time_hours": 2.758
+}

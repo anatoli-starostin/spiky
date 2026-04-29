@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp056_e144_dv24",
+  "best_val_bpb": 1.762764795674847,
+  "final_val_bpb": 1.762764795674847,
+  "adam_params": 33511238,
+  "n_bit_luts": 18,
+  "training_time_hours": 1.16
+}

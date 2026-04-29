@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp040_lr2e3_8k",
+  "best_val_bpb": 1.8430574737023768,
+  "final_val_bpb": 1.8430574737023768,
+  "adam_params": 14912518,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.597
+}

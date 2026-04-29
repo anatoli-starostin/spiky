@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp001_minimal_gpt",
+  "description": "First nanochat_exps experiment. Reproduces the MinimalGPT (vanilla GPT-2 baseline) from nanochat_walkthrough.ipynb Part 4. Uses nanochat's BPE tokenizer (V=32768, ClimbMix) and BOS-aligned best-fit dataloader. Provides a clean fp32-matmul baseline at the new vocab+data setup that future LUT-based experiments will compare against.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 8,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

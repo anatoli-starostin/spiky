@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp002_lut_e64_sumpos",
+  "best_val_bpb": 1.8783579225944,
+  "final_val_bpb": 1.8783579225944,
+  "adam_params": 53252422,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.572
+}

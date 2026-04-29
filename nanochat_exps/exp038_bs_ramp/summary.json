@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp038_bs_ramp",
+  "best_val_bpb": 1.8613695484924384,
+  "final_val_bpb": 1.8613695484924384,
+  "adam_params": 14912518,
+  "n_bit_luts": 24,
+  "training_time_hours": 1.064
+}

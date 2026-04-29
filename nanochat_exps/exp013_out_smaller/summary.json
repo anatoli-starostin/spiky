@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp013_out_smaller",
+  "best_val_bpb": 1.837059409388443,
+  "final_val_bpb": 1.8371073995350498,
+  "adam_params": 14912518,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.404
+}

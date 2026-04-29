@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp054_qk_sparse_deep",
+  "best_val_bpb": 1.7671035038682061,
+  "final_val_bpb": 1.7671035038682061,
+  "adam_params": 22352006,
+  "n_bit_luts": 18,
+  "training_time_hours": 1.546
+}

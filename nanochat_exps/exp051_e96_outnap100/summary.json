@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp051_e96_outnap100",
+  "best_val_bpb": 1.7187235693223453,
+  "final_val_bpb": 1.7187235693223453,
+  "adam_params": 60099974,
+  "n_bit_luts": 12,
+  "training_time_hours": 3.504
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp007_lut_dqk32",
+  "best_val_bpb": 1.8355968246024887,
+  "final_val_bpb": 1.8355968246024887,
+  "adam_params": 14912518,
+  "n_bit_luts": 24,
+  "training_time_hours": 1.021
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp037_dqk32_heads6_bs1",
+  "best_val_bpb": 2.034463196769398,
+  "final_val_bpb": 2.034463196769398,
+  "adam_params": 14912518,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.222
+}

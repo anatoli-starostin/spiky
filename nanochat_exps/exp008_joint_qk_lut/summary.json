@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp008_joint_qk_lut",
+  "best_val_bpb": 1.8482601218699823,
+  "final_val_bpb": 1.8482601218699823,
+  "adam_params": 14912326,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.468
+}

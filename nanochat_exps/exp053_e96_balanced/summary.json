@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp053_e96_balanced",
+  "best_val_bpb": 1.7947380841825529,
+  "final_val_bpb": 1.7947380841825529,
+  "adam_params": 22352006,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.776
+}

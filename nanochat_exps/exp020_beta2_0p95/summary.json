@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp020_beta2_0p95",
+  "best_val_bpb": 1.8286314478958228,
+  "final_val_bpb": 1.8291843319320373,
+  "adam_params": 14912518,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.892
+}

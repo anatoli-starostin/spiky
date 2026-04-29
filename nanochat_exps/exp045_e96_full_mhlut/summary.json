@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp045_e96_full_mhlut",
+  "best_val_bpb": 1.874748336090565,
+  "final_val_bpb": 1.874748336090565,
+  "adam_params": 53843660,
+  "training_time_hours": 0.754
+}

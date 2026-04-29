@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp042_qk_multiheadlut_joint",
+  "best_val_bpb": 1.7852084613537658,
+  "final_val_bpb": 1.7852084613537658,
+  "adam_params": 52660486,
+  "n_bit_luts": 12,
+  "training_time_hours": 1.375
+}

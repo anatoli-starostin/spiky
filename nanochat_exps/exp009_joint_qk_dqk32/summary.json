@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp009_joint_qk_dqk32",
+  "best_val_bpb": 1.8173611555684692,
+  "final_val_bpb": 1.8173611555684692,
+  "adam_params": 14912518,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.768
+}

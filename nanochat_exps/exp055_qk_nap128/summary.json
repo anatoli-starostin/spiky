@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp055_qk_nap128",
+  "best_val_bpb": 1.7697729997739615,
+  "final_val_bpb": 1.7697729997739615,
+  "adam_params": 22352006,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.996
+}

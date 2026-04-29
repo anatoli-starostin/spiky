@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp003_lut_linear_unembed",
+  "best_val_bpb": 1.8621791417511366,
+  "final_val_bpb": 1.8621791417511366,
+  "adam_params": 14912326,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.409
+}

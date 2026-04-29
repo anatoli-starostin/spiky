@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp044_dom_residual_raw",
+  "best_val_bpb": 1.8803961544689936,
+  "final_val_bpb": 1.8803961544689936,
+  "adam_params": 14936076,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.559
+}

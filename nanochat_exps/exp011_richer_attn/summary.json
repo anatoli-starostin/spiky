@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp011_richer_attn",
+  "best_val_bpb": 1.8194275479202895,
+  "final_val_bpb": 1.8194275479202895,
+  "adam_params": 14912518,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.571
+}

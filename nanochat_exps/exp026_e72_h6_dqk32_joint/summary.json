@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp026_e72_h6_dqk32_joint",
+  "best_val_bpb": 1.8414628866794234,
+  "final_val_bpb": 1.8414628866794234,
+  "adam_params": 16772390,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.598
+}

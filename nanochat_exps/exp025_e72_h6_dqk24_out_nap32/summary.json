@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp025_e72_h6_dqk24_out_nap32",
+  "best_val_bpb": 1.877041302948737,
+  "final_val_bpb": 1.877041302948737,
+  "adam_params": 16772198,
+  "n_bit_luts": 18,
+  "training_time_hours": 0.537
+}
