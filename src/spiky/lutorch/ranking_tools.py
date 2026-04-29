@@ -514,7 +514,9 @@ class DominanceToVector(nn.Module):
 
     def forward(self, d: torch.Tensor) -> torch.Tensor:
         # d: (..., P). einsum supports any leading dims.
-        v = torch.einsum('...p,kp->...k', d, self.borda_m)
+        # Cast borda_m to d.dtype so bf16/fp16 inputs don't trigger dtype
+        # mismatch (no-op when d is fp32, since `.to(same dtype)` returns self).
+        v = torch.einsum('...p,kp->...k', d, self.borda_m.to(d.dtype))
         if self.ln is not None:
             v = self.ln(v)
         return v

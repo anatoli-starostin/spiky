@@ -140,7 +140,7 @@ def _can_use_native_tiny_apl(x: torch.Tensor) -> bool:
     return (
         _USE_TINY_APL_CUSTOM_CUDA
         and x.is_cuda
-        and x.dtype in (torch.float32, torch.float64)
+        and x.dtype in (torch.float32, torch.float64, torch.float16, torch.bfloat16)
         and _get_tiny_apl_native() is not None
     )
 

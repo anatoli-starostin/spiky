@@ -2,6 +2,7 @@
 #include "../common/misc.h"
 #include "lutorch.h"
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/Atomic.cuh>
 
 #ifndef NO_CUDA
 #include <cuda_fp8.h>
@@ -546,8 +547,105 @@ __global__ void tiny_apl_bwd_kernel(
 
     int32_t idx1 = b * input_dim + static_cast<int32_t>(anchor1_ids_ptr[tid]);
     int32_t idx2 = b * input_dim + static_cast<int32_t>(anchor2_ids_ptr[tid]);
-    atomicAdd(x_grad_flat_ptr + idx1, du);
-    atomicAdd(x_grad_flat_ptr + idx2, -du);
+    // gpuAtomicAddNoReturn supports all float dtypes (fp16, bf16, fp32, fp64).
+    gpuAtomicAddNoReturn(x_grad_flat_ptr + idx1, du);
+    gpuAtomicAddNoReturn(x_grad_flat_ptr + idx2, -du);
+}
+
+// =====================================================================
+// TinyMultiHeadLut fused backward kernels (n_alternatives=1, non-smooth).
+//
+// Tiny's forward reduces gather over tables_per_head (tph) so grad_out is
+// shape [B, n_heads, n_outputs] instead of MHLut's [B, n_lookup_tables, O].
+// We need to map (b, t) → (b, h) where h = t / tph for both kernels.
+// =====================================================================
+
+// One thread per (b, t, o); atomic-adds grad_out[b, h, o] into
+// weights_grad_fp32[t, lookup_indices[b,t], o].
+//
+// Always accumulates in fp32 (native single-instruction atomicAdd) regardless
+// of upstream dtype — bf16/fp16 hardware atomics on H100 use a CAS loop that
+// is 3-4× slower than fp32. We cast to the user dtype once after the kernel
+// (single elementwise cast, much cheaper than the atomic-stage cost).
+template <typename scalar_t>
+__global__ void tiny_mhlut_bwd_na1_weights_kernel(
+    int64_t B,
+    int64_t n_lookup_tables,
+    int64_t tables_per_head,
+    int64_t n_outputs,
+    int64_t table_dim,
+    const scalar_t* __restrict__ grad_out_ptr,        // [B, n_heads, n_outputs]
+    const int64_t*  __restrict__ lookup_indices_ptr,  // [B, n_lookup_tables]
+    int64_t go_s0,
+    int64_t go_s1,
+    int64_t go_s2,
+    float* __restrict__ weights_grad_fp32_ptr         // [n_lookup_tables, table_dim, n_outputs]
+) {
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = B * n_lookup_tables * n_outputs;
+    if (linear_tid >= total) return;
+
+    int64_t bt = linear_tid / n_outputs;
+    int64_t o = linear_tid - bt * n_outputs;
+    int64_t b = bt / n_lookup_tables;
+    int64_t t = bt - b * n_lookup_tables;
+    int64_t h = t / tables_per_head;
+
+    float g = static_cast<float>(grad_out_ptr[b * go_s0 + h * go_s1 + o * go_s2]);
+    int64_t entry = lookup_indices_ptr[bt];
+    int64_t widx = (t * table_dim + entry) * n_outputs + o;
+    atomicAdd(weights_grad_fp32_ptr + widx, g);
+}
+
+// One thread per (b, t); loops over n_outputs to compute BOTH carrier dots:
+//   grad_main[b, t] = Σ_o grad_out[b, h_of_t, o] * weights[t, lookup_main[b,t], o]
+//   grad_alt[b, t]  = Σ_o grad_out[b, h_of_t, o] * weights[t, lookup_alt[b,t],  o]
+// Mirrors MHLut's `lprojection_backward_na1_carriers_kernel`. Both carriers
+// are required because TinyAnchorPairsLookup's bwd uses
+// `du = (grad_main - grad_alt) * uncertainty_derivative` for the STE update —
+// dropping grad_alt (treating it as zero) gives a wrong x.grad and breaks
+// numerical equivalence with MultiHeadLut.
+template <typename scalar_t>
+__global__ void tiny_mhlut_bwd_na1_carriers_kernel(
+    int64_t B,
+    int64_t n_lookup_tables,
+    int64_t tables_per_head,
+    int64_t n_outputs,
+    int64_t table_dim,
+    const scalar_t* __restrict__ grad_out_ptr,        // [B, n_heads, n_outputs]
+    const scalar_t* __restrict__ weights_ptr,         // [n_lookup_tables, table_dim, n_outputs]
+    const int64_t*  __restrict__ lookup_indices_ptr,
+    const int64_t*  __restrict__ lookup_alt_indices_ptr,
+    int64_t go_s0,
+    int64_t go_s1,
+    int64_t go_s2,
+    scalar_t* __restrict__ carrier_grad_main_ptr,     // [B, n_lookup_tables]
+    scalar_t* __restrict__ carrier_grad_alt_ptr       // [B, n_lookup_tables]
+) {
+    int64_t bt = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = B * n_lookup_tables;
+    if (bt >= total) return;
+
+    int64_t b = bt / n_lookup_tables;
+    int64_t t = bt - b * n_lookup_tables;
+    int64_t h = t / tables_per_head;
+
+    int64_t entry_main = lookup_indices_ptr[bt];
+    int64_t entry_alt  = lookup_alt_indices_ptr[bt];
+    int64_t base_main  = (t * table_dim + entry_main) * n_outputs;
+    int64_t base_alt   = (t * table_dim + entry_alt)  * n_outputs;
+
+    // fp32 accumulators so bf16/fp16 weights/grads don't lose precision over
+    // long inner-product chains (n_outputs can be E=96+).
+    float acc_main = 0.0f;
+    float acc_alt  = 0.0f;
+    for (int64_t o = 0; o < n_outputs; ++o) {
+        float g = static_cast<float>(grad_out_ptr[b * go_s0 + h * go_s1 + o * go_s2]);
+        acc_main += g * static_cast<float>(weights_ptr[base_main + o]);
+        acc_alt  += g * static_cast<float>(weights_ptr[base_alt  + o]);
+    }
+    carrier_grad_main_ptr[bt] = static_cast<scalar_t>(acc_main);
+    carrier_grad_alt_ptr[bt]  = static_cast<scalar_t>(acc_alt);
 }
 
 // =====================================================================
@@ -5149,7 +5247,7 @@ public:
         int threads = static_cast<int>(threads_per_block);
         int blocks = static_cast<int>((total + threads - 1) / threads);
 
-        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "tiny_apl_forward", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, x.scalar_type(), "tiny_apl_forward", [&] {
             tiny_apl_fwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 reinterpret_cast<const scalar_t*>(x_c.data_ptr()),
                 static_cast<int32_t>(B),
@@ -5214,7 +5312,7 @@ public:
         torch::Tensor gd_c;
         if (has_direct) gd_c = grad_direct.value().contiguous();
 
-        AT_DISPATCH_FLOATING_TYPES(lookup_alt_deltas.scalar_type(), "tiny_apl_backward", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, lookup_alt_deltas.scalar_type(), "tiny_apl_backward", [&] {
             const scalar_t* gd_ptr = has_direct ? reinterpret_cast<const scalar_t*>(gd_c.data_ptr()) : nullptr;
             tiny_apl_bwd_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
                 static_cast<int32_t>(total),
@@ -5231,6 +5329,113 @@ public:
         });
         CU_CHECK(cudaGetLastError());
         return x_grad_flat;
+    }
+
+    // -----------------------------------------------------------------
+    // TinyMultiHeadLut backward (n_alternatives=1, non-smooth, mode=sum).
+    //   Inputs:
+    //     grad_out:        [B, n_heads, n_outputs] (already reduced over tph)
+    //     weights:         [n_lookup_tables, table_dim, n_outputs]
+    //     lookup_indices:  [B, n_lookup_tables] int64 (n_lookup_tables = n_heads*tph)
+    //     tables_per_head: int (tph)
+    //   Returns: (weights_grad, carrier_grad)
+    //     weights_grad:    [n_lookup_tables, table_dim, n_outputs]
+    //     carrier_grad:    [B, n_lookup_tables]
+    //
+    // Equivalent to (in PyTorch):
+    //   gather = weights[arange(n_lookup_tables), lookup_indices, :]    # [B, T, O]
+    //   carrier_grad = (gather * grad_out.unsqueeze(2).expand(...)).sum(-1)
+    //   weights_grad.index_add_(0, fully_flat_idx, grad_out.expand_to_bag(...))
+    // but as two fused CUDA kernels modeled after lprojection_backward_na1_*.
+    // -----------------------------------------------------------------
+    py::tuple
+    tiny_mhlut_backward_na1(
+        const torch::Tensor& grad_out,             // [B, n_heads, n_outputs]
+        const torch::Tensor& weights,              // [n_lookup_tables, table_dim, n_outputs]
+        const torch::Tensor& lookup_indices,       // [B, n_lookup_tables] int64 (main)
+        const torch::Tensor& lookup_alt_indices,   // [B, n_lookup_tables] int64 (runner-up)
+        int64_t tables_per_head,
+        int64_t threads_per_block = 256
+    ) {
+        if (!grad_out.is_cuda() || !weights.is_cuda() || !lookup_indices.is_cuda() || !lookup_alt_indices.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (grad_out.dtype() != weights.dtype()) {
+            throw py::value_error("grad_out and weights must have same dtype");
+        }
+        if (!grad_out.is_floating_point()) {
+            throw py::value_error("grad_out/weights must be floating point");
+        }
+        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64) {
+            throw py::value_error("lookup_indices and lookup_alt_indices must be int64");
+        }
+        if (grad_out.dim() != 3 || weights.dim() != 3 || lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 2) {
+            throw py::value_error("expected grad_out [B,H,O], weights [T,E,O], lookup_(alt_)indices [B,T]");
+        }
+        if (lookup_indices.sizes() != lookup_alt_indices.sizes()) {
+            throw py::value_error("lookup_indices and lookup_alt_indices must have same shape");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in [1,1024]");
+        }
+        if (grad_out.device() != weights.device() || lookup_indices.device() != weights.device() || lookup_alt_indices.device() != weights.device()) {
+            throw py::value_error("all tensors must be on the same CUDA device");
+        }
+
+        int64_t B = lookup_indices.size(0);
+        int64_t n_lookup_tables = lookup_indices.size(1);
+        int64_t n_heads = grad_out.size(1);
+        int64_t n_outputs = weights.size(2);
+        int64_t table_dim = weights.size(1);
+
+        if (grad_out.size(0) != B) throw py::value_error("grad_out batch mismatch");
+        if (grad_out.size(2) != n_outputs) throw py::value_error("grad_out n_outputs mismatch");
+        if (weights.size(0) != n_lookup_tables) throw py::value_error("weights n_lookup_tables mismatch");
+        if (n_heads * tables_per_head != n_lookup_tables) {
+            throw py::value_error("n_heads * tables_per_head != n_lookup_tables");
+        }
+
+        auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
+        auto opts_fp32 = torch::TensorOptions().dtype(torch::kFloat32).device(weights.device());
+        torch::Tensor weights_grad_fp32 = torch::zeros(weights.sizes(), opts_fp32);
+        torch::Tensor carrier_grad_main = torch::empty({B, n_lookup_tables}, opts);
+        torch::Tensor carrier_grad_alt  = torch::empty({B, n_lookup_tables}, opts);
+
+        c10::cuda::CUDAGuard guard(weights.device().index());
+        int threads = static_cast<int>(threads_per_block);
+        int64_t total_w = B * n_lookup_tables * n_outputs;
+        int blocks_w = static_cast<int>((total_w + threads - 1) / threads);
+        int64_t total_c = B * n_lookup_tables;
+        int blocks_c = static_cast<int>((total_c + threads - 1) / threads);
+
+        int64_t go_s0 = grad_out.stride(0);
+        int64_t go_s1 = grad_out.stride(1);
+        int64_t go_s2 = grad_out.stride(2);
+
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16,
+            weights.scalar_type(), "tiny_mhlut_backward_na1", [&] {
+                tiny_mhlut_bwd_na1_weights_kernel<scalar_t><<<blocks_w, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                    B, n_lookup_tables, tables_per_head, n_outputs, table_dim,
+                    reinterpret_cast<const scalar_t*>(grad_out.data_ptr()),
+                    reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                    go_s0, go_s1, go_s2,
+                    reinterpret_cast<float*>(weights_grad_fp32.data_ptr())
+                );
+                tiny_mhlut_bwd_na1_carriers_kernel<scalar_t><<<blocks_c, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                    B, n_lookup_tables, tables_per_head, n_outputs, table_dim,
+                    reinterpret_cast<const scalar_t*>(grad_out.data_ptr()),
+                    reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                    reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                    reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                    go_s0, go_s1, go_s2,
+                    reinterpret_cast<scalar_t*>(carrier_grad_main.data_ptr()),
+                    reinterpret_cast<scalar_t*>(carrier_grad_alt.data_ptr())
+                );
+            });
+        CU_CHECK(cudaGetLastError());
+        torch::Tensor weights_grad = weights_grad_fp32.to(weights.dtype());
+        return py::make_tuple(weights_grad, carrier_grad_main, carrier_grad_alt);
     }
 
     // -----------------------------------------------------------------
@@ -6783,6 +6988,16 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("grad_main"),
             py::arg("grad_alt"),
             py::arg("grad_direct") = py::none(),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "tiny_mhlut_backward_na1",
+            &LUTorchManager::tiny_mhlut_backward_na1,
+            py::arg("grad_out"),
+            py::arg("weights"),
+            py::arg("lookup_indices"),
+            py::arg("lookup_alt_indices"),
+            py::arg("tables_per_head"),
             py::arg("threads_per_block") = 256
         )
         .def(
