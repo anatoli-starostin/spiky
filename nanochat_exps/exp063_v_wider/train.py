@@ -1,21 +1,17 @@
-"""nanochat_exps/exp061_tiny_mhlut — fp32 fork of exp060 using TinyMultiHeadLut.
+"""nanochat_exps/exp063_v_wider — fork of exp061 with wider V LUT.
 
-Same architecture and numerics as exp060 (E=96, d_qk=32, d_v=16, 6 layers,
-concat unembedder; full fp32). The only change is swapping MultiHeadLut →
-TinyMultiHeadLut to measure the pure kernel-speedup contribution of the
-native tiny_apl + tiny_mhlut_backward_na1 + embedding_bag forward path.
-
-After the alt-carrier bug fix in `_TinyMHLutGatherReduce`, TinyMultiHeadLut
-is provably numerically equivalent to MultiHeadLut at fp32
-(see `tests/test_tiny_vs_full_equivalence.py`). This run reproduces the
-exp060 trajectory and final 1.7114 bpb at higher throughput.
+Single change vs exp061: V TinyMultiHeadLut shape — n_anchor_pairs 7→6,
+tables_per_head 256→512. Param-invariant (tph * 2^nap = 32768 same), trades
+anchor-pair input dimensionality for 2x more parallel tables per head.
+Q/K and out_proj are unchanged. Same fp32 numerics, same hyperparams,
+same 8K steps.
 
 How to launch:
 
     PYTHONPATH=/home/starost/nanochat \\
         /home/starost/spiky/.venv/bin/python \\
-        -u nanochat_exps/exp061_tiny_mhlut/train.py \\
-        > nanochat_exps/exp061_tiny_mhlut/stdout.log 2>&1 &
+        -u nanochat_exps/exp063_v_wider/train.py \\
+        > nanochat_exps/exp063_v_wider/stdout.log 2>&1 &
 """
 import sys, os, json, math, time, csv
 import torch

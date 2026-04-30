@@ -1,21 +1,18 @@
-"""nanochat_exps/exp061_tiny_mhlut — fp32 fork of exp060 using TinyMultiHeadLut.
+"""nanochat_exps/exp064_no_v_dom — fork of exp061 with raw V into SDPA.
 
-Same architecture and numerics as exp060 (E=96, d_qk=32, d_v=16, 6 layers,
-concat unembedder; full fp32). The only change is swapping MultiHeadLut →
-TinyMultiHeadLut to measure the pure kernel-speedup contribution of the
-native tiny_apl + tiny_mhlut_backward_na1 + embedding_bag forward path.
-
-After the alt-carrier bug fix in `_TinyMHLutGatherReduce`, TinyMultiHeadLut
-is provably numerically equivalent to MultiHeadLut at fp32
-(see `tests/test_tiny_vs_full_equivalence.py`). This run reproduces the
-exp060 trajectory and final 1.7114 bpb at higher throughput.
+Single change vs exp061: drop the dominance encoding/decoding around V.
+V LUT outputs raw 16-dim vectors that go directly into SDPA (no V2D ->
+120-dim, no D2V back to 16). Q/K still go through V2D (ranking attention
+scores stay). v_v2d / attn_to_vec are param-free (Borda buffers only),
+so total params unchanged at 129.30M. Same fp32 numerics, same hyperparams,
+same 8K steps.
 
 How to launch:
 
     PYTHONPATH=/home/starost/nanochat \\
         /home/starost/spiky/.venv/bin/python \\
-        -u nanochat_exps/exp061_tiny_mhlut/train.py \\
-        > nanochat_exps/exp061_tiny_mhlut/stdout.log 2>&1 &
+        -u nanochat_exps/exp064_no_v_dom/train.py \\
+        > nanochat_exps/exp064_no_v_dom/stdout.log 2>&1 &
 """
 import sys, os, json, math, time, csv
 import torch
@@ -36,7 +33,7 @@ from nanochat.loss_eval import evaluate_bpb
 
 from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
-from spiky.lutorch.ranking_tools import DominanceToVector, VectorToDominance
+from spiky.lutorch.ranking_tools import VectorToDominance
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(EXP_DIR, 'config.json')) as f:
@@ -144,8 +141,6 @@ class LUTBlock(nn.Module):
 
         canon_t = cfg.get('canon_temperature', 0.1)
         self.qk_v2d = VectorToDominance(d_qk, smooth_mode=False, temperature=canon_t)
-        self.v_v2d  = VectorToDominance(d_v, smooth_mode=False, temperature=canon_t)
-        self.attn_to_vec = DominanceToVector(d_v, normalise=False)
         self.out_ln = nn.LayerNorm(E)
 
         self.pos_dim = _pos_emb_dim(layer_idx)
@@ -175,13 +170,11 @@ class LUTBlock(nn.Module):
         k = k_dom.reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)
 
         v_vec = self.v_lut(x_flat)                                     # [B*T, H, d_v]
-        v_dom = self.v_v2d(v_vec)
-        v_dom = v_dom.reshape(B, T, H, D_V_P).permute(0, 2, 1, 3)
+        v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3)             # [B, H, T, d_v]
 
-        attn_dom = F.scaled_dot_product_attention(
-            q * self.attn_scale, k, v_dom, is_causal=True,
-        )
-        attn = self.attn_to_vec(attn_dom)
+        attn = F.scaled_dot_product_attention(
+            q * self.attn_scale, k, v, is_causal=True,
+        )                                                               # [B, H, T, d_v]
 
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, H * d_v)
         out_real = self.out_proj(out_in).squeeze(1)                    # [B*T, E]

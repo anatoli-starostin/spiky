@@ -1,21 +1,18 @@
-"""nanochat_exps/exp061_tiny_mhlut — fp32 fork of exp060 using TinyMultiHeadLut.
+"""nanochat_exps/exp062_shared_pos — fork of exp061 with a single shared
+positional embedding across all 6 layers.
 
-Same architecture and numerics as exp060 (E=96, d_qk=32, d_v=16, 6 layers,
-concat unembedder; full fp32). The only change is swapping MultiHeadLut →
-TinyMultiHeadLut to measure the pure kernel-speedup contribution of the
-native tiny_apl + tiny_mhlut_backward_na1 + embedding_bag forward path.
-
-After the alt-carrier bug fix in `_TinyMHLutGatherReduce`, TinyMultiHeadLut
-is provably numerically equivalent to MultiHeadLut at fp32
-(see `tests/test_tiny_vs_full_equivalence.py`). This run reproduces the
-exp060 trajectory and final 1.7114 bpb at higher throughput.
+exp061 had `pos_embs = ParameterList([Param(T, E) for _ in range(6)])`, so each
+layer had its own pos table. exp062 replaces that with a single
+`pos_emb = Param(T, E)` added at every layer's input. Param cost: -245,760
+(5 dropped pos tables × 49,152 entries each). Everything else identical to
+exp061: same fp32 numerics, same hyperparams, same 8K steps.
 
 How to launch:
 
     PYTHONPATH=/home/starost/nanochat \\
         /home/starost/spiky/.venv/bin/python \\
-        -u nanochat_exps/exp061_tiny_mhlut/train.py \\
-        > nanochat_exps/exp061_tiny_mhlut/stdout.log 2>&1 &
+        -u nanochat_exps/exp062_shared_pos/train.py \\
+        > nanochat_exps/exp062_shared_pos/stdout.log 2>&1 &
 """
 import sys, os, json, math, time, csv
 import torch
@@ -194,12 +191,9 @@ class Model(nn.Module):
         super().__init__()
         self.token_embedder = nn.Embedding(VOCAB_SIZE, E)
         self.token_embedder.weight.data.uniform_(-0.1, 0.1)
-        _pos_dim_fn = _pos_emb_dim if _POS_EMB_ACTIVE else (lambda i: E)
         _pos_init_scale = cfg.get('pos_emb_init_scale', 0.1)
-        self.pos_embs = nn.ParameterList([
-            nn.Parameter(torch.randn(CONTEXT_SIZE, _pos_dim_fn(i)) * _pos_init_scale)
-            for i in range(N_LAYERS)
-        ])
+        # Single shared positional embedding applied at every layer's input.
+        self.pos_emb = nn.Parameter(torch.randn(CONTEXT_SIZE, E) * _pos_init_scale)
         self.layers = nn.ModuleList([LUTBlock(i) for i in range(N_LAYERS)])
         concat_dim = N_LAYERS * E
         self.unembedder = nn.Sequential(
@@ -213,8 +207,8 @@ class Model(nn.Module):
     def forward(self, tokens, targets=None, loss_reduction='mean'):
         x = self.token_embedder(tokens)                       # [B, T, E]
         outs = []
-        for layer, pos_emb in zip(self.layers, self.pos_embs):
-            x = layer(x, pos_emb)
+        for layer in self.layers:
+            x = layer(x, self.pos_emb)
             outs.append(x)
         concat = torch.cat(outs, dim=-1)
         logits = self.unembedder(concat)

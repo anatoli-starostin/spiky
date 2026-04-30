@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp061_tiny_mhlut",
+  "best_val_bpb": 1.7180594514010856,
+  "final_val_bpb": 1.7180594514010856,
+  "n_params": 129304838,
+  "training_time_hours": 0.466
+}

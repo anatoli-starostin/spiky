@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp062_shared_pos",
+  "best_val_bpb": 1.7223062860374934,
+  "final_val_bpb": 1.7223062860374934,
+  "n_params": 129059078,
+  "training_time_hours": 0.466
+}

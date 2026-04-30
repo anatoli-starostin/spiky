@@ -808,3 +808,263 @@ for token_id in mini.generate(prompt_ids_tensor, max_tokens=200, temperature=TEM
                                top_k=TOP_K, seq_len=SEQ_LEN):
     print(tokenizer.decode([token_id]), end="", flush=True)
 print(f"\n{'-'*60}")
+
+# %% [markdown]
+# ---
+# ## Part 5 — LUTorch GPT (`exp064` architecture)
+#
+# A from-scratch architecture built on **lookup tables** instead of dense matmuls.
+# This is `exp064` from `nanochat_exps/exp064_no_v_dom/`: final val_bpb ≈ 1.70 at
+# 8K steps on the same data and tokenizer used in Parts 3–4 — beats both the
+# nanochat GPT and MinimalGPT references at this step budget.
+#
+# Key design:
+# - **`TinyMultiHeadLut`** modules for Q/K joint, V, and out_proj. Each module is
+#   a bank of small lookup tables indexed by signed comparisons against learned
+#   anchor pairs in the input space — no dense matmul anywhere in the LUT path.
+# - **Q/K via dominance**: Q and K vectors are projected to all-pairs sign vectors
+#   (`d_qk·(d_qk−1)/2 = 496` dims) before SDPA — attention scores live in ranking
+#   space.
+# - **Raw V into SDPA**: the V LUT outputs 16-dim vectors used directly as
+#   attention values (no V dominance roundtrip — the single change vs. exp061
+#   that delivered ~−0.018 bpb).
+# - **Per-layer learnable position embeddings** (sum-mode), independent per layer.
+# - **Concat unembedder**: outputs of all 6 layers concatenated → LayerNorm →
+#   Linear → vocab.
+# - All-fp32 numerics (LUT weights, optimizer state, attention math). Single AdamW
+#   for the whole model.
+
+# %%
+from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.ranking_tools import VectorToDominance
+
+# Architecture hyperparameters (mirrors nanochat_exps/exp064_no_v_dom/config.json)
+LUT_E                 = 96
+LUT_H                 = 6
+LUT_D_QK              = 32
+LUT_D_V               = 16
+LUT_N_LAYERS          = 6
+LUT_QK_INPUT_NAP      = 6
+LUT_QK_TPH            = 256
+LUT_V_INPUT_NAP       = 7
+LUT_V_TPH             = 256
+LUT_OUT_INPUT_NAP     = 6
+LUT_OUT_TPH_PER_LAYER = [2048, 2048, 1024, 1024, 1024, 1024]
+LUT_CANON_T           = 0.1
+LUT_ATTN_SCALE_INIT   = 0.25
+LUT_INIT_STD          = 0.001
+LUT_POS_INIT_SCALE    = 0.1
+LUT_SEED              = 42
+
+LUT_D_QK_P = LUT_D_QK * (LUT_D_QK - 1) // 2
+
+
+def _make_qk_joint(layer_idx):
+    return TinyMultiHeadLut(
+        input_dim=LUT_E, n_heads=LUT_H, n_outputs=2 * LUT_D_QK,
+        n_anchor_pairs=LUT_QK_INPUT_NAP, tables_per_head=LUT_QK_TPH,
+        random_seed=LUT_SEED + layer_idx,
+        weight_dtype=torch.float32,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+    )
+
+def _make_v(layer_idx):
+    return TinyMultiHeadLut(
+        input_dim=LUT_E, n_heads=LUT_H, n_outputs=LUT_D_V,
+        n_anchor_pairs=LUT_V_INPUT_NAP, tables_per_head=LUT_V_TPH,
+        random_seed=LUT_SEED + 200 + layer_idx,
+        weight_dtype=torch.float32,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+    )
+
+def _make_out(layer_idx):
+    return TinyMultiHeadLut(
+        input_dim=LUT_H * LUT_D_V, n_heads=1, n_outputs=LUT_E,
+        n_anchor_pairs=LUT_OUT_INPUT_NAP,
+        tables_per_head=LUT_OUT_TPH_PER_LAYER[layer_idx],
+        random_seed=LUT_SEED + 400 + layer_idx,
+        weight_dtype=torch.float32,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+    )
+
+
+class LUTBlock(nn.Module):
+    """exp064 block: ranking attention with raw V into SDPA (no V dominance)."""
+
+    def __init__(self, layer_idx):
+        super().__init__()
+        self.qk_joint = _make_qk_joint(layer_idx)
+        self.v_lut    = _make_v(layer_idx)
+        self.out_proj = _make_out(layer_idx)
+        self.qk_v2d   = VectorToDominance(LUT_D_QK, smooth_mode=False, temperature=LUT_CANON_T)
+        self.out_ln   = nn.LayerNorm(LUT_E)
+        self.attn_scale = nn.Parameter(torch.tensor(float(LUT_ATTN_SCALE_INIT)))
+
+    def forward(self, x, pos_emb):
+        B, T, _ = x.shape
+        xp = (x + pos_emb.unsqueeze(0)).reshape(B * T, LUT_E)
+        x_flat = x.reshape(B * T, LUT_E)
+
+        qk_out = self.qk_joint(xp)                                        # [B*T, H, 2*d_qk]
+        q_dom  = self.qk_v2d(qk_out[..., :LUT_D_QK])
+        k_dom  = self.qk_v2d(qk_out[..., LUT_D_QK:])
+        q = q_dom.reshape(B, T, LUT_H, LUT_D_QK_P).permute(0, 2, 1, 3)
+        k = k_dom.reshape(B, T, LUT_H, LUT_D_QK_P).permute(0, 2, 1, 3)
+
+        v_vec = self.v_lut(x_flat)                                        # [B*T, H, d_v]
+        v = v_vec.reshape(B, T, LUT_H, LUT_D_V).permute(0, 2, 1, 3)
+
+        attn = F.scaled_dot_product_attention(
+            q * self.attn_scale, k, v, is_causal=True,
+        )                                                                  # [B, H, T, d_v]
+        out_in = attn.permute(0, 2, 1, 3).reshape(B * T, LUT_H * LUT_D_V)
+        out = self.out_proj(out_in).squeeze(1)                            # [B*T, E]
+        return self.out_ln(out).reshape(B, T, LUT_E)
+
+
+class LUTGPT(nn.Module):
+    def __init__(self, vocab_size, seq_len):
+        super().__init__()
+        torch.manual_seed(LUT_SEED)
+        self.token_embedder = nn.Embedding(vocab_size, LUT_E)
+        self.token_embedder.weight.data.uniform_(-0.1, 0.1)
+        self.pos_embs = nn.ParameterList([
+            nn.Parameter(torch.randn(seq_len, LUT_E) * LUT_POS_INIT_SCALE)
+            for _ in range(LUT_N_LAYERS)
+        ])
+        self.layers = nn.ModuleList([LUTBlock(i) for i in range(LUT_N_LAYERS)])
+        concat_dim = LUT_N_LAYERS * LUT_E
+        self.unembedder = nn.Sequential(
+            nn.LayerNorm(concat_dim),
+            nn.Linear(concat_dim, vocab_size),
+        )
+
+    def get_device(self):
+        return self.token_embedder.weight.device
+
+    def setup_optimizer(self, lr=3e-4, weight_decay=0.1):
+        decay_params   = [p for p in self.parameters() if p.ndim >= 2]
+        nodecay_params = [p for p in self.parameters() if p.ndim < 2]
+        groups = [
+            dict(params=decay_params,   lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
+            dict(params=nodecay_params, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
+        ]
+        opt = torch.optim.AdamW(groups)
+        for group in opt.param_groups:
+            group["initial_lr"] = group["lr"]
+        return opt
+
+    def forward(self, idx, targets=None, loss_reduction="mean"):
+        x = self.token_embedder(idx)
+        outs = []
+        for layer, pos_emb in zip(self.layers, self.pos_embs):
+            x = layer(x, pos_emb)
+            outs.append(x)
+        logits = self.unembedder(torch.cat(outs, dim=-1))
+        if targets is not None:
+            return F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1),
+                reduction=loss_reduction, ignore_index=-1,
+            )
+        return logits
+
+    @torch.inference_mode()
+    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, seq_len=512, seed=42):
+        rng = torch.Generator(device=tokens.device).manual_seed(seed)
+        ids = tokens
+        for _ in range(max_tokens):
+            ids_cond = ids[:, -seq_len:]
+            logits = self.forward(ids_cond)[:, -1, :]
+            if top_k:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float("Inf")
+            next_id = torch.multinomial(
+                F.softmax(logits / temperature, dim=-1),
+                num_samples=1, generator=rng,
+            )
+            ids = torch.cat((ids, next_id), dim=1)
+            yield next_id.item()
+
+
+# %%
+LUT_ITERS      = 8000
+LUT_EVAL_EVERY = 200
+
+lutgpt = LUTGPT(
+    vocab_size=tokenizer.get_vocab_size(),
+    seq_len=SEQ_LEN,
+).to(DEVICE)
+
+lut_params = sum(p.numel() for p in lutgpt.parameters())
+print(f"LUTGPT params: {lut_params:,}")
+
+lut_optimizer = lutgpt.setup_optimizer(lr=3e-4, weight_decay=0.1)
+
+lut_train_loader = tokenizing_distributed_data_loader_bos_bestfit(
+    tokenizer, DEVICE_BATCH_SIZE, SEQ_LEN, split="train", device=DEVICE
+)
+
+# %%
+lut_train_losses = []
+lut_val_bpbs     = []
+lut_val_steps    = []
+
+pbar = tqdm(range(1, LUT_ITERS + 1), desc="LUTGPT", unit="step")
+for step in pbar:
+    lr_scale = get_lr_scale(step, LUT_ITERS)
+    for group in lut_optimizer.param_groups:
+        group["lr"] = group["initial_lr"] * lr_scale
+
+    lut_optimizer.zero_grad(set_to_none=True)
+    x, y = next(lut_train_loader)
+    loss = lutgpt(x, y)
+    loss.backward()
+    lut_optimizer.step()
+    lut_train_losses.append(loss.item())
+
+    pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{lr_scale:.3f}")
+
+    if step % LUT_EVAL_EVERY == 0 or step == LUT_ITERS:
+        lutgpt.eval()
+        val_loader = val_loader_factory()
+        bpb = evaluate_bpb(lutgpt, val_loader, EVAL_STEPS, token_bytes)
+        lut_val_bpbs.append(bpb)
+        lut_val_steps.append(step)
+        tqdm.write(f"  Step {step:04d} | train_loss={loss.item():.4f} | val_bpb={bpb:.4f}")
+        lutgpt.train()
+
+print("LUTGPT training complete.")
+
+# %%
+# Comparison plot: LUTGPT vs MinimalGPT vs Nanochat GPT
+try:
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(val_steps,      val_bpbs,      "o-", label=f"Nanochat GPT (depth={DEPTH})")
+    ax.plot(mini_val_steps, mini_val_bpbs, "s-", label=f"Minimal GPT (depth={MIN_DEPTH})")
+    ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT exp064 (depth={LUT_N_LAYERS})")
+    ax.set(xlabel="step", ylabel="bits per byte", title="Validation BPB")
+    ax.grid(True); ax.legend()
+    plt.tight_layout()
+    plt.savefig("comparison_curves_lutgpt.png", dpi=120)
+    plt.show()
+except ImportError:
+    print("matplotlib not installed — skipping plot.")
+
+# %%
+# Generation demo for LUTGPT
+lutgpt.eval()
+prompt_ids_tensor = torch.tensor(
+    [tokenizer.encode(PROMPT, prepend="<|bos|>")], dtype=torch.long, device=DEVICE
+)
+print(f"LUTGPT generation:\n{'-'*60}")
+print(PROMPT, end="", flush=True)
+for token_id in lutgpt.generate(prompt_ids_tensor, max_tokens=200, temperature=TEMPERATURE,
+                                 top_k=TOP_K, seq_len=SEQ_LEN):
+    print(tokenizer.decode([token_id]), end="", flush=True)
+print(f"\n{'-'*60}")
