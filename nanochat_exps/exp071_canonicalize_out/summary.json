@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp071_canonicalize_out",
+  "best_val_bpb": 1.7088280949602563,
+  "final_val_bpb": 1.7088280949602563,
+  "n_params": 129304838,
+  "training_time_hours": 0.549
+}

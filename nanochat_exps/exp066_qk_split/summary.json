@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp066_qk_split",
+  "best_val_bpb": 1.7036936186146034,
+  "final_val_bpb": 1.7036936186146034,
+  "n_params": 129304838,
+  "training_time_hours": 0.449
+}

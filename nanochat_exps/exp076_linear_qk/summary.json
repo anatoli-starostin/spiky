@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp076_linear_qk",
+  "best_val_bpb": 1.8881941426189914,
+  "final_val_bpb": 1.8885272575975172,
+  "n_params": 92003078,
+  "training_time_hours": 0.669
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp074_random_pairs",
+  "best_val_bpb": 1.7261228520489436,
+  "final_val_bpb": 1.7261228520489436,
+  "n_params": 167053574,
+  "training_time_hours": 0.556
+}

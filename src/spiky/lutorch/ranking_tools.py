@@ -525,8 +525,18 @@ class DominanceToVector(nn.Module):
 class VectorToDominance(nn.Module):
     """All-pairs rank projection x → dominance vector.
 
-    Input:  x (..., d_head)
-    Output: d (..., P) with P = d_head·(d_head−1)/2
+    Default mode: full triu pair set.
+        Input:  x (..., d_head)
+        Output: d (..., P) with P = d_head·(d_head−1)/2
+
+    Random-subset mode (`n_pairs` set):
+        Pick a fixed random subset of `n_pairs ≤ d_head·(d_head−1)/2` index
+        pairs at init from the full triu set. Reduces output dimension and
+        downstream SDPA flop without changing parameters.
+
+    Per-head mode (`n_heads` set; requires `n_pairs`):
+        Each of `n_heads` heads gets its own independent random pair subset.
+        Input then expects `x` shape (..., n_heads, d_head).
 
     soft: d_p = (x_a − x_b) / (t + |x_a − x_b|)    in (−1, 1)
     hard: d_p = +1 if x_a > x_b else −1            in {−1, +1}
@@ -544,22 +554,54 @@ class VectorToDominance(nn.Module):
         d_head: int,
         smooth_mode: bool = False,
         temperature: float = 0.1,
+        n_pairs: int | None = None,
+        n_heads: int | None = None,
+        random_seed: int = 42,
     ):
         super().__init__()
         self.d_head = d_head
         self.smooth_mode = smooth_mode
         self.temperature = temperature
-        tri_i, tri_j = torch.triu_indices(d_head, d_head, offset=1)
-        pairs = torch.stack([tri_i, tri_j])   # (2, P)
+
+        if n_pairs is None:
+            tri_i, tri_j = torch.triu_indices(d_head, d_head, offset=1)
+            pairs = torch.stack([tri_i, tri_j])           # (2, P_full)
+            self.per_head = False
+        else:
+            all_pairs = torch.combinations(torch.arange(d_head), 2)  # (P_full, 2)
+            P_full = all_pairs.size(0)
+            assert 0 < n_pairs <= P_full, f"n_pairs={n_pairs} must be in (0, {P_full}]"
+            rng = torch.Generator().manual_seed(random_seed)
+            if n_heads is None:
+                idx = torch.randperm(P_full, generator=rng)[:n_pairs]
+                pairs = all_pairs[idx].T.contiguous()     # (2, n_pairs)
+                self.per_head = False
+            else:
+                idx = torch.stack([
+                    torch.randperm(P_full, generator=rng)[:n_pairs]
+                    for _ in range(n_heads)
+                ])                                        # (H, n_pairs)
+                pairs = torch.stack(
+                    [all_pairs[idx[h]].T for h in range(n_heads)]
+                )                                         # (H, 2, n_pairs)
+                self.per_head = True
         self.register_buffer('pairs', pairs)
 
+    def _ab(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.per_head:
+            # x: (..., H, d_head)   pairs: (H, 2, P)
+            pa = self.pairs[:, 0].expand(*x.shape[:-2], -1, -1)
+            pb = self.pairs[:, 1].expand(*x.shape[:-2], -1, -1)
+            return x.gather(-1, pa), x.gather(-1, pb)
+        return x[..., self.pairs[0]], x[..., self.pairs[1]]
+
     def _soft(self, x: torch.Tensor) -> torch.Tensor:
-        d = x[..., self.pairs[0]] - x[..., self.pairs[1]]
+        a, b = self._ab(x)
+        d = a - b
         return d / (self.temperature + d.abs())
 
     def _hard(self, x: torch.Tensor) -> torch.Tensor:
-        a = x[..., self.pairs[0]]
-        b = x[..., self.pairs[1]]
+        a, b = self._ab(x)
         return (a > b).to(x.dtype) * 2.0 - 1.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -567,6 +609,73 @@ class VectorToDominance(nn.Module):
             return self._soft(x)
         soft = self._soft(x)
         hard = self._hard(x)
+        return (hard - soft).detach() + soft
+
+
+class SparseDominanceCanonicalize(nn.Module):
+    """Canonicalize a *sparse* per-head dominance vector via Borda + V2D.
+
+    Input  shape [..., n_heads, n_pairs] of real-valued sparse dominance
+                  scores at per-head random pair indices in a virtual
+                  d_head-space (with d_head·(d_head−1)/2 ≥ n_pairs).
+    Output shape [..., n_heads, n_pairs] of canonicalized signed dominance
+                  values at the *same* (tied) per-head indices.
+
+    The mapping `output dim k → pair (i, j) in d_head-space` is fixed at
+    init via per-head random sampling (one independent subset per head).
+    """
+
+    def __init__(
+        self,
+        d_head: int,
+        n_pairs: int,
+        n_heads: int,
+        random_seed: int = 42,
+        smooth_mode: bool = False,
+        temperature: float = 0.1,
+    ):
+        super().__init__()
+        self.d_head = d_head
+        self.n_pairs = n_pairs
+        self.n_heads = n_heads
+        self.smooth_mode = smooth_mode
+        self.temperature = temperature
+
+        all_pairs = torch.combinations(torch.arange(d_head), 2)  # [P_full, 2]
+        P_full = all_pairs.size(0)
+        assert n_pairs <= P_full, f"n_pairs={n_pairs} must be <= {P_full}"
+        rng = torch.Generator().manual_seed(random_seed)
+        idx = torch.stack([
+            torch.randperm(P_full, generator=rng)[:n_pairs]
+            for _ in range(n_heads)
+        ])  # [H, n_pairs]
+        pairs_a = torch.stack([all_pairs[idx[h], 0] for h in range(n_heads)])  # [H, n_pairs]
+        pairs_b = torch.stack([all_pairs[idx[h], 1] for h in range(n_heads)])
+        self.register_buffer('pairs_a', pairs_a.contiguous())
+        self.register_buffer('pairs_b', pairs_b.contiguous())
+
+        # Per-head Borda submatrix [H, d_head, n_pairs] for sparse D2V.
+        borda_m = torch.zeros(n_heads, d_head, n_pairs)
+        h_idx = torch.arange(n_heads).view(n_heads, 1).expand(n_heads, n_pairs)
+        k_idx = torch.arange(n_pairs).view(1, n_pairs).expand(n_heads, n_pairs)
+        borda_m[h_idx, pairs_a, k_idx] = +1.0
+        borda_m[h_idx, pairs_b, k_idx] = -1.0
+        borda_m = borda_m / math.sqrt(max(d_head - 1, 1))
+        self.register_buffer('borda_m', borda_m.contiguous())
+
+    def forward(self, sparse_dom: torch.Tensor) -> torch.Tensor:
+        # sparse_dom: [..., H, n_pairs]
+        v = torch.einsum('...hp,hkp->...hk', sparse_dom, self.borda_m.to(sparse_dom.dtype))
+        # Per-head sign at the SAME indices.
+        pa = self.pairs_a.expand(*v.shape[:-2], -1, -1)
+        pb = self.pairs_b.expand(*v.shape[:-2], -1, -1)
+        a = v.gather(-1, pa)
+        b = v.gather(-1, pb)
+        d = a - b
+        if self.smooth_mode:
+            return d / (self.temperature + d.abs())
+        soft = d / (self.temperature + d.abs())
+        hard = (a > b).to(v.dtype) * 2.0 - 1.0
         return (hard - soft).detach() + soft
 
 
