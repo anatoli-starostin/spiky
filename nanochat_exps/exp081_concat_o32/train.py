@@ -1,29 +1,35 @@
-"""nanochat_exps/exp079_mhlut_smooth — fork of exp071 with smooth MultiHeadLut + dual-output residual.
+"""nanochat_exps/exp081_concat_o32 — fork of exp080 with E=O=32, front-prepend concat, multi-chunk partitions.
 
-Two changes vs exp071:
+Changes vs exp080:
+  1. token-embedding dim E: 16 -> 32.
+  2. out_proj output dim O: 16 -> 32 (larger per-block output channel).
+  3. Concat order flipped: torch.cat([out_real, x_resid], dim=-1).
+     The most-recent block's output is now at the FRONT of the residual stream.
+  4. QK/V partition_sets are per-O-chunk (one zone per block output + one for
+     token_emb). Pairs are sampled WITHIN each O=32 chunk only.
 
-  1. Every LUT module (qk_joint, v_lut, out_proj) is now MultiHeadLut
-     with n_alternatives=1, smooth_mode=True, recompute_in_backward=True.
-     smooth_mode replaces hard-sign anchor comparisons (with STE backward)
-     by soft-rational sigmoid scores forward AND backward — fully
-     differentiable through the lookup. qk_v2d also flips to smooth_mode=True.
+Per-layer dims and partitions:
+  L0: in=32   no partition (single chunk)            out_proj=32 -> next_in=64
+  L1: in=64   (32 | 32)                              out_proj=32 -> next_in=96
+  L2: in=96   (32 | 32 | 32)                         out_proj=32 -> next_in=128
+  L3: in=128  (32 | 32 | 32 | 32)                    out_proj=32 -> next_in=160
+  L4: in=160  (32 | 32 | 32 | 32 | 32)               out_proj=32 -> next_in=192
+  L5: in=192  (32 | 32 | 32 | 32 | 32 | 32)          out_proj=32 -> unembedder_in=224
 
-  2. LUTBlock returns BOTH out_real and out_rank:
-       - out_real (LayerNorm'd real-valued out_proj output) → next LUTBlock.
-         The residual stream between layers carries magnitudes.
-       - out_rank (canonicalized via V2D→D2V) → unembedder.
-         The unembedder path stays ranking-only.
+After flipping concat order, the residual stream layout (going forward) is:
+  After L0: [L0_out(32), token_emb(32)]                                       = 64
+  After L1: [L1_out(32), L0_out(32), token_emb(32)]                           = 96
+  ...
+  After L5: [L5_out, L4_out, L3_out, L2_out, L1_out, L0_out, token_emb]       = 224
 
-    Goal: keep magnitude information flowing through the network so
-    deeper layers can build on richer representations, while still
-    delivering only ranks to the final classifier.
+Each 32-dim chunk is its own zone for pair sampling — block-locality of pairs.
 
 How to launch:
 
     PYTHONPATH=/home/starost/nanochat \\
         /home/starost/spiky/.venv/bin/python \\
-        -u nanochat_exps/exp079_mhlut_smooth/train.py \\
-        > nanochat_exps/exp079_mhlut_smooth/stdout.log 2>&1 &
+        -u nanochat_exps/exp081_concat_o32/train.py \\
+        > nanochat_exps/exp081_concat_o32/stdout.log 2>&1 &
 """
 import sys, os, json, math, time, csv
 import torch
@@ -42,7 +48,7 @@ from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.loss_eval import evaluate_bpb
 
-from spiky.lutorch.multi_head_lut import MultiHeadLut
+from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.ranking_tools import VectorToDominance, DominanceToVector
 
@@ -55,12 +61,12 @@ torch.manual_seed(cfg['random_seed'])
 
 CONTEXT_SIZE = cfg['context_size']
 E           = cfg['embedding_dim']
+O           = cfg['out_proj_output_dim']
 H           = cfg['n_heads']
 d_qk        = cfg['d_qk']
 d_v         = cfg['d_v']
 N_LAYERS    = cfg['num_layers']
 D_QK_P      = d_qk * (d_qk - 1) // 2
-D_V_P       = d_v * (d_v - 1) // 2
 DEVICE_BS   = cfg['device_batch_size']
 TOTAL_BS    = cfg['total_batch_size']
 N_STEPS     = cfg['n_steps']
@@ -68,11 +74,9 @@ EVAL_EVERY  = cfg['eval_every']
 EVAL_STEPS  = cfg['eval_steps']
 WARMUP_FRAC = cfg['lr_warmup_fraction']
 
-# Sum-mode positional embeddings (pos_emb_dim=0 → pos added to x, no concat).
-_POS_EMB_CFG = cfg.get('pos_emb_dim', 0)
-_POS_EMB_ACTIVE = isinstance(_POS_EMB_CFG, int) and _POS_EMB_CFG > 0
-def _pos_emb_dim(layer_idx):
-    return _POS_EMB_CFG if _POS_EMB_ACTIVE else E
+# Per-layer growing input dims: L0=E, L1=E+O, L2=E+2*O, ...
+LAYER_INPUT_DIMS = [E + i * O for i in range(N_LAYERS)]
+UNEMBEDDER_DIM = E + N_LAYERS * O  # token_emb + N_LAYERS * out_proj
 
 
 # --- Tokenizer + dataloader ---------------------------------------------------
@@ -93,98 +97,88 @@ val_loader_factory = lambda: tokenizing_distributed_data_loader_bos_bestfit(
 token_bytes = get_token_bytes(device=DEVICE)
 
 
+# --- Partition helpers --------------------------------------------------------
+def _qkv_partitions(input_dim):
+    """Per-O-chunk partition: one zone per block output + one for token_emb.
+    L0 input_dim==O, so a single chunk — return None (no partition).
+    Otherwise input_dim is a multiple of O; emit input_dim//O zones of size O."""
+    if input_dim <= O:
+        return None
+    assert input_dim % O == 0, f"expected input_dim multiple of O={O}, got {input_dim}"
+    n_chunks = input_dim // O
+    return [list(range(c * O, (c + 1) * O)) for c in range(n_chunks)]
+
+def _out_proj_partitions():
+    """H zones over the SDPA-output (H*d_v) for out_proj: one zone per head."""
+    return [list(range(h * d_v, (h + 1) * d_v)) for h in range(H)]
+
+
 # --- LUT block helpers --------------------------------------------------------
-_MHLUT_KWARGS = dict(
+_TINY_KWARGS = dict(
+    weight_dtype=torch.float32,
     anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
     initial_weights_noise=cfg.get('mhlut_init_std', 0.001),
-    n_alternatives=1,
-    smooth_mode=True,
-    recompute_in_backward=True,
 )
-
-def _make_qk_joint(layer_idx, seed_offset):
-    """Joint Q/K MultiHeadLut (smooth_mode=True): input=E, n_heads=H, n_outputs=2*d_qk."""
-    n_inputs = E + (_pos_emb_dim(layer_idx) if _POS_EMB_ACTIVE else 0)
-    return MultiHeadLut(
-        input_dim=n_inputs,
-        n_heads=H,
-        n_outputs=2 * d_qk,
-        n_anchor_pairs=cfg['qk_input_nap'],
-        tables_per_head=cfg['qk_tph'],
-        random_seed=cfg['random_seed'] + seed_offset,
-        device=DEVICE,
-        **_MHLUT_KWARGS,
-    )
-
-def _make_v(layer_idx, seed_offset):
-    """V MultiHeadLut (smooth_mode=True): input=E, n_heads=H, n_outputs=d_v."""
-    return MultiHeadLut(
-        input_dim=E,
-        n_heads=H,
-        n_outputs=d_v,
-        n_anchor_pairs=cfg['v_input_nap'],
-        tables_per_head=cfg['v_tph'],
-        random_seed=cfg['random_seed'] + seed_offset,
-        device=DEVICE,
-        **_MHLUT_KWARGS,
-    )
-
-_OUT_TPH_PER_LAYER = cfg.get('out_tph_per_layer')
-def _make_out(layer_idx, seed_offset):
-    """out_proj MultiHeadLut (smooth_mode=True): input=H*d_v, n_heads=1, n_outputs=E."""
-    tph = _OUT_TPH_PER_LAYER[layer_idx] if _OUT_TPH_PER_LAYER is not None else cfg['out_tph']
-    return MultiHeadLut(
-        input_dim=H * d_v,
-        n_heads=1,
-        n_outputs=E,
-        n_anchor_pairs=cfg['out_input_nap'],
-        tables_per_head=tph,
-        random_seed=cfg['random_seed'] + seed_offset,
-        device=DEVICE,
-        **_MHLUT_KWARGS,
-    )
 
 
 class LUTBlock(nn.Module):
-    def __init__(self, layer_idx):
+    def __init__(self, layer_idx, input_dim):
         super().__init__()
-        self.qk_joint = _make_qk_joint(layer_idx, layer_idx)
-        self.v_lut    = _make_v(layer_idx, 200 + layer_idx)
-        self.out_proj = _make_out(layer_idx, 400 + layer_idx)
+        self.layer_idx = layer_idx
+        self.input_dim = input_dim
+
+        qkv_part = _qkv_partitions(input_dim)
+        out_part = _out_proj_partitions()
+
+        self.qk_joint = TinyMultiHeadLut(
+            input_dim=input_dim,
+            n_heads=H,
+            n_outputs=2 * d_qk,
+            n_anchor_pairs=cfg['qk_input_nap'],
+            tables_per_head=cfg['qk_tph'],
+            partition_sets=qkv_part,
+            random_seed=cfg['random_seed'] + layer_idx,
+            device=DEVICE,
+            **_TINY_KWARGS,
+        )
+        self.v_lut = TinyMultiHeadLut(
+            input_dim=input_dim,
+            n_heads=H,
+            n_outputs=d_v,
+            n_anchor_pairs=cfg['v_input_nap'],
+            tables_per_head=cfg['v_tph'],
+            partition_sets=qkv_part,
+            random_seed=cfg['random_seed'] + 200 + layer_idx,
+            device=DEVICE,
+            **_TINY_KWARGS,
+        )
+        self.out_proj = TinyMultiHeadLut(
+            input_dim=H * d_v,
+            n_heads=1,
+            n_outputs=O,
+            n_anchor_pairs=cfg['out_input_nap'],
+            tables_per_head=cfg['out_tph'],
+            partition_sets=out_part,
+            random_seed=cfg['random_seed'] + 400 + layer_idx,
+            device=DEVICE,
+            **_TINY_KWARGS,
+        )
 
         canon_t = cfg.get('canon_temperature', 0.1)
-        # Smooth Q/K dominance: soft-rational sign comparison both forward AND backward.
-        self.qk_v2d = VectorToDominance(d_qk, smooth_mode=True, temperature=canon_t)
-        # Rank-canonicalize each block's output: real -> dominance -> Borda+LN.
-        # The canonicalized output goes ONLY to the unembedder; the next LUTBlock
-        # receives the un-canonicalized real-valued out_real (preserves magnitudes
-        # in the residual stream). out_v2d stays hard-STE — the unembedder path
-        # wants a clean ±1 dominance signal; we don't need smooth gradient through
-        # this V2D since the rank-canonicalize is parallel to the residual.
-        self.out_v2d = VectorToDominance(E, smooth_mode=False, temperature=canon_t)
-        self.out_d2v = DominanceToVector(E, normalise=True)
-        # LayerNorm for the real-valued residual passed to the next block.
-        self.out_ln_real = nn.LayerNorm(E)
-
-        self.pos_dim = _pos_emb_dim(layer_idx)
-        if _POS_EMB_ACTIVE:
-            self.qk_input_ln = nn.LayerNorm(E + self.pos_dim)
+        self.qk_v2d = VectorToDominance(d_qk, smooth_mode=False, temperature=canon_t)
+        self.out_ln = nn.LayerNorm(O)
 
         self.attn_scale = nn.Parameter(torch.tensor(
             float(cfg.get('learnable_attn_scale_init', 0.25))
         ))
 
-    def forward(self, x, pos_emb):
-        B, T, _ = x.shape
-        if _POS_EMB_ACTIVE:
-            pos = pos_emb.unsqueeze(0).expand(B, -1, -1)
-            xp = torch.cat([x, pos], dim=-1)
-            xp = self.qk_input_ln(xp).reshape(B * T, E + self.pos_dim)
-        else:
-            xp = (x + pos_emb.unsqueeze(0)).reshape(B * T, E)
-        x_flat = x.reshape(B * T, E)
+    def forward(self, x_resid, pos_emb):
+        # x_resid: [B, T, input_dim] (real-valued residual stream)
+        B, T, D = x_resid.shape
+        x_in = x_resid + pos_emb.unsqueeze(0)               # [B, T, D]
+        x_flat = x_in.reshape(B * T, D)
 
-        qk_out = self.qk_joint(xp)                                     # [B*T, H, 2*d_qk]
+        qk_out = self.qk_joint(x_flat)                      # [B*T, H, 2*d_qk]
         q_vec = qk_out[..., :d_qk]
         k_vec = qk_out[..., d_qk:]
         q_dom = self.qk_v2d(q_vec)
@@ -192,19 +186,20 @@ class LUTBlock(nn.Module):
         q = q_dom.reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)
         k = k_dom.reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)
 
-        v_vec = self.v_lut(x_flat)                                     # [B*T, H, d_v]
-        v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3)             # [B, H, T, d_v]
+        v_vec = self.v_lut(x_flat)                          # [B*T, H, d_v]
+        v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3) # [B, H, T, d_v]
 
         attn = F.scaled_dot_product_attention(
             q * self.attn_scale, k, v, is_causal=True,
-        )                                                               # [B, H, T, d_v]
+        )                                                   # [B, H, T, d_v]
 
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, H * d_v)
-        out_real_flat = self.out_proj(out_in).squeeze(1)               # [B*T, E]
-        out_dom  = self.out_v2d(out_real_flat)                         # [B*T, P=E*(E-1)/2]
-        out_rank = self.out_d2v(out_dom).reshape(B, T, E)              # [B, T, E] for unembedder
-        out_real = self.out_ln_real(out_real_flat).reshape(B, T, E)    # [B, T, E] for next block
-        return out_real, out_rank
+        out_real = self.out_proj(out_in).squeeze(1)         # [B*T, O]
+        out_real = self.out_ln(out_real).reshape(B, T, O)   # [B, T, O]
+
+        # Concat residual: PREPEND this block's output to its input so
+        # the most-recent output occupies the front O slots of the stream.
+        return torch.cat([out_real, x_resid], dim=-1)       # [B, T, O + D]
 
 
 class Model(nn.Module):
@@ -212,30 +207,35 @@ class Model(nn.Module):
         super().__init__()
         self.token_embedder = nn.Embedding(VOCAB_SIZE, E)
         self.token_embedder.weight.data.uniform_(-0.1, 0.1)
-        _pos_dim_fn = _pos_emb_dim if _POS_EMB_ACTIVE else (lambda i: E)
-        _pos_init_scale = cfg.get('pos_emb_init_scale', 0.1)
+
+        pos_init = cfg.get('pos_emb_init_scale', 0.1)
         self.pos_embs = nn.ParameterList([
-            nn.Parameter(torch.randn(CONTEXT_SIZE, _pos_dim_fn(i)) * _pos_init_scale)
-            for i in range(N_LAYERS)
+            nn.Parameter(torch.randn(CONTEXT_SIZE, dim) * pos_init)
+            for dim in LAYER_INPUT_DIMS
         ])
-        self.layers = nn.ModuleList([LUTBlock(i) for i in range(N_LAYERS)])
-        concat_dim = N_LAYERS * E
-        self.unembedder = nn.Sequential(
-            nn.LayerNorm(concat_dim),
-            nn.Linear(concat_dim, VOCAB_SIZE),
-        )
+
+        self.layers = nn.ModuleList([
+            LUTBlock(i, LAYER_INPUT_DIMS[i]) for i in range(N_LAYERS)
+        ])
+
+        canon_t = cfg.get('canon_temperature', 0.1)
+        self.final_v2d = VectorToDominance(UNEMBEDDER_DIM, smooth_mode=False, temperature=canon_t)
+        self.final_d2v = DominanceToVector(UNEMBEDDER_DIM, normalise=True)
+        self.unembedder = nn.Linear(UNEMBEDDER_DIM, VOCAB_SIZE)
 
     def get_device(self):
         return self.token_embedder.weight.device
 
     def forward(self, tokens, targets=None, loss_reduction='mean'):
-        x = self.token_embedder(tokens)                       # [B, T, E] — real-valued residual
-        outs = []
+        x = self.token_embedder(tokens)                     # [B, T, E]
         for layer, pos_emb in zip(self.layers, self.pos_embs):
-            x, out_rank = layer(x, pos_emb)                   # x = out_real for next block;
-            outs.append(out_rank)                              # out_rank = canonicalized for unembedder.
-        concat = torch.cat(outs, dim=-1)
-        logits = self.unembedder(concat)
+            x = layer(x, pos_emb)                           # prepends out_proj output
+        # x is now [B, T, UNEMBEDDER_DIM]
+        B, T, D = x.shape
+        flat = x.reshape(B * T, D)
+        dom = self.final_v2d(flat)                          # [B*T, P=D*(D-1)/2] in ±1
+        rank = self.final_d2v(dom)                          # [B*T, D] Borda + LN
+        logits = self.unembedder(rank).reshape(B, T, VOCAB_SIZE)
         if targets is not None:
             return F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -249,6 +249,8 @@ model = Model().to(DEVICE)
 
 n_params = sum(p.numel() for p in model.parameters())
 print(f'Total params (all fp32): {n_params:,}')
+print(f'Per-layer input dims: {LAYER_INPUT_DIMS}')
+print(f'Unembedder input dim:  {UNEMBEDDER_DIM}')
 
 def get_lr_scale(step):
     n = N_STEPS
@@ -272,8 +274,7 @@ for g in optimizer.param_groups:
 
 print(f'Q/K Joint MHLut: in_nap={cfg["qk_input_nap"]} tph={cfg["qk_tph"]} d_qk={d_qk} (n_outputs=2*d_qk={2*d_qk})')
 print(f'V MHLut:         in_nap={cfg["v_input_nap"]} tph={cfg["v_tph"]} d_v={d_v} (n_outputs=d_v)')
-_tph_str = str(_OUT_TPH_PER_LAYER) if _OUT_TPH_PER_LAYER is not None else str(cfg['out_tph'])
-print(f'out_proj MHLut:  in_nap={cfg["out_input_nap"]} tph={_tph_str} (n_outputs=E={E}) + LayerNorm')
+print(f'out_proj MHLut:  in_nap={cfg["out_input_nap"]} tph={cfg["out_tph"]} (n_outputs=O={O}) + LayerNorm | H={H} partition zones')
 
 # --- Training loop ------------------------------------------------------------
 tokens_per_step = DEVICE_BS * CONTEXT_SIZE
@@ -345,6 +346,8 @@ summary = {
     'final_val_bpb': val_bpbs[-1] if val_bpbs else None,
     'n_params': n_params,
     'training_time_hours': round(elapsed / 3600, 3),
+    'layer_input_dims': LAYER_INPUT_DIMS,
+    'unembedder_dim': UNEMBEDDER_DIM,
 }
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)

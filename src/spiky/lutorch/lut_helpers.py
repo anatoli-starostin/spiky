@@ -210,6 +210,7 @@ def _get_canonical_full_coverage_pairs(
     random_seed: Optional[int],
     n_heads: int,
     partition_sets: Optional[list] = None,
+    partition_pair_weights: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Sample `n_anchor_pairs` distinct canonical pairs per table, with
     full coverage of the canonical pool whenever `n_tables * n_anchor_pairs
@@ -220,6 +221,13 @@ def _get_canonical_full_coverage_pairs(
     P, table boundaries align with perm boundaries and within-table distinctness
     holds for free. Otherwise a greedy swap-repair pass fixes boundary tables
     where two independent perms mix.
+
+    If `partition_pair_weights` is given (alongside `partition_sets`), each
+    pool pair (a, b) gets weight w[part_id_of_pair], and per-table pairs are
+    drawn via weighted multinomial sampling WITHOUT replacement
+    (per-table distinctness preserved). Loses the strict "every pair seen
+    once before repeats" full-coverage property — instead, expected per-pair
+    frequency across slots is proportional to its weight.
 
     Returns (anchor_pairs_a, anchor_pairs_b), both [n_tables, n_anchor_pairs]
     long, with a < b in every entry.
@@ -243,11 +251,57 @@ def _get_canonical_full_coverage_pairs(
         gen.manual_seed(random_seed)
 
     per_head = n_tables // n_heads
-    slots_per_head = per_head * n_anchor_pairs
 
     all_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
     all_b = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
 
+    # ── Weighted-multinomial path (B1) ─────────────────────────────────────
+    if partition_pair_weights is not None:
+        if partition_sets is None:
+            raise ValueError(
+                "partition_pair_weights requires partition_sets to be provided"
+            )
+        if len(partition_pair_weights) != len(partition_sets):
+            raise ValueError(
+                f"partition_pair_weights ({len(partition_pair_weights)}) must "
+                f"match partition_sets ({len(partition_sets)})"
+            )
+        # Build pair → partition id map. Pool is within-partition, so both
+        # endpoints share the same partition id; reading from tri_i suffices.
+        part_id = torch.full((input_dim,), -1, dtype=torch.long, device=device)
+        for s_idx, s in enumerate(partition_sets):
+            s_tensor = torch.as_tensor(list(s), dtype=torch.long, device=device)
+            part_id[s_tensor] = s_idx
+        pair_part = part_id[tri_i]                              # [P]
+        weights_per_part = torch.as_tensor(
+            partition_pair_weights, dtype=torch.float, device=device,
+        )
+        if (weights_per_part < 0).any():
+            raise ValueError("partition_pair_weights must be non-negative")
+        if weights_per_part.sum() <= 0:
+            raise ValueError("partition_pair_weights must have positive sum")
+        pair_weights = weights_per_part[pair_part]              # [P]
+        # Disallow zero-weight partitions whose presence would still leave the
+        # remaining pool too small for n_anchor_pairs distinct draws.
+        positive_pool = (pair_weights > 0).sum().item()
+        if positive_pool < n_anchor_pairs:
+            raise ValueError(
+                f"partition_pair_weights leaves only {positive_pool} pairs "
+                f"with positive weight, < n_anchor_pairs={n_anchor_pairs}"
+            )
+        for h in range(n_heads):
+            base = h * per_head
+            for t in range(per_head):
+                idx = torch.multinomial(
+                    pair_weights, n_anchor_pairs,
+                    replacement=False, generator=gen,
+                )
+                all_a[base + t] = tri_i[idx]
+                all_b[base + t] = tri_j[idx]
+        return all_a, all_b
+
+    # ── Tiled-randperm path (default full-coverage) ────────────────────────
+    slots_per_head = per_head * n_anchor_pairs
     for h in range(n_heads):
         repeats = (slots_per_head + P - 1) // P
         perm_cat = torch.cat([
@@ -336,6 +390,7 @@ def get_balanced_anchor_pairs(
     shuffle_per_head: bool = True,
     exclusion_sets: Optional[list] = None,
     partition_sets: Optional[list] = None,
+    partition_pair_weights: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -354,6 +409,13 @@ def get_balanced_anchor_pairs(
                 (cross-partition pairs are excluded). Every input index must
                 belong to exactly one partition set. Supported by CANONICAL_DISTINCT
                 and CANONICAL_FULL_COVERAGE; rejected for other policies.
+        partition_pair_weights: Optional list of non-negative floats, one per
+                partition, that weights per-pair sampling probability. When
+                provided, CANONICAL_FULL_COVERAGE switches from tiled-randperm
+                full coverage to per-table weighted multinomial sampling
+                without replacement: a pool pair from partition i has its
+                probability proportional to weight[i]. Only supported by
+                CANONICAL_FULL_COVERAGE.
 
     Returns:
         anchor_pairs_a: [n_tables, n_anchor_pairs] int64
@@ -372,6 +434,10 @@ def get_balanced_anchor_pairs(
 
     # ── CANONICAL_DISTINCT ─────────────────────────────────────────────────────
     if effective_policy == AnchorSamplingPolicy.CANONICAL_DISTINCT:
+        if partition_pair_weights is not None:
+            raise ValueError(
+                "partition_pair_weights is only supported by CANONICAL_FULL_COVERAGE"
+            )
         return _get_canonical_distinct_pairs(
             n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
             partition_sets=partition_sets,
@@ -382,6 +448,7 @@ def get_balanced_anchor_pairs(
         return _get_canonical_full_coverage_pairs(
             n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
             partition_sets=partition_sets,
+            partition_pair_weights=partition_pair_weights,
         )
 
     if partition_sets is not None:

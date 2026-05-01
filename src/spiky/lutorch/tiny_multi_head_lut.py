@@ -203,6 +203,7 @@ class TinyMultiHeadLut(nn.Module):
         weight_dtype: torch.dtype = torch.bfloat16,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         partition_sets: Optional[list] = None,
+        partition_pair_weights: Optional[list] = None,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
         device: Optional[torch.device] = None,
@@ -239,6 +240,7 @@ class TinyMultiHeadLut(nn.Module):
             random_seed=random_seed,
             device=device,
             partition_sets=partition_sets,
+            partition_pair_weights=partition_pair_weights,
             anchor_sampling_policy=anchor_sampling_policy,
         )
 

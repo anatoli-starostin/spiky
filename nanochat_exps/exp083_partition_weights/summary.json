@@ -1,0 +1,16 @@
+{
+  "exp_name": "exp083_partition_weights",
+  "best_val_bpb": 1.9027827951815288,
+  "final_val_bpb": 1.9027827951815288,
+  "n_params": 100194438,
+  "training_time_hours": 0.45,
+  "layer_input_dims": [
+    32,
+    64,
+    96,
+    128,
+    160,
+    192
+  ],
+  "unembedder_dim": 224
+}

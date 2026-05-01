@@ -256,6 +256,7 @@ class TinyAnchorPairsLookup(nn.Module):
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         partition_sets: Optional[list] = None,
+        partition_pair_weights: Optional[list] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
     ):
         super().__init__()
@@ -295,6 +296,7 @@ class TinyAnchorPairsLookup(nn.Module):
             n_heads=n_heads,
             shuffle_per_head=True,
             partition_sets=partition_sets,
+            partition_pair_weights=partition_pair_weights,
         )
         if input_dim > 32767:
             raise ValueError(

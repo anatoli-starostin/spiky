@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp085_residual_anchor_inherit",
+  "best_val_bpb": 1.8029956747879523,
+  "final_val_bpb": 1.8029956747879523,
+  "n_params": 143495942,
+  "training_time_hours": 0.506
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp078_canon_48k",
+  "best_val_bpb": 1.588112107891906,
+  "final_val_bpb": 1.5882124295920257,
+  "n_params": 129304838,
+  "training_time_hours": 3.805
+}

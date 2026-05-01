@@ -1,29 +1,23 @@
-"""nanochat_exps/exp079_mhlut_smooth — fork of exp071 with smooth MultiHeadLut + dual-output residual.
+"""nanochat_exps/exp084_residual_luts — fork of exp071 with residual LUTs.
 
-Two changes vs exp071:
-
-  1. Every LUT module (qk_joint, v_lut, out_proj) is now MultiHeadLut
-     with n_alternatives=1, smooth_mode=True, recompute_in_backward=True.
-     smooth_mode replaces hard-sign anchor comparisons (with STE backward)
-     by soft-rational sigmoid scores forward AND backward — fully
-     differentiable through the lookup. qk_v2d also flips to smooth_mode=True.
-
-  2. LUTBlock returns BOTH out_real and out_rank:
-       - out_real (LayerNorm'd real-valued out_proj output) → next LUTBlock.
-         The residual stream between layers carries magnitudes.
-       - out_rank (canonicalized via V2D→D2V) → unembedder.
-         The unembedder path stays ranking-only.
-
-    Goal: keep magnitude information flowing through the network so
-    deeper layers can build on richer representations, while still
-    delivering only ranks to the final classifier.
+Architecture changes vs exp071:
+  * Each LUTBlock i holds an additional residual_lut:
+        (i+1)*E -> E, nap=6, tph=256 * (i + 1)
+    applied to concat(x, *prev_x) and added to out_proj output.
+    At layer 0 the residual_lut input is just x (E -> E, tph=256).
+  * out_v2d / out_d2v are removed from the in-block path. Block outputs
+    are real-valued sums (out_proj + residual_lut).
+  * Only the final block output passes through V2D -> D2V to
+    rank-canonicalize before the MLP unembedder.
+  * Global per-layer concat is removed (unembedder consumes only x_final).
+  * Unembedder: LN(E) -> Linear(E, 4E) -> ReLU -> Linear(4E, VOCAB).
 
 How to launch:
 
     PYTHONPATH=/home/starost/nanochat \\
         /home/starost/spiky/.venv/bin/python \\
-        -u nanochat_exps/exp079_mhlut_smooth/train.py \\
-        > nanochat_exps/exp079_mhlut_smooth/stdout.log 2>&1 &
+        -u nanochat_exps/exp084_residual_luts/train.py \\
+        > nanochat_exps/exp084_residual_luts/stdout.log 2>&1 &
 """
 import sys, os, json, math, time, csv
 import torch
@@ -42,7 +36,7 @@ from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.loss_eval import evaluate_bpb
 
-from spiky.lutorch.multi_head_lut import MultiHeadLut
+from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 from spiky.lutorch.ranking_tools import VectorToDominance, DominanceToVector
 
@@ -60,15 +54,16 @@ d_qk        = cfg['d_qk']
 d_v         = cfg['d_v']
 N_LAYERS    = cfg['num_layers']
 D_QK_P      = d_qk * (d_qk - 1) // 2
-D_V_P       = d_v * (d_v - 1) // 2
 DEVICE_BS   = cfg['device_batch_size']
 TOTAL_BS    = cfg['total_batch_size']
 N_STEPS     = cfg['n_steps']
 EVAL_EVERY  = cfg['eval_every']
 EVAL_STEPS  = cfg['eval_steps']
 WARMUP_FRAC = cfg['lr_warmup_fraction']
+RES_NAP     = cfg['residual_input_nap']
+RES_TPH_F   = cfg['residual_tph_per_layer_factor']
+MLP_MULT    = cfg.get('unembedder_mlp_mult', 4)
 
-# Sum-mode positional embeddings (pos_emb_dim=0 → pos added to x, no concat).
 _POS_EMB_CFG = cfg.get('pos_emb_dim', 0)
 _POS_EMB_ACTIVE = isinstance(_POS_EMB_CFG, int) and _POS_EMB_CFG > 0
 def _pos_emb_dim(layer_idx):
@@ -94,18 +89,15 @@ token_bytes = get_token_bytes(device=DEVICE)
 
 
 # --- LUT block helpers --------------------------------------------------------
-_MHLUT_KWARGS = dict(
+_TINY_KWARGS = dict(
+    weight_dtype=torch.float32,
     anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
     initial_weights_noise=cfg.get('mhlut_init_std', 0.001),
-    n_alternatives=1,
-    smooth_mode=True,
-    recompute_in_backward=True,
 )
 
 def _make_qk_joint(layer_idx, seed_offset):
-    """Joint Q/K MultiHeadLut (smooth_mode=True): input=E, n_heads=H, n_outputs=2*d_qk."""
     n_inputs = E + (_pos_emb_dim(layer_idx) if _POS_EMB_ACTIVE else 0)
-    return MultiHeadLut(
+    return TinyMultiHeadLut(
         input_dim=n_inputs,
         n_heads=H,
         n_outputs=2 * d_qk,
@@ -113,12 +105,11 @@ def _make_qk_joint(layer_idx, seed_offset):
         tables_per_head=cfg['qk_tph'],
         random_seed=cfg['random_seed'] + seed_offset,
         device=DEVICE,
-        **_MHLUT_KWARGS,
+        **_TINY_KWARGS,
     )
 
 def _make_v(layer_idx, seed_offset):
-    """V MultiHeadLut (smooth_mode=True): input=E, n_heads=H, n_outputs=d_v."""
-    return MultiHeadLut(
+    return TinyMultiHeadLut(
         input_dim=E,
         n_heads=H,
         n_outputs=d_v,
@@ -126,45 +117,48 @@ def _make_v(layer_idx, seed_offset):
         tables_per_head=cfg['v_tph'],
         random_seed=cfg['random_seed'] + seed_offset,
         device=DEVICE,
-        **_MHLUT_KWARGS,
+        **_TINY_KWARGS,
     )
 
-_OUT_TPH_PER_LAYER = cfg.get('out_tph_per_layer')
 def _make_out(layer_idx, seed_offset):
-    """out_proj MultiHeadLut (smooth_mode=True): input=H*d_v, n_heads=1, n_outputs=E."""
-    tph = _OUT_TPH_PER_LAYER[layer_idx] if _OUT_TPH_PER_LAYER is not None else cfg['out_tph']
-    return MultiHeadLut(
+    return TinyMultiHeadLut(
         input_dim=H * d_v,
         n_heads=1,
         n_outputs=E,
         n_anchor_pairs=cfg['out_input_nap'],
+        tables_per_head=cfg['out_tph'],
+        random_seed=cfg['random_seed'] + seed_offset,
+        device=DEVICE,
+        **_TINY_KWARGS,
+    )
+
+def _make_residual(layer_idx, seed_offset):
+    """Residual LUT for layer i: (i+1)*E -> E, nap=RES_NAP, tph=RES_TPH_F*(i+1)."""
+    in_dim = (layer_idx + 1) * E
+    tph = RES_TPH_F * (layer_idx + 1)
+    return TinyMultiHeadLut(
+        input_dim=in_dim,
+        n_heads=1,
+        n_outputs=E,
+        n_anchor_pairs=RES_NAP,
         tables_per_head=tph,
         random_seed=cfg['random_seed'] + seed_offset,
         device=DEVICE,
-        **_MHLUT_KWARGS,
+        **_TINY_KWARGS,
     )
 
 
 class LUTBlock(nn.Module):
     def __init__(self, layer_idx):
         super().__init__()
+        self.layer_idx = layer_idx
         self.qk_joint = _make_qk_joint(layer_idx, layer_idx)
         self.v_lut    = _make_v(layer_idx, 200 + layer_idx)
         self.out_proj = _make_out(layer_idx, 400 + layer_idx)
+        self.residual_lut = _make_residual(layer_idx, 600 + layer_idx)
 
         canon_t = cfg.get('canon_temperature', 0.1)
-        # Smooth Q/K dominance: soft-rational sign comparison both forward AND backward.
-        self.qk_v2d = VectorToDominance(d_qk, smooth_mode=True, temperature=canon_t)
-        # Rank-canonicalize each block's output: real -> dominance -> Borda+LN.
-        # The canonicalized output goes ONLY to the unembedder; the next LUTBlock
-        # receives the un-canonicalized real-valued out_real (preserves magnitudes
-        # in the residual stream). out_v2d stays hard-STE — the unembedder path
-        # wants a clean ±1 dominance signal; we don't need smooth gradient through
-        # this V2D since the rank-canonicalize is parallel to the residual.
-        self.out_v2d = VectorToDominance(E, smooth_mode=False, temperature=canon_t)
-        self.out_d2v = DominanceToVector(E, normalise=True)
-        # LayerNorm for the real-valued residual passed to the next block.
-        self.out_ln_real = nn.LayerNorm(E)
+        self.qk_v2d = VectorToDominance(d_qk, smooth_mode=False, temperature=canon_t)
 
         self.pos_dim = _pos_emb_dim(layer_idx)
         if _POS_EMB_ACTIVE:
@@ -174,7 +168,8 @@ class LUTBlock(nn.Module):
             float(cfg.get('learnable_attn_scale_init', 0.25))
         ))
 
-    def forward(self, x, pos_emb):
+    def forward(self, x, pos_emb, prev_xs):
+        """x: [B, T, E], prev_xs: list of [B, T, E] block outputs from prior layers."""
         B, T, _ = x.shape
         if _POS_EMB_ACTIVE:
             pos = pos_emb.unsqueeze(0).expand(B, -1, -1)
@@ -184,7 +179,7 @@ class LUTBlock(nn.Module):
             xp = (x + pos_emb.unsqueeze(0)).reshape(B * T, E)
         x_flat = x.reshape(B * T, E)
 
-        qk_out = self.qk_joint(xp)                                     # [B*T, H, 2*d_qk]
+        qk_out = self.qk_joint(xp)
         q_vec = qk_out[..., :d_qk]
         k_vec = qk_out[..., d_qk:]
         q_dom = self.qk_v2d(q_vec)
@@ -192,19 +187,22 @@ class LUTBlock(nn.Module):
         q = q_dom.reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)
         k = k_dom.reshape(B, T, H, D_QK_P).permute(0, 2, 1, 3)
 
-        v_vec = self.v_lut(x_flat)                                     # [B*T, H, d_v]
-        v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3)             # [B, H, T, d_v]
+        v_vec = self.v_lut(x_flat)
+        v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3)
 
         attn = F.scaled_dot_product_attention(
             q * self.attn_scale, k, v, is_causal=True,
-        )                                                               # [B, H, T, d_v]
+        )
 
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, H * d_v)
-        out_real_flat = self.out_proj(out_in).squeeze(1)               # [B*T, E]
-        out_dom  = self.out_v2d(out_real_flat)                         # [B*T, P=E*(E-1)/2]
-        out_rank = self.out_d2v(out_dom).reshape(B, T, E)              # [B, T, E] for unembedder
-        out_real = self.out_ln_real(out_real_flat).reshape(B, T, E)    # [B, T, E] for next block
-        return out_real, out_rank
+        out_real = self.out_proj(out_in).squeeze(1).reshape(B, T, E)
+
+        if len(prev_xs) > 0:
+            res_in = torch.cat([x, *prev_xs], dim=-1).reshape(B * T, -1)
+        else:
+            res_in = x.reshape(B * T, E)
+        res_out = self.residual_lut(res_in).squeeze(1).reshape(B, T, E)
+        return out_real + res_out
 
 
 class Model(nn.Module):
@@ -219,23 +217,34 @@ class Model(nn.Module):
             for i in range(N_LAYERS)
         ])
         self.layers = nn.ModuleList([LUTBlock(i) for i in range(N_LAYERS)])
-        concat_dim = N_LAYERS * E
+
+        canon_t = cfg.get('canon_temperature', 0.1)
+        self.final_v2d = VectorToDominance(E, smooth_mode=False, temperature=canon_t)
+        self.final_d2v = DominanceToVector(E, normalise=True)
+
+        hidden = MLP_MULT * E
         self.unembedder = nn.Sequential(
-            nn.LayerNorm(concat_dim),
-            nn.Linear(concat_dim, VOCAB_SIZE),
+            nn.LayerNorm(E),
+            nn.Linear(E, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, VOCAB_SIZE),
         )
 
     def get_device(self):
         return self.token_embedder.weight.device
 
     def forward(self, tokens, targets=None, loss_reduction='mean'):
-        x = self.token_embedder(tokens)                       # [B, T, E] — real-valued residual
-        outs = []
+        x = self.token_embedder(tokens)
+        prev_xs = []
         for layer, pos_emb in zip(self.layers, self.pos_embs):
-            x, out_rank = layer(x, pos_emb)                   # x = out_real for next block;
-            outs.append(out_rank)                              # out_rank = canonicalized for unembedder.
-        concat = torch.cat(outs, dim=-1)
-        logits = self.unembedder(concat)
+            x_new = layer(x, pos_emb, prev_xs)
+            prev_xs.append(x)
+            x = x_new
+        B, T, _ = x.shape
+        x_flat = x.reshape(B * T, E)
+        x_dom = self.final_v2d(x_flat)
+        x_rank = self.final_d2v(x_dom).reshape(B, T, E)
+        logits = self.unembedder(x_rank)
         if targets is not None:
             return F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -272,8 +281,9 @@ for g in optimizer.param_groups:
 
 print(f'Q/K Joint MHLut: in_nap={cfg["qk_input_nap"]} tph={cfg["qk_tph"]} d_qk={d_qk} (n_outputs=2*d_qk={2*d_qk})')
 print(f'V MHLut:         in_nap={cfg["v_input_nap"]} tph={cfg["v_tph"]} d_v={d_v} (n_outputs=d_v)')
-_tph_str = str(_OUT_TPH_PER_LAYER) if _OUT_TPH_PER_LAYER is not None else str(cfg['out_tph'])
-print(f'out_proj MHLut:  in_nap={cfg["out_input_nap"]} tph={_tph_str} (n_outputs=E={E}) + LayerNorm')
+print(f'out_proj MHLut:  in_nap={cfg["out_input_nap"]} tph={cfg["out_tph"]} (n_outputs=E={E})')
+print(f'residual MHLut:  in_nap={RES_NAP} tph_factor={RES_TPH_F} (per layer i: in=(i+1)*E, tph={RES_TPH_F}*(i+1))')
+print(f'Unembedder MLP:  LN({E}) -> Linear({E},{MLP_MULT*E}) -> ReLU -> Linear({MLP_MULT*E},VOCAB)')
 
 # --- Training loop ------------------------------------------------------------
 tokens_per_step = DEVICE_BS * CONTEXT_SIZE
