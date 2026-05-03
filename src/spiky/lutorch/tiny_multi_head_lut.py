@@ -173,6 +173,76 @@ class _TinyMHLutGatherReduce(torch.autograd.Function):
         return grad_weights, None, None, grad_main, grad_alt, None, None
 
 
+def _per_table_gather_forward(weights: torch.Tensor, lookup_indices: torch.Tensor,
+                              n_heads: int, tables_per_head: int) -> torch.Tensor:
+    """Per-table gather (no reduce). Returns [B, n_heads, tph, n_outputs]."""
+    B, n_lookup_tables = lookup_indices.shape
+    n_outputs = weights.shape[2]
+    table_ix = torch.arange(n_lookup_tables, device=weights.device).view(1, -1).expand(B, -1)
+    out = weights[table_ix, lookup_indices]                         # [B, n_lookup_tables, n_outputs]
+    return out.view(B, n_heads, tables_per_head, n_outputs)
+
+
+class _TinyMHLutGather(torch.autograd.Function):
+    """Per-table gather with carrier-grad threading. Returns
+    [B, n_heads, tph, n_outputs] without reducing across tables.
+
+    Mirrors the carrier-grad logic of `_TinyMHLutGatherReduce` so that
+    `TinyAnchorPairsLookup.backward` receives the same (grad_main, grad_alt)
+    needed to compute `du = (grad_main - grad_alt) * uncertainty_derivative`
+    for the STE update on x.grad.
+    """
+
+    @staticmethod
+    def forward(ctx, weights, lookup_indices, lookup_alt_indices,
+                lookup_indices_grad_c, lookup_alt_indices_grad_c,
+                n_heads: int, tables_per_head: int):
+        out = _per_table_gather_forward(weights, lookup_indices, n_heads, tables_per_head)
+        ctx.save_for_backward(weights, lookup_indices, lookup_alt_indices)
+        ctx.n_heads = n_heads
+        ctx.tables_per_head = tables_per_head
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        # grad_out: [B, n_heads, tph, n_outputs]
+        weights, lookup_indices, lookup_alt_indices = ctx.saved_tensors
+        n_heads = ctx.n_heads
+        tph = ctx.tables_per_head
+        B, n_lookup_tables = lookup_indices.shape
+        n_outputs = weights.shape[2]
+        table_dim = weights.shape[1]
+
+        if grad_out.dtype != weights.dtype:
+            grad_out = grad_out.to(weights.dtype)
+
+        # Recompute gathers for STE carrier grads (mirrors
+        # _TinyMHLutGatherReduce; native fast path is reduce-only).
+        table_ix = torch.arange(n_lookup_tables, device=weights.device).view(1, -1).expand(B, -1)
+        out_main = weights[table_ix, lookup_indices]      # [B, n_lookup_tables, n_outputs]
+        out_alt  = weights[table_ix, lookup_alt_indices]
+        grad_main = (out_main.view(B, n_heads, tph, n_outputs) * grad_out).sum(-1) \
+                    .view(B, n_lookup_tables).contiguous()
+        grad_alt  = (out_alt.view(B, n_heads, tph, n_outputs)  * grad_out).sum(-1) \
+                    .view(B, n_lookup_tables).contiguous()
+
+        # grad_weights: scatter grad_out onto (table, lookup_index) entries.
+        flat_lookup = lookup_indices.reshape(-1)
+        table_offset = (
+            torch.arange(n_lookup_tables, device=weights.device, dtype=lookup_indices.dtype) * table_dim
+        ).unsqueeze(0).expand(B, -1).reshape(-1)
+        fully_flat_idx = table_offset + flat_lookup
+        grad_per_lookup = grad_out.reshape(B * n_lookup_tables, n_outputs).contiguous()
+        grad_weights_flat = torch.zeros(
+            n_lookup_tables * table_dim, n_outputs,
+            dtype=weights.dtype, device=weights.device,
+        )
+        grad_weights_flat.index_add_(0, fully_flat_idx, grad_per_lookup)
+        grad_weights = grad_weights_flat.view(n_lookup_tables, table_dim, n_outputs)
+
+        return grad_weights, None, None, grad_main, grad_alt, None, None
+
+
 class TinyMultiHeadLut(nn.Module):
     """Multi-head LUT with TinyAnchorPairsLookup + bf16 (default) weights.
 
@@ -207,6 +277,8 @@ class TinyMultiHeadLut(nn.Module):
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
         device: Optional[torch.device] = None,
+        sparse_scatter_n_outputs: Optional[int] = None,
+        sparse_scatter_seed: Optional[int] = None,
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -227,6 +299,32 @@ class TinyMultiHeadLut(nn.Module):
         self.tables_per_head = tables_per_head
         self.table_dim = 1 << n_anchor_pairs  # 2 ** n_anchor_pairs
         self.weight_dtype = weight_dtype
+
+        # Sparse-scatter mode: each table's `n_outputs` values are scattered
+        # into a fixed random subset of `sparse_scatter_n_outputs` slots.
+        # Decouples per-table weights from the final output dim.
+        self.sparse_scatter_n_outputs = sparse_scatter_n_outputs
+        if sparse_scatter_n_outputs is not None:
+            if sparse_scatter_n_outputs < n_outputs:
+                raise ValueError(
+                    f"sparse_scatter_n_outputs ({sparse_scatter_n_outputs}) "
+                    f"must be >= n_outputs ({n_outputs}); each table contributes "
+                    f"n_outputs values to a {n_outputs}-subset of "
+                    f"sparse_scatter_n_outputs"
+                )
+            gen = torch.Generator()
+            if sparse_scatter_seed is not None:
+                gen.manual_seed(int(sparse_scatter_seed))
+            elif random_seed is not None:
+                gen.manual_seed(int(random_seed) + 1234567)
+            scatter_idx = torch.empty(n_heads, tables_per_head, n_outputs, dtype=torch.long)
+            for h in range(n_heads):
+                for t in range(tables_per_head):
+                    perm = torch.randperm(sparse_scatter_n_outputs, generator=gen)
+                    scatter_idx[h, t] = perm[:n_outputs]
+            if device is not None:
+                scatter_idx = scatter_idx.to(device)
+            self.register_buffer('scatter_indices', scatter_idx)
 
         n_lookup_tables = n_heads * tables_per_head
         self.n_lookup_tables = n_lookup_tables
@@ -261,7 +359,8 @@ class TinyMultiHeadLut(nn.Module):
         Args:
             x: float [B, input_dim]
         Returns:
-            [B, n_heads, n_outputs] in weight_dtype.
+            [B, n_heads, n_outputs] in weight_dtype, or
+            [B, n_heads, sparse_scatter_n_outputs] if sparse_scatter is active.
         """
         if x.dim() != 2 or x.shape[1] != self.input_dim:
             raise ValueError(
@@ -281,10 +380,16 @@ class TinyMultiHeadLut(nn.Module):
         lookup_indices = lookup_indices.to(torch.int64)
         lookup_alt_indices = lookup_alt_indices.squeeze(-1).to(torch.int64)
 
+        sparse = self.sparse_scatter_n_outputs is not None
+
         # Eval / no_grad path: TAPL returns None carriers; nothing to
-        # backprop, so skip the autograd Function and just do the
-        # embedding_bag forward directly.
+        # backprop, so skip the autograd Function.
         if lookup_indices_grad_c is None:
+            if sparse:
+                per_table = _per_table_gather_forward(
+                    self.weights, lookup_indices, self.n_heads, self.tables_per_head,
+                )                                                  # [B, H, tph, n_outputs]
+                return self._scatter(per_table)                    # [B, H, sparse_scatter_n_outputs]
             return _embedding_bag_forward(
                 self.weights, lookup_indices, self.n_heads, self.tables_per_head,
             )
@@ -292,8 +397,27 @@ class TinyMultiHeadLut(nn.Module):
         # Training path: thread BOTH carriers through the autograd Function
         # so its backward returns grad_main AND grad_alt. Dropping the alt
         # carrier silently breaks numerical equivalence with MultiHeadLut.
+        if sparse:
+            per_table = _TinyMHLutGather.apply(
+                self.weights, lookup_indices, lookup_alt_indices,
+                lookup_indices_grad_c, lookup_alt_indices_grad_c.squeeze(-1),
+                self.n_heads, self.tables_per_head,
+            )                                                      # [B, H, tph, n_outputs]
+            return self._scatter(per_table)                        # [B, H, sparse_scatter_n_outputs]
         return _TinyMHLutGatherReduce.apply(
             self.weights, lookup_indices, lookup_alt_indices,
             lookup_indices_grad_c, lookup_alt_indices_grad_c.squeeze(-1),
             self.n_heads, self.tables_per_head,
         )
+
+    def _scatter(self, per_table: torch.Tensor) -> torch.Tensor:
+        """Scatter-add per-table outputs into the wider sparse_scatter_n_outputs
+        dense vector via the fixed random per-(head, table) index subsets.
+        per_table: [B, n_heads, tables_per_head, n_outputs]
+        returns:   [B, n_heads, sparse_scatter_n_outputs]
+        """
+        B, H, T, S = per_table.shape
+        out = per_table.new_zeros(B, H, self.sparse_scatter_n_outputs)
+        idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1).reshape(B, H, T * S)
+        out.scatter_add_(2, idx, per_table.reshape(B, H, T * S))
+        return out

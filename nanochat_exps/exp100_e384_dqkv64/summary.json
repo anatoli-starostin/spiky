@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp100_e384_dqk32_dv64",
+  "best_val_bpb": 1.714375826309209,
+  "final_val_bpb": 1.714375826309209,
+  "n_params": 108173318,
+  "training_time_hours": 0.717
+}

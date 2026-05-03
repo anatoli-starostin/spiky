@@ -817,12 +817,13 @@ print(f"\n{'-'*60}")
 # Trained on the same data and tokenizer as Parts 3–4.
 #
 # Key design:
-# - **Sparse-scatter LUTs everywhere**: each LUT module is `MultiHeadLut`
-#   producing per-table outputs of small `n_sparse_outputs`, followed by
-#   `SparseScatter` that scatters those values into the wider final output
-#   via fixed random per-(head, table) index subsets. This decouples
-#   per-table weight cost from `n_outputs`, so widening `E`, `d_qk`, `d_v`
-#   does not blow up LUT params.
+# - **Sparse-scatter LUTs everywhere**: each LUT module is `TinyMultiHeadLut`
+#   in its built-in `sparse_scatter_n_outputs` mode. Internally, per-table
+#   gather produces small `n_sparse_outputs`-wide values, then `scatter_add`
+#   places them into a fixed random subset of the dense `n_outputs`-dim
+#   output (per-(head, table) index subsets sampled without replacement).
+#   This decouples per-table weight cost from `n_outputs`, so widening `E`,
+#   `d_qk`, `d_v` does not grow LUT weights.
 # - **Q/K via dominance**: full all-pairs sign vector over `d_qk = 32`
 #   (`d_qk·(d_qk−1)/2 = 496` dims) before SDPA — attention scores live in
 #   ranking space. Sparse `VectorToDominance` (n_pairs subset) was tested in
@@ -842,9 +843,9 @@ print(f"\n{'-'*60}")
 #   AdamW for the whole model.
 
 # %%
-from spiky.lutorch.multi_head_lut import MultiHeadLut
+from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
-from spiky.lutorch.ranking_tools import VectorToDominance, DominanceToVector, SparseScatter
+from spiky.lutorch.ranking_tools import VectorToDominance, DominanceToVector
 
 # Architecture hyperparameters (mirrors nanochat_exps/exp100_e384_dqk32_dv64/config.json)
 LUT_E                 = 384
@@ -870,40 +871,32 @@ LUT_SEED              = 42
 LUT_D_QK_P = LUT_D_QK * (LUT_D_QK - 1) // 2  # 496
 
 
-class SparseLut(nn.Module):
-    """MultiHeadLut(return_per_table_outputs=True) followed by SparseScatter.
+def _make_sparse_lut(input_dim, n_heads, n_outputs, n_anchor_pairs,
+                     tables_per_head, n_sparse_outputs, lut_seed, scatter_seed):
+    """`TinyMultiHeadLut` with built-in sparse-scatter.
 
-    Per-table weight cost is `n_sparse_outputs` instead of `n_outputs`, so
-    the LUT weights are decoupled from the final output dim. SparseScatter
-    routes each table's small output into a fixed random subset of the
-    wider `n_outputs` slots (per-(head, table) without replacement).
+    Per-table weight cost depends on `n_sparse_outputs` instead of `n_outputs`,
+    so wide outputs are reached without growing LUT weights. Internally the
+    Tiny LUT gathers per-table values of size `n_sparse_outputs` and
+    scatter-adds them into a dense `n_outputs`-dim vector via a fixed random
+    per-(head, table) index subset (sampled without replacement).
     """
-
-    def __init__(self, input_dim, n_heads, n_outputs, n_anchor_pairs,
-                 tables_per_head, n_sparse_outputs, lut_seed, scatter_seed):
-        super().__init__()
-        self.lut = MultiHeadLut(
-            input_dim=input_dim, n_heads=n_heads, n_outputs=n_sparse_outputs,
-            n_anchor_pairs=n_anchor_pairs, tables_per_head=tables_per_head,
-            n_alternatives=3, smooth_mode=True,
-            anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-            initial_weights_noise=LUT_INIT_STD,
-            random_seed=lut_seed,
-            device=torch.device(DEVICE),
-            return_per_table_outputs=True,
-        )
-        self.scatter = SparseScatter(
-            n_heads=n_heads, tables_per_head=tables_per_head,
-            n_sparse_outputs=n_sparse_outputs, n_outputs=n_outputs,
-            seed=scatter_seed, device=torch.device(DEVICE),
-        )
-
-    def forward(self, x):
-        return self.scatter(self.lut(x))
+    return TinyMultiHeadLut(
+        input_dim=input_dim, n_heads=n_heads,
+        n_outputs=n_sparse_outputs,
+        n_anchor_pairs=n_anchor_pairs, tables_per_head=tables_per_head,
+        weight_dtype=torch.float32,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        initial_weights_noise=LUT_INIT_STD,
+        random_seed=lut_seed,
+        device=torch.device(DEVICE),
+        sparse_scatter_n_outputs=n_outputs,
+        sparse_scatter_seed=scatter_seed,
+    )
 
 
 def _make_qk_joint(layer_idx):
-    return SparseLut(
+    return _make_sparse_lut(
         input_dim=LUT_E, n_heads=LUT_H, n_outputs=2 * LUT_D_QK,
         n_anchor_pairs=LUT_QK_INPUT_NAP, tables_per_head=LUT_QK_TPH,
         n_sparse_outputs=LUT_QK_N_SPARSE,
@@ -912,7 +905,7 @@ def _make_qk_joint(layer_idx):
     )
 
 def _make_v(layer_idx):
-    return SparseLut(
+    return _make_sparse_lut(
         input_dim=LUT_E, n_heads=LUT_H, n_outputs=LUT_D_V,
         n_anchor_pairs=LUT_V_INPUT_NAP, tables_per_head=LUT_V_TPH,
         n_sparse_outputs=LUT_V_N_SPARSE,
@@ -921,7 +914,7 @@ def _make_v(layer_idx):
     )
 
 def _make_out(layer_idx):
-    return SparseLut(
+    return _make_sparse_lut(
         input_dim=LUT_H * LUT_D_V, n_heads=1, n_outputs=LUT_E,
         n_anchor_pairs=LUT_OUT_INPUT_NAP, tables_per_head=LUT_OUT_TPH,
         n_sparse_outputs=LUT_OUT_N_SPARSE,
