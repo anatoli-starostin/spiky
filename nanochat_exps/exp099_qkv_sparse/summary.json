@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp099_qkv_sparse",
+  "best_val_bpb": 1.7299505649159628,
+  "final_val_bpb": 1.7299505649159628,
+  "n_params": 99389446,
+  "training_time_hours": 0.664
+}

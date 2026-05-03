@@ -814,3 +814,62 @@ def add_rank_preserving_noise(x, scale=0.1):
     min_gap = (sorted_x[..., 1:] - sorted_x[..., :-1]).min(dim=-1, keepdim=True).values  # (..., 1)
     noise = torch.rand_like(x) * min_gap * scale
     return x + noise
+
+
+class SparseScatter(nn.Module):
+    """Scatter-add per-table outputs into a wider dense output via fixed
+    random per-(head, table) index subsets.
+
+    Pairs with a MultiHeadLut configured with ``n_outputs=n_sparse_outputs`` and
+    ``return_per_table_outputs=True``: each of the ``tables_per_head`` tables
+    contributes its ``n_sparse_outputs`` values to a fixed random subset of
+    size ``n_sparse_outputs`` of the final ``n_outputs``-dim output. This
+    decouples per-table weight cost from ``n_outputs``: an LUT producing the
+    same final output dim now has weights ∝ ``n_sparse_outputs`` instead of
+    ``n_outputs``.
+
+    Subsets are sampled without replacement (per table) and independently
+    across (head, table). Indices are stored as a buffer (no learnable
+    routing).
+
+    Forward:
+        per_table: [B, n_heads, tables_per_head, n_sparse_outputs]
+        returns:   [B, n_heads, n_outputs]
+    """
+
+    def __init__(self, n_heads: int, tables_per_head: int,
+                 n_sparse_outputs: int, n_outputs: int,
+                 seed: Optional[int] = None,
+                 device: Optional[torch.device] = None):
+        super().__init__()
+        if n_sparse_outputs > n_outputs:
+            raise ValueError(
+                f"n_sparse_outputs ({n_sparse_outputs}) must be <= n_outputs ({n_outputs})"
+            )
+        self.n_heads = n_heads
+        self.tables_per_head = tables_per_head
+        self.n_sparse_outputs = n_sparse_outputs
+        self.n_outputs = n_outputs
+
+        gen = torch.Generator()
+        if seed is not None:
+            gen.manual_seed(int(seed))
+        idx = torch.empty(n_heads, tables_per_head, n_sparse_outputs, dtype=torch.long)
+        for h in range(n_heads):
+            for t in range(tables_per_head):
+                perm = torch.randperm(n_outputs, generator=gen)
+                idx[h, t] = perm[:n_sparse_outputs]
+        if device is not None:
+            idx = idx.to(device)
+        self.register_buffer('indices', idx)
+
+    def forward(self, per_table: torch.Tensor) -> torch.Tensor:
+        # per_table: [B, n_heads, tables_per_head, n_sparse_outputs]
+        B, H, T, S = per_table.shape
+        assert H == self.n_heads and T == self.tables_per_head and S == self.n_sparse_outputs, \
+            f"shape mismatch: got {per_table.shape}, expected " \
+            f"[B, {self.n_heads}, {self.tables_per_head}, {self.n_sparse_outputs}]"
+        out = per_table.new_zeros(B, H, self.n_outputs)
+        idx = self.indices.unsqueeze(0).expand(B, -1, -1, -1).reshape(B, H, T * S)
+        out.scatter_add_(2, idx, per_table.reshape(B, H, T * S))
+        return out

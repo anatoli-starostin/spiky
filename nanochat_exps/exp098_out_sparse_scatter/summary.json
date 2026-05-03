@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp098_out_sparse_scatter",
+  "best_val_bpb": 1.7383236134779911,
+  "final_val_bpb": 1.7383236134779911,
+  "n_params": 108826630,
+  "training_time_hours": 0.544
+}

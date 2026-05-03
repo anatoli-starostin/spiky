@@ -811,89 +811,127 @@ print(f"\n{'-'*60}")
 
 # %% [markdown]
 # ---
-# ## Part 5 — LUTorch GPT (`exp064` architecture)
+# ## Part 5 — LUTorch GPT (`exp100` architecture)
 #
-# A from-scratch architecture built on **lookup tables** instead of dense matmuls.
-# This is `exp064` from `nanochat_exps/exp064_no_v_dom/`: final val_bpb ≈ 1.70 at
-# 8K steps on the same data and tokenizer used in Parts 3–4 — beats both the
-# nanochat GPT and MinimalGPT references at this step budget.
+# Latest LUT-only architecture from `nanochat_exps/exp100_e384_dqk32_dv64/`.
+# Trained on the same data and tokenizer as Parts 3–4.
 #
 # Key design:
-# - **`TinyMultiHeadLut`** modules for Q/K joint, V, and out_proj. Each module is
-#   a bank of small lookup tables indexed by signed comparisons against learned
-#   anchor pairs in the input space — no dense matmul anywhere in the LUT path.
-# - **Q/K via dominance**: Q and K vectors are projected to all-pairs sign vectors
-#   (`d_qk·(d_qk−1)/2 = 496` dims) before SDPA — attention scores live in ranking
-#   space.
-# - **Raw V into SDPA**: the V LUT outputs 16-dim vectors used directly as
-#   attention values (no V dominance roundtrip — the single change vs. exp061
-#   that delivered ~−0.018 bpb).
-# - **Per-layer learnable position embeddings** (sum-mode), independent per layer.
-# - **Concat unembedder**: outputs of all 6 layers concatenated → LayerNorm →
-#   Linear → vocab.
-# - All-fp32 numerics (LUT weights, optimizer state, attention math). Single AdamW
-#   for the whole model.
+# - **Sparse-scatter LUTs everywhere**: each LUT module is `MultiHeadLut`
+#   producing per-table outputs of small `n_sparse_outputs`, followed by
+#   `SparseScatter` that scatters those values into the wider final output
+#   via fixed random per-(head, table) index subsets. This decouples
+#   per-table weight cost from `n_outputs`, so widening `E`, `d_qk`, `d_v`
+#   does not blow up LUT params.
+# - **Q/K via dominance**: full all-pairs sign vector over `d_qk = 32`
+#   (`d_qk·(d_qk−1)/2 = 496` dims) before SDPA — attention scores live in
+#   ranking space. Sparse `VectorToDominance` (n_pairs subset) was tested in
+#   exp101 and clearly hurt; full V2D at smaller `d_qk` is preferred.
+# - **Raw V into SDPA**: the V LUT outputs `d_v = 64`-dim per-head vectors
+#   used directly as attention values.
+# - **Classic transformer skip residual**: `out = LN(out_proj(attn(x)) + x)`.
+#   exp094 explored a residual-LUT chain with concat features; exp096+
+#   showed classic skip with wider `E` reaches the same loss with fewer
+#   params and far less complexity.
+# - **Per-layer learnable position embeddings** (sum-mode), independent per
+#   layer.
+# - **Final canonicalization**: `VectorToDominance(E) → DominanceToVector(E)`
+#   (Borda-rank roundtrip) before the unembedder.
+# - **Linear unembedder**: `LN(E) → Linear(E, VOCAB)`, no MLP.
+# - All-fp32 numerics (LUT weights, optimizer state, attention math). Single
+#   AdamW for the whole model.
 
 # %%
-from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
+from spiky.lutorch.multi_head_lut import MultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
-from spiky.lutorch.ranking_tools import VectorToDominance
+from spiky.lutorch.ranking_tools import VectorToDominance, DominanceToVector, SparseScatter
 
-# Architecture hyperparameters (mirrors nanochat_exps/exp064_no_v_dom/config.json)
-LUT_E                 = 96
+# Architecture hyperparameters (mirrors nanochat_exps/exp100_e384_dqk32_dv64/config.json)
+LUT_E                 = 384
 LUT_H                 = 6
 LUT_D_QK              = 32
-LUT_D_V               = 16
+LUT_D_V               = 64
 LUT_N_LAYERS          = 6
-LUT_QK_INPUT_NAP      = 6
-LUT_QK_TPH            = 256
-LUT_V_INPUT_NAP       = 7
-LUT_V_TPH             = 256
-LUT_OUT_INPUT_NAP     = 6
-LUT_OUT_TPH_PER_LAYER = [2048, 2048, 1024, 1024, 1024, 1024]
+LUT_QK_INPUT_NAP      = 8
+LUT_QK_TPH            = 384
+LUT_QK_N_SPARSE       = 8
+LUT_V_INPUT_NAP       = 8
+LUT_V_TPH             = 384
+LUT_V_N_SPARSE        = 8
+LUT_OUT_INPUT_NAP     = 8
+LUT_OUT_TPH           = 2048
+LUT_OUT_N_SPARSE      = 8
 LUT_CANON_T           = 0.1
 LUT_ATTN_SCALE_INIT   = 0.25
 LUT_INIT_STD          = 0.001
 LUT_POS_INIT_SCALE    = 0.1
 LUT_SEED              = 42
 
-LUT_D_QK_P = LUT_D_QK * (LUT_D_QK - 1) // 2
+LUT_D_QK_P = LUT_D_QK * (LUT_D_QK - 1) // 2  # 496
+
+
+class SparseLut(nn.Module):
+    """MultiHeadLut(return_per_table_outputs=True) followed by SparseScatter.
+
+    Per-table weight cost is `n_sparse_outputs` instead of `n_outputs`, so
+    the LUT weights are decoupled from the final output dim. SparseScatter
+    routes each table's small output into a fixed random subset of the
+    wider `n_outputs` slots (per-(head, table) without replacement).
+    """
+
+    def __init__(self, input_dim, n_heads, n_outputs, n_anchor_pairs,
+                 tables_per_head, n_sparse_outputs, lut_seed, scatter_seed):
+        super().__init__()
+        self.lut = MultiHeadLut(
+            input_dim=input_dim, n_heads=n_heads, n_outputs=n_sparse_outputs,
+            n_anchor_pairs=n_anchor_pairs, tables_per_head=tables_per_head,
+            n_alternatives=3, smooth_mode=True,
+            anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+            initial_weights_noise=LUT_INIT_STD,
+            random_seed=lut_seed,
+            device=torch.device(DEVICE),
+            return_per_table_outputs=True,
+        )
+        self.scatter = SparseScatter(
+            n_heads=n_heads, tables_per_head=tables_per_head,
+            n_sparse_outputs=n_sparse_outputs, n_outputs=n_outputs,
+            seed=scatter_seed, device=torch.device(DEVICE),
+        )
+
+    def forward(self, x):
+        return self.scatter(self.lut(x))
 
 
 def _make_qk_joint(layer_idx):
-    return TinyMultiHeadLut(
+    return SparseLut(
         input_dim=LUT_E, n_heads=LUT_H, n_outputs=2 * LUT_D_QK,
         n_anchor_pairs=LUT_QK_INPUT_NAP, tables_per_head=LUT_QK_TPH,
-        random_seed=LUT_SEED + layer_idx,
-        weight_dtype=torch.float32,
-        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+        n_sparse_outputs=LUT_QK_N_SPARSE,
+        lut_seed=LUT_SEED + layer_idx,
+        scatter_seed=LUT_SEED + layer_idx + 10000,
     )
 
 def _make_v(layer_idx):
-    return TinyMultiHeadLut(
+    return SparseLut(
         input_dim=LUT_E, n_heads=LUT_H, n_outputs=LUT_D_V,
         n_anchor_pairs=LUT_V_INPUT_NAP, tables_per_head=LUT_V_TPH,
-        random_seed=LUT_SEED + 200 + layer_idx,
-        weight_dtype=torch.float32,
-        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+        n_sparse_outputs=LUT_V_N_SPARSE,
+        lut_seed=LUT_SEED + 200 + layer_idx,
+        scatter_seed=LUT_SEED + 200 + layer_idx + 10000,
     )
 
 def _make_out(layer_idx):
-    return TinyMultiHeadLut(
+    return SparseLut(
         input_dim=LUT_H * LUT_D_V, n_heads=1, n_outputs=LUT_E,
-        n_anchor_pairs=LUT_OUT_INPUT_NAP,
-        tables_per_head=LUT_OUT_TPH_PER_LAYER[layer_idx],
-        random_seed=LUT_SEED + 400 + layer_idx,
-        weight_dtype=torch.float32,
-        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-        initial_weights_noise=LUT_INIT_STD, device=DEVICE,
+        n_anchor_pairs=LUT_OUT_INPUT_NAP, tables_per_head=LUT_OUT_TPH,
+        n_sparse_outputs=LUT_OUT_N_SPARSE,
+        lut_seed=LUT_SEED + 400 + layer_idx,
+        scatter_seed=LUT_SEED + 400 + layer_idx + 10000,
     )
 
 
 class LUTBlock(nn.Module):
-    """exp064 block: ranking attention with raw V into SDPA (no V dominance)."""
+    """exp100 block: SparseScatter LUTs + classic skip residual + LayerNorm."""
 
     def __init__(self, layer_idx):
         super().__init__()
@@ -901,8 +939,8 @@ class LUTBlock(nn.Module):
         self.v_lut    = _make_v(layer_idx)
         self.out_proj = _make_out(layer_idx)
         self.qk_v2d   = VectorToDominance(LUT_D_QK, smooth_mode=False, temperature=LUT_CANON_T)
-        self.out_ln   = nn.LayerNorm(LUT_E)
         self.attn_scale = nn.Parameter(torch.tensor(float(LUT_ATTN_SCALE_INIT)))
+        self.block_out_ln = nn.LayerNorm(LUT_E)
 
     def forward(self, x, pos_emb):
         B, T, _ = x.shape
@@ -922,8 +960,8 @@ class LUTBlock(nn.Module):
             q * self.attn_scale, k, v, is_causal=True,
         )                                                                  # [B, H, T, d_v]
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, LUT_H * LUT_D_V)
-        out = self.out_proj(out_in).squeeze(1)                            # [B*T, E]
-        return self.out_ln(out).reshape(B, T, LUT_E)
+        out_real = self.out_proj(out_in).squeeze(1).reshape(B, T, LUT_E)   # [B, T, E]
+        return self.block_out_ln(out_real + x)
 
 
 class LUTGPT(nn.Module):
@@ -937,10 +975,11 @@ class LUTGPT(nn.Module):
             for _ in range(LUT_N_LAYERS)
         ])
         self.layers = nn.ModuleList([LUTBlock(i) for i in range(LUT_N_LAYERS)])
-        concat_dim = LUT_N_LAYERS * LUT_E
+        self.final_v2d = VectorToDominance(LUT_E, smooth_mode=False, temperature=LUT_CANON_T)
+        self.final_d2v = DominanceToVector(LUT_E, normalise=True)
         self.unembedder = nn.Sequential(
-            nn.LayerNorm(concat_dim),
-            nn.Linear(concat_dim, vocab_size),
+            nn.LayerNorm(LUT_E),
+            nn.Linear(LUT_E, vocab_size),
         )
 
     def get_device(self):
@@ -960,11 +999,13 @@ class LUTGPT(nn.Module):
 
     def forward(self, idx, targets=None, loss_reduction="mean"):
         x = self.token_embedder(idx)
-        outs = []
         for layer, pos_emb in zip(self.layers, self.pos_embs):
             x = layer(x, pos_emb)
-            outs.append(x)
-        logits = self.unembedder(torch.cat(outs, dim=-1))
+        B, T, _ = x.shape
+        x_flat = x.reshape(B * T, LUT_E)
+        x_dom  = self.final_v2d(x_flat)
+        x_rank = self.final_d2v(x_dom).reshape(B, T, LUT_E)
+        logits = self.unembedder(x_rank)
         if targets is not None:
             return F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -1047,7 +1088,7 @@ try:
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(val_steps,      val_bpbs,      "o-", label=f"Nanochat GPT (depth={DEPTH})")
     ax.plot(mini_val_steps, mini_val_bpbs, "s-", label=f"Minimal GPT (depth={MIN_DEPTH})")
-    ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT exp064 (depth={LUT_N_LAYERS})")
+    ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT exp100 (depth={LUT_N_LAYERS})")
     ax.set(xlabel="step", ylabel="bits per byte", title="Validation BPB")
     ax.grid(True); ax.legend()
     plt.tight_layout()

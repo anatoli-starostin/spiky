@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp096_classic_residual",
+  "best_val_bpb": 1.776789300010279,
+  "final_val_bpb": 1.776789300010279,
+  "n_params": 132598022,
+  "training_time_hours": 0.91
+}

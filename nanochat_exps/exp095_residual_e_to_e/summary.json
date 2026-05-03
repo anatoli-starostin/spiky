@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp095_residual_e_to_e",
+  "best_val_bpb": 1.895620177798955,
+  "final_val_bpb": 1.895620177798955,
+  "n_params": 160909574,
+  "training_time_hours": 0.983
+}
