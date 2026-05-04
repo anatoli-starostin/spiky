@@ -258,6 +258,8 @@ class TinyAnchorPairsLookup(nn.Module):
         partition_sets: Optional[list] = None,
         partition_pair_weights: Optional[list] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        max_anchor_distance: Optional[int] = None,
+        local_window_starts: str = "linspace",
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -297,7 +299,11 @@ class TinyAnchorPairsLookup(nn.Module):
             shuffle_per_head=True,
             partition_sets=partition_sets,
             partition_pair_weights=partition_pair_weights,
+            max_anchor_distance=max_anchor_distance,
+            local_window_starts=local_window_starts,
         )
+        self.max_anchor_distance = max_anchor_distance
+        self.local_window_starts = local_window_starts
         if input_dim > 32767:
             raise ValueError(
                 f"TinyAnchorPairsLookup requires input_dim <= 32767 (int16 limit), got {input_dim}"

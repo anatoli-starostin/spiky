@@ -183,6 +183,78 @@ def _per_table_gather_forward(weights: torch.Tensor, lookup_indices: torch.Tenso
     return out.view(B, n_heads, tables_per_head, n_outputs)
 
 
+def _balanced_coverage_indices(n_tables: int, n_per_row: int, n_slots: int,
+                               generator: torch.Generator,
+                               max_retries: int = 32) -> torch.Tensor:
+    """Build a [n_tables, n_per_row] long tensor with two guarantees:
+
+    1. Every row contains `n_per_row` distinct values in [0, n_slots).
+    2. Each value j ∈ [0, n_slots) appears either
+       ⌊n_tables·n_per_row/n_slots⌋ or ⌈n_tables·n_per_row/n_slots⌉ times
+       across the whole tensor (balanced coverage).
+
+    For n_per_row == 1 the construction is trivial (shuffle of a balanced
+    bag). For n_per_row > 1 we use a greedy capacity-weighted sampler:
+    each table is filled by sampling `n_per_row` distinct slots without
+    replacement, weighted by their remaining capacity. Higher-capacity
+    slots are preferred, which spreads load away from exhaustion. If the
+    greedy gets stuck (a row would need more distinct slots than have
+    capacity left), the table order is reshuffled and the run restarts.
+    """
+    T, S, N = n_tables, n_per_row, n_slots
+    if S > N:
+        raise ValueError(f"n_per_row={S} cannot exceed n_slots={N}")
+
+    base = (T * S) // N
+    extra = (T * S) - base * N
+    target = torch.full((N,), base, dtype=torch.long)
+    if extra > 0:
+        bonus = torch.randperm(N, generator=generator)[:extra]
+        target[bonus] += 1
+    # invariant: target.sum() == T*S
+
+    if S == 1:
+        bag = torch.repeat_interleave(torch.arange(N, dtype=torch.long), target)
+        perm = torch.randperm(T, generator=generator)
+        return bag[perm].view(T, 1)
+
+    for _ in range(max_retries):
+        result = torch.empty(T, S, dtype=torch.long)
+        remaining = target.clone()
+        order = torch.randperm(T, generator=generator).tolist()
+        ok = True
+        for t in order:
+            n_avail = int((remaining > 0).sum().item())
+            if n_avail < S:
+                ok = False
+                break
+            picks = torch.multinomial(
+                remaining.float(), S, replacement=False, generator=generator,
+            )
+            result[t] = picks
+            remaining[picks] -= 1
+        if ok:
+            return result
+
+    # Fallback: when greedy can't pack distinct picks within balanced budget
+    # (typically when S is a substantial fraction of N), revert to i.i.d.
+    # randperm sampling per table. Each row stays distinct; per-slot counts
+    # follow a multinomial close to the balanced target on average but no
+    # longer hit the strict floor/ceil guarantee.
+    import warnings
+    warnings.warn(
+        f"_balanced_coverage_indices: greedy failed after {max_retries} "
+        f"retries for (n_tables={T}, n_per_row={S}, n_slots={N}); falling "
+        f"back to i.i.d. randperm sampling. Per-slot counts will be "
+        f"approximately balanced but not exact.",
+        RuntimeWarning, stacklevel=2,
+    )
+    result = torch.empty(T, S, dtype=torch.long)
+    for t in range(T):
+        result[t] = torch.randperm(N, generator=generator)[:S]
+    return result
+
+
 class _TinyMHLutGather(torch.autograd.Function):
     """Per-table gather with carrier-grad threading. Returns
     [B, n_heads, tph, n_outputs] without reducing across tables.
@@ -279,6 +351,10 @@ class TinyMultiHeadLut(nn.Module):
         device: Optional[torch.device] = None,
         sparse_scatter_n_outputs: Optional[int] = None,
         sparse_scatter_seed: Optional[int] = None,
+        sparse_scatter_balanced: bool = True,
+        max_anchor_distance: Optional[int] = None,
+        local_window_starts: str = "linspace",
+        aligned_local_scatter: bool = False,
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -304,6 +380,8 @@ class TinyMultiHeadLut(nn.Module):
         # into a fixed random subset of `sparse_scatter_n_outputs` slots.
         # Decouples per-table weights from the final output dim.
         self.sparse_scatter_n_outputs = sparse_scatter_n_outputs
+        self.sparse_scatter_balanced = sparse_scatter_balanced
+        self.aligned_local_scatter = aligned_local_scatter
         if sparse_scatter_n_outputs is not None:
             if sparse_scatter_n_outputs < n_outputs:
                 raise ValueError(
@@ -317,11 +395,67 @@ class TinyMultiHeadLut(nn.Module):
                 gen.manual_seed(int(sparse_scatter_seed))
             elif random_seed is not None:
                 gen.manual_seed(int(random_seed) + 1234567)
-            scatter_idx = torch.empty(n_heads, tables_per_head, n_outputs, dtype=torch.long)
-            for h in range(n_heads):
-                for t in range(tables_per_head):
-                    perm = torch.randperm(sparse_scatter_n_outputs, generator=gen)
-                    scatter_idx[h, t] = perm[:n_outputs]
+            if aligned_local_scatter:
+                # Each (head, table)'s scatter destinations are sampled from
+                # the SAME contiguous window [s_t, s_t + max_anchor_distance]
+                # used by the anchor lookup. Requires input_dim ==
+                # sparse_scatter_n_outputs (so input and output windows
+                # share index space).
+                if max_anchor_distance is None:
+                    raise ValueError(
+                        "aligned_local_scatter requires max_anchor_distance"
+                    )
+                if input_dim != sparse_scatter_n_outputs:
+                    raise ValueError(
+                        f"aligned_local_scatter requires input_dim "
+                        f"({input_dim}) == sparse_scatter_n_outputs "
+                        f"({sparse_scatter_n_outputs})"
+                    )
+                if local_window_starts != "linspace":
+                    raise ValueError(
+                        "aligned_local_scatter currently only supports "
+                        "local_window_starts='linspace' (deterministic starts)"
+                    )
+                if n_outputs > max_anchor_distance + 1:
+                    raise ValueError(
+                        f"aligned_local_scatter: n_outputs ({n_outputs}) > "
+                        f"max_anchor_distance+1 ({max_anchor_distance + 1}) — "
+                        f"can't sample n_outputs distinct slots from a "
+                        f"width-{max_anchor_distance + 1} window"
+                    )
+                from spiky.lutorch.lut_helpers import local_window_starts as _starts_fn
+                K = max_anchor_distance
+                starts = _starts_fn(
+                    n_tables=n_heads * tables_per_head,
+                    input_dim=input_dim, max_distance=K, n_heads=n_heads,
+                    starts_mode="linspace",
+                ).view(n_heads, tables_per_head)
+                scatter_idx = torch.empty(
+                    n_heads, tables_per_head, n_outputs, dtype=torch.long,
+                )
+                for h in range(n_heads):
+                    for t in range(tables_per_head):
+                        perm = torch.randperm(K + 1, generator=gen)[:n_outputs]
+                        scatter_idx[h, t] = perm + starts[h, t]
+            elif sparse_scatter_balanced:
+                # Balanced coverage: every output slot of dim
+                # sparse_scatter_n_outputs is the destination of either
+                # ⌊tables_per_head*n_outputs/sparse_scatter_n_outputs⌋ or
+                # ⌈...⌉ table-output positions per head.
+                scatter_idx = torch.stack([
+                    _balanced_coverage_indices(
+                        n_tables=tables_per_head, n_per_row=n_outputs,
+                        n_slots=sparse_scatter_n_outputs, generator=gen,
+                    )
+                    for _ in range(n_heads)
+                ], dim=0)                                              # [H, tph, n_outputs]
+            else:
+                # i.i.d. uniform sampling without replacement per (head, table).
+                scatter_idx = torch.empty(n_heads, tables_per_head, n_outputs, dtype=torch.long)
+                for h in range(n_heads):
+                    for t in range(tables_per_head):
+                        perm = torch.randperm(sparse_scatter_n_outputs, generator=gen)
+                        scatter_idx[h, t] = perm[:n_outputs]
             if device is not None:
                 scatter_idx = scatter_idx.to(device)
             self.register_buffer('scatter_indices', scatter_idx)
@@ -340,6 +474,8 @@ class TinyMultiHeadLut(nn.Module):
             partition_sets=partition_sets,
             partition_pair_weights=partition_pair_weights,
             anchor_sampling_policy=anchor_sampling_policy,
+            max_anchor_distance=max_anchor_distance,
+            local_window_starts=local_window_starts,
         )
 
         # Weights: [n_lookup_tables, table_dim, n_outputs] in weight_dtype.

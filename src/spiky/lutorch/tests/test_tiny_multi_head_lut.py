@@ -452,6 +452,101 @@ def test_sparse_scatter_grad_consistent_with_manual():
 
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+@pytest.mark.parametrize("T,S,N", [
+    (10, 1, 4),       # S=1, divisible
+    (10, 1, 7),       # S=1, non-divisible
+    (10, 3, 4),       # S>1, non-divisible
+    (384, 8, 64),     # divisible, exact balance
+    (2048, 8, 256),   # divisible, exact balance
+    (100, 5, 32),     # non-divisible, T*S=500, /32=15.625
+])
+def test_balanced_coverage_indices_helper(T, S, N):
+    """`_balanced_coverage_indices` returns a [T, S] long tensor where every
+    row has S distinct values in [0, N) and per-slot counts are within {floor,
+    ceil} of T*S/N."""
+    from spiky.lutorch.tiny_multi_head_lut import _balanced_coverage_indices
+    gen = torch.Generator().manual_seed(123)
+    out = _balanced_coverage_indices(n_tables=T, n_per_row=S, n_slots=N, generator=gen)
+    assert out.shape == (T, S), f"shape {out.shape} vs expected ({T}, {S})"
+    assert out.min().item() >= 0 and out.max().item() < N
+    # All rows distinct
+    for t in range(T):
+        assert out[t].unique().numel() == S, f"row {t} has duplicates"
+    # Balanced counts
+    counts = torch.bincount(out.reshape(-1), minlength=N)
+    base = (T * S) // N
+    extra = (T * S) - base * N
+    expected_max = base + (1 if extra > 0 else 0)
+    assert counts.min().item() == base, \
+        f"min count {counts.min().item()} != floor(T*S/N)={base}"
+    assert counts.max().item() == expected_max, \
+        f"max count {counts.max().item()} != ceil(T*S/N)={expected_max}"
+    assert counts.sum().item() == T * S
+    # The number of slots that get the extra +1 equals `extra`.
+    if extra > 0:
+        assert (counts == base + 1).sum().item() == extra
+        assert (counts == base).sum().item() == N - extra
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_sparse_scatter_balanced_mode_distribution():
+    """sparse_scatter_balanced=True (default) yields exactly-balanced
+    per-slot counts when T*S is divisible by N."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=2, n_outputs=8, n_anchor_pairs=6,
+        tables_per_head=128, weight_dtype=torch.float32,
+        random_seed=0, device=dev,
+        sparse_scatter_n_outputs=64, sparse_scatter_seed=7,
+        # default sparse_scatter_balanced=True
+    )
+    # T=128, S=8, N=64 → T*S/N = 16 exactly per head
+    for h in range(2):
+        counts = torch.bincount(m.scatter_indices[h].reshape(-1), minlength=64)
+        assert counts.min().item() == counts.max().item() == 16, \
+            f"head {h}: min={counts.min()} max={counts.max()}, expected exactly 16"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_sparse_scatter_balanced_off_uses_iid():
+    """sparse_scatter_balanced=False falls back to i.i.d. randperm sampling,
+    which has multinomial variance — counts will NOT be exactly equal."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=1, n_outputs=8, n_anchor_pairs=6,
+        tables_per_head=128, weight_dtype=torch.float32,
+        random_seed=0, device=dev,
+        sparse_scatter_n_outputs=64, sparse_scatter_seed=7,
+        sparse_scatter_balanced=False,
+    )
+    counts = torch.bincount(m.scatter_indices[0].reshape(-1), minlength=64)
+    # i.i.d.: with T*S=1024 over N=64, mean=16, std≈sqrt(16)=4. Almost
+    # surely some spread (min < max). Probability of perfect balance is
+    # vanishingly small.
+    assert counts.min().item() < counts.max().item(), \
+        "i.i.d. sampling should produce variance; got perfectly balanced output"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_sparse_scatter_balanced_seed_determinism():
+    """Same seed -> same balanced indices."""
+    dev = torch.device("cuda:0")
+    a = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=6,
+        tables_per_head=16, weight_dtype=torch.float32,
+        random_seed=0, device=dev,
+        sparse_scatter_n_outputs=32, sparse_scatter_seed=42,
+    )
+    b = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=6,
+        tables_per_head=16, weight_dtype=torch.float32,
+        random_seed=0, device=dev,
+        sparse_scatter_n_outputs=32, sparse_scatter_seed=42,
+    )
+    assert torch.equal(a.scatter_indices, b.scatter_indices)
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
 def test_sparse_scatter_collision_accumulates():
     """If two table rows map to the same output slot, the slot accumulates
     the sum of both contributions (scatter_add semantics)."""
@@ -481,3 +576,279 @@ def test_sparse_scatter_collision_accumulates():
     assert torch.allclose(y[..., 1], expected_1, atol=1e-5, rtol=1e-5)
     assert torch.allclose(y[..., 2:], torch.zeros_like(y[..., 2:]),
                           atol=1e-6, rtol=1e-6)
+
+
+# ============================================================================
+# max_anchor_distance: per-table local window constraint
+# ============================================================================
+
+def _per_table_widths(m: TinyMultiHeadLut) -> torch.Tensor:
+    a = m.lookup.anchor_pairs_a.long()
+    b = m.lookup.anchor_pairs_b.long()
+    combined = torch.cat([a, b], dim=1)              # [n_tables, 2*nap]
+    return combined.max(dim=1).values - combined.min(dim=1).values
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+@pytest.mark.parametrize("K", [4, 8, 15])
+def test_max_anchor_distance_constraint_holds(K):
+    """Every table's combined anchor set has max-min span <= K."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=128, n_heads=4, n_outputs=8, n_anchor_pairs=4,
+        tables_per_head=32, weight_dtype=torch.float32, random_seed=42, device=dev,
+        max_anchor_distance=K,
+    )
+    widths = _per_table_widths(m)
+    assert widths.max().item() <= K, \
+        f"some table exceeds max_anchor_distance: max width={widths.max().item()}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_per_pair_also_holds():
+    """Per-pair |a - b| <= K is automatically implied by per-table span <= K."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=2, n_outputs=4, n_anchor_pairs=6,
+        tables_per_head=16, weight_dtype=torch.float32, random_seed=0, device=dev,
+        max_anchor_distance=8,
+    )
+    a = m.lookup.anchor_pairs_a.long()
+    b = m.lookup.anchor_pairs_b.long()
+    diffs = (b - a).abs()
+    assert diffs.max().item() <= 8
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_starts_linspace_spreads_across_input():
+    """Default 'linspace' window starts cover the whole valid start range
+    [0, input_dim - K - 1] approximately uniformly."""
+    dev = torch.device("cuda:0")
+    input_dim, K = 128, 7
+    m = TinyMultiHeadLut(
+        input_dim=input_dim, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=64, weight_dtype=torch.float32, random_seed=0, device=dev,
+        max_anchor_distance=K,
+    )
+    a = m.lookup.anchor_pairs_a.long()
+    b = m.lookup.anchor_pairs_b.long()
+    starts = torch.minimum(a.min(dim=1).values, b.min(dim=1).values)
+    assert starts.min().item() == 0
+    assert starts.max().item() == input_dim - K - 1
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_window_too_small_raises():
+    """If (K+1)·K/2 < n_anchor_pairs, the within-window pair pool is too
+    small and init must raise."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="local_window: window_size"):
+        # K=3 → window=4 → only 6 pairs available. nap=8 won't fit.
+        TinyMultiHeadLut(
+            input_dim=64, n_heads=1, n_outputs=4, n_anchor_pairs=8,
+            tables_per_head=8, weight_dtype=torch.float32, random_seed=0, device=dev,
+            max_anchor_distance=3,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_window_too_big_raises():
+    """K+1 > input_dim is rejected."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="max_distance\\+1=33 > input_dim=32"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, random_seed=0, device=dev,
+            max_anchor_distance=32,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_mutually_exclusive_with_partition_sets():
+    """max_anchor_distance + partition_sets is rejected."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, random_seed=0, device=dev,
+            max_anchor_distance=8,
+            partition_sets=[set(range(0, 16)), set(range(16, 32))],
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_random_starts_seed_determinism():
+    """Same random_seed + starts_mode='random' → identical anchors."""
+    dev = torch.device("cuda:0")
+    kwargs = dict(
+        input_dim=128, n_heads=2, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=16, weight_dtype=torch.float32, random_seed=7, device=dev,
+        max_anchor_distance=10, local_window_starts="random",
+    )
+    a = TinyMultiHeadLut(**kwargs)
+    b = TinyMultiHeadLut(**kwargs)
+    assert torch.equal(a.lookup.anchor_pairs_a, b.lookup.anchor_pairs_a)
+    assert torch.equal(a.lookup.anchor_pairs_b, b.lookup.anchor_pairs_b)
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_forward_backward():
+    """Local-window TinyMHLut still trains (forward + backward populate
+    grads on weights and on x via STE carriers)."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=2, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=16, weight_dtype=torch.float32, random_seed=0, device=dev,
+        max_anchor_distance=8,
+    )
+    x = torch.randn(8, 64, device=dev, requires_grad=True)
+    y = m(x)
+    y.sum().backward()
+    assert m.weights.grad is not None
+    assert m.weights.grad.abs().sum().item() > 0
+    assert x.grad is not None
+    assert x.grad.abs().sum().item() > 0
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_max_anchor_distance_input_coverage_uniform_for_linspace():
+    """Linspace start mode + many tables ⇒ each input dim is covered by at
+    least some tables (no cold spots)."""
+    dev = torch.device("cuda:0")
+    input_dim, K = 64, 7
+    m = TinyMultiHeadLut(
+        input_dim=input_dim, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+        tables_per_head=128, weight_dtype=torch.float32, random_seed=0, device=dev,
+        max_anchor_distance=K,
+    )
+    # Count how many tables touch each input dim (via either a or b indices).
+    a = m.lookup.anchor_pairs_a.long()
+    b = m.lookup.anchor_pairs_b.long()
+    coverage = torch.zeros(input_dim, dtype=torch.long)
+    for t in range(a.shape[0]):
+        for v in torch.cat([a[t], b[t]]).unique():
+            coverage[v] += 1
+    assert (coverage > 0).all(), \
+        f"some input dim is uncovered: {torch.nonzero(coverage == 0).flatten().tolist()}"
+
+
+# ============================================================================
+# aligned_local_scatter: per-table aligned input + scatter windows
+# ============================================================================
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_constraint():
+    """Per (head, table), all lookup anchors AND all scatter destinations
+    lie within the same width-(K+1) window starting at linspace start_t."""
+    from spiky.lutorch.lut_helpers import local_window_starts as _starts_fn
+    dev = torch.device("cuda:0")
+    H, tph, K, n_outputs, n_anchor_pairs = 2, 32, 15, 8, 6
+    input_dim = 64
+    m = TinyMultiHeadLut(
+        input_dim=input_dim, n_heads=H, n_outputs=n_outputs,
+        n_anchor_pairs=n_anchor_pairs, tables_per_head=tph,
+        weight_dtype=torch.float32, random_seed=0, device=dev,
+        sparse_scatter_n_outputs=input_dim, sparse_scatter_seed=7,
+        max_anchor_distance=K,
+        aligned_local_scatter=True,
+    )
+    starts = _starts_fn(n_tables=H * tph, input_dim=input_dim,
+                       max_distance=K, n_heads=H, starts_mode="linspace")
+    starts = starts.view(H, tph)
+    ap_a = m.lookup.anchor_pairs_a.long().view(H, tph, n_anchor_pairs)
+    ap_b = m.lookup.anchor_pairs_b.long().view(H, tph, n_anchor_pairs)
+    sc = m.scatter_indices  # [H, tph, n_outputs]
+    for h in range(H):
+        for t in range(tph):
+            s = starts[h, t].item()
+            lo, hi = s, s + K
+            assert (ap_a[h, t] >= lo).all() and (ap_a[h, t] <= hi).all()
+            assert (ap_b[h, t] >= lo).all() and (ap_b[h, t] <= hi).all()
+            assert (sc[h, t] >= lo).all() and (sc[h, t] <= hi).all()
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_distinct_within_table():
+    """Each (head, table)'s n_outputs scatter destinations are distinct."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=2, n_outputs=8, n_anchor_pairs=4,
+        tables_per_head=16, weight_dtype=torch.float32, device=dev,
+        sparse_scatter_n_outputs=64, sparse_scatter_seed=7,
+        max_anchor_distance=15, aligned_local_scatter=True,
+    )
+    sc = m.scatter_indices.view(-1, 8)
+    for t in range(sc.shape[0]):
+        assert sc[t].unique().numel() == 8, f"table {t} has duplicates"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_requires_max_anchor_distance():
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="aligned_local_scatter requires max_anchor_distance"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=8, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, device=dev,
+            sparse_scatter_n_outputs=32, aligned_local_scatter=True,
+            # missing max_anchor_distance
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_requires_input_eq_output():
+    """input_dim must equal sparse_scatter_n_outputs for alignment."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="aligned_local_scatter requires input_dim"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, device=dev,
+            sparse_scatter_n_outputs=64, max_anchor_distance=8,
+            aligned_local_scatter=True,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_requires_linspace_starts():
+    """aligned_local_scatter currently only supports linspace starts (so the
+    lookup and scatter recompute the same deterministic start positions)."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="local_window_starts='linspace'"):
+        TinyMultiHeadLut(
+            input_dim=64, n_heads=1, n_outputs=4, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, device=dev,
+            sparse_scatter_n_outputs=64, max_anchor_distance=8,
+            aligned_local_scatter=True,
+            local_window_starts="random",
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_n_outputs_capped_by_window():
+    """n_outputs must be <= K+1 (you can't sample n_outputs distinct slots
+    from a window of width K+1 if n_outputs > K+1)."""
+    dev = torch.device("cuda:0")
+    with pytest.raises(ValueError, match="aligned_local_scatter: n_outputs"):
+        TinyMultiHeadLut(
+            input_dim=64, n_heads=1, n_outputs=10, n_anchor_pairs=4,
+            tables_per_head=8, weight_dtype=torch.float32, device=dev,
+            sparse_scatter_n_outputs=64, max_anchor_distance=8,  # window = 9 < 10
+            aligned_local_scatter=True,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_aligned_local_scatter_forward_backward():
+    """Forward + backward populate grads on weights and inputs."""
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=64, n_heads=2, n_outputs=8, n_anchor_pairs=6,
+        tables_per_head=16, weight_dtype=torch.float32, random_seed=0, device=dev,
+        sparse_scatter_n_outputs=64, sparse_scatter_seed=7,
+        max_anchor_distance=15, aligned_local_scatter=True,
+    )
+    x = torch.randn(4, 64, device=dev, requires_grad=True)
+    y = m(x)
+    assert y.shape == (4, 2, 64)
+    y.sum().backward()
+    assert m.weights.grad.abs().sum().item() > 0
+    assert x.grad.abs().sum().item() > 0

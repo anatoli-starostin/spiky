@@ -377,6 +377,109 @@ def _get_canonical_distinct_pairs(
     return all_a, all_b
 
 
+def local_window_starts(
+    n_tables: int,
+    input_dim: int,
+    max_distance: int,
+    n_heads: int,
+    starts_mode: str = "linspace",
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    """Compute per-table window start positions for the local-window sampler.
+
+    Returns a long tensor of shape [n_tables] with values in
+    [0, input_dim - max_distance - 1] (linspace) or [0, input_dim - max_distance)
+    (random). Each table's anchors must lie in the window
+    [start_t, start_t + max_distance].
+
+    Modes:
+      'linspace' — `per_head = n_tables // n_heads` evenly spaced starts over
+                   [0, input_dim - max_distance - 1], reused across all heads
+                   (deterministic, no RNG dependency).
+      'random'   — n_tables uniform-random starts in [0, input_dim - max_distance),
+                   keyed by `generator` if provided.
+    """
+    K = max_distance
+    if K + 1 > input_dim:
+        raise ValueError(
+            f"local_window: max_distance+1={K+1} > input_dim={input_dim}"
+        )
+    if K < 1:
+        raise ValueError(f"local_window: max_distance must be >= 1, got {K}")
+    per_head = n_tables // n_heads
+    if starts_mode == "linspace":
+        if per_head <= 0:
+            raise ValueError(
+                f"n_tables ({n_tables}) must be >= n_heads ({n_heads})"
+            )
+        if per_head == 1:
+            base_starts = torch.zeros(1, dtype=torch.long)
+        else:
+            base_starts = torch.linspace(
+                0, input_dim - K - 1, per_head,
+            ).round().long()
+        starts = base_starts.repeat(n_heads)
+        if starts.numel() < n_tables:
+            extra = n_tables - starts.numel()
+            starts = torch.cat([starts, base_starts[:extra]])
+        return starts
+    if starts_mode == "random":
+        return torch.randint(
+            0, input_dim - K, (n_tables,), generator=generator,
+        )
+    raise ValueError(
+        f"starts_mode must be 'linspace' or 'random', got {starts_mode!r}"
+    )
+
+
+def _get_local_window_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    max_distance: int,
+    device: torch.device,
+    random_seed: Optional[int],
+    n_heads: int,
+    starts_mode: str = "linspace",
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Per-table local-window anchor-pair sampler.
+
+    For each table, all anchors live within a contiguous window
+    [s_t, s_t + max_distance] of width K+1, so that for every pair (a, b) in
+    the table |a - b| <= max_distance. Pairs are sampled without replacement
+    from the within-window pool of size (K+1)·K/2.
+    """
+    K = max_distance
+    window_size = K + 1
+    n_pairs_per_window = window_size * (window_size - 1) // 2
+    if n_anchor_pairs > n_pairs_per_window:
+        raise ValueError(
+            f"local_window: window_size={window_size} has only "
+            f"{n_pairs_per_window} possible pairs, but "
+            f"n_anchor_pairs={n_anchor_pairs}"
+        )
+
+    cpu_gen = None
+    if random_seed is not None:
+        cpu_gen = torch.Generator(device="cpu")
+        cpu_gen.manual_seed(random_seed)
+
+    starts = local_window_starts(
+        n_tables=n_tables, input_dim=input_dim, max_distance=K,
+        n_heads=n_heads, starts_mode=starts_mode, generator=cpu_gen,
+    )
+
+    rel = torch.combinations(torch.arange(window_size), 2)         # [P, 2]
+    a_pairs = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long)
+    b_pairs = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long)
+    for t in range(n_tables):
+        idx = torch.randperm(n_pairs_per_window, generator=cpu_gen)[:n_anchor_pairs]
+        chosen = rel[idx]                                          # [n_anchor_pairs, 2]
+        a_pairs[t] = chosen[:, 0] + starts[t]
+        b_pairs[t] = chosen[:, 1] + starts[t]
+    return a_pairs.to(device), b_pairs.to(device)
+
+
 def get_balanced_anchor_pairs(
     n_tables: int,
     n_anchor_pairs: int,
@@ -391,6 +494,8 @@ def get_balanced_anchor_pairs(
     exclusion_sets: Optional[list] = None,
     partition_sets: Optional[list] = None,
     partition_pair_weights: Optional[list] = None,
+    max_anchor_distance: Optional[int] = None,
+    local_window_starts: str = "linspace",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generate anchor pairs with balanced coverage over input dimensions.
@@ -426,6 +531,29 @@ def get_balanced_anchor_pairs(
         effective_policy = AnchorSamplingPolicy.CONNECTED if connected_mode else AnchorSamplingPolicy.BALANCED
     else:
         effective_policy = policy
+
+    # Local-window mode short-circuits the policy/partition routing — every
+    # table's pairs come from a single contiguous input window.
+    if max_anchor_distance is not None:
+        if partition_sets is not None or partition_pair_weights is not None:
+            raise ValueError(
+                "max_anchor_distance is mutually exclusive with partition_sets / "
+                "partition_pair_weights"
+            )
+        if exclusion_sets is not None:
+            raise ValueError(
+                "max_anchor_distance is mutually exclusive with exclusion_sets"
+            )
+        return _get_local_window_pairs(
+            n_tables=n_tables,
+            n_anchor_pairs=n_anchor_pairs,
+            input_dim=input_dim,
+            max_distance=max_anchor_distance,
+            device=device,
+            random_seed=random_seed,
+            n_heads=n_heads,
+            starts_mode=local_window_starts,
+        )
 
     gen = None
     if random_seed is not None:

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp108_balanced_coverage",
+  "best_val_bpb": 1.783179381634271,
+  "final_val_bpb": 1.783179381634271,
+  "n_params": 108173318,
+  "training_time_hours": 0.923
+}

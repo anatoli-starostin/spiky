@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp104_tiny_sparse",
+  "best_val_bpb": 1.7721929234502967,
+  "final_val_bpb": 1.7721929234502967,
+  "n_params": 108173318,
+  "training_time_hours": 0.668
+}

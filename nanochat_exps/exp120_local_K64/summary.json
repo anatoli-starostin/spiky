@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp120_local_K64",
+  "best_val_bpb": 1.7787586560509892,
+  "final_val_bpb": 1.7787586560509892,
+  "n_params": 108173318,
+  "training_time_hours": 0.669
+}

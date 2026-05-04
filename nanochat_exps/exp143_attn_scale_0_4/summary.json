@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp143_attn_scale_0_4",
+  "best_val_bpb": 1.7212747912237492,
+  "final_val_bpb": 1.7212747912237492,
+  "n_params": 316507654,
+  "training_time_hours": 0.602
+}

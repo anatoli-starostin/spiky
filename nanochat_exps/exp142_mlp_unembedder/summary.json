@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp142_mlp_unembedder",
+  "best_val_bpb": 1.727804971221943,
+  "final_val_bpb": 1.727804971221943,
+  "n_params": 354847750,
+  "training_time_hours": 0.636
+}

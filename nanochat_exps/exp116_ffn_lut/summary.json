@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp116_ffn_lut",
+  "best_val_bpb": 1.720627334918182,
+  "final_val_bpb": 1.720627334918182,
+  "n_params": 133343750,
+  "training_time_hours": 0.669
+}

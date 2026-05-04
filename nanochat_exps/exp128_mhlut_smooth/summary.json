@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp128_mhlut_smooth",
+  "best_val_bpb": 1.7076376107855038,
+  "final_val_bpb": 1.7076376107855038,
+  "n_params": 129304838,
+  "training_time_hours": 0.729
+}
