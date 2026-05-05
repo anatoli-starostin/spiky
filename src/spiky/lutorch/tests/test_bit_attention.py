@@ -187,6 +187,67 @@ def test_bf16_backward_path_correctness(BH, T, d, d_v, is_causal):
     assert rel_k.median().item() < 5e-3, f"dK rel-median {rel_k.median().item():.2e}"
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="TC kernel is CUDA-only")
+@pytest.mark.parametrize("BH,T,d,d_v,is_causal", [
+    (4, 64, 128, 32, True),
+    (4, 128, 256, 32, True),
+    (4, 64, 384, 32, False),
+    (4, 128, 496, 32, True),
+])
+def test_tc_forward_kernel(BH, T, d, d_v, is_causal):
+    """TC forward kernel (binary TC + bf16 WMMA V agg) matches F.SDPA fp32
+    to bf16 precision. Skips if the TC kernel symbol isn't compiled in."""
+    from spiky.lutorch.bit_attention import _native_has_bit_attn_tc
+    if not _native_has_bit_attn_tc():
+        pytest.skip("bit_attn_flash_forward_tc kernel not available")
+
+    from lutorch_cuda import get_lutorch_manager
+    native = get_lutorch_manager()
+    torch.manual_seed(0)
+    device = "cuda"
+    q = (torch.randint(0, 2, (BH, T, d), device=device, dtype=torch.float32) * 2 - 1)
+    k = (torch.randint(0, 2, (BH, T, d), device=device, dtype=torch.float32) * 2 - 1)
+    v = torch.randn(BH, T, d_v, device=device)
+    scale = 1.0 / math.sqrt(d)
+
+    out_tc = native.bit_attn_flash_forward_tc(q, k, v, scale, is_causal)
+    out_ref = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, scale=scale)
+
+    # bf16 V cast + bf16 A cast → ~2e-3 relative quantization.
+    rel = ((out_tc - out_ref).abs() / (out_ref.abs() + 1e-9)).median().item()
+    max_abs = (out_tc - out_ref).abs().max().item()
+    assert rel < 5e-3, f"rel-median {rel:.2e} (max abs {max_abs:.2e})"
+    assert max_abs < 5e-2, f"max abs {max_abs:.2e}"
+
+
+def test_tc_forward_via_dispatcher(monkeypatch):
+    """When SPIKY_BIT_ATTN_USE_FORWARD_KERNEL=tc, BitAttention.forward
+    routes to the TC kernel."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    from spiky.lutorch.bit_attention import _native_has_bit_attn_tc
+    if not _native_has_bit_attn_tc():
+        pytest.skip("TC kernel not available")
+    # Reload module with env var set
+    import importlib
+    monkeypatch.setenv("SPIKY_BIT_ATTN_USE_FORWARD_KERNEL", "tc")
+    import spiky.lutorch.bit_attention as ba
+    importlib.reload(ba)
+    torch.manual_seed(0)
+    device = "cuda"
+    BH, T, d, d_v = 4, 64, 256, 32
+    q = (torch.randint(0, 2, (BH, T, d), device=device, dtype=torch.float32) * 2 - 1)
+    k = (torch.randint(0, 2, (BH, T, d), device=device, dtype=torch.float32) * 2 - 1)
+    v = torch.randn(BH, T, d_v, device=device)
+    out = ba.BitAttention(d).cuda()(q, k, v, is_causal=True)
+    ref = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=1.0 / math.sqrt(d))
+    rel = ((out - ref).abs() / (ref.abs() + 1e-9)).median().item()
+    assert rel < 5e-3
+    # Restore default (no env)
+    monkeypatch.delenv("SPIKY_BIT_ATTN_USE_FORWARD_KERNEL", raising=False)
+    importlib.reload(ba)
+
+
 def test_explicit_backward_3d_input(device):
     """Backward works on 3-D (B, T, d) input shape."""
     torch.manual_seed(1)
