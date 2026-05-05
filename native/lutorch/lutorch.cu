@@ -1938,135 +1938,138 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
     constexpr int K_TILE = 8;
     constexpr int K_FRAG = 128;
     constexpr int MAX_D_V = 128;
+    constexpr int N_WARPS = 4;             // 4 warps per block, each handles its own Q_TILE
+    constexpr int BLOCK_Q = Q_TILE * N_WARPS;  // 32 q_rows per block
 
     int32_t bh = blockIdx.y;
-    int32_t q_blk = blockIdx.x * Q_TILE;
-    int32_t tid = threadIdx.x;
+    int32_t block_q_base = blockIdx.x * BLOCK_Q;
+    int32_t warp_id = threadIdx.y;          // 0..3
+    int32_t lane    = threadIdx.x;          // 0..31
+    int32_t q_blk   = block_q_base + warp_id * Q_TILE;
+    int32_t linear_tid = warp_id * 32 + lane;
+    int32_t threads_per_block = N_WARPS * 32;
 
-    if (q_blk >= T) return;
+    bool warp_active = (q_blk < T);
 
-    // Per-q-row state: max, sum, accumulator. Held in shared mem so all
-    // 32 lanes can read/write any q_row's state cooperatively.
-    __shared__ float running_max[Q_TILE];
-    __shared__ float running_sum[Q_TILE];
-    __shared__ float O_acc[Q_TILE * MAX_D_V];
-    __shared__ int32_t scores_int[Q_TILE * K_TILE];
-    __shared__ float V_tile[K_TILE * MAX_D_V];
+    // Per-warp state slices.
+    __shared__ float running_max[N_WARPS][Q_TILE];
+    __shared__ float running_sum[N_WARPS][Q_TILE];
+    __shared__ float O_acc[N_WARPS][Q_TILE * MAX_D_V];      // 4 * 4 KB = 16 KB
+    __shared__ int32_t scores_int[N_WARPS][Q_TILE * K_TILE]; // 4 * 256 B = 1 KB
+    __shared__ float w_buf[N_WARPS][K_TILE];                 // 4 * 32 B = 128 B
+    // V_tile shared across warps (same K-tile per outer iter).
+    __shared__ float V_tile[K_TILE * MAX_D_V];               // 4 KB
 
-    if (tid < Q_TILE) {
-        running_max[tid] = -INFINITY;
-        running_sum[tid] = 0.0f;
+    if (warp_active) {
+        if (lane < Q_TILE) {
+            running_max[warp_id][lane] = -INFINITY;
+            running_sum[warp_id][lane] = 0.0f;
+        }
+        for (int32_t i = lane; i < Q_TILE * d_v; i += 32) {
+            O_acc[warp_id][i] = 0.0f;
+        }
     }
-    for (int32_t i = tid; i < Q_TILE * d_v; i += 32) {
-        O_acc[i] = 0.0f;
-    }
-    __syncwarp();
+    __syncthreads();
 
     int32_t n_k_tiles = (T + K_TILE - 1) / K_TILE;
-    int32_t n_k_frags = n_words / 4;   // 4 uint32 = 128 bits per K_FRAG
+    int32_t n_k_frags = n_words / 4;
 
     for (int32_t kt = 0; kt < n_k_tiles; ++kt) {
         int32_t k_base = kt * K_TILE;
         int32_t k_count = T - k_base;
         if (k_count > K_TILE) k_count = K_TILE;
 
-        // Q@K^T via bmma XOR-popcount accumulated over n_k_frags.
-        fragment<accumulator, 8, 8, K_FRAG, int32_t> c_frag;
-        fill_fragment(c_frag, 0);
-        for (int32_t kf = 0; kf < n_k_frags; ++kf) {
-            fragment<matrix_a, 8, 8, K_FRAG, experimental::precision::b1, row_major> a_frag;
-            fragment<matrix_b, 8, 8, K_FRAG, experimental::precision::b1, col_major> b_frag;
-            const uint32_t* q_ptr = q_bits + ((int64_t)bh * T + q_blk) * n_words + kf * 4;
-            const uint32_t* k_ptr = k_bits + ((int64_t)bh * T + k_base) * n_words + kf * 4;
-            // ld in bits: stride between rows in source = n_words * 32 bits
-            load_matrix_sync(a_frag, q_ptr, n_words * 32);
-            load_matrix_sync(b_frag, k_ptr, n_words * 32);
-            bmma_sync(c_frag, a_frag, b_frag, c_frag,
-                      experimental::bmmaBitOpXOR,
-                      experimental::bmmaAccumulateOpPOPC);
+        // Each warp: bmma its own Q_TILE × K_TILE score fragment.
+        if (warp_active) {
+            fragment<accumulator, 8, 8, K_FRAG, int32_t> c_frag;
+            fill_fragment(c_frag, 0);
+            for (int32_t kf = 0; kf < n_k_frags; ++kf) {
+                fragment<matrix_a, 8, 8, K_FRAG, experimental::precision::b1, row_major> a_frag;
+                fragment<matrix_b, 8, 8, K_FRAG, experimental::precision::b1, col_major> b_frag;
+                const uint32_t* q_ptr = q_bits + ((int64_t)bh * T + q_blk) * n_words + kf * 4;
+                const uint32_t* k_ptr = k_bits + ((int64_t)bh * T + k_base) * n_words + kf * 4;
+                load_matrix_sync(a_frag, q_ptr, n_words * 32);
+                load_matrix_sync(b_frag, k_ptr, n_words * 32);
+                bmma_sync(c_frag, a_frag, b_frag, c_frag,
+                          experimental::bmmaBitOpXOR,
+                          experimental::bmmaAccumulateOpPOPC);
+            }
+            store_matrix_sync(scores_int[warp_id], c_frag, K_TILE, mem_row_major);
         }
-        store_matrix_sync(scores_int, c_frag, K_TILE, mem_row_major);
-        __syncwarp();
 
-        // Cooperatively load V tile into shared.
-        for (int32_t i = tid; i < k_count * d_v; i += 32) {
+        // V_tile load: cooperative across all 128 threads in block.
+        for (int32_t i = linear_tid; i < k_count * d_v; i += threads_per_block) {
             int32_t k_local = i / d_v;
             int32_t dd = i - k_local * d_v;
             V_tile[k_local * MAX_D_V + dd] =
                 v[((int64_t)bh * T + (k_base + k_local)) * d_v + dd];
         }
-        __syncwarp();
+        __syncthreads();
 
-        // For each q_row in the tile, do online softmax + V aggregation.
-        // 32 lanes work cooperatively per q_row: lane handles a slice of d_v.
-        for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
-            int32_t q_global = q_blk + q_local;
+        if (warp_active) {
+            for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
+                int32_t q_global = q_blk + q_local;
 
-            // Compute scores for this q_row, find tile_max via warp reduce.
-            float my_score = -INFINITY;
-            if (tid < K_TILE && tid < k_count) {
-                int32_t k_global = k_base + tid;
-                bool masked = is_causal && (k_global > q_global);
-                if (!masked) {
-                    int32_t popc = scores_int[q_local * K_TILE + tid];
-                    my_score = ((float)d - 2.0f * (float)popc) * scale;
+                float my_score = -INFINITY;
+                if (lane < K_TILE && lane < k_count) {
+                    int32_t k_global = k_base + lane;
+                    bool masked = is_causal && (k_global > q_global);
+                    if (!masked) {
+                        int32_t popc = scores_int[warp_id][q_local * K_TILE + lane];
+                        my_score = ((float)d - 2.0f * (float)popc) * scale;
+                    }
                 }
-            }
-            // Warp reduce max.
-            float tile_max = my_score;
-            for (int off = 16; off > 0; off >>= 1) {
-                float v = __shfl_xor_sync(0xFFFFFFFFu, tile_max, off);
-                if (v > tile_max) tile_max = v;
-            }
-
-            float old_max = running_max[q_local];
-            float new_max = fmaxf(old_max, tile_max);
-            float correction = (old_max == -INFINITY) ? 0.0f
-                                                       : __expf(old_max - new_max);
-
-            // Apply correction to running sum and O_acc.
-            for (int32_t dd = tid; dd < d_v; dd += 32) {
-                O_acc[q_local * MAX_D_V + dd] *= correction;
-            }
-            float sum_curr = 0.0f;
-            float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
-            // Each lane has its own w; broadcast via shared mem.
-            __shared__ float w_buf[K_TILE];
-            if (tid < K_TILE) w_buf[tid] = w;
-            __syncwarp();
-            // Reduce sum of w via warp reduce
-            float w_self = (tid < K_TILE) ? w : 0.0f;
-            for (int off = 16; off > 0; off >>= 1) {
-                w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
-            }
-            sum_curr = w_self;
-
-            // Accumulate w_k * V[k] into O_acc[q_local].
-            for (int32_t dd = tid; dd < d_v; dd += 32) {
-                float acc = 0.0f;
-                #pragma unroll
-                for (int32_t k_local = 0; k_local < K_TILE; ++k_local) {
-                    acc += w_buf[k_local] * V_tile[k_local * MAX_D_V + dd];
+                float tile_max = my_score;
+                for (int off = 16; off > 0; off >>= 1) {
+                    float vv = __shfl_xor_sync(0xFFFFFFFFu, tile_max, off);
+                    if (vv > tile_max) tile_max = vv;
                 }
-                O_acc[q_local * MAX_D_V + dd] += acc;
-            }
 
-            if (tid == 0) {
-                running_max[q_local] = new_max;
-                running_sum[q_local] = running_sum[q_local] * correction + sum_curr;
+                float old_max = running_max[warp_id][q_local];
+                float new_max = fmaxf(old_max, tile_max);
+                float correction = (old_max == -INFINITY) ? 0.0f
+                                                          : __expf(old_max - new_max);
+
+                for (int32_t dd = lane; dd < d_v; dd += 32) {
+                    O_acc[warp_id][q_local * MAX_D_V + dd] *= correction;
+                }
+                float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
+                if (lane < K_TILE) w_buf[warp_id][lane] = w;
+                __syncwarp();
+                float w_self = (lane < K_TILE) ? w : 0.0f;
+                for (int off = 16; off > 0; off >>= 1) {
+                    w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
+                }
+                float sum_curr = w_self;
+
+                for (int32_t dd = lane; dd < d_v; dd += 32) {
+                    float acc = 0.0f;
+                    #pragma unroll
+                    for (int32_t k_local = 0; k_local < K_TILE; ++k_local) {
+                        acc += w_buf[warp_id][k_local] * V_tile[k_local * MAX_D_V + dd];
+                    }
+                    O_acc[warp_id][q_local * MAX_D_V + dd] += acc;
+                }
+                if (lane == 0) {
+                    running_max[warp_id][q_local] = new_max;
+                    running_sum[warp_id][q_local] = running_sum[warp_id][q_local] * correction + sum_curr;
+                }
+                __syncwarp();
             }
-            __syncwarp();
         }
+        __syncthreads();
     }
 
-    // Normalize and write output.
-    for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
-        int32_t q_global = q_blk + q_local;
-        if (q_global >= T) continue;
-        float inv_sum = (running_sum[q_local] > 0.0f) ? (1.0f / running_sum[q_local]) : 0.0f;
-        for (int32_t dd = tid; dd < d_v; dd += 32) {
-            o[((int64_t)bh * T + q_global) * d_v + dd] =
-                O_acc[q_local * MAX_D_V + dd] * inv_sum;
+    if (warp_active) {
+        for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
+            int32_t q_global = q_blk + q_local;
+            if (q_global >= T) continue;
+            float inv_sum = (running_sum[warp_id][q_local] > 0.0f)
+                            ? (1.0f / running_sum[warp_id][q_local]) : 0.0f;
+            for (int32_t dd = lane; dd < d_v; dd += 32) {
+                o[((int64_t)bh * T + q_global) * d_v + dd] =
+                    O_acc[warp_id][q_local * MAX_D_V + dd] * inv_sum;
+            }
         }
     }
 }
@@ -6853,11 +6856,13 @@ public:
         );
         CU_CHECK(cudaGetLastError());
 
-        // Launch TC forward kernel: 1 warp per block, 1 q_tile per block.
+        // Launch TC forward kernel: 4 warps/block, each owns one Q_TILE=8.
         constexpr int Q_TILE = 8;
-        int64_t n_q_tiles = (T + Q_TILE - 1) / Q_TILE;
-        dim3 grid(static_cast<unsigned>(n_q_tiles), static_cast<unsigned>(BH));
-        dim3 block(32);
+        constexpr int N_WARPS = 4;
+        constexpr int BLOCK_Q = Q_TILE * N_WARPS;
+        int64_t n_blocks_q = (T + BLOCK_Q - 1) / BLOCK_Q;
+        dim3 grid(static_cast<unsigned>(n_blocks_q), static_cast<unsigned>(BH));
+        dim3 block(32, N_WARPS);
         bit_attn_flash_fwd_tc_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             reinterpret_cast<const uint32_t*>(q_bits.data_ptr()),
             reinterpret_cast<const uint32_t*>(k_bits.data_ptr()),
