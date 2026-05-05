@@ -135,45 +135,28 @@ def _bit_attn_backward_explicit(
     scale: float,
     is_causal: bool,
     use_bf16_matmul: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    compute_grad_scale: bool = False,
+):
     """Explicit SDPA backward (PyTorch reference).
 
-    Forward (recap):
-        S = Q @ K^T * scale            (with -inf at j > i if causal)
-        A = softmax(S, dim=-1)
-        O = A @ V
-
-    Backward (given dO):
-        dV = A^T @ dO
-        dA = dO @ V^T
-        dS = A * (dA - rowsum(A * dA))               # softmax backward
-        dQ = (dS @ K) * scale
-        dK = (dS^T @ Q) * scale
-
-    The matmuls `dQ = dS @ K * scale` and `dK = dS^T @ Q * scale` have one
-    ±1 operand (K, Q respectively). When `use_bf16_matmul=True`, dQ/dK are
-    computed via bf16 cuBLAS GEMM — on Hopper this dispatches to WGMMA,
-    yielding ~2x speedup vs fp32 sgemm at the cost of ~1e-3 relative
-    precision (K, Q are ±1 so their bf16 cast is lossless; dS picks up
-    the bf16 quantization).
+    When `compute_grad_scale=True`, also returns grad_scale (for learnable
+    `scale` parameter): grad_scale = sum(dS * (Q @ K^T)) — derived from
+    ∂S/∂scale = Q @ K^T since S = Q @ K^T * scale.
     """
     T = q.shape[-2]
     if use_bf16_matmul:
-        # S = Q @ K^T * scale uses bf16 cuBLAS GEMM (WGMMA on Hopper). Q, K
-        # are ±1 → bf16 cast is lossless, so this is a pure throughput win.
         q_bf = q.to(torch.bfloat16)
         k_bf = k.to(torch.bfloat16)
-        s = torch.matmul(q_bf, k_bf.transpose(-2, -1)).to(torch.float32) * scale
+        s_unscaled = torch.matmul(q_bf, k_bf.transpose(-2, -1)).to(torch.float32)
     else:
-        s = torch.matmul(q, k.transpose(-2, -1)) * scale
+        s_unscaled = torch.matmul(q, k.transpose(-2, -1))
+    s = s_unscaled * scale
     if is_causal:
         causal_mask = torch.triu(
             torch.ones(T, T, dtype=torch.bool, device=s.device), diagonal=1,
         )
         s = s.masked_fill(causal_mask, float('-inf'))
     a = torch.softmax(s, dim=-1)
-    # Fully-masked rows are impossible under is_causal (i can always attend
-    # to itself), but guard against NaN propagation if they appear.
     a = torch.nan_to_num(a, nan=0.0)
 
     dv = torch.matmul(a.transpose(-2, -1), grad_o)
@@ -181,12 +164,17 @@ def _bit_attn_backward_explicit(
     ds = a * (da - (a * da).sum(dim=-1, keepdim=True))
     if use_bf16_matmul:
         ds_bf = ds.to(torch.bfloat16)
-        # Skip explicit .contiguous() on dS^T — cuBLAS handles strided inputs.
         dq = torch.matmul(ds_bf, k_bf).to(torch.float32) * scale
         dk = torch.matmul(ds_bf.transpose(-2, -1), q_bf).to(torch.float32) * scale
     else:
         dq = torch.matmul(ds, k) * scale
         dk = torch.matmul(ds.transpose(-2, -1), q) * scale
+
+    if compute_grad_scale:
+        # Masked positions have A=0 (softmax of -inf), so dS=0 there → no
+        # contribution. Just sum over all elements.
+        grad_scale = (ds * s_unscaled).sum()
+        return dq, dk, dv, grad_scale
     return dq, dk, dv
 
 
@@ -222,14 +210,20 @@ def _bit_attn_backward_dispatch(
     grad_o: torch.Tensor,
     scale: float,
     is_causal: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    compute_grad_scale: bool = False,
+):
     """Backward dispatcher (see `_BACKWARD_KERNEL_MODE` for the modes)."""
     mode = _BACKWARD_KERNEL_MODE
     if mode == "0" or mode == "":
-        return _bit_attn_backward_explicit(q, k, v, grad_o, scale, is_causal)
+        return _bit_attn_backward_explicit(
+            q, k, v, grad_o, scale, is_causal,
+            compute_grad_scale=compute_grad_scale,
+        )
     if mode == "bf16" or mode == "1":
         return _get_compiled_bf16_backward()(
-            q, k, v, grad_o, scale, is_causal, use_bf16_matmul=True,
+            q, k, v, grad_o, scale, is_causal,
+            use_bf16_matmul=True,
+            compute_grad_scale=compute_grad_scale,
         )
 
     # mode == "wmma": dispatch to native CUDA WMMA kernel
@@ -282,25 +276,43 @@ class _BitAttentionFn(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, scale, is_causal):
+        # `scale` may be a 0-d tensor (learnable scalar Parameter) or a
+        # Python float. Extract the value for the flash-forward kernel and
+        # remember whether it was a tensor (in which case grad_scale is
+        # propagated in backward).
+        if isinstance(scale, torch.Tensor):
+            ctx.scale_was_tensor = True
+            scale_val = float(scale.item())
+        else:
+            ctx.scale_was_tensor = False
+            scale_val = float(scale)
         ctx.save_for_backward(q, k, v)
-        ctx.scale = float(scale)
+        ctx.scale = scale_val
         ctx.is_causal = bool(is_causal)
-        return _bit_attn_flash_forward(q, k, v, float(scale), bool(is_causal))
+        return _bit_attn_flash_forward(q, k, v, scale_val, bool(is_causal))
 
     @staticmethod
     def backward(ctx, grad_o):
         q, k, v = ctx.saved_tensors
-        needs_q, needs_k, needs_v = ctx.needs_input_grad[:3]
-        if not (needs_q or needs_k or needs_v):
+        needs_q, needs_k, needs_v, needs_scale, _ = ctx.needs_input_grad
+        if not (needs_q or needs_k or needs_v or needs_scale):
             return None, None, None, None, None
-        dq, dk, dv = _bit_attn_backward_dispatch(
-            q, k, v, grad_o.contiguous(), ctx.scale, ctx.is_causal,
-        )
+        compute_scale = ctx.scale_was_tensor and needs_scale
+        if compute_scale:
+            dq, dk, dv, dscale = _bit_attn_backward_dispatch(
+                q, k, v, grad_o.contiguous(), ctx.scale, ctx.is_causal,
+                compute_grad_scale=True,
+            )
+        else:
+            dq, dk, dv = _bit_attn_backward_dispatch(
+                q, k, v, grad_o.contiguous(), ctx.scale, ctx.is_causal,
+            )
+            dscale = None
         return (
             dq if needs_q else None,
             dk if needs_k else None,
             dv if needs_v else None,
-            None,
+            dscale if compute_scale else None,
             None,
         )
 
@@ -335,5 +347,11 @@ class BitAttention(nn.Module):
         v: torch.Tensor,
         *,
         is_causal: bool = False,
+        scale=None,
     ) -> torch.Tensor:
-        return _BitAttentionFn.apply(q, k, v, self.scale, is_causal)
+        """If `scale` is provided (Python float OR 0-d tensor), it overrides
+        the module's init-time scale. When passed as a tensor with
+        requires_grad=True (e.g. a learnable Parameter), grad flows back
+        to it via `grad_scale = sum(dS * (Q @ K^T))`."""
+        s = scale if scale is not None else self.scale
+        return _BitAttentionFn.apply(q, k, v, s, is_causal)
