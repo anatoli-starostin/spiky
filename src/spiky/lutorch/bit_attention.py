@@ -158,14 +158,27 @@ def _bit_attn_backward_explicit(
 
 # Backward path selection via env var:
 #   unset/"0": fp32 PyTorch reference (exact, matches SDPA autograd)
-#   "bf16":    fp32 components except dQ/dK via bf16 cuBLAS GEMM. On
-#              Hopper this dispatches to WGMMA → ~2x speedup vs fp32
-#              cuBLAS sgemm. K, Q are ±1 (lossless bf16 cast); dS picks up
-#              ~1e-3 relative quantization error.
+#   "bf16":    fp32 components except S/dQ/dK via bf16 cuBLAS GEMM. On
+#              Hopper this dispatches to WGMMA → ~2.4x speedup vs fp32
+#              cuBLAS sgemm. Eltwise ops fused via torch.compile for an
+#              additional ~1.4-1.8x → ~3-4x total speedup vs fp32. K, Q
+#              are ±1 (lossless bf16 cast); dS picks up ~1e-3 relative
+#              quantization error.
 #   "wmma":    custom WMMA kernel with bit-packed K/Q (slower than bf16
 #              cuBLAS on H100, but exercises the ±1-storage code path —
 #              useful for deployment hardware without Tensor Cores).
 _BACKWARD_KERNEL_MODE = os.environ.get("SPIKY_BIT_ATTN_USE_BACKWARD_KERNEL", "0")
+
+# Lazy-compiled bf16 backward (torch.compile fuses eltwise ops + scheduling).
+_compiled_bf16_backward: Optional[callable] = None
+
+def _get_compiled_bf16_backward():
+    global _compiled_bf16_backward
+    if _compiled_bf16_backward is None:
+        _compiled_bf16_backward = torch.compile(
+            _bit_attn_backward_explicit, dynamic=True,
+        )
+    return _compiled_bf16_backward
 
 
 def _bit_attn_backward_dispatch(
@@ -181,7 +194,7 @@ def _bit_attn_backward_dispatch(
     if mode == "0" or mode == "":
         return _bit_attn_backward_explicit(q, k, v, grad_o, scale, is_causal)
     if mode == "bf16" or mode == "1":
-        return _bit_attn_backward_explicit(
+        return _get_compiled_bf16_backward()(
             q, k, v, grad_o, scale, is_causal, use_bf16_matmul=True,
         )
 
