@@ -9,6 +9,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <mma.h>
+#include <cuda_pipeline_primitives.h>
 #endif
 
 namespace py = pybind11;
@@ -1986,7 +1987,35 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
         int32_t k_count = T - k_base;
         if (k_count > K_TILE) k_count = K_TILE;
 
-        // 1. bmma scores: 2 N-tiles of 8 k_rows each → 8 q × 16 k popcount.
+        // 0. ISSUE cp.async for V_bf16 tile load (runs in background while
+        // bmma + score + softmax happen below; we wait before the WMMA).
+        // Each thread copies a 16-byte chunk = 8 bf16 elements.
+        // K_TILE * d_v * 2 bytes / 16 bytes per cp.async = (K_TILE * d_v / 8)
+        // chunks total. With 128 threads, each thread issues
+        // (K_TILE * d_v / 8) / 128 chunks.
+        {
+            constexpr int BYTES_PER_ASYNC = 16;
+            constexpr int ELEMS_PER_ASYNC = 8;  // 16 bytes / 2 bytes per bf16
+            int32_t chunks_per_row = d_v / ELEMS_PER_ASYNC;  // d_v=32 → 4
+            int32_t total_chunks = K_TILE * chunks_per_row;
+            for (int32_t i = linear_tid; i < total_chunks; i += threads_per_block) {
+                int32_t k_local = i / chunks_per_row;
+                int32_t chunk_in_row = i - k_local * chunks_per_row;
+                int32_t dd = chunk_in_row * ELEMS_PER_ASYNC;
+                int32_t k_global = k_base + k_local;
+                if (k_global < T) {
+                    const void* gmem_ptr = v_bf + ((int64_t)bh * T + k_global) * d_v + dd;
+                    void* smem_ptr = &V_bf16[k_local * MAX_D_V + dd];
+                    __pipeline_memcpy_async(smem_ptr, gmem_ptr, BYTES_PER_ASYNC);
+                } else {
+                    // Pad with zeros (write directly to shared, no async needed).
+                    *((float4*)&V_bf16[k_local * MAX_D_V + dd]) = make_float4(0,0,0,0);
+                }
+            }
+            __pipeline_commit();
+        }
+
+        // 1. bmma scores: 4 N-tiles of 8 k_rows each → 8 q × 32 k popcount.
         if (warp_active) {
             #pragma unroll
             for (int32_t kn = 0; kn < N_FRAG_K_BMMA; ++kn) {
@@ -2011,18 +2040,8 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
             }
         }
 
-        // 2. V_tile direct bf16 copy from global to shared. V is pre-cast
-        // by the C++ wrapper, so this is just a memcpy.
-        for (int32_t i = linear_tid; i < K_TILE * d_v; i += threads_per_block) {
-            int32_t k_local = i / d_v;
-            int32_t dd = i - k_local * d_v;
-            int32_t k_global = k_base + k_local;
-            __nv_bfloat16 vv = (k_global < T)
-                               ? v_bf[((int64_t)bh * T + k_global) * d_v + dd]
-                               : __float2bfloat16(0.0f);
-            V_bf16[k_local * MAX_D_V + dd] = vv;
-        }
-        __syncthreads();
+        // 2. V load was issued via cp.async at step 0; nothing to do here.
+        // (We wait for the cp.async right before WMMA in step 4.)
 
         // 3. Per-q-row online softmax → A_bf16; apply correction to O_acc.
         // K_TILE=32 means each lane handles 1 score (32 lanes : 32 k_locals).
@@ -2063,6 +2082,10 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
             }
         }
         __syncwarp();
+
+        // 4. Wait for V cp.async to finish before reading V_bf16.
+        __pipeline_wait_prior(0);
+        __syncthreads();
 
         // 4. WMMA: O_acc += A_bf16 @ V_bf16. With K_TILE=32, do 2 K-frags
         // per N-frag (WMMA K=16). Per N-frag: load c_frag from O_acc, do 2
