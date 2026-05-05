@@ -124,7 +124,14 @@ def _bit_attn_backward_explicit(
     the bf16 quantization).
     """
     T = q.shape[-2]
-    s = torch.matmul(q, k.transpose(-2, -1)) * scale
+    if use_bf16_matmul:
+        # S = Q @ K^T * scale uses bf16 cuBLAS GEMM (WGMMA on Hopper). Q, K
+        # are ±1 → bf16 cast is lossless, so this is a pure throughput win.
+        q_bf = q.to(torch.bfloat16)
+        k_bf = k.to(torch.bfloat16)
+        s = torch.matmul(q_bf, k_bf.transpose(-2, -1)).to(torch.float32) * scale
+    else:
+        s = torch.matmul(q, k.transpose(-2, -1)) * scale
     if is_causal:
         causal_mask = torch.triu(
             torch.ones(T, T, dtype=torch.bool, device=s.device), diagonal=1,
@@ -140,8 +147,7 @@ def _bit_attn_backward_explicit(
     ds = a * (da - (a * da).sum(dim=-1, keepdim=True))
     if use_bf16_matmul:
         ds_bf = ds.to(torch.bfloat16)
-        k_bf  = k.to(torch.bfloat16)
-        q_bf  = q.to(torch.bfloat16)
+        # Skip explicit .contiguous() on dS^T — cuBLAS handles strided inputs.
         dq = torch.matmul(ds_bf, k_bf).to(torch.float32) * scale
         dk = torch.matmul(ds_bf.transpose(-2, -1), q_bf).to(torch.float32) * scale
     else:
