@@ -1935,9 +1935,14 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
 ) {
     using namespace nvcuda::wmma;
     constexpr int Q_TILE = 8;
-    constexpr int K_TILE = 8;
-    constexpr int K_FRAG = 128;
+    constexpr int K_TILE = 16;             // matches WMMA bf16 m8n32k16 K dim
+    constexpr int N_FRAG_K_BMMA = K_TILE / 8;  // 2 bmma fragments along K_TILE (each gives 8 cols)
+    constexpr int K_FRAG_BMMA = 128;       // bmma K (binary, d-bits)
+    constexpr int WMMA_M = 8;
+    constexpr int WMMA_N = 32;
+    constexpr int WMMA_K = 16;
     constexpr int MAX_D_V = 128;
+    constexpr int MAX_N_D_V_FRAGS = MAX_D_V / WMMA_N;  // 4
     constexpr int N_WARPS = 4;             // 4 warps per block, each handles its own Q_TILE
     constexpr int BLOCK_Q = Q_TILE * N_WARPS;  // 32 q_rows per block
 
@@ -1950,15 +1955,16 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
     int32_t threads_per_block = N_WARPS * 32;
 
     bool warp_active = (q_blk < T);
+    int32_t n_d_v_frags = (d_v + WMMA_N - 1) / WMMA_N;  // 1 for d_v=32
 
-    // Per-warp state slices.
+    // Per-warp state.
     __shared__ float running_max[N_WARPS][Q_TILE];
     __shared__ float running_sum[N_WARPS][Q_TILE];
     __shared__ float O_acc[N_WARPS][Q_TILE * MAX_D_V];      // 4 * 4 KB = 16 KB
-    __shared__ int32_t scores_int[N_WARPS][Q_TILE * K_TILE]; // 4 * 256 B = 1 KB
-    __shared__ float w_buf[N_WARPS][K_TILE];                 // 4 * 32 B = 128 B
+    __shared__ int32_t scores_int[N_WARPS][Q_TILE * K_TILE]; // 4 * 8*16*4 = 2 KB
+    __shared__ __nv_bfloat16 A_bf16[N_WARPS][Q_TILE * K_TILE]; // 4 * 8*16*2 = 1 KB
     // V_tile shared across warps (same K-tile per outer iter).
-    __shared__ float V_tile[K_TILE * MAX_D_V];               // 4 KB
+    __shared__ __nv_bfloat16 V_bf16[K_TILE * MAX_D_V];        // 16 * 128 * 2 = 4 KB
 
     if (warp_active) {
         if (lane < Q_TILE) {
@@ -1979,37 +1985,52 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
         int32_t k_count = T - k_base;
         if (k_count > K_TILE) k_count = K_TILE;
 
-        // Each warp: bmma its own Q_TILE × K_TILE score fragment.
+        // 1. bmma scores: 2 N-tiles of 8 k_rows each → 8 q × 16 k popcount.
         if (warp_active) {
-            fragment<accumulator, 8, 8, K_FRAG, int32_t> c_frag;
-            fill_fragment(c_frag, 0);
-            for (int32_t kf = 0; kf < n_k_frags; ++kf) {
-                fragment<matrix_a, 8, 8, K_FRAG, experimental::precision::b1, row_major> a_frag;
-                fragment<matrix_b, 8, 8, K_FRAG, experimental::precision::b1, col_major> b_frag;
-                const uint32_t* q_ptr = q_bits + ((int64_t)bh * T + q_blk) * n_words + kf * 4;
-                const uint32_t* k_ptr = k_bits + ((int64_t)bh * T + k_base) * n_words + kf * 4;
-                load_matrix_sync(a_frag, q_ptr, n_words * 32);
-                load_matrix_sync(b_frag, k_ptr, n_words * 32);
-                bmma_sync(c_frag, a_frag, b_frag, c_frag,
-                          experimental::bmmaBitOpXOR,
-                          experimental::bmmaAccumulateOpPOPC);
+            #pragma unroll
+            for (int32_t kn = 0; kn < N_FRAG_K_BMMA; ++kn) {
+                fragment<accumulator, 8, 8, K_FRAG_BMMA, int32_t> c_frag;
+                fill_fragment(c_frag, 0);
+                int32_t k_kn_base = k_base + kn * 8;
+                for (int32_t kf = 0; kf < n_k_frags; ++kf) {
+                    fragment<matrix_a, 8, 8, K_FRAG_BMMA, experimental::precision::b1, row_major> a_frag;
+                    fragment<matrix_b, 8, 8, K_FRAG_BMMA, experimental::precision::b1, col_major> b_frag;
+                    const uint32_t* q_ptr = q_bits + ((int64_t)bh * T + q_blk) * n_words + kf * 4;
+                    const uint32_t* k_ptr = k_bits + ((int64_t)bh * T + k_kn_base) * n_words + kf * 4;
+                    load_matrix_sync(a_frag, q_ptr, n_words * 32);
+                    load_matrix_sync(b_frag, k_ptr, n_words * 32);
+                    bmma_sync(c_frag, a_frag, b_frag, c_frag,
+                              experimental::bmmaBitOpXOR,
+                              experimental::bmmaAccumulateOpPOPC);
+                }
+                // Store this 8x8 popcount fragment into scores_int[warp_id]
+                // at column offset kn*8, leading dim K_TILE=16.
+                store_matrix_sync(scores_int[warp_id] + kn * 8, c_frag,
+                                  K_TILE, mem_row_major);
             }
-            store_matrix_sync(scores_int[warp_id], c_frag, K_TILE, mem_row_major);
         }
 
-        // V_tile load: cooperative across all 128 threads in block.
-        for (int32_t i = linear_tid; i < k_count * d_v; i += threads_per_block) {
+        // 2. V_tile load + cast to bf16: cooperative across all 128 threads.
+        for (int32_t i = linear_tid; i < K_TILE * d_v; i += threads_per_block) {
             int32_t k_local = i / d_v;
             int32_t dd = i - k_local * d_v;
-            V_tile[k_local * MAX_D_V + dd] =
-                v[((int64_t)bh * T + (k_base + k_local)) * d_v + dd];
+            int32_t k_global = k_base + k_local;
+            float v_val = (k_global < T)
+                          ? v[((int64_t)bh * T + k_global) * d_v + dd]
+                          : 0.0f;
+            V_bf16[k_local * MAX_D_V + dd] = __float2bfloat16(v_val);
         }
         __syncthreads();
 
+        // 3. Per-q-row online softmax → A_bf16; apply correction to O_acc.
         if (warp_active) {
+            // Each lane independently handles two q_locals (Q_TILE=8, 32 lanes
+            // → 4 lanes per q_local). Simplest: 8 serial q_local iterations,
+            // 32 lanes parallel within each.
             for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
                 int32_t q_global = q_blk + q_local;
-
+                // Load this q_row's K_TILE scores; lane handles 1 (K_TILE/32=0.5,
+                // so half lanes have value, half have -inf).
                 float my_score = -INFINITY;
                 if (lane < K_TILE && lane < k_count) {
                     int32_t k_global = k_base + lane;
@@ -2019,42 +2040,55 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
                         my_score = ((float)d - 2.0f * (float)popc) * scale;
                     }
                 }
-                float tile_max = my_score;
+                float row_max = my_score;
                 for (int off = 16; off > 0; off >>= 1) {
-                    float vv = __shfl_xor_sync(0xFFFFFFFFu, tile_max, off);
-                    if (vv > tile_max) tile_max = vv;
+                    float vv = __shfl_xor_sync(0xFFFFFFFFu, row_max, off);
+                    if (vv > row_max) row_max = vv;
                 }
-
                 float old_max = running_max[warp_id][q_local];
-                float new_max = fmaxf(old_max, tile_max);
+                float new_max = fmaxf(old_max, row_max);
                 float correction = (old_max == -INFINITY) ? 0.0f
                                                           : __expf(old_max - new_max);
-
                 for (int32_t dd = lane; dd < d_v; dd += 32) {
                     O_acc[warp_id][q_local * MAX_D_V + dd] *= correction;
                 }
                 float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
-                if (lane < K_TILE) w_buf[warp_id][lane] = w;
-                __syncwarp();
+                if (lane < K_TILE) {
+                    A_bf16[warp_id][q_local * K_TILE + lane] = __float2bfloat16(w);
+                }
                 float w_self = (lane < K_TILE) ? w : 0.0f;
                 for (int off = 16; off > 0; off >>= 1) {
                     w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
                 }
-                float sum_curr = w_self;
-
-                for (int32_t dd = lane; dd < d_v; dd += 32) {
-                    float acc = 0.0f;
-                    #pragma unroll
-                    for (int32_t k_local = 0; k_local < K_TILE; ++k_local) {
-                        acc += w_buf[warp_id][k_local] * V_tile[k_local * MAX_D_V + dd];
-                    }
-                    O_acc[warp_id][q_local * MAX_D_V + dd] += acc;
-                }
                 if (lane == 0) {
                     running_max[warp_id][q_local] = new_max;
-                    running_sum[warp_id][q_local] = running_sum[warp_id][q_local] * correction + sum_curr;
+                    running_sum[warp_id][q_local] = running_sum[warp_id][q_local] * correction + w_self;
                 }
-                __syncwarp();
+            }
+        }
+        __syncwarp();
+
+        // 4. WMMA: temp_O = A_bf16 @ V_bf16 → fp32, ADD to O_acc.
+        if (warp_active) {
+            #pragma unroll
+            for (int32_t j = 0; j < n_d_v_frags; ++j) {
+                int32_t d_offset = j * WMMA_N;
+                fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag;
+                fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> b_frag;
+                fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
+
+                load_matrix_sync(a_frag, A_bf16[warp_id], K_TILE);
+                load_matrix_sync(b_frag, V_bf16 + d_offset, MAX_D_V);
+
+                // Initialize c_frag from O_acc[warp][q_rows, d_offset:d_offset+32]
+                load_matrix_sync(c_frag,
+                                 O_acc[warp_id] + d_offset,
+                                 MAX_D_V, mem_row_major);
+
+                mma_sync(c_frag, a_frag, b_frag, c_frag);
+
+                store_matrix_sync(O_acc[warp_id] + d_offset,
+                                  c_frag, MAX_D_V, mem_row_major);
             }
         }
         __syncthreads();
