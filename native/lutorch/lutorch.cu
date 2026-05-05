@@ -1936,13 +1936,13 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
 ) {
     using namespace nvcuda::wmma;
     constexpr int Q_TILE = 8;
-    constexpr int K_TILE = 32;             // larger tile: 4 bmma N-frags, 2 WMMA K-frags
-    constexpr int N_FRAG_K_BMMA = K_TILE / 8;  // 4
+    constexpr int K_TILE = 64;             // larger: 8 bmma N-frags, 4 WMMA K-frags per outer iter
+    constexpr int N_FRAG_K_BMMA = K_TILE / 8;  // 8
     constexpr int K_FRAG_BMMA = 128;
     constexpr int WMMA_M = 8;
     constexpr int WMMA_N = 32;
     constexpr int WMMA_K = 16;
-    constexpr int N_FRAG_K_WMMA = K_TILE / WMMA_K;  // 2 WMMA K-frags per K_TILE
+    constexpr int N_FRAG_K_WMMA = K_TILE / WMMA_K;  // 4 WMMA K-frags per K_TILE
     constexpr int MAX_D_V = 128;
     constexpr int MAX_N_D_V_FRAGS = MAX_D_V / WMMA_N;  // 4
     constexpr int N_WARPS = 4;
@@ -2044,20 +2044,26 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
         // (We wait for the cp.async right before WMMA in step 4.)
 
         // 3. Per-q-row online softmax → A_bf16; apply correction to O_acc.
-        // K_TILE=32 means each lane handles 1 score (32 lanes : 32 k_locals).
+        // K_TILE=64 means each lane handles 2 scores (32 lanes × 2 = 64 k_locals).
         if (warp_active) {
             for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
                 int32_t q_global = q_blk + q_local;
-                float my_score = -INFINITY;
-                if (lane < k_count) {
-                    int32_t k_global = k_base + lane;
-                    bool masked = is_causal && (k_global > q_global);
-                    if (!masked) {
-                        int32_t popc = scores_int[warp_id][q_local * K_TILE + lane];
-                        my_score = ((float)d - 2.0f * (float)popc) * scale;
+                float scores_row[2];
+                #pragma unroll
+                for (int p = 0; p < 2; ++p) {
+                    int32_t k_local = lane + p * 32;
+                    float s = -INFINITY;
+                    if (k_local < k_count) {
+                        int32_t k_global = k_base + k_local;
+                        bool masked = is_causal && (k_global > q_global);
+                        if (!masked) {
+                            int32_t popc = scores_int[warp_id][q_local * K_TILE + k_local];
+                            s = ((float)d - 2.0f * (float)popc) * scale;
+                        }
                     }
+                    scores_row[p] = s;
                 }
-                float row_max = my_score;
+                float row_max = fmaxf(scores_row[0], scores_row[1]);
                 for (int off = 16; off > 0; off >>= 1) {
                     float vv = __shfl_xor_sync(0xFFFFFFFFu, row_max, off);
                     if (vv > row_max) row_max = vv;
@@ -2069,9 +2075,14 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
                 for (int32_t dd = lane; dd < d_v; dd += 32) {
                     O_acc[warp_id][q_local * MAX_D_V + dd] *= correction;
                 }
-                float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
-                A_bf16[warp_id][q_local * K_TILE + lane] = __float2bfloat16(w);
-                float w_self = w;
+                float w_sum = 0.0f;
+                #pragma unroll
+                for (int p = 0; p < 2; ++p) {
+                    float w = (scores_row[p] == -INFINITY) ? 0.0f : __expf(scores_row[p] - new_max);
+                    A_bf16[warp_id][q_local * K_TILE + lane + p * 32] = __float2bfloat16(w);
+                    w_sum += w;
+                }
+                float w_self = w_sum;
                 for (int off = 16; off > 0; off >>= 1) {
                     w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
                 }
