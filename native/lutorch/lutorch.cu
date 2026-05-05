@@ -1932,8 +1932,12 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
     const __nv_bfloat16*  __restrict__ v_bf,     // [BH, T, d_v] pre-cast bf16
     float*                __restrict__ o,        // [BH, T, d_v]
     int32_t T, int32_t n_words, int32_t d, int32_t d_v,
-    float scale, int32_t is_causal
+    const float*          __restrict__ scale_ptr,  // device-side scalar
+    int32_t is_causal
 ) {
+    // Load scale once from device memory (cached read; avoids host-device
+    // sync that would result from .item() on the Python side).
+    float scale = __ldg(scale_ptr);
     using namespace nvcuda::wmma;
     constexpr int Q_TILE = 8;
     constexpr int K_TILE = 64;             // larger: 8 bmma N-frags, 4 WMMA K-frags per outer iter
@@ -6867,7 +6871,7 @@ public:
         const torch::Tensor& q,
         const torch::Tensor& k,
         const torch::Tensor& v,
-        double scale,
+        const torch::Tensor& scale,    // 0-d fp32 CUDA tensor (avoids host-device sync)
         bool is_causal
     ) {
         if (!q.is_cuda() || !k.is_cuda() || !v.is_cuda())
@@ -6876,6 +6880,8 @@ public:
             throw py::value_error("q, k, v must be float32");
         if (q.dim() != 3 || k.dim() != 3 || v.dim() != 3)
             throw py::value_error("q, k, v must be 3-D [BH, T, feat]");
+        if (!scale.is_cuda() || scale.dtype() != torch::kFloat32 || scale.numel() != 1)
+            throw py::value_error("scale must be a 0-d (or 1-elem) fp32 CUDA tensor");
 
         int64_t BH = q.size(0);
         int64_t T  = q.size(1);
@@ -6935,6 +6941,7 @@ public:
         int64_t n_blocks_q = (T + BLOCK_Q - 1) / BLOCK_Q;
         dim3 grid(static_cast<unsigned>(n_blocks_q), static_cast<unsigned>(BH));
         dim3 block(32, N_WARPS);
+        auto scale_c = scale.contiguous();
         bit_attn_flash_fwd_tc_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             reinterpret_cast<const uint32_t*>(q_bits.data_ptr()),
             reinterpret_cast<const uint32_t*>(k_bits.data_ptr()),
@@ -6944,7 +6951,7 @@ public:
             static_cast<int32_t>(n_words_padded),
             static_cast<int32_t>(d),
             static_cast<int32_t>(d_v),
-            static_cast<float>(scale),
+            reinterpret_cast<const float*>(scale_c.data_ptr()),
             is_causal ? 1 : 0
         );
         CU_CHECK(cudaGetLastError());

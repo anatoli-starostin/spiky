@@ -64,7 +64,7 @@ def _bit_attn_flash_forward(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    scale: float,
+    scale,                           # float OR 0-d tensor (TC kernel reads tensor on-device)
     is_causal: bool,
 ) -> torch.Tensor:
     """Forward path dispatcher.
@@ -91,7 +91,13 @@ def _bit_attn_flash_forward(
             q3 = q.reshape(BH, T, d).contiguous()
             k3 = k.reshape(BH, T, d).contiguous()
             v3 = v.reshape(BH, T, d_v).contiguous()
-            o3 = native.bit_attn_flash_forward_tc(q3, k3, v3, float(scale), bool(is_causal))
+            # TC kernel takes scale as a 0-d CUDA fp32 tensor (avoids .item()
+            # host-device sync). Convert if caller passed a Python float.
+            if isinstance(scale, torch.Tensor):
+                scale_t = scale.detach().to(device=q.device, dtype=torch.float32).contiguous().view(())
+            else:
+                scale_t = torch.tensor(float(scale), device=q.device, dtype=torch.float32)
+            o3 = native.bit_attn_flash_forward_tc(q3, k3, v3, scale_t, bool(is_causal))
             return o3.reshape(*orig_shape_prefix, T, d_v)
     use_kernel = (
         q.is_cuda and k.is_cuda and v.is_cuda
@@ -277,19 +283,14 @@ class _BitAttentionFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, scale, is_causal):
         # `scale` may be a 0-d tensor (learnable scalar Parameter) or a
-        # Python float. Extract the value for the flash-forward kernel and
-        # remember whether it was a tensor (in which case grad_scale is
-        # propagated in backward).
-        if isinstance(scale, torch.Tensor):
-            ctx.scale_was_tensor = True
-            scale_val = float(scale.item())
-        else:
-            ctx.scale_was_tensor = False
-            scale_val = float(scale)
+        # Python float. The TC forward path passes the tensor through to
+        # CUDA (no host-device sync); only fp32 fallback path needs a
+        # Python value, in which case we accept the .item() cost there.
+        ctx.scale_was_tensor = isinstance(scale, torch.Tensor)
         ctx.save_for_backward(q, k, v)
-        ctx.scale = scale_val
+        ctx.scale_obj = scale  # tensor or float; backward extracts value as needed
         ctx.is_causal = bool(is_causal)
-        return _bit_attn_flash_forward(q, k, v, scale_val, bool(is_causal))
+        return _bit_attn_flash_forward(q, k, v, scale, bool(is_causal))
 
     @staticmethod
     def backward(ctx, grad_o):
@@ -297,15 +298,18 @@ class _BitAttentionFn(torch.autograd.Function):
         needs_q, needs_k, needs_v, needs_scale, _ = ctx.needs_input_grad
         if not (needs_q or needs_k or needs_v or needs_scale):
             return None, None, None, None, None
+        # Pass scale through as-is (tensor or float) — PyTorch ops handle
+        # broadcasting from a 0-d tensor, so no .item() sync is needed.
+        scale_obj = ctx.scale_obj
         compute_scale = ctx.scale_was_tensor and needs_scale
         if compute_scale:
             dq, dk, dv, dscale = _bit_attn_backward_dispatch(
-                q, k, v, grad_o.contiguous(), ctx.scale, ctx.is_causal,
+                q, k, v, grad_o.contiguous(), scale_obj, ctx.is_causal,
                 compute_grad_scale=True,
             )
         else:
             dq, dk, dv = _bit_attn_backward_dispatch(
-                q, k, v, grad_o.contiguous(), ctx.scale, ctx.is_causal,
+                q, k, v, grad_o.contiguous(), scale_obj, ctx.is_causal,
             )
             dscale = None
         return (
