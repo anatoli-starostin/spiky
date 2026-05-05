@@ -1903,6 +1903,176 @@ __global__ void bit_attn_signed_accum_tiled_kernel(
 
 
 // =====================================================================
+// BitAttention flash-forward kernel using BINARY Tensor Cores.
+//
+// Same flash-style streaming as bit_attn_flash_fwd_kernel below, but
+// uses `mma.sync.aligned.m8n8k128.row.col.s32.b1.b1.s32.xor.popc` (Hopper
+// b1 Tensor Core) for the Q@K^T popcount step. Theoretical throughput
+// 49,152 TOPS — ~50x more than fp16 TC, ~300x more than fp32 cores.
+//
+// Per warp, per (q_tile of 8 rows, k_tile of 8 rows):
+//   1. Loop over n_k_frags = ceil(d/128) bmma_sync calls accumulating
+//      XOR-popcount into a single int32 8x8 fragment.
+//   2. Convert popcount → score = (d − 2·popc) * scale.
+//   3. Online softmax + V aggregation (V in registers, fp32 fmadds).
+//
+// Constraints:
+//   - Q_TILE = K_TILE = 8 (matches m8n8k128 fragment shape)
+//   - K_FRAG = 128 (one bmma processes 128 bits along K)
+//   - d_v <= MAX_D_V (constexpr cap)
+//   - n_words must be a multiple of 4 (i.e., d padded up to multiple of 128)
+//
+// Correctness: identical math to bit_attn_flash_fwd_kernel. Speed
+// pending tuning.
+// =====================================================================
+__global__ void bit_attn_flash_fwd_tc_kernel(
+    const uint32_t* __restrict__ q_bits,    // [BH, T, n_words]
+    const uint32_t* __restrict__ k_bits,
+    const float*    __restrict__ v,         // [BH, T, d_v]
+    float*          __restrict__ o,         // [BH, T, d_v]
+    int32_t T, int32_t n_words, int32_t d, int32_t d_v,
+    float scale, int32_t is_causal
+) {
+    using namespace nvcuda::wmma;
+    constexpr int Q_TILE = 8;
+    constexpr int K_TILE = 8;
+    constexpr int K_FRAG = 128;
+    constexpr int MAX_D_V = 128;
+
+    int32_t bh = blockIdx.y;
+    int32_t q_blk = blockIdx.x * Q_TILE;
+    int32_t tid = threadIdx.x;
+
+    if (q_blk >= T) return;
+
+    // Per-q-row state: max, sum, accumulator. Held in shared mem so all
+    // 32 lanes can read/write any q_row's state cooperatively.
+    __shared__ float running_max[Q_TILE];
+    __shared__ float running_sum[Q_TILE];
+    __shared__ float O_acc[Q_TILE * MAX_D_V];
+    __shared__ int32_t scores_int[Q_TILE * K_TILE];
+    __shared__ float V_tile[K_TILE * MAX_D_V];
+
+    if (tid < Q_TILE) {
+        running_max[tid] = -INFINITY;
+        running_sum[tid] = 0.0f;
+    }
+    for (int32_t i = tid; i < Q_TILE * d_v; i += 32) {
+        O_acc[i] = 0.0f;
+    }
+    __syncwarp();
+
+    int32_t n_k_tiles = (T + K_TILE - 1) / K_TILE;
+    int32_t n_k_frags = n_words / 4;   // 4 uint32 = 128 bits per K_FRAG
+
+    for (int32_t kt = 0; kt < n_k_tiles; ++kt) {
+        int32_t k_base = kt * K_TILE;
+        int32_t k_count = T - k_base;
+        if (k_count > K_TILE) k_count = K_TILE;
+
+        // Q@K^T via bmma XOR-popcount accumulated over n_k_frags.
+        fragment<accumulator, 8, 8, K_FRAG, int32_t> c_frag;
+        fill_fragment(c_frag, 0);
+        for (int32_t kf = 0; kf < n_k_frags; ++kf) {
+            fragment<matrix_a, 8, 8, K_FRAG, experimental::precision::b1, row_major> a_frag;
+            fragment<matrix_b, 8, 8, K_FRAG, experimental::precision::b1, col_major> b_frag;
+            const uint32_t* q_ptr = q_bits + ((int64_t)bh * T + q_blk) * n_words + kf * 4;
+            const uint32_t* k_ptr = k_bits + ((int64_t)bh * T + k_base) * n_words + kf * 4;
+            // ld in bits: stride between rows in source = n_words * 32 bits
+            load_matrix_sync(a_frag, q_ptr, n_words * 32);
+            load_matrix_sync(b_frag, k_ptr, n_words * 32);
+            bmma_sync(c_frag, a_frag, b_frag, c_frag,
+                      experimental::bmmaBitOpXOR,
+                      experimental::bmmaAccumulateOpPOPC);
+        }
+        store_matrix_sync(scores_int, c_frag, K_TILE, mem_row_major);
+        __syncwarp();
+
+        // Cooperatively load V tile into shared.
+        for (int32_t i = tid; i < k_count * d_v; i += 32) {
+            int32_t k_local = i / d_v;
+            int32_t dd = i - k_local * d_v;
+            V_tile[k_local * MAX_D_V + dd] =
+                v[((int64_t)bh * T + (k_base + k_local)) * d_v + dd];
+        }
+        __syncwarp();
+
+        // For each q_row in the tile, do online softmax + V aggregation.
+        // 32 lanes work cooperatively per q_row: lane handles a slice of d_v.
+        for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
+            int32_t q_global = q_blk + q_local;
+
+            // Compute scores for this q_row, find tile_max via warp reduce.
+            float my_score = -INFINITY;
+            if (tid < K_TILE && tid < k_count) {
+                int32_t k_global = k_base + tid;
+                bool masked = is_causal && (k_global > q_global);
+                if (!masked) {
+                    int32_t popc = scores_int[q_local * K_TILE + tid];
+                    my_score = ((float)d - 2.0f * (float)popc) * scale;
+                }
+            }
+            // Warp reduce max.
+            float tile_max = my_score;
+            for (int off = 16; off > 0; off >>= 1) {
+                float v = __shfl_xor_sync(0xFFFFFFFFu, tile_max, off);
+                if (v > tile_max) tile_max = v;
+            }
+
+            float old_max = running_max[q_local];
+            float new_max = fmaxf(old_max, tile_max);
+            float correction = (old_max == -INFINITY) ? 0.0f
+                                                       : __expf(old_max - new_max);
+
+            // Apply correction to running sum and O_acc.
+            for (int32_t dd = tid; dd < d_v; dd += 32) {
+                O_acc[q_local * MAX_D_V + dd] *= correction;
+            }
+            float sum_curr = 0.0f;
+            float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
+            // Each lane has its own w; broadcast via shared mem.
+            __shared__ float w_buf[K_TILE];
+            if (tid < K_TILE) w_buf[tid] = w;
+            __syncwarp();
+            // Reduce sum of w via warp reduce
+            float w_self = (tid < K_TILE) ? w : 0.0f;
+            for (int off = 16; off > 0; off >>= 1) {
+                w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
+            }
+            sum_curr = w_self;
+
+            // Accumulate w_k * V[k] into O_acc[q_local].
+            for (int32_t dd = tid; dd < d_v; dd += 32) {
+                float acc = 0.0f;
+                #pragma unroll
+                for (int32_t k_local = 0; k_local < K_TILE; ++k_local) {
+                    acc += w_buf[k_local] * V_tile[k_local * MAX_D_V + dd];
+                }
+                O_acc[q_local * MAX_D_V + dd] += acc;
+            }
+
+            if (tid == 0) {
+                running_max[q_local] = new_max;
+                running_sum[q_local] = running_sum[q_local] * correction + sum_curr;
+            }
+            __syncwarp();
+        }
+    }
+
+    // Normalize and write output.
+    for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
+        int32_t q_global = q_blk + q_local;
+        if (q_global >= T) continue;
+        float inv_sum = (running_sum[q_local] > 0.0f) ? (1.0f / running_sum[q_local]) : 0.0f;
+        for (int32_t dd = tid; dd < d_v; dd += 32) {
+            o[((int64_t)bh * T + q_global) * d_v + dd] =
+                O_acc[q_local * MAX_D_V + dd] * inv_sum;
+        }
+    }
+}
+
+
+// =====================================================================
 // BitAttention fused flash-forward kernel (FlashAttention-2 style).
 // One thread block per (bh, q_tile). BLOCK_Q threads, each owning one q_row.
 // Online softmax over BLOCK_K k-tiles. No T*T score matrix in global memory.
@@ -6613,6 +6783,98 @@ public:
     }
 
     // -----------------------------------------------------------------
+    // BitAttention forward using BINARY Tensor Cores (Hopper m8n8k128 b1
+    // mma.sync XOR-popcount). Same flash-style streaming as
+    // bit_attn_flash_forward but routes the Q@K^T popcount through the
+    // binary Tensor Core path.
+    //
+    // Constraint: n_words must be a multiple of 4 (d padded to multiple
+    // of 128). Caller may pad with zero bits (zeros in both q and k
+    // contribute zero to the XOR-popcount).
+    // -----------------------------------------------------------------
+    torch::Tensor bit_attn_flash_forward_tc(
+        const torch::Tensor& q,
+        const torch::Tensor& k,
+        const torch::Tensor& v,
+        double scale,
+        bool is_causal
+    ) {
+        if (!q.is_cuda() || !k.is_cuda() || !v.is_cuda())
+            throw py::value_error("tensors must be CUDA");
+        if (q.dtype() != torch::kFloat32 || k.dtype() != torch::kFloat32 || v.dtype() != torch::kFloat32)
+            throw py::value_error("q, k, v must be float32");
+        if (q.dim() != 3 || k.dim() != 3 || v.dim() != 3)
+            throw py::value_error("q, k, v must be 3-D [BH, T, feat]");
+
+        int64_t BH = q.size(0);
+        int64_t T  = q.size(1);
+        int64_t d  = q.size(2);
+        int64_t d_v = v.size(2);
+
+        constexpr int MAX_D_V = 128;
+        if (d_v > MAX_D_V)
+            throw py::value_error("d_v too large (>128)");
+
+        // Pad n_words to multiple of 4 (= multiple of 128 bits).
+        int64_t n_words_raw    = (d + 31) / 32;
+        int64_t n_words_padded = ((n_words_raw + 3) / 4) * 4;
+
+        auto qc = q.contiguous();
+        auto kc = k.contiguous();
+        auto vc = v.contiguous();
+        c10::cuda::CUDAGuard guard(q.device().index());
+
+        auto opts_u32 = torch::TensorOptions().dtype(torch::kInt32).device(q.device());
+        auto opts_f32 = torch::TensorOptions().dtype(torch::kFloat32).device(q.device());
+        torch::Tensor q_bits = torch::zeros({BH * T, n_words_padded}, opts_u32);
+        torch::Tensor k_bits = torch::zeros({BH * T, n_words_padded}, opts_u32);
+        torch::Tensor o      = torch::empty({BH, T, d_v}, opts_f32);
+
+        // Pack q/k. Pack kernel writes n_words_raw words; remaining padded
+        // words remain zero (zero-init torch::zeros above).
+        // BUT: the pack kernel writes to bits[(N) * n_words + w]. We have
+        // n_words_padded as the logical 2nd dim, so the offset between rows
+        // is n_words_padded, not n_words_raw. We need the pack kernel to
+        // know about n_words_padded. Reuse the pack kernel by passing the
+        // padded count and letting it write zeros for w >= n_words_raw.
+        // The current pack kernel computes word=0 for bits beyond bit_end>d
+        // automatically; we just need the loop to cover all n_words_padded.
+        int pack_threads = static_cast<int>(n_words_padded);
+        int pack_blocks  = static_cast<int>(BH * T);
+        bit_attn_pack_pm_kernel<<<pack_blocks, pack_threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            reinterpret_cast<const float*>(qc.data_ptr()),
+            reinterpret_cast<uint32_t*>(q_bits.data_ptr()),
+            static_cast<int32_t>(BH * T), static_cast<int32_t>(d), static_cast<int32_t>(n_words_padded)
+        );
+        bit_attn_pack_pm_kernel<<<pack_blocks, pack_threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            reinterpret_cast<const float*>(kc.data_ptr()),
+            reinterpret_cast<uint32_t*>(k_bits.data_ptr()),
+            static_cast<int32_t>(BH * T), static_cast<int32_t>(d), static_cast<int32_t>(n_words_padded)
+        );
+        CU_CHECK(cudaGetLastError());
+
+        // Launch TC forward kernel: 1 warp per block, 1 q_tile per block.
+        constexpr int Q_TILE = 8;
+        int64_t n_q_tiles = (T + Q_TILE - 1) / Q_TILE;
+        dim3 grid(static_cast<unsigned>(n_q_tiles), static_cast<unsigned>(BH));
+        dim3 block(32);
+        bit_attn_flash_fwd_tc_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+            reinterpret_cast<const uint32_t*>(q_bits.data_ptr()),
+            reinterpret_cast<const uint32_t*>(k_bits.data_ptr()),
+            reinterpret_cast<const float*>(vc.data_ptr()),
+            reinterpret_cast<float*>(o.data_ptr()),
+            static_cast<int32_t>(T),
+            static_cast<int32_t>(n_words_padded),
+            static_cast<int32_t>(d),
+            static_cast<int32_t>(d_v),
+            static_cast<float>(scale),
+            is_causal ? 1 : 0
+        );
+        CU_CHECK(cudaGetLastError());
+        return o;
+    }
+
+    // -----------------------------------------------------------------
     // BitAttention backward.
     // Computes (grad_q, grad_k, grad_v) given (q, k, v, grad_o, scale, is_causal).
     //
@@ -7590,6 +7852,15 @@ void PB_LUTorchManager(py::module& m) {
         .def(
             "bit_attn_flash_forward",
             &LUTorchManager::bit_attn_flash_forward,
+            py::arg("q"),
+            py::arg("k"),
+            py::arg("v"),
+            py::arg("scale"),
+            py::arg("is_causal")
+        )
+        .def(
+            "bit_attn_flash_forward_tc",
+            &LUTorchManager::bit_attn_flash_forward_tc,
             py::arg("q"),
             py::arg("k"),
             py::arg("v"),
