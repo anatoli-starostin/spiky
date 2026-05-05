@@ -1926,24 +1926,25 @@ __global__ void bit_attn_signed_accum_tiled_kernel(
 // pending tuning.
 // =====================================================================
 __global__ void bit_attn_flash_fwd_tc_kernel(
-    const uint32_t* __restrict__ q_bits,    // [BH, T, n_words]
-    const uint32_t* __restrict__ k_bits,
-    const float*    __restrict__ v,         // [BH, T, d_v]
-    float*          __restrict__ o,         // [BH, T, d_v]
+    const uint32_t*       __restrict__ q_bits,   // [BH, T, n_words]
+    const uint32_t*       __restrict__ k_bits,
+    const __nv_bfloat16*  __restrict__ v_bf,     // [BH, T, d_v] pre-cast bf16
+    float*                __restrict__ o,        // [BH, T, d_v]
     int32_t T, int32_t n_words, int32_t d, int32_t d_v,
     float scale, int32_t is_causal
 ) {
     using namespace nvcuda::wmma;
     constexpr int Q_TILE = 8;
-    constexpr int K_TILE = 16;             // matches WMMA bf16 m8n32k16 K dim
-    constexpr int N_FRAG_K_BMMA = K_TILE / 8;  // 2 bmma fragments along K_TILE (each gives 8 cols)
-    constexpr int K_FRAG_BMMA = 128;       // bmma K (binary, d-bits)
+    constexpr int K_TILE = 32;             // larger tile: 4 bmma N-frags, 2 WMMA K-frags
+    constexpr int N_FRAG_K_BMMA = K_TILE / 8;  // 4
+    constexpr int K_FRAG_BMMA = 128;
     constexpr int WMMA_M = 8;
     constexpr int WMMA_N = 32;
     constexpr int WMMA_K = 16;
+    constexpr int N_FRAG_K_WMMA = K_TILE / WMMA_K;  // 2 WMMA K-frags per K_TILE
     constexpr int MAX_D_V = 128;
     constexpr int MAX_N_D_V_FRAGS = MAX_D_V / WMMA_N;  // 4
-    constexpr int N_WARPS = 4;             // 4 warps per block, each handles its own Q_TILE
+    constexpr int N_WARPS = 4;
     constexpr int BLOCK_Q = Q_TILE * N_WARPS;  // 32 q_rows per block
 
     int32_t bh = blockIdx.y;
@@ -1960,11 +1961,11 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
     // Per-warp state.
     __shared__ float running_max[N_WARPS][Q_TILE];
     __shared__ float running_sum[N_WARPS][Q_TILE];
-    __shared__ float O_acc[N_WARPS][Q_TILE * MAX_D_V];      // 4 * 4 KB = 16 KB
-    __shared__ int32_t scores_int[N_WARPS][Q_TILE * K_TILE]; // 4 * 8*16*4 = 2 KB
-    __shared__ __nv_bfloat16 A_bf16[N_WARPS][Q_TILE * K_TILE]; // 4 * 8*16*2 = 1 KB
-    // V_tile shared across warps (same K-tile per outer iter).
-    __shared__ __nv_bfloat16 V_bf16[K_TILE * MAX_D_V];        // 16 * 128 * 2 = 4 KB
+    __shared__ float O_acc[N_WARPS][Q_TILE * MAX_D_V];          // 4 * 4 KB = 16 KB
+    __shared__ int32_t scores_int[N_WARPS][Q_TILE * K_TILE];     // 4 * 8*32*4 = 4 KB
+    __shared__ __nv_bfloat16 A_bf16[N_WARPS][Q_TILE * K_TILE];   // 4 * 8*32*2 = 2 KB
+    // V_tile shared across warps (same K-tile per outer iter); pre-cast bf16.
+    __shared__ __nv_bfloat16 V_bf16[K_TILE * MAX_D_V];           // 32 * 128 * 2 = 8 KB
 
     if (warp_active) {
         if (lane < Q_TILE) {
@@ -2010,29 +2011,26 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
             }
         }
 
-        // 2. V_tile load + cast to bf16: cooperative across all 128 threads.
+        // 2. V_tile direct bf16 copy from global to shared. V is pre-cast
+        // by the C++ wrapper, so this is just a memcpy.
         for (int32_t i = linear_tid; i < K_TILE * d_v; i += threads_per_block) {
             int32_t k_local = i / d_v;
             int32_t dd = i - k_local * d_v;
             int32_t k_global = k_base + k_local;
-            float v_val = (k_global < T)
-                          ? v[((int64_t)bh * T + k_global) * d_v + dd]
-                          : 0.0f;
-            V_bf16[k_local * MAX_D_V + dd] = __float2bfloat16(v_val);
+            __nv_bfloat16 vv = (k_global < T)
+                               ? v_bf[((int64_t)bh * T + k_global) * d_v + dd]
+                               : __float2bfloat16(0.0f);
+            V_bf16[k_local * MAX_D_V + dd] = vv;
         }
         __syncthreads();
 
         // 3. Per-q-row online softmax → A_bf16; apply correction to O_acc.
+        // K_TILE=32 means each lane handles 1 score (32 lanes : 32 k_locals).
         if (warp_active) {
-            // Each lane independently handles two q_locals (Q_TILE=8, 32 lanes
-            // → 4 lanes per q_local). Simplest: 8 serial q_local iterations,
-            // 32 lanes parallel within each.
             for (int32_t q_local = 0; q_local < Q_TILE; ++q_local) {
                 int32_t q_global = q_blk + q_local;
-                // Load this q_row's K_TILE scores; lane handles 1 (K_TILE/32=0.5,
-                // so half lanes have value, half have -inf).
                 float my_score = -INFINITY;
-                if (lane < K_TILE && lane < k_count) {
+                if (lane < k_count) {
                     int32_t k_global = k_base + lane;
                     bool masked = is_causal && (k_global > q_global);
                     if (!masked) {
@@ -2053,10 +2051,8 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
                     O_acc[warp_id][q_local * MAX_D_V + dd] *= correction;
                 }
                 float w = (my_score == -INFINITY) ? 0.0f : __expf(my_score - new_max);
-                if (lane < K_TILE) {
-                    A_bf16[warp_id][q_local * K_TILE + lane] = __float2bfloat16(w);
-                }
-                float w_self = (lane < K_TILE) ? w : 0.0f;
+                A_bf16[warp_id][q_local * K_TILE + lane] = __float2bfloat16(w);
+                float w_self = w;
                 for (int off = 16; off > 0; off >>= 1) {
                     w_self += __shfl_xor_sync(0xFFFFFFFFu, w_self, off);
                 }
@@ -2068,25 +2064,29 @@ __global__ void bit_attn_flash_fwd_tc_kernel(
         }
         __syncwarp();
 
-        // 4. WMMA: temp_O = A_bf16 @ V_bf16 → fp32, ADD to O_acc.
+        // 4. WMMA: O_acc += A_bf16 @ V_bf16. With K_TILE=32, do 2 K-frags
+        // per N-frag (WMMA K=16). Per N-frag: load c_frag from O_acc, do 2
+        // mma_syncs accumulating, store c_frag back.
         if (warp_active) {
             #pragma unroll
             for (int32_t j = 0; j < n_d_v_frags; ++j) {
                 int32_t d_offset = j * WMMA_N;
-                fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag;
-                fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> b_frag;
                 fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
-
-                load_matrix_sync(a_frag, A_bf16[warp_id], K_TILE);
-                load_matrix_sync(b_frag, V_bf16 + d_offset, MAX_D_V);
-
-                // Initialize c_frag from O_acc[warp][q_rows, d_offset:d_offset+32]
                 load_matrix_sync(c_frag,
                                  O_acc[warp_id] + d_offset,
                                  MAX_D_V, mem_row_major);
-
-                mma_sync(c_frag, a_frag, b_frag, c_frag);
-
+                #pragma unroll
+                for (int32_t kk = 0; kk < N_FRAG_K_WMMA; ++kk) {
+                    fragment<matrix_a, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> a_frag;
+                    fragment<matrix_b, WMMA_M, WMMA_N, WMMA_K, __nv_bfloat16, row_major> b_frag;
+                    load_matrix_sync(a_frag,
+                                     A_bf16[warp_id] + kk * WMMA_K,
+                                     K_TILE);
+                    load_matrix_sync(b_frag,
+                                     V_bf16 + kk * WMMA_K * MAX_D_V + d_offset,
+                                     MAX_D_V);
+                    mma_sync(c_frag, a_frag, b_frag, c_frag);
+                }
                 store_matrix_sync(O_acc[warp_id] + d_offset,
                                   c_frag, MAX_D_V, mem_row_major);
             }
@@ -6890,6 +6890,10 @@ public:
         );
         CU_CHECK(cudaGetLastError());
 
+        // Pre-cast V to bf16 once (instead of per K-tile inside kernel).
+        // Halves V global-memory bandwidth in the kernel.
+        auto v_bf = vc.to(torch::kBFloat16).contiguous();
+
         // Launch TC forward kernel: 4 warps/block, each owns one Q_TILE=8.
         constexpr int Q_TILE = 8;
         constexpr int N_WARPS = 4;
@@ -6900,7 +6904,7 @@ public:
         bit_attn_flash_fwd_tc_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             reinterpret_cast<const uint32_t*>(q_bits.data_ptr()),
             reinterpret_cast<const uint32_t*>(k_bits.data_ptr()),
-            reinterpret_cast<const float*>(vc.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v_bf.data_ptr()),
             reinterpret_cast<float*>(o.data_ptr()),
             static_cast<int32_t>(T),
             static_cast<int32_t>(n_words_padded),
