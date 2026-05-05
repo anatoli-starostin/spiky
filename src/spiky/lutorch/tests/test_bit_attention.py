@@ -210,8 +210,7 @@ def test_tc_forward_kernel(BH, T, d, d_v, is_causal):
     v = torch.randn(BH, T, d_v, device=device)
     scale = 1.0 / math.sqrt(d)
 
-    scale_t = torch.tensor(scale, device=device, dtype=torch.float32)
-    out_tc = native.bit_attn_flash_forward_tc(q, k, v, scale_t, is_causal)
+    out_tc = native.bit_attn_flash_forward_tc(q, k, v, scale, is_causal)
     out_ref = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, scale=scale)
 
     # bf16 V cast + bf16 A cast → ~2e-3 relative quantization.

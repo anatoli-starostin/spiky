@@ -91,13 +91,8 @@ def _bit_attn_flash_forward(
             q3 = q.reshape(BH, T, d).contiguous()
             k3 = k.reshape(BH, T, d).contiguous()
             v3 = v.reshape(BH, T, d_v).contiguous()
-            # TC kernel takes scale as a 0-d CUDA fp32 tensor (avoids .item()
-            # host-device sync). Convert if caller passed a Python float.
-            if isinstance(scale, torch.Tensor):
-                scale_t = scale.detach().to(device=q.device, dtype=torch.float32).contiguous().view(())
-            else:
-                scale_t = torch.tensor(float(scale), device=q.device, dtype=torch.float32)
-            o3 = native.bit_attn_flash_forward_tc(q3, k3, v3, scale_t, bool(is_causal))
+            scale_val = float(scale.item()) if isinstance(scale, torch.Tensor) else float(scale)
+            o3 = native.bit_attn_flash_forward_tc(q3, k3, v3, scale_val, bool(is_causal))
             return o3.reshape(*orig_shape_prefix, T, d_v)
     use_kernel = (
         q.is_cuda and k.is_cuda and v.is_cuda
