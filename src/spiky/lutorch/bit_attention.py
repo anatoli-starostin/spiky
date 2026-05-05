@@ -51,12 +51,11 @@ def _bit_attn_flash_forward(
     scale: float,
     is_causal: bool,
 ) -> torch.Tensor:
-    """Forward path dispatcher. Uses the CUDA kernel if available; otherwise
-    falls back to F.scaled_dot_product_attention (mathematically identical).
+    """Forward path dispatcher.
 
-    Accepts q, k, v of shape (..., T, feat). The kernel requires 3-D input
-    [BH, T, feat], so we collapse leading dims before dispatching and
-    restore them on return.
+    Uses the bit-packed flash CUDA kernel when available (universal in T —
+    flash-style streaming, no T² intermediates); falls back to
+    F.scaled_dot_product_attention otherwise.
     """
     native = _get_native()
     use_kernel = (
