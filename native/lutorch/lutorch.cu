@@ -7,6 +7,8 @@
 #ifndef NO_CUDA
 #include <cuda_fp8.h>
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <mma.h>
 #endif
 
 namespace py = pybind11;
@@ -1364,6 +1366,541 @@ __global__ void bit_attn_pack_pm_kernel(
     }
     bits[(int64_t)n * n_words + w] = word;
 }
+
+// =====================================================================
+// BitAttention signed-accumulation kernel.
+// Computes Y[BH, N, D] = scale * sum_t X[BH, N, t] * sign(B_bits[BH, t, d])
+// where B_bits is +1->0, -1->1 packed (matching bit_attn_pack_pm_kernel).
+// Used for the BitAttention backward:
+//   dQ[BH, T_q, d_qk] = (dS @ K) * scale     where K is bit-packed ±1.
+//   dK[BH, T_k, d_qk] = (dS^T @ Q) * scale   where Q is bit-packed ±1.
+// One output element Y[bh, n, d] per thread; threads of a block share a
+// (bh, n_tile, d_tile). Reads bit B[bh, t, d] without re-materialising the
+// float K (or Q) operand, so this kernel is the ±1 backward analogue of
+// the popcount used in bit_attn_flash_fwd_kernel.
+// =====================================================================
+__global__ void bit_attn_signed_accum_kernel(
+    const float*    __restrict__ X,       // [BH, N, T]
+    const uint32_t* __restrict__ B,       // [BH, T, n_words] bit-packed ±1
+    float*          __restrict__ Y,       // [BH, N, D]
+    int32_t BH, int32_t N, int32_t T,
+    int32_t D, int32_t n_words,
+    float scale
+) {
+    int32_t bh = blockIdx.z;
+    int32_t n  = blockIdx.y * blockDim.y + threadIdx.y;
+    int32_t d  = blockIdx.x * blockDim.x + threadIdx.x;
+    if (n >= N || d >= D) return;
+    int32_t word = d >> 5;          // d / 32
+    int32_t bit  = d & 31;          // d % 32
+    uint32_t mask = (1u << bit);
+    const float* x_row = X + ((int64_t)bh * N + n) * T;
+    const uint32_t* b_col = B + (int64_t)bh * T * n_words + word;
+    float acc = 0.0f;
+    for (int32_t t = 0; t < T; ++t) {
+        uint32_t w = b_col[(int64_t)t * n_words];
+        // bit=1 means B[t, d] = -1, contribute -X[t]; bit=0 means +X[t].
+        float sign = (w & mask) ? -1.0f : 1.0f;
+        acc += x_row[t] * sign;
+    }
+    Y[((int64_t)bh * N + n) * D + d] = acc * scale;
+}
+
+
+// =====================================================================
+// Tiled signed-accumulation kernel.
+//
+// Same operation as bit_attn_signed_accum_kernel but with shared-memory
+// tiling along T to amortize global loads. One thread block per
+// (bh, n_tile, d_tile) where n_tile and d_tile each have width 32.
+//
+//   Block: 32 (d) x 32 (n) = 1024 threads.
+//   Per t-tile (BLOCK_T=64):
+//     - Cooperatively load dS_tile [BLOCK_N=32, BLOCK_T=64] floats (8 KB)
+//       into shared memory. Each thread loads 2 elements (BLOCK_T=64 vs
+//       BLOCK_D=32).
+//     - Cooperatively load B_tile [BLOCK_T] uint32 (256 B) — one word per
+//       t, picking the d_tile's word_idx. Done by warp 0.
+//     - Each thread (tn, td) accumulates Y[n, d] += sum_t dS_tile[tn, t] *
+//       sign(B_tile[t] bit_d).
+//   Total shared mem: ~8.3 KB per block.
+//
+// Requires BLOCK_D = 32 (so all threads in one row share the same word_idx).
+// =====================================================================
+// =====================================================================
+// Tensor-Core (WMMA) int8 signed-accumulation kernel.
+//
+// Uses int8 WMMA fragments (m16n16k16 int8 → int32 accumulator). dS is
+// quantized in-block with per-tile dynamic scale (one scale per K-tile)
+// to preserve relative precision; K bits → int8 ±1. The int32 partial
+// sum from each K-tile is multiplied by the tile scale and accumulated
+// into a fp32 fragment.
+//
+// Throughput: int8 TC peak on H100 is 2x fp16 TC peak. In compute-bound
+// regimes this can beat cuBLAS sgemm. Precision: ~1e-3 relative
+// (8-bit per-tile quantization plus int32 → fp32 cast).
+//
+// Layout same as fp16 WMMA path: 128x128 block, 8 warps.
+// =====================================================================
+__global__ void bit_attn_signed_accum_wmma_int8_kernel(
+    const float*    __restrict__ X,       // [BH, N, T] fp32 (quantized in-block)
+    const uint32_t* __restrict__ B,       // [BH, T, n_words]
+    float*          __restrict__ Y,       // [BH, N, D]
+    int32_t BH, int32_t N, int32_t T,
+    int32_t D, int32_t n_words,
+    float scale
+) {
+    using namespace nvcuda;
+    constexpr int BLOCK_N = 128;
+    constexpr int BLOCK_D = 128;
+    constexpr int BLOCK_K = 16;
+    constexpr int WMMA_M = 16;
+    constexpr int WMMA_N = 16;
+    constexpr int WMMA_K = 16;
+    constexpr int N_FRAGS_M = BLOCK_N / WMMA_M;     // 8
+    constexpr int N_FRAGS_N = BLOCK_D / WMMA_N;     // 8
+    constexpr int N_WARPS   = N_FRAGS_M;            // 8
+    constexpr int LD_A      = BLOCK_K + 16;         // 32 (int8: pad 16 bytes)
+    constexpr int LD_B      = BLOCK_D + 16;         // 144
+
+    int32_t bh = blockIdx.z;
+    int32_t n_blk = blockIdx.y * BLOCK_N;
+    int32_t d_blk = blockIdx.x * BLOCK_D;
+    int32_t warp_id = threadIdx.y;
+    int32_t lane_id = threadIdx.x;
+    int32_t linear_tid = warp_id * 32 + lane_id;
+    int32_t threads_per_block = N_WARPS * 32;
+
+    __shared__ int8_t dS_shared[BLOCK_N * LD_A];   // 128 * 32 = 4 KB
+    __shared__ int8_t  K_shared[BLOCK_K * LD_B];    // 16  * 144 = 2.25 KB
+    __shared__ float partial[WMMA_M * BLOCK_D];     // 16*128*4 = 8 KB
+    __shared__ float tile_max_shared;
+    __shared__ float tile_scale_shared;
+
+    bool fully_in_bounds = (n_blk + BLOCK_N <= N) && (d_blk + BLOCK_D <= D);
+
+    wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frags[N_FRAGS_N];
+    #pragma unroll
+    for (int j = 0; j < N_FRAGS_N; ++j) {
+        wmma::fill_fragment(c_frags[j], 0.0f);
+    }
+
+    int32_t n_k_tiles = (T + BLOCK_K - 1) / BLOCK_K;
+    for (int32_t kt = 0; kt < n_k_tiles; ++kt) {
+        int32_t k_base = kt * BLOCK_K;
+
+        // Pass 1: load dS_tile fp32 values into local registers, find tile max.
+        // 256 threads × 8 elements = 2048 = BLOCK_N*BLOCK_K.
+        constexpr int PER_THREAD = 8;
+        float local_vals[PER_THREAD];
+        float thread_max = 0.0f;
+        #pragma unroll
+        for (int p = 0; p < PER_THREAD; ++p) {
+            int32_t i = linear_tid + p * threads_per_block;
+            if (i < BLOCK_N * BLOCK_K) {
+                int32_t n_local = i / BLOCK_K;
+                int32_t k_local = i - n_local * BLOCK_K;
+                int32_t n_global = n_blk + n_local;
+                int32_t k_global = k_base + k_local;
+                float v = 0.0f;
+                if (n_global < N && k_global < T) {
+                    v = X[((int64_t)bh * N + n_global) * T + k_global];
+                }
+                local_vals[p] = v;
+                float av = fabsf(v);
+                if (av > thread_max) thread_max = av;
+            } else {
+                local_vals[p] = 0.0f;
+            }
+        }
+        // Block-wide reduction of thread_max via shared mem (warp shuffle + 1 atomic).
+        if (linear_tid == 0) tile_max_shared = 0.0f;
+        __syncthreads();
+        // Warp-level reduce
+        for (int off = 16; off > 0; off >>= 1) {
+            float v = __shfl_xor_sync(0xFFFFFFFFu, thread_max, off);
+            if (v > thread_max) thread_max = v;
+        }
+        if (lane_id == 0) atomicMax((int*)&tile_max_shared, __float_as_int(thread_max));
+        __syncthreads();
+        if (linear_tid == 0) {
+            float m = tile_max_shared;
+            tile_scale_shared = (m > 1e-30f) ? (m / 127.0f) : 1.0f;
+        }
+        __syncthreads();
+        float tile_scale = tile_scale_shared;
+        float inv_scale = 1.0f / tile_scale;
+
+        // Pass 2: quantize and store to shared as int8.
+        #pragma unroll
+        for (int p = 0; p < PER_THREAD; ++p) {
+            int32_t i = linear_tid + p * threads_per_block;
+            if (i < BLOCK_N * BLOCK_K) {
+                int32_t n_local = i / BLOCK_K;
+                int32_t k_local = i - n_local * BLOCK_K;
+                int32_t q = (int32_t)__float2int_rn(local_vals[p] * inv_scale);
+                if (q > 127) q = 127;
+                if (q < -128) q = -128;
+                dS_shared[n_local * LD_A + k_local] = (int8_t)q;
+            }
+        }
+
+        // Decompress K bits to int8 ±1 [BLOCK_K, BLOCK_D].
+        for (int32_t i = linear_tid; i < BLOCK_K * BLOCK_D; i += threads_per_block) {
+            int32_t k_local = i / BLOCK_D;
+            int32_t d_local = i - k_local * BLOCK_D;
+            int32_t k_global = k_base + k_local;
+            int32_t d_global = d_blk + d_local;
+            int8_t s = 1;
+            if (k_global < T && d_global < D) {
+                int32_t word_idx = d_global >> 5;
+                int32_t bit = d_global & 31;
+                uint32_t w = B[((int64_t)bh * T + k_global) * n_words + word_idx];
+                s = ((w >> bit) & 1u) ? (int8_t)-1 : (int8_t)1;
+            }
+            K_shared[k_local * LD_B + d_local] = s;
+        }
+        __syncthreads();
+
+        // Each warp loads its A_frag and 8 B_frags, accumulates int32, scales.
+        wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, signed char, wmma::row_major> a_frag;
+        wmma::load_matrix_sync(
+            a_frag,
+            (const signed char*)&dS_shared[warp_id * WMMA_M * LD_A],
+            LD_A
+        );
+
+        #pragma unroll
+        for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+            wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, signed char, wmma::row_major> b_frag;
+            wmma::load_matrix_sync(
+                b_frag,
+                (const signed char*)&K_shared[j * WMMA_N],
+                LD_B
+            );
+            wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, int32_t> c_int_frag;
+            wmma::fill_fragment(c_int_frag, 0);
+            wmma::mma_sync(c_int_frag, a_frag, b_frag, c_int_frag);
+            // Add tile_scale * (int32 partial) to fp32 accumulator.
+            #pragma unroll
+            for (int32_t e = 0; e < c_int_frag.num_elements; ++e) {
+                c_frags[j].x[e] += (float)c_int_frag.x[e] * tile_scale;
+            }
+        }
+        __syncthreads();
+    }
+
+    // Apply outer scale.
+    #pragma unroll
+    for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+        #pragma unroll
+        for (int32_t e = 0; e < c_frags[j].num_elements; ++e) {
+            c_frags[j].x[e] *= scale;
+        }
+    }
+
+    // Stores (same dual-path as fp16 kernel).
+    if (fully_in_bounds) {
+        int32_t n_global_base = n_blk + warp_id * WMMA_M;
+        #pragma unroll
+        for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+            int32_t d_global_base = d_blk + j * WMMA_N;
+            wmma::store_matrix_sync(
+                &Y[((int64_t)bh * N + n_global_base) * D + d_global_base],
+                c_frags[j], D, wmma::mem_row_major
+            );
+        }
+    } else {
+        for (int32_t w_id = 0; w_id < N_WARPS; ++w_id) {
+            __syncthreads();
+            if (warp_id == w_id) {
+                #pragma unroll
+                for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+                    wmma::store_matrix_sync(
+                        &partial[j * WMMA_N],
+                        c_frags[j], BLOCK_D, wmma::mem_row_major
+                    );
+                }
+            }
+            __syncthreads();
+            int32_t n_global_base = n_blk + w_id * WMMA_M;
+            for (int32_t i = linear_tid; i < WMMA_M * BLOCK_D; i += threads_per_block) {
+                int32_t row = i / BLOCK_D;
+                int32_t col = i - row * BLOCK_D;
+                int32_t n_global = n_global_base + row;
+                int32_t d_global = d_blk + col;
+                if (n_global < N && d_global < D) {
+                    Y[((int64_t)bh * N + n_global) * D + d_global] =
+                        partial[row * BLOCK_D + col];
+                }
+            }
+        }
+    }
+}
+
+
+// =====================================================================
+// Tensor-Core (WMMA) signed-accumulation kernel.
+//
+// Same operation as bit_attn_signed_accum_kernel but uses WMMA fragments
+// with on-the-fly bit decompression to fp16 ±1 in shared memory. Lets
+// Tensor Cores do the matmul work while keeping bit storage of B.
+//
+// Block: 64 (n) x 64 (d) tile, 4 warps (128 threads).
+// Each warp owns one row of WMMA fragments (handles WMMA_M=16 N rows
+// and all 4 N=16-wide D fragments in the row).
+// K-tile size: BLOCK_K = 16 (matches WMMA k dim).
+//
+// Shared mem: dS_shared[64,16] fp16 (2 KB) + K_shared[16,64] fp16 (2 KB).
+// =====================================================================
+__global__ void bit_attn_signed_accum_wmma_kernel(
+    const float*    __restrict__ X,       // [BH, N, T]
+    const uint32_t* __restrict__ B,       // [BH, T, n_words]
+    float*          __restrict__ Y,       // [BH, N, D]
+    int32_t BH, int32_t N, int32_t T,
+    int32_t D, int32_t n_words,
+    float scale
+) {
+    using namespace nvcuda;
+    constexpr int BLOCK_N = 128;
+    constexpr int BLOCK_D = 128;
+    constexpr int BLOCK_K = 16;
+    constexpr int WMMA_M = 16;
+    constexpr int WMMA_N = 16;
+    constexpr int WMMA_K = 16;
+    constexpr int N_FRAGS_M = BLOCK_N / WMMA_M;     // 8
+    constexpr int N_FRAGS_N = BLOCK_D / WMMA_N;     // 8
+    constexpr int N_WARPS   = N_FRAGS_M;            // 8
+    constexpr int PAD_K     = 8;
+    constexpr int PAD_D     = 8;
+    constexpr int LD_A      = BLOCK_K + PAD_K;       // 24
+    constexpr int LD_B      = BLOCK_D + PAD_D;       // 136
+
+    int32_t bh = blockIdx.z;
+    int32_t n_blk = blockIdx.y * BLOCK_N;
+    int32_t d_blk = blockIdx.x * BLOCK_D;
+    int32_t warp_id = threadIdx.y;
+    int32_t lane_id = threadIdx.x;
+    int32_t linear_tid = warp_id * 32 + lane_id;
+    int32_t threads_per_block = N_WARPS * 32;       // 256
+
+    __shared__ half dS_shared[BLOCK_N * LD_A];      // 128 * 24 fp16 = 6 KB
+    __shared__ half  K_shared[BLOCK_K * LD_B];       // 16 * 136 fp16 = 4.25 KB
+    __shared__ float partial[WMMA_M * BLOCK_D];     // 16*128*4 = 8 KB
+
+    bool fully_in_bounds = (n_blk + BLOCK_N <= N) && (d_blk + BLOCK_D <= D);
+
+    wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frags[N_FRAGS_N];
+    #pragma unroll
+    for (int j = 0; j < N_FRAGS_N; ++j) {
+        wmma::fill_fragment(c_frags[j], 0.0f);
+    }
+
+    int32_t n_k_tiles = (T + BLOCK_K - 1) / BLOCK_K;
+    for (int32_t kt = 0; kt < n_k_tiles; ++kt) {
+        int32_t k_base = kt * BLOCK_K;
+
+        for (int32_t i = linear_tid; i < BLOCK_N * BLOCK_K; i += threads_per_block) {
+            int32_t n_local = i / BLOCK_K;
+            int32_t k_local = i - n_local * BLOCK_K;
+            int32_t n_global = n_blk + n_local;
+            int32_t k_global = k_base + k_local;
+            float v = 0.0f;
+            if (n_global < N && k_global < T) {
+                v = X[((int64_t)bh * N + n_global) * T + k_global];
+            }
+            dS_shared[n_local * LD_A + k_local] = __float2half(v);
+        }
+        for (int32_t i = linear_tid; i < BLOCK_K * BLOCK_D; i += threads_per_block) {
+            int32_t k_local = i / BLOCK_D;
+            int32_t d_local = i - k_local * BLOCK_D;
+            int32_t k_global = k_base + k_local;
+            int32_t d_global = d_blk + d_local;
+            float sign = 1.0f;
+            if (k_global < T && d_global < D) {
+                int32_t word_idx = d_global >> 5;
+                int32_t bit = d_global & 31;
+                uint32_t w = B[((int64_t)bh * T + k_global) * n_words + word_idx];
+                sign = ((w >> bit) & 1u) ? -1.0f : 1.0f;
+            }
+            K_shared[k_local * LD_B + d_local] = __float2half(sign);
+        }
+        __syncthreads();
+
+        wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> a_frag;
+        wmma::load_matrix_sync(a_frag, &dS_shared[warp_id * WMMA_M * LD_A], LD_A);
+
+        #pragma unroll
+        for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+            wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> b_frag;
+            wmma::load_matrix_sync(b_frag, &K_shared[j * WMMA_N], LD_B);
+            wmma::mma_sync(c_frags[j], a_frag, b_frag, c_frags[j]);
+        }
+        __syncthreads();
+    }
+
+    // Apply scale once, then store. Two paths:
+    //   fully_in_bounds: each warp directly stores its 8 fragments to global
+    //                    using wmma::store_matrix_sync (no shared bounce).
+    //   partial bounds : per-warp shared partial buffer with bounds-checked
+    //                    global write.
+    #pragma unroll
+    for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+        #pragma unroll
+        for (int32_t e = 0; e < c_frags[j].num_elements; ++e) {
+            c_frags[j].x[e] *= scale;
+        }
+    }
+
+    if (fully_in_bounds) {
+        // Direct global stores: each warp owns 16 N-rows and writes 8
+        // d-fragments side by side.
+        int32_t n_global_base = n_blk + warp_id * WMMA_M;
+        #pragma unroll
+        for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+            int32_t d_global_base = d_blk + j * WMMA_N;
+            wmma::store_matrix_sync(
+                &Y[((int64_t)bh * N + n_global_base) * D + d_global_base],
+                c_frags[j], D, wmma::mem_row_major
+            );
+        }
+    } else {
+        // Serialized bounds-checked write. Reuse `partial` for one warp at a
+        // time to keep shared mem footprint at 8 KB (vs 64 KB if all warps
+        // had private buffers).
+        for (int32_t w_id = 0; w_id < N_WARPS; ++w_id) {
+            __syncthreads();
+            if (warp_id == w_id) {
+                #pragma unroll
+                for (int32_t j = 0; j < N_FRAGS_N; ++j) {
+                    wmma::store_matrix_sync(
+                        &partial[j * WMMA_N],
+                        c_frags[j], BLOCK_D, wmma::mem_row_major
+                    );
+                }
+            }
+            __syncthreads();
+            // All warps cooperatively write this warp's [WMMA_M, BLOCK_D]
+            // tile to global with bounds checks.
+            int32_t n_global_base = n_blk + w_id * WMMA_M;
+            for (int32_t i = linear_tid; i < WMMA_M * BLOCK_D; i += threads_per_block) {
+                int32_t row = i / BLOCK_D;
+                int32_t col = i - row * BLOCK_D;
+                int32_t n_global = n_global_base + row;
+                int32_t d_global = d_blk + col;
+                if (n_global < N && d_global < D) {
+                    Y[((int64_t)bh * N + n_global) * D + d_global] =
+                        partial[row * BLOCK_D + col];
+                }
+            }
+        }
+    }
+}
+
+
+__global__ void bit_attn_signed_accum_tiled_kernel(
+    const float*    __restrict__ X,       // [BH, N, T]
+    const uint32_t* __restrict__ B,       // [BH, T, n_words]
+    float*          __restrict__ Y,       // [BH, N, D]
+    int32_t BH, int32_t N, int32_t T,
+    int32_t D, int32_t n_words,
+    float scale
+) {
+    // Each thread accumulates DS_PER_T (=8) outputs along the D axis to
+    // amortize dS_shared reads (one shared-mem read produces 8 fmadds).
+    // Block produces a [BLOCK_N=32, BLOCK_D=256] tile of Y.
+    constexpr int BLOCK_N    = 32;
+    constexpr int BLOCK_T    = 64;
+    constexpr int DS_PER_T   = 8;
+    constexpr int BLOCK_D    = 32 * DS_PER_T;   // 256
+    constexpr int N_WORDS_D  = BLOCK_D / 32;    // 8
+
+    int32_t bh = blockIdx.z;
+    int32_t n_blk = blockIdx.y * BLOCK_N;
+    int32_t d_blk = blockIdx.x * BLOCK_D;
+    int32_t tn = threadIdx.y;       // 0..BLOCK_N-1
+    int32_t td = threadIdx.x;       // 0..31  (warp lane)
+    int32_t n = n_blk + tn;
+    bool n_active = (n < N);
+
+    __shared__ float    dS_shared[BLOCK_N][BLOCK_T];
+    __shared__ uint32_t B_shared[BLOCK_T][N_WORDS_D];
+
+    // Each thread covers DS_PER_T outputs at d = d_blk + ds_idx*32 + td.
+    int32_t d_word_base = d_blk >> 5;
+    int32_t bit = td;
+    uint32_t mask = 1u << bit;
+
+    float acc[DS_PER_T];
+    #pragma unroll
+    for (int i = 0; i < DS_PER_T; ++i) acc[i] = 0.0f;
+
+    int32_t n_tiles = (T + BLOCK_T - 1) / BLOCK_T;
+    for (int32_t t_blk = 0; t_blk < n_tiles; ++t_blk) {
+        int32_t t_base = t_blk * BLOCK_T;
+        int32_t t_count = T - t_base;
+        if (t_count > BLOCK_T) t_count = BLOCK_T;
+
+        // Cooperative dS_tile load: BLOCK_N=32 rows * BLOCK_T=64 cols = 2048
+        // floats. With 32x32 = 1024 threads: each loads 2 entries
+        // (column td and td+32).
+        #pragma unroll
+        for (int32_t k = 0; k < 2; ++k) {
+            int32_t local_t = td + k * 32;
+            int32_t t_load = t_base + local_t;
+            int32_t n_load = n_blk + tn;
+            float v = 0.0f;
+            if (n_load < N && local_t < t_count) {
+                v = X[((int64_t)bh * N + n_load) * T + t_load];
+            }
+            dS_shared[tn][local_t] = v;
+        }
+
+        // Cooperative B_tile load: BLOCK_T * N_WORDS_D uint32 = 64*4 = 256
+        // entries. With 1024 threads, each loads 0 or 1 — assign first 256
+        // threads. Linear index = tn * 32 + td (0..1023). Use first 256.
+        int32_t lin = tn * 32 + td;
+        if (lin < BLOCK_T * N_WORDS_D) {
+            int32_t local_t = lin / N_WORDS_D;
+            int32_t lw      = lin - local_t * N_WORDS_D;
+            int32_t t_load  = t_base + local_t;
+            uint32_t bword  = 0u;
+            if (local_t < t_count) {
+                int32_t word_idx_global = d_word_base + lw;
+                if (word_idx_global < n_words) {
+                    bword = B[((int64_t)bh * T + t_load) * n_words + word_idx_global];
+                }
+            }
+            B_shared[local_t][lw] = bword;
+        }
+        __syncthreads();
+
+        if (n_active) {
+            #pragma unroll 8
+            for (int32_t tt = 0; tt < t_count; ++tt) {
+                float ds_val = dS_shared[tn][tt];
+                #pragma unroll
+                for (int32_t i = 0; i < DS_PER_T; ++i) {
+                    uint32_t w = B_shared[tt][i];
+                    float sign = (w & mask) ? -1.0f : 1.0f;
+                    acc[i] += ds_val * sign;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (n_active) {
+        #pragma unroll
+        for (int32_t i = 0; i < DS_PER_T; ++i) {
+            int32_t d = d_blk + i * 32 + td;
+            if (d < D) {
+                Y[((int64_t)bh * N + n) * D + d] = acc[i] * scale;
+            }
+        }
+    }
+}
+
 
 // =====================================================================
 // BitAttention fused flash-forward kernel (FlashAttention-2 style).
@@ -6076,6 +6613,151 @@ public:
     }
 
     // -----------------------------------------------------------------
+    // BitAttention backward.
+    // Computes (grad_q, grad_k, grad_v) given (q, k, v, grad_o, scale, is_causal).
+    //
+    // Algorithm (mathematically identical to F.scaled_dot_product_attention's
+    // autograd path; ±1 q, k unlock the bit-trick on dQ, dK):
+    //   S  = Q @ K^T * scale          (ATen sgemm; popcount alternative not
+    //                                   meaningfully faster at typical sizes)
+    //   A  = softmax(masked S)
+    //   dV = A^T @ grad_o             (ATen sgemm)
+    //   dA = grad_o @ V^T             (ATen sgemm)
+    //   dS = A * (dA - rowsum(A * dA))
+    //   dQ = (dS @ K) * scale         <- bit_attn_signed_accum_kernel
+    //   dK = (dS^T @ Q) * scale       <- bit_attn_signed_accum_kernel
+    //
+    // The ±1 bit-trick lives in the dQ and dK matmuls: the float operand
+    // of K (or Q) is replaced by reads of bit-packed K (or Q) with signed
+    // accumulation, avoiding any float K/Q tensor in this path.
+    // -----------------------------------------------------------------
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> bit_attn_backward(
+        const torch::Tensor& q,           // float32 [BH, T, d]   ±1
+        const torch::Tensor& k,           // float32 [BH, T, d]   ±1
+        const torch::Tensor& v,           // float32 [BH, T, d_v]
+        const torch::Tensor& grad_o,      // float32 [BH, T, d_v]
+        double scale,
+        bool is_causal
+    ) {
+        if (!q.is_cuda() || !k.is_cuda() || !v.is_cuda() || !grad_o.is_cuda())
+            throw py::value_error("tensors must be CUDA");
+        if (q.dtype() != torch::kFloat32 || k.dtype() != torch::kFloat32
+            || v.dtype() != torch::kFloat32 || grad_o.dtype() != torch::kFloat32)
+            throw py::value_error("q, k, v, grad_o must be float32");
+        if (q.dim() != 3 || k.dim() != 3 || v.dim() != 3 || grad_o.dim() != 3)
+            throw py::value_error("inputs must be 3-D [BH, T, feat]");
+        if (q.size(0) != k.size(0) || q.size(0) != v.size(0) || q.size(0) != grad_o.size(0))
+            throw py::value_error("BH mismatch");
+        if (q.size(1) != k.size(1) || q.size(1) != v.size(1) || q.size(1) != grad_o.size(1))
+            throw py::value_error("T mismatch");
+        if (q.size(2) != k.size(2))
+            throw py::value_error("d mismatch between q and k");
+        if (v.size(2) != grad_o.size(2))
+            throw py::value_error("d_v mismatch between v and grad_o");
+
+        int64_t BH  = q.size(0);
+        int64_t T   = q.size(1);
+        int64_t d   = q.size(2);
+        int64_t d_v = v.size(2);
+
+        // No MAX_N_WORDS limit on the backward path: kernels only read
+        // one word per t per d-tile (no per-thread register arrays).
+        int64_t n_words = (d + 31) / 32;
+
+        auto qc  = q.contiguous();
+        auto kc  = k.contiguous();
+        auto vc  = v.contiguous();
+        auto goc = grad_o.contiguous();
+        c10::cuda::CUDAGuard guard(q.device().index());
+
+        auto opts_u32 = torch::TensorOptions().dtype(torch::kInt32).device(q.device());
+        auto opts_f32 = torch::TensorOptions().dtype(torch::kFloat32).device(q.device());
+
+        // Pack Q and K bits (+1 -> 0, -1 -> 1).
+        torch::Tensor q_bits = torch::empty({BH * T, n_words}, opts_u32);
+        torch::Tensor k_bits = torch::empty({BH * T, n_words}, opts_u32);
+        int pack_threads = static_cast<int>(n_words);
+        int pack_blocks  = static_cast<int>(BH * T);
+        bit_attn_pack_pm_kernel<<<pack_blocks, pack_threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            reinterpret_cast<const float*>(qc.data_ptr()),
+            reinterpret_cast<uint32_t*>(q_bits.data_ptr()),
+            static_cast<int32_t>(BH * T), static_cast<int32_t>(d), static_cast<int32_t>(n_words)
+        );
+        bit_attn_pack_pm_kernel<<<pack_blocks, pack_threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+            reinterpret_cast<const float*>(kc.data_ptr()),
+            reinterpret_cast<uint32_t*>(k_bits.data_ptr()),
+            static_cast<int32_t>(BH * T), static_cast<int32_t>(d), static_cast<int32_t>(n_words)
+        );
+        CU_CHECK(cudaGetLastError());
+
+        // S = Q @ K^T * scale, mask, softmax → A.
+        auto S = torch::matmul(qc, kc.transpose(-2, -1)) * scale;
+        if (is_causal) {
+            auto mask = torch::triu(
+                torch::ones({T, T}, torch::TensorOptions().dtype(torch::kBool).device(q.device())),
+                /*diagonal=*/1
+            );
+            S.masked_fill_(mask, -std::numeric_limits<float>::infinity());
+        }
+        auto A = torch::softmax(S, -1);
+        // Fully-masked rows aren't possible under is_causal but guard anyway.
+        A = at::nan_to_num(A, /*nan=*/0.0);
+
+        // dV = A^T @ grad_o
+        auto dV = torch::matmul(A.transpose(-2, -1), goc);
+
+        // dA = grad_o @ V^T, then dS = A * (dA - rowsum(A * dA))
+        auto dA = torch::matmul(goc, vc.transpose(-2, -1));
+        auto AdA = A * dA;
+        auto dS  = A * (dA - AdA.sum(/*dim=*/-1, /*keepdim=*/true));
+        auto dS_c = dS.contiguous();
+
+        // dQ = (dS @ K_signs) * scale: WMMA path when on Hopper / Ampere
+        // and shapes are reasonable; tiled fp32 kernel otherwise.
+        torch::Tensor dQ = torch::empty({BH, T, d}, opts_f32);
+        {
+            // WMMA kernel: 64x64 tile, 4 warps.
+            dim3 block(32, 8, 1);
+            dim3 grid(
+                static_cast<unsigned>((d + 128 - 1) / 128),
+                static_cast<unsigned>((T + 128 - 1) / 128),
+                static_cast<unsigned>(BH)
+            );
+            bit_attn_signed_accum_wmma_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const float*>(dS_c.data_ptr()),
+                reinterpret_cast<const uint32_t*>(k_bits.data_ptr()),
+                reinterpret_cast<float*>(dQ.data_ptr()),
+                static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(T),
+                static_cast<int32_t>(d), static_cast<int32_t>(n_words),
+                static_cast<float>(scale)
+            );
+        }
+
+        // dK = (dS^T @ Q_signs) * scale via WMMA kernel.
+        auto dS_T = dS.transpose(-2, -1).contiguous();
+        torch::Tensor dK = torch::empty({BH, T, d}, opts_f32);
+        {
+            dim3 block(32, 8, 1);
+            dim3 grid(
+                static_cast<unsigned>((d + 128 - 1) / 128),
+                static_cast<unsigned>((T + 128 - 1) / 128),
+                static_cast<unsigned>(BH)
+            );
+            bit_attn_signed_accum_wmma_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const float*>(dS_T.data_ptr()),
+                reinterpret_cast<const uint32_t*>(q_bits.data_ptr()),
+                reinterpret_cast<float*>(dK.data_ptr()),
+                static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(T),
+                static_cast<int32_t>(d), static_cast<int32_t>(n_words),
+                static_cast<float>(scale)
+            );
+        }
+        CU_CHECK(cudaGetLastError());
+
+        return std::make_tuple(dQ, dK, dV);
+    }
+
+    // -----------------------------------------------------------------
     // Fused fp8-latent Adam step (single kernel over all elements):
     // dequantize latent/m/v from fp8 with per-table scales, run Adam math,
     // safety-clamp latent to +-10, and emit new latent/m/v as float32 scratch
@@ -6911,6 +7593,16 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("q"),
             py::arg("k"),
             py::arg("v"),
+            py::arg("scale"),
+            py::arg("is_causal")
+        )
+        .def(
+            "bit_attn_backward",
+            &LUTorchManager::bit_attn_backward,
+            py::arg("q"),
+            py::arg("k"),
+            py::arg("v"),
+            py::arg("grad_o"),
             py::arg("scale"),
             py::arg("is_causal")
         )
