@@ -21,6 +21,10 @@ native/spiky/torch_utils/aux_/torch_utils_kernels_logic.cu
 src/spiky/lutorch/tests/fineweb_texts.txt
 src/spiky/lutorch/tests/lutorch_profile_results.md
 
+# Distillation pairs (GB-scale parquet)
+nanochat_exps/distill_unembedder/*.parquet
+transformer_exps/**/*.parquet
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

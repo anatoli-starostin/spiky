@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp166_mlp_qk_gelu_nobias",
+  "best_val_bpb": 1.7162450953204431,
+  "final_val_bpb": 1.7162450953204431,
+  "n_params": 184396294,
+  "training_time_hours": 0.49
+}

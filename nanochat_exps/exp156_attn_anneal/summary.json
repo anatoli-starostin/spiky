@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp156_attn_anneal",
+  "best_val_bpb": 1.7108342942920047,
+  "final_val_bpb": 1.7108342942920047,
+  "n_params": 392005126,
+  "training_time_hours": 0.649
+}

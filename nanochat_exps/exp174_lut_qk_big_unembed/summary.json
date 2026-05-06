@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp174_lut_qk_big_unembed",
+  "best_val_bpb": 1.6477971833556884,
+  "final_val_bpb": 1.6477971833556884,
+  "n_params": 481232390,
+  "training_time_hours": 0.745
+}

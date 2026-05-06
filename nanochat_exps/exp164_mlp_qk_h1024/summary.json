@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp164_mlp_qk_h1024",
+  "best_val_bpb": 1.7259375795758574,
+  "final_val_bpb": 1.726523669508135,
+  "n_params": 175037446,
+  "training_time_hours": 0.544
+}

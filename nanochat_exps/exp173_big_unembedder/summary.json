@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp173_big_unembedder",
+  "best_val_bpb": 1.6551576280907785,
+  "final_val_bpb": 1.6551576280907785,
+  "n_params": 424225286,
+  "training_time_hours": 0.756
+}

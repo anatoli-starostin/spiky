@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp167_mlp_qk_h4096",
+  "best_val_bpb": 1.7189537812236722,
+  "final_val_bpb": 1.7189537812236722,
+  "n_params": 203270662,
+  "training_time_hours": 0.426
+}
