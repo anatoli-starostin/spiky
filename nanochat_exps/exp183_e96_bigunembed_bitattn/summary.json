@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp183_e96_bigunembed_bitattn",
+  "best_val_bpb": 1.6283565979023378,
+  "final_val_bpb": 1.6283565979023378,
+  "n_params": 301795590,
+  "training_time_hours": 0.7
+}

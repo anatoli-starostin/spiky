@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp185_e96_unembed_mult4",
+  "best_val_bpb": 1.6620192803729934,
+  "final_val_bpb": 1.6620192803729934,
+  "n_params": 224971014,
+  "training_time_hours": 0.614
+}

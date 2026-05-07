@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp176_smooth_lut_unembedder",
+  "best_val_bpb": 1.6913512334521708,
+  "final_val_bpb": 1.6914467444040975,
+  "n_params": 496829958,
+  "training_time_hours": 0.668
+}

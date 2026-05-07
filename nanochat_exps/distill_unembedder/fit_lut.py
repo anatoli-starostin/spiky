@@ -108,6 +108,9 @@ def main():
     p.add_argument('--nap', type=int, default=8)
     p.add_argument('--n_sparse', type=int, default=128)
     p.add_argument('--init_std', type=float, default=0.1)
+    p.add_argument('--lr_schedule', type=str, default='constant',
+                   choices=['constant', 'cosine'])
+    p.add_argument('--warmup_steps', type=int, default=0)
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -132,9 +135,23 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   weight_decay=args.weight_decay)
+    for g in optimizer.param_groups:
+        g['initial_lr'] = g['lr']
+
+    steps_per_epoch = len(train_loader)
+    total_steps = steps_per_epoch * args.epochs
+
+    def lr_scale_at(step):
+        if args.warmup_steps > 0 and step < args.warmup_steps:
+            return step / max(1, args.warmup_steps)
+        if args.lr_schedule == 'cosine':
+            progress = (step - args.warmup_steps) / max(1, total_steps - args.warmup_steps)
+            progress = min(1.0, max(0.0, progress))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+        return 1.0
 
     print(f'\nTraining: epochs={args.epochs} batch_size={args.batch_size} '
-          f'lr={args.lr}\n')
+          f'lr={args.lr} schedule={args.lr_schedule} warmup={args.warmup_steps}\n')
     step = 0
     t0 = time.time()
     for epoch in range(args.epochs):
@@ -144,6 +161,9 @@ def main():
         for inputs, targets in train_loader:
             inputs = inputs.to(DEVICE, non_blocking=True)
             targets = targets.to(DEVICE, non_blocking=True)
+            scale = lr_scale_at(step)
+            for g in optimizer.param_groups:
+                g['lr'] = g['initial_lr'] * scale
             student = model(inputs)
             loss = kl_loss(student, targets)
             optimizer.zero_grad(set_to_none=True)
