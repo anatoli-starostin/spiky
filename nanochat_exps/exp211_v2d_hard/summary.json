@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp211_v2d_hard",
+  "best_val_bpb": 1.7908930056879107,
+  "final_val_bpb": 1.7908930056879107,
+  "total_params": 59317632,
+  "training_time_hours": 0.406
+}

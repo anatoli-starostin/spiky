@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp187_e96_mlp_replace_lut",
+  "best_val_bpb": 1.719886949037767,
+  "final_val_bpb": 1.719886949037767,
+  "n_params": 166492422,
+  "training_time_hours": 0.865
+}

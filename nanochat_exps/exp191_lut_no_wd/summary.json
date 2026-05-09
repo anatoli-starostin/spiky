@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp191_lut_no_wd",
+  "best_val_bpb": 1.6306580129036778,
+  "final_val_bpb": 1.6316282586794544,
+  "n_params": 301795590,
+  "training_time_hours": 1.551
+}

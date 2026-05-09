@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp197_v2d_attn_ffn",
+  "best_val_bpb": 1.6806486094115758,
+  "final_val_bpb": 1.6806486094115758,
+  "total_params": 62317056,
+  "training_time_hours": 0.183
+}

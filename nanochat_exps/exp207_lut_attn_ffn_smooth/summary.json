@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp207_lut_attn_ffn_smooth",
+  "best_val_bpb": 1.7481723883820126,
+  "final_val_bpb": 1.7481723883820126,
+  "total_params": 86902272,
+  "training_time_hours": 0.508
+}

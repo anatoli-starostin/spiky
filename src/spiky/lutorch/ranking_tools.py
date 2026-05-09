@@ -522,6 +522,86 @@ class DominanceToVector(nn.Module):
         return v
 
 
+def _coprime_units_mod(n: int) -> torch.Tensor:
+    """Return the units of Z/n (integers in [1, n) coprime to n) as a long tensor."""
+    return torch.tensor(
+        [m for m in range(1, n) if math.gcd(m, n) == 1], dtype=torch.long
+    )
+
+
+def _sample_doubling_pairs(
+    d_head: int,
+    n_pairs: int,
+    all_pairs: torch.Tensor,
+    generator: torch.Generator,
+    offset_multiplier: int = 1,
+) -> torch.Tensor:
+    """Sample `n_pairs` pairs over `d_head` anchors with a doubling-step prior.
+
+    Construction:
+      1. Build the circular doubling-step edge set with offsets
+         {m * 2^k mod d_head : 2^k < d_head}, where m = `offset_multiplier`
+         (coprime to d_head so the resulting Cayley graph on Z/d_head is
+         isomorphic to the m=1 graph: full anchor coverage, diameter
+         O(log d_head)). m varies per head to give each head a different
+         specific edge set while preserving structural properties.
+      2. If n_pairs <= |doubling_set|: return a random subset of doubling
+         edges.
+      3. If n_pairs >  |doubling_set|: keep all doubling edges and fill the
+         remainder with a uniform-random sample from non-doubling pairs.
+
+    Args:
+        d_head: number of anchors (vertices).
+        n_pairs: target number of pairs (edges).
+        all_pairs: (P_full, 2) tensor with P_full = d_head*(d_head-1)/2,
+                   pre-sorted lex-ascending (the canonical upper-triangle).
+        generator: torch.Generator for randomization.
+        offset_multiplier: integer coprime to d_head that scales the doubling
+                           offsets. Defaults to 1 (canonical doubling).
+
+    Returns:
+        pairs: (n_pairs, 2) long tensor of pair indices, each row (a, b) with a < b.
+    """
+    E = d_head
+    # 1) Build doubling-step edges (deduplicated, canonical upper-tri).
+    offsets: list[int] = []
+    k = 1
+    while k < E:
+        offsets.append((offset_multiplier * k) % E)
+        k *= 2
+    # Drop zero offsets (would yield self-loops when m*2^k ≡ 0 mod E; only
+    # possible if gcd(m, E) > 1, which we disallow above, but guard anyway).
+    offsets = [o for o in offsets if o != 0]
+    i_grid = torch.arange(E).unsqueeze(1)                # (E, 1)
+    off_t = torch.tensor(offsets).unsqueeze(0)           # (1, n_off)
+    j_grid = (i_grid + off_t) % E                        # (E, n_off)
+    raw = torch.stack(
+        [i_grid.expand_as(j_grid), j_grid], dim=-1
+    ).reshape(-1, 2)                                     # (E*n_off, 2)
+    raw_sorted, _ = raw.sort(dim=-1)                     # (a, b) with a<b
+    dbl_keys = raw_sorted[:, 0] * E + raw_sorted[:, 1]
+    dbl_keys_unique = torch.unique(dbl_keys)
+    dbl_pairs = torch.stack(
+        [dbl_keys_unique // E, dbl_keys_unique % E], dim=-1
+    ).long()                                             # (M, 2), M = unique count
+
+    M = dbl_pairs.size(0)
+    if n_pairs <= M:
+        idx = torch.randperm(M, generator=generator)[:n_pairs]
+        return dbl_pairs[idx]
+    # 2) Use all doubling edges + random fill from non-doubling pairs.
+    all_keys = all_pairs[:, 0] * E + all_pairs[:, 1]
+    non_dbl_mask = ~torch.isin(all_keys, dbl_keys_unique)
+    non_dbl = all_pairs[non_dbl_mask]                    # (P_full - M, 2)
+    n_extra = n_pairs - M
+    extra_idx = torch.randperm(non_dbl.size(0), generator=generator)[:n_extra]
+    extra = non_dbl[extra_idx]
+    chosen = torch.cat([dbl_pairs, extra], dim=0)        # (n_pairs, 2)
+    # Shuffle so doubling/random aren't positionally separated.
+    perm = torch.randperm(chosen.size(0), generator=generator)
+    return chosen[perm]
+
+
 class VectorToDominance(nn.Module):
     """All-pairs rank projection x → dominance vector.
 
@@ -557,11 +637,25 @@ class VectorToDominance(nn.Module):
         n_pairs: int | None = None,
         n_heads: int | None = None,
         random_seed: int = 42,
+        linear_mode: bool = False,
+        pair_sampling_mode: str = "uniform",
     ):
         super().__init__()
         self.d_head = d_head
         self.smooth_mode = smooth_mode
         self.temperature = temperature
+        # linear_mode: bypass the rational/sign projection and emit raw
+        # x_a - x_b (no saturation). Useful for downstream Linear projections
+        # that can handle unbounded magnitudes; preserves gradient magnitude.
+        # Overrides smooth_mode and STE paths.
+        self.linear_mode = linear_mode
+        # pair_sampling_mode:
+        #   "uniform"  - uniform random sample without replacement (default).
+        #   "doubling" - circular doubling-step graph (edges {i, (i+2^k) mod E})
+        #                for k = 0..log2(E), then random fill if more pairs are
+        #                requested. Guarantees full anchor coverage and small
+        #                graph diameter (~log E).
+        self.pair_sampling_mode = pair_sampling_mode
 
         if n_pairs is None:
             tri_i, tri_j = torch.triu_indices(d_head, d_head, offset=1)
@@ -572,18 +666,45 @@ class VectorToDominance(nn.Module):
             P_full = all_pairs.size(0)
             assert 0 < n_pairs <= P_full, f"n_pairs={n_pairs} must be in (0, {P_full}]"
             rng = torch.Generator().manual_seed(random_seed)
-            if n_heads is None:
+
+            def _sample_one_head_uniform(_h: int = 0) -> torch.Tensor:
                 idx = torch.randperm(P_full, generator=rng)[:n_pairs]
-                pairs = all_pairs[idx].T.contiguous()     # (2, n_pairs)
+                return all_pairs[idx]                                    # (n_pairs, 2)
+
+            # Per-head doubling multiplier: each head gets a distinct
+            # `offset_multiplier` coprime to d_head so its Cayley graph is
+            # structurally equivalent (full coverage, O(log E) diameter) but
+            # uses a different specific edge set. Multipliers are sampled
+            # without replacement from the units of Z/d_head.
+            if pair_sampling_mode == "doubling":
+                units = _coprime_units_mod(d_head)
+                if n_heads is not None and n_heads > 0:
+                    perm = torch.randperm(units.numel(), generator=rng)
+                    head_multipliers = [
+                        int(units[perm[h % units.numel()]].item())
+                        for h in range(n_heads)
+                    ]
+                else:
+                    head_multipliers = [1]
+
+            def _sample_one_head_doubling(h: int = 0) -> torch.Tensor:
+                m = head_multipliers[h]
+                return _sample_doubling_pairs(
+                    d_head, n_pairs, all_pairs, rng, offset_multiplier=m
+                )
+
+            if pair_sampling_mode == "uniform":
+                _sample_one = _sample_one_head_uniform
+            elif pair_sampling_mode == "doubling":
+                _sample_one = _sample_one_head_doubling
+            else:
+                raise ValueError(f"Unknown pair_sampling_mode={pair_sampling_mode!r}")
+
+            if n_heads is None:
+                pairs = _sample_one(0).T.contiguous()                    # (2, n_pairs)
                 self.per_head = False
             else:
-                idx = torch.stack([
-                    torch.randperm(P_full, generator=rng)[:n_pairs]
-                    for _ in range(n_heads)
-                ])                                        # (H, n_pairs)
-                pairs = torch.stack(
-                    [all_pairs[idx[h]].T for h in range(n_heads)]
-                )                                         # (H, 2, n_pairs)
+                pairs = torch.stack([_sample_one(h).T for h in range(n_heads)])  # (H, 2, n_pairs)
                 self.per_head = True
         self.register_buffer('pairs', pairs)
 
@@ -605,6 +726,9 @@ class VectorToDominance(nn.Module):
         return (a > b).to(x.dtype) * 2.0 - 1.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.linear_mode:
+            a, b = self._ab(x)
+            return a - b
         if self.smooth_mode:
             return self._soft(x)
         soft = self._soft(x)

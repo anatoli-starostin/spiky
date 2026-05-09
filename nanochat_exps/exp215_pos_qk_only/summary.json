@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp215_pos_qk_only",
+  "best_val_bpb": 1.7598533543355865,
+  "final_val_bpb": 1.7598533543355865,
+  "total_params": 114410880,
+  "training_time_hours": 0.586
+}

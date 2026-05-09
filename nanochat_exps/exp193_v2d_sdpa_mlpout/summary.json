@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp193_v2d_sdpa_mlpout",
+  "best_val_bpb": 2.0067296874027543,
+  "final_val_bpb": 2.0067296874027543,
+  "total_params": 42651648,
+  "training_time_hours": 0.128
+}

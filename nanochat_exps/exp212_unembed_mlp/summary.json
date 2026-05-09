@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp212_unembed_mlp",
+  "best_val_bpb": 1.7709733401157435,
+  "final_val_bpb": 1.7709733401157435,
+  "total_params": 78339456,
+  "training_time_hours": 0.426
+}

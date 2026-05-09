@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp194_v2d_sdpa_untied",
+  "description": "Fork of exp193 (val_bpb=2.0067 @ 8K). Single change: untie lm_head from token embedding — head.weight is its own [VOCAB, E] tensor, std=0.02 init. Hypothesis: with V2D+per-head-QKV attention, tok_emb and the unembedder vector for each token live in different geometries; tying is forcing them to share, which may be the dominant bottleneck.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 8,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "tokenizer_vocab_size": 32768,
+  "v2d_n_pairs": 3297,
+  "v2d_temperature": 0.1,
+  "v2d_linear_mode": true,
+  "qkv_init_std": 0.005,
+  "out_mlp_hidden": 1536
+}

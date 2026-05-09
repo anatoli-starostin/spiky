@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp196_v2d_soft",
+  "description": "Fork of exp194 (untied head, val_bpb≈2.07 @ 2.6K when stopped). Single change: V2D switched from linear_mode (raw x_a - x_b) to soft mode (x_a - x_b) / (t + |x_a - x_b|), bounded in (-1, 1). Hypothesis: linear V2D produces unbounded dominance values that act as a ill-conditioned linear pre-projection; soft mode gives a saturating, near-sign-like signal that better matches the role of attention features. NOTE: soft V2D output variance ≈0.92 vs linear ≈2, so Q magnitude shrinks by ~1.5x at qkv_std=0.005. Keeping qkv_std unchanged for a clean single-variable comparison.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 8,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "tokenizer_vocab_size": 32768,
+  "v2d_n_pairs": 3297,
+  "v2d_temperature": 0.1,
+  "v2d_linear_mode": false,
+  "qkv_init_std": 0.005,
+  "out_mlp_hidden": 1536
+}

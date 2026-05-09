@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp188_e96_48k_steps",
+  "best_val_bpb": 1.5113391375117298,
+  "final_val_bpb": 1.5113391375117298,
+  "n_params": 301795590,
+  "training_time_hours": 4.214
+}

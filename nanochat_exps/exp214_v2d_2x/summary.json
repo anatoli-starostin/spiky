@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp214_v2d_2x",
+  "best_val_bpb": 1.7703325719235175,
+  "final_val_bpb": 1.7703325719235175,
+  "total_params": 121120128,
+  "training_time_hours": 0.642
+}
