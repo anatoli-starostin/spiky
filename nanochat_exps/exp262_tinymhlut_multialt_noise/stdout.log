@@ -1,0 +1,145 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 358,420,230
+Q/K Joint TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 [no V2D, q_norm+k_norm -> SDPA]
+V TinyMHLut(ste, n_alt=3, noise_eps=0.002):       in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+V2D out:         init_T=0.1 learnable=True
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tracking 6 learnable temperatures in temperatures.csv
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4150 | lr=3.75e-07
+step    100 | loss=9.3733 | lr=3.75e-05
+step    200 | loss=8.2696 | lr=7.50e-05
+W0511 10:57:41.796000 3911877 torch/_dynamo/convert_frame.py:964] [0/8] torch._dynamo hit config.recompile_limit (8)
+W0511 10:57:41.796000 3911877 torch/_dynamo/convert_frame.py:964] [0/8]    function: '_multi_alt_fwd_body' (/home/starost/spiky/src/spiky/lutorch/tiny_multi_head_lut.py:422)
+W0511 10:57:41.796000 3911877 torch/_dynamo/convert_frame.py:964] [0/8]    last reason: 0/7: tensor 'weights' size mismatch at index 0. expected 1536, actual 1024. Guard failed on a parameter, consider using torch._dynamo.config.force_parameter_static_shapes = False to allow dynamism on parameters.
+W0511 10:57:41.796000 3911877 torch/_dynamo/convert_frame.py:964] [0/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0511 10:57:41.796000 3911877 torch/_dynamo/convert_frame.py:964] [0/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html.
+[VAL] step 200: bpb=2.3337
+step    300 | loss=7.6968 | lr=1.12e-04
+step    400 | loss=7.1885 | lr=1.50e-04
+[VAL] step 400: bpb=2.0734
+step    500 | loss=6.8587 | lr=1.87e-04
+step    600 | loss=6.7007 | lr=2.25e-04
+[VAL] step 600: bpb=2.0037
+step    700 | loss=6.5931 | lr=2.62e-04
+step    800 | loss=6.4996 | lr=3.00e-04
+[VAL] step 800: bpb=1.9647
+step    900 | loss=6.4261 | lr=3.00e-04
+step   1000 | loss=6.3510 | lr=2.99e-04
+[VAL] step 1000: bpb=1.9182
+step   1100 | loss=6.2728 | lr=2.99e-04
+step   1200 | loss=6.2007 | lr=2.98e-04
+[VAL] step 1200: bpb=1.8683
+step   1300 | loss=6.1173 | lr=2.97e-04
+step   1400 | loss=6.0780 | lr=2.95e-04
+[VAL] step 1400: bpb=1.8381
+step   1500 | loss=6.0314 | lr=2.94e-04
+step   1600 | loss=5.9599 | lr=2.92e-04
+[VAL] step 1600: bpb=1.8167
+step   1700 | loss=5.9347 | lr=2.90e-04
+step   1800 | loss=5.9031 | lr=2.87e-04
+[VAL] step 1800: bpb=1.7945
+step   1900 | loss=5.8722 | lr=2.85e-04
+step   2000 | loss=5.8379 | lr=2.82e-04
+[VAL] step 2000: bpb=1.7804
+step   2100 | loss=5.7888 | lr=2.79e-04
+step   2200 | loss=5.7688 | lr=2.76e-04
+[VAL] step 2200: bpb=1.7650
+step   2300 | loss=5.7503 | lr=2.72e-04
+step   2400 | loss=5.7424 | lr=2.68e-04
+[VAL] step 2400: bpb=1.7516
+step   2500 | loss=5.7210 | lr=2.65e-04
+step   2600 | loss=5.7031 | lr=2.60e-04
+[VAL] step 2600: bpb=1.7395
+step   2700 | loss=5.6705 | lr=2.56e-04
+step   2800 | loss=5.6565 | lr=2.52e-04
+[VAL] step 2800: bpb=1.7283
+step   2900 | loss=5.6305 | lr=2.47e-04
+step   3000 | loss=5.6162 | lr=2.42e-04
+[VAL] step 3000: bpb=1.7176
+step   3100 | loss=5.6009 | lr=2.38e-04
+step   3200 | loss=5.5920 | lr=2.32e-04
+[VAL] step 3200: bpb=1.7082
+step   3300 | loss=5.5797 | lr=2.27e-04
+step   3400 | loss=5.5432 | lr=2.22e-04
+[VAL] step 3400: bpb=1.7021
+step   3500 | loss=5.5326 | lr=2.17e-04
+step   3600 | loss=5.5411 | lr=2.11e-04
+[VAL] step 3600: bpb=1.6988
+step   3700 | loss=5.5131 | lr=2.06e-04
+step   3800 | loss=5.5045 | lr=2.00e-04
+[VAL] step 3800: bpb=1.6902
+step   3900 | loss=5.4808 | lr=1.94e-04
+step   4000 | loss=5.4593 | lr=1.88e-04
+[VAL] step 4000: bpb=1.6814
+step   4100 | loss=5.4901 | lr=1.83e-04
+step   4200 | loss=5.4644 | lr=1.77e-04
+[VAL] step 4200: bpb=1.6768
+step   4300 | loss=5.4671 | lr=1.71e-04
+step   4400 | loss=5.4558 | lr=1.65e-04
+[VAL] step 4400: bpb=1.6712
+step   4500 | loss=5.4386 | lr=1.59e-04
+step   4600 | loss=5.4282 | lr=1.53e-04
+[VAL] step 4600: bpb=1.6646
+step   4700 | loss=5.4294 | lr=1.47e-04
+step   4800 | loss=5.4259 | lr=1.42e-04
+[VAL] step 4800: bpb=1.6597
+step   4900 | loss=5.4022 | lr=1.36e-04
+step   5000 | loss=5.3961 | lr=1.30e-04
+[VAL] step 5000: bpb=1.6538
+step   5100 | loss=5.3867 | lr=1.24e-04
+step   5200 | loss=5.3707 | lr=1.19e-04
+[VAL] step 5200: bpb=1.6490
+step   5300 | loss=5.3550 | lr=1.13e-04
+step   5400 | loss=5.3403 | lr=1.08e-04
+[VAL] step 5400: bpb=1.6444
+step   5500 | loss=5.3502 | lr=1.03e-04
+step   5600 | loss=5.3631 | lr=9.75e-05
+[VAL] step 5600: bpb=1.6406
+step   5700 | loss=5.3487 | lr=9.25e-05
+step   5800 | loss=5.3387 | lr=8.76e-05
+[VAL] step 5800: bpb=1.6377
+step   5900 | loss=5.3414 | lr=8.28e-05
+step   6000 | loss=5.3300 | lr=7.82e-05
+[VAL] step 6000: bpb=1.6347
+step   6100 | loss=5.3167 | lr=7.38e-05
+step   6200 | loss=5.3155 | lr=6.95e-05
+[VAL] step 6200: bpb=1.6310
+step   6300 | loss=5.3183 | lr=6.55e-05
+step   6400 | loss=5.3030 | lr=6.16e-05
+[VAL] step 6400: bpb=1.6290
+step   6500 | loss=5.2918 | lr=5.79e-05
+step   6600 | loss=5.2976 | lr=5.44e-05
+[VAL] step 6600: bpb=1.6252
+step   6700 | loss=5.2921 | lr=5.11e-05
+step   6800 | loss=5.2840 | lr=4.81e-05
+[VAL] step 6800: bpb=1.6233
+step   6900 | loss=5.2852 | lr=4.53e-05
+step   7000 | loss=5.2876 | lr=4.26e-05
+[VAL] step 7000: bpb=1.6219
+step   7100 | loss=5.2789 | lr=4.03e-05
+step   7200 | loss=5.2834 | lr=3.81e-05
+[VAL] step 7200: bpb=1.6204
+step   7300 | loss=5.2693 | lr=3.62e-05
+step   7400 | loss=5.2804 | lr=3.46e-05
+[VAL] step 7400: bpb=1.6187
+step   7500 | loss=5.2685 | lr=3.32e-05
+step   7600 | loss=5.2625 | lr=3.21e-05
+[VAL] step 7600: bpb=1.6157
+step   7700 | loss=5.2560 | lr=3.12e-05
+step   7800 | loss=5.2702 | lr=3.05e-05
+[VAL] step 7800: bpb=1.6147
+step   7900 | loss=5.2675 | lr=3.01e-05
+step   8000 | loss=5.2593 | lr=3.00e-05
+[VAL] step 8000: bpb=1.6148
+
+=== DONE ===
+{
+  "exp_name": "exp262_tinymhlut_multialt_noise",
+  "best_val_bpb": 1.6147151933925086,
+  "final_val_bpb": 1.6148459049409685,
+  "n_params": 358420230,
+  "training_time_hours": 0.759
+}

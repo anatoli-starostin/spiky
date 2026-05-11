@@ -1,0 +1,38 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 358,420,248
+Q/K Joint TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 [no V2D, q_norm+k_norm -> SDPA]
+V TinyMHLut(ste, n_alt=3, noise_eps=0.002):       in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+V2D out:         init_T=0.1 learnable=True
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tracking 24 learnable temperatures in temperatures.csv
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4150 | lr=3.75e-07
+step    100 | loss=9.3734 | lr=3.75e-05
+step    200 | loss=8.2730 | lr=7.50e-05
+W0511 11:56:37.811000 4018674 torch/_dynamo/convert_frame.py:964] [0/8] torch._dynamo hit config.recompile_limit (8)
+W0511 11:56:37.811000 4018674 torch/_dynamo/convert_frame.py:964] [0/8]    function: '_multi_alt_fwd_body' (/home/starost/spiky/src/spiky/lutorch/tiny_multi_head_lut.py:422)
+W0511 11:56:37.811000 4018674 torch/_dynamo/convert_frame.py:964] [0/8]    last reason: 0/7: tensor 'weights' size mismatch at index 0. expected 1536, actual 1024. Guard failed on a parameter, consider using torch._dynamo.config.force_parameter_static_shapes = False to allow dynamism on parameters.
+W0511 11:56:37.811000 4018674 torch/_dynamo/convert_frame.py:964] [0/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0511 11:56:37.811000 4018674 torch/_dynamo/convert_frame.py:964] [0/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html.
+[VAL] step 200: bpb=2.3368
+step    300 | loss=7.6984 | lr=1.12e-04
+step    400 | loss=7.2003 | lr=1.50e-04
+[VAL] step 400: bpb=2.0841
+step    500 | loss=6.8815 | lr=1.87e-04
+step    600 | loss=6.7242 | lr=2.25e-04
+[VAL] step 600: bpb=2.0118
+step    700 | loss=6.6128 | lr=2.62e-04
+step    800 | loss=6.5214 | lr=3.00e-04
+[VAL] step 800: bpb=1.9758
+step    900 | loss=6.4457 | lr=3.00e-04
+step   1000 | loss=6.3799 | lr=2.99e-04
+[VAL] step 1000: bpb=1.9305
+step   1100 | loss=6.3054 | lr=2.99e-04
+step   1200 | loss=6.2315 | lr=2.98e-04
+[VAL] step 1200: bpb=1.8778
+step   1300 | loss=6.1442 | lr=2.97e-04
+step   1400 | loss=6.0997 | lr=2.95e-04
+[VAL] step 1400: bpb=1.8471
+step   1500 | loss=6.0522 | lr=2.94e-04
