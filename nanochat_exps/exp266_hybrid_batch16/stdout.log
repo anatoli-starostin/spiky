@@ -66,3 +66,75 @@ step   3600 | loss=5.1641 | lr=2.11e-04
 step   3700 | loss=5.1552 | lr=2.06e-04
 step   3800 | loss=5.1359 | lr=2.00e-04
 [VAL] step 3800: bpb=1.5919
+step   3900 | loss=5.1308 | lr=1.94e-04
+step   4000 | loss=5.1211 | lr=1.88e-04
+[VAL] step 4000: bpb=1.5854
+step   4100 | loss=5.1060 | lr=1.83e-04
+step   4200 | loss=5.0949 | lr=1.77e-04
+[VAL] step 4200: bpb=1.5785
+step   4300 | loss=5.0950 | lr=1.71e-04
+step   4400 | loss=5.0863 | lr=1.65e-04
+[VAL] step 4400: bpb=1.5754
+step   4500 | loss=5.0696 | lr=1.59e-04
+step   4600 | loss=5.0624 | lr=1.53e-04
+[VAL] step 4600: bpb=1.5688
+step   4700 | loss=5.0613 | lr=1.47e-04
+step   4800 | loss=5.0731 | lr=1.42e-04
+[VAL] step 4800: bpb=1.5644
+step   4900 | loss=5.0603 | lr=1.36e-04
+step   5000 | loss=5.0269 | lr=1.30e-04
+[VAL] step 5000: bpb=1.5585
+step   5100 | loss=5.0177 | lr=1.24e-04
+step   5200 | loss=5.0172 | lr=1.19e-04
+[VAL] step 5200: bpb=1.5552
+step   5300 | loss=5.0068 | lr=1.13e-04
+step   5400 | loss=5.0023 | lr=1.08e-04
+[VAL] step 5400: bpb=1.5515
+step   5500 | loss=4.9851 | lr=1.03e-04
+step   5600 | loss=4.9754 | lr=9.75e-05
+[VAL] step 5600: bpb=1.5487
+step   5700 | loss=4.9707 | lr=9.25e-05
+step   5800 | loss=4.9739 | lr=8.76e-05
+[VAL] step 5800: bpb=1.5435
+step   5900 | loss=4.9717 | lr=8.28e-05
+step   6000 | loss=4.9611 | lr=7.82e-05
+[VAL] step 6000: bpb=1.5404
+step   6100 | loss=4.9437 | lr=7.38e-05
+step   6200 | loss=4.9470 | lr=6.95e-05
+[VAL] step 6200: bpb=1.5381
+step   6300 | loss=4.9452 | lr=6.55e-05
+step   6400 | loss=4.9456 | lr=6.16e-05
+[VAL] step 6400: bpb=1.5363
+step   6500 | loss=4.9554 | lr=5.79e-05
+step   6600 | loss=4.9277 | lr=5.44e-05
+[VAL] step 6600: bpb=1.5332
+step   6700 | loss=4.9485 | lr=5.11e-05
+step   6800 | loss=4.9279 | lr=4.81e-05
+[VAL] step 6800: bpb=1.5309
+step   6900 | loss=4.9345 | lr=4.53e-05
+step   7000 | loss=4.9307 | lr=4.26e-05
+[VAL] step 7000: bpb=1.5292
+step   7100 | loss=4.9246 | lr=4.03e-05
+step   7200 | loss=4.9177 | lr=3.81e-05
+[VAL] step 7200: bpb=1.5279
+step   7300 | loss=4.9072 | lr=3.62e-05
+step   7400 | loss=4.8976 | lr=3.46e-05
+[VAL] step 7400: bpb=1.5262
+step   7500 | loss=4.9055 | lr=3.32e-05
+step   7600 | loss=4.8898 | lr=3.21e-05
+[VAL] step 7600: bpb=1.5253
+step   7700 | loss=4.9049 | lr=3.12e-05
+step   7800 | loss=4.8906 | lr=3.05e-05
+[VAL] step 7800: bpb=1.5234
+step   7900 | loss=4.9087 | lr=3.01e-05
+step   8000 | loss=4.8946 | lr=3.00e-05
+[VAL] step 8000: bpb=1.5229
+
+=== DONE ===
+{
+  "exp_name": "exp266_hybrid_batch16",
+  "best_val_bpb": 1.5229431336244597,
+  "final_val_bpb": 1.5229431336244597,
+  "n_params": 358420254,
+  "training_time_hours": 1.153
+}

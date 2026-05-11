@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp266_hybrid_batch16",
+  "best_val_bpb": 1.5229431336244597,
+  "final_val_bpb": 1.5229431336244597,
+  "n_params": 358420254,
+  "training_time_hours": 1.153
+}

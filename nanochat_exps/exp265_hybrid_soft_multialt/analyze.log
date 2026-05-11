@@ -1,0 +1,89 @@
+Loading tokenizer ...
+Building model + loading checkpoint ...
+Total params: 358,420,254
+Running 64 validation batches (512 sequences = 262,144 tokens) ...
+
+=== DIAGNOSTIC 1: visit-frequency histogram ===
+
+  L0.qk_joint counts done
+L0.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.983 (min 0.925), unvisited=0.0% (max 25.0%), top-10%=16.2% (max 30.6%)
+  L0.v_lut counts done
+L0.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.902 (min 0.818), unvisited=0.0% (max 0.0%), top-10%=41.7% (max 51.8%)
+  L0.out_proj counts done
+L0.out_proj        (mode=soft , K=64, T=2048): norm_H=0.950 (min 0.740), unvisited=0.0% (max 0.0%), top-10%=23.3% (max 60.0%)
+  L1.qk_joint counts done
+L1.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.962 (min 0.908), unvisited=0.0% (max 0.0%), top-10%=21.7% (max 32.4%)
+  L1.v_lut counts done
+L1.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.949 (min 0.889), unvisited=0.0% (max 25.0%), top-10%=28.5% (max 42.9%)
+  L1.out_proj counts done
+L1.out_proj        (mode=soft , K=64, T=2048): norm_H=0.911 (min 0.724), unvisited=0.0% (max 0.0%), top-10%=30.6% (max 56.6%)
+  L2.qk_joint counts done
+L2.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.949 (min 0.879), unvisited=0.0% (max 0.0%), top-10%=24.6% (max 38.1%)
+  L2.v_lut counts done
+L2.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.928 (min 0.864), unvisited=0.0% (max 25.0%), top-10%=33.6% (max 47.4%)
+  L2.out_proj counts done
+L2.out_proj        (mode=soft , K=64, T=1024): norm_H=0.864 (min 0.703), unvisited=0.0% (max 0.0%), top-10%=39.1% (max 66.4%)
+  L3.qk_joint counts done
+L3.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.882 (min 0.680), unvisited=0.0% (max 0.0%), top-10%=36.9% (max 63.0%)
+  L3.v_lut counts done
+L3.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.845 (min 0.700), unvisited=0.1% (max 25.0%), top-10%=50.2% (max 70.0%)
+  L3.out_proj counts done
+L3.out_proj        (mode=soft , K=64, T=1024): norm_H=0.633 (min 0.328), unvisited=0.9% (max 25.0%), top-10%=69.7% (max 89.7%)
+  L4.qk_joint counts done
+L4.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.577 (min 0.239), unvisited=5.5% (max 40.6%), top-10%=74.8% (max 95.4%)
+  L4.v_lut counts done
+L4.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.523 (min 0.246), unvisited=28.6% (max 69.5%), top-10%=88.8% (max 99.2%)
+  L4.out_proj counts done
+L4.out_proj        (mode=soft , K=64, T=1024): norm_H=0.292 (min 0.032), unvisited=48.2% (max 85.9%), top-10%=95.1% (max 100.0%)
+  L5.qk_joint counts done
+L5.qk_joint        (mode=soft , K=64, T=1536): norm_H=0.172 (min 0.000), unvisited=78.2% (max 96.9%), top-10%=99.0% (max 100.0%)
+  L5.v_lut counts done
+L5.v_lut           (mode=ste  , K=256, T=1536): norm_H=0.123 (min 0.003), unvisited=93.2% (max 98.8%), top-10%=100.0% (max 100.0%)
+  L5.out_proj counts done
+L5.out_proj        (mode=soft , K=64, T=1024): norm_H=0.050 (min -0.000), unvisited=94.8% (max 98.4%), top-10%=100.0% (max 100.0%)
+
+=== DIAGNOSTIC 2: SVD of per-table entry matrix ===
+
+L0.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=36.5 (57% of full), rank@99%=57.0 (89% of full), top-4 mass=27.6%
+L0.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=20.5 (64% of full), rank@99%=30.5 (95% of full), top-4 mass=38.2%
+L0.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=32.6 (51% of full), rank@99%=53.4 (84% of full), top-4 mass=28.3%
+L1.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=18.3 (29% of full), rank@99%=40.6 (63% of full), top-4 mass=44.3%
+L1.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=17.1 (54% of full), rank@99%=29.9 (93% of full), top-4 mass=62.9%
+L1.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=35.0 (55% of full), rank@99%=54.6 (85% of full), top-4 mass=24.2%
+L2.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=18.2 (28% of full), rank@99%=43.0 (67% of full), top-4 mass=45.4%
+L2.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=19.9 (62% of full), rank@99%=30.8 (96% of full), top-4 mass=57.4%
+L2.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=35.7 (56% of full), rank@99%=55.1 (86% of full), top-4 mass=23.3%
+L3.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=18.9 (29% of full), rank@99%=45.5 (71% of full), top-4 mass=47.5%
+L3.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=19.8 (62% of full), rank@99%=30.7 (96% of full), top-4 mass=56.8%
+L3.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=34.7 (54% of full), rank@99%=54.8 (86% of full), top-4 mass=28.8%
+L4.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=14.4 (22% of full), rank@99%=37.8 (59% of full), top-4 mass=58.6%
+L4.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=19.6 (61% of full), rank@99%=30.2 (94% of full), top-4 mass=52.4%
+L4.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=18.3 (29% of full), rank@99%=32.6 (51% of full), top-4 mass=45.3%
+L5.qk_joint        (mode=soft , K=64, n_out=128, full_rank=64): rank@90%=5.7 (9% of full), rank@99%=39.3 (61% of full), top-4 mass=87.0%
+L5.v_lut           (mode=ste  , K=256, n_out=32, full_rank=32): rank@90%=9.3 (29% of full), rank@99%=26.9 (84% of full), top-4 mass=75.0%
+L5.out_proj        (mode=soft , K=64, n_out=96, full_rank=64): rank@90%=6.0 (9% of full), rank@99%=23.0 (36% of full), top-4 mass=83.5%
+
+=== SUMMARY ===
+
+LUT                |    K | util_H | unvis | top10% |  r@90%/ r@99% (of full) |  top4
+----------------------------------------------------------------------------------------------------
+L0.qk_joint        |   64 |  0.983 |  0.0% |  16.2% |   36.5/  57.0 (of   64) | 27.6%
+L0.v_lut           |  256 |  0.902 |  0.0% |  41.7% |   20.5/  30.5 (of   32) | 38.2%
+L0.out_proj        |   64 |  0.950 |  0.0% |  23.3% |   32.6/  53.4 (of   64) | 28.3%
+L1.qk_joint        |   64 |  0.962 |  0.0% |  21.7% |   18.3/  40.6 (of   64) | 44.3%
+L1.v_lut           |  256 |  0.949 |  0.0% |  28.5% |   17.1/  29.9 (of   32) | 62.9%
+L1.out_proj        |   64 |  0.911 |  0.0% |  30.6% |   35.0/  54.6 (of   64) | 24.2%
+L2.qk_joint        |   64 |  0.949 |  0.0% |  24.6% |   18.2/  43.0 (of   64) | 45.4%
+L2.v_lut           |  256 |  0.928 |  0.0% |  33.6% |   19.9/  30.8 (of   32) | 57.4%
+L2.out_proj        |   64 |  0.864 |  0.0% |  39.1% |   35.7/  55.1 (of   64) | 23.3%
+L3.qk_joint        |   64 |  0.882 |  0.0% |  36.9% |   18.9/  45.5 (of   64) | 47.5%
+L3.v_lut           |  256 |  0.845 |  0.1% |  50.2% |   19.8/  30.7 (of   32) | 56.8%
+L3.out_proj        |   64 |  0.633 |  0.9% |  69.7% |   34.7/  54.8 (of   64) | 28.8%
+L4.qk_joint        |   64 |  0.577 |  5.5% |  74.8% |   14.4/  37.8 (of   64) | 58.6%
+L4.v_lut           |  256 |  0.523 | 28.6% |  88.8% |   19.6/  30.2 (of   32) | 52.4%
+L4.out_proj        |   64 |  0.292 | 48.2% |  95.1% |   18.3/  32.6 (of   64) | 45.3%
+L5.qk_joint        |   64 |  0.172 | 78.2% |  99.0% |    5.7/  39.3 (of   64) | 87.0%
+L5.v_lut           |  256 |  0.123 | 93.2% | 100.0% |    9.3/  26.9 (of   32) | 75.0%
+L5.out_proj        |   64 |  0.050 | 94.8% | 100.0% |    6.0/  23.0 (of   64) | 83.5%
+
+Wrote /home/starost/spiky/nanochat_exps/exp265_hybrid_soft_multialt/analysis.json
