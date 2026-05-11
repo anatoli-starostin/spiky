@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp271_vanilla_batch32",
+  "description": "Fork of exp001 (vanilla MinimalGPT GPT-2 baseline, 23M params, b=8 -> 1.6256) with device_batch_size 8 -> 32. Pair with exp270 (b=16). Tests whether the b=8 -> b=32 lever that gained ~0.16 bpb on the hybrid LUT model (exp265 -> exp267) is LUT-specific. If vanilla also gains ~0.16, the effect is generic; if vanilla gains << that, the LUT-specific sparse-Adam-statistics hypothesis is confirmed.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 32,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

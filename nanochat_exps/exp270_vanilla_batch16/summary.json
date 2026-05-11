@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp270_vanilla_batch16",
+  "best_val_bpb": 1.4497250495561977,
+  "final_val_bpb": 1.4497250495561977,
+  "total_params": 23406336,
+  "training_time_hours": 0.094
+}

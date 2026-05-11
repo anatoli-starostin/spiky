@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp271_vanilla_batch32",
+  "best_val_bpb": 1.339244150817474,
+  "final_val_bpb": 1.339244150817474,
+  "total_params": 23406336,
+  "training_time_hours": 0.177
+}

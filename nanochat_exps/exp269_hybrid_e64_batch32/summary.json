@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp269_hybrid_e64_batch32",
+  "best_val_bpb": 1.469242128437897,
+  "final_val_bpb": 1.469242128437897,
+  "n_params": 339610654,
+  "training_time_hours": 1.948
+}

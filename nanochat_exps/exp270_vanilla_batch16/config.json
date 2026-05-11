@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp270_vanilla_batch16",
+  "description": "Fork of exp001 (vanilla MinimalGPT GPT-2 baseline, 23M params, b=8 -> 1.6256) with device_batch_size 8 -> 16. Pair with exp271 (b=32) to test whether the bigger-batch lever from exp266/exp267 (LUT-LM, ~0.16 bpb gain b=8->b=32) is LUT-specific or general transformer behaviour. If vanilla shows similar magnitude, the LUT-specific 'sparse per-token gradients' hypothesis weakens; if vanilla shows much smaller gains, it strengthens.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
