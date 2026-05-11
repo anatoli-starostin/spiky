@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp267_hybrid_batch32",
+  "best_val_bpb": 1.4503586552314462,
+  "final_val_bpb": 1.4503586552314462,
+  "n_params": 358420254,
+  "training_time_hours": 2.236
+}

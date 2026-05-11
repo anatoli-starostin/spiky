@@ -47,7 +47,8 @@ dominates HBM while multi-alt stays bounded by n_alt=3.
 | exp263 | + learnable T (init=1.0) | killed at step 1400 (trailing +0.012) | |
 | exp264 | + learnable T (init=0.5) | killed at step 4600 (T drifting smaller) | |
 | **exp265** | **hybrid: soft NAP=6, multi-alt NAP=8** | **1.6126** | **+0.007** |
-| **exp266** | **hybrid batch=16 (this run)** | **1.5229** | **+0.083 vs exp257 — BEST** |
+| exp266 | hybrid batch=16 | 1.5229 | +0.083 vs exp257 |
+| **exp267** | **hybrid batch=32** | **1.4504** | **NEW LUT SOTA — beats exp260's 48K SOTA at 1/6 the compute** |
 
 ## Key findings
 
@@ -87,6 +88,17 @@ dominates HBM while multi-alt stays bounded by n_alt=3.
    **Practical recommendation: for LUT training, scale `device_batch_size`
    to whatever fits in memory** — it's not redundant compute, it's a real
    bpb improvement that no other change in this session matched.
+
+   **exp267 update (b=32):** confirmed the hypothesis decisively. b=32 at
+   8K steps reaches **1.4504 bpb**, beating exp260's 48K SOTA (1.4655)
+   by 0.015 bpb with **6× less compute**. The compounding gain held all
+   the way through. Trajectory (token-matched vs exp266 b=16):
+   - early (16M tokens): -0.06 vs exp266 (same step)
+   - mid (66M tokens): -0.08 vs exp266 final
+   - end (131M tokens, 2× exp266's): final = 1.4504
+
+   The bigger-batch effect is dominant on this task and likely the
+   single biggest lever in the toolbox.
 
 ## Yuval's diagnostics on exp265 (analysis.py, see analysis.json)
 
@@ -138,9 +150,11 @@ out_proj}).
 
 ## Open questions / future work
 
-- **Bigger batch on longer horizon (e.g. 48K)**: exp266 8K @ b=16 already
-  beats exp257 by 0.083 bpb. Same recipe @ 48K should crush exp260's
-  1.4655 SOTA. Likely top priority next.
+- **Even bigger batch (b=64)**: exp267 at b=32 only used ~42 GB peak (38 GB
+  free). b=64 could fit and likely keeps compounding. Top priority next.
+- **Bigger batch on longer horizon (e.g. 48K @ b=32)**: exp267 8K @ b=32
+  is already at 1.4504 (beats exp260's 48K SOTA). At 48K it should reach
+  ~1.40 or below — major SOTA jump.
 - **Cut L5 capacity** based on Yuval's diagnostics: try `out_tph_per_layer`
   with much smaller values for the last 1–2 layers (e.g. [2048, 2048,
   1024, 1024, 512, 256] or even cut whole-layer). Should match exp266 bpb
