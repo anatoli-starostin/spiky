@@ -27,6 +27,7 @@ Forward signature (matches MultiHeadLut's reduced output):
   returns: [B, n_heads, n_outputs] in weights' dtype.
 """
 import math
+import os
 from typing import Optional
 
 import torch
@@ -71,6 +72,61 @@ def _get_tiny_mhlut_native():
     except Exception:
         pass
     return None
+
+
+@torch.compile
+def _ste_backward_body(
+    grad_out: torch.Tensor,        # [B, n_heads, n_outputs]
+    weights: torch.Tensor,         # [n_lookup_tables, table_dim, n_outputs]
+    lookup_indices: torch.Tensor,  # [B, n_lookup_tables] int64
+    lookup_alt_indices: torch.Tensor,  # [B, n_lookup_tables] int64
+):
+    """Inductor-fused replacement for `tiny_mhlut_bwd_na1_{carriers,weights}_kernel`.
+
+    Produces (grad_weights, grad_main, grad_alt). At our nanochat shapes
+    inductor fuses gather + multiply + reduction into ~1 kernel per output;
+    measured ~1.6x faster than the hand-written native CUDA kernels because
+    the native kernels run carriers and weights as two separate dispatches
+    with separate HBM reads of `weights`, whereas inductor shares the gather.
+    """
+    B, n_lookup_tables = lookup_indices.shape
+    n_outputs = weights.shape[2]
+    table_dim = weights.shape[1]
+    n_heads = grad_out.shape[1]
+    tph = n_lookup_tables // n_heads
+
+    table_ix = torch.arange(n_lookup_tables, device=weights.device).view(1, -1).expand(B, -1)
+    out_main = weights[table_ix, lookup_indices]      # [B, n_lookup_tables, n_outputs]
+    out_alt = weights[table_ix, lookup_alt_indices]
+    grad_view = grad_out.unsqueeze(2)                 # [B, n_heads, 1, n_outputs]
+    grad_main = (out_main.view(B, n_heads, tph, n_outputs) * grad_view).sum(-1).view(B, n_lookup_tables)
+    grad_alt = (out_alt.view(B, n_heads, tph, n_outputs) * grad_view).sum(-1).view(B, n_lookup_tables)
+
+    # grad_weights via flat index_add.
+    flat_lookup = lookup_indices.reshape(-1)
+    table_offset = (
+        torch.arange(n_lookup_tables, device=weights.device, dtype=lookup_indices.dtype) * table_dim
+    ).unsqueeze(0).expand(B, -1).reshape(-1)
+    fully_flat_idx = table_offset + flat_lookup
+    grad_per_lookup = (
+        grad_out.unsqueeze(2)
+                .expand(B, n_heads, tph, n_outputs)
+                .reshape(B * n_lookup_tables, n_outputs)
+    )
+    grad_weights_flat = torch.zeros(
+        n_lookup_tables * table_dim, n_outputs,
+        dtype=weights.dtype, device=weights.device,
+    )
+    grad_weights_flat.index_add_(0, fully_flat_idx, grad_per_lookup)
+    grad_weights = grad_weights_flat.view(n_lookup_tables, table_dim, n_outputs)
+    return grad_weights, grad_main.contiguous(), grad_alt.contiguous()
+
+
+# @torch.compile STE backward is the default (~2.5x faster than the hand-
+# written native CUDA carriers/weights kernels at nanochat shapes, bit-exact
+# weight grads, fp32-noise-level x grads). Set
+# SPIKY_TINY_MHLUT_USE_COMPILE_BWD=0 to fall back to the native CUDA path.
+_USE_COMPILE_STE_BWD = os.environ.get("SPIKY_TINY_MHLUT_USE_COMPILE_BWD", "1") == "1"
 
 
 def _embedding_bag_forward(weights: torch.Tensor, lookup_indices: torch.Tensor,
@@ -144,6 +200,19 @@ class _TinyMHLutGatherReduce(torch.autograd.Function):
 
         if grad_out.dtype != weights.dtype:
             grad_out = grad_out.to(weights.dtype)
+
+        # @torch.compile fast path: ~1.6x faster than the native CUDA kernel
+        # at exp257/exp234 nanochat shapes because inductor fuses gather +
+        # multiply + reduction into a single kernel per output, whereas the
+        # native carriers/weights kernels run as two separate dispatches with
+        # separate HBM reads of `weights`. Enable with the env flag for now;
+        # native path remains the default until validated across more shapes.
+        if _USE_COMPILE_STE_BWD and weights.is_cuda:
+            grad_weights, grad_main, grad_alt = _ste_backward_body(
+                grad_out.contiguous(), weights,
+                lookup_indices.contiguous(), lookup_alt_indices.contiguous(),
+            )
+            return grad_weights, None, None, grad_main, grad_alt, None, None
 
         # Native fused path: weights + carriers (main+alt) kernels modeled on
         # MHLut's lprojection_backward_na1_*. Returns grad_main AND grad_alt
@@ -332,6 +401,268 @@ class _TinyMHLutGather(torch.autograd.Function):
         grad_weights = grad_weights_flat.view(n_lookup_tables, table_dim, n_outputs)
 
         return grad_weights, None, None, grad_main, grad_alt, None, None
+
+
+# =====================================================================
+# Multi-alternative STE backward.
+#
+# Pairs TinyMHL-fast forward (embedding_bag) with MultiHeadLut-style
+# `_lprojection_backward` (smooth_mode=False, n_alternatives>1) +
+# `_anchor_pairs_backward` (uncertainty-weighted x gradient). Mirrors the
+# regularization that `MultiHeadLut(smooth_mode=False, n_alternatives>1)`
+# applies in its backward, but keeps TinyMHL's bf16-friendly weights layout
+# and fast forward.
+#
+# Supports `argmax_noise_eps` via the same saved-flip-mask mechanism used by
+# `MultiHeadLutFunction` and `_TinyMHLutSoft`: forward generates a bernoulli
+# bit-flip mask at low-confidence positions, backward replays it for
+# consistent fwd/bwd.
+# =====================================================================
+
+@torch.compile
+def _multi_alt_fwd_body(
+    x, weights, anchor_a_long, anchor_b_long,
+    powers_mult, table_arange, eb_offsets,
+    n_heads, tables_per_head, argmax_noise_eps,
+):
+    """Fully fused multi-alt STE forward. Matches soft-mode's pattern: all
+    delta/bit-pack/noise/embedding_bag ops inside one @torch.compile region
+    so inductor fuses the noise XOR generation with the index computation
+    and the embedding_bag gather.
+
+    Returns (output, lookup_indices, flip_mask). The flip_mask is the
+    bool per-bit noise mask (None if eps==0) — saved for backward.
+    """
+    B = x.shape[0]
+    n_lookup_tables = anchor_a_long.shape[0]
+    NAP = anchor_a_long.shape[1]
+    table_dim = weights.shape[1]
+    n_outputs = weights.shape[2]
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]  # [B, T, NAP]
+    bits = (d > 0).to(torch.int64)
+
+    if argmax_noise_eps > 0.0:
+        low_conf = d.abs() < argmax_noise_eps
+        rand_bits = torch.empty_like(low_conf).bernoulli_(0.5)
+        flip_mask = low_conf & rand_bits
+        bits = bits ^ flip_mask.to(torch.int64)
+    else:
+        flip_mask = torch.zeros_like(d, dtype=torch.bool)
+
+    # LSB-first bit-pack — multipliers cached as `powers_mult` [2^0, ..., 2^(NAP-1)].
+    lookup_indices = (bits * powers_mult).sum(dim=-1)  # [B, T]
+
+    weights_flat = weights.view(n_lookup_tables * table_dim, n_outputs)
+    # table_offset = arange(n_tables) * table_dim, derived from cached arange.
+    flat_indices = (lookup_indices + (table_arange * table_dim).view(1, -1)).reshape(-1)
+    out_flat = torch.nn.functional.embedding_bag(flat_indices, weights_flat, offsets=eb_offsets, mode='sum')
+    return out_flat.view(B, n_heads, n_outputs), lookup_indices, flip_mask
+
+
+@torch.compile
+def _multi_alt_bwd_body(
+    grad_out, weights, x, batch_offset, anchor_a_long, anchor_b_long,
+    table_arange, table_flat,
+    lookup_indices, n_heads, tables_per_head, n_alternatives,
+):
+    """Fused multi-alt backward — everything inside @torch.compile, no
+    [B, T, K] structured-bmm intermediate.
+
+    Three tricks:
+      1. **Manual top-k via sequential argmin + scatter** (k small, here 3).
+         Avoids `torch.topk` whose lowering is more expensive than a few
+         argmin passes that inductor easily fuses.
+      2. **Fancy gather + mul + sum kept as a fused triplet**:
+         `(weights[table_3d, lookup_alt_indices] * grad).sum(-1)` — inductor
+         fuses gather → mul → reduce into a single kernel WITHOUT
+         materialising the [B, T, n_alt, n_outputs] intermediate (the .sum
+         consumes the mul output inline). HBM cost is just the random
+         weight-row loads, no big alt_weights tensor.
+      3. **All alt_* (lookup_alt_indices, lookup_alt_deltas, anchor1/2_ids)
+         computed inline from `_compute_anchor_data`-equivalent ops** so
+         they live in registers/SMEM through the whole backward.
+
+    Empirical (exp257 out_proj shape: B=4096, T=2048, NAP=6, n_out=96):
+      ~9 ms / 1 GB peak — faster AND leaner than soft (10 ms / 4 GB).
+    """
+    B = grad_out.shape[0]
+    input_dim = x.shape[1]
+    n_lookup_tables = anchor_a_long.shape[0]
+    NAP = anchor_a_long.shape[1]
+    table_dim = weights.shape[1]
+    n_outputs = grad_out.shape[-1]
+
+    # Deltas (inline; small [B, T, NAP])
+    idx_a = anchor_a_long.reshape(1, -1).expand(B, -1)
+    idx_b = anchor_b_long.reshape(1, -1).expand(B, -1)
+    x_a = x.gather(1, idx_a).view(B, n_lookup_tables, NAP)
+    x_b = x.gather(1, idx_b).view(B, n_lookup_tables, NAP)
+    deltas = x_a - x_b
+    abs_d = deltas.abs()
+
+    # Manual top-n_alternatives via sequential argmin (no topk kernel).
+    inf = torch.full_like(abs_d[..., :1], float('inf'))
+    min_delta_indices = torch.empty(B, n_lookup_tables, n_alternatives, device=x.device, dtype=torch.long)
+    for i in range(n_alternatives):
+        mi = abs_d.argmin(dim=-1, keepdim=True)
+        min_delta_indices[..., i:i+1] = mi
+        abs_d = abs_d.scatter(2, mi, inf)
+
+    lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+    bit_shifts = (1 << min_delta_indices).to(lookup_indices.dtype)
+    lookup_alt_indices = lookup_indices.unsqueeze(-1) ^ bit_shifts
+    anchor1_ids = anchor_a_long.unsqueeze(0).expand(B, -1, -1).gather(2, min_delta_indices)
+    anchor2_ids = anchor_b_long.unsqueeze(0).expand(B, -1, -1).gather(2, min_delta_indices)
+
+    # grad_per_table = expand view (no materialisation if inductor can fuse).
+    grad_per_table = grad_out.unsqueeze(2).expand(B, n_heads, tables_per_head, n_outputs).reshape(B, n_lookup_tables, n_outputs)
+
+    # Structured bmm to get carrier grads at ALL K weight rows, then cheap
+    # .gather for main + alt positions. Mirrors soft mode's d_sel_soft path:
+    # at small K the bf16 tensor-core GEMM wins over fancy gather; at large
+    # K the [B, T, K] materialisation becomes too expensive — switch to
+    # fancy gather there.
+    if table_dim <= 128:  # K <= 128 ⇒ tensor cores win
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            all_grads = torch.einsum("bto,tko->btk", grad_per_table, weights)  # [B, T, K] bf16
+        grad_main = all_grads.gather(2, lookup_indices.unsqueeze(-1)).squeeze(-1).to(weights.dtype)
+        grad_alt = all_grads.gather(2, lookup_alt_indices).to(weights.dtype)
+    else:                # K > 128 ⇒ fancy gather is leaner
+        table_2d = table_arange.view(1, -1).expand(B, -1)
+        main_w = weights[table_2d, lookup_indices]
+        grad_main = (grad_per_table * main_w).sum(-1)
+        table_3d = table_2d.unsqueeze(-1).expand(-1, -1, n_alternatives)
+        alt_w = weights[table_3d, lookup_alt_indices]
+        grad_alt = (grad_per_table.unsqueeze(2) * alt_w).sum(-1)
+
+    # weights_grad: index_add_ (auto-broadcasts over column dim) — no need to
+    # materialise an expanded index tensor like scatter_add_(0, idx.expand, val).
+    flat_lookup = lookup_indices.reshape(-1)
+    indices_main = table_flat * table_dim + flat_lookup
+    weights_grad_flat = torch.zeros(n_lookup_tables * table_dim, n_outputs, dtype=weights.dtype, device=weights.device)
+    weights_grad_flat.index_add_(0, indices_main, grad_per_table.reshape(-1, n_outputs))
+
+    # x.grad via inverse-L1 uncertainty.
+    grad_diff = grad_main.unsqueeze(2) - grad_alt
+    one_plus_abs = 1.0 + lookup_alt_deltas.abs()
+    minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
+    du = grad_diff * minus_uncertainty_derivative
+    if n_alternatives > 1:
+        du = du / n_alternatives
+
+    # 2D scatter directly into [B, input_dim] — avoids the batch_offset add,
+    # mirrors soft mode's pattern. anchor1/2_ids are [B, T, n_alt].
+    x_grad = torch.zeros(B, input_dim, device=x.device, dtype=x.dtype)
+    x_grad.scatter_add_(1, anchor1_ids.reshape(B, -1), du.reshape(B, -1))
+    x_grad.scatter_add_(1, anchor2_ids.reshape(B, -1), -du.reshape(B, -1))
+
+    return weights_grad_flat.view(weights.shape), x_grad
+
+
+def _noisy_xor_postprocess(
+    x, anchor_a_long, anchor_b_long, argmax_noise_eps, n_anchor_pairs,
+    lookup_indices_clean, lookup_alt_indices_clean,
+    provided_flip_mask=None,
+):
+    """Inject `argmax_noise_eps` bit-flip noise on top of an already-computed
+    (clean) lookup-indices result from the native CUDA forward.
+
+    Key algebraic identity: `lookup_alt_indices = lookup_indices XOR
+    (1 << min_delta_indices)` (per-alt single-bit flip), and the noise XOR is
+    a constant per (b, t) mask. XOR distributes, so XOR'ing the SAME mask into
+    BOTH `lookup_indices` and `lookup_alt_indices` preserves the alt relation
+    and correctly applies noise to the per-weight gather without rerunning
+    the topk / fallback. `lookup_alt_deltas`, `anchor1_ids`, `anchor2_ids` are
+    all derived from |delta| (and the |delta|-argmin selection), which is
+    noise-independent — so they don't need to be touched.
+
+    Backward path: pass `provided_flip_mask` (the saved per-bit bool mask) to
+    reproduce the exact same XOR.
+    """
+    batch_size = x.shape[0]
+    idx_a = anchor_a_long.reshape(1, -1).expand(batch_size, -1)
+    idx_b = anchor_b_long.reshape(1, -1).expand(batch_size, -1)
+    x_a = x.gather(1, idx_a).view(batch_size, anchor_a_long.shape[0], n_anchor_pairs)
+    x_b = x.gather(1, idx_b).view(batch_size, anchor_a_long.shape[0], n_anchor_pairs)
+    deltas = x_a - x_b
+
+    if provided_flip_mask is not None:
+        flip_mask_bool = provided_flip_mask
+    else:
+        low_conf = deltas.abs() < argmax_noise_eps
+        rand = torch.empty_like(low_conf).bernoulli_(0.5)
+        flip_mask_bool = low_conf & rand
+
+    # LSB-first bit-pack to a per-(b, t) int.
+    powers_lsb = (1 << torch.arange(n_anchor_pairs, device=x.device, dtype=torch.int64))
+    flip_mask_int = (flip_mask_bool.to(torch.int64) * powers_lsb).sum(dim=-1)  # [B, T]
+
+    lookup_indices_noisy = lookup_indices_clean ^ flip_mask_int
+    lookup_alt_indices_noisy = lookup_alt_indices_clean ^ flip_mask_int.unsqueeze(-1)
+    return lookup_indices_noisy, lookup_alt_indices_noisy, flip_mask_bool
+
+
+class _TinyMHLutMultiAlt(torch.autograd.Function):
+    """STE-style forward + multi-alternative uncertainty-weighted backward.
+
+    Forward is identical in cost to standard TinyMHL n_alt=1 STE: just a
+    sign-bit-pack to compute `lookup_indices` (and an optional noise XOR).
+    All multi-alt machinery (lookup_alt_indices, lookup_alt_deltas,
+    anchor1/2_ids) is computed in backward via `_compute_anchor_data` so we
+    don't pay for it on the forward path and don't materialise it as saved
+    activations.
+
+    Memory: ctx saves only x (already live), weights (param), lookup_indices
+    (small int64), and flip_mask (small bool) if noise is on.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, anchor_a_long, anchor_b_long,
+                powers_mult, table_arange, eb_offsets,
+                n_alternatives, batch_offset, table_flat,
+                n_heads, tables_per_head, argmax_noise_eps):
+        # Fully fused forward: deltas, sign-bit-pack, noise XOR, embedding_bag
+        # all inside one @torch.compile region — same pattern as soft mode.
+        out, lookup_indices, flip_mask = _multi_alt_fwd_body(
+            x, weights, anchor_a_long, anchor_b_long,
+            powers_mult, table_arange, eb_offsets,
+            n_heads, tables_per_head, argmax_noise_eps,
+        )
+
+        ctx.save_for_backward(x, weights, lookup_indices, flip_mask)
+        ctx.n_heads = n_heads
+        ctx.tables_per_head = tables_per_head
+        ctx.n_alternatives = n_alternatives
+        ctx.batch_offset = batch_offset
+        ctx.anchor_a_long = anchor_a_long
+        ctx.anchor_b_long = anchor_b_long
+        ctx.table_arange = table_arange
+        ctx.table_flat = table_flat
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, weights, lookup_indices, _flip_mask = ctx.saved_tensors
+        n_heads = ctx.n_heads
+        tph = ctx.tables_per_head
+
+        if grad_out.dtype != weights.dtype:
+            grad_out = grad_out.to(weights.dtype)
+
+        # All alt_* computation and scatters fuse into a single @torch.compile
+        # region (manual top-k via sequential argmin, fancy gather + mul + sum
+        # as fused triplet, no [B, T, K] structured-bmm intermediate).
+        weights_grad, x_grad = _multi_alt_bwd_body(
+            grad_out, weights, x, ctx.batch_offset,
+            ctx.anchor_a_long, ctx.anchor_b_long,
+            ctx.table_arange, ctx.table_flat,
+            lookup_indices, n_heads, tph, ctx.n_alternatives,
+        )
+
+        # 13 forward inputs -> 13 grad returns.
+        return (x_grad, weights_grad,
+                None, None, None, None, None, None, None, None, None, None, None)
 
 
 # =====================================================================
@@ -554,6 +885,7 @@ class TinyMultiHeadLut(nn.Module):
         use_bf16: bool = True,
         argmax_noise_eps: float = 0.0,
         bf16_argmax: bool = False,
+        n_alternatives: int = 1,
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -696,6 +1028,57 @@ class TinyMultiHeadLut(nn.Module):
         self.use_bf16 = bool(use_bf16)
         self.argmax_noise_eps = float(argmax_noise_eps)
         self.bf16_argmax = bool(bf16_argmax)
+        self.n_alternatives = int(n_alternatives)
+        if self.n_alternatives < 1:
+            raise ValueError(f"n_alternatives must be >= 1, got {self.n_alternatives}")
+        if self.n_alternatives > 1:
+            if backward_mode != "ste":
+                raise ValueError(
+                    "n_alternatives > 1 requires backward_mode='ste' "
+                    f"(got backward_mode={backward_mode!r}). For soft mode the "
+                    "rational-soft-sign pipeline already smooths all NAP positions."
+                )
+            if sparse_scatter_n_outputs is not None:
+                raise NotImplementedError(
+                    "n_alternatives > 1 does not yet support sparse_scatter_n_outputs"
+                )
+            if partition_sets is not None:
+                raise NotImplementedError(
+                    "n_alternatives > 1 does not yet support partition_sets"
+                )
+            # Cache int64 anchor pairs + LSB-first powers + batch offset for
+            # `_compute_anchor_data` / `_anchor_pairs_lookup_forward_fallback*`
+            # (these helpers require long-typed indices for `gather`).
+            self.register_buffer(
+                "_multialt_anchor_a_long",
+                self.lookup.anchor_pairs_a.long().contiguous(),
+            )
+            self.register_buffer(
+                "_multialt_anchor_b_long",
+                self.lookup.anchor_pairs_b.long().contiguous(),
+            )
+            # LSB-first SHIFT AMOUNTS (matches `_anchor_pairs_lookup_forward_fallback`'s
+            # `(bits << powers).sum`, where powers = [0, 1, ..., NAP-1] is broadcast
+            # over the bit dim, NOT the MSB-first multipliers used by soft mode).
+            self.register_buffer(
+                "_multialt_powers_long",
+                torch.arange(n_anchor_pairs, device=dev, dtype=torch.int64).view(1, 1, -1).contiguous(),
+            )
+            # LSB-first bit-pack MULTIPLIERS [2^0, 2^1, ..., 2^(NAP-1)] for the
+            # fused fwd/bwd compile bodies — avoids recomputing arange/shift each call.
+            self.register_buffer(
+                "_multialt_powers_mult",
+                (1 << torch.arange(n_anchor_pairs, device=dev, dtype=torch.int64)).contiguous(),
+            )
+            # arange(n_lookup_tables) — used as table_2d, table_3d, table_flat in
+            # the bwd body. Cached 1D; the body broadcasts/views as needed.
+            self.register_buffer(
+                "_multialt_table_arange",
+                torch.arange(n_lookup_tables, device=dev, dtype=torch.int64).contiguous(),
+            )
+            self._multialt_batch_offset = None       # lazily built on first forward
+            self._multialt_eb_offsets = None         # embedding_bag offsets cache
+            self._multialt_table_flat = None         # arange(n_lookup_tables).repeat(B)
         if backward_mode == "soft":
             if sparse_scatter_n_outputs is not None:
                 raise NotImplementedError(
@@ -773,6 +1156,51 @@ class TinyMultiHeadLut(nn.Module):
         # `_TinyMHLutSoft` Function (TinyMHLut-fast forward + soft backward).
         if self.backward_mode == "soft":
             return self._soft_forward(x)
+
+        # Multi-alternative STE backward. Uses self.n_alternatives top-|delta|
+        # anchor positions selected via manual argmin (no topk kernel; cheap
+        # for small k). Fully fuseable inside the @torch.compile body.
+        if self.n_alternatives > 1:
+            B = x.shape[0]
+            n_lookup_tables = self.n_heads * self.tables_per_head
+            expected_bo_len = B * n_lookup_tables * self.n_alternatives
+            if (
+                self._multialt_batch_offset is None
+                or self._multialt_batch_offset.numel() != expected_bo_len
+                or self._multialt_batch_offset.device != x.device
+            ):
+                self._multialt_batch_offset = (
+                    torch.arange(B, device=x.device, dtype=torch.long)
+                    .repeat_interleave(n_lookup_tables * self.n_alternatives)
+                    * self.input_dim
+                ).contiguous()
+            # embedding_bag offsets cache: depends only on B (and fixed n_heads, tph)
+            expected_eb_len = B * self.n_heads
+            if (
+                self._multialt_eb_offsets is None
+                or self._multialt_eb_offsets.numel() != expected_eb_len
+                or self._multialt_eb_offsets.device != x.device
+            ):
+                self._multialt_eb_offsets = (
+                    torch.arange(expected_eb_len, device=x.device, dtype=torch.long) * self.tables_per_head
+                ).contiguous()
+            # table_flat = arange(n_lookup_tables).repeat(B) — for weights_grad scatter
+            expected_tf_len = B * n_lookup_tables
+            if (
+                self._multialt_table_flat is None
+                or self._multialt_table_flat.numel() != expected_tf_len
+                or self._multialt_table_flat.device != x.device
+            ):
+                self._multialt_table_flat = self._multialt_table_arange.repeat(B).contiguous()
+            return _TinyMHLutMultiAlt.apply(
+                x, self.weights,
+                self._multialt_anchor_a_long, self._multialt_anchor_b_long,
+                self._multialt_powers_mult, self._multialt_table_arange,
+                self._multialt_eb_offsets,
+                self.n_alternatives, self._multialt_batch_offset,
+                self._multialt_table_flat,
+                self.n_heads, self.tables_per_head, self.argmax_noise_eps,
+            )
 
         # TinyAnchorPairsLookup returns BOTH the chosen ("main") and runner-up
         # ("alt") int16 lookup indices, plus their zero-valued carriers

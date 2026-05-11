@@ -11,7 +11,12 @@ from typing import Tuple, Optional, Union
 # Set by monkeypatching in tests (e.g. via the autouse fixture in conftest.py).
 _FORCE_RECOMPUTE_IN_BACKWARD = False
 
-from spiky.lutorch.anchor_pairs_lookup import AnchorPairsLookup, _compute_anchor_data, _anchor_pairs_backward
+from spiky.lutorch.anchor_pairs_lookup import (
+    AnchorPairsLookup,
+    _compute_anchor_data,
+    _anchor_pairs_backward,
+    _anchor_pairs_lookup_forward_fallback_noisy,
+)
 from spiky.lutorch.l_projection import LProjection, _lprojection_backward, _forward_smooth_impl, _get_native_lutorch_manager as _lp_native, _USE_LUTORCH_CUSTOM_CUDA_KERNELS as _LP_CUDA, _LUTORCH_CUDA_THREADS_PER_BLOCK as _LP_TPB
 from spiky.lutorch.lut_helpers import UncertaintyMode, AnchorSamplingPolicy, compute_hierarchical_n_tables, compute_multiscale_n_tables, compute_conv2d_n_tables
 
@@ -33,9 +38,21 @@ class MultiHeadLutFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weights, anchor_pairs_a, anchor_pairs_b, powers,
                 cmp_eps, n_alternatives, smooth_mode, uncertainty_mode_int,
-                uncertainty_bias, batch_offset):
-        lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = \
-            _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, n_alternatives)
+                uncertainty_bias, batch_offset, argmax_noise_eps):
+        # When `argmax_noise_eps > 0`, force the Python fallback and inject
+        # bernoulli bit-flip noise at low-confidence comparisons (|delta| < eps).
+        # The flip-mask is captured and saved so backward reproduces the exact
+        # same flipped bits (consistent fwd/bwd, mirrors TinyMHLut soft mode).
+        if argmax_noise_eps > 0.0:
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _, flip_mask = \
+                _anchor_pairs_lookup_forward_fallback_noisy(
+                    x, anchor_pairs_a, anchor_pairs_b, powers,
+                    cmp_eps, n_alternatives, argmax_noise_eps, None,
+                )
+        else:
+            lookup_indices, lookup_alt_indices, lookup_alt_deltas, _, _ = \
+                _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers, cmp_eps, n_alternatives)
+            flip_mask = None
 
         batch_size = x.shape[0]
         n_tables = weights.shape[0]
@@ -74,19 +91,20 @@ class MultiHeadLutFunction(torch.autograd.Function):
                 )
 
         ctx.save_for_backward(x, weights, anchor_pairs_a, anchor_pairs_b, powers,
-                              main_weight, alt_weight)
+                              main_weight, alt_weight, flip_mask)
         ctx.cmp_eps = cmp_eps
         ctx.n_alternatives = n_alternatives
         ctx.smooth_mode = smooth_mode
         ctx.inv_l1 = l1_uncertainty
         ctx.uncertainty_bias = float(uncertainty_bias)
         ctx.batch_offset = batch_offset
+        ctx.argmax_noise_eps = argmax_noise_eps
 
         return output, lookup_alt_deltas
 
     @staticmethod
     def backward(ctx, grad_output, grad_lookup_alt_deltas):
-        x, weights, anchor_pairs_a, anchor_pairs_b, powers, main_weight, alt_weight = ctx.saved_tensors
+        x, weights, anchor_pairs_a, anchor_pairs_b, powers, main_weight, alt_weight, flip_mask = ctx.saved_tensors
 
         # Ensure grad_output matches weights dtype for lprojection backward,
         # and fp32 for anchor backward (which needs to match x dtype)
@@ -94,9 +112,19 @@ class MultiHeadLutFunction(torch.autograd.Function):
             grad_output = grad_output.to(weights.dtype)
 
         with torch.no_grad():
-            lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids = \
-                _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers,
-                                     ctx.cmp_eps, ctx.n_alternatives)
+            if flip_mask is not None:
+                # Replay forward's noisy path with the SAVED flip_mask so the
+                # exact same bit-flips that shaped the forward `lookup_indices`
+                # also shape the backward's anchor-id selection.
+                lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids, _ = \
+                    _anchor_pairs_lookup_forward_fallback_noisy(
+                        x, anchor_pairs_a, anchor_pairs_b, powers,
+                        ctx.cmp_eps, ctx.n_alternatives, 0.0, flip_mask,
+                    )
+            else:
+                lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids = \
+                    _compute_anchor_data(x, anchor_pairs_a, anchor_pairs_b, powers,
+                                         ctx.cmp_eps, ctx.n_alternatives)
 
         weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad = \
             _lprojection_backward(
@@ -112,9 +140,9 @@ class MultiHeadLutFunction(torch.autograd.Function):
             grad_lookup_alt_deltas,
         )
 
-        # 11 inputs -> 11 gradient returns
+        # 12 inputs -> 12 gradient returns
         return (x_grad_flat.view(x.shape), weights_grad,
-                None, None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None, None)
 
 
 def _calibrate_per_head_output(output: torch.Tensor) -> torch.Tensor:
@@ -192,6 +220,7 @@ class MultiHeadLut(nn.Module):
         table_gating_init: float = -5.0,
         table_gating_leak: float = 0.01,
         return_per_table_outputs: bool = False,
+        argmax_noise_eps: float = 0.0,
     ):
         super().__init__()
 
@@ -221,6 +250,10 @@ class MultiHeadLut(nn.Module):
         self.input_scale_noise = input_scale_noise
         self.uncertainty_bias = uncertainty_bias
         self.recompute_in_backward = recompute_in_backward or _FORCE_RECOMPUTE_IN_BACKWARD
+        self.argmax_noise_eps = float(argmax_noise_eps)
+        if self.argmax_noise_eps > 0.0:
+            # Noise injection only happens on the fused-Function path. Force it on.
+            self.recompute_in_backward = True
 
         # Total number of lookup tables
         n_lookup_tables = n_heads * tables_per_head
@@ -376,6 +409,7 @@ class MultiHeadLut(nn.Module):
                 0 if self.uncertainty_mode == UncertaintyMode.INVERSE_L1 else 1,
                 self.uncertainty_bias,
                 self.lookup._cached_batch_offset,
+                self.argmax_noise_eps,
             )
 
             if self.uncertainty_mode == UncertaintyMode.INVERSE_L1:

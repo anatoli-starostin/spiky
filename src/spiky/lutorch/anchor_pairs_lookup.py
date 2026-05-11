@@ -100,6 +100,77 @@ def _anchor_pairs_lookup_forward_fallback(
     lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)  # [B, n_tables]
 
     if n_alternatives == n_anchor_pairs:
+        min_delta_indices = torch.arange(
+            n_anchor_pairs, device=x.device, dtype=torch.long
+        ).view(1, 1, -1).expand(batch_size, n_tables, -1)
+        lookup_alt_deltas = deltas
+        anchor1_ids = anchor_pairs_a.unsqueeze(0).repeat(batch_size, 1, 1)
+        anchor2_ids = anchor_pairs_b.unsqueeze(0).repeat(batch_size, 1, 1)
+    else:
+        abs_deltas = deltas.abs()
+        if n_alternatives == 1:
+            _, min_delta_indices = abs_deltas.min(dim=2, keepdim=True)
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        else:
+            min_delta_indices = torch.topk(
+                abs_deltas, k=n_alternatives, dim=2, largest=False
+            ).indices
+            lookup_alt_deltas = deltas.gather(2, min_delta_indices)
+        anchor1_ids = anchor_pairs_a.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+        anchor2_ids = anchor_pairs_b.unsqueeze(0).expand(batch_size, -1, -1).gather(2, min_delta_indices)
+
+    lookup_indices_expanded = lookup_indices.unsqueeze(2)
+    flip_masks = (1 << min_delta_indices).long()
+    lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
+
+    return lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids
+
+
+def _anchor_pairs_lookup_forward_fallback_noisy(
+    x: torch.Tensor,
+    anchor_pairs_a: torch.Tensor,
+    anchor_pairs_b: torch.Tensor,
+    powers: torch.Tensor,
+    cmp_eps: float,
+    n_alternatives: int,
+    argmax_noise_eps: float,
+    provided_flip_mask: Optional[torch.Tensor] = None,
+):
+    """Like `_anchor_pairs_lookup_forward_fallback` but injects bernoulli bit-flip
+    noise at low-confidence comparisons (|delta| < argmax_noise_eps).
+
+    Forward: pass argmax_noise_eps > 0 and provided_flip_mask=None — generates a
+    random flip_mask in-place. Return value's last element is the generated mask
+    so the caller can save it for backward.
+
+    Backward: pass argmax_noise_eps=0.0 (ignored) and provided_flip_mask=<saved> —
+    uses the saved mask deterministically so fwd and bwd see the same flipped bits.
+    """
+    batch_size = x.shape[0]
+    n_anchor_pairs = powers.shape[-1]
+    n_tables = anchor_pairs_a.shape[0]
+
+    idx_a = anchor_pairs_a.reshape(1, -1).expand(batch_size, -1)
+    idx_b = anchor_pairs_b.reshape(1, -1).expand(batch_size, -1)
+    x_a = x.gather(1, idx_a).view(batch_size, n_tables, n_anchor_pairs)
+    x_b = x.gather(1, idx_b).view(batch_size, n_tables, n_anchor_pairs)
+    deltas = x_a - x_b
+
+    bits = deltas.gt(cmp_eps).long()
+    if provided_flip_mask is not None:
+        flip_mask = provided_flip_mask
+        bits = bits ^ flip_mask.long()
+    elif argmax_noise_eps > 0.0:
+        low_conf = deltas.abs() < argmax_noise_eps
+        rand = torch.empty_like(low_conf).bernoulli_(0.5)
+        flip_mask = low_conf & rand
+        bits = bits ^ flip_mask.long()
+    else:
+        flip_mask = None
+
+    lookup_indices = (bits << powers).sum(dim=2, dtype=torch.long)
+
+    if n_alternatives == n_anchor_pairs:
         # All positions: no topk, min_delta_indices = 0..n_anchor_pairs-1, lookup_alt_deltas = deltas
         min_delta_indices = torch.arange(
             n_anchor_pairs, device=x.device, dtype=torch.long
@@ -124,7 +195,7 @@ def _anchor_pairs_lookup_forward_fallback(
     flip_masks = (1 << min_delta_indices).long()
     lookup_alt_indices = (lookup_indices_expanded ^ flip_masks)
 
-    return lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids
+    return lookup_indices, lookup_alt_indices, lookup_alt_deltas, anchor1_ids, anchor2_ids, flip_mask
 
 
 @_maybe_compile
