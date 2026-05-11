@@ -639,16 +639,35 @@ class VectorToDominance(nn.Module):
         random_seed: int = 42,
         linear_mode: bool = False,
         pair_sampling_mode: str = "uniform",
+        learnable_scale_init: Optional[float] = None,
+        learnable_temperature: bool = False,
     ):
         super().__init__()
         self.d_head = d_head
         self.smooth_mode = smooth_mode
-        self.temperature = temperature
         # linear_mode: bypass the rational/sign projection and emit raw
         # x_a - x_b (no saturation). Useful for downstream Linear projections
         # that can handle unbounded magnitudes; preserves gradient magnitude.
         # Overrides smooth_mode and STE paths.
         self.linear_mode = linear_mode
+        # Optional learnable scalar multiplier on the dominance output. Useful
+        # to let the model adjust the post-V2D magnitude (e.g. start at 0.5
+        # instead of forcing the ±1 STE / rational saturation level).
+        if learnable_scale_init is not None:
+            self.scale = nn.Parameter(torch.tensor(float(learnable_scale_init)))
+        else:
+            self.scale = None
+        # Temperature in the rational soft sign d/(T + |d|). Affects backward
+        # only in STE mode (smooth_mode=False), shapes the gradient surrogate.
+        # If learnable_temperature=True, log-parametrize so optimization is
+        # unconstrained and effective temperature stays positive.
+        self.learnable_temperature = bool(learnable_temperature)
+        if self.learnable_temperature:
+            self.log_temperature = nn.Parameter(
+                torch.tensor(math.log(float(temperature)), dtype=torch.float32)
+            )
+        else:
+            self.temperature = float(temperature)
         # pair_sampling_mode:
         #   "uniform"  - uniform random sample without replacement (default).
         #   "doubling" - circular doubling-step graph (edges {i, (i+2^k) mod E})
@@ -716,10 +735,19 @@ class VectorToDominance(nn.Module):
             return x.gather(-1, pa), x.gather(-1, pb)
         return x[..., self.pairs[0]], x[..., self.pairs[1]]
 
+    def _T(self) -> torch.Tensor | float:
+        if self.learnable_temperature:
+            return self.log_temperature.exp()
+        return self.temperature
+
+    def current_temperature(self) -> float:
+        T = self._T()
+        return float(T.detach()) if isinstance(T, torch.Tensor) else float(T)
+
     def _soft(self, x: torch.Tensor) -> torch.Tensor:
         a, b = self._ab(x)
         d = a - b
-        return d / (self.temperature + d.abs())
+        return d / (self._T() + d.abs())
 
     def _hard(self, x: torch.Tensor) -> torch.Tensor:
         a, b = self._ab(x)
@@ -728,12 +756,16 @@ class VectorToDominance(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.linear_mode:
             a, b = self._ab(x)
-            return a - b
-        if self.smooth_mode:
-            return self._soft(x)
-        soft = self._soft(x)
-        hard = self._hard(x)
-        return (hard - soft).detach() + soft
+            out = a - b
+        elif self.smooth_mode:
+            out = self._soft(x)
+        else:
+            soft = self._soft(x)
+            hard = self._hard(x)
+            out = (hard - soft).detach() + soft
+        if self.scale is not None:
+            out = out * self.scale
+        return out
 
 
 class SparseDominanceCanonicalize(nn.Module):

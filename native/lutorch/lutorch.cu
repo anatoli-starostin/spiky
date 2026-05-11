@@ -652,6 +652,206 @@ __global__ void tiny_mhlut_bwd_na1_carriers_kernel(
 }
 
 // =====================================================================
+// SoftMultiHeadLUT soft-backward kernel.
+//
+// Implements the rational-soft-sign + softmax backward path for an
+// `embedding_bag`-style hard forward (TinyMHLut sign-pack). Replaces
+// SoftMHLut(hard=True)'s eager backward to provide:
+//
+//   - dL/dx via per-(b,t) soft pipeline recompute + scatter to grad_x
+//   - dL/dlog_T_soft, dL/dlog_T_sel via fold-in temperature gradients
+//
+// dL/dweights is NOT computed here — caller uses
+// `tiny_mhlut_bwd_na1_weights_kernel` for that (sparse one-hot scatter,
+// matching SoftMHLut(hard=True)'s STE semantics).
+// dL/dsel_soft is NOT computed here — caller does it via cuBLAS GEMM
+// `einsum("bto,tko->btk", grad_pt, weights)` and passes the result.
+//
+// Per (b, t) (one CUDA block): recompute p, ts, sel_soft in registers/SMEM
+// (never written to HBM), apply softmax_bw → d_z → d_p → d_d, scatter to
+// grad_x at anchor positions, contribute to scalar temperature grads.
+//
+// Bit convention: bit_i_of_k = (k >> (NAP-1-i)) & 1. Matches Python
+// `_bit_matrix_msb` and the corresponding sign-pack of `index`.
+// =====================================================================
+
+// Templated on NAP (compile-time) so K = 1<<NAP and K_per_lane = K/32
+// are compile-time constants. Lane arrays size correctly per specialization,
+// avoiding register spills to local memory.
+//
+// Constraints: NAP in [5..10] (K in [32, 1024], K_per_lane in [1, 32]).
+template <typename scalar_t, int NAP>
+__global__ void soft_lut_bwd_kernel(
+    int64_t B,
+    int64_t T,                                 // n_heads * tables_per_head
+    int64_t input_dim,
+    float   T_soft,
+    float   T_sel,
+    int64_t dss_s0, int64_t dss_s1, int64_t dss_s2,  // d_sel_soft strides
+    const scalar_t* __restrict__ d_sel_soft,   // [B, T, K]
+    const scalar_t* __restrict__ d_buf,        // [B, T, NAP]
+    const int16_t*  __restrict__ ap_a,         // [T, NAP]
+    const int16_t*  __restrict__ ap_b,         // [T, NAP]
+    float* __restrict__ grad_x,                // [B, input_dim] (zero-initialized)
+    float* __restrict__ partials_log_T_soft,   // [B*T] (one slot per warp)
+    float* __restrict__ partials_log_T_sel
+) {
+    constexpr int K = 1 << NAP;
+    constexpr int K_PER_LANE = K / 32;
+
+    int warp_in_block = threadIdx.x >> 5;
+    int lane          = threadIdx.x & 31;
+    int warps_per_block = blockDim.x >> 5;
+
+    int64_t bt = (int64_t)blockIdx.x * warps_per_block + warp_in_block;
+    int64_t total = B * T;
+    if (bt >= total) return;
+    int64_t b = bt / T;
+    int64_t t = bt - b * T;
+
+    // ----- load d[i], compute p[i]; broadcast across the warp -----
+    float d_lane = 0.0f;
+    if (lane < NAP) {
+        d_lane = static_cast<float>(d_buf[(b * T + t) * NAP + lane]);
+    }
+    float p_lane = (lane < NAP) ? (d_lane / (T_soft + fabsf(d_lane))) : 0.0f;
+
+    float p[NAP];
+    float d_arr[NAP];
+    #pragma unroll
+    for (int i = 0; i < NAP; ++i) {
+        p[i]     = __shfl_sync(0xFFFFFFFFu, p_lane, i);
+        d_arr[i] = __shfl_sync(0xFFFFFFFFu, d_lane, i);
+    }
+
+    // ----- per-lane ts[k] for own slice (k = lane + j*32) -----
+    float ts[K_PER_LANE];
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        int k = lane + j * 32;
+        float sum = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < NAP; ++i) {
+            int bit_i = (k >> (NAP - 1 - i)) & 1;
+            sum += bit_i ? p[i] : -p[i];
+        }
+        ts[j] = sum;
+    }
+
+    // ----- max-reduce ts across the warp -----
+    float ts_max = ts[0];
+    #pragma unroll
+    for (int j = 1; j < K_PER_LANE; ++j) ts_max = fmaxf(ts_max, ts[j]);
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        ts_max = fmaxf(ts_max, __shfl_xor_sync(0xFFFFFFFFu, ts_max, o));
+    }
+
+    // ----- exp((ts - max)/T_sel) and sum -----
+    // Reuse `ts` array as `ex` after this point — we still need ts later
+    // for d_log_T_sel, so keep both. Storage: 2*K_PER_LANE floats per lane.
+    float ex_sum = 0.0f;
+    float ex[K_PER_LANE];
+    float inv_T_sel = 1.0f / T_sel;
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        ex[j] = __expf((ts[j] - ts_max) * inv_T_sel);
+        ex_sum += ex[j];
+    }
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        ex_sum += __shfl_xor_sync(0xFFFFFFFFu, ex_sum, o);
+    }
+    float inv_Z = 1.0f / ex_sum;
+    // sel_soft = ex / Z — fold into ex
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) ex[j] *= inv_Z;
+    // ex now holds sel_soft for this lane's slice.
+
+    // ----- read d_sel_soft for own slice & compute sum_term -----
+    float dzT[K_PER_LANE];                    // will hold d_z_over_Tsel later
+    float sum_term = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        int k = lane + j * 32;
+        float dss = static_cast<float>(
+            d_sel_soft[b * dss_s0 + t * dss_s1 + (int64_t)k * dss_s2]);
+        dzT[j] = dss;                          // store dss temporarily
+        sum_term += ex[j] * dss;
+    }
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        sum_term += __shfl_xor_sync(0xFFFFFFFFu, sum_term, o);
+    }
+
+    // ----- d_z_over_Tsel = sel_soft * (dss - sum_term) / T_sel -----
+    // Replaces dzT[j] in place.
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        dzT[j] = ex[j] * (dzT[j] - sum_term) * inv_T_sel;
+    }
+
+    // ----- d_log_T_sel contribution: -Σ (d_z_over_Tsel * ts) -----
+    float d_log_Tsel_local = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        d_log_Tsel_local -= dzT[j] * ts[j];
+    }
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        d_log_Tsel_local += __shfl_xor_sync(0xFFFFFFFFu, d_log_Tsel_local, o);
+    }
+    if (lane == 0) partials_log_T_sel[bt] = d_log_Tsel_local;
+
+    // ----- d_p[i] for each i — accumulate NAP partial sums per lane in parallel -----
+    // dp_all[i] = Σ_k (bit_i ? dzT[j] : -dzT[j]) — one reduction per i, but
+    // computed in a single pass over j with NAP independent accumulators.
+    float dp_all[NAP];
+    #pragma unroll
+    for (int i = 0; i < NAP; ++i) dp_all[i] = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < K_PER_LANE; ++j) {
+        int k = lane + j * 32;
+        float v = dzT[j];
+        #pragma unroll
+        for (int i = 0; i < NAP; ++i) {
+            int bit_i = (k >> (NAP - 1 - i)) & 1;
+            dp_all[i] += bit_i ? v : -v;
+        }
+    }
+    // Warp-reduce all NAP partial sums; xor-reduce broadcasts to all lanes.
+    #pragma unroll
+    for (int i = 0; i < NAP; ++i) {
+        #pragma unroll
+        for (int o = 16; o > 0; o >>= 1) {
+            dp_all[i] += __shfl_xor_sync(0xFFFFFFFFu, dp_all[i], o);
+        }
+    }
+
+    // Parallel scatter: lane i handles d_p[i], computes d_d, does its 2 atomics.
+    // grad_x atomics now run NAP-way parallel within the warp instead of serial.
+    float d_log_Tsoft_local = 0.0f;
+    if (lane < NAP) {
+        int i = lane;
+        float di    = d_arr[i];
+        float denom = T_soft + fabsf(di);
+        float d_d   = dp_all[i] * (T_soft / (denom * denom));
+
+        int16_t a_idx = ap_a[t * NAP + i];
+        int16_t b_idx = ap_b[t * NAP + i];
+        atomicAdd(grad_x + b * input_dim + (int64_t)a_idx,  d_d);
+        atomicAdd(grad_x + b * input_dim + (int64_t)b_idx, -d_d);
+        d_log_Tsoft_local = -d_d * di;
+    }
+    // Reduce d_log_T_soft contributions from lanes 0..NAP-1 to lane 0.
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        d_log_Tsoft_local += __shfl_xor_sync(0xFFFFFFFFu, d_log_Tsoft_local, o);
+    }
+    if (lane == 0) partials_log_T_soft[bt] = d_log_Tsoft_local;
+}
+
+// =====================================================================
 // BitPermutationLUT dominance-gather forward kernel.
 // Reads 1-bit weights packed as int32 blocks (output_nap bits per entry,
 // padded to ceil(output_nap/32) blocks), accumulates signed votes into
@@ -6225,6 +6425,117 @@ public:
     }
 
     // -----------------------------------------------------------------
+    // SoftMultiHeadLUT soft-backward grad_x + temperature gradients.
+    // Returns (grad_x [B, input_dim] fp32, grad_log_T_soft scalar fp32,
+    //          grad_log_T_sel scalar fp32). Caller passes the precomputed
+    // d_sel_soft (= einsum("bto,tko->btk", grad_pt, weights), via cuBLAS).
+    // -----------------------------------------------------------------
+    py::tuple
+    soft_lut_backward_grad_x(
+        const torch::Tensor& d_sel_soft,        // [B, T, K]   bf16/fp16/fp32
+        const torch::Tensor& d_buf,             // [B, T, NAP] same dtype as d_sel_soft
+        const torch::Tensor& anchor_pairs_a,    // [T, NAP] int16
+        const torch::Tensor& anchor_pairs_b,    // [T, NAP] int16
+        int64_t input_dim,
+        double  T_soft,
+        double  T_sel
+    ) {
+        if (!d_sel_soft.is_cuda() || !d_buf.is_cuda() ||
+            !anchor_pairs_a.is_cuda() || !anchor_pairs_b.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (d_sel_soft.dtype() != d_buf.dtype()) {
+            throw py::value_error("d_sel_soft and d_buf must have same dtype");
+        }
+        if (anchor_pairs_a.dtype() != torch::kInt16 ||
+            anchor_pairs_b.dtype() != torch::kInt16) {
+            throw py::value_error("anchor_pairs_a/b must be int16");
+        }
+        if (d_sel_soft.dim() != 3 || d_buf.dim() != 3) {
+            throw py::value_error("d_sel_soft must be [B,T,K]; d_buf must be [B,T,NAP]");
+        }
+        int64_t B = d_sel_soft.size(0);
+        int64_t T = d_sel_soft.size(1);
+        int64_t K = d_sel_soft.size(2);
+        int64_t NAP = d_buf.size(2);
+        if (d_buf.size(0) != B || d_buf.size(1) != T) {
+            throw py::value_error("d_buf [B,T,NAP] must match d_sel_soft on B and T");
+        }
+        if ((int64_t(1) << NAP) != K) {
+            throw py::value_error("K must equal 2^NAP");
+        }
+        if (NAP < 5 || NAP > 10) {
+            throw py::value_error(
+                "NAP must be in [5, 10] for soft_lut_backward_grad_x "
+                "(K = 2^NAP must be >= 32 and <= 1024 for the warp-per-(b,t) kernel)");
+        }
+        if (anchor_pairs_a.size(0) != T || anchor_pairs_a.size(1) != NAP) {
+            throw py::value_error("anchor_pairs_a shape must be [T, NAP]");
+        }
+        if (anchor_pairs_b.sizes() != anchor_pairs_a.sizes()) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must have same shape");
+        }
+
+        auto opts_fp32 = torch::TensorOptions().dtype(torch::kFloat32).device(d_sel_soft.device());
+        torch::Tensor grad_x = torch::zeros({B, input_dim}, opts_fp32);
+        // Per-warp scalar partials, reduced to scalar via torch::sum after kernel.
+        // Using `empty` (kernel writes every slot) so torch::sum gets the right value.
+        torch::Tensor partials_T_soft = torch::empty({B * T}, opts_fp32);
+        torch::Tensor partials_T_sel  = torch::empty({B * T}, opts_fp32);
+
+        // Warp-per-(b,t): each block holds WARPS_PER_BLOCK warps, each
+        // independently handles one (b, t). 8 warps × 32 threads = 256/block.
+        constexpr int WARPS_PER_BLOCK = 2;
+        const int block_dim = WARPS_PER_BLOCK * 32;
+        const int K_per_lane = static_cast<int>(K / 32);
+        const int64_t total_bt = B * T;
+        const int n_blocks = static_cast<int>((total_bt + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
+
+        c10::cuda::CUDAGuard guard(d_sel_soft.device().index());
+
+        int64_t dss_s0 = d_sel_soft.stride(0);
+        int64_t dss_s1 = d_sel_soft.stride(1);
+        int64_t dss_s2 = d_sel_soft.stride(2);
+
+        // Dispatch on NAP so the kernel sees compile-time K and K_per_lane,
+        // letting the compiler size lane arrays exactly and unroll the inner
+        // loops fully (avoids local-memory spills).
+        #define _DISPATCH_NAP(NAP_VAL)                                            \
+            soft_lut_bwd_kernel<scalar_t, NAP_VAL><<<n_blocks, block_dim, 0,      \
+                at::cuda::getCurrentCUDAStream()>>>(                              \
+                B, T, input_dim,                                                  \
+                static_cast<float>(T_soft), static_cast<float>(T_sel),            \
+                dss_s0, dss_s1, dss_s2,                                           \
+                reinterpret_cast<const scalar_t*>(d_sel_soft.data_ptr()),         \
+                reinterpret_cast<const scalar_t*>(d_buf.data_ptr()),              \
+                reinterpret_cast<const int16_t*>(anchor_pairs_a.data_ptr()),      \
+                reinterpret_cast<const int16_t*>(anchor_pairs_b.data_ptr()),      \
+                reinterpret_cast<float*>(grad_x.data_ptr()),                      \
+                reinterpret_cast<float*>(partials_T_soft.data_ptr()),             \
+                reinterpret_cast<float*>(partials_T_sel.data_ptr()));
+
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16,
+            d_sel_soft.scalar_type(), "soft_lut_backward_grad_x", [&] {
+                switch (NAP) {
+                    case 5:  _DISPATCH_NAP(5);  break;
+                    case 6:  _DISPATCH_NAP(6);  break;
+                    case 7:  _DISPATCH_NAP(7);  break;
+                    case 8:  _DISPATCH_NAP(8);  break;
+                    case 9:  _DISPATCH_NAP(9);  break;
+                    case 10: _DISPATCH_NAP(10); break;
+                    default: TORCH_CHECK(false, "NAP must be in [5, 10]");
+                }
+            });
+        #undef _DISPATCH_NAP
+        CU_CHECK(cudaGetLastError());
+        // Reduce per-warp partials to scalars.
+        torch::Tensor grad_log_T_soft = partials_T_soft.sum();
+        torch::Tensor grad_log_T_sel  = partials_T_sel.sum();
+        return py::make_tuple(grad_x, grad_log_T_soft, grad_log_T_sel);
+    }
+
+    // -----------------------------------------------------------------
     // BitPermutationLUT forward (int32 output, no float math in kernel).
     // Assumes CANONICAL_DISTINCT output pair sampling (no inv_sign needed).
     // lookup_indices: [B, n_heads*tph] int16 (from TinyAnchorPairsLookup)
@@ -8050,6 +8361,17 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_alt_indices"),
             py::arg("tables_per_head"),
             py::arg("threads_per_block") = 256
+        )
+        .def(
+            "soft_lut_backward_grad_x",
+            &LUTorchManager::soft_lut_backward_grad_x,
+            py::arg("d_sel_soft"),
+            py::arg("d_buf"),
+            py::arg("anchor_pairs_a"),
+            py::arg("anchor_pairs_b"),
+            py::arg("input_dim"),
+            py::arg("T_soft"),
+            py::arg("T_sel")
         )
         .def(
             "bit_perm_lut_dom_gather_forward",

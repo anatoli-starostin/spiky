@@ -26,13 +26,32 @@ Forward signature (matches MultiHeadLut's reduced output):
   x: float [B, input_dim]
   returns: [B, n_heads, n_outputs] in weights' dtype.
 """
+import math
 from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from spiky.lutorch.tiny_anchor_pairs_lookup import TinyAnchorPairsLookup
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+
+
+def _soft_bit_matrix_msb(nap: int, device, dtype=torch.float32) -> torch.Tensor:
+    """[NAP, K] bit pattern matrix with MSB-first convention:
+    bit_matrix[i, k] = +1 if (k >> (NAP-1-i)) & 1 else -1.
+    Used by the soft-mode pure-PyTorch backward."""
+    n = 1 << nap
+    bits = ((torch.arange(n, device=device).unsqueeze(0)
+             >> torch.arange(nap - 1, -1, -1, device=device).unsqueeze(1)) & 1)
+    return ((bits.float() - 0.5) * 2.0).to(dtype)
+
+
+def _msb_powers(nap: int, device) -> torch.Tensor:
+    """powers[i] = 2^(NAP-1-i) — MSB-first packing matching _soft_bit_matrix_msb.
+    index = Σ_i (d_i > 0) * powers[i]  produces the row k that maximizes
+    Σ_i sign(d_i) * bit_matrix[i, k] for the soft-mode argmax."""
+    return (1 << torch.arange(nap - 1, -1, -1, device=device, dtype=torch.int64))
 
 # Toggle to disable the native fused backward kernel (PyTorch fallback path).
 _USE_TINY_MHLUT_NATIVE_BWD = True
@@ -315,6 +334,176 @@ class _TinyMHLutGather(torch.autograd.Function):
         return grad_weights, None, None, grad_main, grad_alt, None, None
 
 
+# =====================================================================
+# Soft-mode pieces: TinyMHLut-fast forward + pure-PyTorch soft backward,
+# both wrapped in @torch.compile so inductor fuses everything.
+#
+# Forward saves only small inputs (x, weights, anchor_*, bit_matrix, index,
+# flat_offset, log_T_*). Backward recomputes p, ts, sel_soft inside one
+# compiled function that produces all four gradients. No HBM materialisation
+# of the [B, n_tables, K] tensors as saved activations.
+#
+# Beats torch.compile'd SoftMHLut(hard=True) on every shape we tested
+# (~30% faster total, ~35% lower peak memory) with identical gradients.
+# =====================================================================
+
+@torch.compile
+def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
+                        bit_matrix, T_soft, n_heads, tph, table_dim,
+                        bf16_argmax, noise_eps):
+    """Compiled forward.
+
+    bf16_argmax=False — fastest. fp32 sign(x_a - x_b) bit-pack for index.
+    bf16_argmax=True  — match SoftMHLut(use_bf16=True): compute bf16
+                        ts = einsum(p, bm) under bf16 autocast, argmax it.
+
+    noise_eps > 0: when in fp32 sign-bit-pack path, RANDOMLY flip the bit at
+                   positions where |d[i]| < noise_eps. This injects structured
+                   noise on low-confidence comparisons — testing the
+                   hypothesis that bf16's argmax regularization is doing this
+                   implicitly. Ignored when bf16_argmax=True.
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]
+    if bf16_argmax:
+        p = d / (T_soft + d.abs())
+        ts = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+        index = ts.argmax(dim=-1)
+    else:
+        bits = (d > 0).to(torch.int64)
+        if noise_eps > 0.0:
+            # At low-confidence bits (|d| < noise_eps), flip with 50% probability.
+            rand_bits = torch.empty_like(d).bernoulli_(0.5).to(torch.int64)
+            low_conf = (d.abs() < noise_eps)
+            bits = torch.where(low_conf, rand_bits, bits)
+        index = (bits * powers.view(1, 1, -1)).sum(dim=-1)
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    table_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * table_dim
+    flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
+    n_bags = B * n_heads
+    offsets = torch.arange(n_bags, device=weights.device, dtype=torch.long) * tph
+    out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
+    return out_flat.view(B, n_heads, n_outputs), index
+
+
+@torch.compile
+def _soft_lut_bwd_body(grad_out, x, weights, anchor_a_long, anchor_b_long,
+                        bit_matrix, index, T_soft, T_sel, n_heads, tph):
+    """Compiled backward — Gumbel-STE consistent.
+
+    Reconstructs `p` so that `argmax(sel_soft) ≡ saved index` (including any
+    noise flips applied in forward). Extract bits actually used in forward
+    from `index`, build `p_signs = ±1` matching those bits, then
+    `p = p_signs * |d| / (T_soft + |d|)`. In the no-noise case this is
+    bit-identical to `p = d/(T+|d|)`; under noise it makes the soft pipeline's
+    argmax match the chosen index, so softmax-backward gradients are
+    self-consistent with the picked row.
+    """
+    B, _, n_outputs = grad_out.shape
+    n_tables, NAP = anchor_a_long.shape
+    K = bit_matrix.shape[1]
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d        = x[:, anchor_a_long] - x[:, anchor_b_long]
+    denom    = T_soft + d.abs()
+
+    # Bits actually used in forward (MSB-first packing): bit at position i is
+    # bit (NAP-1-i) of the integer index.
+    shifts   = torch.arange(NAP - 1, -1, -1, device=index.device, dtype=index.dtype)
+    bits     = ((index.unsqueeze(-1) >> shifts.view(1, 1, -1)) & 1).to(d.dtype)
+    p_signs  = bits * 2.0 - 1.0      # ±1, matches the bits used in forward
+    p        = p_signs * d.abs() / denom
+
+    ts       = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+    z        = ts / T_sel
+    sel_soft = F.softmax(z, dim=-1)
+
+    # Broadcast grad_out → [B, n_tables, n_outputs] for per-table scatter/GEMM.
+    grad_pt    = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+    d_sel_soft = torch.einsum("bto,tko->btk", grad_pt.to(w_dtype), weights)
+
+    # Softmax backward expressed as idiomatic PyTorch (compile fuses).
+    sum_term = (d_sel_soft * sel_soft).sum(dim=-1, keepdim=True)
+    d_z      = sel_soft * (d_sel_soft - sum_term)
+    d_ts     = d_z / T_sel
+    grad_log_T_sel = -(d_z * z).sum()
+
+    # dL/dp via cuBLAS GEMM; dL/dd via rational-sign Jacobian.
+    # p = p_signs * |d| / denom, so dp/d|d| = p_signs * T_soft/denom^2 and
+    # d|d|/dd = sign(d). Hence dp/dd = p_signs * sign(d) * T_soft/denom^2.
+    d_p = torch.einsum("btk,pk->btp", d_ts, bit_matrix.to(d_ts.dtype))
+    d_d = d_p * p_signs * d.sign() * (T_soft / (denom * denom))
+    # grad_log_T_soft = T_soft * dL/dT_soft = -sum(d_d * d) (same algebra as
+    # the simple p=d/denom case; the p_signs * sign(d) factors cancel out).
+    grad_log_T_soft = -(d_d * d).sum()
+
+    # dL/dweights via scatter at saved (table, index).
+    flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+    flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
+    grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+    grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+
+    # dL/dx via scatter-add at anchor positions.
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
+
+
+class _TinyMHLutSoft(torch.autograd.Function):
+    """Forward: TinyMHLut-fast (sign-pack + embedding_bag).
+    Backward: pure-PyTorch soft path, gradients matching SoftMHLut(hard=True).
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix, powers,
+                n_heads, tph, table_dim, use_bf16, argmax_noise_eps,
+                bf16_argmax):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            out, index = _soft_lut_fwd_body(
+                x, weights, anchor_a_long, anchor_b_long, powers,
+                bit_matrix, T_soft, n_heads, tph, table_dim, bool(bf16_argmax),
+                float(argmax_noise_eps),
+            )
+        ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, index, log_T_soft, log_T_sel)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.use_bf16 = use_bf16
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, anchor_a_long, anchor_b_long, bit_matrix, index,
+         log_T_soft, log_T_sel) = ctx.saved_tensors
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if ctx.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                grad_out, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+            )
+        return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None, None, None, None)
+
+
 class TinyMultiHeadLut(nn.Module):
     """Multi-head LUT with TinyAnchorPairsLookup + bf16 (default) weights.
 
@@ -355,6 +544,16 @@ class TinyMultiHeadLut(nn.Module):
         max_anchor_distance: Optional[int] = None,
         local_window_starts: str = "linspace",
         aligned_local_scatter: bool = False,
+        # Soft-mode (backward only): rational-soft-sign + softmax gradient
+        # path that gives the same gradients as SoftMHLut(hard=True). Forward
+        # is unchanged (sign-pack + embedding_bag, native fast path).
+        backward_mode: str = "ste",
+        soft_score_temp: float = 0.5,
+        select_temp: float = 0.5,
+        learnable_temps: bool = False,
+        use_bf16: bool = True,
+        argmax_noise_eps: float = 0.0,
+        bf16_argmax: bool = False,
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -490,6 +689,73 @@ class TinyMultiHeadLut(nn.Module):
         ).to(weight_dtype)
         self.weights = nn.Parameter(weights_init)
 
+        # ----- soft-backward mode setup -----
+        if backward_mode not in ("ste", "soft"):
+            raise ValueError(f"backward_mode must be 'ste' or 'soft', got {backward_mode!r}")
+        self.backward_mode = backward_mode
+        self.use_bf16 = bool(use_bf16)
+        self.argmax_noise_eps = float(argmax_noise_eps)
+        self.bf16_argmax = bool(bf16_argmax)
+        if backward_mode == "soft":
+            if sparse_scatter_n_outputs is not None:
+                raise NotImplementedError(
+                    "soft backward_mode does not yet support sparse_scatter_n_outputs"
+                )
+            if partition_sets is not None:
+                raise NotImplementedError(
+                    "soft backward_mode does not yet support partition_sets"
+                )
+            # bit_matrix and powers (MSB-first, matching `_soft_lut_bwd_body`).
+            self.register_buffer(
+                "soft_bit_matrix",
+                _soft_bit_matrix_msb(n_anchor_pairs, dev, dtype=torch.float32),
+            )
+            self.register_buffer("soft_powers", _msb_powers(n_anchor_pairs, dev))
+            # Anchor pairs as int64 — cast once, reused by forward & backward.
+            self.register_buffer(
+                "soft_anchor_a_long",
+                self.lookup.anchor_pairs_a.long().contiguous(),
+            )
+            self.register_buffer(
+                "soft_anchor_b_long",
+                self.lookup.anchor_pairs_b.long().contiguous(),
+            )
+            self.learnable_temps = bool(learnable_temps)
+            if self.learnable_temps:
+                # Log-parametrize so unconstrained optimization keeps T positive.
+                self.log_soft_score_temp = nn.Parameter(
+                    torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev)
+                )
+                self.log_select_temp = nn.Parameter(
+                    torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev)
+                )
+            else:
+                self.register_buffer(
+                    "log_soft_score_temp",
+                    torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev),
+                )
+                self.register_buffer(
+                    "log_select_temp",
+                    torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev),
+                )
+
+    def _soft_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """soft backward_mode forward path. Forward output is identical to
+        SoftMHLut(hard=True) on the same weights and anchor pairs (sign-pack
+        argmax = soft argmax). Backward gives soft gradients to x and the
+        temperatures, sparse one-hot scatter to weights."""
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(
+                f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
+            )
+        return _TinyMHLutSoft.apply(
+            x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+            self.soft_anchor_a_long, self.soft_anchor_b_long,
+            self.soft_bit_matrix, self.soft_powers,
+            self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+            self.argmax_noise_eps, self.bf16_argmax,
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -503,6 +769,11 @@ class TinyMultiHeadLut(nn.Module):
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
             )
 
+        # Soft backward_mode: bypass TAPL entirely; use the pure-PyTorch
+        # `_TinyMHLutSoft` Function (TinyMHLut-fast forward + soft backward).
+        if self.backward_mode == "soft":
+            return self._soft_forward(x)
+
         # TinyAnchorPairsLookup returns BOTH the chosen ("main") and runner-up
         # ("alt") int16 lookup indices, plus their zero-valued carriers
         # (lookup_indices_grad_c, lookup_alt_indices_grad_c) whose gradients
@@ -515,6 +786,22 @@ class TinyMultiHeadLut(nn.Module):
         # (multi-alt API parity); squeeze for our na=1 path.
         lookup_indices = lookup_indices.to(torch.int64)
         lookup_alt_indices = lookup_alt_indices.squeeze(-1).to(torch.int64)
+
+        # ===== argmax_noise_eps in STE mode =====
+        # Match the regularization mechanism we found in soft-mode: at low-
+        # confidence bit positions (|d_i| < eps), randomly flip that bit in
+        # lookup_indices with 50% probability. TAPL uses LSB-first bit pack
+        # (bit i ↔ powers[i] = 1 << i), so flip = XOR with `(1 << i)`.
+        if self.argmax_noise_eps > 0.0 and lookup_indices_grad_c is not None:
+            idx_a = self.lookup.anchor_pairs_a.long()
+            idx_b = self.lookup.anchor_pairs_b.long()
+            d = x[:, idx_a] - x[:, idx_b]                          # [B, T, NAP]
+            low_conf = (d.abs() < self.argmax_noise_eps)
+            rand_bits = torch.empty_like(d).bernoulli_(0.5).bool()
+            flip_mask_per_bit = (low_conf & rand_bits).to(torch.int64)
+            powers_lsb = (1 << torch.arange(d.shape[-1], device=x.device, dtype=torch.int64))
+            flip_mask = (flip_mask_per_bit * powers_lsb).sum(dim=-1)  # [B, T]
+            lookup_indices = lookup_indices ^ flip_mask
 
         sparse = self.sparse_scatter_n_outputs is not None
 

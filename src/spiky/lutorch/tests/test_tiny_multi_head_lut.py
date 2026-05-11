@@ -14,6 +14,8 @@ import torch
 from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.tiny_multi_head_lut_optimizer import TinyMultiHeadLutOptimizer
 from spiky.lutorch.tiny_anchor_pairs_lookup import _can_use_native_tiny_apl
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.soft_multi_head_lut import SoftMultiHeadLUT
 
 
 DEVICES = [torch.device("cuda:0")] if torch.cuda.is_available() else []
@@ -852,3 +854,280 @@ def test_aligned_local_scatter_forward_backward():
     y.sum().backward()
     assert m.weights.grad.abs().sum().item() > 0
     assert x.grad.abs().sum().item() > 0
+
+
+# =====================================================================
+# soft backward_mode tests — TinyMultiHeadLut(backward_mode='soft')
+# =====================================================================
+# Drop-in for SoftMultiHeadLUT(hard=True, learnable_temps=True) but with
+# TinyMHLut-style fast forward (sign-pack + embedding_bag) and pure-PyTorch
+# + @torch.compile soft backward. Covers:
+#   - construction guards (sparse_scatter / partition_sets rejected)
+#   - parameter registration (learnable vs fixed temps)
+#   - forward output equality with SoftMHLut(hard=True) at fp32
+#   - gradient parity with SoftMHLut(hard=True) at fp32
+#   - argmax_noise_eps: forward changes stochastically, grads stay finite
+#   - bf16_argmax flag: forward matches SoftMHLut(use_bf16=True)
+#   - learnable temperatures receive non-zero gradients
+#   - argmax invariant: signbit-pack == argmax(einsum(p, bit_matrix)) at fp32
+
+def _soft_mhlut_match_tiny(tiny, use_bf16=False):
+    """Build a SoftMHLut whose weights and anchor pairs match a TinyMHLut(soft)
+    instance — bypasses sampler-RNG differences so the equivalence test
+    isolates the algorithm, not the init."""
+    soft = SoftMultiHeadLUT(
+        input_dim=tiny.input_dim, n_heads=tiny.n_heads, n_outputs=tiny.n_outputs,
+        n_anchor_pairs=tiny.n_anchor_pairs, tables_per_head=tiny.tables_per_head,
+        soft_score_temp=float(tiny.log_soft_score_temp.detach().exp()),
+        select_temp=float(tiny.log_select_temp.detach().exp()),
+        gumbel=False, hard=True, learnable_temps=True,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        weight_dtype=tiny.weights.dtype, device=tiny.weights.device,
+        use_bf16=use_bf16, compile_forward=False,
+    ).to(tiny.weights.device)
+    with torch.no_grad():
+        soft.weights.copy_(tiny.weights)
+        soft.anchor_pairs_a.copy_(tiny.lookup.anchor_pairs_a)
+        soft.anchor_pairs_b.copy_(tiny.lookup.anchor_pairs_b)
+    return soft
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_rejects_sparse_scatter():
+    dev = torch.device("cuda:0")
+    with pytest.raises(NotImplementedError, match="sparse_scatter"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+            tables_per_head=4, weight_dtype=torch.float32, device=dev,
+            backward_mode='soft', sparse_scatter_n_outputs=8,
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_rejects_partition_sets():
+    dev = torch.device("cuda:0")
+    # Use a full-coverage partition_sets so input validation passes; the
+    # backward_mode=='soft' check rejects regardless of partition contents.
+    with pytest.raises(NotImplementedError, match="partition_sets"):
+        TinyMultiHeadLut(
+            input_dim=8, n_heads=2, n_outputs=4, n_anchor_pairs=2,
+            tables_per_head=4, weight_dtype=torch.float32, device=dev,
+            backward_mode='soft', partition_sets=[[0, 1, 2, 3, 4, 5, 6, 7]],
+        )
+
+
+def test_soft_backward_mode_invalid_string():
+    dev = torch.device("cuda:0" if _has_cuda() else "cpu")
+    with pytest.raises(ValueError, match="backward_mode must be"):
+        TinyMultiHeadLut(
+            input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+            tables_per_head=4, weight_dtype=torch.float32, device=dev,
+            backward_mode='not_a_mode',
+        )
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_learnable_temps_are_parameters():
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, device=dev,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True,
+    )
+    assert isinstance(m.log_soft_score_temp, torch.nn.Parameter)
+    assert isinstance(m.log_select_temp, torch.nn.Parameter)
+    assert m.log_soft_score_temp.requires_grad
+    assert m.log_select_temp.requires_grad
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_fixed_temps_are_buffers():
+    dev = torch.device("cuda:0")
+    m = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, device=dev,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=False,
+    )
+    assert not isinstance(m.log_soft_score_temp, torch.nn.Parameter)
+    # Tensor `in` comparison is ambiguous; check by id presence in buffers.
+    buffer_ids = {id(b) for _, b in m.named_buffers()}
+    assert id(m.log_soft_score_temp) in buffer_ids
+    assert id(m.log_select_temp) in buffer_ids
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_forward_matches_softmhlut_fp32():
+    """Forward of TinyMHLut(soft, no noise) equals SoftMHLut(hard=True) at fp32."""
+    dev = torch.device("cuda:0")
+    torch.manual_seed(0)
+    tiny = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+        argmax_noise_eps=0.0,
+    ).to(dev)
+    soft = _soft_mhlut_match_tiny(tiny, use_bf16=False)
+    x = torch.randn(16, 32, device=dev)
+    out_tiny = tiny(x.clone())
+    out_soft = soft(x.clone())
+    assert out_tiny.shape == out_soft.shape
+    diff = (out_tiny - out_soft).abs().max().item()
+    # Bit-exact: both gather the same row of the same weights at the same
+    # argmax index. Any non-zero difference is a bug.
+    assert diff < 1e-5, f"forward mismatch: {diff}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_gradients_match_softmhlut_fp32():
+    """All four gradients match SoftMHLut(hard=True) within fp32 noise."""
+    dev = torch.device("cuda:0")
+    torch.manual_seed(0)
+    tiny = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+        argmax_noise_eps=0.0,
+    ).to(dev)
+    soft = _soft_mhlut_match_tiny(tiny, use_bf16=False)
+    x = torch.randn(16, 32, device=dev)
+    target = torch.randn(16, 2, 4, device=dev)
+
+    x1 = x.clone().requires_grad_(True)
+    x2 = x.clone().requires_grad_(True)
+    ((tiny(x1) - target).pow(2).sum()).backward()
+    ((soft(x2) - target).pow(2).sum()).backward()
+
+    # dL/dw: exact match expected (both implementations scatter at the same
+    # picked row, deterministic anchor pairs and weights).
+    dw = (tiny.weights.grad - soft.weights.grad).abs().max().item()
+    assert dw < 1e-5, f"dL/dweights abs mismatch: {dw}"
+    # dL/dx, dL/dlog_T_*: fp32 numeric noise (rel ~1e-6 to 1e-4).
+    dx = (x1.grad - x2.grad).abs().max().item()
+    ref_x = max(x1.grad.abs().max().item(), 1e-12)
+    assert dx / ref_x < 1e-4, f"dL/dx rel mismatch: {dx} / {ref_x}"
+    dts = (tiny.log_soft_score_temp.grad - soft.log_soft_score_temp.grad).abs().item()
+    ref_ts = max(tiny.log_soft_score_temp.grad.abs().item(), 1e-12)
+    assert dts / ref_ts < 1e-3, f"dL/dlog_T_soft rel mismatch: {dts} / {ref_ts}"
+    dtx = (tiny.log_select_temp.grad - soft.log_select_temp.grad).abs().item()
+    ref_tx = max(tiny.log_select_temp.grad.abs().item(), 1e-12)
+    assert dtx / ref_tx < 1e-3, f"dL/dlog_T_sel rel mismatch: {dtx} / {ref_tx}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_noise_changes_forward_but_gradients_stay_finite():
+    """argmax_noise_eps>0 → forward is stochastic across calls (random
+    bit-flips at low-confidence positions); gradients still flow and are
+    finite."""
+    dev = torch.device("cuda:0")
+    torch.manual_seed(0)
+    common = dict(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+    )
+    m_no_noise = TinyMultiHeadLut(argmax_noise_eps=0.0, **common).to(dev)
+    m_noise    = TinyMultiHeadLut(argmax_noise_eps=0.5, **common).to(dev)
+    # Force identical state so any forward difference is from noise alone.
+    with torch.no_grad():
+        m_noise.weights.copy_(m_no_noise.weights)
+        m_noise.lookup.anchor_pairs_a.copy_(m_no_noise.lookup.anchor_pairs_a)
+        m_noise.lookup.anchor_pairs_b.copy_(m_no_noise.lookup.anchor_pairs_b)
+        m_noise.soft_anchor_a_long.copy_(m_no_noise.soft_anchor_a_long)
+        m_noise.soft_anchor_b_long.copy_(m_no_noise.soft_anchor_b_long)
+    x = torch.randn(64, 32, device=dev)
+    out_a = m_noise(x)
+    out_b = m_noise(x)
+    # Two calls under noise → different random bit flips → different outputs.
+    assert (out_a - out_b).abs().max().item() > 0.0
+    # eps=0 → deterministic across calls.
+    out_c = m_no_noise(x)
+    out_d = m_no_noise(x)
+    assert (out_c - out_d).abs().max().item() == 0.0
+    # Backward flows through noise path; gradients are finite.
+    loss = m_noise(x.clone().requires_grad_(True)).sum()
+    loss.backward()
+    assert torch.isfinite(m_noise.weights.grad).all()
+    assert torch.isfinite(m_noise.log_soft_score_temp.grad).all()
+    assert torch.isfinite(m_noise.log_select_temp.grad).all()
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_bf16_argmax_matches_softmhlut_bf16():
+    """bf16_argmax=True + use_bf16=True: forward output matches SoftMHLut(use_bf16=True)."""
+    dev = torch.device("cuda:0")
+    torch.manual_seed(0)
+    tiny = TinyMultiHeadLut(
+        input_dim=64, n_heads=4, n_outputs=8, n_anchor_pairs=6,
+        tables_per_head=16, weight_dtype=torch.float32, random_seed=0, device=dev,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True, use_bf16=True, bf16_argmax=True,
+        argmax_noise_eps=0.0,
+    ).to(dev)
+    soft = _soft_mhlut_match_tiny(tiny, use_bf16=True)
+    x = torch.randn(64, 64, device=dev)
+    out_tiny = tiny(x.clone())
+    out_soft = soft(x.clone())
+    # bf16 argmax in both → same rows picked → forward output within bf16 noise.
+    rel = (out_tiny - out_soft).abs().max() / out_tiny.abs().max().clamp(min=1e-12)
+    assert rel.item() < 1e-2, f"bf16_argmax forward rel mismatch: {rel.item()}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_soft_backward_mode_temperature_gradients_nontrivial():
+    """Learnable T_soft, T_sel parameters get non-zero gradients."""
+    dev = torch.device("cuda:0")
+    torch.manual_seed(0)
+    m = TinyMultiHeadLut(
+        input_dim=32, n_heads=2, n_outputs=4, n_anchor_pairs=5,
+        tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
+        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
+        learnable_temps=True, use_bf16=False,
+    ).to(dev)
+    x = torch.randn(16, 32, device=dev)
+    target = torch.randn(16, 2, 4, device=dev)
+    loss = (m(x) - target).pow(2).sum()
+    loss.backward()
+    assert m.log_soft_score_temp.grad is not None
+    assert m.log_select_temp.grad is not None
+    assert m.log_soft_score_temp.grad.abs().item() > 0.0
+    assert m.log_select_temp.grad.abs().item() > 0.0
+
+
+# =====================================================================
+# Cross-module: SoftMultiHeadLUT bit_matrix convention invariant.
+# =====================================================================
+@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
+def test_softmhlut_argmax_equals_signbit_pack_at_fp32():
+    """At fp32, argmax of `ts = einsum(p, bit_matrix)` equals the MSB-first
+    sign-bit-pack of d, because sign(p) = sign(d) and bit_matrix is ±1. This
+    is the invariant TinyMHLut(soft, bf16_argmax=False) exploits to skip the
+    einsum in forward. Test guards against any future change to bit_matrix
+    or sign-pack convention.
+    """
+    dev = torch.device("cuda:0")
+    from spiky.lutorch.tiny_multi_head_lut import (
+        _soft_bit_matrix_msb, _msb_powers,
+    )
+    for NAP in (4, 6, 8):
+        K = 1 << NAP
+        bm = _soft_bit_matrix_msb(NAP, dev, dtype=torch.float32)
+        powers = _msb_powers(NAP, dev)
+        torch.manual_seed(NAP)
+        d = torch.randn(1024, NAP, device=dev)
+        p = d / (0.5 + d.abs())
+        ts = torch.einsum("bp,pk->bk", p, bm)
+        idx_einsum = ts.argmax(dim=-1)
+        bits = (d > 0).to(torch.int64)
+        idx_bitpack = (bits * powers).sum(dim=-1)
+        assert torch.equal(idx_einsum, idx_bitpack), \
+            f"NAP={NAP}: argmax mismatch ({(idx_einsum != idx_bitpack).sum().item()}/{d.shape[0]})"
