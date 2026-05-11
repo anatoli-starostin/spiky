@@ -464,7 +464,8 @@ def _multi_alt_fwd_body(
 def _multi_alt_bwd_body(
     grad_out, weights, x, batch_offset, anchor_a_long, anchor_b_long,
     table_arange, table_flat,
-    lookup_indices, n_heads, tables_per_head, n_alternatives,
+    lookup_indices, log_uncertainty_T,
+    n_heads, tables_per_head, n_alternatives,
 ):
     """Fused multi-alt backward — everything inside @torch.compile, no
     [B, T, K] structured-bmm intermediate.
@@ -543,10 +544,17 @@ def _multi_alt_bwd_body(
     weights_grad_flat = torch.zeros(n_lookup_tables * table_dim, n_outputs, dtype=weights.dtype, device=weights.device)
     weights_grad_flat.index_add_(0, indices_main, grad_per_table.reshape(-1, n_outputs))
 
-    # x.grad via inverse-L1 uncertainty.
+    # x.grad via inverse-L1 uncertainty u(d) = 0.5 / (T + |d|).
+    #   du/dd = -0.5 · sign(d) / (T + |d|)²
+    # T = exp(log_uncertainty_T) is learnable (controls breakpoint, shapes
+    # relative weighting across alts — Adam can't reproduce that).
+    # β=0.5 is hardcoded: it's a uniform multiplicative scale on x.grad and
+    # Adam's per-parameter second-moment normalisation absorbs its effect.
+    T = log_uncertainty_T.exp()
     grad_diff = grad_main.unsqueeze(2) - grad_alt
-    one_plus_abs = 1.0 + lookup_alt_deltas.abs()
-    minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() / (one_plus_abs * one_plus_abs)
+    T_plus_abs = T + lookup_alt_deltas.abs()
+    inv_denom_sq = 1.0 / (T_plus_abs * T_plus_abs)
+    minus_uncertainty_derivative = 0.5 * lookup_alt_deltas.sign() * inv_denom_sq
     du = grad_diff * minus_uncertainty_derivative
     if n_alternatives > 1:
         du = du / n_alternatives
@@ -557,7 +565,16 @@ def _multi_alt_bwd_body(
     x_grad.scatter_add_(1, anchor1_ids.reshape(B, -1), du.reshape(B, -1))
     x_grad.scatter_add_(1, anchor2_ids.reshape(B, -1), -du.reshape(B, -1))
 
-    return weights_grad_flat.view(weights.shape), x_grad
+    # Gradient for log_uncertainty_T via the "imaginary smooth forward"
+    # trick (same pattern soft mode uses for log_T_soft / log_T_sel):
+    #   ∂L/∂T = (1/n_alt) · Σ (grad_alt - grad_main) · (-0.5)/(T+|d|)²
+    #   grad_log_T = T · ∂L/∂T
+    # In our code grad_diff = grad_main - grad_alt = -(grad_alt - grad_main),
+    # giving the formula below.
+    n_alt_div = float(n_alternatives) if n_alternatives > 1 else 1.0
+    grad_log_uncertainty_T = (T * 0.5 / n_alt_div) * (grad_diff * inv_denom_sq).sum()
+
+    return weights_grad_flat.view(weights.shape), x_grad, grad_log_uncertainty_T
 
 
 def _noisy_xor_postprocess(
@@ -618,7 +635,8 @@ class _TinyMHLutMultiAlt(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, x, weights, anchor_a_long, anchor_b_long,
+    def forward(ctx, x, weights, log_uncertainty_T,
+                anchor_a_long, anchor_b_long,
                 powers_mult, table_arange, eb_offsets,
                 n_alternatives, batch_offset, table_flat,
                 n_heads, tables_per_head, argmax_noise_eps):
@@ -630,7 +648,8 @@ class _TinyMHLutMultiAlt(torch.autograd.Function):
             n_heads, tables_per_head, argmax_noise_eps,
         )
 
-        ctx.save_for_backward(x, weights, lookup_indices, flip_mask)
+        ctx.save_for_backward(x, weights, lookup_indices, flip_mask,
+                              log_uncertainty_T)
         ctx.n_heads = n_heads
         ctx.tables_per_head = tables_per_head
         ctx.n_alternatives = n_alternatives
@@ -643,7 +662,8 @@ class _TinyMHLutMultiAlt(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_out):
-        x, weights, lookup_indices, _flip_mask = ctx.saved_tensors
+        (x, weights, lookup_indices, _flip_mask,
+         log_uncertainty_T) = ctx.saved_tensors
         n_heads = ctx.n_heads
         tph = ctx.tables_per_head
 
@@ -653,15 +673,19 @@ class _TinyMHLutMultiAlt(torch.autograd.Function):
         # All alt_* computation and scatters fuse into a single @torch.compile
         # region (manual top-k via sequential argmin, fancy gather + mul + sum
         # as fused triplet, no [B, T, K] structured-bmm intermediate).
-        weights_grad, x_grad = _multi_alt_bwd_body(
+        weights_grad, x_grad, grad_log_T = _multi_alt_bwd_body(
             grad_out, weights, x, ctx.batch_offset,
             ctx.anchor_a_long, ctx.anchor_b_long,
             ctx.table_arange, ctx.table_flat,
-            lookup_indices, n_heads, tph, ctx.n_alternatives,
+            lookup_indices, log_uncertainty_T,
+            n_heads, tph, ctx.n_alternatives,
         )
 
-        # 13 forward inputs -> 13 grad returns.
-        return (x_grad, weights_grad,
+        # 14 forward inputs (x, weights, log_T, anchor_a, anchor_b,
+        # powers_mult, table_arange, eb_offsets, n_alternatives, batch_offset,
+        # table_flat, n_heads, tables_per_head, argmax_noise_eps) -> 14
+        # grad returns. Only x, weights, log_T get real grads.
+        return (x_grad, weights_grad, grad_log_T,
                 None, None, None, None, None, None, None, None, None, None, None)
 
 
@@ -680,36 +704,27 @@ class _TinyMHLutMultiAlt(torch.autograd.Function):
 
 @torch.compile
 def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
-                        bit_matrix, T_soft, n_heads, tph, table_dim,
-                        bf16_argmax, noise_eps):
+                        bit_matrix, T_soft, n_heads, tph, table_dim, noise_eps):
     """Compiled forward.
 
-    bf16_argmax=False — fastest. fp32 sign(x_a - x_b) bit-pack for index.
-    bf16_argmax=True  — match SoftMHLut(use_bf16=True): compute bf16
-                        ts = einsum(p, bm) under bf16 autocast, argmax it.
+    fp32 sign(x_a - x_b) bit-pack for the index (provably equal to
+    argmax(soft_ts) at fp32 — see test_softmhlut_argmax_equals_signbit_pack_at_fp32).
 
-    noise_eps > 0: when in fp32 sign-bit-pack path, RANDOMLY flip the bit at
-                   positions where |d[i]| < noise_eps. This injects structured
-                   noise on low-confidence comparisons — testing the
-                   hypothesis that bf16's argmax regularization is doing this
-                   implicitly. Ignored when bf16_argmax=True.
+    noise_eps > 0: RANDOMLY flip the bit at positions where |d[i]| < noise_eps.
+    This injects structured noise on low-confidence comparisons — the explicit
+    replacement for bf16's implicit argmax regularisation.
     """
     B, _ = x.shape
     n_tables = anchor_a_long.shape[0]
     n_outputs = weights.shape[2]
     d = x[:, anchor_a_long] - x[:, anchor_b_long]
-    if bf16_argmax:
-        p = d / (T_soft + d.abs())
-        ts = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
-        index = ts.argmax(dim=-1)
-    else:
-        bits = (d > 0).to(torch.int64)
-        if noise_eps > 0.0:
-            # At low-confidence bits (|d| < noise_eps), flip with 50% probability.
-            rand_bits = torch.empty_like(d).bernoulli_(0.5).to(torch.int64)
-            low_conf = (d.abs() < noise_eps)
-            bits = torch.where(low_conf, rand_bits, bits)
-        index = (bits * powers.view(1, 1, -1)).sum(dim=-1)
+    bits = (d > 0).to(torch.int64)
+    if noise_eps > 0.0:
+        # At low-confidence bits (|d| < noise_eps), flip with 50% probability.
+        rand_bits = torch.empty_like(d).bernoulli_(0.5).to(torch.int64)
+        low_conf = (d.abs() < noise_eps)
+        bits = torch.where(low_conf, rand_bits, bits)
+    index = (bits * powers.view(1, 1, -1)).sum(dim=-1)
     weights_flat = weights.view(n_tables * table_dim, n_outputs)
     table_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * table_dim
     flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
@@ -797,8 +812,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weights, log_T_soft, log_T_sel,
                 anchor_a_long, anchor_b_long, bit_matrix, powers,
-                n_heads, tph, table_dim, use_bf16, argmax_noise_eps,
-                bf16_argmax):
+                n_heads, tph, table_dim, use_bf16, argmax_noise_eps):
         T_soft = log_T_soft.exp()
         T_sel  = log_T_sel.exp()
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
@@ -807,7 +821,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
         with autocast_ctx:
             out, index = _soft_lut_fwd_body(
                 x, weights, anchor_a_long, anchor_b_long, powers,
-                bit_matrix, T_soft, n_heads, tph, table_dim, bool(bf16_argmax),
+                bit_matrix, T_soft, n_heads, tph, table_dim,
                 float(argmax_noise_eps),
             )
         ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
@@ -832,7 +846,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
                 index, T_soft, T_sel, ctx.n_heads, ctx.tph,
             )
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
-                None, None, None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None)
 
 
 class TinyMultiHeadLut(nn.Module):
@@ -884,8 +898,14 @@ class TinyMultiHeadLut(nn.Module):
         learnable_temps: bool = False,
         use_bf16: bool = True,
         argmax_noise_eps: float = 0.0,
-        bf16_argmax: bool = False,
         n_alternatives: int = 1,
+        # Multi-alt STE: u(d) = β / (T + |d|). T is a learnable temperature
+        # (when `learnable_temps=True`) controlling the gradient breakpoint
+        # — shapes the relative weighting across alts, which Adam can't
+        # reproduce. β is hardcoded to 0.5 (matches the legacy multi-alt
+        # default): it's a uniform multiplicative scale on x.grad and Adam's
+        # per-parameter second-moment normalisation absorbs its effect.
+        uncertainty_T_init: float = 1.0,
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -1027,7 +1047,6 @@ class TinyMultiHeadLut(nn.Module):
         self.backward_mode = backward_mode
         self.use_bf16 = bool(use_bf16)
         self.argmax_noise_eps = float(argmax_noise_eps)
-        self.bf16_argmax = bool(bf16_argmax)
         self.n_alternatives = int(n_alternatives)
         if self.n_alternatives < 1:
             raise ValueError(f"n_alternatives must be >= 1, got {self.n_alternatives}")
@@ -1079,6 +1098,24 @@ class TinyMultiHeadLut(nn.Module):
             self._multialt_batch_offset = None       # lazily built on first forward
             self._multialt_eb_offsets = None         # embedding_bag offsets cache
             self._multialt_table_flat = None         # arange(n_lookup_tables).repeat(B)
+
+            # Uncertainty kernel: u(d) = β / (T + |d|), with β = 0.5 fixed
+            # (hardcoded in `_multi_alt_bwd_body`) and T learnable when
+            # `learnable_temps=True`. Adam's per-parameter second-moment
+            # normalisation absorbs β's uniform-scale effect, so learning
+            # it doesn't change effective dynamics — only T shapes the
+            # gradient direction (relative weighting across alts).
+            self.multialt_learnable_temps = bool(learnable_temps)
+            log_T_init = math.log(float(uncertainty_T_init))
+            if self.multialt_learnable_temps:
+                self.log_uncertainty_T = nn.Parameter(
+                    torch.tensor(log_T_init, dtype=torch.float32, device=dev)
+                )
+            else:
+                self.register_buffer(
+                    "log_uncertainty_T",
+                    torch.tensor(log_T_init, dtype=torch.float32, device=dev),
+                )
         if backward_mode == "soft":
             if sparse_scatter_n_outputs is not None:
                 raise NotImplementedError(
@@ -1136,7 +1173,7 @@ class TinyMultiHeadLut(nn.Module):
             self.soft_anchor_a_long, self.soft_anchor_b_long,
             self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
-            self.argmax_noise_eps, self.bf16_argmax,
+            self.argmax_noise_eps,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -1194,6 +1231,7 @@ class TinyMultiHeadLut(nn.Module):
                 self._multialt_table_flat = self._multialt_table_arange.repeat(B).contiguous()
             return _TinyMHLutMultiAlt.apply(
                 x, self.weights,
+                self.log_uncertainty_T,
                 self._multialt_anchor_a_long, self._multialt_anchor_b_long,
                 self._multialt_powers_mult, self._multialt_table_arange,
                 self._multialt_eb_offsets,

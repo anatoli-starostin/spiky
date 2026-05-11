@@ -867,7 +867,6 @@ def test_aligned_local_scatter_forward_backward():
 #   - forward output equality with SoftMHLut(hard=True) at fp32
 #   - gradient parity with SoftMHLut(hard=True) at fp32
 #   - argmax_noise_eps: forward changes stochastically, grads stay finite
-#   - bf16_argmax flag: forward matches SoftMHLut(use_bf16=True)
 #   - learnable temperatures receive non-zero gradients
 #   - argmax invariant: signbit-pack == argmax(einsum(p, bit_matrix)) at fp32
 
@@ -967,7 +966,7 @@ def test_soft_backward_mode_forward_matches_softmhlut_fp32():
         tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
         anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
         backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
-        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+        learnable_temps=True, use_bf16=False,
         argmax_noise_eps=0.0,
     ).to(dev)
     soft = _soft_mhlut_match_tiny(tiny, use_bf16=False)
@@ -991,7 +990,7 @@ def test_soft_backward_mode_gradients_match_softmhlut_fp32():
         tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
         anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
         backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
-        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+        learnable_temps=True, use_bf16=False,
         argmax_noise_eps=0.0,
     ).to(dev)
     soft = _soft_mhlut_match_tiny(tiny, use_bf16=False)
@@ -1031,7 +1030,7 @@ def test_soft_backward_mode_noise_changes_forward_but_gradients_stay_finite():
         tables_per_head=4, weight_dtype=torch.float32, random_seed=0, device=dev,
         anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
         backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
-        learnable_temps=True, use_bf16=False, bf16_argmax=False,
+        learnable_temps=True, use_bf16=False,
     )
     m_no_noise = TinyMultiHeadLut(argmax_noise_eps=0.0, **common).to(dev)
     m_noise    = TinyMultiHeadLut(argmax_noise_eps=0.5, **common).to(dev)
@@ -1057,28 +1056,6 @@ def test_soft_backward_mode_noise_changes_forward_but_gradients_stay_finite():
     assert torch.isfinite(m_noise.weights.grad).all()
     assert torch.isfinite(m_noise.log_soft_score_temp.grad).all()
     assert torch.isfinite(m_noise.log_select_temp.grad).all()
-
-
-@pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
-def test_soft_backward_mode_bf16_argmax_matches_softmhlut_bf16():
-    """bf16_argmax=True + use_bf16=True: forward output matches SoftMHLut(use_bf16=True)."""
-    dev = torch.device("cuda:0")
-    torch.manual_seed(0)
-    tiny = TinyMultiHeadLut(
-        input_dim=64, n_heads=4, n_outputs=8, n_anchor_pairs=6,
-        tables_per_head=16, weight_dtype=torch.float32, random_seed=0, device=dev,
-        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-        backward_mode='soft', soft_score_temp=0.5, select_temp=0.5,
-        learnable_temps=True, use_bf16=True, bf16_argmax=True,
-        argmax_noise_eps=0.0,
-    ).to(dev)
-    soft = _soft_mhlut_match_tiny(tiny, use_bf16=True)
-    x = torch.randn(64, 64, device=dev)
-    out_tiny = tiny(x.clone())
-    out_soft = soft(x.clone())
-    # bf16 argmax in both → same rows picked → forward output within bf16 noise.
-    rel = (out_tiny - out_soft).abs().max() / out_tiny.abs().max().clamp(min=1e-12)
-    assert rel.item() < 1e-2, f"bf16_argmax forward rel mismatch: {rel.item()}"
 
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs CUDA")
@@ -1110,7 +1087,7 @@ def test_soft_backward_mode_temperature_gradients_nontrivial():
 def test_softmhlut_argmax_equals_signbit_pack_at_fp32():
     """At fp32, argmax of `ts = einsum(p, bit_matrix)` equals the MSB-first
     sign-bit-pack of d, because sign(p) = sign(d) and bit_matrix is ±1. This
-    is the invariant TinyMHLut(soft, bf16_argmax=False) exploits to skip the
+    is the invariant TinyMHLut(soft) exploits to skip the
     einsum in forward. Test guards against any future change to bit_matrix
     or sign-pack convention.
     """
