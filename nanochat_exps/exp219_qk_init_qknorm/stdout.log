@@ -1,0 +1,33 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 339,545,862
+Q/K Joint MHLut: in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.02 [no V2D, q_norm+k_norm -> SDPA]
+V MHLut:         in_nap=8 tph=256 d_v=24 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+Attention:       SDPA (causal); Q pre-scaled by learnable attn_scale, SDPA default 1/sqrt(d_qk=64)=0.1250 applied
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4193 | lr=3.75e-07
+step    100 | loss=9.3721 | lr=3.75e-05
+step    200 | loss=8.3057 | lr=7.50e-05
+[VAL] step 200: bpb=2.3682
+step    300 | loss=7.8846 | lr=1.12e-04
+step    400 | loss=7.6016 | lr=1.50e-04
+[VAL] step 400: bpb=2.2604
+step    500 | loss=7.3564 | lr=1.87e-04
+step    600 | loss=7.2124 | lr=2.25e-04
+[VAL] step 600: bpb=2.1698
+step    700 | loss=7.0951 | lr=2.62e-04
+step    800 | loss=6.9835 | lr=3.00e-04
+[VAL] step 800: bpb=2.1125
+step    900 | loss=6.8889 | lr=3.00e-04
+step   1000 | loss=6.8134 | lr=2.99e-04
+[VAL] step 1000: bpb=2.0615
+step   1100 | loss=6.7482 | lr=2.99e-04
+step   1200 | loss=6.6758 | lr=2.98e-04
+[VAL] step 1200: bpb=2.0175
+step   1300 | loss=6.5842 | lr=2.97e-04
+step   1400 | loss=6.5173 | lr=2.95e-04
+[VAL] step 1400: bpb=1.9694
+step   1500 | loss=6.4477 | lr=2.94e-04
+step   1600 | loss=6.3575 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9309

@@ -1,0 +1,26 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model + inheriting residual anchors:
+  layer 1: inherited first 512/1024 residual anchor pairs from layer 0
+  layer 2: inherited first 1024/1536 residual anchor pairs from layer 1
+  layer 3: inherited first 1536/2048 residual anchor pairs from layer 2
+  layer 4: inherited first 2048/2560 residual anchor pairs from layer 3
+  layer 5: inherited first 2560/3072 residual anchor pairs from layer 4
+Total params (all fp32): 176,527,238
+Q/K Joint MHLut: in_nap=6 tph=256 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=7 tph=256 d_v=16 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=1024 (n_outputs=E=96)
+residual MHLut:  in_nap=6 tph_factor=512 (per layer i: in=(i+1)*E, tph=512*(i+1))
+Unembedder MLP:  LN(96) -> Linear(96,384) -> ReLU -> Linear(384,VOCAB)
+Residual concat order: INVERSE [*prev_xs, x] (oldest at front, current x at tail)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4214 | lr=3.75e-07
+step    100 | loss=10.2191 | lr=3.75e-05
+step    200 | loss=9.5567 | lr=7.50e-05
+[VAL] step 200: bpb=2.5878
+step    300 | loss=8.3009 | lr=1.12e-04
+step    400 | loss=7.5537 | lr=1.50e-04
+[VAL] step 400: bpb=2.1495
+step    500 | loss=7.1294 | lr=1.87e-04
+step    600 | loss=6.9252 | lr=2.25e-04
+[VAL] step 600: bpb=2.0639

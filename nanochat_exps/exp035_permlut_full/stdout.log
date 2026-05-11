@@ -1,0 +1,38 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+PermutationalLut modules: 24
+PermutationalLut params:  171,966,464
+Adam-managed (all) params: 186,878,982
+Q/K PermLut: in_nap=5 out_nap=24 tph=512 d_qk=32 P_qk=496
+V PermLut:   in_nap=5 out_nap=16 tph=512 d_v=16 P_v=120
+Out PermLut: in_nap=8 out_nap=32 tph=[4096, 4096, 2048, 2048, 2048, 2048]
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5454 | lr=3.75e-07
+step    100 | loss=9.9130 | lr=3.75e-05
+step    200 | loss=8.9631 | lr=7.50e-05
+[VAL] step 200: bpb=2.4448
+step    300 | loss=8.1441 | lr=1.12e-04
+step    400 | loss=7.7455 | lr=1.50e-04
+[VAL] step 400: bpb=2.2957
+step    500 | loss=7.5054 | lr=1.87e-04
+step    600 | loss=7.3802 | lr=2.25e-04
+[VAL] step 600: bpb=2.2274
+step    700 | loss=7.2757 | lr=2.62e-04
+step    800 | loss=7.1733 | lr=3.00e-04
+[VAL] step 800: bpb=2.1692
+step    900 | loss=7.0831 | lr=3.00e-04
+step   1000 | loss=7.0032 | lr=2.99e-04
+[VAL] step 1000: bpb=2.1158
+step   1100 | loss=6.9262 | lr=2.99e-04
+step   1200 | loss=6.8484 | lr=2.98e-04
+[VAL] step 1200: bpb=2.0676
+step   1300 | loss=6.7624 | lr=2.97e-04
+step   1400 | loss=6.7158 | lr=2.95e-04
+[VAL] step 1400: bpb=2.0366
+step   1500 | loss=6.6749 | lr=2.94e-04
+step   1600 | loss=6.6052 | lr=2.92e-04
+[VAL] step 1600: bpb=2.0109
+step   1700 | loss=6.5794 | lr=2.90e-04
+step   1800 | loss=6.5520 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9967
+step   1900 | loss=6.5338 | lr=2.85e-04

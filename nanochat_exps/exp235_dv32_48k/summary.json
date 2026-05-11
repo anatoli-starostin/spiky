@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp235_dv32_48k",
+  "best_val_bpb": 1.4906340292955853,
+  "final_val_bpb": 1.4911307097126685,
+  "n_params": 358420224,
+  "training_time_hours": 4.089
+}

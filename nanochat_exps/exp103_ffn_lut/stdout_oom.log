@@ -1,0 +1,52 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model:
+Total params (all fp32): 133,343,750
+Q/K Joint SparseLut: in_nap=8 tph=384 n_sparse=8 -> 2*d_qk=64 (per head, H=6)
+V SparseLut:         in_nap=8 tph=384 n_sparse=8 -> d_v=64 (per head, H=6)
+out_proj SparseLut:  in_nap=8 tph=2048 n_sparse=8 -> E=384
+ffn SparseLut:       in_nap=8 tph=2048 n_sparse=8 (E=384 -> E)
+Residual:        attention skip + LN, then ffn skip + LN
+Unembedder:      LN(384) -> Linear(384,VOCAB)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+Traceback (most recent call last):
+  File "/home/starost/spiky/nanochat_exps/exp103_ffn_lut/train.py", line 332, in <module>
+    loss = model(x, targets=y)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp103_ffn_lut/train.py", line 259, in forward
+    x = layer(x, pos_emb)
+        ^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp103_ffn_lut/train.py", line 227, in forward
+    ffn_out = self.ffn_lut(attn_out.reshape(B * T, E)).squeeze(1).reshape(B, T, E)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp103_ffn_lut/train.py", line 124, in forward
+    return self.scatter(self.lut(x))  # [B, n_heads, n_outputs]
+                        ^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/src/spiky/lutorch/multi_head_lut.py", line 403, in forward
+    self._internal_loss = (self.uncertainty_bias / (1.0 + lookup_alt_deltas.abs())).mean()
+                                                          ^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 96.00 MiB. GPU 0 has a total capacity of 79.18 GiB of which 60.56 MiB is free. Process 592252 has 40.98 GiB memory in use. Including non-PyTorch memory, this process has 38.12 GiB memory in use. Of the allocated memory 37.37 GiB is allocated by PyTorch, and 161.22 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

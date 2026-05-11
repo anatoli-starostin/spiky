@@ -1,0 +1,61 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 392,005,126
+Q/K Joint MHLut: in_nap=8 tph=384 d_qk=16 (n_outputs=2*d_qk=32)
+V MHLut:         in_nap=8 tph=256 d_v=16 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=3056 (n_outputs=E=64) + LayerNorm
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/_inductor/compile_fx.py:236: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+step      1 | loss=10.5771 | lr=3.75e-07
+step    100 | loss=9.9220 | lr=3.75e-05
+step    200 | loss=8.9670 | lr=7.50e-05
+[VAL] step 200: bpb=2.4430
+step    300 | loss=8.1294 | lr=1.12e-04
+step    400 | loss=7.7057 | lr=1.50e-04
+[VAL] step 400: bpb=2.2723
+step    500 | loss=7.4338 | lr=1.87e-04
+step    600 | loss=7.2412 | lr=2.25e-04
+[VAL] step 600: bpb=2.1531
+step    700 | loss=7.0614 | lr=2.62e-04
+step    800 | loss=6.9103 | lr=3.00e-04
+[VAL] step 800: bpb=2.0793
+step    900 | loss=6.7961 | lr=3.00e-04
+step   1000 | loss=6.7143 | lr=2.99e-04
+[VAL] step 1000: bpb=2.0272
+step   1100 | loss=6.6501 | lr=2.99e-04
+step   1200 | loss=6.5903 | lr=2.98e-04
+[VAL] step 1200: bpb=1.9964
+step   1300 | loss=6.5252 | lr=2.97e-04
+step   1400 | loss=6.4964 | lr=2.95e-04
+[VAL] step 1400: bpb=1.9732
+step   1500 | loss=6.4662 | lr=2.94e-04
+step   1600 | loss=6.4084 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9555
+step   1700 | loss=6.3910 | lr=2.90e-04
+step   1800 | loss=6.3695 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9425
+step   1900 | loss=6.3513 | lr=2.85e-04
+step   2000 | loss=6.3245 | lr=2.82e-04
+[VAL] step 2000: bpb=1.9311
+step   2100 | loss=6.2889 | lr=2.79e-04
+step   2200 | loss=6.2682 | lr=2.76e-04
+[VAL] step 2200: bpb=1.9196
+step   2300 | loss=6.2495 | lr=2.72e-04
+step   2400 | loss=6.2427 | lr=2.68e-04
+[VAL] step 2400: bpb=1.9087
+step   2500 | loss=6.2262 | lr=2.65e-04
+step   2600 | loss=6.2132 | lr=2.60e-04
+[VAL] step 2600: bpb=1.8953
+step   2700 | loss=6.1787 | lr=2.56e-04
+step   2800 | loss=6.1688 | lr=2.52e-04
+[VAL] step 2800: bpb=1.8864
+step   2900 | loss=6.1433 | lr=2.47e-04
+step   3000 | loss=6.1281 | lr=2.42e-04
+[VAL] step 3000: bpb=1.8735
+step   3100 | loss=6.1111 | lr=2.38e-04
+step   3200 | loss=6.0947 | lr=2.32e-04
+[VAL] step 3200: bpb=1.8594
+step   3300 | loss=6.0819 | lr=2.27e-04
+step   3400 | loss=6.0441 | lr=2.22e-04
+[VAL] step 3400: bpb=1.8496

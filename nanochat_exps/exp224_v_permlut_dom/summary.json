@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp224_v_permlut_dom",
+  "best_val_bpb": 1.6279115450268364,
+  "final_val_bpb": 1.6282103980914033,
+  "n_params": 339546144,
+  "training_time_hours": 0.752
+}

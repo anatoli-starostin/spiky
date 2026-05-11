@@ -1,0 +1,33 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 358,420,254
+Q/K Joint TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 [no V2D, q_norm+k_norm -> SDPA]
+V TinyMHLut(ste, n_alt=3, noise_eps=0.002):       in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj TinyMHLut(ste, n_alt=3, noise_eps=0.002): in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+V2D out:         init_T=0.1 learnable=True
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tracking 30 learnable temperatures in temperatures.csv
+Tokens/micro-batch: 16,384 | grad_accum: 1 | effective batch: 16,384 tokens
+step      1 | loss=10.4151 | lr=3.75e-07
+step    100 | loss=9.3245 | lr=3.75e-05
+step    200 | loss=8.0722 | lr=7.50e-05
+[VAL] step 200: bpb=2.1607
+step    300 | loss=7.2018 | lr=1.12e-04
+step    400 | loss=6.7052 | lr=1.50e-04
+[VAL] step 400: bpb=1.9615
+step    500 | loss=6.3896 | lr=1.87e-04
+step    600 | loss=6.1446 | lr=2.25e-04
+[VAL] step 600: bpb=1.8417
+step    700 | loss=5.9671 | lr=2.62e-04
+step    800 | loss=5.8261 | lr=3.00e-04
+[VAL] step 800: bpb=1.7780
+step    900 | loss=5.7126 | lr=3.00e-04
+step   1000 | loss=5.6039 | lr=2.99e-04
+[VAL] step 1000: bpb=1.7220
+step   1100 | loss=5.5351 | lr=2.99e-04
+step   1200 | loss=5.4674 | lr=2.98e-04
+[VAL] step 1200: bpb=1.6848
+step   1300 | loss=5.3998 | lr=2.97e-04
+step   1400 | loss=5.3482 | lr=2.95e-04
+[VAL] step 1400: bpb=1.6543
+step   1500 | loss=5.3036 | lr=2.94e-04

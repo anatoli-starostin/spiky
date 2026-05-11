@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp234_dv32",
+  "best_val_bpb": 1.6212155702189712,
+  "final_val_bpb": 1.6213627087124798,
+  "n_params": 358420224,
+  "training_time_hours": 0.68
+}

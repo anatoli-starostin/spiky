@@ -1,0 +1,19 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 301,797,120
+Q/K Joint SoftLUT: in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 T_soft=0.01 T_sel=1.0 [no V2D, q_norm+k_norm -> SDPA]
+V SoftLUT:       in_nap=6 tph=256 d_v=32 (n_outputs=d_v)
+out_proj SoftLUT: in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4225 | lr=3.75e-07
+step    100 | loss=9.3753 | lr=3.75e-05
+step    200 | loss=8.2542 | lr=7.50e-05
+[VAL] step 200: bpb=2.3245
+step    300 | loss=7.7597 | lr=1.12e-04
+step    400 | loss=7.4968 | lr=1.50e-04
+[VAL] step 400: bpb=2.2370
+step    500 | loss=7.3078 | lr=1.87e-04
+step    600 | loss=7.2080 | lr=2.25e-04
+[VAL] step 600: bpb=2.1795
+step    700 | loss=7.1167 | lr=2.62e-04

@@ -1,0 +1,20 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Traceback (most recent call last):
+  File "/home/starost/spiky/nanochat_exps/exp125_sparse_scatter/train.py", line 243, in <module>
+    model = Model().to(DEVICE)
+            ^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp125_sparse_scatter/train.py", line 216, in __init__
+    self.layers = nn.ModuleList([LUTBlock(i) for i in range(N_LAYERS)])
+                                 ^^^^^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp125_sparse_scatter/train.py", line 155, in __init__
+    self.v_lut    = _make_v(layer_idx, 200 + layer_idx)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/nanochat_exps/exp125_sparse_scatter/train.py", line 118, in _make_v
+    return TinyMultiHeadLut(
+           ^^^^^^^^^^^^^^^^^
+  File "/home/starost/spiky/src/spiky/lutorch/tiny_multi_head_lut.py", line 433, in __init__
+    _balanced_coverage_indices(
+  File "/home/starost/spiky/src/spiky/lutorch/tiny_multi_head_lut.py", line 239, in _balanced_coverage_indices
+    raise RuntimeError(
+RuntimeError: Balanced coverage greedy failed after 32 retries (n_tables=256, n_per_row=8, n_slots=16).

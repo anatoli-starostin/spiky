@@ -1,0 +1,30 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 358,420,224
+Q/K Joint SoftLUT: in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 T_soft=0.5 T_sel=0.1 [no V2D, q_norm+k_norm -> SDPA]
+V SoftLUT:       in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj SoftLUT: in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4124 | lr=3.75e-07
+step    100 | loss=9.3642 | lr=3.75e-05
+step    200 | loss=8.2108 | lr=7.50e-05
+W0510 14:40:28.160000 2341766 torch/_dynamo/convert_frame.py:964] [0/8] torch._dynamo hit config.recompile_limit (8)
+W0510 14:40:28.160000 2341766 torch/_dynamo/convert_frame.py:964] [0/8]    function: 'forward' (/home/starost/spiky/src/spiky/lutorch/soft_multi_head_lut.py:160)
+W0510 14:40:28.160000 2341766 torch/_dynamo/convert_frame.py:964] [0/8]    last reason: 0/5: tensor 'self._buffers['bit_matrix']' size mismatch at index 0. expected 6, actual 8
+W0510 14:40:28.160000 2341766 torch/_dynamo/convert_frame.py:964] [0/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0510 14:40:28.160000 2341766 torch/_dynamo/convert_frame.py:964] [0/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html.
+[VAL] step 200: bpb=2.2932
+step    300 | loss=7.5234 | lr=1.12e-04
+step    400 | loss=7.0814 | lr=1.50e-04
+[VAL] step 400: bpb=2.0657
+step    500 | loss=6.8221 | lr=1.87e-04
+step    600 | loss=6.7048 | lr=2.25e-04
+[VAL] step 600: bpb=2.0157
+step    700 | loss=6.6220 | lr=2.62e-04
+step    800 | loss=6.5504 | lr=3.00e-04
+[VAL] step 800: bpb=1.9872
+step    900 | loss=6.4995 | lr=3.00e-04
+step   1000 | loss=6.4587 | lr=2.99e-04
+[VAL] step 1000: bpb=1.9623
+step   1100 | loss=6.4266 | lr=2.99e-04

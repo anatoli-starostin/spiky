@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp237_no_rank_canon_48k",
+  "best_val_bpb": 1.480280360501956,
+  "final_val_bpb": 1.4803758714538828,
+  "n_params": 358420224,
+  "training_time_hours": 3.503
+}

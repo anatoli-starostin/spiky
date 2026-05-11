@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp260_tinymhlut_soft_48k",
+  "best_val_bpb": 1.4643688695217014,
+  "final_val_bpb": 1.4654942325928675,
+  "n_params": 358420266,
+  "training_time_hours": 4.048
+}

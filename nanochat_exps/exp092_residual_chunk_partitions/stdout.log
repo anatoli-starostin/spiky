@@ -1,0 +1,66 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model + inheriting residual anchors:
+  layer 1: inherited first 256/512 residual anchor pairs from layer 0
+  layer 2: inherited first 512/768 residual anchor pairs from layer 1
+  layer 3: inherited first 768/1024 residual anchor pairs from layer 2
+  layer 4: inherited first 1024/1280 residual anchor pairs from layer 3
+  layer 5: inherited first 1280/1536 residual anchor pairs from layer 4
+Total params (all fp32): 143,497,094
+Param groups: lut=127,401,984 (lr=0.001, wd=0) | decay=16,060,416 (lr=0.0003, wd=0.1) | nodecay=34,694 (lr=0.0003, wd=0)
+Q/K Joint MHLut: in_nap=6 tph=256 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=7 tph=256 d_v=16 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=1024 (n_outputs=E=96)
+residual MHLut:  in_nap=6 tph_factor=256 (per layer i: in=(i+1)*E, tph=256*(i+1))
+Unembedder MLP:  LN(96) -> Linear(96,384) -> ReLU -> Linear(384,VOCAB)
+Residual concat order: INVERSE [*prev_xs, x] (oldest at front, current x at tail)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4207 | lr_scale=0.001 (lut=1.25e-06, base=3.75e-07)
+step    100 | loss=10.2106 | lr_scale=0.125 (lut=1.25e-04, base=3.75e-05)
+step    200 | loss=9.5587 | lr_scale=0.250 (lut=2.50e-04, base=7.50e-05)
+[VAL] step 200: bpb=2.5922
+step    300 | loss=8.3136 | lr_scale=0.375 (lut=3.75e-04, base=1.12e-04)
+step    400 | loss=7.5909 | lr_scale=0.500 (lut=5.00e-04, base=1.50e-04)
+[VAL] step 400: bpb=2.1742
+step    500 | loss=7.1746 | lr_scale=0.625 (lut=6.25e-04, base=1.87e-04)
+step    600 | loss=6.9728 | lr_scale=0.750 (lut=7.50e-04, base=2.25e-04)
+[VAL] step 600: bpb=2.0771
+step    700 | loss=6.8420 | lr_scale=0.875 (lut=8.75e-04, base=2.62e-04)
+step    800 | loss=6.7314 | lr_scale=1.000 (lut=1.00e-03, base=3.00e-04)
+[VAL] step 800: bpb=2.0345
+step    900 | loss=6.6544 | lr_scale=1.000 (lut=1.00e-03, base=3.00e-04)
+step   1000 | loss=6.5982 | lr_scale=0.998 (lut=9.98e-04, base=2.99e-04)
+[VAL] step 1000: bpb=2.0038
+step   1100 | loss=6.5551 | lr_scale=0.996 (lut=9.96e-04, base=2.99e-04)
+step   1200 | loss=6.5189 | lr_scale=0.993 (lut=9.93e-04, base=2.98e-04)
+[VAL] step 1200: bpb=1.9779
+step   1300 | loss=6.4705 | lr_scale=0.989 (lut=9.89e-04, base=2.97e-04)
+step   1400 | loss=6.4554 | lr_scale=0.985 (lut=9.85e-04, base=2.95e-04)
+[VAL] step 1400: bpb=1.9627
+step   1500 | loss=6.4326 | lr_scale=0.979 (lut=9.79e-04, base=2.94e-04)
+step   1600 | loss=6.3854 | lr_scale=0.973 (lut=9.73e-04, base=2.92e-04)
+[VAL] step 1600: bpb=1.9529
+step   1700 | loss=6.3714 | lr_scale=0.966 (lut=9.66e-04, base=2.90e-04)
+step   1800 | loss=6.3579 | lr_scale=0.958 (lut=9.58e-04, base=2.87e-04)
+[VAL] step 1800: bpb=1.9431
+step   1900 | loss=6.3421 | lr_scale=0.949 (lut=9.49e-04, base=2.85e-04)
+step   2000 | loss=6.3213 | lr_scale=0.940 (lut=9.40e-04, base=2.82e-04)
+[VAL] step 2000: bpb=1.9319
+step   2100 | loss=6.2962 | lr_scale=0.930 (lut=9.30e-04, base=2.79e-04)
+step   2200 | loss=6.2828 | lr_scale=0.919 (lut=9.19e-04, base=2.76e-04)
+[VAL] step 2200: bpb=1.9241
+step   2300 | loss=6.2635 | lr_scale=0.907 (lut=9.07e-04, base=2.72e-04)
+step   2400 | loss=6.2572 | lr_scale=0.895 (lut=8.95e-04, base=2.68e-04)
+[VAL] step 2400: bpb=1.9124
+step   2500 | loss=6.2448 | lr_scale=0.882 (lut=8.82e-04, base=2.65e-04)
+step   2600 | loss=6.2381 | lr_scale=0.868 (lut=8.68e-04, base=2.60e-04)
+[VAL] step 2600: bpb=1.9035
+step   2700 | loss=6.2073 | lr_scale=0.854 (lut=8.54e-04, base=2.56e-04)
+step   2800 | loss=6.1995 | lr_scale=0.839 (lut=8.39e-04, base=2.52e-04)
+[VAL] step 2800: bpb=1.8949
+step   2900 | loss=6.1749 | lr_scale=0.824 (lut=8.24e-04, base=2.47e-04)
+step   3000 | loss=6.1677 | lr_scale=0.808 (lut=8.08e-04, base=2.42e-04)
+[VAL] step 3000: bpb=1.8849
+step   3100 | loss=6.1502 | lr_scale=0.792 (lut=7.92e-04, base=2.38e-04)
+step   3200 | loss=6.1386 | lr_scale=0.775 (lut=7.75e-04, base=2.32e-04)
+[VAL] step 3200: bpb=1.8747

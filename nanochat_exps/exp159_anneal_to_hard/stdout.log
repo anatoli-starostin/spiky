@@ -1,0 +1,145 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 392,005,126
+Q/K Joint MHLut: in_nap=8 tph=384 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=3056 (n_outputs=E=64) + LayerNorm
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5444 | lr=3.75e-07
+step    100 | loss=9.9087 | lr=3.75e-05
+step    200 | loss=8.9559 | lr=7.50e-05
+[VAL] step 200: bpb=2.4381
+step    300 | loss=8.0889 | lr=1.12e-04
+step    400 | loss=7.5078 | lr=1.50e-04
+[VAL] step 400: bpb=2.1567
+step    500 | loss=7.1272 | lr=1.87e-04
+step    600 | loss=6.9333 | lr=2.25e-04
+[VAL] step 600: bpb=2.0644
+step    700 | loss=6.8078 | lr=2.62e-04
+step    800 | loss=6.7105 | lr=3.00e-04
+[VAL] step 800: bpb=2.0294
+step    900 | loss=6.6406 | lr=3.00e-04
+step   1000 | loss=6.5918 | lr=2.99e-04
+[VAL] step 1000: bpb=1.9971
+step   1100 | loss=6.5490 | lr=2.99e-04
+step   1200 | loss=6.5104 | lr=2.98e-04
+[VAL] step 1200: bpb=1.9742
+step   1300 | loss=6.4572 | lr=2.97e-04
+step   1400 | loss=6.4385 | lr=2.95e-04
+[VAL] step 1400: bpb=1.9564
+step   1500 | loss=6.4138 | lr=2.94e-04
+step   1600 | loss=6.3599 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9410
+step   1700 | loss=6.3403 | lr=2.90e-04
+step   1800 | loss=6.3171 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9251
+step   1900 | loss=6.2947 | lr=2.85e-04
+step   2000 | loss=6.2655 | lr=2.82e-04
+[VAL] step 2000: bpb=1.9117
+step   2100 | loss=6.2256 | lr=2.79e-04
+step   2200 | loss=6.2023 | lr=2.76e-04
+[VAL] step 2200: bpb=1.8957
+step   2300 | loss=6.1793 | lr=2.72e-04
+step   2400 | loss=6.1719 | lr=2.68e-04
+[VAL] step 2400: bpb=1.8831
+step   2500 | loss=6.1538 | lr=2.65e-04
+step   2600 | loss=6.1418 | lr=2.60e-04
+[VAL] step 2600: bpb=1.8705
+step   2700 | loss=6.1117 | lr=2.56e-04
+step   2800 | loss=6.1034 | lr=2.52e-04
+[VAL] step 2800: bpb=1.8622
+step   2900 | loss=6.0787 | lr=2.47e-04
+step   3000 | loss=6.0688 | lr=2.42e-04
+[VAL] step 3000: bpb=1.8532
+step   3100 | loss=6.0553 | lr=2.38e-04
+step   3200 | loss=6.0448 | lr=2.32e-04
+[VAL] step 3200: bpb=1.8442
+step   3300 | loss=6.0369 | lr=2.27e-04
+step   3400 | loss=6.0043 | lr=2.22e-04
+[VAL] step 3400: bpb=1.8379
+step   3500 | loss=5.9985 | lr=2.17e-04
+step   3600 | loss=6.0082 | lr=2.11e-04
+[VAL] step 3600: bpb=1.8335
+step   3700 | loss=5.9867 | lr=2.06e-04
+step   3800 | loss=5.9792 | lr=2.00e-04
+[VAL] step 3800: bpb=1.8320
+step   3900 | loss=5.9580 | lr=1.94e-04
+step   4000 | loss=5.9465 | lr=1.88e-04
+[VAL] step 4000: bpb=1.8235
+step   4100 | loss=5.9754 | lr=1.83e-04
+step   4200 | loss=5.9486 | lr=1.77e-04
+[VAL] step 4200: bpb=1.8208
+step   4300 | loss=5.9546 | lr=1.71e-04
+step   4400 | loss=5.9447 | lr=1.65e-04
+[VAL] step 4400: bpb=1.8144
+step   4500 | loss=5.9363 | lr=1.59e-04
+step   4600 | loss=5.9282 | lr=1.53e-04
+[VAL] step 4600: bpb=1.8120
+step   4700 | loss=5.9320 | lr=1.47e-04
+step   4800 | loss=5.9309 | lr=1.42e-04
+[VAL] step 4800: bpb=1.8097
+step   4900 | loss=5.9111 | lr=1.36e-04
+step   5000 | loss=5.9095 | lr=1.30e-04
+[VAL] step 5000: bpb=1.8059
+step   5100 | loss=5.8969 | lr=1.24e-04
+step   5200 | loss=5.8831 | lr=1.19e-04
+[VAL] step 5200: bpb=1.8018
+step   5300 | loss=5.8761 | lr=1.13e-04
+step   5400 | loss=5.8638 | lr=1.08e-04
+[VAL] step 5400: bpb=1.8010
+step   5500 | loss=5.8683 | lr=1.03e-04
+step   5600 | loss=5.8873 | lr=9.75e-05
+[VAL] step 5600: bpb=1.7960
+step   5700 | loss=5.8743 | lr=9.25e-05
+step   5800 | loss=5.8679 | lr=8.76e-05
+[VAL] step 5800: bpb=1.7961
+step   5900 | loss=5.8770 | lr=8.28e-05
+step   6000 | loss=5.8647 | lr=7.82e-05
+[VAL] step 6000: bpb=1.7923
+step   6100 | loss=5.8578 | lr=7.38e-05
+step   6200 | loss=5.8572 | lr=6.95e-05
+[VAL] step 6200: bpb=1.7939
+step   6300 | loss=5.8645 | lr=6.55e-05
+step   6400 | loss=5.8507 | lr=6.16e-05
+[VAL] step 6400: bpb=1.7923
+step   6500 | loss=5.8474 | lr=5.79e-05
+step   6600 | loss=5.8574 | lr=5.44e-05
+[VAL] step 6600: bpb=1.7927
+step   6700 | loss=5.8544 | lr=5.11e-05
+step   6800 | loss=5.8530 | lr=4.81e-05
+[VAL] step 6800: bpb=1.7923
+step   6900 | loss=5.8579 | lr=4.53e-05
+step   7000 | loss=5.8586 | lr=4.26e-05
+[VAL] step 7000: bpb=1.7931
+step   7100 | loss=5.8561 | lr=4.03e-05
+step   7200 | loss=5.8627 | lr=3.81e-05
+[VAL] step 7200: bpb=1.7922
+step   7300 | loss=5.8545 | lr=3.62e-05
+step   7400 | loss=5.8698 | lr=3.46e-05
+[VAL] step 7400: bpb=1.7944
+step   7500 | loss=5.8623 | lr=3.32e-05
+step   7600 | loss=5.8589 | lr=3.21e-05
+[VAL] step 7600: bpb=1.7946
+step   7700 | loss=5.8556 | lr=3.12e-05
+step   7800 | loss=5.8726 | lr=3.05e-05
+[VAL] step 7800: bpb=1.7976
+step   7900 | loss=5.8777 | lr=3.01e-05
+step   8000 | loss=5.8750 | lr=3.00e-05
+[VAL] step 8000: bpb=1.7996
+Traceback (most recent call last):
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/serialization.py", line 965, in save
+    _save(
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1266, in _save
+    zip_file.write_record(name, storage, num_bytes)
+RuntimeError: [enforce fail at inline_container.cc:857] . PytorchStreamWriter failed writing file data/8: file write failed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/starost/spiky/nanochat_exps/exp159_anneal_to_hard/train.py", line 358, in <module>
+    torch.save(model.state_dict(), os.path.join(EXP_DIR, 'checkpoint.pt'))
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/serialization.py", line 964, in save
+    with _open_zipfile_writer(f) as opened_zipfile:
+  File "/home/starost/spiky/.venv/lib/python3.12/site-packages/torch/serialization.py", line 798, in __exit__
+    self.file_like.write_end_of_file()
+RuntimeError: [enforce fail at inline_container.cc:659] . unexpected pos 9194368 vs 9194260

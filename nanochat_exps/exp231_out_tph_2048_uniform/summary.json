@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp231_out_tph_2048_uniform",
+  "best_val_bpb": 1.6279062649373566,
+  "final_val_bpb": 1.6279062649373566,
+  "n_params": 364711680,
+  "training_time_hours": 0.739
+}

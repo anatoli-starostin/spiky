@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp261_mhlut_smooth_false_noise",
+  "best_val_bpb": 1.6148832175732937,
+  "final_val_bpb": 1.6150883197157604,
+  "n_params": 358420230,
+  "training_time_hours": 1.863
+}

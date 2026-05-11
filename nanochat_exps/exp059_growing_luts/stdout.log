@@ -1,0 +1,45 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Adding initial phase 0 with fraction=0.25
+bit LUTs (initial): 18
+Adam-managed parameters: 22,352,006
+Q/K Joint BitMultiHeadLUT: in_nap=6 out_nap=128 tph=256 d_qk=32 P_qk=496 (n_outputs=2*P_qk=992, CLT-scaled, q/k-canonicalised)
+V BitPermLUT:   in_nap=7 out_nap=10 tph=256 d_v=16 P_v=120
+Out BitPermLUT: in_nap=6 out_nap=144 tph=[2048, 2048, 1024, 1024, 1024, 1024]
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5414 | lr=3.75e-07
+step    100 | loss=9.7309 | lr=3.75e-05
+step    200 | loss=8.6357 | lr=7.50e-05
+[VAL] step 200: bpb=2.3695
+step    300 | loss=7.9888 | lr=1.12e-04
+step    400 | loss=7.6932 | lr=1.50e-04
+[VAL] step 400: bpb=2.3002
+step    500 | loss=7.5156 | lr=1.87e-04
+step    600 | loss=7.4290 | lr=2.25e-04
+[VAL] step 600: bpb=2.2484
+step    700 | loss=7.2964 | lr=2.62e-04
+step    800 | loss=7.1061 | lr=3.00e-04
+[VAL] step 800: bpb=2.1245
+step    900 | loss=6.9519 | lr=3.00e-04
+step   1000 | loss=6.8447 | lr=2.99e-04
+[VAL] step 1000: bpb=2.0606
+step   1100 | loss=6.7648 | lr=2.99e-04
+step   1200 | loss=6.7020 | lr=2.98e-04
+[VAL] step 1200: bpb=2.0278
+step   1300 | loss=6.6322 | lr=2.97e-04
+step   1400 | loss=6.6054 | lr=2.95e-04
+[VAL] step 1400: bpb=2.0079
+step   1500 | loss=6.5795 | lr=2.94e-04
+step   1600 | loss=6.5213 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9888
+step   1700 | loss=6.5044 | lr=2.90e-04
+step   1800 | loss=6.4846 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9788
+step   1900 | loss=6.4716 | lr=2.85e-04
+Traceback (most recent call last):
+  File "/home/starost/spiky/nanochat_exps/exp059_growing_luts/train.py", line 420, in <module>
+    _add_lut_to_bit_opt(bit_opt, lut)
+  File "/home/starost/spiky/nanochat_exps/exp059_growing_luts/train.py", line 156, in _add_lut_to_bit_opt
+    bit_opt._state.append(state)
+    ^^^^^^^^^^^^^^
+AttributeError: 'BitPermutationLUTOptimizer' object has no attribute '_state'. Did you mean: '_states'?

@@ -1,0 +1,143 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 358,420,260
+Q/K Joint SoftLUT: in_nap=6 tph=256 d_qk=64 (n_outputs=2*d_qk=128) init_std=0.001 T_soft=0.5 T_sel=0.5 [no V2D, q_norm+k_norm -> SDPA]
+V SoftLUT:       in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj SoftLUT: in_nap=6 tph=[2048, 2048, 1024, 1024, 1024, 1024] (n_outputs=E=96) + out_v2d/out_d2v
+Attention:       SDPA (causal); plain default 1/sqrt(d_qk=64)=0.1250, no learnable attn_scale
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4124 | lr=3.75e-07
+step    100 | loss=9.3663 | lr=3.75e-05
+step    200 | loss=8.2312 | lr=7.50e-05
+W0510 14:58:50.268000 2373657 torch/_dynamo/convert_frame.py:964] [0/8] torch._dynamo hit config.recompile_limit (8)
+W0510 14:58:50.268000 2373657 torch/_dynamo/convert_frame.py:964] [0/8]    function: 'forward' (/home/starost/spiky/src/spiky/lutorch/soft_multi_head_lut.py:193)
+W0510 14:58:50.268000 2373657 torch/_dynamo/convert_frame.py:964] [0/8]    last reason: 0/5: tensor 'self._buffers['bit_matrix']' size mismatch at index 0. expected 6, actual 8
+W0510 14:58:50.268000 2373657 torch/_dynamo/convert_frame.py:964] [0/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0510 14:58:50.268000 2373657 torch/_dynamo/convert_frame.py:964] [0/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html.
+[VAL] step 200: bpb=2.3070
+step    300 | loss=7.6046 | lr=1.12e-04
+step    400 | loss=7.1297 | lr=1.50e-04
+[VAL] step 400: bpb=2.0703
+step    500 | loss=6.8326 | lr=1.87e-04
+step    600 | loss=6.6871 | lr=2.25e-04
+[VAL] step 600: bpb=2.0051
+step    700 | loss=6.5832 | lr=2.62e-04
+step    800 | loss=6.4945 | lr=3.00e-04
+[VAL] step 800: bpb=1.9649
+step    900 | loss=6.4207 | lr=3.00e-04
+step   1000 | loss=6.3466 | lr=2.99e-04
+[VAL] step 1000: bpb=1.9174
+step   1100 | loss=6.2663 | lr=2.99e-04
+step   1200 | loss=6.1913 | lr=2.98e-04
+[VAL] step 1200: bpb=1.8669
+step   1300 | loss=6.1107 | lr=2.97e-04
+step   1400 | loss=6.0704 | lr=2.95e-04
+[VAL] step 1400: bpb=1.8388
+step   1500 | loss=6.0237 | lr=2.94e-04
+step   1600 | loss=5.9524 | lr=2.92e-04
+[VAL] step 1600: bpb=1.8159
+step   1700 | loss=5.9250 | lr=2.90e-04
+step   1800 | loss=5.8915 | lr=2.87e-04
+[VAL] step 1800: bpb=1.7904
+step   1900 | loss=5.8575 | lr=2.85e-04
+step   2000 | loss=5.8233 | lr=2.82e-04
+[VAL] step 2000: bpb=1.7741
+step   2100 | loss=5.7737 | lr=2.79e-04
+step   2200 | loss=5.7507 | lr=2.76e-04
+[VAL] step 2200: bpb=1.7614
+step   2300 | loss=5.7304 | lr=2.72e-04
+step   2400 | loss=5.7245 | lr=2.68e-04
+[VAL] step 2400: bpb=1.7484
+step   2500 | loss=5.7024 | lr=2.65e-04
+step   2600 | loss=5.6850 | lr=2.60e-04
+[VAL] step 2600: bpb=1.7325
+step   2700 | loss=5.6517 | lr=2.56e-04
+step   2800 | loss=5.6375 | lr=2.52e-04
+[VAL] step 2800: bpb=1.7239
+step   2900 | loss=5.6113 | lr=2.47e-04
+step   3000 | loss=5.5972 | lr=2.42e-04
+[VAL] step 3000: bpb=1.7110
+step   3100 | loss=5.5809 | lr=2.38e-04
+step   3200 | loss=5.5699 | lr=2.32e-04
+[VAL] step 3200: bpb=1.7006
+step   3300 | loss=5.5598 | lr=2.27e-04
+step   3400 | loss=5.5234 | lr=2.22e-04
+[VAL] step 3400: bpb=1.6961
+step   3500 | loss=5.5119 | lr=2.17e-04
+step   3600 | loss=5.5216 | lr=2.11e-04
+[VAL] step 3600: bpb=1.6917
+step   3700 | loss=5.4931 | lr=2.06e-04
+step   3800 | loss=5.4847 | lr=2.00e-04
+[VAL] step 3800: bpb=1.6831
+step   3900 | loss=5.4596 | lr=1.94e-04
+step   4000 | loss=5.4392 | lr=1.88e-04
+[VAL] step 4000: bpb=1.6750
+step   4100 | loss=5.4681 | lr=1.83e-04
+step   4200 | loss=5.4422 | lr=1.77e-04
+[VAL] step 4200: bpb=1.6698
+step   4300 | loss=5.4471 | lr=1.71e-04
+step   4400 | loss=5.4343 | lr=1.65e-04
+[VAL] step 4400: bpb=1.6661
+step   4500 | loss=5.4183 | lr=1.59e-04
+step   4600 | loss=5.4059 | lr=1.53e-04
+[VAL] step 4600: bpb=1.6595
+step   4700 | loss=5.4060 | lr=1.47e-04
+step   4800 | loss=5.4040 | lr=1.42e-04
+[VAL] step 4800: bpb=1.6544
+step   4900 | loss=5.3795 | lr=1.36e-04
+step   5000 | loss=5.3727 | lr=1.30e-04
+[VAL] step 5000: bpb=1.6470
+step   5100 | loss=5.3640 | lr=1.24e-04
+step   5200 | loss=5.3461 | lr=1.19e-04
+[VAL] step 5200: bpb=1.6417
+step   5300 | loss=5.3297 | lr=1.13e-04
+step   5400 | loss=5.3160 | lr=1.08e-04
+[VAL] step 5400: bpb=1.6379
+step   5500 | loss=5.3256 | lr=1.03e-04
+step   5600 | loss=5.3384 | lr=9.75e-05
+[VAL] step 5600: bpb=1.6338
+step   5700 | loss=5.3227 | lr=9.25e-05
+step   5800 | loss=5.3119 | lr=8.76e-05
+[VAL] step 5800: bpb=1.6309
+step   5900 | loss=5.3140 | lr=8.28e-05
+step   6000 | loss=5.3041 | lr=7.82e-05
+[VAL] step 6000: bpb=1.6270
+step   6100 | loss=5.2907 | lr=7.38e-05
+step   6200 | loss=5.2900 | lr=6.95e-05
+[VAL] step 6200: bpb=1.6253
+step   6300 | loss=5.2931 | lr=6.55e-05
+step   6400 | loss=5.2764 | lr=6.16e-05
+[VAL] step 6400: bpb=1.6212
+step   6500 | loss=5.2652 | lr=5.79e-05
+step   6600 | loss=5.2702 | lr=5.44e-05
+[VAL] step 6600: bpb=1.6180
+step   6700 | loss=5.2652 | lr=5.11e-05
+step   6800 | loss=5.2568 | lr=4.81e-05
+[VAL] step 6800: bpb=1.6158
+step   6900 | loss=5.2553 | lr=4.53e-05
+step   7000 | loss=5.2592 | lr=4.26e-05
+[VAL] step 7000: bpb=1.6144
+step   7100 | loss=5.2490 | lr=4.03e-05
+step   7200 | loss=5.2536 | lr=3.81e-05
+[VAL] step 7200: bpb=1.6122
+step   7300 | loss=5.2394 | lr=3.62e-05
+step   7400 | loss=5.2513 | lr=3.46e-05
+[VAL] step 7400: bpb=1.6116
+step   7500 | loss=5.2387 | lr=3.32e-05
+step   7600 | loss=5.2333 | lr=3.21e-05
+[VAL] step 7600: bpb=1.6091
+step   7700 | loss=5.2266 | lr=3.12e-05
+step   7800 | loss=5.2406 | lr=3.05e-05
+[VAL] step 7800: bpb=1.6074
+step   7900 | loss=5.2382 | lr=3.01e-05
+step   8000 | loss=5.2298 | lr=3.00e-05
+[VAL] step 8000: bpb=1.6071
+
+=== DONE ===
+{
+  "exp_name": "exp248_soft_lut_learnable",
+  "best_val_bpb": 1.6071264141212398,
+  "final_val_bpb": 1.6071264141212398,
+  "n_params": 358420260,
+  "training_time_hours": 0.748
+}

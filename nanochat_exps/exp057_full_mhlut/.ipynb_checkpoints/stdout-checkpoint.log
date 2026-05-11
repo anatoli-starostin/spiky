@@ -1,0 +1,33 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+MultiHeadLut modules: 18
+Adam-managed parameters: 198,659,462
+Q/K Joint MHLut: in_nap=6 tph=256 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=6 tph=256 d_v=24 (n_outputs=d_v)
+out_proj MHLut:  in_nap=8 tph=512 (n_outputs=E=144) + LayerNorm
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5685 | lr=3.75e-07
+step    100 | loss=9.5337 | lr=3.75e-05
+step    200 | loss=8.3893 | lr=7.50e-05
+[VAL] step 200: bpb=2.3396
+step    300 | loss=7.8284 | lr=1.12e-04
+step    400 | loss=7.5304 | lr=1.50e-04
+[VAL] step 400: bpb=2.2426
+step    500 | loss=7.3179 | lr=1.87e-04
+step    600 | loss=7.1357 | lr=2.25e-04
+[VAL] step 600: bpb=2.1165
+step    700 | loss=6.9470 | lr=2.62e-04
+step    800 | loss=6.7995 | lr=3.00e-04
+[VAL] step 800: bpb=2.0468
+step    900 | loss=6.6956 | lr=3.00e-04
+step   1000 | loss=6.6252 | lr=2.99e-04
+[VAL] step 1000: bpb=2.0036
+step   1100 | loss=6.5704 | lr=2.99e-04
+step   1200 | loss=6.5209 | lr=2.98e-04
+[VAL] step 1200: bpb=1.9780
+step   1300 | loss=6.4637 | lr=2.97e-04
+step   1400 | loss=6.4416 | lr=2.95e-04
+[VAL] step 1400: bpb=1.9613
+step   1500 | loss=6.4169 | lr=2.94e-04
+step   1600 | loss=6.3634 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9438

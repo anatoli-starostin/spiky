@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp232_out_tph_halved",
+  "best_val_bpb": 1.6405985440293291,
+  "final_val_bpb": 1.6405985440293291,
+  "n_params": 314380032,
+  "training_time_hours": 0.604
+}

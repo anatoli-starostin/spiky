@@ -247,3 +247,9 @@ transformer_exps/sweep_out_proj/cfg_*/checkpoint*.pt
 transformer_exps/**/*.mp4
 conversation-summary.html
 spikelm_notes.pdf
+
+# Experiment checkpoints — large, regeneratable from train.py + config.json
+nanochat_exps/**/checkpoint.pt
+transformer_exps/**/checkpoint.pt
+# Pre-generated distillation pair data — large, regeneratable
+nanochat_exps/distill_unembedder/pairs.parquet

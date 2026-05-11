@@ -1,0 +1,22 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+bit LUTs: 24
+Adam-managed parameters: 14,912,326
+Q/K BitPermLUT: in_nap=5 out_nap=24 tph=512 d_qk=24 P_qk=276
+V BitPermLUT:   in_nap=5 out_nap=16 tph=512 d_v=32 P_v=496
+Out BitPermLUT: in_nap=8 out_nap=32 tph=[4096, 4096, 2048, 2048, 2048, 2048]
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5552 | lr=3.75e-07
+step    100 | loss=9.9127 | lr=3.75e-05
+step    200 | loss=8.9649 | lr=7.50e-05
+[VAL] step 200: bpb=2.4461
+step    300 | loss=8.1605 | lr=1.12e-04
+step    400 | loss=7.7786 | lr=1.50e-04
+[VAL] step 400: bpb=2.3107
+step    500 | loss=7.5515 | lr=1.87e-04
+step    600 | loss=7.4190 | lr=2.25e-04
+[VAL] step 600: bpb=2.2378
+step    700 | loss=7.3112 | lr=2.62e-04
+step    800 | loss=7.2049 | lr=3.00e-04
+[VAL] step 800: bpb=2.1801
+step    900 | loss=7.1098 | lr=3.00e-04

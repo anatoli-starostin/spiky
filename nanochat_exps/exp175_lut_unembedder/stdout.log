@@ -1,0 +1,63 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 513,639,942
+Q/K Joint MHLut: in_nap=8 tph=384 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=8 tph=256 d_v=32 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=3056 (n_outputs=E=64) + LayerNorm
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4214 | lr=3.75e-07
+step    100 | loss=10.2425 | lr=3.75e-05
+step    200 | loss=10.0748 | lr=7.50e-05
+[VAL] step 200: bpb=3.0516
+step    300 | loss=9.9352 | lr=1.12e-04
+step    400 | loss=9.7693 | lr=1.50e-04
+[VAL] step 400: bpb=2.9430
+step    500 | loss=9.5568 | lr=1.87e-04
+step    600 | loss=9.3116 | lr=2.25e-04
+[VAL] step 600: bpb=2.7753
+step    700 | loss=9.0337 | lr=2.62e-04
+step    800 | loss=8.7248 | lr=3.00e-04
+[VAL] step 800: bpb=2.5820
+step    900 | loss=8.4141 | lr=3.00e-04
+step   1000 | loss=8.1259 | lr=2.99e-04
+[VAL] step 1000: bpb=2.4084
+step   1100 | loss=7.8763 | lr=2.99e-04
+step   1200 | loss=7.6515 | lr=2.98e-04
+[VAL] step 1200: bpb=2.2824
+step   1300 | loss=7.4490 | lr=2.97e-04
+step   1400 | loss=7.2984 | lr=2.95e-04
+[VAL] step 1400: bpb=2.1934
+step   1500 | loss=7.1711 | lr=2.94e-04
+step   1600 | loss=7.0440 | lr=2.92e-04
+[VAL] step 1600: bpb=2.1363
+step   1700 | loss=6.9651 | lr=2.90e-04
+step   1800 | loss=6.8974 | lr=2.87e-04
+[VAL] step 1800: bpb=2.0979
+step   1900 | loss=6.8468 | lr=2.85e-04
+step   2000 | loss=6.8016 | lr=2.82e-04
+[VAL] step 2000: bpb=2.0701
+step   2100 | loss=6.7552 | lr=2.79e-04
+step   2200 | loss=6.7178 | lr=2.76e-04
+[VAL] step 2200: bpb=2.0496
+step   2300 | loss=6.6803 | lr=2.72e-04
+step   2400 | loss=6.6572 | lr=2.68e-04
+[VAL] step 2400: bpb=2.0295
+step   2500 | loss=6.6361 | lr=2.65e-04
+step   2600 | loss=6.6240 | lr=2.60e-04
+[VAL] step 2600: bpb=2.0163
+step   2700 | loss=6.5852 | lr=2.56e-04
+step   2800 | loss=6.5725 | lr=2.52e-04
+[VAL] step 2800: bpb=2.0058
+step   2900 | loss=6.5483 | lr=2.47e-04
+step   3000 | loss=6.5390 | lr=2.42e-04
+[VAL] step 3000: bpb=1.9922
+step   3100 | loss=6.5222 | lr=2.38e-04
+step   3200 | loss=6.5060 | lr=2.32e-04
+[VAL] step 3200: bpb=1.9834
+step   3300 | loss=6.4936 | lr=2.27e-04
+step   3400 | loss=6.4598 | lr=2.22e-04
+[VAL] step 3400: bpb=1.9746
+step   3500 | loss=6.4485 | lr=2.17e-04
+step   3600 | loss=6.4482 | lr=2.11e-04
+[VAL] step 3600: bpb=1.9661
+step   3700 | loss=6.4314 | lr=2.06e-04

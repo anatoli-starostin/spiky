@@ -1,0 +1,41 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+V2DSDPATransformer: depth=6, E=384, H=6, E_H=64, D=3297, seq_len=512
+LUT: nap=8 (2^nap=256 cells), tph=1024, n_sparse=32, n_alt=1, smooth=True
+Params: 99,475,968
+AdamW groups: decay=49,134,336 lut_nodecay=50,331,648 nodecay=9,984
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4674 | lr=3.75e-07
+step    100 | loss=9.9988 | lr=3.75e-05
+step    200 | loss=8.9633 | lr=7.50e-05
+[VAL] step 200: bpb=2.4076
+step    300 | loss=8.0488 | lr=1.12e-04
+step    400 | loss=7.5173 | lr=1.50e-04
+[VAL] step 400: bpb=2.1746
+step    500 | loss=7.1579 | lr=1.87e-04
+step    600 | loss=6.9607 | lr=2.25e-04
+[VAL] step 600: bpb=2.0743
+step    700 | loss=6.8289 | lr=2.62e-04
+step    800 | loss=6.7271 | lr=3.00e-04
+[VAL] step 800: bpb=2.0330
+step    900 | loss=6.6573 | lr=3.00e-04
+step   1000 | loss=6.6104 | lr=2.99e-04
+[VAL] step 1000: bpb=2.0024
+step   1100 | loss=6.5704 | lr=2.99e-04
+step   1200 | loss=6.5370 | lr=2.98e-04
+[VAL] step 1200: bpb=1.9836
+step   1300 | loss=6.4924 | lr=2.97e-04
+step   1400 | loss=6.4833 | lr=2.95e-04
+[VAL] step 1400: bpb=1.9718
+step   1500 | loss=6.4636 | lr=2.94e-04
+step   1600 | loss=6.4179 | lr=2.92e-04
+[VAL] step 1600: bpb=1.9596
+step   1700 | loss=6.4090 | lr=2.90e-04
+step   1800 | loss=6.4013 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9517
+step   1900 | loss=6.3917 | lr=2.85e-04
+step   2000 | loss=6.3735 | lr=2.82e-04
+[VAL] step 2000: bpb=1.9450
+step   2100 | loss=6.3468 | lr=2.79e-04
+step   2200 | loss=6.3375 | lr=2.76e-04
+[VAL] step 2200: bpb=1.9386

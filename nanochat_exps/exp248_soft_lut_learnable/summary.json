@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp248_soft_lut_learnable",
+  "best_val_bpb": 1.6071264141212398,
+  "final_val_bpb": 1.6071264141212398,
+  "n_params": 358420260,
+  "training_time_hours": 0.748
+}

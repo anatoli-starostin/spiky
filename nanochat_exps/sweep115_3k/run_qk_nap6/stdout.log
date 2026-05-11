@@ -1,0 +1,65 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model:
+Total params (all fp32): 108,173,318
+Q/K Joint SparseLut: in_nap=6 tph=384 n_sparse=32 -> 2*d_qk=64 (per head, H=6)
+V SparseLut:         in_nap=8 tph=384 n_sparse=8 -> d_v=64 (per head, H=6)
+out_proj SparseLut:  in_nap=8 tph=2048 n_sparse=8 -> E=384
+Residual:        classic skip connection (out_real + x), no residual_lut
+Unembedder:      LN(384) -> Linear(384,VOCAB)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5756 | lr=1.00e-06
+step    100 | loss=9.8575 | lr=1.00e-04
+step    200 | loss=8.4446 | lr=2.00e-04
+[VAL] step 200: bpb=2.2824
+step    300 | loss=7.6651 | lr=3.00e-04
+step    400 | loss=7.2066 | lr=2.99e-04
+[VAL] step 400: bpb=2.1036
+step    500 | loss=6.9271 | lr=2.96e-04
+step    600 | loss=6.7967 | lr=2.92e-04
+[VAL] step 600: bpb=2.0388
+step    700 | loss=6.7007 | lr=2.86e-04
+step    800 | loss=6.6155 | lr=2.78e-04
+[VAL] step 800: bpb=2.0002
+step    900 | loss=6.5493 | lr=2.68e-04
+step   1000 | loss=6.5022 | lr=2.58e-04
+[VAL] step 1000: bpb=1.9725
+step   1100 | loss=6.4602 | lr=2.46e-04
+step   1200 | loss=6.4236 | lr=2.32e-04
+[VAL] step 1200: bpb=1.9511
+step   1300 | loss=6.3713 | lr=2.18e-04
+step   1400 | loss=6.3546 | lr=2.04e-04
+[VAL] step 1400: bpb=1.9333
+step   1500 | loss=6.3285 | lr=1.88e-04
+step   1600 | loss=6.2767 | lr=1.73e-04
+[VAL] step 1600: bpb=1.9164
+step   1700 | loss=6.2583 | lr=1.57e-04
+step   1800 | loss=6.2391 | lr=1.42e-04
+[VAL] step 1800: bpb=1.9047
+step   1900 | loss=6.2216 | lr=1.26e-04
+step   2000 | loss=6.1960 | lr=1.12e-04
+[VAL] step 2000: bpb=1.8934
+step   2100 | loss=6.1628 | lr=9.75e-05
+step   2200 | loss=6.1469 | lr=8.44e-05
+[VAL] step 2200: bpb=1.8842
+step   2300 | loss=6.1316 | lr=7.24e-05
+step   2400 | loss=6.1274 | lr=6.16e-05
+[VAL] step 2400: bpb=1.8760
+step   2500 | loss=6.1160 | lr=5.22e-05
+step   2600 | loss=6.1126 | lr=4.44e-05
+[VAL] step 2600: bpb=1.8696
+step   2700 | loss=6.0898 | lr=3.81e-05
+step   2800 | loss=6.0857 | lr=3.36e-05
+[VAL] step 2800: bpb=1.8646
+step   2900 | loss=6.0696 | lr=3.09e-05
+step   3000 | loss=6.0708 | lr=3.00e-05
+[VAL] step 3000: bpb=1.8615
+
+=== DONE ===
+{
+  "exp_name": "run_qk_nap6",
+  "best_val_bpb": 1.8615079837105706,
+  "final_val_bpb": 1.8615079837105706,
+  "n_params": 108173318,
+  "training_time_hours": 0.275
+}

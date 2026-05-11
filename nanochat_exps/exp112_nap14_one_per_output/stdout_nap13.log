@@ -1,0 +1,15 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model:
+Total params (all fp32): 83,007,494
+Q/K Joint SparseLut: in_nap=13 tph=64 n_sparse=1 -> 2*d_qk=64 (per head, H=6)
+V SparseLut:         in_nap=13 tph=64 n_sparse=1 -> d_v=64 (per head, H=6)
+out_proj SparseLut:  in_nap=13 tph=384 n_sparse=1 -> E=384
+Residual:        classic skip connection (out_real + x), no residual_lut
+Unembedder:      LN(384) -> Linear(384,VOCAB)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5763 | lr=3.75e-07
+step    100 | loss=10.5457 | lr=3.75e-05
+step    200 | loss=10.3424 | lr=7.50e-05
+[VAL] step 200: bpb=3.0570
+step    300 | loss=9.5979 | lr=1.12e-04

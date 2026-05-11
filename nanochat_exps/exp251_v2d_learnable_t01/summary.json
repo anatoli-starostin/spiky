@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp251_v2d_learnable_t01",
+  "best_val_bpb": 1.6026362260274658,
+  "final_val_bpb": 1.6029879973221544,
+  "n_params": 358420266,
+  "training_time_hours": 0.746
+}

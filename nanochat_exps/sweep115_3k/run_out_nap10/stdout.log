@@ -1,0 +1,65 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Building model:
+Total params (all fp32): 108,173,318
+Q/K Joint SparseLut: in_nap=8 tph=384 n_sparse=8 -> 2*d_qk=64 (per head, H=6)
+V SparseLut:         in_nap=8 tph=384 n_sparse=8 -> d_v=64 (per head, H=6)
+out_proj SparseLut:  in_nap=10 tph=2048 n_sparse=2 -> E=384
+Residual:        classic skip connection (out_real + x), no residual_lut
+Unembedder:      LN(384) -> Linear(384,VOCAB)
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5764 | lr=1.00e-06
+step    100 | loss=10.1736 | lr=1.00e-04
+step    200 | loss=8.6446 | lr=2.00e-04
+[VAL] step 200: bpb=2.2942
+step    300 | loss=7.7574 | lr=3.00e-04
+step    400 | loss=7.2495 | lr=2.99e-04
+[VAL] step 400: bpb=2.1026
+step    500 | loss=6.9377 | lr=2.96e-04
+step    600 | loss=6.7898 | lr=2.92e-04
+[VAL] step 600: bpb=2.0323
+step    700 | loss=6.6834 | lr=2.86e-04
+step    800 | loss=6.5949 | lr=2.78e-04
+[VAL] step 800: bpb=1.9984
+step    900 | loss=6.5309 | lr=2.68e-04
+step   1000 | loss=6.4866 | lr=2.58e-04
+[VAL] step 1000: bpb=1.9671
+step   1100 | loss=6.4484 | lr=2.46e-04
+step   1200 | loss=6.4150 | lr=2.32e-04
+[VAL] step 1200: bpb=1.9484
+step   1300 | loss=6.3669 | lr=2.18e-04
+step   1400 | loss=6.3544 | lr=2.04e-04
+[VAL] step 1400: bpb=1.9349
+step   1500 | loss=6.3335 | lr=1.88e-04
+step   1600 | loss=6.2873 | lr=1.73e-04
+[VAL] step 1600: bpb=1.9210
+step   1700 | loss=6.2750 | lr=1.57e-04
+step   1800 | loss=6.2617 | lr=1.42e-04
+[VAL] step 1800: bpb=1.9119
+step   1900 | loss=6.2509 | lr=1.26e-04
+step   2000 | loss=6.2320 | lr=1.12e-04
+[VAL] step 2000: bpb=1.9044
+step   2100 | loss=6.2043 | lr=9.75e-05
+step   2200 | loss=6.1945 | lr=8.44e-05
+[VAL] step 2200: bpb=1.8985
+step   2300 | loss=6.1842 | lr=7.24e-05
+step   2400 | loss=6.1841 | lr=6.16e-05
+[VAL] step 2400: bpb=1.8925
+step   2500 | loss=6.1765 | lr=5.22e-05
+step   2600 | loss=6.1763 | lr=4.44e-05
+[VAL] step 2600: bpb=1.8888
+step   2700 | loss=6.1550 | lr=3.81e-05
+step   2800 | loss=6.1558 | lr=3.36e-05
+[VAL] step 2800: bpb=1.8861
+step   2900 | loss=6.1435 | lr=3.09e-05
+step   3000 | loss=6.1468 | lr=3.00e-05
+[VAL] step 3000: bpb=1.8840
+
+=== DONE ===
+{
+  "exp_name": "run_out_nap10",
+  "best_val_bpb": 1.8840096130384474,
+  "final_val_bpb": 1.8840096130384474,
+  "n_params": 108173318,
+  "training_time_hours": 0.222
+}

@@ -1,0 +1,654 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+Total params (all fp32): 440,207,622
+Q/K Joint MHLut: in_nap=8 tph=256 d_qk=32 (n_outputs=2*d_qk=64)
+V MHLut:         in_nap=8 tph=256 d_v=24 (n_outputs=d_v)
+out_proj MHLut:  in_nap=6 tph=2048 (n_outputs=E=96) + LayerNorm
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.4149 | lr=6.25e-08
+step    100 | loss=10.0728 | lr=6.25e-06
+step    200 | loss=9.0527 | lr=1.25e-05
+[VAL] step 200: bpb=2.4060
+step    300 | loss=8.1772 | lr=1.87e-05
+step    400 | loss=7.7915 | lr=2.50e-05
+[VAL] step 400: bpb=2.3102
+step    500 | loss=7.5420 | lr=3.13e-05
+step    600 | loss=7.3015 | lr=3.75e-05
+[VAL] step 600: bpb=2.1435
+step    700 | loss=7.0442 | lr=4.37e-05
+step    800 | loss=6.8497 | lr=5.00e-05
+[VAL] step 800: bpb=2.0509
+step    900 | loss=6.7218 | lr=5.62e-05
+step   1000 | loss=6.6361 | lr=6.25e-05
+[VAL] step 1000: bpb=2.0026
+step   1100 | loss=6.5709 | lr=6.87e-05
+step   1200 | loss=6.5168 | lr=7.50e-05
+[VAL] step 1200: bpb=1.9715
+step   1300 | loss=6.4455 | lr=8.12e-05
+step   1400 | loss=6.4068 | lr=8.75e-05
+[VAL] step 1400: bpb=1.9421
+step   1500 | loss=6.3579 | lr=9.37e-05
+step   1600 | loss=6.2811 | lr=1.00e-04
+[VAL] step 1600: bpb=1.9127
+step   1700 | loss=6.2470 | lr=1.06e-04
+step   1800 | loss=6.2095 | lr=1.12e-04
+[VAL] step 1800: bpb=1.8896
+step   1900 | loss=6.1762 | lr=1.19e-04
+step   2000 | loss=6.1396 | lr=1.25e-04
+[VAL] step 2000: bpb=1.8695
+step   2100 | loss=6.0909 | lr=1.31e-04
+step   2200 | loss=6.0643 | lr=1.37e-04
+[VAL] step 2200: bpb=1.8549
+step   2300 | loss=6.0365 | lr=1.44e-04
+step   2400 | loss=6.0229 | lr=1.50e-04
+[VAL] step 2400: bpb=1.8358
+step   2500 | loss=5.9991 | lr=1.56e-04
+step   2600 | loss=5.9835 | lr=1.62e-04
+[VAL] step 2600: bpb=1.8241
+step   2700 | loss=5.9450 | lr=1.69e-04
+step   2800 | loss=5.9320 | lr=1.75e-04
+[VAL] step 2800: bpb=1.8089
+step   2900 | loss=5.9003 | lr=1.81e-04
+step   3000 | loss=5.8837 | lr=1.87e-04
+[VAL] step 3000: bpb=1.7985
+step   3100 | loss=5.8654 | lr=1.94e-04
+step   3200 | loss=5.8563 | lr=2.00e-04
+[VAL] step 3200: bpb=1.7841
+step   3300 | loss=5.8454 | lr=2.06e-04
+step   3400 | loss=5.8053 | lr=2.12e-04
+[VAL] step 3400: bpb=1.7792
+step   3500 | loss=5.7923 | lr=2.19e-04
+step   3600 | loss=5.7990 | lr=2.25e-04
+[VAL] step 3600: bpb=1.7755
+step   3700 | loss=5.7726 | lr=2.31e-04
+step   3800 | loss=5.7611 | lr=2.37e-04
+[VAL] step 3800: bpb=1.7661
+step   3900 | loss=5.7377 | lr=2.44e-04
+step   4000 | loss=5.7169 | lr=2.50e-04
+[VAL] step 4000: bpb=1.7568
+step   4100 | loss=5.7486 | lr=2.56e-04
+step   4200 | loss=5.7181 | lr=2.62e-04
+[VAL] step 4200: bpb=1.7496
+step   4300 | loss=5.7203 | lr=2.69e-04
+step   4400 | loss=5.7076 | lr=2.75e-04
+[VAL] step 4400: bpb=1.7449
+step   4500 | loss=5.6906 | lr=2.81e-04
+step   4600 | loss=5.6790 | lr=2.87e-04
+[VAL] step 4600: bpb=1.7393
+step   4700 | loss=5.6814 | lr=2.94e-04
+step   4800 | loss=5.6789 | lr=3.00e-04
+[VAL] step 4800: bpb=1.7329
+step   4900 | loss=5.6555 | lr=3.00e-04
+step   5000 | loss=5.6479 | lr=3.00e-04
+[VAL] step 5000: bpb=1.7299
+step   5100 | loss=5.6365 | lr=3.00e-04
+step   5200 | loss=5.6166 | lr=3.00e-04
+[VAL] step 5200: bpb=1.7203
+step   5300 | loss=5.5992 | lr=3.00e-04
+step   5400 | loss=5.5816 | lr=3.00e-04
+[VAL] step 5400: bpb=1.7173
+step   5500 | loss=5.5839 | lr=3.00e-04
+step   5600 | loss=5.5955 | lr=3.00e-04
+[VAL] step 5600: bpb=1.7133
+step   5700 | loss=5.5780 | lr=3.00e-04
+step   5800 | loss=5.5686 | lr=3.00e-04
+[VAL] step 5800: bpb=1.7120
+step   5900 | loss=5.5705 | lr=3.00e-04
+step   6000 | loss=5.5542 | lr=2.99e-04
+[VAL] step 6000: bpb=1.7005
+step   6100 | loss=5.5372 | lr=2.99e-04
+step   6200 | loss=5.5347 | lr=2.99e-04
+[VAL] step 6200: bpb=1.6946
+step   6300 | loss=5.5319 | lr=2.99e-04
+step   6400 | loss=5.5155 | lr=2.99e-04
+[VAL] step 6400: bpb=1.6938
+step   6500 | loss=5.5045 | lr=2.99e-04
+step   6600 | loss=5.5128 | lr=2.99e-04
+[VAL] step 6600: bpb=1.6895
+step   6700 | loss=5.5034 | lr=2.99e-04
+step   6800 | loss=5.4875 | lr=2.99e-04
+[VAL] step 6800: bpb=1.6859
+step   6900 | loss=5.4856 | lr=2.98e-04
+step   7000 | loss=5.4863 | lr=2.98e-04
+[VAL] step 7000: bpb=1.6827
+step   7100 | loss=5.4777 | lr=2.98e-04
+step   7200 | loss=5.4804 | lr=2.98e-04
+[VAL] step 7200: bpb=1.6771
+step   7300 | loss=5.4608 | lr=2.98e-04
+step   7400 | loss=5.4714 | lr=2.98e-04
+[VAL] step 7400: bpb=1.6761
+step   7500 | loss=5.4559 | lr=2.97e-04
+step   7600 | loss=5.4473 | lr=2.97e-04
+[VAL] step 7600: bpb=1.6691
+step   7700 | loss=5.4369 | lr=2.97e-04
+step   7800 | loss=5.4481 | lr=2.97e-04
+[VAL] step 7800: bpb=1.6666
+step   7900 | loss=5.4415 | lr=2.97e-04
+step   8000 | loss=5.4302 | lr=2.96e-04
+[VAL] step 8000: bpb=1.6692
+step   8100 | loss=5.4374 | lr=2.96e-04
+step   8200 | loss=5.4216 | lr=2.96e-04
+[VAL] step 8200: bpb=1.6666
+step   8300 | loss=5.4216 | lr=2.96e-04
+step   8400 | loss=5.4160 | lr=2.95e-04
+[VAL] step 8400: bpb=1.6581
+step   8500 | loss=5.4059 | lr=2.95e-04
+step   8600 | loss=5.4250 | lr=2.95e-04
+[VAL] step 8600: bpb=1.6603
+step   8700 | loss=5.4153 | lr=2.95e-04
+step   8800 | loss=5.4064 | lr=2.94e-04
+[VAL] step 8800: bpb=1.6559
+step   8900 | loss=5.3866 | lr=2.94e-04
+step   9000 | loss=5.3928 | lr=2.94e-04
+[VAL] step 9000: bpb=1.6541
+step   9100 | loss=5.3854 | lr=2.93e-04
+step   9200 | loss=5.3848 | lr=2.93e-04
+[VAL] step 9200: bpb=1.6515
+step   9300 | loss=5.3870 | lr=2.93e-04
+step   9400 | loss=5.3882 | lr=2.93e-04
+[VAL] step 9400: bpb=1.6502
+step   9500 | loss=5.4017 | lr=2.92e-04
+step   9600 | loss=5.4055 | lr=2.92e-04
+[VAL] step 9600: bpb=1.6471
+step   9700 | loss=5.3923 | lr=2.92e-04
+step   9800 | loss=5.3906 | lr=2.91e-04
+[VAL] step 9800: bpb=1.6470
+step   9900 | loss=5.3607 | lr=2.91e-04
+step  10000 | loss=5.3494 | lr=2.90e-04
+[VAL] step 10000: bpb=1.6415
+step  10100 | loss=5.3598 | lr=2.90e-04
+step  10200 | loss=5.3389 | lr=2.90e-04
+[VAL] step 10200: bpb=1.6452
+step  10300 | loss=5.3583 | lr=2.89e-04
+step  10400 | loss=5.3479 | lr=2.89e-04
+[VAL] step 10400: bpb=1.6439
+step  10500 | loss=5.3458 | lr=2.89e-04
+step  10600 | loss=5.3414 | lr=2.88e-04
+[VAL] step 10600: bpb=1.6457
+step  10700 | loss=5.3418 | lr=2.88e-04
+step  10800 | loss=5.3413 | lr=2.87e-04
+[VAL] step 10800: bpb=1.6411
+step  10900 | loss=5.3310 | lr=2.87e-04
+step  11000 | loss=5.3203 | lr=2.87e-04
+[VAL] step 11000: bpb=1.6379
+step  11100 | loss=5.3330 | lr=2.86e-04
+step  11200 | loss=5.3162 | lr=2.86e-04
+[VAL] step 11200: bpb=1.6395
+step  11300 | loss=5.3074 | lr=2.85e-04
+step  11400 | loss=5.3211 | lr=2.85e-04
+[VAL] step 11400: bpb=1.6351
+step  11500 | loss=5.3245 | lr=2.84e-04
+step  11600 | loss=5.3244 | lr=2.84e-04
+[VAL] step 11600: bpb=1.6329
+step  11700 | loss=5.3165 | lr=2.83e-04
+step  11800 | loss=5.3215 | lr=2.83e-04
+[VAL] step 11800: bpb=1.6333
+step  11900 | loss=5.3030 | lr=2.82e-04
+step  12000 | loss=5.3077 | lr=2.82e-04
+[VAL] step 12000: bpb=1.6301
+step  12100 | loss=5.2992 | lr=2.81e-04
+step  12200 | loss=5.2869 | lr=2.81e-04
+[VAL] step 12200: bpb=1.6300
+step  12300 | loss=5.2931 | lr=2.80e-04
+step  12400 | loss=5.2981 | lr=2.80e-04
+[VAL] step 12400: bpb=1.6323
+step  12500 | loss=5.3015 | lr=2.79e-04
+step  12600 | loss=5.2929 | lr=2.79e-04
+[VAL] step 12600: bpb=1.6302
+step  12700 | loss=5.3044 | lr=2.78e-04
+step  12800 | loss=5.2982 | lr=2.78e-04
+[VAL] step 12800: bpb=1.6283
+step  12900 | loss=5.3081 | lr=2.77e-04
+step  13000 | loss=5.3125 | lr=2.77e-04
+[VAL] step 13000: bpb=1.6241
+step  13100 | loss=5.2931 | lr=2.76e-04
+step  13200 | loss=5.2733 | lr=2.76e-04
+[VAL] step 13200: bpb=1.6256
+step  13300 | loss=5.3108 | lr=2.75e-04
+step  13400 | loss=5.3095 | lr=2.74e-04
+[VAL] step 13400: bpb=1.6249
+step  13500 | loss=5.2816 | lr=2.74e-04
+step  13600 | loss=5.2731 | lr=2.73e-04
+[VAL] step 13600: bpb=1.6270
+step  13700 | loss=5.2953 | lr=2.73e-04
+step  13800 | loss=5.2909 | lr=2.72e-04
+[VAL] step 13800: bpb=1.6244
+step  13900 | loss=5.2934 | lr=2.72e-04
+step  14000 | loss=5.2860 | lr=2.71e-04
+[VAL] step 14000: bpb=1.6237
+step  14100 | loss=5.2835 | lr=2.70e-04
+step  14200 | loss=5.2852 | lr=2.70e-04
+[VAL] step 14200: bpb=1.6222
+step  14300 | loss=5.2719 | lr=2.69e-04
+step  14400 | loss=5.2738 | lr=2.68e-04
+[VAL] step 14400: bpb=1.6229
+step  14500 | loss=5.2647 | lr=2.68e-04
+step  14600 | loss=5.2586 | lr=2.67e-04
+[VAL] step 14600: bpb=1.6175
+step  14700 | loss=5.2635 | lr=2.66e-04
+step  14800 | loss=5.2476 | lr=2.66e-04
+[VAL] step 14800: bpb=1.6197
+step  14900 | loss=5.2691 | lr=2.65e-04
+step  15000 | loss=5.2638 | lr=2.65e-04
+[VAL] step 15000: bpb=1.6176
+step  15100 | loss=5.2446 | lr=2.64e-04
+step  15200 | loss=5.2404 | lr=2.63e-04
+[VAL] step 15200: bpb=1.6193
+step  15300 | loss=5.2392 | lr=2.63e-04
+step  15400 | loss=5.2683 | lr=2.62e-04
+[VAL] step 15400: bpb=1.6175
+step  15500 | loss=5.2537 | lr=2.61e-04
+step  15600 | loss=5.2349 | lr=2.60e-04
+[VAL] step 15600: bpb=1.6151
+step  15700 | loss=5.2438 | lr=2.60e-04
+step  15800 | loss=5.2698 | lr=2.59e-04
+[VAL] step 15800: bpb=1.6129
+step  15900 | loss=5.2557 | lr=2.58e-04
+step  16000 | loss=5.2435 | lr=2.58e-04
+[VAL] step 16000: bpb=1.6144
+step  16100 | loss=5.2580 | lr=2.57e-04
+step  16200 | loss=5.2432 | lr=2.56e-04
+[VAL] step 16200: bpb=1.6124
+step  16300 | loss=5.2425 | lr=2.55e-04
+step  16400 | loss=5.2404 | lr=2.55e-04
+[VAL] step 16400: bpb=1.6140
+step  16500 | loss=5.2372 | lr=2.54e-04
+step  16600 | loss=5.2370 | lr=2.53e-04
+[VAL] step 16600: bpb=1.6144
+step  16700 | loss=5.2234 | lr=2.53e-04
+step  16800 | loss=5.2404 | lr=2.52e-04
+[VAL] step 16800: bpb=1.6126
+step  16900 | loss=5.2562 | lr=2.51e-04
+step  17000 | loss=5.2545 | lr=2.50e-04
+[VAL] step 17000: bpb=1.6103
+step  17100 | loss=5.2519 | lr=2.49e-04
+step  17200 | loss=5.2217 | lr=2.49e-04
+[VAL] step 17200: bpb=1.6104
+step  17300 | loss=5.2197 | lr=2.48e-04
+step  17400 | loss=5.2196 | lr=2.47e-04
+[VAL] step 17400: bpb=1.6111
+step  17500 | loss=5.2420 | lr=2.46e-04
+step  17600 | loss=5.2393 | lr=2.46e-04
+[VAL] step 17600: bpb=1.6079
+step  17700 | loss=5.2300 | lr=2.45e-04
+step  17800 | loss=5.2377 | lr=2.44e-04
+[VAL] step 17800: bpb=1.6068
+step  17900 | loss=5.2209 | lr=2.43e-04
+step  18000 | loss=5.2309 | lr=2.42e-04
+[VAL] step 18000: bpb=1.6070
+step  18100 | loss=5.2282 | lr=2.42e-04
+step  18200 | loss=5.2244 | lr=2.41e-04
+[VAL] step 18200: bpb=1.6091
+step  18300 | loss=5.2187 | lr=2.40e-04
+step  18400 | loss=5.2393 | lr=2.39e-04
+[VAL] step 18400: bpb=1.6097
+step  18500 | loss=5.2326 | lr=2.38e-04
+step  18600 | loss=5.2319 | lr=2.38e-04
+[VAL] step 18600: bpb=1.6058
+step  18700 | loss=5.2329 | lr=2.37e-04
+step  18800 | loss=5.2060 | lr=2.36e-04
+[VAL] step 18800: bpb=1.6053
+step  18900 | loss=5.2083 | lr=2.35e-04
+step  19000 | loss=5.1979 | lr=2.34e-04
+[VAL] step 19000: bpb=1.6041
+step  19100 | loss=5.2195 | lr=2.33e-04
+step  19200 | loss=5.2207 | lr=2.32e-04
+[VAL] step 19200: bpb=1.6044
+step  19300 | loss=5.2031 | lr=2.32e-04
+step  19400 | loss=5.1887 | lr=2.31e-04
+[VAL] step 19400: bpb=1.6054
+step  19500 | loss=5.2002 | lr=2.30e-04
+step  19600 | loss=5.2035 | lr=2.29e-04
+[VAL] step 19600: bpb=1.6042
+step  19700 | loss=5.1940 | lr=2.28e-04
+step  19800 | loss=5.2072 | lr=2.27e-04
+[VAL] step 19800: bpb=1.6045
+step  19900 | loss=5.1989 | lr=2.26e-04
+step  20000 | loss=5.1951 | lr=2.26e-04
+[VAL] step 20000: bpb=1.6029
+step  20100 | loss=5.1908 | lr=2.25e-04
+step  20200 | loss=5.1940 | lr=2.24e-04
+[VAL] step 20200: bpb=1.6016
+step  20300 | loss=5.2076 | lr=2.23e-04
+step  20400 | loss=5.1868 | lr=2.22e-04
+[VAL] step 20400: bpb=1.6024
+step  20500 | loss=5.1893 | lr=2.21e-04
+step  20600 | loss=5.1820 | lr=2.20e-04
+[VAL] step 20600: bpb=1.6022
+step  20700 | loss=5.1870 | lr=2.19e-04
+step  20800 | loss=5.1666 | lr=2.18e-04
+[VAL] step 20800: bpb=1.6008
+step  20900 | loss=5.1736 | lr=2.18e-04
+step  21000 | loss=5.1782 | lr=2.17e-04
+[VAL] step 21000: bpb=1.5997
+step  21100 | loss=5.1858 | lr=2.16e-04
+step  21200 | loss=5.1685 | lr=2.15e-04
+[VAL] step 21200: bpb=1.5994
+step  21300 | loss=5.1784 | lr=2.14e-04
+step  21400 | loss=5.1787 | lr=2.13e-04
+[VAL] step 21400: bpb=1.5990
+step  21500 | loss=5.1709 | lr=2.12e-04
+step  21600 | loss=5.1778 | lr=2.11e-04
+[VAL] step 21600: bpb=1.5981
+step  21700 | loss=5.1909 | lr=2.10e-04
+step  21800 | loss=5.1867 | lr=2.09e-04
+[VAL] step 21800: bpb=1.5956
+step  21900 | loss=5.1780 | lr=2.08e-04
+step  22000 | loss=5.1762 | lr=2.07e-04
+[VAL] step 22000: bpb=1.5945
+step  22100 | loss=5.1612 | lr=2.07e-04
+step  22200 | loss=5.1922 | lr=2.06e-04
+[VAL] step 22200: bpb=1.5935
+step  22300 | loss=5.1809 | lr=2.05e-04
+step  22400 | loss=5.1739 | lr=2.04e-04
+[VAL] step 22400: bpb=1.5927
+step  22500 | loss=5.1658 | lr=2.03e-04
+step  22600 | loss=5.1808 | lr=2.02e-04
+[VAL] step 22600: bpb=1.5938
+step  22700 | loss=5.1921 | lr=2.01e-04
+step  22800 | loss=5.1832 | lr=2.00e-04
+[VAL] step 22800: bpb=1.5931
+step  22900 | loss=5.1816 | lr=1.99e-04
+step  23000 | loss=5.1770 | lr=1.98e-04
+[VAL] step 23000: bpb=1.5891
+step  23100 | loss=5.1680 | lr=1.97e-04
+step  23200 | loss=5.1722 | lr=1.96e-04
+[VAL] step 23200: bpb=1.5896
+step  23300 | loss=5.1822 | lr=1.95e-04
+step  23400 | loss=5.1709 | lr=1.94e-04
+[VAL] step 23400: bpb=1.5888
+step  23500 | loss=5.1486 | lr=1.93e-04
+step  23600 | loss=5.1452 | lr=1.92e-04
+[VAL] step 23600: bpb=1.5874
+step  23700 | loss=5.1750 | lr=1.91e-04
+step  23800 | loss=5.1782 | lr=1.90e-04
+[VAL] step 23800: bpb=1.5882
+step  23900 | loss=5.1597 | lr=1.89e-04
+step  24000 | loss=5.1565 | lr=1.88e-04
+[VAL] step 24000: bpb=1.5867
+step  24100 | loss=5.1469 | lr=1.87e-04
+step  24200 | loss=5.1561 | lr=1.87e-04
+[VAL] step 24200: bpb=1.5860
+step  24300 | loss=5.1529 | lr=1.86e-04
+step  24400 | loss=5.1530 | lr=1.85e-04
+[VAL] step 24400: bpb=1.5848
+step  24500 | loss=5.1461 | lr=1.84e-04
+step  24600 | loss=5.1503 | lr=1.83e-04
+[VAL] step 24600: bpb=1.5843
+step  24700 | loss=5.1592 | lr=1.82e-04
+step  24800 | loss=5.1598 | lr=1.81e-04
+[VAL] step 24800: bpb=1.5861
+step  24900 | loss=5.1504 | lr=1.80e-04
+step  25000 | loss=5.1519 | lr=1.79e-04
+[VAL] step 25000: bpb=1.5848
+step  25100 | loss=5.1460 | lr=1.78e-04
+step  25200 | loss=5.1393 | lr=1.77e-04
+[VAL] step 25200: bpb=1.5809
+step  25300 | loss=5.1453 | lr=1.76e-04
+step  25400 | loss=5.1387 | lr=1.75e-04
+[VAL] step 25400: bpb=1.5824
+step  25500 | loss=5.1436 | lr=1.74e-04
+step  25600 | loss=5.1331 | lr=1.73e-04
+[VAL] step 25600: bpb=1.5808
+step  25700 | loss=5.1158 | lr=1.72e-04
+step  25800 | loss=5.1360 | lr=1.71e-04
+[VAL] step 25800: bpb=1.5785
+step  25900 | loss=5.1444 | lr=1.70e-04
+step  26000 | loss=5.1305 | lr=1.69e-04
+[VAL] step 26000: bpb=1.5788
+step  26100 | loss=5.1348 | lr=1.68e-04
+step  26200 | loss=5.1361 | lr=1.67e-04
+[VAL] step 26200: bpb=1.5773
+step  26300 | loss=5.1244 | lr=1.66e-04
+step  26400 | loss=5.1364 | lr=1.65e-04
+[VAL] step 26400: bpb=1.5776
+step  26500 | loss=5.1425 | lr=1.64e-04
+step  26600 | loss=5.1443 | lr=1.63e-04
+[VAL] step 26600: bpb=1.5773
+step  26700 | loss=5.1191 | lr=1.62e-04
+step  26800 | loss=5.1204 | lr=1.61e-04
+[VAL] step 26800: bpb=1.5772
+step  26900 | loss=5.1280 | lr=1.60e-04
+step  27000 | loss=5.1186 | lr=1.59e-04
+[VAL] step 27000: bpb=1.5753
+step  27100 | loss=5.1198 | lr=1.58e-04
+step  27200 | loss=5.1340 | lr=1.57e-04
+[VAL] step 27200: bpb=1.5746
+step  27300 | loss=5.1439 | lr=1.56e-04
+step  27400 | loss=5.1340 | lr=1.55e-04
+[VAL] step 27400: bpb=1.5727
+step  27500 | loss=5.1220 | lr=1.54e-04
+step  27600 | loss=5.1224 | lr=1.53e-04
+[VAL] step 27600: bpb=1.5744
+step  27700 | loss=5.1376 | lr=1.52e-04
+step  27800 | loss=5.1223 | lr=1.51e-04
+[VAL] step 27800: bpb=1.5722
+step  27900 | loss=5.1133 | lr=1.50e-04
+step  28000 | loss=5.1123 | lr=1.49e-04
+[VAL] step 28000: bpb=1.5716
+step  28100 | loss=5.0880 | lr=1.48e-04
+step  28200 | loss=5.1074 | lr=1.47e-04
+[VAL] step 28200: bpb=1.5709
+step  28300 | loss=5.1165 | lr=1.46e-04
+step  28400 | loss=5.0986 | lr=1.45e-04
+[VAL] step 28400: bpb=1.5695
+step  28500 | loss=5.1011 | lr=1.44e-04
+step  28600 | loss=5.1043 | lr=1.43e-04
+[VAL] step 28600: bpb=1.5697
+step  28700 | loss=5.1167 | lr=1.43e-04
+step  28800 | loss=5.1315 | lr=1.42e-04
+[VAL] step 28800: bpb=1.5697
+step  28900 | loss=5.1138 | lr=1.41e-04
+step  29000 | loss=5.0856 | lr=1.40e-04
+[VAL] step 29000: bpb=1.5673
+step  29100 | loss=5.0979 | lr=1.39e-04
+step  29200 | loss=5.1004 | lr=1.38e-04
+[VAL] step 29200: bpb=1.5673
+step  29300 | loss=5.0792 | lr=1.37e-04
+step  29400 | loss=5.1062 | lr=1.36e-04
+[VAL] step 29400: bpb=1.5674
+step  29500 | loss=5.1002 | lr=1.35e-04
+step  29600 | loss=5.1041 | lr=1.34e-04
+[VAL] step 29600: bpb=1.5665
+step  29700 | loss=5.1005 | lr=1.33e-04
+step  29800 | loss=5.1062 | lr=1.32e-04
+[VAL] step 29800: bpb=1.5667
+step  29900 | loss=5.1060 | lr=1.31e-04
+step  30000 | loss=5.1001 | lr=1.30e-04
+[VAL] step 30000: bpb=1.5655
+step  30100 | loss=5.0861 | lr=1.29e-04
+step  30200 | loss=5.1084 | lr=1.28e-04
+[VAL] step 30200: bpb=1.5662
+step  30300 | loss=5.1106 | lr=1.27e-04
+step  30400 | loss=5.0862 | lr=1.26e-04
+[VAL] step 30400: bpb=1.5632
+step  30500 | loss=5.0699 | lr=1.25e-04
+step  30600 | loss=5.0506 | lr=1.24e-04
+[VAL] step 30600: bpb=1.5624
+step  30700 | loss=5.0779 | lr=1.23e-04
+step  30800 | loss=5.0764 | lr=1.23e-04
+[VAL] step 30800: bpb=1.5650
+step  30900 | loss=5.0882 | lr=1.22e-04
+step  31000 | loss=5.0919 | lr=1.21e-04
+[VAL] step 31000: bpb=1.5624
+step  31100 | loss=5.0623 | lr=1.20e-04
+step  31200 | loss=5.0738 | lr=1.19e-04
+[VAL] step 31200: bpb=1.5617
+step  31300 | loss=5.0852 | lr=1.18e-04
+step  31400 | loss=5.0752 | lr=1.17e-04
+[VAL] step 31400: bpb=1.5605
+step  31500 | loss=5.0889 | lr=1.16e-04
+step  31600 | loss=5.0748 | lr=1.15e-04
+[VAL] step 31600: bpb=1.5607
+step  31700 | loss=5.0697 | lr=1.14e-04
+step  31800 | loss=5.0645 | lr=1.13e-04
+[VAL] step 31800: bpb=1.5622
+step  31900 | loss=5.0799 | lr=1.12e-04
+step  32000 | loss=5.0708 | lr=1.12e-04
+[VAL] step 32000: bpb=1.5579
+step  32100 | loss=5.0734 | lr=1.11e-04
+step  32200 | loss=5.0657 | lr=1.10e-04
+[VAL] step 32200: bpb=1.5573
+step  32300 | loss=5.0533 | lr=1.09e-04
+step  32400 | loss=5.0646 | lr=1.08e-04
+[VAL] step 32400: bpb=1.5575
+step  32500 | loss=5.0479 | lr=1.07e-04
+step  32600 | loss=5.0650 | lr=1.06e-04
+[VAL] step 32600: bpb=1.5567
+step  32700 | loss=5.0461 | lr=1.05e-04
+step  32800 | loss=5.0519 | lr=1.04e-04
+[VAL] step 32800: bpb=1.5563
+step  32900 | loss=5.0468 | lr=1.04e-04
+step  33000 | loss=5.0495 | lr=1.03e-04
+[VAL] step 33000: bpb=1.5531
+step  33100 | loss=5.0484 | lr=1.02e-04
+step  33200 | loss=5.0332 | lr=1.01e-04
+[VAL] step 33200: bpb=1.5539
+step  33300 | loss=5.0632 | lr=1.00e-04
+step  33400 | loss=5.0526 | lr=9.92e-05
+[VAL] step 33400: bpb=1.5527
+step  33500 | loss=5.0604 | lr=9.84e-05
+step  33600 | loss=5.0553 | lr=9.75e-05
+[VAL] step 33600: bpb=1.5530
+step  33700 | loss=5.0458 | lr=9.67e-05
+step  33800 | loss=5.0458 | lr=9.58e-05
+[VAL] step 33800: bpb=1.5531
+step  33900 | loss=5.0419 | lr=9.50e-05
+step  34000 | loss=5.0556 | lr=9.41e-05
+[VAL] step 34000: bpb=1.5506
+step  34100 | loss=5.0588 | lr=9.33e-05
+step  34200 | loss=5.0403 | lr=9.25e-05
+[VAL] step 34200: bpb=1.5497
+step  34300 | loss=5.0510 | lr=9.16e-05
+step  34400 | loss=5.0450 | lr=9.08e-05
+[VAL] step 34400: bpb=1.5507
+step  34500 | loss=5.0568 | lr=9.00e-05
+step  34600 | loss=5.0496 | lr=8.92e-05
+[VAL] step 34600: bpb=1.5496
+step  34700 | loss=5.0541 | lr=8.84e-05
+step  34800 | loss=5.0449 | lr=8.76e-05
+[VAL] step 34800: bpb=1.5489
+step  34900 | loss=5.0375 | lr=8.68e-05
+step  35000 | loss=5.0504 | lr=8.60e-05
+[VAL] step 35000: bpb=1.5485
+step  35100 | loss=5.0337 | lr=8.52e-05
+step  35200 | loss=5.0480 | lr=8.44e-05
+[VAL] step 35200: bpb=1.5463
+step  35300 | loss=5.0602 | lr=8.36e-05
+step  35400 | loss=5.0454 | lr=8.28e-05
+[VAL] step 35400: bpb=1.5468
+step  35500 | loss=5.0550 | lr=8.20e-05
+step  35600 | loss=5.0529 | lr=8.13e-05
+[VAL] step 35600: bpb=1.5468
+step  35700 | loss=5.0524 | lr=8.05e-05
+step  35800 | loss=5.0319 | lr=7.97e-05
+[VAL] step 35800: bpb=1.5472
+step  35900 | loss=5.0264 | lr=7.90e-05
+step  36000 | loss=5.0229 | lr=7.82e-05
+[VAL] step 36000: bpb=1.5454
+step  36100 | loss=5.0454 | lr=7.75e-05
+step  36200 | loss=5.0370 | lr=7.67e-05
+[VAL] step 36200: bpb=1.5448
+step  36300 | loss=5.0225 | lr=7.60e-05
+step  36400 | loss=5.0110 | lr=7.53e-05
+[VAL] step 36400: bpb=1.5445
+step  36500 | loss=5.0201 | lr=7.45e-05
+step  36600 | loss=5.0217 | lr=7.38e-05
+[VAL] step 36600: bpb=1.5455
+step  36700 | loss=5.0122 | lr=7.31e-05
+step  36800 | loss=5.0170 | lr=7.24e-05
+[VAL] step 36800: bpb=1.5453
+step  36900 | loss=5.0118 | lr=7.16e-05
+step  37000 | loss=5.0192 | lr=7.09e-05
+[VAL] step 37000: bpb=1.5441
+step  37100 | loss=5.0265 | lr=7.02e-05
+step  37200 | loss=5.0318 | lr=6.95e-05
+[VAL] step 37200: bpb=1.5433
+step  37300 | loss=5.0265 | lr=6.88e-05
+step  37400 | loss=5.0234 | lr=6.82e-05
+[VAL] step 37400: bpb=1.5448
+step  37500 | loss=5.0401 | lr=6.75e-05
+step  37600 | loss=5.0108 | lr=6.68e-05
+[VAL] step 37600: bpb=1.5445
+step  37700 | loss=5.0175 | lr=6.61e-05
+step  37800 | loss=5.0200 | lr=6.55e-05
+[VAL] step 37800: bpb=1.5420
+step  37900 | loss=5.0258 | lr=6.48e-05
+step  38000 | loss=5.0216 | lr=6.42e-05
+[VAL] step 38000: bpb=1.5414
+step  38100 | loss=5.0376 | lr=6.35e-05
+step  38200 | loss=5.0182 | lr=6.29e-05
+[VAL] step 38200: bpb=1.5408
+step  38300 | loss=5.0211 | lr=6.22e-05
+step  38400 | loss=5.0213 | lr=6.16e-05
+[VAL] step 38400: bpb=1.5408
+step  38500 | loss=5.0171 | lr=6.10e-05
+step  38600 | loss=5.0230 | lr=6.03e-05
+[VAL] step 38600: bpb=1.5405
+step  38700 | loss=5.0207 | lr=5.97e-05
+step  38800 | loss=4.9845 | lr=5.91e-05
+[VAL] step 38800: bpb=1.5395
+step  38900 | loss=4.9908 | lr=5.85e-05
+step  39000 | loss=4.9936 | lr=5.79e-05
+[VAL] step 39000: bpb=1.5386
+step  39100 | loss=5.0037 | lr=5.73e-05
+step  39200 | loss=5.0150 | lr=5.67e-05
+[VAL] step 39200: bpb=1.5383
+step  39300 | loss=5.0028 | lr=5.61e-05
+step  39400 | loss=5.0165 | lr=5.56e-05
+[VAL] step 39400: bpb=1.5375
+step  39500 | loss=5.0053 | lr=5.50e-05
+step  39600 | loss=4.9943 | lr=5.44e-05
+[VAL] step 39600: bpb=1.5365
+step  39700 | loss=4.9974 | lr=5.39e-05
+step  39800 | loss=5.0051 | lr=5.33e-05
+[VAL] step 39800: bpb=1.5365
+step  39900 | loss=4.9935 | lr=5.28e-05
+step  40000 | loss=5.0066 | lr=5.22e-05
+[VAL] step 40000: bpb=1.5368
+step  40100 | loss=4.9865 | lr=5.17e-05
+step  40200 | loss=4.9931 | lr=5.11e-05
+[VAL] step 40200: bpb=1.5372
+step  40300 | loss=4.9815 | lr=5.06e-05
+step  40400 | loss=4.9974 | lr=5.01e-05
+[VAL] step 40400: bpb=1.5366
+step  40500 | loss=5.0165 | lr=4.96e-05
+step  40600 | loss=4.9944 | lr=4.91e-05
+[VAL] step 40600: bpb=1.5356
+step  40700 | loss=4.9818 | lr=4.86e-05
+step  40800 | loss=4.9920 | lr=4.81e-05
+[VAL] step 40800: bpb=1.5356
+step  40900 | loss=4.9896 | lr=4.76e-05
+step  41000 | loss=4.9588 | lr=4.71e-05
+[VAL] step 41000: bpb=1.5351
+step  41100 | loss=4.9677 | lr=4.66e-05
+step  41200 | loss=4.9924 | lr=4.62e-05
+[VAL] step 41200: bpb=1.5348
+step  41300 | loss=5.0021 | lr=4.57e-05
+step  41400 | loss=4.9963 | lr=4.53e-05
+[VAL] step 41400: bpb=1.5339
+step  41500 | loss=4.9954 | lr=4.48e-05
+step  41600 | loss=4.9871 | lr=4.44e-05
+[VAL] step 41600: bpb=1.5328
+step  41700 | loss=5.0022 | lr=4.39e-05
+step  41800 | loss=4.9812 | lr=4.35e-05
+[VAL] step 41800: bpb=1.5325
+step  41900 | loss=4.9915 | lr=4.31e-05
+step  42000 | loss=4.9839 | lr=4.26e-05
+[VAL] step 42000: bpb=1.5327
+step  42100 | loss=4.9782 | lr=4.22e-05
+step  42200 | loss=4.9812 | lr=4.18e-05
+[VAL] step 42200: bpb=1.5316
+step  42300 | loss=4.9700 | lr=4.14e-05
+step  42400 | loss=4.9931 | lr=4.10e-05
+[VAL] step 42400: bpb=1.5317
+step  42500 | loss=4.9847 | lr=4.07e-05
+step  42600 | loss=4.9852 | lr=4.03e-05
+[VAL] step 42600: bpb=1.5320
+step  42700 | loss=4.9795 | lr=3.99e-05
+step  42800 | loss=4.9938 | lr=3.95e-05
+[VAL] step 42800: bpb=1.5313
+step  42900 | loss=4.9512 | lr=3.92e-05
+step  43000 | loss=4.9648 | lr=3.88e-05
+[VAL] step 43000: bpb=1.5313
+step  43100 | loss=4.9714 | lr=3.85e-05

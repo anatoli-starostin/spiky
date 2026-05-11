@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp226_v_d2v_no_norm_pre_outln",
+  "best_val_bpb": 1.6289788271137229,
+  "final_val_bpb": 1.6289788271137229,
+  "n_params": 339547584,
+  "training_time_hours": 0.75
+}

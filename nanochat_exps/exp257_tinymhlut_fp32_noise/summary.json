@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp257_tinymhlut_fp32_noise",
+  "best_val_bpb": 1.6055787612269972,
+  "final_val_bpb": 1.605962447729209,
+  "n_params": 358420266,
+  "training_time_hours": 0.699
+}

@@ -1,0 +1,21 @@
+[2026-05-03 23:44:08] === sweep115_3k starting === exp115 step-3000 baseline = 1.8284
+[2026-05-03 23:44:08] --- Stage 1: endpoint scan ---
+[2026-05-03 23:44:08]   [start] run_qk_nap6 overrides={'qk_input_nap': 6, 'qk_n_sparse_outputs': 32}
+[2026-05-04 00:00:47]   [done] run_qk_nap6 best_val_bpb=1.8615 dt=999s
+[2026-05-04 00:00:47]   [start] run_qk_nap10 overrides={'qk_input_nap': 10, 'qk_n_sparse_outputs': 2}
+[2026-05-04 00:14:15]   [done] run_qk_nap10 best_val_bpb=1.8805 dt=808s
+[2026-05-04 00:14:15]   [start] run_v_nap6 overrides={'v_input_nap': 6, 'v_n_sparse_outputs': 32}
+[2026-05-04 00:30:53]   [done] run_v_nap6 best_val_bpb=1.8841 dt=998s
+[2026-05-04 00:30:53]   [start] run_v_nap10 overrides={'v_input_nap': 10, 'v_n_sparse_outputs': 2}
+[2026-05-04 00:44:21]   [done] run_v_nap10 best_val_bpb=1.8577 dt=808s
+[2026-05-04 00:44:21]   [start] run_out_nap6 overrides={'out_input_nap': 6, 'out_n_sparse_outputs': 32}
+[2026-05-04 01:01:19]   [done] run_out_nap6 best_val_bpb=1.8689 dt=1018s
+[2026-05-04 01:01:19]   [start] run_out_nap10 overrides={'out_input_nap': 10, 'out_n_sparse_outputs': 2}
+[2026-05-04 01:14:46]   [done] run_out_nap10 best_val_bpb=1.8840 dt=807s
+[2026-05-04 01:14:46] --- Stage 2: mid-point fill-in (gated) ---
+[2026-05-04 01:14:46] --- Stage 3: joint best ---
+[2026-05-04 01:14:46]   per_module_winner = {'qk': 8, 'v': 8, 'out': 8}
+[2026-05-04 01:14:46] === sweep115_3k DONE ===
+[2026-05-04 01:14:46] Summary written to /home/starost/spiky/nanochat_exps/sweep115_3k/SUMMARY.md
+NE ===
+[2026-05-04 01:14:46] Summary written to /home/starost/spiky/nanochat_exps/sweep115_3k/SUMMARY.md

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp223_qk_init_001_qknorm",
+  "best_val_bpb": 1.6246696874214515,
+  "final_val_bpb": 1.624891685850254,
+  "n_params": 339545856,
+  "training_time_hours": 0.669
+}

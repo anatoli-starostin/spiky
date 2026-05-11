@@ -1,0 +1,7 @@
+{
+  "exp_name": "run_qk_nap6",
+  "best_val_bpb": 1.8615079837105706,
+  "final_val_bpb": 1.8615079837105706,
+  "n_params": 108173318,
+  "training_time_hours": 0.275
+}

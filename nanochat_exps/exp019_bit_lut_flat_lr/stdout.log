@@ -1,0 +1,37 @@
+Loading tokenizer from /home/starost/.cache/nanochat/tokenizer
+Vocab size: 32768, BOS id: 32759
+bit LUTs: 24
+Adam-managed parameters: 14,912,518
+Bit-LUT optimizer: FLAT lr (no schedule); AdamW: cosine warmup_decay to 0.1.
+Q/K BitPermLUT: in_nap=5 out_nap=24 tph=512 d_qk=32 P_qk=496
+V BitPermLUT:   in_nap=5 out_nap=16 tph=512 d_v=16 P_v=120
+Out BitPermLUT: in_nap=8 out_nap=32 tph=[4096, 4096, 2048, 2048, 2048, 2048]
+Tokens/micro-batch: 4,096 | grad_accum: 1 | effective batch: 4,096 tokens
+step      1 | loss=10.5607 | lr=3.75e-07
+step    100 | loss=9.8901 | lr=3.75e-05
+step    200 | loss=8.9452 | lr=7.50e-05
+[VAL] step 200: bpb=2.4419
+step    300 | loss=8.1348 | lr=1.12e-04
+step    400 | loss=7.7485 | lr=1.50e-04
+[VAL] step 400: bpb=2.3019
+step    500 | loss=7.5240 | lr=1.87e-04
+step    600 | loss=7.4033 | lr=2.25e-04
+[VAL] step 600: bpb=2.2375
+step    700 | loss=7.3006 | lr=2.62e-04
+step    800 | loss=7.1949 | lr=3.00e-04
+[VAL] step 800: bpb=2.1761
+step    900 | loss=7.0977 | lr=3.00e-04
+step   1000 | loss=7.0079 | lr=2.99e-04
+[VAL] step 1000: bpb=2.1122
+step   1100 | loss=6.9164 | lr=2.99e-04
+step   1200 | loss=6.8271 | lr=2.98e-04
+[VAL] step 1200: bpb=2.0606
+step   1300 | loss=6.7316 | lr=2.97e-04
+step   1400 | loss=6.6822 | lr=2.95e-04
+[VAL] step 1400: bpb=2.0242
+step   1500 | loss=6.6365 | lr=2.94e-04
+step   1600 | loss=6.5663 | lr=2.92e-04
+[VAL] step 1600: bpb=2.0010
+step   1700 | loss=6.5372 | lr=2.90e-04
+step   1800 | loss=6.5079 | lr=2.87e-04
+[VAL] step 1800: bpb=1.9836
