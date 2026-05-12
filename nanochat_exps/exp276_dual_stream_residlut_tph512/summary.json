@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp276_dual_stream_residlut_tph512",
+  "best_val_bpb": 1.6775249084752204,
+  "final_val_bpb": 1.6775249084752204,
+  "n_params": 482544664,
+  "training_time_hours": 0.447
+}

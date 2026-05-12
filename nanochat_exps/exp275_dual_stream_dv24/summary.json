@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp275_dual_stream_dv24",
+  "best_val_bpb": 1.6904028120462447,
+  "final_val_bpb": 1.6904028120462447,
+  "n_params": 331549720,
+  "training_time_hours": 0.357
+}

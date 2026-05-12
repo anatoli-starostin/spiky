@@ -1061,10 +1061,10 @@ class TinyMultiHeadLut(nn.Module):
                 raise NotImplementedError(
                     "n_alternatives > 1 does not yet support sparse_scatter_n_outputs"
                 )
-            if partition_sets is not None:
-                raise NotImplementedError(
-                    "n_alternatives > 1 does not yet support partition_sets"
-                )
+            # partition_sets only affects init-time anchor-pair sampling (stored
+            # as int16 in self.lookup.anchor_pairs_a/b); the multi-alt backward
+            # gathers from these buffers without knowing or caring about
+            # partition membership, so the combination is safe.
             # Cache int64 anchor pairs + LSB-first powers + batch offset for
             # `_compute_anchor_data` / `_anchor_pairs_lookup_forward_fallback*`
             # (these helpers require long-typed indices for `gather`).
@@ -1121,10 +1121,10 @@ class TinyMultiHeadLut(nn.Module):
                 raise NotImplementedError(
                     "soft backward_mode does not yet support sparse_scatter_n_outputs"
                 )
-            if partition_sets is not None:
-                raise NotImplementedError(
-                    "soft backward_mode does not yet support partition_sets"
-                )
+            # partition_sets only affects init-time anchor-pair sampling (stored
+            # as int16 in self.lookup.anchor_pairs_a/b); the soft backward
+            # gathers from these buffers without knowing or caring about
+            # partition membership, so the combination is safe.
             # bit_matrix and powers (MSB-first, matching `_soft_lut_bwd_body`).
             self.register_buffer(
                 "soft_bit_matrix",

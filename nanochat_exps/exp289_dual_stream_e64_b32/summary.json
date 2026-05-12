@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp289_dual_stream_e64_b32",
+  "best_val_bpb": 1.513878913050213,
+  "final_val_bpb": 1.513878913050213,
+  "n_params": 350424100,
+  "training_time_hours": 1.772
+}

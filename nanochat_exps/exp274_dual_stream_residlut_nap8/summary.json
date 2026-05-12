@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp274_dual_stream_residlut_nap8",
+  "best_val_bpb": 1.6857458904602254,
+  "final_val_bpb": 1.6857458904602254,
+  "n_params": 350424088,
+  "training_time_hours": 0.362
+}

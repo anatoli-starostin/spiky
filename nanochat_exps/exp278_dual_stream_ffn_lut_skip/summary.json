@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp278_dual_stream_ffn_lut_skip",
+  "best_val_bpb": 1.7283774502568945,
+  "final_val_bpb": 1.7283774502568945,
+  "n_params": 198904892,
+  "training_time_hours": 0.392
+}

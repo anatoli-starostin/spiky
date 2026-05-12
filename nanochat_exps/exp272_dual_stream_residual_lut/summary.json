@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp272_dual_stream_residual_lut",
+  "best_val_bpb": 1.6836265798782837,
+  "final_val_bpb": 1.6836265798782837,
+  "n_params": 368348580,
+  "training_time_hours": 0.475
+}
