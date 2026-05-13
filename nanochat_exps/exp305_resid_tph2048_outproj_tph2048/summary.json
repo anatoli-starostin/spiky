@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp305_resid_tph2048_outproj_tph2048",
+  "best_val_bpb": 1.6624351167533722,
+  "final_val_bpb": 1.6624351167533722,
+  "n_params": 669191216,
+  "training_time_hours": 0.909
+}
