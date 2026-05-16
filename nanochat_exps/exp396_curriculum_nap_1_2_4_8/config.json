@@ -1,0 +1,40 @@
+{
+  "exp_name": "exp396_curriculum_nap_1_2_4_8",
+  "description": "4-stage NAP curriculum: NAP=1→2→4→8 with bs=2→4→8→16. Top-down anchor tree built from target NAP=8 architecture. Between stages: additive merge formula parent[bits_A, bits_B] = child_A[bits_A] + child_B[bits_B]. Equal step count per stage (option B): 4000 steps each → 16000 total, 120K bs-units (~93% of exp365). Curriculum applies to all 4 LUT modules. Target architecture matches exp365's tph values but unified NAP=8 (vs exp365's qkv/residual at NAP=6).",
+  "per_layer_embedding_dim": [48, 48, 48, 48, 48, 48],
+  "pos_emb_dim": 0,
+  "context_size": 512,
+  "embedding_dim": 48,
+  "residual_dim": 384,
+  "num_layers": 6,
+  "n_heads": 6,
+  "d_qk": 64,
+  "d_v": 16,
+  "rope_base": 10000.0,
+  "target_nap": 8,
+  "target_tph": {
+    "qkv": 16,
+    "v_lut": 32,
+    "out_proj": 128,
+    "residual_lut": 64
+  },
+  "stages": [
+    {"nap": 1, "bs": 2, "n_steps": 4000},
+    {"nap": 2, "bs": 4, "n_steps": 4000},
+    {"nap": 4, "bs": 8, "n_steps": 4000},
+    {"nap": 8, "bs": 16, "n_steps": 4000}
+  ],
+  "argmax_noise_eps": 0.0,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "random_seed": 42,
+  "adam_lr": 0.0003,
+  "lut_lr": 0.001,
+  "weight_decay": 0.1,
+  "mhlut_init_std": 0.001,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "lr_warmup_fraction": 0.1
+}

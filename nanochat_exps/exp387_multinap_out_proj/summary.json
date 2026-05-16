@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp387_multinap_out_proj",
+  "best_val_bpb": 1.6097091966858468,
+  "final_val_bpb": 1.6097091966858468,
+  "n_params": 42470280,
+  "training_time_hours": 0.197
+}

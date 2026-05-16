@@ -1,0 +1,38 @@
+{
+  "exp_name": "exp399_curriculum_2stage_nap_4_8",
+  "description": "Simple 2-stage curriculum: NAP=4 (bs=8, 8000 steps) → NAP=8 (bs=16, 4000 steps). Equal compute per stage (64K bs-units each, 128K total = exp365). Independent per-stage cosine LR with 10%% warmup. Anchor tree top-down from final NAP=8. Adam state carry via averaged additive merge. Target arch matches exp398 (snap-to-NAP=8 everywhere = 87M).",
+  "per_layer_embedding_dim": [48, 48, 48, 48, 48, 48],
+  "pos_emb_dim": 0,
+  "context_size": 512,
+  "embedding_dim": 48,
+  "residual_dim": 384,
+  "num_layers": 6,
+  "n_heads": 6,
+  "d_qk": 64,
+  "d_v": 16,
+  "rope_base": 10000.0,
+  "target_nap": 8,
+  "target_tph": {
+    "qkv": 16,
+    "v_lut": 32,
+    "out_proj": 128,
+    "residual_lut": 64
+  },
+  "stages": [
+    {"nap": 4, "bs": 8, "n_steps": 8000},
+    {"nap": 8, "bs": 16, "n_steps": 4000}
+  ],
+  "argmax_noise_eps": 0.0,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "random_seed": 42,
+  "adam_lr": 0.0003,
+  "lut_lr": 0.001,
+  "weight_decay": 0.1,
+  "mhlut_init_std": 0.001,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "lr_warmup_fraction": 0.1
+}

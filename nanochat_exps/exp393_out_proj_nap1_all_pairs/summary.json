@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp393_out_proj_nap1_all_pairs",
+  "best_val_bpb": 1.6347507898093345,
+  "final_val_bpb": 1.6347507898093345,
+  "n_params": 36249456,
+  "training_time_hours": 0.372
+}

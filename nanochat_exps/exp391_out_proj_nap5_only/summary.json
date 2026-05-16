@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp391_out_proj_nap5_only",
+  "best_val_bpb": 1.601521271146909,
+  "final_val_bpb": 1.601521271146909,
+  "n_params": 43060080,
+  "training_time_hours": 0.248
+}
