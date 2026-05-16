@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp407_E64_sumpos_short",
+  "best_val_loss": 1.3343625605106353,
+  "final_val_loss": 1.3343625605106353,
+  "adam_params": 1054855,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.387
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp350_tiny_lut_out256_v64_qkv32_bs48",
+  "best_val_bpb": 1.4848129423204206,
+  "final_val_bpb": 1.4848129423204206,
+  "n_params": 62524272,
+  "training_time_hours": 0.769
+}

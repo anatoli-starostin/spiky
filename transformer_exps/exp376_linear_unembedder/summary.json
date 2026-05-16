@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp376_linear_unembedder",
+  "best_val_loss": 1.2216974735260009,
+  "final_val_loss": 1.2216974735260009,
+  "adam_params": 83751,
+  "n_bit_luts": 24,
+  "training_time_hours": 3.927
+}

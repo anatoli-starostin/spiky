@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp342_tiny_lut_H12",
+  "best_val_bpb": 1.634426619964483,
+  "final_val_bpb": 1.634426619964483,
+  "n_params": 50465840,
+  "training_time_hours": 0.25
+}

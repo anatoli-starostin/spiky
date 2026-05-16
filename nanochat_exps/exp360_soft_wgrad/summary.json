@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp360_soft_wgrad",
+  "best_val_bpb": 1.643080525005637,
+  "final_val_bpb": 1.643080525005637,
+  "n_params": 43060080,
+  "training_time_hours": 0.216
+}

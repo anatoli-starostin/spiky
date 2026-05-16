@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp392_eout32_sigmoid_short",
+  "best_val_loss": 1.4835722476243973,
+  "final_val_loss": 1.4835722476243973,
+  "adam_params": 42698,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.594
+}

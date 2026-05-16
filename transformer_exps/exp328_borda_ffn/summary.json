@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp328_borda_ffn",
+  "best_val_loss": 1.6233207076787948,
+  "final_val_loss": 1.6233207076787948,
+  "adam_params": 2722215,
+  "n_bit_luts": 0,
+  "training_time_hours": 0.139
+}

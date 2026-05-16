@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp337_tiny_lut_d_v32",
+  "best_val_bpb": 1.635973165616204,
+  "final_val_bpb": 1.635973165616204,
+  "n_params": 45747248,
+  "training_time_hours": 0.176
+}

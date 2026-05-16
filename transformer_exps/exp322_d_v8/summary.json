@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp322_d_v8",
+  "best_val_loss": 1.571304202079773,
+  "final_val_loss": 1.571304202079773,
+  "adam_params": 380775,
+  "n_bit_luts": 30,
+  "training_time_hours": 0.289
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp384_concat_out_dom_short",
+  "best_val_loss": 1.3834283143281936,
+  "final_val_loss": 1.3834283143281936,
+  "adam_params": 805191,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.324
+}

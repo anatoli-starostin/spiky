@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp309_qk_tph512",
+  "best_val_bpb": 1.6615249466623456,
+  "final_val_bpb": 1.6615249466623456,
+  "n_params": 677579824,
+  "training_time_hours": 0.993
+}

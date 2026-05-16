@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp405_tok8_pyramid_short",
+  "best_val_loss": 1.406967693567276,
+  "final_val_loss": 1.406967693567276,
+  "adam_params": 251151,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.355
+}

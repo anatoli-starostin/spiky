@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp339_tiny_lut_E48",
+  "best_val_bpb": 1.6544785055158264,
+  "final_val_bpb": 1.6544785055158264,
+  "n_params": 38341488,
+  "training_time_hours": 0.173
+}

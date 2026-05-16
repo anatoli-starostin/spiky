@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp394_mhl_logits_short",
+  "best_val_loss": 1.3936663717031479,
+  "final_val_loss": 1.3936663717031479,
+  "adam_params": 8455463,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.426
+}

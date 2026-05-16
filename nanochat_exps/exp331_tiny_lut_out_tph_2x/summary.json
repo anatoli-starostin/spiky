@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp331_tiny_lut_out_tph_2x",
+  "best_val_bpb": 1.691544971593506,
+  "final_val_bpb": 1.691544971593506,
+  "n_params": 32148528,
+  "training_time_hours": 0.133
+}

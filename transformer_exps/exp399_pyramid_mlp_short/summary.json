@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp399_pyramid_mlp_short",
+  "best_val_loss": 1.5581734389066697,
+  "final_val_loss": 1.5581734389066697,
+  "adam_params": 197343,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.36
+}

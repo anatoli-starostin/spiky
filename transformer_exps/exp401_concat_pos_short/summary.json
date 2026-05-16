@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp401_concat_pos_short",
+  "best_val_loss": 1.4038864195346832,
+  "final_val_loss": 1.4038864195346832,
+  "adam_params": 368103,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.32
+}

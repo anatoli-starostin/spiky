@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp318_out_nap128",
+  "best_val_loss": 1.3717079609632492,
+  "final_val_loss": 1.3717079609632492,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.616
+}

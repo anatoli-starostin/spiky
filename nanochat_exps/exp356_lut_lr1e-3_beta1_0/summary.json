@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp356_lut_lr1e-3_beta1_0",
+  "best_val_bpb": 1.631587614063658,
+  "final_val_bpb": 1.631587614063658,
+  "n_params": 43060080,
+  "training_time_hours": 0.195
+}

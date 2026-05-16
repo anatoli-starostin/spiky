@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp321_dense_rope",
+  "best_val_bpb": 1.5932722806730282,
+  "final_val_bpb": 1.5932722806730282,
+  "n_params": 601885744,
+  "training_time_hours": 0.881
+}

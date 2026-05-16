@@ -1,0 +1,36 @@
+{
+  "experiment": "multibit_grow_redundancy_test",
+  "layer": 0,
+  "tph_phase1": 1024,
+  "tph_phase3": 1280,
+  "input_nap": 10,
+  "output_nap": 32,
+  "bit_width": 4,
+  "init_std": 0.001,
+  "new_init_std": 1e-05,
+  "phase1_steps": 25000,
+  "phase3_steps": 25000,
+  "phase1_end": {
+    "mse": 0.021175699849282543,
+    "sign_acc": 0.9989774765506867
+  },
+  "post_grow": {
+    "mse": 0.024888898576459578,
+    "sign_acc": 0.9989580339001071
+  },
+  "phase3_end": {
+    "mse": 0.017960091271708088,
+    "sign_acc": 0.9991084683325983
+  },
+  "latent_stats_phase3_end": {
+    "all_mean": 24.94312858581543,
+    "all_max": 29.852184295654297,
+    "all_min": 13.645733833312988,
+    "old_mean": 26.787382125854492,
+    "old_max": 29.852184295654297,
+    "old_min": 21.38008689880371,
+    "new_mean": 17.56610679626465,
+    "new_max": 19.389404296875,
+    "new_min": 13.645733833312988
+  }
+}

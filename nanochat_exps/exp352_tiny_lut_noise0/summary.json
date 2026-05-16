@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp352_tiny_lut_noise0",
+  "best_val_bpb": 1.6301647123693914,
+  "final_val_bpb": 1.6301647123693914,
+  "n_params": 43060080,
+  "training_time_hours": 0.186
+}

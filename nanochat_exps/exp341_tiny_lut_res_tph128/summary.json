@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp341_tiny_lut_res_tph128",
+  "best_val_bpb": 1.6409039225621875,
+  "final_val_bpb": 1.6410279181138336,
+  "n_params": 49876016,
+  "training_time_hours": 0.19
+}

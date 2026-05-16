@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp377_ste_bin_unembed_short",
+  "best_val_loss": 1.3694442629814148,
+  "final_val_loss": 1.3694442629814148,
+  "adam_params": 380391,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.583
+}

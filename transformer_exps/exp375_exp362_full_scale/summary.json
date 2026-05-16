@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp375_exp362_full_scale",
+  "best_val_loss": 1.2111370056867599,
+  "final_val_loss": 1.2112190008163453,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 2.703
+}

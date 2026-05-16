@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp380_tied_v2d_unembedder_short",
+  "best_val_loss": 1.369382980465889,
+  "final_val_loss": 1.369382980465889,
+  "adam_params": 34472,
+  "n_bit_luts": 24,
+  "training_time_hours": 1.311
+}

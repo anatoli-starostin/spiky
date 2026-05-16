@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp362_bs96_noise0_lutlr1e-3",
+  "best_val_bpb": 1.4296433844293954,
+  "final_val_bpb": 1.4296433844293954,
+  "n_params": 43060080,
+  "training_time_hours": 1.016
+}

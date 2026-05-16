@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp315_out_tph4096_nap6",
+  "best_val_loss": 1.2745660811662674,
+  "final_val_loss": 1.2751318037509918,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 4.307
+}

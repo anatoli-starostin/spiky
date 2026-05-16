@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp389_kendall_abs_short",
+  "best_val_loss": 1.522934553027153,
+  "final_val_loss": 1.522934553027153,
+  "adam_params": 42696,
+  "n_bit_luts": 24,
+  "training_time_hours": 1.014
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp387_dot_embed_out_short",
+  "best_val_loss": 1.4664851188659669,
+  "final_val_loss": 1.4664851188659669,
+  "adam_params": 42760,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.778
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp326_qkv_lut_plus_v",
+  "best_val_bpb": 1.5887303477023507,
+  "final_val_bpb": 1.5887303477023507,
+  "n_params": 620760112,
+  "training_time_hours": 0.911
+}

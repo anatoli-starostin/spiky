@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp324_out_lin",
+  "best_val_loss": 1.4935172349214554,
+  "final_val_loss": 1.4935172349214554,
+  "adam_params": 6474855,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.362
+}

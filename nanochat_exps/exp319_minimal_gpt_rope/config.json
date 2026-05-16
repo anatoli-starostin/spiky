@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp319_minimal_gpt_rope",
+  "description": "Fork of exp001_minimal_gpt with RoPE instead of learned absolute pos_emb. Single trade: nn.Embedding(seq_len, n_embd) + additive position term -> RotaryEmbedding(head_dim) applied to q,k inside MinimalAttention (standard half-rotation form, base=10000). All other hyperparameters identical to exp001 (depth=6, n_embd=384, n_head=6, lr=3e-4, wd=0.1, device_bs=8, total_bs=4096, 8000 steps, weight-tied head, zero-init residual projections). Reference: exp001 = 1.6256 bpb @ 23M params.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 8,
+  "total_batch_size": 4096,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

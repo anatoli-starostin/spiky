@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp381_bs32_lr4e3_6250_short",
+  "best_val_loss": 1.5623957484960556,
+  "final_val_loss": 1.5623957484960556,
+  "adam_params": 34472,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.31
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp365_bs16_weight_track",
+  "best_val_bpb": 1.6215017830773142,
+  "final_val_bpb": 1.6215017830773142,
+  "n_params": 43060080,
+  "training_time_hours": 0.182
+}

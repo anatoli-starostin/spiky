@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp330_tiny_lut_resid_tph64",
+  "best_val_bpb": 1.7130841005762178,
+  "final_val_bpb": 1.7130841005762178,
+  "n_params": 30051376,
+  "training_time_hours": 0.128
+}

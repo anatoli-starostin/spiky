@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp382_cr_dist_tracking",
+  "best_val_bpb": 1.626920904355726,
+  "final_val_bpb": 1.626920904355726,
+  "n_params": 43060080,
+  "training_time_hours": 0.186
+}

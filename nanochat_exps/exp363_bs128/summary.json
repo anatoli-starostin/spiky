@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp363_bs128",
+  "best_val_bpb": 1.41054860871261,
+  "final_val_bpb": 1.41054860871261,
+  "n_params": 43060080,
+  "training_time_hours": 1.344
+}

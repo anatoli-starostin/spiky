@@ -1,0 +1,8 @@
+{
+  "exp_name": "cfg_in08_tph0256_o128",
+  "best_val_loss": 1.5221692264080047,
+  "final_val_loss": 1.5221692264080047,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.093
+}

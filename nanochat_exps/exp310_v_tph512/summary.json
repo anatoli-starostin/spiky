@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp310_v_tph512",
+  "best_val_bpb": 1.6555917687813546,
+  "final_val_bpb": 1.6555917687813546,
+  "n_params": 677579824,
+  "training_time_hours": 1.005
+}

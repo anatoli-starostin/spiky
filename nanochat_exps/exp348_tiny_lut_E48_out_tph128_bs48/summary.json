@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp348_tiny_lut_E48_out_tph128_bs48",
+  "best_val_bpb": 1.5234088270969806,
+  "final_val_bpb": 1.5234088270969806,
+  "n_params": 43060080,
+  "training_time_hours": 0.53
+}

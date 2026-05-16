@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp328_minimal_gpt_rope_bs16",
+  "description": "Fork of exp319 (MinimalGPT + RoPE, 23.2 M, val_bpb @ 8K = 1.5468) doubling device_batch_size 8 -> 16 and total_batch_size 4096 -> 8192. Identical hyperparams otherwise. Directly compares vanilla transformer's batch-size sensitivity against the LUT-LM finding (exp326 -> exp327: Δ=−0.0991 from doubling batch). If vanilla also drops ~0.1 bpb, the batch-size lever is general (not LUT-specific); if vanilla drops far less, the LUT-LM batch-sensitivity hypothesis (sparse per-token gradients in STE training) is confirmed.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp321_out_ffn_concat",
+  "best_val_loss": 1.4040565818548203,
+  "final_val_loss": 1.4040565818548203,
+  "adam_params": 381159,
+  "n_bit_luts": 30,
+  "training_time_hours": 0.287
+}

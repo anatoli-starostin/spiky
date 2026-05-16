@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp404_inverted_pyramid_short",
+  "best_val_loss": 1.374743714928627,
+  "final_val_loss": 1.374743714928627,
+  "adam_params": 226471,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.356
+}

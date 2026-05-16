@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp327_out_tph256_nap8_o256",
+  "best_val_loss": 1.4747672915458678,
+  "final_val_loss": 1.4747672915458678,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.281
+}

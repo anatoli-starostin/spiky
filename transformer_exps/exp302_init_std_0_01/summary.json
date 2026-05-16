@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp302_init_std_0_01",
+  "best_val_loss": 2.5898468673229216,
+  "final_val_loss": 2.5898468673229216,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.184
+}

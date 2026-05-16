@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp388_mse_logit_short",
+  "best_val_loss": 1.4637092977762223,
+  "final_val_loss": 1.4637092977762223,
+  "adam_params": 42760,
+  "n_bit_luts": 24,
+  "training_time_hours": 1.015
+}

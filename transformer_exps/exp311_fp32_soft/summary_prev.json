@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp311_fp32_soft",
+  "best_val_loss": 1.4078103482723237,
+  "final_val_loss": 1.4078103482723237,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.308
+}

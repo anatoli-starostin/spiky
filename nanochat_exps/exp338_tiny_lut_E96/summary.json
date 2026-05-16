@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp338_tiny_lut_E96",
+  "best_val_bpb": 1.6458714797002476,
+  "final_val_bpb": 1.6458714797002476,
+  "n_params": 44633520,
+  "training_time_hours": 0.176
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp328_minimal_gpt_rope_bs16",
+  "best_val_bpb": 1.3881508275362664,
+  "final_val_bpb": 1.3881508275362664,
+  "total_params": 23209728,
+  "training_time_hours": 0.098
+}

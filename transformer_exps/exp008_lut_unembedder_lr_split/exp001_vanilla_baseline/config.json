@@ -1,0 +1,21 @@
+{
+  "exp_name": "exp001_vanilla_baseline",
+  "description": "Vanilla causal transformer on fineweb byte-level LM. Baseline for LUT transformer comparisons.",
+  "model": "CharTransformer",
+  "d_model": 256,
+  "n_heads": 4,
+  "num_layers": 6,
+  "dim_feedforward_multiplier": 4,
+  "dropout": 0.0,
+  "context_size": 32,
+  "vocab_size": 257,
+  "optimizer": "Adam",
+  "lr": 0.01,
+  "n_steps": 100000,
+  "batch_size": 128,
+  "test_batch_size": 256,
+  "test_every": 1000,
+  "lr_schedule": "warmup_cosine",
+  "lr_warmup_fraction": 0.1,
+  "random_seed": 1
+}

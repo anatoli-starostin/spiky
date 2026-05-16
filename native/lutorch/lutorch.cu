@@ -652,6 +652,75 @@ __global__ void tiny_mhlut_bwd_na1_carriers_kernel(
 }
 
 // =====================================================================
+// TinyMHLut sparse_scatter forward kernel (slot-major).
+//
+// Replaces the slow F.embedding + scatter_add_ pipeline used when
+// sparse_scatter_n_outputs is set. scatter_add_'s atomic-write contention
+// dominates that path (~118 ms forward at exp318 shapes); this kernel
+// inverts the data flow — for each output slot, sum its precomputed
+// contributors directly, no atomics — and brings forward time down by
+// ~10x at exp318 shapes (bench/test in nanochat_exps/bench_resid_lut_*).
+//
+// Per-(b, h, slot) thread accumulates the contribution sum:
+//
+//   out[b, h, s] = Σ_k  weights[t_k, lookup_indices[b, t_k], i_k]
+//
+// where (t_k, i_k) are the contributors to slot s (precomputed inverse of
+// scatter_indices, sorted by destination slot). lookup_indices stays the
+// SAME tensor as in the dense path; the precomputed slot_offsets +
+// contrib_table + contrib_local_i replace the runtime gather+scatter_add.
+//
+// Memory: zero intermediates. weights random-access; lookup_indices
+// (32 KB per b) sits hot in L1 across all 384 threads of one b's slot
+// block. Compute = O(B * H * D * Kavg) FP32 adds (Kavg = tph * n_out / D).
+// =====================================================================
+template <typename scalar_t>
+__global__ void tiny_mhlut_sparse_scatter_forward_kernel(
+    int64_t B,
+    int64_t n_heads,
+    int64_t sparse_n_outputs,
+    int64_t tables_per_head,
+    int64_t table_dim,
+    int64_t n_outputs,
+    const scalar_t* __restrict__ weights_ptr,          // [n_lookup_tables, table_dim, n_outputs]
+    const int64_t*  __restrict__ lookup_indices_ptr,   // [B, n_lookup_tables] int64
+    const int64_t*  __restrict__ slot_offsets_ptr,     // [n_heads, sparse_n_outputs + 1] int64
+    const int64_t*  __restrict__ contrib_table_ptr,    // [n_heads, tph * n_outputs] int64 (global table idx)
+    const int64_t*  __restrict__ contrib_local_i_ptr,  // [n_heads, tph * n_outputs] int64
+    scalar_t* __restrict__ out_ptr                     // [B, n_heads, sparse_n_outputs]
+) {
+    int64_t bhs = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = B * n_heads * sparse_n_outputs;
+    if (bhs >= total) return;
+
+    int64_t s = bhs % sparse_n_outputs;
+    int64_t hs = bhs / sparse_n_outputs;
+    int64_t h = hs % n_heads;
+    int64_t b = hs / n_heads;
+
+    int64_t off_start = slot_offsets_ptr[h * (sparse_n_outputs + 1) + s];
+    int64_t off_end   = slot_offsets_ptr[h * (sparse_n_outputs + 1) + s + 1];
+
+    int64_t total_contrib_per_head = tables_per_head * n_outputs;
+    const int64_t* ct = contrib_table_ptr   + h * total_contrib_per_head;
+    const int64_t* ci = contrib_local_i_ptr + h * total_contrib_per_head;
+
+    int64_t n_lookup_tables = n_heads * tables_per_head;
+    int64_t lookup_row = b * n_lookup_tables;
+
+    float acc = 0.0f;
+    for (int64_t k = off_start; k < off_end; ++k) {
+        int64_t t = ct[k];               // global table idx in [0, n_lookup_tables)
+        int64_t i = ci[k];               // local output in [0, n_outputs)
+        int64_t lookup_idx = lookup_indices_ptr[lookup_row + t];
+        int64_t widx = (t * table_dim + lookup_idx) * n_outputs + i;
+        acc += static_cast<float>(weights_ptr[widx]);
+    }
+
+    out_ptr[b * (n_heads * sparse_n_outputs) + h * sparse_n_outputs + s] = static_cast<scalar_t>(acc);
+}
+
+// =====================================================================
 // SoftMultiHeadLUT soft-backward kernel.
 //
 // Implements the rational-soft-sign + softmax backward path for an
@@ -6425,6 +6494,110 @@ public:
     }
 
     // -----------------------------------------------------------------
+    // TinyMHLut sparse_scatter forward: slot-major direct accumulation.
+    // Replaces F.embedding + scatter_add_ for the sparse residual_lut path.
+    //
+    // Caller-supplied precomputed buffers (built once at init from
+    // scatter_indices in Python):
+    //   slot_offsets    [n_heads, sparse_n_outputs + 1] int64
+    //   contrib_table   [n_heads, tables_per_head * n_outputs]  int64
+    //                   (GLOBAL table index, in [0, n_heads*tables_per_head))
+    //   contrib_local_i [n_heads, tables_per_head * n_outputs]  int64
+    //
+    // Returns out [B, n_heads, sparse_n_outputs] in `weights.dtype()`.
+    // -----------------------------------------------------------------
+    torch::Tensor
+    tiny_mhlut_sparse_scatter_forward(
+        const torch::Tensor& weights,           // [n_lookup_tables, table_dim, n_outputs]
+        const torch::Tensor& lookup_indices,    // [B, n_lookup_tables] int64
+        const torch::Tensor& slot_offsets,      // [n_heads, sparse_n_outputs + 1] int64
+        const torch::Tensor& contrib_table,     // [n_heads, tph * n_outputs] int64
+        const torch::Tensor& contrib_local_i,   // [n_heads, tph * n_outputs] int64
+        int64_t n_heads,
+        int64_t tables_per_head,
+        int64_t sparse_n_outputs,
+        int64_t threads_per_block = 128
+    ) {
+        if (!weights.is_cuda() || !lookup_indices.is_cuda() ||
+            !slot_offsets.is_cuda() || !contrib_table.is_cuda() || !contrib_local_i.is_cuda()) {
+            throw py::value_error("all tensors must be CUDA");
+        }
+        if (!weights.is_floating_point()) {
+            throw py::value_error("weights must be floating point");
+        }
+        if (lookup_indices.dtype() != torch::kInt64
+            || slot_offsets.dtype() != torch::kInt64
+            || contrib_table.dtype() != torch::kInt64
+            || contrib_local_i.dtype() != torch::kInt64) {
+            throw py::value_error("lookup_indices/slot_offsets/contrib_table/contrib_local_i must be int64");
+        }
+        if (weights.dim() != 3 || lookup_indices.dim() != 2
+            || slot_offsets.dim() != 2 || contrib_table.dim() != 2 || contrib_local_i.dim() != 2) {
+            throw py::value_error("expected weights [T_lt,E,O], lookup_indices [B,T_lt], slot_offsets [H,S+1], contrib_* [H, tph*O]");
+        }
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in [1,1024]");
+        }
+        if (weights.device() != lookup_indices.device()
+            || weights.device() != slot_offsets.device()
+            || weights.device() != contrib_table.device()
+            || weights.device() != contrib_local_i.device()) {
+            throw py::value_error("all tensors must be on the same CUDA device");
+        }
+
+        int64_t B = lookup_indices.size(0);
+        int64_t n_lookup_tables = lookup_indices.size(1);
+        int64_t table_dim = weights.size(1);
+        int64_t n_outputs = weights.size(2);
+
+        if (weights.size(0) != n_lookup_tables) throw py::value_error("weights n_lookup_tables mismatch");
+        if (n_heads * tables_per_head != n_lookup_tables) {
+            throw py::value_error("n_heads * tables_per_head != n_lookup_tables");
+        }
+        if (slot_offsets.size(0) != n_heads || slot_offsets.size(1) != sparse_n_outputs + 1) {
+            throw py::value_error("slot_offsets shape must be [n_heads, sparse_n_outputs + 1]");
+        }
+        int64_t total_contrib_per_head = tables_per_head * n_outputs;
+        if (contrib_table.size(0) != n_heads || contrib_table.size(1) != total_contrib_per_head) {
+            throw py::value_error("contrib_table shape must be [n_heads, tph * n_outputs]");
+        }
+        if (contrib_local_i.sizes() != contrib_table.sizes()) {
+            throw py::value_error("contrib_local_i must have same shape as contrib_table");
+        }
+
+        // Inputs must be contiguous for pointer arithmetic in the kernel.
+        auto weights_c = weights.contiguous();
+        auto lookup_c  = lookup_indices.contiguous();
+        auto so_c      = slot_offsets.contiguous();
+        auto ct_c      = contrib_table.contiguous();
+        auto ci_c      = contrib_local_i.contiguous();
+
+        auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
+        torch::Tensor out = torch::empty({B, n_heads, sparse_n_outputs}, opts);
+
+        c10::cuda::CUDAGuard guard(weights.device().index());
+        int64_t total = B * n_heads * sparse_n_outputs;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16,
+            weights.scalar_type(), "tiny_mhlut_sparse_scatter_forward", [&] {
+                tiny_mhlut_sparse_scatter_forward_kernel<scalar_t><<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+                    B, n_heads, sparse_n_outputs, tables_per_head, table_dim, n_outputs,
+                    reinterpret_cast<const scalar_t*>(weights_c.data_ptr()),
+                    reinterpret_cast<const int64_t*>(lookup_c.data_ptr()),
+                    reinterpret_cast<const int64_t*>(so_c.data_ptr()),
+                    reinterpret_cast<const int64_t*>(ct_c.data_ptr()),
+                    reinterpret_cast<const int64_t*>(ci_c.data_ptr()),
+                    reinterpret_cast<scalar_t*>(out.data_ptr())
+                );
+            });
+        CU_CHECK(cudaGetLastError());
+        return out;
+    }
+
+    // -----------------------------------------------------------------
     // SoftMultiHeadLUT soft-backward grad_x + temperature gradients.
     // Returns (grad_x [B, input_dim] fp32, grad_log_T_soft scalar fp32,
     //          grad_log_T_sel scalar fp32). Caller passes the precomputed
@@ -8361,6 +8534,19 @@ void PB_LUTorchManager(py::module& m) {
             py::arg("lookup_alt_indices"),
             py::arg("tables_per_head"),
             py::arg("threads_per_block") = 256
+        )
+        .def(
+            "tiny_mhlut_sparse_scatter_forward",
+            &LUTorchManager::tiny_mhlut_sparse_scatter_forward,
+            py::arg("weights"),
+            py::arg("lookup_indices"),
+            py::arg("slot_offsets"),
+            py::arg("contrib_table"),
+            py::arg("contrib_local_i"),
+            py::arg("n_heads"),
+            py::arg("tables_per_head"),
+            py::arg("sparse_n_outputs"),
+            py::arg("threads_per_block") = 128
         )
         .def(
             "soft_lut_backward_grad_x",

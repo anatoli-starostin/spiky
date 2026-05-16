@@ -1,0 +1,8 @@
+{
+  "exp_name": "cfg_in12_tph0512_o032",
+  "best_val_loss": 1.5205439001321792,
+  "final_val_loss": 1.5205439001321792,
+  "adam_params": 380007,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.117
+}

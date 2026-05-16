@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp359_row_lr_visit_ema",
+  "best_val_bpb": 1.6221208232510327,
+  "final_val_bpb": 1.6221208232510327,
+  "n_params": 43060080,
+  "training_time_hours": 0.312
+}

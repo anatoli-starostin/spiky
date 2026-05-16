@@ -1,0 +1,8 @@
+{
+  "exp_name": "exp400_control_E32_short",
+  "best_val_loss": 1.3582168459892272,
+  "final_val_loss": 1.3582168459892272,
+  "adam_params": 380391,
+  "n_bit_luts": 24,
+  "training_time_hours": 0.365
+}
