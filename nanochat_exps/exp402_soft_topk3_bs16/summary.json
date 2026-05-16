@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp402_soft_topk3_bs16",
+  "best_val_bpb": 1.640235776399679,
+  "final_val_bpb": 1.640235776399679,
+  "n_params": 43060080,
+  "training_time_hours": 0.397
+}

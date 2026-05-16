@@ -1082,6 +1082,107 @@ def _soft_lut_bwd_body_soft_w(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
 
 
+@torch.compile
+def _soft_lut_bwd_body_topk(grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                             bit_matrix, powers_msb, index, T_soft, T_sel,
+                             n_heads, tph, topk_n_alt):
+    """Soft-math backward with softmax masked to {chosen + top-K 1-bit-flip
+    neighbors} (Approach B: mask -inf on ts BEFORE softmax, keep dense
+    tensor-core path).
+
+    Math equivalent to the alternative gather-based implementation, but keeps
+    the cheap full-K einsums for ts, d_sel_soft, and d_p. softmax(ts_masked)
+    naturally renormalizes over the kept rows (since masked rows have
+    ts=-inf → sel_soft=0). The full-soft chain rule then propagates gradient
+    only through the kept rows automatically.
+
+    Cost: ~= full soft (same einsums, plus a cheap mask construction).
+    Memory: same as full soft (no [B, T, K_top] savings).
+    Quality: softmax over (1 + topk_n_alt) rows out of K_full = 2^NAP rows.
+
+    Selection of kept rows:
+      - chosen index (saved from forward).
+      - The topk_n_alt 1-bit-flip neighbors at the smallest-|d| anchor
+        positions (= rows with highest sel_soft contribution after chosen).
+      - When topk_n_alt >= NAP, all 1-bit-flip neighbors are kept.
+    """
+    B, n_tables_, n_outputs = grad_pt.shape
+    n_tables, NAP = anchor_a_long.shape
+    K_full = bit_matrix.shape[1]
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d        = x[:, anchor_a_long] - x[:, anchor_b_long]
+    denom    = T_soft + d.abs()
+
+    # Reconstruct p so argmax(sel_soft) == saved index (matches `_soft_lut_bwd_body`).
+    shifts   = torch.arange(NAP - 1, -1, -1, device=index.device, dtype=index.dtype)
+    bits     = ((index.unsqueeze(-1) >> shifts.view(1, 1, -1)) & 1).to(d.dtype)
+    p_signs  = bits * 2.0 - 1.0
+    p        = p_signs * d.abs() / denom
+
+    ts       = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+
+    # Pick the top-K bit positions to flip (smallest |d| = highest neighbor
+    # sel_soft). When topk_n_alt == NAP, this is just all positions.
+    if topk_n_alt >= NAP:
+        # All NAP positions: avoid the topk() call.
+        top_pos = (
+            torch.arange(NAP, device=index.device, dtype=index.dtype)
+            .view(1, 1, -1)
+            .expand(B, n_tables, -1)
+        )
+    else:
+        abs_d = d.abs()
+        _, top_pos = abs_d.topk(topk_n_alt, dim=-1, largest=False)
+
+    # Build the row indices to keep: chosen + 1-bit-flip neighbors.
+    selected_powers = powers_msb.view(1, 1, -1).expand(B, n_tables, -1).gather(-1, top_pos)
+    alt_indices = index.unsqueeze(-1) ^ selected_powers              # [B, T, topk_n_alt]
+    kept_indices = torch.cat([index.unsqueeze(-1), alt_indices], dim=-1)  # [B, T, 1+topk_n_alt]
+
+    # Approach (B): mask ts to -inf at non-kept rows so the dense softmax
+    # naturally renormalizes over the kept subset. Keeps the cheap full-K
+    # tensor-core path for d_sel_soft and d_p; adds a bool mask + one extra
+    # [B, T, K] tensor (ts_masked).
+    mask = torch.zeros(B, n_tables, K_full, dtype=torch.bool, device=index.device)
+    mask.scatter_(2, kept_indices, True)
+    ts_masked = ts.masked_fill(~mask, float('-inf'))
+
+    z         = ts_masked / T_sel
+    sel_soft  = F.softmax(z, dim=-1)                                # zero at non-kept rows
+
+    d_sel_soft = torch.einsum("bto,tko->btk", grad_pt.to(w_dtype), weights)
+
+    sum_term = (d_sel_soft * sel_soft).sum(dim=-1, keepdim=True)
+    d_z      = sel_soft * (d_sel_soft - sum_term)
+    d_ts     = d_z / T_sel
+    # grad_log_T_sel: clamp z to 0 at -inf rows (d_z is already 0 there since
+    # sel_soft is 0). Avoid 0 * -inf = NaN.
+    z_safe = torch.where(mask, z, torch.zeros_like(z))
+    grad_log_T_sel = -(d_z * z_safe).sum()
+
+    d_p = torch.einsum("btk,pk->btp", d_ts, bit_matrix.to(d_ts.dtype))
+    d_d = d_p * p_signs * d.sign() * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    # Weight gradient: hard index_add at chosen row (identical to full soft).
+    flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K_full
+    flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+    grad_w_flat = torch.zeros(n_tables * K_full, n_outputs, dtype=w_dtype, device=weights.device)
+    grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+    grad_weights = grad_w_flat.view(n_tables, K_full, n_outputs)
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
+
+
 class _TinyMHLutSoft(torch.autograd.Function):
     """Forward: TinyMHLut-fast (sign-pack + embedding_bag).
     Backward: pure-PyTorch soft path, gradients matching SoftMHLut(hard=True).
@@ -1102,7 +1203,8 @@ class _TinyMHLutSoft(torch.autograd.Function):
                 n_heads, tph, table_dim, use_bf16, argmax_noise_eps,
                 einsum_bf16_forward, scatter_indices, sparse_n_outputs,
                 sparse_slot_offsets=None, sparse_contrib_table=None,
-                sparse_contrib_local_i=None):
+                sparse_contrib_local_i=None,
+                topk_n_alt=0):
         sparse = scatter_indices is not None
         T_soft = log_T_soft.exp()
         T_sel  = log_T_sel.exp()
@@ -1169,24 +1271,26 @@ class _TinyMHLutSoft(torch.autograd.Function):
         if sparse:
             ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
                                   bit_matrix, index, log_T_soft, log_T_sel,
-                                  scatter_indices)
+                                  scatter_indices, powers)
         else:
             ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
-                                  bit_matrix, index, log_T_soft, log_T_sel)
+                                  bit_matrix, index, log_T_soft, log_T_sel,
+                                  powers)
         ctx.n_heads = n_heads
         ctx.tph = tph
         ctx.use_bf16 = use_bf16
         ctx.sparse = sparse
+        ctx.topk_n_alt = int(topk_n_alt)
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
         if ctx.sparse:
             (x, weights, anchor_a_long, anchor_b_long, bit_matrix, index,
-             log_T_soft, log_T_sel, scatter_indices) = ctx.saved_tensors
+             log_T_soft, log_T_sel, scatter_indices, powers) = ctx.saved_tensors
         else:
             (x, weights, anchor_a_long, anchor_b_long, bit_matrix, index,
-             log_T_soft, log_T_sel) = ctx.saved_tensors
+             log_T_soft, log_T_sel, powers) = ctx.saved_tensors
             scatter_indices = None
         T_soft = log_T_soft.exp()
         T_sel  = log_T_sel.exp()
@@ -1205,20 +1309,27 @@ class _TinyMHLutSoft(torch.autograd.Function):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
-        bwd_body = _soft_lut_bwd_body_soft_w if _GLOBAL_SOFT_WEIGHT_GRAD else _soft_lut_bwd_body
         with autocast_ctx:
-            grad_x, grad_w, grad_log_Ts, grad_log_Tx = bwd_body(
-                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                index, T_soft, T_sel, ctx.n_heads, ctx.tph,
-            )
-        # 19 forward inputs (x, weights, log_T_soft, log_T_sel, anchor_a_long,
+            if ctx.topk_n_alt > 0:
+                grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_topk(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                    bit_matrix, powers,
+                    index, T_soft, T_sel, ctx.n_heads, ctx.tph, ctx.topk_n_alt,
+                )
+            else:
+                bwd_body = _soft_lut_bwd_body_soft_w if _GLOBAL_SOFT_WEIGHT_GRAD else _soft_lut_bwd_body
+                grad_x, grad_w, grad_log_Ts, grad_log_Tx = bwd_body(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                )
+        # 20 forward inputs (x, weights, log_T_soft, log_T_sel, anchor_a_long,
         # anchor_b_long, bit_matrix, powers, n_heads, tph, table_dim, use_bf16,
         # argmax_noise_eps, einsum_bf16_forward, scatter_indices, sparse_n_outputs,
-        # sparse_slot_offsets, sparse_contrib_table, sparse_contrib_local_i)
-        # → 19 grad returns.
+        # sparse_slot_offsets, sparse_contrib_table, sparse_contrib_local_i, topk_n_alt)
+        # → 20 grad returns.
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
                 None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None, None)
+                None, None, None, None)
 
 
 class TinyMultiHeadLut(nn.Module):
@@ -1423,16 +1534,16 @@ class TinyMultiHeadLut(nn.Module):
         self.weights = nn.Parameter(weights_init)
 
         # ----- soft-backward mode setup -----
-        if backward_mode not in ("ste", "soft"):
-            raise ValueError(f"backward_mode must be 'ste' or 'soft', got {backward_mode!r}")
+        if backward_mode not in ("ste", "soft", "soft_topk"):
+            raise ValueError(f"backward_mode must be 'ste', 'soft', or 'soft_topk', got {backward_mode!r}")
         self.backward_mode = backward_mode
         self.use_bf16 = bool(use_bf16)
         self.argmax_noise_eps = float(argmax_noise_eps)
         self.einsum_bf16_forward = bool(einsum_bf16_forward)
         if self.einsum_bf16_forward:
-            if backward_mode != "soft":
+            if backward_mode not in ("soft", "soft_topk"):
                 raise ValueError(
-                    "einsum_bf16_forward=True requires backward_mode='soft'; "
+                    "einsum_bf16_forward=True requires backward_mode='soft' or 'soft_topk'; "
                     f"got backward_mode={backward_mode!r}"
                 )
             if not self.use_bf16:
@@ -1443,10 +1554,18 @@ class TinyMultiHeadLut(nn.Module):
         self.n_alternatives = int(n_alternatives)
         if self.n_alternatives < 1:
             raise ValueError(f"n_alternatives must be >= 1, got {self.n_alternatives}")
-        if self.n_alternatives > 1:
+        if backward_mode == "soft_topk":
+            if self.n_alternatives < 1:
+                raise ValueError("soft_topk requires n_alternatives >= 1")
+            if self.n_alternatives > n_anchor_pairs:
+                raise ValueError(
+                    f"soft_topk: n_alternatives ({self.n_alternatives}) cannot exceed "
+                    f"n_anchor_pairs ({n_anchor_pairs}); only 1-bit-flip neighbors are considered"
+                )
+        elif self.n_alternatives > 1:
             if backward_mode != "ste":
                 raise ValueError(
-                    "n_alternatives > 1 requires backward_mode='ste' "
+                    "n_alternatives > 1 requires backward_mode='ste' or 'soft_topk' "
                     f"(got backward_mode={backward_mode!r}). For soft mode the "
                     "rational-soft-sign pipeline already smooths all NAP positions."
                 )
@@ -1509,7 +1628,7 @@ class TinyMultiHeadLut(nn.Module):
                     "log_uncertainty_T",
                     torch.tensor(log_T_init, dtype=torch.float32, device=dev),
                 )
-        if backward_mode == "soft":
+        if backward_mode in ("soft", "soft_topk"):
             # sparse_scatter_n_outputs is supported: forward returns per-table
             # [B, H, tph, n_outputs] from `_TinyMHLutSoft.apply(..., sparse=True)`,
             # then `_scatter` reduces into the wider output dim. Backward
@@ -1592,6 +1711,7 @@ class TinyMultiHeadLut(nn.Module):
             scatter_indices = None
             sparse_n = 0
             slot_offsets = contrib_table = contrib_local_i = None
+        topk_n_alt = self.n_alternatives if self.backward_mode == "soft_topk" else 0
         return _TinyMHLutSoft.apply(
             x, self.weights, self.log_soft_score_temp, self.log_select_temp,
             self.soft_anchor_a_long, self.soft_anchor_b_long,
@@ -1600,6 +1720,7 @@ class TinyMultiHeadLut(nn.Module):
             self.argmax_noise_eps, self.einsum_bf16_forward,
             scatter_indices, sparse_n,
             slot_offsets, contrib_table, contrib_local_i,
+            topk_n_alt,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -1619,7 +1740,9 @@ class TinyMultiHeadLut(nn.Module):
         # `_TinyMHLutSoft` Function (TinyMHLut-fast forward + soft backward).
         # `_soft_forward` internally fuses gather+scatter_add when
         # sparse_scatter_n_outputs is set; no external `_scatter` needed.
-        if self.backward_mode == "soft":
+        # 'soft_topk' shares the same forward path; backward differs by
+        # restricting the soft attribution to 1 + n_alternatives rows.
+        if self.backward_mode in ("soft", "soft_topk"):
             return self._soft_forward(x)
 
         # Multi-alternative STE backward. Uses self.n_alternatives top-|delta|
