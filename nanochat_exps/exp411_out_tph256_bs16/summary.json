@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp411_out_tph256_bs16",
+  "best_val_bpb": 1.6140888883351958,
+  "final_val_bpb": 1.6140888883351958,
+  "n_params": 38341488,
+  "training_time_hours": 0.2
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp408_E32_dv8_bs16",
+  "best_val_bpb": 1.6372359747551317,
+  "final_val_bpb": 1.6372359747551317,
+  "n_params": 36735664,
+  "training_time_hours": 0.212
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp404_qkv_only_tph96_bs16",
+  "best_val_bpb": 1.603347216983057,
+  "final_val_bpb": 1.603347216983057,
+  "n_params": 64883556,
+  "training_time_hours": 0.259
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp405_qkv_only_bs64",
+  "best_val_bpb": 1.4466726394075797,
+  "final_val_bpb": 1.4466726394075797,
+  "n_params": 64883556,
+  "training_time_hours": 0.988
+}

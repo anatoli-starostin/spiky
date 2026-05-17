@@ -1,0 +1,36 @@
+{
+  "exp_name": "exp415_curriculum_nap3_to_6_bs32",
+  "description": "2-stage NAP curriculum on the exp414 architecture (E=32, residual_dim=384, d_v=16, 31.53M params target). Stage 1: NAP=3 with 2x tph everywhere (qkv 32, v 256, out 512, res 64), bs=4, 4000 steps, standard cosine+warmup. Weight transfer via outer-add merge (anchor_tree.merge_weight_tensor). Stage 2: NAP=6 at exp414's tph (qkv 16, v 128, out 256, res 32), bs=32, 3500 steps, RESET LR, NO warmup, pure cosine anneal. Adam state carried with AVG merge (m,v halved post-merge). Total compute = 65.5M tokens = same as exp413 bs=16. Reference: exp413 = 1.6414.",
+  "context_size": 512,
+  "embedding_dim": 32,
+  "residual_dim": 384,
+  "num_layers": 6,
+  "n_heads": 6,
+  "d_qk": 64,
+  "d_v": 16,
+  "rope_base": 10000.0,
+  "target_nap": 6,
+  "target_tph": {
+    "qkv_lut": 16,
+    "v_lut": 128,
+    "out_proj": 256,
+    "residual_lut": 32
+  },
+  "qkv_lut_init_std": 0.001,
+  "stages": [
+    {"curriculum_nap": 3, "tph_mult": 2, "bs": 4, "n_steps": 4000, "warmup_fraction": 0.1},
+    {"curriculum_nap": 6, "tph_mult": 1, "bs": 32, "n_steps": 3500, "warmup_fraction": 0.0}
+  ],
+  "argmax_noise_eps": 0.0,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "random_seed": 42,
+  "adam_lr": 0.0003,
+  "lut_lr": 0.001,
+  "weight_decay": 0.1,
+  "mhlut_init_std": 0.001,
+  "eval_every": 200,
+  "eval_steps": 10
+}

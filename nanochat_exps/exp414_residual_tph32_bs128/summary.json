@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp414_residual_tph32_bs128",
+  "best_val_bpb": 1.4387332666924353,
+  "final_val_bpb": 1.4387332666924353,
+  "n_params": 31525552,
+  "training_time_hours": 1.425
+}

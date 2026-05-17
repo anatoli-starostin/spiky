@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp412_E32_out_tph256_bs16",
+  "best_val_bpb": 1.6290124210047567,
+  "final_val_bpb": 1.6290124210047567,
+  "n_params": 36244144,
+  "training_time_hours": 0.195
+}

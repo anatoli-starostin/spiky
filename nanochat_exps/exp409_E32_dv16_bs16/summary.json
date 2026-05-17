@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp409_E32_dv16_bs16",
+  "best_val_bpb": 1.6143939548956254,
+  "final_val_bpb": 1.6143939548956254,
+  "n_params": 39389872,
+  "training_time_hours": 0.216
+}

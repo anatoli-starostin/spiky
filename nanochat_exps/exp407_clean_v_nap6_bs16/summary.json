@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp407_clean_v_nap6_bs16",
+  "best_val_bpb": 1.603770067597744,
+  "final_val_bpb": 1.603770067597744,
+  "n_params": 43060080,
+  "training_time_hours": 0.225
+}

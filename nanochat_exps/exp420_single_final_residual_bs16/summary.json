@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp420_single_final_residual_bs16",
+  "best_val_bpb": 1.5609170643112082,
+  "final_val_bpb": 1.5609170643112082,
+  "n_params": 64883642,
+  "training_time_hours": 0.257
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp406_qkv_only_bs128",
+  "best_val_bpb": 1.3851426406224505,
+  "final_val_bpb": 1.3851426406224505,
+  "n_params": 64883556,
+  "training_time_hours": 1.984
+}

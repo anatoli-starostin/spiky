@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp425_e_residual_E64_v_tph256",
+  "best_val_bpb": 1.5298346141801198,
+  "final_val_bpb": 1.5299136056752136,
+  "n_params": 51449648,
+  "training_time_hours": 0.286
+}
