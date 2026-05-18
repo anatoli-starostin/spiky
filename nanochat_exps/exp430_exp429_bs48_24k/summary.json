@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp430_exp429_bs48_24k",
+  "best_val_bpb": 1.2847619558538699,
+  "final_val_bpb": 1.285042754448224,
+  "n_params": 89394992,
+  "training_time_hours": 6.03
+}
