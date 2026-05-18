@@ -69,6 +69,17 @@ def enable_soft_weight_grad(flag: bool = True) -> None:
     global _GLOBAL_SOFT_WEIGHT_GRAD
     _GLOBAL_SOFT_WEIGHT_GRAD = bool(flag)
 
+# When True, soft-mode backward divides each (table, row) weight gradient by the
+# number of batch elements that landed there, converting the per-row scatter-add
+# from SUM to MEAN. Equalizes effective update magnitude across rows regardless
+# of visit-count imbalance (helps cold rows; reduces hot-row momentum).
+_GLOBAL_PER_ROW_GRAD_NORM = False
+
+def set_per_row_grad_norm(flag: bool = True) -> None:
+    """Set the global per-row visit-count gradient normalization toggle."""
+    global _GLOBAL_PER_ROW_GRAD_NORM
+    _GLOBAL_PER_ROW_GRAD_NORM = bool(flag)
+
 _NATIVE_MHLUT = None
 def _get_tiny_mhlut_native():
     """Lazily fetch the native LUTorchManager and check for the fused-bwd binding."""
@@ -958,7 +969,8 @@ def _soft_lut_fwd_body_einsum_scatter(x, weights, anchor_a_long, anchor_b_long,
 
 @torch.compile
 def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
-                        bit_matrix, index, T_soft, T_sel, n_heads, tph):
+                        bit_matrix, index, T_soft, T_sel, n_heads, tph,
+                        visit_norm: bool = False):
     """Compiled backward — Gumbel-STE consistent.
 
     Reconstructs `p` so that `argmax(sel_soft) ≡ saved index` (including any
@@ -1016,6 +1028,10 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     flat_idx    = (index + flat_offset[None, :]).reshape(-1)
     grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
     grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+    if visit_norm:
+        # Convert per-row SUM to per-row MEAN by dividing by visit count.
+        counts = torch.bincount(flat_idx, minlength=n_tables * K).to(w_dtype).clamp_(min=1)
+        grad_w_flat = grad_w_flat / counts.unsqueeze(-1)
     grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
 
     # dL/dx via scatter-add at anchor positions.
@@ -1317,11 +1333,17 @@ class _TinyMHLutSoft(torch.autograd.Function):
                     index, T_soft, T_sel, ctx.n_heads, ctx.tph, ctx.topk_n_alt,
                 )
             else:
-                bwd_body = _soft_lut_bwd_body_soft_w if _GLOBAL_SOFT_WEIGHT_GRAD else _soft_lut_bwd_body
-                grad_x, grad_w, grad_log_Ts, grad_log_Tx = bwd_body(
-                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                    index, T_soft, T_sel, ctx.n_heads, ctx.tph,
-                )
+                if _GLOBAL_SOFT_WEIGHT_GRAD:
+                    grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_soft_w(
+                        grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                        index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                    )
+                else:
+                    grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                        grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                        index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                        visit_norm=_GLOBAL_PER_ROW_GRAD_NORM,
+                    )
         # 20 forward inputs (x, weights, log_T_soft, log_T_sel, anchor_a_long,
         # anchor_b_long, bit_matrix, powers, n_heads, tph, table_dim, use_bf16,
         # argmax_noise_eps, einsum_bf16_forward, scatter_indices, sparse_n_outputs,

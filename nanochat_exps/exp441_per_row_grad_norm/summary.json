@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp441_per_row_grad_norm",
+  "best_val_bpb": 1.5085679706960629,
+  "final_val_bpb": 1.5085679706960629,
+  "n_params": 89394992,
+  "training_time_hours": 0.566
+}

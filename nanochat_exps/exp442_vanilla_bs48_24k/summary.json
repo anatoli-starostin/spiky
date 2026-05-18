@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp442_vanilla_bs48_24k",
+  "best_val_bpb": 1.1585108177687522,
+  "final_val_bpb": 1.1585108177687522,
+  "total_params": 23209728,
+  "training_time_hours": 0.846
+}

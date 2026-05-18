@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp442_vanilla_bs48_24k",
+  "description": "Fork of exp416 (vanilla MinimalGPT+RoPE, bs=16, 24K steps, 1.2530). bs=16 -> 48, total tokens 197M -> 590M. Compute-matched to exp430 (LUT-LM bs=48 24K = 1.2850) for direct vanilla-vs-LUT compare.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 24000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
