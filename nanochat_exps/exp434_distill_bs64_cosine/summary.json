@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp434_distill_bs64_cosine",
+  "best_val_bpb": 1.7262325289893545,
+  "final_val_bpb": 1.7262325289893545,
+  "n_params": 112604720,
+  "training_time_hours": 0.902
+}
