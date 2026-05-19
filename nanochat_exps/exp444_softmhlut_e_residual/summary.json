@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp444_softmhlut_e_residual",
+  "best_val_bpb": 1.48211067418636,
+  "final_val_bpb": 1.48211067418636,
+  "n_params": 89394992,
+  "training_time_hours": 2.118
+}

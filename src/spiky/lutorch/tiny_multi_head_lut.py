@@ -80,6 +80,21 @@ def set_per_row_grad_norm(flag: bool = True) -> None:
     global _GLOBAL_PER_ROW_GRAD_NORM
     _GLOBAL_PER_ROW_GRAD_NORM = bool(flag)
 
+# When True, soft-mode backward gates the per-row weight gradient by a per-coord
+# "dominance" rule using the row's centroid as the partner: for each output
+# coord a, the gradient is kept iff (W[k*][a] - mean(W[k*])) * (grad_pt[a] -
+# mean(grad_pt)) >= 0 — i.e., the gradient is fighting an incorrect dominance
+# with the centroid. When the dominance is already correct (product < 0),
+# strengthening it further does nothing useful for downstream LUTs (which only
+# see pairwise dominances) so the gradient is zeroed. Also projects out the
+# mean direction of grad_pt (gauge for downstream LUT and unembedder consumers).
+_GLOBAL_DOMINANCE_GATE = False
+
+def set_dominance_gate(flag: bool = True) -> None:
+    """Set the global dominance-gate toggle (see _GLOBAL_DOMINANCE_GATE)."""
+    global _GLOBAL_DOMINANCE_GATE
+    _GLOBAL_DOMINANCE_GATE = bool(flag)
+
 _NATIVE_MHLUT = None
 def _get_tiny_mhlut_native():
     """Lazily fetch the native LUTorchManager and check for the fused-bwd binding."""
@@ -970,7 +985,8 @@ def _soft_lut_fwd_body_einsum_scatter(x, weights, anchor_a_long, anchor_b_long,
 @torch.compile
 def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel, n_heads, tph,
-                        visit_norm: bool = False):
+                        visit_norm: bool = False,
+                        dominance_gate: bool = False):
     """Compiled backward — Gumbel-STE consistent.
 
     Reconstructs `p` so that `argmax(sel_soft) ≡ saved index` (including any
@@ -1027,7 +1043,20 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
     flat_idx    = (index + flat_offset[None, :]).reshape(-1)
     grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
-    grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+    if dominance_gate:
+        # Per-coord centroid-dominance gate: keep grad_centered[a] iff its sign
+        # agrees with W_centered[a] (= the gradient is fighting current dominance).
+        # Zero gradient where dominance is already correct.
+        w_flat_all = weights.view(n_tables * K, n_outputs)
+        w_at = F.embedding(flat_idx, w_flat_all)              # [B*n_tables, n_outputs]
+        grad_w_in = grad_pt.reshape(-1, n_outputs).to(w_dtype)
+        w_centered = w_at - w_at.mean(dim=-1, keepdim=True)
+        g_centered = grad_w_in - grad_w_in.mean(dim=-1, keepdim=True)
+        keep = (w_centered * g_centered) >= 0
+        grad_to_write = torch.where(keep, g_centered, torch.zeros_like(g_centered))
+        grad_w_flat.index_add_(0, flat_idx, grad_to_write)
+    else:
+        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
     if visit_norm:
         # Convert per-row SUM to per-row MEAN by dividing by visit count.
         counts = torch.bincount(flat_idx, minlength=n_tables * K).to(w_dtype).clamp_(min=1)
@@ -1343,6 +1372,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
                         grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                         index, T_soft, T_sel, ctx.n_heads, ctx.tph,
                         visit_norm=_GLOBAL_PER_ROW_GRAD_NORM,
+                        dominance_gate=_GLOBAL_DOMINANCE_GATE,
                     )
         # 20 forward inputs (x, weights, log_T_soft, log_T_sel, anchor_a_long,
         # anchor_b_long, bit_matrix, powers, n_heads, tph, table_dim, use_bf16,
