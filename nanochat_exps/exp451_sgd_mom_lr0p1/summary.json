@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp451_sgd_mom_lr0p1",
+  "best_val_bpb": 1.5319437105387412,
+  "final_val_bpb": 1.5319437105387412,
+  "n_params": 89394992,
+  "training_time_hours": 0.406
+}

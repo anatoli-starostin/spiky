@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp448_signsgd_lut",
+  "best_val_bpb": 1.5023076017147068,
+  "final_val_bpb": 1.5023076017147068,
+  "n_params": 89394992,
+  "training_time_hours": 0.408
+}

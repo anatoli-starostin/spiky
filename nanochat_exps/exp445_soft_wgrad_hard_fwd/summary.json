@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp445_soft_wgrad_hard_fwd",
+  "best_val_bpb": 1.498314663676352,
+  "final_val_bpb": 1.498314663676352,
+  "n_params": 89394992,
+  "training_time_hours": 0.438
+}
