@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp465_qkv_scatter_4x",
+  "best_val_bpb": 1.4951139845502157,
+  "final_val_bpb": 1.4951139845502157,
+  "n_params": 89394992,
+  "training_time_hours": 1.163
+}

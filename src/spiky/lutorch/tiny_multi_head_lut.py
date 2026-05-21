@@ -95,6 +95,25 @@ def set_dominance_gate(flag: bool = True) -> None:
     global _GLOBAL_DOMINANCE_GATE
     _GLOBAL_DOMINANCE_GATE = bool(flag)
 
+# When True, the soft-mode backward computes the per-(table,row) visit count for
+# this backward (how many batch elements selected each row) and stashes it in
+# _GLOBAL_VISIT_COUNT_REGISTRY keyed by weights.data_ptr(). The gradient itself
+# is UNCHANGED (unlike _GLOBAL_PER_ROW_GRAD_NORM, which folds 1/count into grad).
+# This exposes the exact diagonal Hessian (= visit count) to a Gauss-Newton-style
+# optimizer that wants `m / (count + lambda)` per row. Default off.
+_GLOBAL_STASH_VISIT_COUNT = False
+_GLOBAL_VISIT_COUNT_REGISTRY = {}
+
+def enable_visit_count_stash(flag: bool = True) -> None:
+    """Set the global visit-count stash toggle (see _GLOBAL_STASH_VISIT_COUNT)."""
+    global _GLOBAL_STASH_VISIT_COUNT
+    _GLOBAL_STASH_VISIT_COUNT = bool(flag)
+
+def get_visit_count(weights) -> "torch.Tensor":
+    """Return the last-backward per-row visit count [n_tables*table_dim] for a
+    LUT weight param, or None if not stashed yet."""
+    return _GLOBAL_VISIT_COUNT_REGISTRY.get(weights.data_ptr())
+
 _NATIVE_MHLUT = None
 def _get_tiny_mhlut_native():
     """Lazily fetch the native LUTorchManager and check for the fused-bwd binding."""
@@ -1374,6 +1393,17 @@ class _TinyMHLutSoft(torch.autograd.Function):
                         visit_norm=_GLOBAL_PER_ROW_GRAD_NORM,
                         dominance_gate=_GLOBAL_DOMINANCE_GATE,
                     )
+        # Stash per-(table,row) visit count for a Gauss-Newton optimizer. The
+        # gradient grad_w is the SUM over tokens hitting each row; count is how
+        # many tokens that was — i.e. the exact diagonal Hessian of this linear
+        # (for fixed selection) layer. Keyed by storage so the optimizer can find
+        # it from its own param handle.
+        if _GLOBAL_STASH_VISIT_COUNT:
+            _K = bit_matrix.shape[1]
+            _flat_off = torch.arange(n_tables, device=index.device, dtype=index.dtype) * _K
+            _flat_idx = (index + _flat_off[None, :]).reshape(-1)
+            _GLOBAL_VISIT_COUNT_REGISTRY[weights.data_ptr()] = torch.bincount(
+                _flat_idx, minlength=n_tables * _K).detach()
         # 20 forward inputs (x, weights, log_T_soft, log_T_sel, anchor_a_long,
         # anchor_b_long, bit_matrix, powers, n_heads, tph, table_dim, use_bf16,
         # argmax_noise_eps, einsum_bf16_forward, scatter_indices, sparse_n_outputs,

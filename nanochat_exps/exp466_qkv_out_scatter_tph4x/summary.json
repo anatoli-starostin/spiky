@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp466_qkv_out_scatter_tph4x",
+  "best_val_bpb": 1.4937449939653602,
+  "final_val_bpb": 1.4937449939653602,
+  "n_params": 89394992,
+  "training_time_hours": 0.935
+}

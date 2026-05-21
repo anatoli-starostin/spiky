@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp462_out_proj_scatter_4x",
+  "best_val_bpb": 1.5119748012166656,
+  "final_val_bpb": 1.5119748012166656,
+  "n_params": 70520624,
+  "training_time_hours": 0.558
+}
