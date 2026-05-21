@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp476_untied_emb_head",
+  "description": "Fork of exp328 (vanilla MinimalGPT+RoPE, bs=16, 8K, tied tok_emb<->head, 1.3882 @ 23.21M). SINGLE change: UNTIE the token embedding and output head (remove self.head.weight=self.tok_emb.weight) so they are separate matrices, each normal(0,0.02). Adds vocab*n_embd=32768*384=12.58M -> ~35.79M total. Measures how much tying-vs-untying affects validation bpb. Everything else identical to exp328 (seed 1, lr 3e-4, wd 0.1, bf16).",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

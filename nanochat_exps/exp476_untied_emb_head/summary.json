@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp476_untied_emb_head",
+  "best_val_bpb": 1.4143089666148878,
+  "final_val_bpb": 1.4143089666148878,
+  "total_params": 35792640,
+  "training_time_hours": 0.098
+}
