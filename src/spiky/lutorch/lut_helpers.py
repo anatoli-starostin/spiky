@@ -19,6 +19,8 @@ class AnchorSamplingPolicy(str, Enum):
     CONV2D = "conv2d"              # 2D conv-style; input_dim must be perfect square; nap must be 8; tph is upper bound
     CANONICAL_DISTINCT = "canonical_distinct"  # each table: output_nap distinct canonical (a<b) pairs, sampled without replacement
     CANONICAL_FULL_COVERAGE = "canonical_full_coverage"  # canonical pool, tiled randperm -> full coverage when slots >= P, with within-table distinctness
+    CONNECTED_TRIPLETS = "connected_triplets"    # groups of 3 shared anchor indices forming (a,b),(b,c),(a,c) pairs; NAP must be divisible by 3
+    CONNECTED_QUADRUPLES = "connected_quadruples"  # groups of 4 shared anchor indices forming all C(4,2)=6 pairs; NAP must be divisible by 6
 
 
 class SelfExcitementMode(str, Enum):
@@ -480,6 +482,97 @@ def _get_local_window_pairs(
     return a_pairs.to(device), b_pairs.to(device)
 
 
+def _sample_connected_triplet_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    device: torch.device,
+    random_seed: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample anchor pairs that form connected triplets.
+
+    NAP must be divisible by 3. Each table draws NAP distinct anchor indices,
+    partitions them into NAP//3 triplets, sorts each triplet (a<b<c), and
+    emits 3 pairs: (a,b), (b,c), (a,c). The three pairs form a comparison
+    cycle, so 2 of 8 bit-patterns per triplet are unreachable.
+    For NAP=6 with 2 independent triplets: max_orders = 6^2 = 36 (vs 64).
+    """
+    if n_anchor_pairs % 3 != 0:
+        raise ValueError(
+            f"CONNECTED_TRIPLETS requires n_anchor_pairs divisible by 3, got {n_anchor_pairs}"
+        )
+    n_triplets = n_anchor_pairs // 3
+    n_sample = n_triplets * 3
+    if input_dim < n_sample:
+        raise ValueError(
+            f"CONNECTED_TRIPLETS requires input_dim >= {n_sample} (3 × {n_triplets} triplets), "
+            f"got {input_dim}"
+        )
+    gen = None
+    if random_seed is not None:
+        gen = torch.Generator(device=torch.device("cpu"))
+        gen.manual_seed(random_seed)
+
+    # [n_tables, n_sample] — n_sample distinct indices per table, sampled on CPU
+    raw = torch.stack([
+        torch.randperm(input_dim, generator=gen)[:n_sample]
+        for _ in range(n_tables)
+    ])
+    # sort within each triplet group: [n_tables, n_triplets, 3]
+    triples = raw.view(n_tables, n_triplets, 3).sort(dim=-1).values
+    a, b, c = triples[:, :, 0], triples[:, :, 1], triples[:, :, 2]
+    # pairs (a,b), (b,c), (a,c) — interleaved as [n_tables, n_triplets, 3] → [n_tables, NAP]
+    anchor_a = torch.stack([a, b, a], dim=2).reshape(n_tables, n_anchor_pairs)
+    anchor_b = torch.stack([b, c, c], dim=2).reshape(n_tables, n_anchor_pairs)
+    return anchor_a.to(device=device, dtype=torch.int64), anchor_b.to(device=device, dtype=torch.int64)
+
+
+def _sample_connected_quadruple_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    device: torch.device,
+    random_seed: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Sample anchor pairs that form connected quadruples.
+
+    NAP must be divisible by 6. Each table draws NAP//6 * 4 distinct anchor
+    indices, partitions them into NAP//6 quadruples, sorts each quadruple
+    (a<b<c<d), and emits all C(4,2)=6 pairs: (a,b),(a,c),(a,d),(b,c),(b,d),(c,d).
+    The 6 pairs fully determine the ordering of 4 elements, leaving only 4!=24
+    reachable patterns out of 2^6=64.
+    For NAP=6 with 1 quadruple: max_orders=24. For NAP=12 with 2: max_orders=576.
+    """
+    if n_anchor_pairs % 6 != 0:
+        raise ValueError(
+            f"CONNECTED_QUADRUPLES requires n_anchor_pairs divisible by 6, got {n_anchor_pairs}"
+        )
+    n_quads = n_anchor_pairs // 6
+    n_sample = n_quads * 4
+    if input_dim < n_sample:
+        raise ValueError(
+            f"CONNECTED_QUADRUPLES requires input_dim >= {n_sample} (4 × {n_quads} quadruples), "
+            f"got {input_dim}"
+        )
+    gen = None
+    if random_seed is not None:
+        gen = torch.Generator(device=torch.device("cpu"))
+        gen.manual_seed(random_seed)
+
+    # [n_tables, n_sample] — n_sample distinct indices per table, on CPU
+    raw = torch.stack([
+        torch.randperm(input_dim, generator=gen)[:n_sample]
+        for _ in range(n_tables)
+    ])
+    # sort within each quadruple: [n_tables, n_quads, 4]
+    quads = raw.view(n_tables, n_quads, 4).sort(dim=-1).values
+    a, b, c, d = quads[:,:,0], quads[:,:,1], quads[:,:,2], quads[:,:,3]
+    # all 6 pairs per quadruplet: (a,b),(a,c),(a,d),(b,c),(b,d),(c,d)
+    anchor_a = torch.stack([a, a, a, b, b, c], dim=2).reshape(n_tables, n_anchor_pairs)
+    anchor_b = torch.stack([b, c, d, c, d, d], dim=2).reshape(n_tables, n_anchor_pairs)
+    return anchor_a.to(device=device, dtype=torch.int64), anchor_b.to(device=device, dtype=torch.int64)
+
+
 def get_balanced_anchor_pairs(
     n_tables: int,
     n_anchor_pairs: int,
@@ -577,6 +670,26 @@ def get_balanced_anchor_pairs(
             n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
             partition_sets=partition_sets,
             partition_pair_weights=partition_pair_weights,
+        )
+
+    # ── CONNECTED_TRIPLETS ─────────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.CONNECTED_TRIPLETS:
+        if partition_sets is not None or partition_pair_weights is not None:
+            raise ValueError(
+                "CONNECTED_TRIPLETS does not support partition_sets / partition_pair_weights"
+            )
+        return _sample_connected_triplet_pairs(
+            n_tables, n_anchor_pairs, input_dim, device, random_seed
+        )
+
+    # ── CONNECTED_QUADRUPLES ───────────────────────────────────────────────────
+    if effective_policy == AnchorSamplingPolicy.CONNECTED_QUADRUPLES:
+        if partition_sets is not None or partition_pair_weights is not None:
+            raise ValueError(
+                "CONNECTED_QUADRUPLES does not support partition_sets / partition_pair_weights"
+            )
+        return _sample_connected_quadruple_pairs(
+            n_tables, n_anchor_pairs, input_dim, device, random_seed
         )
 
     if partition_sets is not None:

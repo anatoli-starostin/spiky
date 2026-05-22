@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp484_prob_forward_nap6",
+  "best_val_bpb": 1.547378343965134,
+  "final_val_bpb": 1.547378343965134,
+  "n_params": 89393456,
+  "training_time_hours": 1.104
+}

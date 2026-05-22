@@ -976,6 +976,123 @@ def _soft_lut_fwd_body_einsum_per_table(x, weights, anchor_a_long, anchor_b_long
     return out_per_table.view(B, n_heads, tph, n_outputs), index
 
 
+def _soft_lut_fwd_body_prob(x, weights, anchor_a_long, anchor_b_long,
+                            bit_matrix, T_soft, T_sel, n_heads, tph, table_dim):
+    """Probabilistic forward: sample one row per (batch, table) from softmax(ts/T_sel).
+
+    Like the einsum argmax path but replaces argmax with torch.multinomial — each
+    row whose softmax weight is non-negligible has a chance of being selected every
+    step. At small batch sizes this gives more uniform row coverage than argmax,
+    where the top row monopolises gradient signal and cold rows starve.
+
+    Cannot be @torch.compile-d (multinomial is a dynamic op); runs in eager mode.
+    Backward is identical to _soft_lut_bwd_body (same STE formula with sampled idx).
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]
+    p = d / (T_soft + d.abs())
+    ts = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+    probs = F.softmax(ts.float() / T_sel, dim=-1)          # [B, n_tables, K]
+    flat_probs = probs.reshape(B * n_tables, -1).contiguous()
+    idx_flat = torch.multinomial(flat_probs, num_samples=1, replacement=True).squeeze(-1)
+    index = idx_flat.reshape(B, n_tables)
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    table_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * table_dim
+    flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
+    n_bags = B * n_heads
+    offsets = torch.arange(n_bags, device=weights.device, dtype=torch.long) * tph
+    out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
+    return out_flat.view(B, n_heads, n_outputs), index
+
+
+@torch.compile
+def _soft_lut_fwd_body_winner(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, T_soft, T_sel, n_heads, tph, table_dim):
+    """Scaled-hard forward: out = softmax(ts/T_sel)[winner] * W[winner].
+
+    Picks the argmax row (winner) like hard forward, but multiplies its weights
+    by the winner's softmax coefficient (= max of the selection softmax, a scalar
+    in (1/K, 1] per table). Confident selection (one row dominates) → coeff≈1 ≈
+    plain argmax; uncertain selection → output attenuated. Single-row lookup at
+    inference (same bandwidth as ste/soft), but the coeff is a smooth, fully
+    differentiable confidence gate giving an x-gradient path through the scores.
+    Deterministic: train and eval forward are identical.
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]
+    p = d / (T_soft + d.abs())
+    ts = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+    sel = F.softmax(ts / T_sel, dim=-1)
+    index = ts.argmax(dim=-1)                                      # [B, n_tables]
+    coeff = sel.gather(-1, index.unsqueeze(-1)).squeeze(-1)        # [B, n_tables]
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    table_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * table_dim
+    flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
+    W_winner = F.embedding(flat_indices, weights_flat).view(B, n_tables, n_outputs)
+    out_pt = coeff.unsqueeze(-1).to(W_winner.dtype) * W_winner
+    out = out_pt.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    return out, index
+
+
+@torch.compile
+def _soft_lut_bwd_body_winner(grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                               bit_matrix, index, T_soft, T_sel, n_heads, tph):
+    """Backward for scaled-hard (soft_winner) forward.
+
+    out = coeff * W[winner], coeff = softmax(ts/T_sel)[winner] (W-independent).
+      - weight grad: coeff * grad_pt, index_add at winner row.
+      - x / temp grad: through coeff only (winner index fixed, STE-style).
+        dcoeff/dz_j = coeff * (1{j=winner} - sel_j).
+    """
+    B, n_tables_, n_outputs = grad_pt.shape
+    n_tables, NAP = anchor_a_long.shape
+    K = bit_matrix.shape[1]
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d     = x[:, anchor_a_long] - x[:, anchor_b_long]
+    denom = T_soft + d.abs()
+    p     = d / denom
+    ts    = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+    z     = ts / T_sel
+    sel   = F.softmax(z, dim=-1)
+    coeff = sel.gather(-1, index.unsqueeze(-1)).squeeze(-1)        # [B, n_tables]
+
+    flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+    flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+    W_winner = F.embedding(flat_idx, weights.view(n_tables * K, n_outputs)).view(B, n_tables, n_outputs)
+
+    # weight gradient: coeff-scaled, hard index_add at winner row.
+    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
+    grad_w_contrib = (coeff.unsqueeze(-1).to(w_dtype) * grad_pt.to(w_dtype)).reshape(-1, n_outputs)
+    grad_w_flat.index_add_(0, flat_idx, grad_w_contrib)
+    grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+
+    # coeff gradient → ts → p → d → x.
+    dL_dcoeff = (grad_pt.to(w_dtype) * W_winner).sum(dim=-1)       # [B, n_tables]
+    onehot = F.one_hot(index, num_classes=K).to(sel.dtype)        # [B, n_tables, K]
+    dL_dz = dL_dcoeff.unsqueeze(-1).to(sel.dtype) * coeff.unsqueeze(-1) * (onehot - sel)
+    dL_dts = dL_dz / T_sel
+    grad_log_T_sel = -(dL_dz * z).sum()
+
+    dL_dp = torch.einsum("btk,pk->btp", dL_dts, bit_matrix.to(dL_dts.dtype))
+    d_d = dL_dp * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
+
+
 @torch.compile
 def _soft_lut_fwd_body_einsum_scatter(x, weights, anchor_a_long, anchor_b_long,
                                        bit_matrix, T_soft, n_heads, tph, table_dim,
@@ -1083,6 +1200,60 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
 
     # dL/dx via scatter-add at anchor positions.
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
+
+
+@torch.compile
+def _soft_lut_bwd_body_prob(grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                             bit_matrix, index, T_soft, T_sel, n_heads, tph):
+    """Backward for probabilistic-forward mode.
+
+    Weight gradient: hard index_add_ at sampled `index` (same as STE).
+    Input gradient: derived from the ACTUAL softmax distribution p → ts → sel_soft,
+    NOT from index-bit reconstruction. Since the forward samples from
+    softmax(ts/T_sel), the gradient of E[output] w.r.t. input integrates over
+    the full distribution — it does not depend on which specific row was sampled.
+    """
+    B, n_tables_, n_outputs = grad_pt.shape
+    n_tables, NAP = anchor_a_long.shape
+    K = bit_matrix.shape[1]
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d     = x[:, anchor_a_long] - x[:, anchor_b_long]
+    denom = T_soft + d.abs()
+    p     = d / denom                           # actual p — no index reconstruction
+
+    ts       = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
+    z        = ts / T_sel
+    sel_soft = F.softmax(z, dim=-1)
+
+    d_sel_soft = torch.einsum("bto,tko->btk", grad_pt.to(w_dtype), weights)
+
+    sum_term = (d_sel_soft * sel_soft).sum(dim=-1, keepdim=True)
+    d_z      = sel_soft * (d_sel_soft - sum_term)
+    d_ts     = d_z / T_sel
+    grad_log_T_sel = -(d_z * z).sum()
+
+    # dp/dd = T_soft / denom^2 (straightforward, p = d/denom).
+    d_p = torch.einsum("btk,pk->btp", d_ts, bit_matrix.to(d_ts.dtype))
+    d_d = d_p * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    # Weight gradient: hard index_add at sampled index (STE-style).
+    flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+    flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
+    grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+    grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+
     grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
     idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
     idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
@@ -1414,6 +1585,613 @@ class _TinyMHLutSoft(torch.autograd.Function):
                 None, None, None, None)
 
 
+class _TinyMHLutProb(torch.autograd.Function):
+    """Probabilistic forward + STE backward.
+
+    Forward: sample one row from softmax(ts/T_sel) per (batch, table) —
+    unlike _TinyMHLutSoft (argmax), every row with non-trivial probability
+    gets selected occasionally, increasing row gradient coverage at small batch.
+    Backward: identical to _TinyMHLutSoft — _soft_lut_bwd_body with sampled idx.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix,
+                n_heads, tph, table_dim, use_bf16):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            out, index = _soft_lut_fwd_body_prob(
+                x, weights, anchor_a_long, anchor_b_long,
+                bit_matrix, T_soft, T_sel, n_heads, tph, table_dim,
+            )
+        ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, index, log_T_soft, log_T_sel)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.use_bf16 = use_bf16
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, anchor_a_long, anchor_b_long, bit_matrix, index,
+         log_T_soft, log_T_sel) = ctx.saved_tensors
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        B = x.shape[0]
+        n_heads = ctx.n_heads
+        tph = ctx.tph
+        n_tables = anchor_a_long.shape[0]
+        n_outputs = weights.shape[2]
+        grad_pt = (grad_out.unsqueeze(2)
+                           .expand(B, n_heads, tph, n_outputs)
+                           .reshape(B, n_tables, n_outputs))
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if ctx.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_prob(
+                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                index, T_soft, T_sel, n_heads, tph,
+            )
+        # 11 inputs → 11 grads
+        return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None)
+
+
+class _TinyMHLutSoftWinner(torch.autograd.Function):
+    """Scaled-hard forward (out = coeff_winner * W[winner]) + matching backward.
+
+    Deterministic forward (argmax + softmax-winner-coeff), so train==eval.
+    Single-row inference; the coeff is a differentiable confidence gate.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix,
+                n_heads, tph, table_dim, use_bf16):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            out, index = _soft_lut_fwd_body_winner(
+                x, weights, anchor_a_long, anchor_b_long,
+                bit_matrix, T_soft, T_sel, n_heads, tph, table_dim,
+            )
+        ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, index, log_T_soft, log_T_sel)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.use_bf16 = use_bf16
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, anchor_a_long, anchor_b_long, bit_matrix, index,
+         log_T_soft, log_T_sel) = ctx.saved_tensors
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        B = x.shape[0]
+        n_heads = ctx.n_heads
+        tph = ctx.tph
+        n_tables = anchor_a_long.shape[0]
+        n_outputs = weights.shape[2]
+        grad_pt = (grad_out.unsqueeze(2)
+                           .expand(B, n_heads, tph, n_outputs)
+                           .reshape(B, n_tables, n_outputs))
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if ctx.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_winner(
+                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                index, T_soft, T_sel, n_heads, tph,
+            )
+        # 11 inputs → 11 grads
+        return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None)
+
+
+# =====================================================================
+# TinyOrderedMultiHeadLut: ordering-table + weight-table separation.
+#
+# Architecture motivation: when anchor pairs form connected groups
+# (triplets, quadruplets), some bit-patterns are unreachable due to
+# transitivity (e.g. a>b>c>a is a cycle). Standard TinyMultiHeadLut
+# wastes those rows. This module separates:
+#
+#   ordering_table [n_tables, 2^n_pairs]: bit-pattern → weight-row index.
+#     Unreachable patterns → -1 (→ -inf in soft routing → zero sel).
+#   weight_table [n_tables, max_orders, n_outputs]: actual stored values.
+#     max_orders = n_reachable_orderings_per_table ≤ 2^n_pairs.
+#
+# The ordering_table is built AUTOMATICALLY from the sampled anchor pairs
+# at init time: for each table, all 2^NAP bit-patterns are checked for
+# acyclicity; reachable ones are numbered 0,1,... and unreachable ones
+# get -1. For disjoint anchor pairs (the common case with
+# CANONICAL_FULL_COVERAGE and large input_dim) all patterns are
+# reachable, max_orders = 2^NAP, and the weight_table equals TinyMHLut's
+# weight layout exactly. Connected anchor groups (triplets, quadruplets)
+# yield max_orders < 2^NAP.
+#
+# STE-style: hard argmax forward, hard index_add_ weight gradient, soft
+# input gradient through all reachable patterns (matches TinyMultiHeadLut
+# backward_mode='soft' but restricted to the reachable subset).
+# =====================================================================
+
+
+def _build_ordering_table(
+    anchor_a: torch.Tensor,   # [n_tables, NAP] int64
+    anchor_b: torch.Tensor,   # [n_tables, NAP] int64
+) -> "tuple[torch.Tensor, int, torch.Tensor]":
+    """Derive ordering_table, max_orders, and reachable_bit_matrix from anchor pairs.
+
+    For each table, enumerates all 2^NAP bit-patterns (MSB-first, matching
+    _msb_powers) and tests whether the corresponding directed comparison
+    graph is acyclic (= the pattern is realizable by some real-valued
+    assignment to the anchor dimensions).
+
+    Shortcut: if the undirected version of the graph is a forest
+    (no shared anchor indices → no transitivity constraints), all 2^NAP
+    patterns are reachable and the identity mapping is returned for that
+    table in O(NAP) time.
+
+    Returns:
+        ordering_table       [n_tables, 2^NAP] int64  — reachable → [0, n_reach),
+                             unreachable → -1.
+        max_orders           int — max n_reach across all tables.
+        reachable_bit_matrix [NAP, max_orders] float32 — sign matrix (+1/-1, MSB-first)
+                             for the reachable patterns of table 0, ordered by their
+                             weight-row index j=0..max_orders-1.  When all tables
+                             share the same reachable set (CONNECTED_TRIPLETS,
+                             CANONICAL_FULL_COVERAGE), this covers every table.
+    """
+    from collections import defaultdict, deque
+
+    n_tables, NAP = anchor_a.shape
+    K = 1 << NAP
+    a_cpu = anchor_a.cpu().tolist()
+    b_cpu = anchor_b.cpu().tolist()
+
+    def _forest(pairs):
+        """True iff the undirected graph on `pairs` is a forest (no cycle / self-loop)."""
+        parent = {}
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]; x = parent[x]
+            return x
+        for u, v in pairs:
+            if u == v:
+                return False
+            ru, rv = find(u), find(v)
+            if ru == rv:
+                return False
+            parent[ru] = rv
+        return True
+
+    def _acyclic(dedges):
+        """True iff the directed graph is acyclic (Kahn toposort)."""
+        nodes = set(x for e in dedges for x in e)
+        indeg = {n: 0 for n in nodes}
+        adj = defaultdict(list)
+        for u, v in dedges:
+            adj[u].append(v)
+            indeg[v] += 1
+        q = deque(n for n in nodes if indeg[n] == 0)
+        seen = 0
+        while q:
+            u = q.popleft(); seen += 1
+            for w in adj[u]:
+                indeg[w] -= 1
+                if indeg[w] == 0:
+                    q.append(w)
+        return seen == len(nodes)
+
+    ordering_table = torch.empty(n_tables, K, dtype=torch.long)
+    max_orders = 0
+
+    for t in range(n_tables):
+        pairs = list(zip(a_cpu[t], b_cpu[t]))
+        if _forest(pairs):
+            for k in range(K):
+                ordering_table[t, k] = k
+            max_orders = max(max_orders, K)
+        else:
+            order_idx = 0
+            for k in range(K):
+                dedges = [
+                    (a_cpu[t][i], b_cpu[t][i]) if (k >> (NAP - 1 - i)) & 1
+                    else (b_cpu[t][i], a_cpu[t][i])
+                    for i in range(NAP)
+                ]
+                if _acyclic(dedges):
+                    ordering_table[t, k] = order_idx
+                    order_idx += 1
+                else:
+                    ordering_table[t, k] = -1
+            max_orders = max(max_orders, order_idx)
+
+    # Build reachable_bit_matrix [NAP, max_orders] from table 0's reachable patterns.
+    # Column j = sign pattern (+1/-1, MSB-first) for the pattern mapped to weight row j.
+    tbl0 = ordering_table[0]                    # [K]
+    pattern_for_row = [-1] * max_orders
+    for k in range(K):
+        j = tbl0[k].item()
+        if j >= 0:
+            pattern_for_row[j] = k
+    reachable_bit_matrix = torch.zeros(NAP, max_orders, dtype=torch.float32)
+    for j, k in enumerate(pattern_for_row):
+        if k >= 0:
+            for i in range(NAP):
+                bit = (k >> (NAP - 1 - i)) & 1
+                reachable_bit_matrix[i, j] = 2.0 * bit - 1.0
+
+    return ordering_table, max_orders, reachable_bit_matrix
+
+
+# ---------------------------------------------------------------------------
+# Soft-forward path: output = softmax(ts/T_sel) @ weight_table.
+# Used by TinyOrderedMultiHeadLut(soft_forward=True) for temperature annealing.
+# ---------------------------------------------------------------------------
+
+@torch.compile
+def _ordered_soft_fwd_body(x, weight_table, anchor_a, anchor_b,
+                            reachable_bit_matrix, T_soft, T_sel, n_heads, tph):
+    B = x.shape[0]
+    n_outputs = weight_table.shape[2]
+    d = x[:, anchor_a] - x[:, anchor_b]
+    p = d / (T_soft + d.abs())
+    ts = torch.einsum("btp,pm->btm", p, reachable_bit_matrix.to(p.dtype))
+    sel = F.softmax(ts / T_sel, dim=-1)
+    out_pt = torch.einsum("btm,tmo->bto", sel.to(weight_table.dtype), weight_table)
+    return out_pt.view(B, n_heads, tph, n_outputs).sum(dim=2)
+
+
+def _ordered_soft_bwd_body(grad_out, x, weight_table, anchor_a, anchor_b,
+                            reachable_bit_matrix, log_T_soft, log_T_sel, n_heads, tph):
+    T_soft = log_T_soft.exp()
+    T_sel  = log_T_sel.exp()
+    B = x.shape[0]
+    input_dim = x.shape[1]
+    n_tables, max_orders, n_outputs = weight_table.shape
+    w_dtype = weight_table.dtype
+
+    d = x[:, anchor_a] - x[:, anchor_b]
+    p = d / (T_soft + d.abs())
+    ts = torch.einsum("btp,pm->btm", p, reachable_bit_matrix.to(p.dtype))
+    z  = ts / T_sel
+    sel = F.softmax(z, dim=-1)
+
+    grad_pt = (grad_out.unsqueeze(2)
+               .expand(B, n_heads, tph, n_outputs)
+               .reshape(B, n_tables, n_outputs)
+               .to(w_dtype))
+
+    d_weight_table = torch.einsum("btm,bto->tmo", sel.to(w_dtype), grad_pt)
+
+    d_sel_soft = torch.einsum("bto,tmo->btm", grad_pt, weight_table)
+    sum_term   = (d_sel_soft * sel).sum(-1, keepdim=True)
+    d_z        = sel * (d_sel_soft - sum_term)
+    d_ts       = d_z / T_sel
+    grad_log_T_sel  = -(d_z * z).sum()
+
+    d_p = torch.einsum("btm,pm->btp", d_ts.to(p.dtype), reachable_bit_matrix.to(p.dtype))
+    d_d = d_p * T_soft / (T_soft + d.abs()) ** 2
+    grad_log_T_soft = -(d_d * d).sum()
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a  = anchor_a.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b  = anchor_b.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a,  d_flat)
+    grad_x.scatter_add_(1, idx_b, -d_flat)
+
+    return grad_x, d_weight_table, grad_log_T_soft, grad_log_T_sel
+
+
+class _TinyOrderedMHLutSoft(torch.autograd.Function):
+    """Soft-forward variant: output = softmax(ts/T_sel) @ weight_table."""
+
+    @staticmethod
+    def forward(ctx, x, weight_table, log_T_soft, log_T_sel,
+                anchor_a, anchor_b, reachable_bit_matrix,
+                n_heads, tph, use_bf16):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        ac = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+              if use_bf16 and x.is_cuda
+              else torch.amp.autocast("cpu", enabled=False))
+        with ac:
+            out = _ordered_soft_fwd_body(
+                x, weight_table, anchor_a, anchor_b,
+                reachable_bit_matrix, T_soft, T_sel, n_heads, tph,
+            )
+        ctx.save_for_backward(x, weight_table, anchor_a, anchor_b,
+                               reachable_bit_matrix, log_T_soft, log_T_sel)
+        ctx.n_heads = n_heads
+        ctx.tph     = tph
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weight_table, anchor_a, anchor_b,
+         reachable_bit_matrix, log_T_soft, log_T_sel) = ctx.saved_tensors
+        grad_x, d_wt, gs, gx = _ordered_soft_bwd_body(
+            grad_out, x, weight_table, anchor_a, anchor_b,
+            reachable_bit_matrix, log_T_soft, log_T_sel, ctx.n_heads, ctx.tph,
+        )
+        return (grad_x, d_wt, gs, gx, None, None, None, None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Hard-forward (STE) path — default.
+# ---------------------------------------------------------------------------
+
+@torch.compile
+def _ordered_fwd_body(x, weight_table, anchor_a, anchor_b,
+                       reachable_bit_matrix, T_soft, n_heads, tph):
+    """Ordered hard-LUT forward — argmax over reachable patterns, gather one row.
+
+    reachable_bit_matrix: [NAP, max_orders] float32
+    weight_table:         [n_tables, max_orders, n_outputs]
+    Returns: [B, H, O] output, [B, n_tables] argmax indices.
+    T_sel is NOT needed — argmax(ts) == argmax(ts/T_sel) for any T_sel > 0.
+    """
+    B = x.shape[0]
+    n_tables, max_orders, n_outputs = weight_table.shape
+    d = x[:, anchor_a] - x[:, anchor_b]                                         # [B, T, NAP]
+    p = d / (T_soft + d.abs())
+    ts = torch.einsum("btp,pm->btm", p, reachable_bit_matrix.to(p.dtype))       # [B, T, M]
+    idx = ts.argmax(dim=-1)                                                      # [B, T]
+    flat_offset = torch.arange(n_tables, device=idx.device, dtype=idx.dtype) * max_orders
+    flat_idx = (idx + flat_offset.unsqueeze(0)).reshape(-1)                      # [B*T]
+    out_pt = F.embedding(flat_idx, weight_table.reshape(-1, n_outputs).float()
+                         ).to(weight_table.dtype).view(B, n_tables, n_outputs)
+    return out_pt.view(B, n_heads, tph, n_outputs).sum(dim=2), idx              # [B, H, O], [B, T]
+
+
+def _ordered_bwd_body(grad_out, x, weight_table, anchor_a, anchor_b,
+                       reachable_bit_matrix, log_T_soft, log_T_sel, idx, n_heads, tph):
+    """Ordered LUT backward — hard weight gradient + soft input gradient (STE-style).
+
+    Weight gradient: index_add_ at the argmax row (idx) only.
+    Input gradient: reconstruct p_signs from reachable_bit_matrix[:, idx], run
+    full softmax backward through all max_orders rows (same as TinyMultiHeadLut
+    backward_mode='soft' but with reachable_bit_matrix instead of bit_matrix).
+    """
+    T_soft = log_T_soft.exp()
+    T_sel = log_T_sel.exp()
+    B = x.shape[0]
+    input_dim = x.shape[1]
+    n_tables, max_orders, n_outputs = weight_table.shape
+    w_dtype = weight_table.dtype
+
+    # Per-table upstream gradient [B, n_tables, n_outputs]
+    grad_pt = (grad_out.unsqueeze(2)
+               .expand(B, n_heads, tph, n_outputs)
+               .reshape(B, n_tables, n_outputs)
+               .to(w_dtype))
+
+    # --- Hard weight gradient: index_add_ at selected row only ---
+    flat_offset = torch.arange(n_tables, device=idx.device, dtype=idx.dtype) * max_orders
+    flat_idx = (idx + flat_offset.unsqueeze(0)).reshape(-1)                      # [B*T]
+    grad_w_flat = torch.zeros(n_tables * max_orders, n_outputs, dtype=w_dtype, device=weight_table.device)
+    grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs))
+    d_weight_table = grad_w_flat.view(n_tables, max_orders, n_outputs)
+
+    # --- Soft input gradient (STE): reconstruct p_signs from saved idx ---
+    # reachable_bit_matrix.T: [max_orders, NAP]; idx: [B, n_tables]
+    # p_signs[b,t,:] = reachable_bit_matrix[:, idx[b,t]] = rbm.T[idx[b,t]]
+    p_signs = reachable_bit_matrix.T[idx].to(x.dtype)                           # [B, T, NAP]
+    d = x[:, anchor_a] - x[:, anchor_b]
+    denom = T_soft + d.abs()
+    p = p_signs * d.abs() / denom
+
+    ts = torch.einsum("btp,pm->btm", p, reachable_bit_matrix.to(p.dtype))       # [B, T, M]
+    z = ts / T_sel
+    sel_soft = F.softmax(z, dim=-1)                                              # [B, T, M]
+
+    d_sel_soft = torch.einsum("bto,tmo->btm", grad_pt.to(p.dtype), weight_table.to(p.dtype))
+    sum_term = (d_sel_soft * sel_soft).sum(-1, keepdim=True)
+    d_z = sel_soft * (d_sel_soft - sum_term)
+    d_ts = d_z / T_sel
+    grad_log_T_sel = -(d_z * z).sum()
+
+    # dp/dd = p_signs * sign(d) * T_soft / denom^2  (same algebra as TinyMHLut soft bwd)
+    d_p = torch.einsum("btm,pm->btp", d_ts, reachable_bit_matrix.to(d_ts.dtype))
+    d_d = d_p * p_signs * d.sign() * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a = anchor_a.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b = anchor_b.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat = d_d.reshape(B, -1)
+    grad_x.scatter_add_(1, idx_a,  d_flat)
+    grad_x.scatter_add_(1, idx_b, -d_flat)
+
+    return grad_x, d_weight_table, grad_log_T_soft, grad_log_T_sel
+
+
+class _TinyOrderedMHLut(torch.autograd.Function):
+    """Autograd wrapper for the ordered hard-LUT forward / STE backward.
+
+    Forward: hard argmax over reachable orderings → gather one weight row.
+    Backward: hard index_add_ for weight gradient; soft STE for input gradient.
+
+    Forward inputs (10):
+      x, weight_table, log_T_soft, log_T_sel,
+      anchor_a, anchor_b, reachable_bit_matrix,
+      n_heads(int), tph(int), use_bf16(bool)
+    """
+
+    @staticmethod
+    def forward(ctx, x, weight_table, log_T_soft, log_T_sel,
+                anchor_a, anchor_b, reachable_bit_matrix,
+                n_heads, tph, use_bf16):
+        T_soft = log_T_soft.exp()
+        out, idx = _ordered_fwd_body(
+            x, weight_table, anchor_a, anchor_b,
+            reachable_bit_matrix, T_soft, n_heads, tph,
+        )
+        ctx.save_for_backward(x, weight_table, anchor_a, anchor_b,
+                               reachable_bit_matrix, log_T_soft, log_T_sel, idx)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weight_table, anchor_a, anchor_b,
+         reachable_bit_matrix, log_T_soft, log_T_sel, idx) = ctx.saved_tensors
+        grad_x, d_wt, grad_log_Ts, grad_log_Tx = _ordered_bwd_body(
+            grad_out, x, weight_table, anchor_a, anchor_b,
+            reachable_bit_matrix, log_T_soft, log_T_sel, idx, ctx.n_heads, ctx.tph,
+        )
+        # 10 forward inputs → 10 backward outputs.
+        return (grad_x, d_wt, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None)
+
+
+class TinyOrderedMultiHeadLut(nn.Module):
+    """Multi-head LUT with ordering-table + weight-table two-level lookup.
+
+    Drop-in replacement for TinyMultiHeadLut(backward_mode='soft') with
+    automatic reachability detection. Forward selects one weight row via
+    hard argmax over reachable orderings; backward uses STE: hard index_add_
+    for weight gradients (only the selected row), soft input gradient through
+    all max_orders reachable patterns via reachable_bit_matrix.
+
+    Constructor args are identical to TinyMultiHeadLut except:
+      - backward_mode is always STE-style (no parameter)
+      - argmax_noise_eps is not supported (omitted)
+      - einsum_bf16_forward / n_alternatives are not supported (omitted)
+
+    After init, inspect:
+      self.max_orders           — weight_table rows per table
+      self.ordering_table       — [n_tables, 2^NAP] int, -1 = unreachable
+      self.reachable_bit_matrix — [NAP, max_orders] float32 sign matrix
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        n_heads: int,
+        n_outputs: int,
+        n_anchor_pairs: int,
+        tables_per_head: int = 1,
+        *,
+        weight_dtype: torch.dtype = torch.bfloat16,
+        anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
+        partition_sets: Optional[list] = None,
+        partition_pair_weights: Optional[list] = None,
+        random_seed: Optional[int] = None,
+        initial_weights_noise: float = 0.001,
+        device: Optional[torch.device] = None,
+        soft_score_temp: float = 0.5,
+        select_temp: float = 0.5,
+        learnable_temps: bool = False,
+        use_bf16: bool = True,
+        soft_forward: bool = False,
+        max_anchor_distance: Optional[int] = None,
+        local_window_starts: str = "linspace",
+    ):
+        super().__init__()
+        if not (1 <= n_anchor_pairs <= 15):
+            raise ValueError(f"n_anchor_pairs must be 1..15, got {n_anchor_pairs}")
+        if input_dim > 32767:
+            raise ValueError(f"input_dim must be <= 32767, got {input_dim}")
+
+        self.input_dim = input_dim
+        self.n_heads = n_heads
+        self.n_outputs = n_outputs
+        self.n_anchor_pairs = n_anchor_pairs
+        self.tables_per_head = tables_per_head
+        self.table_dim = 1 << n_anchor_pairs
+        self.weight_dtype = weight_dtype
+        self.soft_forward = bool(soft_forward)
+        n_lookup_tables = n_heads * tables_per_head
+        self.n_lookup_tables = n_lookup_tables
+
+        dev = device or torch.device("cpu")
+
+        # 1. Sample anchor pairs (identical to TinyMultiHeadLut).
+        self.lookup = TinyAnchorPairsLookup(
+            input_dim=input_dim,
+            n_tables=n_lookup_tables,
+            n_anchor_pairs=n_anchor_pairs,
+            n_heads=n_heads,
+            random_seed=random_seed,
+            device=dev,
+            partition_sets=partition_sets,
+            partition_pair_weights=partition_pair_weights,
+            anchor_sampling_policy=anchor_sampling_policy,
+            max_anchor_distance=max_anchor_distance,
+            local_window_starts=local_window_starts,
+        )
+        anchor_a_long = self.lookup.anchor_pairs_a.long().contiguous()
+        anchor_b_long = self.lookup.anchor_pairs_b.long().contiguous()
+        self.register_buffer('soft_anchor_a_long', anchor_a_long)
+        self.register_buffer('soft_anchor_b_long', anchor_b_long)
+        # 2. Auto-detect reachable orderings from sampled pairs.
+        _ord_tbl, _max_orders, _rbm = _build_ordering_table(anchor_a_long, anchor_b_long)
+        self.max_orders = _max_orders
+        self.register_buffer('ordering_table',       _ord_tbl.to(dev))
+        self.register_buffer('reachable_bit_matrix', _rbm.to(dev))
+
+        # 3. Weight table: [n_tables, max_orders, n_outputs].
+        rng_kwargs: dict = {"device": dev}
+        if random_seed is not None:
+            rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
+        wt_init = (
+            (torch.rand(n_lookup_tables, _max_orders, n_outputs, **rng_kwargs) - 0.5)
+            * (2.0 * initial_weights_noise)
+        ).to(weight_dtype)
+        self.weight_table = nn.Parameter(wt_init)
+
+        # 4. Temperature scalars.
+        self.use_bf16 = bool(use_bf16)
+        self.learnable_temps = bool(learnable_temps)
+        if self.learnable_temps:
+            self.log_soft_score_temp = nn.Parameter(
+                torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev)
+            )
+            self.log_select_temp = nn.Parameter(
+                torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev)
+            )
+        else:
+            self.register_buffer(
+                'log_soft_score_temp',
+                torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev),
+            )
+            self.register_buffer(
+                'log_select_temp',
+                torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev),
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [B, input_dim]
+        returns: [B, n_heads, n_outputs]
+        """
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}")
+        fn = _TinyOrderedMHLutSoft if self.soft_forward else _TinyOrderedMHLut
+        return fn.apply(
+            x, self.weight_table,
+            self.log_soft_score_temp, self.log_select_temp,
+            self.soft_anchor_a_long, self.soft_anchor_b_long,
+            self.reachable_bit_matrix,
+            self.n_heads, self.tables_per_head,
+            self.use_bf16,
+        )
+
+
 class TinyMultiHeadLut(nn.Module):
     """Multi-head LUT with TinyAnchorPairsLookup + bf16 (default) weights.
 
@@ -1616,14 +2394,14 @@ class TinyMultiHeadLut(nn.Module):
         self.weights = nn.Parameter(weights_init)
 
         # ----- soft-backward mode setup -----
-        if backward_mode not in ("ste", "soft", "soft_topk"):
-            raise ValueError(f"backward_mode must be 'ste', 'soft', or 'soft_topk', got {backward_mode!r}")
+        if backward_mode not in ("ste", "soft", "soft_topk", "prob", "soft_winner"):
+            raise ValueError(f"backward_mode must be 'ste', 'soft', 'soft_topk', 'prob', or 'soft_winner', got {backward_mode!r}")
         self.backward_mode = backward_mode
         self.use_bf16 = bool(use_bf16)
         self.argmax_noise_eps = float(argmax_noise_eps)
         self.einsum_bf16_forward = bool(einsum_bf16_forward)
         if self.einsum_bf16_forward:
-            if backward_mode not in ("soft", "soft_topk"):
+            if backward_mode not in ("soft", "soft_topk", "prob", "soft_winner"):
                 raise ValueError(
                     "einsum_bf16_forward=True requires backward_mode='soft' or 'soft_topk'; "
                     f"got backward_mode={backward_mode!r}"
@@ -1710,7 +2488,7 @@ class TinyMultiHeadLut(nn.Module):
                     "log_uncertainty_T",
                     torch.tensor(log_T_init, dtype=torch.float32, device=dev),
                 )
-        if backward_mode in ("soft", "soft_topk"):
+        if backward_mode in ("soft", "soft_topk", "prob", "soft_winner"):
             # sparse_scatter_n_outputs is supported: forward returns per-table
             # [B, H, tph, n_outputs] from `_TinyMHLutSoft.apply(..., sparse=True)`,
             # then `_scatter` reduces into the wider output dim. Backward
@@ -1766,6 +2544,41 @@ class TinyMultiHeadLut(nn.Module):
                 self.register_buffer('_sparse_slot_offsets',    so)
                 self.register_buffer('_sparse_contrib_table',   ct)
                 self.register_buffer('_sparse_contrib_local_i', ci)
+
+    def _soft_winner_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """backward_mode='soft_winner' forward: out = softmax_winner_coeff * W[winner]."""
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}")
+        return _TinyMHLutSoftWinner.apply(
+            x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+            self.soft_anchor_a_long, self.soft_anchor_b_long,
+            self.soft_bit_matrix,
+            self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+        )
+
+    def _prob_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """backward_mode='prob' forward: stochastic during train, argmax at eval."""
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}")
+        if not self.training:
+            # Deterministic argmax — no autograd wrapper needed at eval.
+            T_soft = self.log_soft_score_temp.exp()
+            autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                            if self.use_bf16 and x.is_cuda
+                            else torch.amp.autocast("cpu", enabled=False))
+            with autocast_ctx:
+                out, _ = _soft_lut_fwd_body_einsum(
+                    x, self.weights, self.soft_anchor_a_long, self.soft_anchor_b_long,
+                    self.soft_bit_matrix, T_soft,
+                    self.n_heads, self.tables_per_head, self.table_dim,
+                )
+            return out
+        return _TinyMHLutProb.apply(
+            x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+            self.soft_anchor_a_long, self.soft_anchor_b_long,
+            self.soft_bit_matrix,
+            self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+        )
 
     def _soft_forward(self, x: torch.Tensor) -> torch.Tensor:
         """soft backward_mode forward path. Forward output is identical to
@@ -1826,6 +2639,12 @@ class TinyMultiHeadLut(nn.Module):
         # restricting the soft attribution to 1 + n_alternatives rows.
         if self.backward_mode in ("soft", "soft_topk"):
             return self._soft_forward(x)
+
+        if self.backward_mode == "prob":
+            return self._prob_forward(x)
+
+        if self.backward_mode == "soft_winner":
+            return self._soft_winner_forward(x)
 
         # Multi-alternative STE backward. Uses self.n_alternatives top-|delta|
         # anchor positions selected via manual argmin (no topk kernel; cheap

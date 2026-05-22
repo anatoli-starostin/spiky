@@ -282,10 +282,12 @@ class TinyAnchorPairsLookup(nn.Module):
         if policy not in (
             AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
             AnchorSamplingPolicy.CANONICAL_DISTINCT,
+            AnchorSamplingPolicy.CONNECTED_TRIPLETS,
+            AnchorSamplingPolicy.CONNECTED_QUADRUPLES,
         ):
             raise ValueError(
-                f"TinyAnchorPairsLookup supports CANONICAL_FULL_COVERAGE or "
-                f"CANONICAL_DISTINCT, got {policy}"
+                f"TinyAnchorPairsLookup supports CANONICAL_FULL_COVERAGE, "
+                f"CANONICAL_DISTINCT, CONNECTED_TRIPLETS, or CONNECTED_QUADRUPLES, got {policy}"
             )
         self.anchor_sampling_policy = policy
         anchor_pairs_a, anchor_pairs_b = get_balanced_anchor_pairs(

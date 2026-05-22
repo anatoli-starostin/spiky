@@ -1,0 +1,101 @@
+{
+  "init": {
+    "lut": {
+      "LUT_body(tables)": {
+        "noise_to_signal": 0.6535835932880832,
+        "snr_median": 0.38733275545140106,
+        "n_tensors": 24
+      },
+      "head(dense)": {
+        "noise_to_signal": 0.6984238080799662,
+        "snr_median": 0.46879321336746216,
+        "n_tensors": 1
+      }
+    },
+    "vanilla": {
+      "vanilla_body(Linears)": {
+        "noise_to_signal": 0.2908817422814696,
+        "snr_median": 0.5598257879416147,
+        "n_tensors": 24
+      },
+      "head(dense)": {
+        "noise_to_signal": 1.2828947943677627,
+        "snr_median": 0.36255010962486267,
+        "n_tensors": 1
+      }
+    },
+    "lut_coverage": {
+      "qkv_lut": 1.0,
+      "v_lut": 0.9998304744561514,
+      "out_proj": 0.9120305379231771,
+      "residual_lut": 1.0
+    },
+    "density": null
+  },
+  "trained": {
+    "lut": {
+      "LUT_body(tables)": {
+        "noise_to_signal": 14.482775506542989,
+        "snr_median": 0.16207852649192014,
+        "n_tensors": 24
+      },
+      "head(dense)": {
+        "noise_to_signal": 18.48888338998001,
+        "snr_median": 0.23917138576507568,
+        "n_tensors": 1
+      }
+    },
+    "vanilla": {
+      "vanilla_body(Linears)": {
+        "noise_to_signal": 8.757822468513316,
+        "snr_median": 0.19217954327662787,
+        "n_tensors": 24
+      },
+      "head(dense)": {
+        "noise_to_signal": 16.079304028269615,
+        "snr_median": 0.2346113622188568,
+        "n_tensors": 1
+      }
+    },
+    "lut_coverage": {
+      "qkv_lut": 0.9999593297640482,
+      "v_lut": 0.9997592767079672,
+      "out_proj": 0.9731699625651041,
+      "residual_lut": 0.9998982747395834
+    },
+    "density": {
+      "qkv_lut": {
+        "K": 64,
+        "visits_per_row_median": 101.0,
+        "visits_per_row_p10": 35.0,
+        "visits_per_row_min": 0.0,
+        "frac_rows_under_16": 0.01914469338953495,
+        "tokens_per_microbatch": 8192
+      },
+      "v_lut": {
+        "K": 64,
+        "visits_per_row_median": 101.0,
+        "visits_per_row_p10": 35.0,
+        "visits_per_row_min": 0.0,
+        "frac_rows_under_16": 0.01943122036755085,
+        "tokens_per_microbatch": 8192
+      },
+      "out_proj": {
+        "K": 64,
+        "visits_per_row_median": 79.0,
+        "visits_per_row_p10": 9.0,
+        "visits_per_row_min": 0.0,
+        "frac_rows_under_16": 0.14110565185546875,
+        "tokens_per_microbatch": 8192
+      },
+      "residual_lut": {
+        "K": 64,
+        "visits_per_row_median": 99.0,
+        "visits_per_row_p10": 31.0,
+        "visits_per_row_min": 0.0,
+        "frac_rows_under_16": 0.0266520194709301,
+        "tokens_per_microbatch": 8192
+      }
+    }
+  }
+}
