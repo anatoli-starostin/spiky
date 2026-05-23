@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp494_softmax_temppenalty",
+  "best_val_bpb": 1.4804331690710695,
+  "final_val_bpb": 1.4804331690710695,
+  "n_params": 89393456,
+  "training_time_hours": 0.381
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp500_matmul_softmax_ste",
+  "best_val_bpb": 1.543685081376268,
+  "final_val_bpb": 1.543685081376268,
+  "n_params": 89393456,
+  "training_time_hours": 0.391
+}

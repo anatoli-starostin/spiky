@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp501_matmul_relunorm_hardsign",
+  "best_val_bpb": 1.662105755516887,
+  "final_val_bpb": 1.662105755516887,
+  "n_params": 90573104,
+  "training_time_hours": 0.429
+}

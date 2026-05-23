@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp507_hybrid_qkv_soft",
+  "best_val_bpb": 1.4796630605929353,
+  "final_val_bpb": 1.4796630605929353,
+  "n_params": 89393456,
+  "training_time_hours": 0.812
+}

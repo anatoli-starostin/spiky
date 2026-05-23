@@ -95,6 +95,20 @@ def set_dominance_gate(flag: bool = True) -> None:
     global _GLOBAL_DOMINANCE_GATE
     _GLOBAL_DOMINANCE_GATE = bool(flag)
 
+# When True, the soft-mode backward builds the softmax over HARD-sign (±1) match
+# scores — `ts = einsum(p_signs, bit_matrix)` integer-valued — instead of the
+# soft-magnitude `p = p_signs·|d|/denom`. The argmax FORWARD is sign-only so it's
+# unchanged; this isolates the effect of hard vs soft signs on the backward
+# gradient alone (the TinyMHLut analog of MatmulMHL's hard_sign_ste / exp500).
+# The input-gradient Jacobian (T_soft/denom²) is kept as the STE surrogate —
+# without it hard signs give zero input gradient.
+_GLOBAL_HARD_SIGN_BWD = False
+
+def set_hard_sign_bwd(flag: bool = True) -> None:
+    """Set the global hard-sign-backward toggle (see _GLOBAL_HARD_SIGN_BWD)."""
+    global _GLOBAL_HARD_SIGN_BWD
+    _GLOBAL_HARD_SIGN_BWD = bool(flag)
+
 # When True, the soft-mode backward computes the per-(table,row) visit count for
 # this backward (how many batch elements selected each row) and stashes it in
 # _GLOBAL_VISIT_COUNT_REGISTRY keyed by weights.data_ptr(). The gradient itself
@@ -1122,7 +1136,8 @@ def _soft_lut_fwd_body_einsum_scatter(x, weights, anchor_a_long, anchor_b_long,
 def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel, n_heads, tph,
                         visit_norm: bool = False,
-                        dominance_gate: bool = False):
+                        dominance_gate: bool = False,
+                        hard_sign_ste: bool = False):
     """Compiled backward — Gumbel-STE consistent.
 
     Reconstructs `p` so that `argmax(sel_soft) ≡ saved index` (including any
@@ -1152,7 +1167,13 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     shifts   = torch.arange(NAP - 1, -1, -1, device=index.device, dtype=index.dtype)
     bits     = ((index.unsqueeze(-1) >> shifts.view(1, 1, -1)) & 1).to(d.dtype)
     p_signs  = bits * 2.0 - 1.0      # ±1, matches the bits used in forward
-    p        = p_signs * d.abs() / denom
+    if hard_sign_ste:
+        # Hard signs: softmax over INTEGER hamming scores (exact exp-hamming
+        # kernel). Forward (argmax) is sign-only -> unchanged; only the bwd
+        # gradient shaping changes. dp/dd surrogate (T_soft/denom²) kept below.
+        p    = p_signs
+    else:
+        p    = p_signs * d.abs() / denom
 
     ts       = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))
     z        = ts / T_sel
@@ -1563,6 +1584,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
                         index, T_soft, T_sel, ctx.n_heads, ctx.tph,
                         visit_norm=_GLOBAL_PER_ROW_GRAD_NORM,
                         dominance_gate=_GLOBAL_DOMINANCE_GATE,
+                        hard_sign_ste=_GLOBAL_HARD_SIGN_BWD,
                     )
         # Stash per-(table,row) visit count for a Gauss-Newton optimizer. The
         # gradient grad_w is the SUM over tokens hitting each row; count is how
@@ -2762,3 +2784,208 @@ class TinyMultiHeadLut(nn.Module):
         idx = self.scatter_indices.unsqueeze(0).expand(B, -1, -1, -1).reshape(B, H, T * S)
         out.scatter_add_(2, idx, per_table.reshape(B, H, T * S))
         return out
+
+
+# =====================================================================
+# MatmulMultiHeadLut: fully-differentiable dense-matmul LUT (no STE).
+#
+# Same front end as TinyMultiHeadLut (anchor pairs, rational soft-sign,
+# multiply by the ±1 bit-matrix to get per-row match scores `ts`), but the
+# routing is NOT argmax/softmax. Instead each of the 2^NAP rows gets an
+# INDEPENDENT rational gate in [0,1]:
+#     c[k] = 0.5 * (1 + ts[k] / (T_sel + |ts[k]|))
+# (the [0,1] analogue of the [-1,1] soft sign — matching row -> ~1,
+#  anti-matching -> ~0), followed by a dense matmul against the
+# [2^NAP, n_outputs] weight table:
+#     out = c @ W  (summed over tables_per_head).
+#
+# Pure PyTorch + @torch.compile, NO custom autograd / NO STE. Every weight
+# receives a gradient from every token (DENSE gradients) — eliminates the
+# per-row gradient-sparsity bottleneck of the hard-routing LUTs, at the cost
+# of a K×n_outputs matmul per table at both train and inference (not
+# matmul-free). Upper-bound / exploration variant.
+# =====================================================================
+
+
+@torch.compile
+def _matmul_mhlut_fwd_body(x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                            T_soft, T_sel, n_heads, tph, gate_kind,
+                            ln_weight, ln_bias, ham_weight, relu_bias, bias,
+                            hard_sign_ste=0, gate_power=2.0):
+    """x: [B, input_dim]; weights: [n_tables, K=2^NAP, n_out]; bit_matrix: [NAP, K] ±1.
+    gate_kind: 0 unit `0.5*(1+ts/(T_sel+|ts|))` in (0,1);
+               1 signed `ts/(T_sel+|ts|)` in (-1,1);
+               2 layernorm over the K match-scores (+affine ln_weight/ln_bias);
+               3 hamming -- multiply the soft score by a learnable per-hamming-shell
+                 weight: c[k] = ts[k] * ham_weight[h_k], h_k = hamming(row_k, sign(p))
+                 = (NAP - ts_hard[k])/2. No gate/LN/temperature. ham_weight is [NAP+1].
+    Optional output bias [n_heads, n_out]. Returns [B, n_heads, n_out]."""
+    B = x.shape[0]
+    n_tables, K, n_out = weights.shape
+    NAP = bit_matrix.shape[0]
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]               # [B, n_tables, NAP]
+    p = d / (T_soft + d.abs())                                   # [B, n_tables, NAP] in (-1,1) soft sign
+    if hard_sign_ste:
+        # STE: hard ±1 sign on forward, soft-sign gradient on backward. Makes ts an
+        # exact integer Hamming score (softmax -> exact exp-Hamming kernel) at fwd,
+        # while gradients still flow through the (-1,1) soft sign p.
+        p_hard = torch.where(d > 0, 1.0, -1.0).to(p.dtype)
+        p = p + (p_hard - p).detach()                            # fwd=p_hard, bwd grad via p
+    ts = torch.einsum("btp,pk->btk", p, bit_matrix.to(p.dtype))  # [B, n_tables, K] match scores
+    if gate_kind == 2:
+        g = F.layer_norm(ts, (K,), weight=ln_weight, bias=ln_bias)
+    elif gate_kind == 3:
+        hard = torch.where(d > 0, 1.0, -1.0).to(p.dtype)        # hard sign per bit [B,nt,NAP]
+        ts_hard = torch.einsum("btp,pk->btk", hard, bit_matrix.to(p.dtype))  # integer-valued
+        h = ((NAP - ts_hard) * 0.5).round().long().clamp(0, NAP)  # [B,nt,K] hamming shell index
+        g = ts * ham_weight.to(ts.dtype)[h]                      # soft score * learnable shell weight
+    elif gate_kind == 4:
+        g = F.softmax(ts / T_sel, dim=-1)                       # normalized exp hamming kernel (the real thing)
+    elif gate_kind == 5:
+        g = F.relu(ts + relu_bias)                             # thresholded sparse gate (unnormalized; common-mode)
+    elif gate_kind == 6:
+        r = F.relu(ts + relu_bias)                            # sparsemax-style: sparse AND normalized
+        g = r / (r.sum(dim=-1, keepdim=True) + 1e-6)         # Σ=1 fixes common-mode; ReLU keeps it sparse/hardenable
+    elif gate_kind == 7:
+        r = F.gelu(ts + relu_bias)                           # smooth GELU: nonzero gradient everywhere (no ReLU dead rows)
+        g = r / (r.sum(dim=-1, keepdim=True) + 1e-6)         # normalized -> no common-mode; dense-gradient like softmax
+    elif gate_kind == 8:
+        g = F.gelu(ts + relu_bias)                           # UNNORMALIZED GELU; signed -> mid rows cancel common-mode
+    elif gate_kind == 9:
+        g0 = ts / (2.0 * NAP) + 0.5                          # map ts in [-NAP,NAP] -> [0,1] (fraction of matching bits)
+        g = g0 ** gate_power                                 # power -> polynomial Hamming-similarity kernel (unnormalized)
+    elif gate_kind == 10:
+        g0 = ts / (2.0 * NAP) + 0.5                          # map ts in [-NAP,NAP] -> [0,1]
+        r = g0 ** gate_power                                 # power k (k=2 square, larger k = sharper)
+        g = r / (r.sum(dim=-1, keepdim=True) + 1e-6)        # NORMALIZED (Σ=1) polynomial Hamming kernel
+    else:
+        g = ts / (T_sel + ts.abs())                             # (-1,1) signed
+        if gate_kind == 0:
+            g = 0.5 * (1.0 + g)                                 # (0,1) unit
+    out_pt = torch.einsum("btk,tko->bto", g.to(weights.dtype), weights)  # [B, n_tables, n_out]
+    out = out_pt.view(B, n_heads, tph, n_out).sum(dim=2)        # [B, n_heads, n_out]
+    if bias is not None:
+        out = out + bias
+    return out
+
+
+class MatmulMultiHeadLut(nn.Module):
+    """Dense-matmul, fully-differentiable LUT (no STE/argmax/softmax).
+
+    Drop-in for TinyMultiHeadLut(backward_mode='soft'): identical constructor
+    surface and anchor sampling (same random_seed -> identical anchor pairs), so
+    forking exp475 swaps only the routing+aggregation. See module-level comment.
+    """
+
+    def __init__(self, input_dim, n_heads, n_outputs, n_anchor_pairs, tables_per_head,
+                 random_seed=None, device=None, weight_dtype=torch.float32,
+                 anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+                 initial_weights_noise=0.001, soft_score_temp=0.5, select_temp=0.5,
+                 learnable_temps=False, use_bf16=True,
+                 gate_mode="unit", use_bias=False, hard_sign_ste=False, gate_power=2.0,
+                 partition_sets=None, partition_pair_weights=None,
+                 max_anchor_distance=None, local_window_starts="linspace", **_ignored):
+        super().__init__()
+        if not (1 <= n_anchor_pairs <= 15):
+            raise ValueError(f"n_anchor_pairs must be in [1,15], got {n_anchor_pairs}")
+        if gate_mode not in ("unit", "signed", "layernorm", "hamming", "softmax", "relu", "relu_norm", "gelu_norm", "gelu", "square", "square_norm"):
+            raise ValueError(f"gate_mode invalid: {gate_mode!r}")
+        self.gate_mode = gate_mode
+        self.gate_kind = {"unit": 0, "signed": 1, "layernorm": 2, "hamming": 3,
+                          "softmax": 4, "relu": 5, "relu_norm": 6, "gelu_norm": 7, "gelu": 8,
+                          "square": 9, "square_norm": 10}[gate_mode]
+        self.use_bias = bool(use_bias)
+        self.hard_sign_ste = bool(hard_sign_ste)
+        self.gate_power = float(gate_power)
+        self.input_dim = input_dim
+        self.n_heads = n_heads
+        self.n_outputs = n_outputs
+        self.n_anchor_pairs = n_anchor_pairs
+        self.tables_per_head = tables_per_head
+        self.table_dim = 1 << n_anchor_pairs           # K = 2^NAP
+        self.weight_dtype = weight_dtype
+        n_lookup_tables = n_heads * tables_per_head
+        self.n_lookup_tables = n_lookup_tables
+        dev = device or torch.device("cpu")
+
+        # Anchor pairs — identical machinery / seed-determinism as TinyMultiHeadLut.
+        self.lookup = TinyAnchorPairsLookup(
+            input_dim=input_dim, n_tables=n_lookup_tables, n_anchor_pairs=n_anchor_pairs,
+            n_heads=n_heads, random_seed=random_seed, device=dev,
+            partition_sets=partition_sets, partition_pair_weights=partition_pair_weights,
+            anchor_sampling_policy=anchor_sampling_policy,
+            max_anchor_distance=max_anchor_distance, local_window_starts=local_window_starts,
+        )
+        self.register_buffer('soft_anchor_a_long', self.lookup.anchor_pairs_a.long().contiguous())
+        self.register_buffer('soft_anchor_b_long', self.lookup.anchor_pairs_b.long().contiguous())
+        self.register_buffer('soft_bit_matrix',
+                             _soft_bit_matrix_msb(n_anchor_pairs, dev, dtype=torch.float32))
+
+        rng_kwargs: dict = {"device": dev}
+        if random_seed is not None:
+            rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
+        wt = ((torch.rand(n_lookup_tables, self.table_dim, n_outputs, **rng_kwargs) - 0.5)
+              * (2.0 * initial_weights_noise)).to(weight_dtype)
+        self.weights = nn.Parameter(wt)
+
+        # Optional learnable per-(head, output) bias — absorbs the input-independent
+        # (DC) component so the weight table encodes only routing-dependent content.
+        if self.use_bias:
+            self.bias = nn.Parameter(torch.zeros(n_heads, n_outputs, dtype=weight_dtype, device=dev))
+        else:
+            self.bias = None
+
+        # gate_mode='layernorm': affine over the K match-scores (identity init).
+        if self.gate_kind == 2:
+            self.gate_ln_weight = nn.Parameter(torch.ones(self.table_dim, dtype=torch.float32, device=dev))
+            self.gate_ln_bias = nn.Parameter(torch.zeros(self.table_dim, dtype=torch.float32, device=dev))
+        else:
+            self.gate_ln_weight = None
+            self.gate_ln_bias = None
+
+        # gate_mode='hamming': learnable per-shell weight ham_weight[NAP+1], init
+        # linear 1 (hamming 0) -> 0 (hamming NAP). Indexed by integer hamming dist.
+        if self.gate_kind == 3:
+            _h = torch.arange(n_anchor_pairs + 1, dtype=torch.float32, device=dev)
+            self.ham_weight = nn.Parameter(1.0 - _h / n_anchor_pairs)
+        else:
+            self.ham_weight = None
+
+        # gate_mode='relu': learnable per-(table, row) threshold bias for ReLU(ts + b),
+        # shape [n_tables, K], init 0. Per-table so each table sets its own firing
+        # thresholds (the ReLU threshold is a nonlinearity W cannot absorb).
+        if self.gate_kind in (5, 6, 7, 8):
+            self.gate_relu_bias = nn.Parameter(
+                torch.zeros(n_lookup_tables, self.table_dim, dtype=torch.float32, device=dev))
+        else:
+            self.gate_relu_bias = None
+
+        self.use_bf16 = bool(use_bf16)
+        self.learnable_temps = bool(learnable_temps)
+        if self.learnable_temps:
+            self.log_soft_score_temp = nn.Parameter(
+                torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev))
+            self.log_select_temp = nn.Parameter(
+                torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev))
+        else:
+            self.register_buffer('log_soft_score_temp',
+                                 torch.tensor(math.log(float(soft_score_temp)), dtype=torch.float32, device=dev))
+            self.register_buffer('log_select_temp',
+                                 torch.tensor(math.log(float(select_temp)), dtype=torch.float32, device=dev))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}")
+        T_soft = self.log_soft_score_temp.exp()
+        T_sel = self.log_select_temp.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if self.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            return _matmul_mhlut_fwd_body(
+                x, self.weights, self.soft_anchor_a_long, self.soft_anchor_b_long,
+                self.soft_bit_matrix, T_soft, T_sel, self.n_heads, self.tables_per_head,
+                self.gate_kind, self.gate_ln_weight, self.gate_ln_bias,
+                self.ham_weight, self.gate_relu_bias, self.bias,
+                int(self.hard_sign_ste), self.gate_power,
+            )

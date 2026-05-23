@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp502_matmul_layernorm_hardsign",
+  "best_val_bpb": 1.6401259618137696,
+  "final_val_bpb": 1.6401259618137696,
+  "n_params": 89396528,
+  "training_time_hours": 0.468
+}
