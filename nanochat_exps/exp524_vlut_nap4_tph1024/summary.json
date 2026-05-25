@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp524_vlut_nap4_tph1024",
+  "best_val_bpb": 1.5054800361074343,
+  "final_val_bpb": 1.5054800361074343,
+  "n_params": 89393456,
+  "training_time_hours": 0.962
+}

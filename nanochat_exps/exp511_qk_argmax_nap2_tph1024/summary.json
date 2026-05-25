@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp511_qk_argmax_nap2_tph1024",
+  "best_val_bpb": 1.4862291993231045,
+  "final_val_bpb": 1.4862291993231045,
+  "n_params": 89393456,
+  "training_time_hours": 1.68
+}

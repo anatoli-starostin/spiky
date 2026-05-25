@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp519_qk_argmax_nap5_tph128",
+  "best_val_bpb": 1.4880464725025213,
+  "final_val_bpb": 1.4880464725025213,
+  "n_params": 89393456,
+  "training_time_hours": 0.973
+}

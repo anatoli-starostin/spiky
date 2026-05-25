@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp525_vlut_nap8_tph128",
+  "best_val_bpb": 1.4842935560991108,
+  "final_val_bpb": 1.4842935560991108,
+  "n_params": 96471344,
+  "training_time_hours": 0.614
+}
