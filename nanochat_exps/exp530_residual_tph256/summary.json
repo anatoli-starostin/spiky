@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp530_residual_tph256",
+  "best_val_bpb": 1.4730754746170656,
+  "final_val_bpb": 1.4730754746170656,
+  "n_params": 108267824,
+  "training_time_hours": 0.654
+}

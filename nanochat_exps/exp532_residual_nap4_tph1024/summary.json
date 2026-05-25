@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp532_residual_nap4_tph1024",
+  "best_val_bpb": 1.4787479781097104,
+  "final_val_bpb": 1.4787479781097104,
+  "n_params": 108267824,
+  "training_time_hours": 0.869
+}

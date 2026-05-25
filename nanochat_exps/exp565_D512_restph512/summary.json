@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp565_D512_restph512",
+  "best_val_bpb": 1.4512589378170133,
+  "final_val_bpb": 1.4512589378170133,
+  "n_params": 175376944,
+  "training_time_hours": 0.797
+}

@@ -1,0 +1,9 @@
+{
+  "exp_name": "exp537_soft_anchor_anneal_zero",
+  "best_val_bpb": 1.501241919719322,
+  "best_val_bpb_hard": 1.5616527165585448,
+  "final_val_bpb": 1.501241919719322,
+  "final_val_bpb_hard": 1.5617005333686311,
+  "n_params": 130091312,
+  "training_time_hours": 1.147
+}

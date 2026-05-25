@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp560_tied_dot_E64",
+  "best_val_bpb": 1.6282534463426968,
+  "final_val_bpb": 1.6282534463426968,
+  "n_params": 61081265,
+  "training_time_hours": 0.585
+}
