@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp566_big_head_mlp",
+  "best_val_bpb": 1.4891014894740877,
+  "final_val_bpb": 1.4891014894740877,
+  "n_params": 110758192,
+  "training_time_hours": 0.669
+}

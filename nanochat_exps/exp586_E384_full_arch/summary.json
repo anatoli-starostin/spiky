@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp586_E384_full_arch",
+  "best_val_bpb": 1.4509313692283077,
+  "final_val_bpb": 1.4509313692283077,
+  "n_params": 261097776,
+  "training_time_hours": 0.959
+}

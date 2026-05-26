@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp585_E192_full_arch",
+  "best_val_bpb": 1.4624886219073883,
+  "final_val_bpb": 1.4624886219073883,
+  "n_params": 155715888,
+  "training_time_hours": 0.733
+}

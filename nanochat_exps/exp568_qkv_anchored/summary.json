@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp568_qkv_anchored",
+  "best_val_bpb": 1.4883650168403038,
+  "final_val_bpb": 1.4883650168403038,
+  "n_params": 110102832,
+  "training_time_hours": 0.627
+}
