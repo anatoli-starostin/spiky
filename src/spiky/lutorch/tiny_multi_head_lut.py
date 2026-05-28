@@ -1607,6 +1607,426 @@ class _TinyMHLutSoft(torch.autograd.Function):
                 None, None, None, None)
 
 
+@torch.compile
+def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u, n_tables, K, n_outputs, w_dtype):
+    """Fused 2-row weight gradient for hybrid_smooth backward.
+
+    Inductor fuses the scale + reshape + index_add into a single kernel,
+    avoiding the 3 large [B, n_tables, n_outputs] intermediates that the
+    eager-mode version materialises.
+    """
+    flat_offset = torch.arange(n_tables, device=grad_pt.device, dtype=main_index.dtype) * K
+    main_flat_idx = (main_index + flat_offset[None, :]).reshape(-1)
+    alt_flat_idx  = (alt_index  + flat_offset[None, :]).reshape(-1)
+    main_w_exp = (1.0 - u).unsqueeze(-1).to(w_dtype)
+    u_exp = u.unsqueeze(-1).to(w_dtype)
+    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=grad_pt.device)
+    grad_w_flat.index_add_(0, main_flat_idx, (grad_pt * main_w_exp).reshape(-1, n_outputs).to(w_dtype))
+    grad_w_flat.index_add_(0, alt_flat_idx,  (grad_pt * u_exp).reshape(-1, n_outputs).to(w_dtype))
+    return grad_w_flat.view(n_tables, K, n_outputs)
+
+
+@torch.compile
+def _hybrid_smooth_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
+                                 T_soft, T_sel, n_heads, tph, table_dim):
+    """Smooth forward: blend main row and Hamming-1 alternative at least-confident
+    anchor pair. Mirrors standard MultiHeadLut(smooth_mode=True, n_alternatives=1).
+
+    Returns:
+        out: [B, n_heads, n_outputs] — (1 - u) * W[main] + u * W[alt]
+        main_index: [B, n_tables] — argmax row index (sign-packed)
+        alt_index: [B, n_tables] — Hamming-1 neighbor at argmin |d| anchor pair
+        u: [B, n_tables] — uncertainty in (0, 0.5]; alt_weight = u, main_weight = 1 - u
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    NAP = anchor_a_long.shape[1]
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]                 # [B, n_tables, NAP]
+    bits = (d > 0).to(torch.int64)                                # [B, n_tables, NAP]
+    powers_view = powers.view(1, 1, -1)                            # [1, 1, NAP]
+    main_index = (bits * powers_view).sum(dim=-1)                  # [B, n_tables]
+
+    # Least-confident anchor pair: argmin |d| along NAP dim.
+    abs_d = d.abs()                                                # [B, n_tables, NAP]
+    p_star = abs_d.argmin(dim=-1)                                  # [B, n_tables]
+    # Flip the bit at position p_star: XOR with powers[p_star].
+    flip_mask = powers.to(main_index.dtype)[p_star]                # [B, n_tables]
+    alt_index = main_index ^ flip_mask                             # [B, n_tables]
+
+    # Exact top-2 softmax over (main, alt). Soft-mode per-anchor score is
+    # p[i] = sign(d[i]) * |d[i]| / (T_soft + |d[i]|); the row score for `main`
+    # is sum_i |p[i]|, and `alt` differs only in bit p_star, so:
+    #   Δts = ts[main] - ts[alt] = 2 * |d_min| / (T_soft + |d_min|)
+    # The top-2 softmax weight on alt is then sigmoid(-Δts / T_sel). Both
+    # T_soft and T_sel enter the formula, matching the underlying soft-mode
+    # forward this approximates. u ∈ (0, 0.5].
+    d_min = abs_d.gather(-1, p_star.unsqueeze(-1)).squeeze(-1)     # [B, n_tables]
+    delta_ts = 2.0 * d_min / (T_soft + d_min)                       # [B, n_tables]
+    u = torch.sigmoid(-delta_ts / T_sel)                            # [B, n_tables]
+    main_w = 1.0 - u                                                # [B, n_tables]
+
+    # Explicit gather + scale + tph-sum. Avoids F.embedding_bag's slow
+    # per_sample_weights path. Under bf16 autocast the [B, n_tables, n_outputs]
+    # intermediate is half-size and Inductor can fuse multiply+sum.
+    table_offset = torch.arange(n_tables, device=weights.device,
+                                dtype=main_index.dtype) * table_dim
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    main_flat_idx = (main_index + table_offset.view(1, -1)).reshape(-1)
+    alt_flat_idx  = (alt_index  + table_offset.view(1, -1)).reshape(-1)
+    main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
+    alt_rows  = F.embedding(alt_flat_idx,  weights_flat).view(B, n_tables, n_outputs)
+    blended = main_rows * main_w.unsqueeze(-1) + alt_rows * u.unsqueeze(-1)
+    out = blended.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    return out, main_index, alt_index, u
+
+
+class _TinyMHLutHybridSmooth(torch.autograd.Function):
+    """Hybrid smooth forward + soft input grad + 2-row weight grad.
+
+    Forward (smooth, like standard MultiHeadLut with n_alternatives=1, smooth=True):
+      - Pick main row via sign-bit packing of (x_a > x_b).
+      - Pick alt row by flipping the bit at the least-confident anchor pair
+        (smallest |x_a - x_b|).
+      - Uncertainty u = 0.5 / (1 + |d_min|/T_soft) in (0, 0.5].
+      - Output row = (1 - u) * W[main] + u * W[alt], summed across tables.
+
+    Backward:
+      - Input/temperature gradients: SOFT, via _soft_lut_bwd_body — i.e., full
+        softmax over all K rows, gradient flows back through every row score.
+      - Weight gradient: scatter (1 - u) * grad_pt at W[main],
+        u * grad_pt at W[alt]; all other rows zero. This matches the forward's
+        2-row blend (no soft attribution to non-chosen rows).
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix, powers,
+                n_heads, tph, table_dim, use_bf16):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            out, main_index, alt_index, u = _hybrid_smooth_lut_fwd_body(
+                x, weights, anchor_a_long, anchor_b_long, powers,
+                T_soft, T_sel, n_heads, tph, table_dim,
+            )
+        ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, main_index, alt_index, u,
+                              log_T_soft, log_T_sel, powers)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.use_bf16 = use_bf16
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+         main_index, alt_index, u,
+         log_T_soft, log_T_sel, powers) = ctx.saved_tensors
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        B = x.shape[0]
+        n_heads = ctx.n_heads
+        tph = ctx.tph
+        n_tables = anchor_a_long.shape[0]
+        n_outputs = weights.shape[2]
+        K = bit_matrix.shape[1]
+        w_dtype = weights.dtype
+
+        # Dense: broadcast grad_out across tph axis.
+        grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if ctx.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            # Reuse soft backward for grad_x, grad_log_Ts, grad_log_Tx.
+            # _soft_lut_bwd_body returns (grad_x, grad_w_full, grad_log_Ts, grad_log_Tx)
+            # where grad_w_full uses single-row scatter at `index` — we discard it
+            # and rewrite grad_w with the 2-row hybrid scatter below.
+            grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+            )
+
+        # Hybrid weight gradient: fused 2-row scatter at main/alt rows, scaled
+        # by (1 - u) and u. @torch.compile fuses multiply + reshape + index_add.
+        grad_weights = _hybrid_smooth_weight_grad(
+            grad_pt, main_index, alt_index, u, n_tables, K, n_outputs, w_dtype,
+        )
+
+        # 12 forward inputs → 12 grad returns.
+        return (grad_x, grad_weights, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None, None)
+
+
+def _hybrid_smooth_kalt_fwd_autograd(x, weights, log_T_soft, log_T_sel,
+                                       anchor_a_long, anchor_b_long, powers,
+                                       n_heads, tph, table_dim, n_alt):
+    """Self-consistent forward for hybrid_smooth, supporting any n_alt ∈ [1, NAP].
+
+    - n_alt = NAP: uses all NAP anchor positions (full Hamming-1 ball).
+    - n_alt < NAP: uses topk(|d|, k=n_alt, largest=False) — n_alt least-confident
+      anchor positions. n_alt=1 reduces to argmin |d|.
+
+    Backward via plain autograd: weight grad scatters at (n_alt+1) rows scaled by
+    softmax probs; input grad propagates ONLY through smooth path (no soft K-row
+    surrogate).
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    NAP = anchor_a_long.shape[1]
+    T_soft = log_T_soft.exp()
+    T_sel  = log_T_sel.exp()
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]                # [B, n_tables, NAP]
+    bits = (d > 0).to(torch.int64)
+    powers_view = powers.view(1, 1, -1)
+    main_index = (bits * powers_view).sum(dim=-1)                # [B, n_tables]
+
+    abs_d = d.abs()
+    abs_p = abs_d / (T_soft + abs_d)                              # [B, n_tables, NAP]
+
+    if n_alt == NAP:
+        delta_ts = 2.0 * abs_p                                    # [B, n_tables, NAP]
+        flip_powers = powers.view(1, 1, -1).expand(B, n_tables, -1).to(main_index.dtype)
+    else:
+        _, topk_pos = torch.topk(abs_p, k=n_alt, dim=-1, largest=False)  # [B, n_tables, n_alt]
+        delta_ts = 2.0 * abs_p.gather(-1, topk_pos)               # [B, n_tables, n_alt]
+        flip_powers = powers.to(main_index.dtype)[topk_pos]       # [B, n_tables, n_alt]
+
+    alt_indices = main_index.unsqueeze(-1) ^ flip_powers          # [B, n_tables, n_alt]
+
+    logits_alts = -delta_ts / T_sel                               # [B, n_tables, n_alt]
+    logits_main = torch.zeros_like(logits_alts[..., :1])          # [B, n_tables, 1]
+    logits = torch.cat([logits_main, logits_alts], dim=-1)        # [B, n_tables, n_alt+1]
+    probs = torch.softmax(logits, dim=-1)                          # [B, n_tables, n_alt+1]
+
+    table_offset = torch.arange(n_tables, device=weights.device,
+                                dtype=main_index.dtype) * table_dim
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    main_flat_idx = (main_index + table_offset.view(1, -1)).reshape(-1)
+    main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
+    out_per_table = main_rows * probs[..., 0:1]
+    for k in range(n_alt):
+        alt_flat_idx_k = (alt_indices[..., k] + table_offset.view(1, -1)).reshape(-1)
+        alt_rows_k = F.embedding(alt_flat_idx_k, weights_flat).view(B, n_tables, n_outputs)
+        out_per_table = out_per_table + alt_rows_k * probs[..., k + 1: k + 2]
+    out = out_per_table.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    return out
+
+
+@torch.compile
+def _hybrid_smooth_nap_fwd_autograd(x, weights, log_T_soft, log_T_sel,
+                                     anchor_a_long, anchor_b_long, powers,
+                                     n_heads, tph, table_dim):
+    """Self-consistent forward for hybrid_smooth with n_alt=NAP, using
+    plain differentiable PyTorch ops. PyTorch autograd computes the full
+    chain rule through softmax over (NAP+1) ball rows + per-anchor signed
+    rational p, giving exact gradients of the actual forward to:
+      - weights (scatter at main and alt rows, scaled by softmax probs)
+      - x (chain rule through abs_p → delta_ts → probs)
+      - log_T_soft, log_T_sel (through the temperatures in p and softmax)
+
+    main_index / alt_indices are computed from `(d > 0)` (non-differentiable);
+    autograd treats them as constants. Input gradient flows ONLY through the
+    smooth (probs / abs_p) path — no soft K-row surrogate.
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    NAP = anchor_a_long.shape[1]
+    T_soft = log_T_soft.exp()
+    T_sel = log_T_sel.exp()
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]                # [B, n_tables, NAP]
+    # Indices (non-diff)
+    bits = (d > 0).to(torch.int64)
+    powers_view = powers.view(1, 1, -1)
+    main_index = (bits * powers_view).sum(dim=-1)                # [B, n_tables]
+    alt_indices = main_index.unsqueeze(-1) ^ powers.view(1, 1, -1).to(main_index.dtype)
+
+    # Soft probs (diff)
+    abs_d = d.abs()
+    abs_p = abs_d / (T_soft + abs_d)                              # [B, n_tables, NAP]
+    delta_ts = 2.0 * abs_p                                        # [B, n_tables, NAP]
+    logits_alts = -delta_ts / T_sel                               # [B, n_tables, NAP]
+    logits_main = torch.zeros_like(logits_alts[..., :1])          # [B, n_tables, 1]
+    logits = torch.cat([logits_main, logits_alts], dim=-1)        # [B, n_tables, NAP+1]
+    probs = torch.softmax(logits, dim=-1)                          # [B, n_tables, NAP+1]
+
+    # Gather + blend (iterative to bound memory)
+    table_offset = torch.arange(n_tables, device=weights.device,
+                                dtype=main_index.dtype) * table_dim
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    main_flat_idx = (main_index + table_offset.view(1, -1)).reshape(-1)
+    main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
+    out_per_table = main_rows * probs[..., 0:1]
+    for k in range(NAP):
+        alt_flat_idx_k = (alt_indices[..., k] + table_offset.view(1, -1)).reshape(-1)
+        alt_rows_k = F.embedding(alt_flat_idx_k, weights_flat).view(B, n_tables, n_outputs)
+        out_per_table = out_per_table + alt_rows_k * probs[..., k + 1: k + 2]
+    out = out_per_table.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    return out
+
+
+@torch.compile
+def _hybrid_smooth_nap_weight_grad(grad_pt, main_index, alt_indices, probs,
+                                    n_tables, K, n_outputs, w_dtype):
+    """(NAP+1)-row weight scatter for hybrid_smooth with n_alternatives=NAP.
+
+    Scatters grad_pt * probs[k] at main_index (k=0) and each alt_index_k (k=1..NAP).
+    Inductor fuses the multiplications + index_add into a few kernels.
+    """
+    NAP = alt_indices.shape[-1]
+    flat_offset = torch.arange(n_tables, device=grad_pt.device,
+                               dtype=main_index.dtype) * K
+    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype,
+                               device=grad_pt.device)
+    # Main: prob index 0
+    main_flat_idx = (main_index + flat_offset[None, :]).reshape(-1)
+    p_main = probs[..., 0:1].to(w_dtype)
+    grad_w_flat.index_add_(0, main_flat_idx,
+                            (grad_pt * p_main).reshape(-1, n_outputs).to(w_dtype))
+    # NAP alts: prob indices 1..NAP
+    for k in range(NAP):
+        alt_flat_idx_k = (alt_indices[..., k] + flat_offset[None, :]).reshape(-1)
+        p_alt_k = probs[..., k + 1: k + 2].to(w_dtype)
+        grad_w_flat.index_add_(0, alt_flat_idx_k,
+                                (grad_pt * p_alt_k).reshape(-1, n_outputs).to(w_dtype))
+    return grad_w_flat.view(n_tables, K, n_outputs)
+
+
+@torch.compile
+def _hybrid_smooth_nap_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
+                                      T_soft, T_sel, n_heads, tph, table_dim):
+    """Smooth forward with n_alternatives=NAP: full Hamming-1 ball around main.
+
+    For each of the NAP anchor positions, the corresponding alt row flips that one
+    bit. Total (NAP+1) rows blended via exact (NAP+1)-way softmax over the row
+    scores. Row scores are derived analytically from the per-anchor signed rational
+    p[i] = sign(d[i]) * |d[i]|/(T_soft + |d[i]|); the score gap between main and
+    alt_k is exactly 2*|p[k]|.
+
+    Returns:
+        out:          [B, n_heads, n_outputs]
+        main_index:   [B, n_tables]
+        alt_indices:  [B, n_tables, NAP] — main XOR powers[k]
+        probs:        [B, n_tables, NAP+1] — softmax weights, probs[..., 0] = P(main)
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    NAP = anchor_a_long.shape[1]
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]                  # [B, n_tables, NAP]
+    bits = (d > 0).to(torch.int64)
+    powers_view = powers.view(1, 1, -1)
+    main_index = (bits * powers_view).sum(dim=-1)                  # [B, n_tables]
+
+    abs_d = d.abs()                                                # [B, n_tables, NAP]
+    abs_p = abs_d / (T_soft + abs_d)                                # [B, n_tables, NAP]
+    delta_ts = 2.0 * abs_p                                          # [B, n_tables, NAP]
+
+    # (NAP+1)-way softmax: main logit = 0, alt_k logit = -delta_ts[k] / T_sel.
+    logits_alts = -delta_ts / T_sel                                 # [B, n_tables, NAP]
+    logits_main = torch.zeros_like(logits_alts[..., :1])            # [B, n_tables, 1]
+    logits = torch.cat([logits_main, logits_alts], dim=-1)          # [B, n_tables, NAP+1]
+    probs = torch.softmax(logits, dim=-1)                           # [B, n_tables, NAP+1]
+
+    # alt_indices[b, t, k] = main_index[b, t] XOR powers[k].
+    alt_indices = main_index.unsqueeze(-1) ^ powers.view(1, 1, -1).to(main_index.dtype)
+
+    # Gather + blend, iteratively to keep memory bounded.
+    table_offset = torch.arange(n_tables, device=weights.device,
+                                dtype=main_index.dtype) * table_dim
+    weights_flat = weights.view(n_tables * table_dim, n_outputs)
+    main_flat_idx = (main_index + table_offset.view(1, -1)).reshape(-1)
+    main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
+    out_per_table = main_rows * probs[..., 0:1]                     # [B, n_tables, n_outputs]
+    for k in range(NAP):
+        alt_flat_idx_k = (alt_indices[..., k] + table_offset.view(1, -1)).reshape(-1)
+        alt_rows_k = F.embedding(alt_flat_idx_k, weights_flat).view(B, n_tables, n_outputs)
+        out_per_table = out_per_table + alt_rows_k * probs[..., k + 1: k + 2]
+    out = out_per_table.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    return out, main_index, alt_indices, probs
+
+
+class _TinyMHLutHybridSmoothNap(torch.autograd.Function):
+    """Hybrid smooth with n_alternatives=NAP (full Hamming-1 ball).
+
+    Forward: exact (NAP+1)-way softmax blend over main + NAP single-bit-flip
+    alternatives. No topk needed — uses all NAP anchor positions.
+
+    Backward:
+      - Input/temperature gradients: soft K-row surrogate via _soft_lut_bwd_body
+        (treats forward as if it picked one row from softmax over all K).
+      - Weight gradient: (NAP+1)-row scatter, scaled by softmax probabilities,
+        matching the forward's actual row participation.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix, powers,
+                n_heads, tph, table_dim, use_bf16):
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            out, main_index, alt_indices, probs = _hybrid_smooth_nap_lut_fwd_body(
+                x, weights, anchor_a_long, anchor_b_long, powers,
+                T_soft, T_sel, n_heads, tph, table_dim,
+            )
+        ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
+                              bit_matrix, main_index, alt_indices, probs,
+                              log_T_soft, log_T_sel, powers)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.use_bf16 = use_bf16
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+         main_index, alt_indices, probs,
+         log_T_soft, log_T_sel, powers) = ctx.saved_tensors
+        T_soft = log_T_soft.exp()
+        T_sel  = log_T_sel.exp()
+        B = x.shape[0]
+        n_heads = ctx.n_heads
+        tph = ctx.tph
+        n_tables = anchor_a_long.shape[0]
+        n_outputs = weights.shape[2]
+        K = bit_matrix.shape[1]
+        w_dtype = weights.dtype
+
+        grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+
+        autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                        if ctx.use_bf16 and x.is_cuda
+                        else torch.amp.autocast("cpu", enabled=False))
+        with autocast_ctx:
+            grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+            )
+
+        # (NAP+1)-row weight scatter, scaled by softmax probabilities.
+        grad_weights = _hybrid_smooth_nap_weight_grad(
+            grad_pt, main_index, alt_indices, probs, n_tables, K, n_outputs, w_dtype,
+        )
+
+        return (grad_x, grad_weights, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None, None)
+
+
 class _TinyMHLutProb(torch.autograd.Function):
     """Probabilistic forward + STE backward.
 
@@ -2272,6 +2692,16 @@ class TinyMultiHeadLut(nn.Module):
         # Mutually exclusive in spirit with `argmax_noise_eps>0`: when this
         # path is on, the noise flag is ignored.
         einsum_bf16_forward: bool = False,
+        # backward_mode='hybrid_smooth' only: number of alternatives in the
+        # forward smooth blend. 1 = top-2 (main + Hamming-1 neighbor at argmin |d|),
+        # NAP = full Hamming-1 ball (NAP+1 rows). Other values not supported.
+        hybrid_smooth_n_alt: int = 1,
+        # backward_mode='hybrid_smooth' + n_alt=NAP only: if True, use plain
+        # autograd backward (chain rule through softmax + abs_p directly,
+        # gives "self-consistent" input gradient instead of soft K-row surrogate).
+        # Inductor can fuse forward+backward. False = use manual backward with
+        # soft K-row surrogate for input grad (matches exp611 style).
+        hybrid_smooth_autograd: bool = False,
         n_alternatives: int = 1,
         # Multi-alt STE: u(d) = β / (T + |d|). T is a learnable temperature
         # (when `learnable_temps=True`) controlling the gradient breakpoint
@@ -2416,9 +2846,30 @@ class TinyMultiHeadLut(nn.Module):
         self.weights = nn.Parameter(weights_init)
 
         # ----- soft-backward mode setup -----
-        if backward_mode not in ("ste", "soft", "soft_topk", "prob", "soft_winner"):
-            raise ValueError(f"backward_mode must be 'ste', 'soft', 'soft_topk', 'prob', or 'soft_winner', got {backward_mode!r}")
+        if backward_mode not in ("ste", "soft", "soft_topk", "prob", "soft_winner", "hybrid_smooth"):
+            raise ValueError(f"backward_mode must be 'ste', 'soft', 'soft_topk', 'prob', 'soft_winner', or 'hybrid_smooth', got {backward_mode!r}")
         self.backward_mode = backward_mode
+        # Sentinel: hybrid_smooth_n_alt=-1 means "use n_anchor_pairs" (full ball).
+        self.hybrid_smooth_n_alt = (
+            int(n_anchor_pairs) if int(hybrid_smooth_n_alt) == -1
+            else int(hybrid_smooth_n_alt)
+        )
+        self.hybrid_smooth_autograd = bool(hybrid_smooth_autograd)
+        if backward_mode == "hybrid_smooth":
+            if self.hybrid_smooth_autograd:
+                # Generic autograd path supports any n_alt in [1, NAP].
+                if not (1 <= self.hybrid_smooth_n_alt <= n_anchor_pairs):
+                    raise ValueError(
+                        f"hybrid_smooth_n_alt must be in [1, NAP={n_anchor_pairs}]; "
+                        f"got {self.hybrid_smooth_n_alt}"
+                    )
+            else:
+                # Manual autograd.Function path: only n_alt=1 or NAP supported.
+                if self.hybrid_smooth_n_alt not in (1, n_anchor_pairs):
+                    raise ValueError(
+                        f"hybrid_smooth_n_alt must be 1, -1, or NAP={n_anchor_pairs}; "
+                        f"got {self.hybrid_smooth_n_alt}"
+                    )
         self.use_bf16 = bool(use_bf16)
         self.argmax_noise_eps = float(argmax_noise_eps)
         self.einsum_bf16_forward = bool(einsum_bf16_forward)
@@ -2510,7 +2961,7 @@ class TinyMultiHeadLut(nn.Module):
                     "log_uncertainty_T",
                     torch.tensor(log_T_init, dtype=torch.float32, device=dev),
                 )
-        if backward_mode in ("soft", "soft_topk", "prob", "soft_winner"):
+        if backward_mode in ("soft", "soft_topk", "prob", "soft_winner", "hybrid_smooth"):
             # sparse_scatter_n_outputs is supported: forward returns per-table
             # [B, H, tph, n_outputs] from `_TinyMHLutSoft.apply(..., sparse=True)`,
             # then `_scatter` reduces into the wider output dim. Backward
@@ -2575,6 +3026,44 @@ class TinyMultiHeadLut(nn.Module):
             x, self.weights, self.log_soft_score_temp, self.log_select_temp,
             self.soft_anchor_a_long, self.soft_anchor_b_long,
             self.soft_bit_matrix,
+            self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+        )
+
+    def _hybrid_smooth_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """backward_mode='hybrid_smooth':
+          - hybrid_smooth_n_alt=1: top-2 softmax (main + Hamming-1 neighbor at argmin |d|).
+          - hybrid_smooth_n_alt=NAP: full Hamming-1 ball, (NAP+1)-way softmax.
+        Soft K-row input grad + (n_alt+1)-row weight scatter. No sparse_scatter / einsum_bf16."""
+        if x.dim() != 2 or x.shape[1] != self.input_dim:
+            raise ValueError(f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}")
+        if self.sparse_scatter_n_outputs is not None:
+            raise NotImplementedError("hybrid_smooth does not support sparse_scatter yet")
+        # Autograd path: supports any n_alt in [1, NAP]. Self-consistent input
+        # grad (chain rule through u and probs, no soft K-row surrogate).
+        if self.hybrid_smooth_autograd:
+            autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                            if self.use_bf16 and x.is_cuda
+                            else torch.amp.autocast("cpu", enabled=False))
+            with autocast_ctx:
+                return _hybrid_smooth_kalt_fwd_autograd(
+                    x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+                    self.soft_anchor_a_long, self.soft_anchor_b_long, self.soft_powers,
+                    self.n_heads, self.tables_per_head, self.table_dim,
+                    self.hybrid_smooth_n_alt,
+                )
+        # Manual autograd.Function paths.
+        if self.hybrid_smooth_n_alt == 1:
+            return _TinyMHLutHybridSmooth.apply(
+                x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+                self.soft_anchor_a_long, self.soft_anchor_b_long,
+                self.soft_bit_matrix, self.soft_powers,
+                self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+            )
+        # n_alt == NAP: full Hamming-1 ball, no topk needed.
+        return _TinyMHLutHybridSmoothNap.apply(
+            x, self.weights, self.log_soft_score_temp, self.log_select_temp,
+            self.soft_anchor_a_long, self.soft_anchor_b_long,
+            self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
         )
 
@@ -2667,6 +3156,9 @@ class TinyMultiHeadLut(nn.Module):
 
         if self.backward_mode == "soft_winner":
             return self._soft_winner_forward(x)
+
+        if self.backward_mode == "hybrid_smooth":
+            return self._hybrid_smooth_forward(x)
 
         # Multi-alternative STE backward. Uses self.n_alternatives top-|delta|
         # anchor positions selected via manual argmin (no topk kernel; cheap

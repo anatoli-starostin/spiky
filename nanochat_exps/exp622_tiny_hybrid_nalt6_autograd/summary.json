@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp622_tiny_hybrid_nalt6_autograd",
+  "best_val_bpb": 1.574114269498968,
+  "final_val_bpb": 1.574114269498968,
+  "n_params": 43060080,
+  "training_time_hours": 1.38
+}

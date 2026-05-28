@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp605_out_proj_heavy_early",
+  "best_val_bpb": 1.4325440477790703,
+  "final_val_bpb": 1.4325440477790703,
+  "n_params": 339740966,
+  "training_time_hours": 2.227
+}

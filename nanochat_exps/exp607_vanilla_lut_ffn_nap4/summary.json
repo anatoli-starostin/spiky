@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp607_vanilla_lut_ffn_nap4",
+  "best_val_bpb": 1.495075543585244,
+  "final_val_bpb": 1.495075543585244,
+  "total_params": 53880588,
+  "training_time_hours": 0.993
+}

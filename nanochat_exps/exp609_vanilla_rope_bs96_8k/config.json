@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp609_vanilla_rope_bs96_8k",
+  "description": "Vanilla MinimalGPT+RoPE (exp328 architecture) at bs=96 8K steps. Compute-matched and bs-matched fair comparison vs exp608 (LUT-LM SoTA bs=96 8K = 1.2180). Direct test of LUT-LM-vs-vanilla at fixed compute + bs. n_steps=8000 unchanged, total_batch_size 8192 -> 49152 (6x). Native phys bs=96 (vanilla is small enough at 23.2M params to fit). Reference points: exp328 vanilla bs=16 8K = 1.3882 (compute=65.5M tokens); exp416 vanilla bs=16 24K = 1.2530 (196M tokens, 0.5x exp608 compute); exp442 vanilla bs=48 24K = 1.1585 (590M tokens, 1.5x exp608). exp609 at 393M tokens matches exp608 exactly. If exp609 < 1.2180: vanilla still wins at matched compute. If exp609 > 1.2180: LUT-LM cleanly beats at matched compute (first time).",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 96,
+  "total_batch_size": 49152,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

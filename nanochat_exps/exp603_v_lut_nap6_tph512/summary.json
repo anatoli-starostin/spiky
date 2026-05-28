@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp603_v_lut_nap6_tph512",
+  "best_val_bpb": 1.4295093211114696,
+  "final_val_bpb": 1.4295093211114696,
+  "n_params": 289409318,
+  "training_time_hours": 1.217
+}

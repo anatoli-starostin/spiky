@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp599_qkv_singlehead",
+  "best_val_bpb": 1.4452485523060363,
+  "final_val_bpb": 1.4452485523060363,
+  "n_params": 261097766,
+  "training_time_hours": 1.173
+}

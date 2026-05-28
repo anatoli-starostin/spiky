@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp609_vanilla_rope_bs96_8k",
+  "best_val_bpb": 1.18123814951134,
+  "final_val_bpb": 1.18123814951134,
+  "total_params": 23209728,
+  "training_time_hours": 0.536
+}

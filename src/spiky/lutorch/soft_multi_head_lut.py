@@ -88,6 +88,12 @@ class SoftMultiHeadLUT(nn.Module):
         learnable_temps: bool = False,
         use_bf16: bool = False,
         compile_forward: bool = False,
+        # If True, add a Hamming-1 mask to ts before softmax so that only
+        # `main_index` and its NAP single-bit-flip neighbors get non-trivial
+        # softmax mass — restricts the forward to the (NAP+1)-row ball without
+        # losing the matmul-fast scoring path. mask uses -1e4 (finite) so that
+        # gradients w.r.t. temperatures stay well-defined.
+        hamming_1_mask: bool = False,
         anchor_sampling_policy: AnchorSamplingPolicy = AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
         partition_sets: Optional[list] = None,
         initial_weights_noise: float = 0.001,
@@ -159,6 +165,25 @@ class SoftMultiHeadLUT(nn.Module):
         # Precomputed +/-1 bit matrix: [nap, 2^nap].
         self.register_buffer("bit_matrix", _bit_matrix(n_anchor_pairs, device=dev))
 
+        # Hamming-1 mask support: precompute popcount for K integers and
+        # MSB-first powers used to derive main_index from (rd > 0) bits.
+        self.hamming_1_mask = bool(hamming_1_mask)
+        if self.hamming_1_mask:
+            K = self.table_dim
+            row_ids = torch.arange(K, device=dev, dtype=torch.long)
+            # popcount via bit shifts
+            popcount = torch.zeros(K, device=dev, dtype=torch.long)
+            tmp = row_ids.clone()
+            for _ in range(n_anchor_pairs):
+                popcount = popcount + (tmp & 1)
+                tmp = tmp >> 1
+            self.register_buffer("_row_ids", row_ids)
+            self.register_buffer("_row_popcount", popcount)
+            # MSB-first powers for main_index = sum_i (rd[i] > 0) * powers[i]
+            msb_powers = (1 << torch.arange(n_anchor_pairs - 1, -1, -1,
+                                             device=dev, dtype=torch.long))
+            self.register_buffer("_msb_powers", msb_powers)
+
         # LUT weights: [n_tables, table_dim, n_outputs] uniform[-sigma, sigma].
         rng_kwargs: dict = {"device": dev}
         if random_seed is not None:
@@ -217,6 +242,19 @@ class SoftMultiHeadLUT(nn.Module):
             # 3) row match scores against the +/-1 bit pattern of each row index.
             #    ts[b, t, k] = sum_i p[b, t, i] * bit_matrix[i, k]
             ts = torch.einsum("btp,pk->btk", p, self.bit_matrix.to(p.dtype))  # [B, n_tables, 2^nap]
+
+            # 3b) Optional Hamming-1 mask: keep only main and its NAP
+            # single-bit-flip neighbors; set other rows to -1e4 so softmax
+            # gives them ~zero weight while keeping temperature gradients
+            # well-defined.
+            if self.hamming_1_mask:
+                bits = (rd > 0).to(torch.int64)                              # [B, n_tables, nap]
+                main_index = (bits * self._msb_powers.view(1, 1, -1)).sum(dim=-1)  # [B, n_tables]
+                xor_diff = self._row_ids.view(1, 1, -1) ^ main_index.unsqueeze(-1)  # [B, n_tables, K]
+                # popcount via lookup
+                ham = self._row_popcount[xor_diff]                            # [B, n_tables, K]
+                ham_mask = torch.where(ham <= 1, 0.0, -1e4).to(ts.dtype)
+                ts = ts + ham_mask
 
             # 4) row selector
             if self.gumbel:

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp616_tiny_hybrid_nap_autograd",
+  "best_val_bpb": 1.5768665488324791,
+  "final_val_bpb": 1.5768665488324791,
+  "n_params": 43060080,
+  "training_time_hours": 0.319
+}

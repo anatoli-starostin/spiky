@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp608_v_lut_tph512_bs96",
+  "best_val_bpb": 1.2180247115476472,
+  "final_val_bpb": 1.2180247115476472,
+  "n_params": 289409318,
+  "training_time_hours": 7.195
+}

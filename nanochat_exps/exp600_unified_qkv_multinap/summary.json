@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp600_unified_qkv_multinap",
+  "best_val_bpb": 1.463218297053464,
+  "final_val_bpb": 1.463218297053464,
+  "n_params": 364906790,
+  "training_time_hours": 0.965
+}
