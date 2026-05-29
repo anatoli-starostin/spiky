@@ -1764,14 +1764,17 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
                 None, None, None, None, None, None, None, None)
 
 
+@torch.compile
 def _hybrid_smooth_kalt_fwd_autograd(x, weights, log_T_soft, log_T_sel,
                                        anchor_a_long, anchor_b_long, powers,
                                        n_heads, tph, table_dim, n_alt):
     """Self-consistent forward for hybrid_smooth, supporting any n_alt ∈ [1, NAP].
 
     - n_alt = NAP: uses all NAP anchor positions (full Hamming-1 ball).
-    - n_alt < NAP: uses topk(|d|, k=n_alt, largest=False) — n_alt least-confident
-      anchor positions. n_alt=1 reduces to argmin |d|.
+    - n_alt < NAP: picks the n_alt least-confident anchor positions via
+      sequential argmin (one argmin + scatter-INF per k). Fuses much better
+      under @torch.compile than torch.topk for small k, with no algorithmic
+      change. n_alt=1 reduces to argmin |abs_p|.
 
     Backward via plain autograd: weight grad scatters at (n_alt+1) rows scaled by
     softmax probs; input grad propagates ONLY through smooth path (no soft K-row
@@ -1796,7 +1799,17 @@ def _hybrid_smooth_kalt_fwd_autograd(x, weights, log_T_soft, log_T_sel,
         delta_ts = 2.0 * abs_p                                    # [B, n_tables, NAP]
         flip_powers = powers.view(1, 1, -1).expand(B, n_tables, -1).to(main_index.dtype)
     else:
-        _, topk_pos = torch.topk(abs_p, k=n_alt, dim=-1, largest=False)  # [B, n_tables, n_alt]
+        # Sequential argmin: cheap for small n_alt, fuses under torch.compile.
+        # `torch.topk` for k=3 of 6/8 is ~10x slower under Inductor than three
+        # argmins because topk's quickselect kernel doesn't fuse with neighbours.
+        INF = torch.finfo(abs_p.dtype).max
+        abs_p_mask = abs_p
+        pos_list = []
+        for _k in range(n_alt):
+            idx_k = abs_p_mask.argmin(dim=-1, keepdim=True)         # [B, n_tables, 1]
+            pos_list.append(idx_k)
+            abs_p_mask = abs_p_mask.scatter(-1, idx_k, INF)
+        topk_pos = torch.cat(pos_list, dim=-1)                       # [B, n_tables, n_alt]
         delta_ts = 2.0 * abs_p.gather(-1, topk_pos)               # [B, n_tables, n_alt]
         flip_powers = powers.to(main_index.dtype)[topk_pos]       # [B, n_tables, n_alt]
 

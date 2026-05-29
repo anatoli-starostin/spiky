@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp623_tiny_hybrid_nalt3_seqargmin_verify",
+  "best_val_bpb": 1.5789642769788987,
+  "final_val_bpb": 1.5789642769788987,
+  "n_params": 43060080,
+  "training_time_hours": 0.24
+}
