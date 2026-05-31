@@ -52,7 +52,12 @@ def _pair_stats(lut):
 
 
 def _make_lut_for_policy(policy):
-    """Return a lut appropriate for the given policy (CONV2D needs input_dim=64, nap=8)."""
+    """Return a lut appropriate for the given policy.
+
+    - CONV2D needs input_dim=64 (square dim) and nap=8.
+    - CONNECTED_TRIPLETS needs nap divisible by 3.
+    - CONNECTED_QUADRUPLES needs nap divisible by 6.
+    """
     if policy == AnchorSamplingPolicy.CONV2D:
         return MultiHeadLut(
             input_dim=64, n_heads=1, n_outputs=64, n_anchor_pairs=8,
@@ -61,6 +66,10 @@ def _make_lut_for_policy(policy):
             uncertainty_mode=UncertaintyMode.INVERSE_L1, random_seed=42,
             device=torch.device("cpu"), anchor_sampling_policy=policy,
         )
+    if policy == AnchorSamplingPolicy.CONNECTED_TRIPLETS:
+        return _make_lut(policy, nap=6)  # smallest multiple of 3 with reasonable coverage
+    if policy == AnchorSamplingPolicy.CONNECTED_QUADRUPLES:
+        return _make_lut(policy, nap=6)  # smallest multiple of 6
     return _make_lut(policy)
 
 
@@ -148,12 +157,13 @@ def test_forward_all_policies(device):
     x_default = torch.randn(8, INPUT_DIM, device=device)
     x_conv2d = torch.randn(8, 64, device=device)
     for policy in AnchorSamplingPolicy:
+        # _make_lut_for_policy handles per-policy quirks (CONV2D dim,
+        # CONNECTED_TRIPLETS / CONNECTED_QUADRUPLES nap divisibility).
+        lut = _make_lut_for_policy(policy).to(device)
         if policy == AnchorSamplingPolicy.CONV2D:
-            lut = _make_lut_for_policy(policy).to(device)
             out = lut(x_conv2d)
             assert out.shape == (8, 1, 64), f"{policy.value}: unexpected output shape {out.shape}"
         else:
-            lut = _make_lut(policy).to(device)
             out = lut(x_default)
             assert out.shape == (8, 1, INPUT_DIM), f"{policy.value}: unexpected output shape {out.shape}"
         assert not torch.isnan(out).any(), f"{policy.value}: NaN in output"
