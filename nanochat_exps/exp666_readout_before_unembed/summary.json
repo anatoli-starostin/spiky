@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp666_readout_before_unembed",
+  "best_val_bpb": 1.4543867197473805,
+  "final_val_bpb": 1.4543867197473805,
+  "n_params": 92801318,
+  "training_time_hours": 0.834
+}

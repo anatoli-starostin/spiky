@@ -811,76 +811,107 @@ print(f"\n{'-'*60}")
 
 # %% [markdown]
 # ---
-# ## Part 5 — LUTorch GPT (`exp428` architecture)
+# ## Part 5 — LUTorch GPT (`exp666` architecture)
 #
-# Modern matmul-free LUT-LM from `nanochat_exps/exp428_qkv_tph_x2/`
-# (val bpb **1.498** @ 8K steps, **89.4M** params). Trained on the same data and
-# tokenizer as Parts 3–4. This replaces the older exp100 dominance-space LUT-GPT.
+# Tiny bs=16 SOTA LUT-LM from `nanochat_exps/exp666_readout_before_unembed/`
+# (val bpb **1.4544** @ 8K steps, **92.8M** params). Trained on the same data
+# and tokenizer as Parts 3–4.
 #
-# Key design:
-# - **`TinyMultiHeadLut` everywhere, `backward_mode='soft'`**: each module does a
-#   hard single-row **argmax lookup** on the forward — pack the signs of `NAP=6`
-#   anchor-pair comparisons into a 6-bit index, select 1 of `2^6=64` rows per table —
-#   and a **soft-sign straight-through** gradient on the backward. No multiplications,
-#   no float matmul in the LUT path: fully matmul-free.
-# - **RoPE attention** (not dominance-space q/k): a joint `qkv_lut` emits q, k and a
-#   shallow additive v-branch; `q_norm`/`k_norm` LayerNorms then **RoPE** on (q,k)
-#   before causal SDPA.
-# - **Dual-stream residual**: a narrow **E=64** "LUT stream" carries token state with an
-#   identity skip around each block; a wide **D=384** "residual stream" is *accumulated*
-#   from each layer's `residual_lut` (E→D) and read only at the end.
-# - **Untied unembedder**: `LayerNorm(D) → Linear(D, VOCAB)`, separate from the E-dim
-#   token embedding. No weight tying, no MLP.
-# - **Four LUT modules per block** — `qkv_lut`, `v_lut`, `out_proj`, `residual_lut` —
-#   all `NAP=6` with per-module table counts (`tph`). Learnable per-module
-#   temperatures; bf16 LUT weights, fp32 elsewhere.
-# - Single **AdamW** for the whole model, with a higher LR on the LUT param group
-#   (`lut_lr=1e-3` vs `adam_lr=3e-4`).
+# Key design (changes from earlier exp428 walkthrough):
+# - **Single-stream E=384 residual** (no separate D-stream, no `residual_lut`).
+#   The token embedding lives in `E` and an outer residual carries the state
+#   through every block. Far simpler than the earlier dual-stream design.
+# - **`backward_mode='hybrid_smooth'`** everywhere (n_alt=1 default). Each LUT
+#   forward computes the argmax row index plus a Hamming-1 neighbor at the
+#   least-confident anchor pair and blends them as `(1−u)·main + u·alt`; the
+#   backward path uses dense K-row soft gradients on the input but scatters
+#   weight gradients only to the {main, alt} rows. This 2-row blend keeps the
+#   model differentiable while leaving inference matmul-free.
+# - **Split-S sub-heads** for qk and v: the LUT layer holds `H·S` sub-heads,
+#   each producing `(2·d_qk)/S` or `d_v/S` outputs; we then reshape the
+#   contiguous sub-heads back into `H` real attention heads. Same param
+#   count and bandwidth as `S=1`, but each sub-head samples its own
+#   anchor-pair pattern → more input diversity per LUT row. Here S=4 for both.
+# - **Multi-head `out_proj`** (6 LUT heads × 64 outputs each, concat → E).
+# - **Residual `read_out` LUT** placed once *after* all blocks, before the
+#   unembedder: `x = x + read_out(x)`. Same shape as `out_proj`. Worth
+#   −8.6 mb over the no-read_out baseline (exp664).
+# - **`MeanAbsNorm`** (`x / (mean(|x|) + eps)`) as the only pre-norm — no
+#   centering, no affine. Cheapest magnitude norm; absorbs into the LUT
+#   temperature.
+# - **RoPE** on (q, k) before causal SDPA. Standard half-rotation.
+# - **Mixed optimizer**: `Lion` (sign-momentum) for LUT parameters at
+#   `lut_lr=2e-4`, plain `AdamW` for everything else at `adam_lr=3e-4`.
 
 # %%
 from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 
-# Architecture hyperparameters (mirrors nanochat_exps/exp428_qkv_tph_x2/config.json)
-LUT_E            = 64        # embedding / LUT-stream dim
-LUT_D            = 384       # residual-stream dim
-LUT_H            = 6         # attention heads
+# Architecture hyperparameters (mirrors nanochat_exps/exp666_readout_before_unembed/config.json)
+LUT_E            = 384       # single-stream residual width
+LUT_H            = 6         # real attention heads
 LUT_D_QK         = 64        # per-head query/key dim
-LUT_D_V          = 16        # per-head value dim
+LUT_D_V          = 64        # per-head value dim
 LUT_N_LAYERS     = 6
-LUT_NAP          = 6         # anchor pairs per table  (2^6 = 64 rows/table)
-LUT_QKV_TPH      = 64        # qkv_lut tables/head  (emits 2*d_qk + d_v)
-LUT_V_TPH        = 256       # v_lut tables/head
-LUT_OUT_TPH      = 1024      # out_proj tables
-LUT_RESID_TPH    = 128       # residual_lut tables
+
+# qk_lut (split-S=4): n_heads = H*S = 24, n_outputs = 2*d_qk/S = 32
+LUT_QK_NAP   = 4             # 2^4 = 16 rows/table
+LUT_QK_TPH   = 64
+LUT_QK_S     = 4
+
+# v_lut (split-S=4): n_heads = H*S = 24, n_outputs = d_v/S = 16
+LUT_V_NAP    = 6             # 2^6 = 64 rows/table
+LUT_V_TPH    = 128
+LUT_V_S      = 4
+
+# out_proj (6 heads, concat -> E): n_outputs/head = E/6 = 64
+LUT_OUT_NAP  = 6
+LUT_OUT_TPH  = 256
+LUT_OUT_NH   = 6
+
+# read_out (one residual LUT before unembedder, same shape as out_proj)
+LUT_RO_NAP   = 6
+LUT_RO_TPH   = 256
+LUT_RO_NH    = 6
+
 LUT_ROPE_BASE    = 10000.0
 LUT_INIT_STD     = 0.001
 LUT_SEED         = 42
 LUT_ADAM_LR      = 3e-4
-LUT_LUT_LR       = 1e-3      # higher LR on the LUT param group
+LUT_LUT_LR       = 2e-4      # Lion LR on the LUT param group
+LUT_LUT_BETAS    = (0.9, 0.95)
 LUT_WEIGHT_DECAY = 0.1
 
-_LUT_SOFT_KWARGS = dict(
-    weight_dtype=torch.float32,
+_LUT_HS_KWARGS = dict(
     anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
     initial_weights_noise=LUT_INIT_STD,
-    backward_mode="soft",          # hard argmax forward, soft-sign STE backward
+    backward_mode="hybrid_smooth",  # 2-row blend forward + dense K-row input grad
     soft_score_temp=0.5,
     select_temp=0.5,
-    learnable_temps=True,          # per-module learnable temperatures
-    use_bf16=True,                 # bf16 LUT weights
+    learnable_temps=True,
+    use_bf16=True,                  # bf16 LUT weights
     argmax_noise_eps=0.0,
 )
 
 
-def _make_lut(input_dim, n_heads, n_outputs, tables_per_head, seed):
-    """A single `TinyMultiHeadLut` module (soft backward, NAP=6)."""
+def _make_lut(input_dim, n_heads, n_outputs, tables_per_head, n_anchor_pairs, seed):
+    """A single `TinyMultiHeadLut` module (hybrid_smooth backward)."""
     return TinyMultiHeadLut(
         input_dim=input_dim, n_heads=n_heads, n_outputs=n_outputs,
-        n_anchor_pairs=LUT_NAP, tables_per_head=tables_per_head,
+        n_anchor_pairs=n_anchor_pairs, tables_per_head=tables_per_head,
         random_seed=seed, device=torch.device(DEVICE),
-        **_LUT_SOFT_KWARGS,
+        **_LUT_HS_KWARGS,
     )
+
+
+# --- MeanAbsNorm: x / (mean(|x|) + eps), no centering, no affine -------------
+class MeanAbsNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, x):
+        return x / (x.abs().mean(dim=-1, keepdim=True) + self.eps)
 
 
 # --- RoPE on (q, k) -----------------------------------------------------------
@@ -910,66 +941,102 @@ def apply_rope(q, k, cos, sin):
             k * cos + _rotate_half(k) * sin)
 
 
+# --- Lion optimizer (sign-momentum) for LUT params ----------------------------
+class Lion(torch.optim.Optimizer):
+    """EvoLved Sign Momentum. Single momentum buffer, sign-based update."""
+    def __init__(self, params, lr=2e-4, betas=(0.9, 0.95), weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self):
+        for grp in self.param_groups:
+            lr, (b1, b2), wd = grp["lr"], grp["betas"], grp["weight_decay"]
+            for p in grp["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                st = self.state[p]
+                if "exp_avg" not in st:
+                    st["exp_avg"] = torch.zeros_like(p)
+                m = st["exp_avg"]
+                if wd != 0:
+                    p.mul_(1.0 - lr * wd)
+                update = (m * b1 + g * (1.0 - b1)).sign_()
+                p.add_(update, alpha=-lr)
+                m.mul_(b2).add_(g, alpha=1.0 - b2)
+
+
+# --- LUT block (single-stream E=384, split-S qk/v, multi-head out_proj) -------
 class LUTBlock(nn.Module):
-    """exp428 block: 4 TinyMHLut modules, RoPE attention, dual-stream residual."""
+    """exp666 block: MeanAbsNorm pre-norm, split-S qk + v, RoPE attn,
+    multi-head out_proj, single outer E-residual skip. No D-stream."""
 
     def __init__(self, layer_idx):
         super().__init__()
-        # qkv_lut emits q, k AND a shallow additive v-branch (last d_v outputs).
-        self.qkv_lut      = _make_lut(LUT_E,         LUT_H, 2 * LUT_D_QK + LUT_D_V, LUT_QKV_TPH,   LUT_SEED + layer_idx)
-        self.v_lut        = _make_lut(LUT_E,         LUT_H, LUT_D_V,                LUT_V_TPH,     LUT_SEED + 200 + layer_idx)
-        self.out_proj     = _make_lut(LUT_H * LUT_D_V, 1,   LUT_E,                  LUT_OUT_TPH,   LUT_SEED + 400 + layer_idx)
-        self.residual_lut = _make_lut(LUT_E,         1,     LUT_D,                  LUT_RESID_TPH, LUT_SEED + 600 + layer_idx)
+        Hqk = LUT_H * LUT_QK_S
+        Hv  = LUT_H * LUT_V_S
+        self.qk_lut   = _make_lut(LUT_E, Hqk, (2 * LUT_D_QK) // LUT_QK_S,
+                                  LUT_QK_TPH, LUT_QK_NAP, LUT_SEED + layer_idx)
+        self.v_lut    = _make_lut(LUT_E, Hv,  LUT_D_V // LUT_V_S,
+                                  LUT_V_TPH,  LUT_V_NAP,  LUT_SEED + 200 + layer_idx)
+        self.out_proj = _make_lut(LUT_H * LUT_D_V, LUT_OUT_NH, LUT_E // LUT_OUT_NH,
+                                  LUT_OUT_TPH, LUT_OUT_NAP, LUT_SEED + 400 + layer_idx)
         self.q_norm = nn.LayerNorm(LUT_D_QK)
         self.k_norm = nn.LayerNorm(LUT_D_QK)
-        self.ln_pre  = nn.LayerNorm(LUT_E)   # pre-norm before qkv/v LUTs
-        self.ln_post = nn.LayerNorm(LUT_E)   # post-norm on E-stream, feeds residual_lut
+        self.ln_pre = MeanAbsNorm(LUT_E)
 
     def forward(self, x, cos, sin):
         B, T, _ = x.shape
         x_flat = x.reshape(B * T, LUT_E)
         x_pre  = self.ln_pre(x_flat)
 
-        qkv_out  = self.qkv_lut(x_pre)                          # [B*T, H, 2*d_qk + d_v]
-        q_vec    = self.q_norm(qkv_out[..., :LUT_D_QK])
-        k_vec    = self.k_norm(qkv_out[..., LUT_D_QK:2 * LUT_D_QK])
-        v_branch = qkv_out[..., 2 * LUT_D_QK:]                  # shallow additive v-branch
+        # Split-S qk: H*S sub-heads, each emitting 2*d_qk/S outputs.
+        qk_out = self.qk_lut(x_pre)                                   # [B*T, H*S, 2*d_qk/S]
+        qk_per_head = qk_out.reshape(B * T, LUT_H, 2 * LUT_D_QK)      # [B*T, H, 2*d_qk]
+        q_vec = self.q_norm(qk_per_head[..., :LUT_D_QK])
+        k_vec = self.k_norm(qk_per_head[..., LUT_D_QK:])
         q = q_vec.reshape(B, T, LUT_H, LUT_D_QK).permute(0, 2, 1, 3)
         k = k_vec.reshape(B, T, LUT_H, LUT_D_QK).permute(0, 2, 1, 3)
         q, k = apply_rope(q, k, cos[:T], sin[:T])
 
-        v_vec = self.v_lut(x_pre) + v_branch                   # [B*T, H, d_v]
+        # Split-S v: H*S sub-heads, each emitting d_v/S outputs.
+        v_out = self.v_lut(x_pre)                                     # [B*T, H*S, d_v/S]
+        v_vec = v_out.reshape(B * T, LUT_H, LUT_D_V)                  # [B*T, H, d_v]
         v = v_vec.reshape(B, T, LUT_H, LUT_D_V).permute(0, 2, 1, 3)
 
-        attn   = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, LUT_H * LUT_D_V)
-        out_e  = self.out_proj(out_in).squeeze(1)              # [B*T, E]
+        # Multi-head out_proj returns [B*T, OUT_NH, E/OUT_NH]; concat heads → E.
+        out_e = self.out_proj(out_in).reshape(B * T, LUT_E)           # [B*T, E]
 
-        x_lut_next_flat = x_flat + out_e                      # E-stream identity skip
-        r_in  = self.ln_post(x_lut_next_flat)                 # post-norm -> residual_lut
-        r_out = self.residual_lut(r_in).squeeze(1).reshape(B, T, LUT_D)
-        return x_lut_next_flat.reshape(B, T, LUT_E), r_out
+        # Outer E-residual skip around the whole block.
+        return (x_flat + out_e).reshape(B, T, LUT_E)
 
 
+# --- Model: blocks + single residual read_out + LN + untied unembedder --------
 class LUTGPT(nn.Module):
     def __init__(self, vocab_size, seq_len):
         super().__init__()
         torch.manual_seed(LUT_SEED)
         self.tok_emb_E = nn.Embedding(vocab_size, LUT_E)
         self.tok_emb_E.weight.data.uniform_(-0.1, 0.1)
-        self.unembedder = nn.Linear(LUT_D, vocab_size, bias=False)   # untied
+        self.unembedder = nn.Linear(LUT_E, vocab_size, bias=False)    # untied
         self.rope = RotaryEmbedding(LUT_D_QK, max_seq_len=seq_len,
                                     base=LUT_ROPE_BASE, device=torch.device(DEVICE))
         self.layers = nn.ModuleList([LUTBlock(i) for i in range(LUT_N_LAYERS)])
-        self.ln_final = nn.LayerNorm(LUT_D)
+        # Single residual read_out LUT applied once after all blocks.
+        self.read_out = _make_lut(LUT_E, LUT_RO_NH, LUT_E // LUT_RO_NH,
+                                  LUT_RO_TPH, LUT_RO_NAP, LUT_SEED + 800)
+        self.ln_final = nn.LayerNorm(LUT_E)
 
     def get_device(self):
         return self.tok_emb_E.weight.device
 
     def setup_optimizer(self, adam_lr=LUT_ADAM_LR, lut_lr=LUT_LUT_LR,
-                        weight_decay=LUT_WEIGHT_DECAY):
-        """Single AdamW, three param groups: LUT tables (higher LR, no wd),
-        unembedder (wd), and token-embedding + norms/temps (no wd)."""
+                        lut_betas=LUT_LUT_BETAS, weight_decay=LUT_WEIGHT_DECAY):
+        """Lion for LUT tables, AdamW for everything else.
+        Three AdamW groups: unembedder (decay), token emb (no decay),
+        LayerNorms/temps (no decay)."""
         lut_params, tok_emb_params, decay_params, nodecay_params = [], [], [], []
         for name, p in self.named_parameters():
             if not p.requires_grad:
@@ -980,28 +1047,31 @@ class LUTGPT(nn.Module):
                 tok_emb_params.append(p)
             elif p.ndim == 2:                       # unembedder
                 decay_params.append(p)
-            else:                                   # LayerNorm weights/biases, temps
+            else:                                   # LayerNorm weights/biases, log_temps
                 nodecay_params.append(p)
-        groups = [
-            dict(params=lut_params,   lr=lut_lr,  betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
+        adam_groups = [
             dict(params=decay_params, lr=adam_lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
             dict(params=tok_emb_params + nodecay_params,
                  lr=adam_lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
         ]
-        opt = torch.optim.AdamW(groups)
-        for group in opt.param_groups:
-            group["initial_lr"] = group["lr"]
-        return opt
+        adam_opt = torch.optim.AdamW(adam_groups)
+        lion_opt = Lion([dict(params=lut_params, lr=lut_lr, weight_decay=0.0)],
+                        lr=lut_lr, betas=lut_betas)
+        opts = [adam_opt, lion_opt]
+        for opt in opts:
+            for group in opt.param_groups:
+                group["initial_lr"] = group["lr"]
+        return opts
 
     def forward(self, idx, targets=None, loss_reduction="mean"):
         B, T = idx.shape
-        x_resid = torch.zeros(B, T, LUT_D, device=idx.device,
-                              dtype=self.tok_emb_E.weight.dtype)
-        x_lut = self.tok_emb_E(idx)                            # E-stream from token emb
+        x_lut = self.tok_emb_E(idx)                                   # (B, T, E)
         for layer in self.layers:
-            x_lut, r = layer(x_lut, self.rope.cos, self.rope.sin)
-            x_resid = x_resid + r                             # accumulate D-stream
-        logits = self.unembedder(self.ln_final(x_resid))
+            x_lut = layer(x_lut, self.rope.cos, self.rope.sin)
+        # Residual read_out applied once after all blocks, before LN + unembed.
+        ro = self.read_out(x_lut.reshape(B * T, LUT_E)).reshape(B, T, LUT_E)
+        x_lut = x_lut + ro
+        logits = self.unembedder(self.ln_final(x_lut))
         if targets is not None:
             return F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -1037,9 +1107,10 @@ lutgpt = LUTGPT(
 ).to(DEVICE)
 
 lut_params = sum(p.numel() for p in lutgpt.parameters())
-print(f"LUTGPT (exp428) params: {lut_params:,}")
+print(f"LUTGPT (exp666) params: {lut_params:,}")
 
-lut_optimizer = lutgpt.setup_optimizer()
+# `setup_optimizer` returns a list: [AdamW (non-LUT), Lion (LUT)].
+lut_optimizers = lutgpt.setup_optimizer()
 
 lut_train_loader = tokenizing_distributed_data_loader_bos_bestfit(
     tokenizer, DEVICE_BATCH_SIZE, SEQ_LEN, split="train", device=DEVICE
@@ -1053,14 +1124,17 @@ lut_val_steps    = []
 pbar = tqdm(range(1, LUT_ITERS + 1), desc="LUTGPT", unit="step")
 for step in pbar:
     lr_scale = get_lr_scale(step, LUT_ITERS)
-    for group in lut_optimizer.param_groups:
-        group["lr"] = group["initial_lr"] * lr_scale
+    for opt in lut_optimizers:
+        for group in opt.param_groups:
+            group["lr"] = group["initial_lr"] * lr_scale
 
-    lut_optimizer.zero_grad(set_to_none=True)
+    for opt in lut_optimizers:
+        opt.zero_grad(set_to_none=True)
     x, y = next(lut_train_loader)
     loss = lutgpt(x, y)
     loss.backward()
-    lut_optimizer.step()
+    for opt in lut_optimizers:
+        opt.step()
     lut_train_losses.append(loss.item())
 
     pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{lr_scale:.3f}")
@@ -1084,7 +1158,7 @@ try:
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(val_steps,      val_bpbs,      "o-", label=f"Nanochat GPT (depth={DEPTH})")
     ax.plot(mini_val_steps, mini_val_bpbs, "s-", label=f"Minimal GPT (depth={MIN_DEPTH})")
-    ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT exp428 (depth={LUT_N_LAYERS})")
+    ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT exp666 (depth={LUT_N_LAYERS})")
     ax.set(xlabel="step", ylabel="bits per byte", title="Validation BPB")
     ax.grid(True); ax.legend()
     plt.tight_layout()
