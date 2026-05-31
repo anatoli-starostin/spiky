@@ -1137,7 +1137,8 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel, n_heads, tph,
                         visit_norm: bool = False,
                         dominance_gate: bool = False,
-                        hard_sign_ste: bool = False):
+                        hard_sign_ste: bool = False,
+                        compute_weight_grad: bool = True):
     """Compiled backward — Gumbel-STE consistent.
 
     Reconstructs `p` so that `argmax(sel_soft) ≡ saved index` (including any
@@ -1196,29 +1197,34 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     # the simple p=d/denom case; the p_signs * sign(d) factors cancel out).
     grad_log_T_soft = -(d_d * d).sum()
 
-    # dL/dweights via scatter at saved (table, index).
-    flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
-    flat_idx    = (index + flat_offset[None, :]).reshape(-1)
-    grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
-    if dominance_gate:
-        # Per-coord centroid-dominance gate: keep grad_centered[a] iff its sign
-        # agrees with W_centered[a] (= the gradient is fighting current dominance).
-        # Zero gradient where dominance is already correct.
-        w_flat_all = weights.view(n_tables * K, n_outputs)
-        w_at = F.embedding(flat_idx, w_flat_all)              # [B*n_tables, n_outputs]
-        grad_w_in = grad_pt.reshape(-1, n_outputs).to(w_dtype)
-        w_centered = w_at - w_at.mean(dim=-1, keepdim=True)
-        g_centered = grad_w_in - grad_w_in.mean(dim=-1, keepdim=True)
-        keep = (w_centered * g_centered) >= 0
-        grad_to_write = torch.where(keep, g_centered, torch.zeros_like(g_centered))
-        grad_w_flat.index_add_(0, flat_idx, grad_to_write)
+    # dL/dweights via scatter at saved (table, index). Skipped when the caller
+    # only needs grad_x / grad_log_Ts / grad_log_Tx (e.g. hybrid_smooth modes
+    # supply their own 2-row weight grad via _hybrid_smooth_weight_grad).
+    if compute_weight_grad:
+        flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+        flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+        grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
+        if dominance_gate:
+            # Per-coord centroid-dominance gate: keep grad_centered[a] iff its sign
+            # agrees with W_centered[a] (= the gradient is fighting current dominance).
+            # Zero gradient where dominance is already correct.
+            w_flat_all = weights.view(n_tables * K, n_outputs)
+            w_at = F.embedding(flat_idx, w_flat_all)              # [B*n_tables, n_outputs]
+            grad_w_in = grad_pt.reshape(-1, n_outputs).to(w_dtype)
+            w_centered = w_at - w_at.mean(dim=-1, keepdim=True)
+            g_centered = grad_w_in - grad_w_in.mean(dim=-1, keepdim=True)
+            keep = (w_centered * g_centered) >= 0
+            grad_to_write = torch.where(keep, g_centered, torch.zeros_like(g_centered))
+            grad_w_flat.index_add_(0, flat_idx, grad_to_write)
+        else:
+            grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+        if visit_norm:
+            # Convert per-row SUM to per-row MEAN by dividing by visit count.
+            counts = torch.bincount(flat_idx, minlength=n_tables * K).to(w_dtype).clamp_(min=1)
+            grad_w_flat = grad_w_flat / counts.unsqueeze(-1)
+        grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
     else:
-        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
-    if visit_norm:
-        # Convert per-row SUM to per-row MEAN by dividing by visit count.
-        counts = torch.bincount(flat_idx, minlength=n_tables * K).to(w_dtype).clamp_(min=1)
-        grad_w_flat = grad_w_flat / counts.unsqueeze(-1)
-    grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+        grad_weights = None
 
     # dL/dx via scatter-add at anchor positions.
     grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
@@ -1847,6 +1853,7 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
             grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                compute_weight_grad=False,
             )
 
         # Hybrid weight gradient: fused 2-row scatter at main/alt rows, scaled
@@ -1942,6 +1949,7 @@ class _TinyMHLutHybridSmoothSparseScatter(torch.autograd.Function):
             grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                compute_weight_grad=False,
             )
 
         grad_weights = _hybrid_smooth_weight_grad(
@@ -2222,6 +2230,7 @@ class _TinyMHLutHybridSmoothNap(torch.autograd.Function):
             grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                compute_weight_grad=False,
             )
 
         # (NAP+1)-row weight scatter, scaled by softmax probabilities.
@@ -2400,6 +2409,7 @@ class _TinyMHLutHybridSmoothKalt(torch.autograd.Function):
             grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 main_index, T_soft, T_sel, ctx.n_heads, ctx.tph,
+                compute_weight_grad=False,
             )
 
         # (n_alt+1)-row weight scatter, scaled by softmax probs.
@@ -2531,13 +2541,15 @@ def _hybrid_smooth_memeff_Z_chunk(weights_view, grad_out_chunk,
     """Per-chunk Z = W @ grad_out.
 
     Z[b, t, r] = sum_o W[t, r, o] * grad_out[b, h(t), o]. Single batched
-    cuBLAS GEMM. Returned as [cb, n_tables, K] float32. Used by both the
-    self-consistent input-grad path (gather n_alt+1 rows) and the K-row
-    soft-surrogate path (chain through full K-row softmax)."""
+    cuBLAS GEMM. Returns Z in fp32 for bf16/fp16/fp32 inputs (gradient
+    accumulation stability) or in fp64 for fp64 inputs (gradcheck). Used by
+    both the self-consistent input-grad path (gather n_alt+1 rows) and the
+    K-row soft-surrogate path (chain through full K-row softmax)."""
     K = table_dim
     n_tables = n_heads * tph
-    Z = torch.einsum('htro,bho->bhtr', weights_view,
-                       grad_out_chunk.to(torch.float32))
+    grad_dtype = weights_view.dtype if weights_view.dtype == torch.float64 else torch.float32
+    Z = torch.einsum('htro,bho->bhtr', weights_view.to(grad_dtype),
+                       grad_out_chunk.to(grad_dtype))
     return Z.reshape(cb, n_tables, K)
 
 
@@ -2626,15 +2638,20 @@ def _hybrid_smooth_memeff_dw_einsum(all_indices_chunk, probs_chunk, grad_out_chu
     """
     K = table_dim
     n_tables = n_heads * tph
+    # Use fp32 for bf16/fp16/fp32 inputs (gradient accumulation stability),
+    # fp64 for fp64 inputs (gradcheck). Mixing fp32 with fp64 inside a
+    # @torch.compile body trips inductor's AOT-autograd cache on some GPUs
+    # (see line ~2585 comment).
+    grad_dtype = grad_out_chunk.dtype if grad_out_chunk.dtype == torch.float64 else torch.float32
     # S construction: (n_alt+1) writes per (b, t), each to a distinct k slot —
     # no collision so scatter_add is collision-free (cheap).
-    S = torch.zeros(cb, n_tables, K, dtype=torch.float32,
+    S = torch.zeros(cb, n_tables, K, dtype=grad_dtype,
                     device=all_indices_chunk.device)
-    S.scatter_add_(-1, all_indices_chunk, probs_chunk.to(torch.float32))
+    S.scatter_add_(-1, all_indices_chunk, probs_chunk.to(grad_dtype))
     # Per-table batched GEMM: einsum saturates cuBLAS.
     S_view = S.view(cb, n_heads, tph, K)
     dW_chunk = torch.einsum('bhtr,bho->htro', S_view,
-                              grad_out_chunk.to(torch.float32))
+                              grad_out_chunk.to(grad_dtype))
     return dW_chunk.reshape(n_tables, K, n_outputs)
 
 
@@ -2687,15 +2704,18 @@ def _hybrid_smooth_memeff_bwd_dense_fused(
     T_soft = log_T_soft.exp()
     T_sel = log_T_sel.exp()
     weights_view = weights.view(n_heads, tph, K, n_outputs)
-    grad_out_f = grad_out.to(torch.float32)
+    # Use fp32 for bf16/fp16/fp32 inputs (gradient accumulation stability),
+    # fp64 for fp64 inputs (gradcheck). Same reasoning as `_hybrid_smooth_memeff_dw_einsum`.
+    grad_dtype = grad_out.dtype if grad_out.dtype == torch.float64 else torch.float32
+    grad_out_f = grad_out.to(grad_dtype)
 
     # Z = einsum(W, grad_out): full K-row row-by-row dot with grad_out.
-    Z = torch.einsum('htro,bho->bhtr', weights_view, grad_out_f).reshape(
+    Z = torch.einsum('htro,bho->bhtr', weights_view.to(grad_dtype), grad_out_f).reshape(
         B, n_tables, K)
 
     # dW via S + einsum (same shape pattern; cuBLAS GEMM).
-    S = torch.zeros(B, n_tables, K, dtype=torch.float32, device=weights.device)
-    S.scatter_add_(-1, all_indices, probs.to(torch.float32))
+    S = torch.zeros(B, n_tables, K, dtype=grad_dtype, device=weights.device)
+    S.scatter_add_(-1, all_indices, probs.to(grad_dtype))
     S_view = S.view(B, n_heads, tph, K)
     dW = torch.einsum('bhtr,bho->htro', S_view, grad_out_f).reshape(
         n_tables, K, n_outputs)
@@ -2833,11 +2853,16 @@ class _TinyMHLutHybridSmoothMemEff(torch.autograd.Function):
         # so Inductor fuses K-row softmax + Z GEMM + dW GEMM + dx scatter into
         # ~1-2 kernels. Roughly 2× faster than the chunked path at exp611 scale.
         if dense_input_grad:
+            # Match bit_matrix dtype to the gradient accumulation dtype the
+            # dense_fused body picks internally (fp32 for bf16/fp16/fp32,
+            # fp64 for fp64). Avoids fp32/fp64 mixed-dtype matmuls in the
+            # compiled body.
+            _bm_dtype = grad_out.dtype if grad_out.dtype == torch.float64 else torch.float32
             grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel = (
                 _hybrid_smooth_memeff_bwd_dense_fused(
                     x, weights, log_T_soft, log_T_sel,
                     anchor_a_long, anchor_b_long,
-                    bit_matrix.to(torch.float32),
+                    bit_matrix.to(_bm_dtype),
                     d, main_index, all_indices, probs, grad_out,
                     n_heads, tph, table_dim,
                 )
@@ -2890,8 +2915,11 @@ class _TinyMHLutHybridSmoothMemEff(torch.autograd.Function):
             # dabs_p = d_p * p_signs (because p = p_signs * abs_p, p_signs constant).
             dabs_p = d_p * p_signs                                    # [B, n_tables, NAP]
         else:
+            # fp32 for bf16/fp16/fp32 inputs, fp64 for fp64 (gradcheck) — same
+            # reasoning as the memeff helpers above.
+            _grad_dtype = grad_out.dtype if grad_out.dtype == torch.float64 else torch.float32
             dprobs = torch.empty(B, n_tables, n_alt + 1,
-                                  dtype=torch.float32, device=x.device)
+                                  dtype=_grad_dtype, device=x.device)
             for cs in range(0, B, chunk):
                 ce = min(B, cs + chunk)
                 cb = ce - cs
