@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp626_tiny_unrenorm_forward",
+  "best_val_bpb": 1.5929554990498358,
+  "final_val_bpb": 1.5929554990498358,
+  "n_params": 43060080,
+  "training_time_hours": 0.578
+}

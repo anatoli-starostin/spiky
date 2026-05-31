@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp649_single_final_resid_tph384",
+  "best_val_bpb": 1.494799776540799,
+  "final_val_bpb": 1.494799776540799,
+  "n_params": 61344038,
+  "training_time_hours": 0.295
+}

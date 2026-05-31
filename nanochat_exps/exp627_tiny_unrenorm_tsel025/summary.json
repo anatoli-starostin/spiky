@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp627_tiny_unrenorm_tsel025",
+  "best_val_bpb": 1.5751221728488316,
+  "final_val_bpb": 1.5751221728488316,
+  "n_params": 43060080,
+  "training_time_hours": 0.492
+}

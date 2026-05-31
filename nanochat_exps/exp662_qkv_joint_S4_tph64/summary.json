@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp662_qkv_joint_S4_tph64",
+  "best_val_bpb": 1.4950529243589041,
+  "final_val_bpb": 1.4950529243589041,
+  "n_params": 91228440,
+  "training_time_hours": 0.57
+}

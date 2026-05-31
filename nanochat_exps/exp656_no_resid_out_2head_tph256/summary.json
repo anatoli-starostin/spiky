@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp656_no_resid_out_2head_tph256",
+  "best_val_bpb": 1.4998452703913774,
+  "final_val_bpb": 1.4998452703913774,
+  "n_params": 77072676,
+  "training_time_hours": 0.369
+}

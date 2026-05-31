@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp659_no_resid_out_6head_dv64",
+  "best_val_bpb": 1.481984402645348,
+  "final_val_bpb": 1.481984402645348,
+  "n_params": 86509860,
+  "training_time_hours": 0.493
+}

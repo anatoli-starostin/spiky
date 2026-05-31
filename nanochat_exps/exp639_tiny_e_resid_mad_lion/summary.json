@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp639_tiny_e_resid_mad_lion",
+  "best_val_bpb": 1.5181857126150398,
+  "final_val_bpb": 1.5181857126150398,
+  "n_params": 43059504,
+  "training_time_hours": 0.212
+}

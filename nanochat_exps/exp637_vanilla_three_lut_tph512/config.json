@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp637_vanilla_three_lut_tph512",
+  "description": "Fork of exp636 (three LUTs per block @ tph=1024 -> 467M, expected ~1.47 final). Single change: lut_tph 1024 -> 512 for all three LUTs (v_lut, out_lut, FFN lut). Halves LUT params per module (~12.6M each instead of ~25.2M). Total LUT params ~227M (vs exp636 453M), total params ~242M. Tests whether smaller tables per head help when three LUTs per block are present. Reference: exp635 (FFN+v at tph=1024) = 1.4301 @ 317M, exp636 (FFN+v+out at tph=1024) tracking ~1.47.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "lut_lr": 0.0002,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "lut_input_nap": 6,
+  "lut_tph": 512,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "mhlut_init_std": 0.001,
+  "argmax_noise_eps": 0.0,
+  "lut_betas": [
+    0.9,
+    0.95
+  ],
+  "backward_mode": "hybrid_smooth"
+}

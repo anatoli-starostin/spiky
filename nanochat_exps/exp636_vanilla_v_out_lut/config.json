@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp636_vanilla_v_out_lut",
+  "description": "Fork of exp635 (FFN + v_lut = 1.4301 @ 317M). Single additional change: replace the attention output projection (self.proj, Linear n_embd -> n_embd) with a TinyMultiHeadLut (NAP=6, tph=1024, hybrid_smooth) matching the FFN/v_lut shape. Now three LUTs per block: v_lut, out_lut, FFN lut. Only qk_proj remains Linear in attention. The zero-init residual identity is replaced by relying on mhlut_init_std=0.001 (the same approach FFN already uses). Reference: exp328 vanilla = 1.3882, exp633 = 1.4584, exp634 = 1.4372, exp635 = 1.4301.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "lut_lr": 0.0002,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "lut_input_nap": 6,
+  "lut_tph": 1024,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "mhlut_init_std": 0.001,
+  "argmax_noise_eps": 0.0,
+  "lut_betas": [
+    0.9,
+    0.95
+  ],
+  "backward_mode": "hybrid_smooth"
+}

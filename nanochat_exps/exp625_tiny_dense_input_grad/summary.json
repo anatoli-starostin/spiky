@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp625_tiny_dense_input_grad",
+  "best_val_bpb": 1.5741773220573665,
+  "final_val_bpb": 1.5741773220573665,
+  "n_params": 43060080,
+  "training_time_hours": 1.173
+}

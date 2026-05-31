@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp658_no_resid_out_tph1536_sparse64",
+  "best_val_bpb": 1.4927550219192791,
+  "final_val_bpb": 1.4927550219192791,
+  "n_params": 77072676,
+  "training_time_hours": 0.689
+}

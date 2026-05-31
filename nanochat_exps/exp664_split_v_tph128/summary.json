@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp664_split_v_tph128",
+  "best_val_bpb": 1.4629504994773666,
+  "final_val_bpb": 1.4629504994773666,
+  "n_params": 86509860,
+  "training_time_hours": 0.794
+}

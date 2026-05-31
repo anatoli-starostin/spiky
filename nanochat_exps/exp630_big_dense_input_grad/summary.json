@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp630_big_dense_input_grad",
+  "best_val_bpb": 1.4076754389979544,
+  "final_val_bpb": 1.4076754389979544,
+  "n_params": 289409318,
+  "training_time_hours": 1.984
+}

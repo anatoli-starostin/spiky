@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp644_residual_nap4_tph256",
+  "best_val_bpb": 1.5144251783374734,
+  "final_val_bpb": 1.5144251783374734,
+  "n_params": 37751088,
+  "training_time_hours": 0.322
+}

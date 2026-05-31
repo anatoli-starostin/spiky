@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp641_qkv_nap6_tph64",
+  "best_val_bpb": 1.5101305724825431,
+  "final_val_bpb": 1.5101305724825431,
+  "n_params": 58984752,
+  "training_time_hours": 0.313
+}

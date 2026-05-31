@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp655_no_resid_out_tph512_sparse192",
+  "best_val_bpb": 1.4928431548633603,
+  "final_val_bpb": 1.4928431548633603,
+  "n_params": 77072676,
+  "training_time_hours": 0.596
+}

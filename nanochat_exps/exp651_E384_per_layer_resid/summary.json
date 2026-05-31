@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp651_E384_per_layer_resid",
+  "best_val_bpb": 1.4812836754210648,
+  "final_val_bpb": 1.4812836754210648,
+  "n_params": 86509872,
+  "training_time_hours": 0.675
+}

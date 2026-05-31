@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp663_split_qk_v_S4",
+  "best_val_bpb": 1.4825985205003809,
+  "final_val_bpb": 1.4825985205003809,
+  "n_params": 77072676,
+  "training_time_hours": 0.644
+}

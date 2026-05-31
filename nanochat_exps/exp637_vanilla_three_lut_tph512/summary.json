@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp637_vanilla_three_lut_tph512",
+  "best_val_bpb": 1.487220343349825,
+  "final_val_bpb": 1.487220343349825,
+  "total_params": 240854820,
+  "training_time_hours": 0.77
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp638_tiny_hybrid_smooth_rerun",
+  "best_val_bpb": 1.5835317199266756,
+  "final_val_bpb": 1.5835317199266756,
+  "n_params": 43060080,
+  "training_time_hours": 0.218
+}

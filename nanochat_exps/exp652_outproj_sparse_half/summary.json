@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp652_outproj_sparse_half",
+  "best_val_bpb": 1.4901649447062577,
+  "final_val_bpb": 1.4901649447062577,
+  "n_params": 67635494,
+  "training_time_hours": 0.685
+}

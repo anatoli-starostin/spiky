@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp635_vanilla_lut_ffn_v_lut",
+  "description": "Fork of exp633 (vanilla MinimalGPT + LUT FFN hybrid_smooth = 1.4584 @ 167M). Single change: replace v projection in attention with a TinyMultiHeadLut (NAP=6, tph=1024, hybrid_smooth) matching the FFN LUT shape. qkv Linear is split into qk_proj=Linear(n_embd, 2*n_embd) + v_lut=TinyMultiHeadLut(n_embd -> n_embd). Tests whether replacing the v projection with the same LUT recipe as the FFN gives further gain. Reference: exp328 vanilla = 1.3882, exp633 = 1.4584, exp634 (NAP=8 FFN) = 1.4372.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "n_steps": 8000,
+  "lr": 0.0003,
+  "lut_lr": 0.0002,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "lut_input_nap": 6,
+  "lut_tph": 1024,
+  "soft_score_temp": 0.5,
+  "select_temp": 0.5,
+  "soft_learnable_temps": true,
+  "soft_use_bf16": true,
+  "mhlut_init_std": 0.001,
+  "argmax_noise_eps": 0.0,
+  "lut_betas": [
+    0.9,
+    0.95
+  ],
+  "backward_mode": "hybrid_smooth"
+}

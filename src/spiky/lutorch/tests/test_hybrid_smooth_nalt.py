@@ -12,7 +12,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.tiny_multi_head_lut import _hybrid_smooth_kalt_fwd_autograd
+from spiky.lutorch.tiny_multi_head_lut import (
+    _hybrid_smooth_kalt_fwd_autograd,
+    _TinyMHLutHybridSmoothMemEff,
+    _TinyMHLutHybridSmoothKalt,
+    _soft_bit_matrix_msb,
+)
 
 
 # -------- Reference: explicit top-(n_alt+1) softmax forward, no shortcuts. --------
@@ -207,6 +212,167 @@ def test_eager_vs_compile(n_alt):
     assert torch.allclose(p["weights"].grad, dW_e, atol=1e-4, rtol=1e-4)
     assert torch.allclose(p["log_T_soft"].grad, dTs_e, atol=1e-4, rtol=1e-4)
     assert torch.allclose(p["log_T_sel"].grad, dTl_e, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alt", [1, 2, 3, 4])
+def test_memeff_matches_kalt(n_alt):
+    """The memory-efficient autograd.Function path produces the same forward
+    output and the same input/weight/temperature gradients as the plain autograd
+    kalt path (within fp64 numerical noise)."""
+    NAP = 4
+    p_kalt = tiny_inputs(NAP=NAP, B=4, tph=5, n_heads=2, n_outputs=3, input_dim=9,
+                          dtype=torch.float64, device=DEVICE, seed=51)
+    p_me = tiny_inputs(NAP=NAP, B=4, tph=5, n_heads=2, n_outputs=3, input_dim=9,
+                        dtype=torch.float64, device=DEVICE, seed=51)
+
+    out_k = _hybrid_smooth_kalt_fwd_autograd(
+        p_kalt["x"], p_kalt["weights"], p_kalt["log_T_soft"], p_kalt["log_T_sel"],
+        p_kalt["anchor_a"], p_kalt["anchor_b"], p_kalt["powers"],
+        p_kalt["n_heads"], p_kalt["tph"], p_kalt["table_dim"], n_alt,
+    )
+    g = torch.randn_like(out_k)
+    out_k.backward(g)
+
+    from spiky.lutorch.tiny_multi_head_lut import _soft_bit_matrix_msb
+    bit_mat = _soft_bit_matrix_msb(NAP, DEVICE, dtype=torch.float64)
+    out_m = _TinyMHLutHybridSmoothMemEff.apply(
+        p_me["x"], p_me["weights"], p_me["log_T_soft"], p_me["log_T_sel"],
+        p_me["anchor_a"], p_me["anchor_b"], p_me["powers"], bit_mat,
+        p_me["n_heads"], p_me["tph"], p_me["table_dim"], n_alt, False, False,
+    )
+    out_m.backward(g)
+
+    # Tolerances allow for torch.compile's fp32 internal accumulators in the
+    # kalt path (the memeff path is exact fp64 throughout). gradcheck on the
+    # memeff path separately confirms the math itself is accurate to fp64.
+    assert torch.allclose(out_m, out_k, atol=1e-6, rtol=1e-6), \
+        f"out diff {(out_k - out_m).abs().max().item():.3e}"
+    assert torch.allclose(p_me["x"].grad, p_kalt["x"].grad, atol=1e-5, rtol=1e-5), \
+        f"dx diff {(p_kalt['x'].grad - p_me['x'].grad).abs().max().item():.3e}"
+    assert torch.allclose(p_me["weights"].grad, p_kalt["weights"].grad,
+                          atol=1e-5, rtol=1e-5), \
+        f"dW diff {(p_kalt['weights'].grad - p_me['weights'].grad).abs().max().item():.3e}"
+    assert torch.allclose(p_me["log_T_soft"].grad, p_kalt["log_T_soft"].grad,
+                          atol=1e-5, rtol=1e-5)
+    assert torch.allclose(p_me["log_T_sel"].grad, p_kalt["log_T_sel"].grad,
+                          atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alt", [1, 2, 3, 4])
+def test_memeff_gradcheck(n_alt):
+    """gradcheck on the memory-efficient autograd.Function (fp64)."""
+    NAP = 4
+    p = tiny_inputs(NAP=NAP, B=2, tph=3, n_heads=1, n_outputs=2, input_dim=6,
+                    dtype=torch.float64, device=DEVICE, seed=77)
+
+    from spiky.lutorch.tiny_multi_head_lut import _soft_bit_matrix_msb
+    bit_mat = _soft_bit_matrix_msb(NAP, DEVICE, dtype=torch.float64)
+    def f(x, weights, log_T_soft, log_T_sel):
+        return _TinyMHLutHybridSmoothMemEff.apply(
+            x, weights, log_T_soft, log_T_sel,
+            p["anchor_a"], p["anchor_b"], p["powers"], bit_mat,
+            p["n_heads"], p["tph"], p["table_dim"], n_alt, False, False,
+        )
+
+    inputs = (p["x"], p["weights"], p["log_T_soft"], p["log_T_sel"])
+    assert torch.autograd.gradcheck(f, inputs, eps=1e-6, atol=1e-5, rtol=1e-4,
+                                    nondet_tol=1e-8)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alt", [1, 2, 3, 4])
+def test_memeff_dense_input_grad_matches_on_fwd_and_dW(n_alt):
+    """dense_input_grad=True only changes the input-gradient computation.
+    Forward output and weight gradient must be bit-identical to the self-
+    consistent path. (gradcheck on the dense path is intentionally not used —
+    the K-row soft surrogate is non-self-consistent w.r.t. the actual forward,
+    so numerical diff disagrees by design.)"""
+    NAP = 4
+    p_s = tiny_inputs(NAP=NAP, B=4, tph=5, n_heads=2, n_outputs=3, input_dim=9,
+                      dtype=torch.float64, device=DEVICE, seed=101)
+    p_d = tiny_inputs(NAP=NAP, B=4, tph=5, n_heads=2, n_outputs=3, input_dim=9,
+                      dtype=torch.float64, device=DEVICE, seed=101)
+    from spiky.lutorch.tiny_multi_head_lut import _soft_bit_matrix_msb
+    bit_mat = _soft_bit_matrix_msb(NAP, DEVICE, dtype=torch.float64)
+
+    out_s = _TinyMHLutHybridSmoothMemEff.apply(
+        p_s["x"], p_s["weights"], p_s["log_T_soft"], p_s["log_T_sel"],
+        p_s["anchor_a"], p_s["anchor_b"], p_s["powers"], bit_mat,
+        p_s["n_heads"], p_s["tph"], p_s["table_dim"], n_alt, False, False,
+    )
+    out_d = _TinyMHLutHybridSmoothMemEff.apply(
+        p_d["x"], p_d["weights"], p_d["log_T_soft"], p_d["log_T_sel"],
+        p_d["anchor_a"], p_d["anchor_b"], p_d["powers"], bit_mat,
+        p_d["n_heads"], p_d["tph"], p_d["table_dim"], n_alt, False, True,
+    )
+    assert torch.allclose(out_s, out_d, atol=1e-12, rtol=1e-12), \
+        f"forward differs between dense={False,True}: max-diff {(out_s-out_d).abs().max().item():.3e}"
+
+    g = torch.randn_like(out_s)
+    out_s.backward(g)
+    out_d.backward(g)
+
+    assert torch.allclose(p_s["weights"].grad, p_d["weights"].grad,
+                          atol=1e-12, rtol=1e-12), \
+        f"dW differs between dense flags: max-diff {(p_s['weights'].grad-p_d['weights'].grad).abs().max().item():.3e}"
+    # dx and dT's SHOULD differ — that's the whole point. Just sanity-check
+    # that both are finite and non-zero.
+    assert torch.isfinite(p_d["x"].grad).all() and p_d["x"].grad.abs().max() > 0
+    assert torch.isfinite(p_d["log_T_sel"].grad).all()
+    assert torch.isfinite(p_d["log_T_soft"].grad).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("n_alt", [1, 2, 3, 4])
+def test_kalt_manual_forward_matches_reference(n_alt):
+    """Forward output of `_TinyMHLutHybridSmoothKalt` matches the explicit
+    top-(n_alt+1) softmax reference. Same forward semantics as the autograd
+    `_hybrid_smooth_kalt_fwd_autograd` and the memeff path; only backward
+    differs (kalt uses K-row soft input grad surrogate via _soft_lut_bwd_body)."""
+    NAP = 4
+    p = tiny_inputs(NAP=NAP, B=3, tph=5, n_heads=1, n_outputs=4, input_dim=8,
+                    dtype=torch.float32, device=DEVICE, seed=88)
+    bit_mat = _soft_bit_matrix_msb(NAP, DEVICE, dtype=torch.float32)
+    out_kalt = _TinyMHLutHybridSmoothKalt.apply(
+        p["x"], p["weights"], p["log_T_soft"], p["log_T_sel"],
+        p["anchor_a"], p["anchor_b"], bit_mat, p["powers"],
+        p["n_heads"], p["tph"], p["table_dim"], n_alt, False,
+    )
+    out_ref = reference_forward(
+        p["x"], p["weights"],
+        p["log_T_soft"].exp(), p["log_T_sel"].exp(),
+        p["anchor_a"], p["anchor_b"], p["powers"],
+        p["n_heads"], p["tph"], p["table_dim"], n_alt,
+    )
+    assert torch.allclose(out_kalt, out_ref, atol=1e-5, rtol=1e-5), \
+        f"out diff {(out_kalt - out_ref).abs().max().item():.3e}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_kalt_n_alt_1_matches_legacy_hybrid_smooth():
+    """At n_alt=1, the generalised kalt manual path produces the same forward
+    output as the legacy `_TinyMHLutHybridSmooth` (sigmoid form). They use
+    different parameterisations of the same 2-row softmax, so outputs match
+    bit-for-bit when probs are computed identically."""
+    from spiky.lutorch.tiny_multi_head_lut import _TinyMHLutHybridSmooth
+    NAP = 4
+    p = tiny_inputs(NAP=NAP, B=4, tph=5, n_heads=1, n_outputs=3, input_dim=8,
+                    dtype=torch.float32, device=DEVICE, seed=123)
+    bit_mat = _soft_bit_matrix_msb(NAP, DEVICE, dtype=torch.float32)
+    out_legacy = _TinyMHLutHybridSmooth.apply(
+        p["x"], p["weights"], p["log_T_soft"], p["log_T_sel"],
+        p["anchor_a"], p["anchor_b"], bit_mat, p["powers"],
+        p["n_heads"], p["tph"], p["table_dim"], False,
+    )
+    out_kalt = _TinyMHLutHybridSmoothKalt.apply(
+        p["x"], p["weights"], p["log_T_soft"], p["log_T_sel"],
+        p["anchor_a"], p["anchor_b"], bit_mat, p["powers"],
+        p["n_heads"], p["tph"], p["table_dim"], 1, False,
+    )
+    assert torch.allclose(out_legacy, out_kalt, atol=1e-6, rtol=1e-6), \
+        f"out diff {(out_legacy - out_kalt).abs().max().item():.3e}"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
