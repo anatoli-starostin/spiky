@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp684_dual_stream",
+  "best_val_bpb": 1.4262050388968122,
+  "final_val_bpb": 1.4262050388968122,
+  "n_params": 139987248,
+  "training_time_hours": 1.118
+}
