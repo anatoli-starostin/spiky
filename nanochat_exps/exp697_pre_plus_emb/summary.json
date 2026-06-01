@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp697_pre_plus_emb",
+  "best_val_bpb": 1.4291128400611686,
+  "final_val_bpb": 1.4291128400611686,
+  "n_params": 103024948,
+  "training_time_hours": 0.844
+}

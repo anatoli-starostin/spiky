@@ -1,0 +1,9 @@
+{
+  "soft_bpb": 1.4307881416877952,
+  "hard_bpb": 1.4666843465312709,
+  "delta_bpb": 0.035896204843475665,
+  "ckpt_final_val_bpb": 1.4375321145783193,
+  "eval_steps": 50,
+  "device_batch_size": 16,
+  "context_size": 512
+}

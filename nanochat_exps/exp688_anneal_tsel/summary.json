@@ -1,0 +1,14 @@
+{
+  "exp_name": "exp688_anneal_tsel",
+  "baseline_bpb": 1.4189770675625686,
+  "final_soft_bpb": 1.450794653086564,
+  "final_hard_bpb": 1.4504917857799402,
+  "delta_hard_vs_soft": -0.0003028673066238774,
+  "delta_hard_vs_exp684_collapse": -0.002408214220059879,
+  "delta_hard_vs_exp687_scratch": -0.013808214220059734,
+  "anneal_steps": 1000,
+  "anneal_lr_scale": 0.001,
+  "anneal_t_sel_floor": 0.001,
+  "train_time_seconds": 572.322628736496,
+  "n_params": 139987248
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp696_emb_resid_lut",
+  "best_val_bpb": 1.4247366643537378,
+  "final_val_bpb": 1.4247366643537378,
+  "n_params": 100665650,
+  "training_time_hours": 0.812
+}

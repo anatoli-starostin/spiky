@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp692_out512",
+  "best_val_bpb": 1.4375321145783193,
+  "final_val_bpb": 1.4375321145783193,
+  "n_params": 111675696,
+  "training_time_hours": 0.993
+}

@@ -1,0 +1,12 @@
+{
+  "exp_name": "exp691_finetune_hard",
+  "baseline_bpb": 1.4530214363890008,
+  "final_softmode_bpb": 1.4432824739451022,
+  "final_explicit_hard_bpb": 1.443276842696761,
+  "delta_vs_baseline": -0.009744593692239789,
+  "delta_vs_exp689": -0.004623157303238923,
+  "finetune_steps": 1000,
+  "lr_scale": 0.01,
+  "train_time_seconds": 440.0343019962311,
+  "n_params": 139987248
+}

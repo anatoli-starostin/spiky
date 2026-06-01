@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp687_hard_fwd_soft_bwd",
+  "best_val_bpb": 1.4642543279386726,
+  "final_val_bpb": 1.4642543279386726,
+  "n_params": 139987248,
+  "training_time_hours": 0.882
+}
