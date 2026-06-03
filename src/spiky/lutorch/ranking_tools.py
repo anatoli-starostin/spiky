@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spiky.lutorch.wta_lookup import WTALookupFunction
 from spiky.lutorch.lut_helpers import UncertaintyMode
 
 
@@ -302,6 +301,7 @@ class RankWTAAttention(nn.Module):
         # yet safe: even BH*T*T * 1e9 ~ 8e18 stays within float32 range (~3.4e38).
         # Clamp gradient is 0 at masked positions, so no gradient flows there.
         scores_wta = scores.clamp(min=-1e9)
+        from spiky.lutorch.wta_lookup import WTALookupFunction
         winner_idx, alt_idx, alt_deltas, grad_c_winner, grad_c_alt = WTALookupFunction.apply(
             scores_wta, n_alt, uncertainty_mode_int, self._cached_batch_offset
         )
