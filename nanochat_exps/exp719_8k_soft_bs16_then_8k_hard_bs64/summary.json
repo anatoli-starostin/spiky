@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp719_8k_soft_bs16_then_8k_hard_bs64",
+  "best_val_bpb": 1.2962773900465416,
+  "final_val_bpb": 1.2962773900465416,
+  "n_params": 84937010,
+  "training_time_hours": 3.215
+}

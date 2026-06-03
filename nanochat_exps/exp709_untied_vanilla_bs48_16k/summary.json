@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp709_untied_vanilla_bs48_16k",
+  "best_val_bpb": 1.1921996487901405,
+  "final_val_bpb": 1.1921996487901405,
+  "total_params": 35792640,
+  "training_time_hours": 0.618
+}

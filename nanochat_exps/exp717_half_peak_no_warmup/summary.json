@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp717_half_peak_no_warmup",
+  "best_val_bpb": 1.2493927379501906,
+  "final_val_bpb": 1.2493927379501906,
+  "n_params": 116394290,
+  "training_time_hours": 0.971
+}

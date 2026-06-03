@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp715_exp710_soft_to_hard",
+  "best_val_bpb": 1.2512860441027662,
+  "final_val_bpb": 1.2512860441027662,
+  "n_params": 116394290,
+  "training_time_hours": 0.975
+}

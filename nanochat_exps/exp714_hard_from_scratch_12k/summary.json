@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp714_hard_from_scratch_12k",
+  "best_val_bpb": 1.4321371361010788,
+  "final_val_bpb": 1.4321371361010788,
+  "n_params": 84937010,
+  "training_time_hours": 0.9
+}

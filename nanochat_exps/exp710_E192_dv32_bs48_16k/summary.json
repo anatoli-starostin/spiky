@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp710_E192_dv32_bs48_16k",
+  "best_val_bpb": 1.2215048755368685,
+  "final_val_bpb": 1.2215048755368685,
+  "n_params": 116394290,
+  "training_time_hours": 5.486
+}

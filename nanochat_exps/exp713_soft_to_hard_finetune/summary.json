@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp713_soft_to_hard_finetune",
+  "best_val_bpb": 1.4244190576004667,
+  "final_val_bpb": 1.4244190576004667,
+  "n_params": 84937010,
+  "training_time_hours": 0.303
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp712_E384_dv64_bs48_16k",
+  "best_val_bpb": 1.2079996429744677,
+  "final_val_bpb": 1.2079996429744677,
+  "n_params": 179308850,
+  "training_time_hours": 6.663
+}

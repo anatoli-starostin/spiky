@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp709_untied_vanilla_bs48_16k",
+  "description": "Fork of exp476 (untied vanilla MinimalGPT+RoPE, bs=16 8K = 1.4143 @ 35.79M). Changes: device_batch_size 16 -> 48, n_steps 8K -> 16K, total_batch_size 8192 -> 24576 (= 48*512, grad_accum=1). Total compute = 16K * 24576 = 393M tokens (~6x exp476). Same tier as exp609 (vanilla TIED bs=96 8K = 1.1812, also 393M tokens). Provides a long-horizon UNTIED vanilla anchor for comparison against LUT-LM untied family (exp696, exp708 etc). Param count unchanged = 35.79M. All other hyperparams identical to exp476.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 16000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
