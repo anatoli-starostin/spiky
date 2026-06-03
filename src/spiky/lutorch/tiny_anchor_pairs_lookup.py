@@ -250,11 +250,7 @@ class TinyAnchorPairsLookup(nn.Module):
         n_heads: int = 1,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
-        partition_sets: Optional[list] = None,
-        partition_pair_weights: Optional[list] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
-        max_anchor_distance: Optional[int] = None,
-        local_window_starts: str = "linspace",
     ):
         super().__init__()
         if not (1 <= n_anchor_pairs <= 15):
@@ -277,12 +273,10 @@ class TinyAnchorPairsLookup(nn.Module):
         if policy not in (
             AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
             AnchorSamplingPolicy.CANONICAL_DISTINCT,
-            AnchorSamplingPolicy.CONNECTED_TRIPLETS,
-            AnchorSamplingPolicy.CONNECTED_QUADRUPLES,
         ):
             raise ValueError(
-                f"TinyAnchorPairsLookup supports CANONICAL_FULL_COVERAGE, "
-                f"CANONICAL_DISTINCT, CONNECTED_TRIPLETS, or CONNECTED_QUADRUPLES, got {policy}"
+                f"TinyAnchorPairsLookup supports CANONICAL_FULL_COVERAGE or "
+                f"CANONICAL_DISTINCT, got {policy}"
             )
         self.anchor_sampling_policy = policy
         anchor_pairs_a, anchor_pairs_b = get_balanced_anchor_pairs(
@@ -293,14 +287,7 @@ class TinyAnchorPairsLookup(nn.Module):
             random_seed=random_seed,
             policy=policy,
             n_heads=n_heads,
-            shuffle_per_head=True,
-            partition_sets=partition_sets,
-            partition_pair_weights=partition_pair_weights,
-            max_anchor_distance=max_anchor_distance,
-            local_window_starts=local_window_starts,
         )
-        self.max_anchor_distance = max_anchor_distance
-        self.local_window_starts = local_window_starts
         if input_dim > 32767:
             raise ValueError(
                 f"TinyAnchorPairsLookup requires input_dim <= 32767 (int16 limit), got {input_dim}"
