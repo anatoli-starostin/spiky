@@ -299,7 +299,10 @@ def _hybrid_smooth_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers
     main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
     alt_rows  = F.embedding(alt_flat_idx,  weights_flat).view(B, n_tables, n_outputs)
     blended = main_rows * main_w.unsqueeze(-1) + alt_rows * u.unsqueeze(-1)
-    out = blended.view(B, n_heads, tph, n_outputs).sum(dim=2)
+    # Match the hard path's contract that out.dtype == weights.dtype. Under
+    # bf16 autocast .sum() is promoted to fp32 for stability, so an explicit
+    # final cast is needed.
+    out = blended.view(B, n_heads, tph, n_outputs).sum(dim=2).to(weights.dtype)
     return out, main_index, alt_index, u
 
 
