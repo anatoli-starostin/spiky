@@ -5,6 +5,25 @@
 # 1. **Dataset** — inspect ClimbMix parquet shards, understand the train/val split
 # 2. **Tokenisation** — train a BPE tokenizer, then apply it on the fly with BOS-aligned best-fit packing
 # 3. **Training** — train a small GPT model with tqdm progress, periodic validation (bits-per-byte), and a text generation demo
+#
+# ## Prerequisites
+#
+# This notebook imports from a [nanochat](https://github.com/karpathy/nanochat)
+# checkout and expects its data + tokenizer cache to be populated. The shortest
+# path to "ready to run":
+#
+# ```bash
+# git clone https://github.com/karpathy/nanochat ~/nanochat && cd ~/nanochat
+# curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv isn't installed
+# uv venv && uv sync --extra gpu && source .venv/bin/activate
+# python -m nanochat.dataset -n 8       # download ~2B characters / 8 shards
+# python -m scripts.tok_train           # train the BPE tokenizer (vocab 32768)
+# ```
+#
+# Then start Jupyter from inside that venv (so `import nanochat` works) and
+# `cd` into your spiky checkout before opening this notebook. See
+# `examples/lutgpt/README.md` for the same instructions plus the
+# `NANOCHAT_ROOT` env var that the bare-`train.py` script uses.
 
 # %%
 import os, sys, math, time

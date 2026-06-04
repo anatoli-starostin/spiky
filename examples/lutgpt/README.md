@@ -77,18 +77,66 @@ tables (the `lut_lr=2e-4` is lower than `adam_lr=3e-4`).
 
 - A single CUDA GPU.
 - `spiky` installed in this checkout (`pip install -e .` from the repo root).
-- A [nanochat](https://github.com/karpathy/nanochat) checkout. The script
-  pulls its tokenizer, data loader, and bpb evaluator from there.
+- A [nanochat](https://github.com/karpathy/nanochat) checkout, set up as
+  below — the training script imports the tokenizer, the
+  BOS-aligned data loader, and the bits-per-byte eval helper from it.
+
+## Setting up nanochat
+
+`train.py` only uses three things from nanochat: the trained BPE tokenizer,
+the streaming ClimbMix data loader, and `evaluate_bpb`. So you don't need to
+run nanochat's full speedrun; just the data + tokenizer prep.
+
+```bash
+# 1) clone nanochat next to your spiky checkout
+git clone https://github.com/karpathy/nanochat ~/nanochat
+cd ~/nanochat
+
+# 2) install nanochat's deps with uv
+#    (nanochat pins torch==2.9.1 + a few rust BPE / dataset packages)
+curl -LsSf https://astral.sh/uv/install.sh | sh    # if uv isn't installed
+uv venv
+uv sync --extra gpu
+source .venv/bin/activate
+
+# 3) download ~8 shards of ClimbMix (~2B characters; one is the val shard).
+#    8 is enough for the lighter lutgpt recipe; download more if you scale
+#    bs / n_steps up.
+python -m nanochat.dataset -n 8
+
+# 4) train the BPE tokenizer (vocab 32768, ~2-3 min)
+python -m scripts.tok_train
+
+# 5) optional: report tokenizer compression
+python -m scripts.tok_eval
+```
+
+That populates `$HOME/.cache/nanochat/{tokenizer,base_data_climbmix}/`,
+which is where the data loader and bpb eval look (via
+`nanochat.common.get_base_dir()`). Set `NANOCHAT_BASE_DIR` if you want
+them in a different cache location.
 
 ## Running
 
+From inside the **spiky** repo (with spiky's own venv active and
+`spiky` installed editable, and the nanochat venv activated *before this
+shell* so its packages are on `PYTHONPATH` — or just run from the same
+venv with `uv pip install -e <nanochat>` for convenience):
+
 ```bash
-export NANOCHAT_ROOT=/path/to/nanochat
+export NANOCHAT_ROOT=$HOME/nanochat        # or wherever you cloned it
 python examples/lutgpt/train.py
 ```
 
 Outputs land alongside `train.py` (the script computes `EXP_DIR` from its own
-location).
+location): `loss.png`, `metrics.csv`, `summary.json`, `temperatures.csv`,
+`weight_deltas.csv`, `stdout.log`, `checkpoint.pt` (~750 MB).
+
+Smoke run before committing to the full 3 h: edit `config.json` and set
+`n_steps=8`, `bs_switch_step=4`, `hard_switch_step=4`, `eval_every=4`,
+`eval_steps=2`, `device_batch_size=4`, `device_batch_size_b=8`,
+`context_size=256`. That exercises both phases in ~70 s and confirms
+the nanochat setup is wired up.
 
 ## Math
 
