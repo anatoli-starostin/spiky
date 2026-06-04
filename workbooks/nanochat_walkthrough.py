@@ -885,16 +885,17 @@ print(f"\n{'-'*60}")
 #                                                                    unembedder -> logits
 # ```
 #
-# **Two-phase training**: `forward_mode='hybrid_smooth'` for the first half,
-# then a runtime flip to `forward_mode='hard'`. Backward is the *same* soft
-# K-row surrogate in both phases; only the forward path and the weight-grad
-# scatter change. See
+# **Single-phase demo training**: this notebook trains LUTGPT in
+# `forward_mode='hybrid_smooth'` for 8 000 steps at `bs=8` and then,
+# **after** training is finished, has one extra cell that flips every
+# LUT to `forward_mode='hard'` and re-evaluates bpb on val. That bump
+# is the cost of switching from the smooth top-2 blend to a discrete
+# single-row pick at inference time — it's what the second phase of
+# the `examples/lutgpt/` recipe pays a few thousand bs=16 hard-forward
+# steps to absorb. Backward is the *same* soft K-row surrogate
+# regardless of forward mode; see
 # [`paper/tinymhl_hybrid_smooth.tex`](../paper/tinymhl_hybrid_smooth.tex)
 # for the math.
-#
-# This notebook runs a scaled-down 4 000-step demo (2 000 + 2 000 phase A/B).
-# The publish recipe in `examples/lutgpt/` uses 16 000 steps with a wider
-# batch — switch to that for a real run.
 
 # %%
 from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
@@ -1160,46 +1161,35 @@ class LUTGPT(nn.Module):
 # ### 5a. Build the model
 
 # %%
-LUT_ITERS         = 4000
-LUT_PHASE_SWITCH  = 2000     # bs_switch_step == hard_switch_step
-LUT_EVAL_EVERY    = 200
-LUT_BS_A          = 4        # phase A device batch (hybrid_smooth)
-LUT_BS_B          = 8        # phase B device batch (hard)
+LUT_ITERS      = 8000
+LUT_EVAL_EVERY = 200
+LUT_BS         = 8         # device batch for the single hybrid_smooth phase
 
 lutgpt = LUTGPT(vocab_size=tokenizer.get_vocab_size(), seq_len=SEQ_LEN).to(DEVICE)
 lut_param_count = sum(p.numel() for p in lutgpt.parameters())
 print(f"LUTGPT params: {lut_param_count:,}")
-print(f"Two-phase schedule: hybrid_smooth bs={LUT_BS_A} for {LUT_PHASE_SWITCH} steps, "
-      f"then hard bs={LUT_BS_B} for {LUT_ITERS - LUT_PHASE_SWITCH} steps")
+print(f"Single-phase schedule: hybrid_smooth bs={LUT_BS} for {LUT_ITERS} steps")
 
-lut_optimizers = lutgpt.setup_optimizer()
-lut_train_loader_a = tokenizing_distributed_data_loader_bos_bestfit(
-    tokenizer, LUT_BS_A, SEQ_LEN, split="train", device=DEVICE,
-)
-lut_train_loader_b = tokenizing_distributed_data_loader_bos_bestfit(
-    tokenizer, LUT_BS_B, SEQ_LEN, split="train", device=DEVICE,
+lut_optimizers   = lutgpt.setup_optimizer()
+lut_train_loader = tokenizing_distributed_data_loader_bos_bestfit(
+    tokenizer, LUT_BS, SEQ_LEN, split="train", device=DEVICE,
 )
 
 # %% [markdown]
-# ### 5b. Two-phase training loop
+# ### 5b. Training loop (hybrid_smooth only)
 #
-# Phase A: `forward_mode='hybrid_smooth'`, smaller batch (`bs=4`).
-# At `LUT_PHASE_SWITCH`, flip every LUT to `forward_mode='hard'` and swap to
-# the `bs=8` data loader. The LR schedule is continuous across both phases.
+# A plain single-phase training loop. Every LUT stays in
+# `forward_mode='hybrid_smooth'` for the full 8 000 steps. After the loop
+# finishes, cell 5d below flips the forward mode to `'hard'` and
+# re-evaluates — that's where the loss bump shows up.
 
 # %%
 lut_train_losses = []
 lut_val_bpbs     = []
 lut_val_steps    = []
 
-train_loader_lut = lut_train_loader_a
 pbar = tqdm(range(1, LUT_ITERS + 1), desc="LUTGPT", unit="step")
 for step in pbar:
-    if step == LUT_PHASE_SWITCH + 1:
-        n_flipped = lutgpt.flip_to_hard_forward()
-        train_loader_lut = lut_train_loader_b
-        tqdm.write(f"  [SWITCH] step {step}: forward_mode -> 'hard' on {n_flipped} LUTs, bs -> {LUT_BS_B}")
-
     lr_scale = get_lr_scale(step, LUT_ITERS)
     for opt in lut_optimizers:
         for group in opt.param_groups:
@@ -1207,7 +1197,7 @@ for step in pbar:
 
     for opt in lut_optimizers:
         opt.zero_grad(set_to_none=True)
-    x, y = next(train_loader_lut)
+    x, y = next(lut_train_loader)
     loss = lutgpt(x, y)
     loss.backward()
     for opt in lut_optimizers:
@@ -1225,7 +1215,7 @@ for step in pbar:
         tqdm.write(f"  Step {step:04d} | train_loss={loss.item():.4f} | val_bpb={bpb:.4f}")
         lutgpt.train()
 
-print("LUTGPT training complete.")
+print("LUTGPT training complete (hybrid_smooth, single phase).")
 
 # %%
 # Comparison plot: LUTGPT vs MinimalGPT vs Nanochat GPT
@@ -1236,8 +1226,6 @@ try:
     ax.plot(val_steps,      val_bpbs,      "o-", label=f"Nanochat GPT (depth={DEPTH})")
     ax.plot(mini_val_steps, mini_val_bpbs, "s-", label=f"Minimal GPT (depth={MIN_DEPTH})")
     ax.plot(lut_val_steps,  lut_val_bpbs,  "^-", label=f"LUTGPT (E={LUT_E}, D={LUT_D}, L={LUT_N_LAYERS})")
-    ax.axvline(LUT_PHASE_SWITCH, color="grey", linestyle="--", alpha=0.5,
-               label="LUTGPT phase switch")
     ax.set(xlabel="step", ylabel="bits per byte", title="Validation BPB")
     ax.grid(True); ax.legend()
     plt.tight_layout()
@@ -1258,3 +1246,44 @@ for token_id in lutgpt.generate(prompt_ids_tensor, max_tokens=200,
                                  temperature=TEMPERATURE, top_k=TOP_K, seq_len=SEQ_LEN):
     print(tokenizer.decode([token_id]), end="", flush=True)
 print(f"\n{'-'*60}")
+
+# %% [markdown]
+# ### 5d. Switch `forward_mode='hard'` — show the loss bump
+#
+# Up to this point every `TinyMultiHeadLut` has been running in
+# `hybrid_smooth` forward: per `(sample, table)` it blends the main row
+# `b*` with the Hamming-1 neighbour `b_alt` at the least-confident
+# anchor pair, weighted by `u = sigmoid(-Delta/T_sel) ∈ (0, 0.5]`. The
+# alt-row contribution `u·W[b_alt]` is a strict expressivity bonus.
+#
+# `forward_mode='hard'` throws that bonus away — the forward becomes a
+# discrete single-row gather (`W[b*]`). The bump on val bpb measures how
+# much expressive headroom the smooth blend was contributing. The publish
+# recipe in `examples/lutgpt/` is two-phase precisely so the model can
+# adapt its weights to the discrete forward over a few thousand extra
+# bs=16 hard-forward steps; here we just show the raw bump.
+
+# %%
+# Same val data, same model weights — only forward_mode changes.
+n_luts = sum(1 for _ in lutgpt.modules() if isinstance(_, TinyMultiHeadLut))
+lutgpt.eval()
+val_loader_hyb = val_loader_factory()
+bpb_hybrid = evaluate_bpb(lutgpt, val_loader_hyb, EVAL_STEPS, token_bytes)
+
+# Flip every LUT to forward_mode='hard'.
+for mod in lutgpt.modules():
+    if isinstance(mod, TinyMultiHeadLut):
+        mod.forward_mode = "hard"
+
+val_loader_hard = val_loader_factory()
+bpb_hard = evaluate_bpb(lutgpt, val_loader_hard, EVAL_STEPS, token_bytes)
+print(f"{'forward_mode':<18s} {'val bpb':>10s}")
+print(f"{'hybrid_smooth':<18s} {bpb_hybrid:>10.4f}   (training mode, top-2 blend)")
+print(f"{'hard':<18s} {bpb_hard:>10.4f}   (single-row gather)")
+print(f"{'':<18s} {'+' + format(bpb_hard - bpb_hybrid, '.4f'):>10s}   loss bump on {n_luts} LUTs")
+
+# Optional: flip them back, so subsequent cells stay in the training
+# forward mode used above.
+for mod in lutgpt.modules():
+    if isinstance(mod, TinyMultiHeadLut):
+        mod.forward_mode = "hybrid_smooth"
