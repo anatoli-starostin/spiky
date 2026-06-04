@@ -888,7 +888,7 @@ print(f"\n{'-'*60}")
 # the `examples/lutgpt/` recipe pays a few thousand bs=16 hard-forward
 # steps to absorb. Backward is the *same* soft K-row surrogate
 # regardless of forward mode; see
-# [`paper/tinymhl_hybrid_smooth.tex`](../paper/tinymhl_hybrid_smooth.tex)
+# [`doc/lutorch/tinymultiheadlut.pdf`](../doc/lutorch/tinymultiheadlut.pdf)
 # for the math.
 
 # %%

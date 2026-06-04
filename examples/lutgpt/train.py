@@ -29,7 +29,7 @@ Two-phase training:
     batch. The forward blends each LUT's top-2 rows so gradients are dense.
   - phase B (steps bs_switch_step+1..N): forward_mode='hard', larger batch.
     Forward is the discrete sign-pack lookup. Backward stays soft in both
-    phases (see paper/tinymhl_hybrid_smooth.tex).
+    phases (see doc/lutorch/tinymultiheadlut.pdf).
 
 Requires nanochat (https://github.com/karpathy/nanochat) for the tokenizer,
 data loader and bpb eval — point NANOCHAT_ROOT at a local checkout before
