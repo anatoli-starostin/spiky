@@ -87,6 +87,7 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 @torch.compile
 def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel,
+                        accum_dtype: torch.dtype,
                         compute_weight_grad: bool = True):
     """Soft backward pinned to the actually-chosen index.
 
@@ -137,8 +138,12 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     if compute_weight_grad:
         flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
         flat_idx    = (index + flat_offset[None, :]).reshape(-1)
-        grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=w_dtype, device=weights.device)
-        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(w_dtype))
+        # Accumulate in accum_dtype (= bf16 under autocast) regardless of
+        # weights.dtype; caller casts back to weights.dtype at the autograd
+        # boundary. Keeps the K-row index_add bandwidth-light when weights
+        # are fp32 master copies.
+        grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
+        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
         grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
     else:
         grad_weights = None
@@ -192,13 +197,17 @@ class _TinyMHLutSoft(torch.autograd.Function):
         n_tables = anchor_a_long.shape[0]
         n_outputs = weights.shape[2]
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+        # Hard mode's weight grad is a 1-row index_add into a tiny [n_tables*K,
+        # n_outputs] tensor; the bandwidth win from accumulating in bf16
+        # doesn't pay for the [B, n_tables, n_outputs] grad_pt cast. Stick to
+        # weights.dtype here.
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
         with autocast_ctx:
             grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                index, T_soft, T_sel,
+                index, T_soft, T_sel, weights.dtype,
             )
         # 12 forward inputs -> 12 grad returns.
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
@@ -211,7 +220,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
 
 @torch.compile
 def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
-                               n_tables, K, n_outputs, w_dtype):
+                               n_tables, K, n_outputs, accum_dtype):
     """2-row weight gradient for hybrid_smooth backward.
 
     Builds a per-(b, t) "selection mass" S of shape [B, n_tables, K] by
@@ -219,14 +228,19 @@ def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
     dW[t, k, o] = sum_b S[b, t, k] * grad_pt[b, t, o]
     in a single B-reducing einsum (cuBLAS bmm). Avoids the atomicAdd
     contention of a flat global index_add on hot K-row destinations.
+
+    Returns the grad in accum_dtype (= bf16 under autocast); the caller
+    casts back to weights.dtype at the autograd boundary. F.embedding in
+    the forward doesn't autocast, so grad_pt's dtype tracks weights.dtype
+    rather than the autocast policy — we must pass accum_dtype explicitly.
     """
     B = grad_pt.shape[0]
     all_idx  = torch.stack([main_index, alt_index], dim=-1)
-    weights2 = torch.stack([(1.0 - u).to(w_dtype),
-                             u.to(w_dtype)], dim=-1)
-    S = torch.zeros(B, n_tables, K, dtype=w_dtype, device=grad_pt.device)
+    weights2 = torch.stack([(1.0 - u).to(accum_dtype),
+                             u.to(accum_dtype)], dim=-1)
+    S = torch.zeros(B, n_tables, K, dtype=accum_dtype, device=grad_pt.device)
     S.scatter_add_(-1, all_idx, weights2)
-    return torch.einsum('btk,bto->tko', S, grad_pt.to(w_dtype))
+    return torch.einsum('btk,bto->tko', S, grad_pt.to(accum_dtype))
 
 
 @torch.compile
@@ -310,25 +324,28 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
         n_tables = anchor_a_long.shape[0]
         n_outputs = weights.shape[2]
         K = bit_matrix.shape[1]
-        w_dtype = weights.dtype
 
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+        # The 2-row weight grad runs over a huge [B, n_tables, K] selection
+        # mass S; allocating + scattering S in bf16 saves a large amount of
+        # HBM bandwidth, so force bf16 here even with fp32 master weights.
+        wg_accum_dtype = torch.bfloat16 if (ctx.use_bf16 and x.is_cuda) else weights.dtype
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
         with autocast_ctx:
             # Soft backward gives us grad_x and the temperature grads; we
-            # discard its 1-row weight grad and overwrite with the 2-row
-            # hybrid scatter below.
+            # discard its 1-row weight grad (its compute_weight_grad=False
+            # makes the accum_dtype passed here a no-op).
             grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                main_index, T_soft, T_sel,
+                main_index, T_soft, T_sel, weights.dtype,
                 compute_weight_grad=False,
             )
 
         grad_weights = _hybrid_smooth_weight_grad(
-            grad_pt, main_index, alt_index, u, n_tables, K, n_outputs, w_dtype,
-        )
+            grad_pt, main_index, alt_index, u, n_tables, K, n_outputs, wg_accum_dtype,
+        ).to(weights.dtype)
 
         # 12 forward inputs -> 12 grad returns.
         return (grad_x, grad_weights, grad_log_Ts, grad_log_Tx,
@@ -357,11 +374,13 @@ class TinyMultiHeadLut(nn.Module):
             at runtime (e.g. soft -> hard finetune) by setting
             `module.forward_mode = "hard"`.
         weight_dtype: storage dtype for the LUT weights. Default
-            torch.bfloat16 saves ~2x memory; pass torch.float32 for
-            fp32 master weights.
+            torch.float32 (training-friendly: keeps an fp32 master copy
+            and an fp32 .grad for the optimiser). Pass torch.bfloat16 for
+            inference / smaller checkpoints.
         use_bf16: wrap forward and backward in bf16 autocast on CUDA when
-            True. Independent of weight_dtype (you can keep fp32 master
-            weights and still compute in bf16).
+            True. Independent of weight_dtype: with the default fp32
+            weights + use_bf16=True, forward and weight-grad accumulation
+            run in bf16 and only the final .grad is cast back to fp32.
         anchor_sampling_policy: how anchor pairs are drawn. Default
             AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE.
         soft_score_temp: T_soft (per-anchor sign sharpness).
@@ -388,7 +407,7 @@ class TinyMultiHeadLut(nn.Module):
         tables_per_head: int = 1,
         *,
         forward_mode: str = "hard",
-        weight_dtype: torch.dtype = torch.bfloat16,
+        weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = True,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         soft_score_temp: float = 0.5,
