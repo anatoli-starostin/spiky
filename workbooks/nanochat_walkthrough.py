@@ -614,11 +614,45 @@ print(f"\nGenerated {len(generated)} tokens.")
 # ---
 # ## Part 4 — Minimal GPT (vanilla baseline)
 #
-# The same experiment with all optimisations stripped out.
-# Vanilla GPT-2 style: learned positional embeddings, standard SDPA, LayerNorm, GELU, AdamW.
-# No RoPE, no QK-Norm, no sliding window, no value residual, no smear, no backout, no softcap.
+# The same experiment with the LM-specific bells stripped out.
+# Vanilla GPT-2 style attention + MLP block, **untied** unembedder
+# (`head` is its own matrix, not weight-tied to `tok_emb`).
+# Standard half-rotation **RoPE** on `(q, k)` (no learned positional embedding).
+# No QK-Norm, no sliding window, no value residual, no smear, no backout, no softcap.
+#
+# Mirrors `nanochat_exps/exp709_untied_vanilla_bs48_16k/` from the
+# `feature/lutorch-calibrate-output-normalize-weights` branch.
 
 # %%
+class _RoPE(nn.Module):
+    """Standard half-rotation RoPE buffers used by both MinimalGPT (here) and
+    LUTGPT (Part 5). cos/sin shape: [seq_len, head_dim].
+    """
+    def __init__(self, head_dim, max_seq_len, base=10000.0, device=None):
+        super().__init__()
+        if head_dim % 2 != 0:
+            raise ValueError(f"head_dim must be even for RoPE, got {head_dim}")
+        inv_freq = 1.0 / (base ** (
+            torch.arange(0, head_dim, 2, dtype=torch.float32, device=device) / head_dim))
+        t     = torch.arange(max_seq_len, device=device, dtype=torch.float32)
+        freqs = torch.outer(t, inv_freq)
+        emb   = torch.cat([freqs, freqs], dim=-1)
+        self.register_buffer("cos", emb.cos(), persistent=False)
+        self.register_buffer("sin", emb.sin(), persistent=False)
+
+
+def _rotate_half(x):
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat([-x2, x1], dim=-1)
+
+
+def _apply_rope(q, k, cos, sin):
+    cos = cos[None, None, :, :]
+    sin = sin[None, None, :, :]
+    return (q * cos + _rotate_half(q) * sin,
+            k * cos + _rotate_half(k) * sin)
+
+
 class MinimalAttention(nn.Module):
     def __init__(self, n_embd, n_head):
         super().__init__()
@@ -626,12 +660,13 @@ class MinimalAttention(nn.Module):
         self.qkv  = nn.Linear(n_embd, 3 * n_embd, bias=False)
         self.proj = nn.Linear(n_embd, n_embd, bias=False)
 
-    def forward(self, x):
+    def forward(self, x, cos, sin):
         B, T, C = x.size()
         q, k, v = self.qkv(x).split(C, dim=2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q, k = _apply_rope(q, k, cos[:T], sin[:T])
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 
@@ -648,8 +683,8 @@ class MinimalBlock(nn.Module):
             nn.Linear(4 * n_embd, n_embd, bias=False),
         )
 
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
+    def forward(self, x, cos, sin):
+        x = x + self.attn(self.ln1(x), cos, sin)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -658,14 +693,14 @@ class MinimalGPT(nn.Module):
     def __init__(self, vocab_size, n_embd, n_head, n_layer, seq_len):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
-        self.pos_emb = nn.Embedding(seq_len, n_embd)
+        head_dim = n_embd // n_head
+        self.rope    = _RoPE(head_dim, max_seq_len=seq_len)
         self.blocks  = nn.ModuleList([MinimalBlock(n_embd, n_head) for _ in range(n_layer)])
         self.ln_f    = nn.LayerNorm(n_embd)
+        # UNTIED unembedder: `head` is its own matrix, not weight-tied to tok_emb.
         self.head    = nn.Linear(n_embd, vocab_size, bias=False)
-        # weight tying
-        self.head.weight = self.tok_emb.weight
         self.apply(self._init_weights)
-        # Zero-init output projections so residual branches start as identity
+        # Zero-init output projections so residual branches start as identity.
         for block in self.blocks:
             nn.init.zeros_(block.attn.proj.weight)
             nn.init.zeros_(block.mlp[-1].weight)
@@ -693,10 +728,9 @@ class MinimalGPT(nn.Module):
 
     def forward(self, idx, targets=None, loss_reduction='mean'):
         B, T = idx.size()
-        pos = torch.arange(T, device=idx.device)
-        x = self.tok_emb(idx) + self.pos_emb(pos)
+        x = self.tok_emb(idx)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, self.rope.cos, self.rope.sin)
         logits = self.head(self.ln_f(x))
         if targets is not None:
             return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
