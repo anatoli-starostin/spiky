@@ -5,25 +5,6 @@
 # 1. **Dataset** — inspect ClimbMix parquet shards, understand the train/val split
 # 2. **Tokenisation** — train a BPE tokenizer, then apply it on the fly with BOS-aligned best-fit packing
 # 3. **Training** — train a small GPT model with tqdm progress, periodic validation (bits-per-byte), and a text generation demo
-#
-# ## Prerequisites
-#
-# This notebook imports from a [nanochat](https://github.com/karpathy/nanochat)
-# checkout and expects its data + tokenizer cache to be populated. The shortest
-# path to "ready to run":
-#
-# ```bash
-# git clone https://github.com/karpathy/nanochat ~/nanochat && cd ~/nanochat
-# curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv isn't installed
-# uv venv && uv sync --extra gpu && source .venv/bin/activate
-# python -m nanochat.dataset -n 8       # download ~2B characters / 8 shards
-# python -m scripts.tok_train           # train the BPE tokenizer (vocab 32768)
-# ```
-#
-# Then start Jupyter from inside that venv (so `import nanochat` works) and
-# `cd` into your spiky checkout before opening this notebook. See
-# `examples/lutgpt/README.md` for the same instructions plus the
-# `NANOCHAT_ROOT` env var that the bare-`train.py` script uses.
 
 # %%
 import os, sys, math, time
@@ -926,9 +907,9 @@ LUT_ROPE_BASE     = 10000.0
 # Per-LUT (NAP, tables_per_head). NAP=k means each table has K = 2^k rows.
 LUT_QK_NAP   = 4;  LUT_QK_TPH   = 256
 LUT_V_NAP    = 6;  LUT_V_TPH    = 256
-LUT_OUT_NAP  = 6;  LUT_OUT_TPH  = 512
-LUT_RES_NAP  = 5;  LUT_RES_TPH  = 256
-LUT_EMB_NAP  = 5;  LUT_EMB_TPH  = 256
+LUT_OUT_NAP  = 7;  LUT_OUT_TPH  = 512
+LUT_RES_NAP  = 6;  LUT_RES_TPH  = 256
+LUT_EMB_NAP  = 6;  LUT_EMB_TPH  = 256
 
 # Common kwargs for every TinyMultiHeadLut in the model.
 _LUT_KWARGS = dict(
@@ -1300,3 +1281,90 @@ print(f"{'':<18s} {'+' + format(bpb_hard - bpb_hybrid, '.4f'):>10s}   loss bump 
 for mod in lutgpt.modules():
     if isinstance(mod, TinyMultiHeadLut):
         mod.forward_mode = "hybrid_smooth"
+
+# %%
+# %% [markdown]
+# ### 5e. Bandwidth — LUTGPT vs MinimalGPT (per generated token)
+#
+# LUTGPT has roughly **6.5× more parameters** in the trunk than
+# MinimalGPT — deeper LUT tables in place of dense matmuls. But a
+# hard-forward step **only reads one row per table**:
+# `n_heads · tables_per_head · n_outputs` entries per LUT, completely
+# independent of `K = 2^NAP`. The HBM bandwidth compression per LUT is
+# **`K` to 1**: 16 for `qk_lut` (NAP=4), 64 for `v_lut` / `out_proj`
+# (NAP=6), 32 for the residual LUTs (NAP=5).
+#
+# The cell below counts trunk and trunk + I/O bytes per generated token,
+# weights only, assuming bf16 deployment. The unembedder
+# `nn.Linear(D, vocab)` is identical between the two models and dominates
+# the total — the interesting column is the **trunk**.
+
+# %%
+BYTES = 2  # bf16 deployment
+
+def _lut_fwd_bytes(n_heads, n_outputs, tph):
+    """Hard-forward HBM read for one TinyMultiHeadLut, in bytes.
+    One row of n_outputs entries per (head, table-per-head); no K factor
+    because the K rows are *gathered from*, not into. The first row's
+    gather sums into the running output via embedding_bag(mode='sum')."""
+    return n_heads * tph * n_outputs * BYTES
+
+def _lut_params(n_heads, n_outputs, NAP, tph):
+    return n_heads * tph * (1 << NAP) * n_outputs
+
+# --- LUTGPT (Part 5 hyperparams) ---------------------------------------------
+qk_p   = _lut_params(LUT_H, 2 * LUT_D_QK, LUT_QK_NAP, LUT_QK_TPH)
+v_p    = _lut_params(LUT_H, LUT_D_V,      LUT_V_NAP,  LUT_V_TPH)
+out_p  = _lut_params(1,     LUT_E,        LUT_OUT_NAP, LUT_OUT_TPH)
+res_p  = _lut_params(1,     LUT_D,        LUT_RES_NAP, LUT_RES_TPH)
+emb_p  = _lut_params(1,     LUT_D,        LUT_EMB_NAP, LUT_EMB_TPH)
+
+qk_bw  = _lut_fwd_bytes(LUT_H, 2 * LUT_D_QK, LUT_QK_TPH)
+v_bw   = _lut_fwd_bytes(LUT_H, LUT_D_V,       LUT_V_TPH)
+out_bw = _lut_fwd_bytes(1,     LUT_E,         LUT_OUT_TPH)
+res_bw = _lut_fwd_bytes(1,     LUT_D,         LUT_RES_TPH)
+emb_bw = _lut_fwd_bytes(1,     LUT_D,         LUT_EMB_TPH)
+
+lut_layer_params = qk_p + v_p + out_p + res_p
+lut_layer_bw     = qk_bw + v_bw + out_bw + res_bw
+lut_trunk_params = LUT_N_LAYERS * lut_layer_params + emb_p
+lut_trunk_bw     = LUT_N_LAYERS * lut_layer_bw     + emb_bw
+
+# --- MinimalGPT (Part 4 hyperparams) -----------------------------------------
+# 12·n_embd^2 weights per layer: 4·n_embd^2 attention (Q+K+V+O) + 8·n_embd^2 MLP
+# (up 4·n_embd^2 + down 4·n_embd^2).
+mg_layer_params  = 12 * MIN_DIM * MIN_DIM
+mg_layer_bw      = mg_layer_params * BYTES
+mg_trunk_params  = MIN_DEPTH * mg_layer_params
+mg_trunk_bw      = MIN_DEPTH * mg_layer_bw
+
+# --- Shared I/O (token embed + unembedder) -----------------------------------
+V               = tokenizer.get_vocab_size()
+lut_tokemb_bw   = LUT_E * BYTES                 # one row gather
+lut_unemb_bw    = LUT_D * V * BYTES              # read full Linear
+mg_tokemb_bw    = MIN_DIM * BYTES
+mg_unemb_bw     = MIN_DIM * V * BYTES
+
+lut_total_bw = lut_tokemb_bw + lut_trunk_bw + lut_unemb_bw
+mg_total_bw  = mg_tokemb_bw  + mg_trunk_bw  + mg_unemb_bw
+
+def MB(x): return x / (1 << 20)
+def Mp(x): return x / 1e6
+
+print(f"{'':32s}  {'MinimalGPT':>14s}  {'LUTGPT':>14s}  {'ratio':>10s}")
+print(f"{'-'*32}  {'-'*14}  {'-'*14}  {'-'*10}")
+print(f"{'trunk params':32s}  {Mp(mg_trunk_params):>12.2f} M  {Mp(lut_trunk_params):>12.2f} M  "
+      f"{lut_trunk_params/mg_trunk_params:>8.2f}x  ({'LUT has more' if lut_trunk_params>mg_trunk_params else '?'})")
+print(f"{'trunk fwd HBM / token':32s}  {MB(mg_trunk_bw):>11.2f} MB  {MB(lut_trunk_bw):>11.2f} MB  "
+      f"{mg_trunk_bw/lut_trunk_bw:>8.2f}x  (LUT reads less)")
+print()
+print(f"{'tok_emb gather / token':32s}  {MB(mg_tokemb_bw):>11.5f} MB  {MB(lut_tokemb_bw):>11.5f} MB")
+print(f"{'unembedder Linear / token':32s}  {MB(mg_unemb_bw):>11.2f} MB  {MB(lut_unemb_bw):>11.2f} MB  "
+      f"(identical Linear(D, vocab))")
+print(f"{'total fwd HBM / token':32s}  {MB(mg_total_bw):>11.2f} MB  {MB(lut_total_bw):>11.2f} MB  "
+      f"{mg_total_bw/lut_total_bw:>8.2f}x")
+print()
+print(f"LUTGPT trunk: {Mp(lut_trunk_params)/Mp(mg_trunk_params):.1f}x the parameters, "
+      f"{mg_trunk_bw/lut_trunk_bw:.1f}x less HBM bandwidth per generated token.")
+print(f"Compression factor (params per byte of fwd traffic): "
+      f"{(lut_trunk_params/lut_trunk_bw) / (mg_trunk_params/mg_trunk_bw):.1f}x larger for LUTGPT.")
