@@ -27,8 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spiky.lutorch.tiny_anchor_pairs_lookup import TinyAnchorPairsLookup
-from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 
 
 # =============================================================================
@@ -366,7 +365,7 @@ class TinyMultiHeadLut(nn.Module):
     """Multi-head LUT primitive used by LUTGPT.
 
     Args:
-        input_dim: dimension of x (must be <= 32767, int16 anchor range).
+        input_dim: dimension of x.
         n_heads: number of output heads.
         n_outputs: per-head output dimension.
         n_anchor_pairs: per-table anchor pairs (NAP), in [1, 15]. Each table
@@ -425,13 +424,8 @@ class TinyMultiHeadLut(nn.Module):
             )
         if not (1 <= n_anchor_pairs <= 15):
             raise ValueError(
-                f"n_anchor_pairs must be in [1, 15] (int16 lookup range), "
+                f"n_anchor_pairs must be in [1, 15] (K = 2^NAP rows per table), "
                 f"got {n_anchor_pairs}"
-            )
-        if input_dim > 32767:
-            raise ValueError(
-                f"input_dim must be <= 32767 (int16 anchor index range), "
-                f"got {input_dim}"
             )
 
         self.input_dim = input_dim
@@ -452,17 +446,26 @@ class TinyMultiHeadLut(nn.Module):
             if anchor_sampling_policy is not None
             else AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
         )
-        self.lookup = TinyAnchorPairsLookup(
-            input_dim=input_dim,
-            n_tables=n_lookup_tables,
-            n_anchor_pairs=n_anchor_pairs,
-            n_heads=n_heads,
-            random_seed=random_seed,
-            device=device,
-            anchor_sampling_policy=policy,
-        )
+        if policy not in (
+            AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+            AnchorSamplingPolicy.CANONICAL_DISTINCT,
+        ):
+            raise ValueError(
+                f"anchor_sampling_policy must be CANONICAL_FULL_COVERAGE or "
+                f"CANONICAL_DISTINCT, got {policy}"
+            )
+        self.anchor_sampling_policy = policy
 
         dev = device or torch.device("cpu")
+        anchor_a_long, anchor_b_long = get_balanced_anchor_pairs(
+            n_tables=n_lookup_tables,
+            n_anchor_pairs=n_anchor_pairs,
+            input_dim=input_dim,
+            device=dev,
+            random_seed=random_seed,
+            policy=policy,
+            n_heads=n_heads,
+        )
         rng_kwargs: dict = {"device": dev}
         if random_seed is not None:
             rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
@@ -478,15 +481,9 @@ class TinyMultiHeadLut(nn.Module):
             _soft_bit_matrix_msb(n_anchor_pairs, dev, dtype=torch.float32),
         )
         self.register_buffer("soft_powers", _msb_powers(n_anchor_pairs, dev))
-        # Anchor pairs as int64 — cast once, reused by forward and backward.
-        self.register_buffer(
-            "soft_anchor_a_long",
-            self.lookup.anchor_pairs_a.long().contiguous(),
-        )
-        self.register_buffer(
-            "soft_anchor_b_long",
-            self.lookup.anchor_pairs_b.long().contiguous(),
-        )
+        # Anchor pairs as int64; reused by forward and backward.
+        self.register_buffer("soft_anchor_a_long", anchor_a_long.contiguous())
+        self.register_buffer("soft_anchor_b_long", anchor_b_long.contiguous())
 
         # log-parametrise the temperatures so unconstrained optimisation
         # keeps T positive.
