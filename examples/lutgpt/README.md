@@ -1,9 +1,13 @@
 # LUTGPT
 
-A small (84.9 M params) transformer where every attention projection and
-per-layer residual is a `TinyMultiHeadLut` table instead of a dense matmul.
-The forward pass is a sign-pack lookup (no dot product); the backward pass
-uses a soft surrogate over the full K-row neighborhood. See
+A small (84.9 M params) transformer where every attention projection
+(Q / K / V / out) and every per-layer residual is a `TinyMultiHeadLut`
+table instead of a dense matmul — those LUT forwards are sign-pack
+lookups, no dot product. The other matmuls that any transformer needs
+are still there: the token-embedding gather, the scaled-dot-product
+attention itself (`Q·Kᵀ`, `softmax(...)·V`), and the unembedder
+`nn.Linear(D, vocab_size)`. Backward through every LUT uses a soft
+surrogate over the full K-row neighborhood; see
 [`../../paper/tinymhl_hybrid_smooth.tex`](../../paper/tinymhl_hybrid_smooth.tex)
 for the math.
 

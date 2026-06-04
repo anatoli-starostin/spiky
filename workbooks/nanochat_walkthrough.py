@@ -815,9 +815,13 @@ print(f"\n{'-'*60}")
 #
 # Tiny LUT-language-model from
 # [`examples/lutgpt/`](../examples/lutgpt/), 84.94 M parameters.
-# Every attention projection and every per-layer residual is a
-# `TinyMultiHeadLut` table — there are no dense matmuls in the network outside
-# the token embedding and the unembedder.
+# Every attention **projection** and every per-layer **residual** is a
+# `TinyMultiHeadLut` table — the Q / K / V / out projections and the two
+# residual contributions per layer are all sign-pack lookups, no dense
+# matmul. The matmuls that remain are the standard ones we don't try to
+# replace: the token-embedding gather, the
+# `scaled_dot_product_attention` itself (`Q·Kᵀ` then `softmax(...)·V`),
+# and the final `unembedder = nn.Linear(D, vocab_size)`.
 #
 # **Dual residual streams**:
 #  * **E-stream** (width `E = 96`) carries the attention working state;

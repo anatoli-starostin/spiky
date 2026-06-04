@@ -1,5 +1,8 @@
-"""LUTGPT: a small transformer whose attention projections and per-layer
-residuals are TinyMultiHeadLut tables instead of dense matmuls.
+"""LUTGPT: a small transformer whose attention projections (Q / K / V / out)
+and per-layer residuals are TinyMultiHeadLut tables instead of dense
+matmuls. The other matmuls a transformer needs are still here: the
+token-embedding gather, scaled_dot_product_attention itself, and the final
+unembedder Linear.
 
 Architecture (E = embedding_dim, D = residual_dim, H = n_heads):
 
