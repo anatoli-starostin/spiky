@@ -80,25 +80,6 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
     return out_flat.view(B, n_heads, n_outputs), index
 
 
-def _embedding_bag_forward(weights: torch.Tensor, lookup_indices: torch.Tensor,
-                           n_heads: int, tph: int) -> torch.Tensor:
-    """Eval shortcut for hard mode: same gather+sum as the autograd Function,
-    but skips the index-recompute path so eval doesn't pay it."""
-    B, n_lookup_tables = lookup_indices.shape
-    table_dim = weights.shape[1]
-    n_outputs = weights.shape[2]
-    weights_flat = weights.view(n_lookup_tables * table_dim, n_outputs)
-    table_offset = (
-        torch.arange(n_lookup_tables, device=weights.device, dtype=lookup_indices.dtype)
-        * table_dim
-    )
-    flat_indices = (lookup_indices + table_offset.view(1, -1)).reshape(-1)
-    n_bags = B * n_heads
-    offsets = torch.arange(n_bags, device=weights.device, dtype=torch.long) * tph
-    out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
-    return out_flat.view(B, n_heads, n_outputs)
-
-
 # =============================================================================
 # Shared soft backward (used by both hard and hybrid_smooth forward modes)
 # =============================================================================
@@ -521,13 +502,20 @@ class TinyMultiHeadLut(nn.Module):
             )
         # forward_mode == "hard"
         if not torch.is_grad_enabled():
-            # Eval shortcut: skip the autograd Function and its index recompute.
-            d = x[:, self.soft_anchor_a_long] - x[:, self.soft_anchor_b_long]
-            bits = (d > 0).to(torch.int64)
-            index = (bits * self.soft_powers.view(1, 1, -1)).sum(dim=-1)
-            return _embedding_bag_forward(
-                self.weights, index, self.n_heads, self.tables_per_head,
+            # Eval: reuse the compiled forward body and drop the index.
+            autocast_ctx = (
+                torch.amp.autocast("cuda", dtype=torch.bfloat16)
+                if self.use_bf16 and x.is_cuda
+                else torch.amp.autocast("cpu", enabled=False)
             )
+            with autocast_ctx:
+                out, _ = _soft_lut_fwd_body(
+                    x, self.weights,
+                    self.soft_anchor_a_long, self.soft_anchor_b_long,
+                    self.soft_powers,
+                    self.n_heads, self.tables_per_head, self.table_dim,
+                )
+            return out
         return _TinyMHLutSoft.apply(
             x, self.weights, self.log_soft_score_temp, self.log_select_temp,
             self.soft_anchor_a_long, self.soft_anchor_b_long,
