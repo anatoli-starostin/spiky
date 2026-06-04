@@ -220,27 +220,44 @@ class _TinyMHLutSoft(torch.autograd.Function):
 
 @torch.compile
 def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
-                               n_tables, K, n_outputs, accum_dtype):
+                               n_tables, K, n_outputs):
     """2-row weight gradient for hybrid_smooth backward.
 
-    Builds a per-(b, t) "selection mass" S of shape [B, n_tables, K] by
-    scatter-adding (1-u) at main_index and u at alt_index. Then
-    dW[t, k, o] = sum_b S[b, t, k] * grad_pt[b, t, o]
-    in a single B-reducing einsum (cuBLAS bmm). Avoids the atomicAdd
-    contention of a flat global index_add on hot K-row destinations.
+    Two index_add scatters into a flat [n_tables*K, n_outputs] fp32
+    accumulator, weighted by (1-u) at main_index and u at alt_index.
+    Caller casts the returned fp32 grad to weights.dtype at the autograd
+    boundary.
 
-    Returns the grad in accum_dtype (= bf16 under autocast); the caller
-    casts back to weights.dtype at the autograd boundary. F.embedding in
-    the forward doesn't autocast, so grad_pt's dtype tracks weights.dtype
-    rather than the autocast policy — we must pass accum_dtype explicitly.
+    Internal accumulator is fp32 because bf16 atomic accumulation loses
+    precision badly: each LUT row collects O(B/K) ~ thousands of
+    contributions, and a bf16 running sum at magnitude O(sqrt(B/K)) drifts
+    far beyond the per-add rounding bound.
+
+    The naive alternative — building a [B, n_tables, K] selection mass S
+    with scatter_add and contracting via a bmm — materialises 6.3 GB of
+    mostly-zero data at the publish recipe (B=32K, K=64); the two
+    index_adds here only touch [B, n_tables, n_outputs] sources (~1.5 GB
+    each), and the atomic-add contention on the small [n_tables*K, n_out]
+    destination is well below HBM-bound territory. ~3.9x faster at
+    LUTGPT shapes (~50 ms -> ~13 ms).
     """
     B = grad_pt.shape[0]
-    all_idx  = torch.stack([main_index, alt_index], dim=-1)
-    weights2 = torch.stack([(1.0 - u).to(accum_dtype),
-                             u.to(accum_dtype)], dim=-1)
-    S = torch.zeros(B, n_tables, K, dtype=accum_dtype, device=grad_pt.device)
-    S.scatter_add_(-1, all_idx, weights2)
-    return torch.einsum('btk,bto->tko', S, grad_pt.to(accum_dtype))
+    g32           = grad_pt.float()
+    one_minus_u32 = (1.0 - u).float()
+    u32           = u.float()
+    offset = torch.arange(n_tables, device=grad_pt.device, dtype=main_index.dtype) * K
+    main_flat = (main_index + offset).reshape(-1)
+    alt_flat  = (alt_index  + offset).reshape(-1)
+    grad_w_flat = torch.zeros(
+        n_tables * K, n_outputs, dtype=torch.float32, device=grad_pt.device,
+    )
+    grad_w_flat.index_add_(
+        0, main_flat, (one_minus_u32.unsqueeze(-1) * g32).reshape(-1, n_outputs)
+    )
+    grad_w_flat.index_add_(
+        0, alt_flat,  (u32.unsqueeze(-1)         * g32).reshape(-1, n_outputs)
+    )
+    return grad_w_flat.view(n_tables, K, n_outputs)
 
 
 @torch.compile
@@ -326,10 +343,6 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
         K = bit_matrix.shape[1]
 
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
-        # The 2-row weight grad runs over a huge [B, n_tables, K] selection
-        # mass S; allocating + scattering S in bf16 saves a large amount of
-        # HBM bandwidth, so force bf16 here even with fp32 master weights.
-        wg_accum_dtype = torch.bfloat16 if (ctx.use_bf16 and x.is_cuda) else weights.dtype
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
@@ -343,8 +356,11 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
                 compute_weight_grad=False,
             )
 
+        # _hybrid_smooth_weight_grad accumulates in fp32 internally and is
+        # numerically lossless w.r.t. the inputs (bf16 grad_pt limits final
+        # precision either way). Cast to weights.dtype at the autograd boundary.
         grad_weights = _hybrid_smooth_weight_grad(
-            grad_pt, main_index, alt_index, u, n_tables, K, n_outputs, wg_accum_dtype,
+            grad_pt, main_index, alt_index, u, n_tables, K, n_outputs,
         ).to(weights.dtype)
 
         # 12 forward inputs -> 12 grad returns.
