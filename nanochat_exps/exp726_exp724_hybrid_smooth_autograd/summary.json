@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp726_exp724_hybrid_smooth_autograd",
+  "best_val_bpb": 1.19969071570899,
+  "final_val_bpb": 1.19969071570899,
+  "n_params": 276826418,
+  "training_time_hours": 6.582
+}

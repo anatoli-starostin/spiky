@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp730_FastMHL_hybrid_smooth_ball",
+  "best_val_bpb_soft": 1.2115128469869112,
+  "best_val_bpb_hard": 1.281043968415778,
+  "final_val_bpb_soft": 1.2115128469869112,
+  "final_val_bpb_hard": 1.281043968415778,
+  "final_gap": 0.06953112142886675,
+  "n_params": 276826418,
+  "training_time_hours": 9.611
+}

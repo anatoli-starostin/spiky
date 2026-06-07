@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp731_FastMHL_hard_dense_K",
+  "best_val_bpb": 1.2178038465907077,
+  "final_val_bpb": 1.2178038465907077,
+  "n_params": 276826418,
+  "training_time_hours": 4.885
+}

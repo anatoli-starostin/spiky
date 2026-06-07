@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp720_pure_soft_bs96_16k",
+  "best_val_bpb": 1.2052180851339258,
+  "final_val_bpb": 1.2052180851339258,
+  "n_params": 84937010,
+  "training_time_hours": 9.885
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp721_E48_dv8_pure_soft_16k",
+  "best_val_bpb": 1.251924408638278,
+  "final_val_bpb": 1.251924408638278,
+  "n_params": 69208370,
+  "training_time_hours": 9.488
+}
