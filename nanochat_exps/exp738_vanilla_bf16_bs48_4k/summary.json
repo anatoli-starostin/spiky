@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp738_vanilla_bf16_bs48_4k",
+  "best_val_bpb": 1.3984462163431535,
+  "final_val_bpb": 1.3984462163431535,
+  "total_params": 35792640,
+  "training_time_hours": 0.1
+}

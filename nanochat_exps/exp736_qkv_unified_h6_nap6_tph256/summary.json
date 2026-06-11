@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp736_qkv_unified_h6_nap6_tph256",
+  "best_val_bpb": 1.3950393270761323,
+  "final_val_bpb": 1.3950393270761323,
+  "n_params": 333449510,
+  "training_time_hours": 1.163
+}

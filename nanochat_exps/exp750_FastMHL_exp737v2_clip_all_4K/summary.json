@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp750_FastMHL_exp737v2_clip_all_4K",
+  "best_val_bpb": 1.3863307933449842,
+  "final_val_bpb": 1.3863307933449842,
+  "n_params": 276826418,
+  "training_time_hours": 0.96
+}

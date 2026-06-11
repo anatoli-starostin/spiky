@@ -412,11 +412,23 @@ class _FastMHLutSoft(torch.autograd.Function):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
+        # Cast weights to bf16 for compute when use_bf16=True and storage is
+        # fp32. F.embedding_bag (the gather op inside _soft_lut_fwd_body) is
+        # not autocast-eligible, so without this explicit cast the gather and
+        # the downstream einsum would run at fp32 even inside autocast(bf16).
+        # Storage stays fp32; backward's accum_dtype is still weights.dtype.
+        compute_in_bf16 = use_bf16 and x.is_cuda and weights.dtype == torch.float32
+        weights_compute = weights.to(torch.bfloat16) if compute_in_bf16 else weights
         with autocast_ctx:
             out, index = _soft_lut_fwd_body(
-                x, weights, anchor_a_long, anchor_b_long, powers,
+                x, weights_compute, anchor_a_long, anchor_b_long, powers,
                 n_heads, tph, table_dim,
             )
+        # Preserve the historical convention: output dtype = weights storage
+        # dtype. When the body computed in bf16 on fp32-stored weights, cast
+        # the output back so downstream LayerNorms etc. still see fp32.
+        if compute_in_bf16:
+            out = out.to(weights.dtype)
         ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
                               bit_matrix, ball_bit_matrix, index,
                               log_T_soft, log_T_sel, powers)
@@ -441,28 +453,34 @@ class _FastMHLutSoft(torch.autograd.Function):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
-        # Weight-grad H phase: dispatch on per-head n_outputs >= 128.
-        # bmm wins at out_proj/residual_lut/qk_lut (n_out>=128); index_add
-        # remains tied at v_lut shape (n_out=64) where the [B, n_tables, K]
-        # one-hot S tensor cancels the atomic-scatter savings. Same threshold
-        # as the hybrid_smooth forward dispatch (tensor-core efficiency crossover).
-        use_bmm_wgrad = n_outputs >= 128
+        # Mirror the forward's compute-dtype cast: pass bf16 weights to the
+        # body when use_bf16=True and storage is fp32, so the body's einsum
+        # runs at bf16 just like the forward gather. accum_dtype is still
+        # weights.dtype (= fp32 here), so grad_w is accumulated at fp32.
+        compute_in_bf16 = ctx.use_bf16 and x.is_cuda and weights.dtype == torch.float32
+        weights_compute = weights.to(torch.bfloat16) if compute_in_bf16 else weights
+        # Weight-grad H phase: always use the sparse-S + bmm path. Wins at
+        # out_proj/residual_lut/qk_lut (n_out>=128) by ~30-40% over atomic-add
+        # scatter; ties at v_lut shape (n_out=64) under fp32 weights; strictly
+        # faster (~28%) under bf16 weights where atomic-add scatter is slow.
+        # Removing the dispatch simplifies the code path at no measured cost.
+        use_bmm_wgrad = True
         with autocast_ctx:
             if ctx.backward_mode == "ball":
                 grad_x, grad_w, grad_log_Ts, grad_log_Tx = _ball_lut_bwd_body(
-                    grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                    grad_pt, x, weights_compute, anchor_a_long, anchor_b_long,
                     ball_bit_matrix, powers, index, T_soft, T_sel, weights.dtype,
                     wgrad_via_bmm=use_bmm_wgrad,
                 )
             elif ctx.backward_mode == "ball_gather":
                 grad_x, grad_w, grad_log_Ts, grad_log_Tx = _ball_gather_lut_bwd_body(
-                    grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                    grad_pt, x, weights_compute, anchor_a_long, anchor_b_long,
                     ball_bit_matrix, powers, index, T_soft, T_sel, weights.dtype,
                     wgrad_via_bmm=use_bmm_wgrad,
                 )
             else:
                 grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
-                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    grad_pt, x, weights_compute, anchor_a_long, anchor_b_long, bit_matrix,
                     index, T_soft, T_sel, weights.dtype,
                     wgrad_via_bmm=use_bmm_wgrad,
                 )

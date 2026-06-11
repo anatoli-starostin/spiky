@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp735_v_lut_nap7_16k",
+  "best_val_bpb": 1.2138074636018685,
+  "final_val_bpb": 1.2138074636018685,
+  "n_params": 314575154,
+  "training_time_hours": 5.529
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp739_vanilla_fp32_bs48_4k",
+  "best_val_bpb": 1.399258565890069,
+  "final_val_bpb": 1.399258565890069,
+  "total_params": 35792640,
+  "training_time_hours": 0.139
+}

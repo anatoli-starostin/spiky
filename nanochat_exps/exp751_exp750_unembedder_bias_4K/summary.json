@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp751_exp750_unembedder_bias_4K",
+  "best_val_bpb": 1.3932642167921834,
+  "final_val_bpb": 1.3932642167921834,
+  "n_params": 276859186,
+  "training_time_hours": 0.96
+}

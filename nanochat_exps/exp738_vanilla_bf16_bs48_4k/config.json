@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp738_vanilla_bf16_bs48_4k",
+  "description": "Fork of exp709 (untied vanilla MinimalGPT+RoPE, bs=48, 16K, FP32 storage+compute = 1.1922 @ 35.79M). Changes: (1) n_steps 16K -> 4K (cheap apples-to-apples comparison vs exp732/exp737 4K LUT runs at the same bs=48 budget); (2) actually apply bf16 autocast on the train forward/backward, since the existing `compute_dtype: bf16` flag was dead in exp709 (defined but never used). Fp32 master weights kept by PyTorch AdamW; only matmuls (including unembedder Linear(D, V)) run in bf16. Establishes the 4K bs=48 untied vanilla bf16 baseline for LUT-LM comparison (exp737 v2 = bf16 LUT storage + bf16 internal compute). Expected: small bpb regression vs the equivalent fp32 4K run (~5-15 mb). Wallclock ~9-10 min on H100. Note: 4K-step LR schedule shifts peak LR to step 400 vs 1600 in the 16K parent — direct val_bpb comparison to exp709@step4000 is INVALID (different schedule).",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 4000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

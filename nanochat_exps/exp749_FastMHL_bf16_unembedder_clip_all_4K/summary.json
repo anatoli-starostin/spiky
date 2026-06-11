@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp749_FastMHL_bf16_unembedder_clip_all_4K",
+  "best_val_bpb": 1.3975391189789534,
+  "final_val_bpb": 1.3975391189789534,
+  "n_params": 276826418,
+  "training_time_hours": 0.921
+}

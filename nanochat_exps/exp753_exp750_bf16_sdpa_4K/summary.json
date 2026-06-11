@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp753_exp750_bf16_sdpa_4K",
+  "best_val_bpb": 1.3938664500494724,
+  "final_val_bpb": 1.3938664500494724,
+  "n_params": 276826418,
+  "training_time_hours": 0.952
+}

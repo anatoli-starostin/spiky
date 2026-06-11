@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp734_resid_emb_resid_nap7",
+  "best_val_bpb": 1.3861568947778315,
+  "final_val_bpb": 1.3861568947778315,
+  "n_params": 358615346,
+  "training_time_hours": 1.316
+}
