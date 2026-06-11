@@ -1,5 +1,5 @@
 """LUTGPT: a small transformer whose attention projections (Q / K / V / out)
-and per-layer residuals are TinyMultiHeadLut tables instead of dense
+and per-layer residuals are FastMultiHeadLut tables instead of dense
 matmuls. The other matmuls a transformer needs are still here: the
 token-embedding gather, scaled_dot_product_attention itself, and the final
 unembedder Linear.
@@ -29,7 +29,7 @@ Two-phase training:
     batch. The forward blends each LUT's top-2 rows so gradients are dense.
   - phase B (steps bs_switch_step+1..N): forward_mode='hard', larger batch.
     Forward is the discrete sign-pack lookup. Backward stays soft in both
-    phases (see doc/lutorch/tinymultiheadlut.pdf).
+    phases (see doc/lutorch/fastmultiheadlut.pdf).
 
 Requires nanochat (https://github.com/karpathy/nanochat) for the tokenizer,
 data loader and bpb eval — point NANOCHAT_ROOT at a local checkout before
@@ -58,7 +58,7 @@ from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.loss_eval import evaluate_bpb
 
-from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
+from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -111,8 +111,16 @@ token_bytes = get_token_bytes(device=DEVICE)
 
 
 # --- LUT factories ------------------------------------------------------------
+# weight_dtype = 'bf16' halves LUT HBM bandwidth and acts as a regulariser via
+# bf16-rounded forward reads + bf16 .grad accumulation noise. On H100 (exp737v2)
+# this won -4mb bpb vs fp32, but it requires the master-Lion below (without it,
+# per-step rounding drifts loss by +5-9mb). When set to 'bf16', the recipe also
+# needs grad_clip (typically 1.0) to bound the +2-3mb noise on top of the gain.
+_WEIGHT_DTYPE = {'fp32': torch.float32, 'bf16': torch.bfloat16}[
+    cfg.get('weight_dtype', 'fp32')
+]
 _TINY_SOFT_KWARGS = dict(
-    weight_dtype=torch.float32,
+    weight_dtype=_WEIGHT_DTYPE,
     anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
     initial_weights_noise=cfg.get('mhlut_init_std', 0.001),
     forward_mode=cfg.get('forward_mode', 'hard'),
@@ -123,7 +131,7 @@ _TINY_SOFT_KWARGS = dict(
 )
 
 def _make_qk(seed_offset):
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=E, n_heads=H, n_outputs=2 * d_qk,
         n_anchor_pairs=cfg['qk_input_nap'], tables_per_head=cfg['qk_tph'],
         random_seed=cfg['random_seed'] + seed_offset, device=DEVICE,
@@ -131,7 +139,7 @@ def _make_qk(seed_offset):
     )
 
 def _make_v(seed_offset):
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=E, n_heads=H, n_outputs=d_v,
         n_anchor_pairs=cfg['v_input_nap'], tables_per_head=cfg['v_tph'],
         random_seed=cfg['random_seed'] + seed_offset, device=DEVICE,
@@ -139,7 +147,7 @@ def _make_v(seed_offset):
     )
 
 def _make_out(seed_offset):
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=H * d_v, n_heads=1, n_outputs=E,
         n_anchor_pairs=cfg['out_input_nap'], tables_per_head=cfg['out_tph'],
         random_seed=cfg['random_seed'] + seed_offset, device=DEVICE,
@@ -148,7 +156,7 @@ def _make_out(seed_offset):
 
 def _make_residual_lut(seed_offset):
     """Per-layer residual_lut: E -> D, accumulated into the D-stream."""
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=E, n_heads=1, n_outputs=D,
         n_anchor_pairs=cfg['residual_input_nap'], tables_per_head=cfg['residual_tph'],
         random_seed=cfg['random_seed'] + seed_offset, device=DEVICE,
@@ -160,7 +168,7 @@ def _make_emb_resid_lut(seed_offset):
 
     7th contribution to x_resid; bypasses the LUTBlock stack.
     """
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=E, n_heads=1, n_outputs=D,
         n_anchor_pairs=cfg['emb_resid_input_nap'], tables_per_head=cfg['emb_resid_tph'],
         random_seed=cfg['random_seed'] + seed_offset, device=DEVICE,
@@ -314,6 +322,20 @@ for name, p in model.named_parameters():
 
 
 class Lion(torch.optim.Optimizer):
+    """Lion optimizer with optional fp32 master copy for low-precision params.
+
+    Standard Lion: m <- b2*m + (1-b2)*g; update <- sign(b1*m + (1-b1)*g);
+    p <- p*(1-lr*wd) - lr*update.
+
+    For bf16/fp16 params, applying the sign-step directly to bf16 storage
+    rounds away updates smaller than half a bf16 ULP of the param magnitude.
+    Over thousands of steps this accumulates to a 5-9 mb bpb drift (observed
+    on the H100 4K runs). Mitigation: keep an fp32 master copy + fp32
+    momentum; apply the update to the master in fp32, then cast back to the
+    bf16 param so the forward still reads bf16 from HBM.
+
+    For fp32 params there is no master state and no extra memory cost.
+    """
     def __init__(self, params, lr=2e-4, betas=(0.9, 0.99), weight_decay=0.0):
         super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
     @torch.no_grad()
@@ -323,19 +345,34 @@ class Lion(torch.optim.Optimizer):
             for p in grp['params']:
                 if p.grad is None:
                     continue
-                g = p.grad
                 st = self.state[p]
+                is_low = p.dtype != torch.float32
                 if 'exp_avg' not in st:
-                    st['exp_avg'] = torch.zeros_like(p)
+                    st['exp_avg'] = torch.zeros_like(p, dtype=torch.float32)
+                    if is_low:
+                        st['master'] = p.detach().to(torch.float32).clone()
                 m = st['exp_avg']
-                if wd != 0:
-                    p.mul_(1.0 - lr * wd)
-                update = (m * b1 + g * (1.0 - b1)).sign_()
-                p.add_(update, alpha=-lr)
-                m.mul_(b2).add_(g, alpha=1.0 - b2)
+                g_f = p.grad if p.grad.dtype == torch.float32 else p.grad.to(torch.float32)
+                if is_low:
+                    master = st['master']
+                    if wd != 0:
+                        master.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    master.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
+                    p.data.copy_(master)
+                else:
+                    if wd != 0:
+                        p.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    p.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
 
 _LUT_LR  = cfg.get('lut_lr', cfg['adam_lr'])
 _LUT_OPT = cfg.get('lut_optimizer', 'adamw')
+# grad_clip = 1.0 is the H100 SOTA recipe for bf16 LUT storage (exp750).
+# Off (null/None) is the safe default for fp32 LUT storage.
+_GRAD_CLIP = cfg.get('grad_clip', None)
 
 adam_groups = [
     dict(params=decay_params,   lr=cfg['adam_lr'], betas=(0.9, 0.95), eps=1e-8,
@@ -365,10 +402,10 @@ print(
 )
 
 print(f'D=residual_dim={D}, E=embedding_dim={E}, H={H}, d_qk={d_qk}, d_v={d_v}, L={N_LAYERS}')
-print(f'qk_lut       TinyMHLut(soft, LION): in_nap={cfg["qk_input_nap"]} tph={cfg["qk_tph"]} n_out=2*d_qk={2*d_qk}')
-print(f'v_lut        TinyMHLut(soft): in_nap={cfg["v_input_nap"]} tph={cfg["v_tph"]} d_v={d_v}')
-print(f'out_proj     TinyMHLut(soft): in_nap={cfg["out_input_nap"]} tph={cfg["out_tph"]} n_out=E={E}')
-print(f'residual_lut TinyMHLut(soft) [per-layer, x{N_LAYERS}]: in_nap={cfg["residual_input_nap"]} tph={cfg["residual_tph"]} n_out=D={D}; MeanAbsNorm(E) before each')
+print(f'qk_lut       FastMHLut(soft, LION): in_nap={cfg["qk_input_nap"]} tph={cfg["qk_tph"]} n_out=2*d_qk={2*d_qk}')
+print(f'v_lut        FastMHLut(soft): in_nap={cfg["v_input_nap"]} tph={cfg["v_tph"]} d_v={d_v}')
+print(f'out_proj     FastMHLut(soft): in_nap={cfg["out_input_nap"]} tph={cfg["out_tph"]} n_out=E={E}')
+print(f'residual_lut FastMHLut(soft) [per-layer, x{N_LAYERS}]: in_nap={cfg["residual_input_nap"]} tph={cfg["residual_tph"]} n_out=D={D}; MeanAbsNorm(E) before each')
 print(f'UNTIED unembedder Linear(D={D}, V={VOCAB_SIZE}); tok_emb_E at E={E}; ln_final(D); RoPE base={_ROPE_BASE}')
 
 
@@ -450,7 +487,7 @@ def _flip_to_hard():
     """
     n = 0
     for mod in model.modules():
-        if isinstance(mod, TinyMultiHeadLut):
+        if isinstance(mod, FastMultiHeadLut):
             mod.forward_mode = 'hard'
             n += 1
     print(f'[HARD SWITCH] flipped forward_mode hybrid_smooth -> hard on {n} LUT modules')
@@ -479,6 +516,9 @@ for step in range(1, N_STEPS + 1):
         loss = model(x, targets=y)
         (loss / grad_accum).backward()
         accum_loss += loss.item() / grad_accum
+
+    if _GRAD_CLIP is not None:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), _GRAD_CLIP)
 
     for o in all_optimizers:
         o.step()

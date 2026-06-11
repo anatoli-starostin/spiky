@@ -1,4 +1,4 @@
-"""Tests for the published TinyMultiHeadLut primitive.
+"""Tests for the published FastMultiHeadLut primitive.
 
 Covers:
   - Forward shape and dtype across forward_mode in {"hard", "hybrid_smooth"}
@@ -25,7 +25,7 @@ from typing import Optional
 import pytest
 import torch
 
-from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
+from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 
 
@@ -52,8 +52,8 @@ def _make(
     soft_score_temp: float = 0.5,
     select_temp: float = 0.5,
     random_seed: int = 0,
-) -> TinyMultiHeadLut:
-    return TinyMultiHeadLut(
+) -> FastMultiHeadLut:
+    return FastMultiHeadLut(
         input_dim=input_dim,
         n_heads=n_heads,
         n_outputs=n_outputs,
@@ -145,7 +145,7 @@ def test_forward_mode_can_flip_at_runtime():
 @_cuda
 def test_invalid_forward_mode_raises():
     with pytest.raises(ValueError, match="forward_mode"):
-        TinyMultiHeadLut(
+        FastMultiHeadLut(
             input_dim=16, n_heads=1, n_outputs=4, n_anchor_pairs=4,
             tables_per_head=1, forward_mode="ste",
             device=_device(),
@@ -156,7 +156,7 @@ def test_invalid_forward_mode_raises():
 @pytest.mark.parametrize("bad_nap", [0, 16, -1])
 def test_n_anchor_pairs_out_of_range_raises(bad_nap):
     with pytest.raises(ValueError, match="n_anchor_pairs"):
-        TinyMultiHeadLut(
+        FastMultiHeadLut(
             input_dim=64, n_heads=1, n_outputs=4, n_anchor_pairs=bad_nap,
             tables_per_head=1, device=_device(),
         )
@@ -166,9 +166,9 @@ def test_n_anchor_pairs_out_of_range_raises(bad_nap):
 def test_unsupported_anchor_sampling_policy_raises():
     """The publish branch supports only CANONICAL_* policies; BALANCED is
     intentionally rejected here (it stays in lut_helpers for main-branch
-    consumers but isn't part of TinyMultiHeadLut's contract)."""
+    consumers but isn't part of FastMultiHeadLut's contract)."""
     with pytest.raises(ValueError, match="CANONICAL"):
-        TinyMultiHeadLut(
+        FastMultiHeadLut(
             input_dim=64, n_heads=1, n_outputs=4, n_anchor_pairs=4,
             tables_per_head=1, device=_device(),
             anchor_sampling_policy=AnchorSamplingPolicy.BALANCED,

@@ -147,7 +147,7 @@ print("Round-trip OK ✓")
 
 # %%
 # Build a single batch to inspect the packing
-B, T = 2, 128   # tiny sizes just to visualise
+B, T = 2, 128   # small sizes just to visualise
 loader = tokenizing_distributed_data_loader_bos_bestfit(tokenizer, B, T, split="train", device="cpu")
 x, y = next(loader)
 
@@ -841,10 +841,10 @@ print(f"\n{'-'*60}")
 # ---
 # ## Part 5 — LUTGPT (publish recipe)
 #
-# Tiny LUT-language-model from
+# Small LUT-language-model from
 # [`examples/lutgpt/`](../examples/lutgpt/), 84.94 M parameters.
 # Every attention **projection** and every per-layer **residual** is a
-# `TinyMultiHeadLut` table — the Q / K / V / out projections and the two
+# `FastMultiHeadLut` table — the Q / K / V / out projections and the two
 # residual contributions per layer are all sign-pack lookups, no dense
 # matmul. The matmuls that remain are the standard ones we don't try to
 # replace: the token-embedding gather, the
@@ -888,11 +888,11 @@ print(f"\n{'-'*60}")
 # the `examples/lutgpt/` recipe pays a few thousand bs=16 hard-forward
 # steps to absorb. Backward is the *same* soft K-row surrogate
 # regardless of forward mode; see
-# [`doc/lutorch/tinymultiheadlut.pdf`](../doc/lutorch/tinymultiheadlut.pdf)
+# [`doc/lutorch/fastmultiheadlut.pdf`](../doc/lutorch/fastmultiheadlut.pdf)
 # for the math.
 
 # %%
-from spiky.lutorch.tiny_multi_head_lut import TinyMultiHeadLut
+from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 
 # Architecture (mirrors examples/lutgpt/config.json)
@@ -911,7 +911,7 @@ LUT_OUT_NAP  = 7;  LUT_OUT_TPH  = 512
 LUT_RES_NAP  = 6;  LUT_RES_TPH  = 256
 LUT_EMB_NAP  = 6;  LUT_EMB_TPH  = 256
 
-# Common kwargs for every TinyMultiHeadLut in the model.
+# Common kwargs for every FastMultiHeadLut in the model.
 _LUT_KWARGS = dict(
     weight_dtype=torch.float32,                       # fp32 master weights
     use_bf16=True,                                    # bf16 autocast for compute
@@ -926,7 +926,7 @@ _LUT_KWARGS = dict(
 LUT_SEED = 42
 
 def _make_lut(input_dim, n_heads, n_outputs, tables_per_head, n_anchor_pairs, seed_offset):
-    return TinyMultiHeadLut(
+    return FastMultiHeadLut(
         input_dim=input_dim,
         n_heads=n_heads,
         n_outputs=n_outputs,
@@ -1110,7 +1110,7 @@ class LUTGPT(nn.Module):
         """Phase-B switch: forward_mode 'hybrid_smooth' -> 'hard' across all LUTs."""
         n = 0
         for mod in self.modules():
-            if isinstance(mod, TinyMultiHeadLut):
+            if isinstance(mod, FastMultiHeadLut):
                 mod.forward_mode = "hard"
                 n += 1
         return n
@@ -1244,7 +1244,7 @@ print(f"\n{'-'*60}")
 # %% [markdown]
 # ### 5d. Switch `forward_mode='hard'` — show the loss bump
 #
-# Up to this point every `TinyMultiHeadLut` has been running in
+# Up to this point every `FastMultiHeadLut` has been running in
 # `hybrid_smooth` forward: per `(sample, table)` it blends the main row
 # `b*` with the Hamming-1 neighbour `b_alt` at the least-confident
 # anchor pair, weighted by `u = sigmoid(-Delta/T_sel) ∈ (0, 0.5]`. The
@@ -1259,14 +1259,14 @@ print(f"\n{'-'*60}")
 
 # %%
 # Same val data, same model weights — only forward_mode changes.
-n_luts = sum(1 for _ in lutgpt.modules() if isinstance(_, TinyMultiHeadLut))
+n_luts = sum(1 for _ in lutgpt.modules() if isinstance(_, FastMultiHeadLut))
 lutgpt.eval()
 val_loader_hyb = val_loader_factory()
 bpb_hybrid = evaluate_bpb(lutgpt, val_loader_hyb, EVAL_STEPS, token_bytes)
 
 # Flip every LUT to forward_mode='hard'.
 for mod in lutgpt.modules():
-    if isinstance(mod, TinyMultiHeadLut):
+    if isinstance(mod, FastMultiHeadLut):
         mod.forward_mode = "hard"
 
 val_loader_hard = val_loader_factory()
@@ -1279,7 +1279,7 @@ print(f"{'':<18s} {'+' + format(bpb_hard - bpb_hybrid, '.4f'):>10s}   loss bump 
 # Optional: flip them back, so subsequent cells stay in the training
 # forward mode used above.
 for mod in lutgpt.modules():
-    if isinstance(mod, TinyMultiHeadLut):
+    if isinstance(mod, FastMultiHeadLut):
         mod.forward_mode = "hybrid_smooth"
 
 # %%
@@ -1303,7 +1303,7 @@ for mod in lutgpt.modules():
 BYTES = 2  # bf16 deployment
 
 def _lut_fwd_bytes(n_heads, n_outputs, tph):
-    """Hard-forward HBM read for one TinyMultiHeadLut, in bytes.
+    """Hard-forward HBM read for one FastMultiHeadLut, in bytes.
     One row of n_outputs entries per (head, table-per-head); no K factor
     because the K rows are *gathered from*, not into. The first row's
     gather sums into the running output via embedding_bag(mode='sum')."""

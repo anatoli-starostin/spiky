@@ -1,4 +1,4 @@
-"""TinyMultiHeadLut — multi-head LUT primitive for LUTGPT.
+"""FastMultiHeadLut — multi-head LUT primitive for LUTGPT.
 
 Each forward call gathers from `n_heads * tables_per_head` independent
 2^n_anchor_pairs x n_outputs lookup tables, picks one row per table from a
@@ -18,7 +18,7 @@ Backward (both modes; "always soft"):
     chosen row in "hard" mode; a 2-row scatter at main + alt in
     "hybrid_smooth" mode.
 
-See paper/tinymhl_hybrid_smooth.tex for the math.
+See doc/lutorch/fastmultiheadlut.pdf for the math.
 """
 import math
 from typing import Optional
@@ -56,7 +56,7 @@ def _msb_powers(nap: int, device) -> torch.Tensor:
 # Hard-forward body and eval shortcut
 # =============================================================================
 
-@torch.compile
+@torch.compile(dynamic=True)
 def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
                        n_heads, tph, table_dim):
     """Compiled hard forward.
@@ -84,11 +84,12 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 # Shared soft backward (used by both hard and hybrid_smooth forward modes)
 # =============================================================================
 
-@torch.compile
+@torch.compile(dynamic=True)
 def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel,
                         accum_dtype: torch.dtype,
-                        compute_weight_grad: bool = True):
+                        compute_weight_grad: bool = True,
+                        wgrad_via_bmm: bool = False):
     """Soft backward pinned to the actually-chosen index.
 
     Reconstructs p_signs from `index` so the surrogate softmax's argmax matches
@@ -98,6 +99,13 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     `compute_weight_grad=False` skips the 1-row weight scatter — used by
     hybrid_smooth backward, which supplies its own 2-row weight grad via
     `_hybrid_smooth_weight_grad`.
+
+    `wgrad_via_bmm=True` switches the weight scatter to a sparse-S + bmm
+    pattern: build a one-hot S[B, n_tables, K] in `grad_pt.dtype` (bf16 under
+    autocast), then contract S against grad_pt via einsum. Used when weights
+    are bf16 because bf16 atomic index_add is emulated/slow (e.g. +114% on
+    L40S big modules vs fp32+index_add). With fp32 weights, index_add wins
+    or ties on all measured shapes, so the caller picks index_add there.
     """
     B, n_tables_, n_outputs = grad_pt.shape
     n_tables, NAP = anchor_a_long.shape
@@ -136,15 +144,25 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     grad_log_T_soft = -(d_d * d).sum()
 
     if compute_weight_grad:
-        flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
-        flat_idx    = (index + flat_offset[None, :]).reshape(-1)
-        # Accumulate in accum_dtype (= bf16 under autocast) regardless of
-        # weights.dtype; caller casts back to weights.dtype at the autograd
-        # boundary. Keeps the K-row index_add bandwidth-light when weights
-        # are fp32 master copies.
-        grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
-        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
-        grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+        if wgrad_via_bmm:
+            # Sparse-S + bmm: one-hot at chosen index in bf16, contracted against
+            # bf16 grad_pt. cuBLAS bf16 tensor cores use fp32 accumulator
+            # internally, then write bf16 output (the source of the ~0.25 ULP
+            # precision drift vs index_add).
+            g_dtype = grad_pt.dtype
+            S = torch.zeros(B, n_tables, K, dtype=g_dtype, device=weights.device)
+            S.scatter_(2, index.unsqueeze(-1), 1.0)
+            grad_weights = torch.einsum("btk,bto->tko", S, grad_pt).to(accum_dtype)
+        else:
+            flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+            flat_idx    = (index + flat_offset[None, :]).reshape(-1)
+            # Accumulate in accum_dtype (= bf16 under autocast) regardless of
+            # weights.dtype; caller casts back to weights.dtype at the autograd
+            # boundary. Keeps the K-row index_add bandwidth-light when weights
+            # are fp32 master copies.
+            grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
+            grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
+            grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
     else:
         grad_weights = None
 
@@ -163,7 +181,7 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
 # forward_mode="hard": hard forward + soft backward
 # =============================================================================
 
-class _TinyMHLutSoft(torch.autograd.Function):
+class _FastMHLutSoft(torch.autograd.Function):
     """Hard forward (sign-pack + embedding_bag), soft backward."""
 
     @staticmethod
@@ -173,11 +191,23 @@ class _TinyMHLutSoft(torch.autograd.Function):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
+        # Cast weights to bf16 for compute when use_bf16=True and storage is
+        # fp32. F.embedding_bag (the gather op inside _soft_lut_fwd_body) is
+        # not autocast-eligible, so without this explicit cast the gather and
+        # the downstream einsum would run at fp32 even inside autocast(bf16).
+        # Storage stays fp32; backward's accum_dtype is still weights.dtype.
+        compute_in_bf16 = use_bf16 and x.is_cuda and weights.dtype == torch.float32
+        weights_compute = weights.to(torch.bfloat16) if compute_in_bf16 else weights
         with autocast_ctx:
             out, index = _soft_lut_fwd_body(
-                x, weights, anchor_a_long, anchor_b_long, powers,
+                x, weights_compute, anchor_a_long, anchor_b_long, powers,
                 n_heads, tph, table_dim,
             )
+        # Preserve the contract that output dtype == weights storage dtype.
+        # When the body computed in bf16 on fp32-stored weights, cast back so
+        # downstream LayerNorms etc. still see fp32.
+        if compute_in_bf16:
+            out = out.to(weights.dtype)
         ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
                               bit_matrix, index, log_T_soft, log_T_sel, powers)
         ctx.n_heads = n_heads
@@ -197,17 +227,19 @@ class _TinyMHLutSoft(torch.autograd.Function):
         n_tables = anchor_a_long.shape[0]
         n_outputs = weights.shape[2]
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
-        # Hard mode's weight grad is a 1-row index_add into a tiny [n_tables*K,
-        # n_outputs] tensor; the bandwidth win from accumulating in bf16
-        # doesn't pay for the [B, n_tables, n_outputs] grad_pt cast. Stick to
-        # weights.dtype here.
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
+        # Weight-grad backend is determined by storage dtype: bf16 weights must
+        # use the sparse-S + bmm path (atomic index_add on bf16 is emulated and
+        # ~2x slower than fp32 baseline), fp32 weights use index_add (wins or
+        # ties on all measured shapes — see scratch benches in this repo).
+        wgrad_via_bmm = weights.dtype != torch.float32
         with autocast_ctx:
             grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 index, T_soft, T_sel, weights.dtype,
+                wgrad_via_bmm=wgrad_via_bmm,
             )
         # 12 forward inputs -> 12 grad returns.
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
@@ -218,7 +250,7 @@ class _TinyMHLutSoft(torch.autograd.Function):
 # forward_mode="hybrid_smooth": top-2 smooth forward + soft backward
 # =============================================================================
 
-@torch.compile
+@torch.compile(dynamic=True)
 def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
                                n_tables, K, n_outputs):
     """2-row weight gradient for hybrid_smooth backward.
@@ -260,16 +292,22 @@ def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
     return grad_w_flat.view(n_tables, K, n_outputs)
 
 
-@torch.compile
-def _hybrid_smooth_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
-                                 T_soft, T_sel, n_heads, tph, table_dim):
-    """Smooth top-2 forward: blend main row and Hamming-1 alt at the
-    least-confident anchor pair.
+@torch.compile(dynamic=True)
+def _hybrid_smooth_fwd_gather(x, weights, anchor_a_long, anchor_b_long, powers,
+                               T_soft, T_sel, n_heads, tph, table_dim):
+    """Smooth top-2 forward via two F.embedding gathers + blend.
 
       main = sign-pack of (x_a > x_b).
       alt  = main with the bit at argmin |d| flipped.
       u    = sigmoid(-Delta/T_sel), Delta = 2*d_min / (T_soft + d_min).
       out  = sum_t [(1-u) * W[main] + u * W[alt]].
+
+    Wins at modules where per-head n_outputs is small (< 128, e.g. qk/v at
+    n_heads=6 with d_qk=32/16): the gathers read only ~n_tables * n_outputs
+    bf16, and compile fuses gather + multiply + sum into a streaming pattern
+    with no materialised [B, n_tables, n_outputs] intermediates. The bmm
+    fastpath loses here because its per-head matmul N dim is too narrow for
+    tensor cores to amortise tile overhead.
     """
     B, _ = x.shape
     n_tables = anchor_a_long.shape[0]
@@ -306,8 +344,73 @@ def _hybrid_smooth_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers
     return out, main_index, alt_index, u
 
 
-class _TinyMHLutHybridSmooth(torch.autograd.Function):
+@torch.compile(dynamic=True)
+def _hybrid_smooth_fwd_bmm(x, weights, anchor_a_long, anchor_b_long, powers,
+                            T_soft, T_sel, n_heads, tph, table_dim, s_dtype):
+    """Smooth top-2 forward via sparse-S + one bmm per head.
+
+    Build a sparse selection mass S[B, n_tables, K] with two nonzeros per
+    (b, t) — (1-u) at main_index and u at alt_index — then contract via
+    bmm(S, W). At n_heads=1 the bmm collapses to one fat tensor-core matmul;
+    at larger n_heads it splits into n_heads parallel matmuls.
+
+    Wins at LUTGPT modules where per-head n_outputs >= 128 (residual_lut,
+    emb_resid_lut, qk_lut at d_qk=64): on L40S the wins range from -30%
+    (qk) to -48% (residual_lut, emb_resid_lut) vs the gather path because
+    the matmul streams S + W instead of doing random-access gathers. S is
+    98.5%-sparse at K=128 — fine because the matmul is HBM-bandwidth-bound,
+    so unused FLOPs are free.
+
+    `s_dtype` is the build dtype for S — pass bf16 under autocast to skip
+    an fp32 -> bf16 cast at matmul time.
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    K = table_dim
+
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]                 # [B, n_tables, NAP]
+    bits = (d > 0).to(torch.int64)
+    main_index = (bits * powers.view(1, 1, -1)).sum(dim=-1)        # [B, n_tables]
+
+    abs_d = d.abs()
+    p_star = abs_d.argmin(dim=-1)
+    flip_mask = powers.to(main_index.dtype)[p_star]
+    alt_index = main_index ^ flip_mask
+
+    d_min = abs_d.gather(-1, p_star.unsqueeze(-1)).squeeze(-1)
+    delta_ts = 2.0 * d_min / (T_soft + d_min)
+    u = torch.sigmoid(-delta_ts / T_sel)                           # in (0, 0.5]
+    main_w = 1.0 - u
+
+    S = torch.zeros(B, n_tables, K, dtype=s_dtype, device=x.device)
+    S.scatter_(2, main_index.unsqueeze(-1), main_w.unsqueeze(-1).to(s_dtype))
+    S.scatter_(2, alt_index.unsqueeze(-1),  u.unsqueeze(-1).to(s_dtype))
+
+    # Per-head contraction over (tph, K). n_tables = n_heads * tph, laid out
+    # as [head0_t0..t(tph-1), head1_t0..., ...].
+    tph_K = tph * K
+    S_h = S.view(B, n_heads, tph_K).transpose(0, 1).contiguous()   # [n_heads, B, tph*K]
+    W_h = weights.view(n_heads, tph_K, n_outputs)                  # [n_heads, tph*K, n_out]
+    out_h = torch.bmm(S_h, W_h)                                    # [n_heads, B, n_out]
+    out = out_h.transpose(0, 1).contiguous().to(weights.dtype)
+    return out, main_index, alt_index, u
+
+
+class _FastMHLutHybridSmooth(torch.autograd.Function):
     """Smooth top-2 forward + soft input grad + 2-row weight grad."""
+
+    # Forward dispatches inline on per-head n_outputs:
+    #   n_outputs >= 128 -> _hybrid_smooth_fwd_bmm (sparse-S + tensor-core matmul)
+    #   n_outputs <  128 -> _hybrid_smooth_fwd_gather (two embedding gathers + blend)
+    # Crossover measured on L40S at LUTGPT shapes (B=4096, NAP=4-6, tph=256-512):
+    #     module        n_out  gather (ms)  bmm (ms)   pick
+    #     emb_resid_lut   384         1.12      0.58   bmm
+    #     residual_lut    384         1.09      0.57   bmm
+    #     qk_lut          128         5.56      3.84   bmm
+    #     v_lut            16         1.16     12.97   gather
+    #     out_proj         96         2.68      3.64   gather
+    # The 128 threshold matches the H100 sweep and the L40S numbers.
 
     @staticmethod
     def forward(ctx, x, weights, log_T_soft, log_T_sel,
@@ -319,10 +422,19 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
                         if use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
         with autocast_ctx:
-            out, main_index, alt_index, u = _hybrid_smooth_lut_fwd_body(
-                x, weights, anchor_a_long, anchor_b_long, powers,
-                T_soft, T_sel, n_heads, tph, table_dim,
-            )
+            if weights.shape[2] >= 128:
+                s_dtype = (torch.bfloat16
+                           if use_bf16 and x.is_cuda
+                           else weights.dtype)
+                out, main_index, alt_index, u = _hybrid_smooth_fwd_bmm(
+                    x, weights, anchor_a_long, anchor_b_long, powers,
+                    T_soft, T_sel, n_heads, tph, table_dim, s_dtype,
+                )
+            else:
+                out, main_index, alt_index, u = _hybrid_smooth_fwd_gather(
+                    x, weights, anchor_a_long, anchor_b_long, powers,
+                    T_soft, T_sel, n_heads, tph, table_dim,
+                )
         ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
                               bit_matrix, main_index, alt_index, u,
                               log_T_soft, log_T_sel, powers)
@@ -378,7 +490,7 @@ class _TinyMHLutHybridSmooth(torch.autograd.Function):
 _FORWARD_MODES = ("hard", "hybrid_smooth")
 
 
-class TinyMultiHeadLut(nn.Module):
+class FastMultiHeadLut(nn.Module):
     """Multi-head LUT primitive used by LUTGPT.
 
     Args:
@@ -400,6 +512,10 @@ class TinyMultiHeadLut(nn.Module):
             True. Independent of weight_dtype: with the default fp32
             weights + use_bf16=True, forward and weight-grad accumulation
             run in bf16 and only the final .grad is cast back to fp32.
+            The hard-mode weight-grad backend is auto-picked from
+            weights.dtype (bf16 storage -> sparse-S + bmm; fp32 storage
+            -> index_add scatter) because the bf16 atomic index_add is
+            emulated and slow.
         anchor_sampling_policy: how anchor pairs are drawn. Default
             AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE.
         soft_score_temp: T_soft (per-anchor sign sharpness).
@@ -532,7 +648,7 @@ class TinyMultiHeadLut(nn.Module):
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
             )
         if self.forward_mode == "hybrid_smooth":
-            return _TinyMHLutHybridSmooth.apply(
+            return _FastMHLutHybridSmooth.apply(
                 x, self.weights, self.log_soft_score_temp, self.log_select_temp,
                 self.soft_anchor_a_long, self.soft_anchor_b_long,
                 self.soft_bit_matrix, self.soft_powers,
@@ -540,21 +656,31 @@ class TinyMultiHeadLut(nn.Module):
             )
         # forward_mode == "hard"
         if not torch.is_grad_enabled():
-            # Eval: reuse the compiled forward body and drop the index.
+            # Eval: reuse the compiled forward body and drop the index. The
+            # bf16 weight cast mirrors _FastMHLutSoft.forward — F.embedding_bag
+            # isn't autocast-eligible, so we have to cast weights explicitly.
             autocast_ctx = (
                 torch.amp.autocast("cuda", dtype=torch.bfloat16)
                 if self.use_bf16 and x.is_cuda
                 else torch.amp.autocast("cpu", enabled=False)
             )
+            compute_in_bf16 = (
+                self.use_bf16 and x.is_cuda and self.weights.dtype == torch.float32
+            )
+            weights_compute = (
+                self.weights.to(torch.bfloat16) if compute_in_bf16 else self.weights
+            )
             with autocast_ctx:
                 out, _ = _soft_lut_fwd_body(
-                    x, self.weights,
+                    x, weights_compute,
                     self.soft_anchor_a_long, self.soft_anchor_b_long,
                     self.soft_powers,
                     self.n_heads, self.tables_per_head, self.table_dim,
                 )
+            if compute_in_bf16:
+                out = out.to(self.weights.dtype)
             return out
-        return _TinyMHLutSoft.apply(
+        return _FastMHLutSoft.apply(
             x, self.weights, self.log_soft_score_temp, self.log_select_temp,
             self.soft_anchor_a_long, self.soft_anchor_b_long,
             self.soft_bit_matrix, self.soft_powers,
