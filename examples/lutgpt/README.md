@@ -3,7 +3,7 @@
 A six-layer transformer where every attention projection (Q / K / V / out) and
 every per-layer residual is a `FastMultiHeadLut` table instead of a dense
 matmul — those LUT forwards are sign-pack lookups, no dot product. The other
-matmuls that any transformer needs are still there: the token-embedding gather,
+ops that any transformer needs are still there: the token-embedding lookup,
 the scaled-dot-product attention itself (`Q·Kᵀ`, `softmax(...)·V`), and the
 unembedder `nn.Linear(D, vocab_size)`. Backward through every LUT uses a soft
 surrogate over the full K-row neighborhood; see

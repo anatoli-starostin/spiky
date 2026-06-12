@@ -846,8 +846,8 @@ print(f"\n{'-'*60}")
 # `E = D = 384`, `d_v = 64`, six layers. Every attention **projection** and
 # every per-layer **residual** is a `FastMultiHeadLut` table — the Q / K / V /
 # out projections and the two residual contributions per layer are all
-# sign-pack lookups, no dense matmul. The matmuls that remain are the standard
-# ones we don't try to replace: the token-embedding gather, the
+# sign-pack lookups, no dense matmul. The other ops that remain are the
+# standard ones we don't try to replace: the token-embedding lookup, the
 # `scaled_dot_product_attention` itself (`Q·Kᵀ` then `softmax(...)·V`),
 # and the final `unembedder = nn.Linear(D, vocab_size)`.
 #
