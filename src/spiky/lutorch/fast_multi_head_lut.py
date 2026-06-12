@@ -21,6 +21,7 @@ Backward (both modes; "always soft"):
 See doc/lutorch/fastmultiheadlut.pdf for the math.
 """
 import math
+import os
 from typing import Optional
 
 import torch
@@ -28,6 +29,41 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
+
+
+# Hard-eval fast path: hand-written CUDA kernel from lutorch_cuda that fuses the
+# pairwise differences and the sign-bit packing into one pass, returning the int64
+# row indices directly. Replaces the compiled fp32 bit-pack in the hard-mode eval
+# shortcut when available. Set SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS=1 to disable.
+_USE_LUTORCH_CUSTOM_CUDA_KERNELS = (
+    os.environ.get("SPIKY_LUTORCH_NO_CUSTOM_CUDA_KERNELS", "0") != "1"
+)
+_LUTORCH_CUDA_THREADS_PER_BLOCK = int(
+    os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256")
+)
+
+
+def _get_native_lutorch_manager():
+    try:
+        from lutorch_cuda import get_lutorch_manager  # type: ignore[import]
+        return get_lutorch_manager()
+    except Exception:
+        return None
+
+
+@torch.compile(dynamic=True)
+def _native_eval_bag_reduce(index, weights_flat, table_offset,
+                             B, n_heads, tph, n_outputs):
+    """Build flat_indices from MSB-first row indices and bag-sum.
+
+    Compiled together so the add+reshape and the offsets arange live in one
+    graph and can be fused with the embedding_bag launch.
+    """
+    flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
+    n_bags = B * n_heads
+    offsets = torch.arange(n_bags, device=weights_flat.device, dtype=torch.long) * tph
+    out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
+    return out_flat.view(B, n_heads, n_outputs)
 
 
 # =============================================================================
@@ -619,6 +655,24 @@ class FastMultiHeadLut(nn.Module):
         # Anchor pairs as int64; reused by forward and backward.
         self.register_buffer("soft_anchor_a_long", anchor_a_long.contiguous())
         self.register_buffer("soft_anchor_b_long", anchor_b_long.contiguous())
+        # Per-table row-block offsets used by the bag-reduce in hard eval:
+        # entries 0..K-1 live in table 0, K..2K-1 in table 1, etc. Buffer so
+        # we don't rebuild the arange every call.
+        self.register_buffer(
+            "_table_offset",
+            torch.arange(n_lookup_tables, device=dev, dtype=torch.int64) * self.table_dim,
+        )
+        # Cache a bound reference to the MSB-first native eval kernel so the
+        # forward path doesn't pay the manager getter or attribute lookup on
+        # every call. None when lutorch_cuda is unavailable -- the compiled
+        # forward body is then used as fallback.
+        native_manager = (
+            _get_native_lutorch_manager() if _USE_LUTORCH_CUSTOM_CUDA_KERNELS else None
+        )
+        self._native_eval_msb = (
+            getattr(native_manager, "anchor_pairs_lookup_eval_forward_msb", None)
+            if native_manager is not None else None
+        )
 
         # log-parametrise the temperatures so unconstrained optimisation
         # keeps T positive.
@@ -642,6 +696,27 @@ class FastMultiHeadLut(nn.Module):
                 torch.tensor(log_Tx_init, dtype=torch.float32, device=dev),
             )
 
+    def _hard_eval_native(self, x: torch.Tensor,
+                          weights_compute: torch.Tensor) -> torch.Tensor:
+        """Hard-mode eval via the MSB-first lutorch_cuda bit-pack kernel.
+
+        Replaces the compiled fp32 bit-pack of _soft_lut_fwd_body with a single
+        CUDA pass that emits int64 row indices in our MSB-first convention,
+        feeding straight into a compiled embedding_bag reduce.
+        """
+        B = x.shape[0]
+        n_tables = self.soft_anchor_a_long.shape[0]
+        n_outputs = weights_compute.shape[2]
+        index = self._native_eval_msb(
+            x, self.soft_anchor_a_long, self.soft_anchor_b_long,
+            0.0, _LUTORCH_CUDA_THREADS_PER_BLOCK,
+        )  # [B, n_tables] int64
+        weights_flat = weights_compute.view(n_tables * self.table_dim, n_outputs)
+        return _native_eval_bag_reduce(
+            index, weights_flat, self._table_offset,
+            B, self.n_heads, self.tables_per_head, n_outputs,
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 2 or x.shape[1] != self.input_dim:
             raise ValueError(
@@ -656,9 +731,10 @@ class FastMultiHeadLut(nn.Module):
             )
         # forward_mode == "hard"
         if not torch.is_grad_enabled():
-            # Eval: reuse the compiled forward body and drop the index. The
-            # bf16 weight cast mirrors _FastMHLutSoft.forward — F.embedding_bag
-            # isn't autocast-eligible, so we have to cast weights explicitly.
+            # Eval: prefer the native CUDA bit-pack kernel when available; fall
+            # back to the compiled forward body otherwise. The bf16 weight cast
+            # mirrors _FastMHLutSoft.forward --- F.embedding_bag isn't
+            # autocast-eligible, so we have to cast weights explicitly.
             autocast_ctx = (
                 torch.amp.autocast("cuda", dtype=torch.bfloat16)
                 if self.use_bf16 and x.is_cuda
@@ -670,13 +746,21 @@ class FastMultiHeadLut(nn.Module):
             weights_compute = (
                 self.weights.to(torch.bfloat16) if compute_in_bf16 else self.weights
             )
+            use_native = (
+                self._native_eval_msb is not None
+                and x.is_cuda
+                and x.dtype in (torch.float32, torch.float64)
+            )
             with autocast_ctx:
-                out, _ = _soft_lut_fwd_body(
-                    x, weights_compute,
-                    self.soft_anchor_a_long, self.soft_anchor_b_long,
-                    self.soft_powers,
-                    self.n_heads, self.tables_per_head, self.table_dim,
-                )
+                if use_native:
+                    out = self._hard_eval_native(x, weights_compute)
+                else:
+                    out, _ = _soft_lut_fwd_body(
+                        x, weights_compute,
+                        self.soft_anchor_a_long, self.soft_anchor_b_long,
+                        self.soft_powers,
+                        self.n_heads, self.tables_per_head, self.table_dim,
+                    )
             if compute_in_bf16:
                 out = out.to(self.weights.dtype)
             return out

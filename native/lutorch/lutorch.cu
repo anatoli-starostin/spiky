@@ -136,6 +136,49 @@ __global__ void anchor_pairs_lookup_eval_forward_kernel(
 
 
 template <typename scalar_t>
+__global__ void anchor_pairs_lookup_eval_forward_msb_kernel(
+    const scalar_t* x_ptr,
+    int64_t batch_size,
+    int64_t x_stride0,
+    int64_t x_stride1,
+    const int64_t* anchor_pairs_a_ptr,
+    const int64_t* anchor_pairs_b_ptr,
+    int64_t n_tables,
+    int64_t n_anchor_pairs,
+    scalar_t cmp_eps,
+    int64_t* lookup_indices_ptr
+) {
+    // MSB-first variant of anchor_pairs_lookup_eval_forward_kernel: anchor pair
+    // 0 contributes to bit (n_anchor_pairs - 1), pair (n_anchor_pairs - 1) to
+    // bit 0. Matches the MSB-first convention used by FastMultiHeadLut so the
+    // caller can skip a bit-reverse lookup step.
+    int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    int64_t total = batch_size * n_tables;
+    if (linear_tid >= total) {
+        return;
+    }
+
+    int64_t b = linear_tid / n_tables;
+    int64_t t = linear_tid - b * n_tables;
+    int64_t table_offset = t * n_anchor_pairs;
+
+    int64_t lookup_idx = 0;
+
+    for (int64_t p = 0; p < n_anchor_pairs; ++p) {
+        int64_t anchor_a = anchor_pairs_a_ptr[table_offset + p];
+        int64_t anchor_b = anchor_pairs_b_ptr[table_offset + p];
+        scalar_t delta = lutorch_delta(x_ptr, b, x_stride0, x_stride1, anchor_a, anchor_b);
+
+        if (delta > cmp_eps) {
+            lookup_idx |= (static_cast<int64_t>(1) << (n_anchor_pairs - 1 - p));
+        }
+    }
+
+    lookup_indices_ptr[linear_tid] = lookup_idx;
+}
+
+
+template <typename scalar_t>
 __global__ void anchor_pairs_lookup_forward_na2_kernel(
     const scalar_t* x_ptr,
     int64_t batch_size,
@@ -1133,6 +1176,89 @@ public:
 
         AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_eval_forward_kernel", [&] {
             anchor_pairs_lookup_eval_forward_kernel<scalar_t><<<blocks, threads>>>(
+                reinterpret_cast<const scalar_t*>(x.data_ptr()),
+                batch_size,
+                x_stride0,
+                x_stride1,
+                reinterpret_cast<const int64_t*>(anchor_pairs_a.data_ptr()),
+                reinterpret_cast<const int64_t*>(anchor_pairs_b.data_ptr()),
+                n_tables,
+                n_anchor_pairs,
+                static_cast<scalar_t>(cmp_eps),
+                reinterpret_cast<int64_t*>(lookup_indices.data_ptr())
+            );
+        });
+        CU_CHECK(cudaGetLastError());
+
+        PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP);
+        return lookup_indices;
+    }
+
+    torch::Tensor
+    anchor_pairs_lookup_eval_forward_msb(
+        const torch::Tensor& x,
+        const torch::Tensor& anchor_pairs_a,
+        const torch::Tensor& anchor_pairs_b,
+        double cmp_eps,
+        int64_t threads_per_block = 256
+    ) {
+        // MSB-first variant: anchor pair p contributes to bit
+        // (n_anchor_pairs - 1 - p) of the emitted row index. Matches
+        // FastMultiHeadLut's MSB-first packing so the caller can use the
+        // returned indices directly without a bit-reverse step.
+        PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP);
+
+        if (x.dim() != 2) {
+            throw py::value_error("x must be 2D [batch_size, input_dim]");
+        }
+        if (!x.is_cuda()) {
+            throw py::value_error("x must be CUDA tensor");
+        }
+        if (!x.is_floating_point()) {
+            throw py::value_error("x must be floating point tensor");
+        }
+
+        if (anchor_pairs_a.dim() != 2 || anchor_pairs_b.dim() != 2) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must be 2D [n_tables, n_anchor_pairs]");
+        }
+        if (anchor_pairs_a.sizes() != anchor_pairs_b.sizes()) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must have the same shape");
+        }
+        if (anchor_pairs_a.dtype() != torch::kInt64 || anchor_pairs_b.dtype() != torch::kInt64) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must be int64");
+        }
+        if (!anchor_pairs_a.is_contiguous() || !anchor_pairs_b.is_contiguous()) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must be contiguous");
+        }
+        if (!anchor_pairs_a.is_cuda() || !anchor_pairs_b.is_cuda()) {
+            throw py::value_error("anchor_pairs_a and anchor_pairs_b must be CUDA tensors");
+        }
+        if (x.device() != anchor_pairs_a.device() ||
+            x.device() != anchor_pairs_b.device()) {
+            throw py::value_error("All tensors must be on the same CUDA device");
+        }
+
+        const int64_t batch_size = x.size(0);
+        const int64_t x_stride0 = x.stride(0);
+        const int64_t x_stride1 = x.stride(1);
+        const int64_t n_tables = anchor_pairs_a.size(0);
+        const int64_t n_anchor_pairs = anchor_pairs_a.size(1);
+        if (threads_per_block <= 0 || threads_per_block > 1024) {
+            throw py::value_error("threads_per_block must be in range [1, 1024]");
+        }
+
+        auto opts_i64 = torch::TensorOptions().dtype(torch::kInt64).device(x.device());
+        torch::Tensor lookup_indices = torch::empty({batch_size, n_tables}, opts_i64);
+
+        int device = x.device().index();
+        c10::cuda::CUDAGuard guard(device);
+
+        int64_t total = batch_size * n_tables;
+        int threads = static_cast<int>(threads_per_block);
+        int blocks = static_cast<int>((total + threads - 1) / threads);
+
+        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_eval_forward_msb_kernel", [&] {
+            anchor_pairs_lookup_eval_forward_msb_kernel<scalar_t><<<blocks, threads>>>(
                 reinterpret_cast<const scalar_t*>(x.data_ptr()),
                 batch_size,
                 x_stride0,
@@ -2415,6 +2541,15 @@ void PB_LUTorchManager(py::module& m) {
         .def(
             "anchor_pairs_lookup_eval_forward",
             &LUTorchManager::anchor_pairs_lookup_eval_forward,
+            py::arg("x"),
+            py::arg("anchor_pairs_a"),
+            py::arg("anchor_pairs_b"),
+            py::arg("cmp_eps"),
+            py::arg("threads_per_block") = 256
+        )
+        .def(
+            "anchor_pairs_lookup_eval_forward_msb",
+            &LUTorchManager::anchor_pairs_lookup_eval_forward_msb,
             py::arg("x"),
             py::arg("anchor_pairs_a"),
             py::arg("anchor_pairs_b"),
