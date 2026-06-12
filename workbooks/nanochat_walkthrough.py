@@ -895,12 +895,15 @@ print(f"\n{'-'*60}")
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 
-# Architecture (mirrors examples/lutgpt/config.json)
-LUT_E             = 96
+# Architecture: full-width backbone matching exp754 of the published report
+# (E = D = 384, d_v = 64). examples/lutgpt/config.json ships the *narrow-backbone*
+# exp755 variant (E = 192, d_v = 32) instead; this walkthrough is the reduced-budget
+# educational reproduction of the full-width recipe (bs=8 device batch, 8K steps).
+LUT_E             = 384
 LUT_D             = 384
 LUT_H             = 6
 LUT_D_QK          = 64
-LUT_D_V           = 16
+LUT_D_V           = 64
 LUT_N_LAYERS      = 6
 LUT_ROPE_BASE     = 10000.0
 
@@ -916,7 +919,7 @@ _LUT_KWARGS = dict(
     weight_dtype=torch.float32,                       # fp32 master weights
     use_bf16=True,                                    # bf16 autocast for compute
     anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
-    forward_mode="hybrid_smooth",                     # phase A; flipped to "hard" at the switch
+    forward_mode="hybrid_smooth",                     # held fixed for the whole run
     soft_score_temp=0.5,
     select_temp=0.5,
     learnable_temps=True,

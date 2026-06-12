@@ -24,12 +24,9 @@ Architecture (E = embedding_dim, D = residual_dim, H = n_heads):
                                                                   ln_final
                                                                   unembedder -> logits
 
-Two-phase training:
-  - phase A (steps 1..bs_switch_step): forward_mode='hybrid_smooth', smaller
-    batch. The forward blends each LUT's top-2 rows so gradients are dense.
-  - phase B (steps bs_switch_step+1..N): forward_mode='hard', larger batch.
-    Forward is the discrete sign-pack lookup. Backward stays soft in both
-    phases (see doc/lutorch/fastmultiheadlut.pdf).
+Single-phase training: forward_mode is taken from config.json and held fixed
+for the whole run (see doc/lutorch/fastmultiheadlut.pdf for the two forward
+modes and the always-soft backward).
 
 Requires nanochat (https://github.com/karpathy/nanochat) for the tokenizer,
 data loader and bpb eval — point NANOCHAT_ROOT at a local checkout before
@@ -92,18 +89,9 @@ tokenizer = RustBPETokenizer.from_directory(TOKENIZER_DIR)
 VOCAB_SIZE = tokenizer.get_vocab_size()
 print(f'Vocab size: {VOCAB_SIZE}')
 
-# Phase A dataloader (initial).
-train_loader_a = tokenizing_distributed_data_loader_bos_bestfit(
+train_loader = tokenizing_distributed_data_loader_bos_bestfit(
     tokenizer, DEVICE_BS, CONTEXT_SIZE, split='train', device=DEVICE
 )
-# Phase B dataloader (post-switch).
-DEVICE_BS_B = cfg.get('device_batch_size_b', DEVICE_BS)
-TOTAL_BS_B  = cfg.get('total_batch_size_b', TOTAL_BS)
-if DEVICE_BS_B != DEVICE_BS:
-    train_loader_b = tokenizing_distributed_data_loader_bos_bestfit(
-        tokenizer, DEVICE_BS_B, CONTEXT_SIZE, split='train', device=DEVICE)
-else:
-    train_loader_b = train_loader_a
 val_loader_factory = lambda: tokenizing_distributed_data_loader_bos_bestfit(
     tokenizer, DEVICE_BS, CONTEXT_SIZE, split='val', device=DEVICE
 )
@@ -232,25 +220,29 @@ class LUTBlock(nn.Module):
 
         x_pre = self.ln_pre(x_flat)
 
-        qk_out = self.qk_lut(x_pre)
+        # Cast each LUT output back to fp32 at the autograd boundary so
+        # downstream LayerNorms / SDPA / arithmetic see fp32. Free when
+        # weight_dtype is already fp32; mandatory when weight_dtype is bf16
+        # (LUTs return bf16 then, but LayerNorm weights stay fp32).
+        qk_out = self.qk_lut(x_pre).float()
         q_vec = self.q_norm(qk_out[..., :d_qk])
         k_vec = self.k_norm(qk_out[..., d_qk:2 * d_qk])
         q = q_vec.reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
         k = k_vec.reshape(B, T, H, d_qk).permute(0, 2, 1, 3)
         q, k = apply_rope(q, k, cos[:T], sin[:T])
 
-        v_vec = self.v_lut(x_pre)
+        v_vec = self.v_lut(x_pre).float()
         v = v_vec.reshape(B, T, H, d_v).permute(0, 2, 1, 3)
 
         attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         out_in = attn.permute(0, 2, 1, 3).reshape(B * T, H * d_v)
-        out_e  = self.out_proj(out_in).squeeze(1)
+        out_e  = self.out_proj(out_in).squeeze(1).float()
 
         x_lut_next_flat = x_flat + out_e
 
         # Per-layer residual_lut: MeanAbsNorm(E) -> residual_lut -> D-stream contribution.
         r_in  = self.ln_resid(x_lut_next_flat)
-        r_out = self.residual_lut(r_in).squeeze(1).reshape(B, T, D)
+        r_out = self.residual_lut(r_in).squeeze(1).reshape(B, T, D).float()
 
         return x_lut_next_flat.reshape(B, T, E), r_out
 
@@ -276,7 +268,7 @@ class Model(nn.Module):
         x_lut = self.tok_emb_E(tokens)
         # Initialise D-stream with the bare-embedding residual_lut contribution.
         x_emb_pre = self.ln_emb_resid(x_lut.reshape(B * T, E))
-        x_resid = self.emb_resid_lut(x_emb_pre).squeeze(1).reshape(B, T, D)
+        x_resid = self.emb_resid_lut(x_emb_pre).squeeze(1).reshape(B, T, D).float()
         for layer in self.layers:
             x_lut, r = layer(x_lut, self.rope.cos, self.rope.sin)
             x_resid = x_resid + r
@@ -294,7 +286,7 @@ class Model(nn.Module):
 model = Model().to(DEVICE)
 
 n_params = sum(p.numel() for p in model.parameters())
-print(f'Total params (all fp32): {n_params:,}')
+print(f'Total params: {n_params:,}')
 
 def get_lr_scale(step):
     n = N_STEPS
@@ -456,12 +448,9 @@ def _log_weight_deltas(step_):
 
 
 # --- Training loop ------------------------------------------------------------
-tokens_per_step_a = DEVICE_BS * CONTEXT_SIZE
-grad_accum_a = max(1, TOTAL_BS // tokens_per_step_a)
-tokens_per_step_b = DEVICE_BS_B * CONTEXT_SIZE
-grad_accum_b = max(1, TOTAL_BS_B // tokens_per_step_b)
-print(f'Phase A: bs={DEVICE_BS} tokens/microbatch={tokens_per_step_a:,} grad_accum={grad_accum_a} effective={grad_accum_a*tokens_per_step_a:,}')
-print(f'Phase B: bs={DEVICE_BS_B} tokens/microbatch={tokens_per_step_b:,} grad_accum={grad_accum_b} effective={grad_accum_b*tokens_per_step_b:,}')
+tokens_per_step = DEVICE_BS * CONTEXT_SIZE
+grad_accum = max(1, TOTAL_BS // tokens_per_step)
+print(f'bs={DEVICE_BS} tokens/microbatch={tokens_per_step:,} grad_accum={grad_accum} effective={grad_accum*tokens_per_step:,}')
 
 csv_path = os.path.join(EXP_DIR, 'metrics.csv')
 csv_f = open(csv_path, 'w', newline='')
@@ -476,33 +465,8 @@ t0 = time.time()
 temp_w.writerow([0] + [f'{getter():.6f}' for _, getter in temp_specs])
 temp_f.flush()
 
-HARD_SWITCH_STEP = cfg.get('hard_switch_step', None)
-BS_SWITCH_STEP   = cfg.get('bs_switch_step', None)
-
-def _flip_to_hard():
-    """Phase-B forward switch: top-2 hybrid_smooth -> single-row hard forward.
-
-    The soft backward surrogate (input + temp gradients) is identical in both
-    forward modes; only the forward path and the weight-gradient scatter change.
-    """
-    n = 0
-    for mod in model.modules():
-        if isinstance(mod, FastMultiHeadLut):
-            mod.forward_mode = 'hard'
-            n += 1
-    print(f'[HARD SWITCH] flipped forward_mode hybrid_smooth -> hard on {n} LUT modules')
-
-train_loader = train_loader_a
-grad_accum   = grad_accum_a
-
 model.train()
 for step in range(1, N_STEPS + 1):
-    if HARD_SWITCH_STEP is not None and step == HARD_SWITCH_STEP:
-        _flip_to_hard()
-    if BS_SWITCH_STEP is not None and step == BS_SWITCH_STEP:
-        train_loader = train_loader_b
-        grad_accum   = grad_accum_b
-        print(f'[BS SWITCH] step {step}: dataloader -> bs={DEVICE_BS_B} grad_accum={grad_accum}')
     lr_scale = get_lr_scale(step)
     for o in all_optimizers:
         for g in o.param_groups:
