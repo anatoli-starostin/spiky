@@ -1,15 +1,21 @@
 # LUTGPT
 
-A small (84.9 M params) transformer where every attention projection
-(Q / K / V / out) and every per-layer residual is a `FastMultiHeadLut`
-table instead of a dense matmul — those LUT forwards are sign-pack
-lookups, no dot product. The other matmuls that any transformer needs
-are still there: the token-embedding gather, the scaled-dot-product
-attention itself (`Q·Kᵀ`, `softmax(...)·V`), and the unembedder
-`nn.Linear(D, vocab_size)`. Backward through every LUT uses a soft
+A six-layer transformer where every attention projection (Q / K / V / out) and
+every per-layer residual is a `FastMultiHeadLut` table instead of a dense
+matmul — those LUT forwards are sign-pack lookups, no dot product. The other
+matmuls that any transformer needs are still there: the token-embedding gather,
+the scaled-dot-product attention itself (`Q·Kᵀ`, `softmax(...)·V`), and the
+unembedder `nn.Linear(D, vocab_size)`. Backward through every LUT uses a soft
 surrogate over the full K-row neighborhood; see
 [`../../doc/lutorch/lutgpt_research_report.pdf`](../../doc/lutorch/lutgpt_research_report.pdf)
-for the math.
+for the math (Section 2) and the rest of the published write-up.
+
+The configuration shipped here is the **narrow-backbone reference** of the
+report (`exp755` of Section 6.4): a rank-coded backbone at half-width
+(`E = 192`) with a wide Euclidean accumulator (`D = 384`) for the unembedder.
+176.2 M parameters total. The full-width variant (`exp754`,
+`E = D = 384`, 276.8 M params) is reached by setting `embedding_dim=384` and
+`d_v=64` in `config.json`.
 
 ## What's in this directory
 
@@ -24,15 +30,15 @@ for the math.
 ```
 tokens -> tok_emb_E [V, E]
           |
-          MeanAbsNorm(E) -> emb_resid_lut (NAP=5, tph=256) -> D  ----.
+          MeanAbsNorm(E) -> emb_resid_lut (NAP=6, tph=256) -> D  ----.
           |                                                          |
           |   per layer x N_LAYERS:                                  |
           |     MeanAbsNorm(E)                                       |
           |     qk_lut       (NAP=4, tph=256, n_outputs=2*d_qk)      |
           |     v_lut        (NAP=6, tph=256, n_outputs=d_v)         |
           |     scaled-dot-product attention (RoPE on q,k)           |
-          |     out_proj     (NAP=6, tph=512, n_outputs=E)           |
-          |     residual_lut (NAP=5, tph=256, n_outputs=D) ----------+
+          |     out_proj     (NAP=7, tph=512, n_outputs=E)           |
+          |     residual_lut (NAP=6, tph=256, n_outputs=D) ----------+
           |     x_lut += out_proj(attn)                              |
           v                                                          v
        E-stream                                                   D-stream
@@ -40,46 +46,47 @@ tokens -> tok_emb_E [V, E]
                                                                   unembedder -> logits
 ```
 
-Two independent residual streams: the E-stream (width E=96) is mutated only by
-attention output projections; the D-stream (width D=384) is a pure accumulator,
-fed by `emb_resid_lut` at the embedding and one `residual_lut` per layer.
+Two independent residual streams: the E-stream (width `E = 192`) is the
+rank-coded backbone, mutated only by the per-layer `out_proj`; the D-stream
+(width `D = 384`) is a pure Euclidean accumulator, written by `emb_resid_lut`
+once at the embedding and by one `residual_lut` per layer, and read by the
+linear unembedder. The two streams are at different widths by construction —
+that is the asymmetric architecture of Section 3.4 of the report.
 
 ## Training recipe
 
-Two phases, switching simultaneously at step 8000 (`bs_switch_step ==
-hard_switch_step`):
+Single-phase: `forward_mode = hybrid_smooth` (top-2 blended forward + soft
+backward) held fixed for the full 16 000 steps; cosine LR schedule with 10 %
+warmup, decaying to 0.1 × peak; effective batch 48 × 512 = 24 576 tokens per
+step (`device_batch_size = 24` with `grad_accum = 2` for memory on a single
+GPU). Total compute ≈ 3.93 × 10⁸ training tokens.
 
-| step range | `forward_mode` | `device_batch_size` | tokens |
-|---|---|---:|---:|
-| 1–8000 | `hybrid_smooth` (top-2 blend) | 8 | 32.8 M |
-| 8001–16000 | `hard` (single row) | 16 | 65.5 M |
+Optimizers and precision:
 
-(Total ≈ 98 M tokens; the original research recipe ran ~3.3× larger batches
-for ~328 M tokens. Bump `device_batch_size{,_b}` and `total_batch_size{,_b}`
-proportionally if you have headroom.)
+- **AdamW** for the dense (non-LUT) parameters: `lr = 3e-4`, `wd = 0.1`,
+  `betas = (0.9, 0.95)`.
+- **Lion** for the LUT weight tables: `lr = 2e-4`, `betas = (0.9, 0.95)`,
+  with an `fp32` master copy of every parameter alongside its momentum buffer.
+- **LUT weights are stored in `bf16`** (`weight_dtype = bf16` in
+  `config.json`). The forward gather and the weight gradient stay in `bf16`;
+  the Lion master step casts the gradient to `fp32`, applies the update to the
+  `fp32` master, and copies it back into the `bf16` parameter. Halves the LUT
+  HBM footprint and the per-forward gather bandwidth relative to `fp32`
+  storage.
+- **`clip_grad_norm` to 1.0** over all trainable parameters at the end of every
+  step. Required by the `bf16`-storage recipe to bound the gradient
+  accumulation noise.
 
-The backward path is the *same* soft surrogate in both phases (see paper). Only
-the forward path and the weight-gradient scatter differ:
-
-- Phase A's hybrid_smooth forward keeps gradients dense across the K-row
-  neighborhood so the LUT weights move smoothly. Cheaper-per-token at the
-  smaller batch size.
-- Phase B switches to the hard forward to harden the discrete decision
-  boundaries while compensating with a larger batch.
-
-Continuous LR schedule over all 16 000 steps: 10 % warmup, cosine decay to
-0.1× peak.
-
-Optimizers: AdamW for the dense (non-LUT) parameters, Lion for the LUT weight
-tables (the `lut_lr=2e-4` is lower than `adam_lr=3e-4`).
+To train in `hard` mode from scratch (`exp756` of the report), set
+`forward_mode = "hard"` in `config.json` and rerun.
 
 ## Prerequisites
 
 - A single CUDA GPU.
 - `spiky` installed in this checkout (`pip install -e .` from the repo root).
 - A [nanochat](https://github.com/karpathy/nanochat) checkout, set up as
-  below — the training script imports the tokenizer, the
-  BOS-aligned data loader, and the bits-per-byte eval helper from it.
+  below — the training script imports the tokenizer, the BOS-aligned data
+  loader, and the bits-per-byte eval helper from it.
 
 ## Setting up nanochat
 
@@ -100,8 +107,6 @@ uv sync --extra gpu
 source .venv/bin/activate
 
 # 3) download ~8 shards of ClimbMix (~2B characters; one is the val shard).
-#    8 is enough for the lighter lutgpt recipe; download more if you scale
-#    bs / n_steps up.
 python -m nanochat.dataset -n 8
 
 # 4) train the BPE tokenizer (vocab 32768, ~2-3 min)
@@ -130,16 +135,16 @@ python examples/lutgpt/train.py
 
 Outputs land alongside `train.py` (the script computes `EXP_DIR` from its own
 location): `loss.png`, `metrics.csv`, `summary.json`, `temperatures.csv`,
-`weight_deltas.csv`, `stdout.log`, `checkpoint.pt` (~750 MB).
+`weight_deltas.csv`, `checkpoint.pt`.
 
-Smoke run before committing to the full 3 h: edit `config.json` and set
-`n_steps=8`, `bs_switch_step=4`, `hard_switch_step=4`, `eval_every=4`,
-`eval_steps=2`, `device_batch_size=4`, `device_batch_size_b=8`,
-`context_size=256`. That exercises both phases in ~70 s and confirms
-the nanochat setup is wired up.
+Smoke run before committing to the full run: edit `config.json` and set
+`n_steps=20`, `eval_every=20`, `eval_steps=2`, `device_batch_size=4`,
+`total_batch_size=4096`. That exercises model construction, the bf16-Lion-master
+recipe, and a validation pass in under a minute and confirms the nanochat
+setup is wired up.
 
 ## Math
 
 The soft surrogate backward derivation — including the asymmetric
-weight-gradient (1-row for `hard`, 2-row for `hybrid_smooth`) — is written up
-in [`doc/lutorch/fastmultiheadlut.pdf`](../../doc/lutorch/lutgpt_research_report.pdf).
+weight-gradient (1-row for `hard`, 2-row for `hybrid_smooth`) — is Section 2 of
+[`doc/lutorch/lutgpt_research_report.pdf`](../../doc/lutorch/lutgpt_research_report.pdf).
