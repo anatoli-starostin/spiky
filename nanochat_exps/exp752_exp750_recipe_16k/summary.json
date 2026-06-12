@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp752_exp750_recipe_16k",
+  "best_val_bpb": 1.2161744858252719,
+  "final_val_bpb": 1.2161744858252719,
+  "n_params": 276826418,
+  "training_time_hours": 3.844
+}

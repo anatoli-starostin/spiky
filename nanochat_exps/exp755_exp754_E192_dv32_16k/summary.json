@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp755_exp754_E192_dv32_16k",
+  "best_val_bpb": 1.2044289043212906,
+  "final_val_bpb": 1.2044289043212906,
+  "n_params": 176163122,
+  "training_time_hours": 5.415
+}

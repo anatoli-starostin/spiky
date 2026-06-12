@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp754_exp752_hybrid_smooth_16k",
+  "best_val_bpb": 1.1841548648056546,
+  "final_val_bpb": 1.1841548648056546,
+  "n_params": 276826418,
+  "training_time_hours": 6.295
+}

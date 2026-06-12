@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp757_exp750_zero_init_residuals_4K",
+  "best_val_bpb": 1.398718094966152,
+  "final_val_bpb": 1.398718094966152,
+  "n_params": 276826418,
+  "training_time_hours": 0.96
+}
