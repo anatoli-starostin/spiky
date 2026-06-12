@@ -8,7 +8,7 @@ are still there: the token-embedding gather, the scaled-dot-product
 attention itself (`Q·Kᵀ`, `softmax(...)·V`), and the unembedder
 `nn.Linear(D, vocab_size)`. Backward through every LUT uses a soft
 surrogate over the full K-row neighborhood; see
-[`../../doc/lutorch/fastmultiheadlut.pdf`](../../doc/lutorch/fastmultiheadlut.pdf)
+[`../../doc/lutorch/lutgpt_research_report.pdf`](../../doc/lutorch/lutgpt_research_report.pdf)
 for the math.
 
 ## What's in this directory
@@ -142,4 +142,4 @@ the nanochat setup is wired up.
 
 The soft surrogate backward derivation — including the asymmetric
 weight-gradient (1-row for `hard`, 2-row for `hybrid_smooth`) — is written up
-in [`doc/lutorch/fastmultiheadlut.pdf`](../../doc/lutorch/fastmultiheadlut.pdf).
+in [`doc/lutorch/fastmultiheadlut.pdf`](../../doc/lutorch/lutgpt_research_report.pdf).

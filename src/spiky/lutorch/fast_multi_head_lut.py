@@ -18,7 +18,7 @@ Backward (both modes; "always soft"):
     chosen row in "hard" mode; a 2-row scatter at main + alt in
     "hybrid_smooth" mode.
 
-See doc/lutorch/fastmultiheadlut.pdf for the math.
+See doc/lutorch/lutgpt_research_report.pdf for the math (Section~2).
 """
 import math
 import os

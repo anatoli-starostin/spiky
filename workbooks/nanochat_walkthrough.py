@@ -888,8 +888,8 @@ print(f"\n{'-'*60}")
 # the `examples/lutgpt/` recipe pays a few thousand bs=16 hard-forward
 # steps to absorb. Backward is the *same* soft K-row surrogate
 # regardless of forward mode; see
-# [`doc/lutorch/fastmultiheadlut.pdf`](../doc/lutorch/fastmultiheadlut.pdf)
-# for the math.
+# [`doc/lutorch/lutgpt_research_report.pdf`](../doc/lutorch/lutgpt_research_report.pdf)
+# for the math (Section 2).
 
 # %%
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut

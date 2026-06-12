@@ -25,7 +25,7 @@ Architecture (E = embedding_dim, D = residual_dim, H = n_heads):
                                                                   unembedder -> logits
 
 Single-phase training: forward_mode is taken from config.json and held fixed
-for the whole run (see doc/lutorch/fastmultiheadlut.pdf for the two forward
+for the whole run (see doc/lutorch/lutgpt_research_report.pdf for the two forward
 modes and the always-soft backward).
 
 Requires nanochat (https://github.com/karpathy/nanochat) for the tokenizer,
