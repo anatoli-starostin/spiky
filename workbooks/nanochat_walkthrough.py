@@ -841,18 +841,18 @@ print(f"\n{'-'*60}")
 # ---
 # ## Part 5 — LUTGPT (publish recipe)
 #
-# Small LUT-language-model from
-# [`examples/lutgpt/`](../examples/lutgpt/), 84.94 M parameters.
-# Every attention **projection** and every per-layer **residual** is a
-# `FastMultiHeadLut` table — the Q / K / V / out projections and the two
-# residual contributions per layer are all sign-pack lookups, no dense
-# matmul. The matmuls that remain are the standard ones we don't try to
-# replace: the token-embedding gather, the
+# LUTGPT at the full-width `exp754` architecture of the report
+# ([`doc/lutorch/lutgpt_research_report.pdf`](../doc/lutorch/lutgpt_research_report.pdf), Section 6.3):
+# `E = D = 384`, `d_v = 64`, six layers. Every attention **projection** and
+# every per-layer **residual** is a `FastMultiHeadLut` table — the Q / K / V /
+# out projections and the two residual contributions per layer are all
+# sign-pack lookups, no dense matmul. The matmuls that remain are the standard
+# ones we don't try to replace: the token-embedding gather, the
 # `scaled_dot_product_attention` itself (`Q·Kᵀ` then `softmax(...)·V`),
 # and the final `unembedder = nn.Linear(D, vocab_size)`.
 #
 # **Dual residual streams**:
-#  * **E-stream** (width `E = 96`) carries the attention working state;
+#  * **E-stream** (width `E = 384`) carries the attention working state;
 #    each block reads it through a `MeanAbsNorm`, runs the LUT-driven
 #    attention (`qk_lut`, `v_lut`), and writes back via `out_proj`.
 #  * **D-stream** (width `D = 384`) is a pure accumulator. The token embedding
@@ -863,15 +863,15 @@ print(f"\n{'-'*60}")
 # ```
 #   tokens -> tok_emb_E [V, E]
 #             |
-#             MeanAbsNorm(E) -> emb_resid_lut (NAP=5, tph=256) -> D   --.
+#             MeanAbsNorm(E) -> emb_resid_lut (NAP=6, tph=256) -> D   --.
 #             |                                                         |
 #             |   per layer x N_LAYERS:                                 |
 #             |     MeanAbsNorm(E)                                      |
 #             |     qk_lut       (NAP=4, tph=256, n_outputs=2*d_qk)     |
 #             |     v_lut        (NAP=6, tph=256, n_outputs=d_v)        |
 #             |     scaled-dot-product attention (RoPE on q,k)          |
-#             |     out_proj     (NAP=6, tph=512, n_outputs=E)          |
-#             |     residual_lut (NAP=5, tph=256, n_outputs=D) ---------+
+#             |     out_proj     (NAP=7, tph=512, n_outputs=E)          |
+#             |     residual_lut (NAP=6, tph=256, n_outputs=D) ---------+
 #             |     x_lut += out_proj(attn)                             |
 #             v                                                         v
 #          E-stream                                                  D-stream
@@ -879,15 +879,23 @@ print(f"\n{'-'*60}")
 #                                                                    unembedder -> logits
 # ```
 #
-# **Single-phase demo training**: this notebook trains LUTGPT in
-# `forward_mode='hybrid_smooth'` for 8 000 steps at `bs=8` and then,
-# **after** training is finished, has one extra cell that flips every
-# LUT to `forward_mode='hard'` and re-evaluates bpb on val. That bump
-# is the cost of switching from the smooth top-2 blend to a discrete
-# single-row pick at inference time — it's what the second phase of
-# the `examples/lutgpt/` recipe pays a few thousand bs=16 hard-forward
-# steps to absorb. Backward is the *same* soft K-row surrogate
-# regardless of forward mode; see
+# This walkthrough is the **reduced-budget educational reproduction**: the same
+# `exp754` architecture trained at `bs = 8` for 8 000 steps so the run fits in
+# a few hours on a single GPU. The full-budget published numbers (Section 6 of
+# the report, `bs = 48`, 16 000 steps) are not reached here — we just confirm
+# that the model trains and that the LUT-vs-vanilla curves cross. The
+# narrow-backbone (`E = 192`) variant of the same recipe lives at full budget
+# in [`examples/lutgpt/`](../examples/lutgpt/) (the report's `exp755`).
+#
+# **Single-phase hybrid_smooth + the soft→hard bump**: this notebook trains
+# LUTGPT in `forward_mode='hybrid_smooth'` for all 8 000 steps and then,
+# **after** training is finished, has one extra cell that flips every LUT to
+# `forward_mode='hard'` and re-evaluates bpb on val. That bump is the cost of
+# switching from the smooth top-2 blend to a discrete single-row pick at
+# inference time — it's the same soft→hard gap the report quantifies in
+# Section 6.5 (where training in `hard` mode from scratch is shown to recover
+# most of that gap). Backward is the *same* soft K-row surrogate regardless of
+# forward mode; see
 # [`doc/lutorch/lutgpt_research_report.pdf`](../doc/lutorch/lutgpt_research_report.pdf)
 # for the math (Section 2).
 
@@ -1255,10 +1263,10 @@ print(f"\n{'-'*60}")
 #
 # `forward_mode='hard'` throws that bonus away — the forward becomes a
 # discrete single-row gather (`W[b*]`). The bump on val bpb measures how
-# much expressive headroom the smooth blend was contributing. The publish
-# recipe in `examples/lutgpt/` is two-phase precisely so the model can
-# adapt its weights to the discrete forward over a few thousand extra
-# bs=16 hard-forward steps; here we just show the raw bump.
+# much expressive headroom the smooth blend was contributing. The report
+# (Section 6.5) shows that training in `hard` mode from scratch recovers
+# 30-50 mb of this gap relative to soft-train + hard-eval; here we just
+# show the raw bump on the hybrid_smooth-trained checkpoint.
 
 # %%
 # Same val data, same model weights — only forward_mode changes.
@@ -1289,13 +1297,13 @@ for mod in lutgpt.modules():
 # %% [markdown]
 # ### 5e. Bandwidth — LUTGPT vs MinimalGPT (per generated token)
 #
-# LUTGPT has roughly **6.5× more parameters** in the trunk than
-# MinimalGPT — deeper LUT tables in place of dense matmuls. But a
-# hard-forward step **only reads one row per table**:
-# `n_heads · tables_per_head · n_outputs` entries per LUT, completely
-# independent of `K = 2^NAP`. The HBM bandwidth compression per LUT is
-# **`K` to 1**: 16 for `qk_lut` (NAP=4), 64 for `v_lut` / `out_proj`
-# (NAP=6), 32 for the residual LUTs (NAP=5).
+# LUTGPT has several times more parameters in the trunk than MinimalGPT
+# (about 7.7× at the full-width `exp754` architecture used here; 4.9× at
+# the narrow-backbone `exp755` variant). A hard-forward step **only reads
+# one row per table**: `n_heads · tables_per_head · n_outputs` entries per
+# LUT, completely independent of `K = 2^NAP`. The HBM bandwidth
+# compression per LUT is **`K` to 1**: 16 for `qk_lut` (NAP=4), 64 for
+# `v_lut` and the residual LUTs (NAP=6), 128 for `out_proj` (NAP=7).
 #
 # The cell below counts trunk and trunk + I/O bytes per generated token,
 # weights only, assuming bf16 deployment. The unembedder
