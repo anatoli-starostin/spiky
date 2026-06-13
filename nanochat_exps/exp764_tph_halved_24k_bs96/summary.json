@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp764_tph_halved_24k_bs96",
+  "best_val_bpb": 1.2116438896057309,
+  "final_val_bpb": 1.2116438896057309,
+  "n_params": 97519922,
+  "training_time_hours": 5.721
+}
