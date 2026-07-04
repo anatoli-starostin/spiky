@@ -1,0 +1,276 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\title{Hybrid--Smooth Backward Mode for \texttt{TinyMultiHeadLut}\\
+\large Mathematical Specification}
+\author{LUTorch project notes}
+\date{2026--05--29}
+
+\newcommand{\NAP}{N_{\!\text{a}}}
+\newcommand{\nalt}{k}
+\newcommand{\bts}{\mathrm{ts}}
+\newcommand{\Tsoft}{T_{\!\text{soft}}}
+\newcommand{\Tsel}{T_{\!\text{sel}}}
+
+\begin{document}
+\maketitle
+
+\section{Setup}
+
+We process one slot (one head, one table) at a time; the same math repeats
+$H \times \text{tph}$ times in parallel. Inputs:
+\begin{itemize}
+  \item Input vector $\bm{x} \in \mathbb{R}^{d_{\text{in}}}$.
+  \item Anchor pairs $(a_i, b_i) \in \{0, \dots, d_{\text{in}}{-}1\}^2$ for
+        $i = 0, \dots, \NAP{-}1$; chosen at module init, fixed thereafter.
+  \item Weight matrix $W \in \mathbb{R}^{2^\NAP \times d_{\text{out}}}$, with
+        rows $W_r$ indexed by binary patterns $r \in \{0,1\}^\NAP$.
+  \item Two learnable scalar temperatures: $\Tsoft, \Tsel > 0$
+        (stored as $\log T$; we use $\Tsoft = \exp \log T_{\!\text{soft}}$, etc.).
+\end{itemize}
+
+\paragraph{Anchor differences.} For each pair $i$,
+\begin{equation}
+  d_i \;=\; x_{a_i} - x_{b_i}, \qquad i = 0, \dots, \NAP{-}1.
+\end{equation}
+
+\paragraph{Hard ("main") row index.} The bit pattern from sign-of-difference,
+MSB-first:
+\begin{equation}
+  \text{main}(\bm{x}) \;=\; \sum_{i=0}^{\NAP-1} \mathbf{1}[d_i > 0] \cdot 2^{\NAP-1-i}
+  \;\in\; \{0, \dots, 2^\NAP-1\}.
+\end{equation}
+
+\section{Per--anchor soft score}
+
+We define a smooth surrogate for the sign:
+\begin{equation}
+  p_i \;=\; \operatorname{sign}(d_i) \cdot \frac{|d_i|}{\Tsoft + |d_i|},
+  \qquad p_i \in (-1, 1).
+\end{equation}
+The absolute value
+\begin{equation}
+  |p_i| \;=\; \frac{|d_i|}{\Tsoft + |d_i|}
+\end{equation}
+is a confidence in the sign assignment: $|p_i| \to 0$ for $|d_i| \ll \Tsoft$
+(uncertain), $|p_i| \to 1$ for $|d_i| \gg \Tsoft$ (very confident).
+$\Tsoft$ sets the scale at which a difference becomes "decisive".
+
+\paragraph{Full row score.} Define a score over rows by summing per-bit
+soft contributions:
+\begin{equation}
+  \bts(r) \;=\; \sum_{i=0}^{\NAP-1} s_i(r), \qquad
+  s_i(r) \;=\; \begin{cases}
+    +|p_i| & \text{if bit } i \text{ of } r \text{ agrees with } d_i\text{'s sign}, \\
+    -|p_i| & \text{otherwise.}
+  \end{cases}
+\end{equation}
+By construction $\bts(\text{main}) = \sum_i |p_i|$ is the maximum over all
+rows, and flipping bit $i$ of \emph{main} reduces the score by $2|p_i|$.
+
+\section{Hamming--1 ball restriction}
+
+The full softmax over $2^\NAP$ rows is wasteful (and impractical for backprop)
+because the dominant probability mass lives near \emph{main}. We restrict the
+softmax to the \emph{Hamming--1 ball} around \emph{main}: the row \emph{main}
+itself plus the $\NAP$ rows reachable by flipping a single bit.
+
+\paragraph{Top--$\nalt$ alternatives.}
+We further restrict to the $\nalt \le \NAP$ \emph{least confident} bit
+positions, i.e.\ the positions with the smallest $|p_i|$:
+\begin{equation}
+  \mathcal{T} \;=\; \operatorname*{arg\,sort}^{\min}_{i \in \{0,\ldots,\NAP-1\}} |p_i|\;,
+  \qquad
+  \text{top--}\nalt = \mathcal{T}[0:\nalt].
+\end{equation}
+For each $j \in \text{top--}\nalt$, the corresponding alternative row is
+$\text{main} \oplus 2^{\NAP-1-j}$ (XOR with the bit's place-value).
+
+\paragraph{Score gap.} For each alternative we have
+\begin{equation}
+  \Delta \bts_j \;\equiv\; \bts(\text{main}) - \bts(\text{alt}_j) \;=\; 2\,|p_j|,
+  \qquad j \in \text{top--}\nalt.
+\end{equation}
+Small $|p_j|$ $\Rightarrow$ small gap $\Rightarrow$ alternative competes.
+
+\section{Forward pass}
+
+\subsection{Logits and probabilities}
+
+Subtracting a constant from all logits doesn't change the softmax, so we
+center on $\bts(\text{main})$:
+\begin{equation}
+  \ell_0 = 0, \qquad
+  \ell_{k+1} = -\frac{\Delta \bts_{j_k}}{\Tsel} = -\frac{2|p_{j_k}|}{\Tsel},
+  \quad k = 0, \dots, \nalt{-}1.
+\end{equation}
+The $(\nalt+1)$--way selection probabilities are
+\begin{equation}
+  \pi_m \;=\; \frac{\exp(\ell_m)}{\sum_{m'=0}^{\nalt} \exp(\ell_{m'})},
+  \quad m = 0, \dots, \nalt.
+\end{equation}
+$\Tsel$ controls how sharp the selection is: $\Tsel \to 0$ collapses to the
+hard arg--max (always \emph{main}); $\Tsel \to \infty$ averages uniformly over
+the ball.
+
+\subsection{Output}
+
+Letting $r_m$ denote the row indices $(\text{main}, \text{alt}_{j_0}, \ldots,
+\text{alt}_{j_{\nalt-1}})$, the per--table output is
+\begin{equation}
+  \bm{y} \;=\; \sum_{m=0}^{\nalt} \pi_m \, W_{r_m} \;\in\; \mathbb{R}^{d_{\text{out}}}.
+\end{equation}
+The module sums $\bm{y}$ across the table--per--head dimension to produce
+$\bm{o} \in \mathbb{R}^{H \times d_{\text{out}}}$.
+
+\subsection{Special case: $\nalt = 1$}
+
+With a single alternative ($\nalt = 1$ at the smallest $|p|$, call it
+$|p_\star|$), the softmax becomes a sigmoid:
+\begin{equation}
+  \pi_1 \;=\; \sigma\!\left(-\frac{2 |p_\star|}{\Tsel}\right) \;=\;
+  \sigma\!\left(-\frac{2}{\Tsel}\,\frac{|d_\star|}{\Tsoft + |d_\star|}\right),
+  \qquad \pi_0 = 1 - \pi_1.
+\end{equation}
+This is the closed--form (Bradley--Terry) top--2 softmax: it returns the same
+probability mass on \emph{main} vs.\ its top competitor as a full
+$2^\NAP$--way softmax \emph{would}, under the assumption that the third--
+through $2^\NAP$--th rows contribute negligibly. Both temperatures enter
+multiplicatively in the argument, which is why it's important they appear
+in the order shown (a 2026--05--12 correction over an earlier draft that
+mis--placed $\Tsel$).
+
+\section{Backward pass (autograd)}
+
+The forward is written entirely in differentiable PyTorch operations modulo
+the $\bm{1}[d_i > 0]$ thresholds and the $\arg$-selection that picks the
+top--$\nalt$ positions. These two are constant w.r.t.\ infinitesimal changes
+in $\bm{x}$ (the sign of $d_i$ and the index of the smallest $|p_i|$ do not
+flip), so the gradient is well--defined almost everywhere, and we let
+\texttt{torch.autograd} chain it.
+
+\subsection{Weight gradient}
+
+By inspection of $\bm{y}$:
+\begin{equation}
+  \frac{\partial \mathcal{L}}{\partial W_{r}}
+  \;=\; \sum_{m=0}^{\nalt} \mathbf{1}[r_m = r]\, \pi_m \,
+  \frac{\partial \mathcal{L}}{\partial \bm{y}}.
+\end{equation}
+Only the $(\nalt + 1)$ rows in the chosen ball receive gradient; all other
+rows get exactly zero. This is the central efficiency win of hybrid--smooth
+backward: weight updates are $(\nalt + 1)$--sparse per token regardless of
+table size.
+
+\subsection{Input gradient}
+
+The chain is:
+\begin{align}
+  \frac{\partial \mathcal{L}}{\partial \pi_m}
+  &= \frac{\partial \mathcal{L}}{\partial \bm{y}} \cdot W_{r_m}, \\
+  \frac{\partial \mathcal{L}}{\partial \ell_m}
+  &= \pi_m \left( \frac{\partial \mathcal{L}}{\partial \pi_m}
+                 - \sum_{m'} \pi_{m'} \frac{\partial \mathcal{L}}{\partial \pi_{m'}} \right)
+     \quad \text{(softmax Jacobian)}, \\
+  \frac{\partial \mathcal{L}}{\partial \Delta \bts_{j_k}}
+  &= -\frac{1}{\Tsel} \frac{\partial \mathcal{L}}{\partial \ell_{k+1}},
+  \qquad
+  \frac{\partial \mathcal{L}}{\partial |p_{j_k}|}
+  = 2 \frac{\partial \mathcal{L}}{\partial \Delta \bts_{j_k}}, \\
+  \frac{\partial |p_{j_k}|}{\partial |d_{j_k}|}
+  &= \frac{\Tsoft}{(\Tsoft + |d_{j_k}|)^2}, \\
+  \frac{\partial |d_{j_k}|}{\partial d_{j_k}}
+  &= \operatorname{sign}(d_{j_k}), \\
+  \frac{\partial d_{j_k}}{\partial x_q}
+  &= \mathbf{1}[a_{j_k} = q] - \mathbf{1}[b_{j_k} = q].
+\end{align}
+Only the bit positions in $\text{top--}\nalt$ contribute to
+$\partial \mathcal{L}/\partial \bm{x}$; positions outside the ball get
+gradient zero. This is intentional: those bits are highly confident
+(large $|p_i|$), so flipping them is so unlikely that the loss is
+effectively flat in those directions.
+
+\subsection{Temperature gradients}
+
+\begin{align}
+  \frac{\partial \mathcal{L}}{\partial \Tsel}
+  &= \sum_k \frac{\partial \mathcal{L}}{\partial \ell_{k+1}} \cdot
+     \frac{\Delta \bts_{j_k}}{\Tsel^2}, \\
+  \frac{\partial \mathcal{L}}{\partial \Tsoft}
+  &= -\sum_k \frac{\partial \mathcal{L}}{\partial |p_{j_k}|} \cdot
+     \frac{|d_{j_k}|}{(\Tsoft + |d_{j_k}|)^2}.
+\end{align}
+We parametrize $\Tsoft, \Tsel = e^{\log T}$ and let autograd push the
+$\partial T / \partial \log T = T$ factor onto the $\log$-T parameters.
+
+\section{Algorithmic notes}
+
+\subsection{Sequential argmin in lieu of $\operatorname{topk}$}
+
+For small $\nalt$ (typically $1, 2, 3$), we replace
+$\operatorname{topk}(|p|, k=\nalt, \text{largest=False})$ with a loop of
+$\arg\min{}$s, masking the chosen position to $+\infty$ after each pick:
+\begin{equation}
+  \begin{aligned}
+  &\text{for } k = 0, \dots, \nalt{-}1: \\
+  &\quad j_k = \arg\min_i |p_i|, \\
+  &\quad |p_{j_k}| \leftarrow +\infty.
+  \end{aligned}
+\end{equation}
+Under \texttt{torch.compile}, this fuses with the surrounding kernel; PyTorch's
+\texttt{topk} kernel does not. Empirically at $\NAP{=}6$, $\nalt{=}3$,
+$B{=}4096$, $\text{tph}{=}1024$: forward $1.7$\,ms (seq--argmin + compile) vs.\
+$21.9$\,ms (topk, eager) --- a $13\times$ kernel--level speedup. Memory drops
+$2.7\times$.
+
+\subsection{Why $|p|$ instead of $|d|$ for top selection}
+
+The score gap $\Delta\bts = 2|p|$ is monotonic in $|d|$ (since $|p|$ is monotonic
+in $|d|$), so sorting by $|p|$ and sorting by $|d|$ give the same ordering.
+Sorting by $|p|$ keeps everything inside the same already--computed tensor,
+saving one extra pass.
+
+\section{Numerical considerations}
+
+\begin{itemize}
+  \item \textbf{Sign ties.} If any $d_i = 0$ exactly, the "main" bit is taken
+        as $0$ (because $\mathbf{1}[d > 0]$ is false). This matches the
+        convention used by the standard \texttt{MultiHeadLut} forward; the
+        gradient is undefined at the tie point but a.s.\ defined for any
+        random initialization.
+  \item \textbf{Index--tie selection.} If two positions share the smallest
+        $|p_i|$ exactly, $\arg\min$ picks the lower--indexed one
+        deterministically (PyTorch convention); \texttt{topk} returns the same
+        set but may differ in order. The softmax over the ball is
+        permutation--invariant, so the forward output is unaffected.
+  \item \textbf{Compile + gradcheck.} \texttt{torch.compile} enables "donated
+        buffers" which forbid multiple backward passes. \texttt{gradcheck} in
+        tests is wrapped in
+        \verb|torch._functorch.config.patch(donated_buffer=False)|.
+\end{itemize}
+
+\section{Tests}
+
+\texttt{src/spiky/lutorch/tests/test\_hybrid\_smooth\_nalt.py} verifies:
+\begin{enumerate}
+  \item \textbf{Forward matches reference.} An independent reference forward
+        computes the explicit top--$(\nalt{+}1)$ softmax and matches the
+        compiled production forward to \texttt{atol=1e-10} (fp64),
+        $\nalt \in \{1,2,3,4\}$.
+  \item \textbf{Sequential argmin $=$ topk as sets.} The chosen position
+        sets agree up to permutation, $\nalt \in \{1,2,3\}$.
+  \item \textbf{Gradcheck.} \texttt{torch.autograd.gradcheck} on
+        $(\bm{x}, W, \log T_{\!\text{soft}}, \log T_{\!\text{sel}})$ passes in
+        fp64 for $\nalt \in \{1,2,3,4\}$.
+  \item \textbf{Eager $=$ compiled.} Output and all gradients agree to
+        fp32 noise for $\nalt \in \{1,2,3,4\}$.
+  \item \textbf{$\nalt = \NAP$ = full ball.} The specialized
+        no--topk branch matches the explicit full--ball reference.
+\end{enumerate}
+
+\end{document}

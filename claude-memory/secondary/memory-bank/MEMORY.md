@@ -1,0 +1,1 @@
+- [Spiky goal: purely ranking-coded](feedback_purely_ranking_coded.md) — don't promote no_rank_canon or raw-SDPA Q/K recipes even when they score better

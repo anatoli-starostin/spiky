@@ -1,0 +1,230 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\setlength{\parskip}{2pt}
+\titlespacing*{\section}{0pt}{8pt plus 2pt minus 2pt}{4pt}
+\titlespacing*{\paragraph}{0pt}{4pt plus 1pt minus 1pt}{6pt}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Cov}{\mathrm{Cov}}
+\newcommand{\sign}{\mathrm{sign}}
+\newcommand{\Tsel}{T_{\mathrm{sel}}}
+\newcommand{\Tscore}{T_{\mathrm{score}}}
+\newcommand{\dout}{d_{\mathrm{out}}}
+
+\begin{document}
+
+\title{\Large\textbf{Soft LUT gradients in dominance space}\\[2pt]
+\large Math notes toward a ranking-aligned weight update}
+\author{Anatoly Starostin}
+\date{}
+\maketitle
+\vspace{-14pt}
+
+% =========================================================================
+\section{Setup}
+\label{sec:setup}
+
+Single \texttt{TinyMHLut} table (drop head / tph indices). Input $x \in \R^E$, $n_c$ anchor pairs $(i_j, k_j)$ for $j = 1, \dots, n_c$, output $y \in \R^{\dout}$. Pair differences gathered into the linear operator
+\[
+D : \R^E \to \R^{n_c}, \qquad (Dx)_j = x_{i_j} - x_{k_j} =: z_j, \qquad \text{rows of } D = e_{i_j} - e_{k_j}.
+\]
+Pair scores $u_j = z_j / \Tscore$. Table $T \in \R^{K \times \dout}$ with $K = 2^{n_c}$ rows indexed by $b \in \{0,1\}^{n_c}$. Write the parity sign
+\[
+\chi_j(b) := 2 b_j - 1 \in \{-1, +1\}, \qquad \chi_S(b) := \prod_{j \in S} \chi_j(b).
+\]
+
+% =========================================================================
+\section{Forward: softmax over soft signs}
+\label{sec:fwd}
+
+Row energy and selection distribution:
+\[
+\mathcal{E}(b) = \frac{1}{\Tsel} \sum_j u_j\, \chi_j(b), \qquad
+p(b) = \frac{e^{\mathcal{E}(b)}}{Z}, \qquad
+Z = \sum_b e^{\mathcal{E}(b)}.
+\]
+Output:
+\[
+y \;=\; \E_p\!\left[T_b\right] \;=\; \sum_b p(b)\, T_b.
+\]
+
+\paragraph{Factorisation.} Because $\mathcal{E}$ is a sum over independent $\pm$ terms,
+\[
+Z \;=\; \prod_j 2 \cosh\!\big(u_j/\Tsel\big), \qquad
+p(b) \;=\; \prod_j q_j^{b_j}\,(1 - q_j)^{1-b_j}, \qquad
+q_j \;=\; \sigma\!\big(2 u_j / \Tsel\big).
+\]
+The $K$-way softmax is equivalent to an $n_c$-fold product of independent Bernoullis. We never need to materialise $p \in \R^K$ — only $\{q_j\} \in [0,1]^{n_c}$.
+
+% =========================================================================
+\section{Standard backward}
+\label{sec:bwd}
+
+Let $g := \partial L / \partial y \in \R^{\dout}$.
+
+\paragraph{Weight gradient ($\partial L / \partial T$).}
+\[
+\frac{\partial L}{\partial T_b} \;=\; p(b)\, g.
+\]
+Pointwise on rows, weighted by selection probability. \emph{Dense in support, sparse in mass:} every row receives a gradient, but most $p(b)$ are vanishingly small, so the useful signal lives on the few high-probability rows.
+
+\paragraph{Input gradient ($\partial L / \partial x$).} By the chain rule,
+\[
+\frac{\partial L}{\partial x} \;=\; D^\top \frac{\partial L}{\partial z}, \qquad
+\frac{\partial L}{\partial z_j} \;=\; \frac{1}{\Tscore} \frac{\partial L}{\partial u_j} \;=\; \frac{1}{\Tscore}\, g^\top \frac{\partial y}{\partial u_j}.
+\]
+Differentiating $p$ in the softmax form gives
+\[
+\frac{\partial p(b)}{\partial u_j} \;=\; \frac{p(b)}{\Tsel}\,\big(\chi_j(b) - \E_p[\chi_j]\big),
+\]
+so
+\[
+\frac{\partial y}{\partial u_j} \;=\; \frac{1}{\Tsel}\, \Cov_p\!\big(T_b,\, \chi_j(b)\big).
+\]
+Because $\chi_j$ depends on the single bit $b_j$ (marginal $q_j$ under $p$), the $K$-sum collapses to a difference of two conditional row-means:
+\[
+\boxed{\;\Cov_p(T_b, \chi_j) \;=\; 2\, q_j(1 - q_j)\, \Big(\E_{p \mid b_j = 1}[T_b] \;-\; \E_{p \mid b_j = 0}[T_b]\Big).\;}
+\]
+Combining:
+\[
+\frac{\partial L}{\partial u_j} \;=\; \frac{2\, q_j(1-q_j)}{\Tsel}\, g^\top\!\big(\E_{p \mid b_j=1}[T_b] - \E_{p \mid b_j=0}[T_b]\big).
+\]
+
+\paragraph{Geometric note.} $\partial L / \partial x$ lives in the row space of $D$ --- a subspace of $\R^E$ of dimension at most $n_c$, the \emph{comparison-visible subspace}. Any input perturbation orthogonal to it is invisible to the LUT.
+
+% =========================================================================
+\section{Dominance-space reading: when does a ranking change?}
+\label{sec:rank}
+
+The $n_c$ hyperplanes $\{x : x_{i_j} = x_{k_j}\}$ partition $\R^E$ into chambers, each labelled by a sign pattern $b \in \{0,1\}^{n_c}$. The forward map collapses each chamber to its row $T_b$.
+
+A step $\delta = -\eta\, \partial L / \partial x$ in the loss-decreasing direction flips pair $j$ when $z_j + (D \delta)_j$ crosses zero, i.e.\ at
+\[
+\eta^*_j \;=\; \frac{z_j}{(D\, \partial L / \partial x)_j} \;=\; \frac{z_j}{\partial L / \partial z_j}, \qquad \text{flip iff } \eta^*_j > 0.
+\]
+The first ranking change is reached at
+\[
+\eta^* \;=\; \min_{j\, :\, \eta^*_j > 0} \eta^*_j, \qquad j^* \;=\; \arg\min.
+\]
+
+\paragraph{Reading.}
+\begin{itemize}
+\setlength{\itemsep}{1pt}
+    \item If $\sign(\partial L / \partial z_j) = -\sign(z_j)$: loss wants to widen the gap, \emph{strengthening} the current bit. This pair never flips ($\eta^*_j < 0$).
+    \item Otherwise loss wants to flip the bit; the smallest $\eta^*_j$ among flip-wanting pairs identifies the very next ranking $b' = b \oplus e_{j^*}$.
+\end{itemize}
+This is the structural fact: $\partial L / \partial x$ encodes an \emph{itinerary through the chamber graph}, with $j^*$ being the next bit-flip the loss is reaching for.
+
+% =========================================================================
+\section{Two channels of $\partial L / \partial T$ --- and what's missing}
+\label{sec:channels}
+
+Differentiating $y = \E_p[T_b]$ splits the loss change into two channels:
+\[
+\delta y \;=\; \underbrace{\E_p\!\left[\delta T_b\right]}_{\text{(C1) change the table}} \;+\; \underbrace{\sum_b \big(\delta p(b)\big)\, T_b}_{\text{(C2) reroute by changing }x}.
+\]
+(C2) is what flows up through $\partial L / \partial x$ to the upstream layer. (C1) is the table's own update. \textbf{Standard backprop weights both channels by $p$ alone}, throwing away the ranking direction $j^*$ that channel (C2) just produced.
+
+\emph{The idea.} Use $j^*$ to densify and structure the (C1) table update.
+
+% =========================================================================
+\section{Ranking-aligned weight update}
+\label{sec:proposal}
+
+Define a transport kernel $\Psi(b' \mid b, \partial L / \partial z)$ on the cube and set
+\[
+\widetilde{\frac{\partial L}{\partial T_{b'}}} \;=\; \Psi(b' \mid b,\, \partial L / \partial z)\, g.
+\]
+Three natural choices, ordered by structure:
+\begin{enumerate}
+\setlength{\itemsep}{2pt}
+    \item \textbf{Hard STE.} $\Psi(b' \mid b) = \delta_{b, b'}$. Only the visited row updated.
+    \item \textbf{Soft.} $\Psi(b' \mid b) = p(b')$. Every row touched, weighted by current confidence.
+    \item \textbf{Ranking-aligned.} $\Psi(b' \mid b) = p(b') + \alpha\, \chi_{j^*}(b)\, \chi_{j^*}(b')$, or more generally
+    \[
+    \Psi(b' \mid b) \;=\; p(b')\, \exp\!\Big({-}\alpha \sum_{j\, :\, \eta^*_j > 0} \kappa_j\, \chi_j(b)\, \chi_j(b')\Big)
+    \]
+    with $\kappa_j$ decreasing in $\eta^*_j$ (closer-to-flipping pairs get more mass on the opposite bit).
+\end{enumerate}
+
+% =========================================================================
+\section{The clean basis: Walsh characters on $\{0,1\}^{n_c}$}
+\label{sec:walsh}
+
+Every table is a linear combination of $K$ Walsh characters:
+\[
+T_b \;=\; \sum_{S \subseteq [n_c]} w_S\, \chi_S(b), \qquad
+w_S \;=\; \frac{1}{K} \sum_b \chi_S(b)\, T_b,
+\]
+orthogonal in the cube measure: $\tfrac{1}{K}\sum_b \chi_S(b)\, \chi_{S'}(b) = \delta_{S, S'}$. A row-space update induces a Walsh-coefficient update
+\[
+\delta w_S \;=\; \frac{1}{K}\sum_b \chi_S(b)\, \delta T_b.
+\]
+The three kernels above produce:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lll}
+\toprule
+update style & $K \cdot \delta w_S \;\propto$ & character \\
+\midrule
+hard STE                  & $\chi_S(b)\, g$                       & broadband (all $w_S$ shifted equally) \\
+soft backward             & $\E_p[\chi_S]\, g$                    & low-order $S$ dominate \\
+ranking-aligned ($\alpha \to 1$)  & $\delta_{S,\{j^*\}}\, g$              & one-coefficient ($S = \{j^*\}$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Equivalently, translating the one-coefficient update back to row space:
+\[
+\boxed{\;\delta T_{b'} \;=\; -\eta\, g\, \chi_{j^*}(b') \;=\; -\eta\, g\,(2 b'_{j^*} - 1).\;}
+\]
+Every row's $j^*$ bit acts as the sign telling whether to add or subtract $\eta\, g$. The whole table is touched; the update is dense in rows but \emph{rank-one in Walsh basis}.
+
+% =========================================================================
+\section{What this corresponds to as a ``true'' gradient}
+\label{sec:framings}
+
+The above is not $\partial L / \partial T$ at the current routing $p$ --- it is a structured replacement. Three coherent ``it is the gradient of something'' framings:
+
+\paragraph{(F1) Anticipatory / lookahead.}
+It is the standard gradient of $L(\widehat y)$ where $\widehat y = \E_{\widehat p}[T_b]$ and $\widehat p$ is the predicted $k$-step-ahead routing distribution under SGD. The shift $p \to \widehat p$ deposits extra mass on the about-to-be-visited neighbour $b \oplus e_{j^*}$. Honest gradient descent on a slightly modified loss.
+
+\paragraph{(F2) Natural gradient.}
+Place a metric on table space
+\[
+\|\delta T\|_M^2 \;=\; \sum_S \lambda_S\, \|\delta w_S\|^2
+\]
+with $\lambda_S$ growing in $|S|$ (penalise high-frequency Walsh components). The natural gradient $-F^{-1} \nabla L$ then redistributes a pointwise row update along the low-frequency Walsh axes; the one-bit $\chi_{j^*}$ axis is the most natural single-coordinate move.
+
+\paragraph{(F3) Variance reduction.}
+The per-token soft gradient $p(b)\, g$ has large variance across tokens (one row dominates). Project onto $\chi_{j^*}$ as a control variate that captures the dominant low-order component; the residual is batch-averaged away.
+
+All three roads produce the same shape of update; they justify it from different priors.
+
+% =========================================================================
+\section{Sanity checks and next steps}
+\label{sec:next}
+
+\begin{enumerate}
+\setlength{\itemsep}{1pt}
+    \item \textbf{Limiting behaviour.} When no clear $j^*$ exists (all $|\eta^*_j|$ comparable), the ranking-aligned kernel should collapse to standard soft backward. Verify on a 2-pair toy table.
+    \item \textbf{Choice of $\Psi$.} One-bit ($\{j^*\}$ only), low-Hamming with decay, or full Walsh-soft
+    $\Psi(b' \mid b) \propto p(b')\, e^{-\alpha d_H(b, b')}$.
+    \item \textbf{Implementation.} A one-Walsh-axis update on $K$ rows is an outer product of two $\{-1, +1\}^{n_c}$ vectors; never need to materialise the full table.
+    \item \textbf{Empirical probe.} On the smallest LUT in \texttt{exp428} (\texttt{qkv\_lut}, $\mathrm{NAP} = 6$, $\mathrm{tph} = 64$), swap soft backward for the $\chi_{j^*}$-aligned variant and compare bpb trajectories at $b = 16$.
+\end{enumerate}
+
+\end{document}

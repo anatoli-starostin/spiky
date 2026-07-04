@@ -1,0 +1,194 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{xcolor}
+\usepackage[hidelinks,pdftitle={Discrete forward, soft backward for differentiable lookup tables},pdfauthor={}]{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\setlength{\parskip}{2pt}
+\titlespacing*{\section}{0pt}{8pt plus 2pt minus 2pt}{4pt}
+\titlespacing*{\paragraph}{0pt}{4pt plus 1pt minus 1pt}{6pt}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\sign}{\mathrm{sign}}
+\newcommand{\softmax}{\mathrm{softmax}}
+\newcommand{\Tsel}{T_{\mathrm{sel}}}
+\newcommand{\Tsoft}{T_{\mathrm{soft}}}
+\newcommand{\dout}{D}
+\newcommand{\bstar}{b^{\star}}
+\newcommand{\jstar}{j^{\star}}
+
+\begin{document}
+
+\title{\Large\textbf{Discrete forward, soft backward for differentiable lookup tables}\\[2pt]
+\large Sign-pack lookup, top-2 \texorpdfstring{($n_{\text{alt}}{=}1$)}{(n\_alt=1)} blend, full-$K$ soft surrogate}
+\author{}
+\date{}
+\maketitle
+\vspace{-22pt}
+
+% =========================================================================
+\section{Setup}
+
+\paragraph{API surface.} \texttt{FastMultiHeadLut} is a layer
+\[
+F : \R^{E} \;\to\; \R^{H \times \dout},
+\qquad x \mapsto y_h = \sum_{s=1}^{\text{tph}}\; \text{Lut}_{h,s}(x),
+\]
+parameterised by an input width $E$, an output width $\dout$ per head, a number of heads $H$, a number of tables per head $\text{tph}$, and a number of anchor pairs $N$ per table (the LUT's NAP). The layer holds $H \cdot \text{tph}$ independent lookup tables; each one maps $x$ to a $\dout$-vector, and the per-head output sums the $\text{tph}$ tables in that head. Two scalar temperatures shared by all tables, stored in log-space and exponentiated on use: $\Tsoft$ (per-anchor sign sharpness) and $\Tsel$ (row-selection sharpness).
+
+The math below describes a single table $\text{Lut}_{h,s}$ — every formula runs in parallel on all $H \cdot \text{tph}$ of them with their own $(a_j, b_j)$ and $W$ but shared $\Tsoft, \Tsel$.
+
+\paragraph{Anchor pairs and weight table.} Each table fixes $N$ anchor pairs $(a_j, b_j)_{j=1}^{N}$ once at module init and never moves them; the pair differences are
+\[
+d_j \;=\; x_{a_j} - x_{b_j}, \qquad D : \R^E \to \R^{N}, \quad (Dx)_j = d_j, \quad \text{rows}(D) = e_{a_j} - e_{b_j}.
+\]
+A weight table $W \in \R^{K \times \dout}$ with $K = 2^{N}$ rows indexed by $b \in \{0,1\}^{N}$.
+
+Bit parity:
+\[
+\chi_j(b) \;:=\; 2 b_j - 1 \in \{-1, +1\}.
+\]
+
+\paragraph{Per-anchor soft sign and row score.}
+For each anchor pair $j$ and each row $b$ define
+\[
+p_j \;=\; \frac{d_j}{\Tsoft + |d_j|} \;=\; \sign(d_j)\,\frac{|d_j|}{\Tsoft + |d_j|}\;\in\;(-1,+1),
+\qquad
+\mathcal{S}(b) \;=\; \sum_{j=1}^{N} p_j\, \chi_j(b),
+\]
+and the softmax distribution over rows
+\[
+z(b) \;=\; \mathcal{S}(b)/\Tsel,
+\qquad \pi(b) \;=\; \softmax_b\,z(b).
+\]
+$p_j$ is the smooth sign; $\pi$ is the full-$K$ softmax used by the backward surrogate (Section~\ref{sec:bwd}).
+
+\paragraph{Main row.} The argmax of $\mathcal{S}$ is the hard sign-pack:
+\[
+\bstar \;=\; \arg\max_{b} \mathcal{S}(b), \qquad \bstar_j \;=\; [d_j > 0].
+\]
+Computing $\bstar$ takes $N$ comparisons and packs the bits into one integer in $\{0,\dots,K-1\}$.
+
+% =========================================================================
+\section{Two forward modes}
+
+\paragraph{Hard \texttt{(forward\_mode=`hard')}.} The published default. Output is the single row picked by the sign-pack:
+\[
+\boxed{\;
+y^{\text{hard}} \;=\; W[\bstar].
+\;}
+\]
+Cost: $O(N)$ to compute $\bstar$, one row gather. No softmax, no row blend; temperatures play no role in $y^{\text{hard}}$.
+
+\paragraph{Hybrid-smooth \texttt{(forward\_mode=`hybrid\_smooth')}.} An exact two-row softmax restricted to $\bstar$ and its least-confident Hamming-1 neighbour. Let
+\[
+\jstar \;=\; \arg\min_{j} |d_j|, \qquad b_{\text{alt}} \;=\; \bstar \oplus e_{\jstar}.
+\]
+Any single-bit flip of $\bstar$ yields a row whose score differs from $\mathcal{S}(\bstar)$ by exactly $2|p_j|$. The smallest such gap is at $j = \jstar$, so $b_{\text{alt}}$ is the second-best row under $\mathcal{S}$.
+
+\noindent Setting $d_{\min} := |d_{\jstar}|$, the exact score gap is
+\[
+\Delta(\bstar, b_{\text{alt}}) \;=\; \mathcal{S}(\bstar) - \mathcal{S}(b_{\text{alt}}) \;=\; 2|p_{\jstar}| \;=\; \frac{2\, d_{\min}}{\Tsoft + d_{\min}},
+\]
+and the softmax of $z$ restricted to $\{\bstar, b_{\text{alt}}\}$ places mass
+\[
+u \;=\; \sigma\!\bigl(-\Delta/\Tsel\bigr) \;=\; \frac{1}{1 + \exp(\Delta/\Tsel)} \;\in\; (0,\tfrac{1}{2}]
+\]
+on the alt row. The output is the two-row blend:
+\[
+\boxed{\;
+y^{\text{hyb}} \;=\; (1-u)\, W[\bstar] \;+\; u\, W[b_{\text{alt}}].
+\;}
+\]
+\emph{Both temperatures enter $u$}: $\Tsoft$ shapes $\Delta$ through $p_{\jstar}$; $\Tsel$ rescales the resulting log-odds. Cost: $O(N)$ plus two row gathers and one blend; no materialisation of $\pi \in \R^{K}$.
+
+\paragraph{Limit.} As $|d_{\jstar}|/\Tsoft \to \infty$ or $\Tsel \to 0^+$, $u \to 0$ and $y^{\text{hyb}} \to y^{\text{hard}}$. Hybrid-smooth is a strict refinement of hard: same $\bstar$, extra mass $u$ on the second-best row at the least-confident anchor.
+
+% =========================================================================
+\section{Soft surrogate backward}
+\label{sec:bwd}
+
+Let $g := \partial L/\partial y \in \R^{\dout}$. The backward decomposes into two pieces:
+
+\medskip
+\noindent (A)\; \emph{Weight gradient} flows \emph{only} through the row(s) that actually contributed to $y$ — one row in hard mode, two rows in hybrid-smooth mode.
+
+\noindent (B)\; \emph{Input and temperature gradients} are computed as the analytic gradient of the full-$K$ soft forward $y_{\text{full}} = \sum_b \pi(b)\, W[b]$ from Section~1, ignoring the truncation the actual forward applied. Identical in both forward modes.
+
+% --------------------------------------------------------------
+\subsection*{(A) Weight gradient (mode-dependent)}
+
+\paragraph{Hard mode.} Differentiating $y^{\text{hard}} = W[\bstar]$ at fixed $\bstar$:
+\[
+\frac{\partial L}{\partial W[r]}^{\text{(hard)}} \;=\; g\,\mathbf{1}[r = \bstar];
+\qquad \text{all other rows } 0.
+\]
+A one-row scatter into $W$ per sample.
+
+\paragraph{Hybrid-smooth mode.} Differentiating $y^{\text{hyb}} = (1-u) W[\bstar] + u\, W[b_{\text{alt}}]$ at fixed $u, \bstar, b_{\text{alt}}$:
+\[
+\frac{\partial L}{\partial W[r]}^{\text{(hyb)}} \;=\; (1-u)\,g\,\mathbf{1}[r = \bstar] \;+\; u\,g\,\mathbf{1}[r = b_{\text{alt}}];
+\qquad \text{all other rows } 0.
+\]
+A two-row scatter per sample: weight $(1-u_b)\,g_b$ at row $\bstar_b$, weight $u_b\,g_b$ at row $b_{\text{alt},b}$.
+
+In both cases this is the honest derivative of the truncated forward — no soft attribution to rows the forward did not touch. As $u \to 0$ the hybrid-smooth weight grad collapses to the hard weight grad, consistent with the forward limit.
+
+% --------------------------------------------------------------
+\subsection*{(B) Input \& temperature gradients via the full-soft surrogate}
+
+The forward used only $\{\bstar\}$ or $\{\bstar, b_{\text{alt}}\}$, but for $\partial L/\partial x$ and $\partial L / \partial T$ we want a denser local signal that reflects the full neighbourhood of $\bstar$. So we backpropagate as if the forward had been the full-$K$ soft mode of Section~1, $y_{\text{full}} = \sum_b \pi(b)\, W[b]$, reusing the same $p_j, \mathcal S(b), z(b), \pi(b)$ defined there.
+
+\paragraph{Through the softmax.}
+\begin{align*}
+g_{\pi}(b) &\;=\; g^{\top}\,W[b]                                                 && \in\R^K, \\
+\langle g_\pi, \pi\rangle &\;=\; \sum_b g_\pi(b)\,\pi(b),                                       \\
+g_{z}(b)  &\;=\; \pi(b)\,\bigl(g_{\pi}(b) - \langle g_\pi, \pi\rangle\bigr) && (\text{softmax Jacobian}), \\
+g_{\mathcal S}(b) &\;=\; g_z(b)/\Tsel.
+\end{align*}
+
+\paragraph{Through the row-score sum.} $\mathcal S$ is linear in $p_j$ with coefficient $\chi_j(\cdot)$, so
+\[
+g_{p_j} \;=\; \sum_b g_{\mathcal S}(b)\, \chi_j(b).
+\]
+
+\paragraph{Through the soft sign.} $p_j = d_j/(\Tsoft + |d_j|)$, so differentiating directly,
+\[
+\frac{\partial p_j}{\partial d_j} \;=\; \frac{\Tsoft}{(\Tsoft + |d_j|)^2},
+\qquad
+g_{d_j} \;=\; g_{p_j}\,\frac{\Tsoft}{(\Tsoft + |d_j|)^2}.
+\]
+
+\paragraph{Through $D$.}
+\[
+\frac{\partial L}{\partial x} \;=\; D^{\top} g_d, \qquad \text{i.e.}\quad
+(\partial L/\partial x)_{a_j} \mathrel{+}= g_{d_j}, \quad (\partial L/\partial x)_{b_j} \mathrel{-}= g_{d_j}.
+\]
+
+\paragraph{Temperatures (log-parameterised, $\partial/\partial \log T = T \cdot \partial/\partial T$).}
+$z$ depends on $\Tsel$ only via the rescale $z = \mathcal S / \Tsel$, and on $\Tsoft$ only via $p_j$ (hence through $d_j$ in the same way as $x$):
+\[
+\boxed{\;
+\frac{\partial L}{\partial \log \Tsel} \;=\; -\sum_b g_z(b)\,z(b),
+\qquad
+\frac{\partial L}{\partial \log \Tsoft} \;=\; -\sum_j g_{d_j}\,d_j.
+\;}
+\]
+The temperature gradients are nonzero even in hard forward mode, where the temperatures had no effect on $y$ at all — the surrogate gives them an update through the soft-pipeline Jacobian.
+
+% =========================================================================
+\section{Why the asymmetry}
+
+\paragraph{Weight grad is hard because the forward is hard.}
+The forward only ever reads $W[\bstar]$ (hard) or $\{W[\bstar], W[b_{\text{alt}}]\}$ (hybrid-smooth); any soft attribution to the remaining $K{-}1$ or $K{-}2$ rows would be a phantom update with no matching forward contribution. Restricting the weight grad to the rows the forward actually touched keeps the gradient an unbiased derivative of the actual computation.
+
+\paragraph{Input/temperature grad is soft because we want a richer signal.}
+$x$ enters the forward only through $\bstar$ (hard) or through $\bstar$, $b_{\text{alt}}$, and $u$ (hybrid-smooth). The honest derivative w.r.t.\ $x$ is therefore either identically zero (hard: $\bstar$ is a discrete function of $x$, the gather is $x$-independent at the chosen index) or dominated by a single coordinate (hybrid-smooth: only the $\jstar$-th anchor pair feeds $u$). Neither is a usable training signal. The full-soft surrogate restores a dense signal at all $N$ anchor pairs and gives the temperatures a useful update each step, at the cost of not being the literal Jacobian of the truncated forward. Empirically this trade --- honest weight update, smooth input update --- is what makes both forward modes trainable end-to-end while leaving inference as a sign-pack lookup.
+
+\end{document}
