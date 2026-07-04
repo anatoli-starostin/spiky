@@ -166,11 +166,13 @@ def _get_ext_modules():
                     sources_list_cuda,
                     extra_compile_args={
                         "cxx": [
+                            "-std=c++20",
                             "-I",
                             "/usr/local/cuda/include",
                             "-Ofast",
                         ] + BUILD_INTEGERS_COMPILE_ARGS,
                         "nvcc": [
+                            "-std=c++20",
                             "-I",
                             "/usr/local/cuda/include",
                             f"--compiler-bindir={gpp_dir}",
