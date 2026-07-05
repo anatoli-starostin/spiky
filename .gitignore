@@ -4,8 +4,10 @@
 **/tests/**/*.png
 **/tests/mnist
 workbooks/fineweb_texts.txt
+workbooks/tinyshakespeare.txt
 workbooks/mnist
 workbooks/data
+workbooks/*.png
 spiky_cuda_deprecated/*/aux_/*.cu
 
 # Native spiky generated kernels (from .proto / logic)

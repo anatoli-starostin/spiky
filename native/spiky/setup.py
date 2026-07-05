@@ -14,6 +14,23 @@ def _pick_gpp():
     raise RuntimeError("No g++ found in PATH")
 
 
+def _cpp_std_args(kind):
+    """C++ standard compile flag(s) for a compile-args list.
+
+    `kind` is 'cxx' (host compiler) or 'nvcc'. Configurable via the
+    SPIKY_CXX_STD env var (default 'c++20'; set it empty to omit). torch>=2.9
+    ATen headers require C++20 (P0634); the default keeps the build working out
+    of the box while staying overridable per environment/toolchain. MSVC uses
+    the /std: spelling for the host compiler; gcc/clang and nvcc use -std=.
+    """
+    std = os.environ.get("SPIKY_CXX_STD", "c++20").strip()
+    if not std:
+        return []
+    if kind == "cxx" and hasattr(sys, "getwindowsversion"):
+        return [f"/std:{std}"]
+    return [f"-std={std}"]
+
+
 def _run_codegen():
     """
     Run proto-to-CUDA codegen for the main `spiky_cuda` extension.
@@ -132,8 +149,8 @@ def _get_ext_modules():
                     "spiky_cuda",
                     sources_list_cuda,
                     extra_compile_args={
-                        "cxx": ["-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
-                        "nvcc": [
+                        "cxx": _cpp_std_args("cxx") + ["-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
+                        "nvcc": _cpp_std_args("nvcc") + [
                             "-O3",
                             "-v",
                             "-allow-unsupported-compiler",
@@ -150,7 +167,7 @@ def _get_ext_modules():
                 CppExtension(
                     "spiky_cuda",
                     sources_list_no_cuda,
-                    extra_compile_args=["-DNO_CUDA", "-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
+                    extra_compile_args=_cpp_std_args("cxx") + ["-DNO_CUDA", "-O2"] + BUILD_INTEGERS_COMPILE_ARGS,
                 )
             ]
     else:
@@ -165,12 +182,12 @@ def _get_ext_modules():
                     "spiky_cuda",
                     sources_list_cuda,
                     extra_compile_args={
-                        "cxx": [
+                        "cxx": _cpp_std_args("cxx") + [
                             "-I",
                             "/usr/local/cuda/include",
                             "-Ofast",
                         ] + BUILD_INTEGERS_COMPILE_ARGS,
-                        "nvcc": [
+                        "nvcc": _cpp_std_args("nvcc") + [
                             "-I",
                             "/usr/local/cuda/include",
                             f"--compiler-bindir={gpp_dir}",
@@ -189,7 +206,7 @@ def _get_ext_modules():
                 CppExtension(
                     "spiky_cuda",
                     sources_list_no_cuda,
-                    extra_compile_args=["-DNO_CUDA", "-O3"] + BUILD_INTEGERS_COMPILE_ARGS,
+                    extra_compile_args=_cpp_std_args("cxx") + ["-DNO_CUDA", "-O3"] + BUILD_INTEGERS_COMPILE_ARGS,
                 )
             ]
 

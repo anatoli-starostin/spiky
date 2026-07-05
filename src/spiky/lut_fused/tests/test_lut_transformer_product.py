@@ -9,6 +9,7 @@ from spiky.lut_fused.LUTLayer import GradientPolicy, GradientType, SynapseMeta
 from spiky.lut_fused.LUTTransformer import LUTTransformer
 from gt_lut_product import GTLUTProductTransformer
 from spiky.util.text_snippet_sampler import TextSnippetSampler
+from spiky.util.tiny_shakespeare import ensure_tinyshakespeare
 
 
 def test_lut_transformer_product(
@@ -250,7 +251,7 @@ def _test_lut_transformer_product(
     print(f'  Train or eval: {train_or_eval}')
     print('=' * 60)
 
-    snippet_sampler = TextSnippetSampler('../../../../workbooks/tinyshakespeare.txt', context_size + 1, 100, device)
+    snippet_sampler = TextSnippetSampler(ensure_tinyshakespeare('../../../../workbooks/tinyshakespeare.txt'), context_size + 1, 100, device)
 
     lut_transformer = LUTTransformer(
         vocab_size=vocab_size,
