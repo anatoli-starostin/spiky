@@ -1,0 +1,41 @@
+# `claude/` — scientific knowledge base for the spiky project
+
+This folder is the **shared, version-controlled memory** for AI assistants (Claude and
+others) working on **spiky**. Historically this knowledge lived only in each assistant's
+private per-machine memory; as the project spreads across multiple machines it belongs
+here, in the repo, so any assistant on any host inherits the same understanding.
+
+**Audience:** a capable coding/research assistant who has just been pointed at this repo
+and needs to understand *what spiky is trying to do*, *what has already been learned*, and
+*what not to re-try*. It is written to be read top-to-bottom on first contact.
+
+## What's here (read in this order)
+
+1. **[thesis.md](thesis.md)** — the *why*. The scientific thesis behind spiky/LUTGPT:
+   differentiable lookup tables as a permutation-coded, (nearly) matmul-free transformer.
+   Start here.
+2. **[experiment-journey.md](experiment-journey.md)** — the *what we tried*. The arc of
+   ~250 experiments that produced LUTGPT: the eras, the durable mechanistic lessons (the
+   load-bearing knowledge), the dead-ends that are already falsified, and the gotchas.
+   Read this before designing a new experiment so you don't repeat settled work.
+3. **[experiment-archive.md](experiment-archive.md)** — *where the data is*. How to find
+   the full historical experimental record (configs / metrics / summaries for ~1,366 runs)
+   and how to verify any specific experiment number or figure.
+
+## Scope and boundaries
+
+- **This is the scientific record only** — the settled findings and the reasoning behind
+  them. The *methodology* for how experiments are conducted (branching, launching runs,
+  and — going forward — coordinating work across multiple machines) is deliberately **not**
+  in this first cut; it is being defined separately and will be added here later.
+- **Anchor of truth:** the single most authoritative scientific document is the **LUTGPT
+  research report** (`doc/lutorch/lutgpt_research_report.pdf` in this repo). Where these
+  notes and the report disagree, the report wins. These notes are a distilled, navigable
+  companion to it — not a replacement.
+- **Epistemic caveat:** these are distilled observations, accurate as of when they were
+  written. Trust the *lessons*; verify a specific experiment id, bpb figure, or code
+  citation against the report and the archive ([experiment-archive.md](experiment-archive.md))
+  before quoting it as fact. Code moves; the mechanistic conclusions have been stable.
+
+This folder is meant to grow. When you learn something durable and general about the
+science, add it here (in a PR) rather than leaving it in a single assistant's private memory.
