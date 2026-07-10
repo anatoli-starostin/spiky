@@ -21,13 +21,18 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
 3. **[experiment-archive.md](experiment-archive.md)** — *where the data is*. How to find
    the full historical experimental record (configs / metrics / summaries for ~1,366 runs)
    and how to verify any specific experiment number or figure.
+4. **[experiment-methodology.md](experiment-methodology.md)** — *how work is run*. The
+   process: one branch per idea, and how experiments are coordinated across multiple GPU
+   machines (the shared research branch as the sync medium). Read this before starting a new
+   idea or running anything on a second host.
 
 ## Scope and boundaries
 
-- **This is the scientific record only** — the settled findings and the reasoning behind
-  them. The *methodology* for how experiments are conducted (branching, launching runs,
-  and — going forward — coordinating work across multiple machines) is deliberately **not**
-  in this first cut; it is being defined separately and will be added here later.
+- **The scientific record and the working method.** thesis / journey / archive are the
+  settled findings and the reasoning behind them; [experiment-methodology.md](experiment-methodology.md)
+  is *how* experiments are run and coordinated across machines. Both are kept free of
+  machine- and account-specific details (hostnames, credentials, SSH keys) — those live in
+  each assistant's private per-machine notes, not here.
 - **Anchor of truth:** the single most authoritative scientific document is the **LUTGPT
   research report** (`doc/lutorch/lutgpt_research_report.pdf` in this repo). Where these
   notes and the report disagree, the report wins. These notes are a distilled, navigable
