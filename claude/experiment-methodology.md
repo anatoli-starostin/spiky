@@ -12,32 +12,46 @@ per-machine notes — they are how you *implement* the steps below, not part of 
 method. What is shared, and belongs here, is the **branch logic** and the **multi-machine
 coordination model**.
 
-## The unit of work: one idea, one branch
+## The unit of work: one idea, one issue, one branch
 
-Research is structured as **one branch per idea** — no giant catch-all branches. `main` is
-the clean, reproducible source of truth.
+Research is structured as **one idea → one GitHub issue → one branch** — no giant
+catch-all branches. `main` is the clean, reproducible source of truth, and **the GitHub
+issue is where every idea begins**: it comes before any code and outlives the branch.
 
-- A new idea starts on its own branch off `main`, named **`research/<short-slug>`**.
+- **An idea starts as a GitHub issue.** Before opening a branch or writing a line of code,
+  open an issue that states the idea — the hypothesis, why it might work, and what would
+  count as success. This issue is the idea's permanent home: its identifier (`#N`), its
+  discussion thread, and its status (open = in progress, closed = decided). Nothing else is
+  created until the issue exists.
+- **The issue spawns exactly one branch**, off `main`, named **`research/<short-slug>`**.
+  The branch and issue are permanently linked — reference `#N` in the branch's first commit
+  and in its eventual PR — and *all* work for the idea happens on that one branch.
 - **Every experiment gets its own folder** — never overwrite a prior run's outputs. The
   convention is `experiments/<idea>/exp_<slug>/`, each holding at least `config.json`,
   `metrics.csv`, and `summary.json` (plus any plots). Fork the previous run's folder to
   start a new one; change only what the experiment is testing.
 - Run as many scratch experiments on the branch as you need. The branch is your scratch
   space; `main` stays curated.
+- **Keep the issue current.** As experiments land, post the key numbers and turning points
+  back to the issue — it is the human-readable narrative of the idea, while the branch holds
+  the data. Anyone can read the issue to learn where the idea stands without checking out the
+  branch.
 
-### Two exits for a branch
+### Two exits for a branch — and for its issue
 
-An idea-branch ends one of two ways, decided **by results**:
+An idea-branch, and the issue behind it, ends one of two ways, decided **by results**:
 
 - **Success → merge to `main`**, via a pull request (a human reviews and merges — never push
-  `main` directly). Merge only the decisive material: (a) the code/architecture change,
+  `main` directly). The PR references the issue (`Closes #N`) so merging it closes the issue
+  automatically. Merge only the decisive material: (a) the code/architecture change,
   (b) a short findings note under `docs/findings/<idea>.md` (what won, why, key numbers),
   and (c) the *decisive* experiment(s)' data. Losing/scratch runs stay behind on the branch;
   they do not come into `main`. This keeps `main` a curated record, not a dumping ground.
 - **Failure → abandon the branch.** Leave it on the remote, unmerged, never deleted (it stays
-  a searchable record). Write a one-line autopsy to `docs/dead-ends.md` on `main`
-  (`- <idea>: tried X, failed because Y (exp_<slug>: N.NNN bpb)`) so the lesson survives even
-  if nobody reopens the branch.
+  a searchable record). **Close the issue** with a short autopsy comment, and write a one-line
+  autopsy to `docs/dead-ends.md` on `main`
+  (`- <idea> (#N): tried X, failed because Y (exp_<slug>: N.NNN bpb)`) so the lesson survives
+  even if nobody reopens the branch or the issue.
 
 ## Working across multiple machines
 
@@ -70,6 +84,9 @@ files, so histories from parallel hosts merge cleanly with essentially no confli
 
 ### Invariants and gotchas
 
+- **Every branch traces back to an issue.** If you are on a `research/` branch with no issue,
+  open the issue first and link it — the issue is the entry point to the idea, and a branch
+  without one is invisible to anyone reading the tracker.
 - **On research branches: commit + push after *every* experiment** — frequent and direct.
   Pull requests are only ever for landing decisive results into `main`.
 - **Always `git pull --rebase` before pushing** a shared branch. Different machines write
