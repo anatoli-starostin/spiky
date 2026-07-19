@@ -26,6 +26,13 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
    machines (the shared research branch as the sync medium). Read this before starting a new
    idea or running anything on a second host.
 
+## Reusable skills
+
+- **[skills/](skills/)** — portable, machine-agnostic Claude *skills* for this project
+  (e.g. [paper-writing](skills/paper-writing/SKILL.md): detect the LaTeX toolchain and
+  compile a `.tex` to a real PDF on any host). These are capabilities, not scientific
+  findings — drop a skill here when it's worth sharing across every assistant and machine.
+
 ## Scope and boundaries
 
 - **The scientific record and the working method.** thesis / journey / archive are the
