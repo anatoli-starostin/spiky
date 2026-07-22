@@ -151,7 +151,8 @@ inline shell.
 > `gh_issue.py` by its path — so if it sat in `~/projects` (or any `sbox`-writable dir), the
 > caged agent could *silently rewrite the helper* and it would still auto-run green,
 > collapsing the whole "narrow, vetted capability" guarantee. Keep it somewhere the cage
-> mounts **read-only** (the fleet uses `~/work/gh-issue/`), so tampering with the trusted
+> mounts **read-only** (cage_policy's single `_TOOLS_DIR` constant — default `~/work`,
+> overridable via the `AGENT_TOOLS_DIR` env var), so tampering with the trusted
 > tool requires a human approval — exactly like `cage_policy.py`/`permission_gate.py` living
 > in `~/.claude/hooks/` rather than in the cage. The directory *name* is incidental; the
 > **read-only-in-cage** property is the requirement. Same reasoning applies to the

@@ -35,6 +35,14 @@ SAFE_TOOLS = {
     "BashOutput", "KillShell", "KillBash", "ExitPlanMode",
 }
 
+# Directory holding the green-listed helper scripts (body_bridge.py, gh_issue.py). They are
+# trusted by ABSOLUTE PATH, so they MUST live where the sbox cage mounts READ-ONLY — else the
+# caged agent could rewrite a trusted helper and have it still auto-run green (see the
+# agent-cage SKILL). This is the one knob for that location: the directory NAME is incidental,
+# the read-only-in-cage property is the requirement. Override with AGENT_TOOLS_DIR to deploy
+# the helpers elsewhere.
+_TOOLS_DIR = os.path.expanduser(os.environ.get("AGENT_TOOLS_DIR", "~/work"))
+
 # Writable green zone for the file tools — mirrors the sbox writable binds. A file
 # write INSIDE these auto-allows (frictionless, like the cage); anywhere else is
 # gated (routed to the approval channel).
@@ -80,9 +88,8 @@ SAFE_BASH_PATTERNS = [
 # The body filing a delegated task's result: an ABSOLUTE-path body_bridge call,
 # optionally feeding a QUOTED heredoc (report text is literal DATA, not shell).
 # Matched as a WHOLE line so the apostrophe/pipe-laden report never reaches shlex.
-# The body_bridge.py location is a deploy convention, not a fixed absolute path —
-# derive it from $HOME so this is machine-agnostic, and escape it into the pattern.
-_BODY_BRIDGE = os.path.expanduser("~/work/slack-facade/body_bridge.py")
+# body_bridge.py lives in the trusted-tools dir (_TOOLS_DIR); escape it into the pattern.
+_BODY_BRIDGE = f"{_TOOLS_DIR}/slack-facade/body_bridge.py"
 _BODY_HEAD = re.compile(
     r"^\s*(\S+/)?python3?\s+"
     + re.escape(_BODY_BRIDGE)
@@ -290,7 +297,7 @@ def is_safe_git(seg):
 # The script itself only calls the GitHub API with the spikybot PAT; it cannot exec
 # arbitrary code, so the green surface stays narrow. Bodies come via --body-file, so
 # no heredoc / substitution ever rides the command line.
-GH_ISSUE_SCRIPT = os.path.expanduser("~/work/gh-issue/gh_issue.py")
+GH_ISSUE_SCRIPT = f"{_TOOLS_DIR}/gh-issue/gh_issue.py"
 _PY = {"python", "python3"}
 
 def is_safe_gh_issue(seg):
