@@ -70,6 +70,15 @@ sbox bash -c 'cd ~/projects/x && python train.py | tee /tmp/log'
 Keep single commands single — a bare `sbox X && ls` is multi-segment and gets gated on the
 uncaged `&& ls`.
 
+**⚠️ A heredoc gates even under `sbox`.** `sbox python3 - <<'EOF' … EOF` asks for approval
+despite the `sbox` prefix, because the `<<` is an outer-shell **redirect** — and the policy
+gates any outer redirect to a real target (only `/dev/null` and fd-dups like `2>&1` are
+exempt). The prefix doesn't protect a line that has a top-level operator. To run a multi-line
+script frictionlessly, **write it to a file** in a writable dir and run `sbox python3
+script.py` (a single clean segment); for a short snippet use `sbox python3 -c '…'` with the
+body single-quoted. Any `<`/`>`/`|`/`&&`/`$()`/heredoc you actually need must live *inside*
+`sbox bash -c '…'`, never at the outer level.
+
 ### Standing `sbox` up on a new host
 
 1. `sudo apt-get install -y bubblewrap socat`
