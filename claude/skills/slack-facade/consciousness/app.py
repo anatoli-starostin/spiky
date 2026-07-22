@@ -54,7 +54,7 @@ log = logging.getLogger("facade")
 # introduce itself under the wrong name. Each host's Slack app display_name matches this.
 #
 # Override file for hosts whose system hostname isn't their fleet name: a cloud
-# VM calls itself "computeinstance-e00kvx817kxpdq0f2w", and cloud-init would undo a
+# VM calls itself a generated instance id like "computeinstance-…", and cloud-init would undo a
 # hostnamectl change on every reboot. A file is immune to that. Absent on hosts whose
 # system hostname already matches the fleet name.
 _NAME_FILE = Path.home() / ".claude" / "slack_facade" / "agent_name"
