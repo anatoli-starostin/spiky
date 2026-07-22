@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """PostToolUse hook: the tool has RUN, so whatever approval was pending is resolved.
 
-Counterpart to telegram_permission.py, which publishes
-`~/.claude/agent_bridge/awaiting_approval` (contents: "console" or "telegram")
+Counterpart to the permission hook, which publishes
+`~/.claude/agent_bridge/awaiting_approval` (contents: "console" or "slack")
 while a human is being asked. The Slack face reads that via check_status so it can
-truthfully say "there's an approval waiting for you in the console / on Telegram"
+truthfully say "there's an approval waiting for you in the console / in the owner's Slack DM"
 instead of guessing. Without this, the flag would linger after approval and the face
 would keep claiming it's blocked.
 """

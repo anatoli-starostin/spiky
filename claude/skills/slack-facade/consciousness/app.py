@@ -6,7 +6,7 @@ The consciousness is a Claude whose ONLY tools are `delegate_to_body` and
 instantly and can never reach a human prompt (permission_mode="dontAsk"), so the
 consciousness can never freeze a public channel -- the invariant the design
 rests on. The body (this host's Claude Code CLI session) picks tasks off the
-queue via a Monitor, runs them with real tools + Telegram-bridge approvals, and
+queue via a Monitor, runs them with real tools + out-of-band approvals, and
 reports results back; a reaper loop relays those into the Slack thread. See
 body_bridge.py.
 """
@@ -203,7 +203,7 @@ NEVER GUESS at why something is slow. If asked, call check_status and report ONL
 what it actually tells you, in plain human words:
   * awaiting-approval -> an approval is genuinely waiting for Anatoly. Say so, and
     name WHERE, exactly as check_status words it -- e.g. "there's an approval
-    waiting for you on {HOST}'s console", or "...on Telegram". Always name the
+    waiting for you on {HOST}'s console", or "...in your Slack DM". Always name the
     host: "this machine" is useless to him when several agents share the channel.
     That is the actionable part; give it to him.
   * anything else -> say you're still on it and will confirm when it's done.
@@ -348,8 +348,8 @@ class Consciousness:
             ],
             permission_mode="dontAsk",  # <- unmatched calls auto-deny, never prompt
             # [] = load NOTHING. `None` means "defaults", which silently INHERITED
-            # ~/.claude/settings.json -- so the host's hooks (console_guard_off,
-            # telegram_permission, telegram_notify) were firing inside the
+            # ~/.claude/settings.json -- so the host's hooks (the guard, permission, and
+            # notification hooks) were firing inside the
             # consciousness. That disarmed the phone guard on every Slack message,
             # and a permission hook in here could stall the channel. (2026-07-13)
             setting_sources=[],

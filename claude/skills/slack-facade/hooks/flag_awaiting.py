@@ -4,13 +4,13 @@ awaiting a human decision at the console. Publish it (awaiting_approval=console)
 Slack face flags its last message with ❗ and check_status can report it.
 
 This DETECTS the real prompt instead of PREDICTING whether one will appear. The old
-predictor (_host_allows in telegram_permission.py) guessed "Write is allowed -> no
+predictor (a _host_allows check in the permission hook) guessed "Write is allowed -> no
 prompt" and was wrong for a subagent writing to ~/.claude/skills (outside the project),
 so the ❗ never showed. Detection has no such blind spot.
 
 Cleared by clear_awaiting.py on PostToolUse (approved -> ran) / PermissionDenied
-(denied) / Stop (turn end, catches cancel). Does not clobber a "telegram" marker that
-the guard-on path may have written.
+(denied) / Stop (turn end, catches cancel). Does not clobber a "slack" marker that
+the Slack-DM path may have written.
 """
 import os
 import pathlib
@@ -19,7 +19,7 @@ AWAITING = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/awaiting_appr
 
 try:
     cur = AWAITING.read_text().strip() if AWAITING.exists() else ""
-    if cur != "telegram":
+    if cur != "slack":
         AWAITING.write_text("console")
 except Exception:
     pass

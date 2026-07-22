@@ -3,7 +3,7 @@
 
   1. cage_policy   : the fundamental constraint (green vs gated). Transport-free.
   2. a transport   : how the owner is asked when something is gated. Swappable
-                     (Telegram today; Slack DM / console later).
+                     (Slack DM or the console prompt).
 
 Flow: classify -> green? allow. gated? guard-off -> defer to Claude Code's own
 prompt; else auto-allow-memory -> allow; else -> ask the active transport.
@@ -125,7 +125,7 @@ def main():
         base = tool
         shown = describe_tool(tool, ti)
 
-    # If no transport is available (e.g. Telegram switched off), defer to the
+    # If no transport is available (e.g. the Slack face is down), defer to the
     # native console prompt rather than blocking — the cage still holds.
     if not transport.available():
         sys.exit(0)

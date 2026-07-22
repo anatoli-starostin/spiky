@@ -7,7 +7,7 @@ Imported by BOTH hooks that arm them, so the two can never drift apart:
     session type. This is the reliable net: SessionStart's behaviour on
     `claude --resume` is undocumented, so it cannot be trusted alone.
 
-That gap is exactly how a replica came back with ONLY its Telegram bridge armed:
+That gap is exactly how a replica came back with a required unit missing:
 ensure_listener was the net that actually fired, and it knew about the listener but
 nothing about the Slack units. Hence this shared list.
 
@@ -23,13 +23,7 @@ import subprocess
 FACADE = os.path.join(os.path.expanduser(os.environ.get("AGENT_TOOLS_DIR", "~/work")), "slack-facade")
 
 # (label, pgrep pattern, Monitor command)
-# NOTE (2026-07-17): Telegram is DEPRECATED fleet-wide — approvals and chat moved to
-# Slack (DM approvals via the consciousness). The inbound listener is no longer armed.
-# To re-enable, restore the entry below.
 UNITS = [
-    # ("Telegram inbound listener (Anatoly's phone bridge)",
-    #  "agent_bridge/tg_monitor.py",
-    #  "python3 -u " + os.path.expanduser("~/.claude/agent_bridge/tg_monitor.py")),
     ("Slack body-watch (delegated-task ears)",
      "body_bridge.py watch",
      f"cd {FACADE} && python3 body_bridge.py watch"),
@@ -56,7 +50,7 @@ def missing():
     Slack units are only claimed on hosts that actually have the facade installed."""
     out = []
     for label, pattern, cmd in UNITS:
-        if not label.startswith("Telegram") and not os.path.isdir(FACADE):
+        if not os.path.isdir(FACADE):
             continue  # no slack-facade on this host
         if not alive(pattern):
             out.append((label, cmd))

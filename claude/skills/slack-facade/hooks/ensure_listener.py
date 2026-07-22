@@ -3,16 +3,16 @@
 `claude --resume`, where SessionStart's firing is undocumented. UserPromptSubmit
 fires on every prompt in every session type, so this is the RELIABLE net.
 
-It used to know only about the Telegram listener. That's how a replica came back
-import os
-from a restart with just its Telegram bridge running and no Slack face: SessionStart
-either didn't fire or wasn't acted on, and the net that DID fire only nagged about
-Telegram. The unit list now lives in paired_units.py, shared with
-session_start_bridge.py, so the two can never drift apart again.
+It used to know only about one unit. That's how a replica came back from a restart
+with only some of its units running: SessionStart either didn't fire or wasn't acted
+on, and the net that DID fire only knew about a subset. The unit list now lives in
+paired_units.py, shared with session_start_bridge.py, so the two can never drift apart
+again.
 
 Injects nothing once everything is up, so it's silent in the normal case.
 """
 import json
+import os
 import sys
 
 sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))

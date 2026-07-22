@@ -2,7 +2,7 @@
 """The fundamental permission constraint — the CAGE. Transport-agnostic.
 
 This module answers ONE question about a gated tool call: may it run WITHOUT a
-human, or must a human be asked? It knows nothing about Telegram, Slack, guards,
+human, or must a human be asked? It knows nothing about the approval transport, guards,
 or how approval is delivered — those are transport concerns layered on top by
 `permission_gate.py`. If every transport were removed, this policy still stands.
 
@@ -80,8 +80,6 @@ SAFE_BASH_PATTERNS = [
     r"^\s*hostname(\s|$)", r"^\s*whoami(\s|$)", r"^\s*id(\s|$)",
     r"^\s*mkdir\s+-p", r"^\s*chmod\s+\+x\s", r"^\s*kill\s+-0\s",
     r"^\s*until\s", r"^\s*\[\s+", r"^\s*test\s", r"^\s*sleep\s",   # sleep = harmless wait
-    r"^\s*tg(\s|$)",                    # heads-up sender -> owner only, safe
-    r"^\s*(\S+/)?tg_send\.sh(\s|$)",    # same sender by path, safe
 ]
 
 # ── body-report special case (verbatim from the original hook) ──────────────

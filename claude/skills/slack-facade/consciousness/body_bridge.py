@@ -6,7 +6,7 @@
     back into the Slack thread in its own voice;
   * the *body* -- THIS host's Claude Code CLI session, which is told about new
     tasks by a harness Monitor running `body_bridge.py watch`, executes them
-    with its real tools (approvals ride the existing Telegram bridge), and
+    with its real tools (approvals ride the out-of-band channel — Slack DM / console), and
     reports the outcome back with `body_bridge.py done|error <id>`.
 
 Plain stdlib, no deps: importable by app.py and runnable as a CLI by the body.
@@ -20,7 +20,7 @@ from pathlib import Path
 TASKS = Path.home() / ".claude" / "slack_facade" / "tasks"
 TASKS.mkdir(parents=True, exist_ok=True)
 
-# Written by telegram_permission.py for exactly as long as a human is being asked
+# Written by the permission hook for exactly as long as a human is being asked
 # to approve something. Lets check_status distinguish "waiting on Anatoly" from
 # "merely slow" -- without it the consciousness could only guess (and once guessed
 # right, then talked itself out of it because the task still said 'pending').
@@ -29,7 +29,7 @@ AWAITING = Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
 
 def awaiting_where():
     """Where the pending approval is waiting: 'console' (a prompt in this machine's
-    Claude session -- attachable via tmux) or 'telegram'. None if nothing pending."""
+    Claude session -- attachable via tmux) or 'slack' (the owner's DM). None if nothing pending."""
     try:
         return AWAITING.read_text().strip() or "console"
     except Exception:

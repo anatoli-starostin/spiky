@@ -82,6 +82,6 @@ def notify(text):
 
 
 def flush_context(transcript_path):
-    """No-op for Slack. (Telegram used this to push pending assistant text to the
-    phone right before the prompt; the Slack DM relay doesn't need it.)"""
+    """No-op for Slack. (an earlier transport used this to push pending assistant text just before the
+    prompt; the Slack DM relay doesn't need it.)"""
     return

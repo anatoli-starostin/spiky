@@ -4,8 +4,8 @@
 The unit list and the checks live in paired_units.py, shared with
 ensure_listener.py (UserPromptSubmit) — which is the more reliable net, since
 SessionStart's behaviour on `claude --resume` is undocumented. Keeping both on one
-shared list is what stops them drifting: a replica once came back with only its
-Telegram bridge armed because the two hooks knew different things.
+shared list is what stops them drifting: a replica once came back with only some of its
+units armed because the two hooks knew different things.
 """
 import os
 import json
@@ -38,7 +38,7 @@ def main():
     ctx = paired_units.arm_instruction()
     if not ctx:
         # Derive the "all running" note from the ACTUAL unit list, so it can never
-        # name a unit this host no longer has (a host that dropped the Telegram listener).
+        # name a unit this host no longer has (a host that dropped one of its units).
         names = ", ".join(u[0].split(" (")[0] for u in paired_units.UNITS)
         ctx = f"Paired agent Monitors ({names}) all running — no action needed."
     print(json.dumps({

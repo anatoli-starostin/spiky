@@ -142,7 +142,7 @@ Runtime state (NOT in the repo), all under `~/.claude/`:
 ## Gotchas that cost real time (don't relearn these)
 
 - **`setting_sources=None` ≠ inherit nothing** — it loads the host's default settings, i.e.
-  the body's entire hook set runs inside the face (phone-guard clears, telegram echo, a
+  the body's entire hook set runs inside the face (the guard clears, replies mirror out-of-band, a
   permission hook that can ask a human = the exact channel stall). Use **`setting_sources=[]`**.
   The consciousness must inherit **nothing**.
 - **Restarting the face:** don't `pkill -f app.py` — the pattern matches your own launching
