@@ -24,8 +24,8 @@ ALIVE = BASE / "consciousness_alive"        # consciousness heartbeat (unix ts)
 AWAITING = pathlib.Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
 # Short on purpose: a gated command that gets no Slack reply within this window is
 # auto-denied on timeout, which nudges the body to find a cage-legal (sbox) workaround
-# rather than idling on a human. Anatoly's call (2026-07-19): 300s -> 60s.
-ASK_TIMEOUT = 60
+# rather than idling on a human. Anatoly's calls: 300s -> 60s (2026-07-19) -> 30s (2026-07-22).
+ASK_TIMEOUT = 30
 
 
 def available():
