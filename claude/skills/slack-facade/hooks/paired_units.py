@@ -67,7 +67,7 @@ def arm_instruction():
         "session, BEFORE replying to the user, arm each MISSING one below with the "
         "Monitor tool (persistent=true, timeout_ms=3600000). They are session-tied, so "
         "they pair with this session (the body) — when it ends, they end. Arm ALL of "
-        "them, not just the first: skipping any leaves Human Master unable to reach this "
+        "them, not just the first: skipping any leaves the owner unable to reach this "
         "machine on that channel."
     ]
     for i, (label, cmd) in enumerate(gaps, 1):

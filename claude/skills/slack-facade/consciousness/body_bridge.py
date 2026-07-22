@@ -21,7 +21,7 @@ TASKS = Path.home() / ".claude" / "slack_facade" / "tasks"
 TASKS.mkdir(parents=True, exist_ok=True)
 
 # Written by the permission hook for exactly as long as a human is being asked
-# to approve something. Lets check_status distinguish "waiting on Human Master" from
+# to approve something. Lets check_status distinguish "waiting on the owner" from
 # "merely slow" -- without it the consciousness could only guess (and once guessed
 # right, then talked itself out of it because the task still said 'pending').
 AWAITING = Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
@@ -29,7 +29,7 @@ AWAITING = Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
 
 def awaiting_where():
     """Where the pending approval is waiting: 'console' (a prompt in this machine's
-    Claude session -- attachable via tmux) or 'slack' (Human Master's DM). None if nothing pending."""
+    Claude session -- attachable via tmux) or 'slack' (the owner's DM). None if nothing pending."""
     try:
         return AWAITING.read_text().strip() or "console"
     except Exception:
@@ -100,19 +100,19 @@ def main() -> None:
                     print(f"BODY_TASK {t['id']} :: {t['instruction'].strip()}", flush=True)
                     # Hand out the EXACT report form. It must be this absolute-path
                     # shape to match the permission hook's auto-allow pattern --
-                    # otherwise filing the result costs Human Master a needless approval tap.
+                    # otherwise filing the result costs the owner a needless approval tap.
                     print(f"  ↳ report back with EXACTLY this form (pre-approved, no "
                           f"prompt): python3 {me} done {t['id']} <<'EOF' … EOF   "
                           f"(result on stdin; use 'error' instead of 'done' if it failed)",
                           flush=True)
-                    # The body works UNATTENDED: Human Master is NOT at this console and
+                    # The body works UNATTENDED: the owner is NOT at this console and
                     # cannot see anything you print or any prompt you raise here. So do
                     # NOT ask him anything at the console and do NOT block waiting on
                     # input -- never use AskUserQuestion, never pause for a permission
                     # you can't get, never sit on a plan waiting for approval. If you
                     # need a DECISION, a clarification, or you're declining something
                     # risky: don't stall -- write your question/options as the RESULT
-                    # via the 'done' form above (phrased for Human Master, e.g. "Install
+                    # via the 'done' form above (phrased for the owner, e.g. "Install
                     # lean texlive (~1.5GB) or full (~5GB)? I'll proceed on your reply").
                     # It reaches him in Slack and he sends a follow-up task with the
                     # answer. Reporting-back is how you reach him; the console is a
@@ -120,7 +120,7 @@ def main() -> None:
                     # attached to this session and is talking to you live.)
                     print(f"  ↳ UNATTENDED: never AskUserQuestion / never block for input "
                           f"— a decision or clarification is itself a valid RESULT: report "
-                          f"it back with the done form and Human Master answers in Slack.",
+                          f"it back with the done form and the owner answers in Slack.",
                           flush=True)
                     print(f"  ↳ To SEND A PICTURE (a plot, chart, screenshot): save it to a "
                           f"file, then put a marker [[IMAGE:/absolute/path.png]] anywhere in "

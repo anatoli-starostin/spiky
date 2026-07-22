@@ -31,7 +31,7 @@ cord). This file is the deployment recipe and file map.
 > NOT put this under `~/projects` — that's the writable cage. See
 > [agent-cage](../agent-cage/SKILL.md) for the full "green-listed/privileged tooling lives
 > outside the cage" rationale.) The only per-bot thing you edit is `manifest.yaml`'s three
-> identity fields (see below). **Nothing sensitive is in these files** — tokens, Human Master's
+> identity fields (see below). **Nothing sensitive is in these files** — tokens, the owner's
 > Slack id, and bot ids live in a `config.env` (chmod 600) and state dirs that never enter the repo.
 
 ## Depends on: [agent-cage](../agent-cage/SKILL.md)
@@ -60,7 +60,7 @@ hooks/             # -> deploy to ~/.claude/hooks/ on the BODY's host
 
 Runtime state (NOT in the repo), all under `~/.claude/`:
 - `slack_facade/config.env` (chmod 600) — `SLACK_BOT_TOKEN` (xoxb) + `SLACK_APP_TOKEN` (xapp).
-- `slack_facade/{owner_user_id, approval_channel, consciousness_alive, agent_name}` +
+- `slack_facade/{owner_user_id, owner_name, approval_channel, consciousness_alive, agent_name}` +
   `slack_facade/approvals/` (the `req_/seen_/dec_` handshake) + `slack_facade/tasks/`.
 - `agent_bridge/{awaiting_approval, permission.log, auto_allow.txt}` — approval state.
 
@@ -80,7 +80,7 @@ Runtime state (NOT in the repo), all under `~/.claude/`:
    `app.py` posts the phrased result to the originating Slack thread.
 4. **Approvals** (out-of-band): a gated tool in the body → `permission_gate.py` → if the
    cord is `slack`, `transport_slack.ask()` drops `approvals/req_<id>.json` and blocks;
-   `app.py` DMs Human Master with buttons, writes `approvals/dec_<id>.json`; the body unblocks.
+   `app.py` DMs the owner with buttons, writes `approvals/dec_<id>.json`; the body unblocks.
    If the cord is `console`, the gate defers to the native console prompt.
 
 ## Setup recipe (one bot)
@@ -99,8 +99,10 @@ Runtime state (NOT in the repo), all under `~/.claude/`:
    Create the SDK venv there: `slack_sdk`, `claude-agent-sdk`, `aiohttp`.
 4. **Wire `settings.json`** (see the snippet below) — matchers `"*"` on Pre/PostToolUse.
 5. **Seed state** to avoid first-run races: write your Slack user id into
-   `~/.claude/slack_facade/owner_user_id` (Human Master, whom the body DMs for approvals) and
-   `slack` into `~/.claude/slack_facade/approval_channel`.
+   `~/.claude/slack_facade/owner_user_id` (whom the body DMs for approvals), the owner's
+   **name** into `~/.claude/slack_facade/owner_name` (what the face calls them — `app.py`
+   and `permission_gate.py` read it; **no name is hardcoded**, generic fallback if absent),
+   and `slack` into `~/.claude/slack_facade/approval_channel`.
 6. **Start the body's Claude session.** Its SessionStart/UserPromptSubmit hooks arm the two
    paired Monitors (`body_bridge.py watch` + `app.py`). Approve each Monitor.
 7. **Verify:** `python3 consciousness/audit.py` on the host — expect all ✓, a distinct Slack
@@ -149,7 +151,7 @@ Runtime state (NOT in the repo), all under `~/.claude/`:
   shell's cmdline and SIGTERMs it (exit 144). Stop the Monitor task, kill any orphan by
   explicit PID, then re-arm a fresh persistent Monitor. Count real faces with
   `ps … | grep 'python -u app.py' | grep -v 'bash -c' | grep -v grep`.
-- **The cord after a restart must be `console`** — Human Master is at the keyboard when a
+- **The cord after a restart must be `console`** — the owner is at the keyboard when a
   session starts; a stale `slack` sends the console session's approvals to a Slack DM where
   they time out with nobody there. `session_start_bridge.py` resets it every SessionStart.
 - **Silence sentinel:** the "stay silent in a channel" reply is detected with `SENTINEL in

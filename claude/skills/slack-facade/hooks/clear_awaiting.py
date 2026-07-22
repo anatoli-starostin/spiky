@@ -4,7 +4,7 @@
 Counterpart to the permission hook, which publishes
 `~/.claude/agent_bridge/awaiting_approval` (contents: "console" or "slack")
 while a human is being asked. The Slack face reads that via check_status so it can
-truthfully say "there's an approval waiting for you in the console / in Human Master's Slack DM"
+truthfully say "there's an approval waiting for you in the console / in the owner's Slack DM"
 instead of guessing. Without this, the flag would linger after approval and the face
 would keep claiming it's blocked.
 """

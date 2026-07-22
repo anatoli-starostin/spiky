@@ -1,6 +1,6 @@
 display_information:
   name: agent-name            # CHANGE per bot (one Slack app == one bot user)
-  description: Human Master's NUC-resident Claude — ask it things, it delegates to the machine.
+  description: the owner's NUC-resident Claude — ask it things, it delegates to the machine.
   background_color: "#2b3137"
 
 features:

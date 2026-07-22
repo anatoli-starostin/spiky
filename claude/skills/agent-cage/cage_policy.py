@@ -27,7 +27,7 @@ FILE_TOOLS = {"Write", "Edit", "NotebookEdit"}
 # to Claude Code, which auto-approves them). The list is the ONLY escape hatch: any
 # tool NOT here and not green is GATED, so in slack mode EVERY real permission
 # (WebFetch, WebSearch, MCP tools, and any future tool) is asked in Slack -- not
-# silently sent to the native console prompt. Human Master's rule: "all permissions should
+# silently sent to the native console prompt. the owner's rule: "all permissions should
 # be asked on Slack in slack mode." Failure mode stays toward asking, per the cage.
 # (In console mode a gated tool still just defers to the native prompt -- unchanged.)
 SAFE_TOOLS = {
@@ -290,7 +290,7 @@ def is_safe_git(seg):
 # ── the scoped-safe GitHub issue/PR tier ────────────────────────────────────
 # One vetted helper — gh_issue.py — is the sanctioned surface for reading/writing
 # GitHub issues (and opening PRs) on the spiky repo. Greenlighting it by absolute
-# path is exactly the _is_body_report precedent: a fixed, bounded capability Human Master
+# path is exactly the _is_body_report precedent: a fixed, bounded capability the owner
 # has approved, so it needs no per-call approval despite reaching the network.
 # The script itself only calls the GitHub API with the spikybot PAT; it cannot exec
 # arbitrary code, so the green surface stays narrow. Bodies come via --body-file, so

@@ -22,7 +22,7 @@ reasons:
    and dumps a permission prompt into a public room where nobody knows what it means.
 2. **It can leak.** An agent with real tools (`Read`, `Bash`) is one polite request away
    from printing an SSH key or a bot token into a channel — and it cannot tell a stranger
-   in the room from Human Master.
+   in the room from the owner.
 
 So the design is built around **two guarantees**, and everything else follows from them:
 
@@ -43,7 +43,7 @@ privileges:
   too: it can't recite what it was never given.
 - **The body** is an ordinary, fully-capable, permission-gated agent session doing the
   actual work on the machine — invisible to Slack. Its approvals are routed **out-of-band**
-  to Human Master, never into the channel.
+  to the owner, never into the channel.
 
 The one bridge between them is an **async, status-based API** — never a blocking call:
 
@@ -54,7 +54,7 @@ check_status(task_id)         -> pending | awaiting-approval | done
 
 A blocking call would leak the body's stalls back into the consciousness (the very thing we
 split them to prevent). Because the API is async, the face can say *"queued — waiting on
-Human Master's ok"* and stay fluent while the body waits.
+the owner's ok"* and stay fluent while the body waits.
 
 ### Why the consciousness is *fat*, not a one-tool relay
 
@@ -92,24 +92,24 @@ launched with **no inherited settings** — see the isolation note below.
 The single most important implementation gotcha: when you launch the consciousness via the
 Agent SDK, telling it to inherit "default" settings makes it load the **host's entire hook
 set** — the guard hooks, the notification hooks, the permission hooks. That silently breaks
-every guarantee (the face starts mirroring replies to Human Master's phone; a permission hook
+every guarantee (the face starts mirroring replies to the owner's phone; a permission hook
 inside the face can ask a human → the exact channel stall we forbid). The fix is to load an
 **empty settings set** — inherit *nothing* — and give the face its **own** cwd so its memory
 never overlaps the body's. Isolated face; one shared-brain body.
 
 ## Approvals: out-of-band, and the channel *follows the origin*
 
-The body still hits real permission gates. Those approvals go **out-of-band** — to Human Master
+The body still hits real permission gates. Those approvals go **out-of-band** — to the owner
 directly, never into a channel:
 
-- **Work delegated from Slack** → the approval is asked in a **Slack DM** to Human Master
+- **Work delegated from Slack** → the approval is asked in a **Slack DM** to the owner
   (buttons: approve / deny / always; a typed reply is "no, do it differently" — the note is
   handed back to the body as an instruction so it adapts rather than blindly retrying).
 - **Work typed at the console** → the approval is the ordinary console prompt.
 
 This is the **"cord"**: a tiny state file naming where approvals are currently asked
 (`slack` | `console`). It **follows the request's origin** automatically (a restart resets it
-to `console`, since Human Master is at the keyboard then; a Slack delegation pulls it to
+to `console`, since the owner is at the keyboard then; a Slack delegation pulls it to
 `slack`; per-turn console typing keeps it `console`). No manual toggling, no phone guard.
 
 **Truthful state, never guessing.** The face must be able to say *"there's an approval

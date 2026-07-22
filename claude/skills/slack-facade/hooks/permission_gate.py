@@ -2,7 +2,7 @@
 """PreToolUse hook ENTRY — a thin orchestrator over two clean layers:
 
   1. cage_policy   : the fundamental constraint (green vs gated). Transport-free.
-  2. a transport   : how Human Master is asked when something is gated. Swappable
+  2. a transport   : how the owner is asked when something is gated. Swappable
                      (Slack DM or the console prompt).
 
 Flow: classify -> green? allow. gated? guard-off -> defer to Claude Code's own
@@ -34,9 +34,17 @@ def approval_channel():
         return v if v in ("slack", "console") else "slack"
     except Exception:
         return "slack"
-# Bases Human Master tapped 'Always' for — an ad-hoc user allowlist (orchestration,
+# Bases the owner tapped 'Always' for — an ad-hoc user allowlist (orchestration,
 # not the fundamental cage). Read here; appended to on an 'always' decision.
 AUTO_ALLOW = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/auto_allow.txt"))
+
+def _owner():
+    """The human this host serves — CONFIGURABLE via ~/.claude/slack_facade/owner_name
+    (the same file the consciousness reads); generic fallback so no name is hardcoded."""
+    try:
+        return pathlib.Path(os.path.expanduser("~/.claude/slack_facade/owner_name")).read_text().strip() or "the owner"
+    except Exception:
+        return "the owner"
 
 
 def log(m):
@@ -154,10 +162,10 @@ def main():
     elif decision == "deny":
         transport.notify("❌ denied")
         if comment:
-            # Human Master denied WITH a note ("no, archive them first"). A deny's reason is
+            # the owner denied WITH a note ("no, archive them first"). A deny's reason is
             # shown to the body model, so hand his words back as an instruction — the
             # body then adapts rather than blindly retrying the identical command.
-            reason = (f'Human Master declined this and said: "{comment}". Treat that as his '
+            reason = (f'{_owner()} declined this and said: "{comment}". Treat that as his '
                       f"instruction — adjust course accordingly; do NOT just retry the "
                       f"same command.")
         else:
@@ -165,12 +173,12 @@ def main():
         emit("deny", reason)
     else:
         transport.notify("⏱ timed out — denying")
-        # A timeout is NOT an active refusal — Human Master just didn't answer in the window.
-        # Human Master's intent (2026-07-19): a short timeout should push the body toward a
+        # A timeout is NOT an active refusal — the owner just didn't answer in the window.
+        # the owner's intent (2026-07-19): a short timeout should push the body toward a
         # cage-legal path, not a dead stop. So tell the model to look for an sbox workaround
         # before re-asking. (Reason text IS shown to the body model.)
         reason = (f"No reply within {transport.ASK_TIMEOUT}s, so this was auto-denied on "
-                  f"TIMEOUT — not an active 'no' from Human Master. Before re-requesting, look for "
+                  f"TIMEOUT — not an active 'no' from {_owner()}. Before re-requesting, look for "
                   f"a way to accomplish this INSIDE the sbox cage (writable ~/projects, /tmp, "
                   f"~/.cache; runs with no approval). Only re-ask the gated command if the task "
                   f"genuinely cannot be done in-cage.")
