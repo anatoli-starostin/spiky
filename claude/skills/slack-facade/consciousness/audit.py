@@ -33,9 +33,11 @@ def main():
                 for ev in ("PreToolUse", "PostToolUse")}
     allow = (s.get("permissions") or {}).get("allow")
 
-    WIDE = "Bash|Skill|Agent|Workflow|Write|Edit|NotebookEdit"
+    # "*" (also "" or an omitted matcher) matches EVERY tool — the current standard, so
+    # WebFetch / MCP / any future tool reaches the gate, not just Bash. It used to be a wide
+    # pipe-list ("Bash|Skill|…"), which under-matched; the check tracks the "*" convention now.
     for ev in ("PreToolUse", "PostToolUse"):
-        good = matchers[ev] == [WIDE]
+        good = matchers[ev] in (["*"], [""])
         print(f"  {OK if good else BAD} {ev:12} {matchers[ev]}")
     print(f"  {OK if hooks.get('SessionStart') else BAD} SessionStart hook present")
     print(f"    permissions.allow = {allow}  "
