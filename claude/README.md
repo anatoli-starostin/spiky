@@ -28,10 +28,36 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
 
 ## Reusable skills
 
-- **[skills/](skills/)** — portable, machine-agnostic Claude *skills* for this project
-  (e.g. [paper-writing](skills/paper-writing/SKILL.md): detect the LaTeX toolchain and
-  compile a `.tex` to a real PDF on any host). These are capabilities, not scientific
-  findings — drop a skill here when it's worth sharing across every assistant and machine.
+- **[skills/](skills/)** — portable, machine-agnostic Claude *skills* for this project.
+  These are capabilities, not scientific findings — drop a skill here when it's worth
+  sharing across every assistant and machine.
+  - **[paper-writing](skills/paper-writing/SKILL.md)** — detect the LaTeX toolchain and
+    compile a `.tex` to a real PDF on any host.
+  - **[agent-cage](skills/agent-cage/SKILL.md)** — a frictionless "green zone" sandbox
+    (`sbox`) + the PreToolUse classifier that decides what auto-runs vs. asks a human, so an
+    autonomous body works freely in-cage and only *crossing a boundary* trips an approval.
+  - **[slack-facade](skills/slack-facade/SKILL.md)** — put a machine-resident agent into a
+    Slack workspace as a full participant that delegates real work, with approvals routed
+    out-of-band so it never stalls or leaks in a channel. Depends on agent-cage. The design
+    rationale is written up separately in **[slack-facade.md](slack-facade.md)** (the *why*;
+    the skill is the *how*).
+
+### Installing a skill on a host (this folder is *source*, not the discovery path)
+
+**Adding a skill here does NOT make it invokable.** Claude Code discovers skills only from
+**`~/.claude/skills/<name>/`** (the per-user skills path). This `claude/skills/` folder is the
+version-controlled *source of truth* / knowledge base — so to actually use a skill on a host you
+must **install** it: copy the skill's directory into that host's `~/.claude/skills/`, e.g.
+
+```sh
+cp -r claude/skills/agent-cage ~/.claude/skills/agent-cage   # then /agent-cage works next session
+```
+
+Skills are loaded at **session start**, so a new session (or restart) picks up a freshly
+installed skill. Two consequences to remember: (1) *publishing* a skill to this repo and
+*installing* it on a host are **two separate steps** — never assume a repo skill is live
+anywhere; do the copy per host (and per replica). (2) The installed copies are **snapshots that
+drift** from the repo as the SKILL is edited — re-copy after changes to keep a host current.
 
 ## Scope and boundaries
 

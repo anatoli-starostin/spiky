@@ -1,0 +1,34 @@
+#!/bin/sh
+# sbox CMD [args...] — run CMD inside the ML green-zone cage:
+#   * whole system READ-ONLY, except ~/projects and /tmp (writable)
+#   * GPU passed through (/dev/nvidia*), so CUDA works
+#   * NO network (empty net namespace)
+#   * ~/.ssh masked so caged code can't even read keys
+# Chain caged work with:  sbox bash -c 'cd repo && python train.py && ./eval.sh'
+# (the whole pipeline runs inside the cage; the outer command has no operators).
+set -eu
+if [ "$#" -eq 0 ]; then echo "usage: sbox CMD [args...]" >&2; exit 2; fi
+command -v bwrap >/dev/null 2>&1 || { echo "sbox: bubblewrap (bwrap) not installed" >&2; exit 127; }
+
+# Assemble GPU device binds only for nodes that exist on this host.
+gpu=""
+for d in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset /dev/dri; do
+  [ -e "$d" ] && gpu="$gpu --dev-bind $d $d"
+done
+
+# shellcheck disable=SC2086
+mkdir -p "$HOME/.cache" 2>/dev/null || true
+
+# shellcheck disable=SC2086
+exec bwrap \
+  --ro-bind / / \
+  --bind "$HOME/projects" "$HOME/projects" \
+  --bind /tmp /tmp \
+  --bind "$HOME/.cache" "$HOME/.cache" \
+  --proc /proc \
+  --dev /dev \
+  $gpu \
+  --tmpfs "$HOME/.ssh" \
+  --unshare-net \
+  --die-with-parent \
+  -- "$@"
