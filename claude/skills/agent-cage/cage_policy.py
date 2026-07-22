@@ -290,8 +290,8 @@ def is_safe_git(seg):
 # ── the scoped-safe GitHub issue/PR tier ────────────────────────────────────
 # One vetted helper — gh_issue.py — is the sanctioned surface for reading/writing
 # GitHub issues (and opening PRs) on the spiky repo. Greenlighting it by absolute
-# path is exactly the _is_body_report precedent: a fixed, bounded capability the
-# owner has approved, so it needs no per-call approval despite reaching the network.
+# path is exactly the _is_body_report precedent: a fixed, bounded capability Human Master
+# has approved, so it needs no per-call approval despite reaching the network.
 # The script itself only calls the GitHub API with the spikybot PAT; it cannot exec
 # arbitrary code, so the green surface stays narrow. Bodies come via --body-file, so
 # no heredoc / substitution ever rides the command line.

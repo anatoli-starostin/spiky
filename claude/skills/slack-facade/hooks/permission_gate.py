@@ -2,7 +2,7 @@
 """PreToolUse hook ENTRY — a thin orchestrator over two clean layers:
 
   1. cage_policy   : the fundamental constraint (green vs gated). Transport-free.
-  2. a transport   : how the owner is asked when something is gated. Swappable
+  2. a transport   : how Human Master is asked when something is gated. Swappable
                      (Slack DM or the console prompt).
 
 Flow: classify -> green? allow. gated? guard-off -> defer to Claude Code's own
@@ -34,7 +34,7 @@ def approval_channel():
         return v if v in ("slack", "console") else "slack"
     except Exception:
         return "slack"
-# Bases the owner tapped 'Always' for — an ad-hoc user allowlist (orchestration,
+# Bases Human Master tapped 'Always' for — an ad-hoc user allowlist (orchestration,
 # not the fundamental cage). Read here; appended to on an 'always' decision.
 AUTO_ALLOW = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/auto_allow.txt"))
 

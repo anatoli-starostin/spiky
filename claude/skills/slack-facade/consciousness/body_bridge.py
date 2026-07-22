@@ -29,7 +29,7 @@ AWAITING = Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
 
 def awaiting_where():
     """Where the pending approval is waiting: 'console' (a prompt in this machine's
-    Claude session -- attachable via tmux) or 'slack' (the owner's DM). None if nothing pending."""
+    Claude session -- attachable via tmux) or 'slack' (Human Master's DM). None if nothing pending."""
     try:
         return AWAITING.read_text().strip() or "console"
     except Exception:
