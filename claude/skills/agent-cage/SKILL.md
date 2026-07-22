@@ -30,7 +30,8 @@ gated in the first place.
 > **All paths derive from `$HOME`** (`~/projects`, `~/.claude/hooks`, `~/.config/spikybot/pat`)
 > — nothing is hardcoded to one machine or user. The install convention: `sbox` on your
 > `PATH` (`~/.local/bin`), `cage_policy.py` in `~/.claude/hooks/`, the helper in
-> `~/work/gh-issue/`. Sensitive values (tokens, the GitHub PAT) live outside the repo.
+> `~/work/gh-issue/` — a dir the cage mounts **read-only**, on purpose (see the helper
+> section for why). Sensitive values (tokens, the GitHub PAT) live outside the repo.
 
 ## Files
 
@@ -145,6 +146,16 @@ helper by **absolute path** via
 invocation stays a **single green segment**. This is the template for adding a capability
 without opening a general hole: one absolute-path helper, secrets read from a file, no
 inline shell.
+
+> **⚠️ A green-listed helper MUST live outside the writable cage.** `cage_policy` trusts
+> `gh_issue.py` by its path — so if it sat in `~/projects` (or any `sbox`-writable dir), the
+> caged agent could *silently rewrite the helper* and it would still auto-run green,
+> collapsing the whole "narrow, vetted capability" guarantee. Keep it somewhere the cage
+> mounts **read-only** (the fleet uses `~/work/gh-issue/`), so tampering with the trusted
+> tool requires a human approval — exactly like `cage_policy.py`/`permission_gate.py` living
+> in `~/.claude/hooks/` rather than in the cage. The directory *name* is incidental; the
+> **read-only-in-cage** property is the requirement. Same reasoning applies to the
+> slack-facade consciousness (`app.py`), which runs uncaged and holds the Slack tokens.
 
 ## Relationship to the Slack façade
 

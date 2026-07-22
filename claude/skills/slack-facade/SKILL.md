@@ -25,9 +25,14 @@ cord). This file is the deployment recipe and file map.
 > `socket.gethostname()` (or the `agent_name` override file), and host/owner names in
 > comments are generic — so nothing is hardcoded to one machine or account. The install
 > convention it assumes: the consciousness lives in `~/work/slack-facade/` and the hooks in
-> `~/.claude/hooks/`. The only per-bot thing you edit is `manifest.yaml`'s three identity
-> fields (see below). **Nothing sensitive is in these files** — tokens, the owner's Slack
-> id, and bot ids live in a `config.env` (chmod 600) and state dirs that never enter the repo.
+> `~/.claude/hooks/` — **both outside the sbox cage's writable zone, on purpose.** `app.py`
+> runs uncaged and holds the Slack tokens, so the caged body must not be able to silently
+> rewrite it; a dir the cage mounts read-only means editing it needs a human approval. (Do
+> NOT put this under `~/projects` — that's the writable cage. See
+> [agent-cage](../agent-cage/SKILL.md) for the full "green-listed/privileged tooling lives
+> outside the cage" rationale.) The only per-bot thing you edit is `manifest.yaml`'s three
+> identity fields (see below). **Nothing sensitive is in these files** — tokens, the owner's
+> Slack id, and bot ids live in a `config.env` (chmod 600) and state dirs that never enter the repo.
 
 ## Depends on: [agent-cage](../agent-cage/SKILL.md)
 
