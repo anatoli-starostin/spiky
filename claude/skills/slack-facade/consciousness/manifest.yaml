@@ -1,0 +1,35 @@
+display_information:
+  name: nucstar
+  description: Anatoly's NUC-resident Claude — ask it things, it delegates to the machine.
+  background_color: "#2b3137"
+
+features:
+  bot_user:
+    display_name: nucstar
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read      # see @nucstar
+      - chat:write             # post messages
+      - channels:history       # read public channels it's in
+      - groups:history         # read private channels it's in
+      - im:history             # read DMs
+      - im:read
+      - im:write               # open/send DMs
+      - users:read             # resolve display names
+      - reactions:write        # 👀 ack while working
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention            # @nucstar in a channel — starts a conversation
+      - message.im             # direct messages
+      - message.channels       # replies in public-channel threads we're engaged in (no re-mention)
+      - message.groups         # replies in private-channel threads we're engaged in
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true    # outbound WebSocket — no public URL needed
+  org_deploy_enabled: false
+  token_rotation_enabled: false

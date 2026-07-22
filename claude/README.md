@@ -28,10 +28,19 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
 
 ## Reusable skills
 
-- **[skills/](skills/)** — portable, machine-agnostic Claude *skills* for this project
-  (e.g. [paper-writing](skills/paper-writing/SKILL.md): detect the LaTeX toolchain and
-  compile a `.tex` to a real PDF on any host). These are capabilities, not scientific
-  findings — drop a skill here when it's worth sharing across every assistant and machine.
+- **[skills/](skills/)** — portable, machine-agnostic Claude *skills* for this project.
+  These are capabilities, not scientific findings — drop a skill here when it's worth
+  sharing across every assistant and machine.
+  - **[paper-writing](skills/paper-writing/SKILL.md)** — detect the LaTeX toolchain and
+    compile a `.tex` to a real PDF on any host.
+  - **[agent-cage](skills/agent-cage/SKILL.md)** — a frictionless "green zone" sandbox
+    (`sbox`) + the PreToolUse classifier that decides what auto-runs vs. asks a human, so an
+    autonomous body works freely in-cage and only *crossing a boundary* trips an approval.
+  - **[slack-facade](skills/slack-facade/SKILL.md)** — put a machine-resident agent into a
+    Slack workspace as a full participant that delegates real work, with approvals routed
+    out-of-band so it never stalls or leaks in a channel. Depends on agent-cage. The design
+    rationale is written up separately in **[slack-facade.md](slack-facade.md)** (the *why*;
+    the skill is the *how*).
 
 ## Scope and boundaries
 
