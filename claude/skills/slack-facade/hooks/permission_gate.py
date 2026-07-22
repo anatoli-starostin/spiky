@@ -108,7 +108,15 @@ def main():
     verdict = cage_policy.classify(tool, ti)
 
     if verdict == "ungated":
-        sys.exit(0)          # Write/Edit/… -> Claude Code's own layer decides
+        # Read-only / safe tools (Read, Grep, Glob, LS, …). In CONSOLE mode, defer to Claude
+        # Code -- the owner is at the keyboard to answer any native prompt (e.g. reading outside
+        # the project). In SLACK mode that native prompt would land on the CONSOLE, where nobody
+        # is watching -- breaking the invariant that Slack-origin work is decided ON SLACK. These
+        # tools are read-only and never warrant an approval, so auto-allow them here: this
+        # GUARANTEES no console prompt escapes during Slack-delegated work.
+        if approval_channel() == "slack":
+            emit("allow", "read-only tool auto-allowed (slack mode: no console prompt escapes)")
+        sys.exit(0)          # console mode -> Claude Code's own layer decides
     if verdict == "green":
         emit("allow", "green zone (cage_policy)")
         sys.exit(0)
