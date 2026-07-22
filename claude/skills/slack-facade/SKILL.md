@@ -20,15 +20,14 @@ Read **[../../slack-facade.md](../../slack-facade.md)** first — it's the desig
 guarantees "can't stall / can't leak", the consciousness/body split, the async API, the
 cord). This file is the deployment recipe and file map.
 
-> **The code here is the live fleet copy**, shown faithfully rather than rewritten into
-> placeholders (rewriting working code into non-runnable stubs would drift from what
-> actually runs and hide the real gotchas). It uses `Path.home()` and
-> `socket.gethostname()`, so it's already host-portable in behaviour. Two things to adapt
-> per host: (1) the hardcoded deploy path `/home/<user>/work/slack-facade` in
-> `paired_units.py` / `session_start_bridge.py` / `ensure_listener.py` / `permission_gate.py`
-> — set it to your install location; (2) `manifest.yaml`'s three identity fields (see
-> below). **Nothing sensitive is in these files** — tokens, the owner's Slack id, and bot
-> ids live in a `config.env` (chmod 600) and state dirs that never enter the repo.
+> **The code here is the fleet's real code, made host-portable.** All paths derive from
+> `$HOME` (via `os.path.expanduser("~/…")` / `Path.home()`), identity from
+> `socket.gethostname()` (or the `agent_name` override file), and host/owner names in
+> comments are generic — so nothing is hardcoded to one machine or account. The install
+> convention it assumes: the consciousness lives in `~/work/slack-facade/` and the hooks in
+> `~/.claude/hooks/`. The only per-bot thing you edit is `manifest.yaml`'s three identity
+> fields (see below). **Nothing sensitive is in these files** — tokens, the owner's Slack
+> id, and bot ids live in a `config.env` (chmod 600) and state dirs that never enter the repo.
 
 ## Depends on: [agent-cage](../agent-cage/SKILL.md)
 

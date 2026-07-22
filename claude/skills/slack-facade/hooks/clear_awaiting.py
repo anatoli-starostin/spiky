@@ -8,11 +8,12 @@ truthfully say "there's an approval waiting for you in the console / on Telegram
 instead of guessing. Without this, the flag would linger after approval and the face
 would keep claiming it's blocked.
 """
+import os
 import pathlib
 import time
 
-AWAITING = pathlib.Path("/home/astarostin/.claude/agent_bridge/awaiting_approval")
-TRACE = pathlib.Path("/home/astarostin/.claude/agent_bridge/awaiting_trace.log")
+AWAITING = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/awaiting_approval"))
+TRACE = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/awaiting_trace.log"))
 
 try:
     if AWAITING.exists():

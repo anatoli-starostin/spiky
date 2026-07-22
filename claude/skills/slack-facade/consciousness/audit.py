@@ -16,7 +16,7 @@ def proc(pat):
 
 
 def main():
-    # Same identity rule as app.py: the fleet name, which on the Nebius VM is NOT the
+    # Same identity rule as app.py: the fleet name, which on some cloud VMs is NOT the
     # system hostname (that's the instance id, reset by cloud-init on every boot).
     name_file = HOME / ".claude/slack_facade/agent_name"
     host = (name_file.read_text().strip() if name_file.exists()

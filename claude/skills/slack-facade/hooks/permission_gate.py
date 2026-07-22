@@ -13,19 +13,20 @@ memory are ORCHESTRATION/UX, not the cage — so they live here, not in cage_pol
 
 On any internal error it exits 0 (fail-open to the normal flow) so a bug here can
 never freeze the session."""
+import os
 import json, sys, time, pathlib, socket
 
-sys.path.insert(0, "/home/astarostin/.claude/hooks")
+sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
 import cage_policy
 import transport_slack as transport   # swap this line to change approval channel
 
 HOST = socket.gethostname()
-LOG = pathlib.Path("/home/astarostin/.claude/agent_bridge/permission.log")
-AWAITING = pathlib.Path("/home/astarostin/.claude/agent_bridge/awaiting_approval")
+LOG = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/permission.log"))
+AWAITING = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/awaiting_approval"))
 # The "cord": where gated approvals are asked — "slack" (default) or "console".
 # Written by the `approvals` CLI (body) or the consciousness's set_approval_channel
 # tool; both write the same file so either surface can flip it.
-APPROVAL_CHANNEL = pathlib.Path("/home/astarostin/.claude/slack_facade/approval_channel")
+APPROVAL_CHANNEL = pathlib.Path(os.path.expanduser("~/.claude/slack_facade/approval_channel"))
 
 def approval_channel():
     try:
@@ -35,7 +36,7 @@ def approval_channel():
         return "slack"
 # Bases the owner tapped 'Always' for — an ad-hoc user allowlist (orchestration,
 # not the fundamental cage). Read here; appended to on an 'always' decision.
-AUTO_ALLOW = pathlib.Path("/home/astarostin/.claude/agent_bridge/auto_allow.txt")
+AUTO_ALLOW = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/auto_allow.txt"))
 
 
 def log(m):

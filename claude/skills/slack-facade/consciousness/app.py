@@ -5,7 +5,7 @@ The consciousness is a Claude whose ONLY tools are `delegate_to_body` and
 `check_status` (SDK MCP tools that just touch a local task queue). Both return
 instantly and can never reach a human prompt (permission_mode="dontAsk"), so the
 consciousness can never freeze a public channel -- the invariant the design
-rests on. The body (this nucstar Claude Code CLI session) picks tasks off the
+rests on. The body (this host's Claude Code CLI session) picks tasks off the
 queue via a Monitor, runs them with real tools + Telegram-bridge approvals, and
 reports results back; a reaper loop relays those into the Slack thread. See
 body_bridge.py.
@@ -50,13 +50,13 @@ logging.basicConfig(
 log = logging.getLogger("facade")
 
 # Identity comes from the HOST, so this one file is correct on every replica
-# (nucstar / gpustar / nebius-h100). Hardcoding "nucstar" made gpustar's face
-# introduce itself as nucstar. Each host's Slack app display_name matches this.
+# (one name per host). Hardcoding a single fleet name would make a host's face
+# introduce itself under the wrong name. Each host's Slack app display_name matches this.
 #
-# Override file for hosts whose system hostname isn't their fleet name: the Nebius
+# Override file for hosts whose system hostname isn't their fleet name: a cloud
 # VM calls itself "computeinstance-e00kvx817kxpdq0f2w", and cloud-init would undo a
-# hostnamectl change on every reboot. A file is immune to that. Absent on nucstar and
-# gpustar, whose hostnames are already right.
+# hostnamectl change on every reboot. A file is immune to that. Absent on hosts whose
+# system hostname already matches the fleet name.
 _NAME_FILE = Path.home() / ".claude" / "slack_facade" / "agent_name"
 HOST = (_NAME_FILE.read_text().strip() if _NAME_FILE.exists() else socket.gethostname())
 
@@ -145,8 +145,7 @@ permission gating -- does the actual work.
 
 ## Knowing when to speak, and when to stay quiet
 
-You are ONE OF SEVERAL agents here -- one per machine in Anatoly's fleet (nucstar,
-gpustar, nebius-h100, ...). They are your siblings, each with its own machine. You
+You are ONE OF SEVERAL agents here -- one per machine in Anatoly's fleet (one agent per host). They are your siblings, each with its own machine. You
 speak ONLY for {HOST}, and you can only see and act on {HOST}.
 
 You are shown EVERY message in threads you are part of -- including ones that are
@@ -154,7 +153,7 @@ not for you. So judge, exactly as a person in a group conversation does, whether
 this one is yours to answer. Apply these IN ORDER; the first match wins:
 
 1. **You are @{HOST} (named), OR the message is addressed to the whole fleet -> ANSWER for {HOST}.**
-   - Named -- even alongside siblings ("@nucstar @gpustar how are you two?") -- means
+   - Named -- even alongside siblings ("@this-host @sibling how are you two?") -- means
      it is for you: answer for your OWN machine, don't defer or assume a sibling has it.
    - Addressed to EVERYONE / "all machines" / "all agents" / "all of you" / "each of
      you", or a general reminder/announcement to the fleet, is addressed to you TOO.
@@ -274,8 +273,8 @@ def build_body_server(channel, post_thread, thread):
         if st == "awaiting-approval":
             where = body_bridge.awaiting_where() or "console"
             # Name the host AND the exact surface -- "this machine" is useless when
-            # several agents share the channel; "in your Slack DM with gpustar" vs
-            # "on gpustar's console" tells him exactly where his approval is waiting.
+            # several agents share the channel; "in your Slack DM with a host" vs
+            # "on that host's console" tells him exactly where his approval is waiting.
             place = (f"on {HOST}'s console" if where == "console"
                      else f"in your Slack DM with {HOST}")
             hint = (f"An approval is waiting for Anatoly {place}. Tell him exactly "
@@ -349,7 +348,7 @@ class Consciousness:
             ],
             permission_mode="dontAsk",  # <- unmatched calls auto-deny, never prompt
             # [] = load NOTHING. `None` means "defaults", which silently INHERITED
-            # ~/.claude/settings.json -- so nucstar's hooks (console_guard_off,
+            # ~/.claude/settings.json -- so the host's hooks (console_guard_off,
             # telegram_permission, telegram_notify) were firing inside the
             # consciousness. That disarmed the phone guard on every Slack message,
             # and a permission hook in here could stall the channel. (2026-07-13)
@@ -518,7 +517,7 @@ async def main():
 
     async def humanize(text: str) -> str:
         """Render raw Slack mention ids as readable names, so the model sees
-        "@gpustar what's your VRAM?" rather than "<@U0XXXXXXX> …". It cannot judge
+        "@sibling what's your VRAM?" rather than "<@U0XXXXXXX> …". It cannot judge
         who a message is addressed to if the addressee is an opaque id. Our own id
         becomes our own name, so we can see when WE are the one being spoken to."""
         for uid in set(mention_any.findall(text or "")):
@@ -610,8 +609,8 @@ async def main():
 
         # A SIBLING agent's message. Never REPLY to it -- that's how loops start. But
         # do not be DEAF to it either: overhear it, so we know what was said when we
-        # next speak. Being deaf to siblings is why gpustar mis-resolved "I'll do it
-        # later, ok" — it never saw nucstar ask Anatoly to install smartmontools, so
+        # next speak. Being deaf to siblings is why a host mis-resolved "I'll do it
+        # later, ok" — it never saw a sibling ask Anatoly to install smartmontools, so
         # the only pending thing in its world was its own GPU offer. People get this
         # right because they hear everyone in the room; give the model the same.
         if ev.get("bot_id"):
@@ -722,7 +721,7 @@ async def main():
         if is_dm:
             parts.append("[Direct 1:1 message to you — always answer.]")
         elif mentioned:
-            # State the fact plainly. gpustar once stayed silent while literally being
+            # State the fact plainly. a host once stayed silent while literally being
             # @-mentioned, because it saw a sibling named too and deferred. Being named
             # IS being addressed -- don't make it re-derive that from the raw text.
             parts.append(

@@ -12,9 +12,10 @@ Cleared by clear_awaiting.py on PostToolUse (approved -> ran) / PermissionDenied
 (denied) / Stop (turn end, catches cancel). Does not clobber a "telegram" marker that
 the guard-on path may have written.
 """
+import os
 import pathlib
 
-AWAITING = pathlib.Path("/home/astarostin/.claude/agent_bridge/awaiting_approval")
+AWAITING = pathlib.Path(os.path.expanduser("~/.claude/agent_bridge/awaiting_approval"))
 
 try:
     cur = AWAITING.read_text().strip() if AWAITING.exists() else ""

@@ -3,7 +3,8 @@
 `claude --resume`, where SessionStart's firing is undocumented. UserPromptSubmit
 fires on every prompt in every session type, so this is the RELIABLE net.
 
-It used to know only about the Telegram listener. That's how nebius-h100 came back
+It used to know only about the Telegram listener. That's how a replica came back
+import os
 from a restart with just its Telegram bridge running and no Slack face: SessionStart
 either didn't fire or wasn't acted on, and the net that DID fire only nagged about
 Telegram. The unit list now lives in paired_units.py, shared with
@@ -14,7 +15,7 @@ Injects nothing once everything is up, so it's silent in the normal case.
 import json
 import sys
 
-sys.path.insert(0, "/home/astarostin/.claude/hooks")
+sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
 import paired_units  # noqa: E402
 
 

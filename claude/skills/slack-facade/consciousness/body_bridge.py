@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Task queue shared by two halves of the nucstar agent:
+"""Task queue shared by two halves of the agent:
 
   * the Slack *consciousness* (app.py) -- writes tasks via delegate_to_body,
     reads results via check_status, and (a reaper loop) relays finished results
     back into the Slack thread in its own voice;
-  * the *body* -- THIS nucstar Claude Code CLI session, which is told about new
+  * the *body* -- THIS host's Claude Code CLI session, which is told about new
     tasks by a harness Monitor running `body_bridge.py watch`, executes them
     with its real tools (approvals ride the existing Telegram bridge), and
     reports the outcome back with `body_bridge.py done|error <id>`.

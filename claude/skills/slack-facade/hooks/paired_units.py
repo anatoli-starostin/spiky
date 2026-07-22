@@ -7,7 +7,7 @@ Imported by BOTH hooks that arm them, so the two can never drift apart:
     session type. This is the reliable net: SessionStart's behaviour on
     `claude --resume` is undocumented, so it cannot be trusted alone.
 
-That gap is exactly how nebius-h100 came back with ONLY its Telegram bridge armed:
+That gap is exactly how a replica came back with ONLY its Telegram bridge armed:
 ensure_listener was the net that actually fired, and it knew about the listener but
 nothing about the Slack units. Hence this shared list.
 
@@ -18,7 +18,7 @@ agent, face included, goes with it.
 import os
 import subprocess
 
-FACADE = "/home/astarostin/work/slack-facade"
+FACADE = os.path.expanduser("~/work/slack-facade")
 
 # (label, pgrep pattern, Monitor command)
 # NOTE (2026-07-17): Telegram is DEPRECATED fleet-wide — approvals and chat moved to
@@ -27,7 +27,7 @@ FACADE = "/home/astarostin/work/slack-facade"
 UNITS = [
     # ("Telegram inbound listener (Anatoly's phone bridge)",
     #  "agent_bridge/tg_monitor.py",
-    #  "python3 -u /home/astarostin/.claude/agent_bridge/tg_monitor.py"),
+    #  "python3 -u " + os.path.expanduser("~/.claude/agent_bridge/tg_monitor.py")),
     ("Slack body-watch (delegated-task ears)",
      "body_bridge.py watch",
      f"cd {FACADE} && python3 body_bridge.py watch"),

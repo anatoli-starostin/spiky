@@ -80,13 +80,14 @@ SAFE_BASH_PATTERNS = [
 # The body filing a delegated task's result: an ABSOLUTE-path body_bridge call,
 # optionally feeding a QUOTED heredoc (report text is literal DATA, not shell).
 # Matched as a WHOLE line so the apostrophe/pipe-laden report never reaches shlex.
+# The body_bridge.py location is a deploy convention, not a fixed absolute path —
+# derive it from $HOME so this is machine-agnostic, and escape it into the pattern.
+_BODY_BRIDGE = os.path.expanduser("~/work/slack-facade/body_bridge.py")
 _BODY_HEAD = re.compile(
-    r"""^\s*(\S+/)?python3?\s+
-        /home/astarostin/work/slack-facade/body_bridge\.py\s+
-        (done|error|running)\s+\S+\s*
-        (<<-?\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\4\s*)?$
-        """,
-    re.VERBOSE,
+    r"^\s*(\S+/)?python3?\s+"
+    + re.escape(_BODY_BRIDGE)
+    + r"\s+(done|error|running)\s+\S+\s*"
+    + r"(<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\4\s*)?$"
 )
 
 def _is_body_report(command):
@@ -289,7 +290,7 @@ def is_safe_git(seg):
 # The script itself only calls the GitHub API with the spikybot PAT; it cannot exec
 # arbitrary code, so the green surface stays narrow. Bodies come via --body-file, so
 # no heredoc / substitution ever rides the command line.
-GH_ISSUE_SCRIPT = "/home/astarostin/work/gh-issue/gh_issue.py"
+GH_ISSUE_SCRIPT = os.path.expanduser("~/work/gh-issue/gh_issue.py")
 _PY = {"python", "python3"}
 
 def is_safe_gh_issue(seg):

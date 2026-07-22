@@ -27,10 +27,10 @@ This skill is the **precondition** for [slack-facade](../slack-facade/SKILL.md):
 Slack façade routes *how* a gated approval reaches a human; this skill decides *what* is
 gated in the first place.
 
-> **Paths in this skill are the live fleet values** (`~/projects`, `/home/<user>/.claude/hooks`,
-> `~/.config/spikybot/pat`). They are shown verbatim so the code is honest about what runs.
-> Adapt the `$HOME`/username to your host when deploying; the sensitive values (tokens, the
-> GitHub PAT) live outside the repo.
+> **All paths derive from `$HOME`** (`~/projects`, `~/.claude/hooks`, `~/.config/spikybot/pat`)
+> — nothing is hardcoded to one machine or user. The install convention: `sbox` on your
+> `PATH` (`~/.local/bin`), `cage_policy.py` in `~/.claude/hooks/`, the helper in
+> `~/work/gh-issue/`. Sensitive values (tokens, the GitHub PAT) live outside the repo.
 
 ## Files
 

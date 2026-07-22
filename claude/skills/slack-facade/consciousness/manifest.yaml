@@ -1,17 +1,17 @@
 display_information:
-  name: nucstar
+  name: agent-name            # CHANGE per bot (one Slack app == one bot user)
   description: Anatoly's NUC-resident Claude — ask it things, it delegates to the machine.
   background_color: "#2b3137"
 
 features:
   bot_user:
-    display_name: nucstar
+    display_name: agent-name
     always_online: true
 
 oauth_config:
   scopes:
     bot:
-      - app_mentions:read      # see @nucstar
+      - app_mentions:read      # see @<the-bot>
       - chat:write             # post messages
       - channels:history       # read public channels it's in
       - groups:history         # read private channels it's in
@@ -24,7 +24,7 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
-      - app_mention            # @nucstar in a channel — starts a conversation
+      - app_mention            # @<the-bot> in a channel — starts a conversation
       - message.im             # direct messages
       - message.channels       # replies in public-channel threads we're engaged in (no re-mention)
       - message.groups         # replies in private-channel threads we're engaged in

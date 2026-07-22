@@ -214,14 +214,18 @@ def cmd_pr_view(a):
     print(f"mergeable: {pr.get('mergeable')} ({pr.get('mergeable_state')})   url: {pr['html_url']}")
     print("-" * 60)
     print(pr.get("body") or "(no body)")
-    seen = {}
     for r in _api("GET", _rp(a.repo, f"/pulls/{a.number}/reviews?per_page=100")):
-        seen[r["user"]["login"]] = r["state"]   # keep the latest review state per author
-    if seen:
+        if r.get("state") == "COMMENTED" and not (r.get("body") or "").strip():
+            continue   # empty COMMENTED review = just the container for inline notes
         print("-" * 60)
-        print("reviews:")
-        for who, st in seen.items():
-            print(f"  {who}: {st}")
+        print(f"review by {r['user']['login']}: {r['state']}")
+        if (r.get("body") or "").strip():
+            print(r["body"])
+    for c in _api("GET", _rp(a.repo, f"/pulls/{a.number}/comments?per_page=100")):
+        ln = c.get("line") or c.get("original_line") or c.get("position")
+        print("-" * 60)
+        print(f"inline @{c['user']['login']} on {c.get('path', '?')}:{ln}")
+        print(c.get("body") or "")
     for c in _api("GET", _rp(a.repo, f"/issues/{a.number}/comments?per_page=100")):
         print("-" * 60)
         print(f"@{c['user']['login']}:")
