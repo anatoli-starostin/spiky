@@ -42,6 +42,23 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
     rationale is written up separately in **[slack-facade.md](slack-facade.md)** (the *why*;
     the skill is the *how*).
 
+### Installing a skill on a host (this folder is *source*, not the discovery path)
+
+**Adding a skill here does NOT make it invokable.** Claude Code discovers skills only from
+**`~/.claude/skills/<name>/`** (the per-user skills path). This `claude/skills/` folder is the
+version-controlled *source of truth* / knowledge base — so to actually use a skill on a host you
+must **install** it: copy the skill's directory into that host's `~/.claude/skills/`, e.g.
+
+```sh
+cp -r claude/skills/agent-cage ~/.claude/skills/agent-cage   # then /agent-cage works next session
+```
+
+Skills are loaded at **session start**, so a new session (or restart) picks up a freshly
+installed skill. Two consequences to remember: (1) *publishing* a skill to this repo and
+*installing* it on a host are **two separate steps** — never assume a repo skill is live
+anywhere; do the copy per host (and per replica). (2) The installed copies are **snapshots that
+drift** from the repo as the SKILL is edited — re-copy after changes to keep a host current.
+
 ## Scope and boundaries
 
 - **The scientific record and the working method.** thesis / journey / archive are the
