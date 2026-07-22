@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Audit one replica's slack-facade wiring. Run on each host; prints a report."""
 import json
+import os
 import pathlib
 import re
 import socket
 import subprocess
 
 HOME = pathlib.Path.home()
+# Where the facade is deployed — outside the sbox cage's writable zone (see the
+# agent-cage SKILL). Matches cage_policy's AGENT_TOOLS_DIR knob; default ~/work.
+FACADE = pathlib.Path(os.path.expanduser(os.environ.get("AGENT_TOOLS_DIR", "~/work"))) / "slack-facade"
 OK, BAD = "✓", "✗"
 
 
@@ -43,14 +47,14 @@ def main():
         up = proc(pat)
         print(f"  {OK if up else BAD} {label}")
 
-    log = (HOME / "work/slack-facade/app.log")
+    log = FACADE / "app.log"
     txt = log.read_text() if log.exists() else ""
     bot = re.findall(r"connected as bot user (\S+) \(bot_id (\S+)\)", txt)
     conn = "socket mode connected" in txt.split("connected as bot user")[-1] if bot else False
     print(f"  {OK if bot else BAD} slack face: bot_user={bot[-1][0] if bot else '?'} "
           f"bot_id={bot[-1][1] if bot else '?'} {'(socket connected)' if conn else ''}")
 
-    app = (HOME / "work/slack-facade/app.py").read_text()
+    app = (FACADE / "app.py").read_text()
     checks = [
         ("consciousness isolated (setting_sources=[])", "setting_sources=[]" in app),
         ("identity from hostname", "socket.gethostname()" in app),

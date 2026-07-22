@@ -18,7 +18,9 @@ agent, face included, goes with it.
 import os
 import subprocess
 
-FACADE = os.path.expanduser("~/work/slack-facade")
+# Deploy location of the facade — outside the sbox cage's writable zone (see the
+# agent-cage SKILL). Matches cage_policy's AGENT_TOOLS_DIR knob; default ~/work.
+FACADE = os.path.join(os.path.expanduser(os.environ.get("AGENT_TOOLS_DIR", "~/work")), "slack-facade")
 
 # (label, pgrep pattern, Monitor command)
 # NOTE (2026-07-17): Telegram is DEPRECATED fleet-wide — approvals and chat moved to
