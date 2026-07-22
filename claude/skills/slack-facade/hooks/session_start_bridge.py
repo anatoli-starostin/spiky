@@ -19,12 +19,12 @@ APPROVAL_CHANNEL = pathlib.Path(os.path.expanduser("~/.claude/slack_facade/appro
 
 
 def reset_cord_to_console():
-    """After a restart, Anatoly is AT the console (he just started this session), so
+    """After a restart, Human Master is AT the console (he just started this session), so
     approvals belong at the console -- never in Slack. Default the cord to "console" on
     every SessionStart; approval_channel_follow (UserPromptSubmit) then re-points it per
     turn -- a Slack-delegated BODY_TASK pulls it to "slack", console typing keeps it
     "console". Without this, a stale "slack" left over from a previous run sends this
-    console session's approvals to Anatoly's Slack DM, where they sit and time out with
+    console session's approvals to Human Master's Slack DM, where they sit and time out with
     nobody at the console to answer -- exactly what happened on one host's restart."""
     try:
         APPROVAL_CHANNEL.parent.mkdir(parents=True, exist_ok=True)

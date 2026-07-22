@@ -67,10 +67,13 @@ def main():
     for label, good in checks:
         print(f"  {OK if good else BAD} {label}")
 
-    guard = (HOME / ".claude/agent_bridge/guard_on").exists()
+    # No phone/telegram guard any more — approvals route by the "cord" (the
+    # approval_channel: slack | console, following the request's origin).
+    cord = HOME / ".claude/slack_facade/approval_channel"
     await_f = HOME / ".claude/agent_bridge/awaiting_approval"
-    print("  ── guard ──")
-    print(f"    phone guard: {'ON' if guard else 'OFF'}")
+    print("  ── approval routing ──")
+    print(f"    channel (cord): "
+          f"{cord.read_text().strip() if cord.exists() else 'slack (default)'}")
     print(f"    awaiting_approval flag: "
           f"{await_f.read_text().strip() if await_f.exists() else '(none pending)'}")
 

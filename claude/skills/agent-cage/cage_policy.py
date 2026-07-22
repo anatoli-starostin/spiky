@@ -27,7 +27,7 @@ FILE_TOOLS = {"Write", "Edit", "NotebookEdit"}
 # to Claude Code, which auto-approves them). The list is the ONLY escape hatch: any
 # tool NOT here and not green is GATED, so in slack mode EVERY real permission
 # (WebFetch, WebSearch, MCP tools, and any future tool) is asked in Slack -- not
-# silently sent to the native console prompt. Anatoly's rule: "all permissions should
+# silently sent to the native console prompt. Human Master's rule: "all permissions should
 # be asked on Slack in slack mode." Failure mode stays toward asking, per the cage.
 # (In console mode a gated tool still just defers to the native prompt -- unchanged.)
 SAFE_TOOLS = {

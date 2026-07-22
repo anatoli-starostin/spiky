@@ -3,7 +3,7 @@
 
 The body's hook can't talk to Slack. Instead it drops an approval REQUEST in a
 shared dir and blocks polling for a DECISION. The consciousness (app.py), which is
-the one thing wired into Slack, watches for requests, DMs Anatoly, and writes back
+the one thing wired into Slack, watches for requests, DMs Human Master, and writes back
 the decision. Only the consciousness touches Slack; the body stays a plain session.
 
 File protocol in ~/.claude/slack_facade/approvals/ :
@@ -24,7 +24,7 @@ ALIVE = BASE / "consciousness_alive"        # consciousness heartbeat (unix ts)
 AWAITING = pathlib.Path.home() / ".claude" / "agent_bridge" / "awaiting_approval"
 # Short on purpose: a gated command that gets no Slack reply within this window is
 # auto-denied on timeout, which nudges the body to find a cage-legal (sbox) workaround
-# rather than idling on a human. Anatoly's calls: 300s -> 60s (2026-07-19) -> 30s (2026-07-22).
+# rather than idling on a human. Human Master's calls: 300s -> 60s (2026-07-19) -> 30s (2026-07-22).
 ASK_TIMEOUT = 30
 
 
@@ -44,7 +44,7 @@ def _rid():
 def ask(prompt, base="command", timeout=ASK_TIMEOUT):
     """Post an approval request for the consciousness and block for the decision.
     Returns (decision, comment): decision is 'allow'|'deny'|'always'|'timeout';
-    comment is an optional note Anatoly typed alongside a denial (e.g. "no, archive
+    comment is an optional note Human Master typed alongside a denial (e.g. "no, archive
     them first") to hand back to the body as his instruction. Empty otherwise."""
     APPROVALS.mkdir(parents=True, exist_ok=True)
     rid = _rid()

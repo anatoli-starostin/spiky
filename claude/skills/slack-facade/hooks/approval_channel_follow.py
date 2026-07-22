@@ -4,7 +4,7 @@
 No phone guard, no manual toggling needed. The rule is simply:
   * work delegated from Slack (a BODY_TASK from the consciousness) -> approvals
     are asked in Slack;
-  * work typed at the console (Anatoly at the keyboard) -> approvals are asked at
+  * work typed at the console (Human Master at the keyboard) -> approvals are asked at
     the console.
 
 It writes ~/.claude/slack_facade/approval_channel ("slack" | "console"), which the

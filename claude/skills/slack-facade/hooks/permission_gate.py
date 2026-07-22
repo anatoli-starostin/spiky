@@ -154,10 +154,10 @@ def main():
     elif decision == "deny":
         transport.notify("❌ denied")
         if comment:
-            # Anatoly denied WITH a note ("no, archive them first"). A deny's reason is
+            # Human Master denied WITH a note ("no, archive them first"). A deny's reason is
             # shown to the body model, so hand his words back as an instruction — the
             # body then adapts rather than blindly retrying the identical command.
-            reason = (f'Anatoly declined this and said: "{comment}". Treat that as his '
+            reason = (f'Human Master declined this and said: "{comment}". Treat that as his '
                       f"instruction — adjust course accordingly; do NOT just retry the "
                       f"same command.")
         else:
@@ -165,12 +165,12 @@ def main():
         emit("deny", reason)
     else:
         transport.notify("⏱ timed out — denying")
-        # A timeout is NOT an active refusal — Anatoly just didn't answer in the window.
-        # Anatoly's intent (2026-07-19): a short timeout should push the body toward a
+        # A timeout is NOT an active refusal — Human Master just didn't answer in the window.
+        # Human Master's intent (2026-07-19): a short timeout should push the body toward a
         # cage-legal path, not a dead stop. So tell the model to look for an sbox workaround
         # before re-asking. (Reason text IS shown to the body model.)
         reason = (f"No reply within {transport.ASK_TIMEOUT}s, so this was auto-denied on "
-                  f"TIMEOUT — not an active 'no' from Anatoly. Before re-requesting, look for "
+                  f"TIMEOUT — not an active 'no' from Human Master. Before re-requesting, look for "
                   f"a way to accomplish this INSIDE the sbox cage (writable ~/projects, /tmp, "
                   f"~/.cache; runs with no approval). Only re-ask the gated command if the task "
                   f"genuinely cannot be done in-cage.")
