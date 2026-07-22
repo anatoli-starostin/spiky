@@ -133,8 +133,12 @@ legitimate command over-gates, tune the classifier and re-test — don't widen t
 ## `gh_issue.py` — an optional green-listed helper (the extension pattern)
 
 A worked example of **safely widening the green zone with one vetted tool**. It's a
-stdlib-only GitHub REST client (list / view / create / comment / close / reopen / label /
-pr-create / link-branch); `cage_policy` green-lists it by **absolute path** via
+stdlib-only GitHub REST client (issues: list / view / create / comment / close / reopen /
+label; PRs: pr-create / pr-list / pr-view / pr-diff / link-branch — and view / comment /
+close / reopen / label also accept a PR number, since PRs are issues). **`pr-merge` is
+deliberately absent** — merging stays a human action (the branch+PR review gate), so it's
+kept out of this frictionless surface rather than green-listed. `cage_policy` green-lists the
+helper by **absolute path** via
 `is_safe_gh_issue()` (same precedent as any single trusted helper). It reads a PAT from
 `~/.config/spikybot/pat` (never inline, never in the repo), defaults its repo from
 `GH_ISSUE_REPO`, and takes issue bodies via `--body-file` (never inline) so the whole

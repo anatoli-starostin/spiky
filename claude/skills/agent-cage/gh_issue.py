@@ -8,7 +8,10 @@ identity (spikyclaudebot).
 This ONE script is greenlit in cage_policy.py (`_is_gh_issue`), exactly the way
 body_bridge.py's done/error/running is — so invoking it needs no approval, even
 though it makes network calls outside the sbox cage. Nothing else about it is
-special; the narrow, fixed capability is the point.
+special; the narrow, fixed capability is the point. It is deliberately preferred
+over the raw `gh` CLI, which is gated: `gh` exposes api/auth/extension/gist/secret
+verbs that would each be a cage bypass or exfil channel, so it stays out of the
+green zone. This helper can reach ONLY the specific endpoints its code names.
 
 Bodies (issue/comment/PR text) are passed with --body-file, never inline, so the
 command line stays a single simple segment with no heredoc or $(...) — which is
@@ -23,6 +26,14 @@ Usage:
   gh_issue.py reopen  <N>
   gh_issue.py label   <N> [--add L ...] [--remove L ...]
   gh_issue.py pr-create --title T --head BRANCH [--base main] (--body B | --body-file F)
+  gh_issue.py pr-list   [--state open|closed|all] [--base B] [--head H] [--limit N]
+  gh_issue.py pr-view   <N>
+  gh_issue.py pr-diff   <N>
+  gh_issue.py link-branch <N> --branch BRANCH
+
+view / comment / close / reopen / label also accept a PR number (PRs are issues).
+pr-merge is deliberately NOT provided — merging a PR stays a human action (the
+branch+PR review gate); adding it here would make it frictionless, defeating review.
 
 Default repo: anatoli-starostin/spiky (override with --repo owner/name).
 """
@@ -65,6 +76,22 @@ def _request(url, method, data, accept):
         except Exception:
             pass
         sys.exit(f"error: {method} {url} -> HTTP {e.code}: {detail}")
+    except urllib.error.URLError as e:
+        sys.exit(f"error: network failure reaching {url}: {e.reason}")
+
+
+def _request_text(url, accept):
+    """Like _request but returns the RAW response text (for the diff media type,
+    which is not JSON). GET only; used by pr-diff."""
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"token {_token()}")
+    req.add_header("Accept", accept)
+    req.add_header("User-Agent", "gh_issue-spikybot")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.read().decode()
+    except urllib.error.HTTPError as e:
+        sys.exit(f"error: GET {url} -> HTTP {e.code}: {e.read().decode()}")
     except urllib.error.URLError as e:
         sys.exit(f"error: network failure reaching {url}: {e.reason}")
 
@@ -167,6 +194,45 @@ def cmd_pr_create(a):
     print(_api("POST", _rp(a.repo, "/pulls"), payload)["html_url"])
 
 
+def cmd_pr_list(a):
+    q = f"?state={a.state}&per_page={a.limit}"
+    if a.base:
+        q += "&base=" + urllib.parse.quote(a.base)
+    if a.head:
+        q += "&head=" + urllib.parse.quote(a.head)
+    for pr in _api("GET", _rp(a.repo, f"/pulls{q}")):
+        draft = " (draft)" if pr.get("draft") else ""
+        print(f"#{pr['number']} [{pr['state']}]{draft} {pr['title']}  "
+              f"({pr['head']['ref']} -> {pr['base']['ref']})")
+
+
+def cmd_pr_view(a):
+    pr = _api("GET", _rp(a.repo, f"/pulls/{a.number}"))
+    draft = " (draft)" if pr.get("draft") else ""
+    print(f"#{pr['number']} [{pr['state']}]{draft} {pr['title']}")
+    print(f"author: {pr['user']['login']}   {pr['head']['ref']} -> {pr['base']['ref']}")
+    print(f"mergeable: {pr.get('mergeable')} ({pr.get('mergeable_state')})   url: {pr['html_url']}")
+    print("-" * 60)
+    print(pr.get("body") or "(no body)")
+    seen = {}
+    for r in _api("GET", _rp(a.repo, f"/pulls/{a.number}/reviews?per_page=100")):
+        seen[r["user"]["login"]] = r["state"]   # keep the latest review state per author
+    if seen:
+        print("-" * 60)
+        print("reviews:")
+        for who, st in seen.items():
+            print(f"  {who}: {st}")
+    for c in _api("GET", _rp(a.repo, f"/issues/{a.number}/comments?per_page=100")):
+        print("-" * 60)
+        print(f"@{c['user']['login']}:")
+        print(c.get("body") or "")
+
+
+def cmd_pr_diff(a):
+    print(_request_text(f"{API}{_rp(a.repo, f'/pulls/{a.number}')}",
+                        "application/vnd.github.v3.diff"), end="")
+
+
 def cmd_link_branch(a):
     """Create a real issue<->branch link (populates the issue's Development panel)
     via the GraphQL createLinkedBranch mutation, pointing at an EXISTING branch's tip."""
@@ -209,6 +275,14 @@ def main():
     s = sub.add_parser("pr-create"); s.add_argument("--title", required=True); s.add_argument("--head", required=True)
     s.add_argument("--base", default="main")
     s.add_argument("--body"); s.add_argument("--body-file", dest="body_file"); s.set_defaults(func=cmd_pr_create)
+
+    s = sub.add_parser("pr-list"); s.add_argument("--state", default="open", choices=["open", "closed", "all"])
+    s.add_argument("--base"); s.add_argument("--head"); s.add_argument("--limit", type=int, default=30)
+    s.set_defaults(func=cmd_pr_list)
+
+    s = sub.add_parser("pr-view"); s.add_argument("number"); s.set_defaults(func=cmd_pr_view)
+
+    s = sub.add_parser("pr-diff"); s.add_argument("number"); s.set_defaults(func=cmd_pr_diff)
 
     s = sub.add_parser("link-branch"); s.add_argument("number"); s.add_argument("--branch", required=True)
     s.set_defaults(func=cmd_link_branch)
