@@ -1,0 +1,38 @@
+{
+  "exp_name": "exp007_hyperplane_mhl_ffn_nap6_tph256",
+  "description": "Clone of exp006 (single-head HyperplaneMHL FFN replacing the dense MLP) with ONLY the LUT geometry changed: n_anchor_pairs 5->6 (K=2^6=64 rows) and tables_per_head 128->256. Everything else identical to exp006/the locked config (n_heads=1, n_outputs=384, hard forward, random init +0.001 noise, LUT bf16 / hyperplanes fp32, hybrid Lion+Adam-no-wd optimizer routed by parameter identity, grad_clip 1.0, 16000 steps, eval_every 200, seed 1). Bigger LUT -> ~2x exp001 params (~70M). Compares vs exp001 anchor 1.20144 and vs exp006's 1.2645.",
+
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 16000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "grad_clip": 1.0,
+
+  "lut_lr": 0.0002,
+  "lut_betas": [0.9, 0.95],
+
+  "hml_n_heads": 1,
+  "hml_n_outputs": 384,
+  "hml_nap": 6,
+  "hml_tph": 256,
+  "hml_forward_mode": "hard",
+  "hml_hyperplane_init": "random",
+  "hml_init_noise": 0.001,
+  "hml_learnable_temps": true,
+  "hml_soft_score_temp": 0.5,
+  "hml_select_temp": 0.5,
+  "hml_weight_dtype": "bf16",
+  "hml_hyperplane_dtype": "fp32",
+  "hml_use_bf16": true
+}
