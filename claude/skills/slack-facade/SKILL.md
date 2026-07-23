@@ -45,6 +45,7 @@ cord). This file is the deployment recipe and file map.
 consciousness/
   app.py           # THE consciousness — Agent SDK, Slack Socket Mode, the face.
   body_bridge.py   # task queue + the body's CLI/watch loop (the body's "ears").
+  progress.py      # reusable Slack progress-bar brick (post-once / update-in-place).
   manifest.yaml    # Slack app definition (one app == one bot user).
   audit.py         # per-host wiring check; run it after deploy, expect all ✓.
 hooks/             # -> deploy to ~/.claude/hooks/ on the BODY's host
@@ -82,6 +83,35 @@ Runtime state (NOT in the repo), all under `~/.claude/`:
    cord is `slack`, `transport_slack.ask()` drops `approvals/req_<id>.json` and blocks;
    `app.py` DMs the owner with buttons, writes `approvals/dec_<id>.json`; the body unblocks.
    If the cord is `console`, the gate defers to the native console prompt.
+
+## Progress bars (shared brick — `progress.py`)
+
+A reusable primitive for tracking slow work (training runs, long jobs) with a Slack
+message that updates **in place**. Same rails as the reaper: the caller writes small
+record files; the face posts once (`chat_postMessage`) then edits (`chat_update`).
+
+- **Rendezvous is a GREEN-ZONE dir** — `~/.cache/slack_facade/progress/` — because the
+  caller usually runs INSIDE the sbox cage (no network, RW only in `~/projects`,`/tmp`,
+  `~/.cache`) while the face runs outside. The caller writes there with **no approval and
+  no network**; the face reads there and does the Slack I/O. **No cage_policy change.**
+- Two single-writer files per bar (`<handle>.json` by the caller, `<handle>.sent.json` by
+  the face) so they never race. Bars post **verbatim** (not through `mind.ask`).
+- Wire-up in `app.py` is one line:
+  `asyncio.create_task(progress.reaper(web, log, task_loader=body_bridge.load))`. The reaper
+  only edits when a record changed, so bursts coalesce into one edit (light guard, far under
+  Slack's ~1 update/sec/channel limit).
+
+**Usage from an experiment (Python, in-cage):**
+```python
+import progress
+h = progress.progress_start("exp042 pretrain", task=TASK_ID)   # binds to the task's thread
+progress.progress_update(h, step=8000, total=16000, stats="val_bpb 1.243 · eta ~12m")
+progress.progress_done(h, ok=True, final_text="val_bpb 1.201")  # ALWAYS call (ok/fail) — no stale bars
+```
+**Or from bash:** `h=$(python3 progress.py start --task "$TASK_ID" --label exp042)` then
+`python3 progress.py update "$h" --step 8000 --total 16000 --stats "eta ~6m"` and
+`python3 progress.py done "$h" --text "val_bpb 1.201"` (add `--fail` on failure). Renders
+🟩⬜ emoji squares by default, or `██░░` blocks with `style="unicode"` / `--style unicode`.
 
 ## Setup recipe (one bot)
 
