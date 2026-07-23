@@ -12,7 +12,8 @@ or how approval is delivered — those are transport concerns layered on top by
     gated   : everything else -> a human must approve (caller routes it).
 
 The green zone = read-only commands + a single clean `sbox <argv>` (the ML cage)
-+ the scoped-safe `git` surface. Everything else is gated. The design rule is
++ the scoped-safe `git` surface + the two fixed paired-unit Monitor arms (the cage's
+self-arming ears). Everything else is gated. The design rule is
 "auto-allow only the trivially-simple / known-safe; gate on anything else" — the
 failure mode is always toward asking, never toward silent broad execution.
 """
@@ -307,6 +308,37 @@ def is_safe_gh_issue(seg):
     return len(seg) >= 2 and os.path.basename(seg[0]) in _PY and seg[1] == GH_ISSUE_SCRIPT
 
 
+# ── the paired-unit Monitor tier (the cage's self-arming ears) ───────────────
+# A caged agent boots with two PERSISTENT Monitors armed at SessionStart (see the
+# slack-facade skill's paired_units.py): the delegated-task body-watch — the ears
+# every caged agent needs to receive work — and its paired Slack face. Arming those
+# two FIXED units is the cage bringing ITSELF up, not discretionary work, so it must
+# not cost a prompt every session (otherwise a headless replica can't self-arm). We
+# green-list exactly those two arm commands and nothing else. The commands mirror
+# paired_units.UNITS verbatim; both live under the read-only-in-cage _TOOLS_DIR, so a
+# caged agent cannot rewrite what actually runs. Match is EXACT and FAIL-CLOSED: any
+# other Monitor command — or an unrecognised input field — is NOT green (it gates).
+_FACADE_DIR = f"{_TOOLS_DIR}/slack-facade"
+PAIRED_UNIT_MONITOR_CMDS = {
+    f"cd {_FACADE_DIR} && python3 body_bridge.py watch",       # body-watch (delegated-task ears)
+    f"cd {_FACADE_DIR} && .venv/bin/python -u app.py",          # the paired Slack face
+}
+# The Monitor tool carries its shell command in `command` (paired_units instructs the
+# model: 'Monitor command "<cmd>"'); a few aliases are tolerated so a field rename can
+# only ever fail closed, never broaden.
+_MONITOR_CMD_KEYS = ("command", "cmd", "bash_command", "shell_command")
+
+def is_paired_unit_monitor(tool_input):
+    """True iff a Monitor call is arming one of the two fixed paired agent units,
+    by EXACT arm-command match. Unknown field / any other command -> False (gated)."""
+    ti = tool_input or {}
+    for k in _MONITOR_CMD_KEYS:
+        v = ti.get(k)
+        if isinstance(v, str) and v.strip() in PAIRED_UNIT_MONITOR_CMDS:
+            return True
+    return False
+
+
 # ── the composed green-zone test for Bash ───────────────────────────────────
 def _seg_ok(seg):
     """A single command segment is green if it's a known read-only command, the
@@ -348,6 +380,10 @@ def classify(tool, tool_input):
         return "green" if is_safe_bash(cmd) else "gated"
     if tool in SAFE_TOOLS:
         return "ungated"          # read-only -> defer to Claude Code (auto-approves)
+    if tool == "Monitor":
+        # The cage's own paired-unit arms (body-watch + Slack face) self-approve so a
+        # caged agent boots self-sufficient; ANY other Monitor call still gates.
+        return "green" if is_paired_unit_monitor(ti) else "gated"
     # EVERYTHING else -> gated. Skill/Agent/Workflow AND anything not known-safe
     # (WebFetch, WebSearch, MCP tools, future tools) reaches outside the cage's
     # trivially-safe set, so a human must decide -> the caller routes it (Slack in

@@ -118,6 +118,11 @@ tool_input)` returns:
   - **file writes** (`Write`/`Edit`/`NotebookEdit`) whose **absolute** path is under the
     green zone (`~/projects`/`/tmp`/`~/.cache`), mirroring `sbox`'s writable binds;
   - optionally, one vetted helper by absolute path (see `gh_issue.py` below).
+  - the **two fixed paired-unit `Monitor` arms** — the delegated-task body-watch and the
+    paired Slack face — matched by **exact** command (`is_paired_unit_monitor`), so a caged
+    agent self-arms its ears at SessionStart with no prompt. Fail-closed: any other `Monitor`
+    command gates. (Both units live under the read-only-in-cage `_TOOLS_DIR`, so the caged
+    agent can't rewrite what actually runs — same trust basis as `body_bridge.py`.)
 - **`gated`** — **everything else** (default). Any plain uncaged command; ANY command with
   shell operators, even `sbox`-prefixed (operators drop to ask — permission is bound to
   *capability*, not syntax, so splitting a command doesn't evade the gate); broad
