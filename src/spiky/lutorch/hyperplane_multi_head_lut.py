@@ -94,6 +94,16 @@ def _hyperplane_project(x: torch.Tensor, w: torch.Tensor,
     cuBLAS call, is autocast-eligible (runs in bf16 under autocast), and is the
     new dominant FLOP of the module — replacing the cheap x[a]-x[b] gather of
     the anchor-pair front-end.
+
+    PARITY / bf16 CAVEAT: this matmul is autocast-eligible, so under bf16
+    autocast the pre-activation a_i is computed in bf16. Near a decision
+    boundary (a_i ~ 0) the bf16 rounding can flip the sign bit 1[a_i > 0] versus
+    fp32 — a *discrete* change: the packed index selects a different table row.
+    That is a different (correct) LUT output, NOT a floating-point tolerance
+    diff, and it cannot be closed by loosening atol/rtol. Consequently parity
+    with FastMultiHeadLut under anchor-pairs init is bit-exact only in fp32 with
+    autocast OFF (use_bf16=False); the parity tests pin that. Don't chase a
+    "phantom parity bug" in bf16 — a handful of boundary-row flips are expected.
     """
     n_tables, nap, input_dim = w.shape
     w2 = w.reshape(n_tables * nap, input_dim)          # [T*NAP, D]
@@ -141,7 +151,10 @@ def _hyperplane_soft_bwd_body(grad_pt, x, weights, w, b,
                               bit_matrix, index, T_soft, T_sel,
                               accum_dtype: torch.dtype,
                               compute_weight_grad: bool = True,
-                              wgrad_via_bmm: bool = False):
+                              wgrad_via_bmm: bool = False,
+                              compute_grad_x: bool = True,
+                              compute_grad_w: bool = True,
+                              compute_grad_b: bool = True):
     """Soft backward pinned to the actually-chosen index.
 
     Differentiates the full-K softmax surrogate
@@ -166,6 +179,12 @@ def _hyperplane_soft_bwd_body(grad_pt, x, weights, w, b,
 
     `wgrad_via_bmm=True` switches the LUT-weight scatter to a sparse-S + bmm
     pattern (bf16-storage path), matching FastMultiHeadLut.
+
+    `compute_grad_{x,w,b}` gate the affine-parameter GEMMs on the autograd
+    engine's needs_input_grad: when the hyperplanes are frozen
+    (requires_grad=False) the grad_w / grad_b GEMMs are skipped, and grad_x is
+    skipped when x needs no grad. The softmax path (temperature grads) and the
+    LUT-weight grad are unaffected.
     """
     B, n_tables_, n_outputs = grad_pt.shape
     n_tables, NAP, input_dim = w.shape
@@ -223,11 +242,22 @@ def _hyperplane_soft_bwd_body(grad_pt, x, weights, w, b,
     #   dL/dx      = G_flat @ w2                         [B, D]
     #   dL/dw2     = G_flat^T @ x  -> reshape [T, NAP, D]
     #   dL/db      = G.sum(dim=0)                        [T, NAP]
-    w2       = w.reshape(n_tables * NAP, input_dim)
-    d_a_flat = d_a.reshape(B, n_tables * NAP)
-    grad_x   = torch.matmul(d_a_flat, w2.to(d_a_flat.dtype)).to(x.dtype)
-    grad_w   = torch.matmul(d_a_flat.t(), x.to(d_a_flat.dtype)).view(n_tables, NAP, input_dim).to(w.dtype)
-    grad_b   = d_a.sum(dim=0).to(b.dtype)
+    # Each GEMM is gated so a frozen hyperplane (or an x that needs no grad)
+    # doesn't pay for a gradient nobody consumes.
+    if compute_grad_x or compute_grad_w:
+        d_a_flat = d_a.reshape(B, n_tables * NAP)
+    if compute_grad_x:
+        w2     = w.reshape(n_tables * NAP, input_dim)
+        grad_x = torch.matmul(d_a_flat, w2.to(d_a_flat.dtype)).to(x.dtype)
+    else:
+        grad_x = None
+    if compute_grad_w:
+        grad_w = torch.matmul(
+            d_a_flat.t(), x.to(d_a_flat.dtype)
+        ).view(n_tables, NAP, input_dim).to(w.dtype)
+    else:
+        grad_w = None
+    grad_b = d_a.sum(dim=0).to(b.dtype) if compute_grad_b else None
 
     return grad_x, grad_weights, grad_w, grad_b, grad_log_T_soft, grad_log_T_sel
 
@@ -291,11 +321,15 @@ class _HyperplaneMHLutSoft(torch.autograd.Function):
                         else torch.amp.autocast("cpu", enabled=False))
         wgrad_via_bmm = weights.dtype != torch.float32
         bwd_body = _pick_bwd_body(x.is_cuda)
+        # needs_input_grad indexes the forward args: 0=x, 2=w, 3=b. Skip the
+        # affine GEMMs whose grad the autograd engine won't consume.
+        ni = ctx.needs_input_grad
         with autocast_ctx:
             grad_x, grad_w_lut, grad_w, grad_b, grad_log_Ts, grad_log_Tx = bwd_body(
                 grad_pt, x, weights, w, b, bit_matrix,
                 index, T_soft, T_sel, weights.dtype,
                 wgrad_via_bmm=wgrad_via_bmm,
+                compute_grad_x=ni[0], compute_grad_w=ni[2], compute_grad_b=ni[3],
             )
         # 12 forward inputs -> 12 grad returns.
         return (grad_x, grad_w_lut, grad_w, grad_b, grad_log_Ts, grad_log_Tx,
@@ -477,6 +511,7 @@ class _HyperplaneMHLutHybridSmooth(torch.autograd.Function):
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
         bwd_body = _pick_bwd_body(x.is_cuda)
+        ni = ctx.needs_input_grad  # 0=x, 2=w, 3=b
         with autocast_ctx:
             # Soft backward: grad_x/grad_w/grad_b + temp grads (input-side grads
             # are always soft). Its 1-row LUT-weight grad is discarded — we use
@@ -485,6 +520,7 @@ class _HyperplaneMHLutHybridSmooth(torch.autograd.Function):
                 grad_pt, x, weights, w, b, bit_matrix,
                 main_index, T_soft, T_sel, weights.dtype,
                 compute_weight_grad=False,
+                compute_grad_x=ni[0], compute_grad_w=ni[2], compute_grad_b=ni[3],
             )
 
         wgrad_body = _hyperplane_smooth_weight_grad_c if x.is_cuda else _hyperplane_smooth_weight_grad

@@ -186,6 +186,11 @@ def test_parity_with_fast_forward(forward_mode):
                 n_outputs=8, n_anchor_pairs=4, tables_per_head=4,
                 weight_dtype=torch.float32, use_bf16=False,
                 learnable_temps=False, random_seed=7)
+    # PIN (do not relax): parity is only bit-exact in fp32 with autocast OFF.
+    # Under bf16 the front-end matmul can flip a sign bit at a decision boundary
+    # (a discrete table-row change, not a tolerance diff), so the two modules can
+    # legitimately pick different rows and this test would fail spuriously.
+    assert args["weight_dtype"] == torch.float32 and args["use_bf16"] is False
     m_hyp = _make(hyperplane_init="anchor_pairs", **args)
     m_fast = _make_fast(**args)
     # Same seed -> same anchor pairs and same LUT-weight init already; sync to
@@ -212,6 +217,10 @@ def test_parity_with_fast_gradients():
                 n_outputs=8, n_anchor_pairs=4, tables_per_head=4,
                 weight_dtype=torch.float32, use_bf16=False,
                 learnable_temps=True, random_seed=7)
+    # PIN (do not relax): grad parity is only bit-exact in fp32 / autocast OFF
+    # (see forward-parity test) — a bf16 sign flip picks a different row and
+    # produces a legitimately different gradient.
+    assert args["weight_dtype"] == torch.float32 and args["use_bf16"] is False
     m_hyp = _make(hyperplane_init="anchor_pairs", **args)
     m_fast = _make_fast(**args)
     _sync_lut_weights(m_hyp, m_fast)
@@ -295,6 +304,32 @@ def test_backward_grads_flow_to_all_params(forward_mode, weight_dtype):
         assert (g.abs() > 0).any(), f"{name}.grad all zero"
     assert m.log_soft_score_temp.grad is not None
     assert m.log_select_temp.grad is not None
+
+
+@_cuda
+@pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
+def test_frozen_hyperplanes_skip_affine_grads(forward_mode):
+    """When w/b are frozen (requires_grad=False), their grads stay None (the
+    gated GEMMs are skipped) while x and LUT weights still receive grads, and
+    the forward output is unchanged from the all-trainable case."""
+    m = _make(forward_mode=forward_mode, hyperplane_init="random",
+              learnable_temps=True, weight_dtype=torch.float32, random_seed=0)
+    x0 = torch.randn(8, 64, device=_device(), dtype=torch.float32)
+
+    # Reference forward with everything trainable.
+    y_ref = m(x0.clone().requires_grad_(True))
+
+    m.hyperplane_weight.requires_grad_(False)
+    m.hyperplane_bias.requires_grad_(False)
+    x = x0.clone().requires_grad_(True)
+    y = m(x)
+    assert torch.equal(y, y_ref)  # freezing doesn't change forward
+    y.float().sum().backward()
+
+    assert m.hyperplane_weight.grad is None, "frozen w should get no grad"
+    assert m.hyperplane_bias.grad is None, "frozen b should get no grad"
+    assert x.grad is not None and (x.grad.abs() > 0).any()
+    assert m.weights.grad is not None and (m.weights.grad.abs() > 0).any()
 
 
 @_cuda
