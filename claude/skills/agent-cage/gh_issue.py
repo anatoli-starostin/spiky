@@ -29,6 +29,7 @@ Usage:
   gh_issue.py pr-list   [--state open|closed|all] [--base B] [--head H] [--limit N]
   gh_issue.py pr-view   <N>
   gh_issue.py pr-diff   <N>
+  gh_issue.py pr-edit   <N> [--title T] [--body B | --body-file F] [--base BRANCH]
   gh_issue.py link-branch <N> --branch BRANCH
 
 view / comment / close / reopen / label also accept a PR number (PRs are issues).
@@ -237,6 +238,26 @@ def cmd_pr_diff(a):
                         "application/vnd.github.v3.diff"), end="")
 
 
+def cmd_pr_edit(a):
+    """Edit an existing PR's title / body / base (the `gh pr edit` surface).
+
+    Only the PR's own metadata is touched via PATCH /pulls/{n}; still no merge,
+    no api/gist/secret verbs — the same narrow, bounded capability as the rest of
+    this helper. Body comes via --body-file, so no heredoc rides the command line."""
+    payload = {}
+    if a.title is not None:
+        payload["title"] = a.title
+    body = _resolve_body(a.body, a.body_file, required=False)
+    if body is not None:
+        payload["body"] = body
+    if a.base is not None:
+        payload["base"] = a.base
+    if not payload:
+        sys.exit("error: pr-edit needs at least one of --title / --body / --body-file / --base")
+    pr = _api("PATCH", _rp(a.repo, f"/pulls/{a.number}"), payload)
+    print(f"#{pr['number']} edited -> {pr['html_url']}")
+
+
 def cmd_link_branch(a):
     """Create a real issue<->branch link (populates the issue's Development panel)
     via the GraphQL createLinkedBranch mutation, pointing at an EXISTING branch's tip."""
@@ -287,6 +308,10 @@ def main():
     s = sub.add_parser("pr-view"); s.add_argument("number"); s.set_defaults(func=cmd_pr_view)
 
     s = sub.add_parser("pr-diff"); s.add_argument("number"); s.set_defaults(func=cmd_pr_diff)
+
+    s = sub.add_parser("pr-edit"); s.add_argument("number")
+    s.add_argument("--title"); s.add_argument("--body"); s.add_argument("--body-file", dest="body_file")
+    s.add_argument("--base"); s.set_defaults(func=cmd_pr_edit)
 
     s = sub.add_parser("link-branch"); s.add_argument("number"); s.add_argument("--branch", required=True)
     s.set_defaults(func=cmd_link_branch)
