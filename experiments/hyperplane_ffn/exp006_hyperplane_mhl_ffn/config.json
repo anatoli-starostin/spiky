@@ -1,0 +1,38 @@
+{
+  "exp_name": "exp006_hyperplane_mhl_ffn",
+  "description": "First real hyperplane_ffn experiment: clone of exp001 (MinimalGPT+RoPE, untied head) with the dense MLP FFN in all 6 blocks replaced by a single-head HyperplaneMultiHeadLUT (hard forward, always-soft backward). LUT machinery mirrors the latest FastMHL recipe (bf16 LUT storage + grad_clip 1.0 + Lion 2e-4/(0.9,0.95)/wd0); the NEW hyperplane weights w and bias b are fp32 + Adam, NO weight decay. Compares against the exp001 anchor 1.20144 val_bpb. NOTE: at tables_per_head=128 the module is ~1.54x the FFN params (10.9M vs 7.08M) -> whole model ~39.6M vs exp001's 35.79M; this is a deliberate capacity choice, not a param match.",
+
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 16000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "grad_clip": 1.0,
+
+  "lut_lr": 0.0002,
+  "lut_betas": [0.9, 0.95],
+
+  "hml_n_heads": 1,
+  "hml_n_outputs": 384,
+  "hml_nap": 5,
+  "hml_tph": 128,
+  "hml_forward_mode": "hard",
+  "hml_hyperplane_init": "random",
+  "hml_init_noise": 0.001,
+  "hml_learnable_temps": true,
+  "hml_soft_score_temp": 0.5,
+  "hml_select_temp": 0.5,
+  "hml_weight_dtype": "bf16",
+  "hml_hyperplane_dtype": "fp32",
+  "hml_use_bf16": true
+}
