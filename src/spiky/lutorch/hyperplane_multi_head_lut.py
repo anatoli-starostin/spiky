@@ -630,18 +630,30 @@ class HyperplaneMultiHeadLUT(nn.Module):
     biases `b` in addition to `x`, the LUT weights, and the two temperatures.
 
     Args mirror FastMultiHeadLut, plus:
+        weight_dtype: storage dtype of the LUT table weights (`weights`). May be
+            bf16 to mirror the FastMultiHeadLut bf16 recipe.
+        hyperplane_dtype: storage dtype of the hyperplane params
+            (`hyperplane_weight`, `hyperplane_bias`); default fp32, INDEPENDENT of
+            weight_dtype, so the LUT can live in bf16 while w/b stay fp32. All
+            mixed-dtype paths (projection, soft-backward einsums, grad casts)
+            handle bf16-LUT + fp32-hyperplanes.
         hyperplane_init: "anchor_pairs" (default) initializes each hyperplane to
-            reproduce a fixed anchor pair (`w_i = e_p1 - e_p2`, `b_i = 0`), so
-            the module is a strict, bit-for-bit generalization of
-            FastMultiHeadLut and can be A/B'd against it. "random" uses
-            small-norm Gaussian weight rows and zero bias for learning from
+            reproduce a fixed anchor pair (`w_i = e_p1 - e_p2`, `b_i = 0`) EXACTLY
+            (no noise), so the module is a strict, bit-for-bit generalization of
+            FastMultiHeadLut and can be A/B'd against it. "random" uses small-norm
+            Gaussian weight rows (std = initial_weights_noise, or
+            hyperplane_init_scale if given) and zero bias for learning from
             scratch.
-        hyperplane_init_scale: per-element std of the Gaussian rows when
-            hyperplane_init="random".
+        initial_weights_noise: the unified init-noise scale. Perturbs BOTH weight
+            sets: LUT weights ~ Uniform[-noise, +noise], and (under "random")
+            hyperplane rows ~ Normal(0, noise). Default 0.001 (a small non-zero
+            perturbation — NOT an exact-identity init).
+        hyperplane_init_scale: optional override for the random hyperplane-row
+            std; when None (default) the std equals initial_weights_noise.
 
     Forward signature:
         x: float [B, input_dim]
-        returns: [B, n_heads, n_outputs] in weight_dtype.
+        returns: [B, n_heads, n_outputs] in weight_dtype (the LUT storage dtype).
 
     Exposed parameters: `hyperplane_weight` (w, [n_tables, NAP, input_dim]),
     `hyperplane_bias` (b, [n_tables, NAP]), `weights` (LUT tables), and the two
@@ -658,9 +670,10 @@ class HyperplaneMultiHeadLUT(nn.Module):
         *,
         forward_mode: str = "hard",
         weight_dtype: torch.dtype = torch.float32,
+        hyperplane_dtype: torch.dtype = torch.float32,
         use_bf16: bool = True,
         hyperplane_init: str = "anchor_pairs",
-        hyperplane_init_scale: float = 0.02,
+        hyperplane_init_scale: Optional[float] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         soft_score_temp: float = 0.5,
         select_temp: float = 0.5,
@@ -692,6 +705,7 @@ class HyperplaneMultiHeadLUT(nn.Module):
         self.tables_per_head = tables_per_head
         self.table_dim = 1 << n_anchor_pairs
         self.weight_dtype = weight_dtype
+        self.hyperplane_dtype = hyperplane_dtype
         self.forward_mode = forward_mode
         self.hyperplane_init = hyperplane_init
         self.use_bf16 = bool(use_bf16)
@@ -740,6 +754,8 @@ class HyperplaneMultiHeadLUT(nn.Module):
         )
         if hyperplane_init == "anchor_pairs":
             # w_i = e_{a} - e_{b}, b_i = 0  ->  <w_i, x> + b_i = x[a] - x[b].
+            # Kept EXACT (no perturbation) so this init reduces bit-for-bit to
+            # FastMultiHeadLut for the A/B parity test.
             t_idx = torch.arange(n_lookup_tables, device=dev).view(-1, 1).expand(
                 n_lookup_tables, n_anchor_pairs)
             n_idx = torch.arange(n_anchor_pairs, device=dev).view(1, -1).expand(
@@ -747,14 +763,24 @@ class HyperplaneMultiHeadLUT(nn.Module):
             w_init[t_idx, n_idx, anchor_a_long] += 1.0
             w_init[t_idx, n_idx, anchor_b_long] -= 1.0
         else:  # "random"
+            # Small-norm Gaussian rows. `initial_weights_noise` is the unified
+            # noise knob — it perturbs BOTH the hyperplane weights (here) and the
+            # LUT table weights (below). hyperplane_init_scale overrides the std
+            # when set; otherwise the hyperplane std == initial_weights_noise.
             gen = None
             if random_seed is not None:
                 gen = torch.Generator(device=dev).manual_seed(random_seed + 2)
-            w_init.normal_(mean=0.0, std=hyperplane_init_scale, generator=gen)
-        self.hyperplane_weight = nn.Parameter(w_init.to(weight_dtype))
-        self.hyperplane_bias = nn.Parameter(b_init.to(weight_dtype))
+            hp_std = (hyperplane_init_scale if hyperplane_init_scale is not None
+                      else initial_weights_noise)
+            w_init.normal_(mean=0.0, std=hp_std, generator=gen)
+        # Hyperplanes stored in hyperplane_dtype (default fp32), independent of
+        # the LUT storage dtype — the LUT may live in bf16 while w/b stay fp32.
+        self.hyperplane_weight = nn.Parameter(w_init.to(hyperplane_dtype))
+        self.hyperplane_bias = nn.Parameter(b_init.to(hyperplane_dtype))
 
         # --- LUT table weights (identical init to FastMultiHeadLut) ----------
+        # Uniform[-initial_weights_noise, +initial_weights_noise], the same
+        # noise knob that scales the random hyperplanes above.
         rng_kwargs: dict = {"device": dev}
         if random_seed is not None:
             rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)

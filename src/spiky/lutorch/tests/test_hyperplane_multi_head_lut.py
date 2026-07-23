@@ -364,12 +364,70 @@ def test_frozen_hyperplanes_skip_affine_grads(forward_mode):
 
 @pytest.mark.parametrize("weight_dtype", _WEIGHT_DTYPES)
 def test_grad_dtypes_match_param_dtypes(weight_dtype):
+    # hyperplane_dtype defaults to fp32 and is INDEPENDENT of the LUT weight_dtype:
+    # the LUT grad follows weight_dtype, the hyperplane grads follow hyperplane_dtype.
     m = _make(weight_dtype=weight_dtype, hyperplane_init="random")
     x = torch.randn(4, 64, device=_device(), dtype=torch.float32, requires_grad=True)
     y = m(x); y.float().sum().backward()
     assert m.weights.grad.dtype == weight_dtype
-    assert m.hyperplane_weight.grad.dtype == weight_dtype
-    assert m.hyperplane_bias.grad.dtype == weight_dtype
+    assert m.hyperplane_weight.grad.dtype == m.hyperplane_dtype
+    assert m.hyperplane_bias.grad.dtype == m.hyperplane_dtype
+
+
+@_cuda
+@pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
+def test_mixed_dtype_bf16_lut_fp32_hyperplanes(forward_mode):
+    """Mixed storage — bf16 LUT weights + fp32 hyperplanes (the FastMHL-recipe
+    config). Forward runs with no dtype-mismatch error, output dtype == the LUT
+    weight_dtype (bf16), and gradients flow to w/b (fp32) and the LUT (bf16)."""
+    dev = _device()
+    m = HyperplaneMultiHeadLUT(
+        input_dim=64, n_heads=1, n_outputs=32, n_anchor_pairs=5, tables_per_head=8,
+        forward_mode=forward_mode, weight_dtype=torch.bfloat16,
+        hyperplane_dtype=torch.float32, use_bf16=True, hyperplane_init="random",
+        learnable_temps=True, random_seed=0, device=dev,
+    )
+    # Storage dtypes are split as requested.
+    assert m.weights.dtype == torch.bfloat16
+    assert m.hyperplane_weight.dtype == torch.float32
+    assert m.hyperplane_bias.dtype == torch.float32
+
+    x = torch.randn(8, 64, device=dev, dtype=torch.float32, requires_grad=True)
+    y = m(x)
+    assert y.dtype == torch.bfloat16, f"output dtype {y.dtype} != weight_dtype bf16"
+    y.float().sum().backward()
+
+    # Grads present, right dtype (each matches its param), and nonzero.
+    assert x.grad is not None and x.grad.dtype == torch.float32
+    assert m.weights.grad is not None and m.weights.grad.dtype == torch.bfloat16
+    assert m.hyperplane_weight.grad is not None and m.hyperplane_weight.grad.dtype == torch.float32
+    assert m.hyperplane_bias.grad is not None and m.hyperplane_bias.grad.dtype == torch.float32
+    assert (m.weights.grad.abs() > 0).any()
+    assert (m.hyperplane_weight.grad.abs() > 0).any()
+    assert (m.hyperplane_bias.grad.abs() > 0).any()
+
+
+@_cuda
+def test_initial_weights_noise_perturbs_both_weight_sets():
+    """initial_weights_noise perturbs BOTH the LUT weights and (under random
+    init) the hyperplane weights; anchor_pairs init stays exact."""
+    dev = _device()
+    # random init: both weight sets carry the noise, none are exactly zero.
+    m = HyperplaneMultiHeadLUT(
+        input_dim=64, n_heads=2, n_outputs=8, n_anchor_pairs=4, tables_per_head=4,
+        hyperplane_init="random", initial_weights_noise=0.01, random_seed=0, device=dev,
+    )
+    assert (m.weights.abs() > 0).any(), "LUT weights not perturbed"
+    assert (m.hyperplane_weight.abs() > 0).any(), "hyperplane weights not perturbed"
+    # scale roughly tracks the knob (std ~ 0.01 for the Gaussian rows).
+    assert m.hyperplane_weight.float().std().item() < 0.05
+    # anchor_pairs init: hyperplanes are EXACT (+/-1 entries only), not noised.
+    m2 = HyperplaneMultiHeadLUT(
+        input_dim=64, n_heads=2, n_outputs=8, n_anchor_pairs=4, tables_per_head=4,
+        hyperplane_init="anchor_pairs", initial_weights_noise=0.01, random_seed=0, device=dev,
+    )
+    uniq = m2.hyperplane_weight.float().unique()
+    assert set(uniq.tolist()) <= {-1.0, 0.0, 1.0}, f"anchor_pairs init not exact: {uniq}"
 
 
 # =============================================================================
