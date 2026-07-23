@@ -32,24 +32,3 @@ for review and leave them for Anatoli to merge, unless he explicitly tells you t
   Never merge (no `gh pr merge`, no merge via API/helper, no fast-forward push to the target
   branch to sidestep review). Only merge when Anatoli explicitly says to for that specific PR.
   (This is also why the vetted gh helper deliberately omits `pr-merge`.)
-
-## Run git in the cage, ONE command per call
-
-**Run git commands inside the cage (`sbox git …`), and run them ONE AT A TIME — never
-batch/group multiple commands into a single call.**
-
-- **Why:** a single clean `sbox <argv>` is auto-allowed frictionlessly, and inside the cage EVERY
-  git subcommand works (even ones the bare-`git` allowlist gates, like `rev-list`/`ls-tree`). But
-  the auto-allow requires the call to be exactly ONE `sbox <argv>` — the moment two commands are
-  chained (`;`, `&&`, multiple `sbox …` segments, or a `cd X && git …` compound), the whole call
-  stops being a single clean sbox call and gets **gated**. Verified empirically (2026-07-23):
-  `sbox git … status` and `sbox git … rev-list` each ran clean solo; chaining two `sbox git …` in
-  one call was declined. Grouping IS the problem.
-- **How to apply:** issue each git command as its own call, wrapped in `sbox` — e.g.
-  `sbox git -C <repo> add <files>`, then a separate call `sbox git -C <repo> commit -F <msgfile>`.
-  Do NOT combine `add && commit`, do NOT `status; log`, do NOT `cd repo && git …`. Use
-  `git -C <repo>` instead of `cd`. Local ops (status/diff/log/add/commit/branch/checkout/
-  rev-list/ls-tree/show…) all work in-cage since `.git` under `~/projects` is writable there.
-- **Network ops are the exception:** `push`/`pull`/`fetch`/`clone` need network, which the cage
-  does NOT have, so those cannot run under `sbox`. Run each of them **outside** the cage (bare
-  `git …` to a configured remote is auto-allowed), still ONE command per call.

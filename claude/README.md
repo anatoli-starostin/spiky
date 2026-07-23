@@ -28,8 +28,8 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
    protocol (commit an experiment's code to the PR before running it; launch only after Anatoli's
    explicit go).
 5. **[working-with-claude.md](working-with-claude.md)** — *how to work here*. Behavioral standing
-   instructions for an assistant on spiky: plan before big tasks, don't merge PRs, run git in the
-   cage one command at a time. (Previously a root `CLAUDE.md`; consolidated here.)
+   instructions for an assistant on spiky: plan before big tasks, and don't merge PRs.
+   (Previously a root `CLAUDE.md`; consolidated here.)
 
 ## Reusable skills
 
