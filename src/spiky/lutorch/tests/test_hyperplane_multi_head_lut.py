@@ -1,21 +1,29 @@
 """Tests for HyperplaneMultiHeadLUT (learned-hyperplane generalization of
 FastMultiHeadLut).
 
+Most tests are device-agnostic and run on CPU when no GPU is present (real
+GPU-free CI coverage) — they build tensors on `_device()` (CUDA if available,
+else CPU) and the module uses eager bodies on CPU. Only the genuinely
+GPU-specific cases are CUDA-gated:
+  - bf16 *storage* cases (`weight_dtype=torch.bfloat16`): CPU bf16 autocast is a
+    no-op, so the fp32-store / bf16-compute contract can't be exercised and the
+    output-dtype assertions would mismatch. Gated per-param via `_WEIGHT_DTYPES`.
+
+The parity-vs-FastMultiHeadLut tests run under `_eager_mode()`: FastMultiHeadLut
+unconditionally wraps forward/backward in torch.compile, whose inductor path
+misbehaves on CPU / Python 3.14, so we disable dynamo for those tests (numerically
+equivalent, and it still passes on GPU).
+
 Covers:
-  - gradcheck on the soft backward for w, b, x (double precision, small
-    shapes): numerical vs analytic gradient match for all three.
-  - Index-packing correctness: MSB-first bit ordering identical to
-    FastMultiHeadLut; packed index == sum_i bit_i * 2^(NAP-1-i).
-  - Parity with FastMultiHeadLut under anchor-pairs-equivalent init
-    (w_i = e_p1 - e_p2, b_i = 0): forward (hard & hybrid_smooth) and the
-    x / LUT-weight / temperature gradients match to numerical tolerance.
-  - Both forward modes exercised; hard <-> hybrid_smooth runtime flip.
-  - dtype coverage: fp32 weights + bf16 autocast, bf16 storage (CUDA), and a
-    CPU fallback path.
-  - A tiny end-to-end train step: loss decreases and w/b/temps all get
-    nonzero grads.
-  - Argument validation.
+  - gradcheck on the soft backward for w, b, x (double precision, small shapes).
+  - Index-packing correctness (MSB-first).
+  - Parity with FastMultiHeadLut under anchor-pairs-equivalent init (fp32).
+  - Both forward modes + hard <-> hybrid_smooth runtime flip.
+  - dtype coverage: fp32 (CPU+GPU) and bf16 storage (GPU-only), CPU fallback.
+  - Frozen-hyperplane gradient gating.
+  - A tiny end-to-end train step; argument validation.
 """
+import contextlib
 from typing import Optional
 
 import pytest
@@ -32,9 +40,37 @@ from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
 _HAS_CUDA = torch.cuda.is_available()
 _cuda = pytest.mark.skipif(not _HAS_CUDA, reason="CUDA required")
 
+# weight_dtype coverage: fp32 runs everywhere; bf16 *storage* is GPU-only (CPU
+# bf16 autocast is a no-op, so the fp32-store/bf16-compute path and its
+# output-dtype contract can't be faithfully exercised on CPU).
+_WEIGHT_DTYPES = [torch.float32, pytest.param(torch.bfloat16, marks=_cuda)]
+
 
 def _device() -> torch.device:
     return torch.device("cuda:0") if _HAS_CUDA else torch.device("cpu")
+
+
+@contextlib.contextmanager
+def _eager_mode():
+    """Force eager execution (disable TorchDynamo/Inductor) for the block.
+
+    FastMultiHeadLut wraps its forward/backward in torch.compile unconditionally;
+    the inductor path misbehaves on CPU / Python 3.14. Disabling dynamo makes
+    those calls run eager so the parity tests give real CPU coverage. Harmless on
+    GPU — compile is only an optimization and eager is numerically equivalent
+    (if anything, more exact for the bit-parity comparison).
+    """
+    try:
+        import torch._dynamo as dynamo
+    except Exception:
+        yield
+        return
+    prev = dynamo.config.disable
+    dynamo.config.disable = True
+    try:
+        yield
+    finally:
+        dynamo.config.disable = prev
 
 
 def _make(
@@ -98,9 +134,8 @@ def _make_fast(**kwargs) -> FastMultiHeadLut:
 # Forward shape / dtype / determinism
 # =============================================================================
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
-@pytest.mark.parametrize("weight_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("weight_dtype", _WEIGHT_DTYPES)
 def test_forward_shape_and_dtype(forward_mode, weight_dtype):
     m = _make(forward_mode=forward_mode, weight_dtype=weight_dtype)
     x = torch.randn(7, 64, device=_device(), dtype=torch.float32)
@@ -109,7 +144,6 @@ def test_forward_shape_and_dtype(forward_mode, weight_dtype):
     assert y.dtype == weight_dtype
 
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
 def test_forward_determinism(forward_mode):
     m = _make(forward_mode=forward_mode, random_seed=42)
@@ -117,7 +151,6 @@ def test_forward_determinism(forward_mode):
     assert torch.equal(m(x), m(x))
 
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
 def test_eval_matches_train_forward(forward_mode):
     m = _make(forward_mode=forward_mode, random_seed=3)
@@ -129,7 +162,6 @@ def test_eval_matches_train_forward(forward_mode):
     assert torch.equal(y_eval, y_train.detach())
 
 
-@_cuda
 def test_forward_mode_can_flip_at_runtime():
     m = _make(forward_mode="hybrid_smooth", random_seed=11)
     x = torch.randn(3, 64, device=_device(), dtype=torch.float32)
@@ -146,7 +178,6 @@ def test_forward_mode_can_flip_at_runtime():
 # Index-packing correctness (MSB-first, identical to FastMultiHeadLut)
 # =============================================================================
 
-@_cuda
 def test_index_packing_msb_first():
     """The packed row index equals sum_i bit_i * 2^(NAP-1-i), with
     bit_i = 1[<w_i, x> + b_i > 0], MSB-first."""
@@ -177,7 +208,6 @@ def _sync_lut_weights(m_hyp, m_fast):
         m_hyp.weights.copy_(m_fast.weights.to(m_hyp.weights.dtype))
 
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
 def test_parity_with_fast_forward(forward_mode):
     """Anchor-pairs-equivalent init reproduces FastMultiHeadLut's forward
@@ -191,24 +221,26 @@ def test_parity_with_fast_forward(forward_mode):
     # (a discrete table-row change, not a tolerance diff), so the two modules can
     # legitimately pick different rows and this test would fail spuriously.
     assert args["weight_dtype"] == torch.float32 and args["use_bf16"] is False
-    m_hyp = _make(hyperplane_init="anchor_pairs", **args)
-    m_fast = _make_fast(**args)
-    # Same seed -> same anchor pairs and same LUT-weight init already; sync to
-    # be robust to any init-order differences.
-    assert torch.equal(m_hyp.soft_anchor_a_long, m_fast.soft_anchor_a_long)
-    assert torch.equal(m_hyp.soft_anchor_b_long, m_fast.soft_anchor_b_long)
-    _sync_lut_weights(m_hyp, m_fast)
+    # Eager mode: FastMultiHeadLut forces torch.compile, whose inductor path
+    # misbehaves on CPU / Python 3.14 (see _eager_mode).
+    with _eager_mode():
+        m_hyp = _make(hyperplane_init="anchor_pairs", **args)
+        m_fast = _make_fast(**args)
+        # Same seed -> same anchor pairs and same LUT-weight init already; sync to
+        # be robust to any init-order differences.
+        assert torch.equal(m_hyp.soft_anchor_a_long, m_fast.soft_anchor_a_long)
+        assert torch.equal(m_hyp.soft_anchor_b_long, m_fast.soft_anchor_b_long)
+        _sync_lut_weights(m_hyp, m_fast)
 
-    x = torch.randn(16, 48, device=_device(), dtype=torch.float32)
-    with torch.no_grad():
-        y_hyp = m_hyp(x)
-        y_fast = m_fast(x)
+        x = torch.randn(16, 48, device=_device(), dtype=torch.float32)
+        with torch.no_grad():
+            y_hyp = m_hyp(x)
+            y_fast = m_fast(x)
     assert torch.allclose(y_hyp, y_fast, atol=1e-5, rtol=1e-4), (
         f"max abs diff {(y_hyp - y_fast).abs().max().item():.3e}"
     )
 
 
-@_cuda
 def test_parity_with_fast_gradients():
     """Under anchor-pairs init, x / LUT-weight / temperature grads match
     FastMultiHeadLut (the hyperplane front-end reduces exactly to the
@@ -221,16 +253,17 @@ def test_parity_with_fast_gradients():
     # (see forward-parity test) — a bf16 sign flip picks a different row and
     # produces a legitimately different gradient.
     assert args["weight_dtype"] == torch.float32 and args["use_bf16"] is False
-    m_hyp = _make(hyperplane_init="anchor_pairs", **args)
-    m_fast = _make_fast(**args)
-    _sync_lut_weights(m_hyp, m_fast)
+    with _eager_mode():
+        m_hyp = _make(hyperplane_init="anchor_pairs", **args)
+        m_fast = _make_fast(**args)
+        _sync_lut_weights(m_hyp, m_fast)
 
-    x0 = torch.randn(16, 48, device=_device(), dtype=torch.float32)
-    xh = x0.clone().requires_grad_(True)
-    xf = x0.clone().requires_grad_(True)
+        x0 = torch.randn(16, 48, device=_device(), dtype=torch.float32)
+        xh = x0.clone().requires_grad_(True)
+        xf = x0.clone().requires_grad_(True)
 
-    yh = m_hyp(xh); yh.float().pow(2).sum().backward()
-    yf = m_fast(xf); yf.float().pow(2).sum().backward()
+        yh = m_hyp(xh); yh.float().pow(2).sum().backward()
+        yf = m_fast(xf); yf.float().pow(2).sum().backward()
 
     assert torch.allclose(xh.grad, xf.grad, atol=1e-4, rtol=1e-3), (
         f"grad_x max diff {(xh.grad - xf.grad).abs().max().item():.3e}"
@@ -246,7 +279,6 @@ def test_parity_with_fast_gradients():
 # gradcheck on the soft backward for x, w, b (double precision)
 # =============================================================================
 
-@_cuda
 def test_gradcheck_soft_backward_x_w_b():
     """Numerical vs analytic gradient of the full-soft surrogate for x, w, b."""
     torch.manual_seed(0)
@@ -287,9 +319,8 @@ def test_gradcheck_soft_backward_x_w_b():
 # Backward: grad flow and dtypes
 # =============================================================================
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
-@pytest.mark.parametrize("weight_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("weight_dtype", _WEIGHT_DTYPES)
 def test_backward_grads_flow_to_all_params(forward_mode, weight_dtype):
     m = _make(forward_mode=forward_mode, weight_dtype=weight_dtype,
               hyperplane_init="random", learnable_temps=True)
@@ -306,7 +337,6 @@ def test_backward_grads_flow_to_all_params(forward_mode, weight_dtype):
     assert m.log_select_temp.grad is not None
 
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
 def test_frozen_hyperplanes_skip_affine_grads(forward_mode):
     """When w/b are frozen (requires_grad=False), their grads stay None (the
@@ -332,8 +362,7 @@ def test_frozen_hyperplanes_skip_affine_grads(forward_mode):
     assert m.weights.grad is not None and (m.weights.grad.abs() > 0).any()
 
 
-@_cuda
-@pytest.mark.parametrize("weight_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("weight_dtype", _WEIGHT_DTYPES)
 def test_grad_dtypes_match_param_dtypes(weight_dtype):
     m = _make(weight_dtype=weight_dtype, hyperplane_init="random")
     x = torch.randn(4, 64, device=_device(), dtype=torch.float32, requires_grad=True)
@@ -347,7 +376,6 @@ def test_grad_dtypes_match_param_dtypes(weight_dtype):
 # Tiny end-to-end train step
 # =============================================================================
 
-@_cuda
 @pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
 def test_overfit_small_batch(forward_mode):
     """A few Adam steps on a fixed batch reduce the loss and every trainable
@@ -407,7 +435,6 @@ def test_cpu_forward_backward():
 # Argument validation
 # =============================================================================
 
-@_cuda
 def test_invalid_forward_mode_raises():
     with pytest.raises(ValueError, match="forward_mode"):
         HyperplaneMultiHeadLUT(
@@ -416,7 +443,6 @@ def test_invalid_forward_mode_raises():
         )
 
 
-@_cuda
 def test_invalid_hyperplane_init_raises():
     with pytest.raises(ValueError, match="hyperplane_init"):
         HyperplaneMultiHeadLUT(
@@ -425,7 +451,6 @@ def test_invalid_hyperplane_init_raises():
         )
 
 
-@_cuda
 @pytest.mark.parametrize("bad_nap", [0, 16, -1])
 def test_n_anchor_pairs_out_of_range_raises(bad_nap):
     with pytest.raises(ValueError, match="n_anchor_pairs"):
