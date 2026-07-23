@@ -41,6 +41,7 @@ MIND_CWD = HERE / "consciousness"  # own cwd => own memory scope, NOT the body's
 
 sys.path.insert(0, str(HERE))
 import body_bridge  # local task-queue module (needs HERE on sys.path)  # noqa: E402
+import progress  # local Slack progress-bar brick (needs HERE on sys.path)  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -981,7 +982,8 @@ async def main():
     asyncio.create_task(compactor())
     asyncio.create_task(heartbeat())
     asyncio.create_task(approval_watcher())
-    log.info("socket mode connected — reaper + marker + compactor + heartbeat + approval_watcher running")
+    asyncio.create_task(progress.reaper(web, log, task_loader=body_bridge.load))
+    log.info("socket mode connected — reaper + marker + compactor + heartbeat + approval_watcher + progress running")
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
