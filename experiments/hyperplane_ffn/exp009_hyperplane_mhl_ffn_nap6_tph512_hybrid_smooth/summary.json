@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp009_hyperplane_mhl_ffn_nap6_tph512_hybrid_smooth",
+  "best_val_bpb": 1.2139253740765268,
+  "final_val_bpb": 1.2139253740765268,
+  "total_params": 111308556,
+  "training_time_hours": 4.083
+}

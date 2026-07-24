@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp006_hyperplane_mhl_ffn",
+  "best_val_bpb": 1.2645082046241096,
+  "final_val_bpb": 1.2645082046241096,
+  "total_params": 39630348,
+  "training_time_hours": 0.591
+}

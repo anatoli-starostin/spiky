@@ -24,7 +24,12 @@ and needs to understand *what spiky is trying to do*, *what has already been lea
 4. **[experiment-methodology.md](experiment-methodology.md)** — *how work is run*. The
    process: one branch per idea, and how experiments are coordinated across multiple GPU
    machines (the shared research branch as the sync medium). Read this before starting a new
-   idea or running anything on a second host.
+   idea or running anything on a second host. Includes the **agree → commit → go** launch
+   protocol (commit an experiment's code to the PR before running it; launch only after Anatoli's
+   explicit go).
+5. **[working-with-claude.md](working-with-claude.md)** — *how to work here*. Behavioral standing
+   instructions for an assistant on spiky: plan before big tasks, and don't merge PRs.
+   (Previously a root `CLAUDE.md`; consolidated here.)
 
 ## Reusable skills
 

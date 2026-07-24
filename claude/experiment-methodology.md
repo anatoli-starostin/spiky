@@ -53,6 +53,30 @@ An idea-branch, and the issue behind it, ends one of two ways, decided **by resu
   (`- <idea> (#N): tried X, failed because Y (exp_<slug>: N.NNN bpb)`) so the lesson survives
   even if nobody reopens the branch or the issue.
 
+## Before launching a run: agree → commit → go
+
+Standing protocol (from Anatoli): an experiment is not launched until it has been **agreed,
+committed, and explicitly approved — in that order**:
+
+1. **Agree on the setup.** Settle what the experiment is — the hypothesis and the exact config
+   change vs the previous run — with Anatoli before building it.
+2. **Commit the experiment code to the PR/GitHub first.** The run's folder — `config.json` and
+   `train.py` (and anything else needed to reproduce it) — is committed and pushed to the
+   `research/<idea>` branch (the PR) **before the run starts**, so it can be read and reviewed on
+   GitHub while/before it runs. This is a deliberate change from committing only after the run:
+   the *code* lands first; the *results* are committed after the run finishes (as below).
+3. **Ask for the final GO.** Only launch after Anatoli's explicit approval. In delegated /
+   unattended mode a request for the go is itself a valid result — report "committed and ready,
+   awaiting go" and let the approval arrive as a follow-up; never self-approve a launch.
+
+- **Why:** it lets Anatoli review the exact code on GitHub before compute is spent, keeps a
+  reviewable record of precisely what was run, and prevents launching something subtly different
+  from what was discussed.
+- **How to apply:** fork the previous exp folder → make only the change under test → commit +
+  push the code → report it's ready → wait for the go → **then** launch (detached, own log, per
+  the loop below). Results (`metrics.csv`, `summary.json`, plots — never the checkpoint) are
+  committed + pushed after the run finishes.
+
 ## Working across multiple machines
 
 Research runs on more than one GPU host (e.g. a local workstation plus one or more cloud

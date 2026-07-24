@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp003_untied_vanilla_baseline_nebius_astarostin",
+  "description": "Exact reproduction of exp001 (the untied-vanilla exp709 anchor) on the Nebius H100 under the astarostin user, on an independently-built software stack. IDENTICAL config, IDENTICAL train.py (byte-for-byte copy of exp001's), IDENTICAL data (base_data_climbmix 5-shard subset + tokenizer, md5-verified byte-identical to the gpustar copy), same seed=1. Differs from exp002 only in the environment: fresh venv with torch 2.13.0+cu130 and lutorch_cuda/spiky_cuda rebuilt natively for sm_90, versus exp002's gpustar-user stack. Second cross-check of the 1.2014 bpb on-box anchor, and the first exercise of the experiment workflow from the nebius-h100 native clone. Expected to land on exp001/exp002's 1.2014 within noise; a meaningful disagreement would indicate a stack or numerics bug to chase, not something to average over. Baseline definition (from exp001): MinimalGPT + RoPE, untied head, 35.79M params; exp709 verbatim (depth6/n_embd384/n_head6/seq512, device_bs48, total_bs24576 grad_accum=1, 16K steps = 393M tokens, lr3e-4, wd0.1, warmup0.1, seed1, bf16, vocab32768). Original exp709 reached 1.1922 bpb on the full Nebius ClimbMix; this run uses the local base_data_climbmix subset, so the achieved bpb is the on-box anchor. All hyperplane_ffn ideas compare against THIS number.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 16000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}

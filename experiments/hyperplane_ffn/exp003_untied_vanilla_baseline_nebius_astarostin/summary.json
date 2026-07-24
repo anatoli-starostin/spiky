@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp003_untied_vanilla_baseline_nebius_astarostin",
+  "best_val_bpb": 1.2014423555099312,
+  "final_val_bpb": 1.2014423555099312,
+  "total_params": 35792640,
+  "training_time_hours": 0.547
+}
