@@ -1,8 +1,8 @@
-# exp010 — stacked (×2) HyperplaneMHL FFN with intermediate pre-LayerNorm + internal residual
+# exp011 — stacked (×2) HyperplaneMHL FFN with intermediate pre-LayerNorm + internal residual
 
 Continues the **exp007** line (`research/hyperplane_ffn_next`). exp007 replaced each block's
 dense MLP FFN with a **single** `HyperplaneMultiHeadLUT` (n_heads=1, n_outputs=384=d_model,
-NAP6, tph256, hard forward). exp010 changes **only the FFN internals**: it stacks **two**
+NAP6, tph256, hard forward). exp011 changes **only the FFN internals**: it stacks **two**
 HyperplaneMHLs with an intermediate pre-LayerNorm and an **internal residual around the second
 sublayer**.
 

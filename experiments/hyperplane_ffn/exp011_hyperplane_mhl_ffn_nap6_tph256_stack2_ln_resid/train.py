@@ -1,4 +1,4 @@
-"""exp010_hyperplane_mhl_ffn_nap6_tph256_stack2_ln_resid — exp007 (MinimalGPT +
+"""exp011_hyperplane_mhl_ffn_nap6_tph256_stack2_ln_resid — exp007 (MinimalGPT +
 RoPE, untied head; dense MLP FFN replaced by a single HyperplaneMultiHeadLUT) with
 the FFN generalized to a TWO-sublayer stack of HyperplaneMHLs:
     h = lut1(x)                    # first HyperplaneMHL, 384->384

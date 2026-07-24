@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp010_hyperplane_mhl_ffn_nap6_tph256_stack2_ln_resid",
+  "exp_name": "exp011_hyperplane_mhl_ffn_nap6_tph256_stack2_ln_resid",
   "description": "Clone of exp007 (single-head HyperplaneMHL FFN, NAP6/tph256, hard forward) with the ONLY change being the FFN internals: instead of ONE HyperplaneMHL, the FFN now stacks TWO HyperplaneMHL (both n_heads=1, n_outputs=384=d_model, identical geometry) with an intermediate pre-LayerNorm and an internal residual around the SECOND sublayer: h = lut1(x); h = h + lut2(LayerNorm(h)). The outer block residual x + mlp(ln2(x)) is unchanged. Distinct per-layer init seeds: lut1 = seed + 2*layer_idx + 1, lut2 = seed + 2*layer_idx + 2. Both LUTs routed through the hybrid optimizer (table weights->Lion, hyperplane w/b + temps->Adam no-wd); the intermediate LayerNorm's affine params are 1-D so they land in AdamW-nodecay. Continues the exp007 line on research/hyperplane_ffn_next. Compares vs exp001 anchor 1.20144 and vs exp007.",
   "depth": 6,
   "n_embd": 384,
