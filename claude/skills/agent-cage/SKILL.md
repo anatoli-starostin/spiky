@@ -123,6 +123,16 @@ tool_input)` returns:
   *capability*, not syntax, so splitting a command doesn't evade the gate); broad
   Write/Edit outside the zone; `WebFetch`/`WebSearch`/MCP/unknown tools; installs.
 
+> **⚠️ Don't prefix git with `cd <dir> && …` — use `git -C <dir>`.** Scoped-safe git
+> (`fetch`/`pull`/`push` to `origin`) is green, but `cd` is **not** a green command, so
+> `cd repo && git push` has one non-green segment and the **whole line** drops to a human
+> approval — the classic *phantom* git-over-network prompt (it was never the network that
+> gated, it was the `cd`). Pass the repo with git's own `-C` flag (explicitly allowed) so it
+> stays a single green segment: `git -C ~/projects/spiky push origin research/<idea>`. `&&`
+> between two *green* segments is fine — `git -C … add x && git -C … commit -m '…'` stays
+> green; only the non-green `cd` gates. (Keep commit messages URL-free so no `://` token
+> trips the URL check.)
+
 **Security-critical parsing** (this is where a naïve classifier leaks):
 - `_segments` uses `shlex.shlex(punctuation_chars=True)` so operators are isolated **even
   when attached** — `foo|curl` becomes `foo | curl`, it can't hide in a token.
