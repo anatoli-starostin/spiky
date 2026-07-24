@@ -180,6 +180,24 @@ def cmd_reopen(a):
     print(f"#{it['number']} -> open")
 
 
+def cmd_edit(a):
+    """Edit an existing issue's title / body (the `gh issue edit` surface).
+
+    PATCH /issues/{n} touches only the issue's own title/body — the same narrow,
+    bounded capability as the rest of this helper (no merge, no api/gist/secret
+    verbs). Body comes via --body-file, so no heredoc rides the command line."""
+    payload = {}
+    if a.title is not None:
+        payload["title"] = a.title
+    body = _resolve_body(a.body, a.body_file, required=False)
+    if body is not None:
+        payload["body"] = body
+    if not payload:
+        sys.exit("error: edit needs at least one of --title / --body / --body-file")
+    it = _api("PATCH", _rp(a.repo, f"/issues/{a.number}"), payload)
+    print(f"#{it['number']} edited -> {it['html_url']}")
+
+
 def cmd_label(a):
     if a.add:
         _api("POST", _rp(a.repo, f"/issues/{a.number}/labels"), {"labels": a.add})
@@ -293,6 +311,10 @@ def main():
     s.add_argument("--comment"); s.add_argument("--comment-file", dest="comment_file"); s.set_defaults(func=cmd_close)
 
     s = sub.add_parser("reopen"); s.add_argument("number"); s.set_defaults(func=cmd_reopen)
+
+    s = sub.add_parser("edit"); s.add_argument("number")
+    s.add_argument("--title"); s.add_argument("--body"); s.add_argument("--body-file", dest="body_file")
+    s.set_defaults(func=cmd_edit)
 
     s = sub.add_parser("label"); s.add_argument("number")
     s.add_argument("--add", action="append"); s.add_argument("--remove", action="append"); s.set_defaults(func=cmd_label)
