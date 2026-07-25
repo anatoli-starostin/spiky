@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp015_fixedanchor_small_70m",
+  "best_val_bpb": 1.310995691011367,
+  "final_val_bpb": 1.310995691011367,
+  "n_params": 60033074,
+  "training_time_hours": 2.652
+}

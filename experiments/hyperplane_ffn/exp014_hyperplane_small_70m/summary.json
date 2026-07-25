@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp014_hyperplane_small_70m",
+  "best_val_bpb": 1.279298271015584,
+  "final_val_bpb": 1.279298271015584,
+  "n_params": 69840194,
+  "training_time_hours": 2.564
+}

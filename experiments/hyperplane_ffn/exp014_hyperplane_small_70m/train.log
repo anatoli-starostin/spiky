@@ -1,0 +1,267 @@
+Loading tokenizer from /home/astarostin/.cache/nanochat/tokenizer
+Vocab size: 32768
+LUT layer type = hyperplane (HyperplaneMultiHeadLUT), hyperplane_init=anchor_pairs, hyperplane_dtype=fp32
+Total params (all fp32): 69,840,194
+LUT optimizer = lion (lut_lr=0.0002) | lut=43,253,760 | hyperplane=9,807,120 (AdamW no-wd, lr=0.0003) | decay(unembed)=8,388,608 (wd=0.1) | tok_emb=8,388,608 | nodecay_other=2,098 | non-LUT on AdamW
+D=residual_dim=256, E=embedding_dim=256, H=4, d_qk=64, d_v=64, L=6
+qk_lut       TinyMHLut(soft, LION): in_nap=4 tph=120 n_out=2*d_qk=128
+v_lut        TinyMHLut(soft): in_nap=6 tph=120 d_v=64
+out_proj     TinyMHLut(soft): in_nap=6 tph=120 n_out=E=256
+residual_lut TinyMHLut(soft) [per-layer, x6]: in_nap=6 tph=120 n_out=D=256; MeanAbsNorm(E) before each
+UNTIED unembedder Linear(D=256, V=32768); tok_emb_E at E=256; ln_final(D); RoPE base=10000.0
+Tracking 48 learnable temperatures in temperatures.csv
+Tracking weight deltas of 153 parameters in weight_deltas.csv
+Tokens/micro-batch: 12,288 | grad_accum: 2 | effective batch: 24,576 tokens
+step      1 | loss=10.5490 | lr=1.87e-07
+[MEM] step 1 alloc_peak=7.0GB reserved=8.7GB
+[MEM] step 5 alloc_peak=7.5GB reserved=8.7GB
+step    100 | loss=9.8653 | lr=1.87e-05
+step    200 | loss=9.1236 | lr=3.75e-05
+[VAL] step 200: bpb=2.5841
+step    300 | loss=8.3577 | lr=5.62e-05
+step    400 | loss=7.5994 | lr=7.50e-05
+[VAL] step 400: bpb=2.1397
+step    500 | loss=7.0283 | lr=9.37e-05
+step    600 | loss=6.6273 | lr=1.12e-04
+[VAL] step 600: bpb=1.9524
+step    700 | loss=6.3510 | lr=1.31e-04
+step    800 | loss=6.1606 | lr=1.50e-04
+[VAL] step 800: bpb=1.8524
+step    900 | loss=5.9928 | lr=1.69e-04
+step   1000 | loss=5.8644 | lr=1.87e-04
+[VAL] step 1000: bpb=1.7800
+step   1100 | loss=5.7479 | lr=2.06e-04
+step   1200 | loss=5.6449 | lr=2.25e-04
+[VAL] step 1200: bpb=1.7244
+step   1300 | loss=5.5538 | lr=2.44e-04
+step   1400 | loss=5.4723 | lr=2.62e-04
+[VAL] step 1400: bpb=1.6761
+step   1500 | loss=5.3984 | lr=2.81e-04
+step   1600 | loss=5.3428 | lr=3.00e-04
+[VAL] step 1600: bpb=1.6377
+step   1700 | loss=5.2734 | lr=3.00e-04
+step   1800 | loss=5.2122 | lr=3.00e-04
+[VAL] step 1800: bpb=1.6046
+step   1900 | loss=5.1535 | lr=3.00e-04
+step   2000 | loss=5.1086 | lr=2.99e-04
+[VAL] step 2000: bpb=1.5783
+step   2100 | loss=5.0628 | lr=2.99e-04
+step   2200 | loss=5.0286 | lr=2.99e-04
+[VAL] step 2200: bpb=1.5559
+step   2300 | loss=4.9973 | lr=2.98e-04
+step   2400 | loss=4.9657 | lr=2.98e-04
+[VAL] step 2400: bpb=1.5375
+step   2500 | loss=4.9323 | lr=2.97e-04
+step   2600 | loss=4.9002 | lr=2.97e-04
+[VAL] step 2600: bpb=1.5215
+step   2700 | loss=4.8801 | lr=2.96e-04
+step   2800 | loss=4.8530 | lr=2.95e-04
+[VAL] step 2800: bpb=1.5088
+step   2900 | loss=4.8286 | lr=2.95e-04
+step   3000 | loss=4.8152 | lr=2.94e-04
+[VAL] step 3000: bpb=1.4948
+step   3100 | loss=4.8042 | lr=2.93e-04
+step   3200 | loss=4.7844 | lr=2.92e-04
+[VAL] step 3200: bpb=1.4851
+step   3300 | loss=4.7582 | lr=2.91e-04
+step   3400 | loss=4.7425 | lr=2.90e-04
+[VAL] step 3400: bpb=1.4749
+step   3500 | loss=4.7185 | lr=2.89e-04
+step   3600 | loss=4.7023 | lr=2.87e-04
+[VAL] step 3600: bpb=1.4656
+step   3700 | loss=4.6928 | lr=2.86e-04
+step   3800 | loss=4.6914 | lr=2.85e-04
+[VAL] step 3800: bpb=1.4560
+step   3900 | loss=4.6755 | lr=2.83e-04
+step   4000 | loss=4.6592 | lr=2.82e-04
+[VAL] step 4000: bpb=1.4469
+step   4100 | loss=4.6399 | lr=2.80e-04
+step   4200 | loss=4.6251 | lr=2.79e-04
+[VAL] step 4200: bpb=1.4394
+step   4300 | loss=4.6080 | lr=2.77e-04
+step   4400 | loss=4.5972 | lr=2.76e-04
+[VAL] step 4400: bpb=1.4313
+step   4500 | loss=4.5856 | lr=2.74e-04
+step   4600 | loss=4.5790 | lr=2.72e-04
+[VAL] step 4600: bpb=1.4233
+step   4700 | loss=4.5614 | lr=2.70e-04
+step   4800 | loss=4.5497 | lr=2.68e-04
+[VAL] step 4800: bpb=1.4171
+step   4900 | loss=4.5337 | lr=2.66e-04
+step   5000 | loss=4.5322 | lr=2.65e-04
+[VAL] step 5000: bpb=1.4092
+step   5100 | loss=4.5153 | lr=2.63e-04
+step   5200 | loss=4.5161 | lr=2.60e-04
+[VAL] step 5200: bpb=1.4025
+step   5300 | loss=4.5187 | lr=2.58e-04
+step   5400 | loss=4.5128 | lr=2.56e-04
+[VAL] step 5400: bpb=1.3950
+step   5500 | loss=4.4889 | lr=2.54e-04
+step   5600 | loss=4.4679 | lr=2.52e-04
+[VAL] step 5600: bpb=1.3912
+step   5700 | loss=4.4501 | lr=2.49e-04
+step   5800 | loss=4.4371 | lr=2.47e-04
+[VAL] step 5800: bpb=1.3844
+step   5900 | loss=4.4281 | lr=2.45e-04
+step   6000 | loss=4.4229 | lr=2.42e-04
+[VAL] step 6000: bpb=1.3791
+step   6100 | loss=4.4145 | lr=2.40e-04
+step   6200 | loss=4.4073 | lr=2.38e-04
+[VAL] step 6200: bpb=1.3741
+step   6300 | loss=4.3928 | lr=2.35e-04
+step   6400 | loss=4.3861 | lr=2.32e-04
+[VAL] step 6400: bpb=1.3712
+step   6500 | loss=4.3847 | lr=2.30e-04
+step   6600 | loss=4.3716 | lr=2.27e-04
+[VAL] step 6600: bpb=1.3646
+step   6700 | loss=4.3658 | lr=2.25e-04
+step   6800 | loss=4.3686 | lr=2.22e-04
+[VAL] step 6800: bpb=1.3602
+step   6900 | loss=4.3536 | lr=2.19e-04
+step   7000 | loss=4.3377 | lr=2.17e-04
+[VAL] step 7000: bpb=1.3560
+step   7100 | loss=4.3223 | lr=2.14e-04
+step   7200 | loss=4.3146 | lr=2.11e-04
+[VAL] step 7200: bpb=1.3528
+step   7300 | loss=4.3153 | lr=2.08e-04
+step   7400 | loss=4.3155 | lr=2.06e-04
+[VAL] step 7400: bpb=1.3484
+step   7500 | loss=4.3081 | lr=2.03e-04
+step   7600 | loss=4.2984 | lr=2.00e-04
+[VAL] step 7600: bpb=1.3452
+step   7700 | loss=4.2826 | lr=1.97e-04
+step   7800 | loss=4.2805 | lr=1.94e-04
+[VAL] step 7800: bpb=1.3427
+step   7900 | loss=4.2785 | lr=1.91e-04
+step   8000 | loss=4.2731 | lr=1.88e-04
+[VAL] step 8000: bpb=1.3395
+step   8100 | loss=4.2664 | lr=1.86e-04
+step   8200 | loss=4.2677 | lr=1.83e-04
+[VAL] step 8200: bpb=1.3358
+step   8300 | loss=4.2692 | lr=1.80e-04
+step   8400 | loss=4.2547 | lr=1.77e-04
+[VAL] step 8400: bpb=1.3342
+step   8500 | loss=4.2441 | lr=1.74e-04
+step   8600 | loss=4.2393 | lr=1.71e-04
+[VAL] step 8600: bpb=1.3303
+step   8700 | loss=4.2316 | lr=1.68e-04
+step   8800 | loss=4.2300 | lr=1.65e-04
+[VAL] step 8800: bpb=1.3282
+step   8900 | loss=4.2303 | lr=1.62e-04
+step   9000 | loss=4.2343 | lr=1.59e-04
+[VAL] step 9000: bpb=1.3240
+step   9100 | loss=4.2213 | lr=1.56e-04
+step   9200 | loss=4.2186 | lr=1.53e-04
+[VAL] step 9200: bpb=1.3217
+step   9300 | loss=4.2075 | lr=1.50e-04
+step   9400 | loss=4.2038 | lr=1.47e-04
+[VAL] step 9400: bpb=1.3199
+step   9500 | loss=4.1979 | lr=1.44e-04
+step   9600 | loss=4.1989 | lr=1.42e-04
+[VAL] step 9600: bpb=1.3166
+step   9700 | loss=4.1961 | lr=1.39e-04
+step   9800 | loss=4.2016 | lr=1.36e-04
+[VAL] step 9800: bpb=1.3147
+step   9900 | loss=4.1875 | lr=1.33e-04
+step  10000 | loss=4.1828 | lr=1.30e-04
+[VAL] step 10000: bpb=1.3121
+step  10100 | loss=4.1780 | lr=1.27e-04
+step  10200 | loss=4.1781 | lr=1.24e-04
+[VAL] step 10200: bpb=1.3109
+step  10300 | loss=4.1685 | lr=1.22e-04
+step  10400 | loss=4.1909 | lr=1.19e-04
+[VAL] step 10400: bpb=1.3083
+step  10500 | loss=4.1915 | lr=1.16e-04
+step  10600 | loss=4.1953 | lr=1.13e-04
+[VAL] step 10600: bpb=1.3069
+step  10700 | loss=4.1610 | lr=1.11e-04
+step  10800 | loss=4.1577 | lr=1.08e-04
+[VAL] step 10800: bpb=1.3037
+step  10900 | loss=4.1481 | lr=1.05e-04
+step  11000 | loss=4.1329 | lr=1.03e-04
+[VAL] step 11000: bpb=1.3038
+step  11100 | loss=4.1371 | lr=1.00e-04
+step  11200 | loss=4.1380 | lr=9.75e-05
+[VAL] step 11200: bpb=1.3010
+step  11300 | loss=4.1358 | lr=9.50e-05
+step  11400 | loss=4.1360 | lr=9.25e-05
+[VAL] step 11400: bpb=1.3001
+step  11500 | loss=4.1194 | lr=9.00e-05
+step  11600 | loss=4.1213 | lr=8.76e-05
+[VAL] step 11600: bpb=1.2982
+step  11700 | loss=4.1246 | lr=8.52e-05
+step  11800 | loss=4.1193 | lr=8.28e-05
+[VAL] step 11800: bpb=1.2976
+step  11900 | loss=4.1185 | lr=8.05e-05
+step  12000 | loss=4.1135 | lr=7.82e-05
+[VAL] step 12000: bpb=1.2952
+step  12100 | loss=4.1080 | lr=7.60e-05
+step  12200 | loss=4.0957 | lr=7.38e-05
+[VAL] step 12200: bpb=1.2945
+step  12300 | loss=4.0884 | lr=7.16e-05
+step  12400 | loss=4.0882 | lr=6.95e-05
+[VAL] step 12400: bpb=1.2927
+step  12500 | loss=4.0894 | lr=6.75e-05
+step  12600 | loss=4.0869 | lr=6.55e-05
+[VAL] step 12600: bpb=1.2910
+step  12700 | loss=4.0868 | lr=6.35e-05
+step  12800 | loss=4.0785 | lr=6.16e-05
+[VAL] step 12800: bpb=1.2900
+step  12900 | loss=4.0702 | lr=5.97e-05
+step  13000 | loss=4.0749 | lr=5.79e-05
+[VAL] step 13000: bpb=1.2898
+step  13100 | loss=4.0670 | lr=5.61e-05
+step  13200 | loss=4.0681 | lr=5.44e-05
+[VAL] step 13200: bpb=1.2881
+step  13300 | loss=4.0678 | lr=5.28e-05
+step  13400 | loss=4.0721 | lr=5.11e-05
+[VAL] step 13400: bpb=1.2873
+step  13500 | loss=4.0722 | lr=4.96e-05
+step  13600 | loss=4.0650 | lr=4.81e-05
+[VAL] step 13600: bpb=1.2858
+step  13700 | loss=4.0562 | lr=4.66e-05
+step  13800 | loss=4.0552 | lr=4.53e-05
+[VAL] step 13800: bpb=1.2857
+step  13900 | loss=4.0517 | lr=4.39e-05
+step  14000 | loss=4.0557 | lr=4.26e-05
+[VAL] step 14000: bpb=1.2848
+step  14100 | loss=4.0554 | lr=4.14e-05
+step  14200 | loss=4.0611 | lr=4.03e-05
+[VAL] step 14200: bpb=1.2836
+step  14300 | loss=4.0565 | lr=3.92e-05
+step  14400 | loss=4.0498 | lr=3.81e-05
+[VAL] step 14400: bpb=1.2829
+step  14500 | loss=4.0429 | lr=3.72e-05
+step  14600 | loss=4.0407 | lr=3.62e-05
+[VAL] step 14600: bpb=1.2821
+step  14700 | loss=4.0337 | lr=3.54e-05
+step  14800 | loss=4.0410 | lr=3.46e-05
+[VAL] step 14800: bpb=1.2812
+step  14900 | loss=4.0451 | lr=3.39e-05
+step  15000 | loss=4.0463 | lr=3.32e-05
+[VAL] step 15000: bpb=1.2813
+step  15100 | loss=4.0365 | lr=3.26e-05
+step  15200 | loss=4.0333 | lr=3.21e-05
+[VAL] step 15200: bpb=1.2805
+step  15300 | loss=4.0353 | lr=3.16e-05
+step  15400 | loss=4.0436 | lr=3.12e-05
+[VAL] step 15400: bpb=1.2806
+step  15500 | loss=4.0365 | lr=3.08e-05
+step  15600 | loss=4.0678 | lr=3.05e-05
+[VAL] step 15600: bpb=1.2799
+step  15700 | loss=4.0611 | lr=3.03e-05
+step  15800 | loss=4.0556 | lr=3.01e-05
+[VAL] step 15800: bpb=1.2796
+step  15900 | loss=4.0300 | lr=3.00e-05
+step  16000 | loss=4.0309 | lr=3.00e-05
+[VAL] step 16000: bpb=1.2793
+saved checkpoint -> /home/astarostin/projects/spiky/experiments/hyperplane_ffn/exp014_hyperplane_small_70m/checkpoint.pt
+
+=== DONE ===
+{
+  "exp_name": "exp014_hyperplane_small_70m",
+  "best_val_bpb": 1.279298271015584,
+  "final_val_bpb": 1.279298271015584,
+  "n_params": 69840194,
+  "training_time_hours": 2.564
+}
