@@ -61,13 +61,18 @@ class HyperplaneCodeLUT(nn.Module):
       n_tables:  T, number of voting tables summed in the output.
       n_outputs: V, MUST equal 2^nap (checked).
       T_soft:    soft-sign sharpness (fixed scalar, default 0.5, as the sibling).
-      hyperplane_init: "anchor_pairs" (default; w_i = e_p1 - e_p2, b_i = 0) or "random".
+      hyperplane_init: "anchor_pairs" (default; w_i = e_p1 - e_p2, b_i = 0) or "random"
+                   (Gaussian rows ~ N(0, std), bias 0).
+      hyperplane_init_scale: std of the Gaussian rows when hyperplane_init="random".
+                   None (default) falls back to initial_weights_noise. Mirrors
+                   HyperplaneMultiHeadLUT's convention (set ~1/sqrt(input_dim), e.g. 0.05).
       w_cell_init: constant initial value of the per-code gate (default 0.02, small
                    so step-1 logits are ~uniform -> loss ~ ln(V)).
     """
 
     def __init__(self, input_dim: int, nap: int, n_tables: int, n_outputs: int,
                  *, T_soft: float = 0.5, hyperplane_init: str = "anchor_pairs",
+                 hyperplane_init_scale: float = None,
                  w_cell_init: float = 0.02, initial_weights_noise: float = 0.001,
                  anchor_sampling_policy=None, random_seed=None,
                  device=None, dtype: torch.dtype = torch.float32):
@@ -104,7 +109,9 @@ class HyperplaneCodeLUT(nn.Module):
             gen = None
             if random_seed is not None:
                 gen = torch.Generator(device=dev).manual_seed(random_seed + 2)
-            w_init.normal_(mean=0.0, std=initial_weights_noise, generator=gen)
+            hp_std = (hyperplane_init_scale if hyperplane_init_scale is not None
+                      else initial_weights_noise)
+            w_init.normal_(mean=0.0, std=float(hp_std), generator=gen)   # bias stays 0
 
         # Stored flat as [T*nap, E] / [T*nap] for the one fused GEMM.
         self.hyperplane_weight = nn.Parameter(w_init.reshape(n_tables * nap, input_dim).to(dtype))

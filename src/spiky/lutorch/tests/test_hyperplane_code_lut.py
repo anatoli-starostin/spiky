@@ -44,6 +44,20 @@ def test_near_uniform_logits_with_tiny_gate():
     assert y.std(dim=-1).max().item() < 1e-2
 
 
+def test_random_init_scale():
+    E, nap, T = 128, 5, 8
+    V = 1 << nap
+    m = HyperplaneCodeLUT(E, nap, T, V, hyperplane_init="random",
+                          hyperplane_init_scale=0.05, random_seed=3)
+    w = m.hyperplane_weight            # [T*nap, E], Gaussian ~ N(0, 0.05)
+    assert abs(w.std().item() - 0.05) < 0.01
+    assert float(m.hyperplane_bias.detach().abs().max()) == 0.0     # bias stays 0
+    # backward-compat: default is still anchor_pairs (exactly 2-sparse +/-1 rows)
+    ma = HyperplaneCodeLUT(E, nap, T, V, random_seed=3)
+    wa = ma.hyperplane_weight.view(T, nap, E)
+    assert ((wa.abs() > 1e-6).sum(-1) == 2).all()
+
+
 def test_backprops_to_all_params():
     E, nap, T = 16, 4, 2
     V = 1 << nap
