@@ -24,12 +24,16 @@ Parameters / param count:
   code_matrix B      [V, nap]      fixed +/-1 buffer (NOT trainable)
   TOTAL trainable = T*nap*(E+1) + T*V.
 
-Efficiency: never materialize [N, T, V] (~25 GB at N=12k/V=32k). The forward
-loops over the T tables and accumulates into a single [N, V] logits tensor, so
-only [N, V] plus one transient [N, V] are live at once (normal logits footprint).
+Efficiency: never materialize [N, T, V] (~25 GB at N=12k/V=32k). The forward loops
+over the T tables and accumulates into a single [N, V] logits tensor. In the
+BACKWARD, autograd would otherwise retain each table's [N, V] score (O(T*N*V) —
+OOMs for large T), so each per-table vote is wrapped in gradient checkpointing:
+the [N, V] score is recomputed in backward instead of stored, bounding peak
+activation memory to ~O([N, V]) at the cost of one extra matmul per table.
 """
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as _ckpt
 
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 
@@ -117,6 +121,11 @@ class HyperplaneCodeLUT(nn.Module):
         return (f"input_dim={self.input_dim}, nap={self.nap}, n_tables={self.n_tables}, "
                 f"n_outputs={self.n_outputs}, T_soft={self.T_soft}, init={self.hyperplane_init}")
 
+    @staticmethod
+    def _table_vote(p_t, w_cell_t, BT):
+        """One table's gated per-code vote: [N,nap]@[nap,V] -> [N,V], gated by w_cell_t."""
+        return w_cell_t.unsqueeze(0) * (p_t @ BT)                  # [N, V]
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [N, input_dim] -> logits [N, n_outputs]. fp32 for stable logits."""
         x = x.float()
@@ -129,8 +138,15 @@ class HyperplaneCodeLUT(nn.Module):
         BT = self.code_matrix.float().t()                          # [nap, V]  (== B^T)
         w_cell = self.w_cell.float()                               # [T, V]
         logits = x.new_zeros(N, self.n_outputs, dtype=torch.float32)
-        # Accumulate over tables; never materialize [N, T, V].
+        # Accumulate over tables; never materialize [N, T, V]. Under grad, each
+        # per-table [N,V] score is recomputed in backward (checkpoint) so peak
+        # activation memory stays ~O([N,V]) regardless of T (else autograd retains
+        # T score tensors and OOMs for large T).
+        use_ckpt = torch.is_grad_enabled() and p.requires_grad
         for t in range(self.n_tables):
-            s_t = p[:, t, :] @ BT                                  # [N, V] per-code score
-            logits = logits + w_cell[t].unsqueeze(0) * s_t         # gated vote
+            if use_ckpt:
+                logits = logits + _ckpt.checkpoint(
+                    self._table_vote, p[:, t, :], w_cell[t], BT, use_reentrant=False)
+            else:
+                logits = logits + self._table_vote(p[:, t, :], w_cell[t], BT)
         return logits
