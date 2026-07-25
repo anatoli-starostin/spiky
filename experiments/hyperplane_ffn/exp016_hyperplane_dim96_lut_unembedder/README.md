@@ -3,8 +3,8 @@
 **BUILD FOR REVIEW — not launched.** Tests staying in "ranking space" all the way
 to the logits: no ranking→Euclidean transition before unembedding.
 
-(Revised from the initial dim-64 build to **E=96, 6 heads × 16**. The directory name
-still says `dim64` for continuity; the dim is now 96.)
+(Revised from the initial dim-64 build to **E=96, 6 heads × 16**; directory renamed to
+`exp016_hyperplane_dim96_lut_unembedder` to match.)
 
 ## Architecture (derived from exp014's train.py)
 - dim **E=D=96**, single residual stream, **UNTIED** token embeddings, 6 layers, ctx 512, vocab 32768, RoPE 1e4.
