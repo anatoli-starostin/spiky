@@ -164,18 +164,86 @@ Sudoku ~18h on 1×L40S; ARC ~3 days on 4×H100 each. The recursion-depth wall is
 
 ---
 
-## 4. Follow-up work (as of mid-2026)
+## 4. The HRM → TRM lineage and follow-up work (as of mid-2026)
 
-- **Tiny Recursive Reasoning with a Mamba-2 / Attention hybrid** (arXiv:2602.12078, 2026) —
-  swaps the backbone for a Mamba-2 + attention hybrid to push the recursion's sequence model.
-- **"What Survives When You Compress a Recursive Reasoner for the Edge?"** (arXiv:2606.26488)
-  — quantization/pruning study of recursive reasoners for edge deployment. **Directly
-  adjacent to the LUT thesis** (extreme compression of a recursive reasoner).
-- **Tab-TRM** (arXiv:2601.07675) — TRM applied to tabular insurance pricing; shows the
-  recursion generalizes beyond grid puzzles.
-- **ARC Prize 2025 Technical Report** (arXiv:2601.10904) — situates HRM/TRM in the broader
-  ARC-AGI landscape; corroborates that deep supervision, not hierarchy, was the load-bearing
-  part.
+The recursive-reasoning line has moved fast since HRM (Jun 2025) and TRM (Oct 2025). Every
+entry below was **verified against its arXiv abstract** (exact title + authors confirmed on
+2026-07-25) — none is an unverified/hallucinated citation. They cluster into five threads.
+
+**(a) Better backbones for the recursion**
+
+- **Tiny Recursive Reasoning with Mamba-2 Attention Hybrid** — Wenlong Wang, Fergal Reid.
+  Swaps TRM's 2-layer block for a Mamba-2 + attention hybrid to strengthen the sequence
+  model the recursion iterates. arXiv:2602.12078 — https://arxiv.org/abs/2602.12078
+
+**(b) Test-time compute / adaptation**
+
+- **Test-time Adaptation of Tiny Recursive Models** — Ronan Killian McGovern. Adapts a
+  trained 7M TRM at inference (per-task test-time adaptation) on ARC. arXiv:2511.02886 —
+  https://arxiv.org/abs/2511.02886
+- **Tiny Recursive Models on ARC-AGI-1: Inductive Biases, Identity Conditioning, and
+  Test-Time Compute** — Roye-Azar, Vargas-Naranjo, Ghai, Balamurugan, Amir. Ablates TRM's
+  inductive biases + identity conditioning and scales test-time compute on ARC-AGI-1.
+  arXiv:2512.11847 — https://arxiv.org/abs/2512.11847
+
+**(c) Theory — *why* latent recursion works**
+
+- **Latent Reasoning in TRMs is Secretly a Policy Improvement Operator** — Asadulaev,
+  Banerjee, Karray, Takac. Reframes TRM's latent recursion as an RL-style policy-improvement
+  operator, explaining why iterating the latent state improves the answer. arXiv:2511.16886 —
+  https://arxiv.org/abs/2511.16886
+- **Universal Transformers Need Memory: Depth-State Trade-offs in Adaptive Recursive
+  Reasoning** — Grigory Sapunov. Studies learned memory tokens as a scratchpad for a
+  single-block Universal Transformer with ACT on Sudoku-Extreme — a depth-vs-state-memory
+  trade-off directly relevant to how much scratch `z` a recursion needs. arXiv:2604.21999 —
+  https://arxiv.org/abs/2604.21999
+
+**(d) Variants of the recursion itself**
+
+- **One Step Forward and K Steps Back: Better Reasoning with Denoising Recursion Models** —
+  Cameron, Wang, Ivanov, Bhattacharyya, Chételat, Zhang. A denoising-style looped/recursion
+  model that rewrites a fixed-size prediction each loop (iterative refinement).
+  arXiv:2604.18839 — https://arxiv.org/abs/2604.18839
+
+**(e) New domains, compression, and surveys**
+
+- **What Survives When You Compress a Recursive Reasoner for the Edge?** — Jim, Kolawole,
+  Busoye, Bagai, Smith. Quantization/pruning of recursive reasoners for edge deployment —
+  **the follow-up closest to the LUT-compression thesis.** arXiv:2606.26488 —
+  https://arxiv.org/abs/2606.26488
+- **Tab-TRM: Tiny Recursive Model for Insurance Pricing on Tabular Data** — Padayachy,
+  Richman, Wüthrich. TRM's latent-recursion paradigm adapted to tabular insurance modeling;
+  shows the recursion generalizes beyond grid puzzles. arXiv:2601.07675 —
+  https://arxiv.org/abs/2601.07675
+- **ARC Prize 2025: Technical Report** — Chollet, Knoop, Kamradt, Landers. Situates HRM/TRM
+  in the ARC-AGI landscape; corroborates that *deep supervision*, not hierarchy, was HRM's
+  load-bearing component. arXiv:2601.10904 — https://arxiv.org/abs/2601.10904
+- **The ARC of Progress towards AGI: A Living Survey of Abstraction and Reasoning** —
+  Vahdati, Aioanei, Suresh, Lehmann. Living survey of the ARC-AGI field, including the
+  recursive-reasoner line. arXiv:2603.13372 — https://arxiv.org/abs/2603.13372
+
+**(f) The memory / attractor cluster (HRM-side, especially relevant to LUT × recursion)**
+
+Surfaced alongside nucstar's HRM note; both verified. This cluster reframes recursion as
+*converging a latent state toward an attractor / carrying state through "highways"* — the
+same territory a LUT-inside-the-recursion would operate in:
+
+- **MeSH: Memory-as-State-Highways for Recursive Transformers** — Yu et al. (ICLR 2026).
+  Routes state through explicit "highways" so recursive transformers decouple compute depth
+  from parameter depth without losing state. arXiv:2510.07739 —
+  https://arxiv.org/abs/2510.07739
+- **Equilibrium Reasoners: Learning Attractors Enables Scalable Reasoning** — Huang, Geng,
+  Kolter (ICML 2026). Frames iterative latent updates as converging to a learned attractor —
+  a fixed-point view of the recursion (contrast TRM, which deliberately *drops* the
+  fixed-point assumption). arXiv:2605.21488 — https://arxiv.org/abs/2605.21488
+
+**Where our #72 angle sits.** Across all of the above, the recursed block is a
+*dense* network (transformer, Mamba-2, UT, denoiser). **A differentiable lookup-table
+(rank-coded / hyperplane) placed *inside* the recursion — the #72 proposal — does not appear
+to be taken by any of these works.** The memory/attractor cluster (e) shows the field is
+actively rethinking *what state the recursion carries*; none of it rethinks *what primitive
+computes the update*. That is precisely the LUT gap — our angle sits in genuinely open space.
+
 - The official TRM repo (`SamsungSAILMontreal/TinyRecursiveModels`, MIT) was **archived
   (read-only) 2026-04-01** — the reference implementation is frozen.
 
@@ -297,7 +365,9 @@ forward pass, and would be a genuinely novel result.
   Technical Report, arXiv:2601.10904 — https://arxiv.org/abs/2601.10904
 - Forbes, *Samsung AI Research Team Builds A Tiny Model With Big Power* (Oct 2025) —
   https://www.forbes.com/sites/ronschmelzer/2025/10/09/samsung-ai-research-team-builds-a-tiny-model-with-big-power/
-- Follow-ups: Mamba-2/attention hybrid recursion, arXiv:2602.12078 ; edge-compression of
-  recursive reasoners, arXiv:2606.26488 ; Tab-TRM (tabular), arXiv:2601.07675
+- Follow-up work (full verified list with titles, authors, and URLs): see §4 above —
+  arXiv:2602.12078, 2511.02886, 2512.11847, 2511.16886, 2604.21999, 2604.18839, 2606.26488,
+  2601.07675, 2603.13372, plus the memory/attractor cluster 2510.07739 and 2605.21488. All
+  titles + authors were verified against arXiv on 2026-07-25.
 - spiky internal grounding: [`claude/thesis.md`](../../claude/thesis.md),
   [`claude/experiment-methodology.md`](../../claude/experiment-methodology.md)
