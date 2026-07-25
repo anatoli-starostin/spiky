@@ -1,0 +1,60 @@
+{
+  "experiment": "exp_a02_fast_baseline",
+  "phase": "A (fast-iteration variant)",
+  "issue": 73,
+  "umbrella_issue": 72,
+  "branch": "research/lut-trm-sudoku",
+  "implementer": "gpustar (RTX 5090)",
+  "goal": "A quick-turnaround (~25-40 min) TRM Sudoku baseline to A/B LUT swaps in Phase B. Lower final accuracy than the full 5h run is acceptable; the point is a stable, repeatable signal that still exercises the recursion + deep supervision.",
+  "based_on": "exp_a01_stock_trm_sudoku_baseline (same reference repo/optimizer); this is a deliberately cheaper config, not stock.",
+  "reference": {
+    "paper": "arXiv:2510.04871",
+    "repo": "SamsungSAILMontreal/TinyRecursiveModels",
+    "license": "MIT",
+    "notes_doc": "doc/research/trm.md"
+  },
+  "variant": "TRM-MLP, shallow recursion (fast)",
+  "arch": {
+    "arch": "trm",
+    "mlp_t": true,
+    "pos_encodings": "none",
+    "L_layers": 2,
+    "H_cycles": 2,
+    "L_cycles": 3,
+    "note": "cheaper recursion: H_cycles*(L_cycles+1)=8 forward evals/step vs stock 21 (H=3,L=6) -> ~2.5x faster/step and less activation memory (lets batch go to 768).",
+    "ema": true
+  },
+  "optim": {
+    "optimizer": "AdamATan2 (pure-PyTorch drop-in adam_atan2.py; identical math to the fused kernel; a=b=1, decoupled WD)",
+    "lr": 1e-4,
+    "puzzle_emb_lr": 1e-4,
+    "weight_decay": 1.0,
+    "puzzle_emb_weight_decay": 1.0
+  },
+  "data": {
+    "dataset_dir": "data/sudoku-extreme-1k-aug-1000-testsub5k",
+    "train": "FULL augmented train (symlinked): Sudoku-Extreme 1000 subsample x 1000 aug (unchanged)",
+    "test": "SUBSAMPLED to 5000 puzzles (first 5k of the 422,786 test set) via subsample_test.py -> each eval is ~7 batches (seconds) instead of ~826 (minutes)",
+    "num_aug": 1000
+  },
+  "train": {
+    "epochs": 10000,
+    "eval_interval": 2000,
+    "global_batch_size": 768,
+    "wandb": "offline, dirs redirected to /tmp + ~/.cache; PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+  },
+  "deviations_from_stock": [
+    "recursion H_cycles 3->2, L_cycles 6->3 (cheaper; caps accuracy lower)",
+    "epochs 50000->10000 (time-box)",
+    "eval on a 5000-puzzle test subset instead of the full 422,786",
+    "batch 768 (stock; the cheaper recursion frees the memory the full run lacked)",
+    "AdamATan2 pure-PyTorch drop-in (Blackwell sm_120; see exp_a01)"
+  ],
+  "expected": {
+    "val_exact_accuracy": "~40-60% (well below the paper's 87.4%; this is a fast A/B baseline, not a fidelity run)",
+    "wall_clock": "~25-40 min",
+    "params_target": "~5M"
+  },
+  "measured": {"val_exact_accuracy": null, "param_count": null, "steps_per_s": null, "wall_clock_min": null, "total_steps": null},
+  "status": "committed; launching"
+}

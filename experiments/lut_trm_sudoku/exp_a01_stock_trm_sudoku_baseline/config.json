@@ -65,5 +65,5 @@
     "wall_clock_h": null,
     "note": "filled in after the run"
   },
-  "status": "LAUNCHED — stock TRM-MLP baseline training on the 5090 (batch 512, AdamATan2 drop-in); accuracy/throughput to be filled in on completion"
+  "status": "STOPPED intentionally at ~step 9,765/97,656 (~10%) in favour of the fast-iteration config exp_a02 — the full 5h run was too slow for LUT iteration. No final val_exact (first eval was still running at stop). Kept as the full-fidelity recipe for later."
 }
