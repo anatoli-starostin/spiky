@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp012_hyperplane_full_model_16k_randinit",
+  "best_val_bpb": 1.1953464926352175,
+  "final_val_bpb": 1.1954927096875543,
+  "n_params": 324726578,
+  "training_time_hours": 3.544
+}
