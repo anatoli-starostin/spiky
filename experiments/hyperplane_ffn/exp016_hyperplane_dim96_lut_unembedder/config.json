@@ -18,7 +18,7 @@
   "v_input_nap": 6,
   "v_tph": 64,
   "out_input_nap": 6,
-  "out_tph": 64,
+  "out_tph": 256,
   "residual_input_nap": 6,
   "residual_tph": 120,
   "emb_resid_input_nap": 6,
@@ -47,6 +47,6 @@
   "backward_mode": "dense_K",
   "weight_dtype": "bf16",
   "unemb_nap": 6,
-  "unemb_tph": 4,
+  "unemb_tph": 16,
   "unemb_n_heads": 1
 }
