@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp013_hyperplane_full_model_16k_tinyinit",
+  "best_val_bpb": 1.275595599304765,
+  "final_val_bpb": 1.2766868030163185,
+  "n_params": 324726578,
+  "training_time_hours": 3.528
+}
