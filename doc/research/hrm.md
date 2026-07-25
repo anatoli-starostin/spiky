@@ -8,7 +8,7 @@ analyzes concretely how our lookup-table primitives (`FastMultiHeadLut`,
 
 > **Provenance caveat.** The HRM summary below is written from prior knowledge of the paper and
 > the surrounding discussion, not from a live re-read. Treat exact figures (param counts,
-> benchmark %s) as **approximate — verify against the primary sources in §9** before quoting them
+> benchmark %s) as **approximate — verify against the primary sources in §10** before quoting them
 > as fact. The load-bearing content for us is the architecture idea and the LUT-combination
 > analysis (§8), which do not depend on the exact numbers.
 
@@ -67,7 +67,7 @@ mazes) — the work is in the loop, not the weights.
 - Heavy **task-specific data augmentation** (especially for ARC: many augmentations per puzzle at
   train time, and test-time augmentation + voting).
 
-## 5. Reported results & benchmarks *(approximate — verify, §9)*
+## 5. Reported results & benchmarks *(approximate — verify, §10)*
 
 - **Sudoku-Extreme (9×9, minimal givens):** near-solved, where direct-prediction transformers and
   CoT LLMs score ≈0%.
@@ -175,7 +175,72 @@ a strict A/B against fixed anchors / a matmul baseline; random init tests learni
 
 ---
 
-## 9. Sources *(verify before quoting figures)*
+## 9. Successors & follow-up work
+
+*All arXiv IDs below were checked against the arXiv API and resolved (titles confirmed); none are
+marked unverified.*
+
+**HRM → TRM lineage.**
+- **TRM — "Less is More: Recursive Reasoning with Tiny Networks"**
+  ([arXiv:2510.04871](https://arxiv.org/abs/2510.04871)) — the primary successor: a single tiny
+  (~7M) shared network drops HRM's two-module hierarchy and *beats* it on ARC-AGI / Sudoku / maze.
+  See the companion note [`trm.md`](trm.md) on this branch (gpustar's) for detail rather than
+  duplicating it here.
+
+**Better backbones.**
+- **Tiny Recursive Reasoning with Mamba-2 Attention Hybrid**
+  ([arXiv:2602.12078](https://arxiv.org/abs/2602.12078)) — moves the recursive core onto a
+  Mamba-2 / attention hybrid backbone.
+
+**Test-time compute / adaptation.**
+- **Test-time Adaptation of Tiny Recursive Models**
+  ([arXiv:2511.02886](https://arxiv.org/abs/2511.02886)) — adapts a trained TRM at inference.
+- **Tiny Recursive Models on ARC-AGI-1: Inductive Biases, Identity Conditioning, and Test-Time
+  Compute** ([arXiv:2512.11847](https://arxiv.org/abs/2512.11847)) — inductive-bias
+  simplifications + test-time compute tuned to small grids.
+
+**Theory — why recursion works.**
+- **Latent Reasoning in TRMs is Secretly a Policy Improvement Operator**
+  ([arXiv:2511.16886](https://arxiv.org/abs/2511.16886)) — frames the recursive refinement as
+  iterated policy improvement (an RL view of latent reasoning).
+- **Universal Transformers Need Memory: Depth-State Trade-offs in Adaptive Recursive Reasoning**
+  ([arXiv:2604.21999](https://arxiv.org/abs/2604.21999)) — argues recursive / universal
+  transformers need explicit memory/state to trade against depth.
+
+**Variants & new domains.**
+- **One Step Forward and K Steps Back: Better Reasoning with Denoising Recursion Models**
+  ([arXiv:2604.18839](https://arxiv.org/abs/2604.18839)) — a denoising-style recursion variant.
+- **Tab-TRM: Tiny Recursive Model for Insurance Pricing on Tabular Data**
+  ([arXiv:2601.07675](https://arxiv.org/abs/2601.07675)) — carries the recipe to tabular data
+  beyond puzzles.
+- **What Survives When You Compress a Recursive Reasoner for the Edge?**
+  ([arXiv:2606.26488](https://arxiv.org/abs/2606.26488)) — compression / edge study of recursive
+  reasoners; **the closest neighbor to our LUT-compression angle.**
+
+**Recursion × memory / attractor (closest architectural prior art to LUT×recursion).**
+- **MeSH: Memory-as-State-Highways for Recursive Transformers**
+  ([arXiv:2510.07739](https://arxiv.org/abs/2510.07739)) — adds explicit memory-state "highways"
+  to recursive transformers.
+- **Equilibrium Reasoners: Learning Attractors Enables Scalable Reasoning**
+  ([arXiv:2605.21488](https://arxiv.org/abs/2605.21488)) — learns attractor dynamics for
+  reasoning; resonates with LUT-rows-as-attractors and HRM's "hierarchical convergence."
+
+**Independent evaluation.**
+- **ARC Prize 2025: Technical Report** ([arXiv:2601.10904](https://arxiv.org/abs/2601.10904)) —
+  corroborates that **deep supervision (the outer refinement loop), not the H/L hierarchy, was
+  HRM's real driver** (cf. §7).
+
+**Where our angle sits.** A **differentiable lookup-table *inside* the recursion** (issue #72) does
+not appear to be taken yet. The two closest threads to read first are the **compression** study
+([2606.26488](https://arxiv.org/abs/2606.26488) — what survives when you compress a recursive
+reasoner, directly adjacent to swapping GEMMs for lookups) and the **policy-improvement** framing
+([2511.16886](https://arxiv.org/abs/2511.16886) — a principled account of *why* the recursive
+refinement helps, which a LUT recurrence would need to preserve). The memory/attractor cluster
+(MeSH, Equilibrium Reasoners) is the nearest architectural prior art.
+
+---
+
+## 10. Sources *(verify before quoting figures)*
 
 - **HRM paper:** Guan Wang et al., "Hierarchical Reasoning Model," arXiv:2506.21734 (2025). —
   <https://arxiv.org/abs/2506.21734>
