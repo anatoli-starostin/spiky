@@ -24,7 +24,8 @@
     "ema": true
   },
   "optim": {
-    "optimizer": "adam-atan2",
+    "optimizer": "AdamATan2 (pure-PyTorch drop-in, adam_atan2.py — mathematically identical to the fused adam-atan2 kernel; a=1,b=1, decoupled WD)",
+    "optimizer_deviation": "fused CUDA adam-atan2 unbuildable/unrunnable on sm_120 (torch-header compile error + hardcoded sm_80-90/no-PTX); replaced with an identical-math pure-PyTorch impl. Same accuracy, marginally lower throughput.",
     "lr": 1e-4,
     "puzzle_emb_lr": 1e-4,
     "weight_decay": 1.0,
@@ -34,13 +35,16 @@
     "dataset": "Sudoku-Extreme",
     "train_subsample": 1000,
     "num_aug": 1000,
-    "test_size": "~423K",
-    "build_cmd": "python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000 --subsample-size 1000 --num-aug 1000"
+    "test_size": 422786,
+    "build_cmd": "python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000 --subsample-size 1000 --num-aug 1000",
+    "build_status": "BUILT OK"
   },
   "train": {
     "epochs": 50000,
     "eval_interval": 5000,
-    "global_batch_size": "repo default (to be recorded from the run; may be tuned for 32GB)"
+    "global_batch_size": 512,
+    "global_batch_size_deviation": "stock is 768 (tuned for 48GB L40S); 768 OOMs on the 32GB RTX 5090 and the harness has no gradient accumulation, so reduced to 512 (largest stable: ~22GB peak, ~9GB headroom). Batch is an accuracy lever, so this may cost a little vs the paper's 87.4%; exact-768 reproduction would need an 80GB card (e.g. Nebius H100).",
+    "wandb": "offline, dirs redirected to /tmp + ~/.cache (cage HOME is read-only); PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
   },
   "hardware": {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -61,5 +65,5 @@
     "wall_clock_h": null,
     "note": "filled in after the run"
   },
-  "status": "SETUP COMMITTED; execution pending network approvals (clone, deps, dataset)"
+  "status": "LAUNCHED — stock TRM-MLP baseline training on the 5090 (batch 512, AdamATan2 drop-in); accuracy/throughput to be filled in on completion"
 }
