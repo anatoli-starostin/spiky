@@ -1,0 +1,22 @@
+{
+  "exp023": {
+    "baseline_bpb": 1.2188,
+    "anchor_swap_bpb": 4.2378,
+    "delta": 3.019,
+    "bitflip_per_site": {
+      "qk_lut": 0.4232,
+      "v_lut": 0.426,
+      "out_proj": 0.4105
+    }
+  },
+  "exp024": {
+    "baseline_bpb": 1.215,
+    "anchor_swap_bpb": 2.6691,
+    "delta": 1.4541,
+    "bitflip_per_site": {
+      "qk_lut": 0.1566,
+      "v_lut": 0.1448,
+      "out_proj": 0.1477
+    }
+  }
+}
