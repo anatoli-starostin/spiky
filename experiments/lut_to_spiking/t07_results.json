@@ -1,0 +1,42 @@
+[
+ {
+  "family": "bruteforce",
+  "D": 64,
+  "neurons": 152,
+  "synapses": 4504,
+  "spikes": 83.0,
+  "match": 1.0
+ },
+ {
+  "family": "bruteforce",
+  "D": 384,
+  "neurons": 472,
+  "synapses": 24984,
+  "spikes": 403.0,
+  "match": 1.0
+ },
+ {
+  "family": "fitted",
+  "D": 64,
+  "neurons": 101,
+  "synapses": 892,
+  "spikes": 94.640625,
+  "exact": 0.072021484375,
+  "mad": 11.294677734375,
+  "pair": 0.6015604785338332,
+  "tie": 0.051291376921080344,
+  "sim_vs_num": 1.0
+ },
+ {
+  "family": "fitted",
+  "D": 384,
+  "neurons": 421,
+  "synapses": 5052,
+  "spikes": 442.96875,
+  "exact": 0.0791422575712204,
+  "mad": 10.6534423828125,
+  "pair": 0.5918158169509257,
+  "tie": 0.0557855669773784,
+  "sim_vs_num": 1.0
+ }
+]
