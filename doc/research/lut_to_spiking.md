@@ -215,17 +215,19 @@ tokens, at the price of the other 6% producing no output at all.)
  -> 384 output neurons, table value on the row->output DELAY
 ```
 
-**540 neurons, 50,076 synapses, 406 spikes per inference.** On 256 real validation tokens:
+**540 neurons, 50,076 synapses, 406 spikes per inference.** On 4,096 real validation
+tokens (seeded subset — see §3.5):
 
 | input encoding | row selected | exact output latency | output pair-order |
 |---|---|---|---|
 | **exact order code** (rank latencies) | **100.00%** | **100.00%** | **100.00%** |
-| uniform 128-tick grid | 92.97% | 93.25% | 96.74% |
+| uniform 128-tick grid | 91.63% | 91.97% | 96.23% |
 
 The rank-coded row is the milestone: on the inputs that really occur, the spiking circuit
 selects the same row and emits the same latency vector as the trained table, on every
-token. The grid row is an *encoding* loss, not a circuit loss — it matches the LUT's own
-behaviour on the same quantised input (91.3% over all 8,192 tokens).
+token. The grid row is an *encoding* loss, not a circuit loss — it tracks the LUT's own
+behaviour on the same quantised input (91.31% over all 8,192 tokens, from the encoding
+sweep above), which is the correct comparison.
 
 **Two implementation traps worth carrying forward:**
 
@@ -257,6 +259,23 @@ that resolution 17% of individual row selections in this table are wrong. The ar
 is far more robust to occasional row errors than per-table fidelity suggests.
 
 ![real-data validation](../../experiments/lut_to_spiking/real_table_spiking.png)
+
+### 3.5 Determinism
+
+The capture is **reproducible by construction and verified byte-identical across runs**
+(sha256 `5c354e791315f229a30d601c6f091da790345483bcdbce2486767cc5f4909437`,
+113,306,461 bytes). The nanochat val loader contains no RNG at all — it reads the val
+parquet shard in order — so `capture_batches × device_bs × seq` always selects the same
+first 8,192 tokens, and the model forward is deterministic (the LUT forward is a gather,
+not an atomic reduction).
+
+The one genuine source of run-to-run variation was in `t11`: the evaluation subset
+(`torch.randperm`) and the output pairs sampled by the order metric (`torch.randint`) were
+unseeded. Both now take an explicit `torch.Generator` seeded from `SEED = 0`, and the
+default evaluation set was raised from 256 to 4,096 tokens — at n = 256 the
+*grid-encoding* row carried roughly ±4 pp of sampling noise (observed draws ~88–93%),
+which is why the numbers in §3.3 changed slightly from the first report. **The rank-coded
+row was 100.00% under every draw** — it is exact, not sampled-lucky.
 
 ---
 

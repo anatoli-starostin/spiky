@@ -58,13 +58,25 @@ own numbers, and can be run on its own.
 | script | question | answer |
 |---|---|---|
 | `t10_realdata.py` | acceptance test + capture real inputs at layer 3 `out_proj` | val bpb 1.2409; `X = [8192, 384]` |
-| `t11_real_table_spiking.py` | **does the spiking circuit reproduce the real table on real inputs?** | **100.00%** (order-coded input) |
+| `t11_real_table_spiking.py` | **does the spiking circuit reproduce the real table on real inputs?** | **100.00%** (order-coded input, 4,096 tokens) |
 | `t12_bpb_resolution.py` | what does coarse timing cost the whole model? | 64 ticks (6 bit) → **+0.3 mb** |
 | `t13_figure_real.py` | → `real_table_spiking.png` | |
 
 ## Not in git
 
 Checkpoints and the 113 MB activation capture `real_capture_layer3.pt` are excluded by
-`.gitignore` (`experiments/**/*.pt`). The capture regenerates from `t10_realdata.py` in
-about two minutes. Result JSONs (`t06/t07/t11_results.json`) and both figures **are**
-committed.
+`.gitignore` (`experiments/**/*.pt`). Result JSONs (`t06/t07/t11_results.json`) and both
+figures **are** committed.
+
+The capture regenerates from `t10_realdata.py` in about two minutes and is
+**deterministic — verified byte-identical across runs**:
+
+```
+sha256  5c354e791315f229a30d601c6f091da790345483bcdbce2486767cc5f4909437
+size    113,306,461 bytes
+```
+
+A preserved copy lives at `~/projects/lut_captures/` (outside the repo, so a repo cleanup
+cannot take it with it). `t10` and `t11` seed from `SEED = 0`; see
+[§3.5 of the write-up](../../doc/research/lut_to_spiking.md) for what was and was not
+deterministic before.

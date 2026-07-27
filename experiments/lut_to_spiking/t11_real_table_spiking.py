@@ -18,6 +18,7 @@ IF = NeuronMeta(neuron_type=0, cf_2=0.0, cf_1=0.0, cf_0=0.0,
                 a=0.0, b=0.0, c=0.0, d=0.0, spike_threshold=THETA)
 from paths import out
 CAP = out("real_capture_layer3.pt")
+SEED = 0
 
 
 class Builder(Net):
@@ -49,7 +50,7 @@ def encode_rank(X):
     return torch.argsort(torch.argsort(X, dim=-1), dim=-1)
 
 
-def main(table_idx=0, n_eval=256, span=120, R_list=(15, 31, 63, 127, 255)):
+def main(table_idx=0, n_eval=4096, span=120, R_list=(15, 31, 63, 127, 255)):
     cap = torch.load(CAP, map_location="cpu", weights_only=False)
     X, W, A, B, P = cap["X"], cap["weights"], cap["anchor_a"], cap["anchor_b"], cap["powers"]
     n_tables, K, D = W.shape
@@ -125,7 +126,12 @@ def main(table_idx=0, n_eval=256, span=120, R_list=(15, 31, 63, 127, 255)):
           f"(inputs {len(anch)}, comparators {2*NAP}, rows {K}, outputs {D})  synapses={n_syn}")
 
     # ---------- run the REAL inputs through it ----------
-    sub = torch.randperm(X.shape[0])[:n_eval]
+    # Seeded: which n_eval of the 8,192 captured tokens get evaluated, and which output
+    # pairs the order metric samples, were previously unseeded. That is the ONLY
+    # run-to-run variation in this series (it moved pair-order by ~0.3pp between runs);
+    # the capture itself is byte-identical run to run.
+    gen = torch.Generator().manual_seed(SEED)
+    sub = torch.randperm(X.shape[0], generator=gen)[:n_eval]
     results = {}
     for enc_name, Xenc, win in [("global affine 128 ticks", Xt, R),
                                 ("per-sample rank code", encode_rank(X), X.shape[1] - 1)]:
@@ -144,7 +150,9 @@ def main(table_idx=0, n_eval=256, span=120, R_list=(15, 31, 63, 127, 255)):
         got = first[:, outs[0]:outs[0] + D] - t_row_sel.unsqueeze(1) - 1
         want = lat[tgt_row]
         ex = (got == want).float().mean().item()
-        gi = torch.randint(0, D, (40000,)); gj = torch.randint(0, D, (40000,))
+        pg = torch.Generator().manual_seed(SEED + 1)
+        gi = torch.randint(0, D, (40000,), generator=pg)
+        gj = torch.randint(0, D, (40000,), generator=pg)
         mm = gi != gj; gi, gj = gi[mm], gj[mm]
         sg = torch.sign((got[:, gi] - got[:, gj]).float())
         sw = torch.sign((want[:, gi] - want[:, gj]).float())

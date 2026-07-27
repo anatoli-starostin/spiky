@@ -23,9 +23,18 @@ from exp025_model import load_exp025
 
 LAYER = 3
 OUT = out("real_capture_layer3.pt")
+SEED = 0
+
+# Determinism: the capture is reproducible by construction, and verified byte-identical
+# across runs (sha256 5c354e79...). The nanochat val loader contains no RNG at all — it
+# reads the val parquet shard in order — so `capture_batches x device_bs x seq` always
+# selects the SAME first 8,192 tokens. The model forward is deterministic too (the LUT
+# forward is a gather, not an atomic reduction). The seed below is defensive only: it
+# costs nothing and pins the result if a future edit introduces sampling.
 
 
 def main(capture_batches=2, device_bs=8, seq=512):
+    torch.manual_seed(SEED)
     m, d = load_exp025()
     base = get_base_dir()
     tok = RustBPETokenizer.from_directory(os.path.join(base, "tokenizer"))
