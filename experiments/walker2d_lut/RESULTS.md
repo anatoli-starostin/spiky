@@ -671,3 +671,61 @@ anchors evidently need a great deal of capacity before they can address this tas
 while learned hyperplanes work at 5,378 parameters. **Where you look matters far more
 than what you store**, and at small table sizes it is the difference between walking and
 falling over.
+
+---
+
+# LUT-SAC: an off-policy actor-critic whose actor is a lookup table (exp_c09)
+
+Built on the Phase-1..4 diagnosis: the from-scratch gap is an **optimization** problem,
+not a capacity one (distillation puts 5,378 params at 5512, so the table can represent
+the gait). Two named causes: on-policy data is a narrow state distribution while the
+LUT's backward scatters into a *single addressed row* per sample, so most rows barely
+train; and a global fixed Gaussian is wrong for a rugged piecewise-constant landscape.
+
+**Design.** Actor = LUT with **12 outputs per cell** — 6 action means *and* 6 log-stds,
+so the exploration spread is state-local and learned, stored in the table itself
+(`a = tanh(mu_row + sigma_row·eps)`). Critic = twin-Q MLP (Variant A, keeping the
+question "can a LUT be the *actor*?" clean; a LUT critic is a separate branch and was
+deliberately not built). Off-policy replay, auto-entropy temperature, Polyak targets,
+and a per-row trust region (a row update is a *step* change for every state in that
+cell, unlike an MLP's smeared update, so row-gradient norms are clipped).
+
+All returns below are the deterministic **100-episode CPU-reference** eval. Anchors:
+PPO-from-scratch **4407 ± 427**, SAC **5277**, distillation ceiling **5512**.
+
+## Iteration log
+
+| run | update:data ratio | trust region | env-steps | wall | best MJX | **CPU-reference** |
+|---|---:|---|---:|---:|---:|---|
+| PPO from scratch (exp_c06) | on-policy | — | 19.7M | 5.1 min | — | 4407 ± 427 |
+| **LUT-SAC v1** | 0.06 | off | 1.54M | 19.0 min | 4546.9 | **4289.2 ± 78.3** |
+| **LUT-SAC v2** | 0.25 | on (1.0) | 1.28M | 37.8 min | 4824.6 | **4832.3 ± 16.6** |
+
+**What each lever bought.** v1 matched PPO-from-scratch on the mean (4289 vs 4407) but
+with a **5.5× tighter spread** (±78 vs ±427) — off-policy training already produced a
+policy that walks *reliably* rather than one that sometimes falls. Raising the
+update-to-data ratio from 0.06 to 0.25 (plus the per-row trust region) then bought
+**+543 return**, to 4832.3, and tightened σ further to **±16.6** — the tightest of any
+policy measured in this project, including SAC (±34) and the distilled LUT (±431).
+
+At 4832.3 the from-scratch LUT is **+425 over the previous from-scratch best**, and at
+**91.6% of SAC** (5277) with 28,032 parameters against SAC's 73,484.
+
+## The diagnostic confirms the hypothesis
+
+`row_coverage` — the fraction of table rows that have received a gradient — was logged
+every evaluation. It rises from **67.7% → 100.0%** as the return climbs 473 → 4547 in
+v1, and sits at 100% for essentially all of v2.
+
+That is exactly what the diagnosis predicted, and it also **retires one of the planned
+levers**: coverage-prioritised replay was designed to cure the sparse scatter, but
+off-policy replay alone already drives coverage to 100%. There is nothing left for the
+coverage bonus to fix, so it was not enabled. Reporting that honestly matters more than
+shipping an unused feature — the hypothesis was right about the *cause* and the simplest
+fix was sufficient.
+
+With coverage saturated, the remaining gap to SAC is **not** a coverage problem. v1 ran
+at an update-to-data ratio of 0.06 against real SAC's ~1.0 — roughly 16× fewer gradient
+steps per environment step than the algorithm normally gets — and simply raising it
+recovered most of the deficit. That identifies the binding constraint as compute per
+sample, not representation.

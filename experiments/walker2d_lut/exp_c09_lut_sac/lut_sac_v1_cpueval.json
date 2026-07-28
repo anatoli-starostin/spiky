@@ -1,0 +1,7 @@
+{
+ "actor": "lut_sac_v1_actor.npz",
+ "params": 28032,
+ "episodes": 100,
+ "cpu_reference_mean": 4289.223725063458,
+ "cpu_reference_std": 78.33173136240899
+}
