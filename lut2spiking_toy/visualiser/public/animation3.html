@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aggregating LUTs — delay-coded tables + a listening aggregator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>Aggregating LUTs — delay-coded tables + a listening aggregator</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <a href="single_table.html">Single table</a> · <a href="animation2.html">Charge summation</a> · <b>Aggregator population</b></p>
+    <p>
+      A different way to add two tables. Each table stays a self-contained <b>model-1 black box</b>: it selects a row and emits
+      its output vector as latency-coded <b>spikes</b> (value in the conduction delay, like the single-table page) — it doesn't know
+      it's being summed. A separate population of <b>aggregator neurons</b> then <b>listens</b> to every table's output spikes and
+      produces the sum, re-emitted as latency spikes. Contrast with the <a href="animation2.html">charge-summation model</a>, where
+      the tables deposit charge on <i>shared</i> outputs.
+    </p>
+  </header>
+
+  <div class="stack">
+    <!-- INPUT + PLAYBACK -->
+    <div class="panel">
+      <h2>Input &amp; playback</h2>
+      <div id="sliders"></div>
+      <div class="btns"><button id="rand">🎲 Randomize x</button><button id="reset" class="ghost">Reset to 0</button></div>
+      <div class="ctl" style="margin-top:10px;flex-wrap:wrap">
+        <button id="play">▶ Play</button>
+        <button id="restart" class="ghost">⟲ Restart</button>
+        <label>speed <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span class="mono" id="simtime" style="margin-left:6px">t = 0.00</span>
+      </div>
+      <div class="ctl"><label class="small">scrub</label><input type="range" id="scrub" min="0" max="24" step="0.03" value="0" style="flex:1" /></div>
+      <p class="small">Edge colour = synapse weight: <span style="color:#5b9dff">■ −</span> · <span style="color:#6b7280">■ 0</span> · <span style="color:#ff6b6b">■ +</span>; <span style="color:var(--lut)">┄</span> inhibitory H→C; <span style="color:#e6b3ff">■</span> aggregator listening edges.</p>
+    </div>
+
+    <!-- UNIFIED GRAPH -->
+    <div class="panel">
+      <h2>One network — inputs → two delay-output tables → a listening aggregator → summed output spikes</h2>
+      <p class="hint">Left→right: ONE shared input population fans out to <span style="color:var(--spike)">Table 1</span> and <span style="color:var(--out)">Table 2</span>; each does its detector → complement → row-select and drives its OWN <b>TAB-OUT</b> neurons, which emit latency spikes. The <span style="color:#e6b3ff">aggregator</span> neurons (Σ<sub>j</sub>) listen to output j of both tables, integrate, and fire the summed spike.</p>
+      <canvas id="graph" height="600"></canvas>
+      <details style="margin-top:8px">
+        <summary>How the middle layers are wired — DETECT · COMPL · ROWS · TAB-OUT · AGGREGATOR</summary>
+        <ul class="small" style="margin:6px 0 4px;padding-left:18px">
+          <li><b style="color:var(--addr)">DETECT (H<sub>k</sub>)</b> — hyperplane sign-test; after the CLOCK it fires iff ⟨W<sub>k</sub>,x⟩+b<sub>k</sub> ≥ 0 → address bit k. Incoming = weighted input→detector synapses (<span style="color:#5b9dff">−</span>/<span style="color:#ff6b6b">+</span>).</li>
+          <li><b style="color:var(--warn)">COMPL (C<sub>k</sub>)</b> = NOT H<sub>k</sub>: CLOCK excites C<sub>k</sub>, H<sub>k</sub> sends an <b style="color:var(--lut)">inhibitory</b> synapse (<span style="color:var(--lut)">┄ dashed</span>), so C<sub>k</sub> fires iff H<sub>k</sub> did not.</li>
+          <li><b style="color:var(--row)">ROWS (2<sup>K</sup> one-hot)</b> — K-way coincidence AND; exactly the row matching the bits fires.</li>
+          <li><b style="color:var(--spike)">TAB-OUT (o<sub>j</sub>)</b> — each table's OWN output neurons; the winning row drives output j through a conduction delay = α+β·O<sub>t</sub>[r<sub>t</sub>][j], so o<sub>j</sub> fires at a latency encoding the value (bigger = later).</li>
+          <li><b style="color:#e6b3ff">AGGREGATOR (Σ<sub>j</sub>)</b> — one per output dim; listens to output j of <i>both</i> tables (<span style="color:#e6b3ff">purple listening edges</span>) and sums them (see below).</li>
+        </ul>
+      </details>
+    </div>
+
+    <!-- LUT PANELS -->
+    <div class="panel">
+      <h2>What each table selects &amp; emits</h2>
+      <div class="two">
+        <div>
+          <h3 class="sub" style="color:var(--spike)">Table 1 (seed 0)</h3>
+          <table id="lut1_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+          <p class="small">address <b id="lut1_addr" class="mono"></b> → row <b id="lut1_row" class="mono"></b> · emits O₁[r₁] as latency spikes:</p><div id="lut1_out"></div>
+        </div>
+        <div>
+          <h3 class="sub" style="color:var(--out)">Table 2 (seed 1)</h3>
+          <table id="lut2_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+          <p class="small">address <b id="lut2_addr" class="mono"></b> → row <b id="lut2_row" class="mono"></b> · emits O₂[r₂] as latency spikes:</p><div id="lut2_out"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AGGREGATOR MECHANISM -->
+    <div class="panel">
+      <h2>The aggregator — a sustained current that turns spike times into a sum</h2>
+      <p class="hint">A plain integrate-to-threshold aggregator would fire on the k-th arrival — an <b>order statistic</b> of the arrival times, not their sum. The trick: each incoming table-output spike switches on a <b>sustained constant current I</b> from its arrival until a fixed readout clock T_agg. The membrane then holds the sum of elapsed times:</p>
+      <p class="small mono" style="line-height:1.9">
+        V<sub>j</sub>(T_agg) = I·Σ<sub>t</sub>(T_agg − t<sub>t,j</sub>) = I·(N·T_agg − Σ<sub>t</sub> t<sub>t,j</sub>)<br>
+        with t<sub>t,j</sub> = GZ<sub>t</sub> + α + β·O<sub>t</sub>[r<sub>t</sub>][j] &nbsp;⇒&nbsp; Σ<sub>t</sub> t<sub>t,j</sub> = C₀ + β·S<sub>j</sub>, &nbsp; S<sub>j</sub> = Σ<sub>t</sub> O<sub>t</sub>[r<sub>t</sub>][j]<br>
+        ⇒ V<sub>j</sub>(T_agg) = <b>const − I·β·S<sub>j</sub></b> &nbsp;(affine in the true sum) ⇒ re-emit at &nbsp;<b>t_out<sub>j</sub> = T_agg + A + B·S<sub>j</sub></b>
+      </p>
+      <p class="small">Constants (this page): per-table code <b>α=5, β=1</b>, ground zero GZ<sub>t</sub> = row-fire + 0.6; aggregator <b>I=1</b>, readout <b>T_agg</b> = last table spike + 0.6, emission <b>A=T_agg+5, B=1</b> (same bigger=later latency convention, so the summed spikes are themselves composable). Two ground zeros: per-table GZ<sub>t</sub> and the aggregator clock T_agg.</p>
+      <div id="agginfo" class="banner ok" style="font-size:14px;font-weight:700;margin:8px 0 8px">⏱ …</div>
+      <canvas id="atimeline" height="230"></canvas>
+    </div>
+
+    <!-- GROUND TRUTH -->
+    <div class="panel">
+      <h2>Ground truth vs aggregator — live check for THIS input</h2>
+      <p class="hint">The two tables never shared an output. Per dim j: the direct LUT sum <code>O₁[r₁][j]+O₂[r₂][j]</code>, the value read from the aggregator membrane <code>V<sub>j</sub></code>, and the value decoded from the emitted summed <b>spike time</b> <code>(t_out−A)/B</code>. All three must agree.</p>
+      <table id="gtmatch"><thead><tr><th>dim</th><th>O₁[r₁]</th><th>O₂[r₂]</th><th>ground-truth Σ</th><th>V<sub>j</sub> readout</th><th>emitted (spike)</th><th>match</th></tr></thead><tbody></tbody></table>
+      <p class="legend" id="gtnote"></p>
+    </div>
+
+    <!-- VERIFICATION -->
+    <div class="panel">
+      <h2>Verified</h2>
+      <p class="small">Over 50,000 random inputs (<code>analysis/aggregator_check.py</code>): the aggregator membrane readout equals the true <code>Σ<sub>t</sub> O<sub>t</sub>[r<sub>t</sub>][j]</code> to <b>1.8e-15</b>, and the emitted summed-spike times decode back to the sum to <b>4.6e-15</b> — 100% match. A naive integrate-to-threshold aggregator (order statistic) is off by up to <b>3.44</b> — it fires on an arrival <i>order</i>, not the sum. Sustained-current-until-T_agg is what makes spike times add.</p>
+    </div>
+  </div>
+
+  <script src="lut_spiking.js"></script>
+  <script src="animate3.js"></script>
+</body>
+</html>
