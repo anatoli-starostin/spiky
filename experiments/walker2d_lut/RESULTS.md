@@ -453,3 +453,88 @@ Caveats: single seed per policy; the geometry axis also shifts the observation
 distribution, so it confounds dynamics change with input-distribution shift; and the
 friction axis collapses *every* policy at ×1.5–2.0, which looks like a task limit rather
 than a policy property.
+
+---
+
+# Phase 6: does choosing the teacher buy robustness? (exp_c08)
+
+Phase 5 ended with a prediction: the distilled LUT was fragile because *PPO* is fragile,
+so distilling from SAC — which never dropped below the bar anywhere in the swept range —
+should produce a more robust table. This tests it, with everything else held identical:
+same 4M-pair dataset size, same DAgger noise injection, same clipped-action labels, same
+`hyperplane nap4/tph32` (5,378 params), same 6 epochs, same perturbation grid, same
+frozen standardiser.
+
+## Nominal
+
+| policy | nominal | retention of own teacher |
+|---|---:|---:|
+| SAC-MLP (teacher) | 5277.4 | — |
+| **LUT ← SAC** (5,378 params) | **4560.1** | 85.6% |
+| PPO-MLP (teacher) | 5566.6 | — |
+| LUT ← PPO (5,378 params) | 5567.1 | 99.2% |
+
+Distillation took **8 seconds**; the SAC dataset took 195 s to collect (CPU rollouts,
+batched — SAC is torch so it cannot use the MJX collector).
+
+## Robustness
+
+Worst-case retained fraction of each policy's own nominal:
+
+| policy | mass | gravity | friction | geometry | mean | cells ≥3000 |
+|---|---:|---:|---:|---:|---:|---:|
+| SAC-MLP (teacher) | 73.4% | 81.0% | 80.7% | 88.4% | **80.9%** | **18/18** |
+| **LUT ← SAC** | 17.4% | 45.2% | 65.9% | 35.0% | **40.9%** | **13/18** |
+| PPO-MLP (teacher) | 7.3% | 55.4% | 8.3% | 40.8% | 28.0% | 11/18 |
+| LUT ← PPO | 6.5% | 15.7% | 6.3% | 18.2% | 11.7% | 9/18 |
+
+**Yes — the teacher choice buys robustness.** The SAC-taught LUT beats the PPO-taught
+LUT on *every* axis, holds 40.9% of nominal against 11.7% (**3.5×**), and clears the bar
+in 13 of 18 perturbed environments against 9. It even beats the *PPO MLP teacher*
+(28.0%, 11/18) — a 5,378-parameter table is more robust than the 71,948-parameter
+network it is 13× smaller than, because it learned from a better-behaved policy.
+
+![SAC-taught vs PPO-taught LUT](exp_c08_sac_distill/sac_vs_ppo_taught_lut.png)
+
+## But the inheritance is only partial — and the correlations say why
+
+| | SAC-MLP | LUT ← SAC | PPO-MLP | LUT ← PPO |
+|---|---:|---:|---:|---:|
+| SAC-MLP | 1.000 | 0.522 | 0.413 | 0.238 |
+| LUT ← SAC | 0.522 | 1.000 | 0.577 | 0.583 |
+| PPO-MLP | 0.413 | 0.577 | 1.000 | **0.930** |
+| LUT ← PPO | 0.238 | 0.583 | **0.930** | 1.000 |
+
+The PPO-taught LUT tracks its teacher at **r = 0.930**. The SAC-taught LUT tracks its
+teacher at only **r = 0.522** — it inherits SAC's *advantage* (40.9% vs 11.7%) without
+inheriting SAC's *profile*, and it captures only about half the teacher's robustness
+(80.9% → 40.9%, 18/18 → 13/18).
+
+**The likely reason is visible in the datasets.** PPO saturates **63.2%** of its actions
+at ±1; SAC saturates **5.5%**. PPO is close to bang-bang control, and a rank-coded table
+with 16 rows per table reproduces a near-discrete policy almost exactly — hence 99.2%
+retention, σ = 431, and a near-perfect profile match. SAC's policy is smooth and
+continuous, which a coarse table can only *approximate* — hence 85.6% retention, and a
+nominal σ of **1603** versus 431. Once the clone is an approximation rather than a copy,
+its failures are driven by its own approximation error, not by the teacher's failure
+modes, which is exactly what a correlation of 0.52 rather than 0.93 looks like.
+
+## Verdict
+
+* **Choosing the teacher works**: SAC-taught beats PPO-taught 3.5× on mean retained
+  robustness and 13/18 vs 9/18 cells, for the same 5,378 parameters and 8 seconds of
+  training. It is the cheapest robustness lever found so far.
+* **It transfers only partially**: the student captures roughly half of SAC's envelope,
+  not all of it.
+* **The obstacle is representational after all** — but it is about *smoothness*, not
+  robustness. A rank-coded table clones a near-bang-bang policy almost perfectly and a
+  smooth one only approximately. The high variance (σ 1603 vs 431) is the signature.
+* **Actionable next step:** if a SAC-taught LUT is wanted at PPO-taught fidelity, spend
+  capacity on rows — the Phase-1 curve saturates at 31k params, so nap6/tph64 is
+  affordable and should absorb the smoother target far better than 16 rows per table.
+  That is a 40-second experiment.
+
+Caveats: single seed per policy; the geometry axis also shifts the observation
+distribution; friction ×1.5–2.0 collapses most policies, which looks like a task limit.
+Note also that the SAC-taught LUT is the *only* policy whose nominal σ (1603) is large
+enough that its nominal itself is unstable — its curves should be read with that in mind.

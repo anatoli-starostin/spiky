@@ -6,7 +6,7 @@ import progress  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROW = re.compile(r"^\s+(\S+)\s+(\w+)\s+x([\d.]+)\s+->", re.M)
-TOTAL_PER_POLICY = 18          # 5 mass + 3 gravity + 5 friction + 5 geometry
+TOTAL_PER_POLICY = 18
 POLICIES = 4
 
 

@@ -34,15 +34,22 @@ def main():
     ap.add_argument("--episodes", type=int, default=100)
     ap.add_argument("--limit", type=int, default=0, help="use only N pairs (0 = all)")
     ap.add_argument("--tag", default="")
+    # exp_c08 reuses this trainer verbatim against the SAC-teacher dataset;
+    # only the data/output location changes.
+    ap.add_argument("--data-dir", default=HERE)
+    ap.add_argument("--out-dir", default=HERE)
+    # retention is measured against whichever teacher produced the dataset
+    ap.add_argument("--teacher-score", type=float, default=5555.5,
+                    help="PPO teacher 5555.5 (default); SAC teacher 5273.4")
     a = ap.parse_args()
 
     dev = "cuda"
-    obs = np.load(os.path.join(HERE, "obs.npy"), mmap_mode="r")
-    act = np.load(os.path.join(HERE, "act.npy"), mmap_mode="r")
+    obs = np.load(os.path.join(a.data_dir, "obs.npy"), mmap_mode="r")
+    act = np.load(os.path.join(a.data_dir, "act.npy"), mmap_mode="r")
     if a.limit:
         obs, act = obs[:a.limit], act[:a.limit]
     N = len(obs)
-    stats = json.load(open(os.path.join(HERE, "dataset_stats.json")))
+    stats = json.load(open(os.path.join(a.data_dir, "dataset_stats.json")))
 
     X = torch.as_tensor(np.asarray(obs), dtype=torch.float32, device=dev)
     Y = torch.as_tensor(np.asarray(act), dtype=torch.float32, device=dev)
@@ -86,11 +93,11 @@ def main():
         ho = slice(max(N - 200_000, 0), N)
         ho_mse = F.mse_loss(model(X[ho]), Y[ho]).item()
 
-    ckpt = os.path.join(HERE, f"lut_{name}.pt")
+    ckpt = os.path.join(a.out_dir, f"lut_{name}.pt")
     save(model, ckpt)
 
     mean, std, rets, _ = eval_policy(model, episodes=a.episodes)
-    teacher = 5555.5
+    teacher = a.teacher_score
     print(f"[{name}] CPU-reference {a.episodes}-ep eval: {mean:.1f} +/- {std:.1f} "
           f"| retention {100*mean/teacher:.1f}% of teacher | "
           f"{'SOLVED' if mean >= 3000 else 'below 3000'}", flush=True)
@@ -103,7 +110,7 @@ def main():
                eval_mean=mean, eval_std=std, teacher_retention_pct=100 * mean / teacher,
                solved=bool(mean >= 3000), train_s=round(time.time() - t0, 1),
                history=hist, checkpoint=os.path.basename(ckpt))
-    with open(os.path.join(HERE, f"result_{name}.json"), "w") as f:
+    with open(os.path.join(a.out_dir, f"result_{name}.json"), "w") as f:
         json.dump(out, f, indent=1)
     print("wrote", f"result_{name}.json", flush=True)
 
