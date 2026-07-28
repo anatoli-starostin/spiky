@@ -131,3 +131,113 @@ reconstructed from `DEFAULT_CAMERA_CONFIG`. Gymnasium uses the model camera
 (`cam.type == mjCAMERA_FIXED`, `fixedcamid == 0`), which makes those config keys inert;
 using the model camera reproduces gymnasium's frames **pixel-identically** (verified,
 mean |diff| = 0.0), whereas a reconstructed one does not.
+
+---
+
+# Phase 1–2: LUT distillation and the representability curve (exp_c03)
+
+**The keystone result: a LUT policy can represent this controller, and at a fraction of
+the teacher's size.** Every number below is the deterministic 100-episode return in the
+**CPU reference env** — never a training proxy.
+
+Teacher: the 200M-step MJX/PPO policy (**5555.5 ± 34.4**). Dataset: 4,001,792
+(obs → clipped teacher action) pairs, collected in batched MJX at 126k pairs/s (32 s),
+half the envs driven with exploration noise for DAgger-style state coverage.
+
+## The curve
+
+| config | params | rows | held-out action MSE | return (CPU ref, 100 ep) | teacher retention | solved |
+|---|---:|---:|---:|---|---:|:--:|
+| hyperplane nap4 tph8 | 1,346 | 16 | 0.0255 | 441 ± 31 | 7.9% | — |
+| **hyperplane nap4 tph32** | **5,378** | 16 | 0.0086 | **5512 ± 431** | **99.2%** | **✅** |
+| hyperplane nap6 tph16 | 7,874 | 64 | 0.0080 | 4999 ± 1301 | 90.0% | ✅ |
+| hyperplane nap8 tph16 | 26,882 | 256 | 0.0053 | 5484 ± 589 | 98.7% | ✅ |
+| hyperplane nap6 tph64 | 31,490 | 64 | 0.0030 | 5583 ± 29 | 100.5% | ✅ |
+| *fast* nap8 tph64 | 98,306 | 256 | 0.0101 | 4084 ± 1764 | 73.5% | ✅ |
+| hyperplane nap8 tph64 | 107,522 | 256 | 0.0020 | 5584 ± 38 | 100.5% | ✅ |
+| hyperplane nap10 tph64 | 404,738 | 1024 | 0.0015 | 5577 ± 38 | 100.4% | ✅ |
+| hyperplane nap8 tph256 | 430,082 | 256 | 0.0012 | 5579 ± 33 | 100.4% | ✅ |
+| *fast* nap10 tph256 | 1,572,866 | 1024 | 0.0037 | 5359 ± 828 | 96.5% | ✅ |
+| hyperplane nap12 tph64 | 1,586,690 | 4096 | 0.0012 | 5569 ± 39 | 100.2% | ✅ |
+| hyperplane nap10 tph256 | 1,618,946 | 1024 | 0.0013 | 5575 ± 32 | 100.4% | ✅ |
+
+**Smallest LUT clearing 3000: 5,378 parameters → 5512 ± 431 (99.2% of teacher).**
+For scale, the SAC actor is 73,484 parameters — so the smallest solving LUT is **~14×
+smaller than a comparable MLP policy**, and it also beats the SAC baseline (5273.4).
+
+Three things the curve says:
+
+1. **The transition is a cliff, not a slope.** 1,346 params gives 441 (a policy that
+   falls immediately); 5,378 gives 5512. Between those two points the policy goes from
+   useless to essentially teacher-equivalent. Below the cliff the table cannot address
+   finely enough to separate the states that matter.
+2. **It saturates immediately above the cliff**, at ~5580 (100.4–100.5% of teacher)
+   from 31k params onward — 300× more parameters buys nothing. Several configs slightly
+   *exceed* the teacher, plausibly because behaviour cloning smooths the PPO mean.
+3. **Learned addressing matters far more than table size.** At comparable size,
+   FastMHL's fixed anchor pairs give 4084 ± 1764 where HyperplaneMHL gives 5584 ± 38 —
+   and even at 1.57M params FastMHL only reaches 5359 ± 828. Note the *variance*: the
+   fixed-anchor policies are erratic (±1764) where the learned ones are metronomic
+   (±38). Spending parameters on *where to look* beats spending them on *what to store*.
+
+Variance is itself a readout of competence here: every config at ≥100% retention has
+σ ≈ 30–40 (never falls), while marginal ones sit at σ = 400–1800 (falls sometimes).
+
+![representability curve](exp_c03_distillation/representability_curve.png)
+
+## Two bugs that had to be fixed before any of this worked
+
+Both produced a *silently* untrainable setup rather than an error, so they are worth
+recording:
+
+1. **The labels were outside the action space.** The PPO head is an unbounded Gaussian
+   mean, but the environment applies `clip(a, -1, 1)` — so the teacher's *behaviour* is
+   the clipped action. Regressing the raw mean put 63% of targets outside the reachable
+   set (`mean(y²) = 7.53` vs 0.86 clipped) and weighted the loss towards magnitudes the
+   env discards.
+2. **A `tanh` on the student head.** The clipped teacher sits *exactly* at ±1 about 63%
+   of the time; `tanh` reaches ±1 only asymptotically, so MSE demanded ever-growing
+   pre-activations and the gradient died. The LUT stores arbitrary reals — emit raw and
+   let the env clip, exactly as the teacher is clipped.
+
+Before: action MSE 3.23 (*worse than predicting zeros*, whose MSE is 0.86) and a return
+of 405. After: MSE 0.006 and a solved policy.
+
+## Scaling limit found
+
+`hyperplane nap12 tph256` (6.3M params) **OOMs at batch 4096**: the always-soft backward
+materialises a full-K surrogate of shape [batch, n_tables, K] = 4096 × 256 × 4096, which
+is ~17 G elements. This is a property of the soft-backward *training* path, not of the
+LUT itself — the hard forward at that size is cheap. Rerunning at a smaller batch; the
+curve has saturated far below this point regardless.
+
+---
+
+# The JAX LUT port (exp_c04)
+
+The hard forward of `HyperplaneMultiHeadLUT` ported to JAX in ~10 jittable lines, so a
+LUT policy can be evaluated inside the MJX rollout loop (gradient-free search needs only
+the forward).
+
+**Verified bit-for-bit against torch**, fp32, autocast off:
+
+| config | max abs diff (JAX − torch) | verdict |
+|---|---:|---|
+| nap4 tph8 h1 | 0.000e+00 | **exact** |
+| nap6 tph16 h1 | 0.000e+00 | **exact** |
+| nap8 tph64 h1 | 0.000e+00 | **exact** |
+| nap10 tph256 h1 | 1.073e-06 | fp32 sum-order (bound 8.0e-06) |
+| nap12 tph64 h2 | 0.000e+00 | **exact** |
+
+**The first attempt failed at max |Δ| = 1.4e-1** — table-entry-sized, i.e. *wrong rows*,
+not arithmetic drift. Cause: **JAX defaults to TF32 for fp32 matmuls on GPU and torch
+does not.** TF32's ~10-bit mantissa perturbs the pre-activation `aᵢ`, and near a decision
+boundary that flips `1[aᵢ > 0]`, selecting a different row. The fix —
+`precision=jax.lax.Precision.HIGHEST` — is a **correctness requirement for a rank-coded
+primitive, not a performance knob**, and is commented as such in `jax_lut.py`. This is
+the same discrete-flip failure the torch module's own docstring warns about for bf16,
+arriving from the other framework.
+
+The verification harness deliberately distinguishes "wrong row" from "sum-order noise"
+and fails loudly rather than passing on a loose tolerance; the torch↔JAX handoff is an
+.npz because the two frameworks live in separate venvs.
