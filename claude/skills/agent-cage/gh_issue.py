@@ -167,6 +167,18 @@ def cmd_comment(a):
     print(_api("POST", _rp(a.repo, f"/issues/{a.number}/comments"), {"body": body})["html_url"])
 
 
+def cmd_comment_edit(a):
+    """Edit an existing issue/PR comment body via PATCH /issues/comments/{id}.
+
+    Takes the comment id (not the issue number) and replaces its body — the same
+    narrow, bounded capability as the rest of this helper (only the comment body is
+    touched; no api/gist/secret verbs). Body comes via --body-file, so no heredoc
+    rides the command line."""
+    body = _resolve_body(a.body, a.body_file, required=True)
+    c = _api("PATCH", _rp(a.repo, f"/issues/comments/{a.comment_id}"), {"body": body})
+    print(c["html_url"])
+
+
 def cmd_close(a):
     body = _resolve_body(a.comment, a.comment_file, required=False, what="comment")
     if body:
@@ -288,6 +300,9 @@ def main():
 
     s = sub.add_parser("comment"); s.add_argument("number")
     s.add_argument("--body"); s.add_argument("--body-file", dest="body_file"); s.set_defaults(func=cmd_comment)
+
+    s = sub.add_parser("comment-edit"); s.add_argument("comment_id")
+    s.add_argument("--body"); s.add_argument("--body-file", dest="body_file"); s.set_defaults(func=cmd_comment_edit)
 
     s = sub.add_parser("close"); s.add_argument("number")
     s.add_argument("--comment"); s.add_argument("--comment-file", dest="comment_file"); s.set_defaults(func=cmd_close)
