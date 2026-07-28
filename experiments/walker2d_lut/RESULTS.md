@@ -1157,3 +1157,86 @@ Two caveats on this table itself, in the interests of not repeating the mistake:
   3-seed mean measured against a single draw. Reseeding the hyperplane arm is 3 runs.
 * **Three seeds is not many** for a spread this wide. With seed-sd up to 1850, a 3-sample
   std is itself uncertain; these means are honest but not tight.
+
+---
+
+# Reseeding the reference — and discovering the spread is not about seeds (exp_c14)
+
+exp_c13 put the anchors arm on three seeds but measured it against a **single-seed**
+hyperplane number, 5146.9. This reruns `hyperplane × hard nap6/tph32` — exp_c11's config
+verbatim, only `--seed` differing — at seeds 0, 1, 2.
+
+| seed | CPU-ref (100 ep) | ep-sd | coverage |
+|---:|---|---:|---:|
+| 0 | 4195.3 | 66.1 | 100.0% |
+| 1 | 5025.0 | 129.4 | 100.0% |
+| 2 | **2684.6** | 1286.7 | 100.0% |
+
+**3-seed mean 3968.3, seed-sd 1186.6, mean ep-sd 494.1, range 2685–5025.**
+
+The 5146.9 that has anchored every comparison in this experiment was a **lucky draw**. The
+three-seed mean is 1179 points below it — the single-seed reference overstated the
+hyperplane arm by 30%.
+
+## The finding that matters more: the same seed did not reproduce
+
+`exp_c11` ran this exact config with `PRNGKey(0)` (it predates `--seed`) and scored
+**5146.9**. `exp_c14` seed 0 is the same config with the same key and scored **4195.3**.
+
+**A 951-point difference at a fixed seed.** Whatever is generating the spread in these
+experiments, it is not only the seed.
+
+The leading suspect is GPU nondeterminism in the backward: the table-weight gradient is a
+scatter-add (`gw.at[...].add(...)`), and scatter-add on GPU accumulates through atomics in
+nondeterministic order. Compounding it, exp_c11 ran its cells **sequentially** with the GPU
+to itself (26.7 min/cell) while exp_c14 ran three **concurrently** (34.1 min/cell), and XLA
+autotuning can select different kernels under contention. I have **not** isolated which —
+that needs the replicate test below, and until it is run this is a hypothesis, not a result.
+
+## What this does to the seed-sensitivity thesis
+
+The thesis was: learned hyperplanes should be *less* seed-sensitive than frozen anchors,
+because they move their boundaries during training rather than being stuck with the draw.
+
+**It does not hold.**
+
+| | seed-sd |
+|---|---:|
+| hyperplane × hard | **1186.6** |
+| anchors, 9 configs (min / median / max) | 131.1 / 473.7 / 1850.0 |
+
+Only **2 of 9** anchors configs are more seed-sensitive than the hyperplane cell; the median
+anchors config is **0.4×** as sensitive. Learned addressing is, if anything, *more* variable
+run to run.
+
+That kills the mechanism I gave in exp_c13 for the anchors spread — "reseeding an anchors
+model redraws the connectivity, so a seed is a different model." It sounded right and it
+predicted the wrong thing. If redrawing frozen comparators were the dominant source of
+variance, the arm that does *not* redraw anything would be stable. It is not. The variance
+is coming from LUT-SAC training itself, in both arms.
+
+## The headline, with both sides finally on the same footing
+
+| | CPU-ref (3 seeds) | total params | active/step |
+|---|---|---:|---:|
+| hyperplane × hard nap6/tph32 | 3968.3 ± 1186.6 | 28,034 | 3,648 |
+| best anchors nap7/tph64 | **4678.3 ± 473.7** | 106,370 | **1,664** |
+
+**The anchors cell is now the higher scorer** — 118% of the hyperplane mean — at 0.46× the
+active work per step. The gap is +710 in the anchors' favour, which is **0.56 combined sd**
+(combined sd 1277.6): comfortably inside the noise, so the honest reading is *statistically
+indistinguishable*, not "anchors win".
+
+But the direction has reversed. Every previous statement in this document of the form
+"no anchors config reaches the hyperplane target" was measured against a lucky single run.
+Against a three-seed hyperplane mean, the best anchors config is not behind at all.
+
+## What I would run next, in order
+
+1. **The replicate test** — the same config, same seed, twice, sequentially with the GPU to
+   itself. That separates seed variance from run-to-run nondeterminism, and every number in
+   exp_c12–exp_c14 depends on which it is. ~70 min.
+2. **More seeds on both arms.** With sd ≈ 1200, three samples give a mean with a standard
+   error near 700. Nothing here is tight.
+3. **Determinism check** on the scatter-add backward — if that is the source, it may be
+   fixable, and a deterministic training path would make every future comparison cheaper.
