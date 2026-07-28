@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hyperplane LUT ⇄ Spiking network — full pipeline</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>Hyperplane&nbsp;LUT&nbsp;⇄&nbsp;Spiking&nbsp;network — the full 4-layer pipeline</h1>
+    <p class="nav"><b>Full explainer</b> · <a href="circuit.html">Circuit only</a> · <a href="animate.html">Animation</a></p>
+    <p>
+      One input <b>x</b>, two worlds. World A is the exact lookup table. World B is a real spiking
+      network with <b>four layers</b>: input spikes → <b>detector</b> spikes (the 3 address bits) →
+      <b>one row neuron</b> fires (a spiking 1-hot address decoder) → <b>4 output neurons</b> whose
+      spike latencies encode the stored row vector. The decoded 4-vector equals the LUT output
+      <code>O[r]</code> exactly.
+    </p>
+  </header>
+
+  <div class="stack">
+    <!-- INPUT -->
+    <div class="panel">
+      <h2>Input x — shared by both worlds</h2>
+      <p class="hint">Drag any x<sub>i</sub> ∈ [−1, 1]; the whole pipeline recomputes live.</p>
+      <div id="sliders"></div>
+      <div class="btns">
+        <button id="rand">🎲 Randomize x</button>
+        <button id="reset" class="ghost">Reset to 0</button>
+      </div>
+    </div>
+
+    <!-- CENTERPIECE: output vectors -->
+    <div class="panel">
+      <h2>Do the OUTPUTS agree?</h2>
+      <p class="hint">The real comparison is the <b>Dout=4 output vector</b> — not the 3 address bits. World A reads O[r] from the table; World B decodes it from 4 output-spike latencies.</p>
+      <div class="compare">
+        <div class="cmp lut">
+          <h3>World A · LUT output O[r]</h3>
+          <div class="small">bits <span id="lutbits"></span> → row <b id="lutrow" class="mono"></b></div>
+          <div id="lutvec"></div>
+        </div>
+        <div class="cmp spk">
+          <h3>World B · decoded output ô</h3>
+          <div class="small">bits <span id="spkbits"></span> → row <b id="spkrow" class="mono"></b></div>
+          <div id="spkvec"></div>
+        </div>
+      </div>
+      <div id="banner" class="banner ok">MATCH ✓</div>
+      <p class="legend" id="matchnote"></p>
+    </div>
+
+    <!-- TIMELINE: 4 layers -->
+    <div class="panel">
+      <h2>World B · the spiking network — 4 layers on one time axis</h2>
+      <p class="hint">
+        Watch it flow top→bottom, left→right: <b>input</b> spikes (t≈2–4) →
+        <b>detector/address</b> spikes (t≈5–7) → the <b>one</b> row neuron that reaches 3-way
+        coincidence fires → <b>4 output</b> spikes (later window) whose times decode to O[r].
+      </p>
+      <canvas id="timeline" height="560"></canvas>
+      <p class="legend">
+        <span class="key in"></span> input &nbsp; <span class="key addr"></span> address bit &nbsp;
+        <span class="key row"></span> row winner &nbsp; <span class="key out"></span> output &nbsp;
+        <span class="key ref"></span> α &nbsp; <span class="key tr"></span> T_read
+      </p>
+    </div>
+
+    <!-- NETWORK TOPOLOGY GRAPH -->
+    <div class="panel">
+      <h2>Network topology — the whole spiking graph, live</h2>
+      <p class="hint">The same 4 layers as a node–edge graph, highlighted for the current x. The causal path (fired detectors → the one winning row → its 4 output delays) is emphasized; inactive wiring fades.</p>
+      <canvas id="topology" height="540"></canvas>
+      <p class="legend">
+        Input→Detector edges: <span style="color:var(--ok)">green = +weight</span>, <span style="color:var(--bad)">red = −weight</span>, thickness = |W|. &nbsp;
+        Detector→Row: <b>solid</b> = expects bit 1, <b>dashed</b> = expects bit 0. &nbsp;
+        Row→Output: Δ = stored delay. &nbsp; Faded = inactive for this input.
+      </p>
+    </div>
+
+    <!-- PURE SPIKING CIRCUIT (event-driven simulation) -->
+    <div class="panel">
+      <h2>Pure spiking circuit — event-driven simulation (nothing computed as logic)</h2>
+      <p class="hint">
+        A genuine network of leak-free integrate-and-fire neurons wired by synapses (weight <b>and</b> conduction delay).
+        Every spike below is <b>emitted by the simulator</b>; the bits, the winning row and the output vector are read back
+        from the emergent spikes — no analytic margin anywhere. START → inputs → CLOCK gates the detectors → complements
+        (feedforward inhibition) → one row wins by 3-way coincidence → outputs fire with the stored value carried in the delay.
+      </p>
+      <canvas id="circuit" height="600"></canvas>
+      <div class="compare" style="margin-top:10px">
+        <div class="cmp lut">
+          <h3>LUT ground truth</h3>
+          <div class="small">bits <span id="clut_bits"></span> → row <b id="clut_row" class="mono"></b></div>
+          <div id="clut_vec"></div>
+        </div>
+        <div class="cmp spk">
+          <h3>Read back from spikes</h3>
+          <div class="small">bits <span id="csim_bits"></span> → row <b id="csim_row" class="mono"></b></div>
+          <div id="csim_vec"></div>
+        </div>
+      </div>
+      <div id="cbanner" class="banner ok">MATCH ✓</div>
+      <p class="legend" id="cnote"></p>
+    </div>
+
+    <!-- PIPELINE DECODE -->
+    <div class="panel">
+      <h2>The pipeline, decoded stage by stage</h2>
+      <div class="three">
+        <div>
+          <h3 class="sub">① Detectors → address bits</h3>
+          <table id="addr"><thead><tr><th>k</th><th>margin</th><th>fired?</th><th>bit</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3 class="sub">② Row-select (1-hot)</h3>
+          <table id="rowsel"><thead><tr><th>row</th><th>coincidence</th><th>fires?</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3 class="sub">③ Output latencies → ô</h3>
+          <table id="outtab"><thead><tr><th>j</th><th>O[r][j]</th><th>t_out−t_row</th><th>ô_j</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- WORLD A -->
+    <div class="panel">
+      <h2>World A · LUT (ground truth)</h2>
+      <p class="hint">Per hyperplane k: margin <code>m_k = ⟨W_k,x⟩ + b_k</code>, bit = [m_k &gt; 0]. K bits (MSB-first) → row index → stored output vector V[row].</p>
+      <table id="lutmath"><thead><tr><th>k</th><th>m_k = ⟨W_k,x⟩+b_k</th><th>bit</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <!-- SECONDARY -->
+    <details class="panel">
+      <summary><b>Where the address-spike times come from — detector membranes (secondary)</b></summary>
+      <p class="hint">Each detector's leak-free membrane <code>V_k(t)=Σ_i (−W[k,i])·(t−t_i)·[t≥t_i]</code> (detector weights Wd=−W, so the t_i=α+β·x encoding still gives bit=sign(⟨W_k,x⟩+b_k)). Dashed orange = θ_k; green = T_read; the dot is <code>V_k(T_read)</code>, whose height above θ_k sets the address-spike time.</p>
+      <canvas id="membranes" height="330"></canvas>
+    </details>
+
+    <details class="panel">
+      <summary><b>Weight precision floor (secondary)</b></summary>
+      <div class="ctl">
+        <input type="range" id="qbits" min="2" max="17" step="1" value="17" style="flex:1" />
+        <span class="mono" id="qbitsLabel" style="width:74px;text-align:right"></span>
+      </div>
+      <p class="legend" id="qfid"></p>
+    </details>
+  </div>
+
+  <script src="lut_spiking.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
