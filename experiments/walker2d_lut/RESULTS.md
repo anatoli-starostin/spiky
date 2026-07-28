@@ -1057,3 +1057,103 @@ only the addressing term ticks up):
   active12. Nearly free, and nearly useless.
 * tph at fixed nap=6 — 4302.4 → 4879.9 → 4662.5 for tph 32/64/128, against 768 → 1,536 →
   3,072 active12. This is the axis you pay for, and it knees at 64.
+
+---
+
+# The capacity sweep at three seeds, under lutorch's real sampler (exp_c13)
+
+exp_c12 ran this grid once per cell with a home-grown anchor draw. This reruns all nine
+configs at three seeds each — 27 runs — under lutorch's `balanced` policy, with `--seed`
+threaded into both the JAX PRNGKey and the anchor draw. Everything else is identical:
+anchors frozen, hard forward, ratio 0.5, 10,000 iterations, same env and optimizer.
+
+`seed-sd` is the std of the three seeds' means — **training reproducibility**. `ep-sd` is
+the mean within-run 100-episode std — **single-policy consistency**. exp_c12 only ever
+quoted the second. They are different quantities, and here the first is 3–4× larger.
+
+| nap | tph | rows | total par | rd12 | rd6 | addr | act12 | act6 | spars | CPU-ref (3 seeds) | ep-sd | per-seed | cov | vs tgt |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|---:|---:|
+| 7 | 64 | 128 | 106,370 | 768 | 384 | 896 | **1,664** | 1,280 | 1.56% | **4678.3 ± 473.7** | 339.6 | 4139 / 4871 / **5026** | 93.6% | 91% |
+| 7 | 32 | 128 | 53,186 | 384 | 192 | 448 | 832 | 640 | 1.56% | 4382.5 ± 131.1 | 276.2 | 4302 / 4534 / 4311 | 93.8% | 85% |
+| 6 | 64 | 64 | 56,066 | 768 | 384 | 768 | 1,536 | 1,152 | 2.74% | 4346.1 ± 546.0 | 544.7 | 3951 / 4118 / 4969 | 96.1% | 84% |
+| 7 | 128 | 128 | 212,738 | 1,536 | 768 | 1,792 | 3,328 | 2,560 | 1.56% | 4170.7 ± 404.9 | 685.3 | 4477 / 4324 / 3712 | 94.8% | 81% |
+| 8 | 64 | 256 | 205,826 | 768 | 384 | 1,024 | 1,792 | 1,408 | 0.87% | 4152.9 ± 150.4 | 619.0 | 4200 / 4274 / 3985 | 90.6% | 81% |
+| 6 | 128 | 64 | 112,130 | 1,536 | 768 | 1,536 | 3,072 | 2,304 | 2.74% | 3952.3 ± 707.9 | 500.6 | 3945 / 3248 / 4664 | 96.5% | 77% |
+| 8 | 128 | 256 | 411,650 | 1,536 | 768 | 2,048 | 3,584 | 2,816 | 0.87% | 3353.4 ± 398.5 | 1996.0 | 3125 / 3122 / 3814 | 90.6% | 65% |
+| 6 | 32 | 64 | 28,034 | 384 | 192 | 384 | 768 | 576 | 2.74% | 3024.7 ± 1850.0 | 511.6 | 3774 / **918** / 4383 | 91.9% | 59% |
+| 8 | 32 | 256 | 102,914 | 384 | 192 | 512 | 896 | 704 | 0.87% | 2316.6 ± 1705.6 | 532.4 | **1063** / 4259 / 1628 | 92.3% | 45% |
+
+Reference — **hyperplane × hard nap6/tph32**, still ONE seed under the OLD sampler:
+28,034 total, active12 = 384 reads + 3,264 MAC = 3,648, CPU-ref **5146.9 ± 28.2**.
+
+## 1. Does any config reach 5146.9?
+
+**No.** Best 3-seed mean is `nap7/tph64` at **4678.3 ± 473.7** — 91% of target, at 1,664
+active values per step (0.46× the hyperplane's 3,648) or 1,280 deployed at 6/cell. The
+best *individual run* of all 27 is `nap7/tph64` seed 2 at **5025.6**, still short.
+
+## 2. Does the nap-flat / tph-knee-at-64 shape survive?
+
+**Partly, and not in the form exp_c12 reported it.**
+
+The tph knee survives as a tendency: at nap6, tph 32 → 64 → 128 gives 3025 → 4346 → 3952,
+still rising then falling. But the seed-sds on those points are 1850, 546 and 708, so the
+"knee" is a claim about points that overlap heavily.
+
+The nap axis no longer looks flat — it looks *violent*. At fixed tph=32: nap6 3024.7,
+nap7 4382.5, nap8 2316.6, with sds of 1850, 131 and 1706. exp_c12's "nap does essentially
+nothing (+208 over 3.7× the memory)" described a single draw. What is actually there is a
+much wider distribution whose mean happens not to move much.
+
+## 3. How much of exp_c12's ordering was noise?
+
+**Most of it.** Median adjacent gap in the ranking is **248**; median seed-sd is **474**.
+The gaps are *inside* the noise — the middle of this table is not ordered in any
+defensible sense.
+
+The sharpest demonstration: had we run only one seed, the winner would have been
+- seed 0 → `nap7/tph128`
+- seed 1 → `nap7/tph64`
+- seed 2 → `nap7/tph64`
+- and exp_c12 (one seed, old sampler) → `nap6/tph64`
+
+Three different answers from four single-seed experiments. My exp_c12 caveat said "I would
+not defend the ordering of the middle six." That was right, and too weak: the *winner*
+was not defensible either.
+
+## 4. How large is the anchors seed spread?
+
+**Large, and it is a result rather than a nuisance.** Across the nine configs, seed-sd runs
+131 → 474 (median) → **1850**. Across all 27 runs the spread is 918 → 5026, mean 3820,
+sd 1065.
+
+This is expected once stated properly: reseeding an anchors model **redraws the
+connectivity**. The comparators *are* the architecture, and they are frozen, so a seed is
+not a different initialisation of the same model — it is a different model. `nap6/tph32`
+returning 918 on one seed and 4383 on another is the same architecture family drawing a
+partition that works and one that does not.
+
+Two config-level observations that follow:
+* The **most reproducible** configs are `nap7/tph32` (±131) and `nap8/tph64` (±150) — both
+  mid-capacity. The catastrophes are at the extremes.
+* `nap8/tph128` has the largest **ep-sd** (1996) despite a modest seed-sd: that policy is
+  unreliable *within* a run, falling on some episodes and not others. That is a different
+  failure from a bad draw, and only reporting both spreads separates them.
+
+## What this does to exp_c12's conclusions
+
+exp_c12's qualitative headline — *no anchors config reaches the hyperplane target, and the
+gap is an addressing-quality gap that capacity does not close* — **survives**, and is if
+anything stronger: nine configs × three seeds, best 91%.
+
+Its quantitative claims do not. The specific winner (`nap6/tph64`, 4879.9 ± 41.0), the
+"+578 for the first tph doubling, −217 for the second" arithmetic, and "nap is nearly free
+and nearly useless" were all read off single draws whose seed-sd we now know reaches 1850.
+The efficiency framing ("95% of the target at 42% of the active work") also weakens: the
+best 3-seed mean is 91% at 46%.
+
+Two caveats on this table itself, in the interests of not repeating the mistake:
+* **The reference is still one seed under the old sampler.** Every anchors number here is a
+  3-seed mean measured against a single draw. Reseeding the hyperplane arm is 3 runs.
+* **Three seeds is not many** for a spread this wide. With seed-sd up to 1850, a 3-sample
+  std is itself uncertain; these means are honest but not tight.
