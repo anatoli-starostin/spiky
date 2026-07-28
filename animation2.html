@@ -58,10 +58,12 @@
 
     <!-- SHARED OUTPUT -->
     <div class="panel">
-      <h2>Shared output neurons — charge accumulates the SUM from BOTH tables</h2>
-      <p class="hint">Each shared output membrane gets charge from BOTH winning rows: <span style="color:var(--spike)">■ Table 1's O₁[r₁][j]</span> then <span style="color:var(--out)">■ Table 2's O₂[r₂][j]</span>, accumulating to <code>S[j]=O₁[r₁][j]+O₂[r₂][j]</code>. The white marker (▮) is the summed membrane; a fixed-window readout converts it to an output latency.</p>
+      <h2>Shared output neurons — accumulate the SUM, then FIRE</h2>
+      <p class="hint">Each shared output membrane gets charge from BOTH winning rows: <span style="color:var(--spike)">■ Table 1's O₁[r₁][j]</span> then <span style="color:var(--out)">■ Table 2's O₂[r₂][j]</span>, accumulating to <code>S[j]=O₁[r₁][j]+O₂[r₂][j]</code>. Then a fixed-window readout makes each neuron <b>EMIT A SPIKE</b> at <code>t_out = GZ + α + β·S</code> (α=5, β=1, bigger value = LATER — the same latency code as the inputs, so outputs are composable).</p>
       <canvas id="gout" height="150"></canvas>
-      <div id="sumrows"></div>
+      <h3 class="sub" style="margin-top:12px">Output spikes — the 4 output neurons actually firing (spikes in → spikes out)</h3>
+      <canvas id="oraster" height="150"></canvas>
+      <div id="sumrows" style="margin-top:8px"></div>
       <div id="cbanner" class="banner ok">charge = LUT₁(x) + LUT₂(x)</div>
       <p class="legend" id="cnote"></p>
     </div>

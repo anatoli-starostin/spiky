@@ -24,6 +24,11 @@
   const m2 = LS.buildModel({ SEED: 1 });
   const { D, K, Dout } = m1.cfg;
   const BASE = 4.0, KAPPA = 0.35;
+  // OUTPUT spike readout: after the summed charge settles, each shared output neuron
+  // FIRES ONCE at t_out = GZ_out + ALPHA_O + BETA_O*S (same form as the input encoding
+  // t_i = alpha + beta*x, bigger value = LATER). ALPHA_O(=5) > max|S|(~4.5) so every
+  // output spike lands after the readout ground-zero GZ_out. Decode: S = (ℓ - ALPHA_O)/BETA_O.
+  const ALPHA_O = 5.0, BETA_O = 1.0, SETTLE = 0.6;
   let x = new Array(D).fill(0);
 
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -64,7 +69,7 @@
 
   // ---- canvases sized ONCE --------------------------------------------------
   const canv = {};
-  ['g1', 'g2', 'gout'].forEach((id) => { const cv = document.getElementById(id); if (cv) canv[id] = { cv, ctx: cv.getContext('2d'), w: 0, h: 0 }; });
+  ['g1', 'g2', 'gout', 'oraster'].forEach((id) => { const cv = document.getElementById(id); if (cv) canv[id] = { cv, ctx: cv.getContext('2d'), w: 0, h: 0 }; });
   let needResize = true;
   function resizeAll() {
     const dpr = window.devicePixelRatio || 1;
@@ -108,9 +113,14 @@
   function recompute() {
     T1 = tableState(m1); T2 = tableState(m2);
     shared = { o1: T1.out, o2: T2.out, fv1: T1.FIREVISUAL['r' + T1.r], fv2: T2.FIREVISUAL['r' + T2.r] };
+    // output ground-zero = after both tables' rows have deposited their charge, then each
+    // shared output neuron fires once at GZ + ALPHA_O + BETA_O*S.
+    shared.GZ = Math.max(shared.fv1 || 0, shared.fv2 || 0) + SETTLE;
+    shared.S = shared.o1.map((v, j) => v + shared.o2[j]);
+    shared.outT = shared.S.map((s) => shared.GZ + ALPHA_O + BETA_O * s);
     Tmax = 0;
     for (const T of [T1, T2]) for (const n in T.S.st) if (T.S.st[n].fired) Tmax = Math.max(Tmax, T.S.st[n].tf);
-    Tmax = Math.max(Tmax, shared.fv1 || 0, shared.fv2 || 0) + 0.8;
+    Tmax = Math.max(Tmax, ...shared.outT) + 0.6;
     const sc = document.getElementById('scrub'); sc.max = Tmax.toFixed(2); sc.step = (Tmax / 600).toFixed(4);
     fillLUT('1', m1); fillLUT('2', m2); fillSumRows();
     dirty = true;
@@ -184,29 +194,57 @@
 
   // ---- shared output neurons: charge from BOTH tables ------------------------
   function drawSharedOutput() {
-    const c = canv.gout; if (!c) return;
+    const c = canv.gout; if (!c || !shared) return;
     const { ctx, w, h } = c; ctx.clearRect(0, 0, w, h);
-    const R = 20, padT = 34;
-    const cy = padT + (h - padT) / 2 - 6;
+    const R = 20, padT = 28, cy = padT + (h - padT) / 2 - 2;
     ctx.fillStyle = css('--muted'); ctx.font = '11px ui-monospace';
-    ctx.fillText('shared output membranes  (' + css('--spike').trim() + ' cyan = Table 1 charge, amber = Table 2 charge; fill = |S|/scale)', 6, 14);
+    ctx.fillText('shared output neurons — charge accumulates the sum, then each FIRES at t = GZ + α + β·S', 6, 13);
     const scale = 2 * maxv;
     for (let j = 0; j < Dout; j++) {
-      const cx = 60 + j * ((w - 90) / Dout);
-      const c1 = (shared && simT >= (shared.fv1 || Infinity)) ? shared.o1[j] : 0;
-      const c2 = (shared && simT >= (shared.fv2 || Infinity)) ? shared.o2[j] : 0;
+      const cx = 62 + j * ((w - 100) / Dout);
+      const c1 = simT >= (shared.fv1 || Infinity) ? shared.o1[j] : 0;
+      const c2 = simT >= (shared.fv2 || Infinity) ? shared.o2[j] : 0;
       const mem = c1 + c2;
+      const fired = simT >= shared.outT[j];
+      const flashing = Math.abs(simT - shared.outT[j]) < FLASH;
       const frac = Math.max(0, Math.min(1, Math.abs(mem) / scale));
       const col = mem >= 0 ? '#ff6b6b' : '#5b9dff';
+      if (flashing) { const a = 1 - Math.abs(simT - shared.outT[j]) / FLASH; ctx.globalAlpha = 0.6 * a; ctx.fillStyle = css('--out'); ctx.beginPath(); ctx.arc(cx, cy, R + 11 * a, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
       ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.fillStyle = '#20262f'; ctx.fill();
       if (frac > 0.002) { ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.clip(); ctx.globalAlpha = 0.85; ctx.fillStyle = col; const fh = 2 * R * frac; ctx.fillRect(cx - R, cy + R - fh, 2 * R, fh); ctx.globalAlpha = 1; ctx.restore(); }
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.strokeStyle = css('--edge'); ctx.stroke();
-      ctx.fillStyle = css('--out'); ctx.font = 'bold 10px ui-monospace'; ctx.textAlign = 'center';
-      ctx.fillText('o' + j, cx, cy - R - 4);
-      ctx.fillStyle = css('--muted'); ctx.font = '10px ui-monospace';
-      ctx.fillText('S=' + mem.toFixed(2), cx, cy + R + 14);
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.strokeStyle = fired ? css('--out') : css('--edge'); ctx.lineWidth = fired ? 2.5 : 1; ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = css('--out'); ctx.font = 'bold 11px ui-monospace'; ctx.textAlign = 'center'; ctx.fillText('o' + j, cx, cy + 4);
+      ctx.fillStyle = css('--muted'); ctx.font = '9px ui-monospace';
+      ctx.fillText('S=' + shared.S[j].toFixed(2), cx, cy + R + 12);
+      ctx.fillStyle = fired ? css('--out') : css('--muted');
+      ctx.fillText(fired ? ('⚡ spike @' + shared.outT[j].toFixed(2)) : 'charging…', cx, cy + R + 24);
+      if (fired) { ctx.fillStyle = css('--out'); ctx.beginPath(); ctx.arc(cx + R + 9, cy, 4, 0, 7); ctx.fill(); }   // emitted spike
       ctx.textAlign = 'left';
     }
+  }
+
+  // ---- OUTPUT RASTER: the 4 emitted output spikes on a time axis --------------
+  function drawOutputRaster() {
+    const c = canv.oraster; if (!c || !shared) return;
+    const { ctx, w, h } = c; ctx.clearRect(0, 0, w, h);
+    const t0 = Math.max(0, shared.GZ - 1.0), t1 = Tmax;
+    const padL = 62, padR = 18, padT = 14, padB = 20;
+    const X = (t) => padL + ((t - t0) / (t1 - t0)) * (w - padL - padR);
+    const top = padT, rowH = (h - padT - padB) / Dout;
+    ctx.font = '11px ui-monospace';
+    for (let t = Math.ceil(t0); t <= t1; t++) { ctx.strokeStyle = css('--edge'); ctx.globalAlpha = .3; ctx.beginPath(); ctx.moveTo(X(t), top); ctx.lineTo(X(t), h - padB); ctx.stroke(); ctx.globalAlpha = 1; ctx.fillStyle = css('--muted'); ctx.fillText('t=' + t, X(t) - 8, h - padB + 14); }
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = css('--ok'); ctx.beginPath(); ctx.moveTo(X(shared.GZ), top); ctx.lineTo(X(shared.GZ), h - padB); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = css('--ok'); ctx.fillText('GZ (readout clock)', X(shared.GZ) - 4, top - 1);
+    for (let j = 0; j < Dout; j++) {
+      const y = top + rowH * (j + 0.5);
+      ctx.fillStyle = css('--muted'); ctx.fillText('out o' + j, 6, y + 4);
+      ctx.strokeStyle = css('--edge'); ctx.globalAlpha = .3; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.globalAlpha = 1;
+      if (simT >= shared.outT[j]) {
+        ctx.strokeStyle = css('--out'); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(X(shared.outT[j]), y - rowH * .34); ctx.lineTo(X(shared.outT[j]), y + rowH * .34); ctx.stroke(); ctx.lineWidth = 1;
+        ctx.fillStyle = css('--out'); ctx.fillText(shared.outT[j].toFixed(2), X(shared.outT[j]) + 5, y - 3);
+      }
+    }
+    if (simT >= t0) { ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(Math.min(simT, t1)), top); ctx.lineTo(X(Math.min(simT, t1)), h - padB); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; }
   }
 
   // ---- LUT panel + sum rows (DOM) -------------------------------------------
@@ -240,7 +278,7 @@
       SEG1[j].style.left = Math.min(50, p1) + '%'; SEG1[j].style.width = Math.abs(p1 - 50) + '%';
       SEG2[j].style.left = Math.min(p1, p2) + '%'; SEG2[j].style.width = Math.abs(p2 - p1) + '%';
       ENDP[j].style.left = p2 + '%';
-      TXT[j].innerHTML = `<span style="color:${css('--spike')}">${fmt(v1)}</span> + <span style="color:${css('--out')}">${fmt(v2)}</span> = <b>${fmt(S)}</b> → lat ${(BASE - KAPPA * S).toFixed(3)}`;
+      TXT[j].innerHTML = `<span style="color:${css('--spike')}">${fmt(v1)}</span> + <span style="color:${css('--out')}">${fmt(v2)}</span> = <b>${fmt(S)}</b> → spike @ ${shared.outT[j].toFixed(2)}`;
     }
     document.getElementById('cnote').textContent = 'Summed membrane S = [' + o1.map((v, j) => fmt(v + o2[j])).join(', ') + '] = O₁[r₁] + O₂[r₂] (charge adds; latencies do not).';
   }
@@ -248,7 +286,7 @@
   // ---- clock + controls -----------------------------------------------------
   function draw() {
     if (needResize) resizeAll();
-    drawTableGraph('g1', T1); drawTableGraph('g2', T2); drawSharedOutput();
+    drawTableGraph('g1', T1); drawTableGraph('g2', T2); drawSharedOutput(); drawOutputRaster();
     document.getElementById('simtime').textContent = 't = ' + simT.toFixed(2) + ' / ' + Tmax.toFixed(2);
   }
   function loop(ts) {
