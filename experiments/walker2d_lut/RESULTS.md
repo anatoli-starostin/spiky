@@ -777,6 +777,14 @@ training beats cloning, and does so in the deployable single-read mode.
 
 ---
 
+# ~~The real-training 2×2~~ — SUPERSEDED, see the corrected section below
+
+> **This section is WRONG and is kept only for the record.** Its two smooth cells were
+> evaluated with the HARD forward because  called 
+> unconditionally, so both smooth-trained tables were measured cross-mode. Its headline
+> claim — "the training proxy mis-ranked the cells" — was an artifact of that bug, not a
+> property of the proxy. The corrected table follows.
+
 # The real-training 2×2: addressing × forward mode, trained from scratch (exp_c11)
 
 Four LUT-SAC cells, all identical except the two axes: nap6/tph32, 28,032 params,
@@ -849,3 +857,77 @@ plateau lower.
 evidence for the *qualitative* claim. The magnitudes are not: anchors×hard's last five
 evals swing between 3749 and 4291 (±13%) on noise alone. Three seeds per cell would cost
 about 40 minutes and would be needed before quoting "+20%" as a measured effect size.
+
+---
+
+# The real-training 2×2 — CORRECTED (exp_c11)
+
+The previous version of this section was wrong because of a bug in my own evaluation
+harness, found when the counterintuitive result was challenged rather than accepted.
+`eval_cpu.py` called `L.lut_apply` — the **hard** forward — unconditionally, and the
+saved actor does not record its training mode. So both smooth-trained cells were
+evaluated **cross-mode**, which the distillation 2×2 had already measured as
+catastrophic (5520 → 462). Fixed: `eval_cpu.py` now takes `--forward-mode`, defaulting
+to the mode inferred from the run tag.
+
+## Corrected table
+
+All four cells: nap6/tph32, 28,032 params, LUT-SAC from scratch at ratio 0.5, 10,000
+iterations (640k env-steps), each **trained and evaluated in the same forward mode**.
+
+| cell | MJX proxy | **CPU-reference, 100-ep deterministic** | proxy error |
+|---|---:|---|---:|
+| **anchors × hybrid_smooth** | 5569.9 | **5564.6 ± 37.6** | −0.1% |
+| hyperplane × hard | 5149.4 | 5146.9 ± 28.2 | −0.05% |
+| hyperplane × hybrid_smooth | 4333.0 | 4321.6 ± 36.0 | −0.3% |
+| anchors × hard | 4290.8 | 4302.4 ± 49.9 | +0.3% |
+
+Before the fix, the two smooth cells read 4253.9 ± 393.4 and 3792.1 ± 1485.7. Evaluating
+them in their own mode moves them to 4321.6 ± 36.0 and **5564.6 ± 37.6** — the second by
+**+47%** — and collapses their standard deviations by an order of magnitude (1486 → 38).
+A huge σ was the tell: a policy being run in the wrong mode fails erratically rather
+than uniformly.
+
+## What actually happened to the "measurement lesson"
+
+It was retracted. The previous section claimed the MJX proxy badly mis-ranked the cells.
+It does not: across all four cells the proxy is accurate to **within 0.3%**, and it
+preserves the ordering exactly. The apparent mis-ranking was entirely my evaluation bug.
+
+The genuine lesson is a different one, and it is about this project's own tooling: an
+evaluation path that silently accepts a mode-less checkpoint will happily measure the
+wrong thing, and the failure looks like a *scientific* result rather than a bug. The
+checkpoint should record its forward mode; until it does, the filename tag is load-bearing.
+
+## The real finding: an interaction, not two main effects
+
+| | hard | hybrid_smooth |
+|---|---:|---:|
+| **hyperplane** (learned addressing) | **5146.9** | 4321.6 |
+| **anchors** (fixed anchor pairs) | 4302.4 | **5564.6** |
+
+There is no clean winner on either axis — the axes *interact*:
+
+* With **learned addressing**, hard beats smooth (+19%).
+* With **fixed anchors**, smooth beats hard (+29%).
+* In **hard** mode, learned addressing beats anchors (+20%).
+* In **smooth** mode, anchors beat learned addressing (+29%).
+
+The reading that fits the diagnostics: a policy needs *some* mechanism for placing
+decision boundaries where the task needs them. Learned hyperplanes provide it by moving
+the boundaries (measured: ~60° of rotation, cosine 0.48 to init). Fixed anchors cannot,
+so they instead exploit the smooth blend — that cell drove `u` to ≈0.476 with 51% of
+samples above 0.49, i.e. near-uniform averaging of two rows, which softens a partition it
+cannot move. Give a cell *both* mechanisms (hyperplane × smooth) and it does worse than
+either alone, which is consistent with the two fighting: the blend keeps smearing the
+boundaries the hyperplanes are trying to sharpen.
+
+**For the #74 spiking track the relevant cell is unchanged: `hyperplane × hard` at
+5146.9 ± 28.2** — the single magnitude-blind row read, zero multiplies, learned
+addressing. The best overall cell (anchors × smooth) is *not* compilable to the spiking
+construction, since it depends on blending two rows per table.
+
+**Caveat, unchanged:** one seed per cell. The interaction is a large effect (+29% both
+ways) but a single-seed 2×2 cannot separate an interaction from seed noise. Three seeds
+per cell (~40 minutes) would settle it, and I would want that before treating the
+interaction as established.

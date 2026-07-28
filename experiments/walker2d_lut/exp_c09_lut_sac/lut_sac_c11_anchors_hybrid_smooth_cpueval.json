@@ -2,6 +2,7 @@
  "actor": "lut_sac_c11_anchors_hybrid_smooth_actor.npz",
  "params": 28032,
  "episodes": 100,
- "cpu_reference_mean": 3792.1199498838228,
- "cpu_reference_std": 1485.7138726417636
+ "forward_mode": "hybrid_smooth",
+ "cpu_reference_mean": 5564.6224609401015,
+ "cpu_reference_std": 37.61529195314768
 }

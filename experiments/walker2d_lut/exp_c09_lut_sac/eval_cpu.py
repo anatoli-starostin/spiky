@@ -18,12 +18,24 @@ sys.path.insert(0, os.path.join(HERE, "..", "exp_c07_robustness"))
 
 import mjx_walker2d as W          # noqa: E402
 import jax_lut_grad as L         # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "exp_c11_lut_sac_2x2"))
+import jax_lut_ext as X          # noqa: E402
 import perturb                   # noqa: E402
 
 ACT = 6
 
 
-def load_actor(path):
+def mode_from_name(name):
+    """Infer the training forward mode from the run tag in the filename."""
+    return "hybrid_smooth" if "hybrid_smooth" in name else "hard"
+
+
+def load_actor(path, forward_mode="hard"):
+    """forward_mode MUST match the mode the actor was TRAINED in. Evaluating a
+    smooth-trained table with the hard forward (or vice versa) is not a small
+    approximation -- the distillation 2x2 measured that cross-mode swap at
+    5520 -> 462. The checkpoint does not record the mode, so the caller must
+    supply it;  infers it from the run tag as a convenience."""
     z = np.load(path)
     p = dict(w=jnp.asarray(z["w"]), b=jnp.asarray(z["b"]),
              weights=jnp.asarray(z["weights"]),
@@ -38,8 +50,9 @@ def load_actor(path):
     @jax.jit
     def act(obs):
         x = (obs - om) / (osd + 1e-6)
-        y = L.lut_apply(x, p["w"], p["b"], p["weights"], p["log_T_soft"],
-                        p["log_T_sel"], heads, tph).sum(1)
+        y = X.apply(forward_mode)(x, p["w"], p["b"], p["weights"],
+                                  p["log_T_soft"], p["log_T_sel"],
+                                  heads, tph).sum(1)
         return jnp.tanh(y[:, :ACT])          # deterministic: mean only
     n = int(np.prod(z["weights"].shape) + np.prod(z["w"].shape)
             + np.prod(z["b"].shape))
@@ -50,14 +63,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("actor")
     ap.add_argument("--episodes", type=int, default=100)
+    ap.add_argument("--forward-mode", default=None,
+                    choices=["hard", "hybrid_smooth"],
+                    help="default: inferred from the checkpoint filename")
     a = ap.parse_args()
-    fn, n = load_actor(os.path.join(HERE, a.actor))
+    mode = a.forward_mode or mode_from_name(a.actor)
+    fn, n = load_actor(os.path.join(HERE, a.actor), forward_mode=mode)
     m = perturb.make_model(None, 1.0)
     mean, sd, _ = perturb.eval_batched(m, fn, episodes=a.episodes)
-    print(f"{a.actor} ({n:,} params) | CPU-reference {a.episodes}-ep deterministic: "
+    print(f"{a.actor} ({n:,} params) [{mode}] | CPU-reference {a.episodes}-ep deterministic: "
           f"{mean:.1f} +/- {sd:.1f}  [anchors: PPO-scratch 4407 | SAC 5277 | "
           f"distill 5512]", flush=True)
-    json.dump(dict(actor=a.actor, params=n, episodes=a.episodes,
+    json.dump(dict(actor=a.actor, params=n, episodes=a.episodes, forward_mode=mode,
                    cpu_reference_mean=mean, cpu_reference_std=sd),
               open(os.path.join(HERE, a.actor.replace("_actor.npz", "_cpueval.json")),
                    "w"), indent=1)
