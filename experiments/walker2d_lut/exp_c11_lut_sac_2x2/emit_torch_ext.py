@@ -13,6 +13,7 @@ import torch
 
 from spiky.lutorch.hyperplane_multi_head_lut import HyperplaneMultiHeadLUT
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,6 +49,15 @@ def main():
     with torch.no_grad():
         y_anchor = fa(x)
 
+    # The BALANCED draw for the same shape/seed, so the JAX side can check its cached
+    # sampler output index-for-index. FastMultiHeadLut cannot be asked for this: it
+    # uses CANONICAL_FULL_COVERAGE and raises on BALANCED, which is why the balanced
+    # check is index-only while the canonical one is checked end-to-end through y.
+    bal_a, bal_b = get_balanced_anchor_pairs(
+        n_tables=a.heads * a.tph, n_anchor_pairs=a.nap, input_dim=a.input_dim,
+        device=torch.device("cpu"), random_seed=0,
+        policy=AnchorSamplingPolicy.BALANCED, n_heads=a.heads)
+
     np.savez(os.path.join(HERE, "torch_ext.npz"),
              w=hp.hyperplane_weight.detach().cpu().numpy(),
              b=hp.hyperplane_bias.detach().cpu().numpy(),
@@ -59,6 +69,9 @@ def main():
              anchor_a=fa.soft_anchor_a_long.detach().cpu().numpy(),
              anchor_b=fa.soft_anchor_b_long.detach().cpu().numpy(),
              y_anchor=y_anchor.detach().cpu().numpy(),
+             bal_a=bal_a.cpu().numpy(), bal_b=bal_b.cpu().numpy(),
+             anchor_policy=str(fa.anchor_sampling_policy.value),
+             input_dim=np.int32(a.input_dim), nap=np.int32(a.nap),
              n_heads=np.int32(a.heads), tph=np.int32(a.tph))
     print(f"nap={a.nap} tph={a.tph} outputs={a.outputs} batch={a.batch} -> torch_ext.npz")
 

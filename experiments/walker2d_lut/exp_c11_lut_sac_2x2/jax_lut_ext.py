@@ -20,6 +20,7 @@
 Both are checked against torch by `verify_ext.py`.
 """
 import functools
+import subprocess
 
 import jax
 import jax.numpy as jnp
@@ -35,12 +36,93 @@ import jax_lut_grad as L  # noqa: E402
 # 1. Anchor-pair addressing as a frozen hyperplane
 # =============================================================================
 
-def anchor_pair_wb(rng, n_tables, nap, input_dim):
-    """w[t,i] = e_a - e_b, b = 0 — i.e. bit_i = 1[x[a] - x[b] > 0].
+def pairs_to_wb(idx_a, idx_b, input_dim):
+    """(a, b) index pairs -> the frozen hyperplane w[t,i] = e_a - e_b, b = 0.
 
-    Balanced sampling: every table draws its 2*NAP endpoints without replacement so no
-    coordinate is used twice inside a table, matching the spirit of
-    `get_balanced_anchor_pairs`.
+    This is the whole "no new forward needed" claim in three lines: bit_i is
+    1[w_i . x + b_i > 0] = 1[x[a] - x[b] > 0], which is exactly an anchor comparator.
+    Verified bit-exact against FastMultiHeadLut by verify_ext.py check B.
+    """
+    idx_a, idx_b = np.asarray(idx_a), np.asarray(idx_b)
+    n_tables, nap = idx_a.shape
+    if (idx_a == idx_b).any():
+        raise ValueError("degenerate anchor pair with a == b: that bit would collapse "
+                         "to a constant, not a comparator")
+    w = np.zeros((n_tables, nap, input_dim), np.float32)
+    t_i = np.arange(n_tables)[:, None]
+    p_i = np.arange(nap)[None, :]
+    w[t_i, p_i, idx_a] = 1.0
+    w[t_i, p_i, idx_b] = -1.0
+    return jnp.asarray(w), jnp.zeros((n_tables, nap), jnp.float32)
+
+
+def anchor_pair_wb_lutorch(n_tables, nap, input_dim, seed=0, policy="balanced",
+                           heads=1, device="cpu", cache_dir=None, generate=True):
+    """Anchor pairs drawn by LUTORCH'S OWN sampler, returned as w = e_a - e_b, b = 0.
+
+    The draw happens in torch (see gen_anchors.py) and is handed over as cached
+    indices, because the trainer's venv has no torch and torch's RNG stream is not
+    reproducible in numpy — a numpy "port" could match the ALGORITHM but never the
+    actual draw, and matching the actual draw is the point.
+
+    policy: any AnchorSamplingPolicy value. Note `balanced` is what this task
+    specified, but FastMultiHeadLut itself uses `canonical_full_coverage` and REJECTS
+    `balanced` — so pick canonical_full_coverage if the goal is FastMHL semantics.
+
+    device: which torch generator draws. CPU and CUDA generators give DIFFERENT draws
+    from the same seed, so reproducing a GPU-built torch module needs device="cuda".
+    """
+    cache_dir = cache_dir or os.path.expanduser("~/.cache/spiky_anchors")
+    name = (f"anchors_{policy}_t{n_tables}_nap{nap}_d{input_dim}"
+            f"_h{heads}_s{seed}_{device}.npz")
+    path = os.path.join(cache_dir, name)
+    if not os.path.exists(path):
+        if not generate:
+            raise FileNotFoundError(f"no cached anchors at {path}")
+        _generate(n_tables, nap, input_dim, seed, policy, heads, device, cache_dir)
+    z = np.load(path)
+    return pairs_to_wb(z["anchor_a"], z["anchor_b"], input_dim)
+
+
+def _generate(n_tables, nap, input_dim, seed, policy, heads, device, cache_dir):
+    """Shell out to the SPIKY venv (which has torch) to draw and cache the pairs."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    py = os.path.join(repo, ".venv", "bin", "python")
+    if not os.path.exists(py):
+        raise FileNotFoundError(
+            f"need the spiky venv at {py} to draw lutorch anchors (this venv has no "
+            f"torch); or pre-generate with gen_anchors.py and pass cache_dir")
+    cmd = [py, os.path.join(here, "gen_anchors.py"),
+           "--n-tables", str(n_tables), "--nap", str(nap),
+           "--input-dim", str(input_dim), "--heads", str(heads),
+           "--seed", str(seed), "--policy", policy, "--device", device,
+           "--cache-dir", cache_dir]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"gen_anchors.py failed:\n{r.stdout}\n{r.stderr}")
+    print(f"  [anchors] {r.stdout.strip()}", flush=True)
+
+
+def anchor_pair_wb(rng, n_tables, nap, input_dim):
+    """DEPRECATED home-grown sampler. Kept because it produced published numbers.
+
+    The exp_c11 2x2 anchors cells and the ENTIRE exp_c12 capacity sweep were run with
+    this draw, so deleting it would make those results unreproducible. New runs should
+    use `anchor_pair_wb_lutorch`, which uses lutorch's real sampler.
+
+    How it differs from lutorch BALANCED: this balances WITHIN a table (every table's
+    2*NAP endpoints are drawn without replacement, so no coordinate is reused inside a
+    table and a == b is impossible), whereas lutorch balances GLOBALLY across the whole
+    n_tables*nap stream, allows a coordinate to repeat inside a table, draws a and b
+    independently, and repairs a == b by rejection. Opposite guarantees.
+
+    It also has a latent defect the lutorch policies do not: the 2*nap > input_dim
+    branch below tops up WITH replacement and does not exclude already-picked
+    coordinates, so a collision silently degenerates a comparator into a
+    single-coordinate sign test. Never triggered at input_dim=17, nap<=8.
+
+    w[t,i] = e_a - e_b, b = 0 — i.e. bit_i = 1[x[a] - x[b] > 0].
     """
     w = np.zeros((n_tables, nap, input_dim), np.float32)
     for t in range(n_tables):

@@ -55,9 +55,49 @@ ya = L.lut_apply(x, jnp.asarray(w), jnp.zeros((n_tables, nap), jnp.float32),
                  jnp.asarray(z["log_T_sel"]), heads, tph)
 r_anchor = cmp("y_anchor_pairs", ya, z["y_anchor"])
 
+print("\nC. the SAMPLER: lutorch's own draw, reproduced through the cache:")
+input_dim, nap = int(z["input_dim"]), int(z["nap"])
+n_tables = heads * tph
+fa_policy = str(z["anchor_policy"])
+
+# C1 -- balanced: index-for-index against torch. Cannot be checked through a forward
+# because FastMultiHeadLut REJECTS the balanced policy, so there is no torch forward
+# to compare to; the indices are the whole claim.
+CACHE = os.path.expanduser("~/.cache/spiky_anchors")
+_, _ = X.anchor_pair_wb_lutorch(n_tables, nap, input_dim, seed=0, policy="balanced",
+                                heads=heads, device="cpu")   # populates the cache
+zc = np.load(os.path.join(CACHE, f"anchors_balanced_t{n_tables}_nap{nap}_"
+                                 f"d{input_dim}_h{heads}_s0_cpu.npz"))
+bal_ok = bool((zc["anchor_a"] == z["bal_a"]).all() and
+              (zc["anchor_b"] == z["bal_b"]).all())
+n_bad = int((zc["anchor_a"] != z["bal_a"]).sum() + (zc["anchor_b"] != z["bal_b"]).sum())
+print(f"  balanced indices vs torch    {'EXACT MATCH' if bal_ok else f'{n_bad} DIFFER'}"
+      f"  ({n_tables}x{nap} pairs)")
+out["balanced_indices_match"] = dict(exact=bal_ok, n_mismatched=n_bad)
+
+# C2 -- canonical_full_coverage: the policy FastMultiHeadLut ACTUALLY uses, so this one
+# can be checked end to end -- same drawn pairs AND the same forward output.
+# FastMultiHeadLut was built on cuda, so its generator was a CUDA generator: the draw
+# must be reproduced on the same device or the indices differ (they did, first run).
+wc, bc = X.anchor_pair_wb_lutorch(n_tables, nap, input_dim, seed=0,
+                                  policy=fa_policy, heads=heads, device="cuda")
+zc2 = np.load(os.path.join(CACHE, f"anchors_{fa_policy}_t{n_tables}_nap{nap}_"
+                                  f"d{input_dim}_h{heads}_s0_cuda.npz"))
+can_ok = bool((zc2["anchor_a"] == z["anchor_a"]).all() and
+              (zc2["anchor_b"] == z["anchor_b"]).all())
+print(f"  {fa_policy} indices vs FastMHL  "
+      f"{'EXACT MATCH' if can_ok else 'DIFFER'}")
+out["canonical_indices_match"] = dict(exact=can_ok, policy=fa_policy)
+yc = L.lut_apply(x, wc, bc, jnp.asarray(z["fa_weights"]),
+                 jnp.asarray(z["log_T_soft"]), jnp.asarray(z["log_T_sel"]), heads, tph)
+r_sampler = cmp("y_sampler_end_to_end", yc, z["y_anchor"])
+
 tol = 5e-6
-verdict = "PASS" if max(r_smooth, r_anchor) <= tol else "FAIL"
-print(f"\nVERDICT: {verdict} (worst rel {max(r_smooth, r_anchor):.3e}, tol {tol:.0e})")
-out["summary"] = dict(worst_rel=max(r_smooth, r_anchor), tol=tol, verdict=verdict)
+worst = max(r_smooth, r_anchor, r_sampler)
+verdict = "PASS" if (worst <= tol and bal_ok and can_ok) else "FAIL"
+print(f"\nVERDICT: {verdict} (worst rel {worst:.3e}, tol {tol:.0e}; "
+      f"sampler indices balanced={bal_ok} {fa_policy}={can_ok})")
+out["summary"] = dict(worst_rel=worst, tol=tol, verdict=verdict,
+                      balanced_indices=bal_ok, canonical_indices=can_ok)
 json.dump(out, open(os.path.join(HERE, "verify_ext_results.json"), "w"), indent=1)
 raise SystemExit(0 if verdict == "PASS" else 1)

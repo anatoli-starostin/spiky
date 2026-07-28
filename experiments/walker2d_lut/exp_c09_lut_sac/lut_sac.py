@@ -146,6 +146,15 @@ def main():
     ap.add_argument("--addressing", default="hyperplane",
                     choices=["hyperplane", "anchors"],
                     help="anchors = frozen w = e_a - e_b (FastMHL semantics)")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="drives BOTH the jax PRNGKey and the anchor draw")
+    ap.add_argument("--anchor-policy", default="balanced",
+                    choices=["balanced", "connected", "canonical_distinct",
+                             "canonical_full_coverage", "legacy_jax"],
+                    help="lutorch AnchorSamplingPolicy for --addressing anchors. "
+                         "NOTE FastMultiHeadLut itself uses canonical_full_coverage "
+                         "and REJECTS balanced. legacy_jax = the home-grown draw that "
+                         "produced the exp_c11/exp_c12 numbers.")
     ap.add_argument("--forward-mode", default="hard",
                     choices=["hard", "hybrid_smooth"])
     ap.add_argument("--tag", default="")
@@ -158,16 +167,25 @@ def main():
     obs_mean = jnp.asarray(stats["obs_mean"], jnp.float32)
     obs_std = jnp.asarray(stats["obs_std"], jnp.float32)
 
-    key = jax.random.PRNGKey(0)
+    key = jax.random.PRNGKey(a.seed)
     key, ka, kq, kr = jax.random.split(key, 4)
     CFG.update(n_heads=a.heads, tph=a.tph, obs_mean=obs_mean, obs_std=obs_std,
                apply=X.apply(a.forward_mode))
     ap_ = actor_init(ka, a.nap, a.tph, a.heads, obs_mean, obs_std)
     if a.addressing == "anchors":
         # anchor pairs written as a FROZEN hyperplane: w = e_a - e_b, b = 0.
-        # Verified bit-exact against FastMultiHeadLut (exp_c11/verify_ext.py).
-        w0, b0 = X.anchor_pair_wb(np.random.default_rng(0), a.heads * a.tph,
-                                  a.nap, OBS)
+        # The ENCODING is verified bit-exact against FastMultiHeadLut
+        # (exp_c11/verify_ext.py check B); the DRAW now comes from lutorch's own
+        # sampler (check C), instead of the home-grown one that only matched its
+        # spirit. --anchor-policy legacy_jax restores that older draw, which is what
+        # the exp_c11 2x2 and the exp_c12 sweep were run with.
+        if a.anchor_policy == "legacy_jax":
+            w0, b0 = X.anchor_pair_wb(np.random.default_rng(a.seed),
+                                      a.heads * a.tph, a.nap, OBS)
+        else:
+            w0, b0 = X.anchor_pair_wb_lutorch(a.heads * a.tph, a.nap, OBS,
+                                              seed=a.seed, policy=a.anchor_policy,
+                                              heads=a.heads)
         ap_ = dict(ap_, w=w0, b=b0)
     qp = q_init(kq)
     qt = jax.tree.map(lambda x: x, qp)
@@ -177,7 +195,9 @@ def main():
     K = 2 ** a.nap
     n_table_params = int(np.prod(ap_["weights"].shape))
     n_idx = int(np.prod(ap_["w"].shape) + np.prod(ap_["b"].shape))
-    print(f"LUT-SAC actor nap={a.nap} tph={a.tph} heads={a.heads} | "
+    print(f"LUT-SAC actor nap={a.nap} tph={a.tph} heads={a.heads} "
+          f"seed={a.seed} addressing={a.addressing}"
+          f"{'/' + a.anchor_policy if a.addressing == 'anchors' else ''} | "
           f"12 outputs/cell (6 mu + 6 log-sigma) | table {n_table_params:,} + "
           f"addressing {n_idx:,} = {n_table_params + n_idx:,} params | "
           f"rows {n_tables}x{K} = {n_tables*K:,}", flush=True)
