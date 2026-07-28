@@ -22,7 +22,11 @@ def main():
         HERE, "lut_hyperplane_nap4_tph32_h1_sac.pt"))
     ap.add_argument("--episodes", type=int, default=100)
     ap.add_argument("--name", default="LUT-SAC-distilled")
+    # derive the output file from --name, so sweeping a second config cannot
+    # silently clobber the first one's results
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    out_path = a.out or f"results_{a.name.lower().replace('-', '_')}.json"
 
     m = load(a.ckpt, device="cuda")
     m.eval()
@@ -34,8 +38,8 @@ def main():
 
     print(f"=== {a.name}: {m.describe()} ===", flush=True)
     rows = perturb.sweep(fn, a.name, episodes=a.episodes)
-    json.dump(rows, open(os.path.join(HERE, "results_sac_lut.json"), "w"), indent=1)
-    print("wrote results_sac_lut.json", flush=True)
+    json.dump(rows, open(os.path.join(HERE, out_path), "w"), indent=1)
+    print("wrote", out_path, flush=True)
 
 
 if __name__ == "__main__":

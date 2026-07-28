@@ -538,3 +538,81 @@ Caveats: single seed per policy; the geometry axis also shifts the observation
 distribution; friction ×1.5–2.0 collapses most policies, which looks like a task limit.
 Note also that the SAC-taught LUT is the *only* policy whose nominal σ (1603) is large
 enough that its nominal itself is unstable — its curves should be read with that in mind.
+
+---
+
+# Phase 7: more capacity closes the fidelity gap but NOT the robustness gap (exp_c08b)
+
+Phase 6 ended with a hypothesis of mine: the SAC-taught LUT retained only 85.6% of its
+teacher and inherited only half its robustness *because 16 rows per table cannot
+represent a smooth policy*. Give it more rows, the argument went, and it should become
+both faithful **and** robust.
+
+**Half of that is right. The robustness half is wrong, and the failure is informative.**
+
+## Capacity sweep (SAC teacher = 5273.4)
+
+| config | params | rows | held-out MSE | nominal mean | σ | retention |
+|---|---:|---:|---:|---:|---:|---:|
+| nap4 tph32 | 5,378 | 16 | 0.0052 | 4512 | 1603 | 85.6% |
+| nap5 tph32 | 9,026 | 32 | 0.0042 | 4275 | 1882 | 81.1% |
+| nap6 tph32 | 15,746 | 64 | 0.0034 | 5157 | 628 | 97.8% |
+| **nap5 tph64** | **18,050** | 32 | 0.0028 | **5305** | **41** | **100.6%** |
+| nap7 tph32 | 28,610 | 128 | 0.0028 | 5248 | 485 | 99.5% |
+| nap6 tph64 | 31,490 | 64 | 0.0022 | 5281 | 38 | 100.1% |
+
+**The fidelity half of the hypothesis is confirmed.** The smallest config that matches
+the teacher is **nap5/tph64 at 18,050 params → 5305 ± 41**, exceeding SAC's 5277 with the
+nominal σ collapsing from **1603 → 41**, a 39× reduction. Capacity was indeed the
+obstacle to faithfully cloning a smooth policy.
+
+Note *which* capacity mattered: going 16→32 rows at fixed tph barely helped (and
+nap5/tph32 was briefly *worse*), while doubling the number of **tables** at 32 rows fixed
+it. More independent tables beat more rows per table for this target.
+
+## But the robustness envelope did not follow
+
+| policy | mass | gravity | friction | geometry | mean | cells ≥3000 | r vs SAC |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| SAC-MLP (teacher) | 73.4% | 81.0% | 80.7% | 88.4% | **80.9%** | **18/18** | 1.000 |
+| LUT ← SAC (18k, *matched*) | 6.5% | 46.0% | 77.7% | 3.3% | 33.3% | 14/18 | **0.510** |
+| LUT ← SAC (5k) | 17.4% | 45.2% | 65.9% | 35.0% | 40.9% | 13/18 | 0.522 |
+| PPO-MLP (teacher) | 7.3% | 55.4% | 8.3% | 40.8% | 28.0% | 11/18 | 0.413 |
+| LUT ← PPO (5k) | 6.5% | 15.7% | 6.3% | 18.2% | 11.7% | 9/18 | 0.238 |
+
+Matching the teacher at nominal bought **one extra cell** (14/18 vs 13/18) and *lowered*
+mean retained robustness (33.3% vs 40.9%). Correlation with the SAC teacher is
+**0.510 — statistically unchanged from the 5k clone's 0.522**, and nowhere near the
+0.930 the PPO clone achieved with its teacher.
+
+The matched clone is in fact **more brittle at the extremes**: mass ×1.3 gives 344
+(against the 5k clone's 795) and geometry ×1.1 gives 173 (against 1595).
+
+![capacity vs robustness](exp_c08_sac_distill/sac_vs_ppo_taught_lut.png)
+
+## What this says
+
+**Nominal fidelity and robustness are separate axes, and cloning only transfers the
+first.** A bigger table reproduces the teacher more precisely *on the state distribution
+it was shown* — and that is exactly what makes it fit that distribution more tightly and
+fall off it faster. The extra capacity was spent memorising the nominal trajectory
+manifold, not the teacher's recovery behaviour, because **the dataset never contained the
+teacher's responses to a heavier robot or a slipperier floor.**
+
+This also corrects the Phase-6 reading. The high correlation of the PPO clone with its
+teacher (r = 0.930) is not evidence that "cloning transfers robustness" — it is evidence
+that a near-bang-bang policy is *easy to copy exactly*, failure modes included. When the
+target is smooth, the clone tracks its teacher at r ≈ 0.51 no matter how much capacity it
+is given. Fidelity at nominal simply does not imply behavioural agreement off-nominal.
+
+**Practical consequence for #74:** if a compiled LUT must tolerate hardware variation,
+neither a better teacher nor a bigger table is sufficient on its own. The missing
+ingredient is *coverage* — the dataset has to contain the perturbed regimes. The obvious
+next experiment is domain-randomised distillation: collect the SAC teacher's actions
+across randomised mass/gravity/friction/geometry and distil that. It costs one more
+dataset collection (~195 s) and would test directly whether the LUT's robustness ceiling
+is a representation limit or a data limit. My expectation, given the above, is that it is
+a data limit.
+
+Caveats: single seed per config; the geometry axis also shifts the observation
+distribution; friction ×1.5–2.0 collapses most policies (task limit).

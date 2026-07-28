@@ -15,16 +15,22 @@ C07 = os.path.join(HERE, "..", "exp_c07_robustness")
 
 rows = []
 for p in (os.path.join(C07, "results_torch.json"), os.path.join(C07, "results_jax.json"),
-          os.path.join(HERE, "results_sac_lut.json")):
+          os.path.join(HERE, "results_sac_lut.json"),
+          os.path.join(HERE, "results_lut_sac_matched.json")):
     if os.path.exists(p):
         rows += json.load(open(p))
 
-ORDER = ["SAC-MLP", "LUT-SAC-distilled", "PPO-MLP", "LUT-distilled"]
-NICE = {"SAC-MLP": "SAC-MLP (teacher)", "LUT-SAC-distilled": "LUT ← SAC (5k)",
+ORDER = ["SAC-MLP", "LUT-SAC-matched", "LUT-SAC-distilled", "PPO-MLP",
+         "LUT-distilled"]
+NICE = {"SAC-MLP": "SAC-MLP (teacher)",
+        "LUT-SAC-matched": "LUT ← SAC (18k, matched)",
+        "LUT-SAC-distilled": "LUT ← SAC (5k)",
         "PPO-MLP": "PPO-MLP (teacher)", "LUT-distilled": "LUT ← PPO (5k)"}
-COLOR = {"SAC-MLP": "#6b7785", "LUT-SAC-distilled": "#7a5ea7",
+COLOR = {"SAC-MLP": "#6b7785", "LUT-SAC-matched": "#b4553a",
+         "LUT-SAC-distilled": "#7a5ea7",
          "PPO-MLP": "#2f6f4f", "LUT-distilled": "#3b6ea5"}
-STYLE = {"SAC-MLP": "-", "LUT-SAC-distilled": "--", "PPO-MLP": "-",
+STYLE = {"SAC-MLP": "-", "LUT-SAC-matched": "--",
+         "LUT-SAC-distilled": ":", "PPO-MLP": "-",
          "LUT-distilled": "--"}
 AXES = ["mass", "gravity", "friction", "geometry"]
 LABEL = {"mass": "body-mass scale", "gravity": "gravity scale",
@@ -102,7 +108,7 @@ axs[0].set_ylabel("return — CPU reference, 100 deterministic episodes")
 axs[0].yaxis.label.set_color(MUTED)
 axs[0].legend(fontsize=8.5, loc="lower center", frameon=False)
 fig.suptitle("Does the teacher's robustness transfer to the cloned LUT? "
-             "(solid = teacher MLP, dashed = its 5,378-param LUT student)",
+             "(solid = teacher MLP, dashed/dotted = its LUT students)",
              fontsize=12, color=INK)
 fig.tight_layout(rect=[0, 0, 1, 0.94])
 out = os.path.join(HERE, "sac_vs_ppo_taught_lut.png")
