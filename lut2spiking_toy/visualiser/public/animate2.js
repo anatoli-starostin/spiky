@@ -162,6 +162,23 @@
     if (note) note.innerHTML = 'The emitted column is decoded purely from the output <b>spike times</b>; it equals the direct LUT sum to <b>'
       + maxres.toExponential(1) + '</b> for this input — the exactness, confirmed live rather than only in the 50k offline check.';
   }
+  // ---- neuron/synapse budget for N tables (shared input/clock/output) --------
+  function fillScaleTable() {
+    const tb = document.querySelector('#scaletable tbody'); if (!tb) return; tb.innerHTML = '';
+    const twoK = 1 << K;
+    const NEUR_SHARED = 2 + D + Dout, NEUR_PER = 2 * K + twoK;             // 12 + 14·N for D=6,K=3,Dout=4
+    const SYN_SHARED = 1, SYN_PER = D * K + 3 * K + K * twoK + twoK * Dout; // 1 + 83·N
+    const gi = (n) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    for (const N of [1, 2, 64, 128, 1024]) {
+      const neur = NEUR_SHARED + N * NEUR_PER, syn = SYN_SHARED + N * SYN_PER;
+      const tr = document.createElement('tr'); if (N === 1) tr.className = 'winrow';
+      tr.innerHTML = '<td>' + N + (N === 1 ? ' (baseline)' : '') + '</td><td class="mono">' + gi(neur) + '</td><td class="mono">' + gi(syn) + '</td>';
+      tb.appendChild(tr);
+    }
+    const note = document.getElementById('scalenote');
+    if (note) note.innerHTML = 'Sanity: N=1 → <b>' + (NEUR_SHARED + NEUR_PER) + ' neurons / ' + (SYN_SHARED + SYN_PER)
+      + ' synapses</b> = the faithful single-table baseline ✓. Cost is <b>linear in N</b> (shared input/clock/output amortized; each table a fixed block) but <b>exponential in K</b> per table via the 2<sup>K</sup> decoder — the decoder is the cost driver, exactly what the entropy/reduction analysis targets.';
+  }
 
   // ---- a single node: base disc + membrane fill + flash + border + label ----
   function drawNode(ctx, p, id, col, fv, thr, INC, R) {
@@ -205,8 +222,11 @@
       ctx.lineWidth = 1;
       for (const e of T.TOPO) {
         const a = posOf(tbl, e.src), b = posOf(tbl, e.dst); if (!a || !b) continue;
-        const wc = weightColor(T.MAXW, e.weight); ctx.strokeStyle = wc.color; ctx.globalAlpha = wc.alpha;
+        const inhib = e.src[0] === 'H' && e.dst[0] === 'C';   // H_k -| C_k feedforward inhibition (C = NOT H)
+        if (inhib) { ctx.strokeStyle = css('--lut'); ctx.globalAlpha = 0.75; ctx.setLineDash([3, 3]); ctx.lineWidth = 1.4; }
+        else { const wc = weightColor(T.MAXW, e.weight); ctx.strokeStyle = wc.color; ctx.globalAlpha = wc.alpha; }
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        if (inhib) { ctx.setLineDash([]); ctx.lineWidth = 1; }
       }
       ctx.globalAlpha = 1;
       for (const e of T.S.events) {
@@ -406,6 +426,7 @@
   window.addEventListener('resize', () => { needResize = true; });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { needResize = true; dirty = true; } });
 
+  fillScaleTable();
   recompute();
   requestAnimationFrame(loop);
 })();
