@@ -45,6 +45,13 @@
              tables' output spikes and sums them via a <b>sustained current until a readout clock</b> — turning
              spike <i>times</i> into a true sum (not an order statistic). Verified exact over 50k inputs.</p>
         </a>
+        <a class="card" href="animation4.html">
+          <h3>④ Scaling up: a hierarchical aggregation tree</h3>
+          <p>Model ③'s single aggregator has fan-in that grows with the number of tables. Here the same
+             sustained-current aggregator is arranged in a binary <b>tree</b> (4 tables → 2 → 1), so every
+             neuron keeps <b>fan-in 2</b> while depth grows only like <b>log₂(N)</b> — the scale-to-hundreds
+             design. Verified exact over 50k inputs.</p>
+        </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
     </div>
