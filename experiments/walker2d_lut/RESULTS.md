@@ -774,3 +774,78 @@ hard mode by +1790** — and it needs no teacher at all. The earlier conclusion 
 "a LUT is easy to fill and hard to train" is now decisively overturned for the
 gradient-based case: with off-policy training and enough gradient steps per sample,
 training beats cloning, and does so in the deployable single-read mode.
+
+---
+
+# The real-training 2×2: addressing × forward mode, trained from scratch (exp_c11)
+
+Four LUT-SAC cells, all identical except the two axes: nap6/tph32, 28,032 params,
+ratio 0.5, per-row trust region, 10,000 iterations (640k env-steps) each, trained from
+scratch with no teacher, each trained in the mode it is evaluated in.
+
+| cell | best MJX (proxy) | **CPU-reference, 100-ep deterministic** |
+|---|---:|---|
+| **hyperplane × hard** | 5149.4 | **5146.9 ± 28.2** |
+| anchors × hard | 4290.8 | 4302.4 ± 49.9 |
+| hyperplane × hybrid_smooth | 4333.0 | 4253.9 ± 393.4 |
+| anchors × hybrid_smooth | **5569.9** | **3792.1 ± 1485.7** |
+
+## The headline: the training proxy mis-ranked the cells
+
+`anchors × smooth` had the **highest** MJX proxy of all four (5569.9) and the **lowest**
+CPU-reference score (3792.1), with a σ of **±1486**. Its proxy over-states its real
+performance by **+47%**.
+
+The mechanism was visible before the evals came in: that cell had driven its blend weight
+to `u ≈ 0.476` with 51% of samples above 0.49 — i.e. a near-uniform average of two table
+rows — with temperatures run far from initialisation (`T_soft 56`, `T_sel 0.022`). Fixed
+addressing cannot re-partition the state space, so the only remaining degree of freedom
+is to blend harder; that buys return in MJX@10/8 physics and does not survive transfer to
+the CPU reference.
+
+This is the single strongest vindication in the project of insisting the headline number
+be a deterministic 100-episode CPU-reference eval. Had the 2×2 been read off the training
+curves, it would have concluded the exact opposite of the truth.
+
+## Both axes point the same way
+
+* **Hard beats smooth, for both addressings**: 5146.9 vs 4253.9 (hyperplane, +21%) and
+  4302.4 vs 3792.1 (anchors, +13%). This inverts the *distillation* result, where smooth
+  beat hard 5520 vs 3869. Distilling a smooth teacher rewards a smooth student; training
+  from scratch does not.
+* **Learned addressing beats fixed anchors, for both modes**: 5146.9 vs 4302.4 (hard,
+  +20%) and 4253.9 vs 3792.1 (smooth, +12%).
+* **The best cell is hyperplane × hard** — which is also the *deployable* combination:
+  learned addressing, single magnitude-blind row read, zero multiplies. That is the one
+  the #74 spiking construction compiles.
+
+Note also the variance. The two hard cells are metronomic (±28, ±50); the two smooth
+cells are erratic (±393, ±1486). Under from-scratch training, the smooth blend buys
+nothing and costs reliability.
+
+## Learned addressing converges slower, then wins
+
+The within-run trajectories show the ordering *reverse*, which is stronger evidence than
+comparing endpoints. hyperplane ÷ anchors return at matched iteration, hard mode:
+
+```
+iter 3000  0.34    anchors ahead by 3x
+iter 4500  0.91
+iter 6500  1.06    crossover
+iter 8500  1.35
+iter 10000 1.20    hyperplane 5149 vs anchors 4291
+```
+
+The reason is measurable: the hyperplane cells **rotate their addressing almost
+completely** during training — cosine similarity to the initial hyperplanes ends at
+0.48 (hard) and 0.59 (smooth), roughly 60° of rotation, with the bias norm growing by an
+order of magnitude. Every addressing update re-partitions the state space and partially
+invalidates what the table rows have learned, so the two must co-adapt. The anchors cells
+have no such cost — their addressing is provably frozen (verified exactly: 2 non-zeros
+per hyperplane row, values ±1, bias identically 0) — so they train faster early and
+plateau lower.
+
+**Caveat: one seed per cell.** The crossover is a within-run reversal, which is robust
+evidence for the *qualitative* claim. The magnitudes are not: anchors×hard's last five
+evals swing between 3749 and 4291 (±13%) on noise alone. Three seeds per cell would cost
+about 40 minutes and would be needed before quoting "+20%" as a measured effect size.

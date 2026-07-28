@@ -1,0 +1,7 @@
+{
+ "actor": "lut_sac_c11_hyperplane_hybrid_smooth_actor.npz",
+ "params": 28032,
+ "episodes": 100,
+ "cpu_reference_mean": 4253.939080992222,
+ "cpu_reference_std": 393.3761609280498
+}
