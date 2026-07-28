@@ -97,4 +97,15 @@ code { background: #0b0f16; padding: 1px 5px; border-radius: 4px; color: #d2a8ff
 .card:hover { border-color: var(--accent); transform: translateY(-2px); }
 .card h3 { margin: 0 0 6px; color: var(--accent); font-size: 15px; }
 .card p { margin: 0; color: var(--muted); font-size: 13px; }
-@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } .three { grid-template-columns: 1fr; } }
+
+/* narrow phones: kill horizontal overflow — stack the fixed-width sumrow, tighten padding */
+@media (max-width: 560px) {
+  .stack { padding: 10px; gap: 12px; }
+  .panel { padding: 11px; }
+  header { padding: 14px 14px; }
+  .sumrow { grid-template-columns: 34px 1fr; }
+  .sumrow .comptxt { grid-column: 1 / -1; text-align: left; }
+  table { font-size: 11.5px; }
+  th, td { padding: 4px 5px; }
+}
