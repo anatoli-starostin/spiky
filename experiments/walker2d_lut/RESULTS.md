@@ -729,3 +729,48 @@ at an update-to-data ratio of 0.06 against real SAC's ~1.0 — roughly 16× fewe
 steps per environment step than the algorithm normally gets — and simply raising it
 recovered most of the deficit. That identifies the binding constraint as compute per
 sample, not representation.
+
+## LUT-SAC v3 — target reached, and passed
+
+| run | update:data ratio | env-steps | wall | best MJX | **CPU-reference (100 ep)** |
+|---|---:|---:|---:|---:|---|
+| PPO from scratch (exp_c06) | on-policy | 19.7M | 5.1 min | — | 4407 ± 427 |
+| LUT-SAC v1 | 0.06 | 1.54M | 19.0 min | 4546.9 | 4289.2 ± 78.3 |
+| LUT-SAC v2 | 0.25 | 1.28M | 37.8 min | 4824.6 | 4832.3 ± 16.6 |
+| **LUT-SAC v3** | **0.50** | 1.28M | 54.6 min | 5719.0 | **5658.5 ± 326.0** |
+
+**The target was "comparable to SAC (~5277)". v3 reaches 5658.5 — it beats SAC by +381
+and also passes the distillation ceiling of 5512 by +146**, with 28,032 parameters
+against SAC's 73,484. A lookup table trained from scratch, with no teacher, is now the
+best Walker2d policy in this study.
+
+The scaling with the update-to-data ratio is monotone and steep — 0.06 → 4289,
+0.25 → 4832, 0.50 → 5659 — which confirms the Phase-1..4 diagnosis exactly: the
+from-scratch gap was **compute per sample**, not representation and not coverage.
+
+Honest caveat on the spread: σ rises from ±16.6 (v2) to ±326 (v3). The higher-return
+policy is less metronomic — it occasionally falls where v2 essentially never did. Mean
+is up 826, but v2 remains the more *reliable* policy, and a robustness sweep would
+likely favour v2. Both facts belong in the record.
+
+### The point that matters most for #74
+
+**Every LUT-SAC number is a HARD-forward number.** The JAX LUT
+(`exp_c06_jax_backprop/jax_lut_grad.py`) implements only the single-row, magnitude-blind
+gather; there is no hybrid_smooth path in it. So v3's 5658.5 is measured in the
+manifesto-pure, zero-multiply mode that the spiking construction actually compiles.
+
+That reframes the comparison with distillation, which was measured in hybrid_smooth
+throughout. Like for like, in **hard** mode:
+
+| route | mode | CPU-reference |
+|---|---|---|
+| distillation from a PPO teacher | hard | 3869 ± 1928 |
+| distillation from a PPO teacher | hybrid_smooth | 5520 ± 357 |
+| **LUT-SAC v3, from scratch** | **hard** | **5658.5 ± 326.0** |
+
+**Trained directly in hard mode, the from-scratch table beats the distilled table in
+hard mode by +1790** — and it needs no teacher at all. The earlier conclusion that
+"a LUT is easy to fill and hard to train" is now decisively overturned for the
+gradient-based case: with off-policy training and enough gradient steps per sample,
+training beats cloning, and does so in the deployable single-read mode.

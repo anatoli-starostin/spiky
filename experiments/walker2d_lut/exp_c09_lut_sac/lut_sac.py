@@ -41,6 +41,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "exp_c06_jax_backprop"))
 import mjx_walker2d as W          # noqa: E402
 from mujoco import mjx           # noqa: E402
 import jax_lut_grad as L         # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "exp_c11_lut_sac_2x2"))
+import jax_lut_ext as X           # noqa: E402
 
 OBS, ACT = 17, 6
 LOGSTD_MIN, LOGSTD_MAX = -5.0, 2.0
@@ -67,8 +69,8 @@ def actor_init(key, nap, tph, heads, obs_mean, obs_std, table_std=0.05):
 
 def actor_out(p, obs):
     x = (obs - CFG["obs_mean"]) / (CFG["obs_std"] + 1e-6)
-    y = L.lut_apply(x, p["w"], p["b"], p["weights"], p["log_T_soft"],
-                    p["log_T_sel"], CFG["n_heads"], CFG["tph"]).sum(1)   # [B, 12]
+    y = CFG["apply"](x, p["w"], p["b"], p["weights"], p["log_T_soft"],
+                     p["log_T_sel"], CFG["n_heads"], CFG["tph"]).sum(1)   # [B, 12]
     mu, log_std = y[:, :ACT], jnp.clip(y[:, ACT:], LOGSTD_MIN, LOGSTD_MAX)
     return mu, log_std
 
@@ -141,6 +143,11 @@ def main():
                     help="weight of the rarely-updated-row bonus in sampling (0=off)")
     ap.add_argument("--eval-every", type=int, default=250)
     ap.add_argument("--eval-episodes", type=int, default=20)
+    ap.add_argument("--addressing", default="hyperplane",
+                    choices=["hyperplane", "anchors"],
+                    help="anchors = frozen w = e_a - e_b (FastMHL semantics)")
+    ap.add_argument("--forward-mode", default="hard",
+                    choices=["hard", "hybrid_smooth"])
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -153,8 +160,15 @@ def main():
 
     key = jax.random.PRNGKey(0)
     key, ka, kq, kr = jax.random.split(key, 4)
-    CFG.update(n_heads=a.heads, tph=a.tph, obs_mean=obs_mean, obs_std=obs_std)
+    CFG.update(n_heads=a.heads, tph=a.tph, obs_mean=obs_mean, obs_std=obs_std,
+               apply=X.apply(a.forward_mode))
     ap_ = actor_init(ka, a.nap, a.tph, a.heads, obs_mean, obs_std)
+    if a.addressing == "anchors":
+        # anchor pairs written as a FROZEN hyperplane: w = e_a - e_b, b = 0.
+        # Verified bit-exact against FastMultiHeadLut (exp_c11/verify_ext.py).
+        w0, b0 = X.anchor_pair_wb(np.random.default_rng(0), a.heads * a.tph,
+                                  a.nap, OBS)
+        ap_ = dict(ap_, w=w0, b=b0)
     qp = q_init(kq)
     qt = jax.tree.map(lambda x: x, qp)
     log_alpha = jnp.log(jnp.asarray(0.2))
@@ -235,6 +249,9 @@ def main():
 
         # per-row trust region: a row update is a STEP change for every state in
         # that cell, so bound its L2 norm (an MLP has no analogue of this).
+        if a.addressing == "anchors":
+            # no gradient to the addressing — fixed anchor pairs, as in FastMHL
+            ga = dict(ga, w=jnp.zeros_like(ga["w"]), b=jnp.zeros_like(ga["b"]))
         if a.row_clip > 0:
             gw = ga["weights"]
             nrm = jnp.linalg.norm(gw, axis=-1, keepdims=True)

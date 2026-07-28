@@ -1,0 +1,17 @@
+{
+ "y_hybrid_smooth": {
+  "max_abs": 1.1920928955078125e-07,
+  "max_rel": 2.1854531865000185e-07,
+  "exact": false
+ },
+ "y_anchor_pairs": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "exact": true
+ },
+ "summary": {
+  "worst_rel": 2.1854531865000185e-07,
+  "tol": 5e-06,
+  "verdict": "PASS"
+ }
+}
