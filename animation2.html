@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Composing two LUTs — charge-domain summation</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>Composing two LUTs — y = LUT₁(x) + LUT₂(x)</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <a href="single_table.html">Single-table demo</a> · <b>Two-table composition</b></p>
+    <p>
+      A real network is a SET of tables whose selected output vectors are <b>added</b>. Latencies don't sum —
+      so the output moves into the <b>charge domain</b>: each table's selected row deposits its stored output
+      vector as synaptic charge onto <b>shared</b> output neurons, whose membranes accumulate
+      <code>O₁[r₁] + O₂[r₂]</code>. Same input x drives both tables.
+    </p>
+  </header>
+
+  <div class="stack">
+    <!-- INPUT + PLAYBACK -->
+    <div class="panel">
+      <h2>Input &amp; playback</h2>
+      <div id="sliders"></div>
+      <div class="btns"><button id="rand">🎲 Randomize x</button><button id="reset" class="ghost">Reset to 0</button></div>
+      <div class="ctl" style="margin-top:10px;flex-wrap:wrap">
+        <button id="play">▶ Play</button>
+        <button id="restart" class="ghost">⟲ Restart</button>
+        <label>speed <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span class="mono" id="simtime" style="margin-left:6px">t = 0.00</span>
+      </div>
+      <div class="ctl"><label class="small">scrub</label><input type="range" id="scrub" min="0" max="12" step="0.02" value="0" style="flex:1" /></div>
+      <p class="small">Edge colour = synapse weight: <span style="color:#5b9dff">■ −</span> · <span style="color:#6b7280">■ 0</span> · <span style="color:#ff6b6b">■ +</span>; a node fills with its membrane V/θ, and the green <b>CLOCK</b> pulse drives the fixed-window readout.</p>
+    </div>
+
+    <!-- TABLE 1 GRAPH + PANEL -->
+    <div class="panel">
+      <h2>Table 1 (seed 0) — detectors → complements → 1-of-8 row select</h2>
+      <canvas id="g1" height="360"></canvas>
+      <div class="two" style="margin-top:8px">
+        <table id="lut1_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+        <div><p class="small">address <b id="lut1_addr" class="mono"></b> → row <b id="lut1_row" class="mono"></b> · selected O₁[r₁]:</p><div id="lut1_out"></div></div>
+      </div>
+    </div>
+
+    <!-- TABLE 2 GRAPH + PANEL -->
+    <div class="panel">
+      <h2>Table 2 (seed 1) — its own detectors → complements → 1-of-8 row select</h2>
+      <canvas id="g2" height="360"></canvas>
+      <div class="two" style="margin-top:8px">
+        <table id="lut2_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+        <div><p class="small">address <b id="lut2_addr" class="mono"></b> → row <b id="lut2_row" class="mono"></b> · selected O₂[r₂]:</p><div id="lut2_out"></div></div>
+      </div>
+    </div>
+
+    <!-- SHARED OUTPUT -->
+    <div class="panel">
+      <h2>Shared output neurons — charge accumulates the SUM from BOTH tables</h2>
+      <p class="hint">Each shared output membrane gets charge from BOTH winning rows: <span style="color:var(--spike)">■ Table 1's O₁[r₁][j]</span> then <span style="color:var(--out)">■ Table 2's O₂[r₂][j]</span>, accumulating to <code>S[j]=O₁[r₁][j]+O₂[r₂][j]</code>. The white marker (▮) is the summed membrane; a fixed-window readout converts it to an output latency.</p>
+      <canvas id="gout" height="150"></canvas>
+      <div id="sumrows"></div>
+      <div id="cbanner" class="banner ok">charge = LUT₁(x) + LUT₂(x)</div>
+      <p class="legend" id="cnote"></p>
+    </div>
+
+    <!-- VERIFICATION -->
+    <div class="panel">
+      <h2>Verified</h2>
+      <p class="small">Over 50,000 random inputs (<code>analysis/composition_check.py</code>): the charge-accumulated output equals the true <code>O₁[r₁]+O₂[r₂]</code> to <b>0.00e+00</b>, and the latency readout decodes back to the sum to <b>1.3e-15</b> — 100% match. Summing latencies instead does NOT work — the point of the charge domain.</p>
+    </div>
+  </div>
+
+  <script src="lut_spiking.js"></script>
+  <script src="animate2.js"></script>
+</body>
+</html>

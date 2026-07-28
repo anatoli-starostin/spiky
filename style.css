@@ -79,3 +79,22 @@ canvas#topology { min-height: 400px; }
 .small { font-size: 12px; color: var(--muted); }
 code { background: #0b0f16; padding: 1px 5px; border-radius: 4px; color: #d2a8ff; }
 @media (max-width: 720px) { .compare, .two { grid-template-columns: 1fr; } }
+
+/* composition page (animation2.html) — shared-output charge bars */
+.sumrow { display: grid; grid-template-columns: 34px 1fr 300px; gap: 12px; align-items: center; margin: 9px 0; }
+.olab { color: var(--muted); }
+.compbar { position: relative; height: 18px; background: #0b0f16; border: 1px solid var(--edge); border-radius: 4px; }
+.compbar .cline { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .5; }
+.compbar .cseg { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; transition: left .5s ease, width .5s ease; }
+.compbar .s1 { background: var(--spike); }
+.compbar .s2 { background: var(--out); }
+.compbar .cend { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff; transition: left .5s ease; }
+.comptxt { text-align: right; }
+
+/* landing page cards */
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { display: block; text-decoration: none; color: inherit; border: 1px solid var(--edge); border-radius: 10px; padding: 14px; background: #12161d; transition: border-color .15s, transform .1s; }
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card h3 { margin: 0 0 6px; color: var(--accent); font-size: 15px; }
+.card p { margin: 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
