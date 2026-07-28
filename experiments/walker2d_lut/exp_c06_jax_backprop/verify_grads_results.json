@@ -1,0 +1,50 @@
+{
+ "y": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "scale": 0.41100820899009705,
+  "exact": true
+ },
+ "grad_x": {
+  "max_abs": 7.003545761108398e-07,
+  "max_rel": 8.52910843160802e-07,
+  "scale": 0.8211345672607422,
+  "exact": false
+ },
+ "grad_w": {
+  "max_abs": 2.0265579223632812e-06,
+  "max_rel": 7.882837662046798e-07,
+  "scale": 2.570848226547241,
+  "exact": false
+ },
+ "grad_b": {
+  "max_abs": 1.1920928955078125e-06,
+  "max_rel": 6.026779391548406e-07,
+  "scale": 1.9779932498931885,
+  "exact": false
+ },
+ "grad_weights": {
+  "max_abs": 2.86102294921875e-06,
+  "max_rel": 1.7885535079466328e-07,
+  "scale": 15.996294975280762,
+  "exact": false
+ },
+ "grad_logT_soft": {
+  "max_abs": 7.152557373046875e-07,
+  "max_rel": 2.503127866863635e-06,
+  "scale": 0.2857447862625122,
+  "exact": false
+ },
+ "grad_logT_sel": {
+  "max_abs": 7.152557373046875e-07,
+  "max_rel": 4.624350163193317e-07,
+  "scale": 1.5467162132263184,
+  "exact": false
+ },
+ "summary": {
+  "worst_rel": 2.503127866863635e-06,
+  "rel_tol": 5e-05,
+  "fd_max_rel": 0.0003963266135630627,
+  "verdict": "PASS"
+ }
+}

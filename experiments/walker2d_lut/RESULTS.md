@@ -241,3 +241,116 @@ arriving from the other framework.
 The verification harness deliberately distinguishes "wrong row" from "sum-order noise"
 and fails loudly rather than passing on a loose tolerance; the torch↔JAX handoff is an
 .npz because the two frameworks live in separate venvs.
+
+---
+
+# Phase 3: the gradient-free ceiling (exp_c05)
+
+Scalable ES over batched MJX rollouts. **Vanilla CMA-ES is inapplicable here** — it
+maintains a d×d covariance, which at d ≈ 5–8k is 25–64 M entries and O(d³) per update —
+so this uses OpenAI-ES (antithetic mirrored sampling + rank normalisation) and
+sep-CMA-ES (diagonal covariance), both O(d).
+
+Each run: 150 generations × 128 population × 2 episodes × horizon 400 = **15.36 M
+env-steps**, ~20 min. MJX fitness is a horizon-400 proxy; the CPU-reference column is
+the comparable number.
+
+| run | params | MJX fitness | CPU reference (30 ep) | solved |
+|---|---:|---:|---|:--:|
+| MLP · sep-CMA-ES | 1,830 | 1391.6 | 2996.7 ± 913.8 | — (just below) |
+| MLP · OpenAI-ES | 1,830 | 1353.4 | 2051.1 ± 157.7 | — |
+| LUT · OpenAI-ES | 7,872 | 976.3 | 904.0 ± 222.6 | — |
+
+**A clean negative, and a useful one.** At this budget gradient-free search does *not*
+solve Walker2d — sep-CMA-ES reaches the edge of the bar with a σ of ±914, meaning it
+still falls often, against PPO's 5555 and SAC's 5273. The harness demonstrably
+optimises (mean fitness climbs from ~5 to ~1400 over 150 generations), which is what
+Phase 3 was for; it simply needs far more budget to compete.
+
+**The LUT is harder to evolve than the MLP** (904 vs 2051 under identical settings).
+This does *not* contradict Phase 1, where a 5,378-parameter LUT represented the policy
+at 99.2% retention. The gap is **searchability, not capacity**: 4.3× the search
+dimension, and discrete addressing means a perturbation either changes nothing or jumps
+to a different row — a rugged, partly-flat landscape that isotropic Gaussian ES handles
+badly. **A LUT is easy to fill and hard to evolve.**
+
+Single seed, one budget — indicative rather than settled.
+
+---
+
+# Phase 4: a LUT trained FROM SCRATCH by backprop (exp_c06)
+
+**The headline: yes — 4406.9 ± 426.8, solved, from random init with no teacher.**
+
+## The ported backward, and its verification
+
+The differentiable backward is a **hybrid**, and reproducing that faithfully is the
+whole job:
+
+* **table weights** → the honest *hard* gradient: a 1-row scatter of `grad_out` at the
+  row the forward actually selected (not a softmax-weighted average);
+* **x, hyperplanes, temperatures** → the *soft* full-K surrogate
+  `y = Σ_k softmax(ts_k/T_sel)·W[t,k,:]`, with the sign pattern pinned to the row the
+  forward chose and the table weights held constant.
+
+Rather than transcribe torch's softmax backward by hand (easy to get subtly wrong,
+hard to notice), the soft path is written once as a forward function and differentiated
+by JAX itself inside a `jax.custom_vjp`; `stop_gradient` on the weights reproduces
+torch's `d_sel_soft` path exactly. Temperatures are parametrised as log T, as in torch,
+so their gradients match without a chain-rule fixup.
+
+**Verified against torch's custom autograd** (fp32, hard forward, autocast off):
+
+| tensor | max abs Δ | max rel Δ |
+|---|---:|---:|
+| forward `y` | 0.000e+00 | **exact** |
+| `grad_x` | 7.00e-07 | 8.5e-07 |
+| `grad_w` (hyperplanes) | 2.03e-06 | 7.9e-07 |
+| `grad_b` | 1.19e-06 | 6.0e-07 |
+| `grad_weights` (table) | 2.86e-06 | 1.8e-07 |
+| `grad_log_T_soft` | 7.15e-07 | 2.5e-06 |
+| `grad_log_T_sel` | 7.15e-07 | 4.6e-07 |
+
+**Worst relative disagreement 2.5e-06 — fp32 noise. PASS.**
+
+**TF32 struck again, and more quietly this time.** The forward needed
+`Precision.HIGHEST` because a TF32 sign flip picks a whole wrong row — an obvious,
+loud failure. The *backward* needs it for a subtler reason: its einsums and the vjp's
+GEMMs also default to TF32, which showed up as ~5e-3 relative gradient error. That is
+small enough to pass a lax tolerance and be dismissed as "close enough", while
+silently degrading every gradient. Pinning precision took the worst error from
+**5.3e-03 to 2.5e-06 — a 2000× improvement.**
+
+**A finite-difference caveat worth recording:** the *hard* forward is piecewise constant,
+so its true derivative is 0 almost everywhere and finite-differencing it is
+meaningless. The FD check therefore targets the soft surrogate — the thing the backward
+actually claims to differentiate. At fp32 that probe initially reported 8e-1 relative
+error on a gradient that is provably correct; it is dominated by cancellation noise
+(~1e-7/ε), not by the derivative. A false alarm, not a bug.
+
+## From-scratch training
+
+PPO on the batched MJX loop with a random-init LUT as the policy (a small MLP critic is
+scaffolding for the update, not the representation under test), gradients through the
+verified surrogate.
+
+* LUT: nap 8, tph 16 → **24,576 table + 2,304 addressing = 26,880 params**
+* 600 iterations × 1024 envs × rollout 32 = **19.66 M env-steps in 5.1 min**
+  (~64,600 env-steps/s)
+* proxy return climbs 141 → 4245 monotonically
+
+**CPU reference, deterministic, 100 episodes: 4406.9 ± 426.8 → SOLVED.**
+
+## What the three routes together say
+
+| route | LUT params | CPU reference | solved |
+|---|---:|---|:--:|
+| distillation from a PPO teacher | 5,378 | 5512 ± 431 | ✅ |
+| **backprop from scratch (no teacher)** | **26,880** | **4406.9 ± 426.8** | **✅** |
+| evolution (OpenAI-ES) | 7,872 | 904 ± 223 | ✗ |
+
+A LUT can be **filled** (distillation), and it can be **trained** (backprop) — but at
+this budget it cannot be **evolved**. The differentiable surrogate is doing real work:
+it is the difference between 4407 and 904. For the #74 spiking track, that argues for
+obtaining LUT tables by gradient training and *then* compiling them, rather than hoping
+to search for them directly.

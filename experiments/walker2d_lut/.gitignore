@@ -27,8 +27,7 @@ ppo_mjx_108.json
 # Local scratch
 __pycache__/
 MUJOCO_LOG.TXT
-.slack_progress.handle
-.slack_ppo.handle
+.slack_*.handle
 
 # exp_c03/c04/c05 artifacts
 obs.npy
@@ -36,3 +35,8 @@ act.npy
 *.npy
 torch_reference.npz
 sweep_partial.json
+
+# exp_c06
+torch_grads.npz
+lut_scratch_params.npz
+ppo_lut_scratch.json

@@ -71,7 +71,12 @@ def lut_spec(nap=6, tph=16, heads=1):
         p = dict(w=flat[:nw].reshape(sw), b=flat[nw:nw + nb].reshape(sb),
                  weights=flat[nw + nb:].reshape(sv), n_heads=heads, tph=tph)
         x = (obs - norm[0]) / (norm[1] + 1e-6)
-        return jnp.clip(jax_lut.lut_forward(p, x).sum(1), -1.0, 1.0)
+        # `apply` is called under vmap, so obs arrives rank-1 [D]; lut_forward is
+        # written for a batch [B, D] (its dot_general contracts axis 1). Add and drop
+        # a singleton batch axis rather than special-casing the ported forward, which
+        # is verified bit-exact against torch and should not be touched.
+        y = jax_lut.lut_forward(p, x[None])[0]          # [n_heads, ACT]
+        return jnp.clip(y.sum(0), -1.0, 1.0)
 
     def init(key):
         k1, k2, k3 = jax.random.split(key, 3)

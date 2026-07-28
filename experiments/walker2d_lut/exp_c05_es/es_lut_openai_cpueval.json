@@ -1,0 +1,8 @@
+{
+ "mu": "es_lut_openai_mu.npy",
+ "policy": "lut",
+ "episodes": 30,
+ "cpu_reference_mean": 903.9695781365765,
+ "cpu_reference_std": 222.5979025703626,
+ "solved": false
+}
