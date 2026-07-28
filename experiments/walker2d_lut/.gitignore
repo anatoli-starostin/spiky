@@ -40,3 +40,6 @@ sweep_partial.json
 torch_grads.npz
 lut_scratch_params.npz
 ppo_lut_scratch.json
+
+# in-progress artifacts
+*.partial

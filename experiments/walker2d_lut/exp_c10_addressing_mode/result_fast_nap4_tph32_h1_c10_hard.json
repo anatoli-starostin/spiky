@@ -1,0 +1,48 @@
+{
+ "name": "fast_nap4_tph32_h1_c10_hard",
+ "module": "fast",
+ "nap": 4,
+ "tph": 32,
+ "heads": 1,
+ "rows": 16,
+ "forward_mode": "hard",
+ "table_params": 3072,
+ "index_params": 0,
+ "total_params": 3074,
+ "dataset_pairs": 4001792,
+ "epochs": 6,
+ "final_action_mse": 0.06283044995417858,
+ "heldout_action_mse": 0.05373488366603851,
+ "eval_mean": 261.05609503970646,
+ "eval_std": 13.94778042699675,
+ "teacher_retention_pct": 4.699056701281729,
+ "solved": false,
+ "train_s": 14.3,
+ "history": [
+  {
+   "epoch": 0,
+   "action_mse": 0.07090028134787583
+  },
+  {
+   "epoch": 1,
+   "action_mse": 0.06313744545013414
+  },
+  {
+   "epoch": 2,
+   "action_mse": 0.06310466172873302
+  },
+  {
+   "epoch": 3,
+   "action_mse": 0.06301165240203833
+  },
+  {
+   "epoch": 4,
+   "action_mse": 0.06290136570131888
+  },
+  {
+   "epoch": 5,
+   "action_mse": 0.06283044995417858
+  }
+ ],
+ "checkpoint": "lut_fast_nap4_tph32_h1_c10_hard.pt"
+}

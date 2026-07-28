@@ -616,3 +616,58 @@ a data limit.
 
 Caveats: single seed per config; the geometry axis also shifts the observation
 distribution; friction ×1.5–2.0 collapses most policies (task limit).
+
+---
+
+# The 2×2: addressing × forward mode (exp_c10)
+
+All cells at `nap4/tph32`, same PPO-teacher dataset, same deterministic 100-episode
+CPU-reference protocol, each **trained in the mode it is evaluated in**.
+
+| variant | params | CPU-ref mean ± σ | held-out MSE |
+|---|---:|---|---:|
+| **hyperplane + hybrid_smooth** | 5,378 | **5520.0 ± 356.6** | 0.0086 |
+| hyperplane + hard | 5,378 | 3869.1 ± 1928.3 | 0.0144 |
+| fast (anchors) + hybrid_smooth | 3,074 | 239.1 ± 4.3 | 0.0386 |
+| fast (anchors) + hard | 3,074 | 261.1 ± 13.9 | 0.0537 |
+
+And the cross number — **trained smooth, evaluated hard**:
+
+| variant | CPU-ref mean ± σ |
+|---|---|
+| hyperplane, train smooth → eval hard | **462.5 ± 606.0** |
+| fast, train smooth → eval hard | 255.4 ± 38.0 |
+
+(The `fast` variants have fewer parameters because fixed anchor pairs are buffers, not
+learned weights: 3,072 table + 2 temperatures, against hyperplane's extra 2,304
+addressing parameters.)
+
+## Takeaway 1 — what hard mode costs
+
+Trained *in* hard mode, the single-read table reaches **3869 ± 1928 against 5520 ± 357**:
+a **30% drop in return, and a 5.4× increase in variance.** It still clears the 3000 bar,
+but it falls often rather than walking every episode.
+
+**The cross number is the important one, and it is brutal: 5520 → 462, a 92% collapse.**
+Taking a hybrid-smooth-trained table and simply switching it to single-read at inference
+destroys it. The two forward modes are not interchangeable at deployment — a table must
+be *trained* in the mode it will be *run* in.
+
+That directly governs the #74 spiking track: the spiking construction implements the
+**hard**, single-row, zero-multiply read. So any table destined for compilation must be
+trained hard-mode from the start, and should be expected to cost ~30% against the smooth
+number — not the ~0% that quoting 5520 would imply. Every LUT figure in this project
+before now was hybrid_smooth; this is the correction.
+
+## Takeaway 2 — how much learned addressing is worth
+
+At this size, fixed anchor pairs **do not work at all**: 239 and 261, i.e. a walker that
+falls immediately, against 5520 for learned hyperplanes. That is not a degradation, it is
+a failure — a 23× gap.
+
+It is consistent with, and sharper than, the earlier observation at a much larger config
+(`fast` nap8/tph64 reached 4084 ± 1764 against hyperplane's 5584 ± 38). Fixed random
+anchors evidently need a great deal of capacity before they can address this task at all,
+while learned hyperplanes work at 5,378 parameters. **Where you look matters far more
+than what you store**, and at small table sizes it is the difference between walking and
+falling over.
