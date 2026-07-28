@@ -1,0 +1,31 @@
+# Run artifacts for the walker2d_lut chapter — regenerable, kept out of git.
+# (The repo-wide rule only covers experiments/**/*.pt; SB3 writes .zip and the JAX
+#  side writes .msgpack, so they are named explicitly here.)
+#
+# NOTE: patterns are deliberately UNANCHORED (no leading path segment). A pattern
+# containing a mid-string "/" is anchored to this directory, so "run_seed*/ckpt/"
+# would NOT match exp_c01_sac_baseline/run_seed0/ckpt/ — use "**/" or a bare glob.
+
+# Checkpoints / trained weights
+**/ckpt/
+*.zip
+*.msgpack
+
+# Raw frame dumps and rendered video (multi-MB; see RESULTS.md for where they live)
+*.npz
+*.mp4
+*.png
+
+# TensorBoard event files
+**/tb/
+
+# Full per-iteration PPO log (482 KB of JSON); the downsampled curve is committed
+ppo_mjx_full.json
+ppo_mjx_108.json
+*.json.partial
+
+# Local scratch
+__pycache__/
+MUJOCO_LOG.TXT
+.slack_progress.handle
+.slack_ppo.handle

@@ -1,0 +1,74 @@
+{
+  "experiment": "exp_c01_sac_baseline",
+  "phase": "roadmap step 1 \u2014 DL baseline / distillation teacher",
+  "issue": 75,
+  "branch": "walker2d-lut",
+  "implementer": "gpustar (RTX 5090)",
+  "goal": "Train the SAC reference policy on Walker2d-v5 to ~4000-5000 mean return; save the actor as the teacher for the LUT distillation arm (roadmap step 2).",
+  "env": {
+    "id": "Walker2d-v5",
+    "obs_space": "Box(-inf, inf, (17,), float64)",
+    "act_space": "Box(-1.0, 1.0, (6,), float32)",
+    "note": "matches the issue spec: 17-dim obs (x-position excluded by default), 6 continuous torques"
+  },
+  "algo": "SAC (stable-baselines3)",
+  "hyperparameters": {
+    "net_arch": [
+      256,
+      256
+    ],
+    "activation_fn": "ReLU",
+    "learning_rate": 0.0003,
+    "buffer_size": 1000000,
+    "batch_size": 256,
+    "gamma": 0.99,
+    "tau": 0.005,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "learning_starts": 10000,
+    "ent_coef": "auto",
+    "target_entropy": -6.0,
+    "total_timesteps": 1000000,
+    "seed": 0,
+    "spec_source": "issue #75, verbatim"
+  },
+  "eval_protocol": {
+    "deterministic": true,
+    "final_episodes": 100,
+    "progress_episodes": 10,
+    "progress_every_steps": 25000,
+    "solved_bar": 3000,
+    "expected": "4000-5000 by 1M steps"
+  },
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090 (sm_120)",
+    "device_used": "cuda",
+    "device_note": "cuda 233 fps vs cpu-1-thread 184 fps vs cpu-default 20 fps. The default CPU run collapses because torch's thread pool thrashes on a [256,256] MLP; launch.sh pins OMP/MKL threads to 1."
+  },
+  "versions": {
+    "gymnasium": "1.3.0",
+    "mujoco": "3.10.0",
+    "stable-baselines3": "2.9.0",
+    "torch": "2.9.1+cu130",
+    "numpy": "2.2.6",
+    "python": "3.12"
+  },
+  "rendering": {
+    "backend": "MUJOCO_GL=glfw",
+    "note": "egl fails (EGLError) and osmesa is not installed on this box; glfw works offscreen via the active session."
+  },
+  "measured": {
+    "final_eval_mean_100ep": 5273.4,
+    "final_eval_std_100ep": 33.9,
+    "solved": true,
+    "wall_clock_h": 1.762,
+    "fps": 157.6,
+    "milestones": {
+      "100000": 520.4,
+      "300000": 3898.8,
+      "1000000": 5274.6
+    },
+    "note": "seed 0 only; seeds 1-2 stopped at 125k when the GPU-parallel track became the main path"
+  },
+  "status": "COMPLETE \u2014 seed 0 finished 1M steps; pinned reference baseline for the LUT arms"
+}
