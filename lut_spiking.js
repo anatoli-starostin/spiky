@@ -276,22 +276,24 @@
   // list (src, dst, kind) — a STABLE skeleton that never changes with the input.
   // Every non-source node has incoming edges; every non-output node has outgoing.
   function circuitTopology(m) {
-    const { D, K, Dout } = m.cfg;
+    const { D, K, Dout, T_READ, DBASE, KAPPA } = m.cfg;
+    const THETA = 50, INH = -20;              // must match simulateCircuit's constants
+    const th = thetas(m);
     const edges = [];
-    const add = (src, dst, kind) => edges.push({ src, dst, kind });
+    const add = (src, dst, kind, weight) => edges.push({ src, dst, kind, weight });
     for (let k = 0; k < K; k++) {
-      for (let i = 0; i < D; i++) add('x' + i, 'H' + k, 'ramp');   // inputs -> detectors
-      add('CLK', 'H' + k, 'step');                                 // clock gate
-      add('CLK', 'C' + k, 'step');                                 // complement excitation
-      add('H' + k, 'C' + k, 'step');                               // feedforward inhibition
+      for (let i = 0; i < D; i++) add('x' + i, 'H' + k, 'ramp', -m.W[k][i]);   // inputs -> detectors (Wd=-W)
+      add('CLK', 'H' + k, 'step', THETA - th[k]);                              // clock gate pulse
+      add('CLK', 'C' + k, 'step', 1);                                          // complement excitation
+      add('H' + k, 'C' + k, 'step', INH);                                      // feedforward inhibition
     }
-    add('START', 'CLK', 'step');
+    add('START', 'CLK', 'step', 1);
     for (let a = 0; a < (1 << K); a++) {
       for (let k = 0; k < K; k++) {
         const bit = (a >> (K - 1 - k)) & 1;
-        add((bit ? 'H' : 'C') + k, 'r' + a, 'step');               // polarity lines -> row
+        add((bit ? 'H' : 'C') + k, 'r' + a, 'step', 1);                        // polarity lines -> row
       }
-      for (let j = 0; j < Dout; j++) add('r' + a, 'o' + j, 'step'); // rows -> outputs
+      for (let j = 0; j < Dout; j++) add('r' + a, 'o' + j, 'step', DBASE - KAPPA * m.V[a][j]); // rows -> outputs (delay-coded value)
     }
     return edges;
   }

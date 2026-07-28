@@ -21,6 +21,25 @@
   const TOPO = LS.circuitTopology(m);   // full fixed wiring — stable skeleton, computed once
   let x = new Array(D).fill(0);
 
+  const MIN_TRAVEL = 0.6;               // min on-screen dot travel (zero-delay hops would teleport)
+  const MAXW = Math.max(1e-6, ...TOPO.map((e) => Math.abs(e.weight)));
+  const visualArrival = (e) => e.tDepart + Math.max(e.tArrive - e.tDepart, MIN_TRAVEL);
+  // per-node incoming EPSPs (with VISUAL arrival = dot-landing time) and visual fire time,
+  // recomputed per input in recompute(). The fill is reconstructed from these so it responds
+  // exactly when a dot lands (not at the real zero-delay instant), keeping fill and dots in sync.
+  let INCOMING = {}, FIREVISUAL = {};
+  function nodeV(id, t) {              // membrane at t from EPSPs that have visually arrived
+    const inc = INCOMING[id]; if (!inc) return 0;
+    let V = 0;
+    for (const e of inc) { if (t < e.tv) continue; V += e.kind === 'ramp' ? e.weight * (t - e.tv) : e.weight; }
+    return V;
+  }
+  // synapse-weight colour: blue negative, red positive, gray ~zero; opacity ~ |w| / max|w|
+  function weightColor(wt) {
+    const mag = Math.min(1, Math.abs(wt) / MAXW);
+    return { color: Math.abs(wt) < 1e-9 ? '#6b7280' : (wt < 0 ? '#5b9dff' : '#ff6b6b'), alpha: 0.12 + 0.55 * mag };
+  }
+
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
   const fmt = (v) => (v >= 0 ? ' ' : '') + v.toFixed(3);
   const bitBox = (b) => `<span class="bit ${b ? 'on' : 'off'}">${b}</span>`;
@@ -86,6 +105,24 @@
     for (const n in S.st) if (S.st[n].fired) Tmax = Math.max(Tmax, S.st[n].tf);
     Tmax += 0.6;
     const sc = document.getElementById('scrub'); sc.max = Tmax.toFixed(2); sc.step = (Tmax / 600).toFixed(4);
+    // build per-node incoming EPSPs (visual arrival times) + the visual fire time for the fill
+    INCOMING = {}; FIREVISUAL = {};
+    for (const e of S.events) {
+      const tv = visualArrival(e);
+      (INCOMING[e.dst] || (INCOMING[e.dst] = [])).push({ kind: e.kind, weight: e.weight, tv, src: e.src });
+    }
+    for (const id in S.thr) {
+      const thr = S.thr[id], evs = (INCOMING[id] || []).slice().sort((a, b) => a.tv - b.tv);
+      let V = 0, slope = 0, last = 0, fv = Infinity;
+      for (const e of evs) {                       // walk breakpoints, find threshold crossing
+        V += slope * (e.tv - last); last = e.tv;
+        if (e.kind === 'ramp') slope += e.weight; else V += e.weight;
+        if (V > thr) { fv = e.tv; break; }
+      }
+      FIREVISUAL[id] = (S.st[id] && S.st[id].fired) ? fv : Infinity;
+    }
+    FIREVISUAL['START'] = 0;                        // sources fire at their own spike time
+    for (let i = 0; i < D; i++) FIREVISUAL['x' + i] = S.tin[i];
     updateLutReadout();       // LUT side is constant for this input — set once here
     lastDone = null;          // force sim-side readout refresh
   }
@@ -105,62 +142,61 @@
       const u = h - padT - padB;
       ids.forEach((id, ri) => { pos[id] = { x: cx, y: padT + (ri + 0.5) * u / ids.length }; });
     });
-    // (1) STATIC SKELETON — the full fixed wiring, faint, NEVER changes with input.
-    // Guarantees every non-source node shows incoming AND every non-output node
-    // shows outgoing edges, regardless of which synapses carried a spike this round.
-    ctx.strokeStyle = css('--edge'); ctx.lineWidth = 1; ctx.globalAlpha = 0.14;
+    const CLOCKCOL = css('--ok');
+    // (1) STATIC SKELETON coloured by synaptic weight (blue −, red +, gray 0; opacity ~ |w|).
+    ctx.lineWidth = 1;
     for (const e of TOPO) {
       const a = pos[e.src], b = pos[e.dst]; if (!a || !b) continue;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    }
-    // (2) ACTIVE edges this input (carried a spike) — brighter overlay on the skeleton.
-    ctx.strokeStyle = css('--muted'); ctx.globalAlpha = 0.5;
-    const seen = {};
-    for (const e of S.events) {
-      const key = e.src + '>' + e.dst; if (seen[key]) continue; seen[key] = 1;
-      const a = pos[e.src], b = pos[e.dst]; if (!a || !b) continue;
+      const wc = weightColor(e.weight);
+      ctx.strokeStyle = wc.color; ctx.globalAlpha = wc.alpha;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    // EVERY carried spike animates a dot. A near-zero real delay (input->detector
-    // ramps have delay 0) would teleport, so give every hop a MIN on-screen travel
-    // time; genuinely longer delays (START->CLOCK, row->output) travel longer.
-    const MIN_TRAVEL = 0.6;
+    // (2) traveling dots + a brighter glow on the edge a spike is currently on (weight colour kept).
     for (const e of S.events) {
       const a = pos[e.src], b = pos[e.dst]; if (!a || !b) continue;
       const vspan = Math.max(e.tArrive - e.tDepart, MIN_TRAVEL);
       if (simT < e.tDepart || simT > e.tDepart + vspan) continue;
-      const fr = (simT - e.tDepart) / vspan;                 // 0 at src, 1 at dst (left -> right)
+      const fr = (simT - e.tDepart) / vspan;                 // 0 at src, 1 at dst
+      const wc = weightColor(e.weight);
+      ctx.strokeStyle = wc.color; ctx.globalAlpha = Math.min(0.9, wc.alpha + 0.4); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.lineWidth = 1; ctx.globalAlpha = 1;
       const dx = a.x + (b.x - a.x) * fr, dy = a.y + (b.y - a.y) * fr;
-      ctx.fillStyle = e.weight < 0 ? css('--bad') : nodeColor(e.src);
-      ctx.beginPath(); ctx.arc(dx, dy, 3.6, 0, 7); ctx.fill();
+      ctx.fillStyle = e.src === 'CLK' ? CLOCKCOL : (e.weight < 0 ? '#5b9dff' : '#ff6b6b');
+      ctx.beginPath(); ctx.arc(dx, dy, e.src === 'CLK' ? 4.4 : 3.6, 0, 7); ctx.fill();
     }
+    // (3) arrival KICKS — a ripple on the target node the instant a dot lands ("dot -> response").
+    const KICK = 0.32;
+    for (const e of S.events) {
+      const tv = visualArrival(e), p = pos[e.dst]; if (!p) continue;
+      if (simT < tv || simT > tv + KICK) continue;
+      const a = 1 - (simT - tv) / KICK, isClk = e.src === 'CLK';
+      ctx.strokeStyle = isClk ? CLOCKCOL : (e.weight < 0 ? '#5b9dff' : css('--spike'));
+      ctx.globalAlpha = 0.75 * a; ctx.lineWidth = isClk ? 2.5 : 1.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, R + (isClk ? 13 : 8) * (1 - a), 0, 7); ctx.stroke();
+      ctx.lineWidth = 1; ctx.globalAlpha = 1;
+      if (isClk && a > 0.35) { ctx.fillStyle = CLOCKCOL; ctx.font = 'bold 8px ui-monospace'; ctx.textAlign = 'center'; ctx.fillText('CLOCK', p.x, p.y - R - 6); ctx.textAlign = 'left'; }
+    }
+    // (4) nodes: base disc + membrane fill (synced to dot arrivals) + flash + border + label.
+    const DRAIN = 0.5;
     for (const id in pos) {
-      const p = pos[id], s = S.st[id];
-      const fired = s && s.fired && s.tf <= simT;
-      const flashing = s && s.fired && Math.abs(simT - s.tf) < FLASH;
-      const col = nodeColor(id);
-      // membrane fill fraction from the REAL simulator trace: V(simT)/threshold.
-      // Charges up to ~1 at the fire time, then drains over a short window after the spike.
+      const p = pos[id], col = nodeColor(id), fv = FIREVISUAL[id], thr = S.thr[id];
+      const fired = isFinite(fv) && simT >= fv;
+      const flashing = isFinite(fv) && Math.abs(simT - fv) < FLASH;
       let frac = 0;
-      const tr = S.traces[id], thr = S.thr[id], DRAIN = 0.5;
-      if (tr && thr) frac = fired ? Math.max(0, 1 - (simT - s.tf) / DRAIN)
-                                  : Math.max(0, Math.min(1, Vat(tr, simT) / thr));
+      if (thr) frac = fired ? Math.max(0, 1 - (simT - fv) / DRAIN) : Math.max(0, Math.min(1, nodeV(id, simT) / thr));
       if (flashing) {
-        const a = 1 - Math.abs(simT - s.tf) / FLASH;
+        const a = 1 - Math.abs(simT - fv) / FLASH;
         ctx.globalAlpha = 0.5 * a; ctx.fillStyle = col;
         ctx.beginPath(); ctx.arc(p.x, p.y, R + 7 * a, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
       }
-      // base disc (empty)
       ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.fillStyle = '#20262f'; ctx.fill();
-      // membrane fill from the bottom — charging, or draining after a spike
       if (frac > 0.002) {
         ctx.save(); ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.clip();
         ctx.globalAlpha = 0.85; ctx.fillStyle = col;
         const fh = 2 * R * frac; ctx.fillRect(p.x - R, p.y + R - fh, 2 * R, fh);
         ctx.globalAlpha = 1; ctx.restore();
       }
-      // border: coloured once the neuron has fired (persistent marker), dim otherwise
       ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7);
       ctx.strokeStyle = fired ? col : css('--edge'); ctx.lineWidth = fired ? 2 : 1; ctx.stroke(); ctx.lineWidth = 1;
       ctx.fillStyle = frac > 0.55 ? '#05080d' : css('--muted'); ctx.font = 'bold 9px ui-monospace'; ctx.textAlign = 'center';

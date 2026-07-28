@@ -48,7 +48,11 @@
     <div class="panel">
       <h2>Graph — spikes propagating (dots travel at the conduction-delay speed)</h2>
       <canvas id="animgraph" height="430"></canvas>
-      <p class="small">Layers flow left → right: START · INPUT → CLOCK → DETECTORS → COMPLEMENTS → ROWS → OUTPUT. Every dot travels src → dst (left → right); input dots launch as soon as each input fires.</p>
+      <p class="small">Layers flow left → right: START · INPUT → CLOCK → DETECTORS → COMPLEMENTS → ROWS → OUTPUT. Every dot travels src → dst; a ripple kicks a node when a spike lands, and the node fills with its membrane potential (V / threshold) — the big jump to threshold is the green <b>CLOCK</b> pulse doing the fixed-window readout.</p>
+      <p class="small">Edge colour = synapse weight:
+        <span style="color:#5b9dff">■ negative</span> ·
+        <span style="color:#6b7280">■ zero</span> ·
+        <span style="color:#ff6b6b">■ positive</span> — opacity ∝ |weight|.</p>
     </div>
 
     <!-- RASTER (fills in sync) -->
