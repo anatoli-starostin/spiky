@@ -51,12 +51,21 @@ def make_model(axis=None, value=1.0, xml=XML):
     return m
 
 
-def eval_batched(model, policy_fn, episodes=100, max_steps=1000, seed0=0):
+def eval_batched(model, policy_fn, episodes=100, max_steps=1000, seed0=0,
+                 progress=None, progress_every=25):
     """Deterministic eval of `episodes` episodes stepped in lockstep.
 
     Reward/termination reproduce Walker2d-v5 exactly:
       r = healthy(1.0) + dx/dt - 1e-3*||a||^2 ; unhealthy if z not in (0.8,2.0)
       or |angle| > 1 ; truncate at 1000 steps ; reset noise U(-5e-3, 5e-3).
+
+    `progress`, if given, is called as progress(step, max_steps, done, episodes,
+    running_mean) every `progress_every` steps and once at the end. Note the
+    episodes run IN LOCKSTEP, so `done` (episodes terminated) is NOT a monotone
+    stand-in for elapsed work: a policy that never falls sits at 0/episodes until
+    the step loop truncates. `step/max_steps` is the honest progress axis;
+    `running_mean` is the mean over ALL episodes of return accumulated so far,
+    so it rises toward the final number rather than estimating it.
     """
     dt = model.opt.timestep * FRAME_SKIP
     datas, alive, rets = [], np.ones(episodes, bool), np.zeros(episodes)
@@ -68,7 +77,8 @@ def eval_batched(model, policy_fn, episodes=100, max_steps=1000, seed0=0):
         mujoco.mj_forward(model, d)
         datas.append(d)
 
-    for _ in range(max_steps):
+    worked = reported = 0
+    for step in range(1, max_steps + 1):
         if not alive.any():
             break
         idx = np.flatnonzero(alive)
@@ -86,6 +96,14 @@ def eval_batched(model, policy_fn, episodes=100, max_steps=1000, seed0=0):
             z, ang = d.qpos[1], d.qpos[2]
             if not (0.8 < z < 2.0 and -1.0 < ang < 1.0):
                 alive[i] = False
+        worked = step
+        if progress is not None and step % progress_every == 0:
+            progress(step, max_steps, int(episodes - alive.sum()), episodes,
+                     float(rets.mean()))
+            reported = step
+    if progress is not None and reported != worked:   # every walker fell early
+        progress(worked, max_steps, int(episodes - alive.sum()), episodes,
+                 float(rets.mean()))
     return float(rets.mean()), float(rets.std()), rets
 
 

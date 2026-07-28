@@ -5,7 +5,7 @@ gymnasium Walker2d-v5 on CPU MuJoCo — the only number comparable to the
 4407 / 5512 / 5277 anchors. The MJX return printed during training is a horizon-1000
 proxy in perturbation-free MJX physics and is NOT that number.
 """
-import argparse, json, os, sys
+import argparse, json, os, sys, time
 
 import jax, jax.numpy as jnp
 import numpy as np
@@ -66,11 +66,23 @@ def main():
     ap.add_argument("--forward-mode", default=None,
                     choices=["hard", "hybrid_smooth"],
                     help="default: inferred from the checkpoint filename")
+    ap.add_argument("--progress", metavar="LABEL", default=None,
+                    help="stream a live timestamped progress line under LABEL")
     a = ap.parse_args()
     mode = a.forward_mode or mode_from_name(a.actor)
     fn, n = load_actor(os.path.join(HERE, a.actor), forward_mode=mode)
     m = perturb.make_model(None, 1.0)
-    mean, sd, _ = perturb.eval_batched(m, fn, episodes=a.episodes)
+
+    prog = None
+    if a.progress:
+        def prog(step, max_steps, done, eps, mean_so_far):
+            ts = time.strftime("%H:%M:%S", time.gmtime())
+            bar = int(24 * step / max_steps)
+            print(f"    [{ts}] {a.progress:<12} [{'#' * bar}{'.' * (24 - bar)}] "
+                  f"step {step:>4}/{max_steps}  fallen {done:>3}/{eps}  "
+                  f"mean-so-far {mean_so_far:7.1f}", flush=True)
+
+    mean, sd, _ = perturb.eval_batched(m, fn, episodes=a.episodes, progress=prog)
     print(f"{a.actor} ({n:,} params) [{mode}] | CPU-reference {a.episodes}-ep deterministic: "
           f"{mean:.1f} +/- {sd:.1f}  [anchors: PPO-scratch 4407 | SAC 5277 | "
           f"distill 5512]", flush=True)

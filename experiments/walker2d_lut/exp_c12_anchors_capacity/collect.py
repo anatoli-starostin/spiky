@@ -6,7 +6,7 @@ cell (skipping any already evaluated), then prints the table sorted by CPU-ref s
 Baseline nap6/tph32 = 4302.4 +/- 49.9 is reused from exp_c11 rather than rerun.
 Target: hyperplane x hard = 5146.9 +/- 28.2 at 28,032 params.
 """
-import json, os, re, subprocess, sys
+import json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 C09 = os.path.join(HERE, "..", "exp_c09_lut_sac")
@@ -45,12 +45,63 @@ def active(nap, tph, addressing, heads=1):
     return reads, addr, reads + addr
 
 
+def run_eval(actor, label, done_n, todo_n):
+    """Evaluate one cell, streaming the child's live progress lines through.
+
+    The 100 episodes are stepped in LOCKSTEP inside a single process, so there is
+    no per-episode completion to count down: the child reports step/1000, how many
+    walkers have fallen, and the running mean. `done_n/todo_n` is the overall
+    cell counter across the sweep.
+    """
+    t0 = time.time()
+    print(f"  [{time.strftime('%H:%M:%S', time.gmtime())}] cell {done_n + 1}/{todo_n}"
+          f"  evaluating {label} (100-ep deterministic CPU reference) ...", flush=True)
+    p = subprocess.Popen(
+        [PY, "-u", os.path.join(C09, "eval_cpu.py"), actor,
+         "--episodes", "100", "--forward-mode", "hard", "--progress", label],
+        cwd=C09, env=dict(os.environ, XLA_PYTHON_CLIENT_PREALLOCATE="false"),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    tail = []
+    for line in p.stdout:
+        line = line.rstrip()
+        if line.startswith("    ["):                 # live progress from the child
+            print(line, flush=True)
+        elif "CPU-reference" in line:
+            print(f"    -> {line.strip()}", flush=True)
+        tail.append(line)
+    err = p.stderr.read()
+    if p.wait() != 0:
+        print(f"    FAILED ({label}): {err[-300:] or chr(10).join(tail[-5:])}",
+              flush=True)
+        return False
+    print(f"    done {label} in {time.time() - t0:.0f}s "
+          f"({done_n + 1}/{todo_n} cells evaluated)", flush=True)
+    return True
+
+
 def main():
     rows = []
     t, a_, tot = params(BASE["nap"], BASE["tph"])
     ar, aa, at = active(BASE["nap"], BASE["tph"], "anchors")
     rows.append(dict(BASE, table=t, addr=a_, total=tot,
                      act_reads=ar, act_addr=aa, act_total=at))
+
+    # First pass: which finished cells still need evaluating, so the live readout
+    # can quote a real "cell i/N" instead of counting up to an unknown total.
+    pending = []
+    for f in sorted(os.listdir(HERE)):
+        m = re.match(r"cell_nap(\d+)_tph(\d+)\.log$", f)
+        if not m:
+            continue
+        nap, tph = int(m.group(1)), int(m.group(2))
+        actor = f"lut_sac_c12_nap{nap}_tph{tph}_actor.npz"
+        if not os.path.exists(os.path.join(
+                C09, actor.replace("_actor.npz", "_cpueval.json"))):
+            pending.append((nap, tph))
+    if pending:
+        print(f"{len(pending)} cell(s) to evaluate: "
+              + ", ".join(f"nap{n}/tph{t_}" for n, t_ in pending), flush=True)
+    n_done = 0
 
     for f in sorted(os.listdir(HERE)):
         m = re.match(r"cell_nap(\d+)_tph(\d+)\.log$", f)
@@ -66,18 +117,9 @@ def main():
         actor = f"lut_sac_c12_nap{nap}_tph{tph}_actor.npz"
         ev = os.path.join(C09, actor.replace("_actor.npz", "_cpueval.json"))
         if not os.path.exists(ev):
-            print(f"  evaluating nap{nap}/tph{tph} ...", flush=True)
-            r = subprocess.run(
-                [PY, "-u", os.path.join(C09, "eval_cpu.py"), actor,
-                 "--episodes", "100", "--forward-mode", "hard"],
-                cwd=C09, env=dict(os.environ, XLA_PYTHON_CLIENT_PREALLOCATE="false"),
-                capture_output=True, text=True)
-            for line in r.stdout.splitlines():
-                if "CPU-reference" in line:
-                    print("   ", line.strip(), flush=True)
-            if r.returncode != 0:
-                print(f"    FAILED: {r.stderr[-300:]}", flush=True)
+            if not run_eval(actor, f"nap{nap}/tph{tph}", n_done, len(pending)):
                 continue
+            n_done += 1
         e = json.load(open(ev))
         t, a_, tot = params(nap, tph)
         ar, aa, at = active(nap, tph, "anchors")
