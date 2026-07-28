@@ -1,0 +1,8 @@
+{
+ "actor": "lut_sac_c12_nap8_tph128_actor.npz",
+ "params": 411648,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4683.360632622093,
+ "cpu_reference_std": 1119.8561637965017
+}

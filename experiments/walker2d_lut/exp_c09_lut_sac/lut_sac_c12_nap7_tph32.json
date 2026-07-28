@@ -1,0 +1,195 @@
+{
+ "config": {
+  "iters": 10000,
+  "envs": 64,
+  "rollout": 1,
+  "updates": 32,
+  "batch": 512,
+  "buffer": 1000000,
+  "warmup": 500,
+  "lr": 0.0003,
+  "actor_lr": 0.0003,
+  "gamma": 0.99,
+  "tau": 0.005,
+  "nap": 7,
+  "tph": 32,
+  "heads": 1,
+  "target_entropy": -6.0,
+  "row_clip": 1.0,
+  "coverage_bonus": 0.0,
+  "eval_every": 500,
+  "eval_episodes": 20,
+  "addressing": "anchors",
+  "forward_mode": "hard",
+  "tag": "_c12_nap7_tph32",
+  "out": null
+ },
+ "table_params": 49152,
+ "index_params": 4032,
+ "total_params": 53184,
+ "total_env_steps": 640000,
+ "wall_s": 2097.8,
+ "best_mjx": 4082.819580078125,
+ "history": [
+  {
+   "iter": 500,
+   "env_steps": 32000,
+   "mjx_return": 8.02452278137207,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 83.5
+  },
+  {
+   "iter": 1000,
+   "env_steps": 64000,
+   "mjx_return": 329.36090087890625,
+   "row_coverage": 0.810546875,
+   "alpha": 0.06496068835258484,
+   "elapsed_s": 208.5
+  },
+  {
+   "iter": 1500,
+   "env_steps": 96000,
+   "mjx_return": 250.3967742919922,
+   "row_coverage": 0.91845703125,
+   "alpha": 0.05979852005839348,
+   "elapsed_s": 317.9
+  },
+  {
+   "iter": 2000,
+   "env_steps": 128000,
+   "mjx_return": 298.49334716796875,
+   "row_coverage": 0.934814453125,
+   "alpha": 0.04859137907624245,
+   "elapsed_s": 426.0
+  },
+  {
+   "iter": 2500,
+   "env_steps": 160000,
+   "mjx_return": 368.6548156738281,
+   "row_coverage": 0.9443359375,
+   "alpha": 0.04079987853765488,
+   "elapsed_s": 534.7
+  },
+  {
+   "iter": 3000,
+   "env_steps": 192000,
+   "mjx_return": 206.89627075195312,
+   "row_coverage": 0.9599609375,
+   "alpha": 0.03578786924481392,
+   "elapsed_s": 643.2
+  },
+  {
+   "iter": 3500,
+   "env_steps": 224000,
+   "mjx_return": 349.84320068359375,
+   "row_coverage": 0.96923828125,
+   "alpha": 0.03912300243973732,
+   "elapsed_s": 750.7
+  },
+  {
+   "iter": 4000,
+   "env_steps": 256000,
+   "mjx_return": 295.05474853515625,
+   "row_coverage": 0.973876953125,
+   "alpha": 0.03715135157108307,
+   "elapsed_s": 857.2
+  },
+  {
+   "iter": 4500,
+   "env_steps": 288000,
+   "mjx_return": 653.7991943359375,
+   "row_coverage": 0.978515625,
+   "alpha": 0.0392889641225338,
+   "elapsed_s": 960.0
+  },
+  {
+   "iter": 5000,
+   "env_steps": 320000,
+   "mjx_return": 664.0513916015625,
+   "row_coverage": 0.984375,
+   "alpha": 0.04490441456437111,
+   "elapsed_s": 1065.1
+  },
+  {
+   "iter": 5500,
+   "env_steps": 352000,
+   "mjx_return": 904.9215698242188,
+   "row_coverage": 0.98876953125,
+   "alpha": 0.05285746976733208,
+   "elapsed_s": 1170.4
+  },
+  {
+   "iter": 6000,
+   "env_steps": 384000,
+   "mjx_return": 1271.17578125,
+   "row_coverage": 0.9912109375,
+   "alpha": 0.06029451638460159,
+   "elapsed_s": 1275.8
+  },
+  {
+   "iter": 6500,
+   "env_steps": 416000,
+   "mjx_return": 2207.65673828125,
+   "row_coverage": 0.9931640625,
+   "alpha": 0.0672583281993866,
+   "elapsed_s": 1380.4
+  },
+  {
+   "iter": 7000,
+   "env_steps": 448000,
+   "mjx_return": 2167.12451171875,
+   "row_coverage": 0.993896484375,
+   "alpha": 0.07496127486228943,
+   "elapsed_s": 1483.7
+  },
+  {
+   "iter": 7500,
+   "env_steps": 480000,
+   "mjx_return": 3596.69677734375,
+   "row_coverage": 0.994873046875,
+   "alpha": 0.07631301879882812,
+   "elapsed_s": 1588.7
+  },
+  {
+   "iter": 8000,
+   "env_steps": 512000,
+   "mjx_return": 3875.73095703125,
+   "row_coverage": 0.994873046875,
+   "alpha": 0.08183688670396805,
+   "elapsed_s": 1696.6
+  },
+  {
+   "iter": 8500,
+   "env_steps": 544000,
+   "mjx_return": 3845.13037109375,
+   "row_coverage": 0.995361328125,
+   "alpha": 0.08440287411212921,
+   "elapsed_s": 1802.9
+  },
+  {
+   "iter": 9000,
+   "env_steps": 576000,
+   "mjx_return": 3972.0703125,
+   "row_coverage": 0.99560546875,
+   "alpha": 0.08331416547298431,
+   "elapsed_s": 1906.4
+  },
+  {
+   "iter": 9500,
+   "env_steps": 608000,
+   "mjx_return": 3948.439453125,
+   "row_coverage": 0.99560546875,
+   "alpha": 0.08634025603532791,
+   "elapsed_s": 2010.1
+  },
+  {
+   "iter": 10000,
+   "env_steps": 640000,
+   "mjx_return": 4082.819580078125,
+   "row_coverage": 0.99560546875,
+   "alpha": 0.08809027820825577,
+   "elapsed_s": 2097.8
+  }
+ ]
+}

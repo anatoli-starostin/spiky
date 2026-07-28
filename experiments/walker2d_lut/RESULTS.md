@@ -931,3 +931,87 @@ construction, since it depends on blending two rows per table.
 ways) but a single-seed 2×2 cannot separate an interaction from seed noise. Three seeds
 per cell (~40 minutes) would settle it, and I would want that before treating the
 interaction as established.
+
+---
+
+# Can capacity close the fixed-anchor addressing gap? (exp_c12)
+
+The 2×2 left `anchors × hard` at 4302.4 against `hyperplane × hard` at 5146.9, both at
+28k params. This sweeps nap × tph on the anchors cell to ask whether capacity closes it —
+and, more importantly, **which kind** of capacity.
+
+Everything fixed except nap and tph: anchors (frozen), hard forward, ratio 0.5, 10,000
+iterations, same env and optimizer as the 2×2. Baseline reused, not rerun.
+
+**Total parameters are the wrong efficiency metric for a LUT.** In hard mode exactly one
+row fires per table, so what a sparse/in-memory-compute target actually pays is:
+
+* **active table reads** = `heads × tph × 12` — **independent of nap**. More rows is
+  more *memory*, not more work.
+* **active addressing** = `nap × tph × 2` element reads for anchors (a comparator looks
+  at two coordinates), versus `nap × tph × 17` multiply-accumulates for a dense
+  hyperplane.
+
+| nap | tph | rows | total par | act.rd | act.addr | act.tot | sparsity | CPU-ref (100 ep) | vs target |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| 6 | 64 | 64 | 56,066 | 768 | 768 | **1,536** | 2.74% | **4879.9 ± 41.0** | 95% |
+| 7 | 64 | 128 | 106,370 | 768 | 896 | 1,664 | 1.56% | 4736.5 ± 292.6 | 92% |
+| 8 | 128 | 256 | 411,650 | 1,536 | 2,048 | 3,584 | 0.87% | 4683.4 ± 1119.9 | 91% |
+| 6 | 128 | 64 | 112,130 | 1,536 | 1,536 | 3,072 | 2.74% | 4662.5 ± 28.0 | 91% |
+| 7 | 128 | 128 | 212,738 | 1,536 | 1,792 | 3,328 | 1.56% | 4659.4 ± 1021.0 | 91% |
+| 8 | 64 | 256 | 205,826 | 768 | 1,024 | 1,792 | 0.87% | 4598.3 ± 34.3 | 89% |
+| 8 | 32 | 256 | 102,914 | 384 | 512 | 896 | 0.87% | 4510.0 ± 105.9 | 88% |
+| 6 | 32 | 64 | 28,034 | 384 | 384 | 768 | 2.74% | 4302.4 ± 49.9 | 84% ← baseline |
+| 7 | 32 | 128 | 53,186 | 384 | 448 | 832 | 1.56% | 4202.2 ± 438.7 | 82% |
+
+**Reference — hyperplane × hard, nap6/tph32:** 28,034 total params; active **384 reads +
+3,264 MAC = 3,648** (13.01% sparsity); CPU-ref **5146.9 ± 28.2**.
+
+## The answer: no, and the reason is the interesting part
+
+**No anchors config reaches 5146.9.** The best is `nap6/tph64` at **4879.9 ± 41.0** — 95%
+of target.
+
+**The nap axis — the one that is free at inference — does essentially nothing.** At fixed
+tph=32, going nap 6 → 7 → 8 gives **4302 → 4202 → 4510**: a net +208 for a **3.7×**
+increase in stored parameters, and *non-monotone* (nap7 is worse than nap6, and the ±439
+spread on that cell says it is barely distinguishable from noise). Multiplying the number
+of rows from 64 to 256 does not buy meaningfully better control.
+
+**The tph axis — the one that costs active reads — is where the gain is**, and it
+saturates immediately: at nap6, tph 32 → 64 buys **+578** (4302 → 4880), and tph 64 → 128
+*loses* 217 (4880 → 4663). **The knee is tph = 64.**
+
+That is a negative result for the sparse-hardware story in its strongest form: you cannot
+buy away a bad partition with cheap memory. Fixed random comparators put the decision
+boundaries in the wrong places, and adding rows only subdivides an already-wrong
+partition more finely. Learned hyperplanes move the boundaries instead, which is why they
+reach 5147 with 64 rows and 32 tables.
+
+## But the efficiency framing is genuinely favourable
+
+The comparison that matters for a sparse target is not total parameters:
+
+| | CPU-ref | active values/step | active vs hyperplane |
+|---|---|---:|---:|
+| hyperplane × hard nap6/tph32 | 5146.9 ± 28.2 | 3,648 | 1.00× |
+| **anchors × hard nap6/tph64** | **4879.9 ± 41.0** | **1,536** | **0.42×** |
+
+**95% of the performance for 42% of the active work per step.** The saving is almost
+entirely in addressing: 768 sparse element reads versus 3,264 dense multiply-accumulates.
+Whether that trade is worth it depends on the target — on hardware where a dense
+17-wide MAC per address bit is the expensive part, it plainly is; on a GPU it is not.
+
+Two further observations worth carrying:
+
+* **Variance tracks the knee.** The cells at or below the knee are metronomic (±28, ±34,
+  ±41); the over-provisioned ones blow up (±1020, ±1120 at tph=128 with nap 7-8). Excess
+  capacity does not just fail to help, it destabilises — consistent with a policy that
+  has more rows than the data can pin down.
+* **Row coverage stays 99-100% everywhere**, so none of this is an under-training or
+  coverage artifact.
+
+**Caveat: one seed per cell.** With nine points and gaps of 100-200 return between
+neighbours — against a ±13% seed swing measured earlier — individual cell rankings are
+not reliable. What survives that scrutiny is the *shape*: nap flat, tph rising then
+falling, no cell reaching the target. I would not defend the ordering of the middle six.
