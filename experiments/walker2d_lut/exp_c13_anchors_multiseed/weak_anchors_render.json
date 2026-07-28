@@ -1,0 +1,10 @@
+{
+ "actor": "lut_sac_c13_nap6_tph32_s1_actor.npz",
+ "forward_mode": "hard",
+ "seed": 0,
+ "episode_return": 1061.0014387807178,
+ "steps": 294,
+ "fps": 125,
+ "duration_s": 2.352,
+ "frames_npz": "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c13_anchors_multiseed/weak_anchors_frames.npz"
+}
