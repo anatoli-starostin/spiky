@@ -69,15 +69,18 @@
 
   // ---- canvases sized ONCE --------------------------------------------------
   const canv = {};
-  ['graph', 'oraster'].forEach((id) => { const cv = document.getElementById(id); if (cv) canv[id] = { cv, ctx: cv.getContext('2d'), w: 0, h: 0 }; });
+  ['graph', 'oraster'].forEach((id) => { const cv = document.getElementById(id); if (cv) canv[id] = { cv, ctx: cv.getContext('2d'), w: 0, h: 0, hCSS: +cv.getAttribute('height') || 300 }; });
   let needResize = true;
   function resizeAll() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);   // cap DPR: retina phones report 3 → 9× fill cost = lag
     for (const id in canv) {
       const c = canv[id];
-      const w = c.cv.clientWidth || (c.cv.parentElement && c.cv.parentElement.clientWidth) || 820;
-      const h = +c.cv.getAttribute('height');
-      c.cv.width = Math.max(1, Math.round(w * dpr)); c.cv.height = Math.round(h * dpr);
+      const w = Math.round(c.cv.clientWidth || (c.cv.parentElement && c.cv.parentElement.clientWidth) || 820);
+      const h = c.hCSS;                                       // logical height from the ORIGINAL attribute (setting .height mutates it, so never re-read it)
+      const bw = Math.max(1, Math.round(w * dpr));
+      if (w === c.w && c.cv.width === bw) continue;           // CSS width unchanged (mobile address-bar show/hide fires resize but only height changes) → skip backing-store realloc/thrash
+      c.cv.style.height = h + 'px';                           // pin CSS height so it can't follow the mutated backing-store attribute
+      c.cv.width = bw; c.cv.height = Math.round(h * dpr);
       c.ctx.setTransform(dpr, 0, 0, dpr, 0, 0); c.w = w; c.h = h;
     }
     needResize = false;
@@ -307,6 +310,7 @@
   }
   function loop(ts) {
     try {
+      if (document.hidden) { lastTs = null; requestAnimationFrame(loop); return; }  // pause work while tab/page hidden
       if (lastTs == null) lastTs = ts;
       let dt = (ts - lastTs) / 1000; lastTs = ts; if (dt > 0.1) dt = 0.1;
       if (playing) { simT += dt * speed * RATE; if (simT >= Tmax) { simT = Tmax; playing = false; setPlay(false); } document.getElementById('scrub').value = simT; dirty = true; }
@@ -333,6 +337,7 @@
   document.getElementById('speed').onchange = (e) => { speed = parseFloat(e.target.value); };
   document.getElementById('scrub').addEventListener('input', (e) => { playing = false; setPlay(false); simT = parseFloat(e.target.value); dirty = true; });
   window.addEventListener('resize', () => { needResize = true; });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { needResize = true; dirty = true; } });
 
   recompute();
   requestAnimationFrame(loop);
