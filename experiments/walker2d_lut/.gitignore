@@ -43,3 +43,9 @@ ppo_lut_scratch.json
 
 # in-progress artifacts
 *.partial
+
+# Deliberate exception: the four completed 2x2 actor checkpoints (114 KB each,
+# 456 KB total). They are the deliverable artifacts of a finished study and are
+# what any re-evaluation needs without a 30-minute retrain. Everything else stays
+# out -- this is a narrow negation, not a relaxation of the no-checkpoints rule.
+!exp_c09_lut_sac/lut_sac_c11_*_actor.npz
