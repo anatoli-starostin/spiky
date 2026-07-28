@@ -354,3 +354,102 @@ this budget it cannot be **evolved**. The differentiable surrogate is doing real
 it is the difference between 4407 and 904. For the #74 spiking track, that argues for
 obtaining LUT tables by gradient training and *then* compiling them, rather than hoping
 to search for them directly.
+
+---
+
+# Phase 5: zero-shot robustness under perturbed dynamics (exp_c07)
+
+**The question:** does a lookup table — which *memorises* state→action — generalise to a
+slightly different robot as well as a network that *computes* it?
+
+**The answer is that the question is confounded, and the confound is the interesting
+part: the degradation profile is inherited from the TRAINING ROUTE, not determined by
+the representation.**
+
+Four frozen policies × 4 perturbation axes × 18 settings × 100 deterministic episodes
+= 7,200 episodes. No retraining; the LUT policies' stored observation standardisers are
+applied unchanged (re-fitting them would leak knowledge of the new dynamics and stop
+this being zero-shot).
+
+## Nominal sanity check
+
+The `value = 1.0` column must reproduce each policy's known score, or the harness is
+contaminating the nominal case:
+
+| policy | params | harness nominal | known | Δ |
+|---|---:|---:|---:|---:|
+| PPO-MLP | 71,948 | 5566.6 | 5555.5 | +0.2% |
+| SAC-MLP | 73,484 | 5277.4 | 5273.4 | +0.1% |
+| LUT-distilled | 5,378 | 5567.1 | 5511.9 | +1.0% |
+| LUT-scratch | 26,880 | 4406.9 | 4406.9 | 0.0% |
+
+All within 1%. (The harness draws its reset noise from its own PCG64 stream rather than
+gymnasium's, so individual episodes differ; degradation is therefore measured against
+each policy's own harness nominal, not against the historical number.)
+
+## Degradation
+
+Worst-case retained fraction of each policy's own nominal, per axis:
+
+| policy | mass | gravity | friction | geometry | mean |
+|---|---:|---:|---:|---:|---:|
+| **SAC-MLP** | 73.4% | 81.0% | 80.7% | 88.4% | **80.9%** |
+| LUT-scratch | 49.4% | 93.1% | 6.6% | 97.9% | 61.8% |
+| PPO-MLP | 7.3% | 55.4% | 8.3% | 40.8% | 28.0% |
+| LUT-distilled | 6.5% | 15.7% | 6.3% | 18.2% | 11.7% |
+
+Range still clearing the 3000 bar:
+
+| policy | mass | gravity | friction | geometry |
+|---|---|---|---|---|
+| **SAC-MLP** | **0.7–1.3 (all)** | **0.85–1.15 (all)** | **0.5–2.0 (all)** | **0.9–1.1 (all)** |
+| LUT-scratch | 0.85–1.15 | 0.85–1.15 (all) | 0.75–1.0 | 0.9–1.1 (all) |
+| PPO-MLP | 0.85–1.0 | 0.85–1.15 (all) | 0.75–1.0 | 0.9–1.05 |
+| LUT-distilled | 0.85–1.0 | 0.85–1.0 | 0.75–1.0 | 0.9–1.0 |
+
+![degradation curves](exp_c07_robustness/robustness_curves.png)
+
+## The finding: robustness is inherited, not representational
+
+Correlating each policy's 18-point degradation profile against the others:
+
+| | PPO-MLP | SAC-MLP | LUT-distilled | LUT-scratch |
+|---|---:|---:|---:|---:|
+| PPO-MLP | 1.000 | 0.413 | **0.930** | 0.730 |
+| SAC-MLP | 0.413 | 1.000 | 0.238 | 0.319 |
+| LUT-distilled | **0.930** | 0.238 | 1.000 | 0.610 |
+| LUT-scratch | 0.730 | 0.319 | 0.610 | 1.000 |
+
+**LUT-distilled tracks its PPO teacher at r = 0.930** — the highest off-diagonal
+correlation in the matrix, and its mean absolute deviation from the teacher (566) is a
+third of SAC's (1694). It fails where the teacher fails and survives where the teacher
+survives. Behaviour cloning copies the teacher's *robustness envelope*, not just its
+nominal return.
+
+Meanwhile the two MLPs — same architecture class, same task, same nominal ballpark —
+differ from each other more than the LUT differs from its teacher (r = 0.413).
+**SAC's MLP clears the bar across the entire swept range on every axis; PPO's MLP
+collapses to 7% of nominal at mass ×1.15.** That is a training-algorithm difference
+(off-policy with a large diverse replay buffer and entropy regularisation, versus
+on-policy PPO converged onto a narrow high-return gait), not a representation
+difference.
+
+## Plain-language verdict
+
+* **Does the lookup table generalise worse than a neural network? Not because it is a
+  lookup table.** The distilled LUT is fragile *because its teacher is fragile* — it
+  reproduces PPO's failure modes almost exactly at 13× fewer parameters.
+* **A LUT is not inherently brittle.** `LUT-scratch`, trained directly rather than
+  cloned, retains 61.8% on average against PPO-MLP's 28.0%, and is *more* robust than
+  that MLP on three of four axes — including 93% on gravity and 98% on geometry.
+* **The dominant variable is the training route.** SAC ≫ everything else, and it is the
+  only policy that never drops below the bar anywhere in the swept range.
+* **Practical consequence for the #74 spiking track:** if a compiled LUT needs to
+  tolerate hardware or body variation, the lever is *which policy you clone and how it
+  was trained*, not the table itself. Distilling from SAC rather than PPO is the obvious
+  next experiment, and it is cheap — distillation takes 39 seconds.
+
+Caveats: single seed per policy; the geometry axis also shifts the observation
+distribution, so it confounds dynamics change with input-distribution shift; and the
+friction axis collapses *every* policy at ×1.5–2.0, which looks like a task limit rather
+than a policy property.
