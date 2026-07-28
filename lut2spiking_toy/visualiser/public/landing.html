@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LUT → Spiking — interactive demos</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>LUT → Spiking networks</h1>
+    <p class="nav"><b>Contents</b></p>
+    <p>
+      These demos show how a trained <b>lookup-table (LUT) network</b> can be turned into a real
+      <b>spiking</b> network (Izhikevich / SPNet) by <b>direct construction</b> — no retraining. The trick is
+      latency coding: a vector is represented by the <i>first-spike times</i> of one population of neurons, and
+      the constructed spiking circuit re-emits the LUT's output as the spike times of another population. Each
+      page below runs the constructed spiking network live for an input you control and checks it reproduces
+      the table exactly.
+    </p>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <h2>Demos</h2>
+      <div class="cards">
+        <a class="card" href="single_table.html">
+          <h3>① Single LUT table → spiking circuit</h3>
+          <p>One hyperplane LUT compiled to a spiking circuit: input spikes → detector/address bits → a
+             1-of-8 row-select decoder → output neurons whose latencies encode the stored row. Watch every
+             spike propagate and verify the emergent output equals the table.</p>
+        </a>
+        <a class="card" href="animation2.html">
+          <h3>② Composing tables: summing outputs in the charge domain</h3>
+          <p>Real models are a <i>set</i> of tables whose selected output vectors are <b>added</b>. Latencies
+             don't sum — so each table deposits its output as synaptic <b>charge</b> onto shared output neurons,
+             whose membranes accumulate <code>O₁[x] + O₂[x]</code> natively. Verified exact over 50k inputs.</p>
+        </a>
+      </div>
+      <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
+    </div>
+  </div>
+</body>
+</html>
