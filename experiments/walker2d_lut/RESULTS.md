@@ -1015,3 +1015,45 @@ Two further observations worth carrying:
 neighbours — against a ±13% seed swing measured earlier — individual cell rankings are
 not reliable. What survives that scrutiny is the *shape*: nap flat, tph rising then
 falling, no cell reaching the target. I would not defend the ordering of the middle six.
+
+### Addendum — the deployable (6 outputs/cell) accounting
+
+Every cell stores 12 values: 6 action means and 6 log-sigmas. The sigmas exist only for
+SAC's entropy term during training — `eval_cpu.py` computes `tanh(y[:, :6])` and never
+reads one. A *deployed* policy therefore stores and reads **6 values per cell**, halving
+both the table memory and the active table reads. Addressing is unchanged: the same row
+still has to be selected.
+
+| nap | tph | total par | rd12 | rd6 | addr | act12 | act6 | CPU-ref (100 ep) | vs target |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| 6 | 64 | 56,066 | 768 | 384 | 768 | **1,536** | **1,152** | **4879.9 ± 41.0** | 95% |
+| 7 | 64 | 106,370 | 768 | 384 | 896 | 1,664 | 1,280 | 4736.5 ± 292.6 | 92% |
+| 8 | 128 | 411,650 | 1,536 | 768 | 2,048 | 3,584 | 2,816 | 4683.4 ± 1119.9 | 91% |
+| 6 | 128 | 112,130 | 1,536 | 768 | 1,536 | 3,072 | 2,304 | 4662.5 ± 28.0 | 91% |
+| 7 | 128 | 212,738 | 1,536 | 768 | 1,792 | 3,328 | 2,560 | 4659.4 ± 1021.0 | 91% |
+| 8 | 64 | 205,826 | 768 | 384 | 1,024 | 1,792 | 1,408 | 4598.3 ± 34.3 | 89% |
+| 8 | 32 | 102,914 | 384 | 192 | 512 | 896 | 704 | 4510.0 ± 105.9 | 88% |
+| 6 | 32 | 28,034 | 384 | 192 | 384 | 768 | 576 | 4302.4 ± 49.9 | 84% ← baseline |
+| 7 | 32 | 53,186 | 384 | 192 | 448 | 832 | 640 | 4202.2 ± 438.7 | 82% |
+
+Reference — **hyperplane × hard nap6/tph32**: active12 = 384 reads + 3,264 MAC = 3,648;
+active6 = 192 + 3,264 = **3,456**; CPU-ref 5146.9 ± 28.2.
+
+**Dropping the sigmas improves the anchors trade and barely moves the hyperplane's.**
+For the dense addresser the table was never the bottleneck — addressing is 89% of its
+active cost at 12/cell and **94%** at 6/cell, so halving the table buys it 5%. For the
+anchors cell, where reads and addressing are the same order, the halving is real:
+`nap6/tph64` goes from 1,536 to **1,152** active values, i.e. from 0.42× to **0.33× the
+hyperplane's deployed active cost** — 95% of the performance for a third of the work.
+
+That sharpens rather than changes the earlier conclusion: the anchors route's advantage
+is entirely in *addressing*, and the more you strip away everything else, the more the
+comparison reduces to `nap × tph × 2` element reads versus `nap × tph × 17` MACs.
+
+Both axis slices, unchanged by the reframing (active *reads* are independent of nap;
+only the addressing term ticks up):
+
+* nap at fixed tph=32 — 4302.4 → 4202.2 → 4510.0 for nap 6/7/8, against 768 → 832 → 896
+  active12. Nearly free, and nearly useless.
+* tph at fixed nap=6 — 4302.4 → 4879.9 → 4662.5 for tph 32/64/128, against 768 → 1,536 →
+  3,072 active12. This is the axis you pay for, and it knees at 64.
