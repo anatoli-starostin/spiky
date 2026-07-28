@@ -7,6 +7,21 @@ are structured and launched see [experiment-methodology.md](experiment-methodolo
 These are Anatoli's standing instructions. They used to live in a `CLAUDE.md` at the repo root;
 they now live here, under `claude/`, with the rest of the shared knowledge base.
 
+## Language
+
+**Always answer in English, even when the user writes or asks in Russian (or any other
+non-English language).** Spiky is an international project, so English is the default and
+preferred language for all communication.
+
+- **Why:** the project spans multiple people and machines; keeping to one shared language
+  (English) makes replies, issues, PRs, commit messages, and code comments readable by everyone.
+- **How to apply:** default every response — and everything you write into the repo (commits,
+  issues, PRs, comments) — to English, regardless of the language you were addressed in. The
+  **only** exception is an explicit request to use another language — e.g. "translate to Russian",
+  "answer in Russian", "переведи на русский", "ответь на русском", and equivalents — in which case
+  honor the requested language for that response. An incidental non-English phrase in the prompt is
+  not such a request; only an explicit instruction to switch languages is.
+
 ## Plan before big tasks
 
 Before starting any sizable/big task, **first report the plan of what you're going to do and get
