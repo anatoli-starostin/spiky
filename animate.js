@@ -124,6 +124,7 @@
     FIREVISUAL['START'] = 0;                        // sources fire at their own spike time
     for (let i = 0; i < D; i++) FIREVISUAL['x' + i] = S.tin[i];
     updateLutReadout();       // LUT side is constant for this input — set once here
+    drawLUTpanel();           // static LUT table panel — recomputed per input, not per frame
     lastDone = null;          // force sim-side readout refresh
   }
 
@@ -235,6 +236,33 @@
     });
     ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.moveTo(X(simT), top); ctx.lineTo(X(simT), h - padB); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
+  }
+
+  // ---- LUT panel: the table computing the SAME thing, static per input ------
+  // Reuses the shared LUT helpers (no re-implementation); updated in recompute().
+  function drawLUTpanel() {
+    const pre = LS.lutPreacts(m, x), bits = LS.lutBits(m, x), r = LS.bitsToRow(bits);
+    const tb = document.querySelector('#lut_tests tbody'); tb.innerHTML = '';
+    for (let k = 0; k < K; k++) {
+      const tr = document.createElement('tr');
+      const wvec = m.W[k].map((v) => (v >= 0 ? '+' : '') + v.toFixed(2)).join(', ');
+      tr.innerHTML = `<td>H${k}</td>` +
+        `<td class="mono" style="font-size:11px">[${wvec}]</td>` +
+        `<td class="mono">${fmt(m.b[k])}</td>` +
+        `<td class="mono" style="color:${pre[k] > 0 ? '#7ee787' : '#ffa198'}">${fmt(pre[k])}</td>` +
+        `<td>${bitBox(bits[k])}</td>`;
+      tb.appendChild(tr);
+    }
+    document.getElementById('lut_addr').textContent = bits.join('');
+    document.getElementById('lut_rowidx').textContent = r;
+    const ot = document.querySelector('#lut_table tbody'); ot.innerHTML = '';
+    for (let a = 0; a < (1 << K); a++) {
+      const tr = document.createElement('tr'); if (a === r) tr.className = 'winrow';
+      let cells = `<td class="mono">${a} = ${a.toString(2).padStart(K, '0')}</td>`;
+      for (let j = 0; j < Dout; j++) cells += `<td class="mono">${fmt(m.V[a][j])}</td>`;
+      tr.innerHTML = cells; ot.appendChild(tr);
+    }
+    fillVec('lut_outvec', m.V[r]);
   }
 
   // ---- readout (DOM writes kept OUT of the hot path) ------------------------
