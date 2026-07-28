@@ -63,11 +63,18 @@
     <!-- OUTPUT SPIKES -->
     <div class="panel">
       <h2>Output spikes — the shared neurons firing (spikes in → spikes out)</h2>
-      <p class="hint">After the summed charge settles, each output neuron fires once at <code>t_out = GZ + α + β·S</code> (α=5, β=1, bigger value = LATER — the same latency code as the inputs, so outputs are composable). Below: the emitted output spike times, and the <code>O₁[r₁] + O₂[r₂] = S</code> breakdown.</p>
-      <canvas id="oraster" height="150"></canvas>
-      <div id="sumrows" style="margin-top:8px"></div>
+      <p class="hint">After the summed charge settles, each output neuron fires once at <code>t_out = GZ + α + β·S</code> (α=5, β=1, bigger value = LATER — the same latency code as the inputs, so outputs are composable). Below: a full discrete-time axis from START to the last output spike, then the <code>O₁[r₁] + O₂[r₂] = S</code> breakdown.</p>
+      <div id="tickinfo" class="banner ok" style="font-size:14px;font-weight:700;margin:0 0 8px">⏱ …</div>
+      <canvas id="oraster" height="240"></canvas>
+      <p class="small" style="margin:4px 0 0">One <b>tick</b> = one latency unit (β=1) — the quantum of the first-spike code (inputs at <code>t=α+x</code>, readout CLOCK at <code>t=5</code>). The whole computation resolves in the number of ticks shown above.</p>
+      <div id="sumrows" style="margin-top:12px"></div>
       <div id="cbanner" class="banner ok">charge = LUT₁(x) + LUT₂(x)</div>
       <p class="legend" id="cnote"></p>
+
+      <h3 class="sub" style="margin-top:14px;color:var(--ink)">Ground truth vs emitted spike — live check for THIS input</h3>
+      <p class="hint">Left path: the direct LUT sum <code>O₁[r₁][j] + O₂[r₂][j]</code> from the two tables' true selected rows. Right path: the value decoded from the actual emitted output <b>spike time</b>, <code>S = (t_out − α − GZ)/β</code>. They must match.</p>
+      <table id="gtmatch"><thead><tr><th>dim</th><th>O₁[r₁]</th><th>O₂[r₂]</th><th>ground-truth Σ</th><th>emitted (from spike)</th><th>match</th></tr></thead><tbody></tbody></table>
+      <p class="legend" id="gtnote"></p>
     </div>
 
     <!-- VERIFICATION -->

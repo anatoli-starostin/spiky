@@ -121,12 +121,46 @@
     shared.GZ = Math.max(shared.fv1 || 0, shared.fv2 || 0) + SETTLE;
     shared.S = shared.o1.map((v, j) => v + shared.o2[j]);
     shared.outT = shared.S.map((s) => shared.GZ + ALPHA_O + BETA_O * s);
+    // discrete-time summary: START(t=0) -> ... -> last output spike, in whole ticks (1 tick = 1 latency unit, β)
+    shared.tin = T1.S.tin.slice();          // input spike times (same x for both tables)
+    shared.tRead = m1.cfg.T_READ;           // readout CLOCK time
+    shared.lastOut = Math.max(...shared.outT);
+    shared.NTICKS = Math.ceil(shared.lastOut - 1e-9);
     Tmax = 0;
     for (const T of [T1, T2]) for (const n in T.S.st) if (T.S.st[n].fired) Tmax = Math.max(Tmax, T.S.st[n].tf);
     Tmax = Math.max(Tmax, ...shared.outT) + 0.6;
     const sc = document.getElementById('scrub'); sc.max = Tmax.toFixed(2); sc.step = (Tmax / 600).toFixed(4);
-    fillLUT('1', m1); fillLUT('2', m2); fillSumRows();
+    fillLUT('1', m1); fillLUT('2', m2); fillSumRows(); fillGtTable(); updateTickInfo();
     dirty = true;
+  }
+
+  // ---- discrete-tick summary line + ground-truth-vs-emitted table -----------
+  function updateTickInfo() {
+    const el = document.getElementById('tickinfo'); if (!el) return;
+    el.innerHTML = '⏱ This computation resolves in <b>' + shared.NTICKS + ' discrete ticks</b> — '
+      + 'START (t=0) → inputs (t≈' + Math.min(...shared.tin).toFixed(1) + '–' + Math.max(...shared.tin).toFixed(1)
+      + ') → CLOCK readout (t=' + shared.tRead.toFixed(0) + ') → charge settles (GZ=' + shared.GZ.toFixed(1)
+      + ') → last output spike (t=' + shared.lastOut.toFixed(2) + ').';
+  }
+  function fillGtTable() {
+    const tb = document.querySelector('#gtmatch tbody'); if (!tb) return; tb.innerHTML = '';
+    const b1 = LS.lutBits(m1, x), r1 = LS.bitsToRow(b1), O1 = m1.V[r1];   // ground truth via the LUT (true rows)
+    const b2 = LS.lutBits(m2, x), r2 = LS.bitsToRow(b2), O2 = m2.V[r2];
+    let maxres = 0;
+    for (let j = 0; j < Dout; j++) {
+      const strue = O1[j] + O2[j];
+      const semit = (shared.outT[j] - shared.GZ - ALPHA_O) / BETA_O;      // decode from the emitted spike TIME
+      const res = Math.abs(strue - semit); maxres = Math.max(maxres, res);
+      const ok = res < 1e-9;
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>o' + j + '</td><td class="mono">' + fmt(O1[j]) + '</td><td class="mono">' + fmt(O2[j])
+        + '</td><td class="mono"><b>' + fmt(strue) + '</b></td><td class="mono">' + fmt(semit)
+        + '</td><td class="' + (ok ? 'yes' : 'no') + '">' + (ok ? '✓' : fmt(res)) + '</td>';
+      tb.appendChild(tr);
+    }
+    const note = document.getElementById('gtnote');
+    if (note) note.innerHTML = 'The emitted column is decoded purely from the output <b>spike times</b>; it equals the direct LUT sum to <b>'
+      + maxres.toExponential(1) + '</b> for this input — the exactness, confirmed live rather than only in the 50k offline check.';
   }
 
   // ---- a single node: base disc + membrane fill + flash + border + label ----
@@ -242,28 +276,61 @@
     ctx.fillStyle = css('--out'); ctx.fillText('Table 2', colX(3) - 16, midY + 13);
   }
 
-  // ---- OUTPUT RASTER: the 4 emitted output spikes on a time axis --------------
+  // ---- FULL DISCRETE-TIME TIMELINE: START(0) -> inputs -> CLOCK -> outputs -----
+  // One tick = one latency unit (β). Spans t=0..NTICKS so the total tick count of
+  // the whole computation is visible; marks inputs, the readout CLOCK, GZ, and the
+  // emitted output spikes on the integer grid.
   function drawOutputRaster() {
     const c = canv.oraster; if (!c || !shared) return;
     const { ctx, w, h } = c; ctx.clearRect(0, 0, w, h);
-    const t0 = Math.max(0, shared.GZ - 1.0), t1 = Tmax;
-    const padL = 62, padR = 18, padT = 14, padB = 20;
+    const N = Math.max(1, shared.NTICKS), t0 = 0, t1 = N;
+    const padL = 64, padR = 22, padT = 30, padB = 24;
     const X = (t) => padL + ((t - t0) / (t1 - t0)) * (w - padL - padR);
-    const top = padT, rowH = (h - padT - padB) / Dout;
+    const laneTop = padT, laneBot = h - padB, nLanes = Dout + 1, laneH = (laneBot - laneTop) / nLanes;
+    const laneY = (i) => laneTop + laneH * (i + 0.5);
     ctx.font = '11px ui-monospace';
-    for (let t = Math.ceil(t0); t <= t1; t++) { ctx.strokeStyle = css('--edge'); ctx.globalAlpha = .3; ctx.beginPath(); ctx.moveTo(X(t), top); ctx.lineTo(X(t), h - padB); ctx.stroke(); ctx.globalAlpha = 1; ctx.fillStyle = css('--muted'); ctx.fillText('t=' + t, X(t) - 8, h - padB + 14); }
-    ctx.setLineDash([4, 3]); ctx.strokeStyle = css('--ok'); ctx.beginPath(); ctx.moveTo(X(shared.GZ), top); ctx.lineTo(X(shared.GZ), h - padB); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = css('--ok'); ctx.fillText('GZ (readout clock)', X(shared.GZ) - 4, top - 1);
+    // integer tick grid + numbered axis (0..N)
+    for (let t = 0; t <= N; t++) {
+      ctx.strokeStyle = css('--edge'); ctx.globalAlpha = (t % 5 === 0) ? .5 : .18;
+      ctx.beginPath(); ctx.moveTo(X(t), laneTop - 6); ctx.lineTo(X(t), laneBot); ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.fillText(t, X(t), laneBot + 15); ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.fillText('tick →', X(N) , laneBot + 15 + 13); ctx.textAlign = 'left';
+    // total-tick title
+    ctx.fillStyle = css('--accent'); ctx.font = 'bold 13px ui-monospace';
+    ctx.fillText('⏱ ' + N + ' ticks: START → output spikes', padL, 16);
+    ctx.font = '11px ui-monospace';
+    // START marker at t=0
+    ctx.fillStyle = css('--muted'); ctx.fillText('START', X(0) - 2, laneTop - 10);
+    // input-spike lane
+    ctx.fillStyle = css('--spike'); ctx.fillText('inputs', 6, laneY(0) + 4);
+    ctx.strokeStyle = css('--edge'); ctx.globalAlpha = .3; ctx.beginPath(); ctx.moveTo(padL, laneY(0)); ctx.lineTo(w - padR, laneY(0)); ctx.stroke(); ctx.globalAlpha = 1;
+    for (let i = 0; i < D; i++) {
+      const t = shared.tin[i], reached = simT >= t;
+      ctx.strokeStyle = css('--spike'); ctx.globalAlpha = reached ? 1 : .3; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(X(t), laneY(0) - laneH * .3); ctx.lineTo(X(t), laneY(0) + laneH * .3); ctx.stroke();
+      ctx.lineWidth = 1; ctx.globalAlpha = 1;
+    }
+    // CLOCK (readout) vertical
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = css('--ok'); ctx.globalAlpha = .9;
+    ctx.beginPath(); ctx.moveTo(X(shared.tRead), laneTop - 6); ctx.lineTo(X(shared.tRead), laneBot); ctx.stroke();
+    ctx.fillStyle = css('--ok'); ctx.textAlign = 'center'; ctx.fillText('CLOCK t=' + shared.tRead.toFixed(0), X(shared.tRead), laneTop - 18); ctx.textAlign = 'left';
+    // GZ (charge settled) vertical
+    ctx.strokeStyle = css('--warn'); ctx.beginPath(); ctx.moveTo(X(shared.GZ), laneTop - 6); ctx.lineTo(X(shared.GZ), laneBot); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.fillStyle = css('--warn'); ctx.textAlign = 'center'; ctx.fillText('GZ ' + shared.GZ.toFixed(1), X(shared.GZ), laneTop - 6 - 2); ctx.textAlign = 'left';
+    // output-spike lanes
     for (let j = 0; j < Dout; j++) {
-      const y = top + rowH * (j + 0.5);
-      ctx.fillStyle = css('--muted'); ctx.fillText('out o' + j, 6, y + 4);
+      const y = laneY(j + 1);
+      ctx.fillStyle = css('--out'); ctx.fillText('o' + j, 6, y + 4);
       ctx.strokeStyle = css('--edge'); ctx.globalAlpha = .3; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.globalAlpha = 1;
       if (simT >= shared.outT[j]) {
-        ctx.strokeStyle = css('--out'); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(X(shared.outT[j]), y - rowH * .34); ctx.lineTo(X(shared.outT[j]), y + rowH * .34); ctx.stroke(); ctx.lineWidth = 1;
-        ctx.fillStyle = css('--out'); ctx.fillText(shared.outT[j].toFixed(2), X(shared.outT[j]) + 5, y - 3);
+        ctx.strokeStyle = css('--out'); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(X(shared.outT[j]), y - laneH * .32); ctx.lineTo(X(shared.outT[j]), y + laneH * .32); ctx.stroke(); ctx.lineWidth = 1;
+        ctx.fillStyle = css('--out'); ctx.fillText('t=' + shared.outT[j].toFixed(2), X(shared.outT[j]) + 5, y - 3);
       }
     }
-    if (simT >= t0) { ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(Math.min(simT, t1)), top); ctx.lineTo(X(Math.min(simT, t1)), h - padB); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; }
+    // now-cursor
+    if (simT >= t0) { ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(Math.min(simT, t1)), laneTop - 6); ctx.lineTo(X(Math.min(simT, t1)), laneBot); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; }
   }
 
   // ---- LUT panel + sum rows (DOM) -------------------------------------------
