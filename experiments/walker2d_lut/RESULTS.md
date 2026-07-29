@@ -1240,3 +1240,73 @@ Against a three-seed hyperplane mean, the best anchors config is not behind at a
    error near 700. Nothing here is tight.
 3. **Determinism check** on the scatter-add backward — if that is the source, it may be
    fixable, and a deterministic training path would make every future comparison cheaper.
+
+---
+
+# The torch-faithful init: same config, 6.7× less variance (exp_c15)
+
+exp_c14 ran `hyperplane × hard nap6/tph32` at three seeds with the legacy JAX init (dense
+`w ~ N(0, 0.5²)`, `b ~ N(0, 0.1²)`). This reruns it, everything identical, with torch's
+default `hyperplane_init="anchor_pairs"` — `w = e_a − e_b`, `b = 0`, drawn by lutorch's
+CANONICAL_FULL_COVERAGE sampler, verified bit-exact against torch at init. A controlled
+A/B on the init alone.
+
+| | seed 0 | seed 1 | seed 2 | 3-seed mean | **seed-sd** | ep-sd |
+|---|---:|---:|---:|---|---:|---:|
+| legacy init (exp_c14) | 4195.3 | 5025.0 | 2684.6 | 3968.3 | **1186.6** | 494.1 |
+| **torch anchor_pairs (exp_c15)** | 4152.7 | 4296.4 | 4506.5 | **4318.5** | **178.0** | 411.4 |
+
+**Seed-sd falls from 1186.6 to 178.0 — a 6.7× reduction — and the mean rises 350.**
+
+The legacy init's range was 2685–5025, a 2340-point spread across seeds. The torch-faithful
+init's range is 4153–4507: 354 points. Same architecture, same hyperparameters, same
+optimizer, same number of steps. Only where the hyperplanes start.
+
+## This resurrects the thesis that exp_c14 appeared to kill
+
+exp_c14 concluded that learned hyperplanes are *more* seed-sensitive than frozen anchors,
+which falsified the mechanism "anchors are hostage to their draw". That conclusion was an
+artifact of the init.
+
+| | seed-sd |
+|---|---:|
+| hyperplane × hard, torch init | **178.0** |
+| anchors, 9 configs (min / median / max) | 131.1 / 473.7 / 1850.0 |
+
+**7 of 9** anchors configs are now more seed-sensitive than the hyperplane cell, and the
+median anchors config is **2.7×** as variable. Under a sane init, learned addressing *is*
+the more reproducible of the two — which is what the thesis predicted all along.
+
+So the honest sequence is: the thesis was right, exp_c14 appeared to refute it, and the
+refutation was really a measurement of a bad initialisation. I reported that refutation as
+a finding. It was a finding about the init, and I did not know that at the time.
+
+## The headline, both sides multi-seed, both sides torch-faithful
+
+| | CPU-ref (3 seeds) | total params | active/step |
+|---|---|---:|---:|
+| hyperplane × hard nap6/tph32 | 4318.5 ± 178.0 | 28,034 | 3,648 |
+| best anchors nap7/tph64 | 4678.3 ± 473.7 | 106,370 | **1,664** |
+
+Anchors is still nominally ahead — 108% of the hyperplane mean at 0.46× the active work —
+but the gap is 360, which is **0.71 combined sd**. Statistically indistinguishable, as it
+was in exp_c14, and the direction has not changed. What *has* changed is that the
+hyperplane number is now trustworthy: ±178 instead of ±1187.
+
+Neither arm reaches the original single-seed 5146.9. That number remains an outlier from
+one lucky run under an init we no longer use.
+
+## What this does and does not explain
+
+**Does:** the enormous hyperplane spread in exp_c14. A dense random `w` at 500× torch's
+scale, with a nonzero `b`, starts the model at an arbitrary partition; the diagnostic in
+exp_c14 showed the hyperplanes then rotate ~60° and flip a third of their bits getting
+somewhere useful. Where they land evidently depends heavily on where they started.
+
+**Does not:** the same-seed discrepancy — exp_c11 scored 5146.9 and exp_c14 seed 0 scored
+4195.3 with an identical config and key. If anything this deepens it. A seed-sd of 178
+under the torch init means run-to-run nondeterminism cannot be routinely worth ~1000
+return, so a 951-point gap at a fixed seed is not explained by ordinary nondeterminism
+either. The replicate test — same config, same seed, twice, sequentially — remains the only
+thing that will settle it, and it is now the single largest open question in this
+experiment.
