@@ -53,18 +53,16 @@
              design. Verified exact over 50k inputs.</p>
         </a>
         <a class="card" href="inspector.html">
-          <h3>⑤ Live spnet inspector — coincidence-coded</h3>
-          <p>The seed-0 toy LUT compiled onto the <b>real spiky SpikingNet</b> (native CPU kernel), exported
-             live to a linked <b>graph / animation / raster</b> inspector. Inputs are <b>coincidence-coded</b>
-             (a +1 fires a fixed-time spike, −1 stays silent); detectors read a clock-biased weighted sum.
-             Click any neuron or synapse for its full NeuronMeta / weight / delay. Verified 64/64 vs the table.</p>
-        </a>
-        <a class="card" href="inspector.html?v=latency">
-          <h3>⑥ Live spnet inspector — latency-coded (time-to-first-spike)</h3>
-          <p>The same LUT, now with <b>both ends timing-coded</b>: each input value is a <b>first-spike time</b>
-             (+1 early, −1 late), decoded back to the detectors by an explicit <b>delay-line decoder</b> (per-input
-             latch neurons <code>u_i</code> gated by a delay-tuned clock), and the outputs emit their value as
-             spike latency. Same inspector, extra <b>gate</b> + <b>decode</b> layers. Verified 64/64 vs the table.</p>
+          <h3>⑤ Live spnet inspector — graded real-valued (time-to-first-spike)</h3>
+          <p>The faithful picture: the toy LUT accepts <b>real-valued</b> x ∈ ℝ⁶, compiled onto the
+             <b>real spiky SpikingNet</b> (native CPU kernel) and exported live to a linked
+             <b>graph / animation / raster</b> inspector. Each input value becomes a <b>distinct first-spike
+             time</b> (earlier = larger), decoded by a <b>multi-tap delay-line decoder</b> — a bank of gate taps
+             whose firing count is a <b>thermometer code</b> of the value — feeding 3 hyperplane comparators
+             <code>sign(W·x+b)</code> that select 1 of 8 rows; outputs emit their value as spike latency.
+             Click any neuron or synapse for its full NeuronMeta / weight / delay. Comparator bits match the
+             exact oracle on 98.5% of random real inputs (the rest are points within a thermometer half-step
+             of a hyperplane).</p>
         </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>

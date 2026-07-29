@@ -19,12 +19,17 @@
   let simT = 0, Tmax = 1, playing = false, speed = 1, lastTs = null, dirty = true;
   let sel = null, hover = null;
 
-  // dataset toggle: ?v=latency (or ?data=latency) loads the latency-input variant,
-  // default loads the coincidence-coded export. Both live in this same public dir.
+  // dataset toggle: ?v=latency loads the binary latency variant, ?v=graded loads the
+  // graded real-valued (multi-tap) variant; default (no param) = coincidence-coded.
+  // All datasets live in this same public dir.
   const _q = new URLSearchParams(location.search);
-  const LAT = (_q.get('v') || _q.get('data') || '').toLowerCase().startsWith('lat');
-  const _gf = LAT ? 'graph_latency.json' : 'graph.json';
-  const _af = LAT ? 'activity_latency.json' : 'activity.json';
+  const _v = (_q.get('v') || _q.get('data') || '').toLowerCase();
+  // Pages deployment ships only the graded dataset, so graded is the DEFAULT here
+  // (bare inspector.html works); ?v=graded is also accepted.
+  const VARIANT = _v.startsWith('lat') ? 'latency' : _v.startsWith('coinc') ? 'coincidence' : 'graded';
+  const _suffix = { coincidence: '', latency: '_latency', graded: '_graded' }[VARIANT];
+  const _gf = 'graph' + _suffix + '.json';
+  const _af = 'activity' + _suffix + '.json';
   Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
     .then(([g, a]) => { G = g; A = a; init(); }).catch(e => showErr('load: ' + e));
 
@@ -38,8 +43,10 @@
       G.layers.map(l => `<span style="color:${(LAYER_COL[l] ? LAYER_COL[l]() : '#999')}">■ ${l}</span>`).join(' · ')
       + ' · edges: <span style="color:#5b9dff">■ −w</span>/<span style="color:#ff6b6b">■ +w</span>, dashed = delay>1';
     const h1 = document.querySelector('h1');
-    if (h1) h1.textContent = 'spnet inspector — ' + (LAT ? 'latency-coded (time-to-first-spike)' : 'coincidence-coded');
-    document.title = (LAT ? 'latency' : 'coincidence') + ' — spnet inspector';
+    const _label = { coincidence: 'coincidence-coded', latency: 'latency-coded (time-to-first-spike)',
+      graded: 'graded real-valued (multi-tap thermometer)' }[VARIANT];
+    if (h1) h1.textContent = 'spnet inspector — ' + _label;
+    document.title = VARIANT + ' — spnet inspector';
     setupCanvas(); bindControls();
     requestAnimationFrame(loop);
   }
