@@ -241,8 +241,12 @@ public:
 
         // prepare stdp tables
 
-        uint32_t* nm_to_ltp = (uint32_t *) PyMem_Malloc(this->n_synapse_metas * sizeof(uint32_t));
-        uint32_t* nm_to_ltd = (uint32_t *) PyMem_Malloc(this->n_synapse_metas * sizeof(uint32_t));
+        // nm_to_ltp / nm_to_ltd map each NEURON meta -> its STDP table offset and are
+        // indexed by the neuron-meta index i in [0, n_neuron_metas) below, so they must
+        // be sized by n_neuron_metas (not n_synapse_metas): when n_neuron_metas >
+        // n_synapse_metas the old sizing under-allocated and the loop wrote past the end.
+        uint32_t* nm_to_ltp = (uint32_t *) PyMem_Malloc(this->n_neuron_metas * sizeof(uint32_t));
+        uint32_t* nm_to_ltd = (uint32_t *) PyMem_Malloc(this->n_neuron_metas * sizeof(uint32_t));
 
         uint32_t stdp_capacity = 0;
 
