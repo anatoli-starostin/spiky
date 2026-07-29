@@ -1310,3 +1310,91 @@ return, so a 951-point gap at a fixed seed is not explained by ordinary nondeter
 either. The replicate test — same config, same seed, twice, sequentially — remains the only
 thing that will settle it, and it is now the single largest open question in this
 experiment.
+
+---
+
+# The replicate test: run noise is ~1000 return, and it invalidates most of the above (exp_c16)
+
+Every experiment from exp_c12 onward has varied the seed, measured a spread, and called it
+`seed-sd`. None of them checked the premise: **that a fixed seed reproduces at all.**
+
+Same config as exp_c15 — hyperplane × hard, nap6/tph32/heads1, torch-faithful anchor_pairs
+init — **seed 0 both times**, run sequentially with the GPU to itself.
+
+| run | CPU-ref (100 ep) | ep-sd | best MJX |
+|---|---|---:|---:|
+| replicate a | **5406.2** | 89.3 | 5410.9 |
+| replicate b | **4407.1** | 780.4 | 4752.0 |
+
+**|A − B| = 999.1, at an identical seed.**
+
+Adding exp_c15's own seed-0 run (same config, same seed, but trained 3-concurrent) gives
+three samples of *the same experiment*:
+
+| | CPU-ref |
+|---|---:|
+| c16 replicate a (GPU alone) | 5406.2 |
+| c16 replicate b (GPU alone) | 4407.1 |
+| c15 seed 0 (3-concurrent) | 4152.7 |
+
+**Run-to-run sd ≈ 662.6, range 1253.5 — with nothing varying but the invocation.**
+
+## This explains the anomaly, and invalidates the conclusions
+
+The unexplained exp_c11-vs-exp_c14 gap (5146.9 vs 4195.3 at a fixed key) was **951.6**.
+The replicate gap is **999.1** — 1.05× it. That anomaly is now fully explained: it was
+ordinary run-to-run nondeterminism, not a code change, not contention, not a bug.
+
+But the same fact wrecks the seed comparisons. Against a run-noise sd of 663:
+
+| reported as | seed-sd | vs run noise |
+|---|---:|---:|
+| exp_c14 hyperplane, legacy init | 1186.6 | 1.79× |
+| exp_c15 hyperplane, torch init | 178.0 | 0.27× |
+| exp_c13 anchors, median config | 473.7 | 0.71× |
+| exp_c13 anchors, worst config | 1850.0 | 2.79× |
+
+A 3-sample sd drawn from a population sd of 663 lands in **[150, 1147]** ninety percent of
+the time. **exp_c14's 1186.6 and exp_c15's 178.0 both sit inside that interval.**
+
+### What I am retracting
+
+* **The "6.7× variance reduction from the torch-faithful init" is NOT established.** I
+  reported it as the headline of exp_c15. With three samples and run noise this large, 1187
+  and 178 are not distinguishable from each other or from the same underlying spread. The
+  init may well help — the mean did rise — but this experiment cannot show it.
+* **The seed-sensitivity comparison between anchors and hyperplane is void, in both
+  directions.** exp_c14 said hyperplanes are more seed-sensitive; exp_c15 said less. Both
+  were reading run noise through a 3-sample sd.
+* **exp_c13's headline was right for the wrong reason.** "Most of exp_c12's ordering was
+  seed noise" — the ordering is indeed unsupported, but the noise is not from the *seed*.
+  It is nondeterminism between invocations, which the seed never controlled.
+
+### What survives
+
+* The bit-exactness verifications (anchor sampler, anchor-pair encoding, hyperplane
+  anchor_pairs init, hard forward vs torch). Those are deterministic checks with no
+  training in them, and every one was exact rather than merely in tolerance.
+* The active-parameter accounting — arithmetic, not measurement.
+* The exp_c14 movement diagnostic: hyperplanes really do rotate ~60° and flip a quarter to
+  a third of their bits. That is measured off checkpoints, not across runs.
+* The qualitative claim that anchors and hyperplane are *close* at very different active
+  cost. It survives because it was always a claim about overlapping distributions.
+
+Also worth noting: replicate a scored **5406.2**, above the 5146.9 that anchored every
+comparison in this document for two days. The reference was not merely lucky — it was not
+even the ceiling.
+
+## What has to happen before any of these comparisons can be redone
+
+1. **Find the nondeterminism.** The prime suspect remains the table-weight scatter-add in
+   the backward (`gw.at[...].add(...)`), which accumulates through GPU atomics in
+   nondeterministic order. `XLA_FLAGS=--xla_gpu_deterministic_ops=true` would test that
+   directly: if two runs then match bit-for-bit, the source is confirmed and fixable.
+2. **Only then re-measure.** Until a fixed seed reproduces, no A/B at n=3 in this codebase
+   can resolve anything smaller than ~1000 return, which is larger than every effect this
+   document has claimed.
+3. **If it cannot be made deterministic, raise n.** To resolve a 350-point difference
+   against sd 663 at 80% power needs roughly 2 × (2.8 × 663/350)² ≈ 57 runs per arm. That
+   is ~33 GPU-hours per arm at 35 min a run — which is itself the finding: effects this
+   small are not measurable here at any reasonable cost.

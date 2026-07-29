@@ -1,0 +1,24 @@
+{
+ "replicates": [
+  {
+   "rep": "a",
+   "mean": 5406.243149723247,
+   "std": 89.28038262123383,
+   "mjx": 5410.9,
+   "cov": 100.0
+  },
+  {
+   "rep": "b",
+   "mean": 4407.096263340497,
+   "std": 780.4490469101526,
+   "mjx": 4752.0,
+   "cov": 100.0
+  }
+ ],
+ "delta": 999.1468863827504,
+ "c15_seed0": 4152.7,
+ "c15_seed_sd": 178.0,
+ "ratio_to_seed_sd": 5.6131847549592715,
+ "c11_c14_gap": 951.6,
+ "verdict": "run noise EXCEEDS the seed spread \u2014 the seed comparisons are dominated by nondeterminism and cannot support their conclusions"
+}
