@@ -45,7 +45,10 @@ from lutmodel import build_model, lut_bits, bits_to_row
 from spnet_harness import build_packed
 from spiky.spnet.spnet import NeuronMeta, NeuronDataType
 
-torch.set_num_threads(1)
+PACKED = bool(os.environ.get("NE_PACKED"))     # population-parallel packed eval (one build per chunk)
+DEVICE = os.environ.get("NE_DEVICE", "cpu")     # 'cpu' (default) or 'cuda' — Phase 2 GPU target
+if DEVICE == "cpu":
+    torch.set_num_threads(1)
 
 m = build_model(0)
 W, b, V, K, D, Dout = m["W"], m["b"], m["V"], m["K"], m["D"], m["Dout"]
@@ -191,6 +194,111 @@ def eval_batch(g, xs, true_orders):
     return sf + 0.25 * of, sf, of
 
 
+# ----- POPULATION-PARALLEL packed eval (one build + one process_ticks for MANY genomes) -----
+# Instead of build+teardown a fresh SpikingNet per genome, pack a whole chunk of genomes
+# as DISJOINT sub-networks into ONE device-resident net (reusing build_packed's native
+# multi-candidate packing with a combined neuron-meta list: shared input/output metas at
+# indices 0/1, each genome's hidden metas appended). One process_ticks over the corner
+# batch then evaluates every genome at once. On CPU this yields the SAME fitness as the
+# per-genome eval_batch (disjoint subnets never interact); on GPU it's the path that makes
+# per-genome build/teardown overhead vanish. device='cpu' (default) or 'cuda'.
+def build_population(genomes, device='cpu'):
+    """Pack genomes (each assumed to have >=1 synapse) into one build_packed net.
+    NeuronMetas must be DE-DUPLICATED before SpikingNet (its register_neuron_meta
+    dedupes identical metas, which would break its `assert m_id == i`); different
+    genomes routinely share identical hidden metas (crossover copies them), so we
+    dedup by parameter signature and remap every node's meta index accordingly."""
+    metas = []
+    key2idx = {}
+
+    def meta_index(nm):
+        k = (round(nm.cf_2, 6), round(nm.cf_1, 6), round(nm.cf_0, 6), round(nm.a, 6),
+             round(nm.b, 6), round(nm.c, 6), round(nm.d, 6), round(nm.spike_threshold, 6),
+             int(nm.neuron_type))
+        if k not in key2idx:
+            key2idx[k] = len(metas)
+            metas.append(nm)
+        return key2idx[k]
+
+    in_idx = meta_index(leakfree(IN_THR))
+    out_idx = meta_index(leakfree(OUT_THR))
+    cands = []
+    for g in genomes:
+        hids = list(g["hid"].keys())
+        nodes = IN_LABELS + OUT_LABELS + hids            # local order: 0..5 in, 6..9 out, 10.. hidden
+        loc = {n: i for i, n in enumerate(nodes)}
+        node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(meta_of(g["hid"][h])) for h in hids]
+        syn = [(loc[s], loc[t], float(w), int(max(1, dl)))
+               for (s, t, w, dl) in g["syn"].values() if s in loc and t in loc]
+        cands.append({"n_nodes": len(nodes), "node_meta": node_meta, "synapses": syn})
+    return build_packed(cands, metas, device=device)
+
+
+def _score_population(packed, ncand, xs, true_orders, device='cpu'):
+    """Same scoring as _score_chunk, but ncand genomes packed disjointly in one net."""
+    gid = packed["gid"]
+    sp = packed["spnet"]
+    in_gid = [[gid(c, i) for i in range(D)] for c in range(ncand)]           # input local idx = i
+    Oids = torch.tensor([gid(c, D + d) for c in range(ncand) for d in range(Dout)],
+                        dtype=torch.int32)                                    # output local idx = D+d
+    nb = len(xs)
+    kdim = ncand * D
+    S = torch.zeros((nb, N_TICKS, kdim), dtype=torch.int32)
+    Vv = torch.zeros((nb, N_TICKS, kdim), dtype=torch.float32)
+    for b, x in enumerate(xs):
+        for i in range(D):
+            t = min(max(int(round(A_LAT - B_LAT * x[i])), 1), N_TICKS - 1)
+            for c in range(ncand):
+                j = c * D + i
+                S[b, t, j] = in_gid[c][i]
+                Vv[b, t, j] = 50.0
+    if device != 'cpu':
+        S, Vv, Oids = S.to(device), Vv.to(device), Oids.to(device)
+    sp.process_ticks(n_ticks_to_process=N_TICKS, batch_size=nb, n_input_ticks=N_TICKS,
+                     input_values=Vv, do_train=False, sparse_input=S, do_reset_context=True)
+    spk = sp.export_neuron_data(Oids, nb, NeuronDataType.Spike, 0, N_TICKS - 1)
+    spk = spk.view(nb, ncand, Dout, N_TICKS).cpu()
+    res = []
+    for c in range(ncand):
+        strict = order_sum = 0.0
+        for b in range(nb):
+            first = []
+            for d in range(Dout):
+                nz = torch.nonzero(spk[b, c, d] > 0.5).flatten()
+                first.append(int(nz[0].item()) if nz.numel() else N_TICKS + 1)
+            net_order = tuple(sorted(range(Dout), key=lambda d: (first[d], d)))
+            to = true_orders[b]
+            if net_order == to:
+                strict += 1
+            conc = 0
+            for a in range(Dout):
+                for c2 in range(a + 1, Dout):
+                    if first[to[a]] <= first[to[c2]]:
+                        conc += 1
+            order_sum += conc / 6.0
+        sf, of = strict / nb, order_sum / nb
+        res.append((sf + 0.25 * of, sf, of))
+    return res
+
+
+def eval_population(genomes, xs, true_orders, device='cpu', chunk=32):
+    """Fitness for every genome, packed in chunks. Matches [eval_batch(g,...) for g] on CPU.
+    Genomes with no synapses score 0.0 (as build_individual->None in eval_batch)."""
+    out = [(0.0, 0.0, 0.0)] * len(genomes)
+    for s in range(0, len(genomes), chunk):
+        idx = [i for i in range(s, min(s + chunk, len(genomes))) if genomes[i]["syn"]]
+        if not idx:
+            continue
+        try:
+            packed = build_population([genomes[i] for i in idx], device=device)
+            scores = _score_population(packed, len(idx), xs, true_orders, device=device)
+        except Exception:
+            scores = [(0.0, 0.0, 0.0)] * len(idx)
+        for k, i in enumerate(idx):
+            out[i] = scores[k]
+    return out
+
+
 # ----- temporal STREAMING evaluation -----
 # K real-valued x presented at t=0,T,2T on one timeline; each read within its own
 # window. Spacing T is ANNEALED wide->tight over the run so evolution earns the hard
@@ -279,6 +387,71 @@ def make_stream_trials(rng, n):
         xs = [[rng.uniform(-1, 1) for _ in range(D)] for _ in range(STREAM_K)]
         trials.append((xs, [oracle_order(x) for x in xs]))
     return trials
+
+
+# ----- POPULATION-PARALLEL packed STREAM eval (matches eval_stream on CPU) -----
+def _score_population_stream(packed, ncand, trials, T, device='cpu'):
+    W, K = STREAM_WIN, STREAM_K
+    L = (K - 1) * T + W + 6
+    gid, sp = packed["gid"], packed["spnet"]
+    in_gid = [[gid(c, i) for i in range(D)] for c in range(ncand)]
+    Oids = torch.tensor([gid(c, D + d) for c in range(ncand) for d in range(Dout)], dtype=torch.int32)
+    nb, kdim = len(trials), ncand * K * D
+    S = torch.zeros((nb, L, kdim), dtype=torch.int32)
+    Vv = torch.zeros((nb, L, kdim), dtype=torch.float32)
+    for b, (xs, _) in enumerate(trials):
+        for p in range(K):
+            for i in range(D):
+                t = min(max(p * T + int(round(A_LAT - B_LAT * xs[p][i])), 1), L - 1)
+                for c in range(ncand):
+                    j = (c * K + p) * D + i
+                    S[b, t, j] = in_gid[c][i]
+                    Vv[b, t, j] = 50.0
+    if device != 'cpu':
+        S, Vv, Oids = S.to(device), Vv.to(device), Oids.to(device)
+    sp.process_ticks(n_ticks_to_process=L, batch_size=nb, n_input_ticks=L,
+                     input_values=Vv, do_train=False, sparse_input=S, do_reset_context=True)
+    spk = sp.export_neuron_data(Oids, nb, NeuronDataType.Spike, 0, L - 1).view(nb, ncand, Dout, L).cpu()
+    res = []
+    for c in range(ncand):
+        strict = order_sum = 0.0
+        for b, (xs, tos) in enumerate(trials):
+            for p in range(K):
+                lo = p * T
+                first = []
+                for d in range(Dout):
+                    nz = torch.nonzero(spk[b, c, d, lo:lo + W] > 0.5).flatten()
+                    first.append(int(nz[0].item()) if nz.numel() else W + 1)
+                net_order = tuple(sorted(range(Dout), key=lambda d: (first[d], d)))
+                to = tos[p]
+                if net_order == to:
+                    strict += 1
+                conc = 0
+                for a in range(Dout):
+                    for c2 in range(a + 1, Dout):
+                        if first[to[a]] <= first[to[c2]]:
+                            conc += 1
+                order_sum += conc / 6.0
+        denom = nb * K
+        sf, of = strict / denom, order_sum / denom
+        res.append((sf + 0.25 * of, sf, of))
+    return res
+
+
+def eval_population_stream(genomes, trials, T, device='cpu', chunk=16):
+    out = [(0.0, 0.0, 0.0)] * len(genomes)
+    for s in range(0, len(genomes), chunk):
+        idx = [i for i in range(s, min(s + chunk, len(genomes))) if genomes[i]["syn"]]
+        if not idx:
+            continue
+        try:
+            packed = build_population([genomes[i] for i in idx], device=device)
+            scores = _score_population_stream(packed, len(idx), trials, T, device=device)
+        except Exception:
+            scores = [(0.0, 0.0, 0.0)] * len(idx)
+        for k, i in enumerate(idx):
+            out[i] = scores[k]
+    return out
 
 
 # ----- mutation (self-adaptive sigma) -----
@@ -412,11 +585,12 @@ def run_ea_stream(pop_size, generations, seed, ss_batch, stream_n, val_n, val_st
         ss_txs = [[rng.uniform(-1, 1) for _ in range(D)] for _ in range(ss_batch)]
         ss_ttrue = [oracle_order(x) for x in ss_txs]
         st_trials = make_stream_trials(rng, stream_n)
-        scored = []
-        for g in pop:
-            fss = eval_batch(g, ss_txs, ss_ttrue)[0]
-            fst = eval_stream(g, st_trials, T)[0]
-            scored.append((fss + fst, g))
+        if PACKED:                                            # population-parallel packed eval
+            ss = eval_population(pop, ss_txs, ss_ttrue, device=DEVICE)
+            st = eval_population_stream(pop, st_trials, T, device=DEVICE)
+            scored = [(ss[i][0] + st[i][0], pop[i]) for i in range(len(pop))]
+        else:                                                 # per-genome reference path
+            scored = [(eval_batch(g, ss_txs, ss_ttrue)[0] + eval_stream(g, st_trials, T)[0], g) for g in pop]
         scored.sort(key=lambda z: -z[0])
         train_mean = sum(z[0] for z in scored) / len(scored)
         best = scored[0][1]

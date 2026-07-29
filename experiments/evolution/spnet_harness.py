@@ -37,8 +37,9 @@ def stock_meta(_threshold=30.0):
     return NeuronMeta(neuron_type=0)  # a=.02 b=.2 c=-65 d=8 cf=.04/5/140 thr=30
 
 
-def build_packed(genomes, neuron_metas):
-    """neuron_metas: list of NeuronMeta; genome['node_meta'][local] indexes it."""
+def build_packed(genomes, neuron_metas, device='cpu'):
+    """neuron_metas: list of NeuronMeta; genome['node_meta'][local] indexes it.
+    device: 'cpu' (default, unchanged) or 'cuda[:i]' to build the packed net on GPU."""
     n_cand = len(genomes)
     n_nodes = max(g["n_nodes"] for g in genomes)
 
@@ -83,7 +84,7 @@ def build_packed(genomes, neuron_metas):
     spnet = SpikingNet(synapse_metas=syn_metas, neuron_metas=neuron_metas,
                        neuron_counts=counts,
                        initial_synapse_capacity=max(1024, 2 * len(plan)))
-    spnet.to_device('cpu')
+    spnet.to_device(device)
     ids_by_meta = [spnet.get_neuron_ids_by_meta(i) for i in range(len(neuron_metas))]
 
     def gid(c, local):
@@ -94,7 +95,7 @@ def build_packed(genomes, neuron_metas):
     triples_t = torch.tensor(triples, dtype=torch.int32)
 
     total_neurons = sum(counts)
-    ge = SynapseGrowthEngine(device='cpu', synapse_group_size=2,
+    ge = SynapseGrowthEngine(device=device, synapse_group_size=2,
                              max_groups_in_buffer=max(4096, 8 * (len(plan) + total_neurons)))
     for i in range(len(neuron_metas)):
         ge.register_neuron_type(max_synapses=8 * n_nodes, growth_command_list=[])
@@ -108,7 +109,7 @@ def build_packed(genomes, neuron_metas):
     spnet.add_connections(chunk, 1)
     chunk.recycle()
     spnet.compile(shuffle_synapses_random_seed=1)
-    spnet.to_device('cpu')
+    spnet.to_device(device)
     return {"spnet": spnet, "gid": gid, "n_nodes": n_nodes, "n_cand": n_cand,
             "n_synapses": spnet.n_synapses(), "n_syn_metas": len(syn_metas)}
 
