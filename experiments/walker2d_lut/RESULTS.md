@@ -1398,3 +1398,75 @@ even the ceiling.
    against sd 663 at 80% power needs roughly 2 × (2.8 × 663/350)² ≈ 57 runs per arm. That
    is ~33 GPU-hours per arm at 35 min a run — which is itself the finding: effects this
    small are not measurable here at any reasonable cost.
+
+---
+
+# Determinism: confirmed and fixed (exp_c17)
+
+exp_c16 measured |A − B| = 999.1 between two runs of an identical config and seed. This
+reruns exactly that test with deterministic GPU ops forced on:
+
+```
+XLA_FLAGS=--xla_gpu_deterministic_ops=true
+CUBLAS_WORKSPACE_CONFIG=:4096:8
+```
+
+## The checkpoints are bit-for-bit identical
+
+| tensor | elements | max\|Δ\| | differing |
+|---|---:|---:|---:|
+| w | 3,264 | 0.000e+00 | 0 |
+| b | 192 | 0.000e+00 | 0 |
+| weights | 24,576 | 0.000e+00 | 0 |
+| log_T_soft | 1 | 0.000e+00 | 0 |
+| log_T_sel | 1 | 0.000e+00 | 0 |
+| **TOTAL** | **28,034** | **0.000e+00** | **0** |
+
+Not "close". Zero differing elements out of 28,034 after 10,000 iterations, 640,000
+env-steps and 304,000 gradient updates. The returns follow trivially: both 4120.6 ± 143.8,
+**|A − B| = 0.0** against 999.1 without the flag.
+
+**The atomics-based scatter path was the source.** The table-weight gradient is a
+scatter-add (`gw.at[...].add(...)`), which on GPU accumulates through atomics in
+nondeterministic order; in a LUT that lands on the one tensor the whole policy is made of.
+Every run was summing the same numbers in a different order, and 10,000 iterations of
+compounding turned float-reassociation noise into a 1000-point spread in return.
+
+The checkpoint test is what makes this conclusive. Two returns can coincide by luck;
+28,034 weights cannot.
+
+## Cost
+
+| | per run | vs exp_c16 |
+|---|---:|---:|
+| exp_c16, nondeterministic | 28.6 / 27.9 min | — |
+| exp_c17, deterministic | 35.5 / 35.4 min | **+27%** |
+
+27% slower is an unusually cheap price for being able to tell a result from an artifact.
+It should be the default for anything that will be compared, and can be dropped only for
+throwaway exploration.
+
+## What this unblocks, and what it does not
+
+**Unblocks:** every A/B in exp_c12–exp_c16 can be redone on a footing where a fixed seed
+reproduces. Until now "seed-sd" conflated the seed with run noise that the seed never
+controlled; with this flag the two are separable for the first time.
+
+**Does not:** determinism does not make the seed-to-seed variance smaller. It makes each
+seed *reproducible*. If the true seed spread is large, it stays large — we will now simply
+be measuring it rather than measuring it plus an equal-sized artifact.
+
+Nor does it retroactively rescue anything. Every comparison in exp_c12–c16 was run without
+the flag and remains contaminated; the retractions in the exp_c16 section stand. This
+enables the redo, it does not substitute for it.
+
+One calibration point: the deterministic runs scored 4120.6, which sits inside the
+{5406.2, 4407.1, 4152.7} spread exp_c16 observed at this same seed. That is the expected
+result — determinism pins *which* draw you get, it does not move the distribution.
+
+## Recommended order for the redo
+
+1. Set the flag in every run script (one line each).
+2. Re-measure the two comparisons that actually carry the argument: hyperplane init
+   (legacy vs anchor_pairs) and the best anchors config vs the hyperplane reference.
+3. Only then extend to the full capacity grid, if the headline comparisons justify it.
