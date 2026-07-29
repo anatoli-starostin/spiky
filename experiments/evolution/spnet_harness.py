@@ -92,7 +92,9 @@ def build_packed(genomes, neuron_metas, device='cpu'):
         return int(ids_by_meta[mi][slot].item())
 
     triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt) in plan]
-    triples_t = torch.tensor(triples, dtype=torch.int32)
+    # triples (and the entry_points _grow_explicit derives from them) must live on the
+    # growth engine's device — on CUDA the low-level grow rejects CPU-resident tensors.
+    triples_t = torch.tensor(triples, dtype=torch.int32, device=device)
 
     total_neurons = sum(counts)
     ge = SynapseGrowthEngine(device=device, synapse_group_size=2,
