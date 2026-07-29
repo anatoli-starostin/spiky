@@ -24,10 +24,11 @@
   // All datasets live in this same public dir.
   const _q = new URLSearchParams(location.search);
   const _v = (_q.get('v') || _q.get('data') || '').toLowerCase();
-  // Pages deployment ships only the graded dataset, so graded is the DEFAULT here
-  // (bare inspector.html works); ?v=graded is also accepted.
-  const VARIANT = _v.startsWith('lat') ? 'latency' : _v.startsWith('coinc') ? 'coincidence' : 'graded';
-  const _suffix = { coincidence: '', latency: '_latency', graded: '_graded' }[VARIANT];
+  // Pages deployment ships only the clean dataset, so clean is the DEFAULT here
+  // (bare inspector.html works); ?v=clean is also accepted.
+  const VARIANT = _v.startsWith('grad') ? 'graded' : _v.startsWith('lat') ? 'latency'
+    : _v.startsWith('coinc') ? 'coincidence' : 'clean';
+  const _suffix = { coincidence: '', latency: '_latency', graded: '_graded', clean: '_clean' }[VARIANT];
   const _gf = 'graph' + _suffix + '.json';
   const _af = 'activity' + _suffix + '.json';
   Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
@@ -44,7 +45,8 @@
       + ' · edges: <span style="color:#5b9dff">■ −w</span>/<span style="color:#ff6b6b">■ +w</span>, dashed = delay>1';
     const h1 = document.querySelector('h1');
     const _label = { coincidence: 'coincidence-coded', latency: 'latency-coded (time-to-first-spike)',
-      graded: 'graded real-valued (multi-tap thermometer)' }[VARIANT];
+      graded: 'graded real-valued (multi-tap thermometer)',
+      clean: 'clean graded (leaky-detector, no tap bank)' }[VARIANT];
     if (h1) h1.textContent = 'spnet inspector — ' + _label;
     document.title = VARIANT + ' — spnet inspector';
     setupCanvas(); bindControls();
