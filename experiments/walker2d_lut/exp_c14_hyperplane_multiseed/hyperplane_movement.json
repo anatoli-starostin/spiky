@@ -1,0 +1,77 @@
+{
+ "deltas": [
+  {
+   "checkpoint": "lut_sac_c14_hyperplane_hard_s0_actor.npz",
+   "label": "exp_c14 seed 0",
+   "seed": 0,
+   "rel_dw": 1.0065231323242188,
+   "mean_cos": 0.46156296133995056,
+   "mean_angle_deg": 61.8934211730957,
+   "rel_db": 13.044794082641602,
+   "mean_abs_db": 0.9721452593803406,
+   "bit_flip_fraction": 0.3287057291666667
+  },
+  {
+   "checkpoint": "lut_sac_c14_hyperplane_hard_s1_actor.npz",
+   "label": "exp_c14 seed 1",
+   "seed": 1,
+   "rel_dw": 1.000443696975708,
+   "mean_cos": 0.4861699044704437,
+   "mean_angle_deg": 60.27680587768555,
+   "rel_db": 11.136346817016602,
+   "mean_abs_db": 0.8989508748054504,
+   "bit_flip_fraction": 0.27870052083333335
+  },
+  {
+   "checkpoint": "lut_sac_c14_hyperplane_hard_s2_actor.npz",
+   "label": "exp_c14 seed 2",
+   "seed": 2,
+   "rel_dw": 1.0351948738098145,
+   "mean_cos": 0.4502243101596832,
+   "mean_angle_deg": 62.74091720581055,
+   "rel_db": 13.21414566040039,
+   "mean_abs_db": 0.9373968243598938,
+   "bit_flip_fraction": 0.26545833333333335
+  },
+  {
+   "checkpoint": "lut_sac_c11_hyperplane_hard_actor.npz",
+   "label": "exp_c11 (PRNGKey(0), pre-flag)",
+   "seed": 0,
+   "rel_dw": 0.9898771047592163,
+   "mean_cos": 0.4842705726623535,
+   "mean_angle_deg": 60.3572883605957,
+   "rel_db": 12.327704429626465,
+   "mean_abs_db": 0.9122440814971924,
+   "bit_flip_fraction": 0.3169635416666667
+  }
+ ],
+ "grads": {
+  "grad_w": {
+   "norm": 0.5721442699432373,
+   "max_abs": 0.12943971157073975,
+   "frac_nonzero": 1.0
+  },
+  "grad_b": {
+   "norm": 0.12949009239673615,
+   "max_abs": 0.039840709418058395,
+   "frac_nonzero": 1.0
+  },
+  "grad_weights": {
+   "norm": 1.1838010549545288,
+   "max_abs": 0.12314274907112122,
+   "frac_nonzero": 0.0087890625
+  },
+  "grad_log_T_soft": {
+   "norm": 0.2761163115501404,
+   "max_abs": 0.2761163115501404,
+   "frac_nonzero": 1.0
+  },
+  "grad_log_T_sel": {
+   "norm": 0.27852901816368103,
+   "max_abs": 0.27852901816368103,
+   "frac_nonzero": 1.0
+  }
+ },
+ "grad_w_over_grad_table": 0.48331116748769415,
+ "n_obs": 2000
+}
