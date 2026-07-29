@@ -343,13 +343,8 @@ class SynapseGrowthEngine(object):
 
         lowlevel_engine = self._setup_lowlevel_engine(device, random_seed)
 
-        n_synapse_metas = explicit_triples[:, 0:1].unique().shape[0]
-        n_source_ids = explicit_triples[:, 1:2].unique().shape[0]
-        n_groups = (explicit_triples.shape[0] + self._synapse_group_size - 1) // self._synapse_group_size + (n_synapse_metas - 1) * (n_source_ids - 1)
-        connections_buffer = torch.zeros(
-            [n_groups * (4 + 2 * self._synapse_group_size)], dtype=torch.int32, device=self._device
-        )
-
+        # sort triples by (source, then meta) so each distinct (meta, source) sublist is
+        # contiguous — this is the layout the native grow consumes.
         sort_idx = torch.argsort(explicit_triples[:, 1], stable=True)
         explicit_triples = explicit_triples[sort_idx]
         sort_idx = torch.argsort(explicit_triples[:, 0], stable=True)
@@ -363,9 +358,37 @@ class SynapseGrowthEngine(object):
                 )[0] + 1
             ]).flatten().to(dtype=torch.int32)
 
+        entry_points = calc_entry_points(explicit_triples)
+
+        # Connections-buffer sizing. The native grow writes ONE linked group list per
+        # distinct (synapse_meta, source) sublist, each group holding at most group_size
+        # targets, so a sublist with T targets needs ceil(T / group_size) groups. The
+        # exact number of groups is therefore the sum over sublists of ceil(T_i / gs).
+        #
+        # The previous formula  ceil(n_triples/gs) + (n_metas - 1)*(n_sources - 1)
+        # UNDERCOUNTS when there are FEW distinct synapse metas (e.g. a single shared
+        # meta — exactly the per-edge-weights path from #78): the second term collapses
+        # toward 0 while many (meta, source) sublists still each need their own group, so
+        # the buffer is allocated too small and the native kernel writes past it ->
+        # segfault. We compute the exact count from the sublist sizes instead.
+        gs = self._synapse_group_size
+        n_triples = explicit_triples.shape[0]
+        if n_triples > 0:
+            seg_sizes = torch.diff(torch.cat([
+                entry_points,
+                torch.tensor([n_triples], dtype=torch.int32, device=entry_points.device)
+            ]))
+            # exact groups needed, plus one spare group per sublist as a safety margin
+            n_groups = int(((seg_sizes + (gs - 1)) // gs).sum().item()) + int(entry_points.shape[0])
+        else:
+            n_groups = 1
+        connections_buffer = torch.zeros(
+            [n_groups * (4 + 2 * gs)], dtype=torch.int32, device=self._device
+        )
+
         lowlevel_engine._grow_explicit(
             connections_buffer,
-            calc_entry_points(explicit_triples),
+            entry_points,
             explicit_triples.flatten()
         )
         lowlevel_engine.finalize(connections_buffer, do_sort_by_target_id)
