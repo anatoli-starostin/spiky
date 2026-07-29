@@ -309,7 +309,12 @@ class SynapseGrowthEngine(object):
                 )
         return lowlevel_engine
 
-    def _grow_explicit(self, explicit_triples, random_seed=None, do_sort_by_target_id=False):
+    def _grow_explicit(self, explicit_triples, random_seed=None, do_sort_by_target_id=False, weights=None):
+        # weights (optional): a 1-D tensor of one EXPLICIT weight per input triple, in
+        # the same order as explicit_triples. When given, the returned chunk carries a
+        # group-aligned weights buffer (see ChunkOfConnections layout) so that
+        # add_connections seeds each edge's weight from it instead of the meta's
+        # initial_weight — allowing many distinct per-edge weights under a single meta.
         # Determine device index for low-level engine (int for CUDA, -1 for CPU)
         device = self._device
         if not isinstance(device, int):
@@ -324,6 +329,17 @@ class SynapseGrowthEngine(object):
 
         assert len(explicit_triples.shape) == 2
         assert explicit_triples.shape[1] == 3
+
+        # map (source_id, target_id) -> explicit weight, from the ORIGINAL triple order
+        # (sourced before the in-place sort below, so alignment is order-independent).
+        wmap = None
+        if weights is not None:
+            assert weights.shape[0] == explicit_triples.shape[0], "weights must have one entry per triple"
+            trip_cpu = explicit_triples.cpu()
+            w_cpu = weights.detach().cpu().flatten()
+            wmap = {}
+            for k in range(trip_cpu.shape[0]):
+                wmap[(int(trip_cpu[k, 1]), int(trip_cpu[k, 2]))] = float(w_cpu[k])
 
         lowlevel_engine = self._setup_lowlevel_engine(device, random_seed)
 
@@ -355,7 +371,35 @@ class SynapseGrowthEngine(object):
         lowlevel_engine.finalize(connections_buffer, do_sort_by_target_id)
         self._profiling_stats = lowlevel_engine.get_profiling_stats()
 
-        return ChunkOfConnections(connections_buffer, self._synapse_group_size)
+        weights_buffer = None
+        if wmap is not None:
+            weights_buffer = self._build_group_aligned_weights(connections_buffer, wmap)
+
+        return ChunkOfConnections(connections_buffer, self._synapse_group_size, weights=weights_buffer)
+
+    def _build_group_aligned_weights(self, connections_buffer, wmap):
+        """Build the per-edge weights buffer aligned to the connection groups: for a
+        group at int-offset d, its weights occupy [ (d/(4+2*gs))*gs : +gs ], slot j
+        matching the j-th (meta, target) body pair. The source id lives in the root
+        group header (source>0); chained/ghost groups repeat it as 0, so we carry the
+        last positive source forward while scanning blocks in order (the explicit build
+        lays each source's groups out contiguously)."""
+        gs = self._synapse_group_size
+        block = 4 + 2 * gs
+        buf = connections_buffer.cpu().tolist()
+        n_blocks = len(buf) // block
+        wbuf = torch.zeros([n_blocks * gs], dtype=torch.float32)
+        cur_src = 0
+        for b in range(n_blocks):
+            d = b * block
+            src = buf[d]
+            if src != 0:
+                cur_src = src
+            for j in range(gs):
+                tgt = buf[d + 4 + 2 * j + 1]     # body pair j = (meta, target)
+                if tgt != 0:
+                    wbuf[b * gs + j] = wmap.get((cur_src, tgt), 0.0)
+        return wbuf.to(device=connections_buffer.device)
 
     def get_profiling_stats(self) -> str:
         return self._profiling_stats

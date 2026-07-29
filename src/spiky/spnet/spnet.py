@@ -152,12 +152,20 @@ class SpikingNet(object):
 
     def add_connections(
         self, chunk_of_connections: ChunkOfConnections,
-        random_seed: int = None
+        random_seed: int = None,
+        external_weights: torch.Tensor = None
     ):
+        # external_weights (optional): a group-aligned per-edge weights buffer (as
+        # produced by _grow_explicit(..., weights=...)). When None we fall back to the
+        # chunk's own weights (if it carries any), else to each meta's initial_weight —
+        # fully backward compatible.
+        if external_weights is None:
+            external_weights = chunk_of_connections.get_weights()
         self._neuron_data_manager.add_connections(
             chunk_of_connections.get_connections(),
             chunk_of_connections.get_single_group_size(),
-            random_seed
+            random_seed,
+            external_weights
         )
 
     def compile(self, shuffle_synapses_random_seed: int = None, _only_trainable_backwards=True):
