@@ -46,6 +46,9 @@ import jax_lut_ext as X           # noqa: E402
 
 OBS, ACT = 17, 6
 LOGSTD_MIN, LOGSTD_MAX = -5.0, 2.0
+# torch HyperplaneMultiHeadLUT's `initial_weights_noise` default, the std used by its
+# hyperplane_init="random" mode (hyperplane_multi_head_lut.py:682).
+TORCH_HP_NOISE = 0.001
 
 
 # =============================================================================
@@ -155,6 +158,20 @@ def main():
                          "NOTE FastMultiHeadLut itself uses canonical_full_coverage "
                          "and REJECTS balanced. legacy_jax = the home-grown draw that "
                          "produced the exp_c11/exp_c12 numbers.")
+    ap.add_argument("--hyperplane-init", default="anchor_pairs",
+                    choices=["anchor_pairs", "random_torch", "legacy_jax"],
+                    help="init for --addressing hyperplane. anchor_pairs (default) is "
+                         "TORCH'S DEFAULT: w = e_a - e_b, b = 0, so the model starts as "
+                         "a bit-exact FastMultiHeadLut and learns away. random_torch = "
+                         "torch's other mode, N(0, 0.001) with b = 0. legacy_jax = the "
+                         "old dense N(0,0.5^2)/N(0,0.1^2) draw that produced exp_c11 "
+                         "and exp_c14.")
+    ap.add_argument("--hyperplane-anchor-policy", default="canonical_full_coverage",
+                    choices=["canonical_full_coverage", "canonical_distinct"],
+                    help="sampler for the anchor_pairs hyperplane init. Only these two "
+                         "are offered because HyperplaneMultiHeadLUT itself REJECTS "
+                         "balanced/connected for this init (ValueError), so 'balanced' "
+                         "here would not be torch-faithful.")
     ap.add_argument("--forward-mode", default="hard",
                     choices=["hard", "hybrid_smooth"])
     ap.add_argument("--tag", default="")
@@ -187,17 +204,36 @@ def main():
                                               seed=a.seed, policy=a.anchor_policy,
                                               heads=a.heads)
         ap_ = dict(ap_, w=w0, b=b0)
+    elif a.hyperplane_init != "legacy_jax":
+        # Hyperplane addressing, initialised the way torch does it. w and b stay
+        # LEARNABLE either way -- only the starting point changes.
+        if a.hyperplane_init == "anchor_pairs":
+            # Torch's DEFAULT: w = e_a - e_b, b = 0, exact and unperturbed, so the
+            # model starts bit-for-bit as a FastMultiHeadLut and learns away from it.
+            w0, b0 = X.anchor_pair_wb_lutorch(a.heads * a.tph, a.nap, OBS,
+                                              seed=a.seed,
+                                              policy=a.hyperplane_anchor_policy,
+                                              heads=a.heads)
+        else:   # random_torch — torch's other mode: N(0, initial_weights_noise), b = 0
+            w0 = jax.random.normal(jax.random.fold_in(ka, 1),
+                                   (a.heads * a.tph, a.nap, OBS)) * TORCH_HP_NOISE
+            b0 = jnp.zeros((a.heads * a.tph, a.nap), jnp.float32)
+        ap_ = dict(ap_, w=w0, b=b0)
     qp = q_init(kq)
     qt = jax.tree.map(lambda x: x, qp)
     log_alpha = jnp.log(jnp.asarray(0.2))
+
+    init_tag = (a.anchor_policy if a.addressing == "anchors"
+                else a.hyperplane_init)
+    if a.addressing == "hyperplane" and a.hyperplane_init == "anchor_pairs":
+        init_tag += f"({a.hyperplane_anchor_policy})"
 
     n_tables = a.heads * a.tph
     K = 2 ** a.nap
     n_table_params = int(np.prod(ap_["weights"].shape))
     n_idx = int(np.prod(ap_["w"].shape) + np.prod(ap_["b"].shape))
     print(f"LUT-SAC actor nap={a.nap} tph={a.tph} heads={a.heads} "
-          f"seed={a.seed} addressing={a.addressing}"
-          f"{'/' + a.anchor_policy if a.addressing == 'anchors' else ''} | "
+          f"seed={a.seed} addressing={a.addressing}/{init_tag} | "
           f"12 outputs/cell (6 mu + 6 log-sigma) | table {n_table_params:,} + "
           f"addressing {n_idx:,} = {n_table_params + n_idx:,} params | "
           f"rows {n_tables}x{K} = {n_tables*K:,}", flush=True)
