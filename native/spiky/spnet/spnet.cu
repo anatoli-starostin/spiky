@@ -439,12 +439,15 @@ public:
     void add_connections(
         const torch::Tensor &connections_buffer,
         uint32_t single_input_group_size,
-        std::optional<uint32_t> &random_seed
+        std::optional<uint32_t> &random_seed,
+        std::optional<const torch::Tensor> &external_weights_buffer
     ) {
         checkConnectionsManagerIsInitialized();
-        std::optional<const torch::Tensor> none;
+        // external_weights_buffer (optional): per-edge initial weights aligned to the
+        // connection groups (see ChunkOfConnections weights layout). When omitted, each
+        // synapse is seeded from its SynapseMeta.initial_weight as before.
         this->n_synapses += connections_manager->add_connections(
-            connections_buffer, none,
+            connections_buffer, external_weights_buffer,
             single_input_group_size,
             0, nullptr,
             random_seed ? random_seed.value() : std::random_device{}()
@@ -1118,7 +1121,8 @@ void PFX(PB_SPNetDataManager)(py::module& m) {
             "Add connections from ConnectionsBuffer",
             py::arg("connections_buffer"),
             py::arg("single_input_group_size"),
-            py::arg("random_seed") = py::none())
+            py::arg("random_seed") = py::none(),
+            py::arg("external_weights_buffer") = py::none())
         .def("compile", &SPNDM_CLASS_NAME::compile,
             "Finalize synapse groups (calculate backward synapses)",
             py::arg("only_trainable_backwards"),
