@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LUT → Spiking — interactive demos</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>LUT → Spiking networks</h1>
+    <p class="nav"><b>Contents</b></p>
+    <p>
+      These demos show how a trained <b>lookup-table (LUT) network</b> can be turned into a real
+      <b>spiking</b> network (Izhikevich / SPNet) by <b>direct construction</b> — no retraining. The trick is
+      latency coding: a vector is represented by the <i>first-spike times</i> of one population of neurons, and
+      the constructed spiking circuit re-emits the LUT's output as the spike times of another population. Each
+      page below runs the constructed spiking network live for an input you control and checks it reproduces
+      the table exactly.
+    </p>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <h2>Demos</h2>
+      <div class="cards">
+        <a class="card" href="single_table.html">
+          <h3>① Single LUT table → spiking circuit</h3>
+          <p>One hyperplane LUT compiled to a spiking circuit: input spikes → detector/address bits → a
+             1-of-8 row-select decoder → output neurons whose latencies encode the stored row. Watch every
+             spike propagate and verify the emergent output equals the table.</p>
+        </a>
+        <a class="card" href="animation2.html">
+          <h3>② Composing tables: summing outputs in the charge domain</h3>
+          <p>Real models are a <i>set</i> of tables whose selected output vectors are <b>added</b>. Latencies
+             don't sum — so each table deposits its output as synaptic <b>charge</b> onto shared output neurons,
+             whose membranes accumulate <code>O₁[x] + O₂[x]</code> natively. Verified exact over 50k inputs.</p>
+        </a>
+        <a class="card" href="animation3.html">
+          <h3>③ Aggregating tables: delay-coded outputs + a listening population</h3>
+          <p>A different architecture: each table stays a self-contained black box that emits its output as
+             latency <b>spikes</b> (like ①). A separate population of <b>aggregator neurons</b> listens to all
+             tables' output spikes and sums them via a <b>sustained current until a readout clock</b> — turning
+             spike <i>times</i> into a true sum (not an order statistic). Verified exact over 50k inputs.</p>
+        </a>
+        <a class="card" href="animation4.html">
+          <h3>④ Scaling up: a hierarchical aggregation tree</h3>
+          <p>Model ③'s single aggregator has fan-in that grows with the number of tables. Here the same
+             sustained-current aggregator is arranged in a binary <b>tree</b> (4 tables → 2 → 1), so every
+             neuron keeps <b>fan-in 2</b> while depth grows only like <b>log₂(N)</b> — the scale-to-hundreds
+             design. Verified exact over 50k inputs.</p>
+        </a>
+      </div>
+      <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
+    </div>
+  </div>
+</body>
+</html>
