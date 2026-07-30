@@ -1470,3 +1470,156 @@ result — determinism pins *which* draw you get, it does not move the distribut
 2. Re-measure the two comparisons that actually carry the argument: hyperplane init
    (legacy vs anchor_pairs) and the best anchors config vs the hyperplane reference.
 3. Only then extend to the full capacity grid, if the headline comparisons justify it.
+
+---
+
+# exp_c18 — the first real seed-variance measurement (hyperplane × hard, 6 seeds)
+
+**The question.** How much does this config move when *only the seed* changes? Every
+previous attempt in this chapter answered a different question by accident, because a seed
+did not name a single run: exp_c15 got 4318.5 ± 178.0 at 3 seeds, but exp_c16 then showed
+~663 of run-to-run spread at a *fixed* seed, so that 178 was three draws from noise that
+happened to land close. exp_c17 removed the noise (deterministic GPU ops → bit-identical
+checkpoints). This is the same config, 6 seeds, determinism on — the first time the number
+means what it says.
+
+Config: hyperplane addressing, hard forward, `anchor_pairs` init drawn by lutorch's
+`canonical_full_coverage` sampler, nap 6 / tph 32 / 1 head, 10,000 iters, ratio 0.5,
+`--row-clip 1.0`. 3 concurrent, 2 waves, 07:21→08:50Z.
+
+## The numbers
+
+Deterministic 100-episode CPU-reference eval, **hard mode** — the mode each policy was
+trained in.
+
+| seed | CPU-ref (100 ep) | ep-sd | best MJX (20 ep) | train row-cov |
+|---:|---:|---:|---:|---:|
+| 0 | 4120.6 | 143.8 | 4328.5 | 100.0% |
+| 1 | 4017.3 | 857.1 | 4561.7 | 100.0% |
+| 2 | 4369.9 | 42.6 | 4360.1 | 100.0% |
+| 3 | 3951.5 | 356.6 | 4016.0 | 100.0% |
+| **4** | **5286.6** | 51.3 | 5519.4 | 100.0% |
+| 5 | 4102.1 | 32.7 | 4234.8 | 100.0% |
+
+**6-seed mean ± sd: 4308.0 ± 500.1.** Range 3951.5 (seed 3) … 5286.6 (seed 4), spread
+1335.1. Mean within-run episode sd 247.4 — a different quantity (the 100-episode spread of
+*one* policy) and not to be conflated with the seed sd.
+
+## The shape matters more than the sd
+
+The sd invites a picture of a broad 500-wide scatter. That is not what happened:
+
+| | mean ± sd |
+|---|---:|
+| all 6 seeds | 4308.0 ± 500.1 |
+| **the five non-outlier seeds** | **4112.3 ± 159.2** |
+| seed 4 alone | 5286.6 |
+
+Five of six seeds sit within ±160 of each other. One seed jackpots by ~1175 (≈2.0 sd).
+Seed 3, the nominal minimum, is unremarkable at 0.7 sd below the mean.
+
+So `500.1` is not a stable estimate of anything — with n=6 and one dominant outlier it is
+mostly a *description of seed 4*. The honest summary is bimodal, not Gaussian: this config
+usually lands near 4100, and occasionally finds a much better solution.
+
+That is the same shape as the 5146.9 draw in exp_c14 that set off this whole detour — with
+one crucial difference: **it now reproduces.** Re-running seed 4 returns 5286.6 exactly.
+What was previously indistinguishable from a lucky reassociation of floats is now a real,
+repeatable property of that seed.
+
+## Diagnostics
+
+### (a) The addressing has NOT finished moving at 10k
+
+Measured from `--snap-every 500` snapshots: per-row rotation of `w` and bit-flip rate on
+20,000 randomly-sampled standardised observations, normalised per 500 iterations, early
+(500–2500) vs late (8000–10000).
+
+| seed | rot early | rot late | ratio | flip early | flip late | ratio |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 21.40° | 6.20° | 0.29 | 12.07% | 3.04% | 0.25 |
+| 1 | 21.05° | 6.45° | 0.31 | 11.85% | 2.90% | 0.24 |
+| 2 | 20.73° | 5.77° | 0.28 | 11.71% | 3.05% | 0.26 |
+| 3 | 21.13° | 6.28° | 0.30 | 11.74% | 3.18% | 0.27 |
+| 4 | 21.26° | 6.37° | 0.30 | 11.49% | 2.77% | 0.24 |
+| 5 | 19.90° | 5.41° | 0.27 | 11.26% | 2.59% | 0.23 |
+
+**Partly converged, uniformly across seeds.** Late movement is 0.25× early — slowed
+markedly, but ~2.6–3.2% of address bits are still being rewritten in the *final* 2,000
+iterations. 10,000 iters is a cut-off, not a resting point. Part of the seed spread is
+therefore runs halted at different points of an ongoing search, and a longer-horizon run is
+a live hypothesis for both raising the mean and shrinking the spread.
+
+Note this also settles the "hard mode freezes the addressing" worry properly: the
+hyperplanes move a lot, and they keep moving.
+
+### (b) No dead rows anywhere — but ~30% of trained capacity is unused at deployment
+
+| seed | score | trained | deployed | rows/table | min | collapsed | wasted | entropy |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 4121 | 100.0% | 69.4% | 44.4/64 | 27 | 0/32 | 30.6% | 3.97 b |
+| 1 | 4017 | 100.0% | 69.3% | 44.4/64 | 27 | 0/32 | 30.7% | 3.83 b |
+| 2 | 4370 | 100.0% | 69.4% | 44.4/64 | 31 | 0/32 | 30.6% | 4.02 b |
+| 3 | 3951 | 100.0% | 75.0% | 48.0/64 | 27 | 0/32 | 25.0% | 4.04 b |
+| 4 | **5287** | 100.0% | **63.1%** | 40.4/64 | 14 | 0/32 | **36.9%** | **3.73 b** |
+| 5 | 4102 | 100.0% | 80.3% | 51.4/64 | 36 | 0/32 | 19.7% | 4.17 b |
+
+Every seed trains **100%** of its 2,048 rows — the sparse-scatter problem that motivated
+off-policy replay is fully solved at this scale. No table collapses. But only 63–80% of
+rows are ever *addressed* by the final policy on real observations, so 20–37% of the
+trained table is dead weight at deployment, and address entropy is 3.7–4.2 of 6 bits.
+
+The direction is the surprise: **the best seed uses the fewest rows.** Seed 4 has the
+lowest deployed coverage (63.1%), the lowest entropy (3.73 b), the most wasted rows
+(36.9%) and one table down to 14 of 64 — and the highest score by 1175. Coverage is not
+the thing to maximise here; concentrating on fewer, better rows was the winning behaviour
+in this sample. That contradicts the Phase-1–4 working assumption that row coverage should
+rise with return — an assumption which was formed when coverage was the *binding*
+constraint (rows getting no gradient at all) and does not transfer to this regime where
+every row trains.
+
+### (c) Init properties: nothing significant at n=6
+
+| property | pearson r | spearman |
+|---|---:|---:|
+| degenerate bits at init | constant (0 for every seed) | — |
+| mean \|0.5 − P(bit)\| at init | −0.164 | −0.657 |
+| rows addressed at init | **+0.720** | +0.543 |
+| rows addressed at 10k | −0.705 | −0.543 |
+| late bit-flip rate | −0.330 | −0.314 |
+| training row coverage | constant (1.0 for every seed) | — |
+
+At n=6 the 5% threshold for |r| is ≈0.81, so **nothing here clears significance.** The
+strongest hint is that seeds whose init addresses *more* rows score better (+0.720) while
+seeds whose final policy addresses more rows score *worse* (−0.705) — consistent with (b),
+and worth testing at more seeds rather than believed now. No seed had any degenerate bit at
+init, so "seed 4 got a lucky init geometry" is not supported by any measure taken here.
+
+## A flaw found in the earlier diagnostic
+
+`obs.npy` is stored in collection order, so `obs.npy[:N]` is **one narrow window of
+trajectory**. Standardised, that window's per-dim std is ~0.001–0.03 instead of 1, which
+makes 97% of the sign tests constant and every table look collapsed to ~1 of 64 rows.
+`diag_seeds.py` samples the 4.0M rows at random (fixed seed): std ≈ 1, P(bit) ∈
+[0.39, 0.79], 54.6/64 rows addressed at init.
+
+`exp_c14/diag_hyperplane_movement.py` reads `obs.npy[:2000]` and carries that flaw — its
+bit-flip percentages (26.5–32.9%) were measured on an unrepresentative slice. Its
+*conclusion* — that the hyperplanes genuinely move in hard mode — survives and is
+reconfirmed here on proper sampling; the specific percentages do not.
+
+## What this means for the chapter
+
+- **The measurement resolution is now known.** With 6 seeds and sd 500, an A/B on this
+  config needs to move the mean by ~**408** to be detectable. Most differences chased in
+  exp_c12–c15 were smaller than that. Any future claim on this config must state its seed
+  count and be larger than its own resolution.
+- **Report the shape, never just the sd.** "4308 ± 500" and "five seeds at 4112 ± 159 plus
+  one at 5287" are the same data and support opposite conclusions about stability.
+- **Two live leads, in order:** (1) train longer — the addressing is still moving at the
+  cut-off; (2) find out what seed 4 found, since it is now reproducible and uses *fewer*
+  rows to do it.
+- **exp_c15 is superseded, not contradicted.** Its 4318.5 ± 178.0 mean is remarkably close
+  to this 4308.0; its sd measured something else entirely.
+- Whether 500 is large *for SAC on Walker2d at all* is not answerable from this run —
+  exp_c19 is the MLP-actor control for exactly that.
