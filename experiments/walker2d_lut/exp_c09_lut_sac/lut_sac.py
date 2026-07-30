@@ -183,6 +183,12 @@ def main():
                          "a run with snapshots on is bit-identical to one without. "
                          "Needed to ask whether addressing is still MOVING late in "
                          "training, which a single final checkpoint cannot answer.")
+    ap.add_argument("--checkpoint-at", default="", metavar="ITERS",
+                    help="comma-separated iteration counts at which to save an EXTRA, "
+                         "never-overwritten checkpoint <out>_at<N>_actor.npz. The normal "
+                         "<out>_actor.npz is rewritten at every eval, so without this a "
+                         "longer run cannot be compared against a shorter one at the "
+                         "shorter one's horizon.")
     ap.add_argument("--freeze-wb-from", metavar="ACTOR_NPZ", default=None,
                     help="load (w, b) from a trained checkpoint and FREEZE them: the "
                          "addressing receives no gradient, exactly as in --addressing "
@@ -384,6 +390,12 @@ def main():
             return ret
         return float(np.asarray(run(stx)).mean())
 
+    extra_ckpts = {int(t) for t in a.checkpoint_at.split(",") if t.strip()}
+    if extra_ckpts and any(t % a.eval_every for t in extra_ckpts):
+        raise ValueError(f"--checkpoint-at {sorted(extra_ckpts)} must be multiples of "
+                         f"--eval-every {a.eval_every}; checkpoints are written on the "
+                         f"eval cadence, so any other iteration would silently never fire")
+
     rows_log, t0, best = [], time.time(), -1e9
     total_steps = 0
 
@@ -453,6 +465,12 @@ def main():
                      **{k: np.asarray(v) for k, v in ap_.items()
                         if k not in ("n_heads", "tph")},
                      n_heads=np.int32(a.heads), tph=np.int32(a.tph))
+            if (it + 1) in extra_ckpts:
+                np.savez(os.path.join(HERE, f"{out_name}_at{it + 1}_actor.npz"),
+                         **{k: np.asarray(v) for k, v in ap_.items()
+                            if k not in ("n_heads", "tph")},
+                         n_heads=np.int32(a.heads), tph=np.int32(a.tph))
+                print(f"  [checkpoint kept at iter {it + 1}]", flush=True)
 
     json.dump(dict(config=vars(a), table_params=n_table_params, index_params=n_idx,
                    total_params=n_table_params + n_idx, total_env_steps=total_steps,
