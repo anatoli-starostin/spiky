@@ -83,14 +83,15 @@ def build_packed(genomes, neuron_metas, device='cpu'):
                        neuron_counts=counts,
                        initial_synapse_capacity=max(1024, 2 * len(plan)))
     spnet.to_device(device)
-    # Pull neuron ids to CPU python lists ONCE: gid() is called ~2x per synapse to build
-    # the triples, and on CUDA each `.item()` on a device tensor forces a device->host sync
-    # (hundreds of thousands of syncs for a large pack). Indexing a python list is sync-free.
-    ids_by_meta = [spnet.get_neuron_ids_by_meta(i).cpu().tolist() for i in range(len(neuron_metas))]
+    ids_by_meta = [spnet.get_neuron_ids_by_meta(i) for i in range(len(neuron_metas))]  # tensors (add_neurons)
+    # A CPU python-list copy for gid(): it's called ~2x per synapse to build the triples,
+    # and on CUDA each `.item()` on a device tensor forces a device->host sync (hundreds of
+    # thousands of syncs for a large pack). Indexing a python list is sync-free.
+    ids_cpu = [t.cpu().tolist() for t in ids_by_meta]
 
     def gid(c, local):
         mi, slot = slot_of[(c, local)]
-        return ids_by_meta[mi][slot]
+        return ids_cpu[mi][slot]
 
     triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt, w) in plan]
     # triples (and the entry_points _grow_explicit derives from them) must live on the
