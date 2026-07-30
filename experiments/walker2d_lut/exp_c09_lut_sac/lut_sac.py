@@ -176,6 +176,13 @@ def main():
                     choices=["hard", "hybrid_smooth"])
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--snap-every", type=int, default=0,
+                    help="if >0, record the addressing (w, b) and the row-update "
+                         "histogram every N iters into <out>_snaps.npz. Purely "
+                         "diagnostic -- it reads state and consumes no randomness, so "
+                         "a run with snapshots on is bit-identical to one without. "
+                         "Needed to ask whether addressing is still MOVING late in "
+                         "training, which a single final checkpoint cannot answer.")
     a = ap.parse_args()
     out_name = a.out or f"lut_sac{a.tag}"
 
@@ -352,6 +359,25 @@ def main():
 
     rows_log, t0, best = [], time.time(), -1e9
     total_steps = 0
+
+    # Addressing snapshots. iter 0 is the INIT, recorded before any update, so the
+    # diagnostic never has to reconstruct it and cannot drift from what actually ran.
+    snaps = []
+
+    def snap(it_done):
+        snaps.append(dict(iter=it_done,
+                          w=np.asarray(ap_["w"]), b=np.asarray(ap_["b"]),
+                          row_updates=np.asarray(row_updates)))
+        np.savez_compressed(
+            os.path.join(HERE, f"{out_name}_snaps.npz"),
+            iters=np.asarray([s["iter"] for s in snaps], np.int32),
+            w=np.stack([s["w"] for s in snaps]),
+            b=np.stack([s["b"] for s in snaps]),
+            row_updates=np.stack([s["row_updates"] for s in snaps]).astype(np.float32))
+
+    if a.snap_every:
+        snap(0)
+
     for it in range(a.iters):
         key, kro = jax.random.split(key)
         st, kro, tr = rollout(ap_, st, kro, it < a.warmup)
@@ -377,6 +403,9 @@ def main():
                 flat = (np.arange(n_tables)[None, :] * K + rr).ravel()
                 cnt = np.bincount(flat, minlength=n_tables * K).reshape(n_tables, K)
                 row_updates = row_updates + jnp.asarray(cnt)
+
+        if a.snap_every and ((it + 1) % a.snap_every == 0 or it == a.iters - 1):
+            snap(it + 1)
 
         if (it + 1) % a.eval_every == 0 or it == a.iters - 1:
             ret = eval_mjx(ap_, episodes=a.eval_episodes)
