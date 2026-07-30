@@ -45,7 +45,8 @@ class Generator:
             b = N.tournament(scored, self.rng)
             (sf, df), (sw, dw) = (a, b) if a[0] >= b[0] else (b, a)   # df = fitter parent
             child = N.mutate(N.crossover(df["genome"], dw["genome"], self.rng), self.rng)
-            offspring.append((child, [df["_id"], dw["_id"]], sf + sw))
+            depth = max(df.get("depth", 0), dw.get("depth", 0)) + 1
+            offspring.append((child, [df["_id"], dw["_id"]], sf + sw, depth))
         self.store.insert_new_born(offspring)
         self.store.mark_processed([d["_id"] for d in parents])
         return {"seeded": 0, "bred": len(offspring), "parents": len(parents)}

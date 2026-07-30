@@ -45,9 +45,9 @@ class GenomeStore:
         self.col.create_index("claim.ts")
 
     # ---- writes ----
-    def _doc(self, genome, state, priority, parent_ids):
+    def _doc(self, genome, state, priority, parent_ids, depth=0):
         return {"state": state, "score": None, "priority": float(priority),
-                "parent_ids": list(parent_ids), "genome": _ser(genome),
+                "parent_ids": list(parent_ids), "depth": int(depth), "genome": _ser(genome),
                 "eval_version": None, "claim": None, "n_scored": 0}
 
     def seed_random(self, n, rng):
@@ -56,8 +56,9 @@ class GenomeStore:
         return list(self.col.insert_many(docs).inserted_ids) if docs else []
 
     def insert_new_born(self, items):
-        """items: iterable of (genome, parent_ids, priority) -> inserted as NEW_BORN."""
-        docs = [self._doc(g, NEW_BORN, pr, pids) for (g, pids, pr) in items]
+        """items: iterable of (genome, parent_ids, priority[, depth]) -> inserted as NEW_BORN."""
+        docs = [self._doc(it[0], NEW_BORN, it[2], it[1], it[3] if len(it) > 3 else 0)
+                for it in items]
         return list(self.col.insert_many(docs).inserted_ids) if docs else []
 
     # ---- claiming ----
@@ -138,5 +139,5 @@ class GenomeStore:
     def _out(d):
         return {"_id": d["_id"], "state": d["state"], "score": d.get("score"),
                 "priority": d.get("priority"), "parent_ids": d.get("parent_ids", []),
-                "eval_version": d.get("eval_version"), "n_scored": d.get("n_scored", 0),
-                "genome": _deser(d["genome"])}
+                "depth": d.get("depth", 0), "eval_version": d.get("eval_version"),
+                "n_scored": d.get("n_scored", 0), "genome": _deser(d["genome"])}

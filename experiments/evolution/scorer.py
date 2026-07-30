@@ -4,6 +4,7 @@ scorer (#30), writes scores back, and flips them to SCORED. Runs as its own proc
 
   python scorer.py [--once]     # --once: single iteration (for tests/smoke)
 """
+import gc
 import os
 import socket
 import sys
@@ -58,6 +59,7 @@ class Scorer:
                 packed = N.build_population([d["genome"] for d in cur], device=self.device)
                 raw = N._score_population(packed, len(cur), self.xs, self.tos, device=self.device)
                 results += [(cur[i], float(raw[i][0])) for i in range(len(cur))]
+                del packed, raw              # packed nets form ref-cycles holding native memory
                 return results
             except Exception:
                 k = min(DROP_ON_OVERSHOOT, len(cur))
@@ -77,13 +79,35 @@ class Scorer:
         results = self._build_eval_with_retry(pack)
         for d, score in results:
             self.store.mark_scored(d["_id"], score, EVAL_VERSION)
+        gc.collect()                         # reclaim the packed-net ref-cycles (else RSS grows unbounded)
         return len(results)
 
-    def loop(self, poll_s=2.0):
+    def loop(self, poll_s=2.0, max_packs=None):
+        max_rss = int(os.environ.get("NE_MAX_RSS_MB", "0")) or None
+        done = 0
         while True:
             n = self.run_once()
             if n == 0:
                 time.sleep(poll_s)
+            else:
+                done += 1
+                # exit -> supervisor respawns a fresh process, reclaiming the native SpikingNet
+                # memory that leaks across builds (the leak scales with genome size, so we cap on
+                # actual RSS, not a fixed pack count).
+                if max_packs and done >= max_packs:
+                    return
+                if max_rss and _rss_mb() >= max_rss:
+                    return
+
+
+def _rss_mb():
+    try:
+        for ln in open("/proc/self/status"):
+            if ln.startswith("VmRSS:"):
+                return int(ln.split()[1]) / 1024.0
+    except Exception:
+        return 0.0
+    return 0.0
 
 
 def main():
@@ -108,8 +132,9 @@ def main():
                 empties = 0
         print("scorer[%s] drained %d genomes" % (sc.worker_id, total))
     else:
-        print("scorer[%s] looping (device=%s)" % (sc.worker_id, sc.device))
-        sc.loop()
+        mp = int(os.environ.get("NE_MAX_PACKS", "0")) or None
+        print("scorer[%s] looping (device=%s, max_packs=%s)" % (sc.worker_id, sc.device, mp))
+        sc.loop(max_packs=mp)
 
 
 if __name__ == "__main__":
