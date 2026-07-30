@@ -10,7 +10,7 @@
 
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
   const LAYER_COL = { clock: () => css('--ok'), gate: () => '#c58af9', input: () => css('--spike'),
-    decode: () => '#3fb6a8', detect: () => css('--addr'),
+    decode: () => '#3fb6a8', detect: () => css('--addr'), hidden: () => '#c58af9',
     compl: () => css('--warn'), rows: () => css('--row'), output: () => css('--out') };
   const FLASH = 0.45, DOT_MIN = 0.6;
 
@@ -24,9 +24,10 @@
   // All datasets live in this same public dir.
   const _q = new URLSearchParams(location.search);
   const _v = (_q.get('v') || _q.get('data') || '').toLowerCase();
-  const VARIANT = _v.startsWith('grad') ? 'graded' : _v.startsWith('clean') ? 'clean'
-    : _v.startsWith('lat') ? 'latency' : 'coincidence';
-  const _suffix = { coincidence: '', latency: '_latency', graded: '_graded', clean: '_clean' }[VARIANT];
+  const VARIANT = _v.startsWith('evo') ? 'evolved' : _v.startsWith('grad') ? 'graded'
+    : _v.startsWith('clean') ? 'clean' : _v.startsWith('lat') ? 'latency' : 'coincidence';
+  const _suffix = { coincidence: '', latency: '_latency', graded: '_graded', clean: '_clean',
+    evolved: '_evolved' }[VARIANT];
   const _gf = 'graph' + _suffix + '.json';
   const _af = 'activity' + _suffix + '.json';
   Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
@@ -44,7 +45,8 @@
     const h1 = document.querySelector('h1');
     const _label = { coincidence: 'coincidence-coded', latency: 'latency-coded (time-to-first-spike)',
       graded: 'graded real-valued (multi-tap thermometer)',
-      clean: 'clean graded (leaky-detector, no tap bank)' }[VARIANT];
+      clean: 'clean graded (leaky-detector, no tap bank)',
+      evolved: 'EVOLVED net (neuroevolution result)' }[VARIANT];
     if (h1) h1.textContent = 'spnet inspector — ' + _label;
     document.title = VARIANT + ' — spnet inspector';
     setupCanvas(); bindControls();
