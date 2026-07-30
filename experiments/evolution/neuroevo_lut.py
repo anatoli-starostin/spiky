@@ -57,7 +57,7 @@ A_LAT, B_LAT = 8.0, 5.0          # input latency: t_i = round(A - B*x_i), x in [
 N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
 MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
-MAX_TYPES = 16          # neuron-TYPE palette cap per genome: many hidden instances share few types
+MAX_TYPES = 8           # neuron-TYPE palette cap per genome: many hidden instances share few types
                         # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
                         # making the native MAX_NEURON_METAS=512 cap irrelevant regardless of hidden count
 
@@ -370,8 +370,11 @@ def _score_population(packed, ncand, xs, true_orders, device='cpu'):
     return _score_from_first(first, true_orders)
 
 
-def eval_population(genomes, xs, true_orders, device='cpu', chunk=32):
+def eval_population(genomes, xs, true_orders, device='cpu', chunk=128):
     """Fitness for every genome, packed in chunks. Matches [eval_batch(g,...) for g] on CPU.
+    chunk=128 packs more genomes per net (amortizing native add_connections/_grow_explicit/
+    process_ticks fixed costs); with MAX_TYPES=8 + cross-genome meta dedup this stays well
+    under the 512 neuron-meta cap (~1.8 distinct metas/genome -> ~230 metas at 128).
     Genomes with no synapses score 0.0 (as build_individual->None in eval_batch)."""
     out = [(0.0, 0.0, 0.0)] * len(genomes)
     for s in range(0, len(genomes), chunk):
@@ -577,7 +580,7 @@ def _score_population_stream(packed, ncand, trials, T, device='cpu'):
     return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
 
 
-def eval_population_stream(genomes, trials, T, device='cpu', chunk=16):
+def eval_population_stream(genomes, trials, T, device='cpu', chunk=64):
     out = [(0.0, 0.0, 0.0)] * len(genomes)
     for s in range(0, len(genomes), chunk):
         idx = [i for i in range(s, min(s + chunk, len(genomes))) if genomes[i]["syn"]]
