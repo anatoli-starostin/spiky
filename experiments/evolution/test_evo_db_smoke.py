@@ -3,9 +3,8 @@
 mongomock: seed random genomes -> Scorer once -> Generator once, asserting the state machine
 NEW_BORN -> SCORED -> PROCESSED and that offspring appear as NEW_BORN carrying parent_ids.
 Run: PYTHONPATH=<repo>/src:<repo>/experiments/evolution python3 test_evo_db_smoke.py"""
+import os
 import random
-
-import mongomock
 
 from genome_store import GenomeStore
 from scorer import Scorer
@@ -13,8 +12,18 @@ from generator import Generator
 from evo_config import NEW_BORN, SCORED, PROCESSED
 
 
+def _client():
+    if os.environ.get("NE_REAL_MONGO"):
+        import pymongo
+        return pymongo.MongoClient(os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
+    import mongomock
+    return mongomock.MongoClient()
+
+
 def main():
-    store = GenomeStore(client=mongomock.MongoClient(), db_name="t", collection="g")
+    c = _client()
+    c["neuroevo_test"]["smoke"].drop()
+    store = GenomeStore(client=c, db_name="neuroevo_test", collection="smoke")
     rng = random.Random(11)
 
     # bootstrap path: Generator on an empty collection seeds NEW_BORN

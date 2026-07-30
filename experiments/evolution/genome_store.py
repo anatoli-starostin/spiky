@@ -48,7 +48,7 @@ class GenomeStore:
     def _doc(self, genome, state, priority, parent_ids):
         return {"state": state, "score": None, "priority": float(priority),
                 "parent_ids": list(parent_ids), "genome": _ser(genome),
-                "eval_version": None, "claim": None}
+                "eval_version": None, "claim": None, "n_scored": 0}
 
     def seed_random(self, n, rng):
         """Bootstrap: insert n random NEW_BORN genomes (priority 0, no parents)."""
@@ -99,6 +99,7 @@ class GenomeStore:
         self.col.update_one({"_id": id},
                             {"$set": {"state": SCORED, "score": float(score),
                                       "priority": float(score), "eval_version": eval_version},
+                             "$inc": {"n_scored": 1},          # >1 would mean a double-claim slipped through
                              "$unset": {"claim": ""}})
 
     def mark_processed(self, ids):
@@ -137,4 +138,5 @@ class GenomeStore:
     def _out(d):
         return {"_id": d["_id"], "state": d["state"], "score": d.get("score"),
                 "priority": d.get("priority"), "parent_ids": d.get("parent_ids", []),
-                "eval_version": d.get("eval_version"), "genome": _deser(d["genome"])}
+                "eval_version": d.get("eval_version"), "n_scored": d.get("n_scored", 0),
+                "genome": _deser(d["genome"])}

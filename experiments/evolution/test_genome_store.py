@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """Tests for the Mongo genome-store layer (issue #81), using mongomock (in-memory).
 Run: PYTHONPATH=<repo>/src:<repo>/experiments/evolution python3 test_genome_store.py"""
+import os
 import random
 import time
-
-import mongomock
 
 from genome_store import GenomeStore
 from evo_config import NEW_BORN, SCORED, PROCESSED, CLAIMED
 import neuroevo_lut as N
 
 
+def _client():
+    """Real mongod if NE_REAL_MONGO set (+ MONGO_URI), else in-memory mongomock."""
+    if os.environ.get("NE_REAL_MONGO"):
+        import pymongo
+        return pymongo.MongoClient(os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
+    import mongomock
+    return mongomock.MongoClient()
+
+
 def _store():
-    return GenomeStore(client=mongomock.MongoClient(), db_name="t", collection="g")
+    c = _client()
+    c["neuroevo_test"]["g"].drop()            # isolate each test (real mongo persists)
+    return GenomeStore(client=c, db_name="neuroevo_test", collection="g")
 
 
 def test_roundtrip():

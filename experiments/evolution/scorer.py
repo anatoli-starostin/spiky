@@ -87,11 +87,26 @@ class Scorer:
 
 
 def main():
-    once = "--once" in sys.argv
     sc = Scorer()
-    if once:
+    if "--once" in sys.argv:
         n = sc.run_once()
         print("scorer[%s] scored %d genomes (device=%s, eval=%s)" % (sc.worker_id, n, sc.device, EVAL_VERSION))
+    elif "--drain" in sys.argv:      # score until the NEW_BORN queue is truly empty, then exit
+        total = 0
+        empties = 0
+        while empties < 5:
+            n = sc.run_once()
+            total += n
+            if n == 0:
+                # 0 can mean "queue empty" OR "lost the claim race this round" (another worker
+                # grabbed the batch). Only stop once no NEW_BORN actually remain; else back off.
+                if sc.store.count(NEW_BORN) == 0:
+                    break
+                empties += 1
+                time.sleep(0.1)
+            else:
+                empties = 0
+        print("scorer[%s] drained %d genomes" % (sc.worker_id, total))
     else:
         print("scorer[%s] looping (device=%s)" % (sc.worker_id, sc.device))
         sc.loop()
