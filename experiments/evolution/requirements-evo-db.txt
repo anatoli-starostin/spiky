@@ -1,0 +1,4 @@
+# DB-backed neuroevolution framework (issue #81) dependencies.
+# Install into the same env as the existing neuroevo deps (torch, spiky_cuda).
+pymongo>=4.0        # Mongo persistence layer (genome_store.py)
+mongomock>=4.0      # in-memory Mongo for the tests (test_genome_store.py, test_evo_db_smoke.py)
