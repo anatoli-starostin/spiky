@@ -27,40 +27,33 @@ from spiky.spnet.spnet import SpikingNet, SynapseMeta, NeuronMeta, NeuronDataTyp
 
 
 def _group_aligned_weights_vec(conn, triples, weights, gs):
-    """Vectorized equivalent of SynapseGrowthEngine._build_group_aligned_weights.
+    """Weights aligned to the grown connection groups, bound to each edge by POSITION.
 
-    Places each explicit edge's weight into the group-aligned weights buffer matching
-    the connection buffer `conn` (1-D int32, blocks of [src, meta, n_tgt, shift,
-    (meta_i, tgt_i) x gs]). The reference does this with a Python dict {(src,tgt): w}
-    plus a per-slot Python scan (the ~60% build bottleneck for large packs); this does
-    it with torch: forward-fill the per-block source, then look weights up by a
-    (src*MAXID+tgt) key via searchsorted. Bit-identical to the reference buffer:
-    (src,tgt) pairs are unique per list (ChunkOfConnections invariant), so the lookup
-    is unambiguous, and unmatched / zero-target slots stay 0.0 exactly as the ref."""
-    dev = conn.device
+    `conn` is the 1-D int32 buffer of blocks [src, meta, n_tgt, shift, (meta_i, tgt_i) x gs].
+    `_grow_explicit` sorts the input triples by (source, then meta) and the native grow
+    emits the body-pair targets in exactly that sorted order; every real (target != 0)
+    body slot, scanned block-major then slot-minor, corresponds 1:1 to a sorted triple.
+    So we replay that same sort on the weights and drop them onto the real slots in order.
+
+    This binds a weight to its edge by POSITION — never by a lossy (src, tgt) key and never
+    by re-deriving a group's source via carry-forward. The old key/carry approach mis-assigned
+    ~38% of weights (some zeroed, some stealing another edge's weight) and made a genome's
+    effective weights depend on its packmates; position binding is exact and packing-invariant,
+    and it also handles parallel (src, tgt) edges (each occupies its own slot)."""
+    # replay _grow_explicit's internal sort: by source (col 1), then by meta (col 0), both stable
+    i1 = torch.argsort(triples[:, 1], stable=True)
+    i2 = torch.argsort(triples[i1][:, 0], stable=True)
+    ws = weights[i1][i2].flatten().to(torch.float32)
     block = 4 + 2 * gs
     n_blocks = conn.numel() // block
-    b = conn.view(n_blocks, block).long()
-    src_col = b[:, 0]
-    idx = torch.arange(n_blocks, device=dev)
-    # forward-fill the last positive source id across chained/ghost groups (src==0)
-    last_start = torch.where(src_col > 0, idx, torch.zeros_like(idx))
-    cur_src = src_col[torch.cummax(last_start, dim=0).values]
-    srcs = triples[:, 1].long()
-    tgts = triples[:, 2].long()
-    MAXID = int(torch.stack([srcs.max(), tgts.max(), cur_src.max()]).max().item()) + 1
-    ekey = srcs * MAXID + tgts
-    order = torch.argsort(ekey)
-    ekey_s = ekey[order]
-    w_s = weights.flatten().to(torch.float32)[order]
-    wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
-    zero = torch.zeros(n_blocks, dtype=torch.float32, device=dev)
-    for j in range(gs):
-        tgt_j = b[:, 4 + 2 * j + 1]
-        qkey = cur_src * MAXID + tgt_j
-        pos = torch.searchsorted(ekey_s, qkey).clamp(max=ekey_s.numel() - 1)
-        hit = (tgt_j > 0) & (ekey_s[pos] == qkey)
-        wbuf[idx * gs + j] = torch.where(hit, w_s[pos], zero)
+    b = conn.view(n_blocks, block)
+    tgt = torch.stack([b[:, 4 + 2 * j + 1] for j in range(gs)], dim=1).reshape(-1)  # block-major, slot-minor
+    wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=conn.device)
+    mask = tgt != 0
+    n_slots = int(mask.sum().item())
+    assert n_slots == ws.numel(), \
+        "grown body slots (%d) != number of edges (%d); position binding broken" % (n_slots, ws.numel())
+    wbuf[mask] = ws
     return wbuf
 
 WQ = 4
@@ -176,18 +169,17 @@ def _build_packed_impl(genomes, neuron_metas, device='cpu', fast=True):
                               torch.zeros(len(ids)), torch.full((len(ids),), float(i))], dim=1)
         ge.add_neurons(neuron_type_index=i, identifiers=ids, coordinates=coords)
 
-    if fast:
-        # vectorized weight alignment: grow WITHOUT the Python weights= path (skips the
-        # wmap dict), then build the group-aligned weights buffer with torch and re-wrap.
-        chunk = ge._grow_explicit(triples_t, 1)
-        conn = chunk.get_connections()
-        wbuf = _group_aligned_weights_vec(conn, triples_t, weights_t, ge._synapse_group_size)
-        chunk = ChunkOfConnections(conn, ge._synapse_group_size, weights=wbuf)
-    else:
-        chunk = ge._grow_explicit(triples_t, 1, weights=weights_t)
+    # Grow WITHOUT the engine's (src,tgt)-keyed weights path, then attach each edge's
+    # weight by POSITION in the grow's sorted order (see _group_aligned_weights_vec).
+    # fast/ref now share this one correct path; `fast` is kept only for call compatibility.
+    chunk = ge._grow_explicit(triples_t, 1)
+    conn = chunk.get_connections()
+    wbuf = _group_aligned_weights_vec(conn, triples_t, weights_t, ge._synapse_group_size)
+    chunk = ChunkOfConnections(conn, ge._synapse_group_size, weights=wbuf)
     spnet.add_connections(chunk, 1)
     chunk.recycle()
-    spnet.compile(shuffle_synapses_random_seed=1)
+    # Shuffle OFF: keep synapse order stable/deterministic (no reshuffle at compile).
+    spnet.compile(shuffle_synapses_random_seed=None)
     spnet.to_device(device)
     return {"spnet": spnet, "gid": gid, "n_nodes": n_nodes, "n_cand": n_cand,
             "n_synapses": spnet.n_synapses(), "n_syn_metas": len(syn_metas)}

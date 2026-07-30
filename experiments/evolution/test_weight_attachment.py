@@ -97,9 +97,34 @@ def test_score_independent_of_packing():
     assert abs(s_alone - s_paired) < 1e-9, "score changed with packing: %.6f vs %.6f" % (s_alone, s_paired)
 
 
+def test_no_parallel_edges_in_build():
+    """A genome may carry parallel (src,tgt) edges (cross-process innovation numbering);
+    the built net must collapse them to one synapse per (src,tgt) — a simple digraph."""
+    g = {
+        "types": [{"leak": 0.1, "thr": 1.0, "d": 5.0}], "hid": {"h0": 0},
+        "syn": {  # i0->h0 appears three times, h0->o0 twice
+            "1": ["i0", "h0", 0.5, 1], "2": ["i0", "h0", -0.7, 2], "3": ["i0", "h0", 1.3, 3],
+            "4": ["h0", "o0", 0.9, 2], "5": ["h0", "o0", -0.4, 1],
+        }, "sigma": 0.5,
+    }
+    packed = build_population([g], device="cpu")
+    assert packed["spnet"].n_synapses() == 2, \
+        "expected 2 edges (i0->h0, h0->o0), got %d" % packed["spnet"].n_synapses()
+
+
+def test_crossover_yields_simple_digraph():
+    """crossover must not emit parallel edges."""
+    import random
+    from neuroevo_lut import crossover
+    child = crossover(SYN_GENOME, NEIGHBOR, random.Random(0))
+    pairs = collections.Counter((v[0], v[1]) for v in child["syn"].values())
+    assert not pairs or max(pairs.values()) == 1, "crossover produced parallel edges: %s" % pairs
+
+
 if __name__ == "__main__":
     for fn in [test_built_weights_match_genome, test_weights_independent_of_packing,
-               test_score_independent_of_packing]:
+               test_score_independent_of_packing, test_no_parallel_edges_in_build,
+               test_crossover_yields_simple_digraph]:
         try:
             fn()
             print("PASS", fn.__name__)

@@ -101,6 +101,20 @@ def add_syn(g, s, t, w, dl):
     g["syn"][innov_of(s, t)] = [s, t, float(w), int(max(1, dl))]
 
 
+def one_edge_per_pair(syn):
+    """Collapse a syn dict to a simple digraph: at most one synapse per (src,tgt).
+    Deterministic — keeps the first entry (in dict order) for each pair. Parallel edges
+    arise only from merging genomes numbered by different per-process innovation registries."""
+    out, seen = {}, set()
+    for k, v in syn.items():
+        st = (v[0], v[1])
+        if st in seen:
+            continue
+        seen.add(st)
+        out[k] = v
+    return out
+
+
 def random_genome(rng):
     g = {"types": [rnd_type(rng) for _ in range(rng.randint(1, 3))],   # modest starting palette
          "hid": {}, "syn": {}, "sigma": 0.6}
@@ -244,8 +258,14 @@ def build_population(genomes, device='cpu', ref=False):
         nodes = IN_LABELS + OUT_LABELS + hids            # local order: 0..5 in, 6..9 out, 10.. hidden
         loc = {n: i for i, n in enumerate(nodes)}
         node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(type_meta(g, h)) for h in hids]
-        syn = [(loc[s], loc[t], float(w), int(max(1, dl)))
-               for (s, t, w, dl) in g["syn"].values() if s in loc and t in loc]
+        # Enforce a simple digraph: at most ONE synapse per (src,tgt). Parallel edges only
+        # arise from merging genomes numbered by different per-process innovation registries;
+        # the native net has no meaningful place for them. Deterministic: keep the first seen.
+        syn, seen_edges = [], set()
+        for (s, t, w, dl) in g["syn"].values():
+            if s in loc and t in loc and (loc[s], loc[t]) not in seen_edges:
+                seen_edges.add((loc[s], loc[t]))
+                syn.append((loc[s], loc[t], float(w), int(max(1, dl))))
         cands.append({"n_nodes": len(nodes), "node_meta": node_meta, "synapses": syn})
     return (build_packed_ref if ref else build_packed)(cands, metas, device=device)
 
@@ -684,6 +704,7 @@ def crossover(gf, gw, rng):
     child["syn"] = {k: v for k, v in child["syn"].items()
                     if (v[0] in IN_LABELS or v[0] in OUT_LABELS or v[0] in child["hid"])
                     and (v[1] in OUT_LABELS or v[1] in child["hid"])}
+    child["syn"] = one_edge_per_pair(child["syn"])   # simple digraph: one synapse per (src,tgt)
     return child
 
 
