@@ -183,6 +183,13 @@ def main():
                          "a run with snapshots on is bit-identical to one without. "
                          "Needed to ask whether addressing is still MOVING late in "
                          "training, which a single final checkpoint cannot answer.")
+    ap.add_argument("--freeze-wb-from", metavar="ACTOR_NPZ", default=None,
+                    help="load (w, b) from a trained checkpoint and FREEZE them: the "
+                         "addressing receives no gradient, exactly as in --addressing "
+                         "anchors, and only the table content (plus the critic and the "
+                         "temperature) learns. Overrides whatever the init branches "
+                         "produced. This transplants one run's learned routing into "
+                         "another run to ask whether the routing carries the result.")
     a = ap.parse_args()
     out_name = a.out or f"lut_sac{a.tag}"
 
@@ -226,6 +233,23 @@ def main():
                                    (a.heads * a.tph, a.nap, OBS)) * TORCH_HP_NOISE
             b0 = jnp.zeros((a.heads * a.tph, a.nap), jnp.float32)
         ap_ = dict(ap_, w=w0, b=b0)
+    # Transplanted, frozen addressing. Applied LAST so it overrides every init branch,
+    # and shape-checked rather than broadcast: a silent shape mismatch here would train a
+    # different architecture than the one being tested.
+    if a.freeze_wb_from:
+        zf = np.load(a.freeze_wb_from)
+        w0, b0 = jnp.asarray(zf["w"]), jnp.asarray(zf["b"])
+        if w0.shape != ap_["w"].shape or b0.shape != ap_["b"].shape:
+            raise ValueError(
+                f"--freeze-wb-from shape mismatch: checkpoint has w{tuple(w0.shape)} "
+                f"b{tuple(b0.shape)}, this config needs w{tuple(ap_['w'].shape)} "
+                f"b{tuple(ap_['b'].shape)}")
+        ap_ = dict(ap_, w=w0, b=b0)
+
+    # The addressing is frozen in anchors mode by design, and in transplant mode by
+    # request. One flag, so the gradient-zeroing below cannot disagree with the init.
+    freeze_addr = (a.addressing == "anchors") or (a.freeze_wb_from is not None)
+
     qp = q_init(kq)
     qt = jax.tree.map(lambda x: x, qp)
     log_alpha = jnp.log(jnp.asarray(0.2))
@@ -234,6 +258,8 @@ def main():
                 else a.hyperplane_init)
     if a.addressing == "hyperplane" and a.hyperplane_init == "anchor_pairs":
         init_tag += f"({a.hyperplane_anchor_policy})"
+    if a.freeze_wb_from:
+        init_tag = f"FROZEN-wb<-{os.path.basename(a.freeze_wb_from)}"
 
     n_tables = a.heads * a.tph
     K = 2 ** a.nap
@@ -312,8 +338,9 @@ def main():
 
         # per-row trust region: a row update is a STEP change for every state in
         # that cell, so bound its L2 norm (an MLP has no analogue of this).
-        if a.addressing == "anchors":
-            # no gradient to the addressing — fixed anchor pairs, as in FastMHL
+        if freeze_addr:
+            # no gradient to the addressing — fixed anchor pairs as in FastMHL, or a
+            # transplanted routing held fixed on purpose (--freeze-wb-from)
             ga = dict(ga, w=jnp.zeros_like(ga["w"]), b=jnp.zeros_like(ga["b"]))
         if a.row_clip > 0:
             gw = ga["weights"]

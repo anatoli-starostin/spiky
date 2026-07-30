@@ -1,0 +1,8 @@
+{
+ "actor": "mlp_sac_c19_seed2_actor.npz",
+ "params": 73484,
+ "episodes": 100,
+ "forward_mode": "mlp",
+ "cpu_reference_mean": 3397.8142949806656,
+ "cpu_reference_std": 1171.9968621297423
+}

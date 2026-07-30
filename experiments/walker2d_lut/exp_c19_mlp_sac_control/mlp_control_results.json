@@ -1,0 +1,58 @@
+{
+ "seeds": [
+  {
+   "seed": 0,
+   "mean": 4481.341911946005,
+   "std": 60.98197351730089,
+   "params": 73484,
+   "mjx_best": 4494.4
+  },
+  {
+   "seed": 1,
+   "mean": 3950.8216030407284,
+   "std": 1454.486006353625,
+   "params": 73484,
+   "mjx_best": 4794.0
+  },
+  {
+   "seed": 2,
+   "mean": 3397.8142949806656,
+   "std": 1171.9968621297423,
+   "params": 73484,
+   "mjx_best": 3940.6
+  },
+  {
+   "seed": 3,
+   "mean": 565.1063703442787,
+   "std": 1125.9251320625242,
+   "params": 73484,
+   "mjx_best": 4039.3
+  },
+  {
+   "seed": 4,
+   "mean": 4752.520784901373,
+   "std": 357.7448985856253,
+   "params": 73484,
+   "mjx_best": 5124.6
+  },
+  {
+   "seed": 5,
+   "mean": 3555.6877848748713,
+   "std": 1291.5188275728933,
+   "params": 73484,
+   "mjx_best": 4086.8
+  }
+ ],
+ "mean": 3450.5487916813204,
+ "sd": 1506.4893969479667,
+ "min": 565.1063703442787,
+ "max": 4752.520784901373,
+ "spread": 4187.4144145570945,
+ "actor_params": 73484,
+ "n_seeds": 6,
+ "lut_mean": 4307.986635484627,
+ "lut_sd": 500.1046218891684,
+ "sd_ratio_lut_over_mlp": 0.33196690458116895,
+ "f_crit_5_5": 5.05,
+ "verdict": "THE MLP IS THE MORE SEED-SENSITIVE OF THE TWO (variance ratio 0.11x). Whatever the LUT's spread is, it is not worse than the standard baseline's."
+}
