@@ -194,6 +194,8 @@ def _score_chunk(sp, gid, xs, true_orders):
         for d in range(Dout):
             nz = torch.nonzero(spk[bidx, d] > 0.5).flatten()
             first.append(int(nz[0].item()) if nz.numel() else N_TICKS + 1)
+        if any(f >= N_TICKS for f in first):     # HARD CONSTRAINT: a silent output -> corner scores 0
+            continue
         net_order = tuple(sorted(range(Dout), key=lambda d: (first[d], d)))
         true_order = true_orders[bidx]
         if net_order == true_order:
@@ -310,6 +312,8 @@ def _score_population_ref(packed, ncand, xs, true_orders, device='cpu'):
             for d in range(Dout):
                 nz = torch.nonzero(spk[b, c, d] > 0.5).flatten()
                 first.append(int(nz[0].item()) if nz.numel() else N_TICKS + 1)
+            if any(f >= N_TICKS for f in first):     # HARD CONSTRAINT: a silent output -> corner scores 0
+                continue
             net_order = tuple(sorted(range(Dout), key=lambda d: (first[d], d)))
             to = true_orders[b]
             if net_order == to:
@@ -356,11 +360,15 @@ def _strict_conc(first, true_orders):
 
 
 def _score_from_first(first, true_orders):
-    """Per-genome (fitness, strict_frac, ordering_frac), averaged over the nb corners."""
+    """Per-genome (fitness, strict_frac, ordering_frac), averaged over the nb corners.
+    HARD CONSTRAINT — all outputs must fire: on any corner where some output stays silent
+    (its first-spike is the sentinel), that corner scores 0 for BOTH strict and ordering.
+    A net earns fitness only by firing all Dout outputs across the eval set."""
     ncand = first.shape[1]
     strict, conc = _strict_conc(first, true_orders)
-    sf = strict.mean(dim=0)
-    of = (conc / len(_ORD_PAIRS)).mean(dim=0)
+    all_fire = (first < N_TICKS).all(dim=2).float()               # (nb, ncand): every output fired
+    sf = (strict * all_fire).mean(dim=0)
+    of = (conc / len(_ORD_PAIRS) * all_fire).mean(dim=0)
     fit = sf + 0.25 * of
     return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
 
