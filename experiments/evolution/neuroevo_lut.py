@@ -57,6 +57,9 @@ A_LAT, B_LAT = 8.0, 5.0          # input latency: t_i = round(A - B*x_i), x in [
 N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
 MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
+MAX_TYPES = 16          # neuron-TYPE palette cap per genome: many hidden instances share few types
+                        # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
+                        # making the native MAX_NEURON_METAS=512 cap irrelevant regardless of hidden count
 
 IN_LABELS = ["i%d" % i for i in range(D)]
 OUT_LABELS = ["o%d" % d for d in range(Dout)]
@@ -83,10 +86,15 @@ def oracle_order(x):
     return tuple(sorted(range(Dout), key=lambda d: -V[row][d]))
 
 
-# ----- genome: {"hid": {label: meta}, "syn": {innov: [s,t,w,delay]}, "sigma": float} -----
-def rnd_meta(rng):
+# ----- genome (type-palette encoding) -----
+#   "types": [ {leak, thr, d}, ... ]           the neuron-TYPE palette (<= MAX_TYPES)
+#   "hid":   {label: type_index}               each hidden neuron -> a type in the palette
+#   "syn":   {innov: [src, tgt, weight, delay]} (NEAT innovation numbers)
+#   "sigma": float                             self-adaptive mutation step
+# Input/output neurons keep their fixed leak-free metas (the 2 special metas), unchanged.
+def rnd_type(rng):
     return {"leak": max(0.0, rng.gauss(0.1, 0.1)), "thr": abs(rng.gauss(1.0, 0.6)) + 0.2,
-            "c": 0.0, "d": abs(rng.gauss(0.0, 30.0))}
+            "d": abs(rng.gauss(0.0, 30.0))}
 
 
 def add_syn(g, s, t, w, dl):
@@ -94,9 +102,10 @@ def add_syn(g, s, t, w, dl):
 
 
 def random_genome(rng):
-    g = {"hid": {}, "syn": {}, "sigma": 0.6}
+    g = {"types": [rnd_type(rng) for _ in range(rng.randint(1, 3))],   # modest starting palette
+         "hid": {}, "syn": {}, "sigma": 0.6}
     for _ in range(rng.randint(1, 4)):
-        g["hid"][new_hidden()] = rnd_meta(rng)
+        g["hid"][new_hidden()] = rng.randrange(len(g["types"]))         # assign a random type index
     for o in OUT_LABELS:
         for _ in range(rng.randint(1, 3)):
             s = rng.choice(IN_LABELS + list(g["hid"].keys()))
@@ -107,7 +116,7 @@ def random_genome(rng):
 
 
 def clone(g):
-    return {"hid": {k: dict(v) for k, v in g["hid"].items()},
+    return {"types": [dict(t) for t in g["types"]], "hid": dict(g["hid"]),
             "syn": {k: list(v) for k, v in g["syn"].items()}, "sigma": g["sigma"]}
 
 
@@ -117,16 +126,22 @@ def leakfree(thr, c=0.0, d=0.0):
                       c=float(c), d=float(d), spike_threshold=float(thr))
 
 
-def meta_of(hm):
-    return NeuronMeta(neuron_type=0, cf_2=0.0, cf_1=-float(hm["leak"]), cf_0=0.0, a=0.0, b=0.0,
-                      c=float(hm["c"]), d=float(hm["d"]), spike_threshold=float(hm["thr"]))
+def meta_of(t):
+    """t = a palette type {leak, thr, d}; c is fixed at 0 (as before)."""
+    return NeuronMeta(neuron_type=0, cf_2=0.0, cf_1=-float(t["leak"]), cf_0=0.0, a=0.0, b=0.0,
+                      c=0.0, d=float(t["d"]), spike_threshold=float(t["thr"]))
+
+
+def type_meta(g, h):
+    """The NeuronMeta for hidden neuron h, resolved through its type_index into the palette."""
+    return meta_of(g["types"][g["hid"][h]])
 
 
 def build_individual(g):
     hids = list(g["hid"].keys())
     nodes = IN_LABELS + OUT_LABELS + hids
     local = {n: i for i, n in enumerate(nodes)}
-    neuron_metas = [leakfree(IN_THR), leakfree(OUT_THR)] + [meta_of(g["hid"][h]) for h in hids]
+    neuron_metas = [leakfree(IN_THR), leakfree(OUT_THR)] + [type_meta(g, h) for h in hids]
     node_meta = [0] * D + [1] * Dout + [2 + i for i in range(len(hids))]
     syn = [(local[s], local[t], float(w), int(max(1, dl)))
            for (s, t, w, dl) in g["syn"].values() if s in local and t in local]
@@ -227,7 +242,7 @@ def build_population(genomes, device='cpu'):
         hids = list(g["hid"].keys())
         nodes = IN_LABELS + OUT_LABELS + hids            # local order: 0..5 in, 6..9 out, 10.. hidden
         loc = {n: i for i, n in enumerate(nodes)}
-        node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(meta_of(g["hid"][h])) for h in hids]
+        node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(type_meta(g, h)) for h in hids]
         syn = [(loc[s], loc[t], float(w), int(max(1, dl)))
                for (s, t, w, dl) in g["syn"].values() if s in loc and t in loc]
         cands.append({"n_nodes": len(nodes), "node_meta": node_meta, "synapses": syn})
@@ -472,15 +487,32 @@ def mutate(g, rng):
         g["syn"][rng.choice(syns)][2] += rng.gauss(0, g["sigma"])
     elif op < 0.45 and syns:
         gene = g["syn"][rng.choice(syns)]; gene[3] = max(1, gene[3] + rng.choice([-1, 1]))
-    elif op < 0.58 and g["hid"]:
-        hm = g["hid"][rng.choice(list(g["hid"].keys()))]
-        p = rng.choice(["leak", "thr", "d"])
-        if p == "leak":
-            hm["leak"] = max(0.0, hm["leak"] + rng.gauss(0, 0.05))
-        elif p == "thr":
-            hm["thr"] = max(0.2, hm["thr"] + rng.gauss(0, 0.3))
-        else:
-            hm["d"] = max(0.0, hm["d"] + rng.gauss(0, 20))
+    elif op < 0.58 and g["types"]:                            # ---- palette (neuron-TYPE) ops ----
+        sub = rng.random()
+        if sub < 0.5:                                         # mutate-type: jitter one param (all its instances)
+            t = g["types"][rng.randrange(len(g["types"]))]
+            p = rng.choice(["leak", "thr", "d"])
+            if p == "leak":
+                t["leak"] = max(0.0, t["leak"] + rng.gauss(0, 0.05))
+            elif p == "thr":
+                t["thr"] = max(0.2, t["thr"] + rng.gauss(0, 0.3))
+            else:
+                t["d"] = max(0.0, t["d"] + rng.gauss(0, 20))
+        elif sub < 0.75 and g["hid"] and len(g["types"]) > 1:  # reassign: point a hidden at another type
+            g["hid"][rng.choice(list(g["hid"].keys()))] = rng.randrange(len(g["types"]))
+        elif sub < 0.9 and len(g["types"]) < MAX_TYPES:        # add-type: copy an existing type + jitter
+            nt = dict(g["types"][rng.randrange(len(g["types"]))])
+            nt["leak"] = max(0.0, nt["leak"] + rng.gauss(0, 0.05))
+            nt["thr"] = max(0.2, nt["thr"] + rng.gauss(0, 0.3))
+            nt["d"] = max(0.0, nt["d"] + rng.gauss(0, 20))
+            g["types"].append(nt)
+        elif len(g["types"]) > 1:                              # drop-type: remove an UNused type (keep >=1)
+            used = set(g["hid"].values())
+            unused = [i for i in range(len(g["types"])) if i not in used]
+            if unused:
+                di = rng.choice(unused)
+                g["types"].pop(di)
+                g["hid"] = {h: (ti - 1 if ti > di else ti) for h, ti in g["hid"].items()}
     elif op < 0.74 and len(g["syn"]) < MAX_SYN:
         s, t = rng.choice(src_pool(g)), rng.choice(dst_pool(g))
         if innov_of(s, t) not in g["syn"]:
@@ -490,7 +522,7 @@ def mutate(g, rng):
     elif op < 0.94 and len(g["hid"]) < MAX_HIDDEN and syns:
         k = rng.choice(syns); s, t, w, dl = g["syn"][k]
         del g["syn"][k]
-        h = new_hidden(); g["hid"][h] = rnd_meta(rng)
+        h = new_hidden(); g["hid"][h] = rng.randrange(len(g["types"]))   # new instance -> existing type
         add_syn(g, s, h, w, dl); add_syn(g, h, t, 1.0, rng.randint(1, 3))
     elif g["hid"]:
         h = rng.choice(list(g["hid"].keys())); del g["hid"][h]
@@ -499,19 +531,20 @@ def mutate(g, rng):
 
 
 def crossover(gf, gw, rng):
-    """gf = fitter parent, gw = weaker. NEAT: matching genes random; disjoint/excess from fitter."""
-    child = {"hid": {}, "syn": {}, "sigma": gf["sigma"]}
+    """gf = fitter parent, gw = weaker. NEAT: matching genes random; disjoint/excess from fitter.
+    The TYPE PALETTE is inherited whole from the fitter parent (simplest correct choice); each
+    hidden's type_index is clamped to that palette (a gw-only hidden may index a type gf lacks)."""
+    child = {"types": [dict(t) for t in gf["types"]], "hid": {}, "syn": {}, "sigma": gf["sigma"]}
+    ntypes = len(child["types"])
     for innov in set(gf["syn"]) | set(gw["syn"]):
         inf, inw = innov in gf["syn"], innov in gw["syn"]
         if inf and inw:
             child["syn"][innov] = list(rng.choice([gf["syn"][innov], gw["syn"][innov]]))
         elif inf:
             child["syn"][innov] = list(gf["syn"][innov])          # disjoint/excess from fitter only
-    for h in set(gf["hid"]) | set(gw["hid"]):                      # hidden metas: prefer fitter
-        if h in gf["hid"]:
-            child["hid"][h] = dict(gf["hid"][h])
-        else:
-            child["hid"][h] = dict(gw["hid"][h])
+    for h in set(gf["hid"]) | set(gw["hid"]):                      # hidden type_index: prefer fitter, clamp
+        ti = gf["hid"][h] if h in gf["hid"] else gw["hid"][h]
+        child["hid"][h] = min(ti, ntypes - 1)
     # keep only hidden actually referenced (avoid orphan metas bloating the build)
     used = set()
     for s, t, _, _ in child["syn"].values():
