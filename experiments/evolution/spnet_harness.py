@@ -22,7 +22,46 @@ groups guaranteed. group_size must be even (>=2).
 import torch
 import spiky_cuda  # noqa: F401
 from spiky.util.synapse_growth import SynapseGrowthEngine
+from spiky.util.chunk_of_connections import ChunkOfConnections
 from spiky.spnet.spnet import SpikingNet, SynapseMeta, NeuronMeta, NeuronDataType
+
+
+def _group_aligned_weights_vec(conn, triples, weights, gs):
+    """Vectorized equivalent of SynapseGrowthEngine._build_group_aligned_weights.
+
+    Places each explicit edge's weight into the group-aligned weights buffer matching
+    the connection buffer `conn` (1-D int32, blocks of [src, meta, n_tgt, shift,
+    (meta_i, tgt_i) x gs]). The reference does this with a Python dict {(src,tgt): w}
+    plus a per-slot Python scan (the ~60% build bottleneck for large packs); this does
+    it with torch: forward-fill the per-block source, then look weights up by a
+    (src*MAXID+tgt) key via searchsorted. Bit-identical to the reference buffer:
+    (src,tgt) pairs are unique per list (ChunkOfConnections invariant), so the lookup
+    is unambiguous, and unmatched / zero-target slots stay 0.0 exactly as the ref."""
+    dev = conn.device
+    block = 4 + 2 * gs
+    n_blocks = conn.numel() // block
+    b = conn.view(n_blocks, block).long()
+    src_col = b[:, 0]
+    idx = torch.arange(n_blocks, device=dev)
+    # forward-fill the last positive source id across chained/ghost groups (src==0)
+    last_start = torch.where(src_col > 0, idx, torch.zeros_like(idx))
+    cur_src = src_col[torch.cummax(last_start, dim=0).values]
+    srcs = triples[:, 1].long()
+    tgts = triples[:, 2].long()
+    MAXID = int(torch.stack([srcs.max(), tgts.max(), cur_src.max()]).max().item()) + 1
+    ekey = srcs * MAXID + tgts
+    order = torch.argsort(ekey)
+    ekey_s = ekey[order]
+    w_s = weights.flatten().to(torch.float32)[order]
+    wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
+    zero = torch.zeros(n_blocks, dtype=torch.float32, device=dev)
+    for j in range(gs):
+        tgt_j = b[:, 4 + 2 * j + 1]
+        qkey = cur_src * MAXID + tgt_j
+        pos = torch.searchsorted(ekey_s, qkey).clamp(max=ekey_s.numel() - 1)
+        hit = (tgt_j > 0) & (ekey_s[pos] == qkey)
+        wbuf[idx * gs + j] = torch.where(hit, w_s[pos], zero)
+    return wbuf
 
 WQ = 4
 
@@ -37,27 +76,15 @@ def stock_meta(_threshold=30.0):
     return NeuronMeta(neuron_type=0)  # a=.02 b=.2 c=-65 d=8 cf=.04/5/140 thr=30
 
 
-def build_packed(genomes, neuron_metas, device='cpu'):
+def _build_packed_impl(genomes, neuron_metas, device='cpu', fast=True):
     """neuron_metas: list of NeuronMeta; genome['node_meta'][local] indexes it.
-    device: 'cpu' (default, unchanged) or 'cuda[:i]' to build the packed net on GPU."""
+    device: 'cpu' (default, unchanged) or 'cuda[:i]' to build the packed net on GPU.
+    fast=True vectorizes the per-edge weight alignment (default); fast=False uses the
+    growth engine's reference Python weight path. Both produce an identical packed net."""
     n_cand = len(genomes)
     n_nodes = max(g["n_nodes"] for g in genomes)
-
-    # ---- neuron metas: one spnet neuron-meta (= one id block) per provided meta.
-    # node global id = meta_block_start[node_meta] + slot, packed per (meta, cand).
-    # Simplest correct layout: give EACH node its own contiguous slot in a single
-    # neuron-meta only if metas identical. Instead we allocate per neuron-meta a
-    # block of n_cand*n_nodes and use node_meta to pick which block + offset.
-    # To keep node identity simple we instead assign every node to its meta's block
-    # with a global running slot; map (cand,local) -> (meta_idx, slot).
-    counts = [0] * len(neuron_metas)
-    slot_of = {}  # (cand, local) -> (meta_idx, slot_within_meta)
-    for c, g in enumerate(genomes):
-        for local in range(g["n_nodes"]):
-            mi = g["node_meta"][local]
-            slot_of[(c, local)] = (mi, counts[mi])
-            counts[mi] += 1
-    counts = [max(1, x) for x in counts]
+    n_metas = len(neuron_metas)
+    n_edges = sum(len(g["synapses"]) for g in genomes)
 
     # ---- FIXED universal DELAY palette: one SynapseMeta per delay d in 1..255, all
     # other fields constant across every meta and every net (never mutated). The per-edge
@@ -65,7 +92,6 @@ def build_packed(genomes, neuron_metas, device='cpu'):
     # the explicit weights= buffer below (-> SynapseInfo.weight). So distinct weights no
     # longer create metas: a synapse of delay d references meta index (d-1), and the whole
     # table is a constant 255 metas shared across all packed genomes (register dedups it).
-    # Weight bounds are wide enough that any evolved weight is valid.
     N_DELAYS = 255
     syn_metas = [SynapseMeta(
         learning_rate=0.0, min_delay=d, max_delay=d,
@@ -73,36 +99,75 @@ def build_packed(genomes, neuron_metas, device='cpu'):
         initial_noise_level=0.0, weight_decay=0.9, weight_scaling_cf=0.0,
         _forward_group_size=2, _backward_group_size=2) for d in range(1, N_DELAYS + 1)]
 
-    plan = []  # (meta_idx, (cand,src), (cand,tgt), weight)
-    for c, g in enumerate(genomes):
-        for (s, t, w, d) in g["synapses"]:
-            dd = min(max(int(d), 1), N_DELAYS)          # clamp delay to [1,255]
-            plan.append((dd - 1, (c, s), (c, t), float(w)))
+    # node global id = ids_by_meta[node_meta][slot]; slot = running count within that meta
+    # over nodes in (cand-major, local) order. SAME layout in both the vectorized and the
+    # reference path, so the packed nets are identical.
+    if fast:
+        nm_t = torch.tensor([m for g in genomes for m in g["node_meta"]], dtype=torch.long)
+        counts = [max(1, int(x)) for x in torch.bincount(nm_t, minlength=n_metas).tolist()]
+    else:
+        counts = [0] * n_metas
+        slot_of = {}  # (cand, local) -> (meta_idx, slot_within_meta)
+        for c, g in enumerate(genomes):
+            for local in range(g["n_nodes"]):
+                mi = g["node_meta"][local]
+                slot_of[(c, local)] = (mi, counts[mi])
+                counts[mi] += 1
+        counts = [max(1, x) for x in counts]
 
     spnet = SpikingNet(synapse_metas=syn_metas, neuron_metas=neuron_metas,
                        neuron_counts=counts,
-                       initial_synapse_capacity=max(1024, 2 * len(plan)))
+                       initial_synapse_capacity=max(1024, 2 * n_edges))
     spnet.to_device(device)
-    ids_by_meta = [spnet.get_neuron_ids_by_meta(i) for i in range(len(neuron_metas))]  # tensors (add_neurons)
-    # A CPU python-list copy for gid(): it's called ~2x per synapse to build the triples,
-    # and on CUDA each `.item()` on a device tensor forces a device->host sync (hundreds of
-    # thousands of syncs for a large pack). Indexing a python list is sync-free.
-    ids_cpu = [t.cpu().tolist() for t in ids_by_meta]
+    ids_by_meta = [spnet.get_neuron_ids_by_meta(i) for i in range(n_metas)]  # tensors (add_neurons)
+    ids_cpu = [t.cpu().tolist() for t in ids_by_meta]                        # sync-free gid lookups
 
-    def gid(c, local):
-        mi, slot = slot_of[(c, local)]
-        return ids_cpu[mi][slot]
+    if fast:
+        # ---- VECTORIZED global-id table + per-edge triples/weights (no per-edge Python) ----
+        node_base = [0]
+        for g in genomes:
+            node_base.append(node_base[-1] + g["n_nodes"])
+        gid_arr = torch.empty(node_base[-1], dtype=torch.long)  # flat node idx -> global id
+        for m in range(n_metas):
+            mask = nm_t == m
+            cnt = int(mask.sum())
+            if cnt:
+                gid_arr[mask] = torch.tensor(ids_cpu[m][:cnt], dtype=torch.long)
+        gid_list = gid_arr.tolist()
 
-    triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt, w) in plan]
-    # triples (and the entry_points _grow_explicit derives from them) must live on the
-    # growth engine's device — on CUDA the low-level grow rejects CPU-resident tensors.
-    triples_t = torch.tensor(triples, dtype=torch.int32, device=device)
-    # per-edge weights, aligned 1:1 to the triples (delay-only meta carries no weight)
-    weights_t = torch.tensor([w for (mi, src, tgt, w) in plan], dtype=torch.float32, device=device)
+        def gid(c, local):
+            return gid_list[node_base[c] + local]
+
+        edges = [(c, s, t, w, d) for c, g in enumerate(genomes) for (s, t, w, d) in g["synapses"]]
+        if edges:
+            ec, es, et, ew, ed = zip(*edges)
+            base_t = torch.tensor(node_base, dtype=torch.long)
+            ec_t = torch.tensor(ec, dtype=torch.long)
+            srcf = base_t[ec_t] + torch.tensor(es, dtype=torch.long)   # flat node idx of source
+            tgtf = base_t[ec_t] + torch.tensor(et, dtype=torch.long)   # flat node idx of target
+            meta = torch.tensor(ed, dtype=torch.long).clamp(1, N_DELAYS) - 1
+            triples_t = torch.stack([meta, gid_arr[srcf], gid_arr[tgtf]], dim=1).to(torch.int32).to(device)
+            weights_t = torch.tensor(ew, dtype=torch.float32, device=device)
+        else:
+            triples_t = torch.zeros((0, 3), dtype=torch.int32, device=device)
+            weights_t = torch.zeros((0,), dtype=torch.float32, device=device)
+    else:
+        def gid(c, local):
+            mi, slot = slot_of[(c, local)]
+            return ids_cpu[mi][slot]
+
+        plan = []  # (meta_idx, (cand,src), (cand,tgt), weight)
+        for c, g in enumerate(genomes):
+            for (s, t, w, d) in g["synapses"]:
+                dd = min(max(int(d), 1), N_DELAYS)          # clamp delay to [1,255]
+                plan.append((dd - 1, (c, s), (c, t), float(w)))
+        triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt, w) in plan]
+        triples_t = torch.tensor(triples, dtype=torch.int32, device=device)
+        weights_t = torch.tensor([w for (mi, src, tgt, w) in plan], dtype=torch.float32, device=device)
 
     total_neurons = sum(counts)
     ge = SynapseGrowthEngine(device=device, synapse_group_size=2,
-                             max_groups_in_buffer=max(4096, 8 * (len(plan) + total_neurons)))
+                             max_groups_in_buffer=max(4096, 8 * (n_edges + total_neurons)))
     for i in range(len(neuron_metas)):
         ge.register_neuron_type(max_synapses=8 * n_nodes, growth_command_list=[])
     for i in range(len(neuron_metas)):
@@ -111,13 +176,31 @@ def build_packed(genomes, neuron_metas, device='cpu'):
                               torch.zeros(len(ids)), torch.full((len(ids),), float(i))], dim=1)
         ge.add_neurons(neuron_type_index=i, identifiers=ids, coordinates=coords)
 
-    chunk = ge._grow_explicit(triples_t, 1, weights=weights_t)
+    if fast:
+        # vectorized weight alignment: grow WITHOUT the Python weights= path (skips the
+        # wmap dict), then build the group-aligned weights buffer with torch and re-wrap.
+        chunk = ge._grow_explicit(triples_t, 1)
+        conn = chunk.get_connections()
+        wbuf = _group_aligned_weights_vec(conn, triples_t, weights_t, ge._synapse_group_size)
+        chunk = ChunkOfConnections(conn, ge._synapse_group_size, weights=wbuf)
+    else:
+        chunk = ge._grow_explicit(triples_t, 1, weights=weights_t)
     spnet.add_connections(chunk, 1)
     chunk.recycle()
     spnet.compile(shuffle_synapses_random_seed=1)
     spnet.to_device(device)
     return {"spnet": spnet, "gid": gid, "n_nodes": n_nodes, "n_cand": n_cand,
             "n_synapses": spnet.n_synapses(), "n_syn_metas": len(syn_metas)}
+
+
+def build_packed(genomes, neuron_metas, device='cpu'):
+    """Pack genomes into one SpikingNet (vectorized per-edge weight alignment)."""
+    return _build_packed_impl(genomes, neuron_metas, device=device, fast=True)
+
+
+def build_packed_ref(genomes, neuron_metas, device='cpu'):
+    """Reference build (growth engine's Python weight path) — equivalence baseline."""
+    return _build_packed_impl(genomes, neuron_metas, device=device, fast=False)
 
 
 def run(packed, input_events_per_cand, output_locals, n_ticks):

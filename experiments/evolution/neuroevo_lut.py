@@ -42,7 +42,7 @@ import sys
 import torch
 import spiky_cuda  # noqa: F401
 from lutmodel import build_model, lut_bits, bits_to_row
-from spnet_harness import build_packed
+from spnet_harness import build_packed, build_packed_ref
 from spiky.spnet.spnet import NeuronMeta, NeuronDataType
 
 PACKED = bool(os.environ.get("NE_PACKED"))     # population-parallel packed eval (one build per chunk)
@@ -217,8 +217,9 @@ def eval_batch(g, xs, true_orders):
 # batch then evaluates every genome at once. On CPU this yields the SAME fitness as the
 # per-genome eval_batch (disjoint subnets never interact); on GPU it's the path that makes
 # per-genome build/teardown overhead vanish. device='cpu' (default) or 'cuda'.
-def build_population(genomes, device='cpu'):
+def build_population(genomes, device='cpu', ref=False):
     """Pack genomes (each assumed to have >=1 synapse) into one build_packed net.
+    ref=True uses the reference build (build_packed_ref) for equivalence checks.
     NeuronMetas must be DE-DUPLICATED before SpikingNet (its register_neuron_meta
     dedupes identical metas, which would break its `assert m_id == i`); different
     genomes routinely share identical hidden metas (crossover copies them), so we
@@ -246,7 +247,7 @@ def build_population(genomes, device='cpu'):
         syn = [(loc[s], loc[t], float(w), int(max(1, dl)))
                for (s, t, w, dl) in g["syn"].values() if s in loc and t in loc]
         cands.append({"n_nodes": len(nodes), "node_meta": node_meta, "synapses": syn})
-    return build_packed(cands, metas, device=device)
+    return (build_packed_ref if ref else build_packed)(cands, metas, device=device)
 
 
 def _score_population_ref(packed, ncand, xs, true_orders, device='cpu'):
