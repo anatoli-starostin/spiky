@@ -33,12 +33,57 @@
   Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
     .then(([g, a]) => { G = g; A = a; init(); }).catch(e => showErr('load: ' + e));
 
+  // ---- activity loading (a single activity object, OR one variant of a bundle) ----
+  function loadActivity(act) {
+    fireTicks = {}; volt = {};
+    for (const n of G.neurons) fireTicks[n.id] = [];
+    for (const v of act.voltages) volt[v.neuron_id] = v.trace;
+    for (const sp of act.spikes) (fireTicks[sp.neuron_id] || (fireTicks[sp.neuron_id] = [])).push(sp.tick);
+    Tmax = act.t1;
+    simT = 0; playing = false; dirty = true;
+    const pb = document.getElementById('play'); if (pb) pb.textContent = '▶ Play';
+    renderVariantInfo(act);
+  }
+
+  const ordStr = (a) => a.map((d) => 'o' + d).join(' > ');
+
+  function renderVariantInfo(act) {
+    const info = document.getElementById('variantInfo');
+    if (!info || act.input === undefined) return;
+    info.innerHTML =
+      `<b>input x</b> = <span class="mono">[${act.input.join(', ')}]</span>`
+      + ` <span class="small" style="color:var(--muted)">→ input first-spike ticks ${act.stim_ticks.join(', ')}</span><br>`
+      + `<b>LUT ground truth</b> <span class="small" style="color:var(--muted)">(row #${act.row})</span>: `
+      + `output values <span class="mono">[${act.out_values.join(', ')}]</span> → order <span class="mono">${ordStr(act.oracle_order)}</span><br>`
+      + `<b>evolved net</b>: output first-spike order <span class="mono">${ordStr(act.net_order)}</span> — `
+      + (act.correct ? '<span style="color:var(--ok)">✓ matches ground truth</span>'
+                     : '<span style="color:var(--warn)">✗ differs from ground truth</span>');
+  }
+
+  function setupVariantsUI() {
+    if (!A.variants) return;
+    const ctl = document.querySelector('.ctl');
+    const bar = document.createElement('div');
+    bar.className = 'ctl'; bar.style.marginTop = '8px'; bar.style.flexWrap = 'wrap';
+    const lab = document.createElement('label'); lab.textContent = 'input ';
+    const sel = document.createElement('select'); sel.id = 'variantSel';
+    A.variants.forEach((v, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = (i + 1) + ') ' + v.label; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => loadActivity(A.variants[+sel.value]));
+    lab.appendChild(sel); bar.appendChild(lab);
+    const info = document.createElement('div');
+    info.id = 'variantInfo'; info.style.cssText = 'margin-top:8px;font-size:12.5px;line-height:1.8';
+    ctl.parentNode.insertBefore(bar, ctl.nextSibling);
+    bar.parentNode.insertBefore(info, bar.nextSibling);
+  }
+
   function init() {
-    for (const n of G.neurons) { byId[n.id] = n; fireTicks[n.id] = []; thr[n.id] = n.spike_threshold; }
+    for (const n of G.neurons) { byId[n.id] = n; thr[n.id] = n.spike_threshold; }
     for (const s of G.synapses) (outSyn[s.source] || (outSyn[s.source] = [])).push(s);
-    for (const v of A.voltages) volt[v.neuron_id] = v.trace;
-    for (const sp of A.spikes) (fireTicks[sp.neuron_id] || (fireTicks[sp.neuron_id] = [])).push(sp.tick);
-    Tmax = A.t1;
+    setupVariantsUI();
+    loadActivity(A.variants ? A.variants[0] : A);
     document.getElementById('glegend').innerHTML =
       G.layers.map(l => `<span style="color:${(LAYER_COL[l] ? LAYER_COL[l]() : '#999')}">■ ${l}</span>`).join(' · ')
       + ' · edges: <span style="color:#5b9dff">■ −w</span>/<span style="color:#ff6b6b">■ +w</span>, dashed = delay>1';

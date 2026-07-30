@@ -7,25 +7,31 @@ neuroevolution search (best score ~0.88, ~1.5M genomes evaluated). Topology is a
 6 latency-coded inputs (i0-5) -> N hidden (h*) -> 4 output neurons (o0-3) whose
 first-spike ORDER must match the LUT oracle's row ranking.
 
-We build the single genome into a native SpikingNet, pick a demo input the net solves
-correctly, record spikes + membrane voltages over N_TICKS, lay the neurons out in
-BFS columns (input -> hidden depth -> output), and dump the two JSON files.
+graph_evolved.json carries every neuron's full Izhikevich NeuronMeta (cf_2/cf_1/cf_0/
+a/b/c/d/spike_threshold) so the inspector's node panel shows real values.
+activity_evolved.json is a BUNDLE of 8 precomputed input variants (a combobox in the
+inspector): each carries the input vector, its LUT ground-truth output + ranking, the
+evolved net's first-spike ordering (and whether it matches), plus the full spike +
+membrane-voltage trace for the animation/raster.
 """
 import json
 import os
-import sys
 from collections import deque
 
 import torch
 
 import neuroevo_lut as N
-from neuroevo_lut import build_population, IN_LABELS, OUT_LABELS, D, Dout, N_TICKS, A_LAT, B_LAT, IN_THR, OUT_THR
+from neuroevo_lut import (build_population, IN_LABELS, OUT_LABELS, D, Dout, N_TICKS,
+                          A_LAT, B_LAT, IN_THR, OUT_THR, leakfree, type_meta, m,
+                          lut_bits, bits_to_row)
 from evo_config import fixed_eval_set, EVAL_VERSION
 from spiky.spnet.spnet import NeuronDataType
 
 BEST = "/home/astarostin/projects/evo-run/best_genome.json"
 OUT_DIR = "/home/astarostin/projects/spiky/experiments/evolution/visualiser/public"
 COL_W, ROW_H = 190.0, 46.0
+N_VARIANTS = 8
+META_FIELDS = ["cf_2", "cf_1", "cf_0", "a", "b", "c", "d", "spike_threshold"]
 
 
 def stim_tick(v):
@@ -33,8 +39,7 @@ def stim_tick(v):
 
 
 def run_input(sp, GID, x, record_voltage=False):
-    """Stimulate the 6 inputs at latency ticks, run N_TICKS, return the Spike raster
-    (and Voltage if requested) as tensors of shape (n_nodes, N_TICKS)."""
+    """Stimulate the 6 inputs at latency ticks, run N_TICKS."""
     S = torch.zeros((1, N_TICKS, D), dtype=torch.int32)
     Vv = torch.zeros((1, N_TICKS, D), dtype=torch.float32)
     for i in range(D):
@@ -45,7 +50,7 @@ def run_input(sp, GID, x, record_voltage=False):
                      do_record_voltage=record_voltage, do_reset_context=True)
 
 
-def net_order(sp, GID):
+def output_first_spike(sp, GID):
     Oids = torch.tensor([GID["o%d" % d] for d in range(Dout)], dtype=torch.int32)
     spk = sp.export_neuron_data(Oids, 1, NeuronDataType.Spike, 0, N_TICKS - 1).view(Dout, N_TICKS)
     first = []
@@ -55,10 +60,25 @@ def net_order(sp, GID):
     return tuple(sorted(range(Dout), key=lambda d: (first[d], d))), first
 
 
+def ground_truth(x):
+    """LUT oracle for input x: selected row, its stored 4-vector, and the target ranking."""
+    row = bits_to_row(lut_bits(m, x))
+    out_values = [round(float(v), 4) for v in m["V"][row]]
+    order = tuple(sorted(range(Dout), key=lambda d: -m["V"][row][d]))
+    return row, out_values, order
+
+
+def node_meta(g, n):
+    if n[0] == "i":
+        return leakfree(IN_THR)
+    if n[0] == "o":
+        return leakfree(OUT_THR)
+    return type_meta(g, n)
+
+
 def bfs_columns(nodes, edges):
-    """Column per node: inputs=0, hidden=BFS distance from inputs (>=1), outputs rightmost."""
     adj = {}
-    for s, t, *_ in edges:
+    for s, t in edges:
         adj.setdefault(s, []).append(t)
     dist = {n: 0 for n in nodes if n[0] == "i"}
     dq = deque(dist)
@@ -72,13 +92,33 @@ def bfs_columns(nodes, edges):
     max_reached = max([dist[h] for h in hid if h in dist] or [1])
     col = {}
     for n in nodes:
-        if n[0] == "i":
-            col[n] = 0
-        elif n[0] == "o":
-            col[n] = max_reached + 1
-        else:
-            col[n] = dist.get(n, 1)  # unreached hidden -> col 1
+        col[n] = 0 if n[0] == "i" else (max_reached + 1 if n[0] == "o" else dist.get(n, 1))
     return col
+
+
+def collect_activity(sp, GID, nodes, x):
+    """Run x with voltage recording; return the full variant record."""
+    run_input(sp, GID, x, record_voltage=True)
+    no, first = output_first_spike(sp, GID)
+    row, out_values, oracle = ground_truth(x)
+    all_ids = torch.tensor([GID[n] for n in nodes], dtype=torch.int32)
+    spk = sp.export_neuron_data(all_ids, 1, NeuronDataType.Spike, 0, N_TICKS - 1).view(len(nodes), N_TICKS)
+    vol = sp.export_neuron_data(all_ids, 1, NeuronDataType.Voltage, 0, N_TICKS - 1).view(len(nodes), N_TICKS)
+    spikes, voltages = [], []
+    for ni, n in enumerate(nodes):
+        voltages.append({"neuron_id": GID[n], "trace": [round(float(vol[ni, t]), 4) for t in range(N_TICKS)]})
+        for t in range(N_TICKS):
+            if float(spk[ni, t]) > 0.5:
+                spikes.append({"tick": t, "neuron_id": GID[n]})
+    correct = tuple(no) == oracle
+    order_str = " > ".join("o%d" % d for d in oracle)
+    return {
+        "label": "truth %s · net %s" % (order_str, "✓" if correct else "✗"),
+        "input": [round(v, 4) for v in x], "stim_ticks": [stim_tick(v) for v in x],
+        "row": row, "out_values": out_values, "oracle_order": list(oracle),
+        "net_order": list(no), "output_first_spike": first, "correct": correct,
+        "t0": 0, "t1": N_TICKS - 1, "dt": 1, "spikes": spikes, "voltages": voltages,
+    }
 
 
 def main():
@@ -92,40 +132,50 @@ def main():
     GID = {name: packed["gid"](0, i) for i, name in enumerate(nodes)}
     gid2name = {v: k for k, v in GID.items()}
 
-    # pick a demo input the net solves EXACTLY (strict order match); else best ordering match
-    def concord(a, b):
-        return sum(1 for i in range(Dout) for j in range(i + 1, Dout)
-                   if (a.index(i) < a.index(j)) == (b.index(i) < b.index(j)))
-    demo_i, demo_conc, demo_strict = 0, -1, False
+    # ---- pick 8 inputs with DISTINCT ground-truth orderings, preferring for each
+    #      ordering an input the net solves exactly (honest but representative) ----
+    oracle_of = {}                       # idx -> ground-truth ordering
+    correct, wrong = [], []
     for idx, x in enumerate(xs):
-        run_input(sp, GID, x)
-        no, _ = net_order(sp, GID)
-        strict = tuple(no) == tuple(tos[idx])
-        c = concord(list(no), list(tos[idx]))
-        if strict:
-            demo_i, demo_strict = idx, True
-            break
-        if c > demo_conc:
-            demo_i, demo_conc = idx, c
-    x = xs[demo_i]
-    true_order = tuple(tos[demo_i])
+        run_input(sp, GID, x)            # no voltage — cheap correctness probe
+        no, _ = output_first_spike(sp, GID)
+        _, _, oracle = ground_truth(x)
+        oracle_of[idx] = oracle
+        (correct if tuple(no) == oracle else wrong).append(idx)
+    n_strict = len(correct)
 
-    # final run for the chosen input WITH voltage recording
-    run_input(sp, GID, x, record_voltage=True)
-    no, first = net_order(sp, GID)
+    def spread(idxs, k):                 # up to k inputs, distinct orderings first, then fill
+        seen, out = set(), []
+        for idx in idxs:
+            if oracle_of[idx] not in seen:
+                seen.add(oracle_of[idx])
+                out.append(idx)
+            if len(out) >= k:
+                return out
+        for idx in idxs:
+            if idx not in out:
+                out.append(idx)
+            if len(out) >= k:
+                break
+        return out
 
-    all_ids = torch.tensor([GID[n] for n in nodes], dtype=torch.int32)
-    spk = sp.export_neuron_data(all_ids, 1, NeuronDataType.Spike, 0, N_TICKS - 1).view(len(nodes), N_TICKS)
-    vol = sp.export_neuron_data(all_ids, 1, NeuronDataType.Voltage, 0, N_TICKS - 1).view(len(nodes), N_TICKS)
+    n_ok_target = min(5, len(correct))   # correct-majority mix, remainder = instructive misses
+    chosen = spread(correct, n_ok_target)
+    chosen += spread([i for i in wrong if i not in chosen], N_VARIANTS - len(chosen))
+    if len(chosen) < N_VARIANTS:         # few misses -> top up with more correct
+        chosen += [i for i in spread(correct, len(correct)) if i not in chosen][:N_VARIANTS - len(chosen)]
+    chosen = chosen[:N_VARIANTS]
 
-    # ---- synapses (named nodes only) ----
+    variants = [collect_activity(sp, GID, nodes, xs[i]) for i in chosen]
+    variants.sort(key=lambda v: (not v["correct"], v["input"]))   # a correct one first (default view)
+
+    # ---- graph (input-independent): full NeuronMeta per neuron ----
     nsyn = sp.n_synapses()
     buf = {k: torch.zeros([nsyn], dtype=(torch.float32 if k == "weights" else torch.int32))
            for k in ["source_ids", "synapse_metas", "weights", "delays", "target_ids"]}
     sp.export_synapses(sp.get_all_neuron_ids(), buf["source_ids"], buf["synapse_metas"],
                        buf["weights"], buf["delays"], buf["target_ids"], forward_or_backward=True)
-    edges = []
-    synapses_json = []
+    edges, synapses_json = [], []
     for i in range(nsyn):
         s, t = int(buf["source_ids"][i]), int(buf["target_ids"][i])
         if s not in gid2name or t not in gid2name:
@@ -136,7 +186,6 @@ def main():
                               "synapse_meta_index": int(buf["synapse_metas"][i]),
                               "learning_rate": 0.0, "min_weight": -1000.0, "max_weight": 1000.0})
 
-    # ---- layout: BFS columns, spread rows within each column ----
     col = bfs_columns(nodes, edges)
     members = {}
     for n in nodes:
@@ -146,57 +195,39 @@ def main():
         for i, n in enumerate(ms):
             coord[n] = (c * COL_W, (i - (len(ms) - 1) / 2.0) * ROW_H)
 
-    def ntype(n):
-        return {"i": "input", "o": "output", "h": "hidden"}[n[0]]
-
-    def nthr(n):
-        if n[0] == "i":
-            return IN_THR
-        if n[0] == "o":
-            return OUT_THR
-        return float(g["types"][g["hid"][n]]["thr"])
-
+    ntype = {"i": "input", "o": "output", "h": "hidden"}
     neurons_json = []
     for n in nodes:
+        nm = node_meta(g, n)
         xx, yy = coord[n]
-        rec = {"id": GID[n], "label": n, "type": ntype(n), "col": col[n],
-               "x": xx, "y": yy, "z": 0.0, "spike_threshold": nthr(n)}
-        if n[0] == "h":
-            ty = g["types"][g["hid"][n]]
-            rec.update({"leak": round(float(ty["leak"]), 4), "delay": round(float(ty["d"]), 3)})
+        rec = {"id": GID[n], "label": n, "type": ntype[n[0]], "col": col[n], "x": xx, "y": yy, "z": 0.0}
+        rec.update({f: float(getattr(nm, f)) for f in META_FIELDS})
         neurons_json.append(rec)
 
     graph = {"neurons": neurons_json, "synapses": synapses_json,
              "layers": ["input", "hidden", "output"],
              "note": ("EVOLVED spiking net (neuroevolution result, best score %.4f, depth %s, "
                       "%d hidden / %d synapses). Latency-coded LUT: the 4 output neurons' first-spike "
-                      "ORDER must match the LUT oracle's row ranking."
+                      "ORDER must match the LUT oracle's row ranking. Pick an input from the combobox."
                       % (best["best_score"], best.get("best_depth"), len(g["hid"]), len(synapses_json)))}
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(graph, open(os.path.join(OUT_DIR, "graph_evolved.json"), "w"))
 
-    # ---- activity ----
-    spikes, voltages = [], []
-    for ni, n in enumerate(nodes):
-        voltages.append({"neuron_id": GID[n], "trace": [round(float(vol[ni, t]), 4) for t in range(N_TICKS)]})
-        for t in range(N_TICKS):
-            if float(spk[ni, t]) > 0.5:
-                spikes.append({"tick": t, "neuron_id": GID[n]})
-    activity = {"t0": 0, "t1": N_TICKS - 1, "dt": 1, "input": [round(v, 4) for v in x],
-                "stim_ticks": [stim_tick(v) for v in x], "spikes": spikes, "voltages": voltages,
-                "net_order": list(no), "oracle_order": list(true_order),
-                "output_first_spike": first, "correct": tuple(no) == true_order}
+    activity = {"t0": 0, "t1": N_TICKS - 1, "dt": 1, "variants": variants}
     json.dump(activity, open(os.path.join(OUT_DIR, "activity_evolved.json"), "w"))
 
-    print("=" * 64)
+    n_ok = sum(v["correct"] for v in variants)
+    print("=" * 68)
     print("EVOLVED EXPORT -> %s" % OUT_DIR)
-    print("  best_score=%.4f depth=%s | %d neurons (%d hidden) / %d synapses"
-          % (best["best_score"], best.get("best_depth"), len(neurons_json), len(g["hid"]), len(synapses_json)))
-    print("  demo input idx=%d strict=%s  x=%s" % (demo_i, demo_strict, [round(v, 3) for v in x]))
-    print("  net_order=%s  oracle_order=%s  CORRECT=%s" % (no, true_order, tuple(no) == true_order))
-    print("  output first-spike ticks=%s  | %d spikes over %d ticks | eval=%s"
-          % (first, len(spikes), N_TICKS, EVAL_VERSION))
-    print("=" * 64)
+    print("  best_score=%.4f depth=%s | %d neurons (%d hidden) / %d synapses | eval=%s"
+          % (best["best_score"], best.get("best_depth"), len(neurons_json), len(g["hid"]),
+             len(synapses_json), EVAL_VERSION))
+    print("  %d input variants (%d solved exactly):" % (len(variants), n_ok))
+    for i, v in enumerate(variants):
+        print("   %d) x=%s  truth=%s vals=%s  net=%s  %s"
+              % (i + 1, v["input"], tuple(v["oracle_order"]), v["out_values"],
+                 tuple(v["net_order"]), "✓" if v["correct"] else "✗"))
+    print("=" * 68)
 
 
 if __name__ == "__main__":
