@@ -145,9 +145,15 @@ def main():
     log_alpha = jnp.log(jnp.asarray(0.2))
 
     n_actor = int(sum(np.prod(v.shape) for v in ap_.values()))
+    # The critic width is q_init's own default and is deliberately NOT tied to --hidden:
+    # --hidden resizes the ACTOR only, so a param-matched actor study leaves the critic
+    # identical to exp_c19's. Read it back from the built params rather than assuming, so
+    # the banner cannot drift from what was actually constructed (it did: this line used
+    # to print a.hidden for the critic, which was silently wrong for any --hidden != 256).
+    q_hidden = int(qp["q1"]["w1"].shape[1])
     print(f"MLP-SAC actor {OBS}x{a.hidden}x{a.hidden}x{2*ACT} seed={a.seed} | "
           f"6 mu + 6 log-sigma | actor {n_actor:,} params "
-          f"(control for the LUT's 28,032) | critic twin-Q {a.hidden}x{a.hidden}",
+          f"(control for the LUT's 28,032) | critic twin-Q {q_hidden}x{q_hidden}",
           flush=True)
 
     tx_a = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.actor_lr))
