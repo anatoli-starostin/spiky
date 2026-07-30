@@ -34,7 +34,7 @@ DEVICE = os.environ.get("NE_DEVICE", "cpu")
 
 # ---- fixed seeded eval set (comparable, reproducible scores across async scoring) ----
 EVAL_SEED = int(os.environ.get("NE_EVAL_SEED", 20260730))
-EVAL_N = int(os.environ.get("NE_EVAL_N", 64))
+EVAL_N = int(os.environ.get("NE_EVAL_N", 512))
 EVAL_VERSION = "lut-v1-seed%d-n%d" % (EVAL_SEED, EVAL_N)
 
 

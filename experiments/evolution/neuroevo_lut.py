@@ -17,7 +17,8 @@ EVALUATION (v2):
     selection); the best individual's validation fitness each gen is the TRUE curve.
   * All batched into the real spnet CPU kernel (batch_size = minibatch, chunked).
 
-FITNESS (unchanged form): fitness = strict_frac + 0.25*ordering_frac, over the batch.
+FITNESS: fitness = FIT_STRICT_W*strict_frac + FIT_ORDER_W*ordering_frac (50/50), over the
+batch; a corner where any output stays silent scores 0 (all-outputs-fire hard constraint).
   Observed only through the 4 output first-spike latencies -> a ranking.
     strict   = exact match of the net ranking to the oracle row's value ranking.
     ordering = graded pairwise Kendall concordance (the smooth shaping term).
@@ -56,6 +57,7 @@ W, b, V, K, D, Dout = m["W"], m["b"], m["V"], m["K"], m["D"], m["Dout"]
 A_LAT, B_LAT = 8.0, 5.0          # input latency: t_i = round(A - B*x_i), x in [-1,1] -> [3,13]
 N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
+FIT_STRICT_W, FIT_ORDER_W = 0.5, 0.5   # fitness = FIT_STRICT_W*strict_frac + FIT_ORDER_W*order_frac (50/50)
 MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
 MAX_TYPES = 2           # hidden neuron-TYPE palette cap per genome (start small; raise later)
                         # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
@@ -229,7 +231,7 @@ def eval_batch(g, xs, true_orders):
         return 0.0, 0.0, 0.0
     n = len(xs)
     sf, of = strict_tot / n, order_tot / n
-    return sf + 0.25 * of, sf, of
+    return FIT_STRICT_W * sf + FIT_ORDER_W * of, sf, of
 
 
 # ----- POPULATION-PARALLEL packed eval (one build + one process_ticks for MANY genomes) -----
@@ -325,7 +327,7 @@ def _score_population_ref(packed, ncand, xs, true_orders, device='cpu'):
                         conc += 1
             order_sum += conc / 6.0
         sf, of = strict / nb, order_sum / nb
-        res.append((sf + 0.25 * of, sf, of))
+        res.append((FIT_STRICT_W * sf + FIT_ORDER_W * of, sf, of))
     return res
 
 
@@ -369,7 +371,7 @@ def _score_from_first(first, true_orders):
     all_fire = (first < N_TICKS).all(dim=2).float()               # (nb, ncand): every output fired
     sf = (strict * all_fire).mean(dim=0)
     of = (conc / len(_ORD_PAIRS) * all_fire).mean(dim=0)
-    fit = sf + 0.25 * of
+    fit = FIT_STRICT_W * sf + FIT_ORDER_W * of
     return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
 
 
@@ -507,7 +509,7 @@ def eval_stream(g, trials, T):
     except Exception:
         return 0.0, 0.0, 0.0
     sf /= n; of /= n
-    return sf + 0.25 * of, sf, of
+    return FIT_STRICT_W * sf + FIT_ORDER_W * of, sf, of
 
 
 def make_stream_trials(rng, n):
@@ -565,7 +567,7 @@ def _score_population_stream_ref(packed, ncand, trials, T, device='cpu'):
                 order_sum += conc / 6.0
         denom = nb * K
         sf, of = strict / denom, order_sum / denom
-        res.append((sf + 0.25 * of, sf, of))
+        res.append((FIT_STRICT_W * sf + FIT_ORDER_W * of, sf, of))
     return res
 
 
@@ -613,7 +615,7 @@ def _score_population_stream(packed, ncand, trials, T, device='cpu'):
     denom = nb * K
     sf = strict_acc.sum(dim=0) / denom
     of = (conc_acc / len(_ORD_PAIRS)).sum(dim=0) / denom
-    fit = sf + 0.25 * of
+    fit = FIT_STRICT_W * sf + FIT_ORDER_W * of
     return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
 
 
