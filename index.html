@@ -65,6 +65,17 @@
              NeuronMeta / weight / delay. Comparator bits match the exact oracle on ~76% of random real inputs
              (the leaky readout is nonlinear — the price of dropping the tap bank).</p>
         </a>
+        <a class="card" href="inspector.html?v=evolved">
+          <h3>⑥ Evolved spiking net — <i>discovered</i>, not constructed</h3>
+          <p>The opposite approach to ①–⑤. Instead of hand-compiling the circuit, a <b>DB-backed
+             neuroevolution</b> search bred spiking nets against the same latency-coded LUT-ordering task —
+             ~<b>1.5M genomes evaluated</b> over lineages <b>~4000 generations</b> deep (mutation + crossover,
+             persisted in MongoDB, CPU-only). This is the <b>best net found</b> (fitness <b>0.881</b>): an
+             arbitrary, un-designed topology — <b>6 inputs → 11 hidden → 4 outputs, 52 synapses</b> — whose
+             four output neurons' <b>first-spike order</b> reproduces the LUT oracle's row ranking. Same live
+             inspector (graph / animation / raster); the shown input is one the evolved net orders
+             <b>exactly right</b>. Click any neuron or synapse for its evolved NeuronMeta / weight / delay.</p>
+        </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
     </div>
