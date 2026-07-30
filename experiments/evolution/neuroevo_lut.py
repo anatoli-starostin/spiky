@@ -57,7 +57,7 @@ A_LAT, B_LAT = 8.0, 5.0          # input latency: t_i = round(A - B*x_i), x in [
 N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
 MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
-MAX_TYPES = 8           # neuron-TYPE palette cap per genome: many hidden instances share few types
+MAX_TYPES = 2           # hidden neuron-TYPE palette cap per genome (start small; raise later)
                         # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
                         # making the native MAX_NEURON_METAS=512 cap irrelevant regardless of hidden count
 
@@ -97,6 +97,12 @@ def rnd_type(rng):
             "d": abs(rng.gauss(0.0, 30.0))}
 
 
+def default_out_type():
+    """Legacy fallback for the shared output-neuron meta == the old fixed leakfree(OUT_THR):
+    leak 0, threshold OUT_THR, no reset kick. Fresh genomes evolve their own (rnd_type)."""
+    return {"leak": 0.0, "thr": OUT_THR, "d": 0.0}
+
+
 def add_syn(g, s, t, w, dl):
     g["syn"][innov_of(s, t)] = [s, t, float(w), int(max(1, dl))]
 
@@ -116,8 +122,8 @@ def one_edge_per_pair(syn):
 
 
 def random_genome(rng):
-    g = {"types": [rnd_type(rng) for _ in range(rng.randint(1, 3))],   # modest starting palette
-         "hid": {}, "syn": {}, "sigma": 0.6}
+    g = {"types": [rnd_type(rng) for _ in range(rng.randint(1, MAX_TYPES))],   # hidden palette (<= MAX_TYPES)
+         "hid": {}, "syn": {}, "sigma": 0.6, "out_type": rnd_type(rng)}        # one evolved output meta
     for _ in range(rng.randint(1, 4)):
         g["hid"][new_hidden()] = rng.randrange(len(g["types"]))         # assign a random type index
     for o in OUT_LABELS:
@@ -131,7 +137,8 @@ def random_genome(rng):
 
 def clone(g):
     return {"types": [dict(t) for t in g["types"]], "hid": dict(g["hid"]),
-            "syn": {k: list(v) for k, v in g["syn"].items()}, "sigma": g["sigma"]}
+            "syn": {k: list(v) for k, v in g["syn"].items()}, "sigma": g["sigma"],
+            "out_type": dict(g.get("out_type") or default_out_type())}
 
 
 # ----- build genome -> real spnet -----
@@ -251,12 +258,12 @@ def build_population(genomes, device='cpu', ref=False):
         return key2idx[k]
 
     in_idx = meta_index(leakfree(IN_THR))
-    out_idx = meta_index(leakfree(OUT_THR))
     cands = []
     for g in genomes:
         hids = list(g["hid"].keys())
         nodes = IN_LABELS + OUT_LABELS + hids            # local order: 0..5 in, 6..9 out, 10.. hidden
         loc = {n: i for i, n in enumerate(nodes)}
+        out_idx = meta_index(meta_of(g.get("out_type") or default_out_type()))  # ONE evolved meta, all outputs
         node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(type_meta(g, h)) for h in hids]
         # Enforce a simple digraph: at most ONE synapse per (src,tgt). Parallel edges only
         # arise from merging genomes numbered by different per-process innovation registries;
@@ -392,9 +399,11 @@ def _score_population(packed, ncand, xs, true_orders, device='cpu'):
 
 def eval_population(genomes, xs, true_orders, device='cpu', chunk=128):
     """Fitness for every genome, packed in chunks. Matches [eval_batch(g,...) for g] on CPU.
-    chunk=128 packs more genomes per net (amortizing native add_connections/_grow_explicit/
-    process_ticks fixed costs); with MAX_TYPES=8 + cross-genome meta dedup this stays well
-    under the 512 neuron-meta cap (~1.8 distinct metas/genome -> ~230 metas at 128).
+    chunk packs more genomes per net (amortizing native add_connections/_grow_explicit/
+    process_ticks fixed costs). Per-genome metas now = 1 shared input + 1 EVOLVED output
+    (unique per genome) + <= MAX_TYPES hidden, so the packed net holds ~ (1 + MAXTYPES)*chunk
+    distinct metas; keep chunk modest (the run packs 32 -> ~100 metas) to stay under the 512
+    neuron-meta cap. Larger chunks risk approaching it as evolved output metas rarely dedup.
     Genomes with no synapses score 0.0 (as build_individual->None in eval_batch)."""
     out = [(0.0, 0.0, 0.0)] * len(genomes)
     for s in range(0, len(genomes), chunk):
@@ -640,8 +649,8 @@ def mutate(g, rng):
         gene[3] = min(255, max(1, gene[3] + step))            # clamp to the valid delay range
     elif op < 0.58 and g["types"]:                            # ---- palette (neuron-TYPE) ops ----
         sub = rng.random()
-        if sub < 0.5:                                         # mutate-type: jitter one param (all its instances)
-            t = g["types"][rng.randrange(len(g["types"]))]
+        if sub < 0.5:                                         # mutate-type: jitter one param of a hidden type OR the shared output meta
+            t = rng.choice(g["types"] + [g["out_type"]])
             p = rng.choice(["leak", "thr", "d"])
             if p == "leak":
                 t["leak"] = max(0.0, t["leak"] + rng.gauss(0, 0.05))
@@ -685,7 +694,8 @@ def crossover(gf, gw, rng):
     """gf = fitter parent, gw = weaker. NEAT: matching genes random; disjoint/excess from fitter.
     The TYPE PALETTE is inherited whole from the fitter parent (simplest correct choice); each
     hidden's type_index is clamped to that palette (a gw-only hidden may index a type gf lacks)."""
-    child = {"types": [dict(t) for t in gf["types"]], "hid": {}, "syn": {}, "sigma": gf["sigma"]}
+    child = {"types": [dict(t) for t in gf["types"]], "hid": {}, "syn": {}, "sigma": gf["sigma"],
+             "out_type": dict(gf.get("out_type") or default_out_type())}
     ntypes = len(child["types"])
     for innov in set(gf["syn"]) | set(gw["syn"]):
         inf, inw = innov in gf["syn"], innov in gw["syn"]
