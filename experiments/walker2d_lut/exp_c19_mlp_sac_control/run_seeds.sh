@@ -54,7 +54,12 @@ for seed in $SEEDS; do
   sleep 25
 done
 
-wait
+# Wait on the TRAINER pids only. A bare `wait` here DEADLOCKED this run: it also waits for
+# the Slack bar launched above, and the bar does not exit until every eval JSON exists --
+# but the evals run below, after this line. Training finished at 10:10Z and the script then
+# sat idle for 2.5 h with the bar frozen at 90%. (An empty array is guarded because
+# `wait "${pids[@]}"` on an empty array expands to a bare `wait`, reintroducing the bug.)
+if [ "${#pids[@]}" -gt 0 ]; then wait "${pids[@]}" 2>/dev/null || true; fi
 echo "ALL 6 MLP SEEDS DONE $(date -u +%FT%TZ)"
 
 echo "evaluating $(date -u +%FT%TZ)"
