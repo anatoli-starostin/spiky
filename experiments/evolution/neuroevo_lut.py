@@ -249,8 +249,9 @@ def build_population(genomes, device='cpu'):
     return build_packed(cands, metas, device=device)
 
 
-def _score_population(packed, ncand, xs, true_orders, device='cpu'):
-    """Same scoring as _score_chunk, but ncand genomes packed disjointly in one net."""
+def _score_population_ref(packed, ncand, xs, true_orders, device='cpu'):
+    """REFERENCE (loop-based) scoring — kept as the equivalence baseline for the
+    vectorized _score_population below. Same result, just Python-loop O(chunk)."""
     gid = packed["gid"]
     sp = packed["spnet"]
     in_gid = [[gid(c, i) for i in range(D)] for c in range(ncand)]           # input local idx = i
@@ -294,6 +295,78 @@ def _score_population(packed, ncand, xs, true_orders, device='cpu'):
         sf, of = strict / nb, order_sum / nb
         res.append((sf + 0.25 * of, sf, of))
     return res
+
+
+_ORD_PAIRS = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]   # the 6 output pairs (Dout=4)
+
+
+def _first_spike(spk, big):
+    """Vectorized first-spike tick per element: earliest tick where spk>0.5, else `big`.
+    spk shape (..., N_TICKS) -> (...) long. Matches nz[0] / sentinel of the ref loop."""
+    n_ticks = spk.shape[-1]
+    mask = spk > 0.5
+    tr = torch.arange(n_ticks, device=spk.device).view(*([1] * (spk.dim() - 1)), n_ticks)
+    filled = torch.where(mask, tr.expand_as(mask), torch.full_like(mask, big, dtype=torch.long))
+    return filled.amin(dim=-1)
+
+
+def _strict_conc(first, true_orders):
+    """first: (nb, ncand, Dout) first-spike ticks; true_orders: list of nb Dout-perms.
+    Returns (strict, conc) each (nb, ncand): strict = exact ranking match (net ranking =
+    STABLE argsort of first, ties broken by output index = the ref's (first[d], d) key);
+    conc = # concordant pairs of the true ranking. NOT averaged (caller divides)."""
+    nb, ncand, Dout_ = first.shape
+    dev = first.device
+    true_t = torch.tensor(true_orders, dtype=torch.long, device=dev)          # (nb, Dout)
+    net_order = torch.argsort(first, dim=2, stable=True)                       # (nb, ncand, Dout)
+    strict = (net_order == true_t.view(nb, 1, Dout_)).all(dim=2).float()       # (nb, ncand)
+    fo = torch.gather(first, 2, true_t.view(nb, 1, Dout_).expand(nb, ncand, Dout_))  # first in true-rank order
+    conc = torch.zeros((nb, ncand), dtype=torch.float32, device=dev)
+    for a, b2 in _ORD_PAIRS:                                                   # 6 fixed comparisons
+        conc += (fo[:, :, a] <= fo[:, :, b2]).float()
+    return strict, conc
+
+
+def _score_from_first(first, true_orders):
+    """Per-genome (fitness, strict_frac, ordering_frac), averaged over the nb corners."""
+    ncand = first.shape[1]
+    strict, conc = _strict_conc(first, true_orders)
+    sf = strict.mean(dim=0)
+    of = (conc / len(_ORD_PAIRS)).mean(dim=0)
+    fit = sf + 0.25 * of
+    return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
+
+
+def _score_population(packed, ncand, xs, true_orders, device='cpu'):
+    """VECTORIZED packed scoring — same result as _score_population_ref, no per-genome
+    Python loops. Input tensor built with tensor ops (subnet-offset placement); readout
+    is a vectorized first-spike + argsort ranking + pairwise-concordance fitness."""
+    gid = packed["gid"]
+    sp = packed["spnet"]
+    dev = torch.device(device)
+    nb = len(xs)
+    in_gid = torch.tensor([[gid(c, i) for i in range(D)] for c in range(ncand)],
+                          dtype=torch.int32, device=dev)                        # (ncand, D)
+    Oids = torch.tensor([gid(c, D + d) for c in range(ncand) for d in range(Dout)],
+                        dtype=torch.int32, device=dev)
+    xs_t = torch.tensor(xs, dtype=torch.float32, device=dev)                    # (nb, D)
+    ticks = (A_LAT - B_LAT * xs_t).round().long().clamp(1, N_TICKS - 1)         # (nb, D) same tick for all genomes
+    kdim = ncand * D
+    S = torch.zeros((nb, N_TICKS, kdim), dtype=torch.int32, device=dev)
+    Vv = torch.zeros((nb, N_TICKS, kdim), dtype=torch.float32, device=dev)
+    bb = torch.arange(nb, device=dev).view(nb, 1, 1).expand(nb, D, ncand)
+    ii = torch.arange(D, device=dev).view(1, D, 1).expand(nb, D, ncand)
+    cc = torch.arange(ncand, device=dev).view(1, 1, ncand).expand(nb, D, ncand)
+    tt = ticks.view(nb, D, 1).expand(nb, D, ncand)
+    col = cc * D + ii                                                          # column c*D+i
+    val = in_gid.t().reshape(1, D, ncand).expand(nb, D, ncand)                 # val[b,i,c] = in_gid[c,i]
+    S[bb.reshape(-1), tt.reshape(-1), col.reshape(-1)] = val.reshape(-1)
+    Vv[bb.reshape(-1), tt.reshape(-1), col.reshape(-1)] = 50.0
+    sp.process_ticks(n_ticks_to_process=N_TICKS, batch_size=nb, n_input_ticks=N_TICKS,
+                     input_values=Vv, do_train=False, sparse_input=S, do_reset_context=True)
+    spk = sp.export_neuron_data(Oids, nb, NeuronDataType.Spike, 0, N_TICKS - 1).view(nb, ncand, Dout, N_TICKS)
+    first = _first_spike(spk, N_TICKS + 1)                                     # (nb, ncand, Dout)
+    return _score_from_first(first, true_orders)
 
 
 def eval_population(genomes, xs, true_orders, device='cpu', chunk=32):
@@ -405,7 +478,9 @@ def make_stream_trials(rng, n):
 
 
 # ----- POPULATION-PARALLEL packed STREAM eval (matches eval_stream on CPU) -----
-def _score_population_stream(packed, ncand, trials, T, device='cpu'):
+def _score_population_stream_ref(packed, ncand, trials, T, device='cpu'):
+    """REFERENCE (loop-based) streamed scoring — equivalence baseline for the vectorized
+    _score_population_stream below."""
     W, K = STREAM_WIN, STREAM_K
     L = (K - 1) * T + W + 6
     gid, sp = packed["gid"], packed["spnet"]
@@ -451,6 +526,54 @@ def _score_population_stream(packed, ncand, trials, T, device='cpu'):
         sf, of = strict / denom, order_sum / denom
         res.append((sf + 0.25 * of, sf, of))
     return res
+
+
+def _score_population_stream(packed, ncand, trials, T, device='cpu'):
+    """VECTORIZED streamed scoring — same result as _score_population_stream_ref, no
+    per-genome Python loops (only a K-presentation loop, K=3). Inputs placed with tensor
+    ops; per-window first-spike read + concordance accumulated across presentations."""
+    gid = packed["gid"]
+    sp = packed["spnet"]
+    dev = torch.device(device)
+    W, K = STREAM_WIN, STREAM_K
+    L = (K - 1) * T + W + 6
+    nb = len(trials)
+    in_gid = torch.tensor([[gid(c, i) for i in range(D)] for c in range(ncand)],
+                          dtype=torch.int32, device=dev)                        # (ncand, D)
+    Oids = torch.tensor([gid(c, D + d) for c in range(ncand) for d in range(Dout)],
+                        dtype=torch.int32, device=dev)
+    xs_t = torch.tensor([[[trials[b][0][p][i] for i in range(D)] for p in range(K)]
+                         for b in range(nb)], dtype=torch.float32, device=dev)  # (nb, K, D)
+    base = torch.arange(K, device=dev).view(1, K, 1) * T
+    ticks = (base + (A_LAT - B_LAT * xs_t).round().long()).clamp(1, L - 1)      # (nb, K, D)
+    kdim = ncand * K * D
+    S = torch.zeros((nb, L, kdim), dtype=torch.int32, device=dev)
+    Vv = torch.zeros((nb, L, kdim), dtype=torch.float32, device=dev)
+    bb = torch.arange(nb, device=dev).view(nb, 1, 1, 1).expand(nb, K, D, ncand)
+    pp = torch.arange(K, device=dev).view(1, K, 1, 1).expand(nb, K, D, ncand)
+    ii = torch.arange(D, device=dev).view(1, 1, D, 1).expand(nb, K, D, ncand)
+    cc = torch.arange(ncand, device=dev).view(1, 1, 1, ncand).expand(nb, K, D, ncand)
+    tt = ticks.view(nb, K, D, 1).expand(nb, K, D, ncand)
+    col = (cc * K + pp) * D + ii                                               # column (c*K+p)*D+i
+    val = in_gid.t().reshape(1, 1, D, ncand).expand(nb, K, D, ncand)           # val[b,p,i,c] = in_gid[c,i]
+    S[bb.reshape(-1), tt.reshape(-1), col.reshape(-1)] = val.reshape(-1)
+    Vv[bb.reshape(-1), tt.reshape(-1), col.reshape(-1)] = 50.0
+    sp.process_ticks(n_ticks_to_process=L, batch_size=nb, n_input_ticks=L,
+                     input_values=Vv, do_train=False, sparse_input=S, do_reset_context=True)
+    spk = sp.export_neuron_data(Oids, nb, NeuronDataType.Spike, 0, L - 1).view(nb, ncand, Dout, L)
+    strict_acc = torch.zeros((nb, ncand), dtype=torch.float32, device=spk.device)
+    conc_acc = torch.zeros((nb, ncand), dtype=torch.float32, device=spk.device)
+    for p in range(K):                                                        # per presentation window
+        lo = p * T
+        fp = _first_spike(spk[:, :, :, lo:lo + W], W + 1)                      # (nb, ncand, Dout), rel to window
+        s, c = _strict_conc(fp, [trials[b][1][p] for b in range(nb)])
+        strict_acc += s
+        conc_acc += c
+    denom = nb * K
+    sf = strict_acc.sum(dim=0) / denom
+    of = (conc_acc / len(_ORD_PAIRS)).sum(dim=0) / denom
+    fit = sf + 0.25 * of
+    return [(float(fit[c]), float(sf[c]), float(of[c])) for c in range(ncand)]
 
 
 def eval_population_stream(genomes, trials, T, device='cpu', chunk=16):
