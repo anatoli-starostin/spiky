@@ -1833,3 +1833,109 @@ question needs another run, not another diagnostic.
   alone hides it.
 - Retire "the addressing is still moving" as evidence for more budget. It was the right
   hypothesis to test and the test came back: the signal doesn't carry that information.
+
+---
+
+# exp_c22 — LUT vs param-matched MLP at n=12: performance yes, reliability no
+
+exp_c19 compared the LUT against a 2×256 MLP with 2.6× the actor parameters, at n=6 per
+arm, and reported a 9.1× variance ratio. This removes both weaknesses: the MLP actor is
+resized to 2×153 (28,164 params against the LUT's 28,032, +0.47%), and both arms run 12
+seeds. Only the actor width changes from exp_c19 — the critic stays 256×256, as it must for
+this to be an actor-capacity control.
+
+The one-layer alternative 1×934 hits 28,032 exactly, but it changes depth as well as width
+and so would swap one confound for another. 0.47% of parameters is not a capacity story.
+
+## Scores
+
+| seed | LUT | MLP | | seed | LUT | MLP |
+|---:|---:|---:|---|---:|---:|---:|
+| 0 | 4120.6 | 3926.6 | | 6 | 4501.5 | 4296.9 |
+| 1 | 4017.3 | 4082.7 | | 7 | 4131.2 | 3673.2 |
+| 2 | 4369.9 | 3993.4 | | 8 | 4813.9 | 4099.9 |
+| 3 | 3951.5 | 2544.8 | | 9 | 4337.6 | 3364.1 |
+| 4 | 5286.6 | 4563.5 | | 10 | 3849.0 | 3185.2 |
+| 5 | 4102.1 | 4791.9 | | 11 | 5064.0 | 4085.5 |
+
+| arm | n | mean | sd | min | max | cv | retention (x-eval) | retention (within) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| LUT | 12 | **4378.8** | 457.1 | 3849.0 | 5286.6 | 0.104 | 0.973 | 0.965 |
+| MLP | 12 | 3884.0 | 617.4 | 2544.8 | 4791.9 | 0.159 | 0.931 | 0.936 |
+
+## The three pre-registered tests
+
+| test | result | verdict |
+|---|---|---|
+| **performance** — Welch two-sided | +494.8, t = +2.231, df = 20.3, **p = 0.037**, Hedges' g = +0.879 | **LUT wins** |
+| **reliability** — var(MLP)/var(LUT) vs F(0.95;11,11) = 2.818 | ratio **1.825** | indistinguishable |
+| **stability** — retention, Welch | 0.965 vs 0.936, t = +0.869, **p = 0.397** | indistinguishable |
+
+**Bottom line: at matched parameters and n=12 the LUT is the better performer, and is not
+demonstrably the more reliable or the more stable one.**
+
+## Three earlier claims of mine that this corrects
+
+**1. "The LUT is far less seed-sensitive than the MLP" (exp_c19) does not survive.** That
+9.1× variance ratio was measured with the MLP carrying 2.6× the parameters, and it was
+driven largely by one MLP seed collapsing to 565.1. At matched parameters the ratio is
+**1.825**, nowhere near the 2.818 the F-test needs. The reliability headline should be
+withdrawn; what survives is the performance result, which exp_c19 explicitly declined to
+claim ("this measured spread, not rank") and which is now the stronger finding.
+
+**2. The retention/stability edge is not established.** exp_c19's 0.958 vs 0.770 becomes
+0.965 vs 0.936 at matched parameters, p = 0.397. The direction has been consistent across
+three studies, which is worth recording, but it is not an effect and should not be quoted
+as one.
+
+**3. "The score distribution is bimodal — five seeds at 4112 ± 160 plus one at 5287"
+(exp_c18) was an n=6 artefact.** With twelve seeds it is a continuum:
+
+| rank | seed | score | gap | fwd vel |
+|---:|---:|---:|---:|---:|
+| 1 | 10 | 3849.0 | — | 2.878 |
+| 2 | 3 | 3951.5 | 102.5 | 2.999 |
+| 3 | 1 | 4017.3 | 65.8 | 3.491 |
+| 4 | 5 | 4102.1 | 84.8 | 3.105 |
+| 5 | 0 | 4120.6 | 18.5 | 3.124 |
+| 6 | 7 | 4131.2 | 10.6 | 3.135 |
+| 7 | 9 | 4337.6 | 206.5 | 3.341 |
+| 8 | 2 | 4369.9 | 32.2 | 3.373 |
+| 9 | 6 | 4501.5 | 131.6 | 3.505 |
+| 10 | 8 | 4813.9 | 312.4 | 3.817 |
+| 11 | 11 | 5064.0 | 250.1 | 4.067 |
+| 12 | 4 | 5286.6 | 222.6 | 4.290 |
+
+Largest gap is only **2.4×** the mean gap, forward velocity spans 2.878–4.290 m/s smoothly,
+and corr(score, velocity) = **+0.956**. Seeds 8 and 11 land at 4814 and 5064 — precisely in
+the void that made six seeds look like two clusters. **Seed 4 is the top of a continuous
+right tail, not a separate mode.**
+
+The correlation of +0.956 does confirm the mechanism from exp_c18: score on this task *is*
+forward velocity, for any policy that stays upright. That part stands. What changes is that
+seeds differ in *how fast a gait they find*, continuously — not in *whether* they find "the
+fast one".
+
+### What this does to exp_c20
+
+exp_c20's language of a "fast-gait basin", and its Fisher test on membership above a 5000
+threshold, rest on the bimodal reading. With a continuum that threshold is arbitrary and
+the Fisher p = 0.055 should not be quoted as if it tested a natural category.
+
+The substance survives, but it should be restated: transplanting seed 4's frozen routing
+produced two runs at 5215 and 5042 with velocities 4.218 and 4.216 — reproducing seed 4's
+4.290 to within 2%, and landing in the top of the distribution — while the pack-routing
+control produced nothing above 4626. That is evidence the routing carries a *high-velocity
+gait*, and it never depended on the threshold. The word "basin" should go; "right tail"
+is what the data supports.
+
+## Where the chapter stands
+
+- **At equal parameters, the LUT actor outperforms an MLP actor on Walker2d at 10k iters**
+  (+495, p = 0.037, g = 0.88, n=12 each). This is the strongest claim the chapter has, and
+  it is the one that took the most work to earn.
+- It is *not* established as more reliable or more stable. Those were artefacts of unequal
+  capacity and small n.
+- Seed-to-seed variation is a smooth spread over gait speed, not a lottery between two
+  modes. Effort aimed at "reaching the good basin" should be re-aimed at "finding faster
+  gaits", which is a different and more tractable framing.

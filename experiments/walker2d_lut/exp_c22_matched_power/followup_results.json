@@ -1,0 +1,122 @@
+{
+ "lut_gait": [
+  {
+   "seed": 0,
+   "score": 4120.608304718486,
+   "vel": 3.1242026078356337,
+   "full": 100,
+   "z": 1.1885167287711618
+  },
+  {
+   "seed": 1,
+   "score": 4017.3172660653318,
+   "vel": 3.490840682216563,
+   "full": 64,
+   "z": 1.2155150605351006
+  },
+  {
+   "seed": 2,
+   "score": 4369.879828282303,
+   "vel": 3.3730704435897314,
+   "full": 100,
+   "z": 1.1765743679416352
+  },
+  {
+   "seed": 3,
+   "score": 3951.4891525925004,
+   "vel": 2.998534303427898,
+   "full": 98,
+   "z": 1.1732998956250447
+  },
+  {
+   "seed": 4,
+   "score": 5286.557120404921,
+   "vel": 4.289752972074487,
+   "full": 100,
+   "z": 1.0998897088993702
+  },
+  {
+   "seed": 5,
+   "score": 4102.068140844218,
+   "vel": 3.1054089157252145,
+   "full": 100,
+   "z": 1.1186207037691158
+  },
+  {
+   "seed": 6,
+   "score": 4501.472582816048,
+   "vel": 3.5046575069927566,
+   "full": 100,
+   "z": 1.1547753410905275
+  },
+  {
+   "seed": 7,
+   "score": 4131.17598921883,
+   "vel": 3.134684351962298,
+   "full": 100,
+   "z": 1.1941279517978525
+  },
+  {
+   "seed": 8,
+   "score": 4813.866100476465,
+   "vel": 3.8169023018877595,
+   "full": 100,
+   "z": 1.1851135452045747
+  },
+  {
+   "seed": 9,
+   "score": 4337.633935517752,
+   "vel": 3.3410856406311495,
+   "full": 100,
+   "z": 1.1592274015456512
+  },
+  {
+   "seed": 10,
+   "score": 3848.98389213731,
+   "vel": 2.877661768424178,
+   "full": 99,
+   "z": 1.132503215928409
+  },
+  {
+   "seed": 11,
+   "score": 5063.966597216922,
+   "vel": 4.0671029015035725,
+   "full": 100,
+   "z": 1.1715949573514977
+  }
+ ],
+ "gap_ratio": 2.390367757756338,
+ "corr_score_velocity": 0.9556260377826771,
+ "distribution_verdict": "A CONTINUUM, NOT TWO CLUSTERS. The largest gap is only 2.4x the mean gap, and velocity spans 2.88-4.29 m/s smoothly. The 'bimodal, five at 4112 plus one at 5287' reading I gave from exp_c18's six seeds was an n=6 artefact: seeds 8 and 11 land at 4814 and 5064, filling the gap that made it look like two clusters. Seed 4 is the top of a continuous right tail, not a separate mode.",
+ "retention_lut": [
+  0.9222139047398594,
+  0.8091735080456158,
+  1.0,
+  1.0,
+  0.9559278622525967,
+  0.9655344312664895,
+  1.0,
+  1.0,
+  1.0,
+  0.985263293061058,
+  0.946549636861384,
+  0.9993377505372498
+ ],
+ "retention_mlp": [
+  0.8947818187212458,
+  0.9480353396614499,
+  0.97081506065918,
+  1.0,
+  1.0,
+  0.9997457620385647,
+  0.9869854337513747,
+  0.9839466413588539,
+  1.0,
+  0.7859614664121093,
+  0.6786945986128882,
+  0.983877562969287
+ ],
+ "retention_t": 0.8693454451550817,
+ "retention_p": 0.3967636983001203,
+ "retention_verdict": "The LUT retains +2.9 percentage points more of its best (p = 0.397). Not significant at n=12 -- report it as a consistent direction across three studies, not an established effect."
+}

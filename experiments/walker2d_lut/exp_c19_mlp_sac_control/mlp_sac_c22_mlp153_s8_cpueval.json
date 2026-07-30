@@ -1,0 +1,8 @@
+{
+ "actor": "mlp_sac_c22_mlp153_s8_actor.npz",
+ "params": 28164,
+ "episodes": 100,
+ "forward_mode": "mlp",
+ "cpu_reference_mean": 4099.931415209564,
+ "cpu_reference_std": 18.761460855426957
+}
