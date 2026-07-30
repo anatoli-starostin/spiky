@@ -485,8 +485,12 @@ def mutate(g, rng):
     syns = list(g["syn"].keys())
     if op < 0.30 and syns:
         g["syn"][rng.choice(syns)][2] += rng.gauss(0, g["sigma"])
-    elif op < 0.45 and syns:
-        gene = g["syn"][rng.choice(syns)]; gene[3] = max(1, gene[3] + rng.choice([-1, 1]))
+    elif op < 0.45 and syns:                                  # delay: LOCAL random walk on [1,255]
+        gene = g["syn"][rng.choice(syns)]
+        step = 0
+        while step == 0:                                      # small Gaussian step: mass on +-1/+-2,
+            step = round(rng.gauss(0, 1.5))                   # occasional larger moves via the tail
+        gene[3] = min(255, max(1, gene[3] + step))            # clamp to the valid delay range
     elif op < 0.58 and g["types"]:                            # ---- palette (neuron-TYPE) ops ----
         sub = rng.random()
         if sub < 0.5:                                         # mutate-type: jitter one param (all its instances)

@@ -59,27 +59,25 @@ def build_packed(genomes, neuron_metas, device='cpu'):
             counts[mi] += 1
     counts = [max(1, x) for x in counts]
 
-    # ---- synapse-meta palette: (weight,delay) -> meta (deduped; the manager
-    # dedups identical metas anyway). The construction's ~40 distinct weights give
-    # the _grow_explicit group formula plenty of headroom.
-    syn_metas = []
-    pal = {}
-    def syn_meta_idx(w, d):
-        key = (round(float(w), WQ), int(d))
-        if key not in pal:
-            wv = key[0]
-            pal[key] = len(syn_metas)
-            syn_metas.append(SynapseMeta(
-                learning_rate=0.0, min_delay=int(d), max_delay=int(d),
-                min_weight=min(wv, 0.0), max_weight=max(wv, 0.0),
-                initial_weight=wv, weight_decay=0.9,
-                _forward_group_size=2, _backward_group_size=2))
-        return pal[key]
+    # ---- FIXED universal DELAY palette: one SynapseMeta per delay d in 1..255, all
+    # other fields constant across every meta and every net (never mutated). The per-edge
+    # WEIGHT is NOT folded into the meta (initial_weight=0); it is applied per-synapse via
+    # the explicit weights= buffer below (-> SynapseInfo.weight). So distinct weights no
+    # longer create metas: a synapse of delay d references meta index (d-1), and the whole
+    # table is a constant 255 metas shared across all packed genomes (register dedups it).
+    # Weight bounds are wide enough that any evolved weight is valid.
+    N_DELAYS = 255
+    syn_metas = [SynapseMeta(
+        learning_rate=0.0, min_delay=d, max_delay=d,
+        min_weight=-1.0e4, max_weight=1.0e4, initial_weight=0.0,
+        initial_noise_level=0.0, weight_decay=0.9, weight_scaling_cf=0.0,
+        _forward_group_size=2, _backward_group_size=2) for d in range(1, N_DELAYS + 1)]
 
-    plan = []  # (syn_meta_idx, (cand,src), (cand,tgt))
+    plan = []  # (meta_idx, (cand,src), (cand,tgt), weight)
     for c, g in enumerate(genomes):
         for (s, t, w, d) in g["synapses"]:
-            plan.append((syn_meta_idx(w, d), (c, s), (c, t)))
+            dd = min(max(int(d), 1), N_DELAYS)          # clamp delay to [1,255]
+            plan.append((dd - 1, (c, s), (c, t), float(w)))
 
     spnet = SpikingNet(synapse_metas=syn_metas, neuron_metas=neuron_metas,
                        neuron_counts=counts,
@@ -91,10 +89,12 @@ def build_packed(genomes, neuron_metas, device='cpu'):
         mi, slot = slot_of[(c, local)]
         return int(ids_by_meta[mi][slot].item())
 
-    triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt) in plan]
+    triples = [[mi, gid(*src), gid(*tgt)] for (mi, src, tgt, w) in plan]
     # triples (and the entry_points _grow_explicit derives from them) must live on the
     # growth engine's device — on CUDA the low-level grow rejects CPU-resident tensors.
     triples_t = torch.tensor(triples, dtype=torch.int32, device=device)
+    # per-edge weights, aligned 1:1 to the triples (delay-only meta carries no weight)
+    weights_t = torch.tensor([w for (mi, src, tgt, w) in plan], dtype=torch.float32, device=device)
 
     total_neurons = sum(counts)
     ge = SynapseGrowthEngine(device=device, synapse_group_size=2,
@@ -107,7 +107,7 @@ def build_packed(genomes, neuron_metas, device='cpu'):
                               torch.zeros(len(ids)), torch.full((len(ids),), float(i))], dim=1)
         ge.add_neurons(neuron_type_index=i, identifiers=ids, coordinates=coords)
 
-    chunk = ge._grow_explicit(triples_t, 1)
+    chunk = ge._grow_explicit(triples_t, 1, weights=weights_t)
     spnet.add_connections(chunk, 1)
     chunk.recycle()
     spnet.compile(shuffle_synapses_random_seed=1)
