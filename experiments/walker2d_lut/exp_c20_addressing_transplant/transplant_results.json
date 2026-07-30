@@ -1,0 +1,78 @@
+{
+ "arms": {
+  "from4": {
+   "mean": 4573.668790672667,
+   "sd": 965.1802521651869,
+   "min": 3463.6598573446736,
+   "max": 5215.1778532763665,
+   "src": 4,
+   "label": "seed 4's routing (the winner)",
+   "runs": [
+    {
+     "seed": 100,
+     "src": 4,
+     "mean": 5215.1778532763665,
+     "std": 45.986195078555006,
+     "mjx_best": 5223.9
+    },
+    {
+     "seed": 101,
+     "src": 4,
+     "mean": 3463.6598573446736,
+     "std": 65.81736794693306,
+     "mjx_best": 3314.2
+    },
+    {
+     "seed": 102,
+     "src": 4,
+     "mean": 5042.168661396961,
+     "std": 502.0959765528098,
+     "mjx_best": 5154.4
+    }
+   ]
+  },
+  "from5": {
+   "mean": 4051.7813079390903,
+   "sd": 750.499588104547,
+   "min": 3202.6853810721996,
+   "max": 4626.41828488997,
+   "src": 5,
+   "label": "seed 5's routing (pack control)",
+   "runs": [
+    {
+     "seed": 100,
+     "src": 5,
+     "mean": 4326.240257855101,
+     "std": 412.68306554811454,
+     "mjx_best": 4341.3
+    },
+    {
+     "seed": 101,
+     "src": 5,
+     "mean": 3202.6853810721996,
+     "std": 813.2223840324951,
+     "mjx_best": 3528.4
+    },
+    {
+     "seed": 102,
+     "src": 5,
+     "mean": 4626.41828488997,
+     "std": 64.70219024409833,
+     "mjx_best": 4628.6
+    }
+   ]
+  }
+ },
+ "gap": 521.8874827335762,
+ "ci_half_width": 1959.5378422915617,
+ "pooled_sd": 864.5295110390241,
+ "seed4_joint": 5286.6,
+ "pack_mean": 4112.3,
+ "pack_sd": 159.2,
+ "verdict": "THIS TEST CANNOT TELL. Arm A 4574 +/- 965 and arm B 4052 +/- 750 give A - B = +522 with CI [-1438, +2481], which contains zero and is far too wide to exclude anything -- it is consistent both with no effect and with the full 1174 being transferred. Do NOT read this as 'the routing does not transfer'. The outcome is bimodal, so the informative question is whether each run reached the fast-gait basin, not where the means fell: see basin.py.",
+ "seeds": [
+  100,
+  101,
+  102
+ ]
+}

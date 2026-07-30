@@ -127,11 +127,19 @@ def main():
              f"jointly. The shortfall of {SEED4 - a_['mean']:.0f} is the part that needed "
              f"the addressing and the table to co-adapt.")
     elif abs(gap) <= ci:
-        v = (f"THE ROUTING DOES NOT TRANSFER. Arm A {a_['mean']:.0f} and arm B "
-             f"{b_['mean']:.0f} are indistinguishable (A - B = {gap:+.0f}, CI "
-             f"[{gap-ci:+.0f}, {gap+ci:+.0f}] contains zero). Seed 4's advantage is not "
-             f"carried by its addressing alone; it lives in the joint solution, so "
-             f"transplanting routing is not a route to reproducing it.")
+        # Deliberately NOT phrased as "the routing does not transfer". A non-significant
+        # difference of means at n=3 per arm is not evidence of absence, and this outcome
+        # is bimodal (exp_c18: five seeds at ~4112, one at 5287) -- a t-test on a bimodal
+        # variable spends its power estimating a mean no run sits near. See basin.py,
+        # which asks the binary question this data is actually shaped for.
+        v = (f"THIS TEST CANNOT TELL. Arm A {a_['mean']:.0f} +/- {a_['sd']:.0f} and arm B "
+             f"{b_['mean']:.0f} +/- {b_['sd']:.0f} give A - B = {gap:+.0f} with CI "
+             f"[{gap-ci:+.0f}, {gap+ci:+.0f}], which contains zero and is far too wide to "
+             f"exclude anything -- it is consistent both with no effect and with the full "
+             f"{SEED4 - PACK_MEAN:.0f} being transferred. Do NOT read this as 'the routing "
+             f"does not transfer'. The outcome is bimodal, so the informative question is "
+             f"whether each run reached the fast-gait basin, not where the means fell: "
+             f"see basin.py.")
     else:
         v = (f"UNEXPECTED: the PACK routing beat seed 4's by {-gap:.0f} (CI excludes "
              f"zero). Frozen routing quality does not track the joint result at all, "

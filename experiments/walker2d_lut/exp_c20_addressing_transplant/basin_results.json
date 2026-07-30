@@ -1,0 +1,79 @@
+{
+ "runs": [
+  {
+   "arm": "from4",
+   "label": "seed 4's routing",
+   "seed": 100,
+   "score": 5215.1778532763665,
+   "vel": 4.218349948259544,
+   "z": 1.1836199866806216,
+   "full": 100,
+   "fell": 0
+  },
+  {
+   "arm": "from4",
+   "label": "seed 4's routing",
+   "seed": 101,
+   "score": 3463.6598573446736,
+   "vel": 2.4664735131191513,
+   "z": 1.1665918211014172,
+   "full": 100,
+   "fell": 0
+  },
+  {
+   "arm": "from4",
+   "label": "seed 4's routing",
+   "seed": 102,
+   "score": 5042.168661396961,
+   "vel": 4.2157600847393955,
+   "z": 1.1616782279365359,
+   "full": 83,
+   "fell": 17
+  },
+  {
+   "arm": "from5",
+   "label": "seed 5's routing (control)",
+   "seed": 100,
+   "score": 4326.240257855101,
+   "vel": 3.419166381199042,
+   "z": 1.2330732826505826,
+   "full": 93,
+   "fell": 7
+  },
+  {
+   "arm": "from5",
+   "label": "seed 5's routing (control)",
+   "seed": 101,
+   "score": 3202.6853810721996,
+   "vel": 2.662843357080922,
+   "z": 1.2152450453625168,
+   "full": 75,
+   "fell": 25
+  },
+  {
+   "arm": "from5",
+   "label": "seed 5's routing (control)",
+   "seed": 102,
+   "score": 4626.41828488997,
+   "vel": 3.63207926457457,
+   "z": 1.255455935796712,
+   "full": 99,
+   "fell": 1
+  }
+ ],
+ "fast_threshold": 5000.0,
+ "arm_a": [
+  2,
+  3
+ ],
+ "arm_b": [
+  0,
+  3
+ ],
+ "other": [
+  0,
+  8
+ ],
+ "fisher_p": 0.054545454545454355,
+ "verdict": "SUGGESTIVE, NOT ESTABLISHED. 2 of 3 runs with seed 4's routing reached the fast gait against 0 of 8 without it, but Fisher gives p = 0.055. The pattern points at the routing carrying the win; at these sample sizes it does not clear significance. More seeds on arm A is the cheap way to settle it."
+}

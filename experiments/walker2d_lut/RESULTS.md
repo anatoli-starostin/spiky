@@ -1623,3 +1623,118 @@ reconfirmed here on proper sampling; the specific percentages do not.
   to this 4308.0; its sd measured something else entirely.
 - Whether 500 is large *for SAC on Walker2d at all* is not answerable from this run —
   exp_c19 is the MLP-actor control for exactly that.
+
+---
+
+# exp_c19 — MLP-actor control: the LUT is the *less* seed-sensitive of the two
+
+The like-for-like control for exp_c18. A standard 2×256 MLP actor, everything else matched
+line for line (critic, alpha machinery, all hyperparameters, the MJX env, the determinism
+flags, and the RNG structure so seed *s* resets the environments identically), same 6 seeds,
+same deterministic 100-episode CPU-reference eval.
+
+| seed | MLP CPU-ref | | seed | MLP CPU-ref |
+|---:|---:|---|---:|---:|
+| 0 | 4481.3 | | 3 | **565.1** |
+| 1 | 3950.8 | | 4 | 4752.5 |
+| 2 | 3397.8 | | 5 | 3555.7 |
+
+| actor | mean ± sd | range | cv |
+|---|---:|---:|---:|
+| LUT (hyperplane/hard) | 4308.0 ± 500.1 | 3951–5287 | 11.6% |
+| MLP (2×256) | 3450.5 ± 1506.5 | 565–4753 | 43.7% |
+
+**Variance ratio LUT/MLP = 0.11×** against F(0.95; 5, 5) = 5.05 — significant in the
+*opposite* direction to the concern that prompted the run. The LUT's spread is not merely
+"normal for SAC on Walker2d"; it is substantially **tighter** than a standard MLP actor's
+under identical conditions.
+
+Two qualifiers, so this is not oversold. One MLP seed dominates the sd (seed 3 collapsed to
+565.1 from a best of 4039.3) — but removing each arm's own outlier leaves LUT
+4112.3 ± 159.2 against MLP 4027.6 ± 582.4, still 3.7× the sd, so the conclusion survives the
+outlier's removal rather than depending on it. And the MLP has 2.6× the actor parameters;
+this measured spread, not rank.
+
+**A stability difference fell out that may matter more than the sd.** Mean ratio of the
+final CPU-reference score to the run's own best MJX proxy: **0.958 for the LUT, 0.770 for
+the MLP.** The MLP arrives and then degrades (seed 1: best 4794 → final 3951; seed 3: best
+4039 → final 565). The LUT holds what it reaches.
+
+---
+
+# exp_c20 — transplanting seed 4's routing: it carries the fast gait, ~2 times in 3
+
+Seed 4's **final trained** (w, b) frozen into fresh runs — no gradient to the addressing,
+exactly the anchors-mode path — relearning only table content, critic and temperature, at
+seeds 100/101/102. Arm B repeats the identical procedure with a **pack** seed's routing
+(seed 5), because freezing removes the joint optimisation every exp_c18 run had and could
+cost return by itself. Without arm B, a middling arm A would be uninterpretable.
+
+| arm | fresh seeds | mean ± sd | range |
+|---|---|---:|---:|
+| A — seed 4's routing | 5215.2 / 3463.7 / 5042.2 | 4573.7 ± 965.2 | 3464–5215 |
+| B — seed 5's routing (control) | 4326.2 / 3202.7 / 4626.4 | 4051.8 ± 750.5 | 3203–4626 |
+
+A − B = **+521.9**, 95% CI [−1437.7, +2481.4].
+
+**The freezing penalty is essentially zero**: arm B came in 60.5 below the pack its routing
+was taken from (4051.8 vs 4112.3). So freezing the addressing costs almost nothing, and arm
+A's numbers are not depressed by the procedure.
+
+## The difference-of-means test was the wrong statistic
+
+The CI contains zero, but it spans −1438 to +2481 — it is consistent both with no effect and
+with the *entire* 1174-point gap transferring. It excludes nothing. More importantly, this
+outcome is **bimodal**: exp_c18 found five seeds at 4112 ± 160 and one at 5287, and the
+behaviour analysis showed the difference is a discrete gait change, not a graded improvement.
+A t-test on a bimodal variable spends its power estimating a mean that no run sits near.
+
+The question the data is shaped for is binary: **did the run find the fast gait?**
+
+| arm | seed | CPU-ref | fwd vel | full 1000 | basin |
+|---|---:|---:|---:|---:|---|
+| seed 4's routing | 100 | 5215.2 | **4.218** | 100/100 | **FAST** |
+| seed 4's routing | 101 | 3463.7 | 2.466 | 100/100 | slow |
+| seed 4's routing | 102 | 5042.2 | **4.216** | 83/100 | **FAST** |
+| seed 5's routing | 100 | 4326.2 | 3.419 | 93/100 | slow |
+| seed 5's routing | 101 | 3202.7 | 2.663 | 75/100 | slow |
+| seed 5's routing | 102 | 4626.4 | 3.632 | 99/100 | slow |
+
+*(reference: exp_c18 seed 4 trained jointly — 5286.6 at 4.290 m/s; its five pack seeds —
+3951–4370 at 2.999–3.491 m/s)*
+
+The two successes did not merely score higher: they **reproduced seed 4's gait**, at
+4.218 and 4.216 m/s against its own 4.290 — within 2%. Every other run in the entire
+chapter, across both arms and all pack seeds, sits between 2.47 and 3.63 m/s. This is the
+same discrete solution recovered with completely different table content, not a partial
+improvement.
+
+**Basin membership:** seed 4's routing 2/3; everything else in the chapter (arm B plus
+exp_c18's five pack seeds) **0/8**. Fisher exact, one-sided: **p = 0.055**.
+
+## What this establishes
+
+**Seed 4's learned addressing is a genuine, transferable carrier of the fast gait, and the
+table content it was trained with is interchangeable.** Freeze the routing, throw the table
+away, relearn it from a different seed, and the fast gait comes back — twice in three tries,
+while nothing without that routing has ever reached it in eleven runs.
+
+**It is not a guarantee.** Arm A failed once in three, landing at 2.466 m/s — slower than
+any pack seed. The routing raises the odds of the fast basin; it does not determine it. The
+table optimisation can still miss from the same starting point.
+
+**Honest status:** p = 0.055 is marginal and does not clear the conventional bar. The
+velocity evidence is far more convincing than the p-value, because reproducing a specific
+gait to within 2% is a much sharper coincidence to explain away than a score difference.
+Three more arm-A seeds (~40 min each, 3 concurrent) would settle it either way.
+
+**Where this leaves the chapter.** The story that survives all of exp_c18–c20 is:
+
+1. The 28,032-param LUT **can** express a 4.29 m/s gait — demonstrated, reproducibly.
+2. The spread across seeds is **basin selection**, not a capacity or representation limit —
+   and it is *smaller* than a standard MLP's under the same conditions (exp_c19).
+3. The basin is substantially **carried by the addressing**, which is transplantable
+   independently of the table content (exp_c20).
+
+That points the next work at *making the good routing reachable on purpose* — routing
+search, restarts, or transfer — rather than at enlarging the table.
