@@ -1738,3 +1738,98 @@ Three more arm-A seeds (~40 min each, 3 concurrent) would settle it either way.
 
 That points the next work at *making the good routing reachable on purpose* — routing
 search, restarts, or transfer — rather than at enlarging the table.
+
+---
+
+# exp_c21 — seed 4 at double budget: +361, and the first from-scratch LUT past the anchors
+
+exp_c18's diagnostics showed the addressing had not converged at 10k — 2.5–3.2% of address
+bits were still being rewritten per 500 iterations in the final stretch of every seed. This
+extends seed 4, the outlier, to 20,000 iterations with every other knob identical.
+
+## The trajectory is provably the same one
+
+| check | result |
+|---|---|
+| 20k run @ iter 10,000 vs exp_c18 seed 4 final | **0 of 28,034 elements differ**, max\|Δ\| 0.000e+00 |
+| that checkpoint re-evaluated | **5286.6** — exactly exp_c18's number |
+
+`iters` only bounds the training loop, so under determinism the longer run must pass
+through the shorter run's final state. It does, bit for bit. That makes the 10k→20k delta a
+**within-run gain on one trajectory** rather than a comparison across runs, and it
+independently re-confirms exp_c17's determinism fix on a fresh 20k run.
+
+## The scores
+
+| | CPU-ref (100 ep) | ep-sd | best MJX |
+|---|---:|---:|---:|
+| seed 4 @ 10,000 iters | 5286.6 | 51.3 | 5519.4 |
+| seed 4 @ 20,000 iters | **5647.5** | 595.2 | 5860.4 |
+
+**10k → 20k gain: +360.9 (+6.8%).** For scale, seed 4's edge over the exp_c18 pack was
++1174, so doubling the compute bought about 31% of what landing in the good basin bought.
+
+**This is the first from-scratch LUT in the chapter to pass every reference anchor:**
+PPO-from-scratch 4407, SAC 5277, distillation 5512 — all now below 5647.5. The from-scratch
+LUT has overtaken the *distilled* LUT.
+
+**The caveat that must travel with that claim:** seed 4 was selected post-hoc as the best of
+six, and then extended. "Best-of-6 seed, given double budget, beats the anchors" is a much
+weaker statement than "this method beats the anchors", and only the former is supported. The
+honest reading is an existence proof — the architecture can get here — not a reliable
+operating point. exp_c18's five other seeds at 4112 ± 159 are the same method's typical
+outcome.
+
+## It bought speed and gave back a little reliability
+
+| | mean | ep-sd | median | p10 | worst | full 1000 | fwd vel |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| @ 10k | 5286.6 | 51.5 | 5291.8 | 5227.5 | 5022.1 | **100/100** | 4.290 |
+| @ 20k | 5647.5 | 595.2 | 5742.3 | 5644.3 | 802.1 | **97/100** | **4.715** |
+
+The 11.5× jump in per-episode sd is not noise in the estimate — it is three falls. The 20k
+policy is 0.425 m/s faster (4.746 among survivors), its **median episode is +451 better**,
+and its **p10 (5644) is higher than the 10k policy's median**. But it falls in 3 of 100
+episodes where the 10k policy fell in none, and those three drag ~95 off the mean.
+
+So the +361 is real, and the bulk of the distribution improved more than the mean suggests —
+but this is a *faster, more fragile* gait, not a strictly better one. Which is preferable
+depends on whether the metric that matters is mean return or worst-case survival. Worth
+noting the direction: **more training made the policy less robust**, which is the same
+late-training degradation exp_c19 measured in the MLP arm, here in a milder form.
+
+## Churn hit a floor rather than converging
+
+Per 500 iterations, on 20,000 randomly-sampled states, all three windows from the *same*
+trajectory:
+
+| window | rotation | bit-flip |
+|---|---:|---:|
+| early, 500–2,500 | 21.26° | 11.49% |
+| at the 10k mark, 8,000–10,000 | 6.37° | 2.77% |
+| late, 18,000–20,000 | 6.41° | 2.71% |
+
+late/early = 0.24, but **late/10k-mark = 0.98**. The churn collapsed during the first 10,000
+iterations and then *stopped falling entirely* — 2.77% → 2.71% across the whole second half,
+with rotation flat at 6.4°. This is a **floor, not a decay**: the hard-mode addressing
+appears to sit permanently at ~2.7% of bits flipping per 500 iterations, presumably from
+states near sign-test boundaries flipping back and forth.
+
+**The methodological consequence matters more than the number.** exp_c18 read "still moving
+at 10k" as evidence of under-training. This run shows churn is *not* a usable indicator of
+remaining headroom: the rate was identical over 10k→20k, yet return improved by 361 in that
+window. A flat, non-zero churn rate is compatible both with productive learning and with
+nothing happening. So "is it still moving?" cannot tell us whether 30k would help — that
+question needs another run, not another diagnostic.
+
+## What this changes
+
+- Budget is worth real return here, but roughly 3× less than basin selection is. Priority
+  order for effort stays: reach the good basin first, extend second.
+- The architecture can exceed the distillation anchor from scratch. One seed, post-hoc
+  selected — an existence proof, not an operating point.
+- Longer training trades a little robustness for speed under a velocity-dominated reward.
+  Any future long run should report the fall count alongside the mean, because the mean
+  alone hides it.
+- Retire "the addressing is still moving" as evidence for more budget. It was the right
+  hypothesis to test and the test came back: the signal doesn't carry that information.
