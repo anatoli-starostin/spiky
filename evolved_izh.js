@@ -12,7 +12,7 @@
   var sim=null,curIdx=0,simT=0,Tmax=44,playing=false,speed=1,lastTs=null,dirty=true;
   var sel=null,hover=null,pos={},wmax=1;
 
-  fetch('demo_data.json').then(function(r){return r.json();}).then(function(d){D=d;init();}).catch(function(e){showErr('load: '+e);});
+  fetch('evolved_izh_data.json').then(function(r){return r.json();}).then(function(d){D=d;init();}).catch(function(e){showErr('load: '+e);});
 
   // ---------------- faithful Izhikevich sim (port of the reference simulator) ----------------
   function simulate(inputTicks){
