@@ -345,22 +345,31 @@ def load_theta(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    # Defaults follow the paper's tuned brax/ant configuration (Table 19), the nearest
-    # published relative of Walker2d: 3x256 MLP, pop 4096, adam, lr 0.01, sigma 0.05,
-    # rank 4, decays 0.995. --pop is the one deliberate departure (see --pop help).
+    # Defaults follow the paper's tuned brax/ant EGGROLL column (Table 19), the nearest
+    # published relative of Walker2d: 3x256 MLP, adam, lr 0.01, sigma 0.05, and BOTH
+    # decays 0.9995. Read those decays carefully -- 0.995 vs 0.9995 is not a rounding
+    # difference: over 300 generations they leave 22% vs 86% of the starting sigma, i.e.
+    # a completely different exploration schedule. An earlier version of this file had
+    # 0.995, taken from the HPO *range* table rather than the tuned ant row.
+    #
+    # Two deliberate departures, both documented at their flags: --pop (budget) and
+    # --no-rank-transform (ant tuned to false, humanoid to true; it is per-environment
+    # and untuned for Walker2d, so this keeps centred ranks to match exp_c05's ES arm).
     ap.add_argument("--rank", type=int, default=4,
                     help="EGGROLL perturbation rank; 0 = full-rank Gaussian control")
     ap.add_argument("--gens", type=int, default=300)
     ap.add_argument("--pop", type=int, default=1024,
-                    help="must be even (antithetic). The paper used 4096 on brax/ant, "
-                         "but its budget was 5e8 env-steps; 1024 keeps a generation at "
-                         "~2M steps so a run fits in ~1h on one 5090")
-    ap.add_argument("--episodes", type=int, default=2)
+                    help="must be even (antithetic). The paper used 2048 on brax/ant; "
+                         "1024 keeps a generation at ~2M env-steps so a 300-gen arm "
+                         "fits in ~2.5h on one 5090")
+    ap.add_argument("--episodes", type=int, default=2,
+                    help="the paper's n_parallel_evaluations; it used 1 on brax/ant, "
+                         "2 here to halve the fitness noise")
     ap.add_argument("--horizon", type=int, default=1000)
     ap.add_argument("--sigma", type=float, default=0.05)
-    ap.add_argument("--sigma-decay", type=float, default=0.995)
+    ap.add_argument("--sigma-decay", type=float, default=0.9995)
     ap.add_argument("--lr", type=float, default=0.01)
-    ap.add_argument("--lr-decay", type=float, default=0.995)
+    ap.add_argument("--lr-decay", type=float, default=0.9995)
     ap.add_argument("--hidden", type=int, default=256)
     ap.add_argument("--layers", type=int, default=3, help="number of weight matrices")
     ap.add_argument("--no-rank-transform", action="store_true",

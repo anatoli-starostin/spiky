@@ -1,0 +1,49 @@
+{
+ "name": "eggroll_mlp256x3_r0_s0_chk",
+ "kind": "fullrank-ES",
+ "rank": 0,
+ "hidden": 256,
+ "layers": 3,
+ "d": 71942,
+ "seed": 0,
+ "rank_transform": true,
+ "gens": 2,
+ "pop": 256,
+ "episodes": 2,
+ "horizon": 200,
+ "sigma": 0.05,
+ "sigma_decay": 0.995,
+ "lr": 0.01,
+ "lr_decay": 0.995,
+ "noise_floats_per_gen": 18284544,
+ "full_rank_floats_per_gen": 18284544,
+ "total_env_steps": 211200,
+ "budget_env_steps": 211200,
+ "best_mean_policy_mjx": -1.0597970485687256,
+ "final_mean_policy_mjx": -3.317784309387207,
+ "wall_s": 24.2,
+ "history": [
+  {
+   "gen": 0,
+   "mean_policy": -1.0597970485687256,
+   "pop_best": 62.603492736816406,
+   "pop_mean": -6.781834602355957,
+   "sigma": 0.05,
+   "lr": 0.01,
+   "rollout_steps": 200,
+   "env_steps": 105600,
+   "elapsed_s": 21.6
+  },
+  {
+   "gen": 1,
+   "mean_policy": -3.317784309387207,
+   "pop_best": 207.87387084960938,
+   "pop_mean": -2.5597500801086426,
+   "sigma": 0.04975,
+   "lr": 0.00995,
+   "rollout_steps": 200,
+   "env_steps": 211200,
+   "elapsed_s": 24.2
+  }
+ ]
+}

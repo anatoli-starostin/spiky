@@ -20,6 +20,8 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_FLAGS=--xla_gpu_deterministic_ops=true
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# Everything not named here is eggroll.py's default, which is the paper's tuned
+# brax/ant EGGROLL column (Table 19): adam, lr 0.01, sigma 0.05, both decays 0.9995.
 COMMON="--gens 300 --pop 1024 --episodes 2 --horizon 1000 --hidden 256 --layers 3 --seed 0"
 
 echo "=== ARM A: EGGROLL rank 4   $(date -u +%FT%TZ) ==="
