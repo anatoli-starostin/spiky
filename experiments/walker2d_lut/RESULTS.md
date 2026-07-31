@@ -1522,6 +1522,13 @@ So `500.1` is not a stable estimate of anything — with n=6 and one dominant ou
 mostly a *description of seed 4*. The honest summary is bimodal, not Gaussian: this config
 usually lands near 4100, and occasionally finds a much better solution.
 
+> **"Bimodal" is WITHDRAWN — see exp_c22 below.** With six more seeds (n=12) the void that
+> made this look like two clusters fills in: seeds 8 and 11 land at 4814 and 5064, the
+> largest gap is only 2.4× the mean gap, forward velocity spans 2.878–4.290 m/s smoothly,
+> and corr(score, velocity) = +0.956. Seed 4 is the top of a **continuous right tail**, not a
+> separate mode. The "basin" language in exp_c20 and exp_c21 inherits this error — read those
+> sections in velocity terms instead.
+
 That is the same shape as the 5146.9 draw in exp_c14 that set off this whole detour — with
 one crucial difference: **it now reproduces.** Re-running seed 4 returns 5286.6 exactly.
 What was previously indistinguishable from a lucky reassociation of floats is now a real,
@@ -1627,6 +1634,13 @@ reconfirmed here on proper sampling; the specific percentages do not.
 ---
 
 # exp_c19 — MLP-actor control: the LUT is the *less* seed-sensitive of the two
+
+> **This heading's claim is WITHDRAWN — see exp_c22 below.** The 9.1× variance ratio measured
+> here came from n=6 against an MLP with 2.6× the parameters. Repeated at n=12 with the
+> parameter counts matched, the ratio falls to 1.825 against the 2.818 that F(0.95; 11, 11)
+> requires: the two actors' spreads are **indistinguishable**. What survives from this run is
+> the *performance* comparison, which exp_c22 confirms in the LUT's favour. The stability
+> ("retention") edge below is also withdrawn — it tests at p = 0.397 at n=12.
 
 The like-for-like control for exp_c18. A standard 2×256 MLP actor, everything else matched
 line for line (critic, alpha machinery, all hyperparameters, the MJX env, the determinism
