@@ -24,13 +24,17 @@ import neuroevo_lut as N
 
 
 def _ser(g):
+    ot = g.get("out_type") or N.default_out_type()
     return {"types": [dict(t) for t in g["types"]], "hid": dict(g["hid"]),
-            "syn": {str(k): list(v) for k, v in g["syn"].items()}, "sigma": float(g["sigma"])}
+            "syn": {str(k): list(v) for k, v in g["syn"].items()}, "sigma": float(g["sigma"]),
+            "out_type": {k: float(v) for k, v in ot.items()}}
 
 
 def _deser(d):
+    ot = d.get("out_type") or N.default_out_type()
     return {"types": [dict(t) for t in d["types"]], "hid": dict(d["hid"]),
-            "syn": {int(k): list(v) for k, v in d["syn"].items()}, "sigma": float(d["sigma"])}
+            "syn": {int(k): list(v) for k, v in d["syn"].items()}, "sigma": float(d["sigma"]),
+            "out_type": {k: float(v) for k, v in ot.items()}}
 
 
 class GenomeStore:
