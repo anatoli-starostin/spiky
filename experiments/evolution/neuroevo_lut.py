@@ -59,7 +59,7 @@ N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
 FIT_STRICT_W, FIT_ORDER_W = 0.5, 0.5   # fitness = FIT_STRICT_W*strict_frac + FIT_ORDER_W*order_frac (50/50)
 MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
-MAX_TYPES = 2           # hidden neuron-TYPE palette cap per genome (start small; raise later)
+MAX_TYPES = 3           # hidden neuron-TYPE palette cap per genome
                         # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
                         # making the native MAX_NEURON_METAS=512 cap irrelevant regardless of hidden count
 
