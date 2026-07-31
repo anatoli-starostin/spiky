@@ -1,5 +1,7 @@
-// evolved_assoc.js — viewer for the evolved Dale associative-memory winner. Topology canvas +
-// store-then-recall before/after panels (dynamics precomputed from the real net). Dependency-free.
+// evolved_assoc.js — interactive viewer for the evolved Dale associative-memory winner.
+// Static topology canvas + an ANIMATION: pick a stored input, watch the real spike trains play
+// back BEFORE (cold) vs AFTER (trained) STDP storage — neurons flash as they spike, signals travel
+// along synapses respecting per-edge delay. All dynamics are the net's actual recorded spikes.
 (function () {
   'use strict';
   function showErr(m){var b=document.getElementById('errbar');b.style.display='block';b.textContent='⚠ '+m;}
@@ -9,8 +11,10 @@
   fetch(DATA_URL).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' '+DATA_URL);return r.json();})
     .then(init).catch(function(e){showErr('could not load '+DATA_URL+' — '+e.message);});
 
-  var D, pos={};
+  var D;
   function roleColor(n){return n.role==='input'?css('--spike'):(n.exc?'#3fbf6f':'#e5534b');}
+  function nid(raw){for(var i=0;i<D.nodes.length;i++)if(D.nodes[i].raw===raw)return D.nodes[i].id;return raw;}
+  function nodeById(id){for(var i=0;i<D.nodes.length;i++)if(D.nodes[i].id===id)return D.nodes[i];return null;}
 
   function init(d){
     D=d;
@@ -20,112 +24,141 @@
       'neurons <b>'+d.nodes.length+'</b>',
       'excitatory <b>'+d.stats.exc_neurons+'</b> · inhibitory <b>'+d.stats.inh_neurons+'</b>',
       'synapses <b>'+d.stats.synapses+'</b>',
-      'recurrent <b>'+d.stats.recurrent+'</b>',
-      'exc delays <b>'+(d.stats.exc_delays.length?Math.min.apply(null,d.stats.exc_delays)+'–'+Math.max.apply(null,d.stats.exc_delays):'–')+'</b>'
+      'recurrent <b>'+d.stats.recurrent+'</b>'
     ].map(function(t){return '<span class="chip">'+t+'</span>';}).join('');
-    setupCanvas(); layout(); draw();
-    window.addEventListener('resize', function(){resize();layout();draw();});
-    buildDemos();
-    document.getElementById('side').innerHTML = sideText();
+    setupStatic();
+    document.getElementById('side').innerHTML=sideText();
+    setupAnim();
+    window.addEventListener('resize', function(){staticResize();layoutStatic();drawStatic();animResizeAll();});
   }
   function sideText(){
     return '<h3>How to read it</h3><p class="small">This net was taught <b>2 arbitrary input→output-order mappings</b> per episode via spike-timing plasticity (STDP), then tested on the inputs alone. '
-      +'Nodes: <span style="color:'+css('--spike')+'">cyan = input</span> (latency-coded), <span style="color:#3fbf6f">green = excitatory (RS)</span>, <span style="color:#e5534b">red = inhibitory (FS)</span> neurons; larger ringed = outputs. '
-      +'Edges: green = excitatory (plastic, evolved delay), red = inhibitory (fixed weight, delay 1). Dashed = recurrent/lateral (where the memory lives). '
-      +'Dale\'s law holds: sign is set by the presynaptic neuron type, and only excitatory synapses learn.</p>'
-      +'<h3>Result</h3><p class="small">Mean storage-gain <b>'+D.meta.mean_gain+'</b> (recall tau-b after − before), and it <b>generalizes</b> — positive gain on '+Math.round(D.stats.gen_pos_frac*100)+'% of fresh, never-seen random-target pairs. Before storage the outputs are <b>silent</b> (score 0); STDP makes them fire with timing that tracks the taught order. The recall is graded (tau-b ≈ 0.5–0.8), not exact.</p>';
+      +'Nodes: <span style="color:'+css('--spike')+'">cyan = input</span> (latency-coded), <span style="color:#3fbf6f">green = excitatory (RS)</span>, <span style="color:#e5534b">red = inhibitory (FS)</span>; larger ringed = outputs. '
+      +'Edges: green = excitatory (plastic, evolved delay), red = inhibitory (fixed, delay 1). Dashed = recurrent/lateral (where the memory lives).</p>'
+      +'<h3>Result</h3><p class="small">Mean storage-gain <b>'+D.meta.mean_gain+'</b> (recall tau-b after − before), generalizing to '+Math.round(D.stats.gen_pos_frac*100)+'% of fresh random-target pairs. Before storage the outputs are <b>silent</b>; STDP makes them fire with timing that tracks the taught order (graded, tau-b ≈ 0.5–0.8).</p>';
   }
 
-  var canv={};
-  function setupCanvas(){var cv=document.getElementById('graph');canv={cv:cv,ctx:cv.getContext('2d'),w:0,h:+cv.getAttribute('height')};resize();}
-  function resize(){var dpr=Math.min(2,window.devicePixelRatio||1);var w=Math.round(canv.cv.clientWidth||820);canv.cv.style.height=canv.h+'px';canv.cv.width=w*dpr;canv.cv.height=canv.h*dpr;canv.ctx.setTransform(dpr,0,0,dpr,0,0);canv.w=w;}
-  function layout(){
-    var W=canv.w,H=canv.h,pad=40;pos={};
+  // ---------- shared geometry ----------
+  function makePos(W,H){
+    var pad=38,pos={};
     var ins=D.nodes.filter(function(n){return n.role==='input';});
     var outs=D.nodes.filter(function(n){return n.role==='output';});
     var hid=D.nodes.filter(function(n){return n.role==='hidden';});
-    ins.forEach(function(n,i){pos[n.id]={x:pad+20,y:pad+i*(H-2*pad)/(ins.length-1||1)};});
-    outs.forEach(function(n,i){pos[n.id]={x:W-pad-20,y:pad+30+i*(H-2*pad-60)/(outs.length-1||1)};});
-    hid.forEach(function(n,i){pos[n.id]={x:W*0.5,y:H*0.5+(i-(hid.length-1)/2)*70};});
+    ins.forEach(function(n,i){pos[n.id]={x:pad+16,y:pad+i*(H-2*pad)/(ins.length-1||1)};});
+    outs.forEach(function(n,i){pos[n.id]={x:W-pad-16,y:pad+24+i*(H-2*pad-48)/(outs.length-1||1)};});
+    hid.forEach(function(n,i){pos[n.id]={x:W*0.5,y:H*0.5+(i-(hid.length-1)/2)*Math.min(70,(H-2*pad)/(hid.length||1))};});
+    return pos;
   }
-  function ctrl(a,b,back){var mx=(a.x+b.x)/2,my=(a.y+b.y)/2,dx=b.x-a.x,dy=b.y-a.y,l=Math.hypot(dx,dy)||1,bow=(back?-1:1)*Math.min(55,l*0.22);return{x:mx-dy/l*bow,y:my+dx/l*bow};}
-  function draw(){
-    var ctx=canv.ctx;ctx.clearRect(0,0,canv.w,canv.h);
+  function ctrl(a,b,back){var mx=(a.x+b.x)/2,my=(a.y+b.y)/2,dx=b.x-a.x,dy=b.y-a.y,l=Math.hypot(dx,dy)||1,bow=(back?-1:1)*Math.min(48,l*0.22);return{x:mx-dy/l*bow,y:my+dx/l*bow};}
+  function quad(a,cp,b,u){var m=1-u;return{x:m*m*a.x+2*m*u*cp.x+u*u*b.x,y:m*m*a.y+2*m*u*cp.y+u*u*b.y};}
+  function edgePath(ctx,a,b,selfLoop){
+    if(selfLoop){ctx.moveTo(a.x,a.y-11);ctx.bezierCurveTo(a.x+40,a.y-44,a.x+40,a.y+44,a.x,a.y+11);return null;}
+    var back=b.x<a.x-1,cp=ctrl(a,b,back);ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(cp.x,cp.y,b.x,b.y);return cp;
+  }
+
+  // ---------- static topology canvas (#graph) ----------
+  var sc={};
+  function setupStatic(){var cv=document.getElementById('graph');sc={cv:cv,ctx:cv.getContext('2d'),h:+cv.getAttribute('height')};staticResize();layoutStatic();drawStatic();}
+  function staticResize(){var dpr=Math.min(2,window.devicePixelRatio||1);var w=Math.round(sc.cv.clientWidth||820);sc.cv.style.height=sc.h+'px';sc.cv.width=w*dpr;sc.cv.height=sc.h*dpr;sc.ctx.setTransform(dpr,0,0,dpr,0,0);sc.w=w;}
+  function layoutStatic(){sc.pos=makePos(sc.w,sc.h);}
+  function drawStatic(){drawTopology(sc.ctx,sc.w,sc.h,sc.pos,null,1);}
+
+  // ---------- topology + optional animation frame ----------
+  // anim: {spikes:{id:[ticks]}, T, flash} or null for static
+  function drawTopology(ctx,W,H,pos,anim,alphaScale){
+    ctx.clearRect(0,0,W,H);
+    // edges
     D.synapses.forEach(function(s){
       var a=pos[nid(s.src)],b=pos[nid(s.tgt)];if(!a||!b)return;
-      var back=b.x<a.x-1;ctx.strokeStyle=s.exc?'#3fbf6f':'#e5534b';ctx.globalAlpha=s.recurrent?0.95:0.45;
-      ctx.lineWidth=0.8+Math.min(4,s.w_mag*1.2);ctx.setLineDash(s.recurrent?[5,3]:[]);
-      ctx.beginPath();
-      if(s.src===s.tgt){ctx.moveTo(a.x,a.y-12);ctx.bezierCurveTo(a.x+44,a.y-48,a.x+44,a.y+48,a.x,a.y+12);}
-      else{var cp=ctrl(a,b,back);ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(cp.x,cp.y,b.x,b.y);}
-      ctx.stroke();
+      ctx.strokeStyle=s.exc?'#3fbf6f':'#e5534b';ctx.globalAlpha=(s.recurrent?0.85:0.38)*alphaScale;
+      ctx.lineWidth=0.8+Math.min(3.5,s.w_mag*1.1);ctx.setLineDash(s.recurrent?[5,3]:[]);
+      ctx.beginPath();edgePath(ctx,a,b,s.src===s.tgt);ctx.stroke();
     });
     ctx.setLineDash([]);ctx.globalAlpha=1;
+    // traveling signals
+    if(anim){
+      D.synapses.forEach(function(s){
+        if(s.src===s.tgt)return; // self-loops: rely on node flash
+        var a=pos[nid(s.src)],b=pos[nid(s.tgt)];if(!a||!b)return;
+        var sp=anim.spikes[nid(s.src)];if(!sp)return;
+        var back=b.x<a.x-1,cp=ctrl(a,b,back),dl=Math.max(1,s.delay);
+        for(var i=0;i<sp.length;i++){
+          var u=(anim.T-sp[i])/dl;
+          if(u>=0&&u<=1){var p=quad(a,cp,b,u);
+            ctx.globalAlpha=1;ctx.fillStyle=s.exc?'#8affb0':'#ff9a92';
+            ctx.beginPath();ctx.arc(p.x,p.y,3.2,0,7);ctx.fill();
+            ctx.globalAlpha=0.3;ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fill();}
+        }
+      });
+      ctx.globalAlpha=1;
+    }
+    // nodes
     D.nodes.forEach(function(n){
-      var p=pos[n.id];if(!p)return;var r=n.role==='output'?15:11;
-      if(n.role==='output'){ctx.strokeStyle=css('--out');ctx.lineWidth=1;ctx.beginPath();ctx.arc(p.x,p.y,r+5,0,7);ctx.stroke();}
-      ctx.fillStyle='#141b24';ctx.strokeStyle=roleColor(n);ctx.lineWidth=2.5;ctx.beginPath();
+      var p=pos[n.id];if(!p)return;var r=n.role==='output'?13:10;
+      // spike glow
+      if(anim){var sp=anim.spikes[n.id]||[],g=0;
+        for(var i=0;i<sp.length;i++){var dt=anim.T-sp[i];if(dt>=0&&dt<anim.flash)g=Math.max(g,1-dt/anim.flash);}
+        if(g>0){ctx.globalAlpha=g*0.9;ctx.fillStyle=roleColor(n);ctx.beginPath();ctx.arc(p.x,p.y,r+8*g+4,0,7);ctx.fill();ctx.globalAlpha=1;}
+        var lit=g>0.02;
+        ctx.fillStyle=lit?roleColor(n):'#141b24';
+      } else ctx.fillStyle='#141b24';
+      if(n.role==='output'){ctx.globalAlpha=1;ctx.strokeStyle=css('--out');ctx.lineWidth=1;ctx.beginPath();ctx.arc(p.x,p.y,r+5,0,7);ctx.stroke();}
+      ctx.strokeStyle=roleColor(n);ctx.lineWidth=2.3;ctx.beginPath();
       if(n.role==='input')ctx.rect(p.x-r,p.y-r,2*r,2*r);else ctx.arc(p.x,p.y,r,0,7);
       ctx.fill();ctx.stroke();
-      ctx.fillStyle=css('--ink');ctx.font='10px ui-monospace,monospace';ctx.textAlign='center';ctx.textBaseline='middle';
-      ctx.fillText(n.id, p.x, p.y);
+      ctx.fillStyle=css('--ink');ctx.font='9px ui-monospace,monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(n.id,p.x,p.y);
     });
+    ctx.globalAlpha=1;
   }
-  function nid(raw){for(var i=0;i<D.nodes.length;i++)if(D.nodes[i].raw===raw)return D.nodes[i].id;return raw;}
 
+  // ---------- animation ----------
+  var A={sel:0,T:0,playing:true,speed:12,last:0,end:60,conds:['cold','trained'],cv:{}};
+  var FLASH=7;
   function ord(a){return a.map(function(d){return 'o'+d;}).join(' › ');}
-  var TL_MAX=70;   // timeline horizontal scale (ticks); output spikes land ~13–51
-  var OCOL=['#e5c07b','#61afef','#c678dd','#56b6c2'];   // per-output marker colours o0..o3
-  function timeline(first, fires){
-    // horizontal tick axis with a coloured dot per output at its first-spike tick; silent -> empty greyed axis
-    var dots='';
-    if(fires){
-      for(var d=0;d<first.length;d++){
-        var x=Math.max(0,Math.min(100,100*first[d]/TL_MAX));
-        dots+='<div style="position:absolute;left:'+x.toFixed(1)+'%;top:50%;transform:translate(-50%,-50%);">'
-          +'<div style="width:11px;height:11px;border-radius:50%;background:'+OCOL[d]+';box-shadow:0 0 4px '+OCOL[d]+';"></div>'
-          +'<div class="mono" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:9px;color:'+OCOL[d]+';">o'+d+'</div>'
-          +'<div class="mono" style="position:absolute;top:-15px;left:50%;transform:translateX(-50%);font-size:9px;color:#66727f;">'+first[d]+'</div></div>';
-      }
-    }
-    return '<div style="position:relative;height:42px;margin:6px 0 2px;background:'+(fires?'#0b0f16':'#161a20')
-      +';border-radius:6px;border:1px solid var(--edge);">'
-      +'<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#243040;"></div>'+dots
-      +(fires?'':'<div class="small" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--bad);">outputs silent — no spikes</div>')
-      +'</div><div class="small" style="display:flex;justify-content:space-between;color:#66727f;"><span>earlier ⟵ spike time</span><span>⟶ later</span></div>';
+  function setupAnim(){
+    var inputs=D.anim.inputs;
+    // selector
+    var selWrap=document.getElementById('animSel');
+    selWrap.innerHTML=inputs.map(function(inp,i){
+      return '<button class="abtn" data-i="'+i+'">'+inp.label+'</button>';}).join('');
+    selWrap.addEventListener('click',function(e){var b=e.target.closest('.abtn');if(!b)return;A.sel=+b.getAttribute('data-i');A.T=0;syncSel();});
+    // controls
+    document.getElementById('animPlay').addEventListener('click',function(){A.playing=!A.playing;this.textContent=A.playing?'❚❚ pause':'▶ play';});
+    document.getElementById('animRestart').addEventListener('click',function(){A.T=0;A.playing=true;document.getElementById('animPlay').textContent='❚❚ pause';});
+    var sp=document.getElementById('animSpeed');sp.addEventListener('input',function(){A.speed=+this.value;});
+    // canvases
+    A.cv.cold={cv:document.getElementById('animCold'),ctx:document.getElementById('animCold').getContext('2d')};
+    A.cv.trained={cv:document.getElementById('animTrained'),ctx:document.getElementById('animTrained').getContext('2d')};
+    animResizeAll();syncSel();
+    A.last=0;requestAnimationFrame(loop);
   }
-  function taubBar(v){   // signed tau-b meter in [-1,1]
-    var pct=Math.round(Math.abs(v)*100), col=v>0.02?'var(--ok)':(v<-0.02?'var(--bad)':'#66727f');
-    return '<div style="height:7px;background:#161a20;border-radius:4px;overflow:hidden;margin-top:3px;">'
-      +'<div style="height:100%;width:'+pct+'%;background:'+col+';"></div></div>';
+  function animResize(c){var dpr=Math.min(2,window.devicePixelRatio||1);var w=Math.round(c.cv.clientWidth||360);var h=300;c.cv.style.height=h+'px';c.cv.width=w*dpr;c.cv.height=h*dpr;c.ctx.setTransform(dpr,0,0,dpr,0,0);c.w=w;c.h=h;c.pos=makePos(w,h);}
+  function animResizeAll(){animResize(A.cv.cold);animResize(A.cv.trained);}
+  function syncSel(){
+    var inputs=D.anim.inputs,inp=inputs[A.sel];
+    Array.prototype.forEach.call(document.querySelectorAll('#animSel .abtn'),function(b,i){b.classList.toggle('on',i===A.sel);});
+    // active window: last spike + max delay + tail
+    var maxT=0,maxDl=1;D.synapses.forEach(function(s){maxDl=Math.max(maxDl,s.delay);});
+    A.conds.forEach(function(cn){var sp=inp[cn].spikes;for(var k in sp)for(var j=0;j<sp[k].length;j++)maxT=Math.max(maxT,sp[k][j]);});
+    A.end=Math.min(D.anim.n_ticks,maxT+maxDl+8);
+    // input + target line
+    var it=inp.input_ticks;
+    document.getElementById('animInfo').innerHTML='<b>'+inp.label+'</b> · input latency <span class="mono">'+Object.keys(it).map(function(k){return k+'@'+it[k];}).join(' ')+'</span> · taught target order <span class="mono">'+ord(inp.target_order)+'</span>';
+    setOutcome('cold',inp.cold);setOutcome('trained',inp.trained);
   }
-  function buildDemos(){
-    var box=document.getElementById('demos');box.innerHTML='';
-    var head=document.createElement('div');head.className='panel';
-    var mean=D.demos.reduce(function(a,d){return a+d.trained_taub;},0)/D.demos.length;
-    head.innerHTML='<h2>Teach, then recall — '+D.demos.length+' worked examples</h2>'
-      +'<p class="small">Each card is a fresh, arbitrary input→target-order mapping (2 are taught together per episode). '
-      +'<b>Before</b> storage the outputs stay <b style="color:var(--bad)">silent</b> — no recall (fitness 0). '
-      +'<b>After</b> 8 STDP epochs the outputs <b style="color:var(--ok)">fire</b>, and their <b>spike timing</b> becomes rank-correlated with the taught order — measured by <b>tau-b</b> (the exact fitness metric). '
-      +'This is a <i>graded, partial</i> associative recall: earlier-target outputs tend to fire earlier, tau-b ≈ '+mean.toFixed(2)+' on average here (positive, not a perfect reordering).</p>';
-    box.appendChild(head);
-    D.demos.forEach(function(dm,i){
-      var el=document.createElement('div');el.className='panel';
-      var trOK=dm.trained_fires;
-      el.innerHTML='<h2>Episode '+dm.episode+' · pattern '+dm.slot+'</h2>'
-        +'<p class="small">Input latency code: <span class="mono">'+Object.keys(dm.input_ticks).map(function(k){return k+'@'+dm.input_ticks[k];}).join('  ')+'</span><br>'
-        +'Taught target order (earliest ⟶ latest): <span class="mono">'+ord(dm.target_order)+'</span></p>'
-        +'<div class="compare">'
-        +'<div class="cmp"><h3>BEFORE storage (input only, untrained)</h3>'
-        +timeline(dm.cold_first, dm.cold_fires)
-        +'<div class="pill bad">recall fails — outputs silent · tau-b 0.00</div></div>'
-        +'<div class="cmp"><h3>AFTER 8 STDP storage epochs</h3>'
-        +timeline(dm.trained_first, trOK)
-        +'<p class="small" style="margin-top:14px;">recall tau-b vs taught order <b style="color:'+(dm.trained_taub>0.02?'var(--ok)':'var(--bad)')+'">'+dm.trained_taub.toFixed(3)+'</b></p>'
-        +taubBar(dm.trained_taub)
-        +'<div class="pill '+(dm.trained_taub>0.02?'ok':'bad')+'">'+(dm.trained_taub>0.02?'storage → timing tracks target':'no positive recall')+'</div></div>'
-        +'</div>';
-      box.appendChild(el);
-    });
+  function setOutcome(cn,c){
+    var el=document.getElementById('out_'+cn);
+    if(c.fires) el.innerHTML='outputs <b style="color:var(--ok)">fire</b> — order <span class="mono">'+ord(c.order)+'</span> · recall tau-b <b style="color:'+(c.taub>0.02?'var(--ok)':'var(--bad)')+'">'+c.taub.toFixed(3)+'</b>';
+    else el.innerHTML='outputs <b style="color:var(--bad)">don\'t all fire</b> — recall fails · tau-b <b>0.000</b>';
+  }
+  function loop(ts){
+    var dt=A.last?(ts-A.last)/1000:0;A.last=ts;
+    if(A.playing){A.T+=dt*A.speed;if(A.T>A.end+3)A.T=0;}
+    document.getElementById('animClock').textContent='t = '+Math.min(A.end,Math.floor(A.T))+' / '+A.end+' ticks';
+    var inp=D.anim.inputs[A.sel];
+    drawTopology(A.cv.cold.ctx,A.cv.cold.w,A.cv.cold.h,A.cv.cold.pos,{spikes:inp.cold.spikes,T:A.T,flash:FLASH},1);
+    drawTopology(A.cv.trained.ctx,A.cv.trained.w,A.cv.trained.h,A.cv.trained.pos,{spikes:inp.trained.spikes,T:A.T,flash:FLASH},1);
+    requestAnimationFrame(loop);
   }
 })();
