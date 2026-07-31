@@ -1953,3 +1953,85 @@ is what the data supports.
 - Seed-to-seed variation is a smooth spread over gait speed, not a lottery between two
   modes. Effort aimed at "reaching the good basin" should be re-aimed at "finding faster
   gaits", which is a different and more tractable framing.
+
+---
+
+# exp_c24 — real sep-CMA-ES: the first gradient-free policy that never falls
+
+Two things happened here. exp_c05's saved winners were re-scored at the project-standard
+100 episodes, and **sep-CMA-ES was implemented for the first time** — because exp_c05 never
+actually ran it.
+
+## exp_c05 was not running sep-CMA-ES
+
+`es_mjx.py --algo sepcma`, read line by line, is: isotropic antithetic sampling, centred-rank
+shaping, an **Adam** step on the ES gradient, and an ad-hoc per-coordinate step-size
+heuristic. None of CMA-ES is present — no weighted recombination of the best μ of λ, no
+evolution paths, no cumulative step-size adaptation, no rank-one or rank-μ covariance
+update. **The sep-CMA-ES row in exp_c05 is mislabelled**; it is OpenAI-ES with a diagonal
+step size. `exp_c24_sepcma/sep_cma.py` is the actual Ros & Hansen (2008) algorithm, verified
+on sphere (6.0e-23), a condition-1e6 ellipsoid (exactly 0, against 1.4e+02 with the
+covariance frozen — the ablation that proves the covariance update does the work), and
+Rosenbrock (4.4e-06) before it was pointed at Walker2d.
+
+## The 30-episode numbers held, but "just below the bar" was wrong
+
+| run | 30-ep (exp_c05) | **100-ep** | full-length eps |
+|---|---:|---:|---:|
+| MLP "sepcma" | 2996.7 ± 913.8 | **3022.3 ± 889.9** | 39/100 |
+| MLP OpenAI-ES | 2051.1 ± 157.7 | **2058.1 ± 143.2** | 0/100 |
+| LUT OpenAI-ES | 904.0 ± 222.6 | **879.9 ± 225.6** | 0/100 |
+
+All three moved by less than 26 points, so exp_c05's evaluation was sound. But the headline
+flips: the best gradient-free MLP **does** clear 3000. It clears it on the mean only —
+**61 of 100 episodes end in a fall**.
+
+## The result: 1617.5 ± 6.6, and every episode survives
+
+300 generations, λ=1024, μ_eff=261, 2 episodes/candidate, horizon 1000,
+**619.2M env-steps in 139 minutes** (40× exp_c05's budget).
+
+| policy | CPU-ref 100 ep | full-length | speed | falls |
+|---|---:|---:|---:|---:|
+| **exp_c24 sep-CMA-ES** | **1617.5 ± 6.6** | **100/100** | 0.62 m/s | **0** |
+| exp_c05 "sepcma" (really OpenAI-ES) | 3022.3 ± 889.9 | 39/100 | 2.78 m/s | 61 |
+| exp_c05 OpenAI-ES | 2058.1 ± 143.2 | 0/100 | 2.66 m/s | 100 |
+| SAC reference | 5273.4 ± 33.9 | — | 4.27 m/s | ~0 |
+
+**These are not the same kind of policy.** Real sep-CMA-ES produced the only gradient-free
+Walker2d policy in this chapter that *never falls* — 100/100 full-length episodes and a
+standard deviation of **±6.6**, against ±889.9 for the higher-scoring run. It is also 4.5×
+slower. The scalar return hides this completely: 1617 looks like a worse 3022, when in fact
+one walks slowly forever and the other sprints and falls 61% of the time.
+
+## The proxy stopped lying
+
+exp_c05 optimised a horizon-400 MJX fitness and reported 1391.6, against a true 3022.3 — the
+proxy **underestimated by 2.2×**, which is why this file has repeatedly warned that the MJX
+fitness mis-ranks policies. Training at horizon 1000 fixes it: MJX proxy **1622.2** vs CPU
+reference **1617.5**, an error of **0.3%**. The mismatch was the horizon, not the simulator.
+
+## It was still accelerating when the budget ran out
+
+The run spent generations 60–250 stuck at ~1050 — exactly the standing-still local optimum,
+since surviving 1000 steps banks 1000 of healthy bonus before any distance is earned. Then:
+
+```
+gen 240  mean 1124.2      gen 270  mean 1158.8
+gen 250  mean  513.1  <-- distribution in transit; the mean itself falls
+gen 260  mean 1133.3      gen 290  mean 1602.7
+                          gen 299  mean 1622.2   pop best 1799.8
+```
+
+It first cleared the standing ceiling at **generation 268 of 300**, gaining **+637.7 in the
+final 50 generations**, with σ still rising (0.188) and the covariance diagonal still
+spreading (0.20–2.9). **This run is budget-limited, not converged** — it escaped the local
+optimum with 32 generations to spare. Unlike exp_c05's "needs more budget", this one has a
+measured escape trajectory behind it.
+
+## Takeaway
+
+A correct sep-CMA-ES did **not** beat a mislabelled OpenAI-ES on return, and that is the
+honest headline. What it did instead is find a *qualitatively different* solution —
+perfectly reliable, slow — and it found it while still climbing steeply. The comparison to
+draw once both have equal budget is speed at equal reliability, not raw return.
