@@ -12,7 +12,11 @@
   var sim=null,curIdx=0,simT=0,Tmax=44,playing=false,speed=1,lastTs=null,dirty=true;
   var sel=null,hover=null,pos={},wmax=1;
 
-  fetch('evolved_izh_data.json').then(function(r){return r.json();}).then(function(d){D=d;init();}).catch(function(e){showErr('load: '+e);});
+  var DATA_URL='evolved_izh_data.json';
+  fetch(DATA_URL).then(function(r){
+    if(!r.ok)throw new Error('HTTP '+r.status+' fetching '+DATA_URL);
+    return r.text().then(function(t){ try{return JSON.parse(t);}catch(_){throw new Error('non-JSON body from '+DATA_URL+' (starts with "'+t.slice(0,30).replace(/\s+/g,' ')+'")');} });
+  }).then(function(d){D=d;init();}).catch(function(e){showErr('could not load data — '+e.message);});
 
   // ---------------- faithful Izhikevich sim (port of the reference simulator) ----------------
   function simulate(inputTicks){
