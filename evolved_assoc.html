@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>evolved associative memory — Dale spiking net (STDP)</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .insp { display: grid; grid-template-columns: 1fr 320px; gap: 12px; }
+    @media (max-width: 820px) { .insp { grid-template-columns: 1fr; } }
+    #side { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 12px; font-size: 12.5px; }
+    #side h3 { margin: 10px 0 6px; font-size: 13px; }
+    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+  <header>
+    <h1>An evolved spiking net that MEMORIZES arbitrary associations</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <b>Neuroevolution of a Dale-law STDP associative memory</b></p>
+    <p>The demos ①–⑦ show hand-built or weight-evolved networks that <i>compute</i> a fixed function. This one is different: neuroevolution discovered a tiny <b>recurrent spiking network that can be TAUGHT</b>. In each episode it's shown two brand-new, arbitrary input→output-order mappings and must store them via spike-timing plasticity (<b>STDP</b>), then reproduce each output order from its input alone. Because the targets are random every episode, no fixed feedforward function can win — only genuine <b>storage</b> scores. It obeys <b>Dale's law</b> (a neuron is excitatory or inhibitory, not per-synapse), inhibition is fixed and fast (delay 1), and only excitatory synapses learn.</p>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <h2>The evolved network</h2>
+      <div class="insp">
+        <div>
+          <canvas id="graph" height="440"></canvas>
+          <p class="small">Inputs (cyan squares) → excitatory (green) & inhibitory (red) neurons → 4 outputs (ringed). Solid = feedforward, <b>dashed = recurrent/lateral</b> (where the taught order is stored). Excitatory edges are plastic with an evolved delay; inhibitory edges are fixed, delay&nbsp;1.</p>
+        </div>
+        <div id="side"></div>
+      </div>
+    </div>
+    <div id="demos"></div>
+    <div class="panel">
+      <h2>Why this matters</h2>
+      <p class="small">This is a proof-of-concept of <b>learning-to-learn</b> by evolution: rather than evolving the weights of a fixed solver, evolution shaped a <b>topology + plasticity substrate</b> that can rapidly memorize new associations at "inference" time via STDP. The winner reaches mean storage-gain ~0.67 and generalizes to unseen random mappings — a genuine, if small, spiking associative memory discovered from scratch under biological (Dale) constraints. Dynamics here are precomputed from the real evolved network (the in-browser page shows its actual recall behaviour).</p>
+    </div>
+  </div>
+
+  <script src="evolved_assoc.js?v=1"></script>
+</body>
+</html>
