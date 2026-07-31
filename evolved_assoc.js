@@ -28,6 +28,7 @@
     ].map(function(t){return '<span class="chip">'+t+'</span>';}).join('');
     setupStatic();
     document.getElementById('side').innerHTML=sideText();
+    renderStdp();
     setupAnim();
     window.addEventListener('resize', function(){staticResize();layoutStatic();drawStatic();animResizeAll();});
   }
@@ -36,6 +37,24 @@
       +'Nodes: <span style="color:'+css('--spike')+'">cyan = input</span> (latency-coded), <span style="color:#3fbf6f">green = excitatory (RS)</span>, <span style="color:#e5534b">red = inhibitory (FS)</span>; larger ringed = outputs. '
       +'Edges: green = excitatory (plastic, evolved delay), red = inhibitory (fixed, delay 1). Dashed = recurrent/lateral (where the memory lives).</p>'
       +'<h3>Result</h3><p class="small">Mean storage-gain <b>'+D.meta.mean_gain+'</b> (recall tau-b after − before), generalizing to '+Math.round(D.stats.gen_pos_frac*100)+'% of fresh random-target pairs. Before storage the outputs are <b>silent</b>; STDP makes them fire with timing that tracks the taught order (graded, tau-b ≈ 0.5–0.8).</p>';
+  }
+
+  function renderStdp(){
+    var el=document.getElementById('stdp');if(!el)return;
+    if(!D.stdp||!D.stdp.evolved){el.style.display='none';return;}
+    var ev=D.stdp.evolved,sd=D.stdp.seed;
+    var order=[['learning_rate','learning rate'],['ltp_max','LTP cap (ltp_max)'],['ltd_max','LTD cap (ltd_max)'],
+               ['weight_scaling_cf','weight_scaling_cf'],['stdp_decay','stdp_decay'],['weight_decay','weight_decay'],['max_weight','max_weight']];
+    var rows=order.filter(function(o){return ev[o[0]]!=null;}).map(function(o){
+      var e=ev[o[0]],s=sd[o[0]],dir=e<s*0.98?'▼':(e>s*1.02?'▲':'≈');
+      var gentle=(o[0]==='ltp_max'||o[0]==='ltd_max'||o[0]==='learning_rate');
+      var col=gentle?(e<s?'var(--ok)':'var(--bad)'):'var(--ink)';
+      return '<tr><td>'+o[1]+'</td><td class="mono">'+e+'</td><td class="mono" style="color:#66727f">'+s+'</td><td style="color:'+col+';text-align:center">'+dir+'</td></tr>';
+    }).join('');
+    el.innerHTML='<h2>The evolved learning rule</h2>'
+      +'<p class="small">Unlike the fixed-STDP demos, <b>this net also evolved its own STDP rule</b> — the excitatory-plasticity genes were mutated and selected alongside the topology. The winner <b>beats the fixed-STDP net (0.708 vs 0.674)</b>, and it does so with <b>gentler plasticity</b>: smaller LTP/LTD caps and a lower learning rate than the hand-set seed.</p>'
+      +'<table class="gtab"><tr><th>excitatory-STDP gene</th><th>evolved</th><th>seed</th><th>Δ</th></tr>'+rows+'</table>'
+      +'<p class="small" style="margin-top:8px;">Standouts: <b>ltp_max '+ev.ltp_max+'</b> vs 1.0 and <b>ltd_max '+ev.ltd_max+'</b> vs 1.2 (potentiation/depression caps cut ~5×/2×), <b>learning_rate '+ev.learning_rate+'</b> vs 0.05. Across the whole top of the population learning_rate evolved <i>below</i> 0.05 — evolution favored small, well-tempered weight updates that store without destabilizing the net (aggressive STDP silences the outputs).</p>';
   }
 
   // ---------- shared geometry ----------

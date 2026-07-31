@@ -24,6 +24,9 @@
     @media (max-width: 720px) { .anwrap { grid-template-columns: 1fr; } }
     .anwrap h3 { margin: 0 0 4px; font-size: 13px; }
     .outc { font-size: 12px; margin-top: 6px; min-height: 18px; }
+    .gtab { border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+    .gtab th, .gtab td { text-align: left; padding: 3px 16px 3px 0; border-bottom: 1px solid var(--edge); }
+    .gtab th { color: #8b98a5; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -31,7 +34,7 @@
   <header>
     <h1>An evolved spiking net that MEMORIZES arbitrary associations</h1>
     <p class="nav"><a href="index.html">Contents</a> · <b>Neuroevolution of a Dale-law STDP associative memory</b></p>
-    <p>The demos ①–⑦ show hand-built or weight-evolved networks that <i>compute</i> a fixed function. This one is different: neuroevolution discovered a tiny <b>recurrent spiking network that can be TAUGHT</b>. In each episode it's shown two brand-new, arbitrary input→output-order mappings and must store them via spike-timing plasticity (<b>STDP</b>), then recall each from its input alone. Because the targets are random every episode, no fixed feedforward function can win — only genuine <b>storage</b> scores. Recall is <i>graded</i>: before storage the outputs stay <b>silent</b>; after 8 STDP epochs they <b>fire</b>, and their spike <b>timing</b> becomes rank-correlated (tau-b) with the taught order — a real but <i>partial</i> associative memory. It obeys <b>Dale's law</b> (a neuron is excitatory or inhibitory, not per-synapse), inhibition is fixed and fast (delay 1), and only excitatory synapses learn.</p>
+    <p>The demos ①–⑦ show hand-built or weight-evolved networks that <i>compute</i> a fixed function. This one is different: neuroevolution discovered a tiny <b>recurrent spiking network that can be TAUGHT</b> — <b>and it evolved its own learning rule too</b>. In each episode it's shown two brand-new, arbitrary input→output-order mappings and must store them via spike-timing plasticity (<b>STDP</b>), then recall each from its input alone. Because the targets are random every episode, no fixed feedforward function can win — only genuine <b>storage</b> scores. Recall is <i>graded</i>: before storage the outputs stay <b>silent</b>; after 8 STDP epochs they <b>fire</b>, and their spike <b>timing</b> becomes rank-correlated (tau-b) with the taught order — a real but <i>partial</i> associative memory. It obeys <b>Dale's law</b> (a neuron is excitatory or inhibitory, not per-synapse), inhibition is fixed and fast (delay 1), and only excitatory synapses learn. This is the <b>evolved-STDP winner (mean storage-gain 0.71)</b> — it beats the fixed-STDP net (0.674) by evolving <b>gentler</b> plasticity (see the learning-rule table below).</p>
     <div class="chips" id="chips"></div>
   </header>
 
@@ -73,12 +76,14 @@
       <p class="small" style="margin-top:8px;">Moving dots = spikes propagating along synapses (green = excitatory, red = inhibitory); a node's halo = it just spiked. Every spike time here is the actual output of the evolved net — nothing is fabricated. Recall is graded: after storage the outputs fire and their <b>order/timing tracks the taught target</b> (tau-b ≈ 0.5–0.8), not a perfect reordering.</p>
     </div>
 
+    <div class="panel" id="stdp"></div>
+
     <div class="panel">
       <h2>Why this matters</h2>
       <p class="small">This is a proof-of-concept of <b>learning-to-learn</b> by evolution: rather than evolving the weights of a fixed solver, evolution shaped a <b>topology + plasticity substrate</b> that can rapidly memorize new associations at "inference" time via STDP. The winner reaches mean storage-gain ~0.67 and generalizes to unseen random mappings — a genuine, if small, spiking associative memory discovered from scratch under biological (Dale) constraints.</p>
     </div>
   </div>
 
-  <script src="evolved_assoc.js?v=2"></script>
+  <script src="evolved_assoc.js?v=3"></script>
 </body>
 </html>
