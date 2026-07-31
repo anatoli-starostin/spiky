@@ -95,7 +95,12 @@ def main():
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--horizon", type=int, default=1000)
     ap.add_argument("--sigma0", type=float, default=0.1)
+    ap.add_argument("--policy", default="mlp", choices=["mlp", "lut"],
+                    help="lut uses exp_c04's bit-exact JAX LUT forward, via exp_c05's "
+                         "lut_spec -- the step-4 target")
     ap.add_argument("--hidden", type=int, default=32)
+    ap.add_argument("--nap", type=int, default=6, help="LUT: anchor pairs per table")
+    ap.add_argument("--tph", type=int, default=16, help="LUT: tables per head")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-episodes", type=int, default=16)
     ap.add_argument("--tag", default="")
@@ -105,9 +110,14 @@ def main():
     norm = (jnp.asarray(st["obs_mean"], jnp.float32),
             jnp.asarray(st["obs_std"], jnp.float32))
 
-    # exp_c05's own spec, imported rather than re-implemented, so the geometry and the
+    # exp_c05's own specs, imported rather than re-implemented, so the geometry and the
     # forward pass are identical to the runs this is compared against.
-    d, apply, init_fn = es_mjx.mlp_spec(a.hidden)
+    if a.policy == "mlp":
+        d, apply, init_fn = es_mjx.mlp_spec(a.hidden)
+        desc = f"MLP[{a.hidden},{a.hidden}]"
+    else:
+        d, apply, init_fn = es_mjx.lut_spec(a.nap, a.tph)
+        desc = f"LUT nap={a.nap} tph={a.tph}"
 
     key = jax.random.PRNGKey(a.seed)
     key, ki = jax.random.split(key)
@@ -117,8 +127,9 @@ def main():
     mx = mjx.put_model(W.make_model())
     fitness = make_fitness(mx, apply, norm, a.episodes, a.horizon, a.eval_episodes)
 
-    name = f"sepcma_mlp{a.hidden}_s{a.seed}{a.tag}"
-    print(f"[{name}] sep-CMA-ES (Ros & Hansen 2008) | MLP[{a.hidden},{a.hidden}] "
+    name = (f"sepcma_mlp{a.hidden}_s{a.seed}{a.tag}" if a.policy == "mlp"
+            else f"sepcma_lut{a.nap}x{a.tph}_s{a.seed}{a.tag}")
+    print(f"[{name}] sep-CMA-ES (Ros & Hansen 2008) | {desc} "
           f"d={d:,} | lambda={state['lam']} mu={state['mu']} mu_eff={state['mu_eff']:.1f} "
           f"| textbook lambda would be {sep_cma.default_lambda(d)} "
           f"| {a.pop*a.episodes*a.horizon:,} env-steps/gen x {a.gens} gens", flush=True)
@@ -153,7 +164,8 @@ def main():
         # Save every generation: a 2.5h run should not lose everything to a late crash.
         np.save(os.path.join(HERE, f"{name}_mu.npy"), np.asarray(state["m"]))
 
-    out = dict(name=name, algo="sep-CMA-ES (Ros & Hansen 2008)", d=d, hidden=a.hidden,
+    out = dict(name=name, algo="sep-CMA-ES (Ros & Hansen 2008)", d=d, policy=a.policy,
+               desc=desc, hidden=a.hidden, nap=a.nap, tph=a.tph,
                seed=a.seed, gens=a.gens, lam=state["lam"], mu=state["mu"],
                mu_eff=state["mu_eff"], episodes=a.episodes, horizon=a.horizon,
                sigma0=a.sigma0, final_sigma=float(state["sigma"]),

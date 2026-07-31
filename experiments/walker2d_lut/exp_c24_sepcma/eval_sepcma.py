@@ -27,15 +27,28 @@ import rescore_c05                # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mu")
+    ap.add_argument("--policy", default="mlp", choices=["mlp", "lut"])
     ap.add_argument("--hidden", type=int, default=32)
+    ap.add_argument("--nap", type=int, default=6)
+    ap.add_argument("--tph", type=int, default=16)
     ap.add_argument("--episodes", type=int, default=100)
     a = ap.parse_args()
 
     st = json.load(open(os.path.join(BASE, "exp_c03_distillation", "dataset_stats.json")))
     norm = (jnp.asarray(st["obs_mean"], jnp.float32),
             jnp.asarray(st["obs_std"], jnp.float32))
-    _, apply, _ = es_mjx.mlp_spec(a.hidden)
+    # A flat .npy carries no record of the geometry it was trained at, and rebuilding it
+    # wrongly is silent rather than an error -- so the shape is checked, not assumed.
+    if a.policy == "mlp":
+        d, apply, _ = es_mjx.mlp_spec(a.hidden)
+    else:
+        d, apply, _ = es_mjx.lut_spec(a.nap, a.tph)
     flat = jnp.asarray(np.load(os.path.join(HERE, a.mu)))
+    if flat.shape != (d,):
+        raise ValueError(f"{a.mu} holds {flat.shape[0]:,} parameters but --policy "
+                         f"{a.policy} at these settings needs {d:,}. Reconstructing a "
+                         f"flat vector at the wrong geometry silently produces a "
+                         f"meaningless policy, so this is refused rather than guessed.")
     m = mujoco.MjModel.from_xml_path(W.XML)
 
     rets, lengths = rescore_c05.evaluate(apply, flat, norm, m, a.episodes)
