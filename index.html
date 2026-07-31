@@ -96,6 +96,16 @@
              law</b> (excitatory/inhibitory is a neuron property), inhibition fixed &amp; fast, only excitatory
              synapses learn. Mean storage-gain ~0.67, generalizes to unseen mappings. Learning-to-learn by evolution.</p>
         </a>
+        <a class="card" href="smartinit.html">
+          <h3>&#9320; LUT smart-initialization &#8212; a clean 3-layer mapping, no scaffolding</h3>
+          <p>Closes the loop from the hand-built exact construction (&#9312;) to the evolved substrate: a trained
+             lookup table is compiled into a tiny spiking net by SEEDING from its hyperplanes (tau-b &#8776; 0.53)
+             and then running plain <b>weight+delay evolution</b> (no STDP, no store-recall) to evolve away the
+             leak/threshold distortion. Drops ALL the scaffolding &#8212; no clock, no complement neurons, no row
+             decoder &#8212; just latency-in &#8594; detectors &#8594; latency-out under Dale&#8217;s law. Recovers to
+             tau-b ~0.78 (all outputs fire 100%, exact-order-match ~55%) while staying SMALL (it pruned below the
+             seed). Interactive spike-playback per input.</p>
+        </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
     </div>

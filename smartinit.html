@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LUT smart-init — clean 3-layer spiking mapping</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .insp { display: grid; grid-template-columns: 1fr 320px; gap: 12px; }
+    @media (max-width: 820px) { .insp { grid-template-columns: 1fr; } }
+    #side { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 12px; font-size: 12.5px; }
+    #side h3 { margin: 10px 0 6px; font-size: 13px; }
+    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; }
+    .abtn { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+            background: var(--panel); color: var(--ink); border: 1px solid var(--edge); }
+    .abtn.on { background: var(--spike); color: #04202a; border-color: var(--spike); font-weight: 600; }
+    #animSel { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .ctrls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 4px; }
+    .ctrls button { font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+                    background: var(--panel); color: var(--ink); border: 1px solid var(--edge); }
+    #animClock { font-family: ui-monospace, monospace; font-size: 12px; color: #8b98a5; }
+    .outc { font-size: 12.5px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+  <header>
+    <h1>A clean 3-layer spiking net that computes a LUT — smart-initialized, then evolved</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <b>LUT smart-initialization (no scaffolding, no STDP)</b></p>
+    <p>The earlier demos build the exact LUT→spiking circuit with heavy scaffolding — a clock, complement neurons, a one-hot row decoder. This one throws ALL of that away. It's a minimal three-layer feed-forward net — <b>latency-in → detectors → latency-out</b> — <b>seeded directly from the trained LUT's hyperplanes</b> (tau-b ≈ 0.53 at initialization), then refined by plain <b>weight + delay evolution</b> (NO STDP, no learning-at-inference). The 6 real-valued inputs are latency-coded (bigger value fires earlier); the 4 outputs' <b>first-spike order</b> is meant to reproduce the LUT's stored-value ordering. It obeys Dale's law (a neuron is excitatory or inhibitory).</p>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <h2>The evolved network</h2>
+      <div class="insp">
+        <div>
+          <canvas id="graph" height="440"></canvas>
+          <p class="small">Inputs (cyan squares, left) → hidden detectors (green excitatory / red inhibitory, middle) → 4 outputs (ringed, right). Edge thickness ∝ weight; each edge carries an evolved conduction delay. No clock, no complement neurons, no row decoder — just the clean 3 layers.</p>
+        </div>
+        <div id="side"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Watch it compute — interactive</h2>
+      <p class="small">Pick an input, then watch the net's <b>real recorded spikes</b> play out: the 6 inputs fire at their latencies, signals travel along the synapses (respecting each edge's delay), the detectors fire, and the 4 outputs fire in an order. The inputs are curated best→worst by tau-b so you can see it get some exactly right and others only roughly ordered — an honest picture of a ~0.78-tau-b mapping.</p>
+      <div id="animSel"></div>
+      <div class="ctrls">
+        <button id="animPlay">❚❚ pause</button>
+        <button id="animRestart">↻ restart</button>
+        <label class="small">speed <input id="animSpeed" type="range" min="4" max="30" value="10"></label>
+        <span id="animClock"></span>
+      </div>
+      <div class="small" id="animInfo" style="margin:4px 0 8px;"></div>
+      <canvas id="anim" height="340"></canvas>
+      <div class="outc" id="animOut"></div>
+      <p class="small" style="margin-top:8px;">Moving dots = spikes propagating along synapses (green = excitatory, red = inhibitory); a node's halo = it just spiked. Every spike time is the actual output of the evolved net — nothing is fabricated.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Why this matters</h2>
+      <p class="small">This closes the loop from the hand-built exact construction to the evolved substrate: a <b>trained lookup table</b> can be compiled into a tiny spiking net by <b>seeding from its hyperplanes and evolving away the leak/threshold distortion</b> — no scaffolding, no plasticity, just weights and delays. The result is a precise-ish, compact feed-forward spiking mapping (tau-b ~0.78, exact-order-match ~55% on real-valued inputs), and it stays small — it pruned below even the seed. Smart initialization turns evolution from a from-scratch search into a quick recovery of a known solution.</p>
+    </div>
+  </div>
+
+  <script src="smartinit.js?v=1"></script>
+</body>
+</html>
