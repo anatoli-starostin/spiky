@@ -1,0 +1,12 @@
+{
+ "best_gen": 580,
+ "best_proxy": 2625.8525390625,
+ "final_gen": 599,
+ "final_proxy": 2521.84375,
+ "snapshot_window": [
+  411,
+  599
+ ],
+ "n_snapshots": 189,
+ "selection": "argmax of the MJX training proxy, not the CPU reference"
+}

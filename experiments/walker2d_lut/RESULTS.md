@@ -2035,3 +2035,70 @@ A correct sep-CMA-ES did **not** beat a mislabelled OpenAI-ES on return, and tha
 honest headline. What it did instead is find a *qualitatively different* solution —
 perfectly reliable, slow — and it found it while still climbing steeply. The comparison to
 draw once both have equal budget is speed at equal reliability, not raw return.
+
+## Step 4 — the same optimiser on a LUT, and exp_c05's verdict on LUTs reverses
+
+600 generations, λ=1024, horizon 1000, LUT nap=6 tph=16 (d=7,872), **1.22B env-steps in
+280 minutes**. Identical loop, identical settings, only the representation changed.
+
+| policy | CPU-ref 100 ep | sd | full-length | speed | falls |
+|---|---:|---:|---:|---:|---:|
+| SAC reference | 5273.4 | ±33.9 | 100/100 | 4.27 m/s | ~0 |
+| exp_c05 MLP "sepcma" (really OpenAI-ES) | 3022.3 | ±889.9 | 39/100 | 2.78 m/s | **61** |
+| **exp_c24 LUT, best gen 580** | **2617.9** | **±28.0** | **100/100** | 1.62 m/s | **0** |
+| **exp_c24 LUT, final gen 599** | **2591.6** | ±33.9 | 100/100 | 1.59 m/s | **0** |
+| exp_c05 MLP OpenAI-ES | 2058.1 | ±143.2 | 0/100 | 2.66 m/s | 100 |
+| exp_c24 MLP, sep-CMA-ES | 1617.5 | ±6.6 | 100/100 | 0.62 m/s | 0 |
+| exp_c05 LUT, OpenAI-ES | 879.9 | ±225.6 | 0/100 | 1.15 m/s | 100 |
+
+**The LUT beat the MLP under the identical optimiser, by 60%** — 2591.6 against 1617.5,
+both never falling, and at **2.6× the forward speed** (1.59 vs 0.62 m/s). It is **2.9×**
+exp_c05's LUT result.
+
+### This overturns "a LUT is easy to fill and hard to evolve"
+
+exp_c05 concluded exactly that, from the LUT scoring 904 against the MLP's 2051 under
+identical settings, and attributed it to searchability: "4.3× the search dimension, and
+discrete addressing means a perturbation either changes nothing or jumps to a different
+row — a rugged, partly-flat landscape that isotropic Gaussian ES handles badly."
+
+**The diagnosis was right and the conclusion was wrong.** The problem was named precisely —
+*isotropic* Gaussian ES — and that is the part that changed here. sep-CMA-ES learns a
+per-coordinate variance, which is the direct remedy for a landscape whose coordinates have
+different natural scales, and a LUT's addressing parameters and table entries are exactly
+that. Given an optimiser that can adapt to it, the LUT is not harder to evolve than an MLP;
+it is **easier**, and it escaped the standing-still optimum at generation **120** where the
+MLP needed **268**.
+
+The learned diagonal supports the reading: it spread to 0.50–1.4, a ~3× range across
+coordinates. exp_c05's isotropic σ had to pick one compromise scale for all 7,872.
+
+### The dimension penalty was also wrong
+
+The LUT has 4.3× the MLP's parameters (7,872 vs 1,830) and cost the same 28.0 s/generation,
+because the run is bound by MJX physics rather than by the policy. The extra dimension cost
+nothing in wall-clock and bought a better policy.
+
+### Final vs best generation
+
+The run ended at 2521.8 (proxy) on generation 599 while its best generation, 580, scored
+2625.9 — the mean oscillates in a ~100-point band. Both were evaluated: **2591.6 ± 33.9**
+(final, what the algorithm returns) and **2617.9 ± 28.0** (generation 580, selected on the
+*training proxy* and then scored once on the reference — ordinary validation-style
+selection, not selection on the test metric). The gap is 26 points, so the choice barely
+matters here; it is reported because the trainer overwrites `mu.npy` and a per-generation
+snapshotter was needed to make the comparison at all.
+
+### Still not converged, again
+
+Best mean climbed 2310 → 2360 → 2626 over the final 200 generations with σ still rising
+(0.1096) and the covariance still spreading. Like the MLP arm, this run stopped because the
+budget ran out, not because it converged. **Neither arm of exp_c24 has found its ceiling.**
+
+### Where this leaves the chapter
+
+The only gradient-free policy that scores higher than the LUT is exp_c05's, which falls in
+61 of 100 episodes. **Among policies that actually complete an episode, the LUT is now the
+best gradient-free result on Walker2d in this project** — 2617.9 ± 28.0, never falling,
+against a SAC reference of 5273.4. The remaining gap is speed, not stability: 1.62 m/s
+against 4.27.
