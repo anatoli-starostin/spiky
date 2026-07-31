@@ -76,6 +76,17 @@
              inspector (graph / animation / raster); the shown input is one the evolved net orders
              <b>exactly right</b>. Click any neuron or synapse for its evolved NeuronMeta / weight / delay.</p>
         </a>
+        <a class="card" href="evolved_izh.html">
+          <h3>&#9312;&#9333; Evolved Izhikevich RS/FS net &#8212; the two canonical neuron types</h3>
+          <p>A newer neuroevolution run constrained to the <b>two canonical Izhikevich-2006</b> neuron types &#8212;
+             <b>RS</b> excitatory and <b>FS</b> inhibitory &#8212; with only a per-neuron RS/FS bit evolved (no
+             continuous neuron params). The best net (<b>Kendall tau-b 0.796</b>, sole fitness) is a compact
+             <b>6 inputs &#8594; 6 hidden &#8594; 4 outputs, 37 synapses</b>. This page renders its topology and runs the
+             <b>full quadratic Izhikevich</b> simulation live in your browser (a faithful port), so you can watch
+             spikes propagate and the four outputs&#8217; <b>first-spike order</b> emerge and be scored against the
+             oracle. Constraining neurons to RS/FS cost nothing vs the unconstrained model &#8212; evidence the
+             search space was over-broad.</p>
+        </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
     </div>

@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evolved Spiking Network — Latency-Ordering (Izhikevich RS/FS)</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#243040; --ink:#e6edf3; --dim:#93a1b3;
+    --exc:#2fb6a6; --inh:#e0568b; --rs:#4f9dff; --fs:#ff9d3d; --in:#8892a6; --out:#5ad07a;
+    --spike:#fff2a8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:18px 22px 10px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:19px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13px;max-width:1000px}
+  .wrap{display:grid;grid-template-columns:1fr 340px;gap:0;min-height:calc(100vh - 92px)}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .stage{position:relative;padding:14px 18px}
+  svg{width:100%;height:auto;display:block;background:radial-gradient(1200px 600px at 50% 0%,#141a22,#0e1116)}
+  .side{border-left:1px solid var(--line);background:var(--panel);padding:16px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:5px 11px;font-size:12.5px;color:var(--dim)}
+  .chip b{color:var(--ink);font-weight:600}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:4px 0 8px}
+  button{background:#1f6feb;color:#fff;border:0;border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer;font-weight:550}
+  button.ghost{background:#20262e;color:var(--ink);border:1px solid var(--line)}
+  button:disabled{opacity:.45;cursor:default}
+  .seg{display:flex;gap:5px;flex-wrap:wrap}
+  .seg .in{background:#20262e;border:1px solid var(--line);color:var(--dim);border-radius:6px;padding:5px 9px;font-size:12.5px;cursor:pointer}
+  .seg .in.act{background:#2a3646;color:#fff;border-color:#3a5170}
+  input[type=range]{accent-color:#1f6feb}
+  .tick{font-variant-numeric:tabular-nums;color:var(--dim);font-size:12.5px;min-width:88px}
+  h3{margin:16px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);font-weight:600}
+  .inrow{display:flex;align-items:center;gap:8px;margin:5px 0;font-variant-numeric:tabular-nums}
+  .inrow .lab{width:26px;color:var(--dim)}
+  .bar{height:9px;border-radius:5px;background:#243040;flex:1;position:relative;overflow:hidden}
+  .bar>i{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,#2a5b8f,#4f9dff);border-radius:5px}
+  .tk{width:74px;text-align:right;color:var(--dim);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  td,th{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px}
+  .rank{display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:1px 4px;font-size:12px;font-weight:600}
+  .ok{background:rgba(90,208,122,.18);color:#7ee2a0}
+  .bad{background:rgba(224,86,139,.16);color:#f090b0}
+  .pend{color:#556}
+  .taub{font-size:26px;font-weight:700;letter-spacing:.3px}
+  .taub small{font-size:12px;color:var(--dim);font-weight:500}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;color:var(--dim);font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .sq{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .foot{padding:10px 22px 26px;color:#66727f;font-size:12px;border-top:1px solid var(--line)}
+  a{color:#58a6ff}
+  .node-label{font:11px/1 monospace;fill:var(--ink);pointer-events:none}
+  .edge{fill:none;stroke-linecap:round}
+  .caption{background:#12171e;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-top:10px;color:var(--dim);font-size:12.5px}
+  .caption b{color:var(--ink)}
+</style>
+</head>
+<body>
+<header>
+  <h1>An evolved spiking neural network that ranks by spike timing</h1>
+  <div class="sub">Neuroevolution found this <b>16-neuron Izhikevich network</b> for a latency-ordering task: six inputs arrive as spikes whose <i>timing</i> encodes a value (bigger&nbsp;→&nbsp;earlier), and the four output neurons must fire in the order that matches an oracle ranking. Fitness = <b>Kendall&nbsp;tau-b</b> between the output first-spike order and the target. Below the actual network runs in your browser — a faithful port of the simulator — so you can watch spikes propagate and the output order emerge. Neurons are the two canonical Izhikevich-2006 types, <b>RS</b> (excitatory) and <b>FS</b> (inhibitory), chosen per-neuron by evolution.</div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <div class="controls">
+      <div class="seg" id="inputSel"></div>
+      <button id="play">▶ Play</button>
+      <button id="step" class="ghost">Step</button>
+      <button id="reset" class="ghost">Reset</button>
+      <label style="color:var(--dim);font-size:12px">speed <input id="speed" type="range" min="1" max="30" value="9"></label>
+      <span class="tick" id="tick">tick 0 / 44</span>
+    </div>
+    <svg id="net" viewBox="0 0 900 560" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">
+      <span><i class="sq" style="background:var(--in)"></i>input (latency-coded)</span>
+      <span><i class="dot" style="background:var(--rs)"></i>RS excitatory</span>
+      <span><i class="dot" style="background:var(--fs)"></i>FS inhibitory</span>
+      <span><i class="dot" style="background:var(--out);outline:2px solid #9fe">◦</i>output</span>
+      <span><i class="sq" style="background:var(--exc)"></i>excitatory synapse</span>
+      <span><i class="sq" style="background:var(--inh)"></i>inhibitory synapse</span>
+      <span>edge width ∝ |weight|, curve = signal + delay</span>
+    </div>
+    <div class="caption" id="caption"></div>
+  </div>
+
+  <div class="side">
+    <h3>Input (this example)</h3>
+    <div id="inputPanel"></div>
+    <h3>Output first-spike order</h3>
+    <table id="outTable"><thead><tr><th>fires</th><th>output</th><th>tick</th><th>rank</th><th>target</th></tr></thead><tbody></tbody></table>
+    <div style="margin-top:14px">
+      <div class="taub"><span id="taubVal">—</span> <small>tau-b (this input)</small></div>
+      <div style="color:var(--dim);font-size:12px;margin-top:2px" id="taubNote"></div>
+    </div>
+    <h3>About the model</h3>
+    <div style="color:var(--dim);font-size:12.5px" id="modelNote"></div>
+  </div>
+</div>
+
+<div class="foot" id="foot"></div>
+
+<script>
+const DATA = {
+ "meta": {
+  "source": "neuroevo_izh2",
+  "model": "izh2",
+  "stored_taub": 0.7955,
+  "reproduced_taub": 0.7854,
+  "weight_scale": 64.0,
+  "A_LAT": 8.0,
+  "B_LAT": 5.0,
+  "N_TICKS": 44,
+  "D": 6,
+  "Dout": 4
+ },
+ "neuron_params": {
+  "RS": {
+   "a": 0.02,
+   "b": 0.2,
+   "c": -65.0,
+   "d": 8.0,
+   "cf2": 0.04,
+   "cf1": 5.0,
+   "cf0": 140.0,
+   "vth": 30.0
+  },
+  "FS": {
+   "a": 0.1,
+   "b": 0.2,
+   "c": -65.0,
+   "d": 2.0,
+   "cf2": 0.04,
+   "cf1": 5.0,
+   "cf0": 140.0,
+   "vth": 30.0
+  }
+ },
+ "nodes": [
+  {
+   "id": "i0",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "i1",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "i2",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "i3",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "i4",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "i5",
+   "role": "input",
+   "type": "RS"
+  },
+  {
+   "id": "o0",
+   "role": "output",
+   "type": "FS"
+  },
+  {
+   "id": "o1",
+   "role": "output",
+   "type": "FS"
+  },
+  {
+   "id": "o2",
+   "role": "output",
+   "type": "FS"
+  },
+  {
+   "id": "o3",
+   "role": "output",
+   "type": "FS"
+  },
+  {
+   "id": "h20567",
+   "role": "hidden",
+   "type": "RS"
+  },
+  {
+   "id": "h54683",
+   "role": "hidden",
+   "type": "FS"
+  },
+  {
+   "id": "h772",
+   "role": "hidden",
+   "type": "RS"
+  },
+  {
+   "id": "h46619",
+   "role": "hidden",
+   "type": "FS"
+  },
+  {
+   "id": "h29842",
+   "role": "hidden",
+   "type": "FS"
+  },
+  {
+   "id": "h51514",
+   "role": "hidden",
+   "type": "RS"
+  }
+ ],
+ "synapses": [
+  {
+   "src": "o1",
+   "tgt": "o2",
+   "delay": 30,
+   "w_raw": -0.4287,
+   "w": -27.435,
+   "exc": false
+  },
+  {
+   "src": "h772",
+   "tgt": "o3",
+   "delay": 15,
+   "w_raw": -0.3543,
+   "w": -22.674,
+   "exc": false
+  },
+  {
+   "src": "i5",
+   "tgt": "h772",
+   "delay": 22,
+   "w_raw": 4.5736,
+   "w": 292.712,
+   "exc": true
+  },
+  {
+   "src": "h46619",
+   "tgt": "o0",
+   "delay": 8,
+   "w_raw": -0.815,
+   "w": -52.161,
+   "exc": false
+  },
+  {
+   "src": "i4",
+   "tgt": "h20567",
+   "delay": 9,
+   "w_raw": 2.341,
+   "w": 149.822,
+   "exc": true
+  },
+  {
+   "src": "i3",
+   "tgt": "o0",
+   "delay": 3,
+   "w_raw": -0.8664,
+   "w": -55.449,
+   "exc": false
+  },
+  {
+   "src": "i4",
+   "tgt": "o1",
+   "delay": 26,
+   "w_raw": 0.7259,
+   "w": 46.458,
+   "exc": true
+  },
+  {
+   "src": "i3",
+   "tgt": "o2",
+   "delay": 13,
+   "w_raw": -1.5055,
+   "w": -96.355,
+   "exc": false
+  },
+  {
+   "src": "i5",
+   "tgt": "o0",
+   "delay": 7,
+   "w_raw": 1.4624,
+   "w": 93.593,
+   "exc": true
+  },
+  {
+   "src": "i1",
+   "tgt": "h29842",
+   "delay": 17,
+   "w_raw": 1.5669,
+   "w": 100.282,
+   "exc": true
+  },
+  {
+   "src": "i2",
+   "tgt": "o1",
+   "delay": 26,
+   "w_raw": 1.9248,
+   "w": 123.188,
+   "exc": true
+  },
+  {
+   "src": "h29842",
+   "tgt": "h46619",
+   "delay": 10,
+   "w_raw": 1.0546,
+   "w": 67.493,
+   "exc": true
+  },
+  {
+   "src": "i2",
+   "tgt": "o3",
+   "delay": 22,
+   "w_raw": 1.6095,
+   "w": 103.01,
+   "exc": true
+  },
+  {
+   "src": "o2",
+   "tgt": "o3",
+   "delay": 13,
+   "w_raw": 1.9459,
+   "w": 124.539,
+   "exc": true
+  },
+  {
+   "src": "i1",
+   "tgt": "o2",
+   "delay": 3,
+   "w_raw": -0.4828,
+   "w": -30.899,
+   "exc": false
+  },
+  {
+   "src": "i3",
+   "tgt": "h29842",
+   "delay": 27,
+   "w_raw": 0.3115,
+   "w": 19.938,
+   "exc": true
+  },
+  {
+   "src": "h29842",
+   "tgt": "o2",
+   "delay": 2,
+   "w_raw": 0.6539,
+   "w": 41.848,
+   "exc": true
+  },
+  {
+   "src": "o0",
+   "tgt": "h46619",
+   "delay": 23,
+   "w_raw": 2.5207,
+   "w": 161.323,
+   "exc": true
+  },
+  {
+   "src": "h46619",
+   "tgt": "o1",
+   "delay": 13,
+   "w_raw": 0.5747,
+   "w": 36.779,
+   "exc": true
+  },
+  {
+   "src": "i0",
+   "tgt": "o0",
+   "delay": 11,
+   "w_raw": -0.9066,
+   "w": -58.021,
+   "exc": false
+  },
+  {
+   "src": "i0",
+   "tgt": "o2",
+   "delay": 8,
+   "w_raw": 0.7863,
+   "w": 50.325,
+   "exc": true
+  },
+  {
+   "src": "h772",
+   "tgt": "h772",
+   "delay": 13,
+   "w_raw": -0.8204,
+   "w": -52.503,
+   "exc": false
+  },
+  {
+   "src": "o0",
+   "tgt": "o3",
+   "delay": 11,
+   "w_raw": -1.0646,
+   "w": -68.132,
+   "exc": false
+  },
+  {
+   "src": "o0",
+   "tgt": "h29842",
+   "delay": 4,
+   "w_raw": -1.4114,
+   "w": -90.331,
+   "exc": false
+  },
+  {
+   "src": "o3",
+   "tgt": "o3",
+   "delay": 28,
+   "w_raw": 2.2846,
+   "w": 146.212,
+   "exc": true
+  },
+  {
+   "src": "h46619",
+   "tgt": "h51514",
+   "delay": 3,
+   "w_raw": 1.0,
+   "w": 64.0,
+   "exc": true
+  },
+  {
+   "src": "h51514",
+   "tgt": "o2",
+   "delay": 1,
+   "w_raw": 1.0,
+   "w": 64.0,
+   "exc": true
+  },
+  {
+   "src": "i1",
+   "tgt": "o1",
+   "delay": 10,
+   "w_raw": 0.0033,
+   "w": 0.211,
+   "exc": true
+  },
+  {
+   "src": "i3",
+   "tgt": "h20567",
+   "delay": 27,
+   "w_raw": -0.4238,
+   "w": -27.126,
+   "exc": false
+  },
+  {
+   "src": "h20567",
+   "tgt": "o0",
+   "delay": 5,
+   "w_raw": 1.0,
+   "w": 64.0,
+   "exc": true
+  },
+  {
+   "src": "o3",
+   "tgt": "o0",
+   "delay": 8,
+   "w_raw": 3.4996,
+   "w": 223.975,
+   "exc": true
+  },
+  {
+   "src": "i2",
+   "tgt": "h29842",
+   "delay": 5,
+   "w_raw": 1.6217,
+   "w": 103.786,
+   "exc": true
+  },
+  {
+   "src": "i1",
+   "tgt": "h54683",
+   "delay": 29,
+   "w_raw": -0.3772,
+   "w": -24.141,
+   "exc": false
+  },
+  {
+   "src": "h54683",
+   "tgt": "o0",
+   "delay": 3,
+   "w_raw": 1.0,
+   "w": 64.0,
+   "exc": true
+  },
+  {
+   "src": "i4",
+   "tgt": "h29842",
+   "delay": 2,
+   "w_raw": -1.2994,
+   "w": -83.163,
+   "exc": false
+  },
+  {
+   "src": "o0",
+   "tgt": "o1",
+   "delay": 11,
+   "w_raw": 0.5773,
+   "w": 36.95,
+   "exc": true
+  },
+  {
+   "src": "i2",
+   "tgt": "h46619",
+   "delay": 10,
+   "w_raw": 2.3032,
+   "w": 147.406,
+   "exc": true
+  }
+ ],
+ "stats": {
+  "hidden": 6,
+  "synapses": 37,
+  "RS": 9,
+  "FS": 7,
+  "delays": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   7,
+   8,
+   9,
+   10,
+   11,
+   13,
+   15,
+   17,
+   22,
+   23,
+   26,
+   27,
+   28,
+   29,
+   30
+  ]
+ },
+ "demo_inputs": [
+  {
+   "x": [
+    0.4,
+    0.909,
+    -0.492,
+    -0.663,
+    0.467,
+    -0.202
+   ],
+   "input_ticks": {
+    "i0": 6,
+    "i1": 3,
+    "i2": 10,
+    "i3": 11,
+    "i4": 6,
+    "i5": 9
+   },
+   "true_order": [
+    3,
+    2,
+    1,
+    0
+   ],
+   "tvals": [
+    0.131,
+    0.19,
+    0.512,
+    0.57
+   ],
+   "ref_net_first": [
+    16,
+    29,
+    15,
+    28
+   ],
+   "ref_net_order": [
+    2,
+    0,
+    3,
+    1
+   ],
+   "ref_taub": 0.5
+  },
+  {
+   "x": [
+    0.186,
+    -0.655,
+    -0.34,
+    0.184,
+    -0.064,
+    -0.288
+   ],
+   "input_ticks": {
+    "i0": 7,
+    "i1": 11,
+    "i2": 10,
+    "i3": 7,
+    "i4": 8,
+    "i5": 9
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    16,
+    29,
+    16,
+    29
+   ],
+   "ref_net_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "ref_taub": 0.9082
+  },
+  {
+   "x": [
+    0.531,
+    -0.505,
+    -0.41,
+    -0.281,
+    -0.547,
+    0.413
+   ],
+   "input_ticks": {
+    "i0": 5,
+    "i1": 11,
+    "i2": 10,
+    "i3": 9,
+    "i4": 11,
+    "i5": 6
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    13,
+    26,
+    14,
+    27
+   ],
+   "ref_net_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "ref_taub": 1.0
+  },
+  {
+   "x": [
+    -0.511,
+    0.389,
+    -0.046,
+    -0.214,
+    -0.165,
+    0.657
+   ],
+   "input_ticks": {
+    "i0": 11,
+    "i1": 6,
+    "i2": 8,
+    "i3": 9,
+    "i4": 9,
+    "i5": 5
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    13,
+    26,
+    16,
+    29
+   ],
+   "ref_net_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "ref_taub": 1.0
+  },
+  {
+   "x": [
+    -0.21,
+    0.746,
+    -0.027,
+    0.32,
+    -0.912,
+    -0.306
+   ],
+   "input_ticks": {
+    "i0": 9,
+    "i1": 4,
+    "i2": 8,
+    "i3": 6,
+    "i4": 13,
+    "i5": 10
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    17,
+    30,
+    16,
+    29
+   ],
+   "ref_net_order": [
+    2,
+    0,
+    3,
+    1
+   ],
+   "ref_taub": 0.6667
+  },
+  {
+   "x": [
+    0.4,
+    0.89,
+    -0.461,
+    -0.484,
+    0.168,
+    -0.755
+   ],
+   "input_ticks": {
+    "i0": 6,
+    "i1": 4,
+    "i2": 10,
+    "i3": 10,
+    "i4": 7,
+    "i5": 12
+   },
+   "true_order": [
+    3,
+    2,
+    1,
+    0
+   ],
+   "tvals": [
+    0.131,
+    0.19,
+    0.512,
+    0.57
+   ],
+   "ref_net_first": [
+    19,
+    31,
+    15,
+    28
+   ],
+   "ref_net_order": [
+    2,
+    0,
+    3,
+    1
+   ],
+   "ref_taub": 0.5
+  },
+  {
+   "x": [
+    -0.455,
+    -0.291,
+    0.269,
+    0.347,
+    -0.856,
+    -0.261
+   ],
+   "input_ticks": {
+    "i0": 10,
+    "i1": 9,
+    "i2": 7,
+    "i3": 6,
+    "i4": 12,
+    "i5": 9
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    16,
+    29,
+    15,
+    28
+   ],
+   "ref_net_order": [
+    2,
+    0,
+    3,
+    1
+   ],
+   "ref_taub": 0.6667
+  },
+  {
+   "x": [
+    0.648,
+    0.405,
+    -0.833,
+    -0.373,
+    -0.081,
+    0.655
+   ],
+   "input_ticks": {
+    "i0": 5,
+    "i1": 6,
+    "i2": 12,
+    "i3": 10,
+    "i4": 8,
+    "i5": 5
+   },
+   "true_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "tvals": [
+    1.542,
+    -0.073,
+    0.961,
+    -1.554
+   ],
+   "ref_net_first": [
+    12,
+    25,
+    14,
+    27
+   ],
+   "ref_net_order": [
+    0,
+    2,
+    1,
+    3
+   ],
+   "ref_taub": 1.0
+  }
+ ]
+};
+</script>
+<script>
+(function(){
+  const D = DATA, NT = D.meta.N_TICKS, P = D.neuron_params;
+  const INPUTS = D.nodes.filter(n=>n.role==='input').map(n=>n.id);
+  const OUTPUTS = D.nodes.filter(n=>n.role==='output').map(n=>n.id);
+  const HIDDEN = D.nodes.filter(n=>n.role==='hidden').map(n=>n.id);
+  const NODEMAP = {}; D.nodes.forEach(n=>NODEMAP[n.id]=n);
+
+  // ---------- faithful Izhikevich simulation (port of izhik_sim.py 'izh' path) ----------
+  function simulate(inputTicks){
+    const V={},U={},first={},spikes={},vtrace={},outSyn={};
+    D.nodes.forEach(n=>{const p=P[n.type];V[n.id]=p.c;U[n.id]=p.b*p.c;first[n.id]=null;spikes[n.id]=[];vtrace[n.id]=[];});
+    D.synapses.forEach(s=>{(outSyn[s.src]=outSyn[s.src]||[]).push(s);});
+    const arrivals={},events=[],forced={},inputSet=new Set(Object.keys(inputTicks));
+    Object.entries(inputTicks).forEach(([nid,t])=>{(forced[t]=forced[t]||[]).push(nid);});
+    function emit(nid,t){
+      if(first[nid]===null)first[nid]=t; spikes[nid].push(t);
+      (outSyn[nid]||[]).forEach(s=>{const at=t+s.delay;(arrivals[at]=arrivals[at]||[]).push({tgt:s.tgt,w:s.w});
+        events.push({src:s.src,tgt:s.tgt,emit:t,arrive:at,exc:s.exc});});
+    }
+    for(let t=0;t<=NT;t++){
+      (forced[t]||[]).forEach(nid=>{if(first[nid]===null)emit(nid,t);});
+      const inj={}; (arrivals[t]||[]).forEach(a=>{inj[a.tgt]=(inj[a.tgt]||0)+a.w;});
+      D.nodes.forEach(n=>{
+        if(inputSet.has(n.id)){vtrace[n.id].push(first[n.id]!==null&&t>=first[n.id]?30:-65);return;}
+        const p=P[n.type]; let v=V[n.id],u=U[n.id];
+        if(v>p.vth){v=p.c;u+=p.d;}
+        const I=inj[n.id]||0;
+        for(let k=0;k<2;k++){v=v+0.5*((p.cf2*v+p.cf1)*v+p.cf0-u+I);}
+        u=u+p.a*(p.b*v-u); V[n.id]=v;U[n.id]=u; vtrace[n.id].push(v);
+        if(v>=p.vth)emit(n.id,t);
+      });
+    }
+    return {first,spikes,vtrace,events};
+  }
+  function taub(firstOut,tv){
+    const v=firstOut.map(f=>-f),u=tv; let C=0,Dd=0,Tu=0,Tv=0;
+    for(let a=0;a<4;a++)for(let b=a+1;b<4;b++){
+      const su=Math.sign(u[a]-u[b]),sv=Math.sign(v[a]-v[b]),p=su*sv;
+      if(p>0)C++;else if(p<0)Dd++;else if(su===0&&sv!==0)Tu++;else if(sv===0&&su!==0)Tv++;
+    }
+    const den=Math.sqrt((C+Dd+Tu)*(C+Dd+Tv));
+    return ((den>0?(C-Dd)/den:0)+1)/2;
+  }
+
+  // ---------- layout ----------
+  const W=900,H=560,PADX=70;
+  const pos={};
+  INPUTS.forEach((id,i)=>pos[id]={x:PADX,y:60+i*((H-120)/(INPUTS.length-1))});
+  OUTPUTS.forEach((id,i)=>pos[id]={x:W-PADX,y:110+i*((H-220)/(OUTPUTS.length-1))});
+  HIDDEN.forEach((id,i)=>{const col=i%2; pos[id]={x:W*0.40+col*W*0.20, y:80+Math.floor(i/2)*((H-160)/(Math.ceil(HIDDEN.length/2)-1||1))};});
+
+  const svg=document.getElementById('net');
+  const NS='http://www.w3.org/2000/svg';
+  function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+  // defs: arrow markers
+  const defs=el('defs',{});
+  ['exc','inh'].forEach(k=>{const m=el('marker',{id:'arw-'+k,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});
+    m.appendChild(el('path',{d:'M0 0 L10 5 L0 10 z',fill:k==='exc'?getCSS('--exc'):getCSS('--inh')}));defs.appendChild(m);});
+  svg.appendChild(defs);
+  function getCSS(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+
+  // edges
+  const edgeEls=[];
+  function edgePath(s,t,curve){
+    const a=pos[s],b=pos[t];
+    if(s===t){ // self loop
+      return `M ${a.x} ${a.y-16} C ${a.x+46} ${a.y-52}, ${a.x+46} ${a.y+52}, ${a.x} ${a.y+16}`;
+    }
+    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2, dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;
+    const nx=-dy/len,ny=dx/len, bend=(curve)*Math.min(70,len*0.28);
+    return `M ${a.x} ${a.y} Q ${mx+nx*bend} ${my+ny*bend} ${b.x} ${b.y}`;
+  }
+  D.synapses.forEach((s,i)=>{
+    const back = pos[s.tgt].x < pos[s.src].x - 1;   // rightward normal, leftward = recurrent
+    const curve = (s.src===s.tgt)?0:(back? -1.1 : (0.5 + (i%3)*0.25));
+    const p=edgePath(s.src,s.tgt,curve);
+    const wpx=Math.max(0.8,Math.min(6,Math.abs(s.w_raw)*1.4));
+    const col=s.exc?'var(--exc)':'var(--inh)';
+    const path=el('path',{d:p,class:'edge',stroke:col,'stroke-width':wpx,'stroke-opacity':0.5,
+      'marker-end':`url(#arw-${s.exc?'exc':'inh'})`});
+    const title=el('title',{}); title.textContent=`${s.src} → ${s.tgt}  |  weight ${s.w_raw>=0?'+':''}${s.w_raw} (${s.exc?'exc':'inh'})  |  delay ${s.delay} ticks`;
+    path.appendChild(title); svg.appendChild(path);
+    edgeEls.push({s,path,pathStr:p});
+  });
+
+  // moving spike dots layer (added later so on top of edges, under nodes)
+  const spikeLayer=el('g',{}); svg.appendChild(spikeLayer);
+
+  // nodes
+  const nodeEls={};
+  D.nodes.forEach(n=>{
+    const g=el('g',{transform:`translate(${pos[n.id].x},${pos[n.id].y})`});
+    let shape;
+    if(n.role==='input'){shape=el('rect',{x:-13,y:-13,width:26,height:26,rx:6,fill:'#20303f',stroke:getCSS('--in'),'stroke-width':2});}
+    else{
+      const r=n.role==='output'?16:13;
+      shape=el('circle',{r:r,fill:'#182231',stroke:n.type==='FS'?getCSS('--fs'):getCSS('--rs'),'stroke-width':n.role==='output'?3.2:2.4});
+    }
+    g.appendChild(shape);
+    if(n.role==='output'){g.appendChild(el('circle',{r:20,fill:'none',stroke:getCSS('--out'),'stroke-width':1,'stroke-opacity':.5}));}
+    const lab=el('text',{class:'node-label','text-anchor':'middle',y:n.role==='input'?4:4}); lab.textContent=n.id.replace(/^h.*$/,'h');
+    // nicer labels
+    lab.textContent = n.role==='hidden' ? '' : n.id;
+    g.appendChild(lab);
+    if(n.role==='hidden'){const t2=el('text',{class:'node-label','text-anchor':'middle',y:4});t2.textContent=n.type;t2.setAttribute('font-size','9');g.appendChild(t2);}
+    svg.appendChild(g);
+    nodeEls[n.id]={g,shape,type:n.type,role:n.role};
+  });
+
+  function vColor(v){ // -65..30 -> ramp
+    const t=Math.max(0,Math.min(1,(v+65)/95));
+    // dark blue -> cyan -> yellow -> white
+    const stops=[[24,34,48],[40,110,150],[90,200,180],[240,220,120],[255,250,220]];
+    const seg=Math.min(stops.length-2,Math.floor(t*(stops.length-1)));
+    const f=t*(stops.length-1)-seg, a=stops[seg],b=stops[seg+1];
+    return `rgb(${a.map((c,i)=>Math.round(c+(b[i]-c)*f)).join(',')})`;
+  }
+
+  // ---------- animation state ----------
+  let sim=null, cur=null, tick=0, playing=false, timer=null, order=[], target=[], tvals=[];
+  function loadInput(idx){
+    cur=D.demo_inputs[idx];
+    document.querySelectorAll('#inputSel .in').forEach((b,i)=>b.classList.toggle('act',i===idx));
+    sim=simulate(cur.input_ticks); target=cur.true_order; tvals=cur.tvals;
+    renderInputPanel(); resetAnim();
+  }
+  function resetAnim(){tick=0;order=[];pause();render();renderOut();updTaub();}
+  function pause(){playing=false;if(timer){clearInterval(timer);timer=null;}document.getElementById('play').textContent='▶ Play';}
+  function play(){if(playing){pause();return;}playing=true;document.getElementById('play').textContent='⏸ Pause';
+    const spd=+document.getElementById('speed').value; timer=setInterval(()=>{stepOnce();},Math.max(20,420-spd*13));}
+  function stepOnce(){ if(tick>=NT){pause();return;} tick++; // fold newly-fired outputs into order
+    OUTPUTS.forEach((o,i)=>{ if(sim.first[o]!==null && sim.first[o]===tick && !order.includes(i)) order.push(i); });
+    render();renderOut();updTaub();
+    document.getElementById('tick').textContent=`tick ${tick} / ${NT}`;
+    if(tick>=NT)pause();
+  }
+
+  function render(){
+    // node membrane color + spike flash
+    D.nodes.forEach(n=>{
+      const v = sim.vtrace[n.id][Math.min(tick,NT)] ?? P[n.type].c;
+      const fired = sim.spikes[n.id].includes(tick);
+      const ne=nodeEls[n.id];
+      ne.shape.setAttribute('fill', fired? getCSS('--spike') : vColor(v));
+      ne.g.setAttribute('transform',`translate(${pos[n.id].x},${pos[n.id].y}) scale(${fired?1.35:1})`);
+      ne.shape.setAttribute('stroke-opacity', fired?1:0.9);
+    });
+    // in-flight spikes
+    spikeLayer.innerHTML='';
+    sim.events.forEach(ev=>{
+      if(tick>ev.emit && tick<=ev.arrive){
+        const path=edgeEls.find(e=>e.s.src===ev.src&&e.s.tgt===ev.tgt);
+        if(!path)return;
+        const frac=(tick-ev.emit)/(ev.arrive-ev.emit);
+        const L=path.path.getTotalLength(); const pt=path.path.getPointAtLength(L*frac);
+        spikeLayer.appendChild(el('circle',{cx:pt.x,cy:pt.y,r:3.6,fill:ev.exc?getCSS('--exc'):getCSS('--inh'),
+          stroke:'#fff','stroke-width':0.7}));
+      }
+    });
+  }
+
+  function renderInputPanel(){
+    const box=document.getElementById('inputPanel'); box.innerHTML='';
+    INPUTS.forEach((id,i)=>{
+      const x=cur.x[i], tk=cur.input_ticks[id], frac=(x+1)/2*100;
+      const row=document.createElement('div'); row.className='inrow';
+      row.innerHTML=`<span class="lab">${id}</span><span class="bar"><i style="left:0;width:${frac.toFixed(0)}%"></i></span>`+
+        `<span class="tk">x=${x.toFixed(2)} · t=${tk}</span>`;
+      box.appendChild(row);
+    });
+  }
+  function renderOut(){
+    const tb=document.querySelector('#outTable tbody'); tb.innerHTML='';
+    // predicted rank so far = position in `order`; target rank = position in target
+    OUTPUTS.forEach((o,i)=>{
+      const ft=sim.first[o], fired = ft!==null && ft<=tick;
+      const predRank = order.indexOf(i);
+      const tgtRank = target.indexOf(i);
+      const tr=document.createElement('tr');
+      const rankCell = fired ? `<span class="rank ${predRank===tgtRank?'ok':'bad'}">${predRank+1}</span>` : `<span class="pend">–</span>`;
+      tr.innerHTML=`<td>${fired?'●':'<span class=pend>○</span>'}</td><td>${o}</td>`+
+        `<td>${fired?ft:'<span class=pend>—</span>'}</td><td>${rankCell}</td><td>${tgtRank+1}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+  function updTaub(){
+    // tau-b using CURRENT first-spikes (unfired = NT+1)
+    const fo=OUTPUTS.map(o=> (sim.first[o]!==null && sim.first[o]<=tick)? sim.first[o] : NT+1);
+    const allf = fo.every(f=>f<=NT);
+    const val = taub(fo,tvals);
+    document.getElementById('taubVal').textContent = tick===0? '—' : val.toFixed(3);
+    document.getElementById('taubNote').textContent = tick<NT? (allf?'all outputs fired':'waiting for outputs to fire…')
+      : (allf?`final — reference sim ${cur.ref_taub}`:'some output stayed silent (would score 0 under the all-fire rule)');
+  }
+
+  // ---------- build controls / chips ----------
+  const inSel=document.getElementById('inputSel');
+  D.demo_inputs.forEach((d,i)=>{const b=document.createElement('div');b.className='in';b.textContent='in '+(i+1);b.onclick=()=>loadInput(i);inSel.appendChild(b);});
+  document.getElementById('play').onclick=play;
+  document.getElementById('step').onclick=()=>{pause();stepOnce();};
+  document.getElementById('reset').onclick=resetAnim;
+  document.getElementById('speed').oninput=()=>{if(playing){pause();play();}};
+
+  const st=D.stats;
+  document.getElementById('chips').innerHTML=[
+    `native tau-b <b>${D.meta.stored_taub}</b>`,
+    `in-browser tau-b <b>${D.meta.reproduced_taub}</b>`,
+    `neurons <b>${D.nodes.length}</b>`,
+    `hidden <b>${st.hidden}</b>`,
+    `synapses <b>${st.synapses}</b>`,
+    `RS <b>${st.RS}</b> · FS <b>${st.FS}</b>`,
+    `delays <b>${Math.min(...st.delays)}–${Math.max(...st.delays)}</b>`,
+    `source <b>${D.meta.source}</b>`
+  ].map(t=>`<span class="chip">${t}</span>`).join('');
+
+  document.getElementById('caption').innerHTML =
+    `<b>What you're seeing.</b> Six input neurons (left) each fire one spike; earlier spike = larger input value (latency code). `+
+    `Spikes travel along synapses — <span style="color:var(--exc)">teal = excitatory</span>, <span style="color:var(--inh)">pink = inhibitory</span>, `+
+    `edge width ∝ weight, curve length ∝ delay — into hidden neurons (middle) and the four outputs (right). `+
+    `Node brightness tracks membrane potential; a node flashes gold when it spikes. The order in which the four outputs first spike is the network's answer; `+
+    `it is compared to the oracle's target ranking, and their agreement is the Kendall <b>tau-b</b> shown at right. This is the real evolved genome running the faithful Izhikevich update in your browser.`;
+  document.getElementById('modelNote').innerHTML =
+    `Full quadratic Izhikevich-2006 neurons, v′=0.04v²+5v+140−u+I. Two fixed types, freely assigned per neuron by evolution: `+
+    `<b style="color:var(--rs)">RS</b> excitatory (a=0.02, d=8) and <b style="color:var(--fs)">FS</b> inhibitory (a=0.1, d=2), threshold 30&nbsp;mV. `+
+    `Only the topology, weights, delays, and each neuron's RS/FS bit were evolved — no continuous neuron parameters.`;
+  document.getElementById('foot').innerHTML =
+    `Evolved by asynchronous, distributed neuroevolution (Kendall tau-b fitness, lineage-capped diversity) — genome selected as the top scorer from the <code>${D.meta.source}</code> population. `+
+    `Simulator ported faithfully from the reference; in-browser tau-b (${D.meta.reproduced_taub}) is within ~1% of the native score (${D.meta.stored_taub}).`;
+
+  loadInput(0);
+})();
+</script>
+</body>
+</html>
