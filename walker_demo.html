@@ -6,7 +6,7 @@
   <title>Walker2d LUT → spiking actor (live)</title>
   <link rel="stylesheet" href="style.css" />
   <style>
-    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; }
+    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; min-height: 300px; }
     .ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
     .ctl select, .ctl button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
       background: var(--panel); color: var(--ink); border: 1px solid var(--edge); cursor: pointer; }
@@ -22,7 +22,7 @@
   <header>
     <h1>A trained Walker2d policy, running as a latency-spiking network</h1>
     <p class="nav"><a href="index.html">Contents</a> · <b>LUT reinforcement-learning actor → spikes (int4, live)</b></p>
-    <p>This is a real <b>Walker2d</b> SAC control policy — 32 lookup tables over the 17-D observation — compiled into a <b>latency-coded spiking network</b> and run <b>live in your browser</b>. Each observation is encoded as input-neuron spike <b>times</b>; because the policy is <b>4-bit quantized</b> (integer weights) the spiking comparison Σ w·t &lt; θ is <b>exact integer arithmetic</b>, so the 32 tables' 6-bit addresses resolve with zero weight error; the selected table rows are summed and the 6 action values are emitted as <b>output-neuron spike times</b>. We then decode those spike times back to actions and compare to the lookup-table oracle. Pick an example and watch it run.</p>
+    <p>A real <b>Walker2d</b> SAC control policy (32 lookup tables over the 17-D observation) compiled into a <b>latency-coded spiking network</b>, running <b>live in your browser</b>: each observation becomes input-neuron spike <b>times</b>, the 4-bit integer weights make the comparison Σ w·t&lt;θ exact, and the 6 actions come out as <b>output-neuron spike times</b> — decoded and checked against the lookup-table oracle below. Pick an example and watch it run.</p>
     <div class="chips" id="chips"></div>
   </header>
 
@@ -52,6 +52,6 @@
     </div>
   </div>
 
-  <script src="walker_demo.js?v=1"></script>
+  <script src="walker_demo.js?v=2"></script>
 </body>
 </html>
