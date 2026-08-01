@@ -1,0 +1,11 @@
+{
+ "actor": "lut_sac_c25_f0_actor.npz",
+ "params": 28416,
+ "phase_freq": 0.0,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4166.924470487871,
+ "cpu_reference_std": 39.487396087369284,
+ "full_length": 100,
+ "vel_mean": 3.17015919694398
+}

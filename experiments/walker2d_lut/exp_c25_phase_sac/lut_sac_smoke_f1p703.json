@@ -1,0 +1,91 @@
+{
+ "config": {
+  "iters": 1500,
+  "envs": 64,
+  "rollout": 1,
+  "updates": 32,
+  "batch": 512,
+  "buffer": 1000000,
+  "warmup": 500,
+  "lr": 0.0003,
+  "actor_lr": 0.0003,
+  "gamma": 0.99,
+  "tau": 0.005,
+  "nap": 6,
+  "tph": 32,
+  "heads": 1,
+  "target_entropy": -6.0,
+  "row_clip": 1.0,
+  "coverage_bonus": 0.0,
+  "eval_every": 250,
+  "eval_episodes": 20,
+  "addressing": "hyperplane",
+  "seed": 4,
+  "anchor_policy": "balanced",
+  "hyperplane_init": "anchor_pairs",
+  "hyperplane_anchor_policy": "canonical_full_coverage",
+  "forward_mode": "hard",
+  "phase_freq": 1.703,
+  "tag": "_smoke_f1p703",
+  "out": null,
+  "snap_every": 0,
+  "checkpoint_at": "",
+  "freeze_wb_from": null
+ },
+ "table_params": 24576,
+ "index_params": 3840,
+ "total_params": 28416,
+ "total_env_steps": 96000,
+ "wall_s": 338.6,
+ "best_mjx": 526.0935668945312,
+ "history": [
+  {
+   "iter": 250,
+   "env_steps": 16000,
+   "mjx_return": 3.054427146911621,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 68.2
+  },
+  {
+   "iter": 500,
+   "env_steps": 32000,
+   "mjx_return": 3.054426670074463,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 92.3
+  },
+  {
+   "iter": 750,
+   "env_steps": 48000,
+   "mjx_return": 306.05523681640625,
+   "row_coverage": 0.9306640625,
+   "alpha": 0.046507056802511215,
+   "elapsed_s": 171.9
+  },
+  {
+   "iter": 1000,
+   "env_steps": 64000,
+   "mjx_return": 234.0633087158203,
+   "row_coverage": 0.982421875,
+   "alpha": 0.06476760655641556,
+   "elapsed_s": 229.4
+  },
+  {
+   "iter": 1250,
+   "env_steps": 80000,
+   "mjx_return": 526.0935668945312,
+   "row_coverage": 0.9912109375,
+   "alpha": 0.060093410313129425,
+   "elapsed_s": 283.7
+  },
+  {
+   "iter": 1500,
+   "env_steps": 96000,
+   "mjx_return": 444.6441345214844,
+   "row_coverage": 0.9970703125,
+   "alpha": 0.04642042517662048,
+   "elapsed_s": 338.6
+  }
+ ]
+}

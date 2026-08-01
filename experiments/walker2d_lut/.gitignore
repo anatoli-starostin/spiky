@@ -62,3 +62,9 @@ ppo_lut_scratch.json
 # policy. make_int4.py regenerates it from the actor above, so this negation buys
 # convenience rather than irreplaceability -- but it is the deployable artifact.
 !exp_c09_lut_sac/lut_sac_c21_seed4_20k_int4.npz
+
+# exp_c25's four sweep arms (116 KB each, 464 KB total). Kept because the whole
+# point of that offshoot is a four-way comparison: without all four checkpoints the
+# control cannot be re-scored against the phase arms, and a 40-minute retrain per arm
+# would not reproduce them bit-for-bit anyway. The smoke-test checkpoint stays out.
+!exp_c25_phase_sac/lut_sac_c25_f*_actor.npz

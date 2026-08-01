@@ -2102,3 +2102,117 @@ The only gradient-free policy that scores higher than the LUT is exp_c05's, whic
 best gradient-free result on Walker2d in this project** — 2617.9 ± 28.0, never falling,
 against a SAC reference of 5273.4. The remaining gap is speed, not stability: 1.62 m/s
 against 4.27.
+
+
+---
+
+# exp_c25 — a gait clock in the observation: a curious offshoot that went nowhere
+
+*A side question, not a headline result.* Walker2d's observation is very nearly a Markovian
+sufficient statistic — full `(qpos, qvel)` minus the x-position, which flat-ground dynamics
+do not depend on — so a memoryless policy is in principle sufficient and nothing here needed
+fixing. The question was narrower and more curious than that: locomotion is periodic, so
+would *telling* the policy where it is in the stride cycle make the problem easier to
+optimise, even when the information is technically redundant? The literature on memory in
+locomotion (Siekmann 2020, Lee 2020, Kumar 2021) consistently attributes the benefit of
+recurrence and state-history to *partial observability* — unmodelled dynamics, blind rough
+terrain, unknown payload. None of those apply here. So the honest prior was that this would
+not help, and the experiment was built to be able to say so.
+
+## Design
+
+`exp_c25_phase_sac/phase_lut_sac.py` is a **fork** of `exp_c09_lut_sac/lut_sac.py`, not a
+flag on it: exp_c09's trainer produced the published c11–c22 numbers and has to keep running
+bit-identically. sep-CMA-ES was not touched.
+
+* **The clock.** φ = 2π·f·dt·steps, reset to 0 at each episode start, `dt = 0.008 s`. It is
+  read off **the env's own `steps` counter** rather than tracked separately: `mjx_walker2d`
+  auto-resets on done and sets `nsteps = 0` in the same expression that swaps in the fresh
+  state, so `steps` already means "control steps since this episode began" and a clock
+  derived from it cannot drift out of sync with a reset.
+* **Two channels, not one.** `[sin φ, cos φ]` appended, obs **17 → 19**. A lone sinusoid is
+  ambiguous — sin φ = sin(π − φ) — so it cannot distinguish the first half of a stride from
+  the second. Both channels go to **the actor and the critic** (critic input 23 → 25).
+* **They bypass the teacher normalizer exactly.** The extended buffers are
+  `mean = [obs_mean, 0, 0]`, `scale = [obs_std + 1e-6, 1, 1]`, so the 17 physical channels
+  normalize bit-identically to the unforked trainer while the phase channels pass through at
+  scale exactly 1, not 1 + 1e-6.
+* **Replay stores the augmented 19-dim observation.** Recomputing the clock at sample time
+  would be wrong: replay is off-policy and a sampled transition's episode step is not
+  recoverable from the batch.
+* **f is baked into every checkpoint** (`phase_freq`, `dt_ctrl`, `obs_dim`), and
+  `eval_phase_cpu.py` **refuses** a checkpoint that lacks them rather than guessing. A
+  phase-aware actor scored at the wrong frequency is not a slightly worse policy, it is a
+  different one, and that failure would have been silent.
+* **The f = 0 control keeps the channels present but constant** at (0, 1). Same shapes, same
+  parameter count, same critic width — so the comparison isolates the phase *signal* rather
+  than confounding it with two extra inputs.
+
+## The natural gait frequency: 1.703 Hz
+
+Rather than guessing a frequency to centre the sweep on, it was measured: the c21 seed-4 @
+20k actor rolled for 8 full-length episodes, FFT of each joint angle (mean removed, DC bin
+excluded), sampled at the control rate of 125 Hz.
+
+| joint | dominant frequency |
+|---|---|
+| r_hip | 1.672 ± 0.087 Hz |
+| r_knee | 1.734 ± 0.041 |
+| r_ankle | 1.656 ± 0.083 |
+| l_hip | 1.734 ± 0.041 |
+| l_knee | 1.719 ± 0.054 |
+| l_ankle | 1.703 ± 0.061 |
+
+**f = 1.703 Hz**, stride period 0.587 s, 73.4 control steps per cycle. All six joints agree
+inside 0.08 Hz — a clean single-frequency gait, not a number that depended on which
+convention was used to extract it. (`gait_freq.json`.)
+
+## The sweep
+
+Four arms — f = 0 (control), 0.85 Hz (0.5×), 1.703 Hz (1.0×), 2.55 Hz (1.5×) — at seed 4
+with c21's hyperparameters, 10,000 iterations each, **run concurrently on the one GPU**.
+Concurrency was measured before being relied on: solo 600 iters takes 183 s, three
+concurrent take 211/215/215 s — 1.17× slower each and **within 2% of one another**, so no arm
+is handicapped relative to another. The trainer syncs to host 32× per iteration for the
+coverage histogram, so it is latency-bound and sits at a median 5% GPU utilisation; three
+arms peak at 3.9 GB of 32.6 GB. All four arms in the same window also keeps machine
+conditions identical across arms, which staggering would not.
+
+All four reached 100% row coverage and finished in 40–41 minutes.
+
+## Results — 100-episode deterministic CPU reference
+
+| arm | return | full-length | speed |
+|---|---|---|---|
+| **f = 0 (control)** | **4166.9 ± 39.5** | **100/100** | 3.170 m/s |
+| f = 0.85 Hz (0.5×) | 3867.9 ± 1062.7 | 66/100 | 3.374 m/s |
+| f = 1.703 Hz (1.0×) | 4024.4 ± 850.6 | 56/100 | 3.543 m/s |
+| f = 2.55 Hz (1.5×) | **4545.3 ± 138.6** | 97/100 | 3.568 m/s |
+
+## What it says
+
+**Phase did not clearly help, and the arm the design was built around did worst.** The
+natural-frequency arm — the one the FFT existed to locate — came in *below* the control and
+fell in 44 of 100 episodes. The 0.5× arm was worse still on reliability-adjusted terms. Only
+the 1.5× arm beat the control, by +378 (+9%).
+
+There is a consistent secondary pattern: **every phase arm walks faster than the control**
+(3.37–3.57 m/s against 3.17), and every phase arm except 2.55 Hz pays for it in falls. That
+is the same speed-for-reliability trade exp_c21 found between its 10k and 20k checkpoints,
+arriving here by a different route.
+
+**The +378 is not a demonstrated benefit.** This is one seed per arm, and exp_c18 measured
+the seed-to-seed spread of this exact configuration at ±500. A single-seed gap of 378 sits
+comfortably inside that. Nothing here licenses the claim that a gait clock improves the
+walker.
+
+The one lead worth recording: **the 1.5× arm was both the fastest and among the most
+reliable** (97/100, sd 138.6), which is not the shape of a pure noise draw — the two
+sub-natural arms bought their speed with falls and it did not. If this were ever revisited,
+the check is three or four seeds at 2.55 Hz against the same seeds at f = 0, and nothing
+else. Interestingly the *super*-natural frequency being the useful one, if it is real at all,
+would argue the clock is not acting as a gait phase reference at all — it is 1.5 cycles per
+stride, out of phase with the gait by construction.
+
+**This offshoot is closed.** It was a curiosity about whether redundant periodic information
+helps optimisation on an already-observable task; the answer, at one seed, is no.
