@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Walker2d LUT → spiking actor (live)</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; }
+    .ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .ctl select, .ctl button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+      background: var(--panel); color: var(--ink); border: 1px solid var(--edge); cursor: pointer; }
+    #tick { font-family: ui-monospace, monospace; font-size: 12px; color: #8b98a5; }
+    .gtab { border-collapse: collapse; font-size: 12.5px; margin-top: 4px; width: 100%; max-width: 560px; }
+    .gtab th, .gtab td { text-align: left; padding: 3px 12px 3px 0; border-bottom: 1px solid var(--edge); }
+    .gtab th { color: #8b98a5; font-weight: 600; }
+    #obs { font-size: 12px; margin: 6px 0 10px; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+  <header>
+    <h1>A trained Walker2d policy, running as a latency-spiking network</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <b>LUT reinforcement-learning actor → spikes (int4, live)</b></p>
+    <p>This is a real <b>Walker2d</b> SAC control policy — 32 lookup tables over the 17-D observation — compiled into a <b>latency-coded spiking network</b> and run <b>live in your browser</b>. Each observation is encoded as input-neuron spike <b>times</b>; because the policy is <b>4-bit quantized</b> (integer weights) the spiking comparison Σ w·t &lt; θ is <b>exact integer arithmetic</b>, so the 32 tables' 6-bit addresses resolve with zero weight error; the selected table rows are summed and the 6 action values are emitted as <b>output-neuron spike times</b>. We then decode those spike times back to actions and compare to the lookup-table oracle. Pick an example and watch it run.</p>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <div class="ctl">
+        <label>example <select id="preset"></select></label>
+        <button id="play">❚❚ pause</button>
+        <button id="restart">⟲ restart</button>
+        <label>speed <select id="speed"><option value="0.4">0.4×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span id="tick"></span>
+      </div>
+      <div id="obs"></div>
+      <canvas id="raster" height="380"></canvas>
+      <p class="small">Cyan dots (top) = the 17 observation inputs, each a single spike whose TIME encodes its value (earlier = larger). The dashed line marks where all 32 tables' 6-bit addresses are resolved. Purple dots (bottom) = the 6 action outputs, each a spike whose TIME encodes the action value; the number is the decoded action. The playhead sweeps the 256-tick window.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Does the spiking output match the trained policy?</h2>
+      <div id="cmp"></div>
+      <p class="small" style="margin-top:6px;">"LUT oracle" = the 4-bit lookup-table actor evaluated in float on the raw observation. "spiking" = the action decoded from the output-neuron spike time. They match to within the output-spike timing quantization; the only source of any mismatch is a rare boundary address-flip from binning the continuous observation onto the tick grid — the integer-weight comparison itself is exact.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Why this matters</h2>
+      <p class="small">It closes the loop from our HLUT→spiking conversion ladder to a REAL reinforcement-learning controller: a trained Walker2d policy transfers to a spiking network with negligible action error at a modest tick budget. Because the weights are 4-bit integers, the weighted-timing comparison is exact — no analog tick budget is needed for the decision, only for representing the input observation at the desired resolution. Everything here runs client-side from a 59 KB embedded model; nothing is precomputed.</p>
+    </div>
+  </div>
+
+  <script src="walker_demo.js?v=1"></script>
+</body>
+</html>

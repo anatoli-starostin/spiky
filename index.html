@@ -106,6 +106,16 @@
              tau-b ~0.78 (all outputs fire 100%, exact-order-match ~55%) while staying SMALL (it pruned below the
              seed). Interactive spike-playback per input.</p>
         </a>
+        <a class="card" href="walker_demo.html">
+          <h3>&#9321; Walker2d RL policy &#8594; spiking, LIVE &#8212; a trained controller in spikes</h3>
+          <p>A real <b>Walker2d</b> SAC control policy (32 lookup tables over the 17-D observation) compiled into a
+             <b>latency-coded spiking network</b> and run LIVE in your browser. Because the policy is <b>4-bit
+             quantized</b>, the spiking comparison &#931; w&#183;t &lt; &#952; is exact integer arithmetic &#8212; the 32 tables'
+             addresses resolve with zero weight error; the 6 action values come out as output-neuron spike TIMES.
+             Pick an observation, watch the spikes flow input&#8594;address&#8594;action, and see the decoded actions match
+             the lookup-table oracle. Runs client-side from a 59&#8239;KB embedded model, nothing precomputed. The
+             ladder taken all the way to a working RL controller.</p>
+        </a>
       </div>
       <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
     </div>
