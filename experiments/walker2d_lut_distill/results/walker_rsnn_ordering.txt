@@ -1,0 +1,12 @@
+=== RSNN output-ORDERING vs int4 LUT (held-out 512 obs, no retrain — deterministic reproduction) ===
+net = 128 exc / 32 inh, init std 1.0; ranking by hard first-spike tick (earliest = highest action)
+
+EXACT full-ordering match (all 6 dims argsort identical): 6/512 = 1.2%
+PAIRWISE ordering agreement (concordant of 15 pairs, mean over obs): 61.2%
+   = (Kendall tau + 1)/2 with tau_a: 0.676
+mean Kendall tau_a (all-15 denom): +0.352   tau_b (tie-corrected): +0.377
+mean Spearman rho: +0.451
+top-1 argMAX match (net earliest-spike dim == LUT argmax): 214/512 = 41.8%
+top-1 argMIN match (net latest-spike dim  == LUT argmin): 141/512 = 27.5%
+avg tied pairs per obs (equal net ticks or equal LUT vals, of 15): 1.92 (LUT ties ~0; these are equal net first-spike ticks)
+random-chance baselines: exact=1/720=0.14%, pairwise=50%, top-1=1/6=16.7%
