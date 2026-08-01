@@ -1,0 +1,56 @@
+=== RSNN DISCRETE ARM C (band/deadzone loss, 6 outputs, HW_FRAC=0.5=full-bin); SPARSE H256/64 ===
+fixed sparse fan-out: seed=1234, 32 random recurrent targets/neuron (+6 full to output) -> real out-degree 38; recurrent synapses 10240/102080 (10.0% of dense) + H->out 1920 full
+output companding: probit per-dim, U_EPS=0.0001 (|z|<= 3.719); MU=[0.249, -0.545, 1.417, -0.242, -0.813, -0.538] SIGMA=[1.106, 1.14, 1.024, 1.017, 1.182, 1.07]
+device=cuda | arch I=17 H_ex=256 H_inh=64 O=6 | phases read-in[0,64) hidden[64,96) read-out[96,128) | T=128 D(delay)=64 tau=8.0 | C_IN=32 ALPHA_IN=6.0 C_OUT=112 ALPHA_OUT=3.0 | action range=9.323 one-tick=0.333
+
+-- init-std sweep SKIPPED; PINNED std = 0.1 (fix for the H256/64 mis-selection) --
+-- FIX 2: surrogate/gate slope SURR annealed 5 -> 30 over training (close soft/hard gap) --
+
+CHOSEN init std = 0.1
+
+-- full training: std=0.1, 2048 steps, RANDOM per-step batches (size 512) --
+  std=0.1: calibrated thr_h=0.2628 thr_o=1.496 init rates hidden=0.100 out=0.100
+    step    0  mse=12.1377  surr=5.0  hid_rate=0.102 out_rate=0.103 o_nonfire=0
+    step  204  mse=2.3940  surr=7.5  hid_rate=0.087 out_rate=0.057 o_nonfire=1
+    step  408  mse=2.0817  surr=10.0  hid_rate=0.112 out_rate=0.075 o_nonfire=0
+    step  612  mse=2.2352  surr=12.5  hid_rate=0.125 out_rate=0.081 o_nonfire=0
+    step  816  mse=1.9648  surr=15.0  hid_rate=0.135 out_rate=0.089 o_nonfire=0
+    step 1020  mse=1.9668  surr=17.5  hid_rate=0.143 out_rate=0.091 o_nonfire=0
+    step 1224  mse=1.8109  surr=19.9  hid_rate=0.150 out_rate=0.092 o_nonfire=0
+    step 1428  mse=2.0259  surr=22.4  hid_rate=0.155 out_rate=0.093 o_nonfire=0
+    step 1632  mse=1.8608  surr=24.9  hid_rate=0.161 out_rate=0.096 o_nonfire=0
+    step 1836  mse=1.9760  surr=27.4  hid_rate=0.163 out_rate=0.093 o_nonfire=0
+    step 2040  mse=1.8742  surr=29.9  hid_rate=0.167 out_rate=0.096 o_nonfire=0
+    step 2047  mse=1.9802  surr=30.0  hid_rate=0.164 out_rate=0.091 o_nonfire=0
+
+=== ARM C (band/deadzone, HW_FRAC=0.5) — discrete 7-level-per-joint classification ===
+per-dim quantile boundaries + level values (K=7):
+  joint0: bounds [-0.944, -0.344, 0.131, 0.522, 0.931, 1.403]  levelvals [-1.601, -0.627, -0.099, 0.328, 0.726, 1.151, 1.863]
+  joint1: bounds [-1.771, -1.207, -0.774, -0.369, 0.088, 0.685]  levelvals [-2.3, -1.473, -0.984, -0.57, -0.144, 0.357, 1.297]
+  joint2: bounds [0.319, 0.891, 1.299, 1.659, 2.032, 2.483]  levelvals [-0.303, 0.63, 1.102, 1.477, 1.842, 2.251, 2.923]
+  joint3: bounds [-1.289, -0.762, -0.399, -0.041, 0.335, 0.83]  levelvals [-1.897, -1.005, -0.577, -0.223, 0.143, 0.565, 1.303]
+  joint4: bounds [-2.036, -1.52, -1.104, -0.676, -0.198, 0.466]  levelvals [-2.565, -1.764, -1.305, -0.895, -0.444, 0.113, 1.166]
+  joint5: bounds [-1.675, -1.166, -0.767, -0.387, 0.045, 0.618]  levelvals [-2.163, -1.41, -0.964, -0.579, -0.178, 0.314, 1.215]
+per-joint acc: [22.9, 19.3, 22.9, 16.8, 19.5, 19.3] %
+MEAN per-joint acc: 20.12%  |  exact-match (all 6): 0.00%  (chance 14.3%/joint, 0.00085% exact)
+context: top-1 argmax 66.4%  |  snapped-level readback mean|err| 9.20% of range
+
+=== FINAL (integer/snapped delays) ===
+device=cuda  peak_gpu_mem=5.02GB
+init std needed for activity+learning: 0.1
+loss curve (mse): start 12.1377 -> end 1.9802
+held-out val distill err vs LUT: mean 0.7286 (9.09% of range) median 0.5965 (7.44%) max 3.9578
+train distill err: mean 0.7277 (7.81%)
+within 0.333 action (=lin 1-tick): 0.298  within 0.667 (=lin 2-tick): 0.554
+within 2% of range: 0.148  within 5% of range: 0.354  (fixed action-threshold bins)
+companding tail clip (targets beyond +-3.72 sigma): low 0.000%  high 0.000%
+ordering: Spearman rho=0.657  top-1 argmax match=66.4% (chance 16.7%)
+firing rates: H_ex=0.172 H_inh=0.195 O=0.103 spk/neuron/tick
+O non-firing (of 3072): 0
+prunable weights (|w|<0.001): 898/109760 -> sparsity 0.8%
+example decoded net action vs LUT (held-out):
+  obs#0: net=[0.6010000109672546, -0.5450000166893005, 1.8289999961853027, -0.6510000228881836, -1.190000057220459, -0.621999979019165]  LUT=[0.581, -0.997, 2.342, -1.797, -1.226, -1.99]
+  obs#1: net=[0.8889999985694885, -0.2750000059604645, 1.4980000257492065, -0.0820000022649765, -0.23600000143051147, -0.3700000047683716]  LUT=[1.427, -1.265, 0.845, 2.771, 2.081, 1.509]
+  obs#2: net=[0.16200000047683716, -0.08699999749660492, 1.7430000305175781, -0.6510000228881836, -0.8130000233650208, -0.19699999690055847]  LUT=[-0.563, -0.467, 2.455, -1.829, -0.847, -1.871]
+
+(elapsed 536s, device=cuda, peak_gpu_mem=5.02GB, threads=15)
