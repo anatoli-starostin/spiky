@@ -61,6 +61,16 @@ python walker_rsnn_ordering.py     # reproduces the identical net (deterministic
 For contrast, the structural pure-spnet conversion reaches **~0.5%** error — a from-scratch learned net
 is a much harder ask.
 
+### Ablation — T=64 with a settling phase + second-half readout (`walker_rsnn_ablation_t64.py`)
+Double the rollout to T=64, use ticks [0,32) as a pure **settling** phase for the recurrent hidden
+dynamics, and gate the output first-spike readout to **[32,64]** (same 32-tick span / per-tick
+resolution). Everything else identical (same seeds/steps/init). Result — a **clear improvement**:
+held-out mean |err| **23.9% → 13.2%** of range (median 23.0% → 11.5%), within-one-tick **6.5% → 20.6%**,
+top-1 argmax **41.8% → 56.1%**, Spearman ρ **0.451 → 0.495**, Kendall τ_b **0.377 → 0.414**, O non-firing
+**1 → 0**. (Exact full-argsort dipped 1.2%→0.4%, but both are near-chance tiny counts.) **Verdict:
+settling time was a real limiter** — the recurrence benefits from computing before it is read out, which
+directly motivates the "longer T" lever below.
+
 ## Next levers (intended to continue on an H100 / nebius)
 - **Longer T** (finer tick resolution) — likely the biggest single win.
 - More training steps + larger hidden.
