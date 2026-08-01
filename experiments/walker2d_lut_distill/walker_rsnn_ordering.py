@@ -22,7 +22,7 @@ import torch
 import walker_rsnn_distill as R
 
 EVO = os.path.dirname(os.path.abspath(__file__))       # self-contained: data + checkpoint beside the script
-CKPT = f"{EVO}/walker_rsnn_ckpt.pt"
+CKPT = f"{EVO}/walker_rsnn_ckpt_T{R.T}_r{R.READOUT_START}.pt"   # per-config so T=32 / T=64 don't collide
 
 
 def get_model():

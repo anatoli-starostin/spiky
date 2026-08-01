@@ -26,13 +26,20 @@ NI, NEX, NINH, NO = 17, 128, 32, 6
 if SMOKE:
     NEX, NINH = 32, 8
 NH = NEX + NINH
-T = 8 if SMOKE else 32
+T = 8 if SMOKE else int(os.environ.get("RSNN_T", "32"))          # rollout length
+# Optional dedicated settling phase: ticks [0,READOUT_START) are pure compute for the recurrent hidden
+# dynamics; the output first-spike readout is gated to [READOUT_START, T]. Default 0 == original T=32 net.
+READOUT_START = 0 if SMOKE else int(os.environ.get("RSNN_READOUT_START", "0"))
+READOUT_SPAN = T - READOUT_START
 D = 16                                   # max delay (ticks 1..16)
 TAU = 8.0
 BETA = float(np.exp(-1.0 / TAU))
 SURR = 5.0                               # arctan surrogate scale
-C_IN, ALPHA_IN = (T // 2), 3.0           # latency: t = c_in - alpha_in*x  -> x in [-5,5] -> t in [~1,~T-1]
-C_OUT, ALPHA_OUT = (T // 2), 3.0         # decode: a = (c_out - t)/alpha_out ; a in [-5,5] -> t in [~1,~T-1]
+# Inputs are latency-coded into the FIRST 32-tick window (independent of T so the settling phase sees them).
+C_IN, ALPHA_IN = ((T // 2) if SMOKE else 16), 3.0                # t = c_in - alpha_in*x -> x in [-5,5]
+# Output decode maps the action range into the readout window [READOUT_START, T] at the SAME per-tick
+# resolution (alpha_out=3, a 32-tick span): a = (c_out - t_first)/alpha_out, c_out at the window centre.
+C_OUT, ALPHA_OUT = ((T // 2) if SMOKE else (READOUT_START + READOUT_SPAN // 2)), 3.0
 RATE_TGT = 0.10                          # moderate per-neuron-per-tick firing target
 # Regularizer weights are deliberately << the task-MSE gradient so Adam follows the distillation
 # target first (the softplus reparam + recurrent contraction make the task gradient ~1e-7/param; an
@@ -162,13 +169,14 @@ class RSNN(torch.nn.Module):
             s_o = spike(vo - self.thr_o)
             g = torch.sigmoid(SURR * (vo - self.thr_o))    # smooth output-fire gate (differentiable)
             vo = vo - self.thr_o * s_o
-            # differentiable first-spike time: E[t_first] = sum_t t * g_t * prod_{t'<t}(1-g_t') + T*(never)
-            soft_t = soft_t + float(t) * g * notfired
-            notfired = notfired * (1.0 - g)
-            # hard first-spike time (used for the real spiking readout at eval)
-            newly = (s_o > 0.5) & (~o_done)
-            o_first = torch.where(newly, torch.full_like(o_first, float(t)), o_first)
-            o_done = o_done | newly
+            if t >= READOUT_START:                         # readout gated to [READOUT_START, T]
+                # differentiable first-spike time: E[t] = sum_t t * g_t * prod_{t'<t}(1-g_t') + T*(never)
+                soft_t = soft_t + float(t) * g * notfired
+                notfired = notfired * (1.0 - g)
+                # hard first-spike time in the window (used for the real spiking readout at eval)
+                newly = (s_o > 0.5) & (~o_done)
+                o_first = torch.where(newly, torch.full_like(o_first, float(t)), o_first)
+                o_done = o_done | newly
             h_spk_sum = h_spk_sum + s_h; o_spk_sum = o_spk_sum + s_o
             # push spikes into delay buffers for next tick
             Ibuf = torch.cat([Ispk[:, t:t + 1, :], Ibuf[:, :-1, :]], 1)
@@ -264,8 +272,8 @@ def main():
     Xtr = sample_obs(512, seed=0); Ytr = oracle_actions(Xtr)
     Xval = sample_obs(512, seed=1); Yval = oracle_actions(Xval)
     log("=== RSNN distillation of the Walker2d int4 LUT actor (open-loop, no env) ===")
-    log(f"arch I={NI} H_ex={NEX} H_inh={NINH} O={NO} | T={T} tau={TAU} D={D} | "
-        f"action range={Ytr.max()-Ytr.min():.3f} one-tick={1/ALPHA_OUT:.3f}")
+    log(f"arch I={NI} H_ex={NEX} H_inh={NINH} O={NO} | T={T} readout=[{READOUT_START},{T}] c_out={C_OUT} "
+        f"tau={TAU} D={D} | action range={Ytr.max()-Ytr.min():.3f} one-tick={1/ALPHA_OUT:.3f}")
 
     # --- init-std sweep: smallest std that is active AND makes training progress ---
     stds = [1e-3] if SMOKE else [1e-3, 1e-2, 1e-1, 3e-1, 1.0, 3.0]
