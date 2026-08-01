@@ -56,3 +56,9 @@ ppo_lut_scratch.json
 # deployable artifact worth carrying in git; its @10k sibling, the snapshot
 # trace, and every other c12-c22 actor stay out.
 !exp_c09_lut_sac/lut_sac_c21_seed4_20k_actor.npz
+
+# ...and its 4-bit quantized twin (32 KB): int4 symmetric per-table codes for both
+# the table content and the addressing, CPU-reference 5743.1 = 101.7% of the fp32
+# policy. make_int4.py regenerates it from the actor above, so this negation buys
+# convenience rather than irreplaceability -- but it is the deployable artifact.
+!exp_c09_lut_sac/lut_sac_c21_seed4_20k_int4.npz
