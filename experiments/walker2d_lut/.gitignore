@@ -49,3 +49,10 @@ ppo_lut_scratch.json
 # what any re-evaluation needs without a 30-minute retrain. Everything else stays
 # out -- this is a narrow negation, not a relaxation of the no-checkpoints rule.
 !exp_c09_lut_sac/lut_sac_c11_*_actor.npz
+
+# Second deliberate exception: the single best LUT-SAC policy of the chapter
+# (exp_c21, seed 4 @ 20,000 iters, hyperplane x hard, CPU-reference 5647.5 --
+# the first from-scratch LUT past all three anchors). 114 KB. This is the one
+# deployable artifact worth carrying in git; its @10k sibling, the snapshot
+# trace, and every other c12-c22 actor stay out.
+!exp_c09_lut_sac/lut_sac_c21_seed4_20k_actor.npz
