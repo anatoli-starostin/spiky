@@ -1,0 +1,81 @@
+=== RSNN distillation of the Walker2d int4 LUT actor (GPU + random batches + PHASED + COMPANDED INPUT+OUTPUT) ===
+output companding: probit per-dim, U_EPS=0.0001 (|z|<= 3.719); MU=[0.249, -0.545, 1.417, -0.242, -0.813, -0.538] SIGMA=[1.106, 1.14, 1.024, 1.017, 1.182, 1.07]
+input companding: probit per-dim latency, MU_IN=[0.008, -0.004, 0.007, -0.005, -0.002, 0.004, 0.002, -0.002, 0.017, -0.009, 0.003, 0.012, -0.002, -0.002, 0.003, -0.006, -0.006] SIG_IN=[1.001, 0.999, 0.993, 0.998, 0.992, 1.0, 0.998, 1.008, 0.996, 0.996, 0.999, 1.008, 0.999, 0.996, 0.993, 1.004, 1.0]
+device=cuda | arch I=17 H_ex=128 H_inh=32 O=6 | phases read-in[0,64) hidden[64,96) read-out[96,128) | T=128 D(delay)=64 tau=8.0 | C_IN=32 ALPHA_IN=6.0 C_OUT=112 ALPHA_OUT=3.0 | action range=9.323 one-tick=0.333
+
+-- init-std sweep (probe 30 steps, pick smallest std with >10% loss drop & live activity) --
+  std=0.001: calibrated thr_h=0.003458 thr_o=0.002427 init rates hidden=0.100 out=0.100
+    step    0  mse=5.1808  hid_rate=0.095 out_rate=0.097 o_nonfire=818
+    step    3  mse=5.1799  hid_rate=0.072 out_rate=0.076 o_nonfire=929
+    step    6  mse=5.1795  hid_rate=0.055 out_rate=0.059 o_nonfire=1025
+    step    9  mse=5.1798  hid_rate=0.043 out_rate=0.046 o_nonfire=1141
+    step   12  mse=5.1809  hid_rate=0.033 out_rate=0.037 o_nonfire=1201
+    step   15  mse=5.1809  hid_rate=0.026 out_rate=0.028 o_nonfire=1324
+    step   18  mse=5.1825  hid_rate=0.022 out_rate=0.023 o_nonfire=1461
+    step   21  mse=5.1813  hid_rate=0.019 out_rate=0.019 o_nonfire=1552
+    step   24  mse=5.1810  hid_rate=0.016 out_rate=0.015 o_nonfire=1665
+    step   27  mse=5.1807  hid_rate=0.015 out_rate=0.012 o_nonfire=1754
+    step   29  mse=5.1791  hid_rate=0.014 out_rate=0.011 o_nonfire=1773
+  -> std=0.001: loss 5.1808->5.1791 (drop 0.0%) hid_rate=0.014 alive=False progressing=False
+  std=0.01: calibrated thr_h=0.03442 thr_o=0.02455 init rates hidden=0.100 out=0.100
+    step    0  mse=4.6303  hid_rate=0.097 out_rate=0.097 o_nonfire=841
+    step    3  mse=4.5987  hid_rate=0.076 out_rate=0.074 o_nonfire=982
+    step    6  mse=4.5965  hid_rate=0.060 out_rate=0.056 o_nonfire=1140
+    step    9  mse=4.5678  hid_rate=0.048 out_rate=0.044 o_nonfire=1305
+    step   12  mse=4.5540  hid_rate=0.039 out_rate=0.034 o_nonfire=1487
+    step   15  mse=4.5537  hid_rate=0.033 out_rate=0.027 o_nonfire=1656
+    step   18  mse=4.5443  hid_rate=0.028 out_rate=0.022 o_nonfire=1852
+    step   21  mse=4.5085  hid_rate=0.026 out_rate=0.018 o_nonfire=1982
+    step   24  mse=4.4877  hid_rate=0.023 out_rate=0.015 o_nonfire=2083
+    step   27  mse=4.4563  hid_rate=0.022 out_rate=0.012 o_nonfire=2148
+    step   29  mse=4.4227  hid_rate=0.021 out_rate=0.011 o_nonfire=2236
+  -> std=0.01: loss 4.6303->4.4227 (drop 4.5%) hid_rate=0.021 alive=True progressing=False
+  std=0.1: calibrated thr_h=0.3442 thr_o=0.2455 init rates hidden=0.100 out=0.100
+    step    0  mse=5.0946  hid_rate=0.097 out_rate=0.097 o_nonfire=841
+    step    3  mse=4.4082  hid_rate=0.080 out_rate=0.077 o_nonfire=917
+    step    6  mse=3.7128  hid_rate=0.063 out_rate=0.058 o_nonfire=1028
+    step    9  mse=3.1016  hid_rate=0.052 out_rate=0.046 o_nonfire=1188
+    step   12  mse=2.5600  hid_rate=0.042 out_rate=0.036 o_nonfire=1288
+    step   15  mse=2.2630  hid_rate=0.037 out_rate=0.030 o_nonfire=1327
+    step   18  mse=2.0797  hid_rate=0.032 out_rate=0.025 o_nonfire=1322
+    step   21  mse=1.9412  hid_rate=0.030 out_rate=0.021 o_nonfire=1321
+    step   24  mse=1.8926  hid_rate=0.028 out_rate=0.018 o_nonfire=1312
+    step   27  mse=1.8180  hid_rate=0.028 out_rate=0.016 o_nonfire=1271
+    step   29  mse=1.7975  hid_rate=0.027 out_rate=0.015 o_nonfire=1229
+  -> std=0.1: loss 5.0946->1.7975 (drop 64.7%) hid_rate=0.027 alive=True progressing=True
+
+CHOSEN init std = 0.1
+
+-- full training: std=0.1, 1000 steps, RANDOM per-step batches (size 512) --
+  std=0.1: calibrated thr_h=0.3442 thr_o=0.2455 init rates hidden=0.100 out=0.100
+    step    0  mse=5.2384  hid_rate=0.099 out_rate=0.099 o_nonfire=831
+    step  100  mse=1.3931  hid_rate=0.014 out_rate=0.004 o_nonfire=2266
+    step  200  mse=1.2032  hid_rate=0.025 out_rate=0.014 o_nonfire=1313
+    step  300  mse=1.0952  hid_rate=0.044 out_rate=0.030 o_nonfire=784
+    step  400  mse=1.0061  hid_rate=0.068 out_rate=0.044 o_nonfire=473
+    step  500  mse=1.0262  hid_rate=0.079 out_rate=0.048 o_nonfire=423
+    step  600  mse=0.9739  hid_rate=0.098 out_rate=0.058 o_nonfire=305
+    step  700  mse=0.9447  hid_rate=0.111 out_rate=0.062 o_nonfire=265
+    step  800  mse=1.0264  hid_rate=0.120 out_rate=0.062 o_nonfire=277
+    step  900  mse=0.9259  hid_rate=0.118 out_rate=0.060 o_nonfire=299
+    step  999  mse=0.8875  hid_rate=0.136 out_rate=0.064 o_nonfire=233
+
+=== FINAL (integer/snapped delays) ===
+device=cuda  peak_gpu_mem=2.66GB
+init std needed for activity+learning: 0.1
+loss curve (mse): start 5.2384 -> end 0.8875
+held-out val distill err vs LUT: mean 1.0979 (13.70% of range) median 0.8126 (10.14%) max 8.0099
+train distill err: mean 1.0514 (11.28%)
+within 0.333 action (=lin 1-tick): 0.225  within 0.667 (=lin 2-tick): 0.428
+within 2% of range: 0.108  within 5% of range: 0.268  (fixed action-threshold bins)
+companding tail clip (targets beyond +-3.72 sigma): low 0.000%  high 0.000%
+ordering: Spearman rho=0.536  top-1 argmax match=58.4% (chance 16.7%)
+firing rates: H_ex=0.139 H_inh=0.191 O=0.071 spk/neuron/tick
+O non-firing (of 3072): 166
+prunable weights (|w|<0.001): 238/29280 -> sparsity 0.8%
+example decoded net action vs LUT (held-out):
+  obs#0: net=[-1.2079999446868896, -2.0480000972747803, 0.5090000033378601, -2.135999917984009, -3.0139999389648438, -2.178999900817871]  LUT=[0.581, -0.997, 2.342, -1.797, -1.226, -1.99]
+  obs#1: net=[0.5109999775886536, -0.18199999630451202, 0.7269999980926514, -0.32100000977516174, -0.7210000157356262, 0.0820000022649765]  LUT=[1.427, -1.265, 0.845, 2.771, 2.081, 1.509]
+  obs#2: net=[-3.86299991607666, -4.784999847412109, 5.223999977111816, 0.7850000262260437, -1.4980000257492065, -1.6180000305175781]  LUT=[-0.563, -0.467, 2.455, -1.829, -0.847, -1.871]
+
+(elapsed 190s, device=cuda, peak_gpu_mem=2.66GB, threads=15)

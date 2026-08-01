@@ -1,0 +1,41 @@
+=== RSNN DISCRETE ARM B (latency classifier, 7 neurons/joint, first-spike CE); SPARSE H256/64 ===
+fixed sparse fan-out: seed=1234, 32 random recurrent targets/neuron (+42 full to output) -> real out-degree 74; recurrent synapses 10240/102080 (10.0% of dense) + H->out 13440 full
+output companding: probit per-dim, U_EPS=0.0001 (|z|<= 3.719); MU=[0.249, -0.545, 1.417, -0.242, -0.813, -0.538] SIGMA=[1.106, 1.14, 1.024, 1.017, 1.182, 1.07]
+device=cuda | arch I=17 H_ex=256 H_inh=64 O=42 | phases read-in[0,64) hidden[64,96) read-out[96,128) | T=128 D(delay)=64 tau=8.0 | C_IN=32 ALPHA_IN=6.0 C_OUT=112 ALPHA_OUT=3.0 | action range=9.323 one-tick=0.333
+
+-- init-std sweep SKIPPED; PINNED std = 0.1 (fix for the H256/64 mis-selection) --
+-- FIX 2: surrogate/gate slope SURR annealed 5 -> 30 over training (close soft/hard gap) --
+
+CHOSEN init std = 0.1
+
+-- ARM B latency-classifier training: std=0.1, 2048 steps, first-spike CE, 42 outputs (6x7), RANDOM batches (size 512) --
+  std=0.1: calibrated thr_h=0.2557 thr_o=1.446 init rates hidden=0.100 out=0.100
+    step    0  mse=5.9355  surr=5.0  hid_rate=0.102 out_rate=0.104 o_nonfire=548
+    step  204  mse=1.9454  surr=7.5  hid_rate=0.273 out_rate=0.344 o_nonfire=0
+    step  408  mse=1.9446  surr=10.0  hid_rate=0.277 out_rate=0.345 o_nonfire=0
+    step  612  mse=1.9404  surr=12.5  hid_rate=0.280 out_rate=0.344 o_nonfire=0
+    step  816  mse=1.9303  surr=15.0  hid_rate=0.283 out_rate=0.342 o_nonfire=0
+    step 1020  mse=1.9251  surr=17.5  hid_rate=0.287 out_rate=0.339 o_nonfire=0
+    step 1224  mse=1.9218  surr=19.9  hid_rate=0.295 out_rate=0.340 o_nonfire=0
+    step 1428  mse=1.9270  surr=22.4  hid_rate=0.298 out_rate=0.335 o_nonfire=0
+    step 1632  mse=1.9111  surr=24.9  hid_rate=0.306 out_rate=0.335 o_nonfire=0
+    step 1836  mse=1.9146  surr=27.4  hid_rate=0.311 out_rate=0.334 o_nonfire=0
+    step 2040  mse=1.9023  surr=29.9  hid_rate=0.314 out_rate=0.333 o_nonfire=0
+    step 2047  mse=1.8959  surr=30.0  hid_rate=0.315 out_rate=0.334 o_nonfire=0
+
+=== ARM B (latency classifier) — discrete 7-level-per-joint ===
+device=cuda  peak_gpu_mem=5.05GB  CE loss: start 5.9355 -> end 1.8959
+per-joint quantile boundaries + level values (K=7):
+  joint0: bounds [-0.944, -0.344, 0.131, 0.522, 0.931, 1.403]  levelvals [-1.601, -0.627, -0.099, 0.328, 0.726, 1.151, 1.863]
+  joint1: bounds [-1.771, -1.207, -0.774, -0.369, 0.088, 0.685]  levelvals [-2.3, -1.473, -0.984, -0.57, -0.144, 0.357, 1.297]
+  joint2: bounds [0.319, 0.891, 1.299, 1.659, 2.032, 2.483]  levelvals [-0.303, 0.63, 1.102, 1.477, 1.842, 2.251, 2.923]
+  joint3: bounds [-1.289, -0.762, -0.399, -0.041, 0.335, 0.83]  levelvals [-1.897, -1.005, -0.577, -0.223, 0.143, 0.565, 1.303]
+  joint4: bounds [-2.036, -1.52, -1.104, -0.676, -0.198, 0.466]  levelvals [-2.565, -1.764, -1.305, -0.895, -0.444, 0.113, 1.166]
+  joint5: bounds [-1.675, -1.166, -0.767, -0.387, 0.045, 0.618]  levelvals [-2.163, -1.41, -0.964, -0.579, -0.178, 0.314, 1.215]
+per-joint acc (held-out): [14.6, 16.8, 12.7, 15.8, 12.5, 13.5] %
+per-joint acc (train):    [15.2, 16.0, 17.2, 14.3, 15.2, 14.1] %
+MEAN per-joint acc: 14.32% (train 15.33%)  |  exact-match (all 6): 0.00%  (chance 14.3%/joint, 0.00085% exact)
+level-readback continuous mean|err|: 19.87% of range
+firing rates: H_ex=0.339 H_inh=0.280 O=0.345  O non-firing (of 21504): 0
+
+(elapsed 349s, device=cuda, peak_gpu_mem=5.05GB)

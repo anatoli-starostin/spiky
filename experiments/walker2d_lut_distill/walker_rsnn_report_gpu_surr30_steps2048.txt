@@ -1,0 +1,45 @@
+=== RSNN distill Walker2d int4 LUT (SPARSE H256/64, SURROGATE-endpoint sweep) ===
+surrogate anneal: SURR 5 -> 30 (fraction of training)
+fixed sparse fan-out: seed=1234, 32 random recurrent targets/neuron (+6 full to output) -> real out-degree 38; recurrent synapses 10240/102080 (10.0% of dense) + H->out 1920 full
+output companding: probit per-dim, U_EPS=0.0001 (|z|<= 3.719); MU=[0.249, -0.545, 1.417, -0.242, -0.813, -0.538] SIGMA=[1.106, 1.14, 1.024, 1.017, 1.182, 1.07]
+device=cuda | arch I=17 H_ex=256 H_inh=64 O=6 | phases read-in[0,64) hidden[64,96) read-out[96,128) | T=128 D(delay)=64 tau=8.0 | C_IN=32 ALPHA_IN=6.0 C_OUT=112 ALPHA_OUT=3.0 | action range=9.323 one-tick=0.333
+
+-- init-std sweep SKIPPED; PINNED std = 0.1 (fix for the H256/64 mis-selection) --
+-- FIX 2: surrogate/gate slope SURR annealed 5 -> 30 over training (close soft/hard gap) --
+
+CHOSEN init std = 0.1
+
+-- full training: std=0.1, 2048 steps, RANDOM per-step batches (size 512) --
+  std=0.1: calibrated thr_h=0.2628 thr_o=1.496 init rates hidden=0.100 out=0.100
+    step    0  mse=3.0458  surr=5.0  hid_rate=0.102 out_rate=0.103 o_nonfire=0
+    step  204  mse=1.0353  surr=7.5  hid_rate=0.078 out_rate=0.046 o_nonfire=4
+    step  408  mse=0.8809  surr=10.0  hid_rate=0.100 out_rate=0.060 o_nonfire=0
+    step  612  mse=0.8936  surr=12.5  hid_rate=0.113 out_rate=0.066 o_nonfire=2
+    step  816  mse=0.8423  surr=15.0  hid_rate=0.125 out_rate=0.078 o_nonfire=1
+    step 1020  mse=0.8072  surr=17.5  hid_rate=0.131 out_rate=0.079 o_nonfire=0
+    step 1224  mse=0.7793  surr=19.9  hid_rate=0.136 out_rate=0.081 o_nonfire=1
+    step 1428  mse=0.7993  surr=22.4  hid_rate=0.142 out_rate=0.082 o_nonfire=0
+    step 1632  mse=0.7806  surr=24.9  hid_rate=0.146 out_rate=0.083 o_nonfire=1
+    step 1836  mse=0.8522  surr=27.4  hid_rate=0.148 out_rate=0.082 o_nonfire=0
+    step 2040  mse=0.7853  surr=29.9  hid_rate=0.153 out_rate=0.084 o_nonfire=2
+    step 2047  mse=0.8240  surr=30.0  hid_rate=0.150 out_rate=0.080 o_nonfire=0
+
+=== FINAL (integer/snapped delays) ===
+device=cuda  peak_gpu_mem=5.02GB
+init std needed for activity+learning: 0.1
+loss curve (mse): start 3.0458 -> end 0.8240
+held-out val distill err vs LUT: mean 0.7275 (9.08% of range) median 0.5997 (7.48%) max 4.9215
+train distill err: mean 0.7386 (7.92%)
+within 0.333 action (=lin 1-tick): 0.300  within 0.667 (=lin 2-tick): 0.548
+within 2% of range: 0.145  within 5% of range: 0.359  (fixed action-threshold bins)
+companding tail clip (targets beyond +-3.72 sigma): low 0.000%  high 0.000%
+ordering: Spearman rho=0.655  top-1 argmax match=67.6% (chance 16.7%)
+firing rates: H_ex=0.159 H_inh=0.183 O=0.094 spk/neuron/tick
+O non-firing (of 3072): 1
+prunable weights (|w|<0.001): 898/109760 -> sparsity 0.8%
+example decoded net action vs LUT (held-out):
+  obs#0: net=[0.8889999985694885, -0.18199999630451202, 2.4509999752044678, -0.5659999847412109, -1.093999981880188, -1.2589999437332153]  LUT=[0.581, -0.997, 2.342, -1.797, -1.226, -1.99]
+  obs#1: net=[0.9940000176429749, -0.2750000059604645, 1.5779999494552612, -0.0820000022649765, -0.5329999923706055, -0.014999999664723873]  LUT=[1.427, -1.265, 0.845, 2.771, 2.081, 1.509]
+  obs#2: net=[0.5109999775886536, -0.08699999749660492, 1.4980000257492065, -0.5659999847412109, -0.43700000643730164, -0.2840000092983246]  LUT=[-0.563, -0.467, 2.455, -1.829, -0.847, -1.871]
+
+(elapsed 348s, device=cuda, peak_gpu_mem=5.02GB, threads=15)

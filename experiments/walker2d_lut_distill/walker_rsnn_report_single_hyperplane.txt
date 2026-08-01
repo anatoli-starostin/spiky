@@ -1,0 +1,14 @@
+single-hyperplane unit test | HYP idx=84 (median leaky acc=75.6%) posrate=75.6% | integer-tick LOGISTIC CEILING=98.97%
+boundary-distance |w.x+b| quartiles: [0.0, 0.66, 1.39, 2.34, 7.24]
+tau=8          readout=binary   | acc 72.09% (ceil 99.0) | quint(near->far) [53.4, 63.9, 72.7, 80.2, 90.3] | BCE 0.776->0.471
+tau=8          readout=latency  | acc 77.22% (ceil 99.0) | quint(near->far) [57.9, 69.0, 77.2, 87.1, 95.0] | BCE 1.991->0.554
+tau=8          readout=count    | acc 78.86% (ceil 99.0) | quint(near->far) [57.8, 70.3, 81.4, 88.7, 96.2] | BCE 0.741->0.441
+tau=32         readout=binary   | acc 74.08% (ceil 99.0) | quint(near->far) [55.0, 65.8, 73.4, 82.9, 93.3] | BCE 1.549->0.675
+tau=32         readout=latency  | acc 77.47% (ceil 99.0) | quint(near->far) [56.3, 68.9, 78.7, 87.8, 95.6] | BCE 3.215->0.528
+tau=32         readout=count    | acc 77.77% (ceil 99.0) | quint(near->far) [57.2, 69.6, 78.9, 87.9, 95.2] | BCE 1.391->0.497
+tau=64         readout=binary   | acc 71.95% (ceil 99.0) | quint(near->far) [54.1, 64.5, 69.5, 79.8, 91.8] | BCE 1.423->0.604
+tau=64         readout=latency  | acc 77.61% (ceil 99.0) | quint(near->far) [56.6, 69.4, 78.2, 87.5, 96.5] | BCE 3.489->0.536
+tau=64         readout=count    | acc 77.45% (ceil 99.0) | quint(near->far) [57.0, 69.7, 78.0, 87.5, 95.1] | BCE 1.303->0.522
+tau=integrator readout=binary   | acc 24.27% (ceil 99.0) | quint(near->far) [43.9, 32.7, 24.0, 14.7, 6.1] | BCE 1.716->0.713
+tau=integrator readout=latency  | acc 82.28% (ceil 99.0) | quint(near->far) [59.1, 74.8, 85.5, 93.0, 99.0] | BCE 3.808->0.488
+tau=integrator readout=count    | acc 75.62% (ceil 99.0) | quint(near->far) [56.1, 67.3, 75.9, 84.9, 93.9] | BCE 1.531->0.584
