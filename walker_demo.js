@@ -1,182 +1,264 @@
-// walker_demo.js — Walker2d LUT→spiking actor, replaying a REAL spnet spike trace.
-// Every node lights EXACTLY at its recorded spike tick; comparators that never cross stay dark
-// (bit 0); edges carry a pulse only when a real spike propagates. Three synced views: an aggregate
-// graph (32 tables), a per-table INSPECT view (6 comparator bits → 1-of-64 address by coincidence),
-// and a timeline raster. Model + per-preset traces embedded in walker_model.json.
+// inspector.js — dependency-free spnet inspector: linked graph / activity / raster.
 (function () {
   'use strict';
-  function showErr(m){var b=document.getElementById('errbar');if(b){b.style.display='block';b.textContent='⚠ '+m;}}
-  window.addEventListener('error', function(e){showErr((e.error&&e.error.stack)||e.message);});
-  fetch('walker_model.json').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
-    .then(init).catch(function(e){showErr('could not load walker_model.json — '+e.message);});
+  function showErr(msg) {
+    let bar = document.getElementById('errbar');
+    bar.style.display = 'block'; bar.textContent = '⚠ inspector error — ' + msg;
+    if (window.console) console.error(msg);
+  }
+  window.addEventListener('error', (e) => showErr((e.error && e.error.stack) || e.message));
 
-  var M, sel=0, tsel=0, T=0, playing=true, speed=1, last=0, started=false, TT, DT, WIN, NT=32, K=6, errShown=false;
-  var pow2=[32,16,8,4,2,1];
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const LAYER_COL = { clock: () => css('--ok'), gate: () => '#c58af9', input: () => css('--spike'),
+    decode: () => '#3fb6a8', detect: () => css('--addr'), hidden: () => '#c58af9',
+    compl: () => css('--warn'), rows: () => css('--row'), output: () => css('--out') };
+  const FLASH = 0.45, DOT_MIN = 0.6;
 
-  function oracleAddr(obs){                 // int4-dequant LUT addresses on the raw obs (for match stat)
-    var wq=M.wq,bq=M.bq,ws=M.ws,bs=M.bs, a=[];
-    for(var t=0;t<NT;t++){var bits=0;
-      for(var i=0;i<K;i++){var pf=0;for(var j=0;j<17;j++)pf+=(wq[t][i][j]*ws[t])*obs[j];
-        bits=(bits<<1)|((pf+bq[t][i]*bs[t]>0)?1:0);}
-      a.push(bits);}
-    return a;
+  let G = null, A = null;
+  let byId = {}, fireTicks = {}, volt = {}, thr = {}, outSyn = {};
+  let simT = 0, Tmax = 1, playing = false, speed = 1, lastTs = null, dirty = true;
+  let sel = null, hover = null;
+
+  // Walker2d LUT->spiking: our network + REAL spnet spike trace, in the inspector's own schema.
+  const _gf = 'walker_graph.json';
+  const _af = 'walker_activity.json';
+  Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
+    .then(([g, a]) => { G = g; A = a; init(); }).catch(e => showErr('load: ' + e));
+
+  // ---- activity loading (a single activity object, OR one variant of a bundle) ----
+  function loadActivity(act) {
+    fireTicks = {}; volt = {};
+    for (const n of G.neurons) fireTicks[n.id] = [];
+    for (const v of act.voltages) volt[v.neuron_id] = v.trace;
+    for (const sp of act.spikes) (fireTicks[sp.neuron_id] || (fireTicks[sp.neuron_id] = [])).push(sp.tick);
+    Tmax = act.t1;
+    simT = 0; playing = false; dirty = true;
+    const pb = document.getElementById('play'); if (pb) pb.textContent = '▶ Play';
+    renderVariantInfo(act);
   }
 
-  function init(d){
-    M=d; WIN=M.meta.win; DT=M.meta.decode_tick; TT=DT+WIN;
-    document.getElementById('chips').innerHTML=[
-      'model <b>int4</b> Walker2d actor','tables <b>32</b>','k <b>6</b> · n <b>17</b>',
-      'window <b>'+WIN+'</b> ticks','<b>REAL</b> spnet spike trace'
-    ].map(function(t){return '<span class="chip">'+t+'</span>';}).join('');
-    var s=document.getElementById('preset');
-    s.innerHTML=M.presets.map(function(p,i){return '<option value="'+i+'">'+p.name+'</option>';}).join('');
-    s.addEventListener('change',function(){sel=+this.value;T=0;syncSel();});
-    var ts=document.getElementById('tablesel');
-    if(ts){var o='';for(var t=0;t<NT;t++)o+='<option value="'+t+'">table '+t+'</option>';ts.innerHTML=o;
-      ts.addEventListener('change',function(){tsel=+this.value;});}
-    document.getElementById('play').addEventListener('click',function(){playing=!playing;this.textContent=playing?'❚❚ pause':'▶ play';});
-    document.getElementById('restart').addEventListener('click',function(){T=0;playing=true;document.getElementById('play').textContent='❚❚ pause';});
-    document.getElementById('speed').addEventListener('change',function(){speed=+this.value;});
-    gcv=document.getElementById('graph'); gctx=gcv?gcv.getContext('2d'):null;
-    icv=document.getElementById('inspect'); ictx=icv?icv.getContext('2d'):null;
-    rcv=document.getElementById('raster'); rctx=rcv?rcv.getContext('2d'):null;
-    if(!gctx&&!rctx){showErr('no canvas context');return;}
-    resize(); window.addEventListener('resize',function(){resize();drawAll();});
-    syncSel(); drawAll(); last=0; started=false; requestAnimationFrame(loop);
+  const ordStr = (a) => a.map((d) => 'o' + d).join(' > ');
+
+  function renderVariantInfo(act) {
+    const info = document.getElementById('variantInfo');
+    if (!info || act.input === undefined) return;
+    const rows = act.gt.map((g, o) => { const d = act.dec[o], e = Math.abs(g - d), ok = e < 0.15;
+      return `<tr><td>a${o}</td><td class="mono">${g.toFixed(3)}</td><td class="mono">${d.toFixed(3)}</td><td class="mono">${e.toFixed(3)}</td><td>${ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--warn)">✕</span>'}</td></tr>`; }).join('');
+    info.innerHTML =
+      `<b>obs (17-dim)</b> = <span class="mono">[${act.input.join(', ')}]</span><br>`
+      + `<b>action means — LUT oracle vs spiking</b> <span class="small" style="color:var(--muted)">(decoded from the 6 output-neuron spike times)</span>:`
+      + `<table style="width:100%;font-size:12px;margin-top:4px"><tr><td>dim</td><td>oracle</td><td>spiking</td><td>|Δ|</td><td></td></tr>${rows}</table>`
+      + (act.match ? '<span style="color:var(--ok)">✓ spiking output matches the trained LUT policy</span>'
+                   : '<span style="color:var(--warn)">✕ one action dim differs (a rare boundary address-flip)</span>');
   }
 
-  var gcv,gctx,gW,gH,icv,ictx,iW,iH,rcv,rctx,rW,rH,R,GT,ORA;
-  function sizeC(el,c){var dpr=Math.min(2,window.devicePixelRatio||1);var r=el.getBoundingClientRect();
-    var w=Math.max(320,Math.round(r.width||el.clientWidth||640)),h=+el.getAttribute('height')||360;
-    el.style.height=h+'px';el.width=Math.round(w*dpr);el.height=Math.round(h*dpr);c.setTransform(dpr,0,0,dpr,0,0);return [w,h];}
-  function resize(){
-    if(gctx){var a=sizeC(gcv,gctx);gW=a[0];gH=a[1];}
-    if(ictx){var b=sizeC(icv,ictx);iW=b[0];iH=b[1];}
-    if(rctx){var e=sizeC(rcv,rctx);rW=e[0];rH=e[1];}
+  function setupVariantsUI() {
+    if (!A.variants) return;
+    const ctl = document.querySelector('.ctl');
+    const bar = document.createElement('div');
+    bar.className = 'ctl'; bar.style.marginTop = '8px'; bar.style.flexWrap = 'wrap';
+    const lab = document.createElement('label'); lab.textContent = 'input ';
+    const sel = document.createElement('select'); sel.id = 'variantSel';
+    A.variants.forEach((v, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = (i + 1) + ') ' + v.label; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => loadActivity(A.variants[+sel.value]));
+    lab.appendChild(sel); bar.appendChild(lab);
+    const info = document.createElement('div');
+    info.id = 'variantInfo'; info.style.cssText = 'margin-top:8px;font-size:12.5px;line-height:1.8';
+    ctl.parentNode.insertBefore(bar, ctl.nextSibling);
+    bar.parentNode.insertBefore(info, bar.nextSibling);
   }
 
-  function syncSel(){
-    var p=M.presets[sel]; R=p.trace; GT=p.gt; ORA=oracleAddr(p.obs);
-    document.getElementById('obs').innerHTML='<b>obs (17-dim):</b> <span class="mono">['+p.obs.map(function(v){return v.toFixed(2);}).join(', ')+']</span>';
-    var oc=M.meta.out_c, oa=M.meta.out_alpha, rows='<tr><th>action</th><th>LUT oracle</th><th>spiking (from output spike time)</th><th>Δ</th><th></th></tr>', allok=true;
-    for(var ch=0;ch<6;ch++){var gt=GT[ch], dec=(oc-R.out_tick[ch])/oa, err=Math.abs(gt-dec), ok=err<0.15; if(!ok)allok=false;
-      rows+='<tr><td>a'+ch+'</td><td class="mono">'+gt.toFixed(3)+'</td><td class="mono">'+dec.toFixed(3)+'</td><td class="mono">'+err.toFixed(3)+'</td><td>'+(ok?'<span style="color:var(--ok)">✓</span>':'<span style="color:var(--bad)">✕</span>')+'</td></tr>';}
-    var am=0;for(var t=0;t<NT;t++)if(R.addr[t]===ORA[t])am++;
-    document.getElementById('cmp').innerHTML='<table class="gtab">'+rows+'</table>'
-      +'<p class="small" style="margin-top:6px;">Per-table address-match vs oracle: <b>'+Math.round(am/NT*100)+'%</b>. Overall action match: '
-      +(allok?'<b style="color:var(--ok)">MATCH ✓</b>':'<b style="color:#e5c07b">close</b> (a rare boundary flip)')+'</p>';
+  function init() {
+    for (const n of G.neurons) { byId[n.id] = n; thr[n.id] = n.spike_threshold; }
+    for (const s of G.synapses) (outSyn[s.source] || (outSyn[s.source] = [])).push(s);
+    setupVariantsUI();
+    loadActivity(A.variants ? A.variants[0] : A);
+    document.getElementById('glegend').innerHTML =
+      G.layers.map(l => `<span style="color:${(LAYER_COL[l] ? LAYER_COL[l]() : '#999')}">■ ${l}</span>`).join(' · ')
+      + ' · edges: <span style="color:#5b9dff">■ −w</span>/<span style="color:#ff6b6b">■ +w</span>, dashed = delay>1';
+    document.title = 'Walker2d LUT → spiking (inspector)';
+    setupCanvas(); bindControls();
+    requestAnimationFrame(loop);
   }
 
-  function lerp(a,b,f){return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};}
-  function flash(tick){if(tick<0)return 0;var d=T-tick;return (d>=0&&d<16)?1-d/16:0;}
-  function node(c,p,color,g,r){
-    if(g>0){c.globalAlpha=g*0.85;c.fillStyle=color;c.beginPath();c.arc(p.x,p.y,r+7*g,0,7);c.fill();c.globalAlpha=1;}
-    c.globalAlpha=1;c.fillStyle=g>0?'#ffffff':color;c.beginPath();c.arc(p.x,p.y,r,0,7);c.fill();
+  // ---- canvas (dpr-capped, size-once) ----
+  const canv = {};
+  function setupCanvas() {
+    ['graph', 'raster'].forEach(id => {
+      const cv = document.getElementById(id);
+      canv[id] = { cv, ctx: cv.getContext('2d'), w: 0, h: 0, hCSS: +cv.getAttribute('height') };
+    });
+    resize();
+    window.addEventListener('resize', () => { resize(); dirty = true; });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastTs = null; dirty = true; } });
+    // interactions
+    const g = canv.graph.cv;
+    g.addEventListener('mousemove', (e) => { hover = pick(e); dirty = true; g.style.cursor = hover ? 'pointer' : 'default'; });
+    g.addEventListener('click', (e) => { sel = pick(e); showPanel(); dirty = true; });
+    const r = canv.raster.cv;
+    let drag = false;
+    const scrub = (e) => { const t = rasterTick(e); if (t != null) { simT = t; playing = false; setPlay(false); dirty = true; } };
+    r.addEventListener('mousedown', (e) => { drag = true; scrub(e); });
+    r.addEventListener('mousemove', (e) => { if (drag) scrub(e); });
+    window.addEventListener('mouseup', () => { drag = false; });
+  }
+  function resize() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    for (const id in canv) {
+      const c = canv[id];
+      const w = Math.round(c.cv.clientWidth || 800), h = c.hCSS;
+      if (w === c.w) continue;
+      c.cv.style.height = h + 'px'; c.cv.width = Math.max(1, w * dpr); c.cv.height = h * dpr;
+      c.ctx.setTransform(dpr, 0, 0, dpr, 0, 0); c.w = w; c.h = h;
+    }
+    layoutGraph();
   }
 
-  // ---------- aggregate graph: 32 table clusters, real comparator firing, explicit comp->addr edges ----------
-  function drawGraph(){
-    if(!gctx||!R)return; var c=gctx; c.fillStyle='#0b0f16'; c.fillRect(0,0,gW,gH);
-    var padY=22, ph=gH-2*padY-14;
-    var ins=[]; for(var j=0;j<17;j++) ins.push({x:gW*0.05,y:padY+j*ph/16});
-    var outs=[]; for(var o=0;o<6;o++) outs.push({x:gW*0.965,y:padY+ph*0.14+o*ph*0.72/5});
-    var cols=4,rows=8, gx0=gW*0.14, gx1=gW*0.9, gy0=padY, cw=(gx1-gx0)/cols, chh=ph/rows;
-    function cl(t){var cx=t%cols,cy=(t/cols)|0; return {x:gx0+cx*cw, y:gy0+cy*chh};}
-    function comp(t,i){var b=cl(t); return {x:b.x+cw*0.16, y:b.y+chh*0.18+i*chh*0.6/5};}
-    function addrN(t){var b=cl(t); return {x:b.x+cw*0.66, y:b.y+chh*0.42};}
-    // faint input->cluster + addr->output bundles
-    c.lineWidth=0.5; c.strokeStyle='rgba(63,169,184,0.06)';
-    for(j=0;j<17;j++){c.beginPath();c.moveTo(ins[j].x,ins[j].y);c.lineTo(gx0-6,gH/2);c.stroke();}
-    c.strokeStyle='rgba(168,111,192,0.09)';
-    for(o=0;o<6;o++){c.beginPath();c.moveTo(gx1+2,gH/2);c.lineTo(outs[o].x,outs[o].y);c.stroke();}
-    // per-cluster comparator->address EXPLICIT edges + pulses (layer2->layer3, visible)
-    for(var t=0;t<NT;t++){var an=addrN(t);
-      for(var i=0;i<K;i++){var cp=comp(t,i), ct=R.comp_tick[t*K+i], fired=ct>=0;
-        c.lineWidth=0.6; c.strokeStyle=fired?'rgba(120,200,215,0.28)':'rgba(90,90,110,0.14)';
-        c.beginPath();c.moveTo(cp.x,cp.y);c.lineTo(an.x,an.y);c.stroke();
-        if(fired){var t1=R.addr_tick[t]; if(T>=ct&&T<=t1+2){var f=t1>ct?(T-ct)/(t1-ct):1; var pp=lerp(cp,an,Math.min(1,f)); c.fillStyle='#8ff2ff';c.beginPath();c.arc(pp.x,pp.y,2.2,0,7);c.fill();}}
+  // ---- graph layout: map node.x/node.y to canvas ----
+  let pos = {};
+  function layoutGraph() {
+    const c = canv.graph; if (!c) return;
+    const xs = G.neurons.map(n => n.x), ys = G.neurons.map(n => n.y);
+    const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+    const padL = 40, padR = 40, padT = 24, padB = 20;
+    const sx = (c.w - padL - padR) / Math.max(1, maxx - minx), sy = (c.h - padT - padB) / Math.max(1, maxy - miny);
+    pos = {};
+    for (const n of G.neurons) pos[n.id] = { x: padL + (n.x - minx) * sx, y: padT + (n.y - miny) * sy };
+  }
+
+  const wmax = () => Math.max(1e-6, ...G.synapses.map(s => Math.abs(s.weight)));
+  function edgeStyle(ctx, s) {
+    const mag = Math.min(1, Math.abs(s.weight) / wmax());
+    ctx.strokeStyle = s.weight < 0 ? '#5b9dff' : '#ff6b6b';
+    ctx.globalAlpha = 0.15 + 0.5 * mag; ctx.lineWidth = 0.6 + 2.2 * mag;
+    if (s.delay > 1) ctx.setLineDash([4, 3]); else ctx.setLineDash([]);
+  }
+
+  function firedBy(id, t) { const f = fireTicks[id] || []; for (const ft of f) if (Math.abs(t - ft) < FLASH) return true; return false; }
+  function nodeFill(id, t) {
+    const tr = volt[id]; if (!tr) return 0; const v = tr[Math.max(0, Math.min(tr.length - 1, Math.floor(t)))];
+    const th = thr[id]; if (!(th > 0) || th > 1e5) { // huge threshold (outputs): scale by trace max
+      const mx = Math.max(1e-6, ...tr.map(Math.abs)); return Math.max(-1, Math.min(1, v / mx));
+    }
+    return Math.max(-1, Math.min(1, v / th));
+  }
+
+  function drawGraph() {
+    const c = canv.graph, ctx = c.ctx; ctx.clearRect(0, 0, c.w, c.h);
+    // edges
+    for (const s of G.synapses) {
+      const a = pos[s.source], b = pos[s.target]; if (!a || !b) continue;
+      const hot = sel && sel.kind === 'edge' && sel.o.id === s.id;
+      edgeStyle(ctx, s); if (hot) { ctx.globalAlpha = 1; ctx.lineWidth += 1.5; }
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    // travelling spike dots (source fired at T -> dot to target over delay)
+    for (const s of G.synapses) {
+      const a = pos[s.source], b = pos[s.target]; if (!a || !b) continue;
+      for (const T of (fireTicks[s.source] || [])) {
+        const span = Math.max(s.delay, DOT_MIN);
+        if (simT < T || simT > T + span) continue;
+        const fr = (simT - T) / span;
+        ctx.fillStyle = s.weight < 0 ? '#5b9dff' : '#ff6b6b';
+        ctx.beginPath(); ctx.arc(a.x + (b.x - a.x) * fr, a.y + (b.y - a.y) * fr, 3, 0, 7); ctx.fill();
       }
     }
-    // pulses addr->output
-    for(o=0;o<6;o++){var s0=R.addr_tick[0],s1=DT+R.out_tick[o];/*from cluster region*/ var src={x:gx1+2,y:gH/2}; if(T>=WIN&&T<=s1){var ff=(T-WIN)/(s1-WIN);var q=lerp(src,outs[o],Math.min(1,ff));c.fillStyle='#f0c0ff';c.beginPath();c.arc(q.x,q.y,3,0,7);c.fill();}}
-    // nodes: comparators glow at REAL ticks (dark if never), addresses at addr_tick
-    for(t=0;t<NT;t++){for(i=0;i<K;i++){var ct2=R.comp_tick[t*K+i];node(c,comp(t,i),'#4fd1e0',flash(ct2),2.2);}
-      node(c,addrN(t),'#9a7fc0',flash(R.addr_tick[t]),3.2);}
-    for(j=0;j<17;j++) node(c,ins[j],'#3fa9b8',flash(R.in_tick[j]),3.6);
-    for(o=0;o<6;o++) node(c,outs[o],'#c678dd',flash(DT+R.out_tick[o]),5.4);
-    c.fillStyle='#66727f';c.font='10px ui-monospace,monospace';c.textAlign='center';
-    c.fillText('17 obs',gW*0.05,gH-4);c.fillText('32 tables: 6 comparators → address (real staggered spikes; dark = bit 0)',gW*0.5,gH-4);c.fillText('6 actions',gW*0.955,gH-4);
-    c.textAlign='left';c.fillStyle='#8b98a5';c.fillText(T<WIN?'comparators crossing threshold at their real times…':(T<DT?'addresses resolved':'emitting action spikes'),8,13);
-  }
-
-  // ---------- per-table INSPECT: 6 comparator bits -> 1-of-64 address via coincidence ----------
-  function drawInspect(){
-    if(!ictx||!R)return; var c=ictx; c.fillStyle='#0b0f16'; c.fillRect(0,0,iW,iH);
-    var t=tsel, addr=R.addr[t], padY=30, ph=iH-2*padY;
-    var comps=[]; for(var i=0;i<K;i++) comps.push({x:iW*0.16,y:padY+i*ph/5});
-    var an={x:iW*0.66,y:padY+ph*0.5}, out={x:iW*0.9,y:padY+ph*0.5};
-    // edges comp->address (explicit)
-    for(i=0;i<K;i++){var ct=R.comp_tick[t*K+i], fired=ct>=0;
-      c.lineWidth=fired?1.6:1; c.strokeStyle=fired?'rgba(120,220,235,0.5)':'rgba(90,90,110,0.25)'; c.setLineDash(fired?[]:[4,3]);
-      c.beginPath();c.moveTo(comps[i].x,comps[i].y);c.lineTo(an.x,an.y);c.stroke(); c.setLineDash([]);
-      if(fired){var t1=R.addr_tick[t]; if(T>=ct&&T<=t1+3){var f=t1>ct?(T-ct)/(t1-ct):1;var pp=lerp(comps[i],an,Math.min(1,f));c.fillStyle='#8ff2ff';c.beginPath();c.arc(pp.x,pp.y,3.6,0,7);c.fill();}}
+    // nodes
+    for (const n of G.neurons) {
+      const p = pos[n.id], R = 11, col = (LAYER_COL[n.type] ? LAYER_COL[n.type]() : '#888');
+      const flashing = firedBy(n.id, simT), frac = nodeFill(n.id, simT);
+      if (flashing) { ctx.globalAlpha = 0.5; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(p.x, p.y, R + 6, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.fillStyle = '#20262f'; ctx.fill();
+      if (Math.abs(frac) > 0.02) {
+        ctx.save(); ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.clip();
+        ctx.globalAlpha = 0.8; ctx.fillStyle = frac >= 0 ? col : '#5b9dff';
+        const fh = 2 * R * Math.min(1, Math.abs(frac)); ctx.fillRect(p.x - R, p.y + R - fh, 2 * R, fh);
+        ctx.globalAlpha = 1; ctx.restore();
+      }
+      const hot = (hover && hover.kind === 'node' && hover.o.id === n.id) || (sel && sel.kind === 'node' && sel.o.id === n.id);
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 7); ctx.strokeStyle = hot ? '#fff' : col; ctx.lineWidth = hot ? 2.5 : 1.2; ctx.stroke();
+      ctx.fillStyle = css('--ink'); ctx.font = 'bold 8px ui-monospace'; ctx.textAlign = 'center'; ctx.fillText(n.label, p.x, p.y + 3);
     }
-    c.lineWidth=1.4;c.strokeStyle='rgba(198,120,221,0.5)';c.beginPath();c.moveTo(an.x,an.y);c.lineTo(out.x,out.y);c.stroke();
-    // comparator nodes + labels (bit, fire tick or DARK)
-    for(i=0;i<K;i++){var ct3=R.comp_tick[t*K+i], bit=ct3>=0?1:0;
-      node(c,comps[i],'#4fd1e0',flash(ct3),7);
-      c.fillStyle=bit?'#e8eef5':'#7a8593';c.font='11px ui-monospace';c.textAlign='right';
-      c.fillText('h'+i+' = '+bit,comps[i].x-14,comps[i].y-6);
-      c.fillStyle='#66727f';c.font='9px ui-monospace';c.fillText(bit?('fires t='+ct3):'never (bit 0)',comps[i].x-14,comps[i].y+8);}
-    // address node fires (coincidence) at addr_tick
-    node(c,an,'#c678dd',flash(R.addr_tick[t]),11);
-    c.fillStyle='#e8eef5';c.font='12px ui-monospace';c.textAlign='center';c.fillText('addr '+addr,an.x,an.y-18);
-    c.fillStyle='#8b98a5';c.font='10px ui-monospace';c.fillText('coincidence',an.x,an.y+22);
-    node(c,out,'#c678dd',flash(DT+R.out_tick[Math.min(5,t%6)]),6);
-    // caption: 6-bit pattern -> address
-    var bstr=''; for(i=0;i<K;i++) bstr+=(R.comp_tick[t*K+i]>=0?'1':'0');
-    c.fillStyle='#cdd6df';c.font='12px ui-monospace';c.textAlign='left';
-    c.fillText('table '+t+':  bits [b5..b0] = '+bstr+'  →  1-of-64 address = '+addr,12,16);
-    c.fillStyle='#8b98a5';c.font='10px ui-monospace';
-    c.fillText('each comparator fires (=1) when its ramp crosses threshold, or stays dark (=0); the address neuron fires when its 6 required bits coincide.',12,iH-8);
+    ctx.textAlign = 'left'; ctx.lineWidth = 1;
   }
 
-  // ---------- timeline raster: real input, comparator-crossing, output spikes ----------
-  function drawRaster(){
-    if(!rctx||!R)return; var c=rctx; c.fillStyle='#0b0f16'; c.fillRect(0,0,rW,rH);
-    function xt(tk){return 44+(rW-56)*tk/TT;}
-    var padTop=26, band1=padTop, inH=70, compY=padTop+82, compH=120, outY=padTop+220, outH=60;
-    c.fillStyle='#66727f';c.font='10px ui-monospace';c.textAlign='left';
-    c.fillText('17 inputs',8,band1-6);c.fillText('192 comparators (crossing ticks; gaps = bit 0)',8,compY-6);c.fillText('6 action outputs',8,outY-6);
-    // clock line
-    c.strokeStyle='#3a4550';c.setLineDash([4,3]);c.beginPath();c.moveTo(xt(WIN),padTop-4);c.lineTo(xt(WIN),outY+outH);c.stroke();c.setLineDash([]);
-    c.fillStyle='#66727f';c.fillText('t='+WIN,xt(WIN)+3,padTop-4);
-    // inputs
-    for(var j=0;j<17;j++){var y=band1+8+j*(inH-8)/16, tk=R.in_tick[j],g=flash(tk);
-      if(g>0){c.globalAlpha=g*0.8;c.fillStyle='#5fe3f2';c.beginPath();c.arc(xt(tk),y,5+4*g,0,7);c.fill();c.globalAlpha=1;}
-      c.fillStyle=g>0?'#8ff2ff':'#3fa9b8';c.beginPath();c.arc(xt(tk),y,2.6,0,7);c.fill();}
-    // comparators: 192 rows compressed into the band
-    for(var ci=0;ci<192;ci++){var ct=R.comp_tick[ci]; if(ct<0)continue; var y2=compY+ (ci/192)*compH, g2=flash(ct);
-      c.fillStyle=g2>0?'#8ff2ff':'rgba(79,209,224,0.5)';c.beginPath();c.arc(xt(ct),y2,g2>0?3:1.6,0,7);c.fill();}
-    // outputs
-    for(var o=0;o<6;o++){var y3=outY+8+o*(outH-8)/5, at=DT+R.out_tick[o],g3=flash(at);
-      if(g3>0){c.globalAlpha=g3*0.85;c.fillStyle='#d98fee';c.beginPath();c.arc(xt(at),y3,7+4*g3,0,7);c.fill();c.globalAlpha=1;}
-      c.fillStyle=g3>0?'#f0c0ff':'#a86fc0';c.beginPath();c.arc(xt(at),y3,3.4,0,7);c.fill();
-      if(T>=at){c.fillStyle='#e8eef5';c.font='9px ui-monospace';c.textAlign='left';c.fillText(((M.meta.out_c-R.out_tick[o])/M.meta.out_alpha).toFixed(2),xt(at)+8,y3+3);}}
+  // ---- raster ----
+  let rasterGeom = null;
+  function drawRaster() {
+    const c = canv.raster, ctx = c.ctx; ctx.clearRect(0, 0, c.w, c.h);
+    const order = G.neurons.slice().sort((a, b) => a.col - b.col || a.y - b.y);
+    const padL = 64, padR = 16, padT = 12, padB = 22;
+    const n = order.length, rowH = (c.h - padT - padB) / n;
+    const X = (t) => padL + (t / Math.max(1, Tmax)) * (c.w - padL - padR);
+    rasterGeom = { padL, padR, X, order };
+    ctx.font = '9px ui-monospace';
+    for (let t = 0; t <= Tmax; t++) { ctx.strokeStyle = css('--edge'); ctx.globalAlpha = t % 5 === 0 ? .4 : .12; ctx.beginPath(); ctx.moveTo(X(t), padT); ctx.lineTo(X(t), c.h - padB); ctx.stroke(); ctx.globalAlpha = 1; if (t % 2 === 0) { ctx.fillStyle = css('--muted'); ctx.textAlign = 'center'; ctx.fillText(t, X(t), c.h - padB + 12); } }
+    ctx.textAlign = 'left';
+    for (let i = 0; i < n; i++) {
+      const nd = order[i], y = padT + rowH * (i + 0.5), col = (LAYER_COL[nd.type] ? LAYER_COL[nd.type]() : '#888');
+      ctx.fillStyle = col; ctx.font = '9px ui-monospace'; ctx.fillText(nd.label, 6, y + 3);
+      for (const T of (fireTicks[nd.id] || [])) {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(T), y, Math.min(4, rowH * 0.35), 0, 7); ctx.fill();
+      }
+    }
     // playhead
-    var px=xt(T);c.globalAlpha=0.25;c.strokeStyle='#5fe3f2';c.lineWidth=6;c.beginPath();c.moveTo(px,padTop-6);c.lineTo(px,outY+outH);c.stroke();
-    c.globalAlpha=0.95;c.lineWidth=1.4;c.beginPath();c.moveTo(px,padTop-6);c.lineTo(px,outY+outH);c.stroke();c.globalAlpha=1;c.lineWidth=1;
-    var el=document.getElementById('tick'); if(el)el.textContent='t = '+Math.min(TT,Math.floor(T))+' / '+TT;
+    ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(X(simT), padT); ctx.lineTo(X(simT), c.h - padB); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
+  }
+  function rasterTick(e) {
+    if (!rasterGeom) return null; const c = canv.raster, rect = c.cv.getBoundingClientRect();
+    const x = (e.clientX - rect.left); const { padL, padR } = rasterGeom;
+    const t = (x - padL) / (c.w - padL - padR) * Tmax; return Math.max(0, Math.min(Tmax, t));
   }
 
-  function drawAll(){ drawGraph(); drawInspect(); drawRaster(); }
-  function loop(ts){
+  // ---- picking (graph) ----
+  function pick(e) {
+    const c = canv.graph, rect = c.cv.getBoundingClientRect(); const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    for (const n of G.neurons) { const p = pos[n.id]; if ((mx - p.x) ** 2 + (my - p.y) ** 2 <= 144) return { kind: 'node', o: n }; }
+    let best = null, bd = 6;
+    for (const s of G.synapses) { const a = pos[s.source], b = pos[s.target]; if (!a || !b) continue; const d = segDist(mx, my, a, b); if (d < bd) { bd = d; best = { kind: 'edge', o: s }; } }
+    return best;
+  }
+  function segDist(px, py, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy; if (L2 === 0) return Math.hypot(px - a.x, py - a.y);
+    let t = ((px - a.x) * dx + (py - a.y) * dy) / L2; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+  }
+  function showPanel() {
+    const side = document.getElementById('side'); if (!sel) { side.innerHTML = '<h3>Click a node or edge</h3>'; return; }
+    if (sel.kind === 'node') {
+      const n = sel.o, f = ['type', 'label', 'cf_2', 'cf_1', 'cf_0', 'a', 'b', 'c', 'd', 'spike_threshold'];
+      side.innerHTML = `<h3 style="color:${(LAYER_COL[n.type] ? LAYER_COL[n.type]() : '#888')}">Neuron ${n.label} <span class="mono" style="color:var(--muted)">#${n.id}</span></h3>`
+        + '<table>' + f.map(k => `<tr><td>${k}</td><td class="mono">${typeof n[k] === 'number' ? (Math.abs(n[k]) > 1e5 ? n[k].toExponential(1) : (+n[k]).toFixed(4)) : n[k]}</td></tr>`).join('') + '</table>'
+        + `<p class="small">fires at ticks: <b class="mono">${(fireTicks[n.id] || []).join(', ') || '—'}</b></p>`;
+    } else {
+      const s = sel.o, sn = byId[s.source], tn = byId[s.target];
+      side.innerHTML = `<h3>Synapse <span class="mono">${sn.label} → ${tn.label}</span></h3>`
+        + '<table>' + [['weight', s.weight.toFixed(4)], ['delay', s.delay], ['synapse_meta_index', s.synapse_meta_index],
+        ['learning_rate', s.learning_rate], ['min_weight', s.min_weight], ['max_weight', s.max_weight]]
+          .map(([k, v]) => `<tr><td>${k}</td><td class="mono">${v}</td></tr>`).join('') + '</table>';
+    }
+  }
+
+  // ---- loop + controls ----
+  const setPlay = (p) => { document.getElementById('play').textContent = p ? '❚❚ Pause' : '▶ Play'; };
+  function bindControls() {
+    document.getElementById('play').onclick = () => { if (simT >= Tmax) simT = 0; playing = !playing; setPlay(playing); dirty = true; };
+    document.getElementById('step').onclick = () => { playing = false; setPlay(false); simT = Math.min(Tmax, Math.floor(simT) + 1); dirty = true; };
+    document.getElementById('restart').onclick = () => { simT = 0; playing = true; setPlay(true); dirty = true; };
+    document.getElementById('speed').onchange = (e) => { speed = parseFloat(e.target.value); };
+  }
+  function loop(ts) {
+    try {
+      if (document.hidden) { lastTs = null; requestAnimationFrame(loop); return; }
+      if (lastTs == null) lastTs = ts; let dt = (ts - lastTs) / 1000; lastTs = ts; if (dt > 0.1) dt = 0.1;
+      if (playing) { simT += dt * speed * 3; if (simT >= Tmax) { simT = Tmax; playing = false; setPlay(false); } dirty = true; }
+      if (dirty) { drawGraph(); drawRaster(); document.getElementById('tickinfo').textContent = 'tick ' + simT.toFixed(2) + ' / ' + Tmax; dirty = false; }
+    } catch (err) { showErr((err && err.stack) || String(err)); }
     requestAnimationFrame(loop);
-    try{
-      if(!started){started=true; resize();}
-      var dt=last?Math.min(0.05,(ts-last)/1000):0; last=ts;
-      if(playing){T+=dt*speed*130; if(T>TT+50)T=0;}
-      drawAll();
-    }catch(e){ if(!errShown){errShown=true; showErr('animation error: '+(e.message||e));} }
   }
 })();
