@@ -36,12 +36,15 @@
         <span id="tick"></span>
       </div>
       <div id="obs"></div>
-      <p class="small" style="margin:2px 0 4px;"><b>Structural view</b> — spikes flow left→right through the network:</p>
-      <canvas id="graph" height="400"></canvas>
-      <p class="small">17 obs inputs (cyan) → 6 hyperplane comparators → 32 tables (each resolves a 1-of-64 address at the clock) → 6 action outputs (purple). Nodes glow when they spike; pulses travel along the synapses. 32 tables are shown as a compact grid; edges are bundled through the address stage to stay legible.</p>
-      <p class="small" style="margin:10px 0 4px;"><b>Timeline view</b> — the same spikes on a 0→256-tick raster:</p>
-      <canvas id="raster" height="380"></canvas>
-      <p class="small">Cyan dots (top) = the 17 observation inputs, each a single spike whose TIME encodes its value (earlier = larger). The dashed line marks where all 32 tables' 6-bit addresses are resolved. Purple dots (bottom) = the 6 action outputs, each a spike whose TIME encodes the action value; the number is the decoded action. The playhead sweeps the window. Both views share one clock.</p>
+      <p class="small" style="margin:2px 0 4px;"><b>Network (all 32 tables)</b> — REAL recorded spikes: each comparator lights at its actual threshold-crossing tick, or stays dark (bit&nbsp;0); pulses travel comparator→address as bits arrive:</p>
+      <canvas id="graph" height="420"></canvas>
+      <p class="small">17 obs inputs (cyan, left) → 32 tables, each a cluster of 6 comparator neurons whose short edges feed its address neuron → 6 action outputs (purple, right). The comparators fire at genuinely staggered, data-dependent times pulled from a real spnet run; roughly half never cross (bit&nbsp;0, dark). No synchronized flash.</p>
+      <p class="small" style="margin:12px 0 4px;"><b>Inspect one table</b> <select id="tablesel" style="font-size:12px"></select> — how 6 comparator bits pick a 1-of-64 address by coincidence:</p>
+      <canvas id="inspect" height="240"></canvas>
+      <p class="small">The 6 hyperplane comparators (left) each fire (=1) at their real crossing tick or stay dark (=0); those 6 bits form the address. A cyan pulse travels each fired comparator's edge into the address (coincidence) neuron, which fires when its required bits have all arrived — selecting one of 64 rows.</p>
+      <p class="small" style="margin:12px 0 4px;"><b>Timeline</b> — the same real spikes on the tick axis:</p>
+      <canvas id="raster" height="320"></canvas>
+      <p class="small">Top: 17 input spikes at their latency ticks. Middle: all 192 comparator crossing ticks (gaps = comparators that never fire = bit&nbsp;0) — you can see the real stagger. Bottom: the 6 action-output spikes at their emit latencies (number = decoded action). The playhead and clock are shared with the graph.</p>
     </div>
 
     <div class="panel">
@@ -56,6 +59,6 @@
     </div>
   </div>
 
-  <script src="walker_demo.js?v=3"></script>
+  <script src="walker_demo.js?v=4"></script>
 </body>
 </html>
