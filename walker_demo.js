@@ -20,8 +20,8 @@
   let sel = null, hover = null;
 
   // Walker2d LUT->spiking: our network + REAL spnet spike trace, in the inspector's own schema.
-  const _gf = 'walker_graph.json?v=6';
-  const _af = 'walker_activity.json?v=6';
+  const _gf = 'walker_graph.json?v=7';
+  const _af = 'walker_activity.json?v=7';
   Promise.all([fetch(_gf).then(r => r.json()), fetch(_af).then(r => r.json())])
     .then(([g, a]) => { G = g; A = a; init(); }).catch(e => showErr('load: ' + e));
 
