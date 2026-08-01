@@ -36,8 +36,12 @@
         <span id="tick"></span>
       </div>
       <div id="obs"></div>
+      <p class="small" style="margin:2px 0 4px;"><b>Structural view</b> — spikes flow left→right through the network:</p>
+      <canvas id="graph" height="400"></canvas>
+      <p class="small">17 obs inputs (cyan) → 6 hyperplane comparators → 32 tables (each resolves a 1-of-64 address at the clock) → 6 action outputs (purple). Nodes glow when they spike; pulses travel along the synapses. 32 tables are shown as a compact grid; edges are bundled through the address stage to stay legible.</p>
+      <p class="small" style="margin:10px 0 4px;"><b>Timeline view</b> — the same spikes on a 0→256-tick raster:</p>
       <canvas id="raster" height="380"></canvas>
-      <p class="small">Cyan dots (top) = the 17 observation inputs, each a single spike whose TIME encodes its value (earlier = larger). The dashed line marks where all 32 tables' 6-bit addresses are resolved. Purple dots (bottom) = the 6 action outputs, each a spike whose TIME encodes the action value; the number is the decoded action. The playhead sweeps the 256-tick window.</p>
+      <p class="small">Cyan dots (top) = the 17 observation inputs, each a single spike whose TIME encodes its value (earlier = larger). The dashed line marks where all 32 tables' 6-bit addresses are resolved. Purple dots (bottom) = the 6 action outputs, each a spike whose TIME encodes the action value; the number is the decoded action. The playhead sweeps the window. Both views share one clock.</p>
     </div>
 
     <div class="panel">
@@ -52,6 +56,6 @@
     </div>
   </div>
 
-  <script src="walker_demo.js?v=2"></script>
+  <script src="walker_demo.js?v=3"></script>
 </body>
 </html>

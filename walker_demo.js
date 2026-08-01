@@ -51,23 +51,29 @@
     document.getElementById('restart').addEventListener('click',function(){T=0;playing=true;document.getElementById('play').textContent='❚❚ pause';});
     document.getElementById('speed').addEventListener('change',function(){speed=+this.value;});
     cv=document.getElementById('raster'); ctx=cv.getContext('2d');
+    gcv=document.getElementById('graph'); gctx=gcv?gcv.getContext('2d'):null;
     if(!ctx){showErr('canvas 2D context unavailable');return;}
     resize();
-    window.addEventListener('resize',function(){resize();draw();});
+    window.addEventListener('resize',function(){resize();drawGraph();draw();});
     syncSel();
-    draw();                       // immediate first frame (don't wait for RAF)
+    drawGraph(); draw();          // immediate first frame (don't wait for RAF)
     last=0; started=false;
     requestAnimationFrame(loop);
   }
 
-  var cv,ctx,W,H,started=false;
-  function resize(){
+  var cv,ctx,W,H,gcv,gctx,gW,gH,started=false;
+  function sizeCanvas(el,c){
     var dpr=Math.min(2,window.devicePixelRatio||1);
-    var rect=cv.getBoundingClientRect();
-    W=Math.max(320,Math.round(rect.width||cv.clientWidth||640));
-    H=+cv.getAttribute('height')||360;
-    cv.style.height=H+'px'; cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
-    ctx.setTransform(dpr,0,0,dpr,0,0);
+    var rect=el.getBoundingClientRect();
+    var w=Math.max(320,Math.round(rect.width||el.clientWidth||640));
+    var h=+el.getAttribute('height')||360;
+    el.style.height=h+'px'; el.width=Math.round(w*dpr); el.height=Math.round(h*dpr);
+    c.setTransform(dpr,0,0,dpr,0,0);
+    return [w,h];
+  }
+  function resize(){
+    var r=sizeCanvas(cv,ctx); W=r[0]; H=r[1];
+    if(gcv&&gctx){var gr=sizeCanvas(gcv,gctx); gW=gr[0]; gH=gr[1];}
   }
 
   var R;
@@ -94,8 +100,46 @@
       if(!started){started=true; resize();}      // re-measure once layout is settled (mobile timing)
       var dt=last?Math.min(0.05,(ts-last)/1000):0; last=ts;
       if(playing){T+=dt*speed*130; if(T>TT+50)T=0;}
-      draw();
+      drawGraph(); draw();
     }catch(e){ if(!errShown){errShown=true; showErr('animation error: '+(e.message||e));} }
+  }
+  function lerp(a,b,f){return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};}
+  function gnode(c,p,color,g,r){
+    if(g>0){c.globalAlpha=g*0.85;c.fillStyle=color;c.beginPath();c.arc(p.x,p.y,r+7*g,0,7);c.fill();c.globalAlpha=1;}
+    c.globalAlpha=g>0?1:0.92; c.fillStyle=g>0?'#ffffff':color; c.beginPath();c.arc(p.x,p.y,r,0,7);c.fill(); c.globalAlpha=1;
+  }
+  function drawGraph(){
+    if(!gctx||!R)return;
+    var c=gctx; c.fillStyle='#0b0f16'; c.fillRect(0,0,gW,gH);
+    var padY=24, ph=gH-2*padY;
+    var ins=[],comps=[],addrs=[],outs=[],j,i,t,o;
+    for(j=0;j<17;j++) ins.push({x:gW*0.07,y:padY+j*ph/16});
+    for(i=0;i<6;i++) comps.push({x:gW*0.33,y:padY+ph*0.14+i*ph*0.72/5});
+    for(t=0;t<32;t++){var cx=t%4,cy=(t/4)|0; addrs.push({x:gW*0.52+cx*(gW*0.15)/3,y:padY+cy*ph/7});}
+    for(o=0;o<6;o++) outs.push({x:gW*0.93,y:padY+ph*0.14+o*ph*0.72/5});
+    var agl={x:gW*0.50,y:padY+ph/2}, agr={x:gW*0.69,y:padY+ph/2};
+    c.lineWidth=0.5;
+    c.strokeStyle='rgba(63,169,184,0.08)';
+    for(j=0;j<17;j++)for(i=0;i<6;i++){c.beginPath();c.moveTo(ins[j].x,ins[j].y);c.lineTo(comps[i].x,comps[i].y);c.stroke();}
+    c.strokeStyle='rgba(150,150,175,0.10)';
+    for(i=0;i<6;i++){c.beginPath();c.moveTo(comps[i].x,comps[i].y);c.lineTo(agl.x,agl.y);c.stroke();}
+    for(t=0;t<32;t++){c.beginPath();c.moveTo(agl.x,agl.y);c.lineTo(addrs[t].x,addrs[t].y);c.stroke();c.beginPath();c.moveTo(addrs[t].x,addrs[t].y);c.lineTo(agr.x,agr.y);c.stroke();}
+    c.strokeStyle='rgba(168,111,192,0.13)';
+    for(o=0;o<6;o++){c.beginPath();c.moveTo(agr.x,agr.y);c.lineTo(outs[o].x,outs[o].y);c.stroke();}
+    // traveling pulses: inputs -> comparators (fire at latency, arrive at the clock)
+    for(j=0;j<17;j++){var t0=R.it[j],t1=WIN; if(T>=t0&&T<=t1){var p=lerp(ins[j],comps[j%6],(T-t0)/(t1-t0));c.fillStyle='#8ff2ff';c.beginPath();c.arc(p.x,p.y,3,0,7);c.fill();}}
+    // pulses: addresses -> outputs (leave at the clock, arrive at the emit latency)
+    for(o=0;o<6;o++){var s0=WIN,s1=DT+R.tOut[o]; if(T>=s0&&T<=s1){var pp=lerp(agr,outs[o],(T-s0)/(s1-s0));c.fillStyle='#f0c0ff';c.beginPath();c.arc(pp.x,pp.y,3.4,0,7);c.fill();}}
+    // nodes (glow when they spike)
+    for(j=0;j<17;j++) gnode(c,ins[j],'#3fa9b8',flash(R.it[j]),3.6);
+    for(i=0;i<6;i++) gnode(c,comps[i],'#5fb8c8',flash(WIN),4.6);
+    for(t=0;t<32;t++) gnode(c,addrs[t],'#9a7fc0',flash(WIN),3);
+    for(o=0;o<6;o++) gnode(c,outs[o],'#c678dd',flash(DT+R.tOut[o]),5.6);
+    // labels
+    c.fillStyle='#66727f'; c.font='10px ui-monospace,monospace'; c.textAlign='center';
+    c.fillText('17 obs',gW*0.07,gH-6); c.fillText('6 compare',gW*0.33,gH-6);
+    c.fillText('32 tables → 1-of-64 address',gW*0.585,gH-6); c.fillText('6 actions',gW*0.93,gH-6);
+    c.textAlign='left'; c.fillStyle='#8b98a5'; c.fillText(T<WIN?'reading inputs…':(T<DT?'addresses resolved':'emitting action spikes'),8,14);
   }
   function flash(tick){var d=T-tick; return (d>=0&&d<16)?1-d/16:0;}
   function draw(){
