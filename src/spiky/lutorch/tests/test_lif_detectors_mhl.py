@@ -41,15 +41,33 @@ def test_gradients_flow_to_every_param():
 
 
 def test_straight_through_invariant():
-    """ST forward value == pure hard/argmax lookup exactly; pure-soft blend differs."""
+    """ST forward value == pure hard/argmax lookup (up to float rounding of y_soft+(y_hard-y_soft));
+    the pure-soft blend differs materially."""
     m = _model(n_anchor_pairs=5, tables_per_head=4)
     x = torch.randn(32, 17)
     with torch.no_grad():
         y_st = m(x, mode="st")
         y_hard = m(x, mode="hard")
         y_soft = m(x, mode="soft")
-    assert torch.equal(y_st, y_hard), "ST forward must equal the hard/argmax lookup exactly"
+    # output-level STE reconstructs y_hard exactly in value up to fp rounding (~1e-7), not the soft blend
+    assert torch.allclose(y_st, y_hard, atol=1e-5), "ST forward must equal the hard/argmax lookup"
     assert not torch.allclose(y_st, y_soft, atol=1e-4), "soft blend should differ from hard forward"
+
+
+def test_full_k_backward_reaches_nonselected_cells():
+    """Regression guard for the output-level straight-through: because the ST backward is the exact full-K
+    softmax over all 2**nap cells (gradient flows through y_soft = prow_soft @ table), the table gradient
+    must reach (nearly) ALL rows per table, not only the argmax-selected rows. The old bit-level ST would
+    have given table grad to selected rows only."""
+    m = _model(n_anchor_pairs=4, tables_per_head=3)   # 16 rows/table
+    x = torch.randn(16, 17)
+    target = torch.randn(16, m.n_heads, m.n_outputs)
+    loss = torch.nn.functional.mse_loss(m(x, mode="st"), target)
+    loss.backward()
+    # grad reaches a row if any of its n_outputs entries is nonzero
+    row_has_grad = (m.table.grad.abs().sum(dim=-1) > 0)              # (n_tables, n_rows)
+    frac = row_has_grad.float().mean(dim=-1)                        # fraction of rows touched per table
+    assert frac.min() > 0.9, f"full-K backward should touch ~all rows; min fraction {frac.min():.2f}"
 
 
 def test_pair_mask_and_positivity():

@@ -28,25 +28,26 @@ per-detector mix.
 
 The teacher (`HyperplaneMultiHeadLUT`, `forward_mode="hard"`) does a **hard forward** — affine sign-pack
 argmax address → `F.embedding_bag(mode='sum')` reads exactly one row per table — with a **soft backward**
-(full-K softmax surrogate over the `2**nap` rows). We mirror it with a straight-through hard bit
+(full-K softmax surrogate over the `2**nap` rows). We mirror it with an **output-level straight-through**:
 
 ```
-b_st = b_soft + (1[V>θ] − b_soft).detach()
+prow_soft = Π_k [b_soft if code-bit=1 else 1-b_soft]   # b_soft = sigmoid((V-θ)/temp_bit); NO detach
+prow_hard = one-hot at the packed argmax address        # non-differentiable
+y_soft = prow_soft @ table ;  y_hard = prow_hard @ table
+y = y_soft + (y_hard - y_soft).detach()                 # forward = hard single cell; gradient via y_soft
 ```
 
-feeding the `2**nap` outer-product cell distribution. On the forward that distribution is **one-hot at the
-argmax address** (a single cell is read, exactly like the teacher); gradients flow through the soft bits.
-Bit packing is MSB-first and identical to the teacher: `addr = Σ_k bit_k·2**(nap−1−k)` (for nap=6,
-`[32,16,8,4,2,1]`).
+The forward **value** is the hard single cell (a single row read, exactly like the teacher, up to fp
+rounding), while the gradient flows entirely through `y_soft`. Bit packing is MSB-first and identical to the
+teacher: `addr = Σ_k bit_k·2**(nap−1−k)` (for nap=6, `[32,16,8,4,2,1]`).
 
-Consequence: the soft training objective and the hard/argmax inference objective **coincide by
-construction** — no soft-blend "escape hatch". (An earlier fully-soft-addressing prototype scored soft R²
-0.68 but collapsed to hard R² −0.64 because training exploited row-blending; the straight-through version
-fixes this.)
-
-*Backward-parity note:* the teacher's backward is a full-K softmax surrogate over all rows; the
-straight-through outer-product here passes gradient through the **selected** cell's bits only. This simpler,
-sanctioned surrogate trains well; a full-K softmax backward is a possible refinement.
+**Backward parity is now EXACT.** A product of independent per-bit Bernoullis over the `2**nap` outcomes *is*
+the softmax over those cells, so the `y_soft` backward is the **exact full-K softmax over all `2**nap`
+cells** — matching `HyperplaneMultiHeadLUT`'s hard-forward / soft-backward exactly (no longer a
+"selected-cell only" approximation; gradient reaches the bits of non-selected cells too). Consequence: the
+soft training objective and the hard/argmax inference objective **coincide by construction** — no soft-blend
+"escape hatch". (An earlier fully-soft-addressing prototype scored soft R² 0.68 but collapsed to hard R²
+−0.64 because training exploited row-blending; the straight-through version fixes this.)
 
 ## Current distillation result (real Walker2d LUT)
 

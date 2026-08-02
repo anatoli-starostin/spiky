@@ -18,19 +18,22 @@ Per detector (arrivals ``a_i = t_i + d_i`` from latency-coded input ``t``):
 the pair channel is initialised near zero so each detector starts as a pure value/range unit.
 
 Addressing mirrors the teacher's ``forward_mode="hard"`` (hard forward = one cell per table via the packed
-argmax address + ``embedding_bag``-style sum; soft backward). We realise it with a **straight-through** hard
-bit ``b_st = b_soft + (1[V>theta] - b_soft).detach()`` feeding the 2**nap outer-product cell distribution:
-on the forward the distribution is one-hot at the argmax address (a single cell is read), while gradients
-flow through the soft bits. Consequently the soft training objective and the hard/argmax inference objective
-coincide by construction (no soft-blend "escape hatch").
+argmax address + ``embedding_bag``-style sum; soft backward) via an **OUTPUT-level straight-through**::
+
+    prow_soft = Π_k [b_soft if code-bit=1 else 1-b_soft]   # b_soft = sigmoid((V-theta)/temp_bit); no detach
+    prow_hard = one-hot at the packed argmax address       # non-differentiable
+    y_soft = prow_soft @ table ;  y_hard = prow_hard @ table
+    y = y_soft + (y_hard - y_soft).detach()                # forward = hard single cell; backward via y_soft
+
+The forward VALUE equals the hard single-cell lookup, while the gradient flows entirely through ``y_soft``.
+Because a product of independent per-bit Bernoullis over the ``2**nap`` outcomes IS the softmax over those
+cells, this backward is the **exact full-K softmax over all 2**nap cells** — matching
+HyperplaneMultiHeadLUT's hard-forward / soft-backward *exactly* (parity is exact, not an approximation).
+Consequently the soft training objective and the hard/argmax inference objective coincide by construction
+(no soft-blend "escape hatch"), and gradient reaches the bits of non-selected cells too.
 
 Bit packing matches the teacher exactly: MSB-first, ``addr = Σ_k bit_k · 2**(nap-1-k)`` (== ``bits @
 [2**(nap-1), …, 1]``; for nap=6 that is ``[32,16,8,4,2,1]``).
-
-NOTE on backward parity: the teacher's backward is a full-K softmax surrogate over all ``2**nap`` rows; the
-straight-through outer-product used here passes gradient through the *selected* cell's bits only. This is the
-sanctioned, simpler surrogate and trains well in practice; a full-K softmax backward is a possible future
-refinement.
 """
 from typing import Optional
 
@@ -140,18 +143,19 @@ class LIFDetectorsMHL(nn.Module):
         Vpair = ((self.P * self.offdiag).unsqueeze(0) * g).sum(dim=(-1, -2))
         return Vself + Vpair
 
-    def _bits(self, V: torch.Tensor, mode: str) -> torch.Tensor:
-        """(B,n_tables,nap) soft/hard/straight-through index bits from membranes."""
-        th = self.theta.view(1, self.n_tables, self.n_anchor_pairs)
-        hard = (V > th).float()
-        if mode == "hard":
-            return hard
-        soft = torch.sigmoid((V - th) / self.temp_bit).clamp(1e-6, 1 - 1e-6)
-        if mode == "soft":
-            return soft
-        if mode == "st":
-            return soft + (hard - soft).detach()          # forward=hard bit, backward=soft gradient
-        raise ValueError(f"mode must be 'st'|'hard'|'soft', got {mode!r}")
+    def _prow(self, bits: torch.Tensor) -> torch.Tensor:
+        """Per-table cell distribution from index bits: (B,n_tables,nap) -> (B,n_tables,2**nap).
+
+        prow[...,c] = Π_k [bits_k if code c's k-th bit == 1 else 1-bits_k]. For independent per-bit
+        Bernoullis this product over the 2**nap outcomes is exactly the softmax over the cells; for hard
+        0/1 bits it is a one-hot at the packed argmax address."""
+        BM = self.bit_matrix.view(1, 1, self.n_rows, self.n_anchor_pairs)
+        term = BM * bits.unsqueeze(2) + (1.0 - BM) * (1.0 - bits.unsqueeze(2))   # (B,n_tables,rows,nap)
+        return term.prod(dim=-1)                                                 # (B,n_tables,rows)
+
+    def _rows(self, prow: torch.Tensor) -> torch.Tensor:
+        """(B,n_tables,rows) cell distribution -> (B,n_tables,n_outputs) per-table selected values."""
+        return torch.einsum('btc,tco->bto', prow, self.table)
 
     def address(self, x: torch.Tensor, eps: float = 0.3) -> torch.Tensor:
         """Hard packed address per (sample, table): (B, n_tables) int64, MSB-first."""
@@ -162,16 +166,25 @@ class LIFDetectorsMHL(nn.Module):
     def forward(self, x: torch.Tensor, eps: float = 0.3, mode: str = "st") -> torch.Tensor:
         """x:(B, input_dim) -> actions (B, n_heads, n_outputs).
 
-        mode: 'st' (straight-through hard, default; use for training) — forward reads one cell per table,
-        gradients flow through the soft bits; 'hard' (pure argmax inference, == 'st' forward value);
-        'soft' (differentiable 2**nap-cell blend, reference only)."""
+        mode: 'st' (OUTPUT-level straight-through, default; use for training) — forward value is the hard
+        single cell per table, backward is the exact full-K softmax over all 2**nap cells; 'hard' (pure
+        argmax inference, == 'st' forward value); 'soft' (differentiable 2**nap-cell blend, reference)."""
         B = x.shape[0]
         V = self.detector_membrane(self.latency(x), eps).view(B, self.n_tables, self.n_anchor_pairs)
-        b = self._bits(V, mode)                                        # (B,n_tables,nap)
-        BM = self.bit_matrix.view(1, 1, self.n_rows, self.n_anchor_pairs)
-        term = BM * b.unsqueeze(2) + (1.0 - BM) * (1.0 - b.unsqueeze(2))   # (B,n_tables,rows,nap)
-        prow = term.prod(dim=-1)                                       # (B,n_tables,rows); one-hot for hard/st
-        rows = torch.einsum('btc,tco->bto', prow, self.table)         # (B,n_tables,n_outputs)
+        th = self.theta.view(1, self.n_tables, self.n_anchor_pairs)
+        hard_bits = (V > th).float()                                   # non-differentiable argmax bits
+        if mode == "hard":
+            rows = self._rows(self._prow(hard_bits))                  # pure one-hot inference (no grad path)
+        elif mode in ("soft", "st"):
+            soft_bits = torch.sigmoid((V - th) / self.temp_bit).clamp(1e-6, 1 - 1e-6)
+            y_soft = self._rows(self._prow(soft_bits))               # full 2**nap-cell softmax, differentiable
+            if mode == "soft":
+                rows = y_soft
+            else:                                                     # 'st': output-level straight-through
+                y_hard = self._rows(self._prow(hard_bits))          # one-hot forward value
+                rows = y_soft + (y_hard - y_soft).detach()          # forward == hard; backward == full-K softmax
+        else:
+            raise ValueError(f"mode must be 'st'|'hard'|'soft', got {mode!r}")
         return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
 
     # ---- construction helpers ----
