@@ -18,19 +18,22 @@ Per detector (arrivals ``a_i = t_i + d_i`` from latency-coded input ``t``):
 the pair channel is initialised near zero so each detector starts as a pure value/range unit.
 
 Addressing mirrors the teacher's ``forward_mode="hard"`` (hard forward = one cell per table via the packed
-argmax address + ``embedding_bag``-style sum; soft backward) via an **OUTPUT-level straight-through**::
+argmax address + ``embedding_bag``-style sum) with FastMHL's **DECOUPLED straight-through** — the two
+gradients are routed separately::
 
-    prow_soft = Π_k [b_soft if code-bit=1 else 1-b_soft]   # b_soft = sigmoid((V-theta)/temp_bit); no detach
-    prow_hard = one-hot at the packed argmax address       # non-differentiable
-    y_soft = prow_soft @ table ;  y_hard = prow_hard @ table
-    y = y_soft + (y_hard - y_soft).detach()                # forward = hard single cell; backward via y_soft
+    prow_hard = Π_k [hard_bit or 1-hard_bit]   # one-hot at the packed argmax address (non-differentiable bits)
+    prow_soft = Π_k [b_soft or 1-b_soft]        # b_soft = sigmoid((V-theta)/temp_bit) = softmax over the 2**nap cells
+    y_hard = prow_hard @ table                  # WEIGHT gradient -> only the selected row per table updates
+    y_addr = prow_soft @ table.detach()         # ADDRESS/detector gradient -> full-K softmax; table detached (no weight grad)
+    y = y_hard + y_addr - y_addr.detach()       # forward VALUE == hard single cell; address grad injected, its value cancelled
 
-The forward VALUE equals the hard single-cell lookup, while the gradient flows entirely through ``y_soft``.
-Because a product of independent per-bit Bernoullis over the ``2**nap`` outcomes IS the softmax over those
-cells, this backward is the **exact full-K softmax over all 2**nap cells** — matching
-HyperplaneMultiHeadLUT's hard-forward / soft-backward *exactly* (parity is exact, not an approximation).
-Consequently the soft training objective and the hard/argmax inference objective coincide by construction
-(no soft-blend "escape hatch"), and gradient reaches the bits of non-selected cells too.
+So the TABLE/weight gradient follows the hard forward (only the argmax-selected row per table is updated,
+exactly like ``embedding_bag`` + a 1-row scatter), while the DETECTOR/address gradient follows the full-K
+softmax over all ``2**nap`` cells (a product of independent per-bit Bernoullis over the outcomes IS that
+softmax). This matches FastMHL / HyperplaneMultiHeadLUT hard-mode (hard weight scatter + full-K softmax
+address backward). Detaching ``table`` in the address term is the crux: without it the soft blend smears the
+weight gradient across ALL rows and the bits never sharpen (an earlier non-decoupled variant stuck at ~0.5
+bits / hard R² ~0.14); decoupling lets the selected row track the target while the detectors sharpen.
 
 Bit packing matches the teacher exactly: MSB-first, ``addr = Σ_k bit_k · 2**(nap-1-k)`` (== ``bits @
 [2**(nap-1), …, 1]``; for nap=6 that is ``[32,16,8,4,2,1]``).
@@ -153,9 +156,11 @@ class LIFDetectorsMHL(nn.Module):
         term = BM * bits.unsqueeze(2) + (1.0 - BM) * (1.0 - bits.unsqueeze(2))   # (B,n_tables,rows,nap)
         return term.prod(dim=-1)                                                 # (B,n_tables,rows)
 
-    def _rows(self, prow: torch.Tensor) -> torch.Tensor:
-        """(B,n_tables,rows) cell distribution -> (B,n_tables,n_outputs) per-table selected values."""
-        return torch.einsum('btc,tco->bto', prow, self.table)
+    def _rows(self, prow: torch.Tensor, table: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """(B,n_tables,rows) cell distribution -> (B,n_tables,n_outputs). Uses self.table unless `table`
+        is given; pass self.table.detach() to route the address gradient with NO weight gradient."""
+        W = self.table if table is None else table
+        return torch.einsum('btc,tco->bto', prow, W)
 
     def address(self, x: torch.Tensor, eps: float = 0.3) -> torch.Tensor:
         """Hard packed address per (sample, table): (B, n_tables) int64, MSB-first."""
@@ -166,23 +171,24 @@ class LIFDetectorsMHL(nn.Module):
     def forward(self, x: torch.Tensor, eps: float = 0.3, mode: str = "st") -> torch.Tensor:
         """x:(B, input_dim) -> actions (B, n_heads, n_outputs).
 
-        mode: 'st' (OUTPUT-level straight-through, default; use for training) — forward value is the hard
-        single cell per table, backward is the exact full-K softmax over all 2**nap cells; 'hard' (pure
-        argmax inference, == 'st' forward value); 'soft' (differentiable 2**nap-cell blend, reference)."""
+        mode: 'st' (FastMHL-style decoupled straight-through, default; use for training) — forward value is
+        the hard single cell per table; the TABLE gradient follows the hard forward (only the selected row
+        per table updates) while the DETECTOR/address gradient follows the full-K softmax over all 2**nap
+        cells; 'hard' (pure argmax inference, == 'st' forward value); 'soft' (differentiable blend, reference)."""
         B = x.shape[0]
         V = self.detector_membrane(self.latency(x), eps).view(B, self.n_tables, self.n_anchor_pairs)
         th = self.theta.view(1, self.n_tables, self.n_anchor_pairs)
-        hard_bits = (V > th).float()                                   # non-differentiable argmax bits
+        hard_bits = (V > th).float()                                   # non-differentiable argmax bits (one-hot prow)
         if mode == "hard":
             rows = self._rows(self._prow(hard_bits))                  # pure one-hot inference (no grad path)
-        elif mode in ("soft", "st"):
+        elif mode == "soft":
             soft_bits = torch.sigmoid((V - th) / self.temp_bit).clamp(1e-6, 1 - 1e-6)
-            y_soft = self._rows(self._prow(soft_bits))               # full 2**nap-cell softmax, differentiable
-            if mode == "soft":
-                rows = y_soft
-            else:                                                     # 'st': output-level straight-through
-                y_hard = self._rows(self._prow(hard_bits))          # one-hot forward value
-                rows = y_soft + (y_hard - y_soft).detach()          # forward == hard; backward == full-K softmax
+            rows = self._rows(self._prow(soft_bits))                 # differentiable 2**nap-cell blend
+        elif mode == "st":
+            soft_bits = torch.sigmoid((V - th) / self.temp_bit).clamp(1e-6, 1 - 1e-6)
+            y_hard = self._rows(self._prow(hard_bits))              # one-hot @ table -> weight grad ONLY to selected row
+            y_addr = self._rows(self._prow(soft_bits), self.table.detach())   # full-K softmax address grad; table detached
+            rows = y_hard + y_addr - y_addr.detach()               # forward == y_hard; injects address grad; cancels its value
         else:
             raise ValueError(f"mode must be 'st'|'hard'|'soft', got {mode!r}")
         return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)

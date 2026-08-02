@@ -54,20 +54,39 @@ def test_straight_through_invariant():
     assert not torch.allclose(y_st, y_soft, atol=1e-4), "soft blend should differ from hard forward"
 
 
-def test_full_k_backward_reaches_nonselected_cells():
-    """Regression guard for the output-level straight-through: because the ST backward is the exact full-K
-    softmax over all 2**nap cells (gradient flows through y_soft = prow_soft @ table), the table gradient
-    must reach (nearly) ALL rows per table, not only the argmax-selected rows. The old bit-level ST would
-    have given table grad to selected rows only."""
+def test_st_table_grad_only_selected_row():
+    """Decoupled ST: the TABLE gradient follows the HARD forward — only the argmax-selected row per table
+    updates. Single sample => exactly one row per table; batch => at most #distinct addresses, never all rows."""
     m = _model(n_anchor_pairs=4, tables_per_head=3)   # 16 rows/table
-    x = torch.randn(16, 17)
-    target = torch.randn(16, m.n_heads, m.n_outputs)
-    loss = torch.nn.functional.mse_loss(m(x, mode="st"), target)
-    loss.backward()
-    # grad reaches a row if any of its n_outputs entries is nonzero
-    row_has_grad = (m.table.grad.abs().sum(dim=-1) > 0)              # (n_tables, n_rows)
-    frac = row_has_grad.float().mean(dim=-1)                        # fraction of rows touched per table
-    assert frac.min() > 0.9, f"full-K backward should touch ~all rows; min fraction {frac.min():.2f}"
+    # single sample -> exactly one row per table has nonzero table grad, and it's the argmax address
+    x1 = torch.randn(1, 17); tgt1 = torch.randn(1, m.n_heads, m.n_outputs)
+    m.zero_grad(set_to_none=True)
+    torch.nn.functional.mse_loss(m(x1, mode="st"), tgt1).backward()
+    rows_with_grad = (m.table.grad.abs().sum(dim=-1) > 0)          # (n_tables, n_rows)
+    per_table = rows_with_grad.sum(dim=-1)                         # (n_tables,)
+    assert (per_table == 1).all(), f"expected exactly 1 row/table, got {per_table.tolist()}"
+    sel = rows_with_grad.float().argmax(dim=-1)                    # (n_tables,)
+    assert torch.equal(sel, m.address(x1)[0]), "table-grad row must equal the argmax address"
+    # batch -> touched rows per table bounded by distinct addresses, never all 2**nap rows
+    m.zero_grad(set_to_none=True)
+    xb = torch.randn(8, 17); tgtb = torch.randn(8, m.n_heads, m.n_outputs)
+    torch.nn.functional.mse_loss(m(xb, mode="st"), tgtb).backward()
+    per_table_b = (m.table.grad.abs().sum(dim=-1) > 0).sum(dim=-1)
+    assert (per_table_b <= 8).all() and int(per_table_b.max()) < m.n_rows, \
+        f"table grad must touch only selected rows, got max {int(per_table_b.max())} of {m.n_rows}"
+
+
+def test_st_detector_grad_full_k_softmax():
+    """Decoupled ST: the DETECTOR/address gradient follows the full-K softmax, so theta and the detector
+    membrane weights receive nonzero gradient across (most) bits — not just the selected cell."""
+    m = _model(n_anchor_pairs=4, tables_per_head=3)
+    x = torch.randn(16, 17); tgt = torch.randn(16, m.n_heads, m.n_outputs)
+    m.zero_grad(set_to_none=True)
+    torch.nn.functional.mse_loss(m(x, mode="st"), tgt).backward()
+    assert m.theta.grad is not None and m.theta.grad.abs().sum() > 0, "theta got no address gradient"
+    frac = (m.theta.grad.abs() > 0).float().mean().item()
+    assert frac > 0.5, f"address grad too sparse ({frac:.2f}); expected full-K coverage"
+    assert m.w.grad.abs().sum() > 0 and m.d.grad.abs().sum() > 0, "detector membrane params got no gradient"
 
 
 def test_pair_mask_and_positivity():
