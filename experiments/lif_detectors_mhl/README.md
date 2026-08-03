@@ -116,6 +116,48 @@ table gradient = winning cell only (address-only path gives `max|table.grad|=0`)
 full-weight soft first-spike surrogate (all inputs incl. off-winner arrivals, plus per-LUT `τ/T_cross/temp`);
 `gradcheck` of the soft first-spike and the soft-mode forward pass; no NaN/Inf; correct flipped-sign.
 
+## Variant: BucketLIFDetectorsMHL (single neuron per table, time-bucket address)
+
+The leanest sibling (`spiky/src/spiky/lutorch/bucket_lif_detectors_mhl.py`, tests
+`test_bucket_lif_detectors_mhl.py`, harness `distill_walker2d_bucket.py`). Instead of `nap` bit-detectors +
+`P`, each table has **exactly one LIF neuron**, and the table row is **which time bucket its first spike
+lands in** (default `M=16` buckets):
+
+- first-spike front-end identical to `PureLIFDetectorsMHL` (sorted-arrival causal membrane, hard/soft
+  first-spike time);
+- **trainable, strictly-increasing** per-LUT bucket boundaries via `boundaries = beta_base +
+  cumsum(softplus(beta_raw))` (shape `(n_tables, M−1)`);
+- soft address is a **partition of unity** built from boundary sigmoids `S_k = sigmoid((t−b_k)/T_bkt)`
+  (`g_0=1−S_0`, `g_m=S_{m−1}−S_m`, `g_last=S_{M−2}`, `Σ_m g_m = 1`); hard address is
+  `m* = (t ≥ boundaries).sum()` (searchsorted). `t_window` sits above all initial boundaries, so a
+  non-crossing neuron (`t*=t_window`) folds into the **last** bucket automatically.
+
+Reuses the **same decoupled straight-through LUT decode** (winning-bucket-only table gradient via `y_hard`;
+full soft-partition address gradient via `y_addr = g @ table.detach()`; forward == hard).
+
+**Params: 4,768** at the Walker2d config (`M=16`, `n_tables=32`) — `delay/w (32,17)`, per-LUT
+`tau_raw/log_T_cross/log_T_bkt/beta_base (32,)`, `beta_raw (32,15)`, `table (32,16,6)`.
+
+**Distillation (same recipe, constant LR, 6000 steps) + capacity sweep** — teacher is the frozen int4 LUT
+oracle (the 16-row table is *not* warm-started, since 16 buckets ≠ the oracle's 64 rows; it is learned from
+scratch):
+
+| config (M buckets × T tables) | params | hard R² | RMSE (% of range) |
+|---|---|---|---|
+| M=16, T=32  | 4,768  | 0.313 | 0.900 (9.85%) |
+| M=64, T=32  | 15,520 | 0.321 | 0.895 (9.79%) |
+| M=16, T=128 | 19,072 | 0.383 | 0.853 (9.33%) |
+
+**More tables ≫ more buckets:** 4× the buckets buys +0.008 R², 4× the tables buys +0.070 — front-end
+*capacity* (number of independent LIF neurons) is the lever, not bucket resolution. Buckets learn to sharpen
+(`T_bkt` med ~0.06) and only a fraction are used per table (~9/16 at T=32, ~24/64 at M=64). This variant
+trails `PureLIFDetectorsMHL` (0.402) and the `P`-equipped model (0.64), consistent with the ordered-pair
+channel carrying the most fidelity against a sharp LUT.
+
+Harness CLI knobs (uncommitted `.pt` checkpoints, gitignored): `--buckets M` sets the bucket count,
+`--tables T` overrides the **student**'s table count (the oracle keeps its own 32), e.g.
+`python distill_walker2d_bucket.py --buckets 16 --tables 128 --save bucket_lif_ttfs_student_t128.pt`.
+
 ## Next step — gpustar trains Walker2d from scratch with LIFDetectorsMHL
 
 `LIFDetectorsMHL` mirrors the `HyperplaneMultiHeadLUT` constructor/`forward(x)->(B, n_heads, n_outputs)`
