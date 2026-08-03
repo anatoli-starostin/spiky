@@ -64,7 +64,7 @@ class BucketLIFDetectorsMHL(nn.Module):
         # --- trainable params ---
         self.delay = nn.Parameter(torch.zeros(T, N, device=dev))            # per-table per-input
         self.w = nn.Parameter(0.2 * torch.randn(T, N, device=dev))          # per-table per-input (match LIF w init)
-        self.tau_raw = nn.Parameter(torch.ones(T, device=dev))              # per-LUT (tau = softplus + 1e-3)
+        self.tau_raw = nn.Parameter(torch.ones(T, device=dev))              # per-LUT (tau = softplus + 1.0 floor)
         self.log_T_cross = nn.Parameter(torch.zeros(T, device=dev))         # per-LUT (T_cross = exp; init 1.0)
         self.log_T_bkt = nn.Parameter(torch.zeros(T, device=dev))           # per-LUT bucket softness (T_bkt = exp; init 1.0)
         # Boundaries init: n_buckets-1 evenly spaced across (0, t_window). With beta_base=0 and each
@@ -86,7 +86,9 @@ class BucketLIFDetectorsMHL(nn.Module):
     # ---- positive-constrained per-LUT params ----
     @property
     def tau(self):
-        return F.softplus(self.tau_raw) + 1e-3
+        # floored at 1.0 (not 1e-3): the LIF membrane time constant can never drop into the
+        # fast-forgetter regime where the trace decays within a single arrival step.
+        return F.softplus(self.tau_raw) + 1.0
 
     @property
     def T_cross(self):
