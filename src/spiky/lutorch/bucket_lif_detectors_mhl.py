@@ -25,7 +25,12 @@ which telescopes to ``Σ_m g_m = 1``. The hard bucket is ``m* = (t >= boundaries
 No-spike handling: ``t_window`` is the largest possible time and initial boundaries all sit below it, so a
 non-crossing neuron (t*=t_window) folds into the LAST bucket automatically (``m* = n_buckets-1``).
 
-Trainable: delay (n_tables,N), w (n_tables,N), per-LUT tau_raw / log_T_cross / log_T_bkt / beta_base
+Synapses are bounded & excitatory: the effective weight is ``w = w_max * sigmoid(w_raw)`` (``0 <= w <=
+w_max``, default ``w_max = 2``), with a hot init (``w_raw ~ N(-2.2, 0.5)``) so neurons actually spike at
+step 0. This beat free-signed weights in distillation and yields an inherently sparse bank (~64% of
+synapses prune to zero with ~no accuracy loss).
+
+Trainable: delay (n_tables,N), w_raw (n_tables,N), per-LUT tau_raw / log_T_cross / log_T_bkt / beta_base
 (n_tables,), beta_raw (n_tables, n_buckets-1), and the LUT table (n_tables, n_buckets, n_outputs).
 theta_mem is fixed (1.0). Decode is IDENTICAL in spirit to PureLIFDetectorsMHL: weight grad -> selected
 row only via ``y_hard``; address grad -> full partition via ``y_addr = g @ table.detach()``; forward == hard.
@@ -63,7 +68,11 @@ class BucketLIFDetectorsMHL(nn.Module):
 
         # --- trainable params ---
         self.delay = nn.Parameter(torch.zeros(T, N, device=dev))            # per-table per-input
-        self.w = nn.Parameter(0.2 * torch.randn(T, N, device=dev))          # per-table per-input (match LIF w init)
+        # Bounded EXCITATORY synapses: w = w_max * sigmoid(w_raw), so 0 <= w <= w_max (biologically plausible;
+        # beats free-signed weights here). HOT init w_raw ~ N(-2.2, 0.5) puts the eval-set init no-spike bucket
+        # mass at ~0.03 (neurons actually spike at step 0 instead of ~97% collapsing into the no-spike bucket).
+        self.w_max = 2.0
+        self.w_raw = nn.Parameter(-2.2 + 0.5 * torch.randn(T, N, device=dev))   # per-table per-input
         self.tau_raw = nn.Parameter(torch.ones(T, device=dev))              # per-LUT (tau = softplus + 1.0 floor)
         self.log_T_cross = nn.Parameter(torch.zeros(T, device=dev))         # per-LUT (T_cross = exp; init 1.0)
         self.log_T_bkt = nn.Parameter(torch.zeros(T, device=dev))           # per-LUT bucket softness (T_bkt = exp; init 1.0)
@@ -82,6 +91,10 @@ class BucketLIFDetectorsMHL(nn.Module):
 
         # --- buffers ---
         self.register_buffer("theta_mem", torch.tensor(1.0, device=dev))
+
+    @property
+    def w(self):
+        return self.w_max * torch.sigmoid(self.w_raw)   # bounded excitatory synapses in [0, w_max]
 
     # ---- positive-constrained per-LUT params ----
     @property

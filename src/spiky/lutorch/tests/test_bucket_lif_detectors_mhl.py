@@ -66,7 +66,7 @@ def test_st_table_grad_only_selected_bucket():
 
 
 def test_st_address_grad_full_partition():
-    """Address-path gradient reaches the trainable boundaries and the membrane params (delay, w) — the
+    """Address-path gradient reaches the trainable boundaries and the membrane params (delay, w_raw) — the
     full soft-partition backward, not one isolated bucket."""
     m = _model(n_buckets=8, tables_per_head=3)
     x = torch.randn(16, 17); tgt = torch.randn(16, m.n_heads, m.n_outputs)
@@ -74,13 +74,13 @@ def test_st_address_grad_full_partition():
     torch.nn.functional.mse_loss(m(x, mode="st"), tgt).backward()
     assert m.beta_raw.grad is not None and m.beta_raw.grad.abs().sum() > 0, "boundaries got no gradient"
     assert m.beta_base.grad is not None and m.beta_base.grad.abs().sum() > 0, "beta_base got no gradient"
-    assert m.delay.grad.abs().sum() > 0 and m.w.grad.abs().sum() > 0, "membrane params got no gradient"
+    assert m.delay.grad.abs().sum() > 0 and m.w_raw.grad.abs().sum() > 0, "membrane params got no gradient"
 
 
 def test_no_crossing_returns_t_window_and_last_bucket():
     m = _model(n_buckets=8, tables_per_head=3)
     with torch.no_grad():
-        m.w.fill_(-5.0)                                  # strongly negative -> membrane never reaches theta_mem=1
+        m.w_raw.fill_(-30.0)                             # w = w_max*sigmoid(-30) ~ 0 -> membrane never reaches theta_mem=1
     x = torch.randn(8, 17)
     t_hard, _ = m._first_spike(x)
     assert torch.allclose(t_hard, torch.full_like(t_hard, m.t_window)), "no-crossing must give t_hard=t_window"
@@ -93,9 +93,25 @@ def test_per_lut_params_get_gradient():
     x = torch.randn(16, 17); tgt = torch.randn(16, m.n_heads, m.n_outputs)
     m.zero_grad(set_to_none=True)
     torch.nn.functional.mse_loss(m(x, mode="st"), tgt).backward()
-    for name in ("tau_raw", "log_T_cross", "log_T_bkt", "beta_raw", "beta_base", "delay", "w", "table"):
+    for name in ("tau_raw", "log_T_cross", "log_T_bkt", "beta_raw", "beta_base", "delay", "w_raw", "table"):
         g = getattr(m, name).grad
         assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0, f"{name} got no gradient"
+
+
+def test_bounded_excitatory_weights():
+    """Effective synaptic weight w = w_max*sigmoid(w_raw) is strictly positive and bounded in (0, w_max)."""
+    m = _model(n_buckets=8, tables_per_head=4)
+    w = m.w
+    assert w.shape == m.w_raw.shape == (m.n_tables, m.input_dim)
+    assert (w > 0).all(), "excitatory weights must be strictly positive"
+    assert (w < m.w_max).all(), "weights must stay below w_max for finite w_raw"
+    assert m.w_max == 2.0
+    # sanity: extreme w_raw saturates the sigmoid to the two bounds
+    with torch.no_grad():
+        m.w_raw.fill_(30.0)
+        assert torch.allclose(m.w, torch.full_like(m.w, m.w_max), atol=1e-3)
+        m.w_raw.fill_(-30.0)
+        assert (m.w < 1e-6).all()
 
 
 def test_positivity_and_shape_generality():

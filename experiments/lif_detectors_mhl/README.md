@@ -135,24 +135,33 @@ lands in** (default `M=16` buckets):
 Reuses the **same decoupled straight-through LUT decode** (winning-bucket-only table gradient via `y_hard`;
 full soft-partition address gradient via `y_addr = g @ table.detach()`; forward == hard).
 
-**Params: 4,768** at the Walker2d config (`M=16`, `n_tables=32`) — `delay/w (32,17)`, per-LUT
+**Weights — bounded excitatory (default).** The single per-table synapse vector is `w = w_max·sigmoid(w_raw)`
+(`0 ≤ w ≤ w_max`, `w_max = 2`), with a **hot init** `w_raw ~ N(-2.2, 0.5)` so neurons spike at step 0
+instead of ~97% collapsing into the no-spike bucket. This excitatory-only bounded form beat free-signed
+weights (ablation below) and is the current default.
+
+**Params: 4,768** at the Walker2d config (`M=16`, `n_tables=32`) — `delay/w_raw (32,17)`, per-LUT
 `tau_raw/log_T_cross/log_T_bkt/beta_base (32,)`, `beta_raw (32,15)`, `table (32,16,6)`.
 
-**Distillation (same recipe, constant LR, 6000 steps) + capacity sweep** — teacher is the frozen int4 LUT
-oracle (the 16-row table is *not* warm-started, since 16 buckets ≠ the oracle's 64 rows; it is learned from
-scratch):
+**Distillation** (frozen int4 LUT teacher, constant LR, 6000 steps; the 16-row table is learned from scratch
+since 16 buckets ≠ the oracle's 64 rows). With the default bounded-excitatory hot init, **M=16 / T=32 reaches
+hard R² ≈ 0.418** (RMSE 0.828, 9.06% of range) — the best bucket-variant result, beating free-signed weights
+(0.387) and edging past `PureLIFDetectorsMHL` (0.402); still below the `P`-equipped model (0.64). The trained
+bank is **inherently sparse**: ~64% of synapses (`w < 0.05·w_max`) prune to exactly zero with ~no accuracy
+loss (pruned R² 0.417), and each neuron effectively integrates ~6 of its 17 inputs.
 
-| config (M buckets × T tables) | params | hard R² | RMSE (% of range) |
-|---|---|---|---|
-| M=16, T=32  | 4,768  | 0.313 | 0.900 (9.85%) |
-| M=64, T=32  | 15,520 | 0.321 | 0.895 (9.79%) |
-| M=16, T=128 | 19,072 | 0.383 | 0.853 (9.33%) |
-
-**More tables ≫ more buckets:** 4× the buckets buys +0.008 R², 4× the tables buys +0.070 — front-end
-*capacity* (number of independent LIF neurons) is the lever, not bucket resolution. Buckets learn to sharpen
-(`T_bkt` med ~0.06) and only a fraction are used per table (~9/16 at T=32, ~24/64 at M=64). This variant
-trails `PureLIFDetectorsMHL` (0.402) and the `P`-equipped model (0.64), consistent with the ordered-pair
-channel carrying the most fidelity against a sharp LUT.
+**What moved the needle (ablations):**
+- *Weight-init temperature is the real lever.* The original cold signed init (`0.2·randn`) left ~94% of samples
+  in the no-spike bucket at step 0, wasting early training just learning to spike. Draining that collapse via a
+  hotter init lifts fidelity: signed `w=2.0` → R² 0.317→0.387; bounded excitatory hot → 0.418.
+- *Bounded excitatory > free-signed* (0.418 vs 0.387) at equal params — and the bound never even saturates
+  (no `w` reaches `w_max`); the gain is the excitatory constraint + hot init, not the ceiling.
+- *Capacity: more tables ≫ more buckets* (measured under the earlier cold init): 4× buckets → +0.008 R²
+  (M=64/T=32), 4× tables → +0.070 (M=16/T=128, 19,072 params). Front-end neuron count is the lever, not
+  bucket resolution.
+- *A bistable double-well weight penalty `λ·mean(w·(w_max−w))` was tried and NOT adopted:* it only pushed
+  weights toward 0 (never toward `w_max` — one-sided), cost R² (−0.045 at λ=0.15), and didn't improve the
+  already-clean pruning.
 
 Harness CLI knobs (uncommitted `.pt` checkpoints, gitignored): `--buckets M` sets the bucket count,
 `--tables T` overrides the **student**'s table count (the oracle keeps its own 32), e.g.
