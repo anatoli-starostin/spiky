@@ -18,11 +18,13 @@ V      = V_self + V_pair
 bit    = sigmoid((V - θ) / temp_bit)
 ```
 
-Per detector trainable: `d, w ∈ R^N`, readout `r`, off-diagonal `P ∈ R^{N×N}` (self-pairs masked), `τ_s,
-τ_p` (softplus>0), `θ`; global `temp_bit` (exp>0). The pair channel is initialised near zero (`0.01`) so each
-detector starts as a pure value/range unit and grows contrast structure only where it helps. The two
-channels are complementary — self=magnitude half-spaces, pair=order/contrast — and the optimiser picks the
-per-detector mix.
+Trainable per **detector**: `d, w ∈ R^N`, off-diagonal `P ∈ R^{N×N}` (self-pairs masked). Trainable per
+**table** (one value per LUT, broadcast across its `nap` detectors): readout `r`, time constants `τ_s, τ_p`
+(softplus>0), threshold `θ`. Plus one global `temp_bit` (exp>0). (`r/τ_s/τ_p/θ` were per-detector originally;
+sharing them per-table cut their freedom from `n_tables·nap` to `n_tables` — 75,073→74,433 params — with
+equal-or-better fidelity, since `P` at 55,488 dominates the parameter mass.) The pair channel is initialised
+near zero (`0.01`) so each detector starts as a pure value/range unit and grows contrast structure only where
+it helps. The two channels are complementary — self=magnitude half-spaces, pair=order/contrast.
 
 ## Straight-through hard addressing (mirrors the teacher)
 
@@ -69,7 +71,9 @@ Adam steps, batch 256, `ε` annealed 2.0→0.3 (~29 min CPU).
 | soft-blend reference R² | 0.51 (now *worse* than hard — escape hatch closed) |
 | ST-forward vs hard | identical (metrics coincide) |
 
-Reproduce: `PYTHONPATH=../../src python distill_walker2d.py` (this dir; assets included).
+Reproduce: `PYTHONPATH=../../src python distill_walker2d.py [--steps 6000] [--save PATH]` (this dir; assets
+included). `--save` writes the trained student (`state_dict` + `config` + `metrics`) to a checkpoint;
+training uses a constant LR (a cosine anneal was evaluated and dropped — it scored slightly worse).
 
 ## Discrete-addressing error analysis
 

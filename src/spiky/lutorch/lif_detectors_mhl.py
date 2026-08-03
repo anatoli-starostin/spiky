@@ -17,6 +17,10 @@ Per detector (arrivals ``a_i = t_i + d_i`` from latency-coded input ``t``):
 ``tau_s``, ``tau_p`` and ``temp_bit`` are softplus/exp-positive; ``P`` is off-diagonal (self-pairs masked);
 the pair channel is initialised near zero so each detector starts as a pure value/range unit.
 
+``d``, ``w`` and ``P`` are per-detector (per LUT bit); ``r``, ``tau_s``, ``tau_p`` and ``theta`` are shared
+**PER TABLE** — one value per LUT, broadcast across its ``nap`` detectors (this cut per-detector freedom on
+those four from ``n_tables*nap`` to ``n_tables`` with equal-or-better distillation fidelity).
+
 Addressing mirrors the teacher's ``forward_mode="hard"`` (hard forward = one cell per table via the packed
 argmax address + ``embedding_bag``-style sum) with FastMHL's **DECOUPLED straight-through** — the two
 gradients are routed separately::
@@ -89,14 +93,17 @@ class LIFDetectorsMHL(nn.Module):
         self.n_detectors = M
         dev = device or torch.device("cpu")
 
-        # --- detector params (flat over M = n_tables * n_anchor_pairs) ---
+        # --- detector params ---
+        # d, w, P are per-detector per-input (flat over M = n_tables * n_anchor_pairs);
+        # r, tau_s_raw, tau_p_raw, theta are PER-TABLE (shape n_tables) — one value shared by all `nap`
+        # detectors in a table, broadcast to per-detector at use sites via repeat_interleave(nap).
         self.d = nn.Parameter(torch.zeros(M, N, device=dev))
         self.w = nn.Parameter(0.2 * torch.randn(M, N, device=dev))
-        self.r = nn.Parameter(torch.full((M,), 0.9 * self.t_window, device=dev))
-        self.tau_s_raw = nn.Parameter(torch.ones(M, device=dev))
+        self.r = nn.Parameter(torch.full((T,), 0.9 * self.t_window, device=dev))      # per-table
+        self.tau_s_raw = nn.Parameter(torch.ones(T, device=dev))                      # per-table
         self.P = nn.Parameter(pair_init * torch.randn(M, N, N, device=dev))
-        self.tau_p_raw = nn.Parameter(torch.ones(M, device=dev))
-        self.theta = nn.Parameter(torch.zeros(M, device=dev))
+        self.tau_p_raw = nn.Parameter(torch.ones(T, device=dev))                      # per-table
+        self.theta = nn.Parameter(torch.zeros(T, device=dev))                         # per-table
         self.log_temp_bit = nn.Parameter(torch.log(torch.tensor(float(temp_bit_init), device=dev)))
 
         # --- trainable table (row) values ---
@@ -137,12 +144,15 @@ class LIFDetectorsMHL(nn.Module):
     def detector_membrane(self, t: torch.Tensor, eps: float) -> torch.Tensor:
         """Combined LIF membrane V per detector. t:(B,N) latencies -> (B,M)."""
         a = t.unsqueeze(1) + self.d.unsqueeze(0)                       # (B,M,N)
-        r = self.r.view(1, self.n_detectors, 1)
+        nap = self.n_anchor_pairs                                      # per-table params -> per-detector
+        r = self.r.repeat_interleave(nap).view(1, self.n_detectors, 1)
+        tau_s = self.tau_s.repeat_interleave(nap).view(1, self.n_detectors, 1)
         dts = r - a
-        Vself = (self.w.unsqueeze(0) * torch.exp(-F.relu(dts) / self.tau_s.view(1, -1, 1))
+        Vself = (self.w.unsqueeze(0) * torch.exp(-F.relu(dts) / tau_s)
                  * torch.sigmoid(dts / eps)).sum(-1)                   # (B,M)
         D = a.unsqueeze(-2) - a.unsqueeze(-1)                          # D[...,i,j] = a_j - a_i
-        g = torch.exp(-F.relu(D) / self.tau_p.view(1, -1, 1, 1)) * torch.sigmoid(D / eps)
+        tau_p = self.tau_p.repeat_interleave(nap).view(1, self.n_detectors, 1, 1)
+        g = torch.exp(-F.relu(D) / tau_p) * torch.sigmoid(D / eps)
         Vpair = ((self.P * self.offdiag).unsqueeze(0) * g).sum(dim=(-1, -2))
         return Vself + Vpair
 
@@ -165,7 +175,7 @@ class LIFDetectorsMHL(nn.Module):
     def address(self, x: torch.Tensor, eps: float = 0.3) -> torch.Tensor:
         """Hard packed address per (sample, table): (B, n_tables) int64, MSB-first."""
         V = self.detector_membrane(self.latency(x), eps).view(x.shape[0], self.n_tables, self.n_anchor_pairs)
-        bits = (V > self.theta.view(1, self.n_tables, self.n_anchor_pairs)).long()
+        bits = (V > self.theta.view(1, self.n_tables, 1)).long()
         return (bits * self.pow2.view(1, 1, -1)).sum(-1)
 
     def forward(self, x: torch.Tensor, eps: float = 0.3, mode: str = "st") -> torch.Tensor:
@@ -177,7 +187,7 @@ class LIFDetectorsMHL(nn.Module):
         cells; 'hard' (pure argmax inference, == 'st' forward value); 'soft' (differentiable blend, reference)."""
         B = x.shape[0]
         V = self.detector_membrane(self.latency(x), eps).view(B, self.n_tables, self.n_anchor_pairs)
-        th = self.theta.view(1, self.n_tables, self.n_anchor_pairs)
+        th = self.theta.view(1, self.n_tables, 1)
         hard_bits = (V > th).float()                                   # non-differentiable argmax bits (one-hot prow)
         if mode == "hard":
             rows = self._rows(self._prow(hard_bits))                  # pure one-hot inference (no grad path)
