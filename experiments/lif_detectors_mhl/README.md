@@ -86,6 +86,36 @@ version copies the exact hyperplanes as weights, whereas this is a from-scratch 
 Likely gains: longer training / larger detector budget, a selection-temperature schedule, or a per-bit
 auxiliary loss to sharpen the addressing.
 
+## Variant: PureLIFDetectorsMHL (pure time-to-first-spike)
+
+A leaner sibling (`spiky/src/spiky/lutorch/pure_lif_detectors_mhl.py`, tests
+`test_pure_lif_detectors_mhl.py`, harness `distill_walker2d_ttfs.py`) with **no ordered-pair `P` block**.
+Each detector is a single LIF cell read out by its **time of first spike**:
+
+- arrival `a_i = latency(x_i) + delay[d,i]`; membrane at the k-th (ascending-sorted) arrival
+  `V_k = Σ_{j: a_j≤a_k} w[d,j]·exp(-(a_k − a_j)/τ)` (O(N²); exponents ≤0 so stable);
+- hard first-spike time `t* =` earliest arrival with `V_k ≥ θ_mem` (fixed 1.0), else `t_window`; smooth
+  first-success gives the soft `t*`;
+- **flipped detection** `s = L − t*` (an *early* spike = detected): `bit = 1[t* < L]`,
+  `soft_bit = sigmoid(s/temp_bit)`.
+
+Reuses the **same decoupled hard-forward/soft-backward straight-through + LUT decode** as `LIFDetectorsMHL`
+(winning-cell-only table gradient; full-K softmax address gradient with `table.detach()`).
+
+**Params: 19,104** (~26% of the P-equipped model's 74,433) — `delay (192,17)`, `w (192,17)`, `L (192,)`
+per-detector; per-LUT `tau_raw/log_T_cross/log_temp_bit (32,)`; `table (32,64,6)`.
+
+**Distillation (same recipe, constant LR, 6000 steps):** hard-inference **R² 0.402, RMSE 0.840 = 9.19% of
+range** — vs the per-table LIF (with `P`) **R² 0.646 / 7.07%**. So TTFS reproduces the sharp int4-LUT
+*worse* (−0.24 R²) at ~4× fewer params; the dropped ordered-pair channel was carrying real fidelity (bits
+still sharpen hard, `temp_bit` → ~0.065). Distilling *against a sharp LUT* structurally favors the richer
+`P` model; a from-scratch RL actor may trade differently.
+
+**Backward audit (float64, all 8 checks pass):** hard-forward invariant exact (`max|y_st−y_hard|=1.4e-17`);
+table gradient = winning cell only (address-only path gives `max|table.grad|=0`); detector gradient = the
+full-weight soft first-spike surrogate (all inputs incl. off-winner arrivals, plus per-LUT `τ/T_cross/temp`);
+`gradcheck` of the soft first-spike and the soft-mode forward pass; no NaN/Inf; correct flipped-sign.
+
 ## Next step — gpustar trains Walker2d from scratch with LIFDetectorsMHL
 
 `LIFDetectorsMHL` mirrors the `HyperplaneMultiHeadLUT` constructor/`forward(x)->(B, n_heads, n_outputs)`
