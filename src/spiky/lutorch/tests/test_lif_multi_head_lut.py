@@ -21,26 +21,24 @@ def test_forward_shape_and_finite():
     for nd, M in ((1, 16), (2, 8), (3, 4)):
         m = _m(n_det=nd, n_buckets=M)
         x = torch.randn(8, 17)
-        for mode in ("st", "hard", "soft"):
-            y = m(x, mode=mode)
-            assert y.shape == (8, 2, 6) and torch.isfinite(y).all(), f"nd={nd} mode={mode}"
+        for tag, out in (("forward", m(x)), ("eval", m.eval_forward(x))):
+            assert out.shape == (8, 2, 6) and torch.isfinite(out).all(), f"nd={nd} {tag}"
 
 
-def test_straight_through_invariant():
+def test_st_forward_equals_hard_eval():
+    """ST forward value == the hard winner, so forward(x) must equal the efficient hard eval_forward(x)."""
     for nd, M in ((1, 8), (2, 8)):
         m = _m(n_det=nd, n_buckets=M)
         x = torch.randn(24, 17)
         with torch.no_grad():
-            y_st, y_hard, y_soft = m(x, mode="st"), m(x, mode="hard"), m(x, mode="soft")
-        assert torch.allclose(y_st, y_hard, atol=1e-5), f"nd={nd}: ST forward must equal hard"
-        assert not torch.allclose(y_st, y_soft, atol=1e-4), f"nd={nd}: soft must differ from hard"
+            assert torch.allclose(m(x), m.eval_forward(x), atol=1e-5), f"nd={nd}: ST forward must equal hard eval"
 
 
 def test_tph_summation():
     """The tables_per_head tables are summed within each head -> (B, n_heads, n_outputs)."""
     m = _m(n_heads=3, tables_per_head=5, n_det=1)
     x = torch.randn(4, 17)
-    y = m(x, mode="hard")                                         # (4,3,6)
+    y = m.eval_forward(x)                                         # (4,3,6) hard eval
     # equals per-table hard reads reshaped (n_heads, tph) and summed over tph
     t_hard, t_soft = m._first_spike(x)
     rows = m._hard_read(*(m._bucket(t_hard, t_soft)[:1]))         # (B, n_tables, O)
@@ -82,7 +80,7 @@ def test_delay_positive_init_and_clamp():
         m.delay[0, 0, 0] = -5.0; m.delay[0, 0, 1] = 10 * m.t_window
     eff = torch.clamp(m.delay, 0.0, m.t_window)
     assert (eff >= 0).all() and (eff <= m.t_window).all()
-    assert torch.isfinite(m(torch.randn(8, 17), mode="st")).all()
+    assert torch.isfinite(m(torch.randn(8, 17))).all()
 
 
 # ---- n_det=1 (plain bucket) coverage ----
@@ -124,7 +122,7 @@ def test_no_crossing_folds_into_last_bucket():
     t_hard, _ = m._first_spike(x)
     assert torch.allclose(t_hard, torch.full_like(t_hard, m.t_window))
     assert torch.equal(m.address(x), torch.full_like(m.address(x), m.n_buckets - 1))
-    assert torch.isfinite(m(x, mode="st")).all() and torch.isfinite(m(x, mode="soft")).all()
+    assert torch.isfinite(m(x)).all() and torch.isfinite(m.eval_forward(x)).all()
 
 
 # ---- n_det>1 (product / mixed-radix) coverage ----
@@ -138,14 +136,14 @@ def test_mixed_radix_and_tensor_product_soft():
     assert torch.allclose(m._hard_read(b_hard), manual, atol=1e-5), "mixed-radix hard index"
     P = p[:, :, 0, :].unsqueeze(-1) * p[:, :, 1, :].unsqueeze(-2)
     dense = torch.einsum('btij,tijo->bto', P, grid)
-    assert torch.allclose(m._soft_read(p, detach=False), dense, atol=1e-4), "soft == dense tensor product"
+    assert torch.allclose(m._soft_read(p), dense, atol=1e-4), "soft addr readout == dense tensor product (value)"
 
 
 def test_st_table_grad_only_selected_cell():
     m = _m(n_det=2, n_buckets=8, tables_per_head=1, n_heads=3)
     x = torch.randn(4, 17); tgt = torch.randn(4, 3, 6)
     m.zero_grad(set_to_none=True)
-    F.mse_loss(m(x, mode="st"), tgt).backward()
+    F.mse_loss(m(x), tgt).backward()
     cells_with_grad = (m.table.grad.abs().sum(dim=-1) > 0)       # (T, cells)
     assert cells_with_grad.any() and int(cells_with_grad.sum()) < m.table[..., 0].numel()
 
@@ -163,7 +161,7 @@ def test_all_params_incl_temperatures_get_gradient():
     m = _m(n_det=2, n_buckets=8, tables_per_head=3)
     x = torch.randn(16, 17); tgt = torch.randn(16, 2, 6)
     m.zero_grad(set_to_none=True)
-    F.mse_loss(m(x, mode="st"), tgt).backward()
+    F.mse_loss(m(x), tgt).backward()
     for name, pp in m.named_parameters():
         assert pp.grad is not None and torch.isfinite(pp.grad).all() and pp.grad.abs().sum() > 0, f"{name} no grad"
     assert m.log_T_cross.shape == (m.n_tables,) and m.log_T_bkt.shape == (m.n_tables,)   # trainable per-table temps

@@ -12,12 +12,16 @@ Input latency coding is FIXED (no latency_c/latency_alpha params): t = clamp(t_w
 t_window), which expects STANDARDIZED unit-variance input (normalize upstream, e.g. LayerNorm) — center at
 half-window, +-4 sigma spanning the full window.
 
-n_tables = n_heads * tables_per_head. Reuses BucketLIFDetectorsMHL's machinery verbatim (latency coding,
-bounded-excitatory w = w_max*sigmoid(w_raw) hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum
-first-spike membrane, per-detector delay, trainable strictly-increasing boundaries, trainable per-TABLE soft
-temperatures log_T_cross / log_T_bkt init at 1.0, decoupled straight-through, table_init) and
-ProductBucketLIFMHL's mixed-radix gather (hard) + rank-1 tensor-product contraction (soft, sequential einsums,
-no dense outer product) for the n_det>1 combination. M**n_det is capped at 65536 cells/table.
+forward() is STRAIGHT-THROUGH ONLY (training): value == the hard winner, weight-grad to the winners, address-
+grad via the soft distribution against a detached table. eval_forward() is the efficient hard INFERENCE path:
+direct boundary-threshold bucketing + mixed-radix gather, with NO softmax and NO temperatures — its output
+equals forward()'s. The soft temperatures (log_T_bkt / log_T_cross) survive only inside the ST address grad.
+
+n_tables = n_heads * tables_per_head. Machinery: latency coding, bounded-excitatory w = w_max*sigmoid(w_raw)
+hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum first-spike membrane, per-detector clamped delay,
+trainable strictly-increasing boundaries, trainable per-TABLE soft temperatures log_T_cross / log_T_bkt init
+at 1.0, table_init; plus the mixed-radix gather (hard) + rank-1 tensor-product contraction (soft address
+readout, sequential einsums, no dense outer product) for the n_det>1 combination. M**n_det capped at 65536.
 """
 import math
 from typing import Optional
@@ -111,8 +115,8 @@ class LIFMultiHeadLUT(nn.Module):
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
 
-    def _first_spike(self, x):
-        """Per-detector first-spike (hard, soft): (B, n_tables, n_det) each."""
+    def _membrane(self, x):
+        """Shared hard core: sorted arrival times a_srt and the O(N) cumsum LIF membrane V, both (B,T,D,N)."""
         B, T, D = x.shape[0], self.n_tables, self.n_det
         lat = self.latency(x)
         # delay clamped to [0, t_window]: non-negative floor = causality; upper bound keeps arrival in
@@ -122,11 +126,20 @@ class LIFMultiHeadLUT(nn.Module):
         w_srt = self.w.unsqueeze(0).expand(B, -1, -1, -1).gather(-1, idx)
         tv = self.tau.view(1, T, D, 1)
         V = torch.exp(-a_srt / tv) * torch.cumsum(w_srt * torch.exp(a_srt / tv), dim=-1)   # O(N) cumsum membrane
+        return a_srt, V
+
+    def _t_hard(self, a_srt, V):
+        """Hard first-spike time: first arrival whose V crosses theta_mem (else t_window). No temperatures."""
         crossed = V >= self.theta_mem
         kstar = crossed.float().argmax(-1)
         t_hard = a_srt.gather(-1, kstar.unsqueeze(-1)).squeeze(-1)
-        t_hard = torch.where(crossed.any(-1), t_hard, torch.full_like(t_hard, self.t_window))
-        Tc = self.T_cross.view(1, T, 1, 1)
+        return torch.where(crossed.any(-1), t_hard, torch.full_like(t_hard, self.t_window))
+
+    def _first_spike(self, x):
+        """Per-detector first-spike (hard, soft): (B, n_tables, n_det) each. Soft t uses the T_cross temp."""
+        a_srt, V = self._membrane(x)
+        t_hard = self._t_hard(a_srt, V)
+        Tc = self.T_cross.view(1, self.n_tables, 1, 1)
         c = torch.sigmoid((V - self.theta_mem) / Tc)
         surv = torch.cumprod(1.0 - c, dim=-1)
         surv_prev = torch.cat([torch.ones_like(surv[..., :1]), surv[..., :-1]], dim=-1)
@@ -151,9 +164,10 @@ class LIFMultiHeadLUT(nn.Module):
         tt = torch.arange(T, device=b_hard.device).view(1, T).expand(B, T)
         return self.table[tt, idx]                                      # (B,T,O) full table grad -> selected cell
 
-    def _soft_read(self, p, detach):
+    def _soft_read(self, p):
+        """Soft address readout against a DETACHED table (address grad only, no table grad) — the ST addr path."""
         T, D, M = self.n_tables, self.n_det, self.n_buckets
-        tab = (self.table.detach() if detach else self.table).reshape(T, *([M] * D), self.n_outputs)
+        tab = self.table.detach().reshape(T, *([M] * D), self.n_outputs)
         cur = torch.einsum('tm...,btm->bt...', tab, p[:, :, 0, :])      # peel detector 0's axis
         for d in range(1, D):
             cur = torch.einsum('btm...,btm->bt...', cur, p[:, :, d, :])
@@ -164,19 +178,30 @@ class LIFMultiHeadLUT(nn.Module):
         b_hard, _ = self._bucket(t_hard, t_soft)
         return (b_hard * self.radix.view(1, 1, -1)).sum(-1)            # (B, n_tables) joint index
 
-    def forward(self, x, eps: float = 0.3, mode: str = "st"):
-        """x:(B,input_dim) -> (B, n_heads, n_outputs). `eps` accepted for API parity (unused)."""
+    def forward(self, x):
+        """x:(B,input_dim) -> (B, n_heads, n_outputs). Straight-through ONLY: forward value == the hard winner,
+        weight-grad flows to the hard winners, address-grad flows via the soft distribution against a DETACHED
+        table. For inference use eval_forward() (no soft math)."""
         B = x.shape[0]
         t_hard, t_soft = self._first_spike(x)
         b_hard, p = self._bucket(t_hard, t_soft)
-        y_hard = self._hard_read(b_hard)                               # (B,T,O)
-        if mode == "hard":
-            rows = y_hard
-        elif mode == "soft":
-            rows = self._soft_read(p, detach=False)
-        elif mode == "st":
-            y_addr = self._soft_read(p, detach=True)                   # address grad, no table grad
-            rows = y_hard + y_addr - y_addr.detach()                   # forward == hard
-        else:
-            raise ValueError(f"mode must be 'st'|'hard'|'soft', got {mode!r}")
+        y_hard = self._hard_read(b_hard)                               # (B,T,O) value + weight grad to winner
+        y_addr = self._soft_read(p)                                    # address grad, detached table
+        rows = y_hard + y_addr - y_addr.detach()                       # forward value == hard
+        return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+
+    @torch.no_grad()
+    def eval_forward(self, x):
+        """Efficient hard inference: NO soft math, NO temperatures (no log_T_bkt / log_T_cross). Bucket each
+        detector by DIRECT boundary thresholds (count crossed boundaries), combine detectors mixed-radix into
+        the integer cell index, gather from the table. Output (B, n_heads, n_outputs) matches forward(x) up to
+        float rounding (the ST forward value equals the hard winner)."""
+        B, T, D, M = x.shape[0], self.n_tables, self.n_det, self.n_buckets
+        a_srt, V = self._membrane(x)
+        t_hard = self._t_hard(a_srt, V)
+        b = self.boundaries.view(1, T, D, M - 1)
+        b_hard = (t_hard.unsqueeze(-1) >= b).sum(-1)                   # (B,T,D) count of crossed boundaries
+        idx = (b_hard * self.radix.view(1, 1, -1)).sum(-1)            # (B,T) mixed-radix cell index
+        tt = torch.arange(T, device=x.device).view(1, T).expand(B, T)
+        rows = self.table[tt, idx]                                    # (B,T,O)
         return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)

@@ -1,5 +1,5 @@
 """Distill the real Walker2d int4 LUT actor into BucketLIFDetectorsMHL (M=16 time buckets). Same recipe
-and eval protocol as distill_walker2d_ttfs.py (constant LR 3e-3, mode='st' train / 'hard' eval, same seeds
+and eval protocol as distill_walker2d_ttfs.py (constant LR 3e-3, ST forward train / eval_forward hard eval, same seeds
 and batch/step counts) so the hard-R2 is apples-to-apples with the TTFS and bit variants.
 
 The bucket table has 16 rows (one per time bucket), which does NOT match the oracle's 64-row (2**6) LUT, so
@@ -55,9 +55,8 @@ def main():
     opt = torch.optim.Adam(list(student.parameters()) + list(norm.parameters()), lr=3e-3)   # constant LR
     gen = torch.Generator().manual_seed(1); t0 = time.time(); curve = []
     for s in range(a.steps):
-        eps = 2.0 + (0.3 - 2.0) * s / max(1, a.steps - 1)             # accepted but unused (no gate temp)
         x = torch.randn(a.batch, cfg["input_dim"], generator=gen)
-        loss = F.mse_loss(student(norm(x), eps=eps, mode="st"), oracle(x))
+        loss = F.mse_loss(student(norm(x)), oracle(x))                # straight-through forward
         opt.zero_grad(); loss.backward(); opt.step()
         if s % 500 == 0 or s == a.steps - 1:
             curve.append((s, round(loss.item(), 4)))
@@ -65,7 +64,7 @@ def main():
     xe = torch.randn(4096, cfg["input_dim"], generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
     with torch.no_grad():
-        hard = F.mse_loss(student(norm(xe), eps=0.15, mode="hard"), ye).item()
+        hard = F.mse_loss(student.eval_forward(norm(xe)), ye).item()   # efficient hard eval (no soft math)
     r2 = 1 - hard / ovar; rmse = hard ** 0.5
     tau = student.tau.detach(); Tc = student.T_cross.detach(); Tb = student.T_bkt.detach()
     print(f"FINAL hard MSE {hard:.4f} R2 {r2:.4f} RMSE {rmse:.4f} = {100*rmse/arange:.2f}% of range", flush=True)
