@@ -126,11 +126,14 @@ class BucketLIFDetectorsMHL(nn.Module):
         a = t.unsqueeze(1) + self.delay.unsqueeze(0)                   # (B,T,N)
         a_srt, idx = torch.sort(a, dim=-1)                            # ascending; perm = constant subgradient
         w_srt = self.w.unsqueeze(0).expand(B, -1, -1).gather(-1, idx)  # (B,T,N)
-        dt = a_srt.unsqueeze(-1) - a_srt.unsqueeze(-2)                 # dt[...,k,j] = a_k - a_j  (B,T,N,N)
-        tau = self.tau.view(1, T, 1, 1)
-        causal = (dt >= 0).float()
-        contrib = w_srt.unsqueeze(-2) * torch.exp(-dt.clamp(min=0) / tau) * causal   # (B,T,N,N)
-        V = contrib.sum(-1)                                           # (B,T,N) membrane at each sorted arrival
+        # Membrane V_k = Σ_{j<=k} w_j·exp(-(a_k-a_j)/tau). a_srt is sorted ascending so the causal prefix is
+        # automatic (a_k-a_j >= 0 for j<=k); factor it as V_k = exp(-a_k/tau)·cumsum_{j<=k}(w_j·exp(a_j/tau)),
+        # which is O(N) instead of the O(N^2) pairwise dt matrix. Overflow-safe ONLY because tau is floored at
+        # 1.0 and arrivals a in [0, t_window]: exp(a/tau) <= exp(t_window) ~ 8e13 (well inside float32), and the
+        # exp(-a_k/tau) rescale restores O(1) magnitude from the dominant prefix term, preserving relative
+        # precision. (Do NOT lower the tau floor — that is what keeps this factorization stable.)
+        tau = self.tau.view(1, T, 1)
+        V = torch.exp(-a_srt / tau) * torch.cumsum(w_srt * torch.exp(a_srt / tau), dim=-1)   # (B,T,N)
         # hard first-spike time
         crossed = V >= self.theta_mem
         kstar = crossed.float().argmax(-1)                           # (B,T) first crossing (0 if none)
