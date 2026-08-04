@@ -8,12 +8,16 @@ Structure (three nested levels):
   n_det digits combine MIXED-RADIX into an index over M**n_det cells, each holding an n_outputs vector.
   n_det=1 => one LIF + M buckets => exactly the Bucket notion of a table.
 
+Input latency coding is FIXED (no latency_c/latency_alpha params): t = clamp(t_window*(0.5 - x/8), 0,
+t_window), which expects STANDARDIZED unit-variance input (normalize upstream, e.g. LayerNorm) — center at
+half-window, +-4 sigma spanning the full window.
+
 n_tables = n_heads * tables_per_head. Reuses BucketLIFDetectorsMHL's machinery verbatim (latency coding,
 bounded-excitatory w = w_max*sigmoid(w_raw) hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum
 first-spike membrane, per-detector delay, trainable strictly-increasing boundaries, trainable per-TABLE soft
 temperatures log_T_cross / log_T_bkt init at 1.0, decoupled straight-through, table_init) and
 ProductBucketLIFMHL's mixed-radix gather (hard) + rank-1 tensor-product contraction (soft, sequential einsums,
-no dense outer product) for the n_det>1 combination. M**n_det is capped at 4096 cells/table.
+no dense outer product) for the n_det>1 combination. M**n_det is capped at 65536 cells/table.
 """
 import math
 from typing import Optional
@@ -24,13 +28,15 @@ import torch.nn.functional as F
 
 __all__ = ["LIFMultiHeadLUT"]
 
-MAX_CELLS = 4096
+MAX_CELLS = 65536
 
 
 class LIFMultiHeadLUT(nn.Module):
     def __init__(self, input_dim: int, n_heads: int, n_outputs: int, tables_per_head: int = 1, n_det: int = 1,
-                 *, n_buckets: int = 16, w_max: float = 2.0, t_window: float = 32.0, latency_c: float = 16.0,
-                 latency_alpha: float = 3.0, table_init: Optional[torch.Tensor] = None, device=None):
+                 *, n_buckets: int = 16, w_max: float = 2.0, t_window: float = 32.0, delay_init_std: float = 0.0,
+                 table_init: Optional[torch.Tensor] = None, device=None):
+        # delay_init_std: std (scale) of the half-normal delay initialization; 0.0 => all delays init to zero
+        # (neutral start). Delays are non-negative (causal).
         super().__init__()
         if n_buckets < 2 or n_buckets > 256:
             raise ValueError(f"n_buckets must be in [2,256], got {n_buckets}")
@@ -42,20 +48,24 @@ class LIFMultiHeadLUT(nn.Module):
         self.n_tables = self.n_heads * self.tables_per_head
         self.cells = int(cells); self.n_rows = self.cells
         self.w_max = float(w_max); self.t_window = float(t_window)
-        self.latency_c = float(latency_c); self.latency_alpha = float(latency_alpha)
 
         T, D, M, N, O = self.n_tables, self.n_det, self.n_buckets, self.input_dim, self.n_outputs
         dev = device or torch.device("cpu")
-        # Per-detector params. For the plain-bucket n_det=1 case (identical param SHAPES to the retired BucketLIFDetectorsMHL),
-        # the n_det axis is DROPPED when n_det==1 (so w_raw is (T,N) not (T,1,N)); it is present for n_det>1.
-        # The forward normalizes both to (T, n_det, ...) via _nd().
-        self._sq = (D == 1)
-        dsh = (T, N) if self._sq else (T, D, N)
-        bsh = (T, M - 1) if self._sq else (T, D, M - 1)
-        tsh = (T,) if self._sq else (T, D)
+        # Per-detector params ALWAYS carry the detector axis D (D==1 for the plain-bucket n_det=1 case);
+        # the forward relies on standard broadcasting — no n_det==1 special-casing.
+        dsh = (T, D, N)          # per-synapse per-detector: (tables, detectors, synapses)
+        bsh = (T, D, M - 1)      # per-detector bucket boundaries
+        tsh = (T, D)             # per-detector scalars (tau)
         step = self.t_window / M
         inv_softplus_step = math.log(math.expm1(step)) if step > 0 else 0.0
-        self.delay = nn.Parameter(torch.zeros(*dsh, device=dev))
+        # half-normal non-negative delay init. std==0.0 => exactly zeros AND consumes NO RNG draw, so the
+        # default is byte-identical to the prior zero init and downstream params' RNG order is unaffected.
+        # std>0 draws randn here (consuming RNG at this same sequence point) — expected/intended.
+        if float(delay_init_std) > 0.0:
+            init = (float(delay_init_std) * torch.randn(*dsh, device=dev)).abs()
+        else:
+            init = torch.zeros(*dsh, device=dev)
+        self.delay = nn.Parameter(init)
         self.w_raw = nn.Parameter(-2.2 + 0.5 * torch.randn(*dsh, device=dev))         # bounded excitatory hot init
         self.tau_raw = nn.Parameter(torch.ones(*tsh, device=dev))
         self.beta_base = nn.Parameter(torch.zeros(*(tsh + (1,)), device=dev))
@@ -93,23 +103,24 @@ class LIFMultiHeadLUT(nn.Module):
         return self.beta_base + torch.cumsum(F.softplus(self.beta_raw), dim=-1)   # (T,D,M-1)
 
     def latency(self, x):
-        return torch.clamp(self.latency_c - self.latency_alpha * x, 0.0, self.t_window)
+        # Fixed latency code for STANDARDIZED (unit-variance) input — normalize upstream (e.g. LayerNorm).
+        # Center at half-window (x=0 -> t_window/2); +-4 sigma of unit-variance input spans the full
+        # [0, t_window] (effective slope = t_window/8, then clamped). t_window is the structural time-axis scale.
+        return torch.clamp(self.t_window * (0.5 - x / 8.0), 0.0, self.t_window)
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
-
-    def _nd(self, t):
-        """Insert the n_det axis at dim 1 when it was squeezed out (n_det==1)."""
-        return t.unsqueeze(1) if self._sq else t
 
     def _first_spike(self, x):
         """Per-detector first-spike (hard, soft): (B, n_tables, n_det) each."""
         B, T, D = x.shape[0], self.n_tables, self.n_det
         lat = self.latency(x)
-        a = lat.view(B, 1, 1, -1) + self._nd(self.delay).unsqueeze(0)      # (B,T,D,N)
+        # delay clamped to [0, t_window]: non-negative floor = causality; upper bound keeps arrival in
+        # [0, 2*t_window] so exp(a/tau) stays float32-safe. delay is (T,D,N).
+        a = lat.view(B, 1, 1, -1) + torch.clamp(self.delay, 0.0, self.t_window).unsqueeze(0)   # (B,T,D,N)
         a_srt, idx = torch.sort(a, dim=-1)
-        w_srt = self._nd(self.w).unsqueeze(0).expand(B, -1, -1, -1).gather(-1, idx)
-        tv = self._nd(self.tau).view(1, T, D, 1)
+        w_srt = self.w.unsqueeze(0).expand(B, -1, -1, -1).gather(-1, idx)
+        tv = self.tau.view(1, T, D, 1)
         V = torch.exp(-a_srt / tv) * torch.cumsum(w_srt * torch.exp(a_srt / tv), dim=-1)   # O(N) cumsum membrane
         crossed = V >= self.theta_mem
         kstar = crossed.float().argmax(-1)
@@ -126,7 +137,7 @@ class LIFMultiHeadLUT(nn.Module):
     def _bucket(self, t_hard, t_soft):
         """Per-detector hard bucket (B,T,D) and soft partition (B,T,D,M)."""
         T, D, M = self.n_tables, self.n_det, self.n_buckets
-        bnd = self._nd(self.boundaries)                                  # (T,D,M-1)
+        bnd = self.boundaries                                            # (T,D,M-1)
         b = bnd.view(1, T, D, M - 1)
         Tb = self.T_bkt.view(1, T, 1, 1)
         S = torch.sigmoid((t_soft.unsqueeze(-1) - b) / Tb)               # (B,T,D,M-1)

@@ -47,12 +47,50 @@ def test_tph_summation():
     assert torch.allclose(y, rows.view(4, 3, 5, 6).sum(2), atol=1e-6)
 
 
+# ---- fixed latency code ----
+def test_latency_fixed_formula():
+    """latency = clamp(t_window*(0.5 - x/8), 0, t_window): center at half-window, +-4 sigma span the window."""
+    m = _m()
+    TW = m.t_window
+    assert torch.allclose(m.latency(torch.zeros(3)), torch.full((3,), TW / 2), atol=1e-6)   # x=0 -> half window
+    assert torch.allclose(m.latency(torch.full((3,), 4.0)), torch.zeros(3), atol=1e-6)       # +4 sigma -> floor 0
+    assert torch.allclose(m.latency(torch.full((3,), -4.0)), torch.full((3,), TW), atol=1e-6)  # -4 sigma -> t_window
+    # saturates (clamped) beyond +-4, and is monotonically non-increasing in x
+    assert torch.allclose(m.latency(torch.tensor(8.0)), torch.tensor(0.0), atol=1e-6)
+    assert torch.allclose(m.latency(torch.tensor(-8.0)), torch.tensor(TW), atol=1e-6)
+    xs = torch.linspace(-6, 6, 200)
+    lat = m.latency(xs)
+    assert (lat[1:] - lat[:-1] <= 1e-6).all(), "latency must be monotonically non-increasing in x"
+    assert not hasattr(m, "latency_c") and not hasattr(m, "latency_alpha")   # params removed
+
+
+# ---- bounded positive-only delay ----
+def test_delay_default_zero_init():
+    m = _m()                                              # delay_init_std unset -> default 0.0
+    assert torch.equal(m.delay, torch.zeros_like(m.delay))
+
+
+def test_delay_positive_init_and_clamp():
+    m = _m(delay_init_std=4.0)
+    d = m.delay.detach()
+    assert (d >= 0).all(), "half-normal init must be non-negative (causal)"
+    assert d.std() > 0, "delay_init_std>0 must give nonzero spread"
+    # raw init is in-range, so the clamp used in forward is a no-op here
+    assert torch.equal(torch.clamp(d, 0.0, m.t_window), d)
+    # even if a delay is pushed out of range, the effective (clamped) delay stays in [0, t_window]
+    with torch.no_grad():
+        m.delay[0, 0, 0] = -5.0; m.delay[0, 0, 1] = 10 * m.t_window
+    eff = torch.clamp(m.delay, 0.0, m.t_window)
+    assert (eff >= 0).all() and (eff <= m.t_window).all()
+    assert torch.isfinite(m(torch.randn(8, 17), mode="st")).all()
+
+
 # ---- n_det=1 (plain bucket) coverage ----
 def test_bucket_n_det1_reads_and_shapes():
     m = _m(n_det=1, n_heads=1, tables_per_head=4, n_buckets=8)
     x = torch.randn(8, 17)
     assert m.cells == 8 and m.table.shape == (4, 8, 6)
-    assert m.w_raw.shape == (4, 17) and m.boundaries.shape == (4, 7)   # n_det axis dropped when n_det==1
+    assert m.w_raw.shape == (4, 1, 17) and m.boundaries.shape == (4, 1, 7)   # detector axis always present (D=1)
     # hard read is exactly the single-bucket row of the addressed cell
     t_hard, t_soft = m._first_spike(x)
     b_hard, _ = m._bucket(t_hard, t_soft)
@@ -65,7 +103,7 @@ def test_bucket_n_det1_reads_and_shapes():
 def test_bounded_excitatory_weights():
     m = _m(n_det=1, tables_per_head=4)
     w = m.w
-    assert w.shape == m.w_raw.shape == (m.n_tables, m.input_dim)
+    assert w.shape == m.w_raw.shape == (m.n_tables, 1, m.input_dim)
     assert (w > 0).all() and (w < m.w_max).all() and m.w_max == 2.0
     with torch.no_grad():
         m.w_raw.fill_(30.0); assert torch.allclose(m.w, torch.full_like(m.w, m.w_max), atol=1e-3)
@@ -75,7 +113,7 @@ def test_bounded_excitatory_weights():
 def test_boundaries_strictly_increasing():
     m = _m(n_heads=1, tables_per_head=5, n_det=1)
     b = m.boundaries
-    assert b.shape == (5, m.n_buckets - 1) and (b[:, 1:] - b[:, :-1] > 0).all()
+    assert b.shape == (5, 1, m.n_buckets - 1) and (b[..., 1:] - b[..., :-1] > 0).all()
 
 
 def test_no_crossing_folds_into_last_bucket():
@@ -136,5 +174,5 @@ def test_table_init_and_cell_cap():
     m = LIFMultiHeadLUT(input_dim=17, n_heads=2, n_outputs=6, tables_per_head=4, n_det=1, n_buckets=16, table_init=tab)
     assert torch.equal(m.table.detach(), tab)
     with pytest.raises(ValueError):
-        LIFMultiHeadLUT(input_dim=17, n_heads=1, n_outputs=6, n_det=4, n_buckets=16)   # 16**4 > 4096
-    assert MAX_CELLS == 4096
+        LIFMultiHeadLUT(input_dim=17, n_heads=1, n_outputs=6, n_det=5, n_buckets=16)   # 16**5 > 65536
+    assert MAX_CELLS == 65536

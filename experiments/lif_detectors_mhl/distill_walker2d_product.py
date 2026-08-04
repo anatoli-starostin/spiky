@@ -45,10 +45,11 @@ def main():
     oracle, N = load_oracle()
     # product config = LIFMultiHeadLUT with a single output head, `heads` tables summed within it, n_det/table.
     s = LIFMultiHeadLUT(input_dim=N, n_heads=1, n_outputs=6, tables_per_head=a.heads, n_det=a.n_det, n_buckets=a.buckets)
-    fwd = lambda xx, mode: s(xx, mode=mode).sum(dim=1)        # (B,1,out) -> (B,out): product sums the heads
+    norm = torch.nn.LayerNorm(N)                              # standardize input for the fixed latency code
+    fwd = lambda xx, mode: s(norm(xx), mode=mode).sum(dim=1)  # (B,1,out) -> (B,out): product sums the heads
     print(f"LIFMultiHeadLUT (product config) params: {s.param_count()} (heads={a.heads} n_det={a.n_det} M={a.buckets} "
           f"cells/head={s.cells})", flush=True)
-    opt = torch.optim.Adam(s.parameters(), lr=3e-3)
+    opt = torch.optim.Adam(list(s.parameters()) + list(norm.parameters()), lr=3e-3)
     gen = torch.Generator().manual_seed(1); t0 = time.time()
     for step in range(a.steps):
         x = torch.randn(a.batch, N, generator=gen)

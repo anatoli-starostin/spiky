@@ -49,14 +49,15 @@ def main():
     if a.tables > 0:
         cfg["tables_per_head"] = a.tables              # oracle is a closure over its own 32 tables -> unaffected
     student = LIFMultiHeadLUT(n_buckets=a.buckets, n_det=1, **cfg)
+    norm = torch.nn.LayerNorm(cfg["input_dim"])                       # standardize input for the fixed latency code
     tot = sum(p.numel() for p in student.parameters())
     print(f"LIFMultiHeadLUT (n_det=1) total params: {tot}  (n_buckets={a.buckets})", flush=True)
-    opt = torch.optim.Adam(student.parameters(), lr=3e-3)             # constant LR (same as TTFS harness)
+    opt = torch.optim.Adam(list(student.parameters()) + list(norm.parameters()), lr=3e-3)   # constant LR
     gen = torch.Generator().manual_seed(1); t0 = time.time(); curve = []
     for s in range(a.steps):
         eps = 2.0 + (0.3 - 2.0) * s / max(1, a.steps - 1)             # accepted but unused (no gate temp)
         x = torch.randn(a.batch, cfg["input_dim"], generator=gen)
-        loss = F.mse_loss(student(x, eps=eps, mode="st"), oracle(x))
+        loss = F.mse_loss(student(norm(x), eps=eps, mode="st"), oracle(x))
         opt.zero_grad(); loss.backward(); opt.step()
         if s % 500 == 0 or s == a.steps - 1:
             curve.append((s, round(loss.item(), 4)))
@@ -64,7 +65,7 @@ def main():
     xe = torch.randn(4096, cfg["input_dim"], generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
     with torch.no_grad():
-        hard = F.mse_loss(student(xe, eps=0.15, mode="hard"), ye).item()
+        hard = F.mse_loss(student(norm(xe), eps=0.15, mode="hard"), ye).item()
     r2 = 1 - hard / ovar; rmse = hard ** 0.5
     tau = student.tau.detach(); Tc = student.T_cross.detach(); Tb = student.T_bkt.detach()
     print(f"FINAL hard MSE {hard:.4f} R2 {r2:.4f} RMSE {rmse:.4f} = {100*rmse/arange:.2f}% of range", flush=True)
@@ -72,7 +73,7 @@ def main():
           f"med {Tc.median():.3f} | T_bkt [{Tb.min():.3f},{Tb.max():.3f}] med {Tb.median():.3f}", flush=True)
     # bucket occupancy over the eval set (how many of the 16 buckets are actually used, per table on average)
     with torch.no_grad():
-        addr = student.address(xe)                                    # (4096, n_tables)
+        addr = student.address(norm(xe))                                    # (4096, n_tables)
         used = torch.stack([torch.bincount(addr[:, t], minlength=a.buckets).gt(0).sum() for t in range(cfg["tables_per_head"])])
     print(f"bucket occupancy: mean {used.float().mean():.1f}/{a.buckets} used per table (min {int(used.min())}, max {int(used.max())}) | {time.time()-t0:.0f}s", flush=True)
     metrics = dict(hard_mse=hard, hard_r2=r2, hard_rmse=rmse, rmse_pct_range=100 * rmse / arange,
