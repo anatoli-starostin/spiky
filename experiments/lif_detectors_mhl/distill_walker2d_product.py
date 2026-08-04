@@ -51,6 +51,7 @@ def main():
           f"cells/head={s.cells})", flush=True)
     opt = torch.optim.Adam(list(s.parameters()) + list(norm.parameters()), lr=3e-3)
     gen = torch.Generator().manual_seed(1); t0 = time.time()
+    s.train(); norm.train()                                  # training -> straight-through forward
     for step in range(a.steps):
         x = torch.randn(a.batch, N, generator=gen)
         loss = F.mse_loss(fwd(x), oracle(x))
@@ -61,8 +62,9 @@ def main():
             print(f"step {step:5d} MSE {loss.item():.4f} ({time.time()-t0:.0f}s)", flush=True)
     xe = torch.randn(4096, N, generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
+    s.eval(); norm.eval()                                    # eval -> efficient hard forward (no soft math)
     with torch.no_grad():
-        mse = F.mse_loss(s.eval_forward(norm(xe)).sum(dim=1), ye).item()   # efficient hard eval (no soft math)
+        mse = F.mse_loss(s(norm(xe)).sum(dim=1), ye).item()
     r2 = 1 - mse / ovar
     print(f"FINAL hard R2 {r2:.4f} MSE {mse:.4f} RMSE {mse**0.5:.4f} = {100*mse**0.5/arange:.2f}% of range | {time.time()-t0:.0f}s", flush=True)
     if a.save:

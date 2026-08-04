@@ -1,5 +1,5 @@
 """Distill the real Walker2d int4 LUT actor into BucketLIFDetectorsMHL (M=16 time buckets). Same recipe
-and eval protocol as distill_walker2d_ttfs.py (constant LR 3e-3, ST forward train / eval_forward hard eval, same seeds
+and eval protocol as distill_walker2d_ttfs.py (constant LR 3e-3, train-mode ST forward / eval-mode hard forward, same seeds
 and batch/step counts) so the hard-R2 is apples-to-apples with the TTFS and bit variants.
 
 The bucket table has 16 rows (one per time bucket), which does NOT match the oracle's 64-row (2**6) LUT, so
@@ -54,6 +54,7 @@ def main():
     print(f"LIFMultiHeadLUT (n_det=1) total params: {tot}  (n_buckets={a.buckets})", flush=True)
     opt = torch.optim.Adam(list(student.parameters()) + list(norm.parameters()), lr=3e-3)   # constant LR
     gen = torch.Generator().manual_seed(1); t0 = time.time(); curve = []
+    student.train(); norm.train()                                    # training -> straight-through forward
     for s in range(a.steps):
         x = torch.randn(a.batch, cfg["input_dim"], generator=gen)
         loss = F.mse_loss(student(norm(x)), oracle(x))                # straight-through forward
@@ -63,8 +64,9 @@ def main():
             print(f"step {s:5d} MSE {loss.item():.4f} ({time.time()-t0:.0f}s)", flush=True)
     xe = torch.randn(4096, cfg["input_dim"], generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
+    student.eval(); norm.eval()                                       # eval -> efficient hard forward (no soft math)
     with torch.no_grad():
-        hard = F.mse_loss(student.eval_forward(norm(xe)), ye).item()   # efficient hard eval (no soft math)
+        hard = F.mse_loss(student(norm(xe)), ye).item()
     r2 = 1 - hard / ovar; rmse = hard ** 0.5
     tau = student.tau.detach(); Tc = student.T_cross.detach(); Tb = student.T_bkt.detach()
     print(f"FINAL hard MSE {hard:.4f} R2 {r2:.4f} RMSE {rmse:.4f} = {100*rmse/arange:.2f}% of range", flush=True)

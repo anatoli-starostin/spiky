@@ -12,10 +12,11 @@ Input latency coding is FIXED (no latency_c/latency_alpha params): t = clamp(t_w
 t_window), which expects STANDARDIZED unit-variance input (normalize upstream, e.g. LayerNorm) — center at
 half-window, +-4 sigma spanning the full window.
 
-forward() is STRAIGHT-THROUGH ONLY (training): value == the hard winner, weight-grad to the winners, address-
-grad via the soft distribution against a detached table. eval_forward() is the efficient hard INFERENCE path:
-direct boundary-threshold bucketing + mixed-radix gather, with NO softmax and NO temperatures — its output
-equals forward()'s. The soft temperatures (log_T_bkt / log_T_cross) survive only inside the ST address grad.
+forward() branches on self.training (standard PyTorch convention). In TRAINING mode it is straight-through:
+value == the hard winner, weight-grad to the winners, address-grad via the soft distribution against a detached
+table. In EVAL mode (module.eval()) it runs the efficient hard INFERENCE path: direct boundary-threshold
+bucketing + mixed-radix gather under no_grad, with NO softmax and NO temperatures — its value matches the
+training value. The soft temperatures (log_T_bkt / log_T_cross) survive only inside the ST address grad.
 
 n_tables = n_heads * tables_per_head. Machinery: latency coding, bounded-excitatory w = w_max*sigmoid(w_raw)
 hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum first-spike membrane, per-detector clamped delay,
@@ -178,30 +179,29 @@ class LIFMultiHeadLUT(nn.Module):
         b_hard, _ = self._bucket(t_hard, t_soft)
         return (b_hard * self.radix.view(1, 1, -1)).sum(-1)            # (B, n_tables) joint index
 
+    @torch.compile
     def forward(self, x):
-        """x:(B,input_dim) -> (B, n_heads, n_outputs). Straight-through ONLY: forward value == the hard winner,
-        weight-grad flows to the hard winners, address-grad flows via the soft distribution against a DETACHED
-        table. For inference use eval_forward() (no soft math)."""
-        B = x.shape[0]
-        t_hard, t_soft = self._first_spike(x)
-        b_hard, p = self._bucket(t_hard, t_soft)
-        y_hard = self._hard_read(b_hard)                               # (B,T,O) value + weight grad to winner
-        y_addr = self._soft_read(p)                                    # address grad, detached table
-        rows = y_hard + y_addr - y_addr.detach()                       # forward value == hard
-        return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+        """x:(B,input_dim) -> (B, n_heads, n_outputs), branching on self.training (standard PyTorch convention).
 
-    @torch.no_grad()
-    def eval_forward(self, x):
-        """Efficient hard inference: NO soft math, NO temperatures (no log_T_bkt / log_T_cross). Bucket each
-        detector by DIRECT boundary thresholds (count crossed boundaries), combine detectors mixed-radix into
-        the integer cell index, gather from the table. Output (B, n_heads, n_outputs) matches forward(x) up to
-        float rounding (the ST forward value equals the hard winner)."""
+        Training (self.training=True): STRAIGHT-THROUGH — value == the hard winner, weight-grad flows to the
+        hard winners, address-grad flows via the soft distribution against a DETACHED table.
+        Eval (self.training=False): efficient hard path under no_grad — NO soft math, NO temperatures (no
+        log_T_bkt / log_T_cross); direct boundary-threshold bucketing -> mixed-radix cell index -> table gather.
+        The eval value matches the training value up to float rounding (ST forward value == hard winner)."""
         B, T, D, M = x.shape[0], self.n_tables, self.n_det, self.n_buckets
-        a_srt, V = self._membrane(x)
-        t_hard = self._t_hard(a_srt, V)
-        b = self.boundaries.view(1, T, D, M - 1)
-        b_hard = (t_hard.unsqueeze(-1) >= b).sum(-1)                   # (B,T,D) count of crossed boundaries
-        idx = (b_hard * self.radix.view(1, 1, -1)).sum(-1)            # (B,T) mixed-radix cell index
-        tt = torch.arange(T, device=x.device).view(1, T).expand(B, T)
-        rows = self.table[tt, idx]                                    # (B,T,O)
-        return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+        if self.training:
+            t_hard, t_soft = self._first_spike(x)
+            b_hard, p = self._bucket(t_hard, t_soft)
+            y_hard = self._hard_read(b_hard)                          # (B,T,O) value + weight grad to winner
+            y_addr = self._soft_read(p)                              # address grad, detached table
+            rows = y_hard + y_addr - y_addr.detach()                 # forward value == hard
+            return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+        with torch.no_grad():                                        # efficient hard inference, no grad graph
+            a_srt, V = self._membrane(x)
+            t_hard = self._t_hard(a_srt, V)
+            b = self.boundaries.view(1, T, D, M - 1)
+            b_hard = (t_hard.unsqueeze(-1) >= b).sum(-1)             # (B,T,D) count of crossed boundaries
+            idx = (b_hard * self.radix.view(1, 1, -1)).sum(-1)      # (B,T) mixed-radix cell index
+            tt = torch.arange(T, device=x.device).view(1, T).expand(B, T)
+            rows = self.table[tt, idx]                              # (B,T,O)
+            return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)

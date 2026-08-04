@@ -21,24 +21,28 @@ def test_forward_shape_and_finite():
     for nd, M in ((1, 16), (2, 8), (3, 4)):
         m = _m(n_det=nd, n_buckets=M)
         x = torch.randn(8, 17)
-        for tag, out in (("forward", m(x)), ("eval", m.eval_forward(x))):
+        m.train(); y_train = m(x)                                 # ST path
+        m.eval();  y_eval = m(x)                                  # efficient hard path
+        for tag, out in (("train", y_train), ("eval", y_eval)):
             assert out.shape == (8, 2, 6) and torch.isfinite(out).all(), f"nd={nd} {tag}"
 
 
-def test_st_forward_equals_hard_eval():
-    """ST forward value == the hard winner, so forward(x) must equal the efficient hard eval_forward(x)."""
+def test_train_forward_equals_eval_forward():
+    """ST (train-mode) forward value == the hard winner, so it must equal the eval-mode hard forward."""
     for nd, M in ((1, 8), (2, 8)):
         m = _m(n_det=nd, n_buckets=M)
         x = torch.randn(24, 17)
         with torch.no_grad():
-            assert torch.allclose(m(x), m.eval_forward(x), atol=1e-5), f"nd={nd}: ST forward must equal hard eval"
+            m.train(); a = m(x)
+            m.eval();  b = m(x)
+        assert torch.allclose(a, b, atol=1e-5), f"nd={nd}: train-mode ST forward must equal eval-mode hard forward"
 
 
 def test_tph_summation():
     """The tables_per_head tables are summed within each head -> (B, n_heads, n_outputs)."""
     m = _m(n_heads=3, tables_per_head=5, n_det=1)
     x = torch.randn(4, 17)
-    y = m.eval_forward(x)                                         # (4,3,6) hard eval
+    m.eval(); y = m(x)                                            # (4,3,6) eval-mode hard forward
     # equals per-table hard reads reshaped (n_heads, tph) and summed over tph
     t_hard, t_soft = m._first_spike(x)
     rows = m._hard_read(*(m._bucket(t_hard, t_soft)[:1]))         # (B, n_tables, O)
@@ -122,7 +126,8 @@ def test_no_crossing_folds_into_last_bucket():
     t_hard, _ = m._first_spike(x)
     assert torch.allclose(t_hard, torch.full_like(t_hard, m.t_window))
     assert torch.equal(m.address(x), torch.full_like(m.address(x), m.n_buckets - 1))
-    assert torch.isfinite(m(x)).all() and torch.isfinite(m.eval_forward(x)).all()
+    m.train(); assert torch.isfinite(m(x)).all()
+    m.eval();  assert torch.isfinite(m(x)).all()
 
 
 # ---- n_det>1 (product / mixed-radix) coverage ----
