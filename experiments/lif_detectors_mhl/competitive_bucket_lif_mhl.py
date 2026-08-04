@@ -1,6 +1,6 @@
 """CompetitiveBucketLIFMHL — a lateral-inhibition (winner-take-all) population variant of the bucket LIF MHL.
 
-Sibling of :class:`spiky.lutorch.bucket_lif_detectors_mhl.BucketLIFDetectorsMHL`. Instead of one LIF neuron
+Sibling of :class:`spiky.lutorch.lif_multi_head_lut.LIFMultiHeadLUT` (n_det=1). Instead of one LIF neuron
 per table, each **head** is a *population* of ``N`` LIF neurons that share ONE bucket-time axis, with strict
 **1-winner-take-all down each bucket column** (over the neuron axis): for every (head, bucket) the earliest-
 spiking neuron assigned to that bucket wins and emits its row of the table. Heads are independent and their

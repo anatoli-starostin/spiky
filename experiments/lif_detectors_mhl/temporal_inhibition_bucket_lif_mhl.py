@@ -1,6 +1,6 @@
 """TemporalInhibitionBucketLIFMHL — causal (recurrent) lateral-inhibition bucket-LIF population.
 
-The causal counterpart of :class:`spiky.lutorch.competitive_bucket_lif_mhl.CompetitiveBucketLIFMHL`. Rather
+The causal counterpart of :class:`competitive_bucket_lif_mhl.CompetitiveBucketLIFMHL`. Rather
 than computing each neuron's single first-spike independently and doing a post-hoc per-column WTA, the winner
 of each bucket **inhibits the other still-unfired neurons before later buckets**, so a neuron that loses one
 bucket can still spike (win) in a LATER bucket — a "second chance."

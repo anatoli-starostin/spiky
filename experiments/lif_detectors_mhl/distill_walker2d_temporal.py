@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.temporal_inhibition_bucket_lif_mhl import TemporalInhibitionBucketLIFMHL
+from temporal_inhibition_bucket_lif_mhl import TemporalInhibitionBucketLIFMHL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

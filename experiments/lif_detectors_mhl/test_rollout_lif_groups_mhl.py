@@ -1,6 +1,6 @@
 """Tests for RolloutLIFGroupsMHL — the time-stepped LIF-rollout spiking net with intra-group inhibition."""
 import torch
-from spiky.lutorch.rollout_lif_groups_mhl import RolloutLIFGroupsMHL
+from rollout_lif_groups_mhl import RolloutLIFGroupsMHL
 
 
 def _model(**kw):

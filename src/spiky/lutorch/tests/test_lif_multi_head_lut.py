@@ -1,9 +1,12 @@
-"""Tests for LIFMultiHeadLUT — the unified LIF multi-head LUT generalizing Bucket and Product."""
+"""Tests for LIFMultiHeadLUT — the unified LIF multi-head LUT (the library's single LIF-LUT class).
+
+Folds in the behavioral coverage of the retired BucketLIFDetectorsMHL (n_det=1) and ProductBucketLIFMHL
+(n_det>1) suites, tested against LIFMultiHeadLUT directly.
+"""
 import pytest
 import torch
+import torch.nn.functional as F
 from spiky.lutorch.lif_multi_head_lut import LIFMultiHeadLUT, MAX_CELLS
-from spiky.lutorch.bucket_lif_detectors_mhl import BucketLIFDetectorsMHL
-from spiky.lutorch.product_bucket_lif_mhl import ProductBucketLIFMHL
 
 
 def _m(**kw):
@@ -13,9 +16,10 @@ def _m(**kw):
     return LIFMultiHeadLUT(**cfg)
 
 
+# ---- shared ----
 def test_forward_shape_and_finite():
-    for nd in (1, 2, 3):
-        m = _m(n_det=nd, n_buckets=(16 if nd == 1 else (4 if nd == 3 else 8)))
+    for nd, M in ((1, 16), (2, 8), (3, 4)):
+        m = _m(n_det=nd, n_buckets=M)
         x = torch.randn(8, 17)
         for mode in ("st", "hard", "soft"):
             y = m(x, mode=mode)
@@ -23,65 +27,112 @@ def test_forward_shape_and_finite():
 
 
 def test_straight_through_invariant():
-    m = _m(n_det=2, n_buckets=8)
-    x = torch.randn(24, 17)
+    for nd, M in ((1, 8), (2, 8)):
+        m = _m(n_det=nd, n_buckets=M)
+        x = torch.randn(24, 17)
+        with torch.no_grad():
+            y_st, y_hard, y_soft = m(x, mode="st"), m(x, mode="hard"), m(x, mode="soft")
+        assert torch.allclose(y_st, y_hard, atol=1e-5), f"nd={nd}: ST forward must equal hard"
+        assert not torch.allclose(y_st, y_soft, atol=1e-4), f"nd={nd}: soft must differ from hard"
+
+
+def test_tph_summation():
+    """The tables_per_head tables are summed within each head -> (B, n_heads, n_outputs)."""
+    m = _m(n_heads=3, tables_per_head=5, n_det=1)
+    x = torch.randn(4, 17)
+    y = m(x, mode="hard")                                         # (4,3,6)
+    # equals per-table hard reads reshaped (n_heads, tph) and summed over tph
+    t_hard, t_soft = m._first_spike(x)
+    rows = m._hard_read(*(m._bucket(t_hard, t_soft)[:1]))         # (B, n_tables, O)
+    assert torch.allclose(y, rows.view(4, 3, 5, 6).sum(2), atol=1e-6)
+
+
+# ---- n_det=1 (plain bucket) coverage ----
+def test_bucket_n_det1_reads_and_shapes():
+    m = _m(n_det=1, n_heads=1, tables_per_head=4, n_buckets=8)
+    x = torch.randn(8, 17)
+    assert m.cells == 8 and m.table.shape == (4, 8, 6)
+    assert m.w_raw.shape == (4, 17) and m.boundaries.shape == (4, 7)   # n_det axis dropped when n_det==1
+    # hard read is exactly the single-bucket row of the addressed cell
+    t_hard, t_soft = m._first_spike(x)
+    b_hard, _ = m._bucket(t_hard, t_soft)
+    y_hard = m._hard_read(b_hard)
+    manual = torch.stack([m.table[t][b_hard[:, t, 0]] for t in range(m.n_tables)], dim=1)
+    assert torch.allclose(y_hard, manual, atol=1e-6)
+    assert torch.equal(m.address(x), b_hard[:, :, 0])            # joint index == the single bucket digit
+
+
+def test_bounded_excitatory_weights():
+    m = _m(n_det=1, tables_per_head=4)
+    w = m.w
+    assert w.shape == m.w_raw.shape == (m.n_tables, m.input_dim)
+    assert (w > 0).all() and (w < m.w_max).all() and m.w_max == 2.0
     with torch.no_grad():
-        y_st, y_hard, y_soft = m(x, mode="st"), m(x, mode="hard"), m(x, mode="soft")
-    assert torch.allclose(y_st, y_hard, atol=1e-5) and not torch.allclose(y_st, y_soft, atol=1e-4)
+        m.w_raw.fill_(30.0); assert torch.allclose(m.w, torch.full_like(m.w, m.w_max), atol=1e-3)
+        m.w_raw.fill_(-30.0); assert (m.w < 1e-6).all()
 
 
-def test_reduces_to_bucket_wrapper_exactly():
-    """BucketLIFDetectorsMHL is a faithful n_det=1 view of the unified engine (byte-exact, same seed)."""
+def test_boundaries_strictly_increasing():
+    m = _m(n_heads=1, tables_per_head=5, n_det=1)
+    b = m.boundaries
+    assert b.shape == (5, m.n_buckets - 1) and (b[:, 1:] - b[:, :-1] > 0).all()
+
+
+def test_no_crossing_folds_into_last_bucket():
+    m = _m(n_det=1, n_buckets=8, tables_per_head=3)
+    with torch.no_grad():
+        m.w_raw.fill_(-30.0)
     x = torch.randn(8, 17)
-    torch.manual_seed(1); u = LIFMultiHeadLUT(input_dim=17, n_heads=2, n_outputs=6, tables_per_head=16, n_det=1, n_buckets=16)
-    torch.manual_seed(1); b = BucketLIFDetectorsMHL(input_dim=17, n_heads=2, n_outputs=6, tables_per_head=16, n_buckets=16)
-    assert isinstance(b, LIFMultiHeadLUT)
-    for mode in ("st", "hard", "soft"):
-        assert torch.allclose(u(x, mode=mode), b(x, mode=mode), atol=0), f"bucket wrapper mismatch [{mode}]"
-    # n_det=1 param shapes match the original Bucket layout (no n_det axis)
-    assert u.w_raw.shape == (32, 17) and u.boundaries.shape == (32, 15)
+    t_hard, _ = m._first_spike(x)
+    assert torch.allclose(t_hard, torch.full_like(t_hard, m.t_window))
+    assert torch.equal(m.address(x), torch.full_like(m.address(x), m.n_buckets - 1))
+    assert torch.isfinite(m(x, mode="st")).all() and torch.isfinite(m(x, mode="soft")).all()
 
 
-def test_reduces_to_product_wrapper_exactly():
-    """ProductBucketLIFMHL == unified(n_heads=H, tph=1, n_det) with heads summed (byte-exact, same seed)."""
-    x = torch.randn(8, 17)
-    torch.manual_seed(2); u = LIFMultiHeadLUT(input_dim=17, n_heads=8, n_outputs=6, tables_per_head=1, n_det=3, n_buckets=2)
-    torch.manual_seed(2); p = ProductBucketLIFMHL(in_dim=17, out_dim=6, n_heads=8, n_det=3, buckets=2)
-    assert isinstance(p, LIFMultiHeadLUT)
-    for mode in ("st", "hard", "soft"):
-        assert torch.allclose(u(x, mode=mode).sum(dim=1), p(x, mode=mode), atol=0), f"product wrapper mismatch [{mode}]"
-
-
+# ---- n_det>1 (product / mixed-radix) coverage ----
 def test_mixed_radix_and_tensor_product_soft():
     m = _m(n_heads=3, tables_per_head=1, n_det=2, n_buckets=8)
     x = torch.randn(16, 17)
     t_hard, t_soft = m._first_spike(x)
-    b_hard, p = m._bucket(t_hard, t_soft)                     # (B,T,2), (B,T,2,M)
-    # hard gather == reshaped grid cell (b0, b1)
+    b_hard, p = m._bucket(t_hard, t_soft)
     grid = m.table.reshape(m.n_tables, m.n_buckets, m.n_buckets, m.n_outputs)
-    manual = torch.stack([grid[t][b_hard[:, t, 0], b_hard[:, t, 1]] for t in range(m.n_tables)], dim=1)  # (B,T,O)
-    assert torch.allclose(m._hard_read(b_hard), manual, atol=1e-5)
-    # soft contraction == dense tensor product
+    manual = torch.stack([grid[t][b_hard[:, t, 0], b_hard[:, t, 1]] for t in range(m.n_tables)], dim=1)
+    assert torch.allclose(m._hard_read(b_hard), manual, atol=1e-5), "mixed-radix hard index"
     P = p[:, :, 0, :].unsqueeze(-1) * p[:, :, 1, :].unsqueeze(-2)
     dense = torch.einsum('btij,tijo->bto', P, grid)
-    assert torch.allclose(m._soft_read(p, detach=False), dense, atol=1e-4)
+    assert torch.allclose(m._soft_read(p, detach=False), dense, atol=1e-4), "soft == dense tensor product"
 
 
+def test_st_table_grad_only_selected_cell():
+    m = _m(n_det=2, n_buckets=8, tables_per_head=1, n_heads=3)
+    x = torch.randn(4, 17); tgt = torch.randn(4, 3, 6)
+    m.zero_grad(set_to_none=True)
+    F.mse_loss(m(x, mode="st"), tgt).backward()
+    cells_with_grad = (m.table.grad.abs().sum(dim=-1) > 0)       # (T, cells)
+    assert cells_with_grad.any() and int(cells_with_grad.sum()) < m.table[..., 0].numel()
+
+
+def test_soft_joint_sums_to_one():
+    m = _m(n_det=2, n_buckets=8)
+    x = torch.randn(8, 17)
+    t_hard, t_soft = m._first_spike(x)
+    _, p = m._bucket(t_hard, t_soft)
+    assert torch.allclose(p.sum(-1), torch.ones_like(p.sum(-1)), atol=1e-4)   # each detector's dist sums to 1
+
+
+# ---- params, temperatures, cap, table_init ----
 def test_all_params_incl_temperatures_get_gradient():
     m = _m(n_det=2, n_buckets=8, tables_per_head=3)
     x = torch.randn(16, 17); tgt = torch.randn(16, 2, 6)
     m.zero_grad(set_to_none=True)
-    torch.nn.functional.mse_loss(m(x, mode="st"), tgt).backward()
+    F.mse_loss(m(x, mode="st"), tgt).backward()
     for name, pp in m.named_parameters():
         assert pp.grad is not None and torch.isfinite(pp.grad).all() and pp.grad.abs().sum() > 0, f"{name} no grad"
-    # per-table soft temperatures are trainable and per-table shaped (init exp(0)=1.0 -> Bucket-parity)
-    assert m.log_T_cross.shape == (m.n_tables,) and m.log_T_bkt.shape == (m.n_tables,)
-    assert m.log_T_cross.grad.abs().sum() > 0 and m.log_T_bkt.grad.abs().sum() > 0
+    assert m.log_T_cross.shape == (m.n_tables,) and m.log_T_bkt.shape == (m.n_tables,)   # trainable per-table temps
 
 
 def test_table_init_and_cell_cap():
-    T = 2 * 4
-    tab = torch.randn(T, 16, 6)
+    tab = torch.randn(8, 16, 6)
     m = LIFMultiHeadLUT(input_dim=17, n_heads=2, n_outputs=6, tables_per_head=4, n_det=1, n_buckets=16, table_init=tab)
     assert torch.equal(m.table.detach(), tab)
     with pytest.raises(ValueError):

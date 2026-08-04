@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.bucket_lif_detectors_mhl import BucketLIFDetectorsMHL
+from spiky.lutorch.lif_multi_head_lut import LIFMultiHeadLUT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,9 +48,9 @@ def main():
     oracle, cfg = load_oracle()
     if a.tables > 0:
         cfg["tables_per_head"] = a.tables              # oracle is a closure over its own 32 tables -> unaffected
-    student = BucketLIFDetectorsMHL(n_buckets=a.buckets, **cfg)
+    student = LIFMultiHeadLUT(n_buckets=a.buckets, n_det=1, **cfg)
     tot = sum(p.numel() for p in student.parameters())
-    print(f"BucketLIFDetectorsMHL total params: {tot}  (n_buckets={a.buckets})", flush=True)
+    print(f"LIFMultiHeadLUT (n_det=1) total params: {tot}  (n_buckets={a.buckets})", flush=True)
     opt = torch.optim.Adam(student.parameters(), lr=3e-3)             # constant LR (same as TTFS harness)
     gen = torch.Generator().manual_seed(1); t0 = time.time(); curve = []
     for s in range(a.steps):

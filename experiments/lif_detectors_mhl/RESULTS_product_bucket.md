@@ -1,6 +1,6 @@
 # ProductBucketLIFMHL — mixed-radix product-of-detectors sweep
 
-`ProductBucketLIFMHL` (module `spiky.lutorch.product_bucket_lif_mhl`) generalizes the single-detector
+`ProductBucketLIFMHL` (now `LIFMultiHeadLUT` in `spiky.lutorch.lif_multi_head_lut`, n_det>1) generalizes the single-detector
 `BucketLIFDetectorsMHL`. Each head has **N_det independent M-way LIF bucket detectors** (each with its own
 input weights, delay, tau, and trainable strictly-increasing bucket boundaries). The N_det per-detector
 bucket digits form a **mixed-radix index into a table of M^N_det joint cells**:

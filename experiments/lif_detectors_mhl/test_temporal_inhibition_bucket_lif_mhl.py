@@ -6,7 +6,7 @@ the "each neuron wins at most one bucket" (fired-mask) property, that inhibition
 the first-crossing time (the mechanism for the second chance), and no-crossing behaviour.
 """
 import torch
-from spiky.lutorch.temporal_inhibition_bucket_lif_mhl import TemporalInhibitionBucketLIFMHL
+from temporal_inhibition_bucket_lif_mhl import TemporalInhibitionBucketLIFMHL
 
 
 def _model(**kw):

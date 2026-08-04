@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.competitive_bucket_lif_mhl import CompetitiveBucketLIFMHL
+from competitive_bucket_lif_mhl import CompetitiveBucketLIFMHL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

@@ -118,8 +118,8 @@ full-weight soft first-spike surrogate (all inputs incl. off-winner arrivals, pl
 
 ## Variant: BucketLIFDetectorsMHL (single neuron per table, time-bucket address)
 
-The leanest sibling (`spiky/src/spiky/lutorch/bucket_lif_detectors_mhl.py`, tests
-`test_bucket_lif_detectors_mhl.py`, harness `distill_walker2d_bucket.py`). Instead of `nap` bit-detectors +
+The leanest sibling (`spiky/src/spiky/lutorch/lif_multi_head_lut.py` (n_det=1), tests
+`test_lif_multi_head_lut.py`, harness `distill_walker2d_bucket.py`). Instead of `nap` bit-detectors +
 `P`, each table has **exactly one LIF neuron**, and the table row is **which time bucket its first spike
 lands in** (default `M=16` buckets):
 

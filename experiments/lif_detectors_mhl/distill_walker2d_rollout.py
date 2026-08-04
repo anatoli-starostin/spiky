@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.rollout_lif_groups_mhl import RolloutLIFGroupsMHL
+from rollout_lif_groups_mhl import RolloutLIFGroupsMHL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

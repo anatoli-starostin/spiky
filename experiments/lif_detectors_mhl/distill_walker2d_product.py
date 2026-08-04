@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.product_bucket_lif_mhl import ProductBucketLIFMHL
+from spiky.lutorch.lif_multi_head_lut import LIFMultiHeadLUT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -43,14 +43,16 @@ def main():
     a = ap.parse_args()
     torch.manual_seed(0); torch.set_num_threads(max(1, os.cpu_count() - 1))
     oracle, N = load_oracle()
-    s = ProductBucketLIFMHL(in_dim=N, out_dim=6, n_heads=a.heads, n_det=a.n_det, buckets=a.buckets)
-    print(f"ProductBucketLIFMHL params: {s.param_count()} (heads={a.heads} n_det={a.n_det} M={a.buckets} "
+    # product config = LIFMultiHeadLUT with a single output head, `heads` tables summed within it, n_det/table.
+    s = LIFMultiHeadLUT(input_dim=N, n_heads=1, n_outputs=6, tables_per_head=a.heads, n_det=a.n_det, n_buckets=a.buckets)
+    fwd = lambda xx, mode: s(xx, mode=mode).sum(dim=1)        # (B,1,out) -> (B,out): product sums the heads
+    print(f"LIFMultiHeadLUT (product config) params: {s.param_count()} (heads={a.heads} n_det={a.n_det} M={a.buckets} "
           f"cells/head={s.cells})", flush=True)
     opt = torch.optim.Adam(s.parameters(), lr=3e-3)
     gen = torch.Generator().manual_seed(1); t0 = time.time()
     for step in range(a.steps):
         x = torch.randn(a.batch, N, generator=gen)
-        loss = F.mse_loss(s(x, mode="st"), oracle(x))
+        loss = F.mse_loss(fwd(x, "st"), oracle(x))
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(s.parameters(), 1.0)
         opt.step()
@@ -59,7 +61,7 @@ def main():
     xe = torch.randn(4096, N, generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
     with torch.no_grad():
-        mse = F.mse_loss(s(xe, mode="hard"), ye).item()
+        mse = F.mse_loss(fwd(xe, "hard"), ye).item()
     r2 = 1 - mse / ovar
     print(f"FINAL hard R2 {r2:.4f} MSE {mse:.4f} RMSE {mse**0.5:.4f} = {100*mse**0.5/arange:.2f}% of range | {time.time()-t0:.0f}s", flush=True)
     if a.save:

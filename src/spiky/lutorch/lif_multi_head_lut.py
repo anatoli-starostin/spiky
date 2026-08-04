@@ -46,7 +46,7 @@ class LIFMultiHeadLUT(nn.Module):
 
         T, D, M, N, O = self.n_tables, self.n_det, self.n_buckets, self.input_dim, self.n_outputs
         dev = device or torch.device("cpu")
-        # Per-detector params. To make BucketLIFDetectorsMHL (n_det=1) a drop-in with identical param SHAPES,
+        # Per-detector params. For the plain-bucket n_det=1 case (identical param SHAPES to the retired BucketLIFDetectorsMHL),
         # the n_det axis is DROPPED when n_det==1 (so w_raw is (T,N) not (T,1,N)); it is present for n_det>1.
         # The forward normalizes both to (T, n_det, ...) via _nd().
         self._sq = (D == 1)

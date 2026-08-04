@@ -5,7 +5,7 @@ soft-competition normalization, ST invariant, bounded excitatory weights, strict
 boundaries, gradient flow to every param (incl. the WTA temperature), and no-crossing -> last bucket.
 """
 import torch
-from spiky.lutorch.competitive_bucket_lif_mhl import CompetitiveBucketLIFMHL
+from competitive_bucket_lif_mhl import CompetitiveBucketLIFMHL
 
 
 def _model(**kw):
