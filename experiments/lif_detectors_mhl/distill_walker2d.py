@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.lif_detectors_mhl import LIFDetectorsMHL
+from lif_detectors_mhl import LIFDetectorsMHL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

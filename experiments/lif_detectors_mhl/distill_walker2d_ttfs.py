@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from spiky.lutorch.pure_lif_detectors_mhl import PureLIFDetectorsMHL
+from pure_lif_detectors_mhl import PureLIFDetectorsMHL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

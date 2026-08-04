@@ -8,7 +8,7 @@ end-to-end distillation smoke test against a frozen HyperplaneMultiHeadLUT teach
 import pytest
 import torch
 
-from spiky.lutorch.lif_detectors_mhl import LIFDetectorsMHL
+from lif_detectors_mhl import LIFDetectorsMHL
 from spiky.lutorch.hyperplane_multi_head_lut import HyperplaneMultiHeadLUT
 
 

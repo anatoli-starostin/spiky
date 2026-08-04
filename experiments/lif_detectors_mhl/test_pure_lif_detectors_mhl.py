@@ -5,7 +5,7 @@ invariant, table grad = selected row only, detector-path grad = full-K softmax, 
 (no-crossing -> t_window, no NaNs, per-LUT tau/T_cross/temp_bit get gradient).
 """
 import torch
-from spiky.lutorch.pure_lif_detectors_mhl import PureLIFDetectorsMHL
+from pure_lif_detectors_mhl import PureLIFDetectorsMHL
 
 
 def _model(**kw):
