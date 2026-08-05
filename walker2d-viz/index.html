@@ -19,7 +19,13 @@
     canvas { display: block; }
     #ui { position: fixed; top: 12px; left: 12px; z-index: 10; background: rgba(20,24,32,.85);
       border: 1px solid #2a3240; border-radius: 10px; padding: 12px 14px; width: 250px; backdrop-filter: blur(6px); }
-    #ui h1 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+    #ui h1 { font-size: 14px; margin: 0; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    #ui h1 .title { flex: 1; white-space: nowrap; }
+    #foldBtn { background: none; border: none; color: #9fb0c3; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
+    #foldBtn:hover { color: #e6e6e6; border: none; }
+    #uiBody { margin-top: 10px; }
+    #ui.collapsed { width: auto; padding: 8px 10px; }
+    #ui.collapsed #uiBody { display: none; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
     .row label { color: #9fb0c3; }
     button, select { background: #1b2230; color: #e6e6e6; border: 1px solid #33405a; border-radius: 6px;
@@ -36,7 +42,8 @@
 <body>
   <div id="app"></div>
   <div id="ui">
-    <h1>Walker2d Viz &middot; <span id="conn" class="bad">disconnected</span></h1>
+    <h1><span class="title">Walker2d Viz &middot; <span id="conn" class="bad">disconnected</span></span><button id="foldBtn" aria-label="Collapse controls" title="Collapse / expand controls">&#9662;</button></h1>
+    <div id="uiBody">
     <input id="srv" value="ws://localhost:8765" title="WebSocket server URL" />
     <div class="row">
       <button id="restart">Restart</button>
@@ -64,6 +71,7 @@
       step <b id="step">0</b> &middot; reward <b id="reward">0.00</b><br />
       return <b id="ret">0.00</b> &middot; actor <b id="actorName">&mdash;</b>
     </div>
+    </div><!-- /uiBody -->
   </div>
   <script src="config.js"></script>
   <script type="module" src="src/main.js"></script>

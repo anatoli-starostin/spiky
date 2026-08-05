@@ -294,6 +294,16 @@ $('renderBtn').onclick = () => {                          // live switch between
   $('renderBtn').textContent = 'Render: ' + (renderMode === 'accurate' ? 'Accurate' : 'Approx')
   $('renderBtn').classList.toggle('active', renderMode === 'accurate')
 }
+
+// Foldable controls panel — collapses to just the title bar so it doesn't overlap the robot on narrow screens.
+const ui = document.getElementById('ui')
+function setFold(collapsed) {
+  ui.classList.toggle('collapsed', collapsed)
+  $('foldBtn').innerHTML = collapsed ? '&#9656;' : '&#9662;'   // ▸ when collapsed, ▾ when expanded
+  $('foldBtn').setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls')
+}
+$('foldBtn').onclick = () => setFold(!ui.classList.contains('collapsed'))
+setFold(innerWidth < 620)                                 // default: collapsed on narrow/mobile, expanded on wide
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
 $('actor').onchange = (e) => send({ cmd: 'actor', name: e.target.value })
 $('noreset').onchange = (e) => send({ cmd: 'no_reset', value: e.target.checked })
