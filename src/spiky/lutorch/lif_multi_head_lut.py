@@ -16,7 +16,9 @@ forward() branches on self.training (standard PyTorch convention). In TRAINING m
 value == the hard winner, weight-grad to the winners, address-grad via the soft distribution against a detached
 table. In EVAL mode (module.eval()) it runs the efficient hard INFERENCE path: direct boundary-threshold
 bucketing + mixed-radix gather under no_grad, with NO softmax and NO temperatures — its value matches the
-training value. The soft temperatures (log_T_bkt / log_T_cross) survive only inside the ST address grad.
+training value. The soft temperatures (log_T_bkt / log_T_cross) survive only inside the ST address grad; pass
+freeze_temperature=True to fix them at 1.0 (non-trainable), which mimics the old ProductBucketLIFMHL fixed
+buffers and prevents them from collapsing during training.
 
 n_tables = n_heads * tables_per_head. Machinery: latency coding, bounded-excitatory w = w_max*sigmoid(w_raw)
 hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum first-spike membrane, per-detector clamped delay,
@@ -39,9 +41,10 @@ MAX_CELLS = 65536
 class LIFMultiHeadLUT(nn.Module):
     def __init__(self, input_dim: int, n_heads: int, n_outputs: int, tables_per_head: int = 1, n_det: int = 1,
                  *, n_buckets: int = 16, w_max: float = 2.0, t_window: float = 32.0, delay_init_std: float = 0.0,
-                 table_init: Optional[torch.Tensor] = None, device=None):
+                 freeze_temperature: bool = False, table_init: Optional[torch.Tensor] = None, device=None):
         # delay_init_std: std (scale) of the half-normal delay initialization; 0.0 => all delays init to zero
         # (neutral start). Delays are non-negative (causal).
+        # freeze_temperature: if True, log_T_cross/log_T_bkt are fixed at 0.0 (T=1.0) and non-trainable.
         super().__init__()
         if n_buckets < 2 or n_buckets > 256:
             raise ValueError(f"n_buckets must be in [2,256], got {n_buckets}")
@@ -75,9 +78,11 @@ class LIFMultiHeadLUT(nn.Module):
         self.tau_raw = nn.Parameter(torch.ones(*tsh, device=dev))
         self.beta_base = nn.Parameter(torch.zeros(*(tsh + (1,)), device=dev))
         self.beta_raw = nn.Parameter(torch.full(bsh, float(inv_softplus_step), device=dev))
-        # per-TABLE trainable soft temperatures (init exp(0)=1.0 -> step-0 == Bucket)
-        self.log_T_cross = nn.Parameter(torch.zeros(T, device=dev))
-        self.log_T_bkt = nn.Parameter(torch.zeros(T, device=dev))
+        # per-TABLE soft temperatures (init exp(0)=1.0 -> step-0 == Bucket). Trainable unless freeze_temperature,
+        # in which case they stay fixed at 1.0 (requires_grad=False) — mimics the old ProductBucketLIFMHL buffers.
+        trainable_T = not bool(freeze_temperature)
+        self.log_T_cross = nn.Parameter(torch.zeros(T, device=dev), requires_grad=trainable_T)
+        self.log_T_bkt = nn.Parameter(torch.zeros(T, device=dev), requires_grad=trainable_T)
         if table_init is not None:
             if tuple(table_init.shape) != (T, self.cells, O):
                 raise ValueError(f"table_init shape {tuple(table_init.shape)} != {(T, self.cells, O)}")

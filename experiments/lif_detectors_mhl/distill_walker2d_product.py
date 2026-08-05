@@ -40,18 +40,18 @@ def main():
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--save", type=str, default="")
+    ap.add_argument("--delay-init-std", type=float, default=4.0)   # half-normal delay init scale (0 => zero init); default 4.0 (t_window/8)
     a = ap.parse_args()
     torch.manual_seed(0); torch.set_num_threads(max(1, os.cpu_count() - 1))
     oracle, N = load_oracle()
     # product config = LIFMultiHeadLUT with a single output head, `heads` tables summed within it, n_det/table.
-    s = LIFMultiHeadLUT(input_dim=N, n_heads=1, n_outputs=6, tables_per_head=a.heads, n_det=a.n_det, n_buckets=a.buckets)
-    norm = torch.nn.LayerNorm(N)                              # standardize input for the fixed latency code
-    fwd = lambda xx: s(norm(xx)).sum(dim=1)                   # (B,1,out) -> (B,out): ST forward; product sums the heads
+    s = LIFMultiHeadLUT(input_dim=N, n_heads=1, n_outputs=6, tables_per_head=a.heads, n_det=a.n_det, n_buckets=a.buckets, delay_init_std=a.delay_init_std, freeze_temperature=True)
+    fwd = lambda xx: s(xx).sum(dim=1)                        # (B,1,out) -> (B,out): ST forward; product sums the heads
     print(f"LIFMultiHeadLUT (product config) params: {s.param_count()} (heads={a.heads} n_det={a.n_det} M={a.buckets} "
           f"cells/head={s.cells})", flush=True)
-    opt = torch.optim.Adam(list(s.parameters()) + list(norm.parameters()), lr=3e-3)
+    opt = torch.optim.Adam(s.parameters(), lr=3e-3)
     gen = torch.Generator().manual_seed(1); t0 = time.time()
-    s.train(); norm.train()                                  # training -> straight-through forward
+    s.train()                                                # training -> straight-through forward; raw x to model+teacher
     for step in range(a.steps):
         x = torch.randn(a.batch, N, generator=gen)
         loss = F.mse_loss(fwd(x), oracle(x))
@@ -62,9 +62,9 @@ def main():
             print(f"step {step:5d} MSE {loss.item():.4f} ({time.time()-t0:.0f}s)", flush=True)
     xe = torch.randn(4096, N, generator=torch.Generator().manual_seed(7))
     ye = oracle(xe); ovar = ye.var(0).mean().item(); arange = float(ye.max() - ye.min())
-    s.eval(); norm.eval()                                    # eval -> efficient hard forward (no soft math)
+    s.eval()                                                 # eval -> efficient hard forward (no soft math)
     with torch.no_grad():
-        mse = F.mse_loss(s(norm(xe)).sum(dim=1), ye).item()
+        mse = F.mse_loss(s(xe).sum(dim=1), ye).item()
     r2 = 1 - mse / ovar
     print(f"FINAL hard R2 {r2:.4f} MSE {mse:.4f} RMSE {mse**0.5:.4f} = {100*mse**0.5/arange:.2f}% of range | {time.time()-t0:.0f}s", flush=True)
     if a.save:

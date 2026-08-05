@@ -161,6 +161,27 @@ def test_soft_joint_sums_to_one():
     assert torch.allclose(p.sum(-1), torch.ones_like(p.sum(-1)), atol=1e-4)   # each detector's dist sums to 1
 
 
+# ---- freeze_temperature ----
+def test_freeze_temperature():
+    # default: trainable temps at T=1.0
+    md = _m()
+    assert md.log_T_cross.requires_grad and md.log_T_bkt.requires_grad
+    # frozen: value 0.0 (T=1.0) and non-trainable
+    mf = _m(freeze_temperature=True)
+    assert not mf.log_T_cross.requires_grad and not mf.log_T_bkt.requires_grad
+    assert torch.equal(mf.log_T_cross, torch.zeros_like(mf.log_T_cross))
+    assert torch.equal(mf.log_T_bkt, torch.zeros_like(mf.log_T_bkt))
+    assert torch.allclose(mf.T_cross, torch.ones_like(mf.T_cross)) and torch.allclose(mf.T_bkt, torch.ones_like(mf.T_bkt))
+    # after a couple of ST steps: frozen temps stay put; default temps move
+    for m in (md, mf):
+        opt = torch.optim.Adam([p for p in m.parameters() if p.requires_grad], lr=1e-1)
+        for _ in range(2):
+            opt.zero_grad(); F.mse_loss(m(torch.randn(16, 17)), torch.randn(16, 2, 6)).backward(); opt.step()
+    assert torch.equal(mf.log_T_cross, torch.zeros_like(mf.log_T_cross)), "frozen T_cross must not move"
+    assert torch.equal(mf.log_T_bkt, torch.zeros_like(mf.log_T_bkt)), "frozen T_bkt must not move"
+    assert not torch.equal(md.log_T_bkt, torch.zeros_like(md.log_T_bkt)), "trainable T_bkt should move"
+
+
 # ---- params, temperatures, cap, table_init ----
 def test_all_params_incl_temperatures_get_gradient():
     m = _m(n_det=2, n_buckets=8, tables_per_head=3)
