@@ -51,16 +51,20 @@ def test_tph_summation():
 
 # ---- fixed latency code ----
 def test_latency_fixed_formula():
-    """latency = clamp(t_window*(0.5 - x/8), 0, t_window): center at half-window, +-4 sigma span the window."""
+    """latency = clamp(t_window*(0.5 - 3x/32), 0, t_window): slope alpha=3, saturating at x=+-16/3."""
     m = _m()
-    TW = m.t_window
+    TW = m.t_window                                                     # 32 -> map = 16 - 3x
+    sat = 16.0 / 3.0                                                    # ~5.33: saturation point
     assert torch.allclose(m.latency(torch.zeros(3)), torch.full((3,), TW / 2), atol=1e-6)   # x=0 -> half window
-    assert torch.allclose(m.latency(torch.full((3,), 4.0)), torch.zeros(3), atol=1e-6)       # +4 sigma -> floor 0
-    assert torch.allclose(m.latency(torch.full((3,), -4.0)), torch.full((3,), TW), atol=1e-6)  # -4 sigma -> t_window
-    # saturates (clamped) beyond +-4, and is monotonically non-increasing in x
-    assert torch.allclose(m.latency(torch.tensor(8.0)), torch.tensor(0.0), atol=1e-6)
+    # +4 is NO LONGER clamped: 16 - 3*4 = 4 (positive), not 0
+    assert torch.allclose(m.latency(torch.tensor(4.0)), torch.tensor(4.0), atol=1e-6)
+    assert torch.allclose(m.latency(torch.tensor(-4.0)), torch.tensor(28.0), atol=1e-6)      # 16 + 12
+    # saturates to 0 at x=+16/3 (and stays 0 beyond), to t_window at x=-16/3
+    assert torch.allclose(m.latency(torch.tensor(sat)), torch.tensor(0.0), atol=1e-5)
+    assert torch.allclose(m.latency(torch.tensor(-sat)), torch.tensor(TW), atol=1e-5)
+    assert torch.allclose(m.latency(torch.tensor(8.0)), torch.tensor(0.0), atol=1e-6)        # beyond -> stays 0
     assert torch.allclose(m.latency(torch.tensor(-8.0)), torch.tensor(TW), atol=1e-6)
-    xs = torch.linspace(-6, 6, 200)
+    xs = torch.linspace(-8, 8, 300)
     lat = m.latency(xs)
     assert (lat[1:] - lat[:-1] <= 1e-6).all(), "latency must be monotonically non-increasing in x"
     assert not hasattr(m, "latency_c") and not hasattr(m, "latency_alpha")   # params removed

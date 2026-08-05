@@ -8,9 +8,9 @@ Structure (three nested levels):
   n_det digits combine MIXED-RADIX into an index over M**n_det cells, each holding an n_outputs vector.
   n_det=1 => one LIF + M buckets => exactly the Bucket notion of a table.
 
-Input latency coding is FIXED (no latency_c/latency_alpha params): t = clamp(t_window*(0.5 - x/8), 0,
-t_window), which expects STANDARDIZED unit-variance input (normalize upstream, e.g. LayerNorm) — center at
-half-window, +-4 sigma spanning the full window.
+Input latency coding is FIXED (no latency_c/latency_alpha params), slope alpha=3: t = clamp(t_window*(0.5 -
+3*x/32), 0, t_window) (= 16 - 3x at t_window=32, matching the old ProductBucketLIFMHL). Expects ~unit-variance
+input — center at half-window, saturating (clamped) at x = +-16/3 ≈ +-5.33.
 
 forward() branches on self.training (standard PyTorch convention). In TRAINING mode it is straight-through:
 value == the hard winner, weight-grad to the winners, address-grad via the soft distribution against a detached
@@ -113,10 +113,11 @@ class LIFMultiHeadLUT(nn.Module):
         return self.beta_base + torch.cumsum(F.softplus(self.beta_raw), dim=-1)   # (T,D,M-1)
 
     def latency(self, x):
-        # Fixed latency code for STANDARDIZED (unit-variance) input — normalize upstream (e.g. LayerNorm).
-        # Center at half-window (x=0 -> t_window/2); +-4 sigma of unit-variance input spans the full
-        # [0, t_window] (effective slope = t_window/8, then clamped). t_window is the structural time-axis scale.
-        return torch.clamp(self.t_window * (0.5 - x / 8.0), 0.0, self.t_window)
+        # Fixed latency code, slope alpha=3 (matches the old ProductBucketLIFMHL 16 - 3x at t_window=32).
+        # Center at half-window (x=0 -> t_window/2); effective slope = 3*t_window/32, saturating (clamped) at
+        # x = +-16/3 ≈ +-5.33 regardless of t_window (i.e. +-5.33 sigma for unit-variance input). t_window is
+        # the structural time-axis scale.
+        return torch.clamp(self.t_window * (0.5 - 3.0 * x / 32.0), 0.0, self.t_window)
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
