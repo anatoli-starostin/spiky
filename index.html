@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LUT → Spiking — interactive demos</title>
+  <title>LUT → Spiking — Walker2d live demo</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,113 +11,32 @@
 
   <header>
     <h1>LUT → Spiking networks</h1>
-    <p class="nav"><b>Contents</b></p>
     <p>
-      These demos show how a trained <b>lookup-table (LUT) network</b> can be turned into a real
-      <b>spiking</b> network (Izhikevich / SPNet) by <b>direct construction</b> — no retraining. The trick is
-      latency coding: a vector is represented by the <i>first-spike times</i> of one population of neurons, and
-      the constructed spiking circuit re-emits the LUT's output as the spike times of another population. Each
-      page below runs the constructed spiking network live for an input you control and checks it reproduces
-      the table exactly.
+      A trained <b>lookup-table (LUT) network</b> can be turned into a real <b>spiking</b> network
+      (Izhikevich / SPNet) by <b>direct construction</b> — no retraining — via latency coding: a vector is
+      represented by the <i>first-spike times</i> of one population of neurons, and the constructed spiking
+      circuit re-emits the LUT's output as the spike times of another population.
     </p>
   </header>
 
   <div class="stack">
     <div class="panel">
-      <h2>Demos</h2>
+      <h2>Demo</h2>
       <div class="cards">
-        <a class="card" href="single_table.html">
-          <h3>① Single LUT table → spiking circuit</h3>
-          <p>One hyperplane LUT compiled to a spiking circuit: input spikes → detector/address bits → a
-             1-of-8 row-select decoder → output neurons whose latencies encode the stored row. Watch every
-             spike propagate and verify the emergent output equals the table.</p>
-        </a>
-        <a class="card" href="animation2.html">
-          <h3>② Composing tables: summing outputs in the charge domain</h3>
-          <p>Real models are a <i>set</i> of tables whose selected output vectors are <b>added</b>. Latencies
-             don't sum — so each table deposits its output as synaptic <b>charge</b> onto shared output neurons,
-             whose membranes accumulate <code>O₁[x] + O₂[x]</code> natively. Verified exact over 50k inputs.</p>
-        </a>
-        <a class="card" href="animation3.html">
-          <h3>③ Aggregating tables: delay-coded outputs + a listening population</h3>
-          <p>A different architecture: each table stays a self-contained black box that emits its output as
-             latency <b>spikes</b> (like ①). A separate population of <b>aggregator neurons</b> listens to all
-             tables' output spikes and sums them via a <b>sustained current until a readout clock</b> — turning
-             spike <i>times</i> into a true sum (not an order statistic). Verified exact over 50k inputs.</p>
-        </a>
-        <a class="card" href="animation4.html">
-          <h3>④ Scaling up: a hierarchical aggregation tree</h3>
-          <p>Model ③'s single aggregator has fan-in that grows with the number of tables. Here the same
-             sustained-current aggregator is arranged in a binary <b>tree</b> (4 tables → 2 → 1), so every
-             neuron keeps <b>fan-in 2</b> while depth grows only like <b>log₂(N)</b> — the scale-to-hundreds
-             design. Verified exact over 50k inputs.</p>
-        </a>
-        <a class="card" href="inspector.html">
-          <h3>⑤ Live spnet inspector — latency-coded (leaky detectors, 6 forced-spike inputs)</h3>
-          <p>The compact design: the toy LUT accepts <b>real-valued</b> x ∈ ℝ⁶, compiled onto the
-             <b>real spiky SpikingNet</b> (native CPU kernel) and exported live to a linked
-             <b>graph / animation / raster</b> inspector. Just <b>6 input neurons</b>, each forced to spike at a
-             <b>distinct first-spike time</b> (earlier = larger) — no tap bank. The 3 detectors are made
-             timing-sensitive by their own dynamics: <b>leaky integrators</b> whose membrane at a fixed readout
-             tick reads the input spike times directly, forming the hyperplane comparators
-             <code>sign(W·x+b)</code> that select 1 of 8 rows; outputs emit their value as spike latency.
-             A tiny <b>25-neuron / 259-synapse</b> network — click any neuron or synapse for its full
-             NeuronMeta / weight / delay. Comparator bits match the exact oracle on ~76% of random real inputs
-             (the leaky readout is nonlinear — the price of dropping the tap bank).</p>
-        </a>
-        <a class="card" href="inspector.html?v=evolved">
-          <h3>⑥ Evolved spiking net — <i>discovered</i>, not constructed</h3>
-          <p>The opposite approach to ①–⑤. Instead of hand-compiling the circuit, a <b>DB-backed
-             neuroevolution</b> search bred spiking nets against the same latency-coded LUT-ordering task —
-             ~<b>1.5M genomes evaluated</b> over lineages <b>~4000 generations</b> deep (mutation + crossover,
-             persisted in MongoDB, CPU-only). This is the <b>best net found</b> (fitness <b>0.881</b>): an
-             arbitrary, un-designed topology — <b>6 inputs → 11 hidden → 4 outputs, 52 synapses</b> — whose
-             four output neurons' <b>first-spike order</b> reproduces the LUT oracle's row ranking. Same live
-             inspector (graph / animation / raster); the shown input is one the evolved net orders
-             <b>exactly right</b>. Click any neuron or synapse for its evolved NeuronMeta / weight / delay.</p>
-        </a>
-        <a class="card" href="evolved_izh.html">
-          <h3>⑦ Evolved Izhikevich RS/FS net &#8212; the two canonical neuron types</h3>
-          <p>A newer neuroevolution run constrained to the <b>two canonical Izhikevich-2006</b> neuron types &#8212;
-             <b>RS</b> excitatory and <b>FS</b> inhibitory &#8212; with only a per-neuron RS/FS bit evolved (no
-             continuous neuron params). The best net (<b>Kendall tau-b 0.796</b>, sole fitness) is a compact
-             <b>6 inputs &#8594; 6 hidden &#8594; 4 outputs, 37 synapses</b>. This page renders its topology and runs the
-             <b>full quadratic Izhikevich</b> simulation live in your browser (a faithful port), so you can watch
-             spikes propagate and the four outputs&#8217; <b>first-spike order</b> emerge and be scored against the
-             oracle. Constraining neurons to RS/FS cost nothing vs the unconstrained model &#8212; evidence the
-             search space was over-broad.</p>
-        </a>
-        <a class="card" href="evolved_assoc.html">
-          <h3>&#9319; Evolved associative memory &#8212; a spiking net you can TEACH (Dale + STDP)</h3>
-          <p>Unlike &#9312;&#8211;&#9318; (which <i>compute</i> a fixed function), this net was evolved to be
-             TAUGHT: each episode it&#8217;s shown two brand-new arbitrary input&#8594;output-order mappings, stores
-             them via spike-timing plasticity (STDP), and recalls each from its input alone. Random targets per
-             episode make feedforward shortcuts impossible &#8212; only genuine storage scores. Obeys <b>Dale&#8217;s
-             law</b> (excitatory/inhibitory is a neuron property), inhibition fixed &amp; fast, only excitatory
-             synapses learn. Mean storage-gain ~0.67, generalizes to unseen mappings. Learning-to-learn by evolution.</p>
-        </a>
-        <a class="card" href="smartinit.html">
-          <h3>&#9320; LUT smart-initialization &#8212; a clean 3-layer mapping, no scaffolding</h3>
-          <p>Closes the loop from the hand-built exact construction (&#9312;) to the evolved substrate: a trained
-             lookup table is compiled into a tiny spiking net by SEEDING from its hyperplanes (tau-b &#8776; 0.53)
-             and then running plain <b>weight+delay evolution</b> (no STDP, no store-recall) to evolve away the
-             leak/threshold distortion. Drops ALL the scaffolding &#8212; no clock, no complement neurons, no row
-             decoder &#8212; just latency-in &#8594; detectors &#8594; latency-out under Dale&#8217;s law. Recovers to
-             tau-b ~0.78 (all outputs fire 100%, exact-order-match ~55%) while staying SMALL (it pruned below the
-             seed). Interactive spike-playback per input.</p>
-        </a>
-        <a class="card" href="walker_demo.html">
-          <h3>&#9321; Walker2d RL policy &#8594; spiking, LIVE &#8212; a trained controller in spikes</h3>
-          <p>A real <b>Walker2d</b> SAC control policy (32 lookup tables over the 17-D observation) compiled into a
-             <b>latency-coded spiking network</b> and run LIVE in your browser. Because the policy is <b>4-bit
-             quantized</b>, the spiking comparison &#931; w&#183;t &lt; &#952; is exact integer arithmetic &#8212; the 32 tables'
-             addresses resolve with zero weight error; the 6 action values come out as output-neuron spike TIMES.
-             Pick an observation, watch the spikes flow input&#8594;address&#8594;action, and see the decoded actions match
-             the lookup-table oracle. Runs client-side from a 59&#8239;KB embedded model, nothing precomputed. The
-             ladder taken all the way to a working RL controller.</p>
+        <a class="card" href="walker2d-viz/">
+          <h3>Walker2d — live spiking controller (interactive stand)</h3>
+          <p>A real <b>Walker2d</b> SAC control policy (32 lookup tables over the 17-D observation) compiled
+             into a <b>latency-coded spiking network</b> and run <b>live</b> in your browser against a real
+             MuJoCo simulation on the server. Pick an actor (LUT-SAC / int4 / SAC baseline), pause &amp; step,
+             toggle free-fall, adjust speed — and watch the decoded actions drive the walker in real time.
+             Each viewer gets its own independent simulation.</p>
         </a>
       </div>
-      <p class="small" style="margin-top:12px">More demos can be added as cards here as the construction grows (e.g. stacked stages, real learned tables).</p>
+      <!-- The older LUT-to-spiking construction demos (single_table, animation2-4, inspector, evolved_izh,
+           evolved_assoc, smartinit, walker_demo, ...) are currently UNLISTED from this landing page. Their
+           files remain on the gh-pages branch and are still reachable by direct URL. -->
+      <p class="small" style="margin-top:12px">Older construction demos are currently unlisted; their pages
+        remain reachable by direct URL.</p>
     </div>
   </div>
 </body>

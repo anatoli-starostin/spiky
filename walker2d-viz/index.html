@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Walker2d Viz (static)</title>
+  <!-- Node-free build: resolve the `three` bare import from a CDN via an import map, so this page runs
+       under a plain static file server (python -m http.server) with no npm/Vite. Requires the *browser*
+       to have internet to fetch three (the WebSocket still points at the nucstar server). -->
+  <script type="importmap">
+  { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0e1116; color: #e6e6e6;
+      font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+    #ui { position: fixed; top: 12px; left: 12px; z-index: 10; background: rgba(20,24,32,.85);
+      border: 1px solid #2a3240; border-radius: 10px; padding: 12px 14px; width: 250px; backdrop-filter: blur(6px); }
+    #ui h1 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+    .row label { color: #9fb0c3; }
+    button, select { background: #1b2230; color: #e6e6e6; border: 1px solid #33405a; border-radius: 6px;
+      padding: 5px 9px; cursor: pointer; font: inherit; }
+    button:hover, select:hover { border-color: #4a5f86; }
+    button.active { background: #2b6cff; border-color: #2b6cff; }
+    input[type=range] { width: 130px; }
+    #stat { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a3240; color: #9fb0c3; font-variant-numeric: tabular-nums; }
+    #stat b { color: #e6e6e6; }
+    #conn { font-size: 11px; } .ok { color: #4ade80; } .bad { color: #f87171; }
+    #srv { width: 100%; margin-top: 4px; background:#141a24; color:#cbd5e1; border:1px solid #33405a; border-radius:6px; padding:4px 6px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="ui">
+    <h1>Walker2d Viz &middot; <span id="conn" class="bad">disconnected</span></h1>
+    <input id="srv" value="ws://localhost:8765" title="WebSocket server URL" />
+    <div class="row">
+      <button id="restart">Restart</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="modeBtn">Mode: test</button>
+    </div>
+    <div class="row">
+      <label for="noreset">No-reset (free-fall)</label>
+      <input id="noreset" type="checkbox" />
+    </div>
+    <div class="row">
+      <label for="speed">Speed</label>
+      <input id="speed" type="range" min="1" max="120" value="30" />
+      <span id="speedVal">30/s</span>
+    </div>
+    <div class="row">
+      <label for="actor">Actor</label>
+      <select id="actor"></select>
+    </div>
+    <div id="stat">
+      env <b id="env">&mdash;</b><br />
+      step <b id="step">0</b> &middot; reward <b id="reward">0.00</b><br />
+      return <b id="ret">0.00</b> &middot; actor <b id="actorName">&mdash;</b>
+    </div>
+  </div>
+  <script src="config.js"></script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
