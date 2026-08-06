@@ -24,3 +24,5 @@ MHL-LIF SAC actor heads=1 tph=128 n_det=1 buckets=16 seed=1 | 12 outputs/cell (6
 done: best MJX 1066.2 over 640,000 env-steps in 32.7 min
 Failed to import warp: No module named 'warp'
 Failed to import mujoco_warp: No module named 'warp'
+mhl_sac_c53_s1_actor.npz (31,360 params = 6,784 front-end + 24,576 table) [eval] 1 det x 16 bkt = 16 cells / tph128
+  CPU-reference 100-ep deterministic: 1084.7 +/- 166.4  full 0/100  vel 2.607 m/s  len 300  [36s]
