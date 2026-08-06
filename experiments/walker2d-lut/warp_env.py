@@ -105,7 +105,10 @@ class WarpWalker2dVecEnv:
         terminated = ~healthy
         truncated = self.step_count >= self.max_steps
         done = terminated | truncated
-        # auto-reset done envs; next obs for those is the reset obs
+        # capture the TRUE post-step observation BEFORE auto-reset, so PPO can bootstrap
+        # V(true_next_state) on time-limit truncation instead of V(reset_obs).
+        self.true_next_obs = self._obs()
+        # auto-reset done envs; the returned `obs` for those is the reset obs
         self._reset_mask(done)
         obs = self._obs()
         return obs, reward, terminated, truncated

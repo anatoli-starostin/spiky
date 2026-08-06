@@ -46,10 +46,21 @@ def main():
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--minibatches", type=int, default=8)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--lr-schedule", default="constant", choices=["constant", "cosine"],
+                    help="cosine anneals lr from --lr down to --lr-min over --updates")
+    ap.add_argument("--lr-min", type=float, default=0.0,
+                    help="cosine floor (eta_min); default 0 preserves prior behavior")
+    ap.add_argument("--logstd-min", type=float, default=None,
+                    help="floor on the state-independent log_std (e.g. log(0.15)=-1.897) to "
+                         "prevent policy std/entropy collapse; default None = no floor")
     ap.add_argument("--gamma", type=float, default=0.99)
     ap.add_argument("--gae", type=float, default=0.95)
     ap.add_argument("--clip", type=float, default=0.2)
-    ap.add_argument("--ent", type=float, default=0.0)
+    ap.add_argument("--ent", "--ent-coef", dest="ent", type=float, default=0.0)
+    ap.add_argument("--target-kl", type=float, default=0.02,
+                    help="KL early-stop: break epochs when approx_kl > 1.5*target_kl; <=0 disables")
+    ap.add_argument("--norm-returns", action="store_true",
+                    help="normalize rewards by a running discounted-return std (SB3 VecNormalize style)")
     ap.add_argument("--vf", type=float, default=0.5)
     ap.add_argument("--max-grad", type=float, default=0.5)
     ap.add_argument("--compile", action="store_true")
@@ -70,6 +81,10 @@ def main():
     if a.compile:
         ac.evaluate = torch.compile(ac.evaluate)
     opt = torch.optim.Adam(ac.parameters(), lr=a.lr)
+    # LR schedule: cosine anneals lr -> 0 over the full --updates (one step() per PPO update),
+    # to stabilize late training; 'constant' preserves the prior behavior exactly.
+    sched = (torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=a.updates, eta_min=a.lr_min)
+             if a.lr_schedule == "cosine" else None)
     norm = RunningNorm(env.obs_dim, dev)
     nparams = sum(p.numel() for p in ac.parameters())
     print(f"arch={a.arch} params={nparams:,} envs={N} rollout={T} "
@@ -81,7 +96,13 @@ def main():
     b_logp = torch.zeros(T, N, device=dev)
     b_val = torch.zeros(T, N, device=dev)
     b_rew = torch.zeros(T, N, device=dev)
-    b_mask = torch.zeros(T, N, device=dev)   # 1 - terminated
+    b_term = torch.zeros(T, N, device=dev)      # terminated (unhealthy) — zeroes the value bootstrap
+    b_done = torch.zeros(T, N, device=dev)      # terminated OR truncated — cuts the GAE trace
+    b_trueval = torch.zeros(T, N, device=dev)   # V(true next state) for exact bootstrap at boundaries
+    # return normalization: reward scaling by running std of the discounted return (SB3-style)
+    ret_rms = RunningNorm(1, dev)
+    disc_ret = torch.zeros(N, device=dev)
+    total_epochs = 0                            # for avg-epochs-per-update (KL early-stop) reporting
 
     obs = env.reset()
     norm.update(obs)
@@ -99,16 +120,27 @@ def main():
             nobs = norm.norm(obs)
             a_t, logp_t, val_t = ac.act(nobs)
             nx_obs, rew, term, trunc = env.step(a_t)
-            b_obs[t] = nobs; b_act[t] = a_t; b_logp[t] = logp_t
-            b_val[t] = val_t; b_rew[t] = rew; b_mask[t] = (~term).float()
-            # episode bookkeeping — GPU-only, NO host sync (no .item()/.tolist()/.any())
+            b_obs[t] = nobs; b_act[t] = a_t; b_logp[t] = logp_t; b_val[t] = val_t
+            done_f = (term | trunc).float()
+            b_term[t] = term.float(); b_done[t] = done_f
+            # exact truncation bootstrap: value of the TRUE next state (pre-reset)
+            with torch.no_grad():
+                _, b_trueval[t] = ac(norm.norm(env.true_next_obs))
+            # return normalization: scale reward by running std of the discounted return
+            if a.norm_returns:
+                disc_ret = a.gamma * disc_ret + rew
+                ret_rms.update(disc_ret[:, None])
+                b_rew[t] = rew / torch.sqrt(ret_rms.var[0] + 1e-8)
+                disc_ret = disc_ret * (1.0 - done_f)
+            else:
+                b_rew[t] = rew
+            # episode bookkeeping on RAW reward — GPU-only, NO host sync
             ep_ret += rew; ep_len += 1
-            done = (term | trunc).float()
-            acc["ret_sum"] += (ep_ret * done).sum()
-            acc["len_sum"] += (ep_len * done).sum()
-            acc["cnt"] += done.sum()
-            acc["ret_max"] = torch.maximum(acc["ret_max"], (ep_ret * done).max())
-            keep = 1.0 - done
+            acc["ret_sum"] += (ep_ret * done_f).sum()
+            acc["len_sum"] += (ep_len * done_f).sum()
+            acc["cnt"] += done_f.sum()
+            acc["ret_max"] = torch.maximum(acc["ret_max"], (ep_ret * done_f).max())
+            keep = 1.0 - done_f
             ep_ret = ep_ret * keep
             ep_len = ep_len * keep
             obs = nx_obs
@@ -121,9 +153,13 @@ def main():
             adv = torch.zeros(T, N, device=dev)
             gae = torch.zeros(N, device=dev)
             for t in reversed(range(T)):
-                nextval = last_val if t == T - 1 else b_val[t + 1]
-                delta = b_rew[t] + a.gamma * nextval * b_mask[t] - b_val[t]
-                gae = delta + a.gamma * a.gae * b_mask[t] * gae
+                next_v_normal = last_val if t == T - 1 else b_val[t + 1]
+                # boundary (term OR trunc): bootstrap V(true next); else V(actual next obs)
+                nextval = torch.where(b_done[t].bool(), b_trueval[t], next_v_normal)
+                nonterminal = 1.0 - b_term[t]      # zero the bootstrap ONLY on true termination
+                delta = b_rew[t] + a.gamma * nonterminal * nextval - b_val[t]
+                trace = 1.0 - b_done[t]            # cut the GAE trace on term OR trunc
+                gae = delta + a.gamma * a.gae * trace * gae
                 adv[t] = gae
             ret = adv + b_val
         # flatten
@@ -133,12 +169,15 @@ def main():
 
         mb = (T * N) // a.minibatches
         last_info = {}
-        for _ in range(a.epochs):
+        epochs_done = 0
+        stop_early = False
+        for ep in range(a.epochs):
             perm = torch.randperm(T * N, device=dev)
             for s in range(0, T * N, mb):
                 idx = perm[s:s + mb]
                 nlogp, ent, val = ac.evaluate(f_obs[idx], f_act[idx])
-                ratio = (nlogp - f_logp[idx]).exp()
+                logratio = nlogp - f_logp[idx]
+                ratio = logratio.exp()
                 a1 = ratio * f_adv[idx]
                 a2 = torch.clamp(ratio, 1 - a.clip, 1 + a.clip) * f_adv[idx]
                 pi_loss = -torch.min(a1, a2).mean()
@@ -149,8 +188,23 @@ def main():
                 loss.backward()
                 nn.utils.clip_grad_norm_(ac.parameters(), a.max_grad)
                 opt.step()
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1) - logratio).mean()   # Schulman k3, unbiased & >=0
                 last_info = dict(pi=float(pi_loss.detach()), v=float(v_loss.detach()),
-                                 ent=float(ent_loss.detach()))
+                                 ent=float(ent_loss.detach()), kl=float(approx_kl))
+                if a.target_kl > 0 and last_info["kl"] > 1.5 * a.target_kl:
+                    stop_early = True
+                    break
+            epochs_done = ep + 1
+            if stop_early:
+                break
+        total_epochs += epochs_done
+
+        if sched is not None:
+            sched.step()                       # one cosine step per PPO update
+        if a.logstd_min is not None:           # project log_std back up to the floor
+            with torch.no_grad():
+                ac.log_std.clamp_(min=a.logstd_min)
 
         if upd % 10 == 0 or upd == 1:
             el = time.time() - t_start
@@ -160,7 +214,8 @@ def main():
             ep_len_mean = float(acc["len_sum"]) / cnt if cnt > 0 else float("nan")
             row = dict(update=upd, env_steps=total_env_steps, sps=round(sps, 0),
                        ep_ret_mean=ep_ret_mean, ep_ret_max=float(acc["ret_max"]),
-                       ep_len_mean=ep_len_mean, n_done=int(cnt),
+                       ep_len_mean=ep_len_mean, n_done=int(cnt), lr=opt.param_groups[0]["lr"],
+                       logstd=float(ac.log_std.mean()), epochs_done=epochs_done,
                        step_rew=float(b_rew.mean()), **last_info)
             hist.append(row)
             # reset window accumulators so each log reports the interval, not cumulative
@@ -169,11 +224,15 @@ def main():
             acc["ret_max"].zero_()
             print(f"[upd {upd:>4}/{a.updates}] ep_ret {row['ep_ret_mean']:8.1f} "
                   f"(max {row['ep_ret_max']:7.1f}, len {row['ep_len_mean']:5.0f}) | "
-                  f"{sps:>9,.0f} env-steps/s | pi {last_info['pi']:+.3f} v {last_info['v']:.2f}",
-                  flush=True)
+                  f"{sps:>9,.0f} env-steps/s | lr {row['lr']:.1e} | "
+                  f"kl {last_info['kl']:.4f} ep{epochs_done}/{a.epochs} | "
+                  f"pi {last_info['pi']:+.3f} v {last_info['v']:.2f}", flush=True)
 
     el = time.time() - t_start
-    summary = dict(arch=a.arch, envs=N, rollout=T, updates=a.updates,
+    summary = dict(arch=a.arch, envs=N, rollout=T, updates=a.updates, lr_schedule=a.lr_schedule,
+                   lr_min=a.lr_min, logstd_min=a.logstd_min, ent_coef=a.ent,
+                   target_kl=a.target_kl, norm_returns=a.norm_returns,
+                   avg_epochs_per_update=round(total_epochs / a.updates, 2),
                    total_env_steps=total_env_steps, wall_s=round(el, 1),
                    throughput_env_per_s=round(total_env_steps / el, 0),
                    params=nparams, final_ep_ret=hist[-1]["ep_ret_mean"],

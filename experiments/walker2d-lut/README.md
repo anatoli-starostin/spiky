@@ -71,6 +71,33 @@ read-only in the sbox cage).
 compute (82% util). Pack concurrently only when a single run's GPU util is well under ~50%
 (i.e. small-N sweeps).
 
+## PPO stabilization (bench4–7)
+
+The 768-update runs revealed **late-training instability**: with constant LR (`bench4`)
+2/3 seeds partially collapsed in the last quarter (final 5278±1281 vs best 6281±585). A
+sweep of fixes (all in `ppo.py`, flags default to prior behavior):
+
+| run | recipe | final | best | best−final | collapsed |
+|---|---|---:|---:|---:|---:|
+| bench4 | constant LR | 5278 ± 1281 | 6281 ± 585 | ~1003 | 2/3 |
+| bench5 | cosine → 0 | 4638 ± 1393 | 5409 ± 537 | 771 | 1/3 |
+| bench6 | cosine→1e-5 + log_std floor + ent 0.005 | 4634 ± 782 | 5149 ± 314 | 515 | 1/3 |
+| **bench7** | **+ exact truncation bootstrap + return-norm + KL-stop, ent 0, lr_min 3e-5** | **5952 ± 416** | **5985 ± 424** | **33** | **0/3** |
+
+**Winning recipe (bench7) — collapse eliminated AND peak reclaimed simultaneously:**
+cosine LR `3e-4 → 3e-5` (`--lr-schedule cosine --lr-min 3e-5`) + **log_std floor** std≥0.15
+(`--logstd-min -1.897`) + **return normalization** (`--norm-returns`, reward scaled by
+running discounted-return std) + **exact truncation bootstrap** (`warp_env` exposes
+`true_next_obs`; GAE bootstraps `V(true_next)` at the 1000-step time-limit and zeroes only
+on true termination) + **KL early-stop guard** (`--target-kl 0.02`) + **entropy 0**.
+
+The **two decisive fixes were return-normalization and the exact truncation bootstrap**
+(they stabilize the value/advantage scale and correctly value 1000-step survivors);
+dropping the entropy bonus reclaimed the peak that `bench6`'s exploration floors had capped.
+The **KL early-stop never fired** (`avg_epochs_per_update = 4.0`) — a cheap safety net, not
+the active ingredient here. Net: bench7's *final* is now a trustworthy proxy for its *best*
+(gap ~33), so "train and take the final" works. Curves: `four_way_stability.png`.
+
 ## Excluded from git
 
 - **SAC checkpoint `.zip`s** — `cpu_sac_baseline/run_seed0/*.zip` + `ckpt/*.zip`
