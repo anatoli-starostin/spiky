@@ -1,0 +1,261 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}          % load hyperref last
+
+% --- notation shortcuts ---
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\x}{\mathbf{x}}
+\newcommand{\w}{\mathbf{w}}
+\DeclareMathOperator{\clamp}{clamp}
+\DeclareMathOperator{\softplus}{softplus}
+\DeclareMathOperator{\cumsum}{cumsum}
+\DeclareMathOperator{\sg}{sg}          % stop-gradient
+\newcommand{\ind}[1]{\mathbf{1}\!\left[#1\right]}
+\newcommand{\radix}{\mathrm{radix}}
+
+\title{Multi-Head LUT Detectors:\\ Anchor-Pairs, Hyperplane, and LIF}
+\author{Anatoli Starostin}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The Multi-Head LUT (MHL) family builds a differentiable function from a bank of small learned lookup tables
+whose row addresses are produced by a bank of \emph{detectors} applied to the input. This note describes the
+shared addressing--lookup--sum skeleton and three choices of detector: a fixed coordinate comparison
+(anchor-pairs), a learned affine half-space (hyperplane), and a spiking leaky integrate-and-fire (LIF) neuron.
+The first two discretize the input \emph{geometrically}; the third discretizes it \emph{temporally}, encoding
+the input as spike latencies and reading out \emph{when} a neuron first fires. It is a mechanism/derivation
+note only --- no experimental results are reported.
+\end{abstract}
+
+\section{The shared skeleton}
+\label{sec:skeleton}
+
+Let the input be $\x \in \R^{d_{\mathrm{in}}}$ (batch size $B$). A module has $H$ output heads and $P$ tables
+per head, hence $T = H\,P$ lookup tables. Each table $t$ carries $D$ \emph{detectors}; each detector emits a
+single integer \emph{digit}; the digits index a learned table of cells. The output is a tensor of shape
+$(B, H, d_{\mathrm{out}})$.
+
+Every MHL variant is the same four steps.
+
+\paragraph{(1) Per-detector discretization.} Detector $d$ of table $t$ maps the input to a digit
+\begin{equation}
+  g_{t,d}(\x) \in \{0, 1, \dots, r_d - 1\},
+\end{equation}
+where $r_d$ is that detector's \emph{radix} (the number of symbols it may emit).
+
+\paragraph{(2) Mixed-radix cell address.} The $D$ digits of a table are packed, row-major, into one cell index
+\begin{equation}
+  \mathrm{idx}_t \;=\; \sum_{d=0}^{D-1} g_{t,d}\,\radix_d,
+  \qquad
+  \radix_d \;=\; \prod_{d' > d} r_{d'} ,
+  \label{eq:mixedradix}
+\end{equation}
+so the table has $\prod_{d} r_d$ rows (cells). When every $r_d = 2$ this is simply reading the digits as a
+binary number, most-significant bit first.
+
+\paragraph{(3) Table read.} Each table is a learned tensor $\mathrm{Table}_t \in \R^{\,\text{cells}\times
+d_{\mathrm{out}}}$, and the addressed row is
+\begin{equation}
+  \mathrm{row}_t \;=\; \mathrm{Table}_t[\,\mathrm{idx}_t\,] \;\in\; \R^{d_{\mathrm{out}}}.
+\end{equation}
+
+\paragraph{(4) Head sum $\rightarrow$ output.} The $P$ tables of head $h$ are summed:
+\begin{equation}
+  \mathbf{y}_h \;=\; \sum_{p=1}^{P} \mathrm{row}_{(h,p)} \;\in\; \R^{d_{\mathrm{out}}},
+  \qquad
+  \mathbf{y} = (\mathbf{y}_1, \dots, \mathbf{y}_H) \in \R^{H \times d_{\mathrm{out}}}.
+\end{equation}
+
+The tables are the only memory; the detectors are the only thing that reads structure out of $\x$. The three
+variants below differ \emph{only} in the choice of detector. Two of them (anchor-pairs, hyperplane) are
+\emph{geometric}: a digit says which side of a boundary $\x$ lies on, with radix $r_d = 2$. The third (LIF) is
+\emph{temporal}: a digit says \emph{when} a spiking neuron first fires, with radix $r_d = M$ time buckets.
+
+\section{Anchor-pairs detectors (radix $2$, coordinate comparison)}
+\label{sec:anchor}
+
+The simplest detector is a fixed ordered pair of input coordinates $(a_d, b_d)$. Its digit is the sign of
+their difference,
+\begin{equation}
+  g_{t,d}(\x) \;=\; \ind{\, x_{a_{t,d}} - x_{b_{t,d}} > \varepsilon \,} \;\in\; \{0,1\},
+  \qquad \varepsilon \ge 0,
+  \label{eq:anchor}
+\end{equation}
+where $\varepsilon$ is a comparison margin. Each table has $D$ such pairs; the $D$ bits form a binary index
+into a table of $2^{D}$ rows via \eqref{eq:mixedradix}. The pairs are chosen once (balanced coverage over the
+input coordinates) and held fixed; only the tables are learned in the base construction.
+
+Because the boundary $x_a = x_b$ is a hard threshold, the digit is piecewise constant in $\x$ and the raw map
+is non-differentiable. The module additionally exposes, per table, \emph{alternative} indices obtained by
+flipping the bits with the smallest margins $|x_{a_d} - x_{b_d}|$, together with a per-bit \emph{uncertainty}
+weight (for example inverse-$L_1$, $\propto 1/|x_{a_d} - x_{b_d}|$). These quantify which detector is closest
+to flipping and are what a surrogate backward pass uses to route gradients to $\x$ and to neighbouring cells.
+Geometrically each detector is the axis-pair hyperplane $x_a - x_b = 0$.
+
+\section{Hyperplane detectors (radix $2$, learned affine)}
+\label{sec:hyperplane}
+
+This replaces the fixed coordinate pair by a learned affine half-space test. Detector $d$ of table $t$ owns a
+weight row $\w_{t,d} \in \R^{d_{\mathrm{in}}}$ and a bias $b_{t,d} \in \R$, and emits
+\begin{equation}
+  g_{t,d}(\x) \;=\; \ind{\, \langle \w_{t,d}, \x \rangle + b_{t,d} > 0 \,} \;\in\; \{0,1\}.
+  \label{eq:hyperplane}
+\end{equation}
+Again $D$ bits pack most-significant-first into a $2^{D}$-row table index, and the $P$ tables of a head are
+summed. This strictly generalizes Section~\ref{sec:anchor}: initializing $\w_{t,d} = \mathbf{e}_{a} -
+\mathbf{e}_{b}$ (a difference of standard basis vectors) and $b_{t,d} = 0$ gives $\langle \w_{t,d}, \x \rangle
+= x_a - x_b$, exactly the anchor-pairs bit \eqref{eq:anchor}. The added freedom is that each detector's
+boundary is now an arbitrary oriented hyperplane in input space rather than an axis-pair diagonal.
+
+Training is end-to-end through the hard $\arg\max$/gather via a full-$K$ softmax surrogate: the forward value
+is the hard table row, while the backward pass replaces each hard sign by a soft membership
+$\sigma\!\big((\langle \w, \x\rangle + b)/\tau\big)$ and forms a soft distribution over the $2^{D}$ rows, so
+gradients reach $\w$, $b$, the table weights, and $\x$. Two temperatures (a per-bit score temperature and a
+row-select temperature) control the sharpness of that surrogate.
+
+\section{LIF detectors (radix $M$, temporal / first-spike)}
+\label{sec:lif}
+
+Here a detector is a spiking leaky integrate-and-fire (LIF) neuron, and its digit is \emph{when} it first
+fires, discretized into $M$ time buckets. A table carries $D$ such neurons, giving $M^{D}$ cells. The case
+$D = 1$ is the ``bucket'' variant (one neuron, $M$ time buckets $\rightarrow M$ cells); $D > 1$ is the
+``product'' variant (a mixed-radix address over several neurons $\rightarrow M^{D}$ cells).
+
+\paragraph{(a) Latency coding.} The real input is first turned into input \emph{spike times}: each coordinate
+$x_i$ fires once, earlier for larger $x_i$, through a fixed affine-then-clamp map onto a time window
+$[0, t_w]$,
+\begin{equation}
+  \ell_i \;=\; \clamp\!\Big( t_w\big(\tfrac{1}{2} - \tfrac{3 x_i}{32}\big),\; 0,\; t_w \Big).
+  \label{eq:latency}
+\end{equation}
+At $t_w = 32$ this is $\ell_i = \clamp(16 - 3 x_i,\, 0,\, 32)$: $x_i = 0$ fires at the window centre, the map
+saturates at $x_i = \pm 16/3 \approx \pm 5.33$, and it is monotonically \emph{decreasing} (a larger input
+fires earlier). The map has no learned parameters and expects roughly unit-variance input.
+
+\paragraph{(b) Synapses, delays, arrivals.} Detector $d$ has one synapse per input coordinate, with a bounded
+excitatory weight and a non-negative delay,
+\begin{equation}
+  w_{d,i} \;=\; w_{\max}\,\sigma\!\big(w^{\mathrm{raw}}_{d,i}\big) \in (0, w_{\max}),
+  \qquad
+  \delta_{d,i} \;=\; \clamp\!\big(\delta^{\mathrm{raw}}_{d,i},\, 0,\, t_w\big),
+\end{equation}
+where $\sigma$ is the logistic function. The arrival time of input $i$ at neuron $d$ is the input spike time
+plus the synaptic delay,
+\begin{equation}
+  a_{d,i} \;=\; \ell_i + \delta_{d,i} \;\in\; [0, 2 t_w].
+\end{equation}
+
+\paragraph{(c) LIF membrane and first spike.} The neuron is a leaky integrator with time constant
+$\tau_d = \softplus(\tau^{\mathrm{raw}}_d) + 1$. Its membrane potential is the sum of exponentially decaying
+post-synaptic bumps from all arrivals up to time $t$,
+\begin{equation}
+  V_d(t) \;=\; \sum_{i:\, a_{d,i} \le t} w_{d,i}\,\exp\!\Big(-\tfrac{t - a_{d,i}}{\tau_d}\Big).
+  \label{eq:membrane}
+\end{equation}
+Evaluated at the arrival instants (after sorting them in time), \eqref{eq:membrane} is computed in a single
+pass by the factorization
+\begin{equation}
+  V \;=\; \exp\!\big(-a/\tau\big) \,\odot\, \cumsum\!\big( w \odot \exp(a/\tau) \big),
+  \label{eq:cumsum}
+\end{equation}
+which is $O(N)$ in the number of synapses $N$. The neuron fires at its \emph{first-spike time}, the earliest
+arrival at which the membrane crosses a fixed threshold $\theta = 1$,
+\begin{equation}
+  t^{\ast}_d \;=\; \min\big\{\, a_{d,i} : V_d(a_{d,i}) \ge \theta \,\big\},
+  \qquad t^{\ast}_d = t_w \ \text{if it never crosses.}
+  \label{eq:firstspike}
+\end{equation}
+A detector's output is thus a single scalar \emph{time} $t^{\ast}_d \in [0, t_w]$ --- the temporal analogue of
+a hyperplane's scalar score $\langle \w, \x\rangle + b$.
+
+\paragraph{(d) Temporal bucketing $\rightarrow$ digit.} Each detector owns $M-1$ trainable, strictly
+increasing bucket boundaries, kept ordered by construction,
+\begin{equation}
+  \beta_{d,k} \;=\; \beta^{\mathrm{base}}_d + \sum_{j \le k} \softplus\!\big(\beta^{\mathrm{raw}}_{d,j}\big),
+  \qquad \beta_{d,1} < \beta_{d,2} < \dots < \beta_{d,M-1}.
+\end{equation}
+The digit counts how many boundaries the first-spike time has passed,
+\begin{equation}
+  g_{t,d}(\x) \;=\; \#\{\, k : t^{\ast}_d \ge \beta_{d,k} \,\}
+             \;=\; \sum_{k=1}^{M-1} \ind{\, t^{\ast}_d \ge \beta_{d,k} \,} \;\in\; \{0,\dots,M-1\}.
+  \label{eq:lifdigit}
+\end{equation}
+This is a radix-$M$ digit (versus the radix-$2$ bit of Sections~\ref{sec:anchor}--\ref{sec:hyperplane}). Steps
+(a)--(d) produce one digit per detector; the digits then run through the shared mixed-radix address, table
+read, and head sum of Section~\ref{sec:skeleton}.
+
+\paragraph{(e) Differentiable training.} The hard path --- the $\arg\min$ first-spike \eqref{eq:firstspike} and
+the boundary count \eqref{eq:lifdigit} --- is piecewise constant. Training uses a straight-through estimator:
+the forward value is the hard cell read $\mathbf{y}_{\mathrm{hard}}$ (which also carries the gradient to the
+selected table row), while a parallel soft readout $\mathbf{y}_{\mathrm{addr}}$ supplies the address gradient,
+combined so the forward stays exactly hard,
+\begin{equation}
+  \mathbf{y} \;=\; \mathbf{y}_{\mathrm{hard}} + \mathbf{y}_{\mathrm{addr}} - \sg\!\big(\mathbf{y}_{\mathrm{addr}}\big),
+  \label{eq:st}
+\end{equation}
+where $\sg(\cdot)$ is the stop-gradient operator. The soft readout replaces the two hard steps by smooth
+surrogates: a soft first-spike time from per-arrival crossing (``escape'') probabilities
+$c_k = \sigma\!\big((V_k - \theta)/T_{\mathrm{cross}}\big)$ with survival $\prod_{j<k}(1 - c_j)$, giving an
+expected spike time; and a soft bucket partition over the $M$ buckets from differences of
+$\sigma\!\big((t - \beta_{d,k})/T_{\mathrm{bkt}}\big)$. The soft distribution over cells is read against a
+\emph{detached} copy of the table, so that \eqref{eq:st} sends value and table-weight gradients through the
+hard read while the soft read sends address gradients to the weights, delays, $\tau$, and boundaries. Two
+temperatures $T_{\mathrm{cross}}, T_{\mathrm{bkt}}$ set the softness (they may be frozen to $1$). Inference
+uses the pure hard path with no soft computation.
+
+\section{How the three connect, and where LIF differs}
+\label{sec:connect}
+
+Side by side, the variants are one backbone with three detector choices (Table~\ref{tab:variants}); everything
+from the digit onward --- the mixed-radix index \eqref{eq:mixedradix}, the table read, and the head sum --- is
+identical.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{@{}llll@{}}
+    \toprule
+    Variant & Detector & Digit $g_d$ & Radix $r_d$ \\
+    \midrule
+    Anchor-pairs & fixed coordinate pair        & $\ind{x_a - x_b > 0}$             & $2$ \\
+    Hyperplane   & learned affine half-space    & $\ind{\langle\w,\x\rangle + b > 0}$ & $2$ \\
+    LIF          & spiking LIF neuron, 1st spike & $\#\{k : t^{\ast} \ge \beta_k\}$  & $M$ \\
+    \bottomrule
+  \end{tabular}
+  \caption{The three detectors share the addressing and table-read backbone and differ only in how a digit is
+  produced. A table then has $r_d^{\,D}$ cells: $2^{D}$ for the geometric variants, $M^{D}$ for LIF.}
+  \label{tab:variants}
+\end{table}
+
+The geometric variants discretize the input \emph{spatially}: a detector answers ``which side of a boundary is
+$\x$ on?'', the boundary being a coordinate-pair diagonal (anchor-pairs) or a general learned hyperplane
+(hyperplane, which contains anchor-pairs as an initialization). Each detector yields one bit, and a table read
+is a lookup on a sign pattern.
+
+The LIF variant discretizes the input \emph{temporally}: $\x$ becomes a pattern of spike latencies
+\eqref{eq:latency}, a LIF neuron integrates delayed, weighted, leaky charge \eqref{eq:membrane}, and the
+detector reports \emph{when} it first fires \eqref{eq:firstspike}, sorted into $M$ learned time buckets
+\eqref{eq:lifdigit}. Two consequences distinguish it from the geometric detectors.
+\begin{itemize}
+  \item \textbf{Richer per-detector code.} A geometric detector emits one bit; a LIF detector emits one of $M$
+    symbols (a radix-$M$ digit), so a single neuron already splits the input into $M$ regions rather than $2$.
+  \item \textbf{Dynamics instead of a static boundary.} The ``boundary'' is no longer a fixed hyperplane but
+    the neuron's temporal dynamics --- per-synapse delays, a leak time constant $\tau$, and a threshold
+    $\theta$ --- which decide both \emph{whether} and \emph{when} it fires. In the degenerate limit of no
+    leak, no delays, and a single readout instant, threshold crossing on the summed weighted latencies reduces
+    to a linear threshold on the $\ell_i$, i.e.\ an affine test on $\x$. The LIF detector therefore
+    \emph{contains} the hyperplane detector as a special case and adds temporal structure (delays, leak,
+    multiple time buckets) that a single hyperplane cannot express.
+\end{itemize}
+
+In short: the same lookup-table backbone throughout, but the detector moves from \emph{geometry} (which side
+of a plane) to \emph{time} (when a spiking neuron fires), trading a binary spatial test for a multi-valued
+temporal one.
+
+\end{document}
