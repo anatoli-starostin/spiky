@@ -1,0 +1,10 @@
+=== seed 0: training (02:01:23Z) ===
+=== seed 1: training (02:01:23Z) ===
+=== seed 2: training (02:01:23Z) ===
+=== seed 2: CPU reference (04:18:30Z) ===
+=== seed 2: done (04:19:02Z) ===
+=== seed 1: CPU reference (04:19:12Z) ===
+=== seed 1: done (04:19:53Z) ===
+=== seed 0: CPU reference (04:19:57Z) ===
+=== seed 0: done (04:20:10Z) ===
+=== sweep done 04:20:10Z ===

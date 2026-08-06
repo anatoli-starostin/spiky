@@ -1,0 +1,28 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+PureLIF-SAC actor nap=6 tph=32 heads=1 seed=2 | 12 outputs/cell (6 mu + 6 log-sigma) | detectors 6,816 + table 24,576 = 31,392 params (63.9% of the 49,152 LUT baseline) | rows 32x64 = 2,048 | eps INERT (module ignores it); sharpness is trainable T_cross/temp_bit
+[  500/10000] steps    32,000 | MJX ret      8.8 | row-cov   0.0% | bits   0.3% | tbit 1.000 | tcr 1.000 | best      8.8 |   3.4m
+[ 1000/10000] steps    64,000 | MJX ret    204.0 | row-cov  86.6% | bits  27.1% | tbit 0.088 | tcr 0.670 | best    204.0 |  22.7m
+[ 1500/10000] steps    96,000 | MJX ret    122.1 | row-cov  86.7% | bits  34.8% | tbit 0.031 | tcr 0.607 | best    204.0 |  42.2m
+[ 2000/10000] steps   128,000 | MJX ret    281.4 | row-cov  86.8% | bits  34.4% | tbit 0.018 | tcr 0.593 | best    281.4 |  62.2m
+[ 2500/10000] steps   160,000 | MJX ret    349.3 | row-cov  86.9% | bits  36.7% | tbit 0.012 | tcr 0.583 | best    349.3 |  81.6m
+[ 3000/10000] steps   192,000 | MJX ret    386.9 | row-cov  87.2% | bits  37.1% | tbit 0.010 | tcr 0.575 | best    386.9 | 101.4m
+[ 3500/10000] steps   224,000 | MJX ret    369.4 | row-cov  87.5% | bits  35.9% | tbit 0.009 | tcr 0.564 | best    386.9 | 121.4m
+[ 4000/10000] steps   256,000 | MJX ret    396.7 | row-cov  87.5% | bits  36.0% | tbit 0.007 | tcr 0.557 | best    396.7 | 141.3m
+[ 4500/10000] steps   288,000 | MJX ret    407.2 | row-cov  87.5% | bits  36.8% | tbit 0.007 | tcr 0.552 | best    407.2 | 161.2m
+[ 5000/10000] steps   320,000 | MJX ret    394.6 | row-cov  87.5% | bits  36.4% | tbit 0.006 | tcr 0.548 | best    407.2 | 181.0m
+[ 5500/10000] steps   352,000 | MJX ret    440.2 | row-cov  87.5% | bits  36.5% | tbit 0.006 | tcr 0.543 | best    440.2 | 200.7m
+[ 6000/10000] steps   384,000 | MJX ret    395.2 | row-cov  87.5% | bits  35.8% | tbit 0.006 | tcr 0.542 | best    440.2 | 220.5m
+[ 6500/10000] steps   416,000 | MJX ret    438.4 | row-cov  87.5% | bits  34.9% | tbit 0.005 | tcr 0.542 | best    440.2 | 240.4m
+[ 7000/10000] steps   448,000 | MJX ret    432.3 | row-cov  87.5% | bits  33.8% | tbit 0.005 | tcr 0.538 | best    440.2 | 260.1m
+[ 7500/10000] steps   480,000 | MJX ret    447.0 | row-cov  87.6% | bits  33.5% | tbit 0.005 | tcr 0.534 | best    447.0 | 280.3m
+[ 8000/10000] steps   512,000 | MJX ret    476.3 | row-cov  87.7% | bits  33.4% | tbit 0.005 | tcr 0.528 | best    476.3 | 300.7m
+[ 8500/10000] steps   544,000 | MJX ret    472.4 | row-cov  87.7% | bits  33.4% | tbit 0.004 | tcr 0.525 | best    476.3 | 319.5m
+[ 9000/10000] steps   576,000 | MJX ret    453.5 | row-cov  87.8% | bits  33.8% | tbit 0.004 | tcr 0.521 | best    476.3 | 334.1m
+[ 9500/10000] steps   608,000 | MJX ret    477.5 | row-cov  87.8% | bits  33.7% | tbit 0.004 | tcr 0.518 | best    477.5 | 348.6m
+[10000/10000] steps   640,000 | MJX ret    515.8 | row-cov  87.8% | bits  31.6% | tbit 0.004 | tcr 0.513 | best    515.8 | 363.0m
+done: best MJX 515.8 over 640,000 env-steps in 363.0 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+pure_lif_sac_c31_s2_actor.npz (31,392 params = 6,816 detectors + 24,576 table) [hard] nap6/tph32  (eps 0.30000001192092896, inert)
+  CPU-reference 100-ep deterministic: 518.2 +/- 24.2  full 0/100  vel 1.849 m/s  len 182  [11s]

@@ -1,0 +1,19 @@
+=== seed 6: training (11:10:26Z) ===
+=== seed 8: training (11:10:26Z) ===
+=== seed 5: training (11:10:26Z) ===
+=== seed 3: training (11:10:26Z) ===
+=== seed 4: training (11:10:26Z) ===
+=== seed 7: training (11:10:26Z) ===
+=== seed 5: CPU reference (12:22:01Z) ===
+=== seed 5: done (12:22:24Z) ===
+=== seed 8: CPU reference (12:22:34Z) ===
+=== seed 3: CPU reference (12:22:58Z) ===
+=== seed 4: CPU reference (12:23:18Z) ===
+=== seed 8: done (12:23:19Z) ===
+=== seed 7: CPU reference (12:23:20Z) ===
+=== seed 7: done (12:23:29Z) ===
+=== seed 6: CPU reference (12:23:39Z) ===
+=== seed 3: done (12:23:51Z) ===
+=== seed 4: done (12:24:00Z) ===
+=== seed 6: done (12:24:11Z) ===
+=== sweep done 12:24:11Z ===

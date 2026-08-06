@@ -1,0 +1,17 @@
+{
+ "actor": "lut_sac_c29mc_none_s0_actor.npz",
+ "params": 60672,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4422.568918531377,
+ "cpu_reference_std": 57.12132999928407,
+ "full_length": 100,
+ "velocity": 3.4258219198223547,
+ "length_mean": 1000.0,
+ "const_set": "none",
+ "n_const": 0,
+ "obs_dim": 17,
+ "constants": [],
+ "heads": 1,
+ "tph": 128
+}

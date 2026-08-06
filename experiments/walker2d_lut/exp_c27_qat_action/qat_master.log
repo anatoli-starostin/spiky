@@ -1,0 +1,9 @@
+=== exp_c27 QAT sweep, K in {7,5,3}, launched 2026-08-01T20:57:34Z ===
+  launched K=7  pid 143425
+  launched K=5  pid 143426
+  launched K=3  pid 143427
+=== training done 2026-08-01T21:39:43Z ===
+lut_sac_c27_K7_actor.npz (28,032 params, K=7) | CPU-reference 100-ep deterministic: 4334.5 +/- 89.6  full 100/100  vel 3.338 m/s
+lut_sac_c27_K5_actor.npz (28,032 params, K=5) | CPU-reference 100-ep deterministic: 3746.4 +/- 42.3  full 100/100  vel 2.750 m/s
+lut_sac_c27_K3_actor.npz (28,032 params, K=3) | CPU-reference 100-ep deterministic: 3929.7 +/- 508.8  full 95/100  vel 3.023 m/s
+=== qat sweep + eval done 2026-08-01T21:40:09Z ===

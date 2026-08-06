@@ -1,0 +1,106 @@
+nap5/tph128 -> 49152 learnable table params (matched),  4096 rows, 640 comparators,  2816 active values/step
+waited on [SWEEP_DONE SWEEP_DONE_CANONICAL SWEEP_DONE_MIDCAP]; starting c29mc at 2026-08-02T23:42:20Z
+=== launch 1/12  arm=none seed=0  nap5/tph128  2026-08-02T23:42:20Z ===
+=== launch 2/12  arm=grid seed=0  nap5/tph128  2026-08-02T23:42:45Z ===
+=== launch 3/12  arm=none seed=1  nap5/tph128  2026-08-02T23:43:10Z ===
+=== launch 4/12  arm=grid seed=1  nap5/tph128  2026-08-03T00:29:09Z ===
+=== launch 5/12  arm=none seed=2  nap5/tph128  2026-08-03T00:29:45Z ===
+=== launch 6/12  arm=grid seed=2  nap5/tph128  2026-08-03T00:30:24Z ===
+ALL 12 CAPACITY RUNS DONE 2026-08-03T01:17:25Z
+lut_sac_c29mc_none_s0_actor.npz (60,672 params) [hard] constants=none NC=0 input=17
+  CPU-reference 100-ep deterministic: 4422.6 +/- 57.1  full 100/100  vel 3.426 m/s  len 1000  [7s]
+lut_sac_c29mc_none_s0_actor.npz — constants=none NC=0, 100,000 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 29.2/32 mean, 19-32 range (91.2% of the table)
+  obs-obs      640 bits | mean H 0.851 | median H 0.926 | dead   0 (0.0%) | mean fire rate 0.490
+  least informative observation channels: l_knee H=0.599, r_knee H=0.705, vx H=0.758, r_hip H=0.797
+  wrote lut_sac_c29mc_none_s0_bitusage.json
+lut_sac_c29mc_grid_s0_actor.npz (70,912 params) [hard] constants=grid NC=16 input=33
+  CPU-reference 100-ep deterministic: 3636.3 +/- 156.0  full 99/100  vel 2.654 m/s  len 996  [7s]
+lut_sac_c29mc_grid_s0_actor.npz — constants=grid NC=16, 99,625 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 17.8/32 mean, 4-32 range (55.5% of the table)
+  obs-obs      165 bits | mean H 0.733 | median H 0.848 | dead   3 (1.8%) | mean fire rate 0.458
+  obs-const    475 bits | mean H 0.448 | median H 0.420 | dead  75 (15.8%) | mean fire rate 0.491
+  const     value  bits   meanH  dead   fire
+  c0       -2.527    40   0.183    19  0.935
+  c1       -2.273    35   0.243     9  0.937
+  c2       -2.020    42   0.318    11  0.873
+  c3       -1.766    32   0.269     6  0.894
+  c4       -1.513    33   0.336     7  0.869
+  c5       -1.259    32   0.397     4  0.836
+  c6       -1.006    32   0.583     1  0.743
+  c7       -0.752    28   0.542     2  0.728
+  c8       -0.498    29   0.598     0  0.583
+  c9       -0.245    28   0.680     2  0.558
+  c10       0.009    30   0.726     2  0.480
+  c11       0.262    24   0.698     2  0.357
+  c12       0.516    24   0.633     1  0.278
+  c13       0.769    23   0.432     1  0.173
+  c14       1.023    21   0.426     3  0.171
+  c15       1.277    22   0.370     5  0.177
+  least informative observation channels: vx H=0.282, l_hip H=0.347, l_knee H=0.401, l_knee_vel H=0.411
+  wrote lut_sac_c29mc_grid_s0_bitusage.json
+lut_sac_c29mc_none_s1_actor.npz (60,672 params) [hard] constants=none NC=0 input=17
+  CPU-reference 100-ep deterministic: 4379.3 +/- 986.0  full 64/100  vel 3.915 m/s  len 887  [12s]
+lut_sac_c29mc_none_s1_actor.npz — constants=none NC=0, 88,714 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 31.1/32 mean, 24-32 range (97.2% of the table)
+  obs-obs      640 bits | mean H 0.898 | median H 0.978 | dead   0 (0.0%) | mean fire rate 0.409
+  least informative observation channels: torso_angle H=0.669, l_knee H=0.738, r_hip H=0.824, r_ankle H=0.905
+  wrote lut_sac_c29mc_none_s1_bitusage.json
+lut_sac_c29mc_grid_s1_actor.npz (70,912 params) [hard] constants=grid NC=16 input=33
+  CPU-reference 100-ep deterministic: 4363.5 +/- 22.1  full 100/100  vel 3.367 m/s  len 1000  [7s]
+lut_sac_c29mc_grid_s1_actor.npz — constants=grid NC=16, 100,000 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 14.2/32 mean, 4-28 range (44.3% of the table)
+  obs-obs      162 bits | mean H 0.840 | median H 0.943 | dead   1 (0.6%) | mean fire rate 0.480
+  obs-const    478 bits | mean H 0.439 | median H 0.433 | dead  93 (19.5%) | mean fire rate 0.498
+  const     value  bits   meanH  dead   fire
+  c0       -2.527    39   0.112    20  0.974
+  c1       -2.273    39   0.108    18  0.976
+  c2       -2.020    38   0.179    12  0.958
+  c3       -1.766    36   0.229     6  0.944
+  c4       -1.513    33   0.284     8  0.927
+  c5       -1.259    34   0.431     1  0.888
+  c6       -1.006    35   0.535     4  0.840
+  c7       -0.752    29   0.686     0  0.769
+  c8       -0.498    29   0.748     0  0.702
+  c9       -0.245    27   0.793     0  0.636
+  c10       0.009    27   0.862     0  0.493
+  c11       0.262    24   0.780     1  0.347
+  c12       0.516    26   0.592     2  0.269
+  c13       0.769    22   0.492     5  0.178
+  c14       1.023    21   0.352     8  0.132
+  c15       1.277    19   0.253     8  0.080
+  least informative observation channels: l_ankle H=0.323, l_knee H=0.397, vx H=0.422, z_height H=0.469
+  wrote lut_sac_c29mc_grid_s1_bitusage.json
+lut_sac_c29mc_none_s2_actor.npz (60,672 params) [hard] constants=none NC=0 input=17
+  CPU-reference 100-ep deterministic: 3967.2 +/- 364.0  full 94/100  vel 3.040 m/s  len 982  [8s]
+lut_sac_c29mc_none_s2_actor.npz — constants=none NC=0, 98,208 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 28.8/32 mean, 22-32 range (90.1% of the table)
+  obs-obs      640 bits | mean H 0.840 | median H 0.917 | dead   0 (0.0%) | mean fire rate 0.556
+  least informative observation channels: vx H=0.436, l_hip H=0.709, r_ankle H=0.793, r_knee_vel H=0.830
+  wrote lut_sac_c29mc_none_s2_bitusage.json
+lut_sac_c29mc_grid_s2_actor.npz (70,912 params) [hard] constants=grid NC=16 input=33
+  CPU-reference 100-ep deterministic: 3531.9 +/- 792.4  full 87/100  vel 2.788 m/s  len 927  [8s]
+lut_sac_c29mc_grid_s2_actor.npz — constants=grid NC=16, 92,665 visited states from 100 episodes
+  address bits 640 in 128 tables x 5; rows reached 20.8/32 mean, 7-32 range (64.9% of the table)
+  obs-obs      164 bits | mean H 0.853 | median H 0.942 | dead   0 (0.0%) | mean fire rate 0.485
+  obs-const    476 bits | mean H 0.454 | median H 0.411 | dead  55 (11.6%) | mean fire rate 0.494
+  const     value  bits   meanH  dead   fire
+  c0       -2.527    37   0.178    11  0.955
+  c1       -2.273    40   0.153    13  0.966
+  c2       -2.020    38   0.266     8  0.920
+  c3       -1.766    36   0.246     6  0.932
+  c4       -1.513    35   0.322     3  0.917
+  c5       -1.259    31   0.433     0  0.878
+  c6       -1.006    32   0.531     0  0.827
+  c7       -0.752    32   0.592     0  0.770
+  c8       -0.498    28   0.729     0  0.665
+  c9       -0.245    26   0.751     0  0.590
+  c10       0.009    26   0.833     0  0.469
+  c11       0.262    27   0.749     0  0.341
+  c12       0.516    25   0.639     0  0.251
+  c13       0.769    22   0.549     2  0.156
+  c14       1.023    21   0.373     5  0.097
+  c15       1.277    20   0.309     7  0.077
+  least informative observation channels: r_hip H=0.452, vx H=0.455, r_hip_vel H=0.482, r_ankle H=0.520
+  wrote lut_sac_c29mc_grid_s2_bitusage.json
+CAPACITY EVALS DONE 2026-08-03T01:19:17Z

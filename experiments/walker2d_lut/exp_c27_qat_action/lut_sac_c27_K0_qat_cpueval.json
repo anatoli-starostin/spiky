@@ -1,0 +1,12 @@
+{
+ "actor": "lut_sac_c27_K0_actor.npz",
+ "params": 28032,
+ "action_levels": 0,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "mean": 4513.914429363491,
+ "sd": 123.85867752931632,
+ "full": 96,
+ "vel": 3.535499247446355,
+ "len_mean": 995.92
+}

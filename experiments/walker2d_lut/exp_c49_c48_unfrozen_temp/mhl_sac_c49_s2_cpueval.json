@@ -1,0 +1,19 @@
+{
+ "actor": "mhl_sac_c49_s2_actor.npz",
+ "params": 31360,
+ "episodes": 100,
+ "forward_mode": "eval",
+ "cpu_reference_mean": 3173.556689933194,
+ "cpu_reference_std": 1069.259249687661,
+ "full_length": 71,
+ "velocity": 2.6397108120547546,
+ "length_mean": 854.1,
+ "heads": 1,
+ "tph": 128,
+ "n_buckets": 16,
+ "n_det": 1,
+ "cells": 16,
+ "freeze_temperature": false,
+ "frontend_params": 6784,
+ "table_params": 24576
+}

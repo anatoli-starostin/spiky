@@ -1,0 +1,14 @@
+{
+ "c39 stock (offset 0)": {
+  "init_agreement": 0.6344129774305555,
+  "init_floor": 0.4948293212801218,
+  "final_agreement": 0.35427008734809023,
+  "final_floor": 0.3361366604351335
+ },
+ "c41 boundary (offset 6)": {
+  "init_agreement": 0.21570587158203125,
+  "init_floor": 0.21722402485708395,
+  "final_agreement": 0.25022210015190977,
+  "final_floor": 0.24655645858082506
+ }
+}

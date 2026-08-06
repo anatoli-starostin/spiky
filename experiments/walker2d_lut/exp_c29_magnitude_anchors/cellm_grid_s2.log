@@ -1,0 +1,30 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+  [anchors] balanced seed=2 128x5 over d=33: 377 distinct unordered pairs -> /home/astarostin/.cache/spiky_anchors/anchors_balanced_t128_nap5_d33_h1_s2_cpu.npz
+LUT-SAC actor nap=5 tph=128 heads=1 seed=2 addressing=anchors/balanced | 12 outputs/cell (6 mu + 6 log-sigma) | table 49,152 + addressing 21,760 = 70,912 params | rows 128x32 = 4,096
+  constants: grid | NC = 16 | LUT input 17 -> 33 (actor addressing ONLY; critic and replay stay 17-dim)
+  values: -2.527 -2.273 -2.020 -1.766 -1.513 -1.259 -1.006 -0.752 -0.498 -0.245 +0.009 +0.262 +0.516 +0.769 +1.023 +1.277
+  addressing wiring: 640 bits = 158 obs-obs (24.7%) + 482 obs-const (75.3%) + 0 const-const (0.0%); 136 const-const bits repaired
+  bits wired to each constant: c0:29 c1:28 c2:36 c3:31 c4:25 c5:26 c6:32 c7:31 c8:30 c9:30 c10:32 c11:33 c12:28 c13:29 c14:32 c15:30
+  bits wired to each observation channel: z_heig:47 torso_:47 r_hip:47 r_knee:46 r_ankl:47 l_hip:47 l_knee:47 l_ankl:47 vx:47 vz:47 torso_:47 r_hip_:47 r_knee:47 r_ankl:47 l_hip_:47 l_knee:47 l_ankl:47
+[  500/10000] steps    32,000 | MJX ret     -0.8 | row-cov   0.0% | best     -0.8 |   2.4m
+[ 1000/10000] steps    64,000 | MJX ret    342.9 | row-cov  78.0% | best    342.9 |   5.3m
+[ 1500/10000] steps    96,000 | MJX ret    484.1 | row-cov  79.3% | best    484.1 |   7.7m
+[ 2000/10000] steps   128,000 | MJX ret    532.2 | row-cov  79.9% | best    532.2 |  10.0m
+[ 2500/10000] steps   160,000 | MJX ret    680.2 | row-cov  81.0% | best    680.2 |  12.4m
+[ 3000/10000] steps   192,000 | MJX ret   1101.2 | row-cov  81.0% | best   1101.2 |  14.7m
+[ 3500/10000] steps   224,000 | MJX ret   1342.1 | row-cov  81.1% | best   1342.1 |  17.0m
+[ 4000/10000] steps   256,000 | MJX ret   1735.4 | row-cov  81.3% | best   1735.4 |  19.3m
+[ 4500/10000] steps   288,000 | MJX ret   2292.5 | row-cov  81.5% | best   2292.5 |  21.6m
+[ 5000/10000] steps   320,000 | MJX ret   1961.2 | row-cov  81.7% | best   2292.5 |  23.9m
+[ 5500/10000] steps   352,000 | MJX ret   3222.5 | row-cov  81.8% | best   3222.5 |  26.2m
+[ 6000/10000] steps   384,000 | MJX ret   2741.0 | row-cov  81.8% | best   3222.5 |  28.6m
+[ 6500/10000] steps   416,000 | MJX ret   1989.8 | row-cov  81.8% | best   3222.5 |  30.9m
+[ 7000/10000] steps   448,000 | MJX ret   2217.6 | row-cov  81.8% | best   3222.5 |  33.3m
+[ 7500/10000] steps   480,000 | MJX ret   1396.1 | row-cov  81.9% | best   3222.5 |  35.6m
+[ 8000/10000] steps   512,000 | MJX ret   2916.1 | row-cov  81.9% | best   3222.5 |  37.9m
+[ 8500/10000] steps   544,000 | MJX ret   3306.9 | row-cov  81.9% | best   3306.9 |  40.3m
+[ 9000/10000] steps   576,000 | MJX ret   2981.8 | row-cov  81.9% | best   3306.9 |  42.6m
+[ 9500/10000] steps   608,000 | MJX ret   2010.0 | row-cov  81.9% | best   3306.9 |  45.0m
+[10000/10000] steps   640,000 | MJX ret   1289.8 | row-cov  81.9% | best   3306.9 |  47.0m
+done: best MJX 3306.9 over 640,000 env-steps in 47.0 min

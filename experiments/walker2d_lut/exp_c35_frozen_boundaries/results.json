@@ -1,0 +1,78 @@
+{
+ "seeds": {
+  "0": 1975.855693515709,
+  "1": 974.2034333147885,
+  "2": 688.6048742954897
+ },
+ "mean": 1212.888000375329,
+ "sd": 676.0040013272404,
+ "n": 3,
+ "actor_params": 7840,
+ "frontend_params": 1696,
+ "table_params": 6144,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -3095.1119996246707,
+   "welch_se": 440.4661980260005
+  },
+  {
+   "name": "exp_c32b bucket x16 UNIFORM",
+   "mean": 2041.2,
+   "sd": 1230.1,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": -828.311999624671,
+   "welch_se": 810.3759250723168
+  },
+  {
+   "name": "exp_c33 bucket x64 uniform",
+   "mean": 1536.2,
+   "sd": 1416.8,
+   "n": 3,
+   "params": 27808,
+   "front_end": 3232,
+   "delta": -323.311999624671,
+   "welch_se": 906.3302653761558
+  },
+  {
+   "name": "exp_c34 quantile, FREE boundaries",
+   "mean": 1661.8,
+   "sd": 1375.0,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": -448.9119996246709,
+   "welch_se": 884.6103492141685
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": -2873.911999624671,
+   "welch_se": 692.6901302916622
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": -2718.411999624671,
+   "welch_se": 516.4439465583978
+  }
+ ]
+}

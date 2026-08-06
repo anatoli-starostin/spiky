@@ -1,0 +1,124 @@
+{
+ "offsets": [
+  {
+   "pair_agreement": 0.6344129774305555,
+   "indep_floor": 0.4948293212801218,
+   "det_entropy": 0.9369799629561483,
+   "det_entropy_min": 0.1810821059552616,
+   "dead": 0.0,
+   "nospike": 0.48302883572048616,
+   "eff_cells": 6.014096539965194,
+   "offset": 0.0
+  },
+  {
+   "pair_agreement": 0.6500905354817709,
+   "indep_floor": 0.5084345779485173,
+   "det_entropy": 0.8935565974161374,
+   "det_entropy_min": 0.17933548717354075,
+   "dead": 0.0,
+   "nospike": 0.4846242268880208,
+   "eff_cells": 5.469808975466219,
+   "offset": 1.0
+  },
+  {
+   "pair_agreement": 0.6517978244357638,
+   "indep_floor": 0.5240877560443348,
+   "det_entropy": 0.8570486545463454,
+   "det_entropy_min": 0.12587539680085705,
+   "dead": 0.6666666666666666,
+   "nospike": 0.49014027913411456,
+   "eff_cells": 5.15754808734131,
+   "offset": 2.0
+  },
+  {
+   "pair_agreement": 0.6476169162326388,
+   "indep_floor": 0.5590446022235684,
+   "det_entropy": 0.7531036901182261,
+   "det_entropy_min": 0.006057840699079389,
+   "dead": 5.666666666666667,
+   "nospike": 0.49626837836371535,
+   "eff_cells": 4.39109604206113,
+   "offset": 3.0
+  },
+  {
+   "pair_agreement": 0.6420338948567709,
+   "indep_floor": 0.6007292177528143,
+   "det_entropy": 0.5907609919342046,
+   "det_entropy_min": 0.0,
+   "dead": 23.333333333333332,
+   "nospike": 0.5071258544921875,
+   "eff_cells": 3.2911765509846824,
+   "offset": 4.0
+  },
+  {
+   "pair_agreement": 0.6702295939127604,
+   "indep_floor": 0.6433136411425139,
+   "det_entropy": 0.5107234984466957,
+   "det_entropy_min": 0.0,
+   "dead": 34.333333333333336,
+   "nospike": 0.5381028917100695,
+   "eff_cells": 2.8426124110526785,
+   "offset": 5.333
+  },
+  {
+   "pair_agreement": 0.6858334011501735,
+   "indep_floor": 0.6667469975848993,
+   "det_entropy": 0.4665928923837351,
+   "det_entropy_min": 0.0,
+   "dead": 36.333333333333336,
+   "nospike": 0.5701777140299479,
+   "eff_cells": 2.620747124008219,
+   "offset": 6.0
+  },
+  {
+   "pair_agreement": 0.7171512179904513,
+   "indep_floor": 0.7161540687084198,
+   "det_entropy": 0.3366057596364242,
+   "det_entropy_min": 0.0,
+   "dead": 55.666666666666664,
+   "nospike": 0.6848941379123263,
+   "eff_cells": 2.033413831959203,
+   "offset": 8.0
+  },
+  {
+   "pair_agreement": 0.723158942328559,
+   "indep_floor": 0.7232045498159198,
+   "det_entropy": 0.30656817215668664,
+   "det_entropy_min": 0.0,
+   "dead": 63.666666666666664,
+   "nospike": 0.7158660888671875,
+   "eff_cells": 1.9087882531287024,
+   "offset": 10.667
+  },
+  {
+   "pair_agreement": 0.7235751681857638,
+   "indep_floor": 0.7235777080059052,
+   "det_entropy": 0.30487298565559856,
+   "det_entropy_min": 0.0,
+   "dead": 64.0,
+   "nospike": 0.7670135498046875,
+   "eff_cells": 1.9028579028439812,
+   "offset": 13.0
+  },
+  {
+   "pair_agreement": 0.7235819498697916,
+   "indep_floor": 0.7235819498697916,
+   "det_entropy": 0.3048341876739277,
+   "det_entropy_min": 0.0,
+   "dead": 64.0,
+   "nospike": 0.837799072265625,
+   "eff_cells": 1.9027103182457508,
+   "offset": 16.0
+  }
+ ],
+ "chosen": {
+  "pair_agreement": 0.6344129774305555,
+  "indep_floor": 0.4948293212801218,
+  "det_entropy": 0.9369799629561483,
+  "det_entropy_min": 0.1810821059552616,
+  "dead": 0.0,
+  "nospike": 0.48302883572048616,
+  "eff_cells": 6.014096539965194,
+  "offset": 0.0
+ }
+}

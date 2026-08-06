@@ -1,0 +1,30 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+TRANSPLANT: actor init from seed 2, all other randomness from seed 1
+TABLE SPLIT: front-end init from seed 2, TABLE init from seed 1
+MHL-LIF SAC actor heads=1 tph=32 n_det=3 buckets=4 seed=1 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 3,808 + table 24,576 = 28,384 params (101.3% of the 28,032 hyperplane baseline; 28,320 trainable) | cells 32x64 = 2,048 | delay_init_std=4.0 | temperatures FROZEN at 1.0 | no eps
+[  500/10000] steps    32,000 | MJX ret    -27.0 | cell-cov   0.0% | digit 2.602 | nosp 0.541 | eff  5.18/64 | Tbkt 1.000 | Tcr 1.000 | best    -27.0 |   2.8m
+[ 1000/10000] steps    64,000 | MJX ret    347.1 | cell-cov  45.6% | digit 2.070 | nosp 0.212 | eff  5.57/64 | Tbkt 1.000 | Tcr 1.000 | best    347.1 |   5.0m
+[ 1500/10000] steps    96,000 | MJX ret    408.6 | cell-cov  52.8% | digit 1.964 | nosp 0.172 | eff  5.55/64 | Tbkt 1.000 | Tcr 1.000 | best    408.6 |   6.6m
+[ 2000/10000] steps   128,000 | MJX ret    380.5 | cell-cov  55.0% | digit 1.945 | nosp 0.148 | eff  6.11/64 | Tbkt 1.000 | Tcr 1.000 | best    408.6 |   7.9m
+[ 2500/10000] steps   160,000 | MJX ret    440.2 | cell-cov  57.3% | digit 2.008 | nosp 0.127 | eff  4.80/64 | Tbkt 1.000 | Tcr 1.000 | best    440.2 |   9.5m
+[ 3000/10000] steps   192,000 | MJX ret    644.1 | cell-cov  58.9% | digit 2.008 | nosp 0.114 | eff  5.93/64 | Tbkt 1.000 | Tcr 1.000 | best    644.1 |  11.0m
+[ 3500/10000] steps   224,000 | MJX ret    972.6 | cell-cov  59.9% | digit 2.025 | nosp 0.106 | eff  5.12/64 | Tbkt 1.000 | Tcr 1.000 | best    972.6 |  12.6m
+[ 4000/10000] steps   256,000 | MJX ret    740.2 | cell-cov  61.2% | digit 2.001 | nosp 0.099 | eff  4.91/64 | Tbkt 1.000 | Tcr 1.000 | best    972.6 |  14.1m
+[ 4500/10000] steps   288,000 | MJX ret   1037.1 | cell-cov  63.2% | digit 2.015 | nosp 0.088 | eff  4.92/64 | Tbkt 1.000 | Tcr 1.000 | best   1037.1 |  15.6m
+[ 5000/10000] steps   320,000 | MJX ret   1472.0 | cell-cov  63.7% | digit 2.056 | nosp 0.078 | eff  4.78/64 | Tbkt 1.000 | Tcr 1.000 | best   1472.0 |  17.1m
+[ 5500/10000] steps   352,000 | MJX ret   1276.9 | cell-cov  65.0% | digit 2.044 | nosp 0.073 | eff  4.80/64 | Tbkt 1.000 | Tcr 1.000 | best   1472.0 |  18.7m
+[ 6000/10000] steps   384,000 | MJX ret   1392.4 | cell-cov  65.6% | digit 2.018 | nosp 0.093 | eff  5.37/64 | Tbkt 1.000 | Tcr 1.000 | best   1472.0 |  20.2m
+[ 6500/10000] steps   416,000 | MJX ret   1788.1 | cell-cov  66.3% | digit 1.986 | nosp 0.073 | eff  5.61/64 | Tbkt 1.000 | Tcr 1.000 | best   1788.1 |  21.7m
+[ 7000/10000] steps   448,000 | MJX ret   1701.6 | cell-cov  66.8% | digit 2.010 | nosp 0.051 | eff  5.79/64 | Tbkt 1.000 | Tcr 1.000 | best   1788.1 |  23.2m
+[ 7500/10000] steps   480,000 | MJX ret   3411.3 | cell-cov  67.0% | digit 2.048 | nosp 0.053 | eff  5.00/64 | Tbkt 1.000 | Tcr 1.000 | best   3411.3 |  24.7m
+[ 8000/10000] steps   512,000 | MJX ret   3714.5 | cell-cov  67.8% | digit 2.044 | nosp 0.054 | eff  5.41/64 | Tbkt 1.000 | Tcr 1.000 | best   3714.5 |  26.2m
+[ 8500/10000] steps   544,000 | MJX ret   2792.1 | cell-cov  68.3% | digit 2.007 | nosp 0.032 | eff  5.56/64 | Tbkt 1.000 | Tcr 1.000 | best   3714.5 |  27.7m
+[ 9000/10000] steps   576,000 | MJX ret   3502.4 | cell-cov  69.3% | digit 1.992 | nosp 0.027 | eff  5.79/64 | Tbkt 1.000 | Tcr 1.000 | best   3714.5 |  29.2m
+[ 9500/10000] steps   608,000 | MJX ret   3798.5 | cell-cov  70.0% | digit 1.967 | nosp 0.020 | eff  6.16/64 | Tbkt 1.000 | Tcr 1.000 | best   3798.5 |  30.7m
+[10000/10000] steps   640,000 | MJX ret   3887.7 | cell-cov  70.2% | digit 1.956 | nosp 0.023 | eff  6.04/64 | Tbkt 1.000 | Tcr 1.000 | best   3887.7 |  32.2m
+done: best MJX 3887.7 over 640,000 env-steps in 32.2 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+mhl_sac_sp_F_actor.npz (28,384 params = 3,808 front-end + 24,576 table) [eval] 3 det x 4 bkt = 64 cells / tph32
+  CPU-reference 100-ep deterministic: 3860.3 +/- 133.7  full 97/100  vel 2.880 m/s  len 996  [9s]

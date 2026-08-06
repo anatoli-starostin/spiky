@@ -1,0 +1,32 @@
+[
+ {
+  "variant": "c32b-linear",
+  "params": 7840,
+  "ms_per_step": 1.287,
+  "peak_bytes": 67252992,
+  "activation_gb": 0.0626,
+  "gflops": 0.107,
+  "gb_accessed": 0.198,
+  "loss": 1830.2314453125
+ },
+ {
+  "variant": "c32b-quadratic",
+  "params": 7840,
+  "ms_per_step": 1.35,
+  "peak_bytes": 67253504,
+  "activation_gb": 0.0626,
+  "gflops": 0.253,
+  "gb_accessed": 0.271,
+  "loss": 1830.2315673828125
+ },
+ {
+  "variant": "c31-pure",
+  "params": 31392,
+  "ms_per_step": 9.308,
+  "peak_bytes": 268860928,
+  "activation_gb": 0.2502,
+  "gflops": 1.67,
+  "gb_accessed": 1.724,
+  "loss": 1882.7978515625
+ }
+]

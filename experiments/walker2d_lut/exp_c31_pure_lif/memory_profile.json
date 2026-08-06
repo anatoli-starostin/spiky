@@ -1,0 +1,38 @@
+[
+ {
+  "model": "hyperplane",
+  "params": 28034,
+  "peak_bytes": 319793408,
+  "buffer_bytes": 168000000,
+  "base_bytes": 272889856,
+  "peak_gb": 0.298,
+  "activation_gb": 0.044
+ },
+ {
+  "model": "c30",
+  "params": 87361,
+  "peak_bytes": 327042048,
+  "buffer_bytes": 168000000,
+  "base_bytes": 273151744,
+  "peak_gb": 0.305,
+  "activation_gb": 0.05
+ },
+ {
+  "model": "c30b",
+  "params": 48193,
+  "peak_bytes": 537868288,
+  "buffer_bytes": 168000000,
+  "base_bytes": 272970240,
+  "peak_gb": 0.501,
+  "activation_gb": 0.247
+ },
+ {
+  "model": "c31",
+  "params": 31392,
+  "peak_bytes": 537667072,
+  "buffer_bytes": 168000000,
+  "base_bytes": 272903168,
+  "peak_gb": 0.501,
+  "activation_gb": 0.247
+ }
+]

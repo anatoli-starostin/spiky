@@ -1,0 +1,8 @@
+{
+ "eval_fwd": 0.043044090270996094,
+ "train_fwd": 0.33324241638183594,
+ "train_fwd_bwd": 1.0918235778808594,
+ "mode": "compiled",
+ "batch": 512,
+ "device": "NVIDIA GeForce RTX 5090"
+}

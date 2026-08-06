@@ -1,0 +1,8 @@
+XLA_FLAGS=--xla_gpu_deterministic_ops=true
+CUBLAS_WORKSPACE_CONFIG=:4096:8
+=== launch 1/12  arm=none seed=0  2026-08-02T12:08:22Z ===
+=== launch 2/12  arm=grid seed=0  2026-08-02T12:08:47Z ===
+=== launch 3/12  arm=random seed=0  2026-08-02T12:09:12Z ===
+=== launch 4/12  arm=clumped seed=0  2026-08-02T12:53:00Z ===
+=== launch 5/12  arm=none seed=1  2026-08-02T12:53:33Z ===
+=== launch 6/12  arm=grid seed=1  2026-08-02T12:54:13Z ===

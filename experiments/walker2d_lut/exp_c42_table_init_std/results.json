@@ -1,0 +1,109 @@
+{
+ "seeds": {
+  "0": 4146.537715354429,
+  "1": 4254.356128075514,
+  "2": 3941.821309852804
+ },
+ "mean": 4114.238384427582,
+ "sd": 158.75118341013092,
+ "n": 3,
+ "actor_params": 28384,
+ "frontend_params": 3808,
+ "table_params": 24576,
+ "frozen_params": 64,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -193.76161557241812,
+   "welch_se": 223.79450636250886
+  },
+  {
+   "name": "exp_c38 mhl 6det x 2bkt x 32tab",
+   "mean": 3213.9,
+   "sd": 1525.9,
+   "n": 3,
+   "params": 31744,
+   "front_end": 7168,
+   "delta": 900.3383844275818,
+   "welch_se": 885.7337350532451
+  },
+  {
+   "name": "exp_c31 PureLIF 6 deadlines x 32 tab",
+   "mean": 2951.2,
+   "sd": 2109.2,
+   "n": 3,
+   "params": 31392,
+   "front_end": 6816,
+   "delta": 1163.038384427582,
+   "welch_se": 1221.1915735916998
+  },
+  {
+   "name": "exp_c36 bucket 16bkt x 128tab",
+   "mean": 4246.1,
+   "sd": 298.4,
+   "n": 3,
+   "params": 31360,
+   "front_end": 6784,
+   "delta": -131.8616155724185,
+   "welch_se": 195.1448165116674
+  },
+  {
+   "name": "exp_c37 bucket 32bkt x 64tab",
+   "mean": 2531.1,
+   "sd": 1266.1,
+   "n": 3,
+   "params": 28992,
+   "front_end": 4416,
+   "delta": 1583.138384427582,
+   "welch_se": 736.706895183812
+  },
+  {
+   "name": "exp_c32b bucket 16bkt x 32tab",
+   "mean": 2041.2,
+   "sd": 1230.1,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 2073.038384427582,
+   "welch_se": 716.0884368647299
+  },
+  {
+   "name": "exp_c33 bucket 64bkt x 32tab",
+   "mean": 1536.2,
+   "sd": 1416.8,
+   "n": 3,
+   "params": 27808,
+   "front_end": 3232,
+   "delta": 2578.038384427582,
+   "welch_se": 823.1087773869091
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": 27.438384427581695,
+   "welch_se": 579.5628749998045
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": 182.9383844275817,
+   "welch_se": 350.4109864307515
+  }
+ ]
+}

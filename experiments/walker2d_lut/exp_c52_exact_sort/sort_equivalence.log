@@ -1,0 +1,128 @@
+
+--- fresh init, generic input (delay_init_std=0)  (batch 64, 139,264 arrivals, 0/131,072 adjacent pairs exactly tied = 0.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+--- CONSTRUCTED TIES (all 17 arrivals equal — tie-break decides alone)  (batch 64, 139,264 arrivals, 131,072/131,072 adjacent pairs exactly tied = 100.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+--- perturbed random weights (ties rare — the generic path)  (batch 64, 139,264 arrivals, 0/131,072 adjacent pairs exactly tied = 0.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+--- TRAINED exp_c50 seed 0 (the operating point that matters)  (batch 64, 139,264 arrivals, 0/131,072 adjacent pairs exactly tied = 0.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+--- TRAINED exp_c50 seed 1 (the operating point that matters)  (batch 64, 139,264 arrivals, 0/131,072 adjacent pairs exactly tied = 0.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+--- TRAINED exp_c50 seed 2 (the operating point that matters)  (batch 64, 139,264 arrivals, 0/131,072 adjacent pairs exactly tied = 0.00%)
+  quantity                       max |rank - argsort|
+  a_srt                                     0.000e+00
+  t_hard                                    0.000e+00
+  t_soft                                    0.000e+00
+  g_soft                                    0.000e+00
+  y_train                                   0.000e+00
+  y_eval                                    0.000e+00
+  bucket digits (exact)                 0 of 8,192 differ (0.0000%)
+  cell index (exact)                    0 of 8,192 differ
+  grad beta_base                            0.000e+00
+  grad beta_raw                             0.000e+00
+  grad delay                                0.000e+00
+  grad log_T_bkt                            0.000e+00
+  grad log_T_cross                          0.000e+00
+  grad table                                0.000e+00
+  grad tau_raw                              0.000e+00
+  grad w_raw                                0.000e+00
+
+========================================================================
+The two forms are BIT-IDENTICAL on every weight set tested, including the
+constructed case where 100% of adjacent arrival pairs are exactly tied and
+the tie-break alone decides the permutation. Every intermediate, both
+forwards, and the gradient of all 8 parameters agree to 0.000e+00.
+
+The sort spelling therefore cannot be the source of the c50-vs-c36 residual,
+and the exact-sort ablation can only reproduce c50 seed for seed.
+
+This ran on CPU, but the argument carries to GPU: the `rank` form applies
+the permutation as an elementwise multiply followed by a sum over N, NOT a
+dot_general, so no TF32 matmul path is involved and the reduction is a sum
+of 16 exact zeros and one exact value -- reassociation-invariant.

@@ -1,0 +1,88 @@
+{
+ "seeds": {
+  "0": 4527.523482648957,
+  "1": 3933.2428830740146,
+  "2": 4277.638542888182
+ },
+ "mean": 4246.134969537051,
+ "sd": 298.3902044441234,
+ "n": 3,
+ "actor_params": 31360,
+ "frontend_params": 6784,
+ "table_params": 24576,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -61.86503046294911,
+   "welch_se": 267.13711779297023
+  },
+  {
+   "name": "exp_c32b bucket 16x32",
+   "mean": 2041.2,
+   "sd": 1230.1,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 2204.934969537051,
+   "welch_se": 730.7947099124818
+  },
+  {
+   "name": "exp_c33 bucket 64x32",
+   "mean": 1536.2,
+   "sd": 1416.8,
+   "n": 3,
+   "params": 27808,
+   "front_end": 3232,
+   "delta": 2709.934969537051,
+   "welch_se": 835.9343981653516
+  },
+  {
+   "name": "exp_c31 PureLIF (TTFS bits)",
+   "mean": 2951.2,
+   "sd": 2109.2,
+   "n": 3,
+   "params": 31392,
+   "front_end": 6816,
+   "delta": 1294.934969537051,
+   "welch_se": 1229.8728056331959
+  },
+  {
+   "name": "exp_c32 BROKEN bucket (free-signed w)",
+   "mean": 1174.4,
+   "sd": 517.2,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 3071.734969537051,
+   "welch_se": 344.73784924596725
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": 159.3349695370507,
+   "welch_se": 597.6381720595961
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": 314.8349695370507,
+   "welch_se": 379.5604273841895
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "actor": "pure_lif_sac_c31_s0_actor.npz",
+ "params": 31392,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4262.0728822031,
+ "cpu_reference_std": 445.96427019832396,
+ "full_length": 95,
+ "velocity": 3.337221215359552,
+ "length_mean": 981.47,
+ "heads": 1,
+ "tph": 32,
+ "nap": 6,
+ "eval_eps": 0.30000001192092896,
+ "detector_params": 6816,
+ "table_params": 24576
+}

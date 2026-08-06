@@ -1,0 +1,28 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+MHL-LIF SAC actor heads=1 tph=64 n_det=1 buckets=32 seed=0 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 4,416 + table 24,576 = 28,992 params (103.4% of the 28,032 hyperplane baseline; 28,864 trainable) | cells 64x32 = 2,048 | delay_init_std=4.0 table_init_std=0.01250 | temperatures FROZEN at 1.0 | no eps
+[  500/10000] steps    32,000 | MJX ret     36.5 | cell-cov   0.0% | digit 25.613 | nosp 0.510 | eff  5.69/32 | Tbkt 1.000 | Tcr 1.000 | best     36.5 |   2.8m
+[ 1000/10000] steps    64,000 | MJX ret    -30.8 | cell-cov  62.1% | digit 28.609 | nosp 0.553 | eff  2.53/32 | Tbkt 1.000 | Tcr 1.000 | best     36.5 |   4.6m
+[ 1500/10000] steps    96,000 | MJX ret    210.0 | cell-cov  65.9% | digit 27.590 | nosp 0.307 | eff  3.36/32 | Tbkt 1.000 | Tcr 1.000 | best    210.0 |   5.9m
+[ 2000/10000] steps   128,000 | MJX ret    394.8 | cell-cov  67.0% | digit 27.863 | nosp 0.358 | eff  3.03/32 | Tbkt 1.000 | Tcr 1.000 | best    394.8 |   7.4m
+[ 2500/10000] steps   160,000 | MJX ret    419.6 | cell-cov  69.4% | digit 27.166 | nosp 0.240 | eff  3.03/32 | Tbkt 1.000 | Tcr 1.000 | best    419.6 |   9.0m
+[ 3000/10000] steps   192,000 | MJX ret    484.7 | cell-cov  70.5% | digit 26.178 | nosp 0.201 | eff  3.77/32 | Tbkt 1.000 | Tcr 1.000 | best    484.7 |  10.4m
+[ 3500/10000] steps   224,000 | MJX ret    461.1 | cell-cov  70.8% | digit 25.465 | nosp 0.162 | eff  5.00/32 | Tbkt 1.000 | Tcr 1.000 | best    484.7 |  12.0m
+[ 4000/10000] steps   256,000 | MJX ret    451.3 | cell-cov  71.6% | digit 25.583 | nosp 0.181 | eff  4.66/32 | Tbkt 1.000 | Tcr 1.000 | best    484.7 |  13.4m
+[ 4500/10000] steps   288,000 | MJX ret    546.4 | cell-cov  72.4% | digit 25.030 | nosp 0.160 | eff  5.26/32 | Tbkt 1.000 | Tcr 1.000 | best    546.4 |  14.9m
+[ 5000/10000] steps   320,000 | MJX ret    674.3 | cell-cov  73.4% | digit 24.978 | nosp 0.151 | eff  4.84/32 | Tbkt 1.000 | Tcr 1.000 | best    674.3 |  16.4m
+[ 5500/10000] steps   352,000 | MJX ret    513.6 | cell-cov  74.5% | digit 24.563 | nosp 0.142 | eff  4.92/32 | Tbkt 1.000 | Tcr 1.000 | best    674.3 |  17.9m
+[ 6000/10000] steps   384,000 | MJX ret    708.4 | cell-cov  74.6% | digit 24.826 | nosp 0.151 | eff  4.55/32 | Tbkt 1.000 | Tcr 1.000 | best    708.4 |  19.4m
+[ 6500/10000] steps   416,000 | MJX ret    767.1 | cell-cov  75.2% | digit 24.984 | nosp 0.150 | eff  4.13/32 | Tbkt 1.000 | Tcr 1.000 | best    767.1 |  20.8m
+[ 7000/10000] steps   448,000 | MJX ret    895.1 | cell-cov  75.5% | digit 24.901 | nosp 0.163 | eff  4.27/32 | Tbkt 1.000 | Tcr 1.000 | best    895.1 |  22.3m
+[ 7500/10000] steps   480,000 | MJX ret    902.1 | cell-cov  76.5% | digit 24.755 | nosp 0.156 | eff  4.26/32 | Tbkt 1.000 | Tcr 1.000 | best    902.1 |  23.8m
+[ 8000/10000] steps   512,000 | MJX ret    900.2 | cell-cov  76.8% | digit 24.578 | nosp 0.146 | eff  4.34/32 | Tbkt 1.000 | Tcr 1.000 | best    902.1 |  25.3m
+[ 8500/10000] steps   544,000 | MJX ret   1203.8 | cell-cov  77.0% | digit 24.573 | nosp 0.138 | eff  4.38/32 | Tbkt 1.000 | Tcr 1.000 | best   1203.8 |  26.7m
+[ 9000/10000] steps   576,000 | MJX ret   2185.4 | cell-cov  77.2% | digit 24.142 | nosp 0.137 | eff  4.65/32 | Tbkt 1.000 | Tcr 1.000 | best   2185.4 |  28.2m
+[ 9500/10000] steps   608,000 | MJX ret   1213.1 | cell-cov  77.5% | digit 24.176 | nosp 0.126 | eff  4.36/32 | Tbkt 1.000 | Tcr 1.000 | best   2185.4 |  29.7m
+[10000/10000] steps   640,000 | MJX ret   2136.9 | cell-cov  78.2% | digit 24.153 | nosp 0.122 | eff  3.93/32 | Tbkt 1.000 | Tcr 1.000 | best   2185.4 |  31.2m
+done: best MJX 2185.4 over 640,000 env-steps in 31.2 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+mhl_sac_c44_s0_actor.npz (28,992 params = 4,416 front-end + 24,576 table) [eval] 1 det x 32 bkt = 32 cells / tph64
+  CPU-reference 100-ep deterministic: 2217.2 +/- 932.7  full 8/100  vel 2.810 m/s  len 568  [49s]
