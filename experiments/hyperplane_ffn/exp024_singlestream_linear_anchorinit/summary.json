@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp024_singlestream_linear_anchorinit",
+  "best_val_bpb": 1.2034398423160242,
+  "final_val_bpb": 1.2034398423160242,
+  "n_params": 276551460,
+  "training_time_hours": 3.227
+}

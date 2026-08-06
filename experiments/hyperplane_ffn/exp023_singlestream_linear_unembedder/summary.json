@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp023_singlestream_linear_unembedder",
+  "best_val_bpb": 1.2063160732358655,
+  "final_val_bpb": 1.2064770692160731,
+  "n_params": 276551460,
+  "training_time_hours": 3.234
+}

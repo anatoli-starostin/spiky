@@ -1,0 +1,1 @@
+res128+delay[1,200] leaky-tau8 latency | acc 30.85% (res128+d200 logistic ceiling 99.34%) | quint(near->far) [44.8, 36.9, 31.1, 23.4, 18.0] | BCE 16.039->0.551

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp025_singlestream_linear_fastmhl",
+  "best_val_bpb": 1.2402790714296867,
+  "final_val_bpb": 1.240843343473598,
+  "n_params": 232790820,
+  "training_time_hours": 3.641
+}

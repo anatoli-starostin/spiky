@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp030_depth12_lowtph",
+  "best_val_bpb": 1.3150365486142042,
+  "final_val_bpb": 1.315040950848038,
+  "n_params": 88023624,
+  "training_time_hours": 1.301
+}
