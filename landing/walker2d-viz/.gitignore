@@ -1,0 +1,15 @@
+# Python / venv
+server/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# runtime logs / tensorboard
+*.log
+server/_server.log
+server/tb/
+
+# local deploy config (contains your domain; keep .env.example instead)
+.env
+
+# NOTE: server/models/*.npz and *.json ARE committed on purpose — the server + Docker image need them.
