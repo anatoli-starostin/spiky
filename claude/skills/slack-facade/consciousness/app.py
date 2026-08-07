@@ -22,8 +22,10 @@ from pathlib import Path
 
 from claude_agent_sdk import (
     AssistantMessage,
+    CLIConnectionError,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    ProcessError,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -341,6 +343,7 @@ class Consciousness:
     def __init__(self):
         MIND_CWD.mkdir(exist_ok=True)
         self._threads: dict[str, tuple[ClaudeSDKClient, asyncio.Lock]] = {}
+        self._thread_ctx: dict[str, tuple] = {}   # thread -> (channel, post_thread), remembered to respawn on crash
         self._ctx: dict[str, int] = {}   # thread -> last-measured context tokens
 
     def _options(self, channel, post_thread, thread) -> ClaudeAgentOptions:
@@ -372,6 +375,7 @@ class Consciousness:
             client = ClaudeSDKClient(options=self._options(channel, post_thread, thread))
             await client.connect()
             self._threads[thread] = (client, asyncio.Lock())
+            self._thread_ctx[thread] = (channel, post_thread)   # remembered so we can respawn on a crash
             log.info("spawned consciousness for thread %s", thread)
             if prime:
                 text = (
@@ -385,21 +389,40 @@ class Consciousness:
         client, lock = self._threads[thread]
 
         async with lock:  # one query at a time per session
-            await client.query(text)
-            out: list[str] = []
-            async for msg in client.receive_response():
-                if isinstance(msg, AssistantMessage):
-                    texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
-                    if texts:
-                        # Keep ONLY the latest assistant text, not every block glued
-                        # together. When it delegates, the model speaks before the tool
-                        # call ("let me check…") AND after it ("pulling up your GPU
-                        # details…") -- concatenating both posted one message with two
-                        # acknowledgements in it. The last text is also the most
-                        # informed one: it's written after the tool results came back.
-                        out = texts
-                elif isinstance(msg, ResultMessage):
-                    self._ctx[thread] = _ctx_tokens(msg)   # for the compactor
+            try:
+                return await self._run(thread, client, text)
+            except (CLIConnectionError, ProcessError) as e:
+                # The consciousness CLI subprocess died (e.g. SIGSEGV, exit -11) -- either mid-generation
+                # (ProcessError) or on the next write to the now-dead process (CLIConnectionError). Respawn a
+                # fresh client for this thread and retry ONCE, so a single crash doesn't wedge the thread (its
+                # cached client stays dead) until app.py is restarted. Continuity of the crashed session is
+                # lost -- the fresh session answers this message anew -- but the thread keeps working.
+                log.warning("consciousness for thread %s died (%s) -> respawning", thread, e)
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                channel, post_thread = self._thread_ctx.get(thread, (None, None))
+                client = ClaudeSDKClient(options=self._options(channel, post_thread, thread))
+                await client.connect()
+                self._threads[thread] = (client, lock)   # reuse the lock we already hold
+                log.info("respawned consciousness for thread %s", thread)
+                return await self._run(thread, client, text)
+
+    async def _run(self, thread: str, client: ClaudeSDKClient, text: str) -> str:
+        """Send one query and collect the reply. SDK errors from a dead subprocess bubble up to ask()."""
+        await client.query(text)
+        out: list[str] = []
+        async for msg in client.receive_response():
+            if isinstance(msg, AssistantMessage):
+                texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
+                if texts:
+                    # Keep ONLY the latest assistant text, not every block glued together: when it
+                    # delegates it speaks before AND after the tool call, and the last text -- written
+                    # after the tool results came back -- is the most informed one.
+                    out = texts
+            elif isinstance(msg, ResultMessage):
+                self._ctx[thread] = _ctx_tokens(msg)   # for the compactor
         return "\n".join(out).strip() or "(no reply)"
 
     async def maybe_compact(self, thread: str, threshold: int) -> bool:
