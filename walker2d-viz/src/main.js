@@ -244,7 +244,7 @@ addEventListener('resize', resize); resize()
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id)
 const conn = $('conn')
-let ws = null, mode = 'test', paused = false
+let ws = null, paused = false
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
@@ -270,8 +270,6 @@ function connect(url) {
       $('reward').textContent = (+m.reward).toFixed(2)
       $('ret').textContent = (+m.return).toFixed(1)
       $('actorName').textContent = m.actor
-      mode = m.mode; $('modeBtn').textContent = 'Mode: ' + mode
-      $('modeBtn').classList.toggle('active', mode === 'train')
       paused = !!m.paused                            // reflect server pause state
       $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
       $('pauseBtn').classList.toggle('active', paused)
@@ -287,7 +285,6 @@ $('pauseBtn').onclick = () => {
   $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
   $('pauseBtn').classList.toggle('active', paused)
 }
-$('modeBtn').onclick = () => { mode = (mode === 'test' ? 'train' : 'test'); send({ cmd: 'mode', mode }) }
 $('renderBtn').onclick = () => {                          // live switch between accurate MJCF and approximate render
   renderMode = renderMode === 'accurate' ? 'approx' : 'accurate'
   applyRenderVisibility()
