@@ -122,14 +122,24 @@ class Sim:
         self.paused = bool(value)
         self.touch()                             # pause OR resume is an interaction: reset timer + wake
 
-    def restart(self):
+    def _reset_episode(self):
+        """Start a fresh episode WITHOUT counting as a user interaction (no touch()).
+
+        Used by the AUTOMATIC on-fall / on-truncation reset, which is part of one *uninterrupted* walk and
+        must NOT re-arm the auto-stop timer. (Bug fix: a Walker2d episode truncates at the 1000-step limit
+        ~every 33 s at 30 sps, and falls sooner — when the auto-reset called restart()->touch(), the 180 s
+        auto-idle clock was reset every episode, so it never fired on a continuously-walking demo.)"""
         self.obs, _ = self.env.reset()
         self.step_count = 0
         self.reward = 0.0
         self.ret = 0.0
         self.terminated = False
         if self.actor_name == "zero":
-            self._zero_settle = ZERO_SETTLE      # restarted while on zero -> let it topple again, then idle
+            self._zero_settle = ZERO_SETTLE      # (re)started while on zero -> let it topple again, then idle
+
+    def restart(self):
+        """USER-initiated restart (Restart button): a fresh episode AND an interaction (resets the timer)."""
+        self._reset_episode()
         self.touch()
 
     def step(self):
@@ -140,10 +150,13 @@ class Sim:
         self.ret += self.reward
         self.step_count += 1
         self.terminated = bool(terminated or truncated)
-        # Free-fall mode: keep stepping the (fallen) body instead of resetting. MuJoCo happily keeps
-        # integrating a terminated Walker2d state (verified), so the walker just lies/flails on the ground.
-        if self.terminated and not self.no_reset:
-            self.restart()
+        # Automatic episode reset on fall/truncation. Uses _reset_episode() (NOT restart()), so it does NOT
+        # touch()/re-arm the auto-stop timer — the walk is uninterrupted across episode boundaries. Guards:
+        #  - no_reset (free-fall): user asked to keep stepping the fallen body instead of resetting.
+        #  - actor "zero": never auto-reset a zeroed session — a forgotten walk switched to zero must lie
+        #    down and idle, not spring back up (a reset would re-arm _zero_settle and loop fall->reset forever).
+        if self.terminated and not self.no_reset and self.actor_name != "zero":
+            self._reset_episode()
 
     def close(self):
         with contextlib.suppress(Exception):
@@ -185,6 +198,11 @@ async def stepper(sim, ws):
             if (not sim.paused and not sim._auto_zeroed and sim.actor_name != "zero"
                     and (time.monotonic() - sim._walk_since) >= AUTO_IDLE_S):
                 sim._auto_zero()
+                try:
+                    # Tell the client the model auto-switched, so its selector visibly shows "zero".
+                    await ws.send(json.dumps({"type": "actor_changed", "actor": sim.actor_name}))
+                except websockets.exceptions.ConnectionClosed:
+                    break
 
             # Idle (~0 CPU / ~0 bandwidth): PAUSED, or on the zero policy once it has settled. Send exactly ONE
             # frozen/resting frame, then await sim._wake (no busy-spin) until an interaction. The connection is
