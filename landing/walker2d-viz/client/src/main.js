@@ -272,6 +272,12 @@ function connect(url) {
       showOverlay(m.message || 'The demo server is at capacity, please come back later.')
       return
     }
+    if (m.type === 'actor_changed') {                  // server auto-switched the model (auto-stop -> zero)
+      const sel = $('actor')                           // reflect it in the selector so the user sees "zero".
+      if (sel && m.actor) sel.value = m.actor          // programmatic set does NOT fire onchange -> not a user interaction
+      $('actorName').textContent = m.actor
+      return
+    }
     if (m.type === 'actors') {
       const sel = $('actor'); sel.innerHTML = ''
       for (const name of m.actors) {
