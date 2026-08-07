@@ -21,11 +21,20 @@ XML = os.path.abspath(os.path.join(os.path.dirname(mujoco.__file__), "..", "gymn
 
 class WarpWalker2dVecEnv:
     def __init__(self, num_envs, device="cuda", solver_iters=10, ls_iters=8,
-                 reset_noise=5e-3, max_steps=1000, seed=0):
+                 reset_noise=5e-3, max_steps=1000, seed=0, obs_clip_vel=None):
         self.N = num_envs
         self.device = torch.device(device)
         self.reset_noise = reset_noise
         self.max_steps = max_steps
+        # DEPLOYMENT PARITY. gymnasium's Walker2d builds its observation as
+        #     concat(qpos[1:], clip(qvel, -10, 10))
+        # i.e. it CLIPS the velocities. This env historically did not, so a policy trained
+        # here saw a different observation than it gets in any gymnasium-based deployment
+        # (measured on a trained exp19 policy: 9.0% of velocity components exceed |10|,
+        # peak 73.9) and its normalisation statistics were fitted to the unclipped
+        # distribution. Set obs_clip_vel=10.0 to match gymnasium exactly.
+        # Default None preserves the original behaviour, so exp00-19 stay reproducible.
+        self.obs_clip_vel = obs_clip_vel
         mjm = mujoco.MjModel.from_xml_path(XML)
         mjm.opt.iterations = solver_iters
         mjm.opt.ls_iterations = ls_iters
@@ -70,7 +79,10 @@ class WarpWalker2dVecEnv:
                 mjw.step(self.m, self.d)
 
     def _obs(self):
-        return torch.cat([self.qpos[:, 1:], self.qvel], dim=1)
+        qvel = self.qvel
+        if self.obs_clip_vel is not None:
+            qvel = qvel.clamp(-self.obs_clip_vel, self.obs_clip_vel)
+        return torch.cat([self.qpos[:, 1:], qvel], dim=1)
 
     def _reset_mask(self, mask):
         n = int(mask.sum())

@@ -46,7 +46,11 @@ def act(P, obs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=30)
-    ap.add_argument("--dir", default="/tmp/seedsel")
+    ap.add_argument("--dir", default="/tmp/seedsel", help="folder holding seed{0,1,2}.npz")
+    ap.add_argument("--train-dir", default="rerun_ckpt",
+                    help="folder holding the ppo_s*.json for the TRAINING column. Must "
+                         "match --dir's provenance: pointing it at the wrong run silently "
+                         "prints another run's training numbers beside these deployed ones.")
     a = ap.parse_args()
     import gymnasium as gym
     import json
@@ -57,7 +61,8 @@ def main():
     rows = []
     for s in (0, 1, 2):
         P = load_actor_params(os.path.join(a.dir, f"seed{s}.npz"))
-        tr = json.load(open(os.path.join(HERE, "rerun_ckpt", f"ppo_s{s}.json")))["final_ep_ret"]
+        td = a.train_dir if os.path.isabs(a.train_dir) else os.path.join(HERE, a.train_dir)
+        tr = json.load(open(os.path.join(td, f"ppo_s{s}.json")))["final_ep_ret"]
         rets, lens = [], []
         for ep in range(a.episodes):
             obs, _ = env.reset(seed=1000 + ep)      # SAME episode seeds for every model

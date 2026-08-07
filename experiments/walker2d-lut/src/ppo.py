@@ -68,6 +68,19 @@ def main():
     ap.add_argument("--compile", action="store_true")
     ap.add_argument("--graph", action="store_true", help="CUDA-graph-capture the physics in the rollout")
     ap.add_argument("--seed", type=int, default=0)
+    # --- deployment-parity knobs (all default to the historical behaviour) ---
+    ap.add_argument("--obs-clip-vel", type=float, default=None,
+                    help="clip |qvel| in the observation, matching gymnasium's Walker2d "
+                         "(which clips at 10). Default None = no clipping, the original "
+                         "behaviour. Set 10.0 to train on the same observation a "
+                         "gymnasium deployment will produce.")
+    ap.add_argument("--solver-iters", type=int, default=10,
+                    help="MuJoCo solver iterations. 10 is this env's historical value and "
+                         "is far weaker than the MuJoCo default (100) that a stock "
+                         "gymnasium deployment uses.")
+    ap.add_argument("--ls-iters", type=int, default=8,
+                    help="MuJoCo line-search iterations; historical value 8, stock "
+                         "MuJoCo default 50.")
     ap.add_argument("--out", default="smoke_results.json")
     ap.add_argument("--save-model", default=None,
                     help="path to save the trained policy (torch .pt) at the end of training: "
@@ -78,7 +91,9 @@ def main():
     dev = torch.device("cuda")
     torch.manual_seed(a.seed)
 
-    env = WarpWalker2dVecEnv(num_envs=a.envs, seed=a.seed)
+    env = WarpWalker2dVecEnv(num_envs=a.envs, seed=a.seed,
+                             solver_iters=a.solver_iters, ls_iters=a.ls_iters,
+                             obs_clip_vel=a.obs_clip_vel)
     if a.graph:
         env.build_physics_graph()
     N, T = a.envs, a.rollout
