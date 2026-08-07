@@ -23,12 +23,19 @@ You provision the VM and DNS yourself. Nothing here spends money or touches a cl
 The server runs **one isolated session per WebSocket connection**: each connected browser gets its own
 Gymnasium env instance, its own selected actor, and its own pause / mode / free-fall state. Viewers never
 share or fight over a single env. A global cap **`MAX_SESSIONS`** bounds CPU — once reached, new
-connections are refused with `{"type":"error", ...}` (the client shows it as a failed connection).
+connections get a `{"type":"server_full"}` message and a clean close, and the client shows a friendly
+"server is overloaded" banner (with a Retry button) instead of a raw failure.
 
 Each session is one MuJoCo env stepping at `SPS` (default 30) steps/s — CPU-bound, no GPU. The initial
-target box is a **2 vCPU / 8 GB Nebius Ice Lake** VM, and `MAX_SESSIONS` **defaults to 6** — comfortably
-~5–8 concurrent viewers on 2 cores. Raise it (e.g. **16–24**) if you move to a larger box; watch CPU while
-a few viewers are connected and tune.
+target box is a **2 vCPU / 8 GB Nebius Ice Lake** VM, and `MAX_SESSIONS` **defaults to 48** — the
+benchmarked clean ceiling on that box with the light LUT policy: a full 30 fps held for all sessions up to
+~48, with degradation beginning around ~64 and a hard falloff past ~96. 48 keeps the box smooth for the
+common (LUT) case; lower it if you expect many viewers on the heavier SAC-baseline MLP, and raise it on a
+bigger box (watch CPU while a few viewers are connected and tune).
+
+Idle sessions are cheap: after `AUTO_IDLE_S` (default 180 s) of uninterrupted walking a forgotten session
+auto-switches to the **zero** policy, lets the body settle, then goes fully idle (≈0 CPU / 0 bandwidth)
+until the next interaction — so a tab left open doesn't keep burning a core.
 
 ---
 
@@ -65,7 +72,7 @@ Config knobs (all env vars, set in `.env` / compose):
 | var            | default        | meaning                                             |
 |----------------|----------------|-----------------------------------------------------|
 | `DOMAIN`       | *(required)*   | FQDN Caddy serves + gets a cert for                 |
-| `MAX_SESSIONS` | `6`            | concurrent viewer cap (6 fits 2 vCPU; raise on a bigger box) |
+| `MAX_SESSIONS` | `48`           | concurrent viewer cap (48 = benchmarked clean ceiling on 2 vCPU; raise on a bigger box) |
 | `SPS`          | `30`           | sim steps/sec streamed per session                  |
 | `ENV_ID`       | `Walker2d-v5`  | Gymnasium env id                                    |
 | `PORT`/`HOST`  | `8765`/`0.0.0.0` | internal server bind (rarely changed)             |
