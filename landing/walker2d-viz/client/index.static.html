@@ -37,10 +37,23 @@
     #stat b { color: #e6e6e6; }
     #conn { font-size: 11px; } .ok { color: #4ade80; } .bad { color: #f87171; }
     #srv { width: 100%; margin-top: 4px; background:#141a24; color:#cbd5e1; border:1px solid #33405a; border-radius:6px; padding:4px 6px; }
+    /* Overload banner: shown when the server replies "server_full" (at capacity). */
+    #overlay { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+      background: rgba(14,17,22,.82); backdrop-filter: blur(3px); }
+    #overlay .card { background: #141a24; border: 1px solid #33405a; border-radius: 12px; padding: 22px 26px;
+      max-width: 360px; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,.5); }
+    #overlay h2 { margin: 0 0 8px; font-size: 16px; color: #ffd479; }
+    #overlay p { margin: 0 0 14px; color: #cbd5e1; line-height: 1.5; }
+    #overlay button { background: #2b6cff; border: 1px solid #2b6cff; color: #fff; }
   </style>
 </head>
 <body>
   <div id="app"></div>
+  <div id="overlay"><div class="card">
+    <h2>Server is overloaded</h2>
+    <p id="overlayMsg">The demo server is at capacity, please come back later.</p>
+    <button id="overlayRetry">Retry</button>
+  </div></div>
   <div id="ui">
     <h1><span class="title">Walker2d Viz &middot; <span id="conn" class="bad">disconnected</span></span><button id="foldBtn" aria-label="Collapse controls" title="Collapse / expand controls">&#9662;</button></h1>
     <div id="uiBody">
@@ -48,7 +61,6 @@
     <div class="row">
       <button id="restart">Restart</button>
       <button id="pauseBtn">Pause</button>
-      <button id="modeBtn">Mode: test</button>
     </div>
     <div class="row">
       <button id="renderBtn" class="active" title="Toggle between the real Walker2d MJCF geometry and the approximate one">Render: Accurate</button>

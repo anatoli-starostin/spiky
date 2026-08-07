@@ -6,7 +6,7 @@ messages (restart / mode / speed / actor / pause / no_reset). Actors are auto-di
 Concurrency model: **one independent session per WebSocket connection**. Each connected browser gets its
 own Sim (its own env instance, selected actor, pause/mode/free-fall state and stepping task), so multiple
 viewers never fight over a shared env — required for a public multi-viewer demo. A global cap
-(MAX_SESSIONS) bounds CPU: extra connections are refused with an {"type":"error"} message.
+(MAX_SESSIONS) bounds CPU: extra connections get a {"type":"server_full"} message, then a clean close.
 
 Config via env vars (CLI flags override): HOST, PORT, ENV_ID, SPS, MAX_SESSIONS.
 Run:  python server.py [--host 0.0.0.0] [--port 8765] [--env Walker2d-v5] [--sps 30] [--max-sessions 8]
@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time
 
 import numpy as np
 import websockets
@@ -32,6 +33,15 @@ from actors import discover_actors
 REGISTRY = discover_actors()
 if not REGISTRY:
     raise SystemExit("no actors discovered in actors/")
+
+# Auto-stop: after this many seconds of UNINTERRUPTED walking, a session is switched to the "zero" policy so
+# a forgotten/idle viewer stops consuming compute. Any user interaction (model switch, pause/resume, restart,
+# speed change) resets the timer. The "zero" policy is itself idle (~0 CPU): the stepper lets the body settle
+# for ZERO_SETTLE frames (so it topples naturally) then goes quiet until the next interaction. AUTO_IDLE_S is
+# env-overridable (mostly for tests).
+AUTO_IDLE_S = float(os.environ.get("AUTO_IDLE_S", 180.0))
+ZERO_SETTLE = 60                        # ~2 s at 30 sps
+DEFAULT_ACTOR = "fastlut_lse (exp19)"   # preferred default actor if present (else "random", else first discovered)
 
 
 def make_env(preferred):
@@ -56,17 +66,16 @@ class Sim:
     def __init__(self, env_name, sps):
         self.env, self.env_name = make_env(env_name)
         self.registry = REGISTRY
-        # Default a fresh session to a GOOD walking policy so viewers don't see the random flail-and-fall on
-        # load; fall back to "random" then the first discovered actor if that policy isn't present.
-        _default = "fastlut_lse (exp19)"
-        self.actor_name = (_default if _default in self.registry
+        self.actor_name = (DEFAULT_ACTOR if DEFAULT_ACTOR in self.registry
                            else "random" if "random" in self.registry
                            else next(iter(self.registry)))
         self.actor = self.registry[self.actor_name](self.env.action_space)
         self.mode = "test"                       # "test" | "train"
         self.paused = False                      # when True, the stepper idles (no step, no broadcast)
-        self._resume = asyncio.Event()           # set() while running; cleared while paused -> stepper awaits it
-        self._resume.set()
+        # One wake event drives ALL idle states (pause AND the settled zero policy): cleared while idle so the
+        # stepper awaits it; any interaction sets it (see touch()). ~0 CPU / ~0 bandwidth while idle.
+        self._wake = asyncio.Event()
+        self._wake.set()
         self.no_reset = False                    # free-fall: when True, don't auto-reset on termination
         self.terminated = False
         self.sps = float(sps)
@@ -74,12 +83,31 @@ class Sim:
         self.step_count = 0
         self.reward = 0.0
         self.ret = 0.0                            # episode return
+        self._walk_since = time.monotonic()      # start of the current uninterrupted walk (auto-stop timer)
+        self._auto_zeroed = False                # set once the auto-stop has fired for this walk
+        self._zero_settle = ZERO_SETTLE if self.actor_name == "zero" else 0   # frames to step before idling on zero
 
     # ---- control ----
+    def touch(self):
+        """A user interaction: reset the auto-stop walk timer, re-arm it, and wake any idle stepper."""
+        self._walk_since = time.monotonic()
+        self._auto_zeroed = False
+        self._wake.set()
+
     def set_actor(self, name):
         if name in self.registry:
             self.actor_name = name
             self.actor = self.registry[name](self.env.action_space)
+            self._zero_settle = ZERO_SETTLE if name == "zero" else 0   # a (re)selected zero topples, then idles
+            self.touch()
+
+    def _auto_zero(self):
+        """Internal (NOT a user interaction, so no touch): switch a forgotten walk to the zero policy."""
+        if self.actor_name != "zero" and "zero" in self.registry:
+            self.actor_name = "zero"
+            self.actor = self.registry["zero"](self.env.action_space)
+        self._auto_zeroed = True
+        self._zero_settle = ZERO_SETTLE
 
     def set_mode(self, mode):
         self.mode = "train" if mode == "train" else "test"
@@ -89,10 +117,7 @@ class Sim:
 
     def set_paused(self, value):
         self.paused = bool(value)
-        if self.paused:
-            self._resume.clear()                 # stepper will send one final frame then await _resume
-        else:
-            self._resume.set()                   # wake the idling stepper -> resume stepping/broadcast
+        self.touch()                             # pause OR resume is an interaction: reset timer + wake
 
     def restart(self):
         self.obs, _ = self.env.reset()
@@ -100,6 +125,9 @@ class Sim:
         self.reward = 0.0
         self.ret = 0.0
         self.terminated = False
+        if self.actor_name == "zero":
+            self._zero_settle = ZERO_SETTLE      # restarted while on zero -> let it topple again, then idle
+        self.touch()
 
     def step(self):
         action = self.actor.act(self.obs)
@@ -149,18 +177,28 @@ async def stepper(sim, ws):
     next_t = loop.time()
     try:
         while True:
-            if sim.paused:
-                # Send exactly ONE frame reflecting the frozen pose + paused=true, then go fully quiet:
-                # no physics, no inference, no per-tick frames. Await the resume event (no busy-spin, ~0 CPU).
-                # The connection is kept alive by the websockets library's built-in ping/pong while we idle.
+            # Auto-stop: a forgotten walk (untouched for AUTO_IDLE_S) -> zero policy, which then settles + idles.
+            # (Skip if already on zero — a user-selected zero settles/idles on its own; don't re-settle it.)
+            if (not sim.paused and not sim._auto_zeroed and sim.actor_name != "zero"
+                    and (time.monotonic() - sim._walk_since) >= AUTO_IDLE_S):
+                sim._auto_zero()
+
+            # Idle (~0 CPU / ~0 bandwidth): PAUSED, or on the zero policy once it has settled. Send exactly ONE
+            # frozen/resting frame, then await sim._wake (no busy-spin) until an interaction. The connection is
+            # kept alive by the websockets library's built-in ping/pong while we idle.
+            if sim.paused or (sim.actor_name == "zero" and sim._zero_settle <= 0):
                 try:
                     await ws.send(sim.state_msg())
                 except websockets.exceptions.ConnectionClosed:
                     break
-                await sim._resume.wait()
-                next_t = loop.time()      # resync pacing on resume (don't burst-catch-up the paused gap)
+                sim._wake.clear()
+                await sim._wake.wait()
+                next_t = loop.time()      # resync pacing on wake (don't burst-catch-up the idle gap)
                 continue
-            sim.step()
+
+            sim.step()                    # normal walk, OR the brief zero-settle so the body topples naturally
+            if sim.actor_name == "zero" and sim._zero_settle > 0:
+                sim._zero_settle -= 1
             try:
                 await ws.send(sim.state_msg())
             except websockets.exceptions.ConnectionClosed:
@@ -178,9 +216,14 @@ async def stepper(sim, ws):
 def make_handler(cfg, state):
     async def handler(ws):
         # Capacity gate: one env per session is CPU-bound; refuse beyond the cap instead of thrashing.
+        # Accept the socket just long enough to send a structured "server_full" message, then close
+        # cleanly, so the client can show a friendly overload banner rather than see a raw drop.
         if state["sessions"] >= cfg.max_sessions:
             with contextlib.suppress(Exception):
-                await ws.send(json.dumps({"type": "error", "error": "Server at capacity — try again shortly."}))
+                await ws.send(json.dumps({
+                    "type": "server_full",
+                    "message": "The demo server is at capacity, please come back later.",
+                }))
                 await ws.close()
             return
         state["sessions"] += 1
@@ -201,6 +244,7 @@ def make_handler(cfg, state):
                     sim.set_mode(m.get("mode", "test"))
                 elif cmd == "speed":
                     sim.sps = max(1.0, float(m.get("sps", sim.sps)))
+                    sim.touch()                          # speed change is an interaction: reset the auto-stop timer
                 elif cmd == "actor":
                     sim.set_actor(m.get("name", ""))
                 elif cmd == "pause":
@@ -241,7 +285,7 @@ async def main():
     ap.add_argument("--port", type=int, default=_env_int("PORT", 8765))
     ap.add_argument("--env", default=os.environ.get("ENV_ID", "Walker2d-v5"))
     ap.add_argument("--sps", type=float, default=_env_float("SPS", 30.0))
-    ap.add_argument("--max-sessions", type=int, default=_env_int("MAX_SESSIONS", 6))
+    ap.add_argument("--max-sessions", type=int, default=_env_int("MAX_SESSIONS", 48))
     a = ap.parse_args()
 
     class Cfg:
