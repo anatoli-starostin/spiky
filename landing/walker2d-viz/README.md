@@ -4,6 +4,10 @@ A tiny **server–client** app to visualize and control a Gymnasium MuJoCo **Wal
 The Python server steps the env and streams state over WebSocket; the browser client renders the walker in
 3D (Three.js) with camera-follow and live controls.
 
+> **Adding a new model/actor?** See **[ADDING_MODELS.md](ADDING_MODELS.md)** — drop an `Actor` subclass in
+> `server/actors/` + its weights in `server/models/`, commit to the `landing` branch, and rebuild the server
+> image on the VM.
+
 ```
 walker2d-viz/
 ├── server/                     # Python: gym env loop + WebSocket, streams state, takes control msgs

@@ -26,6 +26,10 @@ landing/
     └── DEPLOY.md             #   full deploy runbook
 ```
 
+> **Adding a new model/actor to the demo?** See
+> **[walker2d-viz/ADDING_MODELS.md](walker2d-viz/ADDING_MODELS.md)** — the concrete, reproducible procedure
+> (write an `Actor` subclass, store weights, commit here, rebuild the server on the VM).
+
 These are the **current** (latest) versions: the client carries the accurate MJCF render mode + the
 Approximate/Accurate toggle, the foldable controls panel, and `config.js` pointing at
 `wss://89-169-96-79.sslip.io`; the server `requirements.txt` includes the full pinned dep set (with
