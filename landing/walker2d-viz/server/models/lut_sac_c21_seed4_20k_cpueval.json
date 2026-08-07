@@ -1,0 +1,8 @@
+{
+ "actor": "/tmp/verify_best/lut_sac_c21_seed4_20k_actor.npz",
+ "params": 28032,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 5658.232034229333,
+ "cpu_reference_std": 619.3668952455945
+}

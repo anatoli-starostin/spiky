@@ -1,0 +1,21 @@
+# Full dependency set pinned to EXACTLY the working local venv on nucstar (Python 3.12) — verified to create
+# the Walker2d MuJoCo env and stream state. The prior hand-minimized list omitted gymnasium/mujoco transitive
+# deps (imageio, packaging, typing_extensions, etils, absl-py, glfw, pyopengl, pillow, fsspec, zipp), which are
+# present in any normal env but NOT in a clean python:slim image — so gym.make("Walker2d-v5") failed there
+# one missing module at a time. Pinning the whole set ends that whack-a-mole and guarantees container==local.
+gymnasium==1.3.0
+mujoco==3.11.0
+numpy==2.5.1
+websockets==17.0.1
+imageio==2.37.4
+cloudpickle==3.1.2
+farama-notifications==0.0.6
+packaging==26.2
+typing_extensions==4.16.0
+etils==1.14.0
+absl-py==2.5.0
+glfw==2.10.2
+PyOpenGL==3.1.10
+pillow==12.3.0
+fsspec==2026.7.0
+zipp==4.1.0
