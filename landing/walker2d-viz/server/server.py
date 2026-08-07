@@ -56,7 +56,12 @@ class Sim:
     def __init__(self, env_name, sps):
         self.env, self.env_name = make_env(env_name)
         self.registry = REGISTRY
-        self.actor_name = "random" if "random" in self.registry else next(iter(self.registry))
+        # Default a fresh session to a GOOD walking policy so viewers don't see the random flail-and-fall on
+        # load; fall back to "random" then the first discovered actor if that policy isn't present.
+        _default = "fastlut_lse (exp19)"
+        self.actor_name = (_default if _default in self.registry
+                           else "random" if "random" in self.registry
+                           else next(iter(self.registry)))
         self.actor = self.registry[self.actor_name](self.env.action_space)
         self.mode = "test"                       # "test" | "train"
         self.paused = False                      # when True, the stepper idles (no step, no broadcast)
