@@ -1,0 +1,27 @@
+{
+  "exp_name": "exp14_lut-anchor-pair-lutcrit-t64",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 3455.3,
+  "ppo_best_std": 700.2,
+  "ppo_final_mean": 3425.5,
+  "ppo_final_std": 675.6,
+  "params": 28678,
+  "throughput_env_per_s_mean": 144442,
+  "training_time_hours_mean": 0.387,
+  "avg_epochs_per_update_mean": 3.99,
+  "per_seed": {
+    "0": {
+      "best": 2481.9,
+      "final": 2481.9
+    },
+    "1": {
+      "best": 3784.9,
+      "final": 3767.7
+    },
+    "2": {
+      "best": 4099.3,
+      "final": 4026.8
+    }
+  }
+}
