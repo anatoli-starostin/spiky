@@ -202,12 +202,20 @@ let fromQ = null, toQ = null, interpStart = 0, interpDur = 1000 / 30
 let emaInterval = 1000 / 30, lastMsg = 0, prevStep = -1
 const curQ = new Array(9).fill(0)                    // reused each frame (no per-frame allocation)
 
-function pushState(qpos, step) {
+function pushState(qpos, step, sps) {
   const now = performance.now()
-  if (lastMsg) emaInterval += ((now - lastMsg) - emaInterval) * 0.2   // smoothed inter-arrival interval
+  const nominal = 1000 / Math.max(1, sps || 30)      // the stream's real inter-frame interval at this sps
+  const gap = lastMsg ? now - lastMsg : nominal
+  // A gap far larger than the stream cadence means the server was SILENT (paused, or auto-stopped to the
+  // zero idle) and has just resumed. Do NOT fold that idle gap into the smoothed interval: it would blow up
+  // interpDur and play the next move in extreme slow motion (a 3-min idle -> ~36 s lerp). Reset to the
+  // nominal cadence and snap the pose instead, so resume is immediate and smooth.
+  const resumed = gap > Math.max(1200, nominal * 4)
+  if (resumed) emaInterval = nominal
+  else if (lastMsg) emaInterval += (gap - emaInterval) * 0.2   // smoothed inter-arrival interval
   lastMsg = now
-  // On an episode reset the pose jumps discontinuously (root x snaps back) — snap instead of sliding.
-  const reset = prevStep >= 0 && (step <= prevStep || (toQ && Math.abs(qpos[0] - toQ[0]) > 0.4))
+  // On an episode reset OR a resume-from-idle the pose jumps discontinuously — snap instead of sliding.
+  const reset = resumed || (prevStep >= 0 && (step <= prevStep || (toQ && Math.abs(qpos[0] - toQ[0]) > 0.4)))
   prevStep = step
   fromQ = reset ? qpos.slice() : curQ.slice()        // start from where we're currently drawn -> no snapping
   toQ = qpos
@@ -285,7 +293,7 @@ function connect(url) {
       }
       if (m.active) sel.value = m.active
     } else if (m.type === 'state') {
-      pushState(m.qpos, m.step)                       // update interpolation target (no geometry rebuild)
+      pushState(m.qpos, m.step, m.sps)                // update interpolation target (no geometry rebuild)
       $('env').textContent = m.env
       $('step').textContent = m.step
       $('reward').textContent = (+m.reward).toFixed(2)
