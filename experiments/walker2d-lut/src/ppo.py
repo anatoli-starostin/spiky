@@ -69,6 +69,11 @@ def main():
     ap.add_argument("--graph", action="store_true", help="CUDA-graph-capture the physics in the rollout")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="smoke_results.json")
+    ap.add_argument("--save-model", default=None,
+                    help="path to save the trained policy (torch .pt) at the end of training: "
+                         "full state_dict PLUS the observation-normalisation statistics, which "
+                         "the policy is useless without. Resolved like --out. Default None = "
+                         "save nothing, preserving prior behaviour exactly.")
     a = ap.parse_args()
     dev = torch.device("cuda")
     torch.manual_seed(a.seed)
@@ -220,6 +225,9 @@ def main():
                        ep_len_mean=ep_len_mean, n_done=int(cnt), lr=opt.param_groups[0]["lr"],
                        logstd=float(ac.log_std.mean()), epochs_done=epochs_done,
                        step_rew=float(b_rew.mean()), **last_info)
+            # architectures may expose extra scalars to log (e.g. fastlut_exp's c and t)
+            if hasattr(ac, "extra_log"):
+                row.update(ac.extra_log())
             hist.append(row)
             # reset window accumulators so each log reports the interval, not cumulative
             for k in ("ret_sum", "len_sum", "cnt"):
@@ -242,6 +250,22 @@ def main():
                    params=nparams, final_ep_ret=hist[-1]["ep_ret_mean"],
                    first_ep_ret=hist[0]["ep_ret_mean"], history=hist)
     json.dump(summary, open(os.path.join(os.path.dirname(__file__), a.out), "w"), indent=1)
+    if a.save_model:
+        # The obs-normalisation statistics are saved alongside the weights deliberately:
+        # the policy is trained on norm.norm(obs), so weights WITHOUT these stats are not a
+        # usable model. Everything is moved to CPU so the file loads without a GPU.
+        ckpt = dict(
+            arch=a.arch, tables_per_head=a.tables_per_head,
+            obs_dim=env.obs_dim, act_dim=env.act_dim, seed=a.seed,
+            state_dict={k: v.detach().cpu() for k, v in ac.state_dict().items()},
+            obs_mean=norm.mean.detach().cpu(), obs_var=norm.var.detach().cpu(),
+            obs_count=float(norm.count),
+            final_ep_ret=summary["final_ep_ret"], config=vars(a),
+        )
+        mp = os.path.join(os.path.dirname(__file__), a.save_model)
+        os.makedirs(os.path.dirname(mp), exist_ok=True)
+        torch.save(ckpt, mp)
+        print(f"saved model -> {mp}", flush=True)
     print(f"\nthroughput {summary['throughput_env_per_s']:,.0f} env-steps/s | "
           f"ep_ret {summary['first_ep_ret']:.0f} -> {summary['final_ep_ret']:.0f} "
           f"over {a.updates} updates ({total_env_steps:,} env-steps, {el:.0f}s)")

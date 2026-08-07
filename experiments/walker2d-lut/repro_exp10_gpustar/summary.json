@@ -1,0 +1,47 @@
+{
+  "exp_name": "repro_exp10_gpustar",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "reproduces": "exp10_lut-anchor-pair-t32",
+  "ppo_best_mean": 6098.8,
+  "ppo_best_std": 912.4,
+  "ppo_final_mean": 6063.9,
+  "ppo_final_std": 879.3,
+  "params": 82951,
+  "throughput_env_per_s_mean": 264760,
+  "training_time_hours_mean": 0.211,
+  "collapsed_seeds": [],
+  "collapse_criterion": "final/best < 0.90",
+  "per_seed": {
+    "0": {
+      "best": 5387.7,
+      "final": 5369.6,
+      "final_over_best": 0.997
+    },
+    "1": {
+      "best": 5521.9,
+      "final": 5517.7,
+      "final_over_best": 0.999
+    },
+    "2": {
+      "best": 7386.8,
+      "final": 7304.5,
+      "final_over_best": 0.989
+    }
+  },
+  "reference": {
+    "ppo_final_mean": 5488.4,
+    "ppo_final_std": 179.9,
+    "ppo_best_mean": 5551.0,
+    "collapsed_seeds": [],
+    "throughput_env_per_s_mean": 168258,
+    "training_time_hours_mean": 0.332
+  },
+  "comparison": {
+    "final_delta": 575.5,
+    "welch_se": 634.6,
+    "welch_abs_t": 0.91,
+    "pct_of_reference": 110.5,
+    "speedup_vs_reference": 1.57
+  }
+}

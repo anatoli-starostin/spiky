@@ -1,0 +1,30 @@
+{
+  "exp_name": "exp18ctl_lut-lse-plaincrit-t32",
+  "description": "CONTROL for exp18: identical in every respect except the critic's readout, which is the plain sum over tables. Isolates the effect of the exponential critic readout from 'LUT critic vs MLP critic', which exp13-15 already measured.",
+  "algo": "ppo",
+  "arch": "fastlut_lse_sum2_plaincrit",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 14343,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "forked_from": "exp17_lut-anchor-pair-t32-logsumexp",
+  "critic": "anchor-pair LUT, tables_per_head=32 (matches the actor and exp13)",
+  "readout": "T * tau * log((1/T) * sum_t exp(w_t / tau))",
+  "tau_init": 0.05,
+  "weight_init": "plain additive",
+  "host": "gpustar (RTX 5090)",
+  "critic_readout": "plain sum over tables"
+}

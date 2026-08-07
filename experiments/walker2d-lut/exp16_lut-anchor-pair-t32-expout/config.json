@@ -1,0 +1,32 @@
+{
+  "exp_name": "exp16_lut-anchor-pair-t32-expout",
+  "description": "exp10 + a trainable exponential output transform on the actor mean: mean -> c + exp(mean / t), with c a free trainable scalar and t a trainable scalar constrained positive via softplus. Everything else identical to exp10.",
+  "algo": "ppo",
+  "arch": "fastlut_exp",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 82953,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "forked_from": "exp10_lut-anchor-pair-t32",
+  "output_transform": "mean -> c + exp(mean / t)",
+  "c_init": -1.0,
+  "t_init": 1.0,
+  "c_parameterization": "free scalar (any sign)",
+  "t_parameterization": "softplus(t_raw), constrained > 0",
+  "init_rationale": "c=-1, t=1 makes the transform a first-order match to the identity at init (c+exp(0)=0, slope 1/t=1), so exp16 starts behaviourally identical to exp10; verified to 7.6e-5 on the action mean.",
+  "exp_clamp": 20.0,
+  "host": "gpustar (RTX 5090)"
+}

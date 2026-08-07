@@ -1,0 +1,26 @@
+{
+  "exp_name": "repro_exp10_gpustar",
+  "description": "Reproduction of exp10_lut-anchor-pair-t32 on gpustar (RTX 5090) to verify the framework runs cleanly on this host. Flags verbatim from exp10/config.json; 3 seeds in parallel. Not a new experiment \u2014 a host-verification rerun.",
+  "algo": "ppo",
+  "arch": "fastlut",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 82951,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "reproduces": "exp10_lut-anchor-pair-t32",
+  "host": "gpustar (RTX 5090, Blackwell sm_120)",
+  "torch": "2.9.1+cu130"
+}

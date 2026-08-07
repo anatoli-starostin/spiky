@@ -1,0 +1,101 @@
+{
+  "exp_name": "exp18_lut-lse-lutcrit-t32",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 2847.7,
+  "ppo_best_std": 1118.8,
+  "ppo_final_mean": 2752.5,
+  "ppo_final_std": 1127.6,
+  "params": 14344,
+  "throughput_env_per_s_mean": 242521,
+  "training_time_hours_mean": 0.231,
+  "collapsed_seeds": [],
+  "collapse_criterion": "final/best < 0.90",
+  "tau_init": 0.05,
+  "learned_tau_actor": {
+    "per_seed": {
+      "0": 0.06616,
+      "1": 0.06847,
+      "2": 0.07567
+    },
+    "mean": 0.0701
+  },
+  "learned_tau_critic": {
+    "per_seed": {
+      "0": 0.08469,
+      "1": 0.08557,
+      "2": 0.08876
+    },
+    "mean": 0.08634
+  },
+  "warmup_updates_to": {
+    "1000": 190.0,
+    "3000": null,
+    "5000": null
+  },
+  "per_seed": {
+    "0": {
+      "best": 1378.5,
+      "final": 1315.4,
+      "final_over_best": 0.954,
+      "tau_actor": 0.06616,
+      "tau_critic": 0.08469
+    },
+    "1": {
+      "best": 3073.8,
+      "final": 2872.6,
+      "final_over_best": 0.935,
+      "tau_actor": 0.06847,
+      "tau_critic": 0.08557
+    },
+    "2": {
+      "best": 4090.9,
+      "final": 4069.6,
+      "final_over_best": 0.995,
+      "tau_actor": 0.07567,
+      "tau_critic": 0.08876
+    }
+  },
+  "comparisons": {
+    "control_plain_lut_critic": {
+      "reference_final": 1922.2,
+      "reference_std": 1047.8,
+      "delta": 830.3,
+      "welch_se": 1088.4,
+      "welch_abs_t": 0.76,
+      "pct_of_reference": 143.2,
+      "complete_rank_separation": false,
+      "separation_exact_p": 0.05
+    },
+    "exp10_mlpcrit_plainactor": {
+      "reference_final": 5488.4,
+      "reference_std": 179.9,
+      "delta": -2735.9,
+      "welch_se": 807.4,
+      "welch_abs_t": 3.39,
+      "pct_of_reference": 50.2,
+      "complete_rank_separation": true,
+      "separation_exact_p": 0.05
+    },
+    "exp13_lutcrit_plainactor": {
+      "reference_final": 2358.6,
+      "reference_std": 878.6,
+      "delta": 393.9,
+      "welch_se": 1010.8,
+      "welch_abs_t": 0.39,
+      "pct_of_reference": 116.7,
+      "complete_rank_separation": false,
+      "separation_exact_p": 0.05
+    },
+    "exp17_mlpcrit_lseactor": {
+      "reference_final": 5403.8,
+      "reference_std": 34.4,
+      "delta": -2651.3,
+      "welch_se": 797.7,
+      "welch_abs_t": 3.32,
+      "pct_of_reference": 50.9,
+      "complete_rank_separation": true,
+      "separation_exact_p": 0.05
+    }
+  }
+}

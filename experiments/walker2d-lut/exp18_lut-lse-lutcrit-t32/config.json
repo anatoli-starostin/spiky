@@ -1,0 +1,30 @@
+{
+  "exp_name": "exp18_lut-lse-lutcrit-t32",
+  "description": "exp17's sum-scaled log-sum-exp actor paired with an anchor-pair LUT critic carrying the SAME exponential readout, each with its own trainable tau. Tests whether an exponential value head gives the actor's tau a reason to use the max-like regime.",
+  "algo": "ppo",
+  "arch": "fastlut_lse_sum2",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 14344,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "forked_from": "exp17_lut-anchor-pair-t32-logsumexp",
+  "critic": "anchor-pair LUT, tables_per_head=32 (matches the actor and exp13)",
+  "readout": "T * tau * log((1/T) * sum_t exp(w_t / tau))",
+  "tau_init": 0.05,
+  "weight_init": "plain additive",
+  "host": "gpustar (RTX 5090)",
+  "critic_readout": "log-sum-exp (sum-scaled)"
+}

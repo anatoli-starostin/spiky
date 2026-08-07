@@ -1,0 +1,133 @@
+{
+  "exp_name": "exp17_lut-anchor-pair-t32-logsumexp",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "forked_from": "exp10_lut-anchor-pair-t32",
+  "readout": "T * tau * log((1/T) * sum_tables exp(w / tau))",
+  "ppo_best_mean": 5426.0,
+  "ppo_best_std": 46.9,
+  "ppo_final_mean": 5403.8,
+  "ppo_final_std": 34.4,
+  "params": 82952,
+  "throughput_env_per_s_mean": 257176,
+  "training_time_hours_mean": 0.217,
+  "collapsed_seeds": [],
+  "collapse_criterion": "final/best < 0.90",
+  "tau_init": 0.05,
+  "init": "additive (plain) \u2014 the sum-scaled readout needs no special init",
+  "warmup_updates_to": {
+    "1000": 66.7,
+    "1000_reached": 3,
+    "3000": 96.7,
+    "3000_reached": 3,
+    "5000": 373.3,
+    "5000_reached": 3
+  },
+  "warmup_reference": {
+    "exp10_committed": {
+      "1000": 66.7,
+      "1000_reached": 3,
+      "3000": 103.3,
+      "3000_reached": 3,
+      "5000": 306.7,
+      "5000_reached": 3
+    },
+    "exp10_gpustar_repro": {
+      "1000": 63.3,
+      "1000_reached": 3,
+      "3000": 100.0,
+      "3000_reached": 3,
+      "5000": 310.0,
+      "5000_reached": 3
+    },
+    "exp16_expout": {
+      "1000": 70.0,
+      "1000_reached": 3,
+      "3000": 120.0,
+      "3000_reached": 3,
+      "5000": null,
+      "5000_reached": 0
+    },
+    "plain_lse_attempt1": {
+      "1000": null,
+      "1000_reached": 0,
+      "3000": null,
+      "3000_reached": 0,
+      "5000": null,
+      "5000_reached": 0
+    }
+  },
+  "learned_tau": {
+    "0": 0.08662,
+    "1": 0.08669,
+    "2": 0.0928
+  },
+  "learned_tau_mean": 0.0887,
+  "per_seed": {
+    "0": {
+      "best": 5366.6,
+      "final": 5366.6,
+      "final_over_best": 1.0,
+      "tau": 0.08662
+    },
+    "1": {
+      "best": 5430.0,
+      "final": 5395.2,
+      "final_over_best": 0.994,
+      "tau": 0.08669
+    },
+    "2": {
+      "best": 5481.4,
+      "final": 5449.6,
+      "final_over_best": 0.994,
+      "tau": 0.0928
+    }
+  },
+  "comparisons": {
+    "exp10_committed": {
+      "reference_final": 5488.4,
+      "reference_std": 179.9,
+      "delta": -84.6,
+      "welch_se": 129.5,
+      "welch_abs_t": 0.65,
+      "pct_of_reference": 98.5,
+      "complete_rank_separation": false,
+      "separation_exact_p": 0.05
+    },
+    "exp10_gpustar_repro": {
+      "reference_final": 6063.9,
+      "reference_std": 879.3,
+      "delta": -660.1,
+      "welch_se": 622.2,
+      "welch_abs_t": 1.06,
+      "pct_of_reference": 89.1,
+      "complete_rank_separation": false,
+      "separation_exact_p": 0.05
+    },
+    "exp16_expout": {
+      "reference_final": 4819.2,
+      "reference_std": 70.1,
+      "delta": 584.6,
+      "welch_se": 55.2,
+      "welch_abs_t": 10.59,
+      "pct_of_reference": 112.1,
+      "complete_rank_separation": true,
+      "separation_exact_p": 0.05
+    },
+    "plain_lse_attempt1": {
+      "reference_final": 495.2,
+      "reference_std": 112.3,
+      "delta": 4908.6,
+      "welch_se": 83.1,
+      "welch_abs_t": 59.08,
+      "pct_of_reference": 1091.3,
+      "complete_rank_separation": true,
+      "separation_exact_p": 0.05
+    }
+  },
+  "vs_all_exp10_seeds": {
+    "n": 6,
+    "complete_rank_separation": false,
+    "exact_p": 0.0119
+  }
+}
