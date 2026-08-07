@@ -28,6 +28,16 @@ _MODELS = os.path.join(_HERE, "..", "models")
 
 
 class FastLutLSEActor(Actor):
+    # DO NOT RENAME. The server's default actor is configured to this exact string, so
+    # changing it would leave sessions falling back to `random`.
+    #
+    # The name was investigated as a suspect when the first artifact failed on the server —
+    # `Sim.set_actor` fails SILENTLY on an unknown name (`if name in self.registry:`, no
+    # else) and a session's default is `random`, so any name mismatch presents exactly as
+    # "the walker falls over immediately". It was RULED OUT: two shipped actors already use
+    # spaces ("Walker2d LUT-SAC c21", "Walker2d SAC baseline"), and the client assigns the
+    # option's value as a DOM property (`o.value = o.textContent = name`), so the string
+    # round-trips unescaped. Spaces and parentheses are safe here.
     name = "fastlut_lse (exp19)"
 
     def __init__(self, action_space):
