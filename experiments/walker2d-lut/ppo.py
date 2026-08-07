@@ -40,6 +40,8 @@ class RunningNorm:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="mlp", choices=list(REGISTRY))
+    ap.add_argument("--tables-per-head", type=int, default=None,
+                    help="override the LUT arch's tables_per_head (LUT arches only; None=arch default)")
     ap.add_argument("--envs", type=int, default=4096)
     ap.add_argument("--rollout", type=int, default=32)
     ap.add_argument("--updates", type=int, default=150)
@@ -75,7 +77,8 @@ def main():
     if a.graph:
         env.build_physics_graph()
     N, T = a.envs, a.rollout
-    ac = REGISTRY[a.arch](env.obs_dim, env.act_dim).to(dev)
+    ac_kw = {} if a.tables_per_head is None else {"tables_per_head": a.tables_per_head}
+    ac = REGISTRY[a.arch](env.obs_dim, env.act_dim, **ac_kw).to(dev)
     # torch.compile the PPO UPDATE (evaluate path), not the rollout act() — composes with
     # the physics CUDA-graph (separate mechanisms: Warp graph for physics, inductor for update)
     if a.compile:
@@ -229,7 +232,8 @@ def main():
                   f"pi {last_info['pi']:+.3f} v {last_info['v']:.2f}", flush=True)
 
     el = time.time() - t_start
-    summary = dict(arch=a.arch, envs=N, rollout=T, updates=a.updates, lr_schedule=a.lr_schedule,
+    summary = dict(arch=a.arch, tables_per_head=a.tables_per_head, envs=N, rollout=T,
+                   updates=a.updates, lr_schedule=a.lr_schedule,
                    lr_min=a.lr_min, logstd_min=a.logstd_min, ent_coef=a.ent,
                    target_kl=a.target_kl, norm_returns=a.norm_returns,
                    avg_epochs_per_update=round(total_epochs / a.updates, 2),
