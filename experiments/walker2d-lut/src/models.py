@@ -259,3 +259,31 @@ class FastLUTActorCritic(BaseActorCritic):
         value = self.vf(obs).squeeze(-1)
         return mean, value
 
+
+@register("fastlut2")
+class FastLUT2ActorCritic(BaseActorCritic):
+    """BOTH actor and critic are FastMultiHeadLut (anchor-pair) heads — same fixed-anchor
+    structure/inits as `fastlut`; the critic LUT outputs a scalar V(s). This is the
+    anchor-pair analogue of `hyperlut2` (fully-LUT actor+critic): address bit =
+    sign(x[a]-x[b]) over balanced-sampled coordinate pairs, only the LUT tables (`weights`)
+    train, forward_mode='hard', fp32. Actor and critic get independent seed-reproducible
+    random anchors (torch.manual_seed(--seed) is set before construction)."""
+
+    def __init__(self, obs_dim, act_dim, tables_per_head=32, nap=6,
+                 initial_weights_noise=0.001, log_std_init=0.0):
+        super().__init__(obs_dim, act_dim, log_std_init)
+        from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+        self.actor_lut = FastMultiHeadLut(
+            input_dim=obs_dim, n_heads=1, n_outputs=act_dim, n_anchor_pairs=nap,
+            tables_per_head=tables_per_head, forward_mode="hard", use_bf16=False,
+            initial_weights_noise=initial_weights_noise)
+        self.critic_lut = FastMultiHeadLut(
+            input_dim=obs_dim, n_heads=1, n_outputs=1, n_anchor_pairs=nap,
+            tables_per_head=tables_per_head, forward_mode="hard", use_bf16=False,
+            initial_weights_noise=initial_weights_noise)
+
+    def forward(self, obs):
+        mean = self.actor_lut(obs).squeeze(1)          # (B, 1, act_dim) -> (B, act_dim)
+        value = self.critic_lut(obs).reshape(obs.shape[0])  # (B, 1, 1) -> (B,)
+        return mean, value
+
