@@ -244,19 +244,34 @@ addEventListener('resize', resize); resize()
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id)
 const conn = $('conn')
-let ws = null, paused = false
+let ws = null, paused = false, serverFull = false
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
+const overlay = $('overlay'), overlayMsg = $('overlayMsg')
+function showOverlay(msg) { if (overlayMsg) overlayMsg.textContent = msg; if (overlay) overlay.style.display = 'flex' }
+function hideOverlay() { if (overlay) overlay.style.display = 'none' }
+
 function connect(url) {
   if (ws) { try { ws.close() } catch {} }
+  serverFull = false; hideOverlay()
   conn.textContent = 'connecting…'; conn.className = ''
   ws = new WebSocket(url)
-  ws.onopen = () => { conn.textContent = 'connected'; conn.className = 'ok' }
-  ws.onclose = () => { conn.textContent = 'disconnected'; conn.className = 'bad'; setTimeout(() => connect(url), 1500) }
+  ws.onopen = () => { conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
+  ws.onclose = () => {
+    conn.textContent = serverFull ? 'server full' : 'disconnected'; conn.className = 'bad'
+    // When the server told us it's at capacity, do NOT auto-reconnect (no tight retry loop) — the
+    // overlay's Retry button lets the visitor try again on their own terms. Otherwise reconnect.
+    if (!serverFull) setTimeout(() => connect(url), 1500)
+  }
   ws.onerror = () => { conn.textContent = 'error'; conn.className = 'bad' }
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data)
+    if (m.type === 'server_full') {                    // at capacity: friendly banner, stop reconnecting
+      serverFull = true
+      showOverlay(m.message || 'The demo server is at capacity, please come back later.')
+      return
+    }
     if (m.type === 'actors') {
       const sel = $('actor'); sel.innerHTML = ''
       for (const name of m.actors) {
@@ -305,6 +320,7 @@ $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s';
 $('actor').onchange = (e) => send({ cmd: 'actor', name: e.target.value })
 $('noreset').onchange = (e) => send({ cmd: 'no_reset', value: e.target.checked })
 $('srv').onchange = (e) => connect(e.target.value.trim())
+$('overlayRetry').onclick = () => connect($('srv').value.trim())   // manual retry from the overload banner
 
 // WebSocket URL resolution order:
 //   1. window.WALKER2D_WS from config.js (set to wss://your-domain for a GitHub Pages build), else
