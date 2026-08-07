@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp01_ppo-sac-baseline",
+  "algo": "ppo+sac",
+  "n_seeds": 3,
+  "ppo_best_mean": 4753.1,
+  "ppo_best_std": 141.7,
+  "ppo_final_mean": 4419.4,
+  "ppo_final_std": 393.0,
+  "params": 142605,
+  "throughput_env_per_s_mean": 492136,
+  "training_time_hours_mean": 0.057,
+  "per_seed": {
+    "0": {
+      "best": 4556.8,
+      "final": 4556.8
+    },
+    "1": {
+      "best": 4817.0,
+      "final": 4817.0
+    },
+    "2": {
+      "best": 4885.6,
+      "final": 3884.3
+    }
+  },
+  "sac_final_mean": 1759.0,
+  "sac_final_std": 1175.3,
+  "sac_per_seed_final": {
+    "0": 686.8,
+    "1": 3394.9,
+    "2": 1195.2
+  }
+}

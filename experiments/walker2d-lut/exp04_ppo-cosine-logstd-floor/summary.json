@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp04_ppo-cosine-logstd-floor",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 5149.2,
+  "ppo_best_std": 314.5,
+  "ppo_final_mean": 4634.3,
+  "ppo_final_std": 782.0,
+  "params": 142605,
+  "throughput_env_per_s_mean": 166200,
+  "training_time_hours_mean": 0.336,
+  "per_seed": {
+    "0": {
+      "best": 5459.6,
+      "final": 5389.8
+    },
+    "1": {
+      "best": 5269.8,
+      "final": 4955.8
+    },
+    "2": {
+      "best": 4718.2,
+      "final": 3557.2
+    }
+  }
+}

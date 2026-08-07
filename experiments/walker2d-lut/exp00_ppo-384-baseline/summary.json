@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp00_ppo-384-baseline",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 4909.5,
+  "ppo_best_std": 52.9,
+  "ppo_final_mean": 4908.3,
+  "ppo_final_std": 51.6,
+  "params": 142605,
+  "throughput_env_per_s_mean": 164680,
+  "training_time_hours_mean": 0.17,
+  "per_seed": {
+    "0": {
+      "best": 4840.2,
+      "final": 4840.2
+    },
+    "1": {
+      "best": 4919.5,
+      "final": 4919.5
+    },
+    "2": {
+      "best": 4968.7,
+      "final": 4965.1
+    }
+  }
+}

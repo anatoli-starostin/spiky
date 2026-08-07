@@ -1,0 +1,16 @@
+{
+  "exp_name": "exp02_ppo-const-lr",
+  "description": "PPO stabilization step 1 - constant LR 3e-4, 768 updates. Reveals late-training instability: 2/3 seeds partially collapse in the last quarter (final 5278+/-1281 vs best 6281+/-585).",
+  "algo": "ppo",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench4"
+}

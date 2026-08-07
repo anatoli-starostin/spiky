@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp07_lut-hyperplane-t32-lutcrit",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 4208.0,
+  "ppo_best_std": 210.4,
+  "ppo_final_mean": 4204.9,
+  "ppo_final_std": 211.6,
+  "params": 21254,
+  "throughput_env_per_s_mean": 103894,
+  "training_time_hours_mean": 0.538,
+  "per_seed": {
+    "0": {
+      "best": 4338.0,
+      "final": 4338.0
+    },
+    "1": {
+      "best": 4374.6,
+      "final": 4370.5
+    },
+    "2": {
+      "best": 3911.2,
+      "final": 3906.3
+    }
+  }
+}

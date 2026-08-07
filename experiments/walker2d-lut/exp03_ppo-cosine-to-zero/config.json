@@ -1,0 +1,17 @@
+{
+  "exp_name": "exp03_ppo-cosine-to-zero",
+  "description": "PPO stabilization step 2 - cosine LR decay 3e-4->0. Partial fix (1/3 collapse) but peak lowered.",
+  "algo": "ppo",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench5"
+}

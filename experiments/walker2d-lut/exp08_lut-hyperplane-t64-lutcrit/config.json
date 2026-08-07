@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp08_lut-hyperplane-t64-lutcrit",
+  "description": "Hyperplane-LUT actor (tph=64) + hyperplane-LUT critic (tph=64) - fully-LUT, wider tables.",
+  "algo": "ppo",
+  "arch": "hyperlut2_t64",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 42502,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench10"
+}

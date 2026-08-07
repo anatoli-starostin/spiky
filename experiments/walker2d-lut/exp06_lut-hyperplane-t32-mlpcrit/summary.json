@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp06_lut-hyperplane-t32-mlpcrit",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 4920.0,
+  "ppo_best_std": 191.7,
+  "ppo_final_mean": 4890.9,
+  "ppo_final_std": 231.9,
+  "params": 86407,
+  "throughput_env_per_s_mean": 137050,
+  "training_time_hours_mean": 0.408,
+  "per_seed": {
+    "0": {
+      "best": 4996.3,
+      "final": 4996.3
+    },
+    "1": {
+      "best": 5107.2,
+      "final": 5107.2
+    },
+    "2": {
+      "best": 4656.6,
+      "final": 4569.2
+    }
+  }
+}
