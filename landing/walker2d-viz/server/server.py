@@ -42,6 +42,9 @@ if not REGISTRY:
 AUTO_IDLE_S = float(os.environ.get("AUTO_IDLE_S", 180.0))
 ZERO_SETTLE = 60                        # ~2 s at 30 sps
 DEFAULT_ACTOR = "fastlut_lse (exp19)"   # preferred default actor if present (else "random", else first discovered)
+MIN_SPS = 1.0
+MAX_SPS = 60.0                          # hard ceiling on steps/sec: higher sps = more step+inference+send/sec
+                                        # = more server CPU/bandwidth, so cap it (authoritative server-side guard)
 
 
 def make_env(preferred):
@@ -78,7 +81,7 @@ class Sim:
         self._wake.set()
         self.no_reset = False                    # free-fall: when True, don't auto-reset on termination
         self.terminated = False
-        self.sps = float(sps)
+        self.sps = min(MAX_SPS, max(MIN_SPS, float(sps)))   # clamp even the startup SPS to the cap
         self.obs, _ = self.env.reset(seed=0)
         self.step_count = 0
         self.reward = 0.0
@@ -243,7 +246,7 @@ def make_handler(cfg, state):
                 elif cmd == "mode":
                     sim.set_mode(m.get("mode", "test"))
                 elif cmd == "speed":
-                    sim.sps = max(1.0, float(m.get("sps", sim.sps)))
+                    sim.sps = min(MAX_SPS, max(MIN_SPS, float(m.get("sps", sim.sps))))   # clamp to [1, 60]
                     sim.touch()                          # speed change is an interaction: reset the auto-stop timer
                 elif cmd == "actor":
                     sim.set_actor(m.get("name", ""))
