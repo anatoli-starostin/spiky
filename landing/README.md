@@ -31,8 +31,9 @@ landing/
 > (write an `Actor` subclass, store weights, commit here, rebuild the server on the VM).
 
 These are the **current** (latest) versions: the client carries the accurate MJCF render mode + the
-Approximate/Accurate toggle, the foldable controls panel, and `config.js` pointing at
-`wss://89-169-96-79.sslip.io`; the server `requirements.txt` includes the full pinned dep set (with
+Approximate/Accurate toggle, the foldable controls panel, and `config.js` carrying the client's `wss://` URL
+(a `wss://YOUR_SERVER_HOST` placeholder in the committed source — the deployer sets their real host); the
+server `requirements.txt` includes the full pinned dep set (with
 `imageio`, needed for `gym.make("Walker2d-v5")` in a clean container).
 
 ## How this maps to what gets deployed to gh-pages
@@ -70,8 +71,9 @@ docker compose up -d --build  # builds server:8765, starts server + Caddy(:80/:4
 Caddy auto-obtains a Let's Encrypt cert for `$DOMAIN` and proxies `wss://$DOMAIN → ws://server:8765`.
 Requirements: **ports 80 and 443 open** to the internet (80 for the ACME challenge, 443 for wss), and a
 hostname that resolves to the box — either a real domain's A-record or a no-domain option like
-`<dashed-ip>.sslip.io` (the current deployment uses `89-169-96-79.sslip.io`). Full runbook +
-concurrency notes: `walker2d-viz/DEPLOY.md`.
+`<dashed-ip>.sslip.io` (e.g. `your-ip.sslip.io`). Set that host as `DOMAIN` in `.env` (Caddy's cert) and as
+the client's `wss://` URL in `walker2d-viz/client/config.js`. Full runbook + concurrency notes:
+`walker2d-viz/DEPLOY.md`.
 
 Gotcha (already fixed in `server/requirements.txt`): gymnasium's MuJoCo env creation imports `imageio`
 (and other transitive deps) even headless; a bare `gymnasium` install omits them, so `gym.make` fails in a

@@ -122,18 +122,22 @@ source of truth: anyone can rebuild the demo with your model from it.
 
 ## 4. Redeploy the server so the new model goes live
 
-The live server runs in **Docker on the VM `89.169.96.79`** (project copy at `/home/nucstar/walker2d-viz`).
+The live server runs in **Docker on the VM `YOUR_SERVER_HOST`** (project copy at `/home/nucstar/walker2d-viz`).
 The Docker image **COPYs `server/actors/` and `server/models/` into the image at build time**, so new files
 require a **rebuild**, not just a restart.
 
+> `YOUR_SERVER_HOST` is a placeholder — substitute your deployed server's hostname. It is set in three places:
+> the client's `client/config.js` (`window.WALKER2D_WS = "wss://<host>"`), the server's `.env` `DOMAIN` (which
+> Caddy uses for its TLS cert), and the `ssh`/`rsync` target below.
+
 ```sh
 # 1) get the new actor + weights onto the VM (from a checkout / the landing branch):
-rsync -av server/actors/ nucstar@89.169.96.79:/home/nucstar/walker2d-viz/server/actors/
-rsync -av server/models/ nucstar@89.169.96.79:/home/nucstar/walker2d-viz/server/models/
+rsync -av server/actors/ nucstar@YOUR_SERVER_HOST:/home/nucstar/walker2d-viz/server/actors/
+rsync -av server/models/ nucstar@YOUR_SERVER_HOST:/home/nucstar/walker2d-viz/server/models/
 #    (or re-ship the whole project as a tarball; scp works too)
 
 # 2) rebuild + restart on the VM:
-ssh nucstar@89.169.96.79
+ssh nucstar@YOUR_SERVER_HOST
 cd /home/nucstar/walker2d-viz
 sudo docker compose up -d --build          # rebuilds the server image with the new actor/model, restarts
 
@@ -147,7 +151,7 @@ Then confirm end-to-end with a real wss client (the exact path the browser uses)
 # on any host with `websockets`:
 import asyncio, json, websockets
 async def m():
-    async with websockets.connect("wss://89-169-96-79.sslip.io") as ws:
+    async with websockets.connect("wss://YOUR_SERVER_HOST") as ws:
         print(json.loads(await ws.recv())["actors"])   # first frame is {"type":"actors","actors":[...]}
 asyncio.run(m())
 ```
