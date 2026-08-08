@@ -1,13 +1,13 @@
-"""Live Slack progress monitor for exp21 (single group, 3 seeds in parallel):
-stacked LIFLayer actor (17->32->32->6) + exp19-style MLP-exp critic. Read-only over the run
-logs. Bound to BODY_TASK b2c83796's thread."""
+"""Live Slack progress monitor for exp22 (single group, 3 seeds in parallel):
+stacked LIFLayer actor 17->32->64->6 (rescale/rescale/log) + exp19-style MLP-exp critic.
+Read-only over the run logs. Bound to BODY_TASK ab101f2d's thread."""
 import sys, os, re, time, json, statistics
 sys.path.insert(0, "/home/astarostin/work/slack-facade")
 import progress
 
 BASE = "/home/astarostin/projects/spiky/experiments/walker2d-lut"
-D = f"{BASE}/exp21_liflayer-32-32-mlpexpcrit"
-TASK = "c6c67db8"
+D = f"{BASE}/exp22_liflayer-32-64-mlpexpcrit"
+TASK = "ab101f2d"
 SEEDS = [0, 1, 2]
 TOTAL = 768
 WALL_MIN = 35.0
@@ -34,7 +34,7 @@ def done_run(s):
 
 
 def main():
-    h = progress.progress_start("PPO exp21 · LIFLayer actor 17->192->32->6 (rescale/rescale/log) + exp19 MLP-exp critic · 3 seeds",
+    h = progress.progress_start("PPO exp22 · LIFLayer actor 17->32->64->6 (rescale/rescale/log) + exp19 MLP-exp critic · 3 seeds",
                                 task=TASK, width=12, stats="starting…")
     t0 = time.time()
     while time.time() - t0 < 3 * 3600:

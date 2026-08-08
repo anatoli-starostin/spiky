@@ -702,7 +702,7 @@ class LIFLUTMlpExpCriticActorCritic(BaseActorCritic):
 
 @register("liflayer_mlpexpcrit")
 class LIFLayerMlpExpCriticActorCritic(BaseActorCritic):
-    """exp21 (clean recipe): a STACKED LIFLayer spiking ACTOR (obs -> 32 LIF -> 32 LIF -> act_dim)
+    """STACKED LIFLayer spiking ACTOR (obs -> 32 LIF -> 64 LIF -> act_dim; exp22 wiring)
     + exp19's exact MLP exponential-head critic.
 
     Actor: a stack of LIFLayer (src/spiky/lutorch/lif_layer.py), each detecting patterns as spike TIMINGS
@@ -716,7 +716,7 @@ class LIFLayerMlpExpCriticActorCritic(BaseActorCritic):
     Critic: IDENTICAL to exp20/exp19's exp-MLP head (256x256 backbone + centred sum-scaled log-sum-exp
     readout, trainable tau_c init 0.25)."""
 
-    def __init__(self, obs_dim, act_dim, hidden=(32, 32), t_window=32.0,
+    def __init__(self, obs_dim, act_dim, hidden=(32, 64), t_window=32.0,
                  log_std_init=0.0, tau_critic_init=0.25, critic_clamp=60.0,
                  out_center=2.75, out_scale_init=1.0):
         super().__init__(obs_dim, act_dim, log_std_init)
@@ -727,7 +727,7 @@ class LIFLayerMlpExpCriticActorCritic(BaseActorCritic):
         # the FINAL readout layer -> "log" (log-time), decoded to the action mean below. The rescale init
         # is calibrated per in_dim from the measured raw spike-time stats (mean, std) at ~unit-variance
         # input, so each hidden layer's output starts ~standardized (learnable, adapts during training).
-        RESCALE_INIT = {17: (12.4, 1.0), 32: (15.6, 2.9)}
+        RESCALE_INIT = {17: (12.4, 1.0), 32: (15.6, 2.9), 192: (15.5, 2.9)}
         n_layers = len(dims) - 1
         layers = []
         for i in range(n_layers):
