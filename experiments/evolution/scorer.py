@@ -6,14 +6,16 @@ scorer (#30), writes scores back, and flips them to SCORED. Runs as its own proc
 """
 import gc
 import os
+import random
 import socket
 import sys
 import time
 
 from evo_config import (NEW_BORN, DEVICE, PACK_LIMIT, META_SOFT_CAP, DROP_ON_OVERSHOOT,
-                        EVAL_VERSION, CLAIM_TIMEOUT_S, fixed_eval_set)
+                        EVAL_VERSION, CLAIM_TIMEOUT_S, SCORE_PRIORITY_EPS, FITNESS, fixed_eval_set)
 from genome_store import GenomeStore
 import neuroevo_lut as N
+import tau_fitness as TF
 
 
 def _meta_sig(nm):
@@ -28,7 +30,13 @@ class Scorer:
         self.store = store if store is not None else GenomeStore()
         self.worker_id = worker_id or ("scorer-%s-%d" % (socket.gethostname(), os.getpid()))
         self.device = device or DEVICE
-        self.xs, self.tos = fixed_eval_set()
+        self.rng = random.Random()          # per-worker; picks FIFO vs priority intake per batch
+        self.fitness = FITNESS
+        if self.fitness == "taub":
+            self.xs, self.tvals, self.tos = TF.fixed_eval_taub()   # Kendall tau-b = sole fitness
+        else:
+            self.xs, self.tos = fixed_eval_set()
+            self.tvals = None
 
     def _greedy_pack(self, claimed):
         """Split claimed docs into (pack, spill): add genomes until the estimated distinct
@@ -57,7 +65,11 @@ class Scorer:
         while cur:
             try:
                 packed = N.build_population([d["genome"] for d in cur], device=self.device)
-                raw = N._score_population(packed, len(cur), self.xs, self.tos, device=self.device)
+                if self.fitness == "taub":   # pure Kendall tau-b (blend=0), all-fire-gated
+                    raw = TF.score_population_taub(packed, len(cur), self.xs, self.tvals, self.tos,
+                                                   blend=0.0, all_fire_gate=True)
+                else:
+                    raw = N._score_population(packed, len(cur), self.xs, self.tos, device=self.device)
                 results += [(cur[i], float(raw[i][0])) for i in range(len(cur))]
                 del packed, raw              # packed nets form ref-cycles holding native memory
                 return results
@@ -70,7 +82,10 @@ class Scorer:
 
     def run_once(self):
         self.store.sweep_stale(CLAIM_TIMEOUT_S)
-        claimed = self.store.claim_batch(self.worker_id, NEW_BORN, PACK_LIMIT)
+        # Decouple intake from score: mostly FIFO (insertion order), only a small fraction by
+        # priority. Breaks the score->intake-priority->score collapse feedback loop.
+        order = "priority" if self.rng.random() < SCORE_PRIORITY_EPS else "fifo"
+        claimed = self.store.claim_batch(self.worker_id, NEW_BORN, PACK_LIMIT, order=order)
         if not claimed:
             return 0
         pack, spill = self._greedy_pack(claimed)

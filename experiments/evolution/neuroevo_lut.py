@@ -58,8 +58,53 @@ A_LAT, B_LAT = 8.0, 5.0          # input latency: t_i = round(A - B*x_i), x in [
 N_TICKS = 44
 IN_THR, OUT_THR = 0.5, 1.0
 FIT_STRICT_W, FIT_ORDER_W = 0.5, 0.5   # fitness = FIT_STRICT_W*strict_frac + FIT_ORDER_W*order_frac (50/50)
-MAX_HIDDEN, MAX_SYN, CHUNK = 12, 60, 512
+MAX_HIDDEN = int(os.environ.get("NE_MAX_HIDDEN", 12))
+MAX_SYN = int(os.environ.get("NE_MAX_SYN", 60))   # per-genome synapse cap (env-overridable)
+CHUNK = 512
 MAX_TYPES = 3           # hidden neuron-TYPE palette cap per genome
+# ---- neuron model ------------------------------------------------------------------
+# "lif" (default): the reduced leaky integrate-and-fire (cf_2=a=b=0) used so far.
+# "izh2": the FULL quadratic Izhikevich-2006 neuron (spnet NeuronMeta defaults) with the
+#         palette FIXED to two canonical types, RS (excitatory) and FS (inhibitory). The only
+#         per-neuron gene is a TYPE BIT (0=RS, 1=FS); no continuous neuron params are evolved.
+NEURON_MODEL = os.environ.get("NE_NEURON_MODEL", "lif")
+IZH = NEURON_MODEL == "izh2"
+WEIGHT_SCALE = float(os.environ.get("NE_WEIGHT_SCALE", 1.0))   # synaptic weight ×scale at build (mV I/O rescale)
+DELAY_INIT_MAX = int(os.environ.get("NE_DELAY_INIT_MAX", 5))   # init / add-synapse delay upper bound
+DELAY_MAX = int(os.environ.get("NE_DELAY_MAX", 255))           # delay random-walk clamp ceiling
+# ---- DALE mode: exc/inh a property of the presynaptic RS/FS type, inh non-plastic + delay 1,
+#      and the excitatory STDP rule is a per-genome global gene set. Gated by NE_DALE. -------
+DALE = os.environ.get("NE_DALE", "0") == "1"
+_DALE_STDP = {}   # current genome's excitatory-STDP config (set in build_population, read by the
+                  # scorer's SynapseMeta monkeypatch + rs/fs_meta). Single-genome build => safe.
+STDP_SEED = {"learning_rate": 0.05, "weight_decay": 0.9, "weight_scaling_cf": 0.0, "max_weight": 20.0,
+             "stdp_decay": 0.95, "ltp_max": 1.0, "ltd_max": 1.2}
+STDP_BOUNDS = {"learning_rate": (0.001, 0.5), "weight_decay": (0.5, 0.99), "weight_scaling_cf": (0.0, 0.1),
+               "max_weight": (1.0, 30.0), "stdp_decay": (0.8, 0.99), "ltp_max": (0.1, 3.0), "ltd_max": (0.1, 3.0)}
+FS_DELAY_CODE = 255      # reserved delay value: FS-source synapses use it -> a non-plastic, delay-1 meta
+TOPO_C = os.environ.get("NE_TOPO_C", "0") == "1"   # topological constraints (run c2): no direct
+#   input<->output edges, and every node must have a directed path to some output. Enforced by
+#   constrain_genome() at seed + after every mutate/crossover; off by default (other runs unaffected).
+
+
+def rnd_stdp(rng):
+    return {k: min(hi, max(lo, rng.gauss(STDP_SEED[k], (hi - lo) * 0.1)))
+            for k, (lo, hi) in STDP_BOUNDS.items()}
+
+
+def mut_stdp(s, rng):
+    s = dict(s); k = rng.choice(list(STDP_BOUNDS)); lo, hi = STDP_BOUNDS[k]
+    s[k] = min(hi, max(lo, s.get(k, STDP_SEED[k]) + rng.gauss(0, (hi - lo) * 0.15)))
+    return s
+
+
+def _src_is_exc(g, s):
+    """Dale: excitatory iff the presynaptic neuron is RS. inputs=RS(exc); output/hidden by type bit."""
+    if s in IN_LABELS:
+        return True
+    if s in OUT_LABELS:
+        return int((g.get("out_type") or {}).get("bit", 0)) == 0
+    return int(g["hid"].get(s, 0)) == 0
                         # (biological: few cell types, many cells) -> registers <= MAX_TYPES+2 metas,
                         # making the native MAX_NEURON_METAS=512 cap irrelevant regardless of hidden count
 
@@ -123,7 +168,74 @@ def one_edge_per_pair(syn):
     return out
 
 
+def _reaches_output(g):
+    """Set of nodes with a directed path to SOME output (reverse-BFS from outputs over syn edges).
+    Outputs seed the set (a node reaches an output iff it has an edge to a node already in the set)."""
+    preds = {}
+    for (s, t, w, d) in g["syn"].values():
+        preds.setdefault(t, []).append(s)
+    reach = set(OUT_LABELS); stack = list(OUT_LABELS)
+    while stack:
+        n = stack.pop()
+        for p in preds.get(n, []):
+            if p not in reach:
+                reach.add(p); stack.append(p)
+    return reach
+
+
+def constrain_genome(g, rng):
+    """Enforce the run-c2 topology constraints IN PLACE (no-op unless NE_TOPO_C=1):
+    (1) no direct input<->output synapse (signal must pass through >=1 hidden neuron);
+    (2) output-reachability: every node has a directed path to some output — drop dead-end hidden
+        nodes, wire dead-end inputs into a reachable hidden. Idempotent; leaves g satisfying both."""
+    if not TOPO_C:
+        return g
+    INs, OUTs = set(IN_LABELS), set(OUT_LABELS)
+    # (1) strip direct input<->output edges (either direction)
+    g["syn"] = {k: v for k, v in g["syn"].items()
+                if not ((v[0] in INs and v[1] in OUTs) or (v[0] in OUTs and v[1] in INs))}
+    # need a hidden layer with a route to an output so inputs CAN reach outputs through hidden
+    if not g["hid"]:
+        h = new_hidden(); g["hid"][h] = rng.randint(0, 1) if IZH else rng.randrange(len(g["types"]))
+    if not any((v[0] in g["hid"] and v[1] in OUTs) for v in g["syn"].values()):
+        add_syn(g, rng.choice(list(g["hid"].keys())), rng.choice(OUT_LABELS),
+                rng.uniform(0.5, 3.0), rng.randint(1, DELAY_INIT_MAX))
+    # (2) output-reachability: iterate drop-dead-hidden / connect-dead-inputs until stable
+    for _ in range(12):
+        reach = _reaches_output(g)
+        dead_h = [h for h in g["hid"] if h not in reach]
+        if dead_h:
+            for h in dead_h:
+                del g["hid"][h]
+            hs = set(g["hid"])
+            g["syn"] = {k: v for k, v in g["syn"].items()
+                        if (v[0] in INs or v[0] in OUTs or v[0] in hs)
+                        and (v[1] in OUTs or v[1] in hs)}
+            continue                                        # recompute reach after structural change
+        reachable_hid = [h for h in g["hid"] if h in reach]
+        dead_in = [i for i in IN_LABELS if i not in reach]
+        if dead_in and reachable_hid:
+            for i in dead_in:
+                add_syn(g, i, rng.choice(reachable_hid), rng.uniform(0.5, 3.0), rng.randint(1, DELAY_INIT_MAX))
+            continue
+        break
+    return g
+
+
 def random_genome(rng):
+    if IZH:
+        # Fixed 2-type palette (RS=0, FS=1); the only neuron gene is a per-neuron type BIT.
+        g = {"types": [{"izh": 0}, {"izh": 1}], "hid": {}, "syn": {}, "sigma": 0.6,
+             "out_type": {"bit": rng.randint(0, 1)}, "stdp": rnd_stdp(rng) if DALE else None}
+        for _ in range(rng.randint(1, 4)):
+            g["hid"][new_hidden()] = rng.randint(0, 1)                  # RS/FS bit
+        for o in OUT_LABELS:
+            for _ in range(rng.randint(1, 3)):
+                s = rng.choice(IN_LABELS + list(g["hid"].keys()))
+                add_syn(g, s, o, rng.uniform(-1.0, 3.0), rng.randint(1, DELAY_INIT_MAX))
+        for h in list(g["hid"].keys()):
+            add_syn(g, rng.choice(IN_LABELS), h, rng.uniform(-1.0, 3.0), rng.randint(1, DELAY_INIT_MAX))
+        return constrain_genome(g, rng)
     g = {"types": [rnd_type(rng) for _ in range(rng.randint(1, MAX_TYPES))],   # hidden palette (<= MAX_TYPES)
          "hid": {}, "syn": {}, "sigma": 0.6, "out_type": rnd_type(rng)}        # one evolved output meta
     for _ in range(rng.randint(1, 4)):
@@ -134,13 +246,14 @@ def random_genome(rng):
             add_syn(g, s, o, rng.uniform(-1.0, 3.0), rng.randint(1, 5))
     for h in list(g["hid"].keys()):
         add_syn(g, rng.choice(IN_LABELS), h, rng.uniform(-1.0, 3.0), rng.randint(1, 5))
-    return g
+    return constrain_genome(g, rng)
 
 
 def clone(g):
     return {"types": [dict(t) for t in g["types"]], "hid": dict(g["hid"]),
             "syn": {k: list(v) for k, v in g["syn"].items()}, "sigma": g["sigma"],
-            "out_type": dict(g.get("out_type") or default_out_type())}
+            "out_type": dict(g.get("out_type") or default_out_type()),
+            "stdp": (dict(g["stdp"]) if g.get("stdp") else None)}
 
 
 # ----- build genome -> real spnet -----
@@ -155,8 +268,33 @@ def meta_of(t):
                       c=0.0, d=float(t["d"]), spike_threshold=float(t["thr"]))
 
 
+# ---- izh2 canonical types (Izhikevich-2006 polychronization; spnet NeuronMeta defaults for the rest) ----
+def _stdp_kw():
+    """In DALE mode, per-neuron STDP-table params come from the genome's evolved STDP genes."""
+    if DALE and _DALE_STDP:
+        return {"stdp_decay": _DALE_STDP["stdp_decay"], "ltp_max": _DALE_STDP["ltp_max"], "ltd_max": _DALE_STDP["ltd_max"]}
+    return {}
+
+
+def rs_meta():
+    """RS excitatory: a=0.02,b=0.2,c=-65,d=8 (+ cf_2=0.04,cf_1=5,cf_0=140,thr=30 defaults)."""
+    return NeuronMeta(neuron_type=0, a=0.02, b=0.2, c=-65.0, d=8.0, spike_threshold=30.0, **_stdp_kw())
+
+
+def fs_meta():
+    """FS inhibitory: a=0.1,b=0.2,c=-65,d=2 (+ same quadratic defaults, thr=30)."""
+    return NeuronMeta(neuron_type=1, a=0.1, b=0.2, c=-65.0, d=2.0, spike_threshold=30.0, **_stdp_kw())
+
+
+def izh_meta(bit):
+    return fs_meta() if int(bit) else rs_meta()
+
+
 def type_meta(g, h):
-    """The NeuronMeta for hidden neuron h, resolved through its type_index into the palette."""
+    """The NeuronMeta for hidden neuron h. izh2: the fixed RS/FS type BIT (g['hid'][h] in {0,1}).
+    lif: resolved through its type_index into the evolved palette."""
+    if IZH:
+        return izh_meta(g["hid"][h])
     return meta_of(g["types"][g["hid"][h]])
 
 
@@ -261,22 +399,31 @@ def build_population(genomes, device='cpu', ref=False):
             metas.append(nm)
         return key2idx[k]
 
-    in_idx = meta_index(leakfree(IN_THR))
     cands = []
     for g in genomes:
+        if DALE:                     # set this genome's excitatory-STDP genes BEFORE any meta is built
+            _DALE_STDP.clear(); _DALE_STDP.update(g.get("stdp") or STDP_SEED)
+        in_idx = meta_index(rs_meta() if IZH else leakfree(IN_THR))
         hids = list(g["hid"].keys())
         nodes = IN_LABELS + OUT_LABELS + hids            # local order: 0..5 in, 6..9 out, 10.. hidden
         loc = {n: i for i, n in enumerate(nodes)}
-        out_idx = meta_index(meta_of(g.get("out_type") or default_out_type()))  # ONE evolved meta, all outputs
+        if IZH:
+            out_idx = meta_index(izh_meta(int((g.get("out_type") or {}).get("bit", 0))))  # RS/FS bit, all outputs
+        else:
+            out_idx = meta_index(meta_of(g.get("out_type") or default_out_type()))  # ONE evolved meta, all outputs
         node_meta = [in_idx] * D + [out_idx] * Dout + [meta_index(type_meta(g, h)) for h in hids]
-        # Enforce a simple digraph: at most ONE synapse per (src,tgt). Parallel edges only
-        # arise from merging genomes numbered by different per-process innovation registries;
-        # the native net has no meaningful place for them. Deterministic: keep the first seen.
+        # Enforce a simple digraph: at most ONE synapse per (src,tgt).
         syn, seen_edges = [], set()
         for (s, t, w, dl) in g["syn"].values():
             if s in loc and t in loc and (loc[s], loc[t]) not in seen_edges:
                 seen_edges.add((loc[s], loc[t]))
-                syn.append((loc[s], loc[t], float(w), int(max(1, dl))))
+                if DALE:
+                    exc = _src_is_exc(g, s)                       # Dale: sign fixed by presynaptic type
+                    wsigned = abs(float(w)) if exc else -abs(float(w))
+                    d_enc = min(int(max(1, dl)), FS_DELAY_CODE - 1) if exc else FS_DELAY_CODE  # FS -> non-plastic delay-1 meta
+                    syn.append((loc[s], loc[t], wsigned * WEIGHT_SCALE, d_enc))
+                else:
+                    syn.append((loc[s], loc[t], float(w) * WEIGHT_SCALE, int(max(1, dl))))
         cands.append({"n_nodes": len(nodes), "node_meta": node_meta, "synapses": syn})
     return (build_packed_ref if ref else build_packed)(cands, metas, device=device)
 
@@ -646,6 +793,9 @@ def dst_pool(g):
 
 def mutate(g, rng):
     g = clone(g)
+    if DALE and rng.random() < 0.2:            # tune the per-genome excitatory STDP rule
+        g["stdp"] = mut_stdp(g.get("stdp") or STDP_SEED, rng)
+        return g
     g["sigma"] = min(2.0, max(0.05, g["sigma"] * math.exp(rng.gauss(0, 0.2))))   # self-adaptive
     op = rng.random()
     syns = list(g["syn"].keys())
@@ -656,37 +806,46 @@ def mutate(g, rng):
         step = 0
         while step == 0:                                      # small Gaussian step: mass on +-1/+-2,
             step = round(rng.gauss(0, 1.5))                   # occasional larger moves via the tail
-        gene[3] = min(255, max(1, gene[3] + step))            # clamp to the valid delay range
-    elif op < 0.58 and g["types"]:                            # ---- palette (neuron-TYPE) ops ----
-        sub = rng.random()
-        if sub < 0.5:                                         # mutate-type: jitter one param of a hidden type OR the shared output meta
-            t = rng.choice(g["types"] + [g["out_type"]])
-            p = rng.choice(["leak", "thr", "d"])
-            if p == "leak":
-                t["leak"] = max(0.0, t["leak"] + rng.gauss(0, 0.05))
-            elif p == "thr":
-                t["thr"] = max(0.2, t["thr"] + rng.gauss(0, 0.3))
+        gene[3] = min(DELAY_MAX, max(1, gene[3] + step))      # clamp to the valid delay range
+    elif op < 0.58 and g["types"]:                            # ---- neuron-TYPE ops ----
+        if IZH:
+            # izh2: the ONLY neuron gene is the RS/FS bit. Flip it freely (either direction, any
+            # neuron) so the excitatory/inhibitory ratio EMERGES from evolution — never forced.
+            if g["hid"] and rng.random() < 0.85:
+                hkey = rng.choice(list(g["hid"].keys()))
+                g["hid"][hkey] = 1 - int(g["hid"][hkey])       # RS<->FS on a hidden neuron
             else:
-                t["d"] = max(0.0, t["d"] + rng.gauss(0, 20))
-        elif sub < 0.75 and g["hid"] and len(g["types"]) > 1:  # reassign: point a hidden at another type
-            g["hid"][rng.choice(list(g["hid"].keys()))] = rng.randrange(len(g["types"]))
-        elif sub < 0.9 and len(g["types"]) < MAX_TYPES:        # add-type: copy an existing type + jitter
-            nt = dict(g["types"][rng.randrange(len(g["types"]))])
-            nt["leak"] = max(0.0, nt["leak"] + rng.gauss(0, 0.05))
-            nt["thr"] = max(0.2, nt["thr"] + rng.gauss(0, 0.3))
-            nt["d"] = max(0.0, nt["d"] + rng.gauss(0, 20))
-            g["types"].append(nt)
-        elif len(g["types"]) > 1:                              # drop-type: remove an UNused type (keep >=1)
-            used = set(g["hid"].values())
-            unused = [i for i in range(len(g["types"])) if i not in used]
-            if unused:
-                di = rng.choice(unused)
-                g["types"].pop(di)
-                g["hid"] = {h: (ti - 1 if ti > di else ti) for h, ti in g["hid"].items()}
+                g["out_type"]["bit"] = 1 - int(g["out_type"].get("bit", 0))  # flip output type
+        else:
+            sub = rng.random()
+            if sub < 0.5:                                     # mutate-type: jitter one param of a hidden type OR the shared output meta
+                t = rng.choice(g["types"] + [g["out_type"]])
+                p = rng.choice(["leak", "thr", "d"])
+                if p == "leak":
+                    t["leak"] = max(0.0, t["leak"] + rng.gauss(0, 0.05))
+                elif p == "thr":
+                    t["thr"] = max(0.2, t["thr"] + rng.gauss(0, 0.3))
+                else:
+                    t["d"] = max(0.0, t["d"] + rng.gauss(0, 20))
+            elif sub < 0.75 and g["hid"] and len(g["types"]) > 1:  # reassign: point a hidden at another type
+                g["hid"][rng.choice(list(g["hid"].keys()))] = rng.randrange(len(g["types"]))
+            elif sub < 0.9 and len(g["types"]) < MAX_TYPES:        # add-type: copy an existing type + jitter
+                nt = dict(g["types"][rng.randrange(len(g["types"]))])
+                nt["leak"] = max(0.0, nt["leak"] + rng.gauss(0, 0.05))
+                nt["thr"] = max(0.2, nt["thr"] + rng.gauss(0, 0.3))
+                nt["d"] = max(0.0, nt["d"] + rng.gauss(0, 20))
+                g["types"].append(nt)
+            elif len(g["types"]) > 1:                              # drop-type: remove an UNused type (keep >=1)
+                used = set(g["hid"].values())
+                unused = [i for i in range(len(g["types"])) if i not in used]
+                if unused:
+                    di = rng.choice(unused)
+                    g["types"].pop(di)
+                    g["hid"] = {h: (ti - 1 if ti > di else ti) for h, ti in g["hid"].items()}
     elif op < 0.74 and len(g["syn"]) < MAX_SYN:
         s, t = rng.choice(src_pool(g)), rng.choice(dst_pool(g))
         if innov_of(s, t) not in g["syn"]:
-            add_syn(g, s, t, rng.uniform(-1.5, 3.0), rng.randint(1, 5))
+            add_syn(g, s, t, rng.uniform(-1.5, 3.0), rng.randint(1, DELAY_INIT_MAX))
     elif op < 0.84 and len(g["syn"]) > 1:
         del g["syn"][rng.choice(syns)]
     elif op < 0.94 and len(g["hid"]) < MAX_HIDDEN and syns:
@@ -697,7 +856,7 @@ def mutate(g, rng):
     elif g["hid"]:
         h = rng.choice(list(g["hid"].keys())); del g["hid"][h]
         g["syn"] = {k: v for k, v in g["syn"].items() if v[0] != h and v[1] != h}
-    return g
+    return constrain_genome(g, rng)
 
 
 def crossover(gf, gw, rng):
@@ -705,7 +864,8 @@ def crossover(gf, gw, rng):
     The TYPE PALETTE is inherited whole from the fitter parent (simplest correct choice); each
     hidden's type_index is clamped to that palette (a gw-only hidden may index a type gf lacks)."""
     child = {"types": [dict(t) for t in gf["types"]], "hid": {}, "syn": {}, "sigma": gf["sigma"],
-             "out_type": dict(gf.get("out_type") or default_out_type())}
+             "out_type": dict(gf.get("out_type") or default_out_type()),
+             "stdp": (dict(gf["stdp"]) if gf.get("stdp") else None)}
     ntypes = len(child["types"])
     for innov in set(gf["syn"]) | set(gw["syn"]):
         inf, inw = innov in gf["syn"], innov in gw["syn"]
@@ -725,7 +885,7 @@ def crossover(gf, gw, rng):
                     if (v[0] in IN_LABELS or v[0] in OUT_LABELS or v[0] in child["hid"])
                     and (v[1] in OUT_LABELS or v[1] in child["hid"])}
     child["syn"] = one_edge_per_pair(child["syn"])   # simple digraph: one synapse per (src,tgt)
-    return child
+    return constrain_genome(child, rng)
 
 
 def tournament(scored, rng, k=3):

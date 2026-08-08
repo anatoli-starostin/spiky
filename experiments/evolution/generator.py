@@ -10,11 +10,28 @@ import random
 import socket
 import sys
 import time
+from uuid import uuid4
 
-from evo_config import (SCORED, GENERATOR_PARENTS, GENERATOR_OFFSPRING, SEED_POP,
-                        CLAIM_TIMEOUT_S)
+from evo_config import (NEW_BORN, SCORED, GENERATOR_PARENTS, GENERATOR_OFFSPRING, SEED_POP,
+                        CLAIM_TIMEOUT_S, IMMIGRANT_RATIO, GENERATOR_OVERFETCH, LINEAGE_CAP,
+                        MAX_BACKLOG)
 from genome_store import GenomeStore
 import neuroevo_lut as N
+
+
+def _lineage_filter(cands, cap, want):
+    """From priority-sorted candidates, keep at most `cap` per lineage_id, up to `want` total.
+    A very large `cap` reproduces plain top-`want` by priority (legacy behavior)."""
+    per, chosen = {}, []
+    for c in cands:
+        lin = c["lineage_id"]
+        if per.get(lin, 0) >= cap:
+            continue
+        per[lin] = per.get(lin, 0) + 1
+        chosen.append(c)
+        if len(chosen) >= want:
+            break
+    return chosen
 
 
 class Generator:
@@ -35,7 +52,18 @@ class Generator:
         seeded = self.bootstrap_if_empty()
         if seeded:
             return {"seeded": seeded, "bred": 0}
-        parents = self.store.claim_batch(self.worker_id, SCORED, GENERATOR_PARENTS)
+        # Backlog throttle: don't out-run the scorers. If the unscored NEW_BORN pile is at/above
+        # the ceiling, skip breeding this iteration (the loop then sleeps) so scoring catches up.
+        if MAX_BACKLOG and self.store.count(NEW_BORN) >= MAX_BACKLOG:
+            return {"seeded": 0, "bred": 0, "throttled": True}
+        # Lineage-capped selection via over-fetch-and-filter (LOCAL rule, no global barrier):
+        # peek the top-OVERFETCH SCORED by priority, keep <= LINEAGE_CAP per lineage, then claim
+        # only the survivors by id. Degrades gracefully — a peek/claim race just yields fewer.
+        cands = self.store.peek_top(SCORED, GENERATOR_OVERFETCH)
+        if not cands:
+            return {"seeded": 0, "bred": 0}
+        chosen = _lineage_filter(cands, LINEAGE_CAP, GENERATOR_PARENTS)
+        parents = self.store.claim_ids(self.worker_id, [c["_id"] for c in chosen], SCORED)
         if not parents:
             return {"seeded": 0, "bred": 0}
         scored = [(float(d["score"]), d) for d in parents]     # (score, doc) for tournament
@@ -46,10 +74,14 @@ class Generator:
             (sf, df), (sw, dw) = (a, b) if a[0] >= b[0] else (b, a)   # df = fitter parent
             child = N.mutate(N.crossover(df["genome"], dw["genome"], self.rng), self.rng)
             depth = max(df.get("depth", 0), dw.get("depth", 0)) + 1
-            offspring.append((child, [df["_id"], dw["_id"]], sf + sw, depth))
-        self.store.insert_new_born(offspring)
+            lineage = df.get("lineage_id") or str(df["_id"])     # child inherits the FITTER parent's lineage
+            offspring.append((child, [df["_id"], dw["_id"]], sf + sw, depth, lineage))
+        # IMMIGRANTS: steady trickle of fresh random genomes, each rooting its own lineage.
+        n_imm = int(round(len(offspring) * IMMIGRANT_RATIO))
+        immigrants = [(N.random_genome(self.rng), [], 0.0, 0, uuid4().hex) for _ in range(n_imm)]
+        self.store.insert_new_born(offspring + immigrants)
         self.store.mark_processed([d["_id"] for d in parents])
-        return {"seeded": 0, "bred": len(offspring), "parents": len(parents)}
+        return {"seeded": 0, "bred": len(offspring), "parents": len(parents), "immigrants": n_imm}
 
     def loop(self, poll_s=2.0):
         while True:
