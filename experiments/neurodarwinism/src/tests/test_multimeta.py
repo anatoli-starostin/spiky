@@ -4,11 +4,32 @@ HYPOTHESIS UNDER TEST (Anatoli): register all metas up front, then grow a SEPARA
 ChunkOfConnections for each delay (each chunk homogeneous in delay / single meta), and add
 them all -- instead of growing one mixed chunk spanning many metas.
 
+**THE HYPOTHESIS IS REFUTED, AND THAT IS THIS TEST'S RESULT, NOT A FAILURE.** Splitting by
+delay is architecturally impossible: `estimate_forward_groups_capacity` rejects a chunk whose
+source neuron an earlier chunk already configured
+(connections_manager_kernels_logic.cu:30-36, thrown at connections_manager.cu:76-79), which is
+ChunkOfConnections invariant 5 -- "For each different source_neuron_id only one list may be
+present" -- enforced ACROSS chunks. Once one source's edges span two delays it lands in two
+chunks and the second add_connections raises. So the per-delay arm is an EXPECTED-FAILURE
+probe: at delays >= 2 it must raise that specific ValueError, and anything else is a real
+regression.
+
+THE delays=1 CONTROL is the point of the whole thing: with a single delay the excitatory
+chunk holds only E sources and the inhibitory chunk only I sources, so the two chunks are
+DISJOINT and the build succeeds. Two chunks, passing. That isolates the constraint exactly --
+it is not chunk count, meta count, group size or capacity, it is "the same source appears in
+two chunks".
+
+States in the table: PASS, REFUTED (expected), FAIL. Exit code is non-zero iff some row did
+not do what it is supposed to do -- including a per-delay row that stops raising, or raises
+something other than the invariant violation.
+
 Each configuration runs in its OWN PROCESS: a CUDA illegal-address poisons the context, so
 one process would report every later case as failed regardless of its own merit.
 
     python test_multimeta.py                       # full table
     python test_multimeta.py --approach per-delay --delays 4 --train 1
+    python test_multimeta.py --approach per-delay --delays 1    # the control, builds fine
 """
 import argparse
 import subprocess
@@ -181,6 +202,29 @@ def run_one(approach, n_delays, train, lr=0.1, homogeneous=False, inh_bank=False
           f"inh={len(inh)} inh_all_-5={inh_held}")
 
 
+# The invariant violation the per-delay arm is supposed to hit, and nothing else.
+EXPECTED_REFUTATION = ("estimate_forward_groups_capacity", "already configured earlier")
+
+
+def expected_state(approach, n_delays):
+    """per-delay must fail once one source's edges span more than one meta -- and only then."""
+    return "REFUTED" if approach == "per-delay" and n_delays >= 2 else "PASS"
+
+
+def classify(r):
+    """-> (state, detail). PASS / REFUTED / FAIL, from a child process's output."""
+    txt = r.stdout + r.stderr
+    lines = [ln.strip() for ln in txt.splitlines()
+             if ln.startswith(("BUILT", "ROUNDTRIP", "PASS"))]
+    if r.returncode == 0 and any(ln.startswith("PASS") for ln in lines):
+        return "PASS", " | ".join(lines)
+    if r.returncode != 0 and all(s in txt for s in EXPECTED_REFUTATION):
+        return "REFUTED", ("ValueError: source neuron already had a forward group list "
+                           "(ChunkOfConnections invariant 5)")
+    err = [ln.strip() for ln in txt.splitlines() if "Error" in ln]
+    return "FAIL", (err[-1][:90] if err else f"rc={r.returncode}, no PASS line")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--approach", default=None, choices=["per-delay", "mixed"])
@@ -195,26 +239,26 @@ if __name__ == "__main__":
         run_one(a.approach, a.delays, a.train, homogeneous=a.homogeneous,
                 inh_bank=a.inh_bank)
     else:
-        print(f"{'approach':22s} {'delays':>6s} {'train':>5s}  result")
+        print(f"{'approach':22s} {'delays':>6s} {'train':>5s}  {'state':18s} detail")
+        bad = 0
         for approach, homo in (("per-delay", False), ("mixed", False),
                                ("per-delay", True), ("mixed", True)):
-            for nd in (2, 4, 20):
+            # delays=1 is the per-delay CONTROL: disjoint sources per chunk, so it must build
+            for nd in ((1, 2, 4, 20) if approach == "per-delay" else (2, 4, 20)):
                 for tr in (0, 1):
                     cmd = [sys.executable, __file__, "--approach", approach,
                            "--delays", str(nd), "--train", str(tr)]
                     if homo:
                         cmd.append("--homogeneous")
                     r = subprocess.run(cmd, capture_output=True, text=True)
-                    txt = r.stdout + r.stderr
-                    keep = [ln.strip() for ln in txt.splitlines()
-                            if ln.startswith(("BUILT", "ROUNDTRIP", "PASS"))]
-                    if any(ln.startswith("PASS") for ln in keep):
-                        res = " | ".join(keep)
+                    state, detail = classify(r)
+                    want = expected_state(approach, nd)
+                    if state == want:
+                        shown = "REFUTED (expected)" if state == "REFUTED" else "PASS"
                     else:
-                        err = [ln.strip() for ln in txt.splitlines() if "Error" in ln]
-                        res = ("CRASH " + (err[-1].split("error")[-1].strip()[:70]
-                                           if err else f"rc={r.returncode}"))
-                        if keep:
-                            res = keep[0] + " -> " + res
+                        bad += 1
+                        shown = f"FAIL (wanted {want})"
                     lbl = approach + (" (homog metas)" if homo else " (inh meta)")
-                    print(f"{lbl:22s} {nd:6d} {tr:5d}  {res}", flush=True)
+                    print(f"{lbl:22s} {nd:6d} {tr:5d}  {shown:18s} {detail}", flush=True)
+        print(f"\n{'ALL ROWS AS EXPECTED' if not bad else f'{bad} ROW(S) NOT AS EXPECTED'}")
+        sys.exit(1 if bad else 0)
