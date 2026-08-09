@@ -332,14 +332,15 @@ class SynapseGrowthEngine(object):
 
         # map (source_id, target_id) -> explicit weight, from the ORIGINAL triple order
         # (sourced before the in-place sort below, so alignment is order-independent).
-        wmap = None
+        edge_src = edge_tgt = edge_w = None
         if weights is not None:
             assert weights.shape[0] == explicit_triples.shape[0], "weights must have one entry per triple"
-            trip_cpu = explicit_triples.cpu()
-            w_cpu = weights.detach().cpu().flatten()
-            wmap = {}
-            for k in range(trip_cpu.shape[0]):
-                wmap[(int(trip_cpu[k, 1]), int(trip_cpu[k, 2]))] = float(w_cpu[k])
+            # Snapshot the edge endpoints BEFORE the in-place sort below, so the weights stay
+            # aligned with their triples. Kept as tensors rather than a {(src,tgt): w} dict:
+            # the dict alone was a Python loop over every synapse (~12M at K=128).
+            edge_src = explicit_triples[:, 1].clone()
+            edge_tgt = explicit_triples[:, 2].clone()
+            edge_w = weights.detach().flatten()
 
         lowlevel_engine = self._setup_lowlevel_engine(device, random_seed)
 
@@ -395,34 +396,76 @@ class SynapseGrowthEngine(object):
         self._profiling_stats = lowlevel_engine.get_profiling_stats()
 
         weights_buffer = None
-        if wmap is not None:
-            weights_buffer = self._build_group_aligned_weights(connections_buffer, wmap)
+        if edge_src is not None:
+            weights_buffer = self._build_group_aligned_weights(
+                connections_buffer, edge_src, edge_tgt, edge_w)
 
         return ChunkOfConnections(connections_buffer, self._synapse_group_size, weights=weights_buffer)
 
-    def _build_group_aligned_weights(self, connections_buffer, wmap):
+    def _build_group_aligned_weights(self, connections_buffer, edge_src, edge_tgt, edge_w):
         """Build the per-edge weights buffer aligned to the connection groups: for a
         group at int-offset d, its weights occupy [ (d/(4+2*gs))*gs : +gs ], slot j
-        matching the j-th (meta, target) body pair. The source id lives in the root
-        group header (source>0); chained/ghost groups repeat it as 0, so we carry the
-        last positive source forward while scanning blocks in order (the explicit build
-        lays each source's groups out contiguously)."""
+        matching the j-th (meta, target) body pair.
+
+        The source id lives in the root group header (source > 0); chained groups repeat it
+        as 0 and are reached through the header's shift_to_next_group. That shift is a
+        SIGNED offset to an ARBITRARY block, so the owning source must be recovered by
+        FOLLOWING THE CHAIN.
+
+        This previously carried the last positive source forward while scanning blocks in
+        buffer order, on the assumption that "the explicit build lays each source's groups
+        out contiguously". That assumption does not hold: a source whose edges span several
+        synapse metas owns one block per (meta, source) sublist, and those blocks are not
+        adjacent. The forward-fill then attributed chained blocks to whichever source
+        happened to precede them in memory, silently writing weights onto the WRONG EDGES
+        while every synapse still existed and the build looked healthy. Measured on a
+        64-neuron 4-meta net: 65 of 256 edges correct; on a 2-meta net, 134 of 512. Single
+        meta was unaffected, which is why it went unnoticed.
+
+        Fully vectorised and runs on the buffer's own device. The earlier host-side version
+        did this with nested Python loops over n_blocks * gs plus a {(src,tgt): w} dict over
+        every edge; at K=128 with group size 128 that is ~10^8 iterations and took a
+        steady-state round from ~11s to >300s. Same results, verified edge-for-edge.
+        """
+        dev = connections_buffer.device
         gs = self._synapse_group_size
         block = 4 + 2 * gs
-        buf = connections_buffer.cpu().tolist()
-        n_blocks = len(buf) // block
-        wbuf = torch.zeros([n_blocks * gs], dtype=torch.float32)
-        cur_src = 0
-        for b in range(n_blocks):
-            d = b * block
-            src = buf[d]
-            if src != 0:
-                cur_src = src
-            for j in range(gs):
-                tgt = buf[d + 4 + 2 * j + 1]     # body pair j = (meta, target)
-                if tgt != 0:
-                    wbuf[b * gs + j] = wmap.get((cur_src, tgt), 0.0)
-        return wbuf.to(device=connections_buffer.device)
+        n_blocks = connections_buffer.numel() // block
+        b = connections_buffer.view(n_blocks, block).long()
+        idx = torch.arange(n_blocks, device=dev)
+
+        # label every block with its true owning source by walking each chain from its root;
+        # the frontier is processed in parallel, so this loops once per chain LINK, not once
+        # per block, and breaks as soon as every chain has ended
+        cur_src = torch.zeros(n_blocks, dtype=torch.long, device=dev)
+        cur = idx[b[:, 0] > 0]
+        val = b[cur, 0]
+        for _ in range(n_blocks):
+            if cur.numel() == 0:
+                break
+            cur_src[cur] = val
+            shift = b[cur, 3]                   # shift_to_next_group, signed, int32 units
+            alive = shift != 0
+            cur, val = ((cur * block + shift) // block)[alive], val[alive]
+
+        srcs = edge_src.to(device=dev, dtype=torch.long)
+        tgts = edge_tgt.to(device=dev, dtype=torch.long)
+        w = edge_w.to(device=dev, dtype=torch.float32)
+        maxid = int(torch.stack([srcs.max(), tgts.max(), cur_src.max()]).max().item()) + 1
+        ekey = srcs * maxid + tgts
+        order = torch.argsort(ekey)
+        ekey_s, w_s = ekey[order], w[order]
+
+        # slot j of every block at once: look up (owning source, target) in the sorted edges
+        wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
+        zero = torch.zeros(n_blocks, dtype=torch.float32, device=dev)
+        for j in range(gs):
+            tgt_j = b[:, 4 + 2 * j + 1]         # body pair j = (meta, target)
+            qkey = cur_src * maxid + tgt_j
+            pos = torch.searchsorted(ekey_s, qkey).clamp(max=ekey_s.numel() - 1)
+            hit = (tgt_j > 0) & (ekey_s[pos] == qkey)
+            wbuf[idx * gs + j] = torch.where(hit, w_s[pos], zero)
+        return wbuf
 
     def get_profiling_stats(self) -> str:
         return self._profiling_stats
