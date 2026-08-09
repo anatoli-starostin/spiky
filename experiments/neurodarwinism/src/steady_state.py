@@ -801,12 +801,32 @@ def main():
             # tie diagnostics: does the penalty actually spread the output code over time?
             _bi = int(np.nanargmax(ewma))
             _bt = first_ticks[:, _bi, :].astype(int)
+            # distinct first-spike ticks per state, for EVERY member -- sort along the output
+            # axis and count the changes, so it is one vectorised pass over [B, P, N_OUT]
+            # rather than B*P calls to np.unique. Cheap enough to log every round.
+            _srt = np.sort(first_ticks.astype(np.int64), axis=-1)
+            distinct_ticks = (1 + (np.diff(_srt, axis=-1) != 0).sum(-1)).mean(0)
             rec.update(tie_rate_mean=float(ties.mean()),
                        tie_rate_best=float(ties[_bi]),
                        distinct_ticks_best=float(np.mean([len(np.unique(r)) for r in _bt])),
                        tick_std_best=float(_bt.std()),
                        drive_best=float(drives[_bi]), drive_mean=float(np.mean(drives)),
                        drive_min=float(np.min(drives)), drive_max=float(np.max(drives)))
+            # PER-MEMBER VECTORS, length K, in pool-slot order. Everything above is a scalar
+            # summary, which is why no run before this one can show per-round pool variance --
+            # only the final checkpoint's `ewma` array survived, so every diversity claim in
+            # this chapter had to lean on (best - mean) as a proxy. These are the real thing.
+            #
+            # `fitness_vec` is the ARRAY SELECTION USED, not a recomputation: `f` comes straight
+            # out of score() above and is untouched by the cull. `ewma_vec` is POST-cull, so a
+            # newborn carries its parent's inherited value -- that is the number the next round
+            # will actually judge it on, but it is not a measurement of the newborn.
+            rec.update(fitness_vec=[round(float(v), 6) for v in f],
+                       ewma_vec=[round(float(v), 6) for v in ewma],
+                       tie_rate_vec=[round(float(v), 6) for v in ties],
+                       distinct_ticks_vec=[round(float(v), 4) for v in distinct_ticks],
+                       age_vec=[int(v) for v in age],
+                       lineage_vec=[int(v) for v in lineage])
             rec.update(pool_scalars(genomes, a.w_max))
             hist.append(rec)
             if not a.no_fitness_log:

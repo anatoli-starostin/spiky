@@ -82,11 +82,41 @@ def convergence_round(hist, thresh=0.01):
     return None
 
 
+def pool_matrix(hist, key="fitness_vec"):
+    """-> [n_rounds, K] of a per-member vector, or None if this run did not log one.
+
+    Runs before 2026-08-09 recorded only scalar summaries per round, so per-round pool variance
+    was recoverable only at the final round from the checkpoint's `ewma` array -- which is why
+    every diversity claim about them leans on (best - mean). Newer runs log the full vectors
+    (`fitness_vec`, `ewma_vec`, `tie_rate_vec`, `distinct_ticks_vec`, `age_vec`, `lineage_vec`).
+
+    ALWAYS go through this rather than indexing the key: it returns None for old histories
+    instead of raising, and it refuses ragged data rather than silently truncating -- K can
+    legitimately differ between two histories, but never within one.
+    """
+    rows = [r.get(key) for r in hist]
+    if not rows or any(v is None for v in rows):
+        return None
+    widths = {len(v) for v in rows}
+    if len(widths) != 1:
+        raise ValueError(f"{key}: ragged pool vectors across rounds, widths {sorted(widths)}")
+    return np.asarray(rows, float)
+
+
 def summarise(hist):
     best = max(hist, key=lambda r: r["best"])
-    return dict(rounds=len(hist), peak=best["best"], peak_round=best["rnd"],
-                final_best=hist[-1]["best"], final_mean=hist[-1]["mean"],
-                final_gap=hist[-1]["best"] - hist[-1]["mean"],
-                convergence_round=convergence_round(hist),
-                syn_first=hist[0]["n_syn"], syn_last=hist[-1]["n_syn"],
-                wall_s=hist[-1]["wall"])
+    out = dict(rounds=len(hist), peak=best["best"], peak_round=best["rnd"],
+               final_best=hist[-1]["best"], final_mean=hist[-1]["mean"],
+               final_gap=hist[-1]["best"] - hist[-1]["mean"],
+               convergence_round=convergence_round(hist),
+               syn_first=hist[0]["n_syn"], syn_last=hist[-1]["n_syn"],
+               wall_s=hist[-1]["wall"])
+    # true per-round spread, when the run logged the vectors. Absent on older runs.
+    fit = pool_matrix(hist, "fitness_vec")
+    if fit is not None:
+        out.update(pool_k=int(fit.shape[1]),
+                   fitness_std_first=float(fit[0].std()),
+                   fitness_std_last=float(fit[-1].std()),
+                   fitness_std_min=float(fit.std(axis=1).min()),
+                   fitness_spread_last=float(fit[-1].max() - fit[-1].min()))
+    return out
