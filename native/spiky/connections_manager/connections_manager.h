@@ -94,7 +94,15 @@ static_assert((sizeof(DoubleNeuronIndexAndSynapseId) % 8) == 0, "check sizeof(Do
 #define BACKWARD_GROUPS_HASH_KEY(neuron_id, synapse_meta_index, single_group_size, delay) ((static_cast<uint64_t>(neuron_id) << 32) | (synapse_meta_index << 18) | (single_group_size << 8) | delay)
 #define NEURON_ID_FROM_BACKWARD_GROUPS_HASH_KEY(hash_key) static_cast<NeuronIndex_t>(hash_key >> 32)
 #define SYNAPSE_META_INDEX_FROM_BACKWARD_GROUPS_HASH_KEY(hash_key) ((hash_key >> 18) & 0xFFF)
-#define SINGLE_GROUP_SIZE_FROM_BACKWARD_GROUPS_HASH_KEY(hash_key) ((hash_key >> 8) & 0x7FF)
+// Bits 8..17 (10 bits, up to 1023). The mask used to be 0x7FF, i.e. 11 bits spanning bits
+// 8..18 -- but synapse_meta_index is packed at bit 18, so the two fields OVERLAPPED. Every
+// ODD meta index set bit 18 and this accessor read the group size as size + 1024 (e.g. 8 ->
+// 1032). The capacity pass then sized that (target, meta) region as ONE group of `counter`
+// while fill_backward_groups tiled it by the meta's real _backward_group_size, so as soon as
+// counter exceeded the real group size the fill ran past the region and stamped the next
+// meta's groups -- surfacing as "wrong delay" in fill_backward_groups. Invisible at
+// backward_group_size=32 only because our per-(target,meta) counters stay under 32.
+#define SINGLE_GROUP_SIZE_FROM_BACKWARD_GROUPS_HASH_KEY(hash_key) ((hash_key >> 8) & 0x3FF)
 typedef struct {
     uint64_t key;
     uint32_t counter;

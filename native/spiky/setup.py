@@ -153,6 +153,7 @@ def _get_ext_modules():
                         "nvcc": _cpp_std_args("nvcc") + [
                             "-O3",
                             "-v",
+                            "-lineinfo",
                             "-allow-unsupported-compiler",
                             '-Xptxas="-v"',
                         ] + BUILD_INTEGERS_COMPILE_ARGS,
