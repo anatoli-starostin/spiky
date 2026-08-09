@@ -1,9 +1,11 @@
 """STEP 0: is our REAL production weights placement correct at 40 metas, engine gs=2?
 
-steady_state.build_pool calls es_harness.group_aligned_weights (the chain-following copy),
-NOT synapse_growth._build_group_aligned_weights (stock). This checks that copy on a realistic
-multi-meta explicit genome, keyed on (src,tgt), with EVERY EXCITATORY EDGE GIVEN A UNIQUE
-WEIGHT so a misplacement cannot hide behind a repeated value.
+steady_state.build_pool goes through synapse_growth._grow_explicit(weights=), whose aligner
+follows the group chain as of PR #94. This checks it on a realistic multi-meta explicit
+genome, keyed on (src,tgt), with EVERY EXCITATORY EDGE GIVEN A UNIQUE WEIGHT so a
+misplacement cannot hide behind a repeated value. (It predates that fix, when build_pool
+used a chain-following copy that lived in harness.py; the check is unchanged, the path
+under it is now the library's.)
 
 Inhibitory edges keep RES_W_INH: their metas pin min==max==-5, so unique values there would
 be clamped and register as false mismatches. They are checked separately for being exactly -5.

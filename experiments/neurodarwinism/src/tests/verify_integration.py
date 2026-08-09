@@ -1,7 +1,9 @@
-"""Verify the vectorised aligner now living in the library: correctness + build timing.
+"""Verify the aligner now living in the library: placement correctness + build timing.
 
-Compares the stock _grow_explicit(weights=) path (now vectorised) against
-es_harness.group_aligned_weights on the same chunk, and times a K=128 build.
+Checks that build_pool's weights come back out of the compiled net edge-for-edge, and times
+a K=128 build. (It used to cross-check the stock _grow_explicit(weights=) path against a
+local chain-following copy in harness.py; PR #94 put chain-following in the engine, so the
+local copy is gone and there is only one path left to check.)
 """
 # tests live one level below src/; make the sibling modules importable.
 import os as _os, sys as _sys
@@ -13,7 +15,6 @@ import numpy as np
 import torch
 
 import steady_state as S
-from harness import group_aligned_weights
 
 # ---- 1. the two implementations must agree edge-for-edge on a real multi-meta chunk
 from spiky.util.synapse_growth import SynapseGrowthEngine

@@ -8,12 +8,12 @@ and mutation, the episode runner, and the scoring functions. Renamed on the move
 
 CORRECTED RECIPE (supersedes the weight-palette version):
   * DELAYS   one SynapseMeta per discrete delay, range [d, d]. ~20 metas total.
-  * WEIGHTS  CONTINUOUS, set explicitly. The metas' initial_weight is discarded.
-             The stock `_grow_explicit(weights=)` helper mis-orders weights against the
-             compiled group layout (measured: only 86/516 land), so we build the
-             group-aligned buffer ourselves — `group_aligned_weights` below is a
-             replication of the reference harness's `_group_aligned_weights_vec` — and
-             wrap the chunk with ChunkOfConnections(conn, gs, weights=buf).
+  * WEIGHTS  CONTINUOUS, set explicitly via `_grow_explicit(weights=)`. The metas'
+             initial_weight is discarded.
+             (This file used to carry its own chain-following aligner, because the stock
+             helper recovered each group's owning source by scanning memory in order and
+             landed only 86/516 weights. The engine's aligner follows the chain as of
+             PR #94, so the local copy is gone and the plain `weights=` path is exact.)
   * ONE _grow_explicit chunk, ONE add_connections, group_size 2,
     compile(shuffle_synapses_random_seed=None)  (shuffle OFF).
 
@@ -44,60 +44,6 @@ RES_W_EXC, RES_W_INH = 6.0, -5.0
 D_MIN, D_MAX = 1, 20
 N_TICKS, T_IN = 96, 32
 GROUP_SIZE = 2
-
-
-# ------------------------------------------------------- group-aligned weights
-def group_aligned_weights(conn, triples, weights, gs):
-    """Place each explicit edge's weight into the group-aligned buffer matching `conn`.
-
-    `conn` is a 1-D int32 buffer of blocks [src, meta, n_tgt, next_shift,
-    (meta_i, tgt_i) x gs]. A source's targets span several CHAINED groups when its fan-out
-    exceeds `gs`; chained groups carry src == 0 and are reached through `next_shift`.
-
-    THE BUG THIS FIXES. Both the stock `_build_group_aligned_weights` and the reference's
-    `_group_aligned_weights_vec` recover the owning source with a CUMMAX forward-fill over
-    block index, which assumes a chained group physically follows its root. It does not:
-    `next_shift` is a signed element offset to an ARBITRARY block, forwards or backwards.
-    Measured on a 516-edge net: 0 of 372 chained blocks followed their root, cummax
-    assigned the wrong source to 370 of 436 occupied blocks, and only 113/516 edges were
-    recovered. FOLLOWING THE CHAIN recovers 516/516.
-
-    Empty slots stay 0.0. (src, tgt) is unique per list, so the key lookup is unambiguous.
-    """
-    dev = conn.device
-    block = 4 + 2 * gs
-    n_blocks = conn.numel() // block
-    b = conn.view(n_blocks, block).long()
-    idx = torch.arange(n_blocks, device=dev)
-
-    # follow next_shift from every root to label each block with its true source
-    cur_src = torch.zeros(n_blocks, dtype=torch.long, device=dev)
-    cur = idx[b[:, 0] > 0]
-    val = b[cur, 0]
-    for _ in range(n_blocks):                      # bounded; breaks when the chain ends
-        if cur.numel() == 0:
-            break
-        cur_src[cur] = val
-        shift = b[cur, 3]
-        alive = shift != 0
-        cur, val = ((cur * block + shift) // block)[alive], val[alive]
-
-    srcs, tgts = triples[:, 1].long(), triples[:, 2].long()
-    MAXID = int(torch.stack([srcs.max(), tgts.max(), cur_src.max()]).max().item()) + 1
-    ekey = srcs * MAXID + tgts
-    order = torch.argsort(ekey)
-    ekey_s = ekey[order]
-    w_s = weights.flatten().to(torch.float32)[order]
-
-    wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
-    zero = torch.zeros(n_blocks, dtype=torch.float32, device=dev)
-    for j in range(gs):
-        tgt_j = b[:, 4 + 2 * j + 1]
-        qkey = cur_src * MAXID + tgt_j
-        pos = torch.searchsorted(ekey_s, qkey).clamp(max=ekey_s.numel() - 1)
-        hit = (tgt_j > 0) & (ekey_s[pos] == qkey)
-        wbuf[idx * gs + j] = torch.where(hit, w_s[pos], zero)
-    return wbuf
 
 
 def delay_metas(group_size=GROUP_SIZE, d_min=D_MIN, d_max=D_MAX):
@@ -178,7 +124,6 @@ def build(genomes, res, device="cuda", seed=1, res_scale=1.0, res_edges=None):
     """
     from spiky.spnet.spnet import SpikingNet, NeuronMeta
     from spiky.util.synapse_growth import SynapseGrowthEngine
-    from spiky.util.chunk_of_connections import ChunkOfConnections
 
     P = len(genomes)
     metas = delay_metas()
@@ -249,10 +194,7 @@ def build(genomes, res, device="cuda", seed=1, res_scale=1.0, res_edges=None):
 
     tri_t = torch.tensor(triples, dtype=torch.int32, device=device)
     w_t = torch.tensor(weights, dtype=torch.float32, device=device)
-    chunk = ge._grow_explicit(tri_t, seed)                    # NO weights= (stock is buggy)
-    conn = chunk.get_connections()
-    wbuf = group_aligned_weights(conn, tri_t, w_t, GROUP_SIZE)
-    chunk = ChunkOfConnections(conn, GROUP_SIZE, weights=wbuf)
+    chunk = ge._grow_explicit(tri_t, seed, weights=w_t)
     spnet.add_connections(chunk, seed)
     chunk.recycle()
     spnet.compile(shuffle_synapses_random_seed=None)          # shuffle OFF

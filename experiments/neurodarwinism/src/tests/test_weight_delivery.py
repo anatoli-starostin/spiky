@@ -24,9 +24,12 @@ blocks, which delivered 47.8 % of the non-zero weights and 32 % of the total wei
 was silently dropped to 0.0 by a lookup miss. And because block placement is nondeterministic,
 a different 32 % survived on every rebuild of the identical genome.
 
-`harness.group_aligned_weights` FOLLOWS the chain via next_shift instead of assuming layout, so
-it is exact and reproducible even though the layout underneath it still is not. That is what
-`build_pool` uses now, and that is what this test pins.
+The aligner now FOLLOWS the chain via next_shift instead of assuming layout, so it is exact and
+reproducible even though the layout underneath it still is not. That fix landed in the engine
+itself in PR #94; this chapter briefly carried its own copy in `harness.py` and a local patch
+in `build_pool`, both now removed. This test pins the outcome from the chapter's side, so a
+regression in the engine shows up here as well as in
+src/spiky/spnet/tests/test_explicit_weight_alignment.py.
 
 The two failure modes are independent, so both are asserted separately:
   CORRECTNESS   is a host-side logic bug -- it reproduces on CPU, where the buffer is
@@ -34,7 +37,7 @@ The two failure modes are independent, so both are asserted separately:
   REPRODUCIBILITY is the device-side atomic ordering.
 
 Not a pytest file (the chapter's tests are standalone scripts):
-    python tests/test_weight_delivery.py [--show-broken-path]
+    python tests/test_weight_delivery.py
 Exits non-zero on failure.
 """
 import argparse
@@ -47,7 +50,6 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import steady_state as S                          # noqa: E402
-from harness import group_aligned_weights         # noqa: E402
 
 STDP_LR, W_MAX, SEED = 0.01, 30.0, 1
 # Small fanouts keep the test to ~10k synapses and a couple of seconds, while leaving every
@@ -94,40 +96,6 @@ def exported(H):
     return s[k], m[k], w[k], t[k]
 
 
-def build_broken(g, device="cuda"):
-    """build_pool as it was BEFORE the fix, for the A/B report. Not used by the assertions."""
-    from spiky.spnet.spnet import SpikingNet, NeuronMeta
-    from spiky.util.synapse_growth import SynapseGrowthEngine
-
-    metas = S.stage2_metas(STDP_LR, W_MAX)
-    nm = [NeuronMeta(neuron_type=0, a=0.02, d=8.0), NeuronMeta(neuron_type=1, a=0.1, d=2.0),
-          NeuronMeta(neuron_type=2, a=0.02, d=8.0), NeuronMeta(neuron_type=3, a=0.02, d=8.0)]
-    counts = [S.N_EXC, S.N_INH, S.N_IN, S.N_OUT]
-    sp = SpikingNet(synapse_metas=metas, neuron_metas=nm, neuron_counts=counts,
-                    initial_synapse_capacity=1 << 23, summation_dtype=torch.float32)
-    sp.to_device(device)
-    ids = [sp.get_neuron_ids_by_meta(i).cpu().numpy() for i in range(4)]
-    s, meta, t, w = requested(g, ids)
-    triples = np.stack([meta, s, t], 1)
-
-    ge = SynapseGrowthEngine(device=device, synapse_group_size=S.ENGINE_GROUP_SIZE,
-                             max_groups_in_buffer=max(4096, 8 * (len(triples) + sum(counts))))
-    for i in range(4):
-        ge.register_neuron_type(max_synapses=8 * (S.N_EXC + S.N_INH), growth_command_list=[])
-    for i in range(4):
-        tt = torch.tensor(ids[i], dtype=torch.int32)
-        n = tt.numel()
-        ge.add_neurons(neuron_type_index=i, identifiers=tt,
-                       coordinates=torch.stack([torch.arange(n).float(), torch.zeros(n),
-                                                torch.full((n,), float(i))], 1))
-    chunk = ge._grow_explicit(torch.tensor(triples, dtype=torch.int32, device=device), SEED,
-                              weights=torch.tensor(w, dtype=torch.float32, device=device))
-    sp.add_connections(chunk, SEED)
-    chunk.recycle()
-    sp.compile(shuffle_synapses_random_seed=None)
-    return dict(spnet=sp, ids=ids, P=1, device=device, n_syn=len(triples))
-
-
 def measure(H, g):
     es, em, ew, et = exported(H)
     rs, rm, rt, rw = requested(g, H["ids"])
@@ -155,9 +123,6 @@ def report(tag, m):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--show-broken-path", action="store_true",
-                    help="also build via the pre-fix _grow_explicit(weights=) path and print "
-                         "its numbers, to show what this test is guarding against")
     ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
 
@@ -169,7 +134,7 @@ def main():
           f"ENGINE_GROUP_SIZE={S.ENGINE_GROUP_SIZE}, "
           f"{len(np.unique(g['delay']))} distinct delays, stdp_lr={STDP_LR}\n")
 
-    print("build_pool (fixed, chain-following group_aligned_weights):")
+    print("build_pool -> _grow_explicit(weights=), chain-following aligner (engine, PR #94):")
     H1 = S.build_pool([g], a.device, seed=SEED, stdp_lr=STDP_LR, w_max=W_MAX)
     m1 = measure(H1, g)
     report("build 1", m1)
@@ -184,14 +149,6 @@ def main():
 
     identical = bool(np.array_equal(m1["exported_weights"], m2["exported_weights"]))
     print(f"  two builds, same seed: weight vectors byte-identical = {identical}")
-
-    if a.show_broken_path:
-        print("\npre-fix path (_grow_explicit(weights=)), for comparison only:")
-        for i in range(2):
-            Hb = build_broken(g, a.device)
-            report(f"build {i + 1}", measure(Hb, g))
-            del Hb
-            torch.cuda.empty_cache()
 
     fails = []
     # (a) every non-zero weight lands on the edge it was written for

@@ -77,9 +77,6 @@ def wiring(n_delays, E, I, rng, homogeneous=False, inh_bank=False):
 def build(n_delays, per_delay, lr, homogeneous=False, inh_bank=False, dev="cuda"):
     from spiky.spnet.spnet import SpikingNet, NeuronMeta
     from spiky.util.synapse_growth import SynapseGrowthEngine
-    from spiky.util.chunk_of_connections import ChunkOfConnections
-    from harness import group_aligned_weights
-
     rng = np.random.default_rng(0)
     metas = make_metas(n_delays, lr, homogeneous=homogeneous, inh_bank=inh_bank)
     sp = SpikingNet(synapse_metas=metas,
@@ -109,9 +106,7 @@ def build(n_delays, per_delay, lr, homogeneous=False, inh_bank=False, dev="cuda"
         w = np.array([w for _, (_, w) in items], np.float32)
         tri_t = torch.tensor(tri, dtype=torch.int32, device=dev)
         w_t = torch.tensor(w, dtype=torch.float32, device=dev)
-        conn = ge._grow_explicit(tri_t, 1).get_connections()
-        ch = ChunkOfConnections(conn, GS,
-                                weights=group_aligned_weights(conn, tri_t, w_t, GS))
+        ch = ge._grow_explicit(tri_t, 1, weights=w_t)
         sp.add_connections(ch, 1)
         ch.recycle()
 

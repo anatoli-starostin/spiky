@@ -55,12 +55,11 @@ ge.add_neurons(neuron_type_index=0, identifiers=nid,
 tri_t = torch.tensor(tri, dtype=torch.int32, device="cuda")
 w_t = torch.tensor(w, dtype=torch.float32, device="cuda")
 
-import harness as es_harness
-conn = ge._grow_explicit(tri_t, 1).get_connections()
-wbuf = es_harness.group_aligned_weights(conn, tri_t, w_t, a.gs)
-chunk = ChunkOfConnections(conn, a.gs, weights=wbuf)
+chunk = ge._grow_explicit(tri_t, 1, weights=w_t)
+conn = chunk.get_connections()
 print(f"gs={a.gs} metas={a.metas} synapses={len(tri)} "
-      f"blocks={conn.numel() // (4 + 2 * a.gs)} weights={wbuf.numel()}")
+      f"blocks={conn.numel() // (4 + 2 * a.gs)} "
+      f"weights={chunk.get_weights().numel()}")
 
 ok, errors = ChunkOfConnectionsValidator(chunk).validate_all()
 print(f"VALIDATOR valid={ok} n_errors={len(errors)}")
