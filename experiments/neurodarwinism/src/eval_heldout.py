@@ -114,8 +114,10 @@ def main():
 
     draws = []
     for rep in range(a.repeats):
-        hb = S.build_pool([genomes[best_i]], a.device, seed=1, stdp_lr=a.stdp_lr,
-                          w_max=a.w_max, drives=dr)
+        # same helper steady_state.main()'s own held-out score goes through, so the two paths
+        # cannot drift apart again
+        hb = S.build_eval_pool(genomes[best_i], a.device, a.stdp_lr, a.w_max,
+                               drive=None if dr is None else dr[0])
         fit, first, ties = S.score(hb, Xval, Yval, enc, a.current, a.tie_penalty)
         pred = -first[:, 0, :]
         raw = float(S.kendall_tau_b(pred, Yval).mean())

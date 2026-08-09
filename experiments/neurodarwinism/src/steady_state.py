@@ -326,7 +326,9 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
     from spiky.util.chunk_of_connections import ChunkOfConnections
 
     K = len(genomes)
-    metas = stage2_metas(stdp_lr, w_max) if stdp_lr > 0 else delay_metas()
+    # d_max=D_MAX is NOT redundant: delay_metas' own default is bound at import from
+    # harness.D_MAX, so omitting it silently pins the bank at 20 delays and ignores --d-max.
+    metas = stage2_metas(stdp_lr, w_max) if stdp_lr > 0 else delay_metas(d_max=D_MAX)
     neuron_metas = [NeuronMeta(neuron_type=0, a=0.02, d=8.0),
                     NeuronMeta(neuron_type=1, a=0.1, d=2.0),
                     NeuronMeta(neuron_type=2, a=0.02, d=8.0),
@@ -388,6 +390,34 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
 
 
 GENOME_FIELDS = ("src_pool", "src_idx", "tgt_pool", "tgt_idx", "delay", "weight")
+
+
+def build_eval_pool(genome, device, stdp_lr, w_max, drive=None, seed=1):
+    """Build a ONE-MEMBER pool for scoring a saved/selected genome.
+
+    THE SINGLE ENTRY POINT for every evaluation build -- main()'s final held-out score and
+    eval_heldout.py both come through here -- because getting this wrong is silent.
+
+    A genome's `delay` column is an index into the meta bank the run trained against, and
+    build_pool picks that bank off `stdp_lr`: >0 gives stage2_metas' 2*(D_MAX-D_MIN+1) plastic +
+    frozen banks with inhibitory synapses offset by N_DELAY_METAS, 0 gives a single unoffset
+    bank. Evaluate with the wrong one and the indices mean something else.
+
+    The original held-out line was `build_pool([genomes[best_i]], dev, seed=1)` -- no stdp_lr,
+    no w_max, no drive. Two consequences, one loud and one quiet:
+      * LOUD: for d_max 48 the genome carries meta indices up to 95 into a 20-meta network. The
+        engine reads out of range and requests a nonsense allocation, surfacing as
+        cudaErrorMemoryAllocation. That is what killed exp004's evaluation and every one of its
+        40 supervisor retries -- it was never short of memory.
+      * QUIET: at d_max 20 the indices stay in range, so nothing crashes, but inhibitory
+        synapses land in the excitatory bank instead of the frozen one. The number that comes
+        out is for a different network than the one that was selected.
+
+    `drive` is the member's evolved output-drive scale, which the old path also dropped: it
+    scored the genome at drive 1.0 rather than at the value selection actually chose it with.
+    """
+    return build_pool([genome], device, seed=seed, stdp_lr=stdp_lr, w_max=w_max,
+                      drives=None if drive is None else np.asarray([float(drive)], np.float64))
 
 
 def build_pool_retry(genomes, device, seed, stdp_lr, w_max, rnd, retries=5, drives=None):
@@ -810,9 +840,12 @@ def main():
             _prog.progress_done(bar, ok=False, final_text="run failed — see log")
         raise
 
-    # final: score the best genome on the held-out set
+    # final: score the best genome on the held-out set. Through build_eval_pool, which carries
+    # the run's OWN meta bank (stdp_lr/w_max/D_MAX) and the member's own drive -- see the note
+    # there for what dropping any of them silently does.
     best_i = int(np.nanargmax(ewma))
-    hb = build_pool([genomes[best_i]], dev, seed=1)
+    hb = build_eval_pool(genomes[best_i], dev, a.stdp_lr, a.w_max,
+                         drive=drives[best_i] if a.drive_gene else None)
     fv, _, _ = score(hb, Xval, Yval, enc, a.current, a.tie_penalty)
     print(f"\nBEST member {best_i}: EWMA {ewma[best_i]:+.4f}  HELD-OUT corrected "
           f"{fv[0]:+.4f}  ({genomes[best_i]['weight'].size:,} synapses)")
