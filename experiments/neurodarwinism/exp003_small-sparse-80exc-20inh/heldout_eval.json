@@ -1,0 +1,164 @@
+{
+ "checkpoint": "ck_small8020.npz",
+ "member": 0,
+ "ewma": 0.2668548885136096,
+ "n_synapses": 1011,
+ "n_val": 2000,
+ "d_max": 20,
+ "stdp_lr": 0.01,
+ "n_metas": 40,
+ "drive_applied": null,
+ "repeats": 10,
+ "draws": [
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  },
+  {
+   "corrected_tau": 2.7755575615628914e-17,
+   "raw_tau": 0.17031832941093958,
+   "own_null": 0.17031832941093955,
+   "tie_rate": 0.6666666666666666,
+   "distinct_ticks_per_state": 2.0,
+   "tick_mean": 83.49391666666666,
+   "tick_std": 27.97947693685002,
+   "tick_min": 19,
+   "tick_max": 96,
+   "silent_frac": 0.8333333333333334
+  }
+ ],
+ "heldout_corrected_tau": {
+  "mean": 2.7755575615628914e-17,
+  "std": 0.0,
+  "min": 2.7755575615628914e-17,
+  "max": 2.7755575615628914e-17
+ },
+ "heldout_raw_tau": {
+  "mean": 0.17031832941093958,
+  "std": 0.0,
+  "min": 0.17031832941093958,
+  "max": 0.17031832941093958
+ },
+ "heldout_own_null": {
+  "mean": 0.17031832941093955,
+  "std": 0.0,
+  "min": 0.17031832941093955,
+  "max": 0.17031832941093955
+ },
+ "heldout_tie_rate": {
+  "mean": 0.6666666666666667,
+  "std": 1.1702778228589004e-16,
+  "min": 0.6666666666666666,
+  "max": 0.6666666666666666
+ },
+ "distinct_first_spike_ticks_per_state": {
+  "mean": 2.0,
+  "std": 0.0,
+  "min": 2.0,
+  "max": 2.0
+ }
+}

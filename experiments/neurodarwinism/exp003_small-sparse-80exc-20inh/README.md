@@ -1,5 +1,21 @@
 # exp003 — small sparse net, 80 exc / 20 inh, ~1k synapses
 
+> ## ⚠ THIS RESULT DOES NOT REPRODUCE ON THE CURRENT ENGINE
+>
+> Everything below was measured before [PR #92](https://github.com/anatoli-starostin/spiky/pull/92)
+> fixed four CUDA bugs, one of which corrupted delay readings for odd meta indices. Re-scoring
+> this exact checkpoint on the fixed engine (`src/eval_heldout.py`, 10 builds) gives corrected
+> tau-b **+0.0000 ± 0.0000 — chance.** 83 % of outputs never fire inside the 96-tick window,
+> five of the six dimensions are silent, and only 2.0 distinct first-spike ticks per state
+> survive against the 4.75 recorded here.
+>
+> A ~1k-synapse net is where corrupted delay handling does the most relative damage, so this is
+> the run most likely to have been *measuring the bug*. **Treat the headline below — "83× fewer
+> synapses, 70 % of the score" — as unverified.** It is a claim worth re-testing, and cheap to:
+> the whole run took 215 seconds. Until then it should not be cited. See
+> [the chapter README](../README.md#a-warning-about-every-held-out-number-here) and
+> `heldout_eval.json`.
+
 **Hypothesis.** exp002 buys score with 97k synapses per genome and nearly two GPU-hours. If
 most of that genome is inert — and the weight histogram says three quarters of it is — then a
 net two orders of magnitude smaller should keep most of the score. This is the capacity

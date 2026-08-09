@@ -16,7 +16,7 @@ the first to log the extra per-round diagnostics — `pool_std`, `pool_min`, `po
 | rounds | **208 / 300** (killed, see below) |
 | peak corrected tau-b | **+0.3720** at round 175 |
 | final EWMA best / mean | +0.3404 / +0.3390 |
-| **held-out** | **none — the run was terminated before evaluation** |
+| **held-out** | none from the run itself; measured post-hoc: **+0.3122 ± 0.0093** over 10 builds |
 | pool collapsed at round | 82 |
 | **tie rate, round 0 → 208** | **0.1148 → 0.2557** (max 0.2886) |
 | **live lineages, round 0 → 208** | **32 → 1** |
@@ -49,8 +49,14 @@ search.
 
 **Terminated externally to free the GPU for exp006.** Not a crash: the supervisor log records
 the launch and the warm-up and then simply ends — no nonzero-exit line, no `RUN COMPLETE`. The
-checkpoint at round 208 is intact (the weight/delay analytics in `summary.json` were computed
-from it), but no held-out evaluation ever ran.
+checkpoint at round 208 is intact, but no held-out evaluation ever ran.
+
+One has since been measured from that checkpoint with `src/eval_heldout.py` on the fixed
+engine: **+0.3122 ± 0.0093** over 10 builds (raw τ_b +0.3484, own null +0.0362, tie rate 0.174,
+3.98 distinct ticks/state; `heldout_eval.json` has all ten draws). That is **within one
+build-noise σ of exp002's refit +0.3277 and exp006's +0.3125** — so on held-out data the tie
+penalty neither helped nor measurably hurt. What it demonstrably did was double the tie rate,
+which is the finding above and does not depend on the held-out number.
 
 ## Reading
 

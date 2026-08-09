@@ -20,7 +20,8 @@ so a scalar stored there corrupts both.
 | rounds | 300 / 300, `rc=0`, 0 restarts |
 | peak corrected tau-b | **+0.4012** at round 175 |
 | final EWMA best / mean | +0.3530 / +0.3514 |
-| **held-out corrected tau-b** | **+0.3166** (member 2, 80,869 synapses) |
+| **held-out corrected tau-b** | **+0.3166** (member 2, 80,869 synapses) — *in-run, pre-#92 engine* |
+| held-out, refit on the fixed engine | **+0.3125 ± 0.0135** over 10 builds (`heldout_eval.json`) |
 | pool collapsed at round | 55 |
 | **tie rate, round 0 → 300** | **0.1310 → 0.2463** (max 0.2939) |
 | **live lineages, round 0 → 300** | **32 → 1** |
@@ -28,6 +29,14 @@ so a scalar stored there corrupts both.
 
 Held-out +0.3166, below exp002's +0.3742 at 3.7× less compute — and the tie rate rose by the
 same factor as in exp005 despite the mechanism existing specifically to lower it.
+
+> **Refit caveat, and it cuts both ways.** Re-scored on the post-#92 engine, exp006 gives
+> +0.3125 ± 0.0135 against exp002's +0.3277 ± 0.0101 — a gap of 0.015, about one build-noise σ.
+> The "below exp002" claim survives only as a training-score statement. Separately, the in-run
+> evaluation did **not** apply the net's evolved drive (`build_pool` was called with
+> `drives=None`), so the recorded +0.3166 scored the genome at drive 1.0 rather than at the
+> 0.904 it actually carried. Scoring it *with* its drive gives +0.3118 — within noise, so the
+> omission changed nothing here, but it would matter for a run whose gene had gone further.
 
 ## The gene's trajectory (`drive_trajectory.json`, from the 25-round snapshots)
 

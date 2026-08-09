@@ -39,6 +39,7 @@ some numbers survive).
 | `data.py` | `load()` / `sample_batch()` — the only way anything touches the teacher data. Was inside `es_smoke.py`. |
 | `steady_state.py` | **the loop.** Pool, EWMA, cull/clone, structural + weight mutation, the drive gene, checkpoint/resume. This is the file to read first. |
 | `supervise_run.py` | relaunches a wedged or crashed run from its checkpoint. Written because of the engine hangs; kept because runs are hours long. |
+| `eval_heldout.py` | scores a saved checkpoint's best member on the held-out set in a fresh process, `--repeats N` times. Written to recover exp004's lost number; keep using it, because the in-run evaluation builds the wrong meta bank and a single build is not a measurement. |
 | `lut_ttfs.py`, `student.py`, `real_snn.py` | the gradient-trained comparison line (learnable race front-end, TTFS student, direct LIF student). Not part of the evolution loop. |
 | `analytics/` | post-hoc, read-only. `run_all.py` regenerates the CPU-safe figures into `analytics/out/` (gitignored). |
 | `tests/` | invariant checks against the spnet engine — chunk validation, sort order, multi-meta builds, and the weight-placement checks that caught the group-alignment bug. |
@@ -63,24 +64,71 @@ ND_OUT=$PWD python -u ../src/steady_state.py --pool 32 --rounds 300 --tag _yourt
 
 ## The six experiments
 
-| # | run | rounds | peak τ_b | held-out | wall | what it tested |
-|---|---|---:|---:|---:|---:|---|
-| [001](exp001_k32-baseline) | K=32 baseline | 136/∞ | +0.3498 | — | 534 s | does the loop climb at all? |
-| [002](exp002_k128-pool) | K=128 pool | 300 | **+0.4308** | **+0.3742** | 6772 s | does 4× the pool buy 4× the search? |
-| [003](exp003_small-sparse-80exc-20inh) | 80 exc / 20 inh, ~1k syn | 300 | +0.3026 | +0.2490 | 215 s | how much of the score is capacity? |
-| [004](exp004_wide-exc-delays-1-48) | delays 1–48, 96 metas | 300 | +0.3995 | — | 2153 s | is the delay range the bottleneck? |
-| [005](exp005_tie-penalty-0.1) | fitness − 0.1·tie_rate | 208/300 | +0.3720 | — | 1225 s | can selection be pushed off ties? |
-| [006](exp006_drive-gene) | evolvable output drive | 300 | +0.4012 | +0.3166 | 1824 s | can the net evolve its own spike timing? |
+| # | run | rounds | peak τ_b | held-out (in-run) | held-out (refit) | wall | what it tested |
+|---|---|---:|---:|---:|---:|---:|---|
+| [001](exp001_k32-baseline) | K=32 baseline | 136/∞ | +0.3498 | — | — | 534 s | does the loop climb at all? |
+| [002](exp002_k128-pool) | K=128 pool | 300 | **+0.4308** | +0.3742 | **+0.3277** ±0.0101 | 6772 s | does 4× the pool buy 4× the search? |
+| [003](exp003_small-sparse-80exc-20inh) | 80 exc / 20 inh, ~1k syn | 300 | +0.3026 | +0.2490 | **+0.0000** ±0.0000 | 215 s | how much of the score is capacity? |
+| [004](exp004_wide-exc-delays-1-48) | delays 1–48, 96 metas | 300 | +0.3995 | — (bug) | **+0.2761** ±0.0321 | 2153 s | is the delay range the bottleneck? |
+| [005](exp005_tie-penalty-0.1) | fitness − 0.1·tie_rate | 208/300 | +0.3720 | — | **+0.3122** ±0.0093 | 1225 s | can selection be pushed off ties? |
+| [006](exp006_drive-gene) | evolvable output drive | 300 | +0.4012 | +0.3166 | **+0.3125** ±0.0135 | 1824 s | can the net evolve its own spike timing? |
 
 τ_b is Kendall tau-b against the teacher's action ordering, corrected by each model's **own**
-label-shuffle null. Three runs have no held-out number and the reasons differ — an engine
-hang, an OOM, and a manual kill. Each README says which.
+label-shuffle null. exp001 never reached a held-out evaluation (the engine hung) and no
+checkpoint survives, so it has neither column.
+
+**The two held-out columns are different regimes. Do not compare across them** — read the
+section immediately below before using any number in this table.
+
+## A warning about every held-out number here
+
+Recovering exp004's missing held-out score turned up two problems that apply to the whole
+chapter. Both were found by re-running evaluations, not by reading code.
+
+**1. Rebuilding the same genome does not give the same network.** Ten independent builds of one
+saved genome, scored on the same held-out set, spread **±0.01 to ±0.03** in corrected tau —
+exp004's ten draws run from +0.2225 to +0.3170. Every single-shot held-out number in this
+chapter, including all the in-run ones, is one draw from that distribution reported without its
+uncertainty. Differences smaller than ~0.05 between two runs are not resolvable by one
+evaluation each. `src/eval_heldout.py --repeats N` exists because of this; use it.
+
+**2. The engine fix changed the answers, so pre-#92 numbers do not reproduce.** The in-run
+held-out column was produced by the engine *before*
+[PR #92](https://github.com/anatoli-starostin/spiky/pull/92) — in particular before the
+backward-groups hash-key overlap that corrupted delay readings for odd meta indices was fixed.
+Re-scoring the identical checkpoints on the fixed engine gives materially different results,
+and `analytics/tie_rate.py` reproduces the shift on its own metrics too (exp002 teacher
+agreement 0.574 → 0.613, exp004 0.632 → 0.583). Genomes that evolved against buggy dynamics do
+not carry over to correct ones.
+
+**exp003 is the extreme case and deserves flagging on its own: on the fixed engine it is
+completely dead.** 83 % of its outputs never fire inside the 96-tick window, five of six
+dimensions are silent, only 2.0 distinct ticks per state remain, and corrected tau is exactly
+**0.0000** — chance. Its recorded +0.2490 was measured on a net whose behaviour the current
+engine does not produce. The "83× fewer synapses for 70 % of the score" result in
+[exp003's README](exp003_small-sparse-80exc-20inh) should be treated as **unverified** until it
+is re-run from scratch on the fixed engine; a 1k-synapse net is exactly where corrupted delay
+handling would do the most relative damage.
+
+The refit column is internally consistent (one engine, one method, 10 builds each) and is the
+one to use for comparisons. It also flattens the chapter's headline: exp002, exp005 and exp006
+land within 0.016 of each other, which is inside the build noise. On the fixed engine, **the
+only clearly separated results are exp004 below the rest and exp003 at chance.**
 
 ## What we learned
 
-**1. Pool size is the lever, and it is the only clean win.** K=32 → K=128 took peak
-+0.3498 → +0.4308 and held-out to +0.3742, at 12× the wall clock. Nothing else tried here
-beat the baseline by as much.
+> Points 1 and 5–6 below are stated in *training* τ_b and the pre-#92 analytics, because that
+> is the regime the experiments were run and compared in. Where the refit column changes the
+> conclusion, it says so.
+
+**1. Pool size is the lever — on training score. It does not survive the refit.** K=32 → K=128
+took peak +0.3498 → +0.4308 and in-run held-out to +0.3742, at 12× the wall clock, and nothing
+else tried here beat the baseline by as much. But re-scored on the fixed engine, exp002
+(+0.3277 ±0.0101), exp005 (+0.3122 ±0.0093) and exp006 (+0.3125 ±0.0135) sit within 0.016 of
+each other — roughly one build-noise σ apart. **The K=128 advantage is visible in training and
+not resolvable on held-out data at this measurement precision.** Establishing it properly needs
+a K=32-vs-K=128 pair re-run on the fixed engine with repeated evaluations, which nothing here
+has.
 
 **2. The pool collapses to a single lineage, long before it stops improving.** exp005 and
 exp006 are the only runs that logged `n_lineages` — the number of round-0 ancestors still

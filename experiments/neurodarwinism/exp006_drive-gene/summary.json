@@ -34,5 +34,25 @@
   "exc_max_weight": 58.2,
   "delay_effective_frac": 0.253,
   "delay_weighted_mean": 5.41
+ },
+ "heldout_refit_fixed_engine": {
+  "corrected_tau_mean": 0.3125,
+  "corrected_tau_std": 0.0135,
+  "corrected_tau_min": 0.299,
+  "corrected_tau_max": 0.3367,
+  "n_builds": 10,
+  "member": 2,
+  "n_metas": 40,
+  "d_max": 20,
+  "engine": "post-PR#92 (fixed)",
+  "raw_tau_mean": 0.4824,
+  "own_null_mean": 0.17,
+  "tie_rate_mean": 0.2795,
+  "distinct_ticks_per_state_mean": 3.3838,
+  "silent_frac": 0.0,
+  "note": "Measured on 2026-08-09 by src/eval_heldout.py in a fresh standalone process, 10 independent builds of the same genome. TWO CAVEATS THAT MATTER. (1) This runs against the engine WITH the four CUDA fixes from PR #92; the in-run numbers recorded during the original runs were produced by the buggy engine and are NOT reproducible against the current one, so the two columns are different regimes and must not be compared. (2) Building the same genome twice does not give the same network -- hence the std over 10 builds. Single-draw held-out numbers in this chapter, including every in-run one, carry that uncertainty silently.",
+  "detail": "heldout_eval.json",
+  "recorded_in_run_buggy_engine": 0.3166,
+  "delta_vs_recorded": -0.0041
  }
 }

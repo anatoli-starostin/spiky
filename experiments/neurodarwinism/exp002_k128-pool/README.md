@@ -14,7 +14,8 @@ same ~97k synapses per genome, same delays 1–20. `config.json` is reconstructe
 | rounds | 300 / 300, `rc=0`, 0 restarts |
 | peak corrected tau-b | **+0.4308** at round 281 |
 | final EWMA best / mean | +0.3765 / +0.3732 |
-| **held-out corrected tau-b** | **+0.3742** (member 54, 84,626 synapses) |
+| **held-out corrected tau-b** | **+0.3742** (member 54, 84,626 synapses) — *in-run, pre-#92 engine* |
+| held-out, refit on the fixed engine | **+0.3277 ± 0.0101** over 10 builds (`heldout_eval.json`) |
 | pool collapsed at round | 126 |
 | synapses per net | 97,100 → 85,228 |
 | wall | 6772 s |
@@ -25,6 +26,12 @@ one: it is what you get by paying for it.
 
 Held-out (+0.3742) sits essentially on the final training EWMA (+0.3765), so the pool is not
 overfitting the resampled batch stream — the ceiling is real, not memorisation.
+
+> **Refit caveat.** Re-scored on the post-#92 engine over 10 builds this genome gives
+> **+0.3277 ± 0.0101**, and exp005 (+0.3122) and exp006 (+0.3125) land within 0.016 of it —
+> about one build-noise σ. The K=128 advantage is clear in *training* score and is **not
+> resolvable on held-out data** at this precision. See
+> [the chapter README](../README.md#a-warning-about-every-held-out-number-here).
 
 ## What the checkpoint says
 

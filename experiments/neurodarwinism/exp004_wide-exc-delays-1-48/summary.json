@@ -1,10 +1,10 @@
 {
  "experiment": "exp004_wide-exc-delays-1-48",
- "status": "complete-but-unevaluated",
+ "status": "complete (held-out recovered post-hoc)",
  "rounds_completed": 300,
  "rounds_requested": 300,
- "heldout_corrected_tau": null,
- "why_no_heldout": "all 300 rounds finished, then the held-out evaluation died with RuntimeError: CUDA runtime API error cudaErrorMemoryAllocation in build_pool -> sp.add_connections (steady_state.py:731). The supervisor relaunched from the checkpoint 40 times; every attempt died at the same point, and it gave up. 96 delay metas at K=32 does not fit alongside the pool. The history is intact; only the held-out number is missing, and it is cheap to recover by evaluating the checkpoint alone.",
+ "heldout_corrected_tau": 0.2761,
+ "why_no_heldout": "RECOVERED 2026-08-09. The original in-run evaluation died with cudaErrorMemoryAllocation and 40 supervisor restarts died identically -- but it was never actually out of memory. steady_state.py:816 calls build_pool without stdp_lr, so the evaluation built harness.delay_metas() -- 20 metas, d_max bound at import -- while this run's genome carries meta indices up to 95 (d_max 48, stage2's 96-meta plastic+frozen banks). The engine dereferenced out of range and requested a nonsense allocation. Re-evaluated standalone with the correct bank: +0.2761 +/- 0.0321 over 10 builds.",
  "exit": "rc=1 x41, supervisor gave up after 40 restarts",
  "rounds": 300,
  "peak": 0.3994538684502399,
@@ -30,5 +30,25 @@
   "delay_effective_frac": 0.12,
   "delay_weighted_mean": 5.18,
   "delay_mean": 23.0
- }
+ },
+ "heldout_refit_fixed_engine": {
+  "corrected_tau_mean": 0.2761,
+  "corrected_tau_std": 0.0321,
+  "corrected_tau_min": 0.2225,
+  "corrected_tau_max": 0.317,
+  "n_builds": 10,
+  "member": 31,
+  "n_metas": 96,
+  "d_max": 48,
+  "engine": "post-PR#92 (fixed)",
+  "raw_tau_mean": 0.3225,
+  "own_null_mean": 0.0464,
+  "tie_rate_mean": 0.1654,
+  "distinct_ticks_per_state_mean": 4.0437,
+  "silent_frac": 0.0,
+  "note": "Measured on 2026-08-09 by src/eval_heldout.py in a fresh standalone process, 10 independent builds of the same genome. TWO CAVEATS THAT MATTER. (1) This runs against the engine WITH the four CUDA fixes from PR #92; the in-run numbers recorded during the original runs were produced by the buggy engine and are NOT reproducible against the current one, so the two columns are different regimes and must not be compared. (2) Building the same genome twice does not give the same network -- hence the std over 10 builds. Single-draw held-out numbers in this chapter, including every in-run one, carry that uncertainty silently.",
+  "detail": "heldout_eval.json"
+ },
+ "heldout_member": 31,
+ "heldout_member_synapses": 80781
 }
