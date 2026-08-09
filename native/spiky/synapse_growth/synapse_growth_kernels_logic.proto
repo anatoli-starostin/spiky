@@ -504,7 +504,8 @@ merge_chains_logic(
 sort_chains_by_synapse_meta_logic(
     uint32_t* input,
     uint32_t n_connection_blocks,
-    uint32_t single_block_size
+    uint32_t single_block_size,
+    uint32_t* error_counter
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < n_connection_blocks) {
@@ -515,8 +516,22 @@ sort_chains_by_synapse_meta_logic(
 
         if((main_header.source_neuron_id > 0) && (main_header.n_target_neurons == 0)) {
             #ifdef ATOMIC
-            if(atomicAdd(&(reinterpret_cast<ConnectionsBlockHeader*>(input + current_chain_root_int_offset)->n_target_neurons), 0) > 0) {
-                // if n_target_neurons > 0 then we have root that was changed by another thread during sorting and we shouldn't touch it
+            // EXCLUSIVE CLAIM on this chain. This used to be atomicAdd(&n_target_neurons, 0),
+            // which is a READ, not a claim: two threads could both observe 0 and both sort
+            // the SAME chain. That matters because sorting MOVES the root (a swap clears
+            // source_neuron_id on the old root and sets it on the new one), so a thread whose
+            // block only becomes a root part-way through another thread's sort would start a
+            // second, concurrent sort of that chain. Two sorters rewriting shift_to_next_group
+            // in place produce either a CYCLE -- the consumer's chain walks in
+            // connections_manager then spin forever at 100% GPU -- or a TRUNCATED chain, which
+            // trips create_forward_groups' "shouldn't happen" error counter and surfaces as
+            // "some error happened inside create_forward_groups kernel". Same defect, two
+            // faces, nondeterministic; measured ~1 build in 35 at K=32.
+            // atomicCAS makes the claim atomic: exactly one thread wins a chain, losers return.
+            // n_target_neurons is only a 0/1 root marker at this stage -- final_sort assigns
+            // the real per-sublist counts afterwards -- so it is safe to use as the claim word,
+            // and the swap below already migrates the marker to the new root.
+            if(atomicCAS(&(reinterpret_cast<ConnectionsBlockHeader*>(input + current_chain_root_int_offset)->n_target_neurons), 0u, 1u) != 0u) {
                 return;
             }
             #endif
@@ -529,23 +544,68 @@ sort_chains_by_synapse_meta_logic(
             int64_t secondary_int_offset;
             int64_t prev_secondary_int_offset;
 
+            // BELT-AND-SUSPENDERS (not the primary fix): both walks below are unbounded and
+            // exit only on shift_to_next_group == 0, so a cyclic chain spins the GPU forever
+            // and cannot be killed. The primary fix is the atomic claim-then-publish above;
+            // these caps merely turn any residual corruption into a diagnosable ValueError.
+            // A walk cannot legitimately visit more blocks than exist.
+            uint32_t outer_steps = 0;
             while(main_header.shift_to_next_group != 0) {
+                if(++outer_steps > n_connection_blocks) {
+                    #ifdef ATOMIC
+                    atomicAdd(error_counter, 1);
+                    #else
+                    *error_counter += 1;
+                    #endif
+                    break;
+                }
                 secondary_int_offset = main_int_offset + main_header.shift_to_next_group;
                 secondary_header = *reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset);
                 prev_secondary_int_offset = main_int_offset;
 
+                uint32_t inner_steps = 0;
                 while(true) {
+                    if(++inner_steps > n_connection_blocks) {
+                        #ifdef ATOMIC
+                        atomicAdd(error_counter, 1);
+                        #else
+                        *error_counter += 1;
+                        #endif
+                        break;
+                    }
                     if((secondary_header.synapse_meta_index < main_header.synapse_meta_index) || ((secondary_header.synapse_meta_index == main_header.synapse_meta_index) && (main_int_offset > secondary_int_offset))) {
                         // do swap if needed
                         if(main_int_offset == current_chain_root_int_offset) {
                             #ifdef ATOMIC
-                            atomicAdd(&(reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset)->n_target_neurons), 1);
+                            // ROOT MIGRATION, CLAIM-THEN-PUBLISH, ATOMICALLY AND IN THAT ORDER.
+                            // The previous code marked the new root with atomicAdd and then
+                            // published source_neuron_id with a PLAIN STORE, with nothing
+                            // ordering the two. Another thread could observe the publication
+                            // before the marker -- seeing source_neuron_id > 0 while
+                            // n_target_neurons was still 0 -- pass the outer ownership test,
+                            // win its own entry CAS, and start a SECOND concurrent sort of this
+                            // chain. Two sorters rewriting shift_to_next_group in place close a
+                            // cycle in the list, and this kernel's own walks then spin forever
+                            // (measured: 6 hangs in 40 builds at K=128, all inside this kernel).
+                            // Marker first, threadfence, then publish the root with atomicCAS so
+                            // claiming and publishing cannot be observed out of order.
+                            atomicExch(&(reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset)->n_target_neurons), 1u);
+                            __threadfence();
+                            if(atomicCAS(&(reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset)->source_neuron_id), 0u, static_cast<uint32_t>(source_neuron_id)) != 0u) {
+                                // Someone else already owns this block as a root. With exclusive
+                                // claims this is unreachable; report rather than corrupt.
+                                atomicAdd(error_counter, 1);
+                                return;
+                            }
+                            __threadfence();
+                            atomicExch(&(reinterpret_cast<ConnectionsBlockHeader*>(input + main_int_offset)->source_neuron_id), 0u);
+                            atomicExch(&(reinterpret_cast<ConnectionsBlockHeader*>(input + main_int_offset)->n_target_neurons), 0u);
                             #else
                             reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset)->n_target_neurons++;
-                            #endif
                             reinterpret_cast<ConnectionsBlockHeader*>(input + secondary_int_offset)->source_neuron_id = source_neuron_id;
                             reinterpret_cast<ConnectionsBlockHeader*>(input + main_int_offset)->source_neuron_id = 0;
                             reinterpret_cast<ConnectionsBlockHeader*>(input + main_int_offset)->n_target_neurons = 0;
+                            #endif
                             current_chain_root_int_offset = secondary_int_offset;
                         }
 
