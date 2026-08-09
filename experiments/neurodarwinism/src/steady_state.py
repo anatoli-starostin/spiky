@@ -382,7 +382,24 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
                                                 torch.full((n,), float(i))], 1))
     tri_t = torch.tensor(triples, dtype=torch.int32, device=device)
     w_t = torch.tensor(weights, dtype=torch.float32, device=device)
-    chunk = ge._grow_explicit(tri_t, seed, weights=w_t)
+    # NEVER pass weights= to _grow_explicit. Its aligner, SynapseGrowthEngine.
+    # _build_group_aligned_weights, recovers each block's owning source by carrying the last
+    # non-zero source header FORWARD IN MEMORY ORDER, on the stated premise that "the explicit
+    # build lays each source's groups out contiguously" (synapse_growth.py:408). It does not.
+    # finalize() -> merge_chains stitches a source's per-meta chains together by demoting all
+    # but one root to source_id 0 and linking the tail with a SIGNED offset to an arbitrary
+    # block (synapse_growth_kernels_logic.cu:1400-1418), so a chained group never physically
+    # follows its root. Measured on exp002 member 54 at group size 128: 38,002 blocks, 19,001
+    # occupied, 1,017 surviving roots, 0 of 17,984 chain links contiguous, ~half pointing
+    # backward -- the forward-fill names the right source for 5.4% of blocks, delivering
+    # 47.8% of the non-zero weights and 32% of the total weight. The rest is silently dropped
+    # to 0.0 by a wmap lookup miss. On top of that the block layout is itself nondeterministic
+    # (atomicAdd bump allocator, kernels_logic.cu:1324), so the surviving 32% differed on every
+    # rebuild of the same genome. group_aligned_weights FOLLOWS the chain instead and is exact.
+    chunk = ge._grow_explicit(tri_t, seed)
+    conn = chunk.get_connections()
+    wbuf = group_aligned_weights(conn, tri_t, w_t, ENGINE_GROUP_SIZE)
+    chunk = ChunkOfConnections(conn, ENGINE_GROUP_SIZE, weights=wbuf)
     sp.add_connections(chunk, seed)
     chunk.recycle()
     sp.compile(shuffle_synapses_random_seed=None)
