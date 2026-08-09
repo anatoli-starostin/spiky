@@ -1,0 +1,22 @@
+# Experiment artifacts. Source, findings and per-round histories ARE tracked; anything large
+# or regenerable is not.
+
+# Checkpoints (12-49 MB each) and the distillation dataset (21 MB) never go in git. The
+# *.npz.hist.json sidecars beside them are small text and ARE the per-round scientific record
+# the analytics modules read, so they are explicitly kept.
+*.npz
+*.npz.*
+!*.npz.hist.json
+spiking/results/prefix_backup/
+
+# Mid-run pool snapshots: the .npz are large and their .hist.json sidecars just repeat a
+# prefix of the run's own history, which is already tracked as results/ck_<tag>.npz.hist.json.
+spiking/results/snapshots/
+
+# Run logs (also caught by the repo-root *.log rule; spelled out here so it is obvious).
+logs/
+
+# Analytics figures/JSON: regenerate with `python analytics/run_all.py`.
+spiking/analytics/out/
+
+__pycache__/
