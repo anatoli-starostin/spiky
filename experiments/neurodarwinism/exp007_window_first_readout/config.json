@@ -1,0 +1,64 @@
+{
+ "experiment": "exp007_window_first_readout",
+ "script": "../src/steady_state.py",
+ "_provenance": "Geometry, d_max, stdp_lr and batch cloned from exp001_k32-baseline -- the only K=32 configuration with no extra mechanism (exp004 changes d_max, exp005 adds a tie penalty, exp006 adds the drive gene). Rounds raised 136 -> 300 to match every other completed run in the chapter; exp001 stopped at 136 because the engine hung, not by design. Unlike exp001's own config.json, nothing here is reconstructed: this is the configuration as launched.",
+ "launch_command": "cd experiments/neurodarwinism/exp007_window_first_readout && ND_OUT=$PWD nohup python -u ../src/steady_state.py --pool 32 --rounds 300 --batch 64 --n-val 2000 --stdp-lr 0.01 --d-max 20 --readout-window 48 --coverage-penalty 1.0 --seed-genome <exp002 ck_k128.npz> --ckpt $PWD/ck_window48.npz --tag _window48 > run.log 2>&1 &",
+
+ "under_test": {
+  "readout_window": 48,
+  "_readout_meaning": "rank the six outputs on their first spike inside ticks [48, 96), re-based to 0..47; spikes before tick 48 are discarded entirely and an output with none in the window reads 48 (silent)",
+  "coverage_penalty": 1.0,
+  "_penalty_meaning": "TRAINING-ONLY. selection fitness = corrected_tau - 1.0 * (mean number of the 6 outputs with no spike in the window, per state). Range of the penalty term is 0..-6, which dwarfs tau's +-1, so coverage dominates until satisfied and ordering takes over afterwards. NEVER applied to the held-out score.",
+  "warm_start": {
+   "seed_genome": "exp002 ck_k128.npz",
+   "seed_member": "auto (highest EWMA -> member 54, EWMA +0.3765, 84,626 synapses)",
+   "_why": "a random seed genome has almost no output activity, so under a narrow window the whole pool starts at coverage 6/6 and fitness is flat -- selection has nothing to grip. Cloning one evolved genome into all K slots starts the pool somewhere the window can see, and mutation diversifies it from round 1."
+  }
+ },
+
+ "held_out_protocol": {
+  "penalties_applied": "none",
+  "_note": "the held-out score is PURE windowed corrected tau. Both the coverage penalty and the tie penalty are training scaffolds and are explicitly passed as 0 in main()'s held-out block and in eval_heldout.py, so the reported number stays comparable with every other experiment. (This is also a behaviour fix: the old held-out call forwarded a.tie_penalty, so an exp005-style run would have reported tau - 0.1*tie_rate as its held-out score.)",
+  "reevaluate_with": "python ../src/eval_heldout.py --ckpt ck_window48.npz --d-max 20 --stdp-lr 0.01 --readout-window 48 --repeats 10"
+ },
+
+ "config": {
+  "pool": 32,
+  "rounds": 300,
+  "cull_per_round": 8,
+  "alpha": 0.3,
+  "grace": 2,
+  "batch": 64,
+  "n_val": 2000,
+  "stdp_lr": 0.01,
+  "d_max": 20,
+  "n_in": 17,
+  "n_exc": 800,
+  "n_inh": 200,
+  "n_out": 6,
+  "fanout_scale": 1.0,
+  "fanout_e": 80,
+  "fanout_i": 20,
+  "fanout_inh": 100,
+  "fanout_in": 100,
+  "fanin_out": 100,
+  "w_max": 30.0,
+  "current": 200.0,
+  "seed": 0,
+  "tie_penalty": 0.0,
+  "drive_gene": false,
+  "per_member_fitness_logging": true,
+  "snapshot_every": 25
+ },
+
+ "changed_vs_exp001": {
+  "rounds": [136, 300],
+  "readout_window": [null, 48],
+  "coverage_penalty": [0.0, 1.0],
+  "pool_init": ["random seed genomes", "warm start from exp002 best"]
+ },
+
+ "why_not_the_original_final_32_design": "The first design read the final 32 ticks, [64,96). Measurement killed it before it ran: output spiking on seed genomes stops at tick 33, so that window is empty by construction -- fitness exactly 0.0 for every member, tie rate 1.0, one distinct output vector across 500 states. It was not a seed-genome artefact either: exp002's best evolved genome puts 42 of its 59,971 output spikes at tick >= 64 (windowed fitness +0.0048, 98.6 % silent) and exp004's puts 1,572 of 25,178 (windowed fitness -0.0351). Opening the window at 48 instead of 64, warm-starting from an evolved genome, and adding the coverage penalty are the three changes that give selection something to grip.",
+
+ "missing_control": "There is still no matched TTFS baseline on the post-PR#92 engine. exp001 ran 136 rounds pre-fix, so comparing exp007's held-out against its +0.3498 would repeat the cross-engine error documented in the chapter README. A 300-round K=32 TTFS control on the fixed engine is the natural companion run."
+}

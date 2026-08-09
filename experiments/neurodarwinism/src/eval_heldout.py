@@ -69,6 +69,9 @@ def main():
                     help="MUST match the run: build_pool sizes the neuron pools from this and "
                          "the genome's indices are relative to it")
     ap.add_argument("--n-inh", type=int, default=S.N_INH)
+    ap.add_argument("--readout-window", type=int, default=None,
+                    help="MUST match the run. Rank on the first spike within the final W ticks "
+                         "only; unset = first spike anywhere in the 96-tick simulation.")
     ap.add_argument("--use-drive", action="store_true",
                     help="apply the member's evolved output-drive scale from the checkpoint. "
                          "The in-run evaluation did NOT (it calls build_pool with drives=None), "
@@ -112,13 +115,19 @@ def main():
     if dr is not None:
         print(f"  applying evolved drive {dr[0]:.4f}", flush=True)
 
+    # a silent output reads as N_TICKS under the full-window readout and as W under a
+    # windowed one -- ask the harness rather than hard-coding either
+    _null = S.readout_null(a.readout_window)
     draws = []
     for rep in range(a.repeats):
         # same helper steady_state.main()'s own held-out score goes through, so the two paths
         # cannot drift apart again
         hb = S.build_eval_pool(genomes[best_i], a.device, a.stdp_lr, a.w_max,
                                drive=None if dr is None else dr[0])
-        fit, first, ties = S.score(hb, Xval, Yval, enc, a.current, a.tie_penalty)
+        # penalties stay at 0 here on purpose: a held-out number must be pure windowed tau
+        fit, first, ties, miss = S.score(hb, Xval, Yval, enc, a.current, a.tie_penalty,
+                                         readout_window=a.readout_window,
+                                         coverage_penalty=0.0)
         pred = -first[:, 0, :]
         raw = float(S.kendall_tau_b(pred, Yval).mean())
         t = first[:, 0, :]
@@ -128,7 +137,8 @@ def main():
             distinct_ticks_per_state=float(np.mean([len(np.unique(r)) for r in t])),
             tick_mean=float(t.mean()), tick_std=float(t.std()),
             tick_min=int(t.min()), tick_max=int(t.max()),
-            silent_frac=float((t >= S.N_TICKS).mean())))
+            silent_frac=float((t >= _null).mean()),
+            coverage_miss=float(miss[0])))
         print(f"  draw {rep + 1}/{a.repeats}: corrected {draws[-1]['corrected_tau']:+.4f}  "
               f"raw {raw:+.4f}  tie {draws[-1]['tie_rate']:.4f}  "
               f"ticks/state {draws[-1]['distinct_ticks_per_state']:.3f}", flush=True)
@@ -144,6 +154,7 @@ def main():
         checkpoint=os.path.basename(a.ckpt), member=best_i, ewma=float(ewma[best_i]),
         n_synapses=n_syn, n_val=int(Xval.shape[0]),
         d_max=a.d_max, stdp_lr=a.stdp_lr, n_metas=n_metas,
+        readout_window=a.readout_window,
         drive_applied=float(dr[0]) if dr is not None else None,
         repeats=a.repeats, draws=draws,
         heldout_corrected_tau=agg("corrected_tau"), heldout_raw_tau=agg("raw_tau"),

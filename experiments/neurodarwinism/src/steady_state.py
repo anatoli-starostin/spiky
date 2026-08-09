@@ -28,7 +28,7 @@ import torch
 
 from harness import (D_MAX, D_MIN, GROUP_SIZE, LatencyEncoder, N_EXC, N_INH, N_IN,
                      N_OUT, N_TICKS, RES_W_INH, delay_metas, group_aligned_weights,
-                     kendall_tau_b, own_null, run_episode)
+                     kendall_tau_b, own_null, readout_null, run_episode)
 from data import load, sample_batch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -587,14 +587,42 @@ def tie_rate_per_member(first, n_out=N_OUT):
     return (d == 0).mean(axis=(0, 2))                    # [P]
 
 
-def score(h, X, Y, enc, current=200.0, tie_penalty=0.0):
+def coverage_miss_per_member(first, readout_window=None):
+    """Mean number of the 6 outputs that produced NO spike in the readout window, per state.
+
+    Range 0..N_OUT. 0 means every output fired inside the window for every state; N_OUT means
+    the window is empty and there is nothing to rank.
+    """
+    return (first >= readout_null(readout_window)).sum(-1).mean(0)
+
+
+def score(h, X, Y, enc, current=200.0, tie_penalty=0.0, readout_window=None,
+          coverage_penalty=0.0):
     """Corrected tau per pool member: raw tau minus that member's OWN null.
 
     With tie_penalty > 0 the fitness becomes  corrected_tau - lambda * tie_rate, so a net that
     encodes six actions in three distinguishable ticks is charged for it. tau-B itself is
     computed exactly as before; the penalty is a separate additive term.
+
+    coverage_penalty is a SCAFFOLD FOR WINDOWED READOUTS, and a training-time term only. Under
+    a narrow window most outputs may not fire at all, and tau-b cannot see the difference
+    between "silent" and "ranked last" -- every silent output sits at the same null value, so
+    they tie, and tau-b discards ties from its denominator. A pool where nothing fires in the
+    window is therefore FLAT: every member scores ~0 and selection has nothing to choose
+    between. Subtracting lambda * (outputs missing from the window) restores a gradient that
+    points at firing in the window at all, before ordering matters. At the default lambda of
+    1.0 a fully silent member sits at -6, which dwarfs tau's +-1 range, so coverage dominates
+    until it is satisfied and ordering takes over afterwards.
+
+    It is a scaffold, not a metric: it must NEVER appear in a reported number. main()'s
+    held-out block and eval_heldout.py both call this with the penalties at 0 so the held-out
+    score stays pure windowed tau and stays comparable across experiments.
+
+    readout_window is passed straight to run_episode; None keeps the full-window TTFS default.
+
+    -> (fitness, first-spike ticks, tie rate per member, coverage miss per member)
     """
-    first, _ = run_episode(h, X, enc, current)
+    first, _ = run_episode(h, X, enc, current, readout_window=readout_window)
     out = []
     for p in range(h["P"]):
         pred = -first[:, p, :]
@@ -604,9 +632,12 @@ def score(h, X, Y, enc, current=200.0, tie_penalty=0.0):
         out.append(raw - nl)
     fit = np.array(out)
     ties = tie_rate_per_member(first)
+    miss = coverage_miss_per_member(first, readout_window)
     if tie_penalty:
         fit = fit - tie_penalty * ties
-    return fit, first, ties
+    if coverage_penalty:
+        fit = fit - coverage_penalty * miss
+    return fit, first, ties, miss
 
 
 # ----------------------------------------------------------------- the loop
@@ -663,6 +694,25 @@ def main():
     ap.add_argument("--tie-penalty", type=float, default=0.0,
                     help="fitness becomes corrected_tau - LAMBDA * tie_rate. 0.0 (default) "
                          "reproduces the previous fitness exactly")
+    ap.add_argument("--coverage-penalty", type=float, default=0.0,
+                    help="TRAINING-ONLY scaffold for windowed readouts: subtract LAMBDA * "
+                         "(number of the 6 outputs with no spike in the window) from the "
+                         "selection fitness. At 1.0 a fully silent member sits at -6, so "
+                         "coverage dominates tau until it is satisfied. NEVER applied to "
+                         "the held-out score. 0.0 (default) = off, previous behaviour.")
+    ap.add_argument("--seed-genome", default=None,
+                    help="WARM START: path to a ck_*.npz whose best member is cloned into "
+                         "all K slots instead of generating random seed genomes. Use when "
+                         "a fresh pool would start flat -- a random genome has almost no "
+                         "output activity to select on under a narrow readout window.")
+    ap.add_argument("--seed-member", type=int, default=None,
+                    help="which member of --seed-genome to clone (default: highest EWMA)")
+    ap.add_argument("--readout-window", type=int, default=None,
+                    help="rank the outputs on their first spike within the FINAL W ticks only, "
+                         "re-based to 0..W-1, with spikes before the window discarded and a "
+                         "silent output reading W. Unset (default) = first spike anywhere in "
+                         "the 96-tick simulation, i.e. the previous behaviour exactly. "
+                         "W=32 matches the declared [64,96) readout phase")
     # evolvable output-drive gene (off by default -> previous behaviour exactly)
     ap.add_argument("--drive-gene", action="store_true",
                     help="per-net evolvable scale on the synaptic drive into the 6 output "
@@ -711,6 +761,24 @@ def main():
         print(f"RESUMED from {a.ckpt} at round {start_rnd} "
               f"({len(genomes)} genomes, {len(hist_resumed)} rounds of history, "
               f"rng {'restored' if rng_state else 'RESEEDED'})")
+    elif a.seed_genome:
+        # WARM START. Every slot is a clone of one evolved genome; mutation diversifies them
+        # from round 1 onward. The pool therefore begins IDENTICAL, which is deliberate --
+        # under a narrow readout window a random genome has essentially no output activity,
+        # so a cold pool starts flat and selection has nothing to grip. Lineages are still
+        # numbered per slot: they track divergence from here, not independent ancestry.
+        src_g, src_ewma, *_ = load_ckpt(a.seed_genome)
+        si = a.seed_member if a.seed_member is not None else int(np.nanargmax(src_ewma))
+        genomes = [clone(src_g[si]) for _ in range(a.pool)]
+        print(f"WARM START from {a.seed_genome} member {si} "
+              f"(EWMA {src_ewma[si]:+.4f}, {genomes[0]['weight'].size:,} synapses) "
+              f"cloned into all {a.pool} slots")
+        ewma = np.full(a.pool, np.nan)
+        age = np.zeros(a.pool, int)
+        newborn = np.zeros(a.pool, bool)
+        lineage = np.arange(a.pool)
+        drives = (np.exp(rng.uniform(np.log(a.drive_lo), np.log(a.drive_hi), a.pool))
+                  if a.drive_gene else np.ones(a.pool))
     else:
         genomes = [seed_genome(np.random.default_rng(a.seed * 100 + i), a.w_max, **fanouts)
                    for i in range(a.pool)]
@@ -754,7 +822,9 @@ def main():
                 stdp_batches(h, Xpool, Ypool, enc, a.batch, a.seed, rnd,
                              a.mature_batches, a.current)
                 newborn[:] = False
-            f, first_ticks, ties = score(h, Xb, Yb, enc, a.current, a.tie_penalty)
+            f, first_ticks, ties, miss = score(h, Xb, Yb, enc, a.current, a.tie_penalty,
+                                               readout_window=a.readout_window,
+                                               coverage_penalty=a.coverage_penalty)
             n_syn = h["n_syn"]
             if a.stdp_lr > 0:
                 n_changed = readback(h, genomes, drives)   # LAMARCKIAN: device -> genome
@@ -821,7 +891,11 @@ def main():
             # out of score() above and is untouched by the cull. `ewma_vec` is POST-cull, so a
             # newborn carries its parent's inherited value -- that is the number the next round
             # will actually judge it on, but it is not a measurement of the newborn.
+            rec.update(coverage_miss_mean=float(miss.mean()),
+                       coverage_miss_best=float(miss[_bi]),
+                       coverage_miss_min=float(miss.min()))
             rec.update(fitness_vec=[round(float(v), 6) for v in f],
+                       coverage_miss_vec=[round(float(v), 4) for v in miss],
                        ewma_vec=[round(float(v), 6) for v in ewma],
                        tie_rate_vec=[round(float(v), 6) for v in ties],
                        distinct_ticks_vec=[round(float(v), 4) for v in distinct_ticks],
@@ -866,9 +940,16 @@ def main():
     best_i = int(np.nanargmax(ewma))
     hb = build_eval_pool(genomes[best_i], dev, a.stdp_lr, a.w_max,
                          drive=drives[best_i] if a.drive_gene else None)
-    fv, _, _ = score(hb, Xval, Yval, enc, a.current, a.tie_penalty)
+    # PURE windowed tau: both penalties are training scaffolds and are deliberately NOT
+    # applied here, so the reported held-out number stays comparable across experiments.
+    # (This also drops the tie penalty, which the old code did pass -- exp005's held-out
+    # would have been tau - 0.1*tie_rate, not tau, had it ever produced one.)
+    fv, _, _, fmiss = score(hb, Xval, Yval, enc, a.current, tie_penalty=0.0,
+                            readout_window=a.readout_window, coverage_penalty=0.0)
     print(f"\nBEST member {best_i}: EWMA {ewma[best_i]:+.4f}  HELD-OUT corrected "
-          f"{fv[0]:+.4f}  ({genomes[best_i]['weight'].size:,} synapses)")
+          f"{fv[0]:+.4f} (pure tau, no penalties)  "
+          f"coverage miss {fmiss[0]:.3f}/{N_OUT}  "
+          f"({genomes[best_i]['weight'].size:,} synapses)")
     if bar and _prog:
         _prog.progress_done(bar, ok=True,
                             final_text=f"held-out corrected {fv[0]:+.4f} after "

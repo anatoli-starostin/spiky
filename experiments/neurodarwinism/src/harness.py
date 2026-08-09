@@ -288,8 +288,34 @@ def verify_round_trip(H):
 
 
 # ------------------------------------------------------- run / fitness
-def run_episode(H, X, enc, current=200.0, train=False):
-    """-> first-spike tick [B, P, 6] (N_TICKS if silent), raw raster."""
+def readout_null(readout_window=None):
+    """The value a silent output takes, i.e. 'later than any real spike'.
+
+    Downstream code tests for silence against this, so never hard-code N_TICKS once a
+    windowed readout is in play: under a W-tick window the ticks run 0..W-1 and the null is W.
+    """
+    return N_TICKS if readout_window is None else int(readout_window)
+
+
+def run_episode(H, X, enc, current=200.0, train=False, readout_window=None):
+    """-> first-spike tick [B, P, 6] (readout_null() if silent), raw raster.
+
+    readout_window=None (DEFAULT, unchanged): first spike anywhere in the 96-tick simulation,
+    null = 96.
+
+    readout_window=W: only the FINAL W ticks count. The value is the first spike inside
+    [N_TICKS - W, N_TICKS), re-based to 0..W-1, and null = W. Spikes before the window are
+    discarded outright, even from a neuron that never fires again -- such an output reads as
+    silent. The raster R is returned whole either way, so nothing downstream loses information.
+
+    WHY THIS MIGHT MATTER. The declared timing is [0,32) input, [32,64) computation,
+    [64,96) readout -- but the phases are only a propagation budget, never enforced, and the
+    default readout ignores them: an output neuron driven straight through by the input volley
+    lands its first spike in the input phase, and its rank is then decided before the network
+    has computed anything. Restricting to the final third makes the readout read the phase it
+    was designed to read, and re-basing means the six outputs are ranked on a 32-tick scale
+    rather than a 96-tick one.
+    """
     from spiky.spnet.spnet import NeuronDataType
     sp, ids, P, dev = H["spnet"], H["ids"], H["P"], H["device"]
     B = X.shape[0]
@@ -308,8 +334,17 @@ def run_episode(H, X, enc, current=200.0, train=False):
                      do_reset_context=True, _stdp_period=32)
     R = sp.export_neuron_data(out_ids, B, NeuronDataType.Spike, 0, N_TICKS - 1)
     R = R.cpu().numpy().reshape(B, P, N_OUT, N_TICKS)
-    has = R.any(-1)
-    first = np.where(has, R.argmax(-1), N_TICKS)
+    if readout_window is None:
+        window = R
+        null = N_TICKS
+    else:
+        W = int(readout_window)
+        if not 1 <= W <= N_TICKS:
+            raise ValueError(f"readout_window must be in [1, {N_TICKS}], got {W}")
+        window = R[..., N_TICKS - W:]        # the FINAL W ticks; earlier spikes discarded
+        null = W
+    has = window.any(-1)
+    first = np.where(has, window.argmax(-1), null)
     return first.astype(np.float64), R
 
 
