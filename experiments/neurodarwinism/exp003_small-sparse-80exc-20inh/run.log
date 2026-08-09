@@ -1,0 +1,67 @@
+
+=== supervisor: launch #0 at 0s ===
+architecture: 17 in / 80 exc / 20 inh / 6 out, fan-outs {'fanout_e': 8, 'fanout_i': 2, 'fanout_inh': 10, 'fanout_in': 10, 'fanin_out': 10} (scale 10.0x)
+steady state: pool K=32, cull M=8/round, alpha=0.3, grace=2 rounds, 1,167 synapses/genome, dev cuda
+  round   0  batch best +0.1046 mean +0.0080  EWMA best +0.1046 mean +0.0080  syn 1,167/net  0s
+  round   5  batch best +0.1250 mean +0.0222  EWMA best +0.0832 mean +0.0506  syn 1,171/net  3s
+  round  10  batch best +0.1366 mean +0.0972  EWMA best +0.1254 mean +0.1166  syn 1,167/net  7s
+  round  15  batch best +0.1416 mean +0.1212  EWMA best +0.1289 mean +0.1222  syn 1,158/net  10s
+  round  20  batch best +0.0991 mean +0.0686  EWMA best +0.1344 mean +0.1137  syn 1,160/net  14s
+  round  25  batch best +0.0762 mean +0.0631  EWMA best +0.0968 mean +0.0928  syn 1,154/net  17s
+  round  30  batch best +0.1684 mean +0.1539  EWMA best +0.1104 mean +0.1088  syn 1,149/net  21s
+  round  35  batch best +0.0842 mean +0.0450  EWMA best +0.0962 mean +0.0848  syn 1,146/net  25s
+  round  40  batch best +0.1571 mean +0.1290  EWMA best +0.1110 mean +0.1023  syn 1,145/net  28s
+  round  45  batch best +0.0841 mean +0.0762  EWMA best +0.0789 mean +0.0748  syn 1,142/net  32s
+  round  50  batch best +0.0725 mean +0.0667  EWMA best +0.0818 mean +0.0808  syn 1,140/net  35s
+  round  55  batch best +0.1220 mean +0.1105  EWMA best +0.1267 mean +0.1173  syn 1,137/net  39s
+  round  60  batch best +0.1274 mean +0.1163  EWMA best +0.1235 mean +0.1212  syn 1,131/net  43s
+  round  65  batch best +0.1116 mean +0.1063  EWMA best +0.1224 mean +0.1163  syn 1,128/net  46s
+  round  70  batch best +0.1724 mean +0.1679  EWMA best +0.1428 mean +0.1424  syn 1,123/net  50s
+  round  75  batch best +0.0984 mean +0.0673  EWMA best +0.1244 mean +0.1160  syn 1,120/net  54s
+  round  80  batch best +0.1115 mean +0.0921  EWMA best +0.1431 mean +0.1331  syn 1,117/net  57s
+  round  85  batch best +0.1900 mean +0.1658  EWMA best +0.1624 mean +0.1522  syn 1,118/net  61s
+  round  90  batch best +0.2199 mean +0.1992  EWMA best +0.1928 mean +0.1875  syn 1,117/net  64s
+  round  95  batch best +0.2048 mean +0.1898  EWMA best +0.1937 mean +0.1905  syn 1,112/net  68s
+  round 100  batch best +0.1360 mean +0.1271  EWMA best +0.1538 mean +0.1524  syn 1,106/net  72s
+  round 105  batch best +0.1617 mean +0.1579  EWMA best +0.1824 mean +0.1815  syn 1,101/net  75s
+  round 110  batch best +0.2415 mean +0.2288  EWMA best +0.2198 mean +0.2170  syn 1,098/net  79s
+  round 115  batch best +0.2414 mean +0.2298  EWMA best +0.2278 mean +0.2252  syn 1,096/net  82s
+  round 120  batch best +0.1967 mean +0.1898  EWMA best +0.2081 mean +0.2063  syn 1,094/net  86s
+  round 125  batch best +0.1536 mean +0.1388  EWMA best +0.1859 mean +0.1824  syn 1,092/net  90s
+  round 130  batch best +0.2164 mean +0.1936  EWMA best +0.2067 mean +0.1962  syn 1,089/net  93s
+  round 135  batch best +0.1284 mean +0.1261  EWMA best +0.1717 mean +0.1706  syn 1,086/net  97s
+  round 140  batch best +0.1874 mean +0.1874  EWMA best +0.1800 mean +0.1799  syn 1,083/net  100s
+  round 145  batch best +0.2475 mean +0.2456  EWMA best +0.2356 mean +0.2349  syn 1,082/net  104s
+  round 150  batch best +0.2192 mean +0.2172  EWMA best +0.2086 mean +0.2080  syn 1,081/net  108s
+  round 155  batch best +0.1691 mean +0.1691  EWMA best +0.2046 mean +0.2046  syn 1,079/net  111s
+  round 160  batch best +0.2367 mean +0.2367  EWMA best +0.2155 mean +0.2155  syn 1,076/net  115s
+  round 165  batch best +0.2067 mean +0.2059  EWMA best +0.2123 mean +0.2122  syn 1,075/net  118s
+  round 170  batch best +0.1851 mean +0.1645  EWMA best +0.2082 mean +0.2067  syn 1,070/net  122s
+  round 175  batch best +0.2600 mean +0.2385  EWMA best +0.2338 mean +0.2196  syn 1,067/net  126s
+  round 180  batch best +0.2406 mean +0.2368  EWMA best +0.2096 mean +0.2076  syn 1,068/net  129s
+  round 185  batch best +0.2519 mean +0.2476  EWMA best +0.2231 mean +0.2228  syn 1,067/net  133s
+  round 190  batch best +0.2694 mean +0.2590  EWMA best +0.2352 mean +0.2329  syn 1,066/net  136s
+  round 195  batch best +0.1947 mean +0.1937  EWMA best +0.2124 mean +0.2121  syn 1,063/net  140s
+  round 200  batch best +0.2774 mean +0.2757  EWMA best +0.2192 mean +0.2185  syn 1,061/net  144s
+  round 205  batch best +0.2580 mean +0.2333  EWMA best +0.2059 mean +0.1991  syn 1,060/net  147s
+  round 210  batch best +0.2534 mean +0.2178  EWMA best +0.2281 mean +0.2191  syn 1,059/net  151s
+  round 215  batch best +0.2462 mean +0.2305  EWMA best +0.2236 mean +0.2219  syn 1,054/net  154s
+  round 220  batch best +0.1950 mean +0.1892  EWMA best +0.2207 mean +0.2201  syn 1,043/net  158s
+  round 225  batch best +0.2740 mean +0.2409  EWMA best +0.2532 mean +0.2442  syn 1,044/net  162s
+  round 230  batch best +0.2077 mean +0.1844  EWMA best +0.2245 mean +0.2190  syn 1,036/net  165s
+  round 235  batch best +0.2871 mean +0.2870  EWMA best +0.2582 mean +0.2581  syn 1,037/net  169s
+  round 240  batch best +0.2778 mean +0.2739  EWMA best +0.2459 mean +0.2452  syn 1,033/net  172s
+  round 245  batch best +0.2864 mean +0.2864  EWMA best +0.2529 mean +0.2528  syn 1,033/net  176s
+  round 250  batch best +0.2297 mean +0.2286  EWMA best +0.2336 mean +0.2335  syn 1,031/net  180s
+  round 255  batch best +0.2185 mean +0.2185  EWMA best +0.2441 mean +0.2439  syn 1,031/net  183s
+  round 260  batch best +0.3072 mean +0.2725  EWMA best +0.2557 mean +0.2435  syn 1,029/net  187s
+  round 265  batch best +0.2741 mean +0.2712  EWMA best +0.2654 mean +0.2650  syn 1,028/net  191s
+  round 270  batch best +0.2854 mean +0.2854  EWMA best +0.2772 mean +0.2771  syn 1,026/net  194s
+  round 275  batch best +0.3206 mean +0.3190  EWMA best +0.2989 mean +0.2986  syn 1,024/net  198s
+  round 280  batch best +0.2792 mean +0.2790  EWMA best +0.2956 mean +0.2911  syn 1,023/net  201s
+  round 285  batch best +0.3322 mean +0.3297  EWMA best +0.2747 mean +0.2744  syn 1,019/net  205s
+  round 290  batch best +0.2442 mean +0.2348  EWMA best +0.2675 mean +0.2660  syn 1,014/net  209s
+  round 295  batch best +0.2617 mean +0.2582  EWMA best +0.2614 mean +0.2611  syn 1,012/net  212s
+  round 299  batch best +0.2900 mean +0.2863  EWMA best +0.2669 mean +0.2662  syn 1,009/net  215s
+
+BEST member 0: EWMA +0.2669  HELD-OUT corrected +0.2490  (1,011 synapses)

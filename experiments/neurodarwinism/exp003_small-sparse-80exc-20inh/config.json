@@ -1,0 +1,45 @@
+{
+ "experiment": "exp003_small-sparse-80exc-20inh",
+ "script": "../src/steady_state.py",
+ "_reconstruction_note": "Reconstructed after the fact. These runs pre-date this directory layout and their exact command lines were never recorded; nothing in the checkpoint stores the arguments either. Fields under `observed` were read out of the run's own log header (run.log, first lines) or measured from its checkpoint. Fields under `inferred` are argued from the run's tag/filename or its wall-clock profile and could be wrong. Everything else is the CLI default in src/steady_state.py at the time.",
+ "tag": "_small8020",
+ "observed": {
+  "pool": 32,
+  "cull_per_round": 8,
+  "alpha": 0.3,
+  "grace": 2,
+  "n_in": 17,
+  "n_exc": 80,
+  "n_inh": 20,
+  "n_out": 6,
+  "fanout_scale": 10.0,
+  "fanout_e": 8,
+  "fanout_i": 2,
+  "fanout_inh": 10,
+  "fanout_in": 10,
+  "fanin_out": 10,
+  "synapses_per_genome_at_start": 1167,
+  "device": "cuda"
+ },
+ "inferred": {
+  "batch": 64,
+  "d_max": 20,
+  "_why": "d_max 20 confirmed from the checkpoint: delays span [1,20]"
+ },
+ "defaults": {
+  "cull": 0.25,
+  "alpha": 0.3,
+  "grace": 2,
+  "n_val": 2000,
+  "w_max": 30.0,
+  "current": 200.0,
+  "seed": 0,
+  "p_add_exc": 0.015,
+  "p_prune_exc": 0.015,
+  "p_add_inh": 0.015,
+  "p_prune_inh": 0.015,
+  "mature_batches": 32,
+  "snapshot_every": 25,
+  "build_retries": 5
+ }
+}

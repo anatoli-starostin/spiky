@@ -1,0 +1,46 @@
+{
+ "experiment": "exp001_k32-baseline",
+ "script": "../src/steady_state.py",
+ "_reconstruction_note": "Reconstructed after the fact. These runs pre-date this directory layout and their exact command lines were never recorded; nothing in the checkpoint stores the arguments either. Fields under `observed` were read out of the run's own log header (run.log, first lines) or measured from its checkpoint. Fields under `inferred` are argued from the run's tag/filename or its wall-clock profile and could be wrong. Everything else is the CLI default in src/steady_state.py at the time.",
+ "tag": "_stdp",
+ "observed": {
+  "pool": 32,
+  "cull_per_round": 8,
+  "alpha": 0.3,
+  "grace": 2,
+  "synapses_per_genome_at_start": 97075,
+  "device": "cuda",
+  "n_in": 17,
+  "n_exc": 800,
+  "n_inh": 200,
+  "n_out": 6,
+  "fanout_scale": 1.0,
+  "fanout_e": 80,
+  "fanout_i": 20,
+  "fanout_inh": 100,
+  "fanout_in": 100,
+  "fanin_out": 100
+ },
+ "inferred": {
+  "batch": 64,
+  "stdp_lr": 0.01,
+  "d_max": 20,
+  "_why": "the history's twin filename is steady_state_stdp_k32_b64_lr0.01_partial136.json, which spells out batch 64 and stdp_lr 0.01; 534 s for 136 rounds matches the b64 log and is 4.5x faster per round than the superseded batch-512 attempt"
+ },
+ "defaults": {
+  "cull": 0.25,
+  "alpha": 0.3,
+  "grace": 2,
+  "n_val": 2000,
+  "w_max": 30.0,
+  "current": 200.0,
+  "seed": 0,
+  "p_add_exc": 0.015,
+  "p_prune_exc": 0.015,
+  "p_add_inh": 0.015,
+  "p_prune_inh": 0.015,
+  "mature_batches": 32,
+  "snapshot_every": 25,
+  "build_retries": 5
+ }
+}

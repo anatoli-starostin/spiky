@@ -1,0 +1,24 @@
+# Chapter artifacts. Source, findings, per-round histories and run logs ARE tracked;
+# anything large or regenerable is not.
+
+# Evolution checkpoints, 12-49 MB each, rewritten every round. A run writes ck_<tag>.npz
+# beside its README when launched with ND_OUT=$PWD; the .hist.json sidecar beside it is the
+# scientific record and is committed as that experiment's history.json instead.
+ck_*.npz
+ck_*.npz.tmp.npz
+*_fitness.npz
+snapshots/
+
+# The two dataset binaries under data/ ARE tracked on purpose (see data/README.md): the .npz
+# is the teacher data and actor_s1.pt is force-added so the .npz stays reproducible. Nothing
+# else of that kind belongs in here.
+
+# Analytics figures and summaries: regenerate with `python src/analytics/run_all.py`.
+src/analytics/out/
+
+# Run logs ARE part of the record here, so undo the repo-wide `*.log` rule. They are a few KB
+# each and they are the only place some numbers survive -- the architecture header, the
+# held-out line, and the exact failure that ended a run.
+!*.log
+
+__pycache__/

@@ -1,0 +1,125 @@
+[supervisor] launch #0, pid 367168
+[supervisor] warm-up done in 5s; stall detection now armed at 30s
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #1, pid 370801
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #2, pid 370862
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #3, pid 370918
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #4, pid 370972
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #5, pid 371046
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #6, pid 371103
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #7, pid 371158
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #8, pid 371219
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #9, pid 371273
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #10, pid 371329
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #11, pid 371387
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #12, pid 371441
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #13, pid 371496
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #14, pid 371558
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #15, pid 371613
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #16, pid 371667
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #17, pid 371725
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #18, pid 371780
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #19, pid 371835
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #20, pid 371897
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #21, pid 371952
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #22, pid 372006
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #23, pid 372064
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #24, pid 372119
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #25, pid 372173
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #26, pid 372237
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #27, pid 372302
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #28, pid 372357
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #29, pid 372416
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #30, pid 372472
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #31, pid 372526
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #32, pid 372587
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #33, pid 372641
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #34, pid 372708
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #35, pid 372768
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #36, pid 372822
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #37, pid 372989
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #38, pid 373043
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #39, pid 373097
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] launch #40, pid 373258
+[supervisor] process exited rc=1
+[supervisor] nonzero exit -- resuming from checkpoint
+[supervisor] gave up after 40 restarts

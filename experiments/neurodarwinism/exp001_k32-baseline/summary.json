@@ -1,0 +1,20 @@
+{
+ "experiment": "exp001_k32-baseline",
+ "status": "incomplete",
+ "rounds_completed": 136,
+ "rounds_requested": null,
+ "heldout_corrected_tau": null,
+ "why_no_heldout": "the run HUNG at round 136 and never reached the held-out evaluation. The log was preserved twice, the second copy named steady_state_stdp_b64_hung.log, ending at the same round. This is the sort_chains_by_synapse_meta race later fixed in PR #92 (measured then at roughly 1 build in 35 at K=32).",
+ "exit": "hung (GPU pinned, unkillable)",
+ "rounds": 136,
+ "peak": 0.3498262532753185,
+ "peak_round": 114,
+ "final_best": 0.29367536191570487,
+ "final_mean": 0.28620284517740974,
+ "final_gap": 0.007472516738295132,
+ "syn_total_final": 2956843,
+ "wall_s": 534.3,
+ "convergence_round": 92,
+ "analytics": null,
+ "analytics_note": "no checkpoint survives for this run, so the weight/delay/readout analytics could not be computed post-hoc"
+}
