@@ -8,6 +8,7 @@ from test_izhikevitch_topology import test_izhikevitch_topology
 from test_izhikevitch_runtime import test_izhikevitch_runtime
 from test_spnet_math import test_simple_math
 from test_chunk_of_connections import test_chunk_of_connections
+from test_explicit_weight_alignment import test_explicit_weight_alignment
 
 
 def main():
@@ -21,7 +22,8 @@ def main():
             test_izhikevitch_topology,
             test_izhikevitch_runtime,
             test_simple_math,
-            test_chunk_of_connections
+            test_chunk_of_connections,
+            test_explicit_weight_alignment
         ]
     }
 
