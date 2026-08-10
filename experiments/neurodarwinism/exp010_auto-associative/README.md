@@ -144,13 +144,117 @@ whether the teacher should encode the **z-scored** order (ceiling +0.54, what is
 or the **raw within-state** order (ceiling +1.0) — the second is a one-line change and makes
 the whole scale interpretable.
 
+---
+
+# Follow-up — scoped, homeostatic STDP (blocker 3) + the two bookkeeping fixes
+
+> ## VERDICT: still NO-GO, but the reason has moved and it is no longer about STDP.
+> Freezing the reservoir and adding homeostasis both work *mechanically* and neither buys any
+> tau: across **20 configurations the paired teacher never beats the shuffled teacher by more
+> than one member-to-member sd**. The control that explains it: an **untrained, frozen**
+> reservoir already carries **+0.317** in the very six first-spike times the readout reads,
+> and the rank-order metric recovers **+0.060** of it. *The bottleneck is the readout code,
+> not the learning rule and not the substrate.*
+
+![scoped](exp010_scoped.png)
+
+## What was added
+
+* **Bookkeeping A** — `--fanout-scale 2` / `3`, as before, so the pool survives training.
+* **Bookkeeping B** — in assoc mode `--readout-window` now **defaults to `N_TICKS - teacher_offset`**,
+  i.e. the teacher's own phase. Explicit values still win.
+* **`--freeze-reservoir`** — reservoir↔reservoir synapses become non-plastic (`learning_rate 0`
+  on the excitatory bank) and a **third meta bank** carries the readout cells' afferents as the
+  only plastic synapses in the network. Inhibitory afferents deliberately stay in the frozen
+  bank: it is what pins them at `RES_W_INH`, and the plastic bank's `[0, 45]` bounds would flip
+  them excitatory on the first clip.
+* **`--weight-scaling-cf`** — non-zero homeostatic drift on that plastic bank. The engine's
+  update is `s += weight_scaling_cf + sd * learning_rate`, so with 0 there is nothing to lift a
+  depressed weight and 0 is absorbing. Engine cap is 0.1.
+
+## Result: 20 configurations, no association
+
+Fan-out ÷2 and ÷3 × lr 1e-3 and 1e-2 × `weight_scaling_cf` 0 / 0.01 / 0.03 / 0.1, all frozen,
+plus 4 unfrozen controls. 400 clamped batches, each config run **twice from identical seed
+genomes** — once with the teacher paired to its own input batch, once with the teacher ticks
+taken from a permuted batch. Scored on the windowed readout [32, 96).
+
+**Largest |gap| across all 20: 0.031. Every gap is inside its own ±1 sd. The sign is a coin
+flip — 10 positive, 9 negative, 1 flat.** The single row my script flagged `BEATS SD`
+(÷3, lr 1e-2, wsc 0.1: +0.0072 against sd 0.0025) is a false positive of that criterion: both
+arms are *negative* (−0.071 vs −0.078), so it is "less bad", and the tiny sd is degeneracy —
+all four members had collapsed onto nearly the same output.
+
+**The homeostasis knob is demonstrably live**, which is what makes this a null result about
+learning rather than a flag left off: at ÷2/lr 1e-3, raising `weight_scaling_cf` through
+0 → 0.01 → 0.03 → 0.1 moves the readout firing rate **1.05 → 1.69 → 3.08 → 11.69** spikes per
+cell, monotonically. The drift does rescue weights from zero. It buys no tau.
+
+## Why — the control that settles it
+
+Freeze the reservoir, take every excitatory neuron's first-spike tick and spike count as
+features, fit **ridge regression** to the actions on 2000 training states, score on 512 held-out
+states with the same corrected tau-b. Ridge is deliberately generous — closed form, given the
+labels directly — so it is an upper bound on what any local rule could extract, not a
+competitor. At fan-out ÷2:
+
+| readout of the frozen, **untrained** reservoir | held-out corrected tau |
+|---|---:|
+| linear decode of all 800 excitatory cells | **+0.455** |
+| linear decode of the 238 cells that actually project to the readout | **+0.440** |
+| linear decode of the 6 readout cells' first-spike times | **+0.317** |
+| **TTFS rank order of those same 6 times — the chapter's metric** | **+0.060** |
+| *(design ceiling, the teacher ticks themselves)* | *+0.540* |
+
+The same three rows at ÷1 give +0.429 / +0.414 / +0.189 against a TTFS rank order of +0.010,
+and at ÷3 +0.432 / +0.410 / +0.083 against −0.021. So the shape holds at every gain.
+
+**Read the third and fourth rows together.** They are computed from *the same six numbers on
+the same states*. Decoding them per-cell — one learned weight and offset each — gives +0.317.
+Ranking them against each other gives +0.060. **Five times the tau is lost at the readout code,
+before any learning question is asked.**
+
+This is the exp009 finding again, in a new place: tau-b over first-spike *order* requires all
+six cells to be calibrated onto one common scale with matching signs, while a per-cell affine
+decode does not. exp009 measured it as "identical |r|, only the sign differs"; here it is
+"+0.317 available, +0.060 read".
+
+## Where that leaves exp010
+
+Three things are now separately established, and only the third is still open:
+
+1. **The substrate is fine.** A frozen random reservoir carries +0.44 about the action vector
+   in exactly the cells the readout is wired to. There is plenty to associate.
+2. **STDP is not the bottleneck we thought.** Scoping and homeostasis both do what they claim,
+   and the association still is not written — but the ceiling STDP is being asked to climb
+   toward, through this readout, is +0.06, not +0.44. It is failing at a task that is mostly
+   unavailable.
+3. **The readout code is the bottleneck.** Rank-order-across-six-heterogeneous-cells discards
+   ~80 % of what those six cells already know.
+
+**Recommendation, for the owner to accept or overrule:** do not run 300 rounds of exp010 as it
+stands. The cheapest informative next step is to change what is read, not what is learned — an
+evolved or trained **per-cell affine map** from the six first-spike times to the six action
+dimensions, scored with the same tau-b. That converts a +0.060 ceiling into a +0.317 one on an
+untrained net, before STDP contributes anything, and it makes the association question askable
+for the first time. The alternative reading — that the chapter should keep the pure rank-order
+readout on principle, and exp010 is simply refuted — is equally defensible and one word from
+you.
+
 ## Files
 
 `../src/steady_state.py` (`--assoc`, `--teacher-offset`, `--teacher-current`,
-`--teacher-levels`, `--assoc-train-batches`), `../src/harness.py` (`readout_ids`,
-`teacher_ticks`), `../src/assoc_sanity.py` (the four checks + the three controls),
-`../src/assoc_probe.py` (the gain × rate sweep), `sanity/*.json` (every number above),
-`plot_exp010.py`.
+`--teacher-levels`, `--assoc-train-batches`, `--freeze-reservoir`, `--weight-scaling-cf`),
+`../src/harness.py` (`readout_ids`, `teacher_ticks`), `../src/assoc_sanity.py` (the four checks
++ the three controls), `../src/assoc_probe.py` (the gain × rate sweep),
+`../src/assoc_scoped_sweep.py` (the 20-configuration paired-vs-shuffled grid),
+`../src/assoc_linear_probe.py` (the ridge control), `sanity/*.json` (every number above),
+`plot_exp010.py`, `plot_exp010_scoped.py`.
 
-Reproduce the headline: `sbox python assoc_sanity.py --pool 4 --n-val 256 --train-batches 400
---fanout-scale 3.0 --stdp-lr 0.001 --teacher-offset 32`
+Reproduce the pre-flight headline:
+`sbox python assoc_sanity.py --pool 4 --n-val 256 --train-batches 400 --fanout-scale 3.0
+--stdp-lr 0.001 --teacher-offset 32`
+
+Reproduce the follow-up headline:
+`sbox python assoc_scoped_sweep.py --out sweep.json` and
+`sbox python assoc_linear_probe.py --fanout-scale 2.0`

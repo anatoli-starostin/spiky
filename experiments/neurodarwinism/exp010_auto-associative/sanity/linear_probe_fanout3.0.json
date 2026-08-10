@@ -1,0 +1,53 @@
+{
+ "config": {
+  "n_train": 2000,
+  "n_val": 512,
+  "fanout_scale": 3.0,
+  "current": 200.0,
+  "w_max": 30.0,
+  "seed": 0,
+  "lams": [
+   1.0,
+   10.0,
+   100.0,
+   1000.0
+  ],
+  "out": "/tmp/probe_fs3.0.json"
+ },
+ "n_afferent_sources": 172,
+ "ttfs_rank_order": {
+  "raw": -0.12577793701972292,
+  "null": -0.10451330451540364,
+  "corrected": -0.021264632504319286
+ },
+ "results": {
+  "ALL EXC (800 cells)": {
+   "train": 0.6084933333333333,
+   "heldout": 0.43177083333333327,
+   "heldout_raw": 0.715625,
+   "n_features": 1600,
+   "lam": 1000.0
+  },
+  "AFFERENTS of readout (172 cells)": {
+   "train": 0.5278366666666667,
+   "heldout": 0.4103645833333333,
+   "heldout_raw": 0.7270833333333333,
+   "n_features": 344,
+   "lam": 1000.0
+  },
+  "READOUT CELLS only (6), spike+count": {
+   "train": 0.1868333333333333,
+   "heldout": 0.1251822916666666,
+   "heldout_raw": 0.5187499999999999,
+   "n_features": 12,
+   "lam": 1.0
+  },
+  "READOUT CELLS only (6), FIRST SPIKE only": {
+   "train": 0.1791466666666665,
+   "heldout": 0.08317708333333329,
+   "heldout_raw": 0.47526041666666663,
+   "n_features": 6,
+   "lam": 1000.0
+  }
+ }
+}

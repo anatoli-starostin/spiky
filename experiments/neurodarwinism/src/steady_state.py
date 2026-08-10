@@ -70,6 +70,23 @@ ASSOC = False
 ASSOC_TEACHER_OFFSET = 64          # teacher tick = offset + target_offsets(Y) in 0..31
 ASSOC_TEACHER_CURRENT = 200.0      # same amplitude as the input volley
 
+# PLASTICITY SCOPING (--freeze-reservoir). The exp010 pre-flight found teacher-clamped STDP
+# destroying the whole reservoir: 80% of excitatory weights driven to 0 and the survivors
+# pinned at the ceiling, within ~64 batches. Two things cause that, and this flag addresses
+# both:
+#   * SCOPE. Every excitatory synapse in the net is plastic, so the clamp's LTD is applied to
+#     ~96k synapses when the association only needs the ~30-100 afferents of the 6 readout
+#     cells. Freezing the reservoir confines learning to exactly those afferents, which is
+#     also the clean causal test: if the input->readout pairing is being written at all, it is
+#     written there and nowhere else.
+#   * HOMEOSTASIS. weight_scaling_cf is 0 on the stock metas, and the engine's update is
+#     `s += weight_scaling_cf + sd * learning_rate`, so a depressed weight has nothing pulling
+#     it back and 0 is absorbing. A non-zero coefficient gives the plastic bank a constant
+#     upward drift that LTD has to work against, so weights settle at a balance instead of
+#     collapsing. The engine caps it at 0.1.
+ASSOC_FREEZE_RESERVOIR = False
+ASSOC_WSC = 0.0                    # weight_scaling_cf on the plastic readout-afferent bank
+
 
 def _tgt_choice():
     """(target populations, probabilities) for a newly invented excitatory synapse.
@@ -362,7 +379,10 @@ def stage2_metas(stdp_lr, w_max, group_size=8, backward_group_size=32):
     all pass. 32 leaves headroom above the ~100 worst case without padding as hard as 128.
     """
     from spiky.spnet.spnet import SynapseMeta
-    exc = [SynapseMeta(learning_rate=stdp_lr, min_delay=d, max_delay=d,
+    # SCOPED PLASTICITY: when the reservoir is frozen the ordinary excitatory bank carries
+    # learning_rate 0 and a separate third bank, below, carries the readout cells' afferents.
+    exc_lr = 0.0 if (ASSOC and ASSOC_FREEZE_RESERVOIR) else stdp_lr
+    exc = [SynapseMeta(learning_rate=exc_lr, min_delay=d, max_delay=d,
                        initial_weight=0.0, min_weight=0.0, max_weight=1.5 * w_max,
                        initial_noise_level=0.0, weight_decay=0.9, weight_scaling_cf=0.0,
                        _forward_group_size=group_size,
@@ -375,6 +395,17 @@ def stage2_metas(stdp_lr, w_max, group_size=8, backward_group_size=32):
                        _forward_group_size=group_size,
                        _backward_group_size=backward_group_size)
            for d in range(D_MIN, D_MAX + 1)]
+    if ASSOC and ASSOC_FREEZE_RESERVOIR:
+        # THE READOUT-AFFERENT BANK: same delay range as the excitatory bank, but this is the
+        # only plastic one in the network, and the only one with a homeostatic drift term.
+        ro = [SynapseMeta(learning_rate=stdp_lr, min_delay=d, max_delay=d,
+                          initial_weight=0.0, min_weight=0.0, max_weight=1.5 * w_max,
+                          initial_noise_level=0.0, weight_decay=0.9,
+                          weight_scaling_cf=ASSOC_WSC,
+                          _forward_group_size=group_size,
+                          _backward_group_size=backward_group_size)
+              for d in range(D_MIN, D_MAX + 1)]
+        return exc + inh + ro
     if not OUT_GATE:
         return exc + inh
     # THE OUTPUT DELAY GATE: a third bank, used only by synapses whose TARGET is an output
@@ -464,7 +495,7 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
     # two-bank layout has to be in force whenever the gate is on -- including at stdp_lr 0,
     # where the single unoffset delay_metas bank would put the gate at the wrong offset AND
     # (per build_eval_pool's note) silently land inhibitory synapses in the excitatory bank.
-    two_bank = stdp_lr > 0 or OUT_GATE
+    two_bank = stdp_lr > 0 or OUT_GATE or (ASSOC and ASSOC_FREEZE_RESERVOIR)
     metas = stage2_metas(stdp_lr, w_max) if two_bank else delay_metas(d_max=D_MAX)
     neuron_metas = [NeuronMeta(neuron_type=0, a=0.02, d=8.0),
                     NeuronMeta(neuron_type=1, a=0.1, d=2.0),
@@ -492,6 +523,15 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
         meta = (g["delay"] - D_MIN).copy()
         if two_bank:                         # inhibitory synapses use the frozen bank
             meta[g["src_pool"] == INH] += N_DELAY_METAS
+        if ASSOC and ASSOC_FREEZE_RESERVOIR:
+            # Everything landing on a readout cell FROM A NON-INHIBITORY SOURCE moves to the
+            # plastic third bank. Inhibitory afferents are deliberately left in the frozen
+            # bank: that bank is what pins them at RES_W_INH, and the plastic bank's [0, 45]
+            # bounds would flip them excitatory on the first clip.
+            to_ro = ((g["tgt_pool"] == EXC) & (g["tgt_idx"] >= N_EXC - N_OUT)
+                     & (g["src_pool"] != INH))
+            if to_ro.any():
+                meta[to_ro] = 2 * N_DELAY_METAS + (g["delay"][to_ro] - D_MIN)
         if OUT_GATE:
             # output-targeting synapses index the third bank instead, at their own offset
             to_out = g["tgt_pool"] == OUTP
@@ -850,6 +890,7 @@ def main():
     global N_EXC, N_INH, POOL_SIZE, D_MAX, N_DELAY_METAS
     global OUT_GATE, OUT_D_MIN, OUT_D_MAX, N_OUT_DELAY_METAS
     global ASSOC, ASSOC_TEACHER_OFFSET, ASSOC_TEACHER_CURRENT
+    global ASSOC_FREEZE_RESERVOIR, ASSOC_WSC
     ap = argparse.ArgumentParser()
     ap.add_argument("--pool", type=int, default=32)
     ap.add_argument("--rounds", type=int, default=60)
@@ -960,6 +1001,17 @@ def main():
                     help="assoc only: teacher clamp amplitude (default: --current)")
     ap.add_argument("--teacher-levels", type=int, default=32,
                     help="assoc only: quantisation levels of the teacher target")
+    ap.add_argument("--freeze-reservoir", action="store_true",
+                    help="assoc only: SCOPED PLASTICITY. Reservoir<->reservoir synapses become "
+                         "non-plastic and only the 6 readout cells' non-inhibitory afferents "
+                         "learn, in their own meta bank. This is the causal test of whether "
+                         "the input->readout pairing is written at all, and it stops the clamp "
+                         "from applying LTD to all ~96k excitatory synapses")
+    ap.add_argument("--weight-scaling-cf", type=float, default=0.0,
+                    help="assoc + --freeze-reservoir only: HOMEOSTASIS. The engine's update is "
+                         "s += weight_scaling_cf + sd * learning_rate, so a non-zero value "
+                         "gives the plastic bank a constant upward drift for LTD to work "
+                         "against and 0 stops being an absorbing state. Engine cap is 0.1")
     ap.add_argument("--assoc-train-batches", type=int, default=4,
                     help="assoc only: teacher-clamped STDP batches run over the WHOLE pool "
                          "each round, before the (unclamped) scoring pass. The stock loop "
@@ -980,12 +1032,27 @@ def main():
     ASSOC = a.assoc
     ASSOC_TEACHER_OFFSET = int(a.teacher_offset)
     ASSOC_TEACHER_CURRENT = a.current if a.teacher_current is None else float(a.teacher_current)
+    ASSOC_FREEZE_RESERVOIR = a.freeze_reservoir
+    ASSOC_WSC = float(a.weight_scaling_cf)
+    if ASSOC:
+        # BOOKKEEPING FIX B: read the teacher's own phase, not the whole episode. The
+        # pre-flight measured the teacher-ON control at -0.030 under plain TTFS and +0.523
+        # windowed -- unwindowed, the metric cannot see a perfect answer, because the readout
+        # cells' first spike lands in the input phase long before the clamp. readout_window
+        # counts back from the END, so N_TICKS - offset is exactly [offset, N_TICKS).
+        if a.readout_window is None:
+            a.readout_window = N_TICKS - ASSOC_TEACHER_OFFSET
+            print(f"ASSOC: readout window defaulted to {a.readout_window} "
+                  f"= ticks [{ASSOC_TEACHER_OFFSET}, {N_TICKS}), the teacher's own phase")
     if ASSOC:
         assert not a.out_delay_gate, ("--assoc has no output pool to gate; the readout is a "
                                       "set of ordinary reservoir neurons")
         assert not a.drive_gene, ("--drive-gene scales output-targeting synapses, of which "
                                   "assoc mode has none")
         assert a.stdp_lr > 0, "--assoc is an STDP experiment; --stdp-lr must be > 0"
+    else:
+        assert not a.freeze_reservoir, "--freeze-reservoir only means anything with --assoc"
+    assert 0.0 <= ASSOC_WSC <= 0.1, "--weight-scaling-cf must be in [0, 0.1] (engine cap)"
 
     OUT_GATE = a.out_delay_gate
     OUT_D_MIN, OUT_D_MAX = int(a.out_delay_range[0]), int(a.out_delay_range[1])

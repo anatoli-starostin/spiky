@@ -78,10 +78,20 @@ def weight_health(h, genomes):
     """
     gs = [{k: v.copy() for k, v in g.items()} for g in genomes]
     ss.readback(h, gs)
-    w = np.concatenate([g["weight"][g["src_pool"] != ss.INH] for g in gs])
-    return dict(exc_w_mean=float(w.mean()), exc_w_median=float(np.median(w)),
-                exc_w_max=float(w.max()), frac_below_0p1=float((w < 0.1).mean()),
-                frac_below_1=float((w < 1.0).mean()))
+
+    def stats(sel):
+        w = np.concatenate([g["weight"][sel(g)] for g in gs])
+        if not w.size:
+            return dict(n=0)
+        return dict(n=int(w.size), mean=float(w.mean()), median=float(np.median(w)),
+                    max=float(w.max()), frac_below_0p1=float((w < 0.1).mean()),
+                    frac_at_ceiling=float((w >= 44.9).mean()))
+
+    exc = lambda g: g["src_pool"] != ss.INH                                    # noqa: E731
+    # the plastic set under --freeze-reservoir: non-inhibitory afferents of the readout cells
+    ro = lambda g: (exc(g) & (g["tgt_pool"] == ss.EXC)                         # noqa: E731
+                    & (g["tgt_idx"] >= N_EXC - N_OUT))
+    return dict(all_excitatory=stats(exc), readout_afferents=stats(ro))
 
 
 def train(h, Xpool, Ypool, enc, batch, seed, n_batches, current, tcur, shuffle=False, tag="",
@@ -158,6 +168,11 @@ def main():
                          "and therefore what sets the readout cells' firing rate. 1.0 (the "
                          "chapter default) gives ~10 spikes/cell/episode, which is not a "
                          "first-spike code at all")
+    ap.add_argument("--freeze-reservoir", action="store_true",
+                    help="SCOPED PLASTICITY: only the readout cells' non-inhibitory afferents "
+                         "learn; the reservoir is frozen")
+    ap.add_argument("--weight-scaling-cf", type=float, default=0.0,
+                    help="HOMEOSTASIS on the plastic bank: s += wsc + sd*lr. Engine cap 0.1")
     ap.add_argument("--out", default=None, help="write the full report as JSON here")
     a = ap.parse_args()
 
@@ -165,6 +180,8 @@ def main():
     ss.ASSOC = True
     ss.ASSOC_TEACHER_OFFSET = a.teacher_offset
     ss.ASSOC_TEACHER_CURRENT = tcur
+    ss.ASSOC_FREEZE_RESERVOIR = a.freeze_reservoir
+    ss.ASSOC_WSC = a.weight_scaling_cf
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
     X, Y, Xpool, Ypool, Xval, Yval = load(a.batch, a.seed, a.n_val)
@@ -264,7 +281,8 @@ def main():
           trace=(set(marks), tick))
     rep["trained"] = ev(h, Xval, Yval, enc, a.current, tcur, "TRAINED (paired)")
     rep["weights_after_training"] = weight_health(h, genomes)
-    print(f"  weights after training: {rep['weights_after_training']}")
+    for k, v in rep["weights_after_training"].items():
+        print(f"  weights after training [{k}]: {v}")
 
     # ---------------------------------------------------------------- (4) the trivial-solution control
     print("\n(4) TRIVIAL-SOLUTION control -- retrain a FRESH copy on SHUFFLED teacher ticks")
