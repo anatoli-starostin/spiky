@@ -1,0 +1,113 @@
+{
+ "baselines": {
+  "constant_predictor_mse": 1.059823989868164,
+  "target_var": 1.198630690574646,
+  "target_sd": 1.0948199033737183
+ },
+ "rows": [
+  {
+   "genome": {
+    "n_anchor_pairs": 6,
+    "tables_per_head": 128,
+    "n_heads": 1,
+    "forward_mode": "hard",
+    "learnable_temps": false,
+    "soft_score_temp": 0.5,
+    "select_temp": 0.5,
+    "lr": 0.003,
+    "anchor_seed": 1,
+    "use_bf16": true
+   },
+   "params": 49152,
+   "steps": 3000,
+   "batch": 512,
+   "heldout_mse": 0.013716201782226562,
+   "train_mse": 0.0110123441696167,
+   "seconds": 3.5,
+   "curve": [],
+   "baselines": {
+    "constant_predictor_mse": 1.059823989868164,
+    "target_var": 1.198630690574646,
+    "target_sd": 1.0948199033737183
+   }
+  },
+  {
+   "genome": {
+    "n_anchor_pairs": 8,
+    "tables_per_head": 32,
+    "n_heads": 1,
+    "forward_mode": "hard",
+    "learnable_temps": false,
+    "soft_score_temp": 0.5,
+    "select_temp": 0.5,
+    "lr": 0.003,
+    "anchor_seed": 1,
+    "use_bf16": true
+   },
+   "params": 49152,
+   "steps": 3000,
+   "batch": 512,
+   "heldout_mse": 0.016412432352701824,
+   "train_mse": 0.01373043581644694,
+   "seconds": 3.0,
+   "curve": [],
+   "baselines": {
+    "constant_predictor_mse": 1.059823989868164,
+    "target_var": 1.198630690574646,
+    "target_sd": 1.0948199033737183
+   }
+  },
+  {
+   "genome": {
+    "n_anchor_pairs": 10,
+    "tables_per_head": 8,
+    "n_heads": 1,
+    "forward_mode": "hard",
+    "learnable_temps": false,
+    "soft_score_temp": 0.5,
+    "select_temp": 0.5,
+    "lr": 0.003,
+    "anchor_seed": 1,
+    "use_bf16": true
+   },
+   "params": 49152,
+   "steps": 3000,
+   "batch": 512,
+   "heldout_mse": 0.04186416625976563,
+   "train_mse": 0.04103484446207682,
+   "seconds": 3.0,
+   "curve": [],
+   "baselines": {
+    "constant_predictor_mse": 1.059823989868164,
+    "target_var": 1.198630690574646,
+    "target_sd": 1.0948199033737183
+   }
+  },
+  {
+   "genome": {
+    "n_anchor_pairs": 12,
+    "tables_per_head": 2,
+    "n_heads": 1,
+    "forward_mode": "hard",
+    "learnable_temps": false,
+    "soft_score_temp": 0.5,
+    "select_temp": 0.5,
+    "lr": 0.003,
+    "anchor_seed": 1,
+    "use_bf16": true
+   },
+   "params": 49152,
+   "steps": 3000,
+   "batch": 512,
+   "heldout_mse": 0.10308937581380208,
+   "train_mse": 0.15649452718098958,
+   "seconds": 2.8,
+   "curve": [],
+   "baselines": {
+    "constant_predictor_mse": 1.059823989868164,
+    "target_var": 1.198630690574646,
+    "target_sd": 1.0948199033737183
+   }
+  }
+ ]
+}

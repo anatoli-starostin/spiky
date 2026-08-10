@@ -8,6 +8,43 @@
 
 ![sanity](exp011_sanity.png)
 
+## Hard forward only — and a correction to the premise
+
+> **The brief asked me to switch exp011 from `hybrid_smooth` to hard forward. There was
+> nothing to switch: exp011 has trained and evaluated in `forward_mode="hard"` from the first
+> commit.** `DEFAULT_GENOME["forward_mode"]` was `"hard"`, `seed_genome`'s default was
+> `("hard",)`, and `--forward-modes` defaulted to `["hard"]`. `hybrid_smooth` was an opt-in
+> choice that was never exercised, so **every number in this README was already produced by
+> hard forward + surrogate backward**. Re-running the whole sanity pass after the change
+> reproduces them to the 4th decimal (GPU nondeterminism only) — see the table at the end.
+
+What *did* change: `hybrid_smooth` is now **removed entirely** rather than merely unused. The
+forward mode is no longer part of the genome, `--forward-modes` is gone, and `lut_backprop`
+pins `FORWARD_MODE = "hard"` with an assert in `build()`. It cannot be selected by accident.
+
+**Why hard is the right and only mode here.** The hard forward selects one row per table by
+sign-packing the pairwise differences — piecewise constant, with a zero-a.e. true derivative.
+It is trainable because `FastMultiHeadLut` ships a **soft surrogate backward**: input and
+temperature gradients come from a full K-row softmax surrogate pinned to the chosen row, while
+the weight gradient is a scatter reflecting the actual forward. Keeping it hard everywhere also
+means **training and evaluation are the same function** — a `hybrid_smooth`-trained,
+hard-evaluated candidate would be scored on a network it never optimised.
+
+### The surrogate is verified, not assumed (`src/lut_grad_check.py`)
+
+Four checks on the teacher-shaped candidate (NAP 6 × 32, 12,288 params):
+
+| check | result |
+|---|---|
+| **1 MODE** | `forward_mode` is `'hard'` at build and still `'hard'` after forward+backward |
+| **2 FLOW** | `weights.grad`: **444 / 12,288** entries non-zero (3.61 %), finite, \|g\|max 5.91e-01. `x.grad`: **4,352 / 4,352** non-zero, finite, \|g\|max 2.92e-05 |
+| **3 SURROGATE** | perturbing `x` by 3.89e-04 leaves **95.7 % of outputs bit-identical** — the true derivative is *exactly* 0 there — while `x.grad` is **dense**. A gradient where the true one is zero *is* the surrogate |
+| **4 LEARNING** | 600 hard-mode steps: held-out MSE **1.796 → 0.027**, 66.5× better, against a constant-predictor baseline of 1.060 |
+
+Check 2's sparsity is the signature of hard selection: only the rows actually visited receive
+weight gradient. Check 3 is the one that rules out "learning is quietly happening through some
+soft path" — the forward really is piecewise constant, and the gradient really is a surrogate.
+
 ## Why this experiment exists
 
 Every negative result in this chapter so far is confounded by the same doubt: *did the
@@ -161,6 +198,26 @@ Two things I would change only on your word: whether to sweep **lambda** (2e-7 i
 call — the Pareto front is lambda-free either way, but which *point* on it evolution converges
 to is not), and whether to open `--forward-modes hard hybrid_smooth` (see the test note below).
 
+## Re-run after removing the mode knob: numbers unchanged
+
+Every check above re-run with `hybrid_smooth` removed from the codebase, same seeds:
+
+| | before | after | Δ |
+|---|---:|---:|---:|
+| teacher shape, 12,288 params | 0.02554 | 0.02553 | 1e-05 |
+| NAP 3 × 4, 192 params | 0.26753 | 0.26756 | 3e-05 |
+| NAP 10 × 32, 196,608 params | 0.01236 | 0.01235 | 1e-05 |
+| iso-12k, NAP 4 × 128 | 0.02449 | 0.02444 | 5e-05 |
+| iso-49k, NAP 6 × 128 | 0.01371 | 0.01372 | 1e-05 |
+| smoke round 5, best fitness | −0.02058 | −0.02053 | 5e-05 |
+| smoke round 5, median params | 19,872 | 19,872 | 0 |
+| smoke round 5, Pareto points | 10 | 10 | 0 |
+
+Differences are 4th–5th decimal, i.e. GPU nondeterminism, not a change in behaviour — which is
+the expected result given the training path never differed. **The tables-vs-depth finding holds
+unchanged**: iso-12k reads 0.0244 / 0.0255 / 0.0645 / 0.1184 across NAP 4 / 6 / 8 / 10, and
+iso-49k reads 0.0137 / 0.0164 / 0.0419 / 0.1031 across NAP 6 / 8 / 10 / 12.
+
 ## Test status
 
 Chapter tests (`src/tests`) are unaffected — exp011 adds new files only and modifies nothing.
@@ -174,7 +231,9 @@ It is a pre-existing, order-dependent tolerance flake — `git status` shows no 
 ## Files
 
 `../src/lut_backprop.py` (candidate build + train + eval, and the CLI that produced checks 1–2),
-`../src/lut_evolve.py` (the loop, check 3), `sanity/fit_vs_size.json`,
+`../src/lut_evolve.py` (the loop, check 3), `../src/lut_grad_check.py` (the four
+hard+surrogate checks), `sanity/*_hard_rerun.json` and
+`sanity/hard_surrogate_grad_check.json`, `sanity/fit_vs_size.json`,
 `sanity/iso_params_{12k,49k}.json`, `sanity/evolve_smoke.json`, `sanity/evolve_smoke.log`,
 `plot_exp011.py`.
 

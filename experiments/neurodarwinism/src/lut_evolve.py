@@ -45,18 +45,19 @@ OUT = os.path.abspath(os.environ.get("ND_OUT", os.path.join(HERE, "results")))
 
 
 # ----------------------------------------------------------------- genome
-def seed_genome(rng, evolve_heads=False, forward_modes=("hard",)):
+def seed_genome(rng, evolve_heads=False):
+    """The forward mode is NOT part of the genome: exp011 is hard-forward only, and the
+    surrogate backward is what makes that trainable (see lut_backprop.FORWARD_MODE)."""
     g = dict(lb.DEFAULT_GENOME)
     g["n_anchor_pairs"] = int(rng.integers(lb.NAP_RANGE[0], lb.NAP_RANGE[1] + 1))
     g["tables_per_head"] = int(rng.integers(lb.TPH_RANGE[0], lb.TPH_RANGE[1] + 1))
     g["n_heads"] = int(rng.integers(*lb.HEADS_RANGE)) if evolve_heads else 1
-    g["forward_mode"] = str(rng.choice(list(forward_modes)))
     g["lr"] = float(np.exp(rng.uniform(math.log(lb.LR_RANGE[0]), math.log(lb.LR_RANGE[1]))))
     g["anchor_seed"] = int(rng.integers(0, 100000))
     return g
 
 
-def mutate(g, rng, evolve_heads=False, forward_modes=("hard",), p=0.5):
+def mutate(g, rng, evolve_heads=False, p=0.5):
     """Perturb the hyperparameters. Every knob is bounded and every result is buildable.
 
     NAP and tables_per_head move MULTIPLICATIVELY (+-1 on NAP is a factor of 2 in rows; tph
@@ -74,8 +75,6 @@ def mutate(g, rng, evolve_heads=False, forward_modes=("hard",), p=0.5):
         h["n_heads"] = int(np.clip(h["n_heads"] + rng.choice([-1, 1]), *lb.HEADS_RANGE))
     if rng.random() < p:
         h["lr"] = float(np.clip(h["lr"] * math.exp(rng.normal(0, 0.4)), *lb.LR_RANGE))
-    if len(forward_modes) > 1 and rng.random() < 0.2:
-        h["forward_mode"] = str(rng.choice(list(forward_modes)))
     if rng.random() < 0.2:
         h["anchor_seed"] = int(rng.integers(0, 100000))
     return h
@@ -118,8 +117,6 @@ def main():
     ap.add_argument("--evolve-heads", action="store_true",
                     help="let n_heads vary. Off by default: under a summed readout it is the "
                          "same capacity axis as tables_per_head (see lut_backprop's docstring)")
-    ap.add_argument("--forward-modes", nargs="+", default=["hard"],
-                    choices=["hard", "hybrid_smooth"])
     ap.add_argument("--tag", default="")
     ap.add_argument("--ckpt", default=None)
     ap.add_argument("--out-dir", default=None)
@@ -137,8 +134,8 @@ def main():
           f"target sd {base['target_sd']:.4f}")
 
     M = max(1, int(a.cull * a.pool))
-    genomes = [seed_genome(np.random.default_rng(a.seed * 100 + i), a.evolve_heads,
-                           a.forward_modes) for i in range(a.pool)]
+    genomes = [seed_genome(np.random.default_rng(a.seed * 100 + i), a.evolve_heads)
+               for i in range(a.pool)]
     ewma = np.full(a.pool, np.nan)
     age = np.zeros(a.pool, int)
     lineage = np.arange(a.pool)
@@ -167,7 +164,7 @@ def main():
             for slot in worst:
                 c1, c2 = rng.choice(surv, 2, replace=False)
                 par = c1 if ewma[c1] >= ewma[c2] else c2
-                genomes[slot] = mutate(genomes[par], rng, a.evolve_heads, a.forward_modes)
+                genomes[slot] = mutate(genomes[par], rng, a.evolve_heads)
                 ewma[slot] = ewma[par]
                 age[slot] = 0
                 lineage[slot] = lineage[par]

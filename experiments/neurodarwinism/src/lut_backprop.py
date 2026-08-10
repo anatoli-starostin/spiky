@@ -37,13 +37,28 @@ from data import load                                       # noqa: E402
 
 N_IN, N_OUT = 17, 6
 
+# HARD FORWARD ONLY, FOR TRAINING AND EVALUATION ALIKE.
+#
+# The hard forward selects one row per table by sign-packing the pairwise differences, which is
+# piecewise constant and has a zero-a.e. true derivative. It is still trainable because
+# FastMultiHeadLut ships a SOFT SURROGATE backward: the input and temperature gradients come
+# from a full K-row softmax surrogate pinned to the chosen row, while the weight gradient is a
+# 1-row scatter reflecting the actual forward. So backprop rides the hard forward pass and the
+# surrogate gradient -- there is no need for, and no use of, a smooth forward path here.
+#
+# Keeping it hard everywhere also means TRAINING AND EVALUATION ARE THE SAME FUNCTION. A
+# hybrid_smooth-trained, hard-evaluated candidate would be scored on a network it never
+# optimised, and the whole point of exp011 is a substrate whose training we do not have to
+# reason about. `lut_grad_check.py` verifies all of this empirically rather than assuming it.
+FORWARD_MODE = "hard"
+
 # The capacity/optimisation knobs the genome carries. Values here are the reference mid-size
 # config: the teacher's own shape (NAP 6 -> 64 rows, 32 tables, 1 head).
 DEFAULT_GENOME = dict(
     n_anchor_pairs=6,          # NAP in [1, 15]; each table has 2^NAP rows
     tables_per_head=32,        # tables summed per head
     n_heads=1,                 # see the module docstring: redundant with tables_per_head
-    forward_mode="hard",       # "hard" or "hybrid_smooth"
+    forward_mode="hard",       # THE ONLY MODE USED -- see FORWARD_MODE below
     learnable_temps=False,
     soft_score_temp=0.5,
     select_temp=0.5,
@@ -74,10 +89,12 @@ def build(g, device="cuda"):
     """The REAL FastMultiHeadLut. Nothing here is a reimplementation."""
     from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
     from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+    assert g.get("forward_mode", FORWARD_MODE) == FORWARD_MODE, (
+        f"exp011 is hard-forward only (see FORWARD_MODE); got {g.get('forward_mode')!r}")
     return FastMultiHeadLut(
         input_dim=N_IN, n_heads=g["n_heads"], n_outputs=N_OUT,
         n_anchor_pairs=g["n_anchor_pairs"], tables_per_head=g["tables_per_head"],
-        forward_mode=g["forward_mode"],
+        forward_mode=FORWARD_MODE,
         weight_dtype=torch.float32,
         use_bf16=bool(g.get("use_bf16", True)),
         anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
