@@ -117,6 +117,79 @@ def _policy(name):
 # training rather than assuming it.
 
 
+# ----------------------------------------------------------------- warm start (Lamarckian)
+# THE WEIGHT LAYOUT, confirmed against the module: self.weights is an nn.Parameter of shape
+#     [n_tables, table_dim, n_outputs] = [n_heads * tables_per_head, 2^NAP, n_outputs]
+#
+# THE ROW-DESCENT MAPPING, confirmed empirically (see lut_warmstart_check.py check 1).
+# `_msb_powers` is MSB-FIRST -- powers[i] = 2^(NAP-1-i) -- so anchor pair 0 is the most
+# significant bit and the LAST pair is the least significant. `resize_pairs` APPENDS new pairs
+# at the end of the pair axis, so an added anchor becomes the new LSB and therefore
+#
+#     old row k  ->  new rows {2k, 2k+1}          i.e. np.repeat(w, 2, axis=1)
+#
+# Duplicating each parent row into its two children makes the added anchor a PERFECTLY NEUTRAL
+# split: whichever way the new bit falls, the row read holds the same values, so the child
+# reproduces the parent's function EXACTLY before any training (measured max |diff| = 0.0).
+# The alternative mapping (np.tile, k -> {k, k+2^NAP}) does NOT, and is measurably different
+# (max |diff| 1.34), so the choice is not ambiguous.
+#
+# WHY LOW STD FOR GENUINELY NEW CELLS. A new table starts near zero so it contributes almost
+# nothing to the summed output: it has to EARN its weight through training rather than arriving
+# with a random head start. That matters here because fitness charges for size -- a new table
+# that is initialised large would perturb a working function and be charged for it before it
+# ever had a chance to help, biasing the search against growth for the wrong reason.
+
+
+def remap_weights(w, nap_from, nap_to, tables_to, std=1e-4, rng=None):
+    """Remap a trained [n_tables, 2^nap_from, n_outputs] weight array into the child's shape.
+
+    NAP is handled first, then the table axis, mirroring the order resize_pairs uses so the
+    weights and the anchor pairs stay in step.
+
+      NAP GROWS    each row is repeated 2^g times -> the added anchors are neutral splits and
+                   the function is preserved exactly.
+      NAP SHRINKS  groups of 2^s consecutive rows are AVERAGED -- the exact inverse of the
+                   duplication above, so a grow-then-shrink round trip is the identity when the
+                   duplicated rows have not yet diverged.
+      tph GROWS    surviving tables keep their weights; new tables start at `std` (near-zero).
+      tph SHRINKS  the tail is dropped, survivors keep their weights. This DOES change the
+                   function -- the forward sums over tables -- and nothing can prevent that;
+                   backprop re-fits the survivors.
+
+    NOTE ON ANCHOR EDITS. When mutation rewires an anchor pair, the row -> input routing
+    changes underneath these weights, so an inherited row no longer means quite what it meant
+    in the parent. The weights are therefore only APPROXIMATELY valid after a pair edit. That
+    is accepted by design: it is a warm start, not an exact transplant, and training refines it.
+    """
+    rng = np.random.default_rng() if rng is None else rng
+    w = np.asarray(w, np.float32)
+    if nap_to > nap_from:
+        w = np.repeat(w, 1 << (nap_to - nap_from), axis=1)
+    elif nap_to < nap_from:
+        s = 1 << (nap_from - nap_to)
+        w = w.reshape(w.shape[0], w.shape[1] // s, s, w.shape[2]).mean(axis=2)
+    n_have = w.shape[0]
+    if tables_to < n_have:
+        w = w[:tables_to]
+    elif tables_to > n_have:
+        new = rng.normal(0.0, std, (tables_to - n_have, w.shape[1], w.shape[2]))
+        w = np.concatenate([w, new.astype(np.float32)], 0)
+    return np.ascontiguousarray(w, np.float32)
+
+
+def set_weights(model, w):
+    with torch.no_grad():
+        model.weights.copy_(torch.tensor(np.asarray(w, np.float32),
+                                         dtype=model.weights.dtype,
+                                         device=model.weights.device))
+    return model
+
+
+def get_weights(model):
+    return model.weights.detach().float().cpu().numpy()
+
+
 def canonical_pool(input_dim=N_IN):
     """All C(input_dim, 2) canonical (a<b) pairs, as an [P, 2] int array."""
     a, b = np.triu_indices(input_dim, 1)
@@ -259,8 +332,12 @@ def genome_str(g):
             f"anchors {pol:13s} lr {g['lr']:.4g}  -> {param_count(g):,} params")
 
 
-def build(g, device="cuda"):
-    """The REAL FastMultiHeadLut. Nothing here is a reimplementation."""
+def build(g, device="cuda", init_weights=None):
+    """The REAL FastMultiHeadLut. Nothing here is a reimplementation.
+
+    `init_weights` (warm start) must already be in THIS genome's shape -- call remap_weights
+    first. Absent, the engine's own random init stands, which is the cold-start default.
+    """
     from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
     assert g.get("forward_mode", FORWARD_MODE) == FORWARD_MODE, (
         f"exp011 is hard-forward only (see FORWARD_MODE); got {g.get('forward_mode')!r}")
@@ -279,6 +356,12 @@ def build(g, device="cuda"):
     # the module's own sampling stands, which is the previous behaviour exactly.
     if g.get("anchor_pairs") is not None:
         set_anchor_pairs(m, g["anchor_pairs"])
+    # WARM START: inherited weights, already remapped to this genome's shape by the caller.
+    if init_weights is not None:
+        assert tuple(np.asarray(init_weights).shape) == tuple(m.weights.shape), (
+            f"inherited weights {np.asarray(init_weights).shape} do not match "
+            f"{tuple(m.weights.shape)} -- remap_weights was not applied or used a wrong shape")
+        set_weights(m, init_weights)
     return m
 
 
@@ -299,7 +382,7 @@ def evaluate(model, X, Y, batch=4096):
 
 
 def train_eval(g, Xtr, Ytr, Xte, Yte, steps=2000, batch=512, seed=0, device="cuda",
-               eval_every=0, log=None):
+               eval_every=0, log=None, init_weights=None, return_weights=False):
     """Train ONE candidate from scratch and return its held-out MSE and size.
 
     Weights are always freshly initialised: the genome is the architecture, so a candidate's
@@ -308,7 +391,10 @@ def train_eval(g, Xtr, Ytr, Xte, Yte, steps=2000, batch=512, seed=0, device="cud
     when the pool contains different shapes.
     """
     torch.manual_seed(seed)
-    model = build(g, device)
+    model = build(g, device, init_weights=init_weights)
+    # pre-training loss: the number that shows whether a warm start actually carried anything
+    with torch.no_grad():
+        pre = evaluate(model, Xte, Yte)
     opt = torch.optim.Adam(model.parameters(), lr=float(g["lr"]))
     rng = np.random.default_rng(seed)
     n = Xtr.shape[0]
@@ -340,7 +426,10 @@ def train_eval(g, Xtr, Ytr, Xte, Yte, steps=2000, batch=512, seed=0, device="cud
                params=param_count(g), steps=steps, batch=batch,
                heldout_mse=evaluate(model, Xte, Yte),
                train_mse=evaluate(model, Xtr[:20000], Ytr[:20000]),
+               pretrain_heldout_mse=pre, warm_started=init_weights is not None,
                seconds=round(time.time() - t0, 1), curve=curve)
+    if return_weights:
+        out["weights"] = get_weights(model)
     del model, opt
     torch.cuda.empty_cache()
     return out

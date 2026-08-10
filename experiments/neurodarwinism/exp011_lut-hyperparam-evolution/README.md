@@ -433,6 +433,84 @@ Two honest caveats on the aggregate numbers this run printed:
 - The round-5 best member and the two *smallest* Pareto points happen to use `distinct`, which
   is the opposite of the trend. With n=1 run, that is noise, not a counter-finding.
 
+## Warm start — Lamarckian weight inheritance (`--warm-start`, off by default)
+
+Cold start trains every candidate's row weights from scratch; only the anchor pairs are
+inherited. `--warm-start` makes a child inherit its **parent's trained row weights**, remapped
+into its own shape. Default off, so the cold-start behaviour and every number above are
+unchanged.
+
+### The layout and the row-descent mapping, confirmed empirically
+
+`self.weights` is `[n_tables, 2^NAP, n_outputs]` = `[n_heads * tables_per_head, 2^NAP, 6]`.
+
+`_msb_powers` is **MSB-first** (`powers[i] = 2^(NAP-1-i)`), so anchor pair 0 is the most
+significant bit and the **last** pair is the least significant. `resize_pairs` **appends** new
+anchors, so an added anchor becomes the new LSB and therefore
+
+```
+old row k  ->  new rows {2k, 2k+1}        i.e. np.repeat(w, 2, axis=1)
+```
+
+Duplicating each parent row into its two children makes the added anchor a **perfectly neutral
+split** — whichever way the new bit falls, the row read holds the same values. Measured:
+
+| mapping | max &#124;child − parent&#124; output diff, zero training |
+|---|---:|
+| `repeat`, k → {2k, 2k+1} | **0.000e+00 — exact** |
+| `tile`, k → {k, k+2^NAP} *(control)* | 1.219e+00 — differs |
+
+The control matters: without it, "the mapping reproduces the parent" would not distinguish a
+correct mapping from a vacuous test.
+
+### What each mutation type costs, before any training
+
+Parent NAP 6 × tph 16, held-out MSE 0.03525:
+
+| child | placement | new-cell std | pre-training MSE |
+|---|---|---:|---:|
+| same shape | exact | — | **0.03525** (exact) |
+| tph 16 → 24 | exact | 1.0e-04 | **0.03525** (exact — new tables contribute ~nothing) |
+| nap 6 → 7 | exact | — | **0.03525** (exact — neutral split) |
+| tph 16 → 8 | exact | — | 0.58666 *(lossy by nature: the forward sums over tables)* |
+| nap 6 → 5 | exact | — | 0.26552 *(lossy: rows are averaged)* |
+
+**Growth is free; shrinkage costs.** That asymmetry is inherent — dropping tables removes terms
+from a sum, and collapsing rows averages two learned functions — so it is reported rather than
+hidden. Backprop re-fits from there.
+
+**Why low std for new cells** (`--warm-start-std`, default 1e-4, 10× below the engine's own
+`initial_weights_noise`): a new table starts near zero, contributes almost nothing to the summed
+output, and must *earn* its weight through training. Initialised large, it would perturb a
+working function and be charged for by the size penalty before it had any chance to help —
+biasing the search against growth for the wrong reason.
+
+**Caveat, by design:** when mutation rewires an anchor pair, the row → input routing changes
+underneath the inherited weights, so they are only *approximately* valid after a pair edit. That
+is accepted — it is a warm start, not an exact transplant.
+
+### Does it carry? Yes
+
+- A warm-started child's pre-training held-out MSE is **0.03525 vs 2.00692 for a cold random
+  init — 57× better before a single step**.
+- Across a K=12 × 6-round warm-start run, the pool's mean pre-training MSE goes
+  **2.006 (round 0, nobody has a parent yet) → 0.052 → 0.116 → 0.037 → 0.032 → 0.185**. It
+  never returns to the cold-start level, so knowledge genuinely accumulates down lineages. The
+  bumps are the lossy remaps (tph/nap shrink) and anchor edits doing exactly what the table
+  above predicts.
+
+### But it did not change the outcome at 6 rounds
+
+| | best fitness | cheapest match of the teacher's fit | dominates teacher |
+|---|---:|---|---:|
+| cold start | −0.02024 | 15,552 params / 486 tput | 0 |
+| warm start | −0.02009 | 10,752 params / 336 tput | 0 |
+
+Warm start's cheapest teacher-matching member is smaller on both axes than cold start's, which
+is the direction its sample-efficiency promise predicts — but this is **one 6-round run each**,
+well inside noise, and neither dominates the teacher. A matched-total-backprop-steps A/B is what
+would actually settle it.
+
 ## Re-run after removing the mode knob: numbers unchanged
 
 Every check above re-run with `hybrid_smooth` removed from the codebase, same seeds:

@@ -1,0 +1,50 @@
+exp011 evolve: K=16, 60 rounds, 2000 Adam steps/candidate, lambda 2e-07, dev cuda
+  constant-predictor held-out MSE 1.05982, target sd 1.0948
+W0810 18:50:02.278000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/0] _maybe_guard_rel() was called on non-relation expression Eq(s59, 1) | Eq(s59, 32)
+W0810 18:50:02.280000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/0] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+  TEACHER reference (NAP  6 (2^6=   64 rows) x tph  32 x heads 1 anchors full_coverage lr 0.003  -> 12,288 params):
+    held-out MSE 0.02532   params 12,288   throughput 192 weights/forward   (2000 steps)
+  anchoring: LITERAL PAIRS evolved, pair mutation rate 0.03
+W0810 18:50:05.547000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/1] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 83)
+W0810 18:50:05.548000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/1] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:10.617000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:10.675000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 127)
+W0810 18:50:10.676000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:15.172000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:15.225000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 45)
+W0810 18:50:15.226000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:19.601000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:19.655000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 100)
+W0810 18:50:19.655000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:23.624000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:23.679000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 69)
+W0810 18:50:23.680000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:32.022000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:32.079000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 117)
+W0810 18:50:32.079000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:40.208000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:50:40.262000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 111)
+W0810 18:50:40.263000 449074 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8] torch._dynamo hit config.recompile_limit (8)
+W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8]    function: '_soft_lut_bwd_body' (/home/astarostin/projects/spiky/src/spiky/lutorch/fast_multi_head_lut.py:123)
+W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8]    last reason: 1/7: tensor 'index' size mismatch at index 1. expected 111, actual 36
+W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html
+  round   0  best fitness -0.02715  min MSE 0.00554  params min/med 156/9,264  tput min/med 78/501  pareto 11  beats-teacher 0  142s
+  round   1  best fitness -0.02715  min MSE 0.00554  params min/med 156/9,264  tput min/med 78/501  pareto 11  beats-teacher 0  254s
+  round   2  best fitness -0.02678  min MSE 0.00881  params min/med 864/12,240  tput min/med 216/531  pareto 13  beats-teacher 0  323s
+  round   3  best fitness -0.02580  min MSE 0.00891  params min/med 2,160/12,288  tput min/med 222/636  pareto 14  beats-teacher 0  377s
+  round   4  best fitness -0.02505  min MSE 0.00901  params min/med 4,848/12,288  tput min/med 222/765  pareto 15  beats-teacher 0  428s
+  round   5  best fitness -0.02336  min MSE 0.00904  params min/med 5,328/12,288  tput min/med 600/768  pareto 18  beats-teacher 0  475s
+  round   6  best fitness -0.02200  min MSE 0.00900  params min/med 5,328/12,288  tput min/med 666/768  pareto 18  beats-teacher 0  523s
+  round   7  best fitness -0.02119  min MSE 0.01135  params min/med 6,144/12,288  tput min/med 666/768  pareto 20  beats-teacher 0  572s
+  round   8  best fitness -0.02051  min MSE 0.01044  params min/med 6,048/23,424  tput min/med 378/768  pareto 22  beats-teacher 0  622s
+  round   9  best fitness -0.02003  min MSE 0.01046  params min/med 6,048/24,576  tput min/med 378/768  pareto 22  beats-teacher 0  671s
+  round  10  best fitness -0.01974  min MSE 0.01067  params min/med 12,288/24,576  tput min/med 450/768  pareto 23  beats-teacher 0  722s
+  round  11  best fitness -0.01956  min MSE 0.01164  params min/med 12,288/24,576  tput min/med 210/768  pareto 24  beats-teacher 0  773s
+  round  12  best fitness -0.01942  min MSE 0.01071  params min/med 12,288/24,576  tput min/med 210/768  pareto 26  beats-teacher 0  845s
+  round  13  best fitness -0.01931  min MSE 0.01044  params min/med 11,808/24,576  tput min/med 510/768  pareto 27  beats-teacher 0  905s
+  round  14  best fitness -0.01923  min MSE 0.01003  params min/med 11,808/24,576  tput min/med 240/768  pareto 28  beats-teacher 0  958s
+  round  15  best fitness -0.01924  min MSE 0.01008  params min/med 12,288/24,576  tput min/med 240/768  pareto 29  beats-teacher 0  1009s
+  round  16  best fitness -0.01917  min MSE 0.01041  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1060s
+  round  17  best fitness -0.01913  min MSE 0.01117  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1112s

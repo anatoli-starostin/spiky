@@ -1,0 +1,59 @@
+{
+ "descent": {
+  "layout": [
+   3,
+   16,
+   6
+  ],
+  "repeat_maxdiff": 0.0,
+  "tile_maxdiff": 1.21875,
+  "exact": true
+ },
+ "remap": [
+  {
+   "case": "same shape",
+   "shape_ok": true,
+   "placement_exact": true,
+   "new_cell_std": NaN,
+   "pretrain_mse": 0.03524957529703776,
+   "parent_mse": 0.03524957529703776
+  },
+  {
+   "case": "tph GROWS  16->24",
+   "shape_ok": true,
+   "placement_exact": true,
+   "new_cell_std": 0.00010019452747656032,
+   "pretrain_mse": 0.035246327718098956,
+   "parent_mse": 0.03524957529703776
+  },
+  {
+   "case": "tph SHRINKS 16->8",
+   "shape_ok": true,
+   "placement_exact": true,
+   "new_cell_std": NaN,
+   "pretrain_mse": 0.5866577962239583,
+   "parent_mse": 0.03524957529703776
+  },
+  {
+   "case": "nap GROWS   6->7",
+   "shape_ok": true,
+   "placement_exact": true,
+   "new_cell_std": NaN,
+   "pretrain_mse": 0.03524957529703776,
+   "parent_mse": 0.03524957529703776
+  },
+  {
+   "case": "nap SHRINKS 6->5",
+   "shape_ok": true,
+   "placement_exact": true,
+   "new_cell_std": NaN,
+   "pretrain_mse": 0.2655210774739583,
+   "parent_mse": 0.03524957529703776
+  }
+ ],
+ "carries": {
+  "cold_init_mse": 2.0069169921875,
+  "warm_start_mse": 0.03524957529703776,
+  "ratio": 56.934501345783694
+ }
+}

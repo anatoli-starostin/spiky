@@ -298,6 +298,15 @@ def main():
     ap.add_argument("--no-evolve-anchor-pairs", action="store_true",
                     help="revert to the categorical policy gene instead of evolving the "
                          "literal anchor pairs")
+    ap.add_argument("--warm-start", action="store_true",
+                    help="LAMARCKIAN: a child inherits its parent's TRAINED row weights, "
+                         "remapped into its own shape, instead of cold-starting. Off by "
+                         "default, so the cold-start behaviour is unchanged")
+    ap.add_argument("--warm-start-std", type=float, default=1e-4,
+                    help="std for genuinely NEW cells (tables added by a tph increase). Small "
+                         "on purpose -- 10x below the engine's own initial_weights_noise of "
+                         "1e-3 -- so new capacity starts neutral and has to earn its weight "
+                         "through training rather than arriving with a random head start")
     ap.add_argument("--pair-mutation-rate", type=float, default=0.03,
                     help="per-PAIR probability of an anchor edit, so the edit rate per anchor "
                          "is constant across genome sizes")
@@ -340,10 +349,17 @@ def main():
     ewma = np.full(a.pool, np.nan)
     age = np.zeros(a.pool, int)
     lineage = np.arange(a.pool)
+    # WARM START: the trained row weights of each live pool slot. None until a slot has been
+    # trained once, so round 0 is a cold start for everyone either way.
+    pool_w = [None] * a.pool
     hist, seen, t0 = [], [], time.time()
+    if a.warm_start:
+        print(f"  WARM START on: children inherit their parent's trained weights, remapped; "
+              f"new cells at std {a.warm_start_std:g}")
 
     for rnd in range(a.rounds):
         fit = np.zeros(a.pool)
+        pre_gain = []
         mses = np.zeros(a.pool)
         pars = np.zeros(a.pool, dtype=np.int64)
         tputs = np.zeros(a.pool, dtype=np.int64)
@@ -351,7 +367,16 @@ def main():
             # a FRESH training seed per (round, member): the score is a noisy sample of what
             # the architecture reaches, and the EWMA is what averages it
             r = lb.train_eval(g, Xtr, Ytr, Xte, Yte, a.steps, a.batch,
-                              seed=a.seed * 100003 + rnd * 97 + i, device=dev)
+                              seed=a.seed * 100003 + rnd * 97 + i, device=dev,
+                              init_weights=pool_w[i] if a.warm_start else None,
+                              return_weights=a.warm_start)
+            if a.warm_start:
+                # LAMARCKIAN READBACK: the slot now holds this member's TRAINED weights, which
+                # is what its children will inherit and what it will itself resume from next
+                # round. Without this the pool would keep re-training from the same birth
+                # weights and nothing learned would ever accumulate.
+                pool_w[i] = r["weights"]
+                pre_gain.append(r["pretrain_heldout_mse"])
             mses[i], pars[i], tputs[i] = r["heldout_mse"], r["params"], lb.throughput(g)
             fit[i] = fitness(mses[i], pars[i], a.size_penalty,
                              tputs[i], a.throughput_penalty)
@@ -373,8 +398,18 @@ def main():
             for slot in worst:
                 c1, c2 = rng.choice(surv, 2, replace=False)
                 par = c1 if ewma[c1] >= ewma[c2] else c2
-                genomes[slot] = mutate(genomes[par], rng, a.evolve_heads,
-                                       evolve_pairs=ev_pairs, p_pair=a.pair_mutation_rate)
+                child = mutate(genomes[par], rng, a.evolve_heads,
+                               evolve_pairs=ev_pairs, p_pair=a.pair_mutation_rate)
+                if a.warm_start and pool_w[par] is not None:
+                    # remap the PARENT'S TRAINED weights into the CHILD'S shape. Done here, at
+                    # birth, so the child's first training round already starts from them.
+                    pool_w[slot] = lb.remap_weights(
+                        pool_w[par], genomes[par]["n_anchor_pairs"],
+                        child["n_anchor_pairs"], lb.n_tables(child),
+                        std=a.warm_start_std, rng=rng)
+                elif a.warm_start:
+                    pool_w[slot] = None
+                genomes[slot] = child
                 ewma[slot] = ewma[par]
                 age[slot] = 0
                 lineage[slot] = lineage[par]
@@ -397,6 +432,11 @@ def main():
                    n_dominating_teacher=int(sum(s["vs_teacher"]["dominates"]
                                                 for s in seen if s["rnd"] == rnd)),
                    teacher=dict(mse=t_mse, params=t_params, throughput=t_tput),
+                   # warm start only: mean held-out MSE BEFORE this round's training. A cold
+                   # start sits at the target variance (~1.06); anything far below it is
+                   # inherited knowledge that actually survived the remap.
+                   pretrain_mse_mean=(float(np.mean(pre_gain)) if pre_gain else None),
+                   total_backprop_steps=int((rnd + 1) * a.pool * a.steps),
                    anchor_policy_vec=[g["anchor_policy"] for g in genomes],
                    nap_vec=[g["n_anchor_pairs"] for g in genomes],
                    tph_vec=[g["tables_per_head"] for g in genomes],
