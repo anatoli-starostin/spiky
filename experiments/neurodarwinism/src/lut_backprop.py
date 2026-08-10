@@ -273,7 +273,9 @@ LR_RANGE = (3e-4, 3e-2)
 
 def param_count(g):
     n = g["n_heads"] * g["tables_per_head"] * (1 << g["n_anchor_pairs"]) * N_OUT
-    return int(n + (2 if g["learnable_temps"] else 0))
+    # +1 for the trainable readout temperature, counted honestly even though it is one scalar
+    # against ~10^4 weights and cannot move the size story.
+    return int(n + (2 if g["learnable_temps"] else 0) + (1 if g.get("train_tau", True) else 0))
 
 
 def n_tables(g):
@@ -324,8 +326,29 @@ def throughput(g):
 TEACHER_SHAPE = dict(n_anchor_pairs=6, tables_per_head=32, n_heads=1)
 
 
+def teacher_anchor_pairs():
+    """The teacher's ACTUAL anchor pairs, read from the dataset the teacher generated.
+
+    WHY NOT JUST SEED IT. The teacher's anchors are canonical_full_coverage with random_seed=1
+    -- but `get_balanced_anchor_pairs` seeds a `torch.Generator(device=...)`, and the CUDA and
+    CPU streams differ. exp011 builds on CUDA, so passing anchor_seed=1 produced a DIFFERENT
+    draw, and every teacher comparison before this was against the teacher's SHAPE with random
+    anchors rather than against the teacher. Measured: the CPU draw is bit-identical to the
+    checkpoint's `soft_anchor_a_long`/`soft_anchor_b_long`, the CUDA draw is not.
+
+    Reading the pairs out of the .npz removes the device question entirely -- these are the
+    arrays the collector wrote straight from the live module, so they are the teacher's by
+    construction, whatever device anything is built on later.
+    """
+    from data import NPZ
+    Z = np.load(NPZ)
+    return np.stack([Z["anchor_a"], Z["anchor_b"]], -1).astype(np.int64)
+
+
 def teacher_genome():
-    return dict(DEFAULT_GENOME, **TEACHER_SHAPE)
+    """The reference: the teacher's shape AND its actual anchors AND its tau."""
+    return dict(DEFAULT_GENOME, **TEACHER_SHAPE,
+                anchor_pairs=teacher_anchor_pairs(), tau=TEACHER_TAU)
 
 
 def dominates_teacher(mse, params, tput, t_mse, t_params, t_tput, tol=0.0):
@@ -382,13 +405,70 @@ def build(g, device="cuda", init_weights=None):
             f"inherited weights {np.asarray(init_weights).shape} do not match "
             f"{tuple(m.weights.shape)} -- remap_weights was not applied or used a wrong shape")
         set_weights(m, init_weights)
+    # THE READOUT TEMPERATURE. Defaults to the teacher's tau and is TRAINABLE by default
+    # (parameterised as log-tau so it stays positive); --fixed-tau freezes it.
+    #
+    # Trainable is the deliberate choice, not an oversight. tau is ONE scalar against 10^4
+    # weights, so it cannot meaningfully change the size story, and freezing it at a value the
+    # teacher fitted for ITS anchors would hand every differently-anchored candidate an
+    # arbitrary handicap -- the whole point of the experiment is that anchors differ.
+    lt = torch.tensor(float(np.log(g.get("tau", TEACHER_TAU))), device=torch.device(device))
+    if g.get("train_tau", True):
+        m.lse_log_tau = torch.nn.Parameter(lt)
+    else:
+        m.register_buffer("lse_log_tau", lt)
     return m
 
 
+# ----------------------------------------------------------------- the readout
+# THE TARGET IS A LOG-SUM-EXP, NOT A SUM. The exp19 teacher computes
+#
+#     y = tph * tau * ( logsumexp_t( clip(W[t, addr_t] / tau, -60, 60) ) - log(tph) )
+#
+# while the engine's only reduction is F.embedding_bag(mode='sum'). Students trained under a
+# sum were fitting a different function class from the one that generated the data.
+#
+# THE ENGINE HAS NO LSE PATH IN THIS CHECKOUT. `_FORWARD_MODES` is ("hard", "hybrid_smooth"),
+# every reduction in the file is embedding_bag(mode='sum'), and `git log -S exp_outputs --
+# src/spiky/lutorch/` is empty -- the `_exp_outputs_fwd` the dataset README quotes belongs to
+# the exp19-era file, which this repo replaced in af82d49e. So the LSE cannot be delegated to
+# the engine; it is applied here, on top of the engine's OWN addressing.
+#
+# WHY THAT IS STILL FAITHFUL, AND NOT A REIMPLEMENTATION OF THE LUT. We take the row index
+# straight from the engine's compiled hard forward (`_soft_lut_fwd_body`), so the sign-pack,
+# the MSB-first packing and the anchor routing are bit-identical to the engine's. Only the
+# reduction over tables changes. And the gradient is right: the only trainable tensors are the
+# row weights (and log-tau), the addresses are discrete and carry no gradient to x anyway, and
+# gathering the selected rows gives autograd exactly the 1-row-per-table scatter that hard mode
+# produces. With the LSE applied outside, the weight gradient is in fact EXACT given the
+# addresses rather than a surrogate.
+EXP_CLAMP = 60.0
+TEACHER_TAU = 0.09036567807197571
+
+
+def _row_index(model, x):
+    """The engine's own sign-pack row index, [B, n_tables]. No reimplementation."""
+    from spiky.lutorch.fast_multi_head_lut import _soft_lut_fwd_body
+    _, idx = _soft_lut_fwd_body(x, model.weights, model.soft_anchor_a_long,
+                                model.soft_anchor_b_long, model.soft_powers,
+                                model.n_heads, model.tables_per_head, model.table_dim)
+    return idx
+
+
 def _fwd(model, x):
-    """[B, n_heads, n_outputs] -> [B, n_outputs]. Sum over heads, matching the within-head
-    reduction, so heads and tables compose the same way (see the module docstring)."""
-    return model(x).sum(dim=1).float()
+    """[B, n_outputs] under the TEACHER'S readout.
+
+    `model.lse_log_tau` is attached by build(); tph * tau * (logsumexp - log tph) reduces over
+    the table axis exactly as the teacher does. n_heads is pinned at 1 in this experiment, so
+    the table axis and the head axis coincide.
+    """
+    idx = _row_index(model, x)                                   # [B, n_tables]
+    T = idx.shape[1]
+    w_sel = model.weights[torch.arange(T, device=idx.device)[None, :], idx]   # [B, T, n_out]
+    tau = model.lse_log_tau.exp()
+    z = torch.clamp(w_sel.float() / tau, -EXP_CLAMP, EXP_CLAMP)
+    n = float(model.tables_per_head)
+    return (n * tau * (torch.logsumexp(z, dim=1) - math.log(n))).float()
 
 
 @torch.no_grad()
