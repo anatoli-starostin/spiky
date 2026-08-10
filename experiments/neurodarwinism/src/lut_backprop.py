@@ -52,6 +52,45 @@ N_IN, N_OUT = 17, 6
 # reason about. `lut_grad_check.py` verifies all of this empirically rather than assuming it.
 FORWARD_MODE = "hard"
 
+# THE ANCHORING AXIS -- enumerated from the implementation, not invented.
+#
+# `AnchorSamplingPolicy` in spiky.lutorch.lut_helpers defines FOUR members, but
+# FastMultiHeadLut.__init__ explicitly REJECTS two of them:
+#
+#     if policy not in (CANONICAL_FULL_COVERAGE, CANONICAL_DISTINCT):
+#         raise ValueError("anchor_sampling_policy must be CANONICAL_FULL_COVERAGE or "
+#                          "CANONICAL_DISTINCT, got ...")
+#
+# so BALANCED and CONNECTED are not options here at all -- they remain in lut_helpers for
+# main-branch consumers and there is a test asserting FastMultiHeadLut turns them down. The
+# real, supported set is therefore exactly these two:
+#
+#   canonical_full_coverage  canonical-pool tiled-randperm. Guarantees full coverage of all
+#                            C(input_dim, 2) pairs whenever n_tables * NAP >= C(input_dim, 2),
+#                            plus a greedy swap-repair pass keeping pairs distinct within a
+#                            table across permutation boundaries. (the module default)
+#   canonical_distinct       each table independently draws NAP canonical (a<b) pairs without
+#                            replacement. Distinct within a table, NO cross-table coverage
+#                            guarantee -- so tables can overlap or leave inputs unused.
+#
+# Both require NAP <= C(input_dim, 2) = C(17, 2) = 136, which NAP_RANGE (max 12) never
+# approaches, so every (policy, NAP) combination in the search space is constructible.
+#
+# The second half of "how anchors are configured" is WHICH pairs get drawn, which is set by
+# `random_seed`. That is already an evolvable gene (`anchor_seed`), so the anchoring axis is
+# really two genes: the policy that decides the drawing RULE, and the seed that decides the
+# DRAW. Both mutate.
+#
+# NOT included, and worth flagging: soft_score_temp / select_temp / learnable_temps change how
+# anchor DIFFERENCES are scored, not how anchors are placed. I read those as a separate
+# (temperature) axis rather than an anchoring scheme; say the word if they should be folded in.
+ANCHOR_POLICIES = ("canonical_full_coverage", "canonical_distinct")
+
+
+def _policy(name):
+    from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
+    return AnchorSamplingPolicy(name)
+
 # The capacity/optimisation knobs the genome carries. Values here are the reference mid-size
 # config: the teacher's own shape (NAP 6 -> 64 rows, 32 tables, 1 head).
 DEFAULT_GENOME = dict(
@@ -63,6 +102,7 @@ DEFAULT_GENOME = dict(
     soft_score_temp=0.5,
     select_temp=0.5,
     lr=3e-3,
+    anchor_policy="canonical_full_coverage",   # the anchoring axis; see ANCHOR_POLICIES
     anchor_seed=1,             # which anchor-pair draw this candidate got
 )
 
@@ -80,15 +120,15 @@ def param_count(g):
 
 
 def genome_str(g):
+    pol = g.get("anchor_policy", ANCHOR_POLICIES[0]).replace("canonical_", "")
     return (f"NAP {g['n_anchor_pairs']:2d} (2^{g['n_anchor_pairs']}={1 << g['n_anchor_pairs']:5d} "
             f"rows) x tph {g['tables_per_head']:3d} x heads {g['n_heads']} "
-            f"{g['forward_mode']:14s} lr {g['lr']:.4g}  -> {param_count(g):,} params")
+            f"anchors {pol:13s} lr {g['lr']:.4g}  -> {param_count(g):,} params")
 
 
 def build(g, device="cuda"):
     """The REAL FastMultiHeadLut. Nothing here is a reimplementation."""
     from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
-    from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
     assert g.get("forward_mode", FORWARD_MODE) == FORWARD_MODE, (
         f"exp011 is hard-forward only (see FORWARD_MODE); got {g.get('forward_mode')!r}")
     return FastMultiHeadLut(
@@ -97,7 +137,7 @@ def build(g, device="cuda"):
         forward_mode=FORWARD_MODE,
         weight_dtype=torch.float32,
         use_bf16=bool(g.get("use_bf16", True)),
-        anchor_sampling_policy=AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
+        anchor_sampling_policy=_policy(g.get("anchor_policy", ANCHOR_POLICIES[0])),
         soft_score_temp=g["soft_score_temp"], select_temp=g["select_temp"],
         learnable_temps=g["learnable_temps"],
         random_seed=int(g["anchor_seed"]),

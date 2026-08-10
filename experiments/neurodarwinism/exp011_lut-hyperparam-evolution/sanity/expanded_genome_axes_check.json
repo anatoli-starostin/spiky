@@ -1,0 +1,49 @@
+{
+ "anchor_policies": [
+  "canonical_full_coverage",
+  "canonical_distinct"
+ ],
+ "corners": {
+  "n": 18,
+  "failures": []
+ },
+ "walk": {
+  "steps": 200,
+  "failures": [],
+  "anchor_flips": 15,
+  "nap_range": [
+   4,
+   12
+  ],
+  "tph_range": [
+   1,
+   128
+  ],
+  "policies_visited": [
+   "canonical_distinct",
+   "canonical_full_coverage"
+  ]
+ },
+ "head_to_head": {
+  "NAP6xtph32/canonical_full_coverage": [
+   0.023500162760416665,
+   0.024378733317057293,
+   0.025079137166341147
+  ],
+  "NAP6xtph32/canonical_distinct": [
+   0.030551531473795572,
+   0.034832433064778644,
+   0.034971598307291664
+  ],
+  "NAP5xtph64/canonical_full_coverage": [
+   0.020309933980305988,
+   0.02210191853841146,
+   0.02290106201171875
+  ],
+  "NAP5xtph64/canonical_distinct": [
+   0.025911692301432292,
+   0.027617418924967448,
+   0.025228230794270834
+  ]
+ }
+}

@@ -1,0 +1,55 @@
+exp011 evolve: K=12, 6 rounds, 1000 Adam steps/candidate, lambda 2e-07, dev cuda
+  constant-predictor held-out MSE 1.05982, target sd 1.0948
+W0810 18:24:30.106000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/0] _maybe_guard_rel() was called on non-relation expression Eq(s59, 1) | Eq(s59, 82)
+W0810 18:24:30.108000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/0] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:32.104000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/1] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:32.162000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/1] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 66)
+W0810 18:24:32.163000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/1] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:33.347000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:33.396000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 34)
+W0810 18:24:33.397000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/2] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:34.732000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:34.779000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 11)
+W0810 18:24:34.780000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/3] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:35.966000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:36.015000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 121)
+W0810 18:24:36.016000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/4] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:37.220000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:37.266000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 104)
+W0810 18:24:37.267000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/5] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:38.446000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:38.493000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 69)
+W0810 18:24:38.494000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/6] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:39.649000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s4, 1) | Eq(s4, s14)
+W0810 18:24:39.697000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s62, 1) | Eq(s62, 81)
+W0810 18:24:39.698000 408534 torch/fx/experimental/symbolic_shapes.py:6833] [1/7] _maybe_guard_rel() was called on non-relation expression Eq(s30, 1) | Eq(s30, 6)
+W0810 18:24:41.969000 408534 torch/_dynamo/convert_frame.py:1358] [1/8] torch._dynamo hit config.recompile_limit (8)
+W0810 18:24:41.969000 408534 torch/_dynamo/convert_frame.py:1358] [1/8]    function: '_soft_lut_bwd_body' (/home/astarostin/projects/spiky/src/spiky/lutorch/fast_multi_head_lut.py:123)
+W0810 18:24:41.969000 408534 torch/_dynamo/convert_frame.py:1358] [1/8]    last reason: 1/7: tensor 'index' size mismatch at index 1. expected 81, actual 42
+W0810 18:24:41.969000 408534 torch/_dynamo/convert_frame.py:1358] [1/8] To log all recompilation reasons, use TORCH_LOGS="recompiles".
+W0810 18:24:41.969000 408534 torch/_dynamo/convert_frame.py:1358] [1/8] To diagnose recompilation issues, see https://pytorch.org/docs/main/torch.compiler_troubleshooting.html
+  round   0  best fitness -0.02133  min MSE 0.00532  min params 408  median params 224,256  pareto 6 pts  anchors full/distinct 7/5  21s
+  round   1  best fitness -0.02133  min MSE 0.00535  min params 408  median params 224,256  pareto 6 pts  anchors full/distinct 7/5  38s
+  round   2  best fitness -0.02092  min MSE 0.00520  min params 8,448  median params 55,296  pareto 7 pts  anchors full/distinct 6/6  54s
+  round   3  best fitness -0.02074  min MSE 0.01124  min params 8,448  median params 34,752  pareto 7 pts  anchors full/distinct 6/6  66s
+  round   4  best fitness -0.02055  min MSE 0.01068  min params 8,448  median params 24,960  pareto 9 pts  anchors full/distinct 7/5  79s
+  round   5  best fitness -0.02038  min MSE 0.00931  min params 10,176  median params 25,536  pareto 9 pts  anchors full/distinct 9/3  92s
+
+BEST member 7: fitness -0.02038
+  NAP  5 (2^5=   32 rows) x tph  75 x heads 1 anchors distinct      lr 0.0006735  -> 14,400 params
+
+PARETO FRONT (fit vs size), 9 points, lambda-free -- read the minimal config for any MSE threshold off this:
+      params  held-out MSE  vs constant  config
+         408       0.18709      0.1765x  NAP  2 x tph  17 x heads 1  anchors distinct      lr 0.00299
+       8,448       0.04411      0.0416x  NAP  6 x tph  22 x heads 1  anchors distinct      lr 0.0008856
+      10,176       0.02940      0.0277x  NAP  5 x tph  53 x heads 1  anchors distinct      lr 0.001458
+      19,200       0.02015      0.0190x  NAP  6 x tph  50 x heads 1  anchors full_coverage lr 0.000913
+      24,576       0.01502      0.0142x  NAP  5 x tph 128 x heads 1  anchors full_coverage lr 0.001124
+      43,008       0.01251      0.0118x  NAP  6 x tph 112 x heads 1  anchors full_coverage lr 0.001124
+      49,152       0.01195      0.0113x  NAP  6 x tph 128 x heads 1  anchors full_coverage lr 0.001124
+      98,304       0.00931      0.0088x  NAP  7 x tph 128 x heads 1  anchors full_coverage lr 0.0006711
+     755,712       0.00520      0.0049x  NAP 10 x tph 123 x heads 1  anchors distinct      lr 0.0007807
+
+ANCHORING:
+  canonical_full_coverage   9/12 of the final pool    40 candidates trained, median held-out MSE 0.01809
+  canonical_distinct        3/12 of the final pool    32 candidates trained, median held-out MSE 0.02088

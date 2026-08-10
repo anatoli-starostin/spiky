@@ -198,6 +198,85 @@ Two things I would change only on your word: whether to sweep **lambda** (2e-7 i
 call — the Pareto front is lambda-free either way, but which *point* on it evolution converges
 to is not), and whether to open `--forward-modes hard hybrid_smooth` (see the test note below).
 
+## The expanded genome: nap, tph, **anchoring**
+
+Evolution now moves on three axes. The first two were already there; the third is new.
+
+### The anchoring options, enumerated from the implementation
+
+`AnchorSamplingPolicy` in `lut_helpers` defines **four** members, but `FastMultiHeadLut.__init__`
+**explicitly rejects two of them** — there is even a test asserting it turns `BALANCED` down:
+
+```python
+if policy not in (CANONICAL_FULL_COVERAGE, CANONICAL_DISTINCT):
+    raise ValueError("anchor_sampling_policy must be CANONICAL_FULL_COVERAGE or "
+                     "CANONICAL_DISTINCT, got ...")
+```
+
+So the genuinely supported set is exactly **two**, and both are now evolvable:
+
+| policy | what it does |
+|---|---|
+| `canonical_full_coverage` | canonical-pool tiled-randperm. Guarantees coverage of all C(input_dim,2) pairs whenever `n_tables * NAP >= C(input_dim,2)`, plus a greedy swap-repair pass keeping pairs distinct within a table across permutation boundaries. *(module default)* |
+| `canonical_distinct` | each table independently draws NAP canonical (a<b) pairs without replacement. Distinct within a table, **no** cross-table coverage guarantee — tables may overlap or leave inputs unused. |
+
+Both require `NAP <= C(17,2) = 136`, which `NAP_RANGE` (max 12) never approaches, so **every
+(policy, NAP) pair in the search space is constructible**.
+
+Anchoring is really **two genes**: `anchor_policy` (the drawing *rule*, resampled at p=0.15 —
+a large structural jump) and `anchor_seed` (the *draw* itself, resampled at p=0.2 — a smaller
+move). `anchor_seed` already existed; the policy is new.
+
+**Deliberately not folded in, flag if you disagree:** `soft_score_temp`, `select_temp` and
+`learnable_temps` change how anchor *differences are scored*, not how anchors are *placed*. I
+read those as a separate temperature axis rather than an anchoring scheme.
+
+### Validity across all three axes (`src/lut_axes_check.py`)
+
+| check | result |
+|---|---|
+| **A corners** — 2 policies × NAP {1, 6, 12} × tph {1, 32, 128} | **18/18 built and took a training step, 0 failures** |
+| **B random walk** — 200 steps of the *real* `mutate()` | **200/200 built and stepped, 0 failures**; visited NAP 4–12 (9 values), tph 1–128 (41 values), both policies, **15 anchoring flips** |
+
+Check B matters more than A: it exercises the operator the run will actually use, including
+mid-walk flips of the anchoring gene, so a policy change never lands on an unbuildable config.
+
+### Head to head: `full_coverage` wins at matched shape
+
+Three seeds each, 1500 steps, identical (NAP, tph):
+
+| shape | `canonical_full_coverage` | `canonical_distinct` |
+|---|---:|---:|
+| NAP 6 × tph 32 | **0.02432 ± 0.00065** | 0.03345 ± 0.00205 |
+| NAP 5 × tph 64 | **0.02177 ± 0.00108** | 0.02625 ± 0.00100 |
+
+Full coverage is better by 27 % and 17 %, with **non-overlapping spreads on both shapes**. That
+makes sense mechanically: with 17 inputs there are 136 canonical pairs, and `distinct` gives no
+guarantee that the table ensemble collectively looks at all of them, so some inputs can go
+unread.
+
+### Does selection prefer one? (K=12, 6 rounds)
+
+```
+round  best fitness  min MSE  min params  median params  pareto  anchors full/distinct
+    0     -0.02133   0.00532         408        224,256       6         7/5
+    2     -0.02092   0.00520       8,448         55,296       7         6/6
+    5     -0.02038   0.00931      10,176         25,536       9         9/3
+```
+
+The pool drifts from 7/5 to **9/3 in favour of full coverage** while median size falls 224k →
+25.5k — consistent with the head-to-head. **But treat the drift as suggestive only**: one run
+of six rounds with K=12 is far too short to call a selection preference, and the pool
+composition also reflects drift and founder effects. *The matched-shape head-to-head above is
+the real evidence*; the drift merely agrees with it.
+
+Two honest caveats on the aggregate numbers this run printed:
+- `full_coverage` median held-out MSE 0.01809 vs `distinct` 0.02088 across all candidates ever
+  trained (40 vs 32) is **confounded by size** — the two arms did not train on the same shapes.
+  Only the matched-shape table is a clean comparison.
+- The round-5 best member and the two *smallest* Pareto points happen to use `distinct`, which
+  is the opposite of the trend. With n=1 run, that is noise, not a counter-finding.
+
 ## Re-run after removing the mode knob: numbers unchanged
 
 Every check above re-run with `hybrid_smooth` removed from the codebase, same seeds:
@@ -232,8 +311,10 @@ It is a pre-existing, order-dependent tolerance flake — `git status` shows no 
 
 `../src/lut_backprop.py` (candidate build + train + eval, and the CLI that produced checks 1–2),
 `../src/lut_evolve.py` (the loop, check 3), `../src/lut_grad_check.py` (the four
-hard+surrogate checks), `sanity/*_hard_rerun.json` and
-`sanity/hard_surrogate_grad_check.json`, `sanity/fit_vs_size.json`,
+hard+surrogate checks), `../src/lut_axes_check.py` (the expanded-genome validity checks),
+`sanity/*_hard_rerun.json`, `sanity/hard_surrogate_grad_check.json`,
+`sanity/expanded_genome_axes_check.json`, `sanity/evolve_smoke_expanded.{json,log}`,
+`sanity/fit_vs_size.json`,
 `sanity/iso_params_{12k,49k}.json`, `sanity/evolve_smoke.json`, `sanity/evolve_smoke.log`,
 `plot_exp011.py`.
 

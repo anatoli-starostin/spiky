@@ -53,6 +53,9 @@ def seed_genome(rng, evolve_heads=False):
     g["tables_per_head"] = int(rng.integers(lb.TPH_RANGE[0], lb.TPH_RANGE[1] + 1))
     g["n_heads"] = int(rng.integers(*lb.HEADS_RANGE)) if evolve_heads else 1
     g["lr"] = float(np.exp(rng.uniform(math.log(lb.LR_RANGE[0]), math.log(lb.LR_RANGE[1]))))
+    # THE ANCHORING AXIS: the drawing RULE (policy) and the DRAW (seed). See
+    # lut_backprop.ANCHOR_POLICIES for why the supported set is exactly these two.
+    g["anchor_policy"] = str(rng.choice(lb.ANCHOR_POLICIES))
     g["anchor_seed"] = int(rng.integers(0, 100000))
     return g
 
@@ -75,6 +78,11 @@ def mutate(g, rng, evolve_heads=False, p=0.5):
         h["n_heads"] = int(np.clip(h["n_heads"] + rng.choice([-1, 1]), *lb.HEADS_RANGE))
     if rng.random() < p:
         h["lr"] = float(np.clip(h["lr"] * math.exp(rng.normal(0, 0.4)), *lb.LR_RANGE))
+    # ANCHORING. Two genes, mutated at different rates on purpose: the POLICY is a categorical
+    # over two options, so flipping it is a large structural jump and gets the lower rate; the
+    # SEED just redraws which pairs that policy picks, which is a smaller move.
+    if rng.random() < 0.15:
+        h["anchor_policy"] = str(rng.choice(lb.ANCHOR_POLICIES))
     if rng.random() < 0.2:
         h["anchor_seed"] = int(rng.integers(0, 100000))
     return h
@@ -171,11 +179,19 @@ def main():
 
         bi = int(np.nanargmax(ewma))
         pf = pareto(seen)
+        # Which anchoring is selection actually keeping? Counted over the LIVE pool after the
+        # cull, so it tracks what survived rather than what was tried.
+        pol_counts = {p: int(sum(g["anchor_policy"] == p for g in genomes))
+                      for p in lb.ANCHOR_POLICIES}
         rec = dict(rnd=rnd, best=float(np.nanmax(ewma)), mean=float(np.nanmean(ewma)),
                    batch_best=float(fit.max()),
                    min_mse=float(mses.min()), min_params=int(pars.min()),
                    median_params=int(np.median(pars)),
                    n_lineages=int(np.unique(lineage).size),
+                   anchor_policy_counts=pol_counts,
+                   anchor_policy_vec=[g["anchor_policy"] for g in genomes],
+                   nap_vec=[g["n_anchor_pairs"] for g in genomes],
+                   tph_vec=[g["tables_per_head"] for g in genomes],
                    wall=round(time.time() - t0, 1),
                    fitness_vec=[round(float(v), 6) for v in fit],
                    mse_vec=[round(float(v), 6) for v in mses],
@@ -187,7 +203,9 @@ def main():
         print(f"  round {rnd:3d}  best fitness {np.nanmax(ewma):+.5f}  "
               f"min MSE {mses.min():.5f}  min params {pars.min():,}  "
               f"median params {int(np.median(pars)):,}  "
-              f"pareto {len(pf)} pts  {rec['wall']:.0f}s", flush=True)
+              f"pareto {len(pf)} pts  "
+              f"anchors full/distinct {pol_counts['canonical_full_coverage']}/"
+              f"{pol_counts['canonical_distinct']}  {rec['wall']:.0f}s", flush=True)
         json.dump(hist, open(os.path.join(out_dir, f"lut_evolve{a.tag}.json"), "w"), indent=1)
         if a.ckpt:
             json.dump(dict(genomes=genomes, ewma=ewma.tolist(), age=age.tolist(),
@@ -204,7 +222,19 @@ def main():
         print(f"  {p['params']:10,} {p['mse']:13.5f} "
               f"{p['mse'] / base['constant_predictor_mse']:11.4f}x  "
               f"NAP {g['n_anchor_pairs']:2d} x tph {g['tables_per_head']:3d} "
-              f"x heads {g['n_heads']}  lr {g['lr']:.4g}")
+              f"x heads {g['n_heads']}  "
+              f"anchors {g['anchor_policy'].replace('canonical_', ''):13s} lr {g['lr']:.4g}")
+
+    # Does selection prefer an anchoring? Two views: what survives in the final pool, and how
+    # every candidate ever trained scored, which is the fairer comparison because the pool
+    # composition also reflects drift.
+    print("\nANCHORING:")
+    for pol in lb.ANCHOR_POLICIES:
+        live = sum(g["anchor_policy"] == pol for g in genomes)
+        tried = [s["mse"] for s in seen if s["genome"]["anchor_policy"] == pol]
+        med = f"median held-out MSE {np.median(tried):.5f}" if tried else "none trained"
+        print(f"  {pol:24s} {live:2d}/{len(genomes)} of the final pool   "
+              f"{len(tried):3d} candidates trained, {med}")
     json.dump(dict(baselines=base, history=hist, seen=seen,
                    pareto=pareto(seen), best_genome=genomes[bi]),
               open(os.path.join(out_dir, f"lut_evolve{a.tag}_final.json"), "w"), indent=1)
