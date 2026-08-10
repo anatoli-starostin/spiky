@@ -85,7 +85,7 @@ def seed_genome(rng, w_max, fanout_e=80, fanout_i=20, fanout_inh=100,
              tgt_pool=np.concatenate(tp), tgt_idx=np.concatenate(ti),
              delay=np.concatenate(d).astype(np.int64),
              weight=np.concatenate(w).astype(np.float64))
-    return dedupe(g)
+    return apply_out_delay_gate(dedupe(g), rng)
 
 
 def _key(g):
@@ -192,7 +192,7 @@ def mutate_structural(g, rng, w_max, p_add_exc=0.015, p_prune_exc=0.015,
     inh_now = h["src_pool"] == INH
     h["weight"][inh_now] = RES_W_INH
     h["weight"][~inh_now] = np.clip(h["weight"][~inh_now], 0.0, 1.5 * w_max)
-    return h
+    return apply_out_delay_gate(h, rng)
 
 
 def mutate(g, rng, w_max, p_add=0.015, p_prune=0.015, p_jit=0.15, w_sigma=0.15,
@@ -264,7 +264,7 @@ def mutate(g, rng, w_max, p_add=0.015, p_prune=0.015, p_jit=0.15, w_sigma=0.15,
             # v[:target] would drop whole (src_pool, tgt_pool) groups from one end.
             keep = np.sort(rng.choice(h["weight"].size, target, replace=False))
             h = {k: v[keep] for k, v in h.items()}
-    return h
+    return apply_out_delay_gate(h, rng)
 
 
 # ----------------------------------------------------------------- build
@@ -313,10 +313,80 @@ def stage2_metas(stdp_lr, w_max, group_size=8, backward_group_size=32):
                        _forward_group_size=group_size,
                        _backward_group_size=backward_group_size)
            for d in range(D_MIN, D_MAX + 1)]
-    return exc + inh
+    if not OUT_GATE:
+        return exc + inh
+    # THE OUTPUT DELAY GATE: a third bank, used only by synapses whose TARGET is an output
+    # neuron, holding delays [OUT_D_MIN, OUT_D_MAX] instead of [D_MIN, D_MAX]. Nothing can
+    # reach an output sooner than OUT_D_MIN ticks after its presynaptic spike, so an output
+    # physically cannot fire inside the input/computation phase.
+    #
+    # WHY A THIRD BANK RATHER THAN RAISING D_MAX. Widening the main range to 80 would give
+    # 2 * 80 = 160 metas and put every ordinary synapse's index somewhere in that range;
+    # appending a 17-meta bank costs 2 * N_DELAY_METAS + 17 metas total (57 at D_MAX 20) and
+    # leaves every existing index untouched.
+    #
+    # ONE BANK, PLASTIC, IS ENOUGH. Output-targeting synapses are sourced from EXC or INP
+    # only -- mutate_structural's inhibitory add_block always targets EXC, and mutate()'s
+    # draw() maps spool == INH to EXC -- so no inhibitory synapse ever lands on an output.
+    # build_pool asserts this rather than trusting it.
+    gate = [SynapseMeta(learning_rate=stdp_lr, min_delay=d, max_delay=d,
+                        initial_weight=0.0, min_weight=0.0, max_weight=1.5 * w_max,
+                        initial_noise_level=0.0, weight_decay=0.9, weight_scaling_cf=0.0,
+                        _forward_group_size=group_size,
+                        _backward_group_size=backward_group_size)
+            for d in range(OUT_D_MIN, OUT_D_MAX + 1)]
+    return exc + inh + gate
 
 
 N_DELAY_METAS = D_MAX - D_MIN + 1
+
+# ----------------------------------------------------------------- output delay gate
+# Opt-in (--out-delay-gate). Defaults OFF, so every existing run reproduces byte for byte.
+#
+# WHY DELAY AND NOT INHIBITORY CURRENT. A scheduled negative external current on the output
+# neurons was measured and does not work: the engine integrates
+# V += dt * ((0.04V + 5)V + 140 - U + I), whose intrinsic term turns positive below
+# V = -82.6, so a clamp strong enough to matter drives V past that root and the quadratic
+# DIVERGES UPWARD -- the outputs then fire on every tick. Measured on 64 held-out states:
+# -200 halved early firing (10,758 -> 5,082 spikes in [0,64)) and -250 inverted it (15,150),
+# with -500 and beyond saturating at 24,192 = every cell on every tick. Raising the output
+# meta's spike_threshold fails too: V overshoots to ~4,135 normally and to 3.2e6 when
+# diverging, so it clears any finite threshold within one tick's Euler sub-steps.
+# A delay bank has nothing to diverge -- it is a statement about arrival times.
+OUT_GATE = False
+OUT_D_MIN, OUT_D_MAX = 64, 80
+N_OUT_DELAY_METAS = OUT_D_MAX - OUT_D_MIN + 1
+
+
+def out_gate_meta_base():
+    """First meta index of the gate bank: it sits after the excitatory and inhibitory banks."""
+    return 2 * N_DELAY_METAS
+
+
+def apply_out_delay_gate(g, rng=None):
+    """Force every output-targeting synapse's delay into [OUT_D_MIN, OUT_D_MAX].
+
+    Called at the end of every genome-producing operation (seed_genome, mutate,
+    mutate_structural) so the gate survives selection: a mutation that invents a new
+    output-targeting synapse draws its delay from the ordinary range, and without this it
+    would land in the low bank and punch a hole in the gate.
+    """
+    if not OUT_GATE:
+        return g
+    m = g["tgt_pool"] == OUTP
+    if not m.any():
+        return g
+    d = g["delay"][m]
+    out_of_range = (d < OUT_D_MIN) | (d > OUT_D_MAX)
+    if out_of_range.any():
+        n = int(out_of_range.sum())
+        # redraw rather than clip: clipping would pile every new synapse onto OUT_D_MIN and
+        # collapse the readout to a single arrival time
+        draw = (np.random.default_rng() if rng is None else rng)
+        d = d.copy()
+        d[out_of_range] = draw.integers(OUT_D_MIN, OUT_D_MAX + 1, n)
+        g["delay"][m] = d
+    return g
 
 
 def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=None):
@@ -328,7 +398,12 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
     K = len(genomes)
     # d_max=D_MAX is NOT redundant: delay_metas' own default is bound at import from
     # harness.D_MAX, so omitting it silently pins the bank at 20 delays and ignores --d-max.
-    metas = stage2_metas(stdp_lr, w_max) if stdp_lr > 0 else delay_metas(d_max=D_MAX)
+    # The gate bank is appended by stage2_metas and indexed off 2 * N_DELAY_METAS, so the
+    # two-bank layout has to be in force whenever the gate is on -- including at stdp_lr 0,
+    # where the single unoffset delay_metas bank would put the gate at the wrong offset AND
+    # (per build_eval_pool's note) silently land inhibitory synapses in the excitatory bank.
+    two_bank = stdp_lr > 0 or OUT_GATE
+    metas = stage2_metas(stdp_lr, w_max) if two_bank else delay_metas(d_max=D_MAX)
     neuron_metas = [NeuronMeta(neuron_type=0, a=0.02, d=8.0),
                     NeuronMeta(neuron_type=1, a=0.1, d=2.0),
                     NeuronMeta(neuron_type=2, a=0.02, d=8.0),
@@ -353,8 +428,20 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
             if m.any():
                 t[m] = ids[p][c * base[p] + g["tgt_idx"][m]]
         meta = (g["delay"] - D_MIN).copy()
-        if stdp_lr > 0:                      # inhibitory synapses use the frozen bank
+        if two_bank:                         # inhibitory synapses use the frozen bank
             meta[g["src_pool"] == INH] += N_DELAY_METAS
+        if OUT_GATE:
+            # output-targeting synapses index the third bank instead, at their own offset
+            to_out = g["tgt_pool"] == OUTP
+            if to_out.any():
+                d = g["delay"][to_out]
+                assert not (g["src_pool"][to_out] == INH).any(), (
+                    "an inhibitory synapse targets an output neuron; the gate bank is "
+                    "plastic-only, so it would silently become excitatory")
+                assert d.min() >= OUT_D_MIN and d.max() <= OUT_D_MAX, (
+                    f"output-targeting delays {d.min()}..{d.max()} outside the gate range "
+                    f"[{OUT_D_MIN}, {OUT_D_MAX}] -- apply_out_delay_gate was not called")
+                meta[to_out] = out_gate_meta_base() + (d - OUT_D_MIN)
         tri.append(np.stack([meta, s, t], 1))
         # EVOLVABLE OUTPUT DRIVE: scale the weight of every synapse landing on this net's
         # OUTPUT neurons. Per-net neuron parameters are impossible here (all K nets share the
@@ -644,6 +731,7 @@ def score(h, X, Y, enc, current=200.0, tie_penalty=0.0, readout_window=None,
 def main():
     # declared up front: the architecture knobs below rebind these module-level values
     global N_EXC, N_INH, POOL_SIZE, D_MAX, N_DELAY_METAS
+    global OUT_GATE, OUT_D_MIN, OUT_D_MAX, N_OUT_DELAY_METAS
     ap = argparse.ArgumentParser()
     ap.add_argument("--pool", type=int, default=32)
     ap.add_argument("--rounds", type=int, default=60)
@@ -724,12 +812,34 @@ def main():
     ap.add_argument("--drive-p", type=float, default=0.5,
                     help="probability a newborn's drive gene mutates")
     ap.add_argument("--drive-clip", type=float, nargs=2, default=[0.1, 3.0])
+    # output delay gate (off by default -> previous behaviour exactly)
+    ap.add_argument("--out-delay-gate", action="store_true",
+                    help="put every output-TARGETING synapse in its own high-delay bank so an "
+                         "output physically cannot fire before the readout window. Pairs with "
+                         "--readout-window 32; makes the declared [64,96) readout phase real "
+                         "instead of a convention. Adds N_OUT_DELAY_METAS metas to the bank")
+    ap.add_argument("--out-delay-range", type=int, nargs=2, default=[64, 80],
+                    metavar=("LO", "HI"),
+                    help="the gate bank's delay range. HI below N_TICKS on purpose: a spike "
+                         "leaving at tick t arrives at t+delay, so delays near 96 mostly land "
+                         "past the end of the episode and are lost")
     a = ap.parse_args()
 
     # Delay range drives the meta banks (stage2_metas iterates D_MIN..D_MAX) and the
     # inhibitory bank offset, so N_DELAY_METAS must be refreshed alongside it.
     D_MAX = a.d_max
     N_DELAY_METAS = D_MAX - D_MIN + 1
+
+    OUT_GATE = a.out_delay_gate
+    OUT_D_MIN, OUT_D_MAX = int(a.out_delay_range[0]), int(a.out_delay_range[1])
+    N_OUT_DELAY_METAS = OUT_D_MAX - OUT_D_MIN + 1
+    if OUT_GATE:
+        assert 1 <= OUT_D_MIN <= OUT_D_MAX < N_TICKS, (
+            f"--out-delay-range {OUT_D_MIN} {OUT_D_MAX} must satisfy "
+            f"1 <= LO <= HI < N_TICKS ({N_TICKS})")
+        print(f"OUTPUT DELAY GATE ON: output-targeting synapses use delays "
+              f"[{OUT_D_MIN}, {OUT_D_MAX}] ({N_OUT_DELAY_METAS} extra metas, "
+              f"{2 * N_DELAY_METAS + N_OUT_DELAY_METAS} total)", flush=True)
 
     # Rebind the pool sizes everywhere they are cached. N_EXC/N_INH come from harness and
     # are baked into POOL_SIZE at import, so both must be refreshed together or the genome

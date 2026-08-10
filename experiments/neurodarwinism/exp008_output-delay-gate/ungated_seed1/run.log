@@ -1,0 +1,83 @@
+architecture: 17 in / 800 exc / 200 inh / 6 out, fan-outs {'fanout_e': 80, 'fanout_i': 20, 'fanout_inh': 100, 'fanout_in': 100, 'fanin_out': 100} (scale 1.0x)
+steady state: pool K=32, cull M=8/round, alpha=0.3, grace=2 rounds, 97,157 synapses/genome, dev cuda
+  round   0  batch best +0.1363 mean +0.0113  EWMA best +0.1363 mean +0.0113  syn 97,098/net  2s
+  round   5  batch best +0.1568 mean +0.0364  EWMA best +0.1099 mean +0.0627  syn 97,529/net  40s
+  round  10  batch best +0.2303 mean +0.0868  EWMA best +0.1853 mean +0.1338  syn 96,799/net  125s
+  round  15  batch best +0.2024 mean +0.1335  EWMA best +0.1820 mean +0.1511  syn 96,565/net  224s
+  round  20  batch best +0.2361 mean +0.1732  EWMA best +0.2045 mean +0.1720  syn 96,539/net  319s
+  round  25  batch best +0.2304 mean +0.1570  EWMA best +0.2072 mean +0.1859  syn 96,197/net  417s
+  round  30  batch best +0.2563 mean +0.1881  EWMA best +0.1995 mean +0.1867  syn 95,998/net  502s
+  round  35  batch best +0.3241 mean +0.2416  EWMA best +0.2310 mean +0.2101  syn 95,443/net  596s
+  round  40  batch best +0.2405 mean +0.2027  EWMA best +0.2612 mean +0.2425  syn 95,466/net  688s
+  round  45  batch best +0.3477 mean +0.2936  EWMA best +0.2974 mean +0.2733  syn 95,294/net  784s
+Traceback (most recent call last):
+  File "/home/astarostin/projects/spiky/experiments/neurodarwinism/src/steady_state.py", line 1070, in <module>
+    main()
+  File "/home/astarostin/projects/spiky/experiments/neurodarwinism/src/steady_state.py", line 932, in main
+    stdp_batches(h, Xpool, Ypool, enc, a.batch, a.seed, rnd,
+  File "/home/astarostin/projects/spiky/experiments/neurodarwinism/src/steady_state.py", line 660, in stdp_batches
+    run_episode(h, Xb, enc, current, train=True)
+  File "/home/astarostin/projects/spiky/experiments/neurodarwinism/src/harness.py", line 289, in run_episode
+    sp.process_ticks(n_ticks_to_process=N_TICKS, batch_size=B, n_input_ticks=T_IN,
+  File "/home/astarostin/projects/spiky/src/spiky/spnet/spnet.py", line 245, in process_ticks
+    return self._neuron_data_manager.process_ticks(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: CUDA runtime API error cudaErrorInvalidValue at /home/astarostin/projects/spiky/native/spiky/spnet/spnet_runtime.cu:440
+exit=1
+architecture: 17 in / 800 exc / 200 inh / 6 out, fan-outs {'fanout_e': 80, 'fanout_i': 20, 'fanout_inh': 100, 'fanout_in': 100, 'fanin_out': 100} (scale 1.0x)
+RESUMED from /home/astarostin/projects/spiky/experiments/neurodarwinism/exp008_output-delay-gate/ungated_seed1/ck.npz at round 49 (32 genomes, 49 rounds of history, rng restored)
+steady state: pool K=32, cull M=8/round, alpha=0.3, grace=2 rounds, 94,343 synapses/genome, dev cuda
+  round  50  batch best +0.3039 mean +0.2577  EWMA best +0.2984 mean +0.2785  syn 94,802/net  10s
+  round  55  batch best +0.3000 mean +0.2722  EWMA best +0.2629 mean +0.2509  syn 94,675/net  38s
+  round  60  batch best +0.3327 mean +0.2833  EWMA best +0.3261 mean +0.3095  syn 94,856/net  65s
+  round  65  batch best +0.3093 mean +0.2850  EWMA best +0.3080 mean +0.2998  syn 94,534/net  93s
+  round  70  batch best +0.3533 mean +0.3282  EWMA best +0.3146 mean +0.3081  syn 94,308/net  120s
+  round  75  batch best +0.2951 mean +0.2726  EWMA best +0.3063 mean +0.2997  syn 94,147/net  147s
+  round  80  batch best +0.4029 mean +0.3870  EWMA best +0.3423 mean +0.3371  syn 93,898/net  175s
+  round  85  batch best +0.3581 mean +0.3441  EWMA best +0.3219 mean +0.3191  syn 93,640/net  202s
+  round  90  batch best +0.3552 mean +0.3436  EWMA best +0.3213 mean +0.3181  syn 93,564/net  229s
+  round  95  batch best +0.3310 mean +0.3059  EWMA best +0.3158 mean +0.3061  syn 93,344/net  256s
+  round 100  batch best +0.2541 mean +0.2365  EWMA best +0.2876 mean +0.2826  syn 93,168/net  283s
+  round 105  batch best +0.4188 mean +0.4034  EWMA best +0.3642 mean +0.3578  syn 92,887/net  313s
+  round 110  batch best +0.2754 mean +0.2583  EWMA best +0.2907 mean +0.2817  syn 92,553/net  341s
+  round 115  batch best +0.3180 mean +0.3031  EWMA best +0.3189 mean +0.3122  syn 92,105/net  369s
+  round 120  batch best +0.3402 mean +0.3310  EWMA best +0.3385 mean +0.3352  syn 91,812/net  397s
+  round 125  batch best +0.4036 mean +0.3834  EWMA best +0.3628 mean +0.3518  syn 91,387/net  426s
+  round 130  batch best +0.2509 mean +0.2351  EWMA best +0.3253 mean +0.3090  syn 91,088/net  456s
+  round 135  batch best +0.3774 mean +0.3617  EWMA best +0.3522 mean +0.3487  syn 90,730/net  484s
+  round 140  batch best +0.3127 mean +0.2992  EWMA best +0.3486 mean +0.3451  syn 90,446/net  513s
+  round 145  batch best +0.3856 mean +0.3761  EWMA best +0.3492 mean +0.3474  syn 90,302/net  542s
+  round 150  batch best +0.3084 mean +0.2995  EWMA best +0.3566 mean +0.3542  syn 90,116/net  571s
+  round 155  batch best +0.3062 mean +0.2850  EWMA best +0.3372 mean +0.3279  syn 90,122/net  601s
+  round 160  batch best +0.3184 mean +0.3067  EWMA best +0.3372 mean +0.3324  syn 89,756/net  630s
+  round 165  batch best +0.3178 mean +0.3072  EWMA best +0.3305 mean +0.3281  syn 89,520/net  659s
+  round 170  batch best +0.3843 mean +0.3627  EWMA best +0.3581 mean +0.3501  syn 89,203/net  688s
+  round 175  batch best +0.3304 mean +0.3189  EWMA best +0.3354 mean +0.3321  syn 89,211/net  717s
+  round 180  batch best +0.3637 mean +0.3522  EWMA best +0.3573 mean +0.3518  syn 88,685/net  748s
+  round 185  batch best +0.3029 mean +0.2984  EWMA best +0.3305 mean +0.3295  syn 88,050/net  777s
+  round 190  batch best +0.3595 mean +0.3480  EWMA best +0.3339 mean +0.3297  syn 87,745/net  806s
+  round 195  batch best +0.3800 mean +0.3519  EWMA best +0.3532 mean +0.3477  syn 87,662/net  835s
+  round 200  batch best +0.3077 mean +0.2973  EWMA best +0.3309 mean +0.3295  syn 87,424/net  864s
+  round 205  batch best +0.3292 mean +0.3221  EWMA best +0.3370 mean +0.3354  syn 87,391/net  895s
+  round 210  batch best +0.3608 mean +0.3499  EWMA best +0.3732 mean +0.3675  syn 87,039/net  924s
+  round 215  batch best +0.3647 mean +0.3420  EWMA best +0.3507 mean +0.3441  syn 86,784/net  952s
+  round 220  batch best +0.3973 mean +0.3846  EWMA best +0.3556 mean +0.3499  syn 86,554/net  981s
+  round 225  batch best +0.4025 mean +0.3933  EWMA best +0.3880 mean +0.3846  syn 86,232/net  1010s
+  round 230  batch best +0.3356 mean +0.3285  EWMA best +0.3568 mean +0.3553  syn 85,688/net  1040s
+  round 235  batch best +0.3848 mean +0.3785  EWMA best +0.3677 mean +0.3646  syn 85,229/net  1068s
+  round 240  batch best +0.3729 mean +0.3688  EWMA best +0.3887 mean +0.3864  syn 85,050/net  1097s
+  round 245  batch best +0.3613 mean +0.3510  EWMA best +0.3681 mean +0.3656  syn 84,672/net  1126s
+  round 250  batch best +0.3865 mean +0.3812  EWMA best +0.3651 mean +0.3604  syn 84,389/net  1154s
+  round 255  batch best +0.3674 mean +0.3524  EWMA best +0.3619 mean +0.3594  syn 84,044/net  1184s
+  round 260  batch best +0.4337 mean +0.4209  EWMA best +0.3816 mean +0.3778  syn 83,549/net  1213s
+  round 265  batch best +0.3386 mean +0.3361  EWMA best +0.3645 mean +0.3618  syn 83,267/net  1242s
+  round 270  batch best +0.3818 mean +0.3749  EWMA best +0.3713 mean +0.3692  syn 82,908/net  1270s
+  round 275  batch best +0.4034 mean +0.3916  EWMA best +0.3684 mean +0.3646  syn 82,346/net  1299s
+  round 280  batch best +0.4247 mean +0.4184  EWMA best +0.3950 mean +0.3943  syn 82,072/net  1330s
+  round 285  batch best +0.4131 mean +0.4022  EWMA best +0.3868 mean +0.3831  syn 81,915/net  1359s
+  round 290  batch best +0.2552 mean +0.2531  EWMA best +0.3492 mean +0.3484  syn 82,161/net  1387s
+  round 295  batch best +0.3836 mean +0.3802  EWMA best +0.3547 mean +0.3538  syn 82,058/net  1416s
+  round 299  batch best +0.3764 mean +0.3662  EWMA best +0.3595 mean +0.3567  syn 81,778/net  1439s
+
+BEST member 11: EWMA +0.3595  HELD-OUT corrected +0.3856 (pure tau, no penalties)  coverage miss 0.000/6  (82,112 synapses)
+exit=0

@@ -1,0 +1,23 @@
+arm        seed member      EWMA  held-out tau
+ungated       0      2   +0.3563       +0.3438
+ungated       1     11   +0.3595       +0.3856
+ungated       2     15   +0.3868       +0.3837
+gated         0     19   +0.3577       +0.3098
+gated         1      0   +0.3428       +0.2867
+gated         2      6   +0.3617       +0.3887
+
+complete pairs: 3  (seeds [0, 1, 2])
+  ungated held-out tau: mean +0.3710 +/- 0.0236  range [+0.3438, +0.3856]
+  gated   held-out tau: mean +0.3284 +/- 0.0535  range [+0.2867, +0.3887]
+  paired difference (gated - ungated): mean -0.0426 +/- 0.0525  per seed ['-0.0340', '-0.0989', '+0.0050']
+  gated wins 1/3
+  final EWMA: ungated +0.3675, gated +0.3541, diff -0.0135
+
+trajectory of best EWMA (every 50 rounds):
+run              r0     r50    r100   r150   r200   r250   r299 
+ungated_s0         +0.096  +0.276  +0.291  +0.336  +0.344  +0.376  +0.356
+ungated_s1         +0.136  +0.298  +0.288  +0.357  +0.331  +0.365  +0.360
+ungated_s2         +0.163  +0.282  +0.333  +0.342  +0.351  +0.349  +0.387
+gated_s0         +0.188  +0.280  +0.364  +0.406  +0.384  +0.361  +0.358
+gated_s1         +0.127  +0.298  +0.279  +0.340  +0.318  +0.346  +0.343
+gated_s2         +0.146  +0.276  +0.327  +0.339  +0.349  +0.341  +0.362

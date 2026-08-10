@@ -4,10 +4,21 @@
 # Evolution checkpoints, 12-49 MB each, rewritten every round. A run writes ck_<tag>.npz
 # beside its README when launched with ND_OUT=$PWD; the .hist.json sidecar beside it is the
 # scientific record and is committed as that experiment's history.json instead.
-ck_*.npz
-ck_*.npz.tmp.npz
+ck*.npz
+ck*.npz.tmp.npz
 *_fitness.npz
 snapshots/
+
+# `ck_*.npz` used to be the whole rule and it MISSED `ck.npz` -- exp008 runs live in one
+# directory per run and name their checkpoint plainly, so six 12 MB files sailed straight
+# past it. Hence the wider glob above.
+#
+# ck.npz.hist.json is a byte-for-byte twin of the run's own steady_state_<tag>.json history
+# (save_ckpt writes one, main() writes the other). Track the tagged one, skip the twin.
+ck*.npz.hist.json
+
+# Launcher bookkeeping, not results.
+DONE
 
 # The two dataset binaries under data/ ARE tracked on purpose (see data/README.md): the .npz
 # is the teacher data and actor_s1.pt is force-added so the .npz stays reproducible. Nothing

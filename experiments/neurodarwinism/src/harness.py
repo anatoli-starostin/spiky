@@ -116,17 +116,29 @@ def reservoir_wiring(rng):
 
 
 # ------------------------------------------------------- build
-def build(genomes, res, device="cuda", seed=1, res_scale=1.0, res_edges=None):
+def build(genomes, res, device="cuda", seed=1, res_scale=1.0, res_edges=None,
+          out_gate=None):
     """Pack candidates into ONE SpikingNet with continuous explicit weights.
 
     res_edges: optional (src_local, tgt_local, weight, delay, is_inh) arrays overriding the
     generated reservoir — used by arm B to place an edge-exact imported reservoir.
+
+    out_gate: optional (lo, hi). Appends a second meta bank holding delays [lo, hi] and routes
+    every OUTPUT synapse through it, so an output neuron cannot fire before `lo` ticks after
+    its presynaptic spike. `out_dly` is clamped into the range. None (default) = unchanged.
+    (Mirrors steady_state's --out-delay-gate; see its note on why a delay bank rather than an
+    inhibitory current, which diverges in the Izhikevich quadratic.)
     """
     from spiky.spnet.spnet import SpikingNet, NeuronMeta
     from spiky.util.synapse_growth import SynapseGrowthEngine
 
     P = len(genomes)
     metas = delay_metas()
+    n_base_metas = len(metas)
+    if out_gate is not None:
+        lo, hi = int(out_gate[0]), int(out_gate[1])
+        assert 1 <= lo <= hi < N_TICKS, f"out_gate {out_gate} must satisfy 1 <= lo <= hi < {N_TICKS}"
+        metas = metas + delay_metas(d_min=lo, d_max=hi)
     neuron_metas = [NeuronMeta(neuron_type=0, a=0.02, d=8.0),
                     NeuronMeta(neuron_type=1, a=0.1, d=2.0),
                     NeuronMeta(neuron_type=2, a=0.02, d=8.0),
@@ -168,7 +180,12 @@ def build(genomes, res, device="cuda", seed=1, res_scale=1.0, res_edges=None):
         add(In, E, g["in_tgt"], g["in_dly"], g["in_w"])
         s = E[g["out_src"].ravel()]
         t = np.repeat(Ou, FANIN_OUT)
-        tri.append(np.stack([np.asarray(g["out_dly"]).ravel() - D_MIN, s, t], 1))
+        od = np.asarray(g["out_dly"]).ravel()
+        if out_gate is None:
+            om = od - D_MIN
+        else:
+            om = n_base_metas + (np.clip(od, lo, hi) - lo)
+        tri.append(np.stack([om, s, t], 1))
         wts.append(np.asarray(g["out_w"], np.float64).ravel())
 
     triples = np.concatenate(tri, 0)

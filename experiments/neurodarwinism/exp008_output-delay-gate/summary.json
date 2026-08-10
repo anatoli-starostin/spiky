@@ -1,0 +1,72 @@
+{
+ "experiment": "exp008_output-delay-gate",
+ "verdict": "no significant difference; no sign of the hypothesised benefit",
+ "runs": {
+  "ungated_seed0": {
+   "member": 2,
+   "ewma": 0.3563,
+   "heldout": 0.3438
+  },
+  "ungated_seed1": {
+   "member": 11,
+   "ewma": 0.3595,
+   "heldout": 0.3856
+  },
+  "ungated_seed2": {
+   "member": 15,
+   "ewma": 0.3868,
+   "heldout": 0.3837
+  },
+  "gated_seed0": {
+   "member": 19,
+   "ewma": 0.3577,
+   "heldout": 0.3098
+  },
+  "gated_seed1": {
+   "member": 0,
+   "ewma": 0.3428,
+   "heldout": 0.2867
+  },
+  "gated_seed2": {
+   "member": 6,
+   "ewma": 0.3617,
+   "heldout": 0.3887
+  }
+ },
+ "ungated_heldout": {
+  "mean": 0.3710333333333333,
+  "sd": 0.02360388386120668,
+  "values": [
+   0.3438,
+   0.3856,
+   0.3837
+  ]
+ },
+ "gated_heldout": {
+  "mean": 0.3284,
+  "sd": 0.053483361898818575,
+  "values": [
+   0.3098,
+   0.2867,
+   0.3887
+  ]
+ },
+ "paired_diff": {
+  "mean": -0.04263333333333332,
+  "sd": 0.05248526777423673,
+  "values": [
+   -0.033999999999999975,
+   -0.09889999999999999,
+   0.0050000000000000044
+  ],
+  "gated_wins": 1,
+  "n": 3
+ },
+ "metas": {
+  "ungated": 40,
+  "gated": 57
+ },
+ "crashes": [
+  "ungated_seed0 and ungated_seed1 hit cudaErrorInvalidValue at spnet_runtime.cu:440 under 6-way GPU concurrency; both resumed from checkpoint with rng restored"
+ ]
+}

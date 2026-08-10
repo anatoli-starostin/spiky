@@ -1,0 +1,34 @@
+{
+ "experiment": "exp008_output-delay-gate",
+ "script": "../src/steady_state.py",
+ "hypothesis": "Making the declared [64,96) readout phase physically real -- by routing every output-TARGETING synapse through a high-delay bank so no output can fire before tick 64 -- helps evolution find a better FastMultiHeadLUT->SPNet mapping than the ungated build, where outputs are driven straight through by the input volley and rank each other on spikes emitted before the network has computed anything.",
+ "design": "Two arms, paired. Identical in every respect except the gate. Because seed_genome draws the base genome BEFORE apply_out_delay_gate touches it, the two arms at a given seed start from the SAME topology and the SAME weights, differing only in the delays of output-targeting synapses. 3 seeds per arm, 6 runs.",
+ "arms": {
+  "ungated": "current production build (control)",
+  "gated": "--out-delay-gate --out-delay-range 64 80"
+ },
+ "config": {
+  "pool": 32,
+  "rounds": 300,
+  "batch": 64,
+  "stdp_lr": 0.01,
+  "d_max": 20,
+  "seeds": [0, 1, 2],
+  "cull": 0.25,
+  "alpha": 0.3,
+  "grace": 2,
+  "n_val": 2000,
+  "w_max": 30.0,
+  "current": 200.0,
+  "n_exc": 800,
+  "n_inh": 200,
+  "mature_batches": 32,
+  "_why_this_config": "matches exp001_k32-baseline (K=32, batch 64, stdp_lr 0.01, d_max 20), the chapter's standard single-pool setup, so the gate is the only thing that differs from a run we already understand"
+ },
+ "metric": "held-out Kendall tau-b, corrected by each model's own label-shuffle null, on the 2000 never-trained samples",
+ "meta_counts": {
+  "ungated": 40,
+  "gated": 57,
+  "_note": "the gate appends OUT_D_MAX - OUT_D_MIN + 1 = 17 metas; raising d_max to 80 instead would have cost 160"
+ }
+}
