@@ -1,0 +1,101 @@
+{
+ "throughput": {
+  "rows": [
+   {
+    "nap": 3,
+    "tph": 8,
+    "params": 384,
+    "measured": 48,
+    "formula": 48,
+    "match": true
+   },
+   {
+    "nap": 3,
+    "tph": 32,
+    "params": 1536,
+    "measured": 192,
+    "formula": 192,
+    "match": true
+   },
+   {
+    "nap": 6,
+    "tph": 8,
+    "params": 3072,
+    "measured": 48,
+    "formula": 48,
+    "match": true
+   },
+   {
+    "nap": 6,
+    "tph": 32,
+    "params": 12288,
+    "measured": 192,
+    "formula": 192,
+    "match": true
+   },
+   {
+    "nap": 9,
+    "tph": 8,
+    "params": 24576,
+    "measured": 48,
+    "formula": 48,
+    "match": true
+   },
+   {
+    "nap": 9,
+    "tph": 32,
+    "params": 98304,
+    "measured": 192,
+    "formula": 192,
+    "match": true
+   },
+   {
+    "nap": 12,
+    "tph": 8,
+    "params": 196608,
+    "measured": 48,
+    "formula": 48,
+    "match": true
+   },
+   {
+    "nap": 12,
+    "tph": 32,
+    "params": 786432,
+    "measured": 192,
+    "formula": 192,
+    "match": true
+   }
+  ],
+  "all_match": true
+ },
+ "injection": {
+  "pairs_valid": true,
+  "readback_identical": true,
+  "index_match": true,
+  "different_pairs_change_output": true
+ },
+ "fixed_during_training": {
+  "unchanged": true,
+  "anchors_in_parameters": false,
+  "n_trainable": 576
+ },
+ "walk": {
+  "steps": 200,
+  "failures": [],
+  "pair_edits": 1951,
+  "nap_range": [
+   7,
+   12
+  ],
+  "tph_range": [
+   1,
+   128
+  ]
+ },
+ "teacher": {
+  "params": 12288,
+  "throughput": 192,
+  "heldout_mse": 0.025409352620442707,
+  "steps": 1500
+ }
+}

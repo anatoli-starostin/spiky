@@ -198,11 +198,136 @@ Two things I would change only on your word: whether to sweep **lambda** (2e-7 i
 call — the Pareto front is lambda-free either way, but which *point* on it evolution converges
 to is not), and whether to open `--forward-modes hard hybrid_smooth` (see the test note below).
 
+## Two costs, not one: parameters **and** throughput
+
+`param_count` was never the whole story. A LUT has two costs that **diverge**, and the second
+is the one that matters for inference:
+
+```
+params      = n_heads * tables_per_head * 2^NAP * n_outputs      (EXPONENTIAL in NAP)
+throughput  = n_heads * tables_per_head          * n_outputs      (INDEPENDENT of NAP)
+```
+
+**Confirmed empirically, not derived on paper.** In hard mode the weight gradient is a 1-row
+scatter at the selected row, so after a *single-sample* backward the support of `weights.grad`
+*is* the set of entries the forward read. Counting it (`src/lut_metrics_check.py`, check 1):
+
+| NAP | tph | params | measured touched | formula | |
+|---:|---:|---:|---:|---:|---|
+| 3 | 8 | 384 | 48 | 48 | OK |
+| 6 | 8 | 3,072 | 48 | 48 | OK |
+| 9 | 8 | 24,576 | 48 | 48 | OK |
+| 12 | 8 | 196,608 | 48 | 48 | OK |
+| 3 | 32 | 1,536 | 192 | 192 | OK |
+| 12 | 32 | 786,432 | 192 | 192 | OK |
+
+**NAP 3 → 12 moves the parameter count 512× while throughput does not move at all.** The
+mechanism: the sign-pack collapses each table's NAP differences into *one* row index, and
+`embedding_bag` gathers exactly that one row (`n_outputs` floats) per table. NAP sets how many
+rows *exist*; it never changes how many are *read*.
+
+### The teacher sits at the knee of the throughput/fit trade
+
+The sharpest way to see the second cost: hold **parameters fixed at the teacher's 12,288** and
+walk NAP up while tph comes down, so throughput sweeps 768 → 6 (3000 steps each):
+
+| NAP × tph | throughput | held-out MSE | vs teacher |
+|---|---:|---:|---|
+| 4 × 128 | 768 | 0.02449 | 4× the throughput, 4 % better fit |
+| 5 × 64 | 384 | **0.02380** | 2× the throughput, **7 % better fit** |
+| **6 × 32** | **192** | **0.02554** | ← **the teacher** |
+| 7 × 16 | 96 | 0.03638 | half the throughput, **43 % worse fit** |
+| 8 × 8 | 48 | 0.06450 | ¼ the throughput, 2.5× worse |
+| 9 × 4 | 24 | 0.09266 | |
+| 10 × 2 | 12 | 0.11838 | |
+| 11 × 1 | 6 | 0.17048 | |
+
+**This is a knee, and the teacher is sitting on it.** Buying throughput back is cheap in fit
+(halving it costs 43 %); spending more barely helps (doubling it gains 7 %). At its parameter
+budget, `NAP 6 × 32` is very close to the best throughput/fit compromise available.
+
+It also completes the picture from the iso-parameter table above. Those two results are the two
+sides of one trade:
+- **at fixed *parameters*, breadth (tables) buys fit** — NAP 4 × 128 beats NAP 10 × 2 by ~5×;
+- **at fixed *throughput*, depth (NAP) buys fit** — at throughput 192, NAP 6 → 10 improves MSE
+  0.0255 → 0.0124, for 16× the parameters.
+
+So "which axis to spend on" has no single answer: it depends entirely on which cost you are
+paying. That is exactly why throughput is logged raw rather than folded into fitness.
+
+### Fitness recommendation: leave throughput out of the penalty, log it raw
+
+**Default is `--throughput-penalty 0`, and I recommend keeping it there.** Two reasons.
+
+1. **The costs are not independent.** `throughput = params / 2^NAP` exactly. Penalising both
+   charges `tph` twice while charging NAP once, biasing the search toward deep-and-narrow —
+   the very shape the iso-parameter sweep showed is ~5× *worse* per parameter. A throughput
+   term would push against a result we already have.
+2. **Raw logging makes it unnecessary.** Every member records `(mse, params, throughput)`, so
+   the front is re-readable on either axis or on both jointly after the fact. A lambda baked
+   into fitness cannot be changed after a run; a logged metric can.
+
+`--throughput-penalty` exists to overrule this and composes additively.
+
 ## The expanded genome: nap, tph, **anchoring**
 
 Evolution now moves on three axes. The first two were already there; the third is new.
 
-### The anchoring options, enumerated from the implementation
+### Literal anchor pairs are the anchoring gene
+
+> **Correction to my previous reading.** I had made "anchoring" the categorical choice between
+> the two sampling *policies*. That was the wrong axis: the policies are only two ways to
+> *initialise* the pairs. The anchoring gene is now the **concrete anchor pairs themselves** —
+> which input dimensions each pair compares, per table — searched by evolution while backprop
+> trains the row weights. The policy survives with exactly one job: seeding the initial draw.
+
+**Representation, read off the implementation.** Two **int64 buffers**, both
+`[n_tables, n_anchor_pairs]` with `a < b` in every entry, where `n_tables = n_heads *
+tables_per_head`:
+
+```python
+self.register_buffer("soft_anchor_a_long", anchor_a_long.contiguous())
+self.register_buffer("soft_anchor_b_long", anchor_b_long.contiguous())
+```
+
+Every forward path reads them off `self` — the compiled hard body, the eval fast path and the
+soft surrogate backward all take them as arguments. Nothing else derives from the pair
+*values* (`soft_bit_matrix` and `soft_powers` depend only on NAP), so overwriting those two
+buffers fully redefines the anchoring.
+
+**The constructor has no explicit-pairs argument** — it accepts only `(policy, random_seed)`
+and calls `get_balanced_anchor_pairs` itself. So the smallest clean injection is: construct
+normally, then `copy_` the evolved pairs in. `lb.set_anchor_pairs()` does that with a shape
+assert, so a genome/module mismatch is loud rather than silent.
+
+**Backprop cannot touch them.** They are *buffers*, not Parameters, so they are absent from
+`model.parameters()` and the optimiser has no handle on them — the evolved anchoring is fixed
+for the whole of a candidate's training, then mutated between generations. Verified, not
+assumed (check 3 below).
+
+**Mutation edits individual pairs**, two operators chosen 50/50 per selected pair:
+- **RESAMPLE** — replace with a fresh canonical pair not already in that table (the jump);
+- **NUDGE** — move *one* endpoint to a different input dimension, re-canonicalising so `a < b`
+  (the local move).
+
+Both preserve `a < b`, the index range, and within-table distinctness — the invariants both of
+the module's own samplers guarantee. The rate is **per pair** (`--pair-mutation-rate`, default
+0.03), so a 32×6 genome gets ~6 edits and a 128×12 genome ~46: the edit rate per *anchor* is
+constant instead of large genomes being effectively immutable. When NAP or tph moves,
+`resize_pairs` grows or truncates while **preserving what evolution already found**, rather
+than redrawing and throwing the anchoring search away on every size mutation.
+
+`--no-evolve-anchor-pairs` reverts to the old policy-gene behaviour.
+
+### Validation of the anchoring machinery
+
+| check | result |
+|---|---|
+| **2 INJECTION** | pairs read back identical; the module's own row indices **match a numpy recomputation of the sign-pack from those pairs**; and a *different* pair set changes the output, so the check cannot pass vacuously |
+| **3 FIXED** | anchors **bit-identical after 50 Adam steps**; `anchors in model.parameters(): False` (576 trainable scalars, all row weights) |
+| **4 WALK** | **200/200** steps of the real `mutate()` built, trained and stayed valid — **1,951 individual pair edits**, NAP 7–12, tph 1–128, zero invalid pair sets |
+
+### The anchoring options (now only the initialiser)
 
 `AnchorSamplingPolicy` in `lut_helpers` defines **four** members, but `FastMultiHeadLut.__init__`
 **explicitly rejects two of them** — there is even a test asserting it turns `BALANCED` down:
@@ -255,7 +380,38 @@ makes sense mechanically: with 17 inputs there are 136 canonical pairs, and `dis
 guarantee that the table ensemble collectively looks at all of them, so some inputs can go
 unread.
 
-### Does selection prefer one? (K=12, 6 rounds)
+### Smoke test on the full genome — and the teacher is not beaten
+
+K=12, 6 rounds, 1000 steps, literal anchor pairs, `--teacher-tol 0.002`. Teacher reference
+trained in the same run at the same budget: **MSE 0.02595, params 12,288, throughput 192**.
+
+```
+round  best fitness  min MSE  params min/med   tput min/med  pareto  beats-teacher
+    4     -0.02030   0.01160  10,176/25,344       66/450        7          0
+    5     -0.02024   0.01150  10,176/30,528      288/561        8          0
+```
+
+**45 of 72 candidates matched the teacher's fit. Zero Pareto-dominate it. Zero beat it on both
+params and throughput.** The cheapest match of the teacher's fit cost **15,552 params / 486
+throughput** — worse on *both* axes.
+
+That is a real negative result, and the iso-parameter line above explains it: the teacher sits
+on the knee, so anything cheaper on throughput pays for it in fit. The two single-axis fronts
+show where the search *did* win, and it is always on one axis only:
+
+| | params | throughput | MSE | vs teacher |
+|---|---:|---:|---:|---|
+| teacher | 12,288 | 192 | 0.02595 | — |
+| best on throughput | 67,584 | **66** | 0.03776 | 2.9× cheaper to run, 5.5× more params, worse fit |
+| better fit, similar throughput | 417,792 | 204 | **0.01045** | 2.5× better fit, 34× more params |
+
+**Six rounds at K=12 is a smoke test, not a search.** The joint front already has 14 points and
+the pool was still moving when it stopped, so "no dominator" means *not found yet*, not
+*impossible*. But it is worth saying plainly: the distillation teacher's `NAP 6 × 32` is a
+strong point on this trade, and beating it on both costs at equal fit may simply not be
+available.
+
+### Does selection prefer one anchoring initialiser? (earlier policy-gene run)
 
 ```
 round  best fitness  min MSE  min params  median params  pareto  anchors full/distinct

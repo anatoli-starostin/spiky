@@ -91,6 +91,90 @@ def _policy(name):
     from spiky.lutorch.lut_helpers import AnchorSamplingPolicy
     return AnchorSamplingPolicy(name)
 
+
+# ----------------------------------------------------------------- literal anchor pairs
+# HOW FastMultiHeadLut STORES ANCHORS. Two int64 BUFFERS (not Parameters), both
+# [n_tables, n_anchor_pairs] with a < b in every entry, where n_tables = n_heads *
+# tables_per_head:
+#
+#     self.register_buffer("soft_anchor_a_long", anchor_a_long.contiguous())
+#     self.register_buffer("soft_anchor_b_long", anchor_b_long.contiguous())
+#
+# Every forward path reads them off `self` -- the compiled hard body, the eval fast path and
+# the soft surrogate backward all take `self.soft_anchor_a_long, self.soft_anchor_b_long` as
+# arguments. Nothing else is derived from the pair VALUES: `soft_bit_matrix` and `soft_powers`
+# depend only on NAP. So overwriting the two buffers fully redefines the anchoring.
+#
+# THE CONSTRUCTOR HAS NO EXPLICIT-PAIRS ARGUMENT -- it only accepts (policy, random_seed) and
+# calls get_balanced_anchor_pairs itself. The smallest clean injection is therefore: construct
+# normally, then copy_ the evolved pairs into those two buffers. set_anchor_pairs() does that
+# and asserts the shapes match, so a genome/shape mismatch is loud rather than silent.
+#
+# Because they are BUFFERS, they are not in model.parameters() and the optimiser cannot touch
+# them: backprop trains the row weights (and temps if learnable) while the evolved anchoring is
+# held fixed for the whole of a candidate's training, exactly as the gradient-free/gradient
+# split intends. lut_metrics_check.py verifies that the pairs come back bit-identical after
+# training rather than assuming it.
+
+
+def canonical_pool(input_dim=N_IN):
+    """All C(input_dim, 2) canonical (a<b) pairs, as an [P, 2] int array."""
+    a, b = np.triu_indices(input_dim, 1)
+    return np.stack([a, b], 1).astype(np.int64)
+
+
+def initial_pairs(g, input_dim=N_IN):
+    """Seed the genome's pairs using the module's OWN sampler, not a reimplementation.
+
+    The policy gene keeps exactly one job from here on: deciding how the INITIAL pairs are
+    drawn. After that, evolution edits pairs directly and the policy is inert -- which is why
+    mutate() stops perturbing it once pairs are evolvable.
+    """
+    from spiky.lutorch.lut_helpers import get_balanced_anchor_pairs
+    a, b = get_balanced_anchor_pairs(
+        n_tables=n_tables(g), n_anchor_pairs=int(g["n_anchor_pairs"]), input_dim=input_dim,
+        device=torch.device("cpu"), random_seed=int(g["anchor_seed"]),
+        policy=_policy(g.get("anchor_policy", ANCHOR_POLICIES[0])), n_heads=int(g["n_heads"]))
+    return np.stack([a.cpu().numpy(), b.cpu().numpy()], -1).astype(np.int64)
+
+
+def pairs_valid(pairs, input_dim=N_IN):
+    """(a < b), in range, and distinct within each table -- the invariants both samplers hold.
+
+    -> (ok, reason). Within-table distinctness is what CANONICAL_DISTINCT guarantees by
+    construction and what CANONICAL_FULL_COVERAGE's swap-repair pass restores, so mutation has
+    to preserve it or evolved genomes would be outside the space the module ever produces.
+    """
+    p = np.asarray(pairs)
+    if p.ndim != 3 or p.shape[-1] != 2:
+        return False, f"shape {p.shape}, expected [n_tables, nap, 2]"
+    if p.min() < 0 or p.max() >= input_dim:
+        return False, f"index range {p.min()}..{p.max()} outside [0, {input_dim})"
+    if not (p[..., 0] < p[..., 1]).all():
+        return False, "not all pairs satisfy a < b"
+    key = p[..., 0] * input_dim + p[..., 1]
+    for t in range(key.shape[0]):
+        if len(np.unique(key[t])) != key.shape[1]:
+            return False, f"table {t} has duplicate pairs"
+    return True, "ok"
+
+
+def set_anchor_pairs(model, pairs):
+    """Overwrite the module's anchor buffers with evolved pairs. Shapes must already match."""
+    p = np.asarray(pairs, np.int64)
+    want = tuple(model.soft_anchor_a_long.shape)
+    assert p.shape[:2] == want, f"pairs {p.shape[:2]} do not match module anchors {want}"
+    dev = model.soft_anchor_a_long.device
+    model.soft_anchor_a_long.copy_(torch.tensor(p[..., 0], dtype=torch.int64, device=dev))
+    model.soft_anchor_b_long.copy_(torch.tensor(p[..., 1], dtype=torch.int64, device=dev))
+    return model
+
+
+def get_anchor_pairs(model):
+    """Read the pairs back out, as an [n_tables, nap, 2] int array."""
+    return np.stack([model.soft_anchor_a_long.cpu().numpy(),
+                     model.soft_anchor_b_long.cpu().numpy()], -1).astype(np.int64)
+
 # The capacity/optimisation knobs the genome carries. Values here are the reference mid-size
 # config: the teacher's own shape (NAP 6 -> 64 rows, 32 tables, 1 head).
 DEFAULT_GENOME = dict(
@@ -119,6 +203,55 @@ def param_count(g):
     return int(n + (2 if g["learnable_temps"] else 0))
 
 
+def n_tables(g):
+    return int(g["n_heads"] * g["tables_per_head"])
+
+
+def throughput(g):
+    """Weight ENTRIES read per forward pass, per sample.
+
+        throughput = n_heads * tables_per_head * n_outputs        -- INDEPENDENT OF NAP
+
+    Why: the hard forward sign-packs each table's NAP differences into ONE row index, then
+    F.embedding_bag gathers exactly that one row (n_outputs floats) from each of the
+    n_heads*tables_per_head tables and sums. NAP sets how many rows EXIST per table (2^NAP,
+    which is what makes param_count exponential) but not how many are READ, which is always 1.
+
+    So the two costs diverge sharply: doubling NAP doubles nothing in throughput while
+    doubling the parameter count. This is verified empirically in lut_metrics_check.py by
+    counting non-zero weight-gradient entries at batch size 1 -- in hard mode the weight
+    gradient is a 1-row scatter at the chosen row, so its support IS the set of entries the
+    forward read.
+    """
+    return int(g["n_heads"] * g["tables_per_head"] * N_OUT)
+
+
+# The distillation teacher's own shape, the reference point every evolved member is compared
+# against: FastMultiHeadLut(exp_outputs=True), NAP 6 (64 rows) x 32 tables x 1 head.
+TEACHER_SHAPE = dict(n_anchor_pairs=6, tables_per_head=32, n_heads=1)
+
+
+def teacher_genome():
+    return dict(DEFAULT_GENOME, **TEACHER_SHAPE)
+
+
+def dominates_teacher(mse, params, tput, t_mse, t_params, t_tput, tol=0.0):
+    """Does this member Pareto-dominate the teacher?
+
+    Fit no worse than the teacher (within `tol` of its MSE), strictly better on at least one of
+    (params, throughput), and no worse on the other. Returned as a dict so the log can say
+    WHICH way it wins rather than just yes/no.
+    """
+    fit_ok = mse <= t_mse + tol
+    p_better, p_worse = params < t_params, params > t_params
+    t_better, t_worse = tput < t_tput, tput > t_tput
+    return dict(fit_ok=bool(fit_ok),
+                params_better=bool(p_better), throughput_better=bool(t_better),
+                dominates=bool(fit_ok and (p_better or t_better)
+                               and not p_worse and not t_worse),
+                both_better=bool(fit_ok and p_better and t_better))
+
+
 def genome_str(g):
     pol = g.get("anchor_policy", ANCHOR_POLICIES[0]).replace("canonical_", "")
     return (f"NAP {g['n_anchor_pairs']:2d} (2^{g['n_anchor_pairs']}={1 << g['n_anchor_pairs']:5d} "
@@ -131,7 +264,7 @@ def build(g, device="cuda"):
     from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
     assert g.get("forward_mode", FORWARD_MODE) == FORWARD_MODE, (
         f"exp011 is hard-forward only (see FORWARD_MODE); got {g.get('forward_mode')!r}")
-    return FastMultiHeadLut(
+    m = FastMultiHeadLut(
         input_dim=N_IN, n_heads=g["n_heads"], n_outputs=N_OUT,
         n_anchor_pairs=g["n_anchor_pairs"], tables_per_head=g["tables_per_head"],
         forward_mode=FORWARD_MODE,
@@ -142,6 +275,11 @@ def build(g, device="cuda"):
         learnable_temps=g["learnable_temps"],
         random_seed=int(g["anchor_seed"]),
         device=torch.device(device))
+    # LITERAL ANCHORING: explicit evolved pairs replace whatever the policy+seed drew. Absent,
+    # the module's own sampling stands, which is the previous behaviour exactly.
+    if g.get("anchor_pairs") is not None:
+        set_anchor_pairs(m, g["anchor_pairs"])
+    return m
 
 
 def _fwd(model, x):
@@ -188,7 +326,17 @@ def train_eval(g, Xtr, Ytr, Xte, Yte, steps=2000, batch=512, seed=0, device="cud
             curve.append(dict(step=s + 1, train_batch_mse=lv, heldout_mse=m))
             if log:
                 print(f"      step {s + 1:5d}  batch {lv:.5f}  held-out {m:.5f}", flush=True)
-    out = dict(genome={k: (float(v) if isinstance(v, float) else v) for k, v in g.items()},
+    # The returned genome is JSON-safe: the anchor-pair ARRAY is replaced by its shape plus a
+    # stable digest. Carrying the full array for every candidate every round would bloat the
+    # history by orders of magnitude (a 128x12 genome is 1,536 pairs), while the digest is
+    # enough to tell whether two candidates share an anchoring. The live genome keeps the array.
+    gj = {k: (float(v) if isinstance(v, float) else v)
+          for k, v in g.items() if k != "anchor_pairs"}
+    if g.get("anchor_pairs") is not None:
+        ap = np.asarray(g["anchor_pairs"], np.int64)
+        gj["anchor_pairs_shape"] = list(ap.shape)
+        gj["anchor_pairs_digest"] = int(hash(ap.tobytes()) & 0xFFFFFFFF)
+    out = dict(genome=gj,
                params=param_count(g), steps=steps, batch=batch,
                heldout_mse=evaluate(model, Xte, Yte),
                train_mse=evaluate(model, Xtr[:20000], Ytr[:20000]),
