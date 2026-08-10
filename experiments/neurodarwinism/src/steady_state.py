@@ -683,8 +683,46 @@ def coverage_miss_per_member(first, readout_window=None):
     return (first >= readout_null(readout_window)).sum(-1).mean(0)
 
 
+# ----------------------------------------------------------------- MSE objective
+# Fitted on the TRAINING POOL only and then frozen -- fitting on the held-out set would leak
+# it into the target the net is selected against.
+TARGET_STATS = None            # (mu[6], sigma[6], clip_sigma, n_levels)
+
+
+def fit_target_stats(Ypool, clip_sigma=2.5, n_levels=32):
+    """Freeze the per-dimension centering/scaling used to turn actions into spike offsets."""
+    global TARGET_STATS
+    mu = Ypool.mean(0)
+    sd = Ypool.std(0)
+    sd = np.where(sd < 1e-9, 1.0, sd)
+    TARGET_STATS = (mu, sd, float(clip_sigma), int(n_levels))
+    return TARGET_STATS
+
+
+def target_offsets(Y):
+    """Actions -> target first-spike offsets in 0..n_levels-1, one per output dimension.
+
+        z = clip((y - mu_d) / sigma_d, -C, +C)          per dimension, pool statistics
+        u = (z + C) / 2C                                 -> [0, 1]
+        t = round((1 - u) * (n_levels - 1))              -> 0 .. n_levels-1
+
+    `1 - u` on purpose: the chapter's convention throughout is EARLIER SPIKE = LARGER VALUE
+    (fitness() ranks on -first, and LatencyEncoder maps large inputs to early ticks the same
+    way). So the largest action in a dimension targets offset 0, the smallest targets 31, and
+    input and output share one latency convention.
+
+    A silent output reads readout_null(W) = W = n_levels, i.e. one step LATER than the latest
+    real target. That is deliberate: silence should cost more than being maximally late, and
+    under MSE it does, whereas under tau-b every silent output ties and is discarded.
+    """
+    mu, sd, C, n = TARGET_STATS
+    z = np.clip((np.asarray(Y, np.float64) - mu) / sd, -C, C)
+    u = (z + C) / (2.0 * C)
+    return np.rint((1.0 - u) * (n - 1))
+
+
 def score(h, X, Y, enc, current=200.0, tie_penalty=0.0, readout_window=None,
-          coverage_penalty=0.0):
+          coverage_penalty=0.0, objective="tau"):
     """Corrected tau per pool member: raw tau minus that member's OWN null.
 
     With tie_penalty > 0 the fitness becomes  corrected_tau - lambda * tie_rate, so a net that
@@ -710,14 +748,21 @@ def score(h, X, Y, enc, current=200.0, tie_penalty=0.0, readout_window=None,
     -> (fitness, first-spike ticks, tie rate per member, coverage miss per member)
     """
     first, _ = run_episode(h, X, enc, current, readout_window=readout_window)
-    out = []
-    for p in range(h["P"]):
-        pred = -first[:, p, :]
-        raw = float(kendall_tau_b(pred, Y).mean())
-        nl = float(np.mean([kendall_tau_b(pred, Y[np.random.default_rng(k).permutation(Y.shape[0])]).mean()
-                            for k in range(40)]))
-        out.append(raw - nl)
-    fit = np.array(out)
+    if objective == "mse":
+        # NEGATIVE mean squared error, so selection still MAXIMISES fitness. No null
+        # correction: MSE has an absolute zero, unlike tau-b, whose chance level depends on
+        # the model's own ordering statistics and has to be subtracted per member.
+        tgt = target_offsets(Y)[:, None, :]                  # [B, 1, N_OUT]
+        fit = -((first - tgt) ** 2).mean(axis=(0, 2))        # [P]
+    else:
+        out = []
+        for p in range(h["P"]):
+            pred = -first[:, p, :]
+            raw = float(kendall_tau_b(pred, Y).mean())
+            nl = float(np.mean([kendall_tau_b(pred, Y[np.random.default_rng(k).permutation(Y.shape[0])]).mean()
+                                for k in range(40)]))
+            out.append(raw - nl)
+        fit = np.array(out)
     ties = tie_rate_per_member(first)
     miss = coverage_miss_per_member(first, readout_window)
     if tie_penalty:
@@ -818,6 +863,15 @@ def main():
                          "output physically cannot fire before the readout window. Pairs with "
                          "--readout-window 32; makes the declared [64,96) readout phase real "
                          "instead of a convention. Adds N_OUT_DELAY_METAS metas to the bank")
+    ap.add_argument("--objective", choices=["tau", "mse"], default="tau",
+                    help="what selection maximises. 'tau' (default) = corrected Kendall tau-b, "
+                         "the chapter's metric throughout. 'mse' = NEGATIVE mean squared error "
+                         "between the 6 first-spike offsets and the quantised centred teacher "
+                         "target, a direct regression signal rather than a rank correlation. "
+                         "Pairs with --out-delay-gate --readout-window 32, which is what makes "
+                         "the offsets live on the same 0..31 scale as the target")
+    ap.add_argument("--target-clip-sigma", type=float, default=2.5,
+                    help="mse only: per-dimension clip of the centred target, in sigmas")
     ap.add_argument("--out-delay-range", type=int, nargs=2, default=[64, 80],
                     metavar=("LO", "HI"),
                     help="the gate bank's delay range. HI below N_TICKS on purpose: a spike "
@@ -859,6 +913,23 @@ def main():
     rng = np.random.default_rng(a.seed)
     X, Y, Xpool, Ypool, Xval, Yval = load(a.batch, a.seed, a.n_val)
     enc = LatencyEncoder(Xpool)
+    # Target statistics come from the TRAINING POOL ONLY and are then frozen. Fitting them on
+    # Yval would leak the held-out set into the very target the net is selected against.
+    n_levels = readout_null(a.readout_window)
+    mu, sd, C, n_levels = fit_target_stats(Ypool, a.target_clip_sigma, n_levels)
+    if a.objective == "mse":
+        print(f"OBJECTIVE mse: z = clip((y - mu_d)/sigma_d, -{C}, +{C}); u = (z + {C})/{2 * C}; "
+              f"target = round((1 - u) * {n_levels - 1}) -> offsets 0..{n_levels - 1}, "
+              f"silent reads {n_levels}", flush=True)
+        print(f"  per-dim mu    {np.array2string(mu, precision=4)}", flush=True)
+        print(f"  per-dim sigma {np.array2string(sd, precision=4)}", flush=True)
+        t = target_offsets(Ypool)
+        print(f"  target offsets over the pool: mean {t.mean():.2f}, sd {t.std():.2f}, "
+              f"min {t.min():.0f}, max {t.max():.0f}, "
+              f"{len(np.unique(t))} distinct levels used", flush=True)
+        if a.readout_window is None or not a.out_delay_gate:
+            print("  WARNING: mse without --out-delay-gate --readout-window 32 means the "
+                  "predicted offsets are NOT on the same scale as the target", flush=True)
     M = max(1, int(a.cull * a.pool))
 
     start_rnd = 0
@@ -934,7 +1005,8 @@ def main():
                 newborn[:] = False
             f, first_ticks, ties, miss = score(h, Xb, Yb, enc, a.current, a.tie_penalty,
                                                readout_window=a.readout_window,
-                                               coverage_penalty=a.coverage_penalty)
+                                               coverage_penalty=a.coverage_penalty,
+                                               objective=a.objective)
             n_syn = h["n_syn"]
             if a.stdp_lr > 0:
                 n_changed = readback(h, genomes, drives)   # LAMARCKIAN: device -> genome
@@ -1060,10 +1132,18 @@ def main():
           f"{fv[0]:+.4f} (pure tau, no penalties)  "
           f"coverage miss {fmiss[0]:.3f}/{N_OUT}  "
           f"({genomes[best_i]['weight'].size:,} synapses)")
+    # BOTH metrics on the SAME evolved net, whichever objective it was selected under, so an
+    # MSE-trained run and a tau-trained run are directly comparable in both directions.
+    mv, _, _, _ = score(hb, Xval, Yval, enc, a.current, tie_penalty=0.0,
+                        readout_window=a.readout_window, coverage_penalty=0.0,
+                        objective="mse")
+    print(f"HELD-OUT MSE {-mv[0]:.4f} (offsets 0..{TARGET_STATS[3] - 1}, "
+          f"silent reads {readout_null(a.readout_window)})  "
+          f"objective trained on: {a.objective}")
     if bar and _prog:
         _prog.progress_done(bar, ok=True,
-                            final_text=f"held-out corrected {fv[0]:+.4f} after "
-                                       f"{a.rounds} rounds")
+                            final_text=f"held-out corrected {fv[0]:+.4f}, MSE {-mv[0]:.4f} "
+                                       f"after {a.rounds} rounds")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,30 @@
+{
+ "experiment": "exp009_mse-objective",
+ "script": "../src/steady_state.py",
+ "hypothesis": "MSE against a quantised centred teacher target is a more direct training signal than rank correlation for a first-spike readout: tau-b only asks for the right ORDER of the six outputs within a state, MSE asks each output to land on a specific tick.",
+ "builds_on": "exp008_output-delay-gate — the gate is what puts output offsets on the same 0..31 scale as a 32-level target, so MSE is well-posed",
+ "command": "python steady_state.py --pool 32 --rounds 300 --batch 64 --stdp-lr 0.01 --d-max 20 --seed N --objective mse --out-delay-gate --out-delay-range 64 80 --readout-window 32 --tag _mse_sN --ckpt <dir>/ck.npz",
+ "target": {
+  "formula": "z = clip((y_d - mu_d)/sigma_d, -C, +C); u = (z + C)/(2C); target_d = round((1 - u) * (L - 1))",
+  "C_clip_sigma": 2.5,
+  "L_levels": 32,
+  "stats_fitted_on": "training pool only (Ypool), then frozen — never the held-out set",
+  "direction": "1 - u, so the LARGEST action targets offset 0 (earliest spike), matching the chapter's earlier-spike-is-larger convention and LatencyEncoder",
+  "silent_output_reads": 32,
+  "_why_32": "one step later than the latest real target (31), so silence costs strictly more than being maximally late; under tau-b silent outputs instead tie and are discarded"
+ },
+ "fitness": "-MSE over the 6 dimensions and the batch (selection maximises). No null correction — MSE has an absolute zero, unlike tau-b.",
+ "config": {
+  "pool": 32,
+  "rounds": 300,
+  "batch": 64,
+  "stdp_lr": 0.01,
+  "d_max": 20,
+  "out_delay_range": [64, 80],
+  "readout_window": 32,
+  "seeds": [0, 1, 2],
+  "n_metas": 57
+ },
+ "comparison_arm": "exp008_output-delay-gate/gated_seed{0,1,2} — same configuration, objective tau",
+ "concurrency": "3 concurrent runs (six caused CUDA realloc crashes in exp008)"
+}

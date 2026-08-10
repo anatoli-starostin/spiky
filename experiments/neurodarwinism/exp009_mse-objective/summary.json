@@ -1,0 +1,83 @@
+{
+ "experiment": "exp009_mse-objective",
+ "verdict": "MSE training wins on MSE (48.03 -> 37.52) and loses on tau (+0.3284 -> +0.2664); both objectives extract the same |r| ~ 0.32, MSE only fixes its sign",
+ "target_formula": "z = clip((y_d - mu_d)/sigma_d, -2.5, +2.5); u = (z + 2.5)/5; target_d = round((1 - u) * 31); mu/sigma from the TRAINING POOL only; silent output reads 32",
+ "runs": {
+  "mse_seed0": {
+   "ewma": -42.8844,
+   "heldout_tau": 0.2965,
+   "heldout_mse": 37.3868
+  },
+  "mse_seed1": {
+   "ewma": -42.2626,
+   "heldout_tau": 0.2981,
+   "heldout_mse": 36.2864
+  },
+  "mse_seed2": {
+   "ewma": -40.5819,
+   "heldout_tau": 0.2047,
+   "heldout_mse": 38.8922
+  }
+ },
+ "heldout_mse": {
+  "mean": 37.521800000000006,
+  "sd": 1.308134993033977,
+  "values": [
+   37.3868,
+   36.2864,
+   38.8922
+  ]
+ },
+ "heldout_tau": {
+  "mean": 0.26643333333333336,
+  "sd": 0.05346862008069156,
+  "values": [
+   0.2965,
+   0.2981,
+   0.2047
+  ]
+ },
+ "baselines": {
+  "constant_predictor": 39.185,
+  "uniform_random": 125.76,
+  "optimally_rescaled_both_arms": 29.0
+ },
+ "comparison_exp008_tau_trained": {
+  "heldout_mse": {
+   "mean": 48.026,
+   "sd": 2.161
+  },
+  "heldout_tau": {
+   "mean": 0.3284,
+   "sd": 0.0535
+  }
+ },
+ "per_dimension_r": {
+  "tau_trained": [
+   0.34,
+   0.07,
+   0.56,
+   -0.59,
+   -0.1,
+   -0.33
+  ],
+  "mse_trained": [
+   0.36,
+   0.31,
+   0.62,
+   -0.11,
+   0.3,
+   -0.22
+  ],
+  "mean_abs_r": {
+   "tau_trained": 0.332,
+   "mse_trained": 0.32
+  }
+ },
+ "prediction_spread": {
+  "pred_sd_mse_trained": 2.884,
+  "pred_sd_tau_trained": 3.353,
+  "target_sd": 6.11,
+  "regression_slope_mse_trained": 0.24
+ }
+}
