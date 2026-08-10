@@ -149,13 +149,14 @@ def mutate_pairs(pairs, rng, p_pair=0.03, input_dim=lb.N_IN):
 
 
 # ----------------------------------------------------------------- genome
-def seed_genome(rng, evolve_heads=False, evolve_pairs=True):
+def seed_genome(rng, evolve_heads=False, evolve_pairs=True, max_throughput=None):
     """The forward mode is NOT part of the genome: exp011 is hard-forward only, and the
     surrogate backward is what makes that trainable (see lut_backprop.FORWARD_MODE)."""
     g = dict(lb.DEFAULT_GENOME)
     g["n_anchor_pairs"] = int(rng.integers(lb.NAP_RANGE[0], lb.NAP_RANGE[1] + 1))
-    g["tables_per_head"] = int(rng.integers(lb.TPH_RANGE[0], lb.TPH_RANGE[1] + 1))
     g["n_heads"] = int(rng.integers(*lb.HEADS_RANGE)) if evolve_heads else 1
+    tph_hi = lb.max_tph_within(g["n_heads"], max_throughput)
+    g["tables_per_head"] = int(rng.integers(lb.TPH_RANGE[0], tph_hi + 1))
     g["lr"] = float(np.exp(rng.uniform(math.log(lb.LR_RANGE[0]), math.log(lb.LR_RANGE[1]))))
     # THE ANCHORING AXIS: the drawing RULE (policy) and the DRAW (seed). See
     # lut_backprop.ANCHOR_POLICIES for why the supported set is exactly these two.
@@ -167,7 +168,8 @@ def seed_genome(rng, evolve_heads=False, evolve_pairs=True):
     return g
 
 
-def mutate(g, rng, evolve_heads=False, p=0.5, evolve_pairs=True, p_pair=0.03):
+def mutate(g, rng, evolve_heads=False, p=0.5, evolve_pairs=True, p_pair=0.03,
+           max_throughput=None):
     """Perturb the hyperparameters. Every knob is bounded and every result is buildable.
 
     NAP and tables_per_head move MULTIPLICATIVELY (+-1 on NAP is a factor of 2 in rows; tph
@@ -185,6 +187,13 @@ def mutate(g, rng, evolve_heads=False, p=0.5, evolve_pairs=True, p_pair=0.03):
         h["n_heads"] = int(np.clip(h["n_heads"] + rng.choice([-1, 1]), *lb.HEADS_RANGE))
     if rng.random() < p:
         h["lr"] = float(np.clip(h["lr"] * math.exp(rng.normal(0, 0.4)), *lb.LR_RANGE))
+    # THROUGHPUT BUDGET. Applied AFTER both tph and n_heads have moved, since the bound depends
+    # on n_heads. Equivalent to rejecting any over-budget child (see max_tph_within), but the
+    # rejection never costs a training run. Must precede the anchor-pair resize below, or the
+    # pair array would be built for a table count the clamp is about to change.
+    if max_throughput is not None:
+        h["tables_per_head"] = min(h["tables_per_head"],
+                                   lb.max_tph_within(h["n_heads"], max_throughput))
     if evolve_pairs:
         # LITERAL ANCHORING. The policy and seed are NOT mutated here: once the genome carries
         # explicit pairs they only ever decided the initial draw, so perturbing them would be a
@@ -289,6 +298,11 @@ def main():
     ap.add_argument("--throughput-penalty", type=float, default=0.0,
                     help="lambda_t in -MSE - lambda*params - lambda_t*throughput. 0 (default, "
                          "and recommended) leaves throughput logged raw -- see fitness()")
+    ap.add_argument("--max-throughput", type=int, default=None,
+                    help="HARD CONSTRAINT: reject any candidate reading more than this many "
+                         "weights per forward. 192 is the teacher's own budget, so the search "
+                         "must find fit INSIDE its inference cost instead of buying fit with "
+                         "more tables. Unset (default) = unbounded, previous behaviour")
     ap.add_argument("--teacher-tol", type=float, default=0.0,
                     help="a member counts as matching the teacher's fit if its held-out MSE is "
                          "within this of the teacher's")
@@ -344,8 +358,12 @@ def main():
           f"{f', pair mutation rate {a.pair_mutation_rate}' if ev_pairs else ''}")
 
     M = max(1, int(a.cull * a.pool))
-    genomes = [seed_genome(np.random.default_rng(a.seed * 100 + i), a.evolve_heads, ev_pairs)
-               for i in range(a.pool)]
+    genomes = [seed_genome(np.random.default_rng(a.seed * 100 + i), a.evolve_heads, ev_pairs,
+                           a.max_throughput) for i in range(a.pool)]
+    if a.max_throughput is not None:
+        print(f"  THROUGHPUT BUDGET {a.max_throughput} weights/forward "
+              f"(teacher reads {t_tput}); tph is bounded at "
+              f"{lb.max_tph_within(1, a.max_throughput)} for a 1-head genome")
     ewma = np.full(a.pool, np.nan)
     age = np.zeros(a.pool, int)
     lineage = np.arange(a.pool)
@@ -378,6 +396,11 @@ def main():
                 pool_w[i] = r["weights"]
                 pre_gain.append(r["pretrain_heldout_mse"])
             mses[i], pars[i], tputs[i] = r["heldout_mse"], r["params"], lb.throughput(g)
+            # Belt and braces: the budget is enforced at draw/mutate time, so a violation here
+            # means a genome reached the pool by some path that skipped the bound. Fail loudly
+            # rather than quietly reporting a run that did not respect its own constraint.
+            assert a.max_throughput is None or tputs[i] <= a.max_throughput, (
+                f"member {i} has throughput {tputs[i]} > budget {a.max_throughput}")
             fit[i] = fitness(mses[i], pars[i], a.size_penalty,
                              tputs[i], a.throughput_penalty)
             dom = lb.dominates_teacher(mses[i], pars[i], tputs[i],
@@ -399,7 +422,8 @@ def main():
                 c1, c2 = rng.choice(surv, 2, replace=False)
                 par = c1 if ewma[c1] >= ewma[c2] else c2
                 child = mutate(genomes[par], rng, a.evolve_heads,
-                               evolve_pairs=ev_pairs, p_pair=a.pair_mutation_rate)
+                               evolve_pairs=ev_pairs, p_pair=a.pair_mutation_rate,
+                               max_throughput=a.max_throughput)
                 if a.warm_start and pool_w[par] is not None:
                     # remap the PARENT'S TRAINED weights into the CHILD'S shape. Done here, at
                     # birth, so the child's first training round already starts from them.

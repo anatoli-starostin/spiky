@@ -280,6 +280,26 @@ def n_tables(g):
     return int(g["n_heads"] * g["tables_per_head"])
 
 
+def max_tph_within(n_heads, max_throughput):
+    """Largest tables_per_head whose throughput stays inside a budget.
+
+    THE CONSTRAINT IS EXACTLY A BOUND ON tph. throughput = n_heads * tph * n_outputs is
+    deterministic, monotone and depends on NOTHING else -- not NAP, not the anchor pairs, not
+    the weights. So "reject any candidate over budget" and "never propose a tph above
+    max_throughput / (n_heads * n_outputs)" accept precisely the same set of genomes. Bounding
+    at draw time is the cheaper of the two: a rejected candidate would otherwise cost 2000
+    backprop steps before being thrown away.
+
+    Genes are CLAMPED into the bound rather than redrawn, matching how NAP_RANGE and TPH_RANGE
+    are already handled everywhere else in this chapter. That does concentrate members at the
+    boundary -- but selection already wants maximum tables (the full run pinned 47/48 members at
+    the cap), so the clamp is not what creates that, it just moves where it happens.
+    """
+    if max_throughput is None:
+        return TPH_RANGE[1]
+    return max(1, min(TPH_RANGE[1], int(max_throughput) // (int(n_heads) * N_OUT)))
+
+
 def throughput(g):
     """Weight ENTRIES read per forward pass, per sample.
 
