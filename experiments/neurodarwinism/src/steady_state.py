@@ -51,6 +51,63 @@ EXC, INH, INP, OUTP = 0, 1, 2, 3
 POOL_SIZE = {EXC: N_EXC, INH: N_INH, INP: N_IN, OUTP: N_OUT}
 
 
+# ----------------------------------------------------------------- assoc mode (exp010)
+# Opt-in (--assoc). Defaults OFF, so every existing run reproduces byte for byte.
+#
+# AUTO-ASSOCIATIVE READOUT. There are NO dedicated output neurons. The readout is the LAST
+# N_OUT of the N_EXC excitatory reservoir neurons, which stay full members of the pool: they
+# receive the ordinary ~80 recurrent exc->exc synapses, they project back into the reservoir
+# like any other excitatory cell, and nothing about their wiring is special-cased. The only
+# thing that distinguishes them is that (a) we read their spikes and (b) during TRAINING a
+# teacher current clamps them to fire at the ticks encoding the LUT's action vector, so STDP
+# writes "this input pattern -> these six fire in this order" into the reservoir's own
+# weights. At evaluation the clamp is removed and they fire from recurrent drive alone.
+#
+# The dedicated output pool (meta 3) still EXISTS in the SpikingNet -- keeping the four-meta
+# layout means ids/indices and every build path stay identical -- but in assoc mode no
+# synapse ever targets it, so those 6 neurons per net are inert.
+ASSOC = False
+ASSOC_TEACHER_OFFSET = 64          # teacher tick = offset + target_offsets(Y) in 0..31
+ASSOC_TEACHER_CURRENT = 200.0      # same amplitude as the input volley
+
+
+def _tgt_choice():
+    """(target populations, probabilities) for a newly invented excitatory synapse.
+
+    Assoc mode removes OUTP entirely and renormalises onto EXC/INH: a mutation that wired
+    something to the inert output pool would be a synapse that can never influence anything.
+    """
+    if ASSOC:
+        return [EXC, INH], [0.85, 0.15]
+    return [EXC, INH, OUTP], [0.80, 0.15, 0.05]
+
+
+def assoc_readout_ids(ids, K):
+    """Global ids of every net's readout neurons: the LAST N_OUT excitatory cells.
+
+    Flat and net-major (net0's six, then net1's six, ...), matching the layout run_episode
+    reshapes to [B, P, N_OUT] and the column stride it uses to inject the teacher.
+    """
+    return ids[EXC].reshape(K, N_EXC)[:, N_EXC - N_OUT:].ravel().copy()
+
+
+def teacher_ticks_for(Y):
+    """Teacher first-spike ticks [B, N_OUT] for a batch of LUT actions.
+
+    Reuses exp009's target transform EXACTLY (z-score on pool statistics, clip at C sigma,
+    quantise to n_levels, `1 - u` so the largest action fires EARLIEST), then shifts the
+    resulting 0..31 offset by ASSOC_TEACHER_OFFSET.
+
+    WHY AN OFFSET. STDP is causal: the reservoir potentiates a synapse whose presynaptic
+    spike PRECEDES the postsynaptic one. With offset 0 the teacher fires the readout cells
+    during the input volley itself, before the reservoir has propagated anything, so there is
+    almost nothing pre-synaptic to associate with. Offset 64 puts the clamp in the declared
+    readout phase [64, 96), one full propagation budget after the input -- the association is
+    then written on synapses that actually carried the input pattern.
+    """
+    return (ASSOC_TEACHER_OFFSET + target_offsets(Y)).astype(np.int64)
+
+
 # ----------------------------------------------------------------- genome
 def seed_genome(rng, w_max, fanout_e=80, fanout_i=20, fanout_inh=100,
                 fanout_in=100, fanin_out=100, res_w_exc=6.0):
@@ -73,13 +130,17 @@ def seed_genome(rng, w_max, fanout_e=80, fanout_i=20, fanout_inh=100,
     blk(EXC, INH, N_EXC, fanout_i, lambda n: np.full(n, res_w_exc))
     blk(INH, EXC, N_INH, fanout_inh, lambda n: np.full(n, RES_W_INH))
     blk(INP, EXC, N_IN, fanout_in, lambda n: rng.uniform(0.0, w_max, n))
-    # output synapses are exc -> output, so build them source-major over the output pool
-    s = rng.integers(0, N_EXC, N_OUT * fanin_out)
-    t = np.repeat(np.arange(N_OUT), fanin_out)
-    sp.append(np.full(s.size, EXC)); si.append(s)
-    tp.append(np.full(s.size, OUTP)); ti.append(t)
-    d.append(rng.integers(D_MIN, D_MAX + 1, s.size))
-    w.append(rng.uniform(0.0, w_max, s.size))
+    if not ASSOC:
+        # output synapses are exc -> output, so build them source-major over the output pool
+        s = rng.integers(0, N_EXC, N_OUT * fanin_out)
+        t = np.repeat(np.arange(N_OUT), fanin_out)
+        sp.append(np.full(s.size, EXC)); si.append(s)
+        tp.append(np.full(s.size, OUTP)); ti.append(t)
+        d.append(rng.integers(D_MIN, D_MAX + 1, s.size))
+        w.append(rng.uniform(0.0, w_max, s.size))
+    # In ASSOC mode there is no output block at all: the readout is the LAST N_OUT excitatory
+    # reservoir neurons, which are already wired by the exc->exc block above (each receives
+    # ~80 recurrent synapses) and already project back into the pool. Nothing is segregated.
 
     g = dict(src_pool=np.concatenate(sp), src_idx=np.concatenate(si),
              tgt_pool=np.concatenate(tp), tgt_idx=np.concatenate(ti),
@@ -165,8 +226,9 @@ def mutate_structural(g, rng, w_max, p_add_exc=0.015, p_prune_exc=0.015,
             return None
         spool = (np.full(n_new, INH) if inhibitory
                  else rng.choice(spools, n_new, p=probs))
+        tp_a, tp_p = _tgt_choice()
         tpool = (np.full(n_new, EXC) if inhibitory
-                 else rng.choice([EXC, INH, OUTP], n_new, p=[0.80, 0.15, 0.05]))
+                 else rng.choice(tp_a, n_new, p=tp_p))
         return dict(
             src_pool=spool,
             src_idx=np.array([rng.integers(0, POOL_SIZE[p]) for p in spool], np.int64),
@@ -233,8 +295,8 @@ def mutate(g, rng, w_max, p_add=0.015, p_prune=0.015, p_jit=0.15, w_sigma=0.15,
     # count is restored, instead of trusting one draw.
     def draw(k):
         spool = rng.choice([EXC, INH, INP], k, p=[0.75, 0.15, 0.10])
-        tpool = np.where(spool == INH, EXC,
-                         rng.choice([EXC, INH, OUTP], k, p=[0.80, 0.15, 0.05]))
+        tp_a, tp_p = _tgt_choice()
+        tpool = np.where(spool == INH, EXC, rng.choice(tp_a, k, p=tp_p))
         return dict(
             src_pool=spool,
             src_idx=np.array([rng.integers(0, POOL_SIZE[p]) for p in spool]),
@@ -473,7 +535,13 @@ def build_pool(genomes, device="cuda", seed=1, stdp_lr=0.0, w_max=30.0, drives=N
     sp.add_connections(chunk, seed)
     chunk.recycle()
     sp.compile(shuffle_synapses_random_seed=None)
-    return dict(spnet=sp, ids=ids, P=K, device=device, n_syn=int(len(triples)))
+    h = dict(spnet=sp, ids=ids, P=K, device=device, n_syn=int(len(triples)))
+    if ASSOC:
+        assert not (np.concatenate([g["tgt_pool"] for g in genomes]) == OUTP).any(), (
+            "assoc mode but a genome still targets the dedicated output pool; those neurons "
+            "are inert here, so the synapse would be invisible to the readout")
+        h["readout_ids"] = assoc_readout_ids(ids, K)
+    return h
 
 
 GENOME_FIELDS = ("src_pool", "src_idx", "tgt_pool", "tgt_idx", "delay", "weight")
@@ -656,8 +724,12 @@ def stdp_batches(h, Xpool, Ypool, enc, batch, seed, rounds, n_batches, current=2
     newborns settle without freezing the tournament.
     """
     for i in range(n_batches):
-        Xb, _, _ = sample_batch(Xpool, Ypool, batch, seed, rounds * 1000 + i)
-        run_episode(h, Xb, enc, current, train=True)
+        Xb, Yb, _ = sample_batch(Xpool, Ypool, batch, seed, rounds * 1000 + i)
+        # ASSOC: the teacher clamp is what makes an STDP batch a TRAINING batch here. Without
+        # it the readout cells fire only from recurrent drive and STDP writes no association.
+        tt = teacher_ticks_for(Yb) if ASSOC else None
+        run_episode(h, Xb, enc, current, train=True, teacher_ticks=tt,
+                    teacher_current=ASSOC_TEACHER_CURRENT)
 
 
 def tie_rate_per_member(first, n_out=N_OUT):
@@ -777,6 +849,7 @@ def main():
     # declared up front: the architecture knobs below rebind these module-level values
     global N_EXC, N_INH, POOL_SIZE, D_MAX, N_DELAY_METAS
     global OUT_GATE, OUT_D_MIN, OUT_D_MAX, N_OUT_DELAY_METAS
+    global ASSOC, ASSOC_TEACHER_OFFSET, ASSOC_TEACHER_CURRENT
     ap = argparse.ArgumentParser()
     ap.add_argument("--pool", type=int, default=32)
     ap.add_argument("--rounds", type=int, default=60)
@@ -872,6 +945,26 @@ def main():
                          "the offsets live on the same 0..31 scale as the target")
     ap.add_argument("--target-clip-sigma", type=float, default=2.5,
                     help="mse only: per-dimension clip of the centred target, in sigmas")
+    # auto-associative readout (off by default -> previous behaviour exactly)
+    ap.add_argument("--assoc", action="store_true",
+                    help="AUTO-ASSOCIATIVE MODE: no dedicated output neurons. The readout is "
+                         "the LAST 6 excitatory reservoir neurons, which stay full members of "
+                         "the pool. During training a teacher current clamps them to the ticks "
+                         "encoding the LUT action; at evaluation the clamp is removed and they "
+                         "must fire from recurrent drive alone")
+    ap.add_argument("--teacher-offset", type=int, default=64,
+                    help="assoc only: teacher tick = OFFSET + the 0..31 target offset. 64 puts "
+                         "the clamp in the declared readout phase, one propagation budget "
+                         "after the input volley, so STDP has something causal to associate")
+    ap.add_argument("--teacher-current", type=float, default=None,
+                    help="assoc only: teacher clamp amplitude (default: --current)")
+    ap.add_argument("--teacher-levels", type=int, default=32,
+                    help="assoc only: quantisation levels of the teacher target")
+    ap.add_argument("--assoc-train-batches", type=int, default=4,
+                    help="assoc only: teacher-clamped STDP batches run over the WHOLE pool "
+                         "each round, before the (unclamped) scoring pass. The stock loop "
+                         "gives STDP only to newborns, which is not enough to write an "
+                         "association into every member")
     ap.add_argument("--out-delay-range", type=int, nargs=2, default=[64, 80],
                     metavar=("LO", "HI"),
                     help="the gate bank's delay range. HI below N_TICKS on purpose: a spike "
@@ -883,6 +976,16 @@ def main():
     # inhibitory bank offset, so N_DELAY_METAS must be refreshed alongside it.
     D_MAX = a.d_max
     N_DELAY_METAS = D_MAX - D_MIN + 1
+
+    ASSOC = a.assoc
+    ASSOC_TEACHER_OFFSET = int(a.teacher_offset)
+    ASSOC_TEACHER_CURRENT = a.current if a.teacher_current is None else float(a.teacher_current)
+    if ASSOC:
+        assert not a.out_delay_gate, ("--assoc has no output pool to gate; the readout is a "
+                                      "set of ordinary reservoir neurons")
+        assert not a.drive_gene, ("--drive-gene scales output-targeting synapses, of which "
+                                  "assoc mode has none")
+        assert a.stdp_lr > 0, "--assoc is an STDP experiment; --stdp-lr must be > 0"
 
     OUT_GATE = a.out_delay_gate
     OUT_D_MIN, OUT_D_MAX = int(a.out_delay_range[0]), int(a.out_delay_range[1])
@@ -915,8 +1018,21 @@ def main():
     enc = LatencyEncoder(Xpool)
     # Target statistics come from the TRAINING POOL ONLY and are then frozen. Fitting them on
     # Yval would leak the held-out set into the very target the net is selected against.
-    n_levels = readout_null(a.readout_window)
+    # In assoc mode the target is a TEACHER SPIKE TIME, not a readout offset, so its level
+    # count is set by --teacher-levels and is independent of the readout window (which is off).
+    n_levels = a.teacher_levels if ASSOC else readout_null(a.readout_window)
     mu, sd, C, n_levels = fit_target_stats(Ypool, a.target_clip_sigma, n_levels)
+    if ASSOC:
+        t = target_offsets(Ypool)
+        assert 0 <= ASSOC_TEACHER_OFFSET and ASSOC_TEACHER_OFFSET + n_levels - 1 < N_TICKS, (
+            f"--teacher-offset {ASSOC_TEACHER_OFFSET} + {n_levels} levels does not fit in "
+            f"{N_TICKS} ticks")
+        print(f"ASSOC MODE: readout = excitatory neurons {N_EXC - N_OUT}..{N_EXC - 1} "
+              f"(full reservoir members, no dedicated outputs). Teacher ticks "
+              f"{ASSOC_TEACHER_OFFSET}..{ASSOC_TEACHER_OFFSET + n_levels - 1} at current "
+              f"{ASSOC_TEACHER_CURRENT}, {a.assoc_train_batches} clamped STDP batches/round "
+              f"over the whole pool. Pool target offsets: mean {t.mean():.2f}, "
+              f"sd {t.std():.2f}, {len(np.unique(t))} distinct levels", flush=True)
     if a.objective == "mse":
         print(f"OBJECTIVE mse: z = clip((y - mu_d)/sigma_d, -{C}, +{C}); u = (z + {C})/{2 * C}; "
               f"target = round((1 - u) * {n_levels - 1}) -> offsets 0..{n_levels - 1}, "
@@ -1003,6 +1119,12 @@ def main():
                 stdp_batches(h, Xpool, Ypool, enc, a.batch, a.seed, rnd,
                              a.mature_batches, a.current)
                 newborn[:] = False
+            if ASSOC and a.assoc_train_batches:
+                # THE TRAINING PASS. Whole pool, teacher clamped on, no measurement. Offset
+                # the batch stream past the maturation batches so the two do not draw the
+                # same states. Scoring below runs with the clamp OFF.
+                stdp_batches(h, Xpool, Ypool, enc, a.batch, a.seed, rnd + 500_000,
+                             a.assoc_train_batches, a.current)
             f, first_ticks, ties, miss = score(h, Xb, Yb, enc, a.current, a.tie_penalty,
                                                readout_window=a.readout_window,
                                                coverage_penalty=a.coverage_penalty,
@@ -1134,15 +1256,20 @@ def main():
           f"({genomes[best_i]['weight'].size:,} synapses)")
     # BOTH metrics on the SAME evolved net, whichever objective it was selected under, so an
     # MSE-trained run and a tau-trained run are directly comparable in both directions.
-    mv, _, _, _ = score(hb, Xval, Yval, enc, a.current, tie_penalty=0.0,
-                        readout_window=a.readout_window, coverage_penalty=0.0,
-                        objective="mse")
-    print(f"HELD-OUT MSE {-mv[0]:.4f} (offsets 0..{TARGET_STATS[3] - 1}, "
-          f"silent reads {readout_null(a.readout_window)})  "
-          f"objective trained on: {a.objective}")
+    # NOT in assoc mode: there the target is a teacher SPIKE TIME on a 32-level scale offset
+    # to [64, 96), while the readout is a raw tick in [0, 96), so an MSE between the two is a
+    # number about nothing. tau, which only reads the ORDER, is scale-free and stays valid.
+    if not ASSOC:
+        mv, _, _, _ = score(hb, Xval, Yval, enc, a.current, tie_penalty=0.0,
+                            readout_window=a.readout_window, coverage_penalty=0.0,
+                            objective="mse")
+        print(f"HELD-OUT MSE {-mv[0]:.4f} (offsets 0..{TARGET_STATS[3] - 1}, "
+              f"silent reads {readout_null(a.readout_window)})  "
+              f"objective trained on: {a.objective}")
     if bar and _prog:
+        tail = "" if ASSOC else f", MSE {-mv[0]:.4f}"
         _prog.progress_done(bar, ok=True,
-                            final_text=f"held-out corrected {fv[0]:+.4f}, MSE {-mv[0]:.4f} "
+                            final_text=f"held-out corrected {fv[0]:+.4f}{tail} "
                                        f"after {a.rounds} rounds")
 
 

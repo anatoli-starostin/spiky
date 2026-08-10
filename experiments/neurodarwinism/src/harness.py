@@ -256,8 +256,21 @@ def readout_null(readout_window=None):
     return N_TICKS if readout_window is None else int(readout_window)
 
 
-def run_episode(H, X, enc, current=200.0, train=False, readout_window=None):
+def run_episode(H, X, enc, current=200.0, train=False, readout_window=None,
+                teacher_ticks=None, teacher_current=None):
     """-> first-spike tick [B, P, 6] (readout_null() if silent), raw raster.
+
+    WHICH NEURONS ARE READ. By default the 6 dedicated OUTPUT neurons (`ids[3]`). If the
+    harness dict carries `readout_ids` -- a flat array of P*N_OUT GLOBAL ids, net-major --
+    those are read instead. That is what the auto-associative mode (exp010) uses to read 6
+    ordinary EXCITATORY reservoir neurons without segregating them from the pool.
+
+    TEACHER CLAMP (exp010). `teacher_ticks` [B, N_OUT] of integer ticks in [0, N_TICKS)
+    injects `teacher_current` into each readout neuron at its own tick, on top of the input
+    volley, so STDP sees "this input pattern -> these 6 fire in this order". It requires
+    `readout_ids` (there is no point clamping dedicated outputs) and widens n_input_ticks
+    from T_IN to N_TICKS, since a teacher tick may legitimately sit in the readout phase.
+    None (the default) reproduces the previous behaviour byte for byte.
 
     readout_window=None (DEFAULT, unchanged): first spike anywhere in the 96-tick simulation,
     null = 96.
@@ -280,13 +293,35 @@ def run_episode(H, X, enc, current=200.0, train=False, readout_window=None):
     B = X.shape[0]
     ticks = enc(X)
     K = P * N_IN
-    va = np.zeros((B, T_IN, K), np.float32)
-    sp_ids = np.broadcast_to(ids[2].reshape(1, 1, K), (B, T_IN, K)).astype(np.int32)
+    rid = H.get("readout_ids")
+    if teacher_ticks is None:
+        n_in, cols = T_IN, ids[2]
+    else:
+        if rid is None:
+            raise ValueError("teacher_ticks requires H['readout_ids'] (exp010 assoc mode)")
+        # the teacher may fire a readout neuron anywhere in the episode, so the sparse input
+        # has to span every tick, not just the input phase
+        n_in, cols = N_TICKS, np.concatenate([ids[2], rid])
+    va = np.zeros((B, n_in, cols.size), np.float32)
+    sp_ids = np.broadcast_to(cols.reshape(1, 1, cols.size),
+                             (B, n_in, cols.size)).astype(np.int32)
     for b in range(B):
         for j in range(N_IN):
             va[b, ticks[b, j], j::N_IN] = current
-    out_ids = torch.tensor(ids[3], dtype=torch.int32, device=dev)
-    sp.process_ticks(n_ticks_to_process=N_TICKS, batch_size=B, n_input_ticks=T_IN,
+    if teacher_ticks is not None:
+        tc = current if teacher_current is None else teacher_current
+        tt = np.asarray(teacher_ticks, np.int64)
+        if tt.shape != (B, N_OUT):
+            raise ValueError(f"teacher_ticks must be [B, {N_OUT}], got {tt.shape}")
+        if tt.min() < 0 or tt.max() >= N_TICKS:
+            raise ValueError(f"teacher ticks {tt.min()}..{tt.max()} outside [0, {N_TICKS})")
+        for b in range(B):
+            for j in range(N_OUT):
+                # the readout ids are net-major with N_OUT per net, so this column stride
+                # hits readout neuron j of EVERY net, exactly as j::N_IN does for inputs
+                va[b, tt[b, j], K + j::N_OUT] = tc
+    out_ids = torch.tensor(ids[3] if rid is None else rid, dtype=torch.int32, device=dev)
+    sp.process_ticks(n_ticks_to_process=N_TICKS, batch_size=B, n_input_ticks=n_in,
                      input_values=torch.tensor(va, device=dev),
                      sparse_input=torch.tensor(sp_ids.copy(), device=dev),
                      do_train=train, do_record_voltage=False,
