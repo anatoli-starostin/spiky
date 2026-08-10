@@ -48,3 +48,158 @@ W0810 18:50:48.543000 449074 torch/_dynamo/convert_frame.py:1358] [1/8] To diagn
   round  15  best fitness -0.01924  min MSE 0.01008  params min/med 12,288/24,576  tput min/med 240/768  pareto 29  beats-teacher 0  1009s
   round  16  best fitness -0.01917  min MSE 0.01041  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1060s
   round  17  best fitness -0.01913  min MSE 0.01117  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1112s
+  round  18  best fitness -0.01910  min MSE 0.01095  params min/med 12,288/24,576  tput min/med 444/768  pareto 29  beats-teacher 0  1164s
+  round  19  best fitness -0.01904  min MSE 0.01068  params min/med 12,288/24,576  tput min/med 360/768  pareto 29  beats-teacher 0  1212s
+  round  20  best fitness -0.01904  min MSE 0.01405  params min/med 12,288/24,576  tput min/med 360/768  pareto 29  beats-teacher 0  1259s
+  round  21  best fitness -0.01902  min MSE 0.01078  params min/med 12,288/24,576  tput min/med 750/768  pareto 29  beats-teacher 0  1307s
+  round  22  best fitness -0.01898  min MSE 0.01116  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1355s
+  round  23  best fitness -0.01900  min MSE 0.00994  params min/med 12,288/24,576  tput min/med 390/768  pareto 29  beats-teacher 0  1403s
+  round  24  best fitness -0.01898  min MSE 0.01024  params min/med 12,288/24,576  tput min/med 702/768  pareto 29  beats-teacher 0  1450s
+  round  25  best fitness -0.01884  min MSE 0.01361  params min/med 12,288/24,576  tput min/med 750/768  pareto 29  beats-teacher 0  1499s
+  round  26  best fitness -0.01886  min MSE 0.01394  params min/med 24,000/24,576  tput min/med 750/768  pareto 29  beats-teacher 0  1547s
+  round  27  best fitness -0.01889  min MSE 0.01117  params min/med 12,288/24,576  tput min/med 720/768  pareto 30  beats-teacher 0  1594s
+  round  28  best fitness -0.01887  min MSE 0.01113  params min/med 10,176/24,576  tput min/med 636/768  pareto 30  beats-teacher 0  1642s
+  round  29  best fitness -0.01883  min MSE 0.01128  params min/med 10,176/24,576  tput min/med 636/768  pareto 29  beats-teacher 0  1690s
+  round  30  best fitness -0.01884  min MSE 0.01229  params min/med 11,520/24,576  tput min/med 636/768  pareto 29  beats-teacher 0  1736s
+  round  31  best fitness -0.01884  min MSE 0.01012  params min/med 12,288/24,576  tput min/med 588/768  pareto 30  beats-teacher 0  1785s
+  round  32  best fitness -0.01879  min MSE 0.01050  params min/med 12,288/24,576  tput min/med 588/768  pareto 30  beats-teacher 0  1833s
+  round  33  best fitness -0.01888  min MSE 0.01089  params min/med 12,288/24,576  tput min/med 396/768  pareto 30  beats-teacher 0  1880s
+  round  34  best fitness -0.01884  min MSE 0.01120  params min/med 12,288/24,576  tput min/med 396/768  pareto 31  beats-teacher 0  1927s
+  round  35  best fitness -0.01889  min MSE 0.01102  params min/med 15,744/24,576  tput min/med 246/768  pareto 31  beats-teacher 0  1973s
+  round  36  best fitness -0.01889  min MSE 0.01052  params min/med 15,744/24,576  tput min/med 246/768  pareto 31  beats-teacher 0  2023s
+  round  37  best fitness -0.01889  min MSE 0.01068  params min/med 12,288/24,576  tput min/med 510/768  pareto 31  beats-teacher 0  2071s
+  round  38  best fitness -0.01888  min MSE 0.01223  params min/med 12,288/24,576  tput min/med 576/768  pareto 31  beats-teacher 0  2119s
+  round  39  best fitness -0.01884  min MSE 0.01047  params min/med 12,288/24,576  tput min/med 576/768  pareto 31  beats-teacher 0  2166s
+  round  40  best fitness -0.01886  min MSE 0.01081  params min/med 11,424/24,576  tput min/med 714/768  pareto 32  beats-teacher 0  2214s
+  round  41  best fitness -0.01880  min MSE 0.01374  params min/med 11,424/24,576  tput min/med 714/768  pareto 33  beats-teacher 0  2262s
+  round  42  best fitness -0.01883  min MSE 0.01334  params min/med 11,904/24,576  tput min/med 588/768  pareto 33  beats-teacher 0  2309s
+  round  43  best fitness -0.01883  min MSE 0.01017  params min/med 12,288/24,576  tput min/med 588/768  pareto 33  beats-teacher 0  2357s
+  round  44  best fitness -0.01880  min MSE 0.01023  params min/med 13,248/24,576  tput min/med 414/768  pareto 33  beats-teacher 0  2406s
+  round  45  best fitness -0.01874  min MSE 0.01309  params min/med 6,336/24,576  tput min/med 396/768  pareto 34  beats-teacher 0  2452s
+  round  46  best fitness -0.01875  min MSE 0.01321  params min/med 6,336/24,576  tput min/med 324/768  pareto 35  beats-teacher 0  2499s
+  round  47  best fitness -0.01871  min MSE 0.01094  params min/med 7,488/24,576  tput min/med 324/768  pareto 35  beats-teacher 0  2546s
+  round  48  best fitness -0.01873  min MSE 0.01091  params min/med 12,288/24,576  tput min/med 768/768  pareto 35  beats-teacher 0  2594s
+  round  49  best fitness -0.01868  min MSE 0.01054  params min/med 12,288/24,576  tput min/med 768/768  pareto 35  beats-teacher 0  2642s
+  round  50  best fitness -0.01861  min MSE 0.01120  params min/med 12,288/24,576  tput min/med 768/768  pareto 35  beats-teacher 0  2690s
+  round  51  best fitness -0.01859  min MSE 0.01362  params min/med 12,288/24,576  tput min/med 768/768  pareto 35  beats-teacher 0  2739s
+  round  52  best fitness -0.01860  min MSE 0.01364  params min/med 10,176/24,576  tput min/med 318/768  pareto 36  beats-teacher 0  2787s
+  round  53  best fitness -0.01864  min MSE 0.01032  params min/med 10,176/24,576  tput min/med 318/768  pareto 36  beats-teacher 0  2836s
+  round  54  best fitness -0.01863  min MSE 0.01061  params min/med 12,288/24,576  tput min/med 768/768  pareto 35  beats-teacher 0  2884s
+  round  55  best fitness -0.01858  min MSE 0.01105  params min/med 9,120/24,576  tput min/med 570/768  pareto 36  beats-teacher 0  2932s
+  round  56  best fitness -0.01857  min MSE 0.01094  params min/med 9,120/24,576  tput min/med 570/768  pareto 36  beats-teacher 0  2981s
+  round  57  best fitness -0.01856  min MSE 0.01138  params min/med 3,840/24,576  tput min/med 240/768  pareto 37  beats-teacher 0  3030s
+  round  58  best fitness -0.01865  min MSE 0.01096  params min/med 3,840/24,576  tput min/med 240/768  pareto 36  beats-teacher 0  3077s
+  round  59  best fitness -0.01866  min MSE 0.01071  params min/med 11,808/24,576  tput min/med 588/768  pareto 36  beats-teacher 0  3120s
+
+BEST member 5: fitness -0.01866
+  NAP  5 (2^5=   32 rows) x tph 128 x heads 1 anchors distinct      lr 0.001255  -> 24,576 params
+
+PARETO FRONT on PARAMETERS (36 points, lambda-free):
+      params  throughput  held-out MSE  vs constant  config
+         156          78       0.27755      0.2619x  NAP  1 x tph  13 x heads 1  lr 0.002087
+         864         216       0.13899      0.1311x  NAP  2 x tph  36 x heads 1  lr 0.002929
+       1,392         348       0.10567      0.0997x  NAP  2 x tph  58 x heads 1  lr 0.001708
+       2,160         270       0.05781      0.0545x  NAP  3 x tph  45 x heads 1  lr 0.002314
+       3,840         240       0.04979      0.0470x  NAP  4 x tph  40 x heads 1  lr 0.001255
+       4,032         504       0.04906      0.0463x  NAP  3 x tph  84 x heads 1  lr 0.00773
+       4,848         606       0.04345      0.0410x  NAP  3 x tph 101 x heads 1  lr 0.002137
+       5,328         666       0.04241      0.0400x  NAP  3 x tph 111 x heads 1  lr 0.001465
+       6,048         378       0.03580      0.0338x  NAP  4 x tph  63 x heads 1  lr 0.0009338
+       6,144         768       0.03574      0.0337x  NAP  3 x tph 128 x heads 1  lr 0.00269
+       6,336         396       0.03442      0.0325x  NAP  4 x tph  66 x heads 1  lr 0.001338
+       7,488         468       0.03091      0.0292x  NAP  4 x tph  78 x heads 1  lr 0.001569
+       9,120         570       0.02599      0.0245x  NAP  4 x tph  95 x heads 1  lr 0.002064
+       9,600         600       0.02558      0.0241x  NAP  4 x tph 100 x heads 1  lr 0.001465
+      10,176         636       0.02398      0.0226x  NAP  4 x tph 106 x heads 1  lr 0.001395
+      11,040         690       0.02355      0.0222x  NAP  4 x tph 115 x heads 1  lr 0.001096
+      11,424         714       0.02171      0.0205x  NAP  4 x tph 119 x heads 1  lr 0.001255
+      11,520         720       0.02094      0.0198x  NAP  4 x tph 120 x heads 1  lr 0.001476
+      11,808         738       0.02027      0.0191x  NAP  4 x tph 123 x heads 1  lr 0.001232
+      12,288         768       0.01971      0.0186x  NAP  4 x tph 128 x heads 1  lr 0.001255
+      17,856         558       0.01777      0.0168x  NAP  5 x tph  93 x heads 1  lr 0.001474
+      18,240         570       0.01685      0.0159x  NAP  5 x tph  95 x heads 1  lr 0.001458
+      19,008         594       0.01676      0.0158x  NAP  5 x tph  99 x heads 1  lr 0.001429
+      21,696         678       0.01521      0.0144x  NAP  5 x tph 113 x heads 1  lr 0.0006789
+      23,040         720       0.01437      0.0136x  NAP  5 x tph 120 x heads 1  lr 0.001255
+      24,000         750       0.01412      0.0133x  NAP  5 x tph 125 x heads 1  lr 0.001395
+      24,576         768       0.01342      0.0127x  NAP  5 x tph 128 x heads 1  lr 0.001569
+      36,480         570       0.01226      0.0116x  NAP  6 x tph  95 x heads 1  lr 0.001038
+      40,704         636       0.01160      0.0109x  NAP  6 x tph 106 x heads 1  lr 0.001255
+      44,160         690       0.01111      0.0105x  NAP  6 x tph 115 x heads 1  lr 0.00132
+      48,384         756       0.01072      0.0101x  NAP  6 x tph 126 x heads 1  lr 0.001869
+      49,152         768       0.00994      0.0094x  NAP  6 x tph 128 x heads 1  lr 0.001255
+      85,248         666       0.00982      0.0093x  NAP  7 x tph 111 x heads 1  lr 0.001795
+      89,856         702       0.00892      0.0084x  NAP  7 x tph 117 x heads 1  lr 0.0008575
+      98,304         768       0.00881      0.0083x  NAP  7 x tph 128 x heads 1  lr 0.001155
+   1,437,696         702       0.00554      0.0052x  NAP 11 x tph 117 x heads 1  lr 0.0003707
+
+PARETO FRONT on THROUGHPUT (7 points, lambda-free):
+      params  throughput  held-out MSE  vs constant  config
+         156          78       0.27755      0.2619x  NAP  1 x tph  13 x heads 1  lr 0.002087
+      26,880         210       0.02174      0.0205x  NAP  7 x tph  35 x heads 1  lr 0.001938
+     113,664         222       0.01345      0.0127x  NAP  9 x tph  37 x heads 1  lr 0.004414
+     150,528         294       0.01285      0.0121x  NAP  9 x tph  49 x heads 1  lr 0.004414
+      65,280         510       0.01060      0.0100x  NAP  7 x tph  85 x heads 1  lr 0.001255
+      85,248         666       0.00982      0.0093x  NAP  7 x tph 111 x heads 1  lr 0.001795
+   1,437,696         702       0.00554      0.0052x  NAP 11 x tph 117 x heads 1  lr 0.0003707
+
+JOINT FRONT, non-dominated on (params, throughput, MSE) together (53 points):
+      params  throughput  held-out MSE  vs constant  config
+         156          78       0.27755      0.2619x  NAP  1 x tph  13 x heads 1  lr 0.002087
+         864         216       0.13899      0.1311x  NAP  2 x tph  36 x heads 1  lr 0.002929
+       1,392         348       0.10567      0.0997x  NAP  2 x tph  58 x heads 1  lr 0.001708
+       2,160         270       0.05781      0.0545x  NAP  3 x tph  45 x heads 1  lr 0.002314
+       3,840         240       0.04979      0.0470x  NAP  4 x tph  40 x heads 1  lr 0.001255
+       4,032         504       0.04906      0.0463x  NAP  3 x tph  84 x heads 1  lr 0.00773
+       4,848         606       0.04345      0.0410x  NAP  3 x tph 101 x heads 1  lr 0.002137
+       5,328         666       0.04241      0.0400x  NAP  3 x tph 111 x heads 1  lr 0.001465
+       6,048         378       0.03580      0.0338x  NAP  4 x tph  63 x heads 1  lr 0.0009338
+       6,144         768       0.03574      0.0337x  NAP  3 x tph 128 x heads 1  lr 0.00269
+       6,336         396       0.03442      0.0325x  NAP  4 x tph  66 x heads 1  lr 0.001338
+       7,488         468       0.03091      0.0292x  NAP  4 x tph  78 x heads 1  lr 0.001569
+       9,120         570       0.02599      0.0245x  NAP  4 x tph  95 x heads 1  lr 0.002064
+       9,600         600       0.02558      0.0241x  NAP  4 x tph 100 x heads 1  lr 0.001465
+      10,176         318       0.02849      0.0269x  NAP  5 x tph  53 x heads 1  lr 0.001088
+      10,176         636       0.02398      0.0226x  NAP  4 x tph 106 x heads 1  lr 0.001395
+      11,040         690       0.02355      0.0222x  NAP  4 x tph 115 x heads 1  lr 0.001096
+      11,424         714       0.02171      0.0205x  NAP  4 x tph 119 x heads 1  lr 0.001255
+      11,520         720       0.02094      0.0198x  NAP  4 x tph 120 x heads 1  lr 0.001476
+      11,808         738       0.02027      0.0191x  NAP  4 x tph 123 x heads 1  lr 0.001232
+      12,288         768       0.01971      0.0186x  NAP  4 x tph 128 x heads 1  lr 0.001255
+      12,480         390       0.02298      0.0217x  NAP  5 x tph  65 x heads 1  lr 0.001106
+      13,248         414       0.02257      0.0213x  NAP  5 x tph  69 x heads 1  lr 0.0009247
+      14,208         444       0.02252      0.0213x  NAP  5 x tph  74 x heads 1  lr 0.0009874
+      14,400         450       0.02109      0.0199x  NAP  5 x tph  75 x heads 1  lr 0.001465
+      15,744         246       0.02699      0.0255x  NAP  6 x tph  41 x heads 1  lr 0.0008526
+      17,856         558       0.01777      0.0168x  NAP  5 x tph  93 x heads 1  lr 0.001474
+      18,240         570       0.01685      0.0159x  NAP  5 x tph  95 x heads 1  lr 0.001458
+      19,008         594       0.01676      0.0158x  NAP  5 x tph  99 x heads 1  lr 0.001429
+      20,736         324       0.02122      0.0200x  NAP  6 x tph  54 x heads 1  lr 0.001569
+      21,696         678       0.01521      0.0144x  NAP  5 x tph 113 x heads 1  lr 0.0006789
+      23,040         360       0.01907      0.0180x  NAP  6 x tph  60 x heads 1  lr 0.0009874
+      23,040         720       0.01437      0.0136x  NAP  5 x tph 120 x heads 1  lr 0.001255
+      24,000         750       0.01412      0.0133x  NAP  5 x tph 125 x heads 1  lr 0.001395
+      24,576         768       0.01342      0.0127x  NAP  5 x tph 128 x heads 1  lr 0.001569
+      24,960         390       0.01856      0.0175x  NAP  6 x tph  65 x heads 1  lr 0.0009874
+      26,880         210       0.02174      0.0205x  NAP  7 x tph  35 x heads 1  lr 0.001938
+      29,568         462       0.01509      0.0142x  NAP  6 x tph  77 x heads 1  lr 0.0008165
+      30,720         240       0.02030      0.0192x  NAP  7 x tph  40 x heads 1  lr 0.0008412
+      32,640         510       0.01399      0.0132x  NAP  6 x tph  85 x heads 1  lr 0.0007136
+      33,024         516       0.01342      0.0127x  NAP  6 x tph  86 x heads 1  lr 0.0007694
+      36,480         570       0.01226      0.0116x  NAP  6 x tph  95 x heads 1  lr 0.001038
+      40,704         636       0.01160      0.0109x  NAP  6 x tph 106 x heads 1  lr 0.001255
+      44,160         690       0.01111      0.0105x  NAP  6 x tph 115 x heads 1  lr 0.00132
+      48,384         756       0.01072      0.0101x  NAP  6 x tph 126 x heads 1  lr 0.001869
+      49,152         768       0.00994      0.0094x  NAP  6 x tph 128 x heads 1  lr 0.001255
+      65,280         510       0.01060      0.0100x  NAP  7 x tph  85 x heads 1  lr 0.001255
+      85,248         666       0.00982      0.0093x  NAP  7 x tph 111 x heads 1  lr 0.001795
+      89,856         702       0.00892      0.0084x  NAP  7 x tph 117 x heads 1  lr 0.0008575
+      98,304         768       0.00881      0.0083x  NAP  7 x tph 128 x heads 1  lr 0.001155
+     113,664         222       0.01345      0.0127x  NAP  9 x tph  37 x heads 1  lr 0.004414
+     150,528         294       0.01285      0.0121x  NAP  9 x tph  49 x heads 1  lr 0.004414
+   1,437,696         702       0.00554      0.0052x  NAP 11 x tph 117 x heads 1  lr 0.0003707
+
+VS THE TEACHER  (MSE 0.02532, params 12,288, throughput 192, tol 0.002):
+  909/960 candidates matched the teacher's fit; 0 Pareto-dominate it; 0 beat it on BOTH params and throughput.
+    none yet. Best fit overall: MSE 0.00554 at 1,437,696 params / 702 throughput.
+    Cheapest match of the teacher's fit: 9,120 params / 570 throughput at MSE 0.02599.

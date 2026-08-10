@@ -17,6 +17,13 @@ snapshots/
 # (save_ckpt writes one, main() writes the other). Track the tagged one, skip the twin.
 ck*.npz.hist.json
 
+# exp011's evolutionary loop checkpoints (JSON, not npz, so the ck*.npz rules above miss them).
+# They carry every candidate ever trained plus the live genomes' full anchor-pair arrays and are
+# rewritten every round. The scientific record is the tagged history `lut_evolve_<tag>.json` and
+# the `_final.json` summary, both of which ARE tracked.
+ck.json
+ck_*.json
+
 # Launcher bookkeeping, not results.
 DONE
 
