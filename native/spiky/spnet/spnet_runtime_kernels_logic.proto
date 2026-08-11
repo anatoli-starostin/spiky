@@ -702,6 +702,7 @@ update_neuron_states_logic(
     REAL_QUAD_DT* U_ptr,
     REAL_QUAD_DT* V_ptr,
     uint4* spike_quads_ptr,
+    int4* last_spikes_quads,
     uint32_t current_tick,
     NeuronIndex_t first_neuron_quad_idx,
     uint32_t n_neuron_quads_to_process,
@@ -765,67 +766,91 @@ update_neuron_states_logic(
         __SUPER_DETAILED_TRACE__("[update_neuron_states] U: (%f, %f, %f, %f)\n", U.x, U.y, U.z, U.w);
         __SUPER_DETAILED_TRACE__("[update_neuron_states] I: (%f, %f, %f, %f)\n", I.x, I.y, I.z, I.w);
 
+        // Absolute refractory: block integration for `refractory_ticks` ticks after a spike, using
+        // the existing per-neuron last_spikes tick buffer (-1 = never spiked). Disabled when
+        // refractory_ticks == 0, or when last_spikes isn't maintained (e.g. pure inference: it
+        // stays -1, so no lane is refractory). Per lane of the quad.
+        bool ref_x = false, ref_y = false, ref_z = false, ref_w = false;
+        if((last_spikes_quads != nullptr) && (nm.refractory_ticks > 0u)) {
+            int4 _ls = (last_spikes_quads + shift)[neuron_quad_idx];
+            int _rt = static_cast<int>(nm.refractory_ticks);
+            int _ct = static_cast<int>(current_tick);
+            ref_x = (_ls.x >= 0) && ((_ct - _ls.x) < _rt);
+            ref_y = (_ls.y >= 0) && ((_ct - _ls.y) < _rt);
+            ref_z = (_ls.z >= 0) && ((_ct - _ls.z) < _rt);
+            ref_w = (_ls.w >= 0) && ((_ct - _ls.w) < _rt);
+        }
+
+        // Spike reset: constant (v = c, existing Izhikevich) or subtractive (v -= threshold, LIF soft).
         if(V.x >= nm.spike_threshold) {
-            V.x = nm.c;
+            V.x = (nm.reset_mode == NEURON_RESET_SUBTRACTIVE) ? (V.x - nm.spike_threshold) : nm.c;
             U.x += nm.d;
         }
         if(V.y >= nm.spike_threshold) {
-            V.y = nm.c;
+            V.y = (nm.reset_mode == NEURON_RESET_SUBTRACTIVE) ? (V.y - nm.spike_threshold) : nm.c;
             U.y += nm.d;
         }
         if(V.z >= nm.spike_threshold) {
-            V.z = nm.c;
+            V.z = (nm.reset_mode == NEURON_RESET_SUBTRACTIVE) ? (V.z - nm.spike_threshold) : nm.c;
             U.z += nm.d;
         }
         if(V.w >= nm.spike_threshold) {
-            V.w = nm.c;
+            V.w = (nm.reset_mode == NEURON_RESET_SUBTRACTIVE) ? (V.w - nm.spike_threshold) : nm.c;
             U.w += nm.d;
         }
 
         #pragma unroll
         for(int i=0;i < N_EULER_STEPS;i++) {
-            V.x = fmaf(
-                EULER_DT,
-                fmaf(
-                    fmaf(nm.cf_2, V.x, nm.cf_1),
-                    V.x,
-                    nm.cf_0 - U.x + I.x
-                ),
-                V.x
-            );
-            V.y = fmaf(
-                EULER_DT,
-                fmaf(
-                    fmaf(nm.cf_2, V.y, nm.cf_1),
-                    V.y,
-                    nm.cf_0 - U.y + I.y
-                ),
-                V.y
-            );
-            V.z = fmaf(
-                EULER_DT,
-                fmaf(
-                    fmaf(nm.cf_2, V.z, nm.cf_1),
-                    V.z,
-                    nm.cf_0 - U.z + I.z
-                ),
-                V.z
-            );
-            V.w = fmaf(
-                EULER_DT,
-                fmaf(
-                    fmaf(nm.cf_2, V.w, nm.cf_1),
-                    V.w,
-                    nm.cf_0 - U.w + I.w
-                ),
-                V.w
-            );
+            if(!ref_x) {
+                V.x = fmaf(
+                    EULER_DT,
+                    fmaf(
+                        fmaf(nm.cf_2, V.x, nm.cf_1),
+                        V.x,
+                        nm.cf_0 - U.x + I.x
+                    ),
+                    V.x
+                );
+            }
+            if(!ref_y) {
+                V.y = fmaf(
+                    EULER_DT,
+                    fmaf(
+                        fmaf(nm.cf_2, V.y, nm.cf_1),
+                        V.y,
+                        nm.cf_0 - U.y + I.y
+                    ),
+                    V.y
+                );
+            }
+            if(!ref_z) {
+                V.z = fmaf(
+                    EULER_DT,
+                    fmaf(
+                        fmaf(nm.cf_2, V.z, nm.cf_1),
+                        V.z,
+                        nm.cf_0 - U.z + I.z
+                    ),
+                    V.z
+                );
+            }
+            if(!ref_w) {
+                V.w = fmaf(
+                    EULER_DT,
+                    fmaf(
+                        fmaf(nm.cf_2, V.w, nm.cf_1),
+                        V.w,
+                        nm.cf_0 - U.w + I.w
+                    ),
+                    V.w
+                );
+            }
         }
 
-        U.x = fmaf(nm.a, fmaf(nm.b, V.x, -U.x), U.x);
-        U.y = fmaf(nm.a, fmaf(nm.b, V.y, -U.y), U.y);
-        U.z = fmaf(nm.a, fmaf(nm.b, V.z, -U.z), U.z);
-        U.w = fmaf(nm.a, fmaf(nm.b, V.w, -U.w), U.w);
+        if(!ref_x) { U.x = fmaf(nm.a, fmaf(nm.b, V.x, -U.x), U.x); }
+        if(!ref_y) { U.y = fmaf(nm.a, fmaf(nm.b, V.y, -U.y), U.y); }
+        if(!ref_z) { U.z = fmaf(nm.a, fmaf(nm.b, V.z, -U.z), U.z); }
+        if(!ref_w) { U.w = fmaf(nm.a, fmaf(nm.b, V.w, -U.w), U.w); }
 
         U_ptr[neuron_quad_idx] = U;
         V_ptr[neuron_quad_idx] = V;
