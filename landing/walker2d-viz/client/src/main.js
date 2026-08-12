@@ -255,10 +255,44 @@ const conn = $('conn')
 let ws = null, paused = false, serverFull = false
 // Remembered user intent, re-applied after a (re)connect so a dropped socket doesn't silently strand
 // the session on the server's default actor with unresponsive controls.
-let lastActor = null, lastPaused = false, lastNoReset = false
+let lastActor = null, lastPaused = false, lastNoReset = false, lastShowSpikes = false
 let sockId = 0
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
+
+// ---- live spike raster (spiking-LUT actor only) ----
+let spikeMeta = null
+const spikeCanvas = $('spikeCanvas'), sctx = spikeCanvas ? spikeCanvas.getContext('2d') : null
+function setupSpikeInfo() {
+  if (spikeMeta) $('spikeInfo').textContent = `${spikeMeta.n_rows} neurons · ${spikeMeta.n_ticks} ticks/inference`
+}
+function bandColorFor(row) {
+  if (spikeMeta) for (const b of spikeMeta.bands) if (row >= b.start && row < b.end) return b.color
+  return '#8ab0d0'
+}
+// Binary ws frame = flat (row uint16, tick uint16) pairs for one act(). Redraw the whole raster each frame.
+function drawSpikes(buf) {
+  if (!sctx || !spikeMeta) return
+  const a = new Uint16Array(buf)
+  const W = spikeCanvas.width, H = spikeCanvas.height
+  const PADL = 92, PADR = 8, PADT = 6, PADB = 6
+  const pw = W - PADL - PADR, ph = H - PADT - PADB
+  const nt = spikeMeta.n_ticks, nr = spikeMeta.n_rows
+  sctx.clearRect(0, 0, W, H)
+  sctx.textAlign = 'right'; sctx.textBaseline = 'middle'; sctx.font = '10px sans-serif'
+  for (const b of spikeMeta.bands) {                       // stage bands: faint tint + label
+    const y0 = PADT + (b.start / nr) * ph, y1 = PADT + (b.end / nr) * ph
+    sctx.fillStyle = b.color + '22'
+    sctx.fillRect(PADL, y0, pw, Math.max(1, y1 - y0))
+    sctx.fillStyle = '#b9c6d6'
+    sctx.fillText(b.name, PADL - 6, (y0 + y1) / 2)
+  }
+  for (let i = 0; i < a.length; i += 2) {                  // one dot per fired neuron at its tick
+    const row = a[i], tick = a[i + 1]
+    sctx.fillStyle = bandColorFor(row)
+    sctx.fillRect(PADL + (tick / nt) * pw, PADT + (row / nr) * ph, 2.2, 2.2)
+  }
+}
 
 const overlay = $('overlay'), overlayMsg = $('overlayMsg')
 function showOverlay(msg) { if (overlayMsg) overlayMsg.textContent = msg; if (overlay) overlay.style.display = 'flex' }
@@ -273,6 +307,7 @@ function connect(url) {
   // schedule reconnects while the buttons' send() targets a different, current `ws`. Fixes the
   // "robot keeps walking but buttons dead" two-socket class of bug.
   const sk = new WebSocket(url); sk._id = ++sockId; ws = sk
+  sk.binaryType = 'arraybuffer'                            // spike frames arrive as binary (ArrayBuffer)
   sk.onopen = () => { if (ws !== sk) return; conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
   sk.onclose = (e) => {
     if (ws !== sk) return                                  // a stale socket closing must NOT touch UI or reconnect
@@ -284,12 +319,14 @@ function connect(url) {
   sk.onerror = () => { if (ws !== sk) return; conn.textContent = 'error'; conn.className = 'bad' }
   sk.onmessage = (ev) => {
     if (ws !== sk) return                                  // ignore frames from a superseded socket
+    if (typeof ev.data !== 'string') { drawSpikes(ev.data); return }   // binary = spike raster frame
     const m = JSON.parse(ev.data)
     if (m.type === 'server_full') {                    // at capacity: friendly banner, stop reconnecting
       serverFull = true
       showOverlay(m.message || 'The demo server is at capacity, please come back later.')
       return
     }
+    if (m.type === 'spike_meta') { spikeMeta = m; setupSpikeInfo(); return }   // raster layout (once)
     if (m.type === 'actor_changed') {                  // server auto-switched the model (auto-stop -> zero)
       const sel = $('actor')                           // reflect it in the selector so the user sees "zero".
       if (sel && m.actor) sel.value = m.actor          // programmatic set does NOT fire onchange -> not a user interaction
@@ -310,6 +347,7 @@ function connect(url) {
       }
       if (lastPaused) send({ cmd: 'pause', value: true })
       if (lastNoReset) send({ cmd: 'no_reset', value: true })
+      if (lastShowSpikes) send({ cmd: 'show_spikes', value: true })
     } else if (m.type === 'state') {
       pushState(m.qpos, m.step, m.sps)                // update interpolation target (no geometry rebuild)
       $('env').textContent = m.env
@@ -352,6 +390,12 @@ setFold(innerWidth < 620)                                 // default: collapsed 
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
 $('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }) }
 $('noreset').onchange = (e) => { lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
+$('showspikes').onchange = (e) => {
+  lastShowSpikes = e.target.checked
+  send({ cmd: 'show_spikes', value: e.target.checked })
+  $('spikePanel').style.display = e.target.checked ? 'block' : 'none'
+  if (!e.target.checked && sctx) sctx.clearRect(0, 0, spikeCanvas.width, spikeCanvas.height)
+}
 $('srv').onchange = (e) => connect(e.target.value.trim())
 $('overlayRetry').onclick = () => connect($('srv').value.trim())   // manual retry from the overload banner
 

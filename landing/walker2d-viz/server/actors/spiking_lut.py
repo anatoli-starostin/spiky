@@ -152,6 +152,40 @@ class SpikingLutActor(Actor):
         self._torch = torch
         self.net, self.ids = net, ids
 
+        # ---- spike-readout support (for the live raster viz) ----
+        # Canonical ROW order = populations concatenated, so the client plots row-vs-tick without
+        # knowing raw neuron ids. Bands give the stage boundaries in row space.
+        self._all_oid = torch.as_tensor(np.concatenate(self.ids).astype(np.int32))
+        self._n_rows = int(self._all_oid.numel())
+        o = np.cumsum([0] + [len(a) for a in self.ids])   # population offsets in row space
+        self._bands = [
+            {"name": "S1 inputs+gate", "start": int(o[0]), "end": int(o[1]), "color": "#e6194B"},
+            {"name": "S1 rails",       "start": int(o[1]), "end": int(o[3]), "color": "#f58231"},
+            {"name": "S1 memory",      "start": int(o[3]), "end": int(o[4]), "color": "#3cb44b"},
+            {"name": "S1 tie",         "start": int(o[4]), "end": int(o[5]), "color": "#42d4f4"},
+            {"name": "S2 cells",       "start": int(o[5]), "end": int(o[6]), "color": "#4363d8"},
+            {"name": "S3 outputs",     "start": int(o[6]), "end": int(o[7]), "color": "#f032e6"},
+        ]
+
+    def spike_layout(self):
+        """Static metadata for the raster: tick count, row count, and stage bands (row ranges)."""
+        return {"n_ticks": int(self.n_ticks), "n_rows": int(self._n_rows), "bands": self._bands}
+
+    def read_spikes(self):
+        """(row uint16, tick uint16) pairs for the LAST act(), little-endian bytes (~1 ms).
+        Each neuron fires at most once, so this is the complete spike record for one inference."""
+        torch = self._torch
+        from spiky.spnet.spnet import NeuronDataType
+        R = self.net.export_neuron_data(self._all_oid, 1, NeuronDataType.Spike, 0, self.n_ticks - 1)
+        idx = torch.nonzero(R.reshape(self._n_rows, self.n_ticks).ne(0), as_tuple=False)  # [K,2]=(row,tick)
+        if idx.numel() == 0:
+            return b""
+        a = idx.to(torch.int32).cpu().numpy()
+        inter = np.empty(a.shape[0] * 2, dtype="<u2")
+        inter[0::2] = a[:, 0].astype("<u2")
+        inter[1::2] = a[:, 1].astype("<u2")
+        return inter.tobytes()
+
     def _encode(self, xn):
         u = (xn - self.lo) / max(self.hi - self.lo, 1e-9)
         t = (1.0 - np.clip(u, 0.0, 1.0)) * (self.t_in - 1)

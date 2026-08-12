@@ -51,6 +51,14 @@
     #overlay h2 { margin: 0 0 8px; font-size: 16px; color: #ffd479; }
     #overlay p { margin: 0 0 14px; color: #cbd5e1; line-height: 1.5; }
     #overlay button { background: #2b6cff; border: 1px solid #2b6cff; color: #fff; }
+    /* Live spike-raster panel (spiking-LUT actor only). */
+    #spikePanel { position: fixed; top: 12px; right: 12px; z-index: 10; display: none;
+      background: rgba(20,24,32,.9); border: 1px solid #2a3240; border-radius: 10px; padding: 10px 12px;
+      backdrop-filter: blur(6px); width: 520px; max-width: 46vw; }
+    #spikePanel .sphdr { font-size: 12px; font-weight: 600; color: #e6e6e6; margin-bottom: 6px; }
+    #spikePanel #spikeInfo { color: #9fb0c3; font-weight: 400; }
+    #spikeCanvas { width: 100%; height: auto; display: block; background: #0d1017; border-radius: 6px; }
+    #spikePanel .spaxis { text-align: center; font-size: 10px; color: #9fb0c3; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -84,12 +92,21 @@
       <label for="actor">Actor</label>
       <select id="actor"></select>
     </div>
+    <div class="row">
+      <label for="showspikes">Show spikes</label>
+      <input id="showspikes" type="checkbox" />
+    </div>
     <div id="stat">
       env <b id="env">&mdash;</b><br />
       step <b id="step">0</b> &middot; reward <b id="reward">0.00</b><br />
       return <b id="ret">0.00</b> &middot; actor <b id="actorName">&mdash;</b>
     </div>
     </div><!-- /uiBody -->
+  </div>
+  <div id="spikePanel">
+    <div class="sphdr">Spike raster &middot; <span id="spikeInfo">select the Spiking&nbsp;LUT actor</span></div>
+    <canvas id="spikeCanvas" width="520" height="380"></canvas>
+    <div class="spaxis">&larr; earlier &nbsp;&nbsp; tick (spike time within one inference) &nbsp;&nbsp; later &rarr;</div>
   </div>
   <script src="config.js"></script>
   <script type="module" src="src/main.js"></script>

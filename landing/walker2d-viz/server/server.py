@@ -81,6 +81,8 @@ class Sim:
         self._wake.set()
         self.no_reset = False                    # free-fall: when True, don't auto-reset on termination
         self.terminated = False
+        self.show_spikes = False                 # stream the per-act spike raster (only for a spiking actor)
+        self._spike_meta_sent = False
         self.sps = min(MAX_SPS, max(MIN_SPS, float(sps)))   # clamp even the startup SPS to the cap
         self.obs, _ = self.env.reset(seed=0)
         self.step_count = 0
@@ -131,6 +133,12 @@ class Sim:
 
     def set_no_reset(self, value):
         self.no_reset = bool(value)
+
+    def set_show_spikes(self, value):
+        self.show_spikes = bool(value)
+        if not self.show_spikes:
+            self._spike_meta_sent = False        # re-send layout metadata next time it's turned on
+        self.touch()
 
     def set_paused(self, value):
         self.paused = bool(value)
@@ -238,6 +246,21 @@ async def stepper(sim, ws):
                 await ws.send(sim.state_msg())
             except websockets.exceptions.ConnectionClosed:
                 break
+            # Optional live spike raster: only when the client asked for it AND the active actor exposes a
+            # spike readout (the spiking-LUT actor does). One JSON metadata frame, then a compact BINARY frame
+            # of (row uint16, tick uint16) pairs per act (~2.4 KB). Zero cost when off / for other actors.
+            if sim.show_spikes and hasattr(sim.actor, "read_spikes"):
+                try:
+                    if not sim._spike_meta_sent:
+                        await ws.send(json.dumps({"type": "spike_meta", **sim.actor.spike_layout()}))
+                        sim._spike_meta_sent = True
+                    payload = sim.actor.read_spikes()
+                    if payload:
+                        await ws.send(payload)
+                except websockets.exceptions.ConnectionClosed:
+                    break
+            else:
+                sim._spike_meta_sent = False
             next_t += 1.0 / max(1.0, sim.sps)
             delay = next_t - loop.time()
             if delay > 0:
@@ -293,6 +316,8 @@ def make_handler(cfg, state):
                     sim.set_paused(m.get("value", not sim.paused))
                 elif cmd == "no_reset":
                     sim.set_no_reset(m.get("value", False))
+                elif cmd == "show_spikes":
+                    sim.set_show_spikes(m.get("value", False))
                 elif cmd == "list_actors":
                     await ws.send(sim.actor_list_msg())
         except websockets.exceptions.ConnectionClosed:
