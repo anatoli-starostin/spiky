@@ -23,7 +23,7 @@
     #ui h1 .title { flex: 1; white-space: nowrap; }
     #foldBtn { background: none; border: none; color: #9fb0c3; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
     #foldBtn:hover { color: #e6e6e6; border: none; }
-    #uiBody { margin-top: 10px; }
+    #uiBody { margin-top: 10px; overflow: hidden; }   /* definitive guard: no child (e.g. a wide <select>) can paint/hit-test past the panel */
     #ui.collapsed { width: auto; padding: 8px 10px; }
     #ui.collapsed #uiBody { display: none; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
@@ -33,6 +33,12 @@
     button:hover, select:hover { border-color: #4a5f86; }
     button.active { background: #2b6cff; border-color: #2b6cff; }
     input[type=range] { width: 130px; }
+    /* Keep the actor <select> within the panel: a long option name (e.g. "Spiking LUT (handcrafted SNN)")
+       must not blow the combobox past the 250px panel. Bound the width so it fits after the "Actor" label;
+       a native <select> already clips its shown value to its box. Do NOT put overflow/text-overflow/
+       white-space on the <select> itself — those are non-standard on a replaced element and made Chromium
+       mis-size/mis-hit-test it so it stole clicks from the Restart/Pause buttons. */
+    #actor { flex: 1 1 auto; min-width: 0; max-width: 170px; }
     #stat { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a3240; color: #9fb0c3; font-variant-numeric: tabular-nums; }
     #stat b { color: #e6e6e6; }
     #conn { font-size: 11px; } .ok { color: #4ade80; } .bad { color: #f87171; }

@@ -253,6 +253,10 @@ addEventListener('resize', resize); resize()
 const $ = (id) => document.getElementById(id)
 const conn = $('conn')
 let ws = null, paused = false, serverFull = false
+// Remembered user intent, re-applied after a (re)connect so a dropped socket doesn't silently strand
+// the session on the server's default actor with unresponsive controls.
+let lastActor = null, lastPaused = false, lastNoReset = false
+let sockId = 0
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
@@ -264,16 +268,22 @@ function connect(url) {
   if (ws) { try { ws.close() } catch {} }
   serverFull = false; hideOverlay()
   conn.textContent = 'connecting…'; conn.className = ''
-  ws = new WebSocket(url)
-  ws.onopen = () => { conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
-  ws.onclose = () => {
-    conn.textContent = serverFull ? 'server full' : 'disconnected'; conn.className = 'bad'
+  // Bind every handler to THIS socket object (sk), and gate side-effects on `ws === sk` so a stale
+  // socket (e.g. one that keeps delivering frames after a reconnect) can never drive the render or
+  // schedule reconnects while the buttons' send() targets a different, current `ws`. Fixes the
+  // "robot keeps walking but buttons dead" two-socket class of bug.
+  const sk = new WebSocket(url); sk._id = ++sockId; ws = sk
+  sk.onopen = () => { if (ws !== sk) return; conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
+  sk.onclose = (e) => {
+    if (ws !== sk) return                                  // a stale socket closing must NOT touch UI or reconnect
+    conn.textContent = serverFull ? 'server full' : 'reconnecting…'; conn.className = 'bad'
     // When the server told us it's at capacity, do NOT auto-reconnect (no tight retry loop) — the
     // overlay's Retry button lets the visitor try again on their own terms. Otherwise reconnect.
     if (!serverFull) setTimeout(() => connect(url), 1500)
   }
-  ws.onerror = () => { conn.textContent = 'error'; conn.className = 'bad' }
-  ws.onmessage = (ev) => {
+  sk.onerror = () => { if (ws !== sk) return; conn.textContent = 'error'; conn.className = 'bad' }
+  sk.onmessage = (ev) => {
+    if (ws !== sk) return                                  // ignore frames from a superseded socket
     const m = JSON.parse(ev.data)
     if (m.type === 'server_full') {                    // at capacity: friendly banner, stop reconnecting
       serverFull = true
@@ -292,6 +302,14 @@ function connect(url) {
         const o = document.createElement('option'); o.value = o.textContent = name; sel.appendChild(o)
       }
       if (m.active) sel.value = m.active
+      // Restore the user's chosen actor + toggles after a (re)connect (the fresh session starts on the
+      // server default). No-op on the first connect (lastActor is null).
+      if (lastActor && m.actors.includes(lastActor) && lastActor !== m.active) {
+        sel.value = lastActor
+        send({ cmd: 'actor', name: lastActor })
+      }
+      if (lastPaused) send({ cmd: 'pause', value: true })
+      if (lastNoReset) send({ cmd: 'no_reset', value: true })
     } else if (m.type === 'state') {
       pushState(m.qpos, m.step, m.sps)                // update interpolation target (no geometry rebuild)
       $('env').textContent = m.env
@@ -310,6 +328,7 @@ function connect(url) {
 $('restart').onclick = () => send({ cmd: 'restart' })
 $('pauseBtn').onclick = () => {
   paused = !paused                                  // optimistic toggle; server echoes it back in state
+  lastPaused = paused
   send({ cmd: 'pause', value: paused })
   $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
   $('pauseBtn').classList.toggle('active', paused)
@@ -331,8 +350,8 @@ function setFold(collapsed) {
 $('foldBtn').onclick = () => setFold(!ui.classList.contains('collapsed'))
 setFold(innerWidth < 620)                                 // default: collapsed on narrow/mobile, expanded on wide
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
-$('actor').onchange = (e) => send({ cmd: 'actor', name: e.target.value })
-$('noreset').onchange = (e) => send({ cmd: 'no_reset', value: e.target.checked })
+$('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }) }
+$('noreset').onchange = (e) => { lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
 $('srv').onchange = (e) => connect(e.target.value.trim())
 $('overlayRetry').onclick = () => connect($('srv').value.trim())   // manual retry from the overload banner
 

@@ -280,8 +280,6 @@ def make_handler(cfg, state):
                 except Exception:
                     continue
                 cmd = m.get("cmd")
-                if cmd in ("restart", "pause", "no_reset"):
-                    print(f"[dbg] recv {cmd} value={m.get('value')} actor={sim.actor_name} step={sim.step_count}", flush=True)
                 if cmd == "restart":
                     sim.restart()
                 elif cmd == "mode":
