@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 COPY native ./native
 COPY src ./src
 RUN pip install --no-cache-dir --no-build-isolation ./native/spiky \
- && python -c "import spiky_cuda; print('spiky_cuda: CPU extension built and importable')"
+ && python -c "import torch; import spiky_cuda; print('spiky_cuda: CPU extension built and importable')"
 
 # `spiky` is imported from src/ rather than installed, matching how the repo is used elsewhere.
 ENV PYTHONPATH=/app/src

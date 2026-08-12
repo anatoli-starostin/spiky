@@ -67,7 +67,7 @@ locally-built CUDA artefacts cannot leak into the context. **Do not remove those
 **Verify before deploying** (this is the check that catches the failure mode):
 
 ```sh
-docker compose run --rm server python -c "import spiky_cuda; print('spiky_cuda ok')"
+docker compose run --rm server python -c "import torch; import spiky_cuda; print('spiky_cuda ok')"
 ```
 
 If that errors with something about `libcuda.so` or a missing CUDA driver, the extension was built as the
@@ -112,7 +112,7 @@ rsync -av --exclude '.git' ./ nucstar@YOUR_SERVER_HOST:/home/nucstar/spiky/
 ssh nucstar@YOUR_SERVER_HOST
 cd /home/nucstar/spiky/landing/walker2d-viz
 sudo docker compose build --no-cache server        # first build compiles the extension; several minutes
-sudo docker compose run --rm server python -c "import spiky_cuda; print('spiky_cuda ok')"   # §2 CHECK
+sudo docker compose run --rm server python -c "import torch; import spiky_cuda; print('spiky_cuda ok')"   # §2 CHECK
 sudo docker compose up -d
 
 # 3) verify the actor registered
