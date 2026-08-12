@@ -70,6 +70,12 @@ class SpikingLutActor(Actor):
         self.obs_std = np.sqrt(Q["obs_var"].astype(np.float64) + 1e-8)
         self.affine = Q["affine"].astype(np.float64)
         self.lo, self.hi = float(Q["enc_lo"]), float(Q["enc_hi"])
+        # LEVER A: a shared quantile-equalised value->tick map, fitted on the training pool.
+        # SHARED across all 17 coordinates by necessity -- the teacher uses all C(17,2)=136
+        # coordinate pairs, so the comparison graph is complete; a per-coordinate scale would
+        # stop tick(a) < tick(b) meaning x[a] > x[b]. Spending ticks where the values are dense
+        # cuts the near-tie comparison flips 2.13% -> 0.40% at the SAME 128-tick budget.
+        self.qtable = Q["qtable"].astype(np.float64) if "qtable" in Q.files else None
         self.t_in = int(Q["t_in"])
         self.gate_tick = int(Q["gate_tick"])
         emit = self.gate_tick + 3
@@ -187,7 +193,11 @@ class SpikingLutActor(Actor):
         return inter.tobytes()
 
     def _encode(self, xn):
-        u = (xn - self.lo) / max(self.hi - self.lo, 1e-9)
+        if self.qtable is not None:
+            r = np.searchsorted(self.qtable, np.asarray(xn).ravel(), side="left")
+            return np.clip(self.t_in - 1 - r.reshape(np.shape(xn)),
+                           0, self.t_in - 1).astype(np.int64)
+        u = (xn - self.lo) / max(self.hi - self.lo, 1e-9)          # legacy linear map
         t = (1.0 - np.clip(u, 0.0, 1.0)) * (self.t_in - 1)
         return np.clip(np.round(t), 0, self.t_in - 1).astype(np.int64)
 

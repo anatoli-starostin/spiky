@@ -20,7 +20,17 @@ def main():
     x = Z["x_norm"].astype(np.float64)
     ntr = len(x) - 4000
     n_cal = 1024
-    ticks = F.encode(x[ntr:ntr + n_cal], F.T_IN)
+    # LEVER A: one SHARED quantile-equalised value->tick map, fitted on the TRAINING pool.
+    # It has to be shared across all 17 coordinates -- the teacher uses all C(17,2)=136 pairs,
+    # so the comparison graph is complete and a per-coordinate scale would stop tick(a)<tick(b)
+    # meaning x[a]>x[b]. Same 128-tick window, so the tick budget is untouched.
+    qtab = np.quantile(x[:ntr].ravel(), np.linspace(0, 1, F.T_IN))
+
+    def qencode(v):
+        r = np.searchsorted(qtab, np.asarray(v).ravel(), side="left").reshape(np.shape(v))
+        return np.clip(F.T_IN - 1 - r, 0, F.T_IN - 1).astype(np.int64)
+
+    ticks = qencode(x[ntr:ntr + n_cal])
     dims = [0, 1, 2, 3, 4, 5]
     F.GATE_TICK, F.EMIT = 140, 143
     net, ids, nsyn, n_ticks, nneur = F.build(Z, dims, True, settle=75)
@@ -56,6 +66,9 @@ def main():
         obs_mean=Z["obs_mean"].astype(np.float64), obs_var=Z["obs_var"].astype(np.float64),
         affine=coef,
         # the encoder's percentile calibration, so the actor reproduces encode() exactly
+        # Lever A: the shared quantile table replaces the linear enc_lo/enc_hi map. The old
+        # fields are still written so an older actor build keeps working.
+        qtable=qtab.astype(np.float64),
         enc_lo=np.float64(np.percentile(x, 0.5)), enc_hi=np.float64(np.percentile(x, 99.5)),
         t_in=np.int64(F.T_IN), gate_tick=np.int64(140), settle=np.int64(75))
     print(f"\nwrote {os.path.abspath(OUT)}  ({os.path.getsize(OUT) / 1024:.1f} KiB)")
