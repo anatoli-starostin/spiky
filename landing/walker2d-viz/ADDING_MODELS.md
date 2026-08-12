@@ -120,6 +120,32 @@ source of truth: anyone can rebuild the demo with your model from it.
 
 ---
 
+## 3b. Models that need a heavier runtime (the spiking actor)
+
+Everything above assumes a **pure-numpy** actor, which is still the default and the right choice for almost
+any model. One actor breaks that assumption — **"Spiking LUT (handcrafted SNN)"** — because it runs a real
+`spiky` spiking network. Adding it changed two things you need to know about:
+
+**The build context is now the repo root, not `./server`.** The actor imports the `spiky` package
+(`src/spiky`) and needs the `spiky_cuda` native extension (`native/spiky`), neither of which lives under
+`server/`, so `docker-compose.yml` now builds with `context: ../..` and
+`dockerfile: landing/walker2d-viz/server/Dockerfile`. A repo-root `.dockerignore` allow-lists what the
+daemon receives (measured 2.6 MB, versus 13.4 GB unfiltered). **Consequence: the deploy host needs the repo
+checked out, not just this folder.** Purely-numpy actors are unaffected — they still just drop a file in
+`actors/` and a `.npz` in `models/`.
+
+**`spiky_cuda` must be compiled on a GPU-less host.** Its `setup.py` selects `CppExtension` (`-DNO_CUDA`)
+or `CUDAExtension` from `torch.cuda.is_available()` **at build time**. The Dockerfile compiles it inside the
+image so a GPU-less build resolves correctly and automatically; building it on a GPU machine produces a
+binary that imports on that machine and **fails inside the container**. Verify with
+`docker compose run --rm server python -c "import spiky_cuda"` before deploying.
+
+Full step-by-step handoff: **[`DEPLOY_spiking_lut.md`](DEPLOY_spiking_lut.md)**, which also covers this
+actor's capacity implications (12.5 ms/step vs a 33 ms budget, and why `MAX_SESSIONS: 6` may be too high
+for it).
+
+---
+
 ## 4. Redeploy the server so the new model goes live
 
 The live server runs in **Docker on the VM `YOUR_SERVER_HOST`** (project copy at `/home/nucstar/walker2d-viz`).

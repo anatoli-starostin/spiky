@@ -19,3 +19,8 @@ PyOpenGL==3.1.10
 pillow==12.3.0
 fsspec==2026.7.0
 zipp==4.1.0
+
+# NOTE: torch is required by the "Spiking LUT (handcrafted SNN)" actor but is deliberately NOT
+# listed here. Installed from PyPI, `torch` pulls the CUDA-bundled wheel (~2.5 GB of nvidia-*
+# libs this box can never use). The Dockerfile installs it explicitly from PyTorch's CPU index
+# instead — see the `torch --index-url .../whl/cpu` line there.

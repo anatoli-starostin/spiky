@@ -1,0 +1,39 @@
+# Build context for the walker2d-viz demo image (landing/walker2d-viz/server/Dockerfile).
+#
+# The context is the REPO ROOT, because the image has to build the `spiky_cuda` extension from
+# native/spiky and import the `spiky` package from src/ -- both outside the old ./server
+# context. This file is therefore an ALLOW-LIST: deny everything, then re-admit only what the
+# build actually needs. Without it the daemon would receive the whole repo, including
+# experiments/walker2d_lut (1.1 GB) and experiments/walker2d-lut (484 MB).
+*
+
+# --- the demo server itself
+!landing/walker2d-viz/server/**
+
+# --- the native extension sources + the codegen the setup.py runs
+!native/spiky/**
+!native/common/**
+
+# --- the python package the actor imports (spiky.spnet, spiky.util)
+!src/spiky/**
+
+# --- root packaging metadata that `pip install ./native/spiky` and the package need
+!setup.py
+!requirements.txt
+
+# --- and now carve the heavy, irrelevant parts back OUT of those allowed trees.
+# Test fixtures dominate src/: 30 MB of reference voltages + 64 MB of MNIST, none of it used
+# at runtime.
+src/spiky/**/tests/**
+
+# STALE LOCAL BUILD ARTEFACTS -- THIS EXCLUSION IS LOAD-BEARING, NOT TIDINESS.
+# A developer machine with a GPU leaves a CUDA-linked spiky_cuda*.so and a populated build/
+# tree here. If either reached the image, the container could end up with the CUDA variant of
+# the extension -- which imports fine on the build host and fails inside the GPU-less
+# container. The image must compile its own CPU extension from source, every time.
+native/spiky/build/**
+native/**/*.so
+native/**/*.o
+**/__pycache__/**
+**/*.pyc
+**/*.egg-info/**
