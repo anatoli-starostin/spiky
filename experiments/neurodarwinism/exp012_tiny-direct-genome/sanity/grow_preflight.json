@@ -1,0 +1,330 @@
+{
+ "seed": {
+  "n_synapses_small": 134,
+  "n_synapses_big": 134,
+  "weights_identical": true,
+  "delays_identical": true,
+  "heldout_mse_small": 24.271333333333335,
+  "heldout_mse_big": 24.271333333333335,
+  "abs_diff": 0.0,
+  "tau": 0.2838632065729514,
+  "stats": {
+   "n_syn": 134,
+   "n_exc": 8,
+   "n_inh": 2,
+   "n_active": 10,
+   "e_fraction": 0.8,
+   "max_fanout": 9,
+   "n_in_hidden": 68,
+   "n_rec": 49,
+   "n_out": 17,
+   "w_mean": 30.77447442065424
+  },
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 600,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "incoherent_cells": 0,
+  "from_parent1": 0.48980530178308695,
+  "from_parent1_sd": 0.09264590716369336,
+  "ok": true
+ },
+ "grow_shrink": {
+  "grow_traj": [
+   [
+    10,
+    0.8,
+    134
+   ],
+   [
+    11,
+    0.8182,
+    137
+   ],
+   [
+    12,
+    0.8333,
+    140
+   ],
+   [
+    13,
+    0.7692,
+    143
+   ],
+   [
+    14,
+    0.7857,
+    147
+   ],
+   [
+    15,
+    0.8,
+    152
+   ],
+   [
+    16,
+    0.8125,
+    157
+   ],
+   [
+    17,
+    0.8235,
+    160
+   ],
+   [
+    18,
+    0.7778,
+    165
+   ],
+   [
+    19,
+    0.7895,
+    169
+   ],
+   [
+    20,
+    0.8,
+    175
+   ],
+   [
+    21,
+    0.8095,
+    180
+   ],
+   [
+    22,
+    0.8182,
+    183
+   ],
+   [
+    23,
+    0.7826,
+    186
+   ],
+   [
+    24,
+    0.7917,
+    191
+   ],
+   [
+    25,
+    0.8,
+    196
+   ],
+   [
+    26,
+    0.8077,
+    202
+   ],
+   [
+    27,
+    0.8148,
+    205
+   ],
+   [
+    28,
+    0.7857,
+    210
+   ],
+   [
+    29,
+    0.7931,
+    214
+   ],
+   [
+    30,
+    0.8,
+    217
+   ]
+  ],
+  "grow_kinds": [
+   "exc",
+   "exc",
+   "inh",
+   "exc",
+   "exc",
+   "exc",
+   "exc",
+   "inh",
+   "exc",
+   "exc",
+   "exc",
+   "exc",
+   "inh",
+   "exc",
+   "exc",
+   "exc",
+   "exc",
+   "inh",
+   "exc",
+   "exc"
+  ],
+  "grow_invariants": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "shrink_traj": [
+   [
+    30,
+    0.8
+   ],
+   [
+    29,
+    0.7931
+   ],
+   [
+    28,
+    0.7857
+   ],
+   [
+    27,
+    0.8148
+   ],
+   [
+    26,
+    0.8077
+   ],
+   [
+    25,
+    0.8
+   ],
+   [
+    24,
+    0.7917
+   ],
+   [
+    23,
+    0.8261
+   ],
+   [
+    22,
+    0.8182
+   ],
+   [
+    21,
+    0.8571
+   ],
+   [
+    20,
+    0.85
+   ],
+   [
+    19,
+    0.8421
+   ],
+   [
+    18,
+    0.8333
+   ],
+   [
+    17,
+    0.8235
+   ],
+   [
+    16,
+    0.8125
+   ],
+   [
+    15,
+    0.8
+   ],
+   [
+    14,
+    0.7857
+   ],
+   [
+    13,
+    0.7692
+   ],
+   [
+    12,
+    0.8333
+   ],
+   [
+    11,
+    0.8182
+   ],
+   [
+    10,
+    0.8
+   ]
+  ],
+  "shrink_invariants": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "e_frac_after_20_grows": 0.8,
+  "floor_test": {
+   "n_exc": 2,
+   "n_inh": 0,
+   "min_exc_required": 2
+  },
+  "ok": true
+ },
+ "fitness": {
+  "mse": 24.271333333333335,
+  "n_active": 10,
+  "cap": 6,
+  "fanout_excess": 9,
+  "neuron_penalty": 3.5,
+  "fanout_penalty": 0.9,
+  "fitness": 28.671333333333333,
+  "over_cap_neurons": 6,
+  "max_fanout": 9
+ },
+ "build": {
+  "round_trip": {
+   "n_exported": 4545,
+   "n_requested": 4545,
+   "weights_ok": 4545,
+   "delays_ok": 4545,
+   "missing": 0,
+   "n_negative": 327,
+   "negative_ok": 327,
+   "ok": true
+  },
+  "which": [
+   0,
+   5,
+   17,
+   31
+  ],
+  "packed": [
+   24.301106770833332,
+   166.63346354166666,
+   161.04329427083334,
+   191.23404947916666
+  ],
+  "solo": [
+   24.301106770833332,
+   166.63346354166666,
+   161.04329427083334,
+   191.23404947916666
+  ],
+  "max_abs_diff": 0.0,
+  "ok": true
+ },
+ "all_ok": true
+}

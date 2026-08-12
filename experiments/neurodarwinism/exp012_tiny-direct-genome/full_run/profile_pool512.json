@@ -1,0 +1,69 @@
+{
+ "config": {
+  "pool": 512,
+  "cull": 64,
+  "batch": 256,
+  "rounds": 4,
+  "w_max": 60.0,
+  "crossover": false,
+  "seed": 0,
+  "device": "cuda",
+  "out": "../exp012_tiny-direct-genome/full_run/profile_pool512.json"
+ },
+ "device": {
+  "cuda_available": true,
+  "torch_device_requested": "cuda",
+  "spnet_neuron_ids_device": "cuda:0",
+  "spnet_neuron_ids_dtype": "torch.int32",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "export_bytes_per_round_full_batch": 301989888,
+  "input_bytes_per_round": 570425344
+ },
+ "observed": {
+  "engine._grow_explicit.arg_devices": [
+   "cuda:0"
+  ],
+  "engine.process_ticks.arg_devices": [
+   "cuda:0"
+  ],
+  "engine.export_neuron_data": {
+   "device": "cuda:0",
+   "dtype": "torch.float32",
+   "shape": [
+    256,
+    3072,
+    96
+   ],
+   "numel": 75497472,
+   "bytes": 301989888
+  },
+  "engine.export_neuron_data.arg_devices": [
+   "cuda:0"
+  ]
+ },
+ "stages": {
+  "genome": 0.0031173837501228263,
+  "build": 0.05229399174959326,
+  "score": 0.9651760645001559,
+  "host": 0.0003407167500881769
+ },
+ "engine": {
+  "engine._grow_explicit": 0.005561830750593799,
+  "engine.add_connections": 0.0015807034997123992,
+  "engine.compile": 0.0010895382501985296,
+  "engine.process_ticks": 0.05258301525054776,
+  "engine.export_neuron_data": 0.008297216000300978
+ },
+ "run_episode_steps": {
+  "encode": 2.9203998565208167e-05,
+  "alloc va (285 MB)": 1.8657001419342123e-05,
+  "fill va (python loop)": 0.02205023099850223,
+  "build sparse ids (285 MB)": 0.6203110579990607,
+  "H2D copy of both (570 MB)": 0.08927970600052504,
+  "process_ticks (GPU sim)": 0.04850866599917936,
+  "export_neuron_data": 0.014974612000514753,
+  "D2H .cpu().numpy() (302 MB)": 0.09236191300078644,
+  "numpy readout (argmax etc)": 0.07443752899962419
+ },
+ "total_s": 1.0209281567499602
+}

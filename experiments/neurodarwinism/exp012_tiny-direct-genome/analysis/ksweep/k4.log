@@ -1,0 +1,9 @@
+RANDOM init: 256 independent genomes, 40 exc + 10 inh active (E-frac 0.800), ~414 synapses each
+r   0  fit  32.091  mse  32.091  neurons 50.00 (min 50 max 50)  syn  414.4  held-out best  33.302  [   1.8s]
+r  25  fit  30.985  mse  30.985  neurons 50.00 (min 50 max 50)  syn  536.3  held-out best  34.165  [  19.9s]
+r  50  fit  29.293  mse  29.293  neurons 50.00 (min 50 max 50)  syn  578.7  held-out best  31.378  [  38.5s]
+r  75  fit  30.750  mse  30.750  neurons 50.00 (min 50 max 50)  syn  591.5  held-out best  30.819  [  57.3s]
+r 100  fit  28.800  mse  28.800  neurons 50.00 (min 50 max 50)  syn  606.3  held-out best  30.819  [  76.2s]
+r 125  fit  29.956  mse  29.956  neurons 50.00 (min 50 max 50)  syn  628.0  held-out best  30.819  [  95.0s]
+r 149  fit  30.120  mse  30.120  neurons 50.00 (min 50 max 50)  syn  634.5  held-out best  30.819  [ 113.7s]
+DONE: held-out MSE 30.819 vs constant 34.152 (1.9 min)

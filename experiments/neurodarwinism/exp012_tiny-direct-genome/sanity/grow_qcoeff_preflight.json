@@ -1,0 +1,128 @@
+{
+ "weight_levels": [
+  -1.0,
+  0.0,
+  1.0
+ ],
+ "exc_subgrid": [
+  0.0,
+  1.0
+ ],
+ "inh_subgrid": [
+  -1.0,
+  0.0
+ ],
+ "coeff_init": 0.5,
+ "coeff_box": [
+  0.05,
+  4.0
+ ],
+ "coeff_sigma": 0.1,
+ "p_inhcoeff": 0.25,
+ "fanout_cap": 16,
+ "coeff_at_init": 0.5,
+ "weights": {
+  "off_grid": 0,
+  "dale_violations": 0,
+  "exc_values_seen": [
+   0.0,
+   1.0
+  ],
+  "inh_values_seen": [
+   -1.0,
+   0.0
+  ],
+  "ok": true
+ },
+ "coeff": {
+  "init": 0.5,
+  "n_mutations": 300,
+  "min": 0.05,
+  "mean": 0.22426366580233803,
+  "max": 0.7429342084833156,
+  "final": 0.207922583709088,
+  "moved_off_init": true,
+  "distinct_values": 63,
+  "in_box": true,
+  "ok": true
+ },
+ "build_scaling": {
+  "per_coeff": {
+   "0.5": {
+    "exc_sum": 23600.0,
+    "inh_sum": 1600.0
+   },
+   "1.0": {
+    "exc_sum": 23600.0,
+    "inh_sum": 3200.0
+   },
+   "2.0": {
+    "exc_sum": 23600.0,
+    "inh_sum": 6400.0
+   }
+  },
+  "n_inh_synapses": 43,
+  "n_exc_synapses": 252,
+  "exc_unchanged": true,
+  "inh_halves": true,
+  "inh_doubles": true,
+  "ok": true
+ },
+ "crossover": {
+  "counts": {
+   "p2": 196,
+   "p1": 204
+  },
+  "n": 400,
+  "only_parent_values": true,
+  "frac_p1": 0.51,
+  "ok": true
+ },
+ "legacy": {
+  "coeff_read_as": 1.0,
+  "expected": 1.0,
+  "currents_identical": true,
+  "new_genome_starts_at": 0.5,
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 450,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "delay_grid": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "worst_hidden_fanout": 16,
+  "affine_still_continuous": true,
+  "ok": true
+ },
+ "defaults": {
+  "coeff_frozen_when_gated": true,
+  "n_weight_levels": 11,
+  "delay_grid_off": true,
+  "weights_off_grid": true,
+  "invariants": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "delay_grid": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "ok": true
+ },
+ "all_ok": true
+}

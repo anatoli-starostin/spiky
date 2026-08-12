@@ -1,0 +1,179 @@
+{
+ "ckpt": "../exp012_tiny-direct-genome/full_run_grow_norm/ck_n0.npz",
+ "round": 1499,
+ "leader_index": 204,
+ "leader_ewma": 23.2578125,
+ "heldout_mse": 23.71066666666667,
+ "constant_baseline": 34.151749708333334,
+ "fitness_terms": {
+  "mse": 23.71066666666667,
+  "n_active": 8,
+  "cap": 6,
+  "fanout_excess": 1,
+  "neuron_penalty": 0.4,
+  "fanout_penalty": 0.1,
+  "fitness": 24.21066666666667
+ },
+ "tau": 0.3062740478403232,
+ "mean_abs_r": 0.6712565560049252,
+ "affine_ceiling": 16.221648082088453,
+ "silent": 0.0,
+ "n_distinct": 23,
+ "mse_action": 0.6388381187674508,
+ "bias2": 3.4604229999999987,
+ "scale_err": 6.430151264338195,
+ "resid": 13.820092402328473,
+ "per_dim": [
+  {
+   "dim": 0,
+   "r": 0.4838074678163806,
+   "bias2": 1.2056040000000017,
+   "scale_err": 1.550924805106079
+  },
+  {
+   "dim": 1,
+   "r": 0.39903890699096206,
+   "bias2": 12.677160249999995,
+   "scale_err": 0.31324225375391035
+  },
+  {
+   "dim": 2,
+   "r": 0.7473756013554498,
+   "bias2": 0.013572250000000063,
+   "scale_err": 1.2493150280912966
+  },
+  {
+   "dim": 3,
+   "r": 0.8313440386859025,
+   "bias2": 0.3214890000000002,
+   "scale_err": 9.520910644817747
+  },
+  {
+   "dim": 4,
+   "r": 0.7021740028030952,
+   "bias2": 6.540806249999996,
+   "scale_err": 9.108444089587003
+  },
+  {
+   "dim": 5,
+   "r": 0.8637993183777611,
+   "bias2": 0.00390625,
+   "scale_err": 16.838070764673134
+  }
+ ],
+ "size": {
+  "n_syn": 108,
+  "n_exc": 7,
+  "n_inh": 1,
+  "n_active": 8,
+  "e_fraction": 0.875,
+  "max_fanout": 7,
+  "n_in_hidden": 64,
+  "n_rec": 30,
+  "n_out": 14,
+  "w_mean": 0.17817825770773063
+ },
+ "units": [
+  {
+   "unit": "E0",
+   "slot": 0,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 12,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E1",
+   "slot": 1,
+   "kind": "exc",
+   "fanout": 6,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E2",
+   "slot": 2,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 15,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E3",
+   "slot": 3,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E4",
+   "slot": 4,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 16,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E5",
+   "slot": 5,
+   "kind": "exc",
+   "fanout": 6,
+   "fanin": 13,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E7",
+   "slot": 7,
+   "kind": "exc",
+   "fanout": 7,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "I0",
+   "slot": 0,
+   "kind": "inh",
+   "fanout": 5,
+   "fanin": 5,
+   "is_seed_slot": true,
+   "live": true
+  }
+ ],
+ "fanout_distribution": [
+  1,
+  2,
+  3,
+  3,
+  3,
+  3,
+  4,
+  4,
+  4,
+  4,
+  4,
+  4,
+  4,
+  5,
+  5,
+  5,
+  5,
+  5,
+  5,
+  5,
+  5,
+  6,
+  6,
+  6,
+  7
+ ],
+ "n_over_cap": 1,
+ "batch_champion_heldout": 24.058666666666667
+}

@@ -1,0 +1,116 @@
+{
+ "weight_levels": [
+  -0.5,
+  0.0,
+  1.0
+ ],
+ "exc_subgrid": [
+  0.0,
+  1.0
+ ],
+ "inh_subgrid": [
+  -0.5,
+  0.0
+ ],
+ "delay_levels": [
+  1,
+  3,
+  "...",
+  63
+ ],
+ "n_delay_levels": 32,
+ "fanout_cap": 16,
+ "weights": {
+  "off_grid": 0,
+  "dale_violations": 0,
+  "exc_values_seen": [
+   0.0,
+   1.0
+  ],
+  "inh_values_seen": [
+   -0.5,
+   0.0
+  ],
+  "exc_subgrid_ok": true,
+  "inh_subgrid_ok": true,
+  "ok": true
+ },
+ "delays": {
+  "min": 1,
+  "max": 63,
+  "all_odd": true,
+  "in_range": true,
+  "off_grid": 0,
+  "n_distinct": 32,
+  "pinned_synapses": 126,
+  "pinned_all_equal_1": true,
+  "pins_violations": 0,
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 490,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "delay_grid": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "worst_hidden_fanout": 16,
+  "ok": true
+ },
+ "affine": {
+  "identity_at_init": true,
+  "a_after": [
+   1.0744,
+   0.9299,
+   0.5614,
+   1.2019,
+   1.2166,
+   1.1577
+  ],
+  "b_after": [
+   -1.6266,
+   -0.0797,
+   0.0763,
+   -1.0002,
+   0.2435,
+   -1.6782
+  ],
+  "still_continuous": true,
+  "ok": true
+ },
+ "hop": {
+  "weight_moves_per_proposed": 0.5019886363636363,
+  "delay_moves_per_proposed": 0.9543333333333334,
+  "note": "on a 2-level sub-grid a clamped step is a toggle-or-stay, so ~50 % of proposed weight hops are no-ops and the EFFECTIVE p_weight is about half its nominal value. Delays have 32 levels, so only the two ends clamp and nearly every delay hop lands.",
+  "ok": true
+ },
+ "defaults": {
+  "n_weight_levels": 11,
+  "weights_on_11_grid": true,
+  "delay_grid_off": true,
+  "even_delays_present": true,
+  "invariants": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "delay_grid": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "ok": true
+ },
+ "all_ok": true
+}

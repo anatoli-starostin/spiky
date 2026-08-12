@@ -1,0 +1,138 @@
+{
+ "ckpt": "../exp012_tiny-direct-genome/full_run_grow/ck_g0.npz",
+ "round": 1499,
+ "leader_index": 310,
+ "leader_ewma": 24.18450520833333,
+ "heldout_mse": 23.44525,
+ "constant_baseline": 34.151749708333334,
+ "fitness_terms": {
+  "mse": 23.44525,
+  "n_active": 4,
+  "cap": 6,
+  "fanout_excess": 0,
+  "neuron_penalty": 1.4,
+  "fanout_penalty": 0.0,
+  "fitness": 24.84525
+ },
+ "tau": 0.26936596301478666,
+ "mean_abs_r": 0.6803972470621965,
+ "affine_ceiling": 17.033230040425934,
+ "silent": 0.0,
+ "n_distinct": 21,
+ "mse_action": 0.626703074598915,
+ "bias2": 2.722161875,
+ "scale_err": 9.198348282982325,
+ "resid": 11.524739842017675,
+ "per_dim": [
+  {
+   "dim": 0,
+   "r": 0.4668910147594303,
+   "bias2": 1.2221302500000022,
+   "scale_err": 1.5766950993875908
+  },
+  {
+   "dim": 1,
+   "r": 0.5756838296158587,
+   "bias2": 9.681432249999997,
+   "scale_err": 4.4873289470699484
+  },
+  {
+   "dim": 2,
+   "r": 0.7440836389494554,
+   "bias2": 0.009506250000000029,
+   "scale_err": 1.3064540768932773
+  },
+  {
+   "dim": 3,
+   "r": 0.7859633335478576,
+   "bias2": 0.122500000000001,
+   "scale_err": 16.275061793931425
+  },
+  {
+   "dim": 4,
+   "r": 0.7321075979791098,
+   "bias2": 4.859820249999998,
+   "scale_err": 10.573222996261375
+  },
+  {
+   "dim": 5,
+   "r": 0.7776540675214673,
+   "bias2": 0.4375822500000026,
+   "scale_err": 20.97132678435033
+  }
+ ],
+ "size": {
+  "n_syn": 56,
+  "n_exc": 4,
+  "n_inh": 0,
+  "n_active": 4,
+  "e_fraction": 1.0,
+  "max_fanout": 5,
+  "n_in_hidden": 39,
+  "n_rec": 4,
+  "n_out": 13,
+  "w_mean": 34.9411572260516
+ },
+ "units": [
+  {
+   "unit": "E1",
+   "slot": 1,
+   "kind": "exc",
+   "fanout": 3,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E2",
+   "slot": 2,
+   "kind": "exc",
+   "fanout": 4,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E3",
+   "slot": 3,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 11,
+   "is_seed_slot": true,
+   "live": true
+  },
+  {
+   "unit": "E7",
+   "slot": 7,
+   "kind": "exc",
+   "fanout": 5,
+   "fanin": 10,
+   "is_seed_slot": true,
+   "live": true
+  }
+ ],
+ "fanout_distribution": [
+  1,
+  1,
+  1,
+  2,
+  2,
+  2,
+  2,
+  2,
+  3,
+  3,
+  3,
+  3,
+  3,
+  3,
+  3,
+  4,
+  4,
+  4,
+  5,
+  5
+ ],
+ "n_over_cap": 0,
+ "batch_champion_heldout": 22.72475
+}

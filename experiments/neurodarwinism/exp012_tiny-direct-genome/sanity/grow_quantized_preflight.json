@@ -1,0 +1,172 @@
+{
+ "levels": [
+  -1.0,
+  -0.8,
+  -0.6,
+  -0.4,
+  -0.2,
+  -0.0,
+  0.2,
+  0.4,
+  0.6,
+  0.8,
+  1.0
+ ],
+ "step": 0.2,
+ "positive_subgrid": [
+  -0.0,
+  0.2,
+  0.4,
+  0.6,
+  0.8,
+  1.0
+ ],
+ "negative_subgrid": [
+  -1.0,
+  -0.8,
+  -0.6,
+  -0.4,
+  -0.2,
+  -0.0
+ ],
+ "fanout_cap": {
+  "cap": 16,
+  "worst_hidden_fanout_small_and_grow": 16,
+  "worst_hidden_fanout_full_capacity": 16,
+  "synapses_after_mutation_burst": {
+   "min": 116,
+   "max": 192
+  },
+  "full_capacity_synapses_after_burst": 1097,
+  "implied_ceiling": 1480,
+  "ceiling_note": "680 input->exc (uncapped) + 50 hidden x 16 = 1480; without the cap the legal-cell bound is 3420",
+  "ok": true
+ },
+ "grid": {
+  "genomes_checked": 301,
+  "off_grid_weights": 0,
+  "dale_violations": 0,
+  "exc_rows_negative": 0,
+  "inh_rows_positive": 0,
+  "distinct_levels_used": [
+   -1.0,
+   -0.8,
+   -0.6,
+   -0.4,
+   -0.2,
+   0.0,
+   0.2,
+   0.4,
+   0.6,
+   0.8,
+   1.0
+  ],
+  "n_distinct": 11,
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 530,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "off_grid": 0,
+  "ok": true
+ },
+ "affine": {
+  "init_a": [
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0
+  ],
+  "init_b": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "identity_at_init": true,
+  "after_100_mutations_a": [
+   0.9803,
+   1.1017,
+   0.7532,
+   0.4615,
+   0.9766,
+   1.2601
+  ],
+  "after_100_mutations_b": [
+   -1.0396,
+   -3.0902,
+   -0.7062,
+   -0.9089,
+   -1.1196,
+   0.17
+  ],
+  "a_on_grid": false,
+  "still_continuous": true,
+  "ok": true
+ },
+ "mutation": {
+  "n_steps": 11307,
+  "hist": {
+   "-2": 858,
+   "-1": 4753,
+   "1": 4709,
+   "2": 987
+  },
+  "frac_one_level": 0.8368267444945608,
+  "frac_two_level": 0.1631732555054391,
+  "frac_positive": 0.5037587335279031,
+  "want": "80 % +-1, 20 % +-2, 50/50 sign; clamping at the rails shifts these slightly",
+  "ok": true
+ },
+ "seed": {
+  "on_grid": true,
+  "n_synapses": 134,
+  "max_weight_shift": 0.09982484817504883,
+  "mean_weight_shift": 0.051491708501951026,
+  "mse_continuous": 24.271333333333335,
+  "mse_quantized": 29.075916666666668,
+  "mse_delta": 4.804583333333333,
+  "levels_used": [
+   -0.4,
+   -0.2,
+   0.0,
+   0.2,
+   0.4,
+   0.6
+  ],
+  "ok": true
+ },
+ "continuous_path": {
+  "off_grid_weights": 3734,
+  "weights_moved": true,
+  "invariants": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "ok": true
+ },
+ "all_ok": true
+}

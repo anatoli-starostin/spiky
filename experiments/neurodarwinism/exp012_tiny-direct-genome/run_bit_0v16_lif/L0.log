@@ -1,0 +1,10 @@
+delay ranges: exc columns [1,128], others [1,64]
+BIT task: target = 1[ x_norm[0] > x_norm[16] ]  P(1) train 0.4796  held-out 0.5080
+RANDOM init: 512 independent genomes, 20 exc + 20 inh active (E-frac 0.500), ~195 synapses each
+r   0  fit   0.203  mse   0.203  neurons 40.00 (min 40 max 40)  syn  195.6  held-out best   0.254  [   4.2s]
+r  25  fit   0.143  mse   0.143  neurons 40.00 (min 40 max 40)  syn  299.0  held-out best   0.124  [  46.0s]
+r  50  fit   0.145  mse   0.145  neurons 40.00 (min 40 max 40)  syn  319.5  held-out best   0.124  [  83.6s]
+r  75  fit   0.131  mse   0.131  neurons 40.00 (min 40 max 40)  syn  331.3  held-out best   0.125  [ 122.3s]
+r 100  fit   0.120  mse   0.120  neurons 40.00 (min 40 max 40)  syn  335.3  held-out best   0.125  [ 161.4s]
+r 125  fit   0.132  mse   0.132  neurons 40.00 (min 40 max 40)  syn  341.0  held-out best   0.125  [ 197.5s]
+r 150  fit   0.105  mse   0.105  neurons 40.00 (min 40 max 40)  syn  348.1  held-out best   0.125  [ 235.4s]

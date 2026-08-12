@@ -1,0 +1,122 @@
+{
+ "label": "z0_11level",
+ "ckpt": "../exp012_tiny-direct-genome/full_run_quantized_fanout16_random/ck_z0.npz",
+ "round": 1699,
+ "chance": 34.151749708333334,
+ "n_train": 2000,
+ "n_val": 2000,
+ "genome": {
+  "n_syn": 629,
+  "n_active": 50,
+  "gain": 200.0,
+  "inh_coeff": 1.0
+ },
+ "a_evolved_affine": 48.21920775170617,
+ "a_raw_no_affine": 52.66975,
+ "linear_ceilings": {
+  "b_out_win (6 feats, the run's own readout)": {
+   "n_features": 6,
+   "heldout_mse": 21.72751900633924,
+   "pct_of_chance": 63.620514884007626
+  },
+  "c1_out_full 96-tick first spike (6)": {
+   "n_features": 6,
+   "heldout_mse": 18.157921432300753,
+   "pct_of_chance": 53.168348876339
+  },
+  "c2_out_count spike RATE (6)": {
+   "n_features": 6,
+   "heldout_mse": 33.233060743704456,
+   "pct_of_chance": 97.30997980345144
+  },
+  "c3_out_full + out_count (12)": {
+   "n_features": 12,
+   "heldout_mse": 16.37277074837386,
+   "pct_of_chance": 47.941235480473075
+  },
+  "d1_hidden first spikes (50)": {
+   "n_features": 50,
+   "heldout_mse": 8.877476208949476,
+   "pct_of_chance": 25.99420610881115
+  },
+  "d2_hidden counts (50)": {
+   "n_features": 50,
+   "heldout_mse": 18.981156589139136,
+   "pct_of_chance": 55.57887004690586
+  },
+  "d3_hidden first + counts (100)": {
+   "n_features": 100,
+   "heldout_mse": 8.535257082292574,
+   "pct_of_chance": 24.992151661880722
+  },
+  "d4_EVERYTHING hidden + out (112)": {
+   "n_features": 112,
+   "heldout_mse": 8.40949269063698,
+   "pct_of_chance": 24.62389998303656
+  }
+ },
+ "output_behaviour": {
+  "frac_no_spike_in_window": 0.00025,
+  "frac_no_spike_at_all": 0.00025,
+  "win_sd_across_inputs": [
+   4.291090304339912,
+   3.954030348897186,
+   2.5161664789914044,
+   3.0051778233575464,
+   2.54142460049477,
+   3.790214241965749
+  ],
+  "full_sd_across_inputs": [
+   4.291090304339912,
+   2.16117878714372,
+   5.303571532467531,
+   4.314813553329969,
+   2.54142460049477,
+   3.79021424196575
+  ],
+  "count_mean": [
+   2.665,
+   4.671,
+   4.643,
+   4.8385,
+   1.8385,
+   1.014
+  ],
+  "count_sd_across_inputs": [
+   0.48966825504620987,
+   0.8097894788153276,
+   0.7166247274550329,
+   0.698868907592833,
+   0.40548458663677955,
+   0.12963024338479043
+  ],
+  "win_distinct": [
+   17,
+   16,
+   21,
+   26,
+   15,
+   21
+  ],
+  "full_first_min": 13.0,
+  "full_first_max": 96.0,
+  "target_sd": 6.160218971013395
+ },
+ "hidden_regime": {
+  "mean_spikes_per_neuron": 6.01833,
+  "frac_neurons_always_silent": 0.0,
+  "frac_episodes_silent": 0.0,
+  "frac_first_at_tick_0": 0.0,
+  "first_spike_mean": 35.12045,
+  "first_spike_sd_across_inputs": 3.1329230539554533,
+  "count_sd_across_inputs": 0.7618582605751694,
+  "max_spikes_seen": 17.0
+ },
+ "input_separation": {
+  "n_hidden_with_variance": 50,
+  "max_abs_corr_input_to_hidden_first": 0.9986393479096894,
+  "mean_abs_corr": 0.9127353556535543,
+  "n_distinct_hidden_patterns": 1239,
+  "n_inputs": 2000
+ }
+}

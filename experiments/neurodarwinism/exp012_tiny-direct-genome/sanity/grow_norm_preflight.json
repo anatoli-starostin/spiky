@@ -1,0 +1,113 @@
+{
+ "gain": 200.0,
+ "sigma_norm": 0.045,
+ "born": [
+  0.03,
+  0.18
+ ],
+ "w_init_norm": 0.3,
+ "equivalence": {
+  "n_synapses": 56,
+  "max_abs_diff_weight_matrix": 1.4210854715202004e-14,
+  "max_abs_diff_triples_into_engine": 1.4210854715202004e-14,
+  "mse_absolute": 23.44525,
+  "mse_normalised": 23.44525,
+  "mse_abs_diff": 0.0,
+  "mse_bitwise_equal": true,
+  "offsets_identical": true,
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 600,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "max_abs_magnitude_seen": 0.7364351217653111,
+  "incoherent_cells": 0,
+  "from_parent1": 0.48980530178308695,
+  "from_parent1_sd": 0.09264590716369336,
+  "ok": true
+ },
+ "distributions": {
+  "weight_step": {
+   "mean": 0.0022624611546091457,
+   "std": 9.017605506531392,
+   "want": "N(0, 9.0)"
+  },
+  "born_magnitude": {
+   "mean": 21.00081713493855,
+   "std": 8.669364973671023,
+   "min": 6.000010568223719,
+   "max": 35.99973749125224,
+   "want": "U(6, 36): mean 21.0, std 8.66"
+  },
+  "init_magnitude": {
+   "mean": 29.979083249532966,
+   "max": 59.999676014072904,
+   "want": "U(0, 60): mean 30.0"
+  },
+  "ok": true
+ },
+ "spot_check": {
+  "heldout_mse": 23.44525,
+  "prior_grow_leader_mse": 23.4453,
+  "tau": 0.26936596301478666,
+  "mean_abs_r": 0.6803972470621965,
+  "affine_ceiling": 17.033230040425934,
+  "silent": 0.0,
+  "size": {
+   "n_syn": 56,
+   "n_exc": 4,
+   "n_inh": 0,
+   "n_active": 4,
+   "e_fraction": 1.0,
+   "max_fanout": 5,
+   "n_in_hidden": 39,
+   "n_rec": 4,
+   "n_out": 13,
+   "w_mean": 0.17470578613025803
+  },
+  "ok": true
+ },
+ "build": {
+  "round_trip": {
+   "n_exported": 4523,
+   "n_requested": 4523,
+   "weights_ok": 4523,
+   "delays_ok": 4523,
+   "missing": 0,
+   "n_negative": 317,
+   "negative_ok": 317,
+   "ok": true
+  },
+  "which": [
+   0,
+   5,
+   17,
+   31
+  ],
+  "packed": [
+   24.301106770833332,
+   193.40266927083334,
+   85.833984375,
+   133.66145833333334
+  ],
+  "solo": [
+   24.301106770833332,
+   193.40266927083334,
+   85.833984375,
+   133.66145833333334
+  ],
+  "max_abs_diff": 0.0,
+  "ok": true
+ },
+ "all_ok": true
+}

@@ -1,0 +1,39 @@
+{
+ "chance": 0.24993600000000005,
+ "p1_val": 0.508,
+ "encoding": {
+  "monotone_agreement": 0.92,
+  "tie_fraction": 0.1215,
+  "agreement_when_not_tied": 1.0,
+  "n_distinct_ticks_a": 19,
+  "n_distinct_ticks_b": 26
+ },
+ "wiring": {
+  "reach": {
+   "x0": {
+    "n_hidden_targets": 4,
+    "n_two_hop_paths": 1,
+    "delays": [
+     64
+    ],
+    "n_paths_landing_in_window": 1
+   },
+   "x16": {
+    "n_hidden_targets": 6,
+    "n_two_hop_paths": 0,
+    "delays": [],
+    "n_paths_landing_in_window": 0
+   }
+  },
+  "direct_input_to_output": false,
+  "n_synapses": 115
+ },
+ "diagls_heldout": 0.1283049927251191,
+ "diagls_accuracy": 0.857,
+ "best_tick_decode": 0.1143073063124981,
+ "best_tick_decode_accuracy": 0.857,
+ "n_distinct_output_ticks": 9,
+ "ridge_on_output_neurons": 0.12988189767692404,
+ "ridge_on_encoded_input": 0.1127068551492484,
+ "ridge_on_encoded_input_accuracy": 0.8295
+}

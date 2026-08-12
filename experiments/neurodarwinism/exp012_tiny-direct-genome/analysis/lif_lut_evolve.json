@@ -1,0 +1,48 @@
+{
+ "run": "run_lut_lif",
+ "status": "STOPPED EARLY (parked by request)",
+ "neuron_model": "LIF (tau 80, threshold 1.0)",
+ "hidden": "20 exc + 20 inh",
+ "episode": {
+  "input_ticks": [
+   0,
+   128
+  ],
+  "hidden_ticks": [
+   128,
+   160
+  ],
+  "readout_ticks": [
+   160,
+   192
+  ],
+  "n_ticks": 192
+ },
+ "delay_ranges": {
+  "exc_columns": [
+   1,
+   128
+  ],
+  "other_columns": [
+   1,
+   64
+  ]
+ },
+ "readout": "diagls (trainable affine on one output neurons first-spike time)",
+ "target": "standard LUT output, dimension 0",
+ "own_chance": 29.384,
+ "rounds_completed": 1650,
+ "rounds_planned": 1700,
+ "best_heldout_mse": 20.479,
+ "best_ratio_to_own_chance": 0.6969439150558127,
+ "final_champion_heldout": 24.791,
+ "final_champion_ratio": 0.8436904437789273,
+ "final_train_fit": 23.647,
+ "baselines": {
+  "izhikevich_17_8_1_dim0": 22.783,
+  "izhikevich_17_8_1_ratio": 0.7753539341138035,
+  "izhikevich_6way_K8_dim0_slice": 25.83,
+  "chance": 29.384
+ },
+ "note": "diagls on a single first-spike time cannot express spike ORDER, which is where the LIF gain lives; the handcrafted comparator artifacts hold that result."
+}

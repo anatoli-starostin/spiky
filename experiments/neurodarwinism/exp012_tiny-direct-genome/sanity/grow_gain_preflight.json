@@ -1,0 +1,120 @@
+{
+ "gain_init": 200.0,
+ "gain_box": [
+  20.0,
+  2000.0
+ ],
+ "gain_sigma": 20.0,
+ "p_gain": 0.25,
+ "p_inhcoeff": 0.25,
+ "weight_levels": [
+  -1.0,
+  0.0,
+  1.0
+ ],
+ "gain_at_init": 200.0,
+ "gain": {
+  "init": 200.0,
+  "n_mutations": 300,
+  "min": 77.61969254870756,
+  "mean": 166.69213897357739,
+  "max": 259.1836539835595,
+  "final": 234.82564843216383,
+  "moved": true,
+  "distinct": 84,
+  "in_box": true,
+  "coeff_min": 0.05,
+  "coeff_mean": 0.2795815877178684,
+  "coeff_max": 0.6521129334376938,
+  "ok": true
+ },
+ "build": {
+  "per_gain": {
+   "150.0": {
+    "exc_full": [
+     150.0
+    ],
+    "inh_full": [
+     -75.0
+    ],
+    "zero": [
+     0.0
+    ]
+   },
+   "200.0": {
+    "exc_full": [
+     200.0
+    ],
+    "inh_full": [
+     -100.0
+    ],
+    "zero": [
+     0.0
+    ]
+   },
+   "400.0": {
+    "exc_full": [
+     400.0
+    ],
+    "inh_full": [
+     -200.0
+    ],
+    "zero": [
+     0.0
+    ]
+   }
+  },
+  "input_injection": {
+   "150.0": 200.0,
+   "400.0": 200.0
+  },
+  "injection_unchanged": true,
+  "exc_equals_gain": true,
+  "inh_equals_gain_times_coeff": true,
+  "ok": true
+ },
+ "crossover": {
+  "counts": {
+   "p2": 202,
+   "p1": 198
+  },
+  "only_parent_values": true,
+  "frac_p1": 0.495,
+  "ok": true
+ },
+ "legacy": {
+  "gain_read_as": 200.0,
+  "expected": 200.0,
+  "coeff_read_as": 1.0,
+  "currents_identical": true,
+  "new_genome_starts_at": 200.0,
+  "ok": true
+ },
+ "invariants": {
+  "genomes_checked": 450,
+  "violations": {
+   "dale": 0,
+   "legal": 0,
+   "pins": 0,
+   "active": 0,
+   "delays": 0,
+   "range": 0,
+   "fanout": 0,
+   "delay_grid": 0,
+   "in_to_inh": 0,
+   "in_to_out": 0,
+   "inh_to_out": 0
+  },
+  "worst_hidden_fanout": 16,
+  "on_symmetric_grid": true,
+  "affine_continuous": true,
+  "ok": true
+ },
+ "defaults": {
+  "gain_frozen": true,
+  "value": 200.0,
+  "coeff_frozen": true,
+  "ok": true
+ },
+ "all_ok": true
+}

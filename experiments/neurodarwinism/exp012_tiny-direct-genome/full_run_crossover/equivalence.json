@@ -1,0 +1,47 @@
+{
+ "config": {
+  "pool": 512,
+  "batch": 256,
+  "reps": 3,
+  "w_max": 60.0,
+  "seed": 0,
+  "device": "cuda",
+  "out": "../exp012_tiny-direct-genome/full_run_crossover/equivalence.json"
+ },
+ "ids_stable": true,
+ "reps": [
+  {
+   "rep": 0,
+   "max_abs_diff_offsets": 0,
+   "silence_flag_mismatches": 0,
+   "max_abs_diff_mse": 0.0,
+   "mse_bitwise_equal": true,
+   "n_offsets_compared": 786432
+  },
+  {
+   "rep": 1,
+   "max_abs_diff_offsets": 0,
+   "silence_flag_mismatches": 0,
+   "max_abs_diff_mse": 0.0,
+   "mse_bitwise_equal": true,
+   "n_offsets_compared": 786432
+  },
+  {
+   "rep": 2,
+   "max_abs_diff_offsets": 0,
+   "silence_flag_mismatches": 0,
+   "max_abs_diff_mse": 0.0,
+   "mse_bitwise_equal": true,
+   "n_offsets_compared": 786432
+  }
+ ],
+ "worst": {
+  "offsets": 0,
+  "silence": 0,
+  "mse": 0.0
+ },
+ "round_s_old": 0.9824981363332578,
+ "round_s_new": 0.22827339066679997,
+ "speedup": 4.304041454255019,
+ "ok": true
+}
