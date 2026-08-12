@@ -244,6 +244,13 @@ async def stepper(sim, ws):
                 await asyncio.sleep(delay)
             else:
                 next_t = loop.time()      # fell behind (or sps was lowered) -> resync, don't burst-catch-up
+                await asyncio.sleep(0)     # CRITICAL: always yield so the receiver coroutine gets serviced.
+                # A heavy actor.act() (e.g. the spiking-LUT SNN, ~12-16 ms, more under load) keeps the loop
+                # perpetually behind, so the pacing sleep above is skipped; and ws.send() for a small state
+                # frame usually completes WITHOUT suspending. With no suspension point the single-threaded loop
+                # never returns to the message receiver, so restart/pause/no_reset pile up unprocessed while the
+                # stepper keeps walking -> "robot walks but the buttons are dead". Light actors finish inside the
+                # frame budget, hit the delay>0 sleep, and yield -- which is why only the spiking actor broke.
     except asyncio.CancelledError:
         pass
 
@@ -273,6 +280,8 @@ def make_handler(cfg, state):
                 except Exception:
                     continue
                 cmd = m.get("cmd")
+                if cmd in ("restart", "pause", "no_reset"):
+                    print(f"[dbg] recv {cmd} value={m.get('value')} actor={sim.actor_name} step={sim.step_count}", flush=True)
                 if cmd == "restart":
                     sim.restart()
                 elif cmd == "mode":
