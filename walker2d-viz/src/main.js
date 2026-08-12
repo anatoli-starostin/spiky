@@ -256,15 +256,9 @@ let ws = null, paused = false, serverFull = false
 // Remembered user intent, re-applied after a (re)connect so a dropped socket doesn't silently strand
 // the session on the server's default actor with unresponsive controls.
 let lastActor = null, lastPaused = false, lastNoReset = false
-let sockId = 0, lastLoggedActor = null
-console.log('[dbg] walker2d-viz INSTRUMENTED client loaded — ws.readyState legend: 0=CONNECTING 1=OPEN 2=CLOSING 3=CLOSED')
+let sockId = 0
 
-function send(obj) {
-  const open = ws && ws.readyState === 1
-  const tag = obj.cmd + (obj.name !== undefined ? ` "${obj.name}"` : '') + (obj.value !== undefined ? ` =${obj.value}` : '')
-  console.log(`[dbg] send ${tag} -> ${open ? 'SENT' : 'SKIPPED (ws not open)'} | readyState=${ws ? ws.readyState : 'no-ws'} sock#${ws ? ws._id : '-'}`)
-  if (open) ws.send(JSON.stringify(obj))
-}
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
 const overlay = $('overlay'), overlayMsg = $('overlayMsg')
 function showOverlay(msg) { if (overlayMsg) overlayMsg.textContent = msg; if (overlay) overlay.style.display = 'flex' }
@@ -279,19 +273,17 @@ function connect(url) {
   // schedule reconnects while the buttons' send() targets a different, current `ws`. Fixes the
   // "robot keeps walking but buttons dead" two-socket class of bug.
   const sk = new WebSocket(url); sk._id = ++sockId; ws = sk
-  console.log(`[dbg] connect(): opened NEW socket #${sk._id} -> ${url}`)
-  sk.onopen = () => { console.log(`[dbg] onopen #${sk._id}`); if (ws !== sk) return; conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
+  sk.onopen = () => { if (ws !== sk) return; conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
   sk.onclose = (e) => {
-    console.log(`[dbg] onclose #${sk._id} code=${e.code} wasClean=${e.wasClean} | current ws=#${ws ? ws._id : '-'}`)
     if (ws !== sk) return                                  // a stale socket closing must NOT touch UI or reconnect
     conn.textContent = serverFull ? 'server full' : 'reconnecting…'; conn.className = 'bad'
     // When the server told us it's at capacity, do NOT auto-reconnect (no tight retry loop) — the
     // overlay's Retry button lets the visitor try again on their own terms. Otherwise reconnect.
     if (!serverFull) setTimeout(() => connect(url), 1500)
   }
-  sk.onerror = () => { console.log(`[dbg] onerror #${sk._id}`); if (ws !== sk) return; conn.textContent = 'error'; conn.className = 'bad' }
+  sk.onerror = () => { if (ws !== sk) return; conn.textContent = 'error'; conn.className = 'bad' }
   sk.onmessage = (ev) => {
-    if (ws !== sk) { if (!sk._staleLogged) { sk._staleLogged = true; console.log(`[dbg] STALE sock#${sk._id} still delivering frames — IGNORING (current #${ws ? ws._id : '-'})`) } return }
+    if (ws !== sk) return                                  // ignore frames from a superseded socket
     const m = JSON.parse(ev.data)
     if (m.type === 'server_full') {                    // at capacity: friendly banner, stop reconnecting
       serverFull = true
@@ -325,7 +317,6 @@ function connect(url) {
       $('reward').textContent = (+m.reward).toFixed(2)
       $('ret').textContent = (+m.return).toFixed(1)
       $('actorName').textContent = m.actor
-      if (m.actor !== lastLoggedActor) { console.log(`[dbg] state: server ACTIVE actor = "${m.actor}" (sock#${sk._id})`); lastLoggedActor = m.actor }
       paused = !!m.paused                            // reflect server pause state
       $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
       $('pauseBtn').classList.toggle('active', paused)
@@ -334,9 +325,8 @@ function connect(url) {
   }
 }
 
-$('restart').onclick = () => { console.log('[dbg] click RESTART button'); send({ cmd: 'restart' }) }
+$('restart').onclick = () => send({ cmd: 'restart' })
 $('pauseBtn').onclick = () => {
-  console.log('[dbg] click PAUSE button')
   paused = !paused                                  // optimistic toggle; server echoes it back in state
   lastPaused = paused
   send({ cmd: 'pause', value: paused })
@@ -360,11 +350,8 @@ function setFold(collapsed) {
 $('foldBtn').onclick = () => setFold(!ui.classList.contains('collapsed'))
 setFold(innerWidth < 620)                                 // default: collapsed on narrow/mobile, expanded on wide
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
-$('actor').onchange = (e) => {
-  console.log(`[dbg] actor <select> changed -> "${e.target.value}" | ws.readyState=${ws ? ws.readyState : 'no-ws'} sock#${ws ? ws._id : '-'}`)
-  lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value })
-}
-$('noreset').onchange = (e) => { console.log(`[dbg] click NO-RESET -> ${e.target.checked}`); lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
+$('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }) }
+$('noreset').onchange = (e) => { lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
 $('srv').onchange = (e) => connect(e.target.value.trim())
 $('overlayRetry').onclick = () => connect($('srv').value.trim())   // manual retry from the overload banner
 
