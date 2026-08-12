@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import os
+import struct
 import time
 
 import numpy as np
@@ -83,6 +84,8 @@ class Sim:
         self.terminated = False
         self.show_spikes = False                 # stream the per-act spike raster (only for a spiking actor)
         self._spike_meta_sent = False
+        self.show_network = False                # stream the network-graph view (topology once + spikes)
+        self._net_topo_sent = False
         self.sps = min(MAX_SPS, max(MIN_SPS, float(sps)))   # clamp even the startup SPS to the cap
         self.obs, _ = self.env.reset(seed=0)
         self.step_count = 0
@@ -138,6 +141,12 @@ class Sim:
         self.show_spikes = bool(value)
         if not self.show_spikes:
             self._spike_meta_sent = False        # re-send layout metadata next time it's turned on
+        self.touch()
+
+    def set_show_network(self, value):
+        self.show_network = bool(value)
+        if not self.show_network:
+            self._net_topo_sent = False          # re-send topology next time it's turned on
         self.touch()
 
     def set_paused(self, value):
@@ -249,18 +258,27 @@ async def stepper(sim, ws):
             # Optional live spike raster: only when the client asked for it AND the active actor exposes a
             # spike readout (the spiking-LUT actor does). One JSON metadata frame, then a compact BINARY frame
             # of (row uint16, tick uint16) pairs per act (~2.4 KB). Zero cost when off / for other actors.
-            if sim.show_spikes and hasattr(sim.actor, "read_spikes"):
+            # Spike raster and/or network-graph view. Both need the per-act spikes; the network view also
+            # needs the (static) topology once. Binary frames are tagged with a uint16 kind (1=spikes,
+            # 2=topology) so the client can dispatch. Gated: only for an actor exposing read_spikes.
+            want_spikes = (sim.show_spikes or sim.show_network) and hasattr(sim.actor, "read_spikes")
+            if want_spikes:
                 try:
                     if not sim._spike_meta_sent:
                         await ws.send(json.dumps({"type": "spike_meta", **sim.actor.spike_layout()}))
                         sim._spike_meta_sent = True
+                    if sim.show_network and not sim._net_topo_sent:
+                        await ws.send(json.dumps({"type": "network_meta", **sim.actor.topology_meta()}))
+                        await ws.send(struct.pack("<H", 2) + sim.actor.topology_payload())  # kind=2 topology
+                        sim._net_topo_sent = True
                     payload = sim.actor.read_spikes()
                     if payload:
-                        await ws.send(payload)
+                        await ws.send(struct.pack("<H", 1) + payload)                       # kind=1 spikes
                 except websockets.exceptions.ConnectionClosed:
                     break
             else:
                 sim._spike_meta_sent = False
+                sim._net_topo_sent = False
             next_t += 1.0 / max(1.0, sim.sps)
             delay = next_t - loop.time()
             if delay > 0:
@@ -318,6 +336,8 @@ def make_handler(cfg, state):
                     sim.set_no_reset(m.get("value", False))
                 elif cmd == "show_spikes":
                     sim.set_show_spikes(m.get("value", False))
+                elif cmd == "show_network":
+                    sim.set_show_network(m.get("value", False))
                 elif cmd == "list_actors":
                     await ws.send(sim.actor_list_msg())
         except websockets.exceptions.ConnectionClosed:

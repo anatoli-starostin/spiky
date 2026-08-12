@@ -140,6 +140,7 @@ class SpikingLutActor(Actor):
                     E.append((int(dly[o][t, k]), cell, ids[6][o], amps[o]))
         tri = np.array([[d - 1, s, tg] for d, s, tg, _ in E], np.int64)
         wts = np.array([w for *_, w in E], np.float64)
+        self._E_raw = E                                    # kept for the network-graph topology export
         ge = SynapseGrowthEngine(device="cpu", synapse_group_size=64,
                                  max_groups_in_buffer=max(1 << 19, 4 * len(tri)))
         for i in range(7):
@@ -172,6 +173,30 @@ class SpikingLutActor(Actor):
             {"name": "S2 cells",       "start": int(o[5]), "end": int(o[6]), "color": "#4363d8"},
             {"name": "S3 outputs",     "start": int(o[6]), "end": int(o[7]), "color": "#f032e6"},
         ]
+
+        # ---- topology export (for the network-graph viz): edges in ROW-index space ----
+        id2row = {int(nid): r for r, nid in enumerate(np.concatenate(self.ids))}
+        Eg = self._E_raw
+        self._edge_src = np.fromiter((id2row[int(s)] for _, s, _, _ in Eg), np.uint16, len(Eg))
+        self._edge_tgt = np.fromiter((id2row[int(t)] for _, _, t, _ in Eg), np.uint16, len(Eg))
+        self._edge_dly = np.fromiter((int(d) for d, _, _, _ in Eg), np.uint16, len(Eg))
+        self._edge_exc = np.fromiter((1 if w >= 0 else 0 for _, _, _, w in Eg), np.uint16, len(Eg))
+        del self._E_raw
+
+    def topology_meta(self):
+        """One-time metadata for the network graph: node/edge counts, tick count, stage bands."""
+        return {"n_nodes": int(self._n_rows), "n_edges": int(len(self._edge_src)),
+                "n_ticks": int(self.n_ticks), "bands": self._bands}
+
+    def topology_payload(self):
+        """One-time edge list: (src_row, tgt_row, delay, is_excitatory) uint16 quads, LE bytes (~210 KB)."""
+        n = len(self._edge_src)
+        out = np.empty(n * 4, dtype="<u2")
+        out[0::4] = self._edge_src
+        out[1::4] = self._edge_tgt
+        out[2::4] = self._edge_dly
+        out[3::4] = self._edge_exc
+        return out.tobytes()
 
     def spike_layout(self):
         """Static metadata for the raster: tick count, row count, and stage bands (row ranges)."""
