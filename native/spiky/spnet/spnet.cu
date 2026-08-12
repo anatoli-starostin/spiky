@@ -193,12 +193,17 @@ public:
         REAL_DT spike_threshold,
         REAL_DT stdp_decay,
         REAL_DT ltp_max,
-        REAL_DT ltd_max
+        REAL_DT ltd_max,
+        uint32_t reset_mode,
+        uint32_t refractory_ticks
     ) {
         __TRACE__("spndm_register_neuron_meta\n");
         checkOnHostDuringPrepare();
         if(this->n_neurons > 0) {
             throw py::value_error("can't register new neuron metas after neurons were initialized");
+        }
+        if((reset_mode != NEURON_RESET_CONSTANT) && (reset_mode != NEURON_RESET_SUBTRACTIVE)) {
+            throw py::value_error("reset_mode must be 0 (constant) or 1 (subtractive)");
         }
         if(stdp_decay < 0.0) {
             throw py::value_error("stdp_decay < 0.0");
@@ -215,7 +220,7 @@ public:
 
         NeuronMeta target_meta = {
             neuron_type, cf_2, cf_1, cf_0, a, b, c, d,
-            spike_threshold, stdp_decay, ltp_max, ltd_max
+            spike_threshold, reset_mode, refractory_ticks, stdp_decay, ltp_max, ltd_max
         };
         NeuronMeta *current_neuron_meta = NeuronMetas(this->neuron_metas_id, host_device_allocator.data);
         uint32_t i=0;
@@ -1110,7 +1115,9 @@ void PFX(PB_SPNetDataManager)(py::module& m) {
             py::arg("spike_threshold"),
             py::arg("stdp_decay"),
             py::arg("ltp_max"),
-            py::arg("ltd_max"))
+            py::arg("ltd_max"),
+            py::arg("reset_mode") = 0,
+            py::arg("refractory_ticks") = 0)
         .def("initialize_neurons", &SPNDM_CLASS_NAME::initialize_neurons,
             "Initialize neurons",
             py::arg("neuron_counts_by_meta_id"))

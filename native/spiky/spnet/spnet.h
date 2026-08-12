@@ -28,6 +28,11 @@ static_assert((sizeof(SPNetSynapseMeta) % 8) == 0, "check sizeof(SPNetSynapseMet
 #define N_EULER_STEPS 2
 #define EULER_DT 0.5f
 
+// Spike reset mode (per neuron type). CONSTANT keeps the existing Izhikevich hard reset
+// v = c; SUBTRACTIVE does the LIF-style soft reset v = v - spike_threshold (carries overshoot).
+#define NEURON_RESET_CONSTANT 0u
+#define NEURON_RESET_SUBTRACTIVE 1u
+
 typedef struct alignas(8) {
     uint32_t neuron_type;
     REAL_DT cf_2;
@@ -38,12 +43,16 @@ typedef struct alignas(8) {
     REAL_DT c;
     REAL_DT d;
     REAL_DT spike_threshold;
+    uint32_t reset_mode;        // NEURON_RESET_CONSTANT (default) or NEURON_RESET_SUBTRACTIVE
+    uint32_t refractory_ticks;  // absolute refractory window in ticks; 0 = disabled
     REAL_DT stdp_decay;
     REAL_DT ltp_max;
     REAL_DT ltd_max;
 } NeuronMeta;
 static_assert((sizeof(NeuronMeta) % 8) == 0, "check sizeof(NeuronMeta)");
 
+// MUST stay an exact memory-suffix of NeuronMeta starting right after neuron_type (see
+// GetShortNeuronMeta): the kernel-visible fields are cf_2..refractory_ticks.
 typedef struct alignas(8) {
     REAL_DT cf_2;
     REAL_DT cf_1;
@@ -53,6 +62,8 @@ typedef struct alignas(8) {
     REAL_DT c;
     REAL_DT d;
     REAL_DT spike_threshold;
+    uint32_t reset_mode;
+    uint32_t refractory_ticks;
 } NeuronMetaShort;
 static_assert((sizeof(NeuronMetaShort) % 8) == 0, "check sizeof(NeuronMetaShort)");
 

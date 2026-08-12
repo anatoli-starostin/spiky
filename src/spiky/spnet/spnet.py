@@ -28,11 +28,39 @@ class NeuronMeta:
     stdp_decay: float = 0.95
     ltp_max: float = 1.0
     ltd_max: float = 1.2
+    reset_mode: int = 0        # 0 = constant reset (v = c); 1 = subtractive reset (v -= spike_threshold)
+    refractory_ticks: int = 0  # absolute refractory window in ticks; 0 = disabled
 
     def __post_init__(self):
         assert 0.0 < self.stdp_decay < 1.0
         assert 0.0 <= self.ltp_max
         assert 0.0 <= self.ltd_max
+        assert self.reset_mode in (0, 1), "reset_mode must be 0 (constant) or 1 (subtractive)"
+        assert self.refractory_ticks >= 0
+
+
+def LIFNeuronMeta(neuron_type: int, tau: float, v_rest: float = 0.0, v_reset: float = 0.0,
+                  threshold: float = 1.0, subtractive_reset: bool = False, refractory_ticks: int = 0,
+                  stdp_decay: float = 0.95, ltp_max: float = 1.0, ltd_max: float = 1.2) -> "NeuronMeta":
+    """Classic Leaky Integrate-and-Fire, expressed as a parameterization of the Izhikevich kernel.
+
+    The membrane obeys  v' = -(v - v_rest) / tau + I  (integrated as N_EULER_STEPS half-steps/tick);
+    a spike is emitted when v >= threshold; reset is either constant (v = v_reset, default) or
+    subtractive (v -= threshold, carrying the overshoot). `refractory_ticks` (>0) blocks integration
+    for that many ticks after a spike. Achieved by zeroing the quadratic and the recovery variable:
+    cf_2 = 0, a = 0, b = 0 (so u stays 0), cf_1 = -1/tau, cf_0 = v_rest/tau, c = v_reset, d = 0.
+    """
+    if tau <= 0.0:
+        raise ValueError("tau must be > 0")
+    return NeuronMeta(
+        neuron_type=neuron_type,
+        cf_2=0.0, cf_1=-1.0 / tau, cf_0=v_rest / tau,
+        a=0.0, b=0.0, c=v_reset, d=0.0,
+        spike_threshold=threshold,
+        stdp_decay=stdp_decay, ltp_max=ltp_max, ltd_max=ltd_max,
+        reset_mode=1 if subtractive_reset else 0,
+        refractory_ticks=refractory_ticks,
+    )
 
 
 @dataclass(frozen=True, order=True)
@@ -117,7 +145,9 @@ class SpikingNet(object):
                 spike_threshold=nm.spike_threshold,
                 stdp_decay=nm.stdp_decay,
                 ltp_max=nm.ltp_max,
-                ltd_max=nm.ltd_max
+                ltd_max=nm.ltd_max,
+                reset_mode=nm.reset_mode,
+                refractory_ticks=nm.refractory_ticks
             )
             assert m_id == i
 
