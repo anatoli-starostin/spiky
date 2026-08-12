@@ -104,6 +104,20 @@ class Sim:
             self._zero_settle = ZERO_SETTLE if name == "zero" else 0   # a (re)selected zero topples, then idles
             self.touch()
 
+    async def set_actor_async(self, name):
+        """Like set_actor, but constructs the actor OFF the event loop (thread executor). Some actors are
+        heavy to build — e.g. the spiking-LUT actor imports torch + builds a 3024-neuron SNN (~2 s). Building
+        that inline starves the single asyncio loop, so the websocket keepalive lapses and the socket drops,
+        which silently kills send()-based controls (restart/pause/no-reset). Offloading keeps the loop live
+        (the stepper keeps running the current actor) and swaps in the new actor once it's built."""
+        if name in self.registry:
+            loop = asyncio.get_event_loop()
+            actor = await loop.run_in_executor(None, self.registry[name], self.env.action_space)
+            self.actor_name = name
+            self.actor = actor
+            self._zero_settle = ZERO_SETTLE if name == "zero" else 0
+            self.touch()
+
     def _auto_zero(self):
         """Internal (NOT a user interaction, so no touch): switch a forgotten walk to the zero policy."""
         if self.actor_name != "zero" and "zero" in self.registry:
@@ -267,7 +281,7 @@ def make_handler(cfg, state):
                     sim.sps = min(MAX_SPS, max(MIN_SPS, float(m.get("sps", sim.sps))))   # clamp to [1, 60]
                     sim.touch()                          # speed change is an interaction: reset the auto-stop timer
                 elif cmd == "actor":
-                    sim.set_actor(m.get("name", ""))
+                    await sim.set_actor_async(m.get("name", ""))   # build off-loop so the ws keepalive survives
                 elif cmd == "pause":
                     sim.set_paused(m.get("value", not sim.paused))
                 elif cmd == "no_reset":
