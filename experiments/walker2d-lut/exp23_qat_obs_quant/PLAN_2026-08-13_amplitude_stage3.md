@@ -9,8 +9,8 @@ only a longer crossing window.
 
 | file | what |
 |---|---|
-| `experiments/neurodarwinism/src/tiny_lut_quantised_pipeline.py` | forked build+verify pipeline |
-| `experiments/neurodarwinism/src/tiny_lut_quantised_export.py` | artefact exporter |
+| `experiments/walker2d-spiking/tiny_lut_quantised_pipeline.py` | forked build+verify pipeline |
+| `experiments/walker2d-spiking/tiny_lut_quantised_export.py` | artefact exporter |
 | `landing/walker2d-viz/server/actors/spiking_lut_quantised.py` | forked actor (new name) |
 | `exp012_tiny-direct-genome/deploy_quantised/` | exported npz + meta |
 | `exp012_tiny-direct-genome/analysis/quantised_pipeline_tau31.json` | verification record |

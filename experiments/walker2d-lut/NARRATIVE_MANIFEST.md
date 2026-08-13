@@ -6,7 +6,7 @@
 deploy the live demo** — as a reviewable PR candidate into `main`. Curated for
 clarity, not completeness; the full research trees stay on `research/walker2d-lut`.
 
-The narrative doc is **`experiments/neurodarwinism/exp012_tiny-direct-genome/WALKER2D_SPIKING_WRITEUP.md`**
+The narrative doc is **`experiments/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`**
 (and gpustar's public write-up, *"A lookup table that learned to walk — and then
 became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 
@@ -23,8 +23,9 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
   log-sum-exp pooling (learned τ=0.09377), 201M env-steps.
 
 ### Stage B — construct the spiking network (closed-form, no backprop inside the net)
-- `experiments/neurodarwinism/src/` (26 files) — the analytic **3-stage construction**
+- `experiments/walker2d-spiking/` (26 files) — the analytic **3-stage construction**
   (order → lookup → readout) that turns the trained table into an spnet network;
+  *(relocated from the historically-misnamed `experiments/neurodarwinism/src/`)*;
   entry point **`tiny_lut_quantised_pipeline.py`** ("builds and verifies the network",
   identical wiring to the deployed actor), with its `tiny_lut_order_*` / `stage2` /
   `output_stage` / `stage3_*` siblings.
@@ -49,7 +50,7 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 
 ## Deliberately EXCLUDED (kept on `research/walker2d-lut`, not part of the story)
 - `experiments/walker2d_lut/` (1,488 files) — the separate JAX/MJX **c36 reproduction** track.
-- `experiments/neurodarwinism/exp012_tiny-direct-genome/` analysis/probe/deploy sub-trees (kept only the write-up).
+- `experiments/neurodarwinism/exp012_tiny-direct-genome/` analysis/probe/deploy sub-trees (kept only the write-up, now at `experiments/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`).
 - `exp00–04, exp06–18, exp20–22` — superseded / alternative-architecture runs; the story uses **exp05 recipe + exp19 actor**.
 - `exp19.../distill/spiking/` (~180 files) — the earlier *trainable*-SNN distillation R&D; the shipped net is the **analytic** construction.
 - `exp23` sweep/probe/`qat_*`/raw `.npy` trees, all `progress_monitor*.py`, `run_bench*.sh`, `*.gpu` traces — dev clutter.
@@ -58,5 +59,6 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 - The served `spiking_lut_quantised.py` **builds the net via `spiky.spnet` (torch) at
   construction** (lazy import in `__init__`); the public write-up's "pure NumPy at inference"
   describes a numpy replay — worth reconciling which actor the PR should ship as canonical.
-- Provisional branch name; the construction code sits under `experiments/neurodarwinism/src/`
-  (historical home) — we may want to move it under `experiments/walker2d-lut/` before the PR.
+- Provisional branch name. The construction code was relocated from its historically-misnamed
+  home `experiments/neurodarwinism/src/` to **`experiments/walker2d-spiking/`**; the
+  `experiments/neurodarwinism/` path no longer exists on this branch.
