@@ -499,12 +499,15 @@ sprawl costs ticks. So we made it cost something in training too:
 </div>
 
 <div class="note warn">
-  <span class="lbl">An honest caveat about the word "quantised"</span>
-  <p>The <b>table weights themselves were never quantised</b>. They remain float32 — 12,286
-  distinct values out of 12,288, on no grid whatsoever. "Quantisation-aware" here means
-  <em>at the interfaces</em>: what enters the network and what leaves it are discrete; what is
-  stored inside is not. (Part 3 later puts the <em>readout</em> weights on an 8-bit grid, but
-  that is a separate step with a different motivation.)</p>
+  <span class="lbl">What "quantised" means <em>here</em>, in the software teacher</span>
+  <p>During PPO, the teacher's <b>table weights are never quantised</b>. They stay float32 —
+  12,286 distinct values out of 12,288, on no grid whatsoever. "Quantisation-aware" at this
+  stage means <em>at the interfaces</em>: what enters the policy and what leaves it are
+  discrete; what is stored inside is not.</p>
+  <p>That is a statement about the <b>software teacher only</b>. The spiking model built from it
+  in Part 2 is a different object, and its readout weights <em>are</em> genuinely quantised — to
+  8 bits, in the log domain. That is what the word means in the deployed model's name, and it is
+  the subject of Part 3.</p>
 </div>
 
 <p>
@@ -1536,13 +1539,26 @@ the tick <code>ceil</code> <em>inside</em> the objective so the search sees the 
 hardware will.
 </p>
 <p>
-The weights stay on an <b>8-bit log-domain grid</b> throughout — the constraint is enforced
-during the search, not applied afterwards, and it costs nothing: a relative weight error δ shifts
-the crossing by <code>τ_eff·δ</code>, so half an output level needs δ &lt; 1.6%, which 8 bits
-clears comfortably. Three sweeps, about six seconds, <b>5,390 of the 12,288 weights moved</b>,
-maximum log-domain drift 0.261. Validated on the real spiking network, on GPU, with measured
-spike ticks, on held-out states:
+All <b>12,288</b> Stage-3 readout weights (32 tables × 64 rows × 6 outputs) stay on an
+<b>8-bit log-domain grid</b> throughout — 256 levels in <code>w/τ</code>, a step of 0.029. The
+constraint is enforced <em>during</em> the search rather than applied afterwards, and it costs
+nothing: a relative weight error δ shifts the crossing by <code>τ_eff·δ</code>, so half an output
+level needs δ &lt; 1.6%, which 8 bits clears comfortably. Three sweeps, about six seconds,
+<b>5,390 weights moved</b>, maximum log-domain drift 0.261. Validated on the real spiking
+network, on GPU, with measured spike ticks, on held-out states:
 </p>
+
+<div class="note key">
+  <span class="lbl">This is what "quantised" means in the deployed model</span>
+  <p>Those 12,288 grid values <em>are</em> the network's Stage-3 synapses — the stored table
+  value is carried as the synaptic amplitude <code>β·exp(w/τ)</code>, so quantising
+  <code>w/τ</code> to 8 bits quantises the synapse itself. It is not a compression applied to a
+  saved file; it is the weight the hardware would hold.</p>
+  <p>The shipped artefact was checked against that grid and sits on it exactly, to float32
+  storage precision. So the deployed actor's name — <b>"Spiking LUT quantised"</b> — is about
+  these weights, on top of the quantised input and output interfaces it inherits from the
+  teacher.</p>
+</div>
 
 <div class="tw">
 <table>
@@ -1663,8 +1679,10 @@ action against a 33 ms frame budget at 30 steps per second.
 
 <p>Other limits worth stating plainly:</p>
 <ul>
-  <li><b>Table weights are not quantised.</b> Only the interfaces and the readout weights are on
-  grids. A genuinely all-integer model is further work.</li>
+  <li><b>Not everything is on a grid yet.</b> The deployed model's inputs, outputs and all 12,288
+  Stage-3 readout weights are quantised, but the Stage-1 and Stage-2 weights are still plain
+  floats — they only ever have to clear fixed thresholds, so nothing forced the issue. A
+  genuinely all-integer model is further work.</li>
   <li><b>The fit used teacher-visited states only.</b> All 153,600 pairs come from the software
   policy's own trajectories. It transferred to closed-loop control at 98.58% agreement — but
   there was no guarantee in advance that it would.</li>
@@ -1673,20 +1691,6 @@ action against a 33 ms frame budget at 30 steps per second.
   <li><b>The tick budget is a real cost.</b> ~155 ticks per decision is cheap for this
   simulator, but it is a latency floor that a matmul does not have.</li>
 </ul>
-
-<h3>Four traps, each of which produced a wrong answer before it was caught</h3>
-<ol>
-  <li><b>Censored evaluation.</b> Any rollout shorter than the 1,000-step episode limit measures
-  only the episodes that <em>failed</em> — the successful ones never complete and are never
-  counted. A 600-step "cheap screen" returned n = 1 and a meaningless mean.</li>
-  <li><b>Exact-match is the wrong calibration objective.</b> Maximising exact agreement
-  re-selects the biased-low decode. The objective that matters is a zero mean <em>signed</em>
-  residual.</li>
-  <li><b>Underpowered evaluations.</b> At n = 65 the standard error is ~110, so a real effect of
-  ~165 sits inside the noise. ~520 episodes brings it to ~30–40.</li>
-  <li><b>Weights and offset are a pair.</b> Covered above — it cost the single most confidently
-  wrong conclusion in this whole line of work.</li>
-</ol>
 
 <hr>
 
