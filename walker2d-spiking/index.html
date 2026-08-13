@@ -1548,15 +1548,24 @@ network, on GPU, with measured spike ticks, on held-out states:
 </p>
 
 <div class="note key">
-  <span class="lbl">This is what "quantised" means in the deployed model</span>
-  <p>Those 12,288 grid values <em>are</em> the network's Stage-3 synapses — the stored table
-  value is carried as the synaptic amplitude <code>β·exp(w/τ)</code>, so quantising
-  <code>w/τ</code> to 8 bits quantises the synapse itself. It is not a compression applied to a
-  saved file; it is the weight the hardware would hold.</p>
-  <p>The shipped artefact was checked against that grid and sits on it exactly, to float32
-  storage precision. So the deployed actor's name — <b>"Spiking LUT quantised"</b> — is about
-  these weights, on top of the quantised input and output interfaces it inherits from the
-  teacher.</p>
+  <span class="lbl">What spnet actually stores in the synapse</span>
+  <p>Worth being precise about, because the grid and the synapse are not the same numbers. A
+  spnet synapse is only ever a <b>(weight, integer delay)</b> pair, and the engine does no
+  exponentiation at runtime — when a spike arrives it adds the stored number straight onto the
+  postsynaptic membrane. So what sits in the synapse table is not the teacher weight
+  <code>w</code>; it is the <b>amplitude</b></p>
+<pre><code>A = β · exp(w/τ)        precomputed offline, before deploy</code></pre>
+  <p>and <code>w</code> itself never appears in the running network at all.</p>
+  <p>The 8-bit grid sits one <code>exp()</code> step upstream of that, on <code>w/τ</code> — 256
+  levels anchored at <code>lo = −5.099703</code> with a step of <code>0.029012245</code> — so the
+  shipped synapse is <code>A = β·exp(</code>quantised <code>w/τ)</code>. The artefact was checked
+  against that grid and sits on it exactly, to float32 storage precision. The consequence is that
+  the values in the synapse table are <b>geometrically spaced</b>, even though the grid they came
+  from is uniform: the same 12,288 numbers, seen from the other side of the exponential.</p>
+  <p>Either way, quantising <code>w/τ</code> quantises the synapse — this is not a compression
+  applied to a saved file, it is the weight the hardware would hold. That is what the deployed
+  actor's name, <b>"Spiking LUT quantised"</b>, refers to, on top of the quantised input and
+  output interfaces it inherits from the teacher.</p>
 </div>
 
 <div class="tw">
