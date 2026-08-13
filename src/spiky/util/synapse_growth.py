@@ -309,7 +309,12 @@ class SynapseGrowthEngine(object):
                 )
         return lowlevel_engine
 
-    def _grow_explicit(self, explicit_triples, random_seed=None, do_sort_by_target_id=False):
+    def _grow_explicit(self, explicit_triples, random_seed=None, do_sort_by_target_id=False, weights=None):
+        # weights (optional): a 1-D tensor of one EXPLICIT weight per input triple, in
+        # the same order as explicit_triples. When given, the returned chunk carries a
+        # group-aligned weights buffer (see ChunkOfConnections layout) so that
+        # add_connections seeds each edge's weight from it instead of the meta's
+        # initial_weight — allowing many distinct per-edge weights under a single meta.
         # Determine device index for low-level engine (int for CUDA, -1 for CPU)
         device = self._device
         if not isinstance(device, int):
@@ -325,15 +330,31 @@ class SynapseGrowthEngine(object):
         assert len(explicit_triples.shape) == 2
         assert explicit_triples.shape[1] == 3
 
+        # Keep the ORIGINAL (source, target) order alongside the weights. The sort below
+        # rebinds explicit_triples but does NOT reorder `weights`, so the aligner has to be
+        # given the pre-sort tensor. Matching is by (source, target), so the order itself is
+        # irrelevant -- only the correspondence between the two tensors matters.
+        weight_triples = None
+        if weights is not None:
+            assert weights.shape[0] == explicit_triples.shape[0], "weights must have one entry per triple"
+            # (source, target) is the key the weights are matched on, so it has to be unique.
+            # It was previously a dict key, where a collision under two different synapse metas
+            # silently resolved last-one-wins and one of the two edges got the other's weight.
+            pairs = explicit_triples[:, 1:3]
+            n_unique = torch.unique(pairs, dim=0).shape[0]
+            if n_unique != pairs.shape[0]:
+                raise ValueError(
+                    f"explicit weights are matched by (source, target), which must be unique "
+                    f"across the chunk: got {pairs.shape[0]} triples but only {n_unique} "
+                    f"distinct (source, target) pairs. Two edges sharing a source and a target "
+                    f"under different synapse metas cannot be told apart here."
+                )
+            weight_triples = explicit_triples
+
         lowlevel_engine = self._setup_lowlevel_engine(device, random_seed)
 
-        n_synapse_metas = explicit_triples[:, 0:1].unique().shape[0]
-        n_source_ids = explicit_triples[:, 1:2].unique().shape[0]
-        n_groups = (explicit_triples.shape[0] + self._synapse_group_size - 1) // self._synapse_group_size + (n_synapse_metas - 1) * (n_source_ids - 1)
-        connections_buffer = torch.zeros(
-            [n_groups * (4 + 2 * self._synapse_group_size)], dtype=torch.int32, device=self._device
-        )
-
+        # sort triples by (source, then meta) so each distinct (meta, source) sublist is
+        # contiguous — this is the layout the native grow consumes.
         sort_idx = torch.argsort(explicit_triples[:, 1], stable=True)
         explicit_triples = explicit_triples[sort_idx]
         sort_idx = torch.argsort(explicit_triples[:, 0], stable=True)
@@ -347,15 +368,137 @@ class SynapseGrowthEngine(object):
                 )[0] + 1
             ]).flatten().to(dtype=torch.int32)
 
+        entry_points = calc_entry_points(explicit_triples)
+
+        # Connections-buffer sizing. The native grow writes ONE linked group list per
+        # distinct (synapse_meta, source) sublist, each group holding at most group_size
+        # targets, so a sublist with T targets needs ceil(T / group_size) groups. The
+        # exact number of groups is therefore the sum over sublists of ceil(T_i / gs).
+        #
+        # The previous formula  ceil(n_triples/gs) + (n_metas - 1)*(n_sources - 1)
+        # UNDERCOUNTS when there are FEW distinct synapse metas (e.g. a single shared
+        # meta — exactly the per-edge-weights path from #78): the second term collapses
+        # toward 0 while many (meta, source) sublists still each need their own group, so
+        # the buffer is allocated too small and the native kernel writes past it ->
+        # segfault. We compute the exact count from the sublist sizes instead.
+        gs = self._synapse_group_size
+        n_triples = explicit_triples.shape[0]
+        if n_triples > 0:
+            seg_sizes = torch.diff(torch.cat([
+                entry_points,
+                torch.tensor([n_triples], dtype=torch.int32, device=entry_points.device)
+            ]))
+            # exact groups needed, plus one spare group per sublist as a safety margin
+            n_groups = int(((seg_sizes + (gs - 1)) // gs).sum().item()) + int(entry_points.shape[0])
+        else:
+            n_groups = 1
+        connections_buffer = torch.zeros(
+            [n_groups * (4 + 2 * gs)], dtype=torch.int32, device=self._device
+        )
+
         lowlevel_engine._grow_explicit(
             connections_buffer,
-            calc_entry_points(explicit_triples),
+            entry_points,
             explicit_triples.flatten()
         )
         lowlevel_engine.finalize(connections_buffer, do_sort_by_target_id)
         self._profiling_stats = lowlevel_engine.get_profiling_stats()
 
-        return ChunkOfConnections(connections_buffer, self._synapse_group_size)
+        weights_buffer = None
+        if weight_triples is not None:
+            weights_buffer = self._build_group_aligned_weights(
+                connections_buffer, weight_triples, weights)
+
+        return ChunkOfConnections(connections_buffer, self._synapse_group_size, weights=weights_buffer)
+
+    def _build_group_aligned_weights(self, connections_buffer, triples, weights):
+        """Build the per-edge weights buffer aligned to the connection groups: for a
+        group at int-offset d, its weights occupy [ (d/(4+2*gs))*gs : +gs ], slot j
+        matching the j-th (meta, target) body pair.
+
+        THE SOURCE OF EACH BLOCK IS RECOVERED BY FOLLOWING THE CHAIN, not by scanning
+        memory. Only a chain's root header carries its source id; every other group in the
+        chain repeats it as 0 and is reached through the root's `shift_to_next_group`.
+
+        This function used to carry the last positive source FORWARD IN MEMORY ORDER, on the
+        premise that "the explicit build lays each source's groups out contiguously". That
+        premise is false, for two compounding reasons:
+
+          * the grow kernel gives each (synapse_meta, source) sublist its own thread and every
+            thread takes its next group from one global bump allocator (`atomicAdd` on
+            n_allocated, synapse_growth_kernels_logic.cu:1324), so group placement follows GPU
+            scheduling order, not source order;
+          * `finalize() -> merge_chains` then stitches a source's per-meta chains into a single
+            chain by DEMOTING all but one root to source_id 0 and linking the tail with a
+            SIGNED offset to an arbitrary group, forwards or backwards (same file, 1400-1418).
+
+        Measured on a 84,626-edge explicit build at group size 128: 38,002 groups, 19,001
+        occupied, 1,017 surviving roots out of ~19,000 entry points, and ZERO of 17,984 chain
+        links landing on the physically next group -- about half pointed backward, with a
+        median jump of 5,082 groups. The forward-fill therefore named the right source for
+        5.4 % of groups. Every mis-attributed group missed the weight lookup and silently took
+        0.0, so only 47.8 % of the non-zero weights and 32 % of the total weight were ever
+        delivered -- and because group placement is nondeterministic, a DIFFERENT 32 % survived
+        on each rebuild of the identical input.
+
+        Note that these are two independent defects. The mis-attribution is deterministic and
+        host-side: on the CPU build path, where the bump allocator is sequential and the buffer
+        comes out byte-identical between runs, the forward-fill is still 91.7 % wrong, because
+        merge_chains rewrites the links whatever the allocator did. Following the chain fixes
+        the correctness bug outright and makes the result reproducible even though the
+        underlying layout stays nondeterministic -- the weights no longer depend on it.
+
+        `triples` and `weights` correspond element-wise; (source, target) is unique across
+        them (enforced in _grow_explicit), so the lookup is unambiguous. Empty body slots and
+        any (source, target) not present in `triples` stay 0.0.
+        """
+        dev = connections_buffer.device
+        gs = self._synapse_group_size
+        block = 4 + 2 * gs
+        n_blocks = connections_buffer.numel() // block
+        b = connections_buffer.view(n_blocks, block)
+        idx = torch.arange(n_blocks, device=dev)
+
+        # Walk every chain from its root, labelling each group with its true owning source.
+        owner = torch.zeros(n_blocks, dtype=torch.long, device=dev)
+        roots = b[:, 0].long()
+        cur = idx[roots > 0]
+        val = roots[cur]
+        for _ in range(n_blocks + 1):
+            if cur.numel() == 0:
+                break
+            owner[cur] = val
+            shift = b[cur, 3].long()
+            alive = shift != 0
+            cur = ((cur * block + shift) // block)[alive]
+            val = val[alive]
+        else:
+            # each group belongs to exactly one chain, so no chain can be longer than the
+            # buffer -- if we are still walking, the links form a cycle
+            raise RuntimeError("cycle detected in connection group chains")
+
+        if triples.shape[0] == 0:
+            return torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
+
+        srcs = triples[:, 1].to(device=dev, dtype=torch.long)
+        tgts = triples[:, 2].to(device=dev, dtype=torch.long)
+        stride = int(torch.stack([srcs.max(), tgts.max(), owner.max()]).max().item()) + 1
+        ekey = srcs * stride + tgts
+        order = torch.argsort(ekey)
+        ekey_sorted = ekey[order]
+        w_sorted = weights.detach().flatten().to(dtype=torch.float32, device=dev)[order]
+
+        # One pass per body slot rather than one big [n_blocks, gs] tensor: the buffer can hold
+        # millions of groups and gs is up to 128, so the flattened form would not fit.
+        wbuf = torch.zeros(n_blocks * gs, dtype=torch.float32, device=dev)
+        zero = torch.zeros(n_blocks, dtype=torch.float32, device=dev)
+        for j in range(gs):
+            tgt_j = b[:, 5 + 2 * j].long()          # body pair j is (meta, target)
+            qkey = owner * stride + tgt_j
+            pos = torch.searchsorted(ekey_sorted, qkey).clamp(max=ekey_sorted.numel() - 1)
+            hit = (tgt_j > 0) & (ekey_sorted[pos] == qkey)
+            wbuf[idx * gs + j] = torch.where(hit, w_sorted[pos], zero)
+        return wbuf
 
     def get_profiling_stats(self) -> str:
         return self._profiling_stats

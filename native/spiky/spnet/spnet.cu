@@ -193,12 +193,17 @@ public:
         REAL_DT spike_threshold,
         REAL_DT stdp_decay,
         REAL_DT ltp_max,
-        REAL_DT ltd_max
+        REAL_DT ltd_max,
+        uint32_t reset_mode,
+        uint32_t refractory_ticks
     ) {
         __TRACE__("spndm_register_neuron_meta\n");
         checkOnHostDuringPrepare();
         if(this->n_neurons > 0) {
             throw py::value_error("can't register new neuron metas after neurons were initialized");
+        }
+        if((reset_mode != NEURON_RESET_CONSTANT) && (reset_mode != NEURON_RESET_SUBTRACTIVE)) {
+            throw py::value_error("reset_mode must be 0 (constant) or 1 (subtractive)");
         }
         if(stdp_decay < 0.0) {
             throw py::value_error("stdp_decay < 0.0");
@@ -215,7 +220,7 @@ public:
 
         NeuronMeta target_meta = {
             neuron_type, cf_2, cf_1, cf_0, a, b, c, d,
-            spike_threshold, stdp_decay, ltp_max, ltd_max
+            spike_threshold, reset_mode, refractory_ticks, stdp_decay, ltp_max, ltd_max
         };
         NeuronMeta *current_neuron_meta = NeuronMetas(this->neuron_metas_id, host_device_allocator.data);
         uint32_t i=0;
@@ -241,8 +246,12 @@ public:
 
         // prepare stdp tables
 
-        uint32_t* nm_to_ltp = (uint32_t *) PyMem_Malloc(this->n_synapse_metas * sizeof(uint32_t));
-        uint32_t* nm_to_ltd = (uint32_t *) PyMem_Malloc(this->n_synapse_metas * sizeof(uint32_t));
+        // nm_to_ltp / nm_to_ltd map each NEURON meta -> its STDP table offset and are
+        // indexed by the neuron-meta index i in [0, n_neuron_metas) below, so they must
+        // be sized by n_neuron_metas (not n_synapse_metas): when n_neuron_metas >
+        // n_synapse_metas the old sizing under-allocated and the loop wrote past the end.
+        uint32_t* nm_to_ltp = (uint32_t *) PyMem_Malloc(this->n_neuron_metas * sizeof(uint32_t));
+        uint32_t* nm_to_ltd = (uint32_t *) PyMem_Malloc(this->n_neuron_metas * sizeof(uint32_t));
 
         uint32_t stdp_capacity = 0;
 
@@ -439,12 +448,15 @@ public:
     void add_connections(
         const torch::Tensor &connections_buffer,
         uint32_t single_input_group_size,
-        std::optional<uint32_t> &random_seed
+        std::optional<uint32_t> &random_seed,
+        std::optional<const torch::Tensor> &external_weights_buffer
     ) {
         checkConnectionsManagerIsInitialized();
-        std::optional<const torch::Tensor> none;
+        // external_weights_buffer (optional): per-edge initial weights aligned to the
+        // connection groups (see ChunkOfConnections weights layout). When omitted, each
+        // synapse is seeded from its SynapseMeta.initial_weight as before.
         this->n_synapses += connections_manager->add_connections(
-            connections_buffer, none,
+            connections_buffer, external_weights_buffer,
             single_input_group_size,
             0, nullptr,
             random_seed ? random_seed.value() : std::random_device{}()
@@ -1103,7 +1115,9 @@ void PFX(PB_SPNetDataManager)(py::module& m) {
             py::arg("spike_threshold"),
             py::arg("stdp_decay"),
             py::arg("ltp_max"),
-            py::arg("ltd_max"))
+            py::arg("ltd_max"),
+            py::arg("reset_mode") = 0,
+            py::arg("refractory_ticks") = 0)
         .def("initialize_neurons", &SPNDM_CLASS_NAME::initialize_neurons,
             "Initialize neurons",
             py::arg("neuron_counts_by_meta_id"))
@@ -1118,7 +1132,8 @@ void PFX(PB_SPNetDataManager)(py::module& m) {
             "Add connections from ConnectionsBuffer",
             py::arg("connections_buffer"),
             py::arg("single_input_group_size"),
-            py::arg("random_seed") = py::none())
+            py::arg("random_seed") = py::none(),
+            py::arg("external_weights_buffer") = py::none())
         .def("compile", &SPNDM_CLASS_NAME::compile,
             "Finalize synapse groups (calculate backward synapses)",
             py::arg("only_trainable_backwards"),

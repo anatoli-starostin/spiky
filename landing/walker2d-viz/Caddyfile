@@ -1,0 +1,8 @@
+# Caddy auto-provisions a Let's Encrypt certificate for $DOMAIN. Requirements:
+#   - a DNS A (and/or AAAA) record for $DOMAIN pointing at this box's public IP, and
+#   - ports 80 and 443 reachable from the internet (the ACME challenge uses them).
+# reverse_proxy transparently forwards the WebSocket Upgrade, so wss://$DOMAIN -> ws://server:8765 works
+# with no extra config.
+{$DOMAIN} {
+	reverse_proxy server:8765
+}

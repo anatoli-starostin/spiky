@@ -1,0 +1,38 @@
+# Walker2d demo stand — WS server + Caddy TLS reverse proxy.
+#
+# Bring up (after pointing DNS at this box and setting DOMAIN):
+#   cp .env.example .env && edit .env      # set DOMAIN=demo.example.com
+#   docker compose up -d --build
+#
+# Caddy obtains a Let's Encrypt cert for $DOMAIN automatically and proxies wss://$DOMAIN -> ws://server:8765.
+services:
+  server:
+    build: ./server
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8765"
+      ENV_ID: "Walker2d-v5"
+      SPS: "30"
+      MAX_SESSIONS: "${MAX_SESSIONS:-6}"    # cap concurrent viewers (one MuJoCo env each); 6 fits a 2-vCPU box
+    expose:
+      - "8765"                              # internal only — not published to the host; Caddy fronts it
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - server
+    environment:
+      DOMAIN: "${DOMAIN:?set DOMAIN in .env to your FQDN, e.g. demo.example.com}"
+    ports:
+      - "80:80"       # required for the ACME HTTP challenge + HTTP->HTTPS redirect
+      - "443:443"     # TLS (wss)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # persists issued certs across restarts (don't lose these)
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

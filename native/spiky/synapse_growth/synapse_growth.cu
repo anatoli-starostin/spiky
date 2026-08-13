@@ -380,25 +380,45 @@ public:
             throw py::value_error("some error happened inside merge_chains kernel");
         }
 
+        // NOTE: error_counter is deliberately kept alive past this point --
+        // sort_chains_by_synapse_meta now reports through it too (chain-walk step caps and the
+        // root-claim invariant). Only merge_table is released here.
         if (device == -1) {
             PyMem_Free(merge_table);
-            PyMem_Free(error_counter);
         } else {
             #ifndef NO_CUDA
             c10::cuda::CUDAGuard guard(device);
             cudaFree(merge_table);
-            cudaFreeHost(error_counter);
             #endif
         }
 
+        *error_counter = 0;
         PROF_START(SYNAPSE_GROWTH_SORT_CHAINS_BY_SYNAPSE_META_PROFILER_OP);
         numBlocks = dim3((n_connection_blocks + SYNAPSE_GROWTH_TPB - 1) / SYNAPSE_GROWTH_TPB, 1);
         GRID_CALL_NO_SHARED_MEM(
             numBlocks, sort_chains_by_synapse_meta, SYNAPSE_GROWTH_TPB,
             target_buffer, n_connection_blocks,
-            this->single_block_size
+            this->single_block_size, error_counter
         );
         PROF_END(SYNAPSE_GROWTH_SORT_CHAINS_BY_SYNAPSE_META_PROFILER_OP);
+
+        if(device != -1) {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaDeviceSynchronize();
+            #endif
+        }
+        if(*error_counter > 0) {
+            throw py::value_error("some error happened inside sort_chains_by_synapse_meta kernel");
+        }
+        if (device == -1) {
+            PyMem_Free(error_counter);
+        } else {
+            #ifndef NO_CUDA
+            c10::cuda::CUDAGuard guard(device);
+            cudaFreeHost(error_counter);
+            #endif
+        }
 
         PROF_START(SYNAPSE_GROWTH_FINAL_SORT_PROFILER_OP);
         numBlocks = dim3((n_connection_blocks + SYNAPSE_GROWTH_TPB - 1) / SYNAPSE_GROWTH_TPB, 1);

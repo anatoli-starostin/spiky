@@ -1,0 +1,5 @@
+opponent-pair WTA | HYP #84 ceiling 98.97% | BETA=1.0 near-integrator, soft reset, Dale-legal; E edges learnable-DCLS, I edges FIXED delay 1
+single       | acc 75.62% | quint(near->far) [56.1, 67.3, 75.9, 84.9, 93.9] | rates P/N/I 0.047/0.047/0.000 | BCE 1.921->0.576
+pair_noinh   | acc 77.54% | quint(near->far) [55.1, 66.1, 79.5, 90.2, 96.8] | rates P/N/I 0.070/0.047/0.000 | BCE 1.118->0.453
+pair_shared  | acc 79.48% | quint(near->far) [57.0, 69.4, 81.8, 91.9, 97.4] | rates P/N/I 0.075/0.043/0.015 | BCE 1.118->0.464
+pair_cross   | acc 79.06% | quint(near->far) [56.3, 69.0, 81.1, 91.4, 97.4] | rates P/N/I 0.070/0.039/0.004 | BCE 1.118->0.458

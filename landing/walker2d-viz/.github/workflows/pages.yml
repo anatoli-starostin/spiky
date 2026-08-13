@@ -1,0 +1,31 @@
+# Publishes the static client/ folder to GitHub Pages. In the repo: Settings -> Pages -> Build and
+# deployment -> Source = "GitHub Actions". Then edit client/config.js to your wss:// domain and push.
+name: Deploy client to GitHub Pages
+on:
+  push:
+    branches: [main]        # <-- set to your default branch
+    paths:
+      - "client/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: client        # the whole static client dir (index.html + config.js + src/)
+      - id: deploy
+        uses: actions/deploy-pages@v4

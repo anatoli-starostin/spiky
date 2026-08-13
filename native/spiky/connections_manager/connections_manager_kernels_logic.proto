@@ -33,7 +33,22 @@ estimate_forward_groups_capacity_logic(
                 return;
             }
 
+            // BELT-AND-SUSPENDERS (not the primary fix): a malformed chain with a cycle would
+            // otherwise spin here forever, because the only exit is shift_to_next_group == 0.
+            // The real fix is the atomicCAS chain claim in sort_chains_by_synapse_meta_logic;
+            // this bound just turns any residual corruption into a diagnosable error instead
+            // of an unkillable 100%-GPU hang. A chain cannot legitimately visit more blocks
+            // than exist.
+            uint32_t chain_steps = 0;
             while(true) {
+                if(++chain_steps > n_input_groups) {
+                    #ifdef ATOMIC
+                    atomicAdd(error_counter, 1);
+                    #else
+                    *error_counter += 1;
+                    #endif
+                    break;
+                }
                 if(header.n_target_neurons > 0) {
                     BaseSynapseMeta synapse_meta = synapse_metas[header.synapse_meta_index];
                     uint32_t n_delays = synapse_meta.max_delay - synapse_meta.min_delay + 1;
@@ -122,6 +137,10 @@ create_forward_groups_logic(
                 #endif
                 return;
             }
+            // Base of the caller-supplied weights buffer, kept so that every chain hop can
+            // recompute the slot offset from header_ptr's ABSOLUTE block index rather than
+            // accumulating a signed delta (see the hops below).
+            EXTERNAL_REAL_DT* input_weights_base = input_weights;
             if(input_weights != nullptr) {
                 input_weights += single_input_group_size * i;
             }
@@ -154,7 +173,18 @@ create_forward_groups_logic(
             #endif
             bool is_rand_initialized = false;
 
+            // BELT-AND-SUSPENDERS, same rationale as the estimator above: bound the chain
+            // walk so a cyclic chain reports an error instead of hanging the GPU forever.
+            uint32_t chain_steps = 0;
             while(true) {
+                if(++chain_steps > n_input_groups) {
+                    #ifdef ATOMIC
+                    atomicAdd(error_counter, 1);
+                    #else
+                    *error_counter += 1;
+                    #endif
+                    break;
+                }
                 synapse_meta_index = header.synapse_meta_index;
                 synapse_meta = synapse_metas[synapse_meta_index];
                 n_targets = header.n_target_neurons;
@@ -199,7 +229,19 @@ create_forward_groups_logic(
                             __DETAILED_TRACE__("[create_forward_groups] Shifting to next group by %u\n", header.shift_to_next_group);
                             header_ptr = reinterpret_cast<ConnectionsBlockHeader *>(reinterpret_cast<NeuronIndex_t *>(header_ptr) + header.shift_to_next_group);
                             if(input_weights != nullptr) {
-                                input_weights += (header.shift_to_next_group / ConnectionsBlockIntSize(single_input_group_size)) * single_input_group_size;
+                                // Recompute from header_ptr's ABSOLUTE block index. The old
+                                // form accumulated (shift / ConnectionsBlockIntSize(gs)) * gs,
+                                // but ConnectionsBlockIntSize is size_t, so a NEGATIVE
+                                // shift_to_next_group (back-links set one, see
+                                // synapse_growth_kernels_logic -main_header.shift_to_next_group)
+                                // was promoted to unsigned 64-bit before the division and the
+                                // pointer jumped ~2^64 slots. It only ever worked because the
+                                // wrap cancels when the block size divides 2^64 -- true at
+                                // gs=2 (block 8) and false at gs=128 (block 260).
+                                input_weights = input_weights_base
+                                    + (static_cast<int64_t>(reinterpret_cast<NeuronIndex_t *>(header_ptr) - input)
+                                       / static_cast<int64_t>(ConnectionsBlockIntSize(single_input_group_size)))
+                                      * static_cast<int64_t>(single_input_group_size);
                             }
                             input_targets = reinterpret_cast<SynapseMetaNeuronIdPair *>(header_ptr + 1);
                             header = *header_ptr;
@@ -296,7 +338,11 @@ create_forward_groups_logic(
                 } else {
                     header_ptr = reinterpret_cast<ConnectionsBlockHeader *>(reinterpret_cast<NeuronIndex_t *>(header_ptr) + header.shift_to_next_group);
                     if(input_weights != nullptr) {
-                        input_weights += (header.shift_to_next_group / ConnectionsBlockIntSize(single_input_group_size)) * single_input_group_size;
+                        // Same sign-promotion bug as the hop above; recompute absolutely.
+                        input_weights = input_weights_base
+                            + (static_cast<int64_t>(reinterpret_cast<NeuronIndex_t *>(header_ptr) - input)
+                               / static_cast<int64_t>(ConnectionsBlockIntSize(single_input_group_size)))
+                              * static_cast<int64_t>(single_input_group_size);
                     }
                     input_targets = reinterpret_cast<SynapseMetaNeuronIdPair *>(header_ptr + 1);
                     header = *header_ptr;

@@ -1,0 +1,17 @@
+=== ABLATION: T=64 settling[0,32)+readout[32,64]  vs  BASELINE T=32 ===
+metric                          |     T=32 (baseline) |   T=64 second-half
+loss (task MSE) start->end      |    3.549-> 1.411     |   15.597-> 1.708
+held-out |err| mean (% range)   |         23.87%      |         13.16%
+held-out |err| median (% range) |         23.04%      |         11.47%
+within one output tick          |          6.51%      |         20.61%
+within two output ticks         |         15.07%      |         38.57%
+O non-firing (readout window)   |             1       |             0
+rates H_ex / H_inh / O          | 0.249/0.192/0.290     | 0.335/0.336/0.248
+--- ORDERING vs LUT ---
+exact full-argsort match        |         1.2%       |         0.4%
+pairwise agreement (C/15)       |        61.2%       |        63.2%
+Kendall tau_b                   |       0.377        |       0.414
+Spearman rho                    |       0.451        |       0.495
+top-1 argmax match              |        41.8%       |        56.1%
+top-1 argmin match              |        27.5%       |        26.8%
+VERDICT: IMPROVED — err -10.7pp, Spearman +0.044, top-1 +14.3pp vs T=32. Settling time was a real limiter.
