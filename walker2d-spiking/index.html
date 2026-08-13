@@ -1,0 +1,1204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A lookup table that learned to walk — and then became a spiking network</title>
+<meta name="description" content="Turning a trained lookup-table Walker2d policy into a pure spiking neural network by direct construction, and showing it is indistinguishable from its software teacher in closed-loop control." />
+<style>
+/* ------------------------------------------------------------------ *
+ *  PALETTE.  Light is the base; dark only re-defines these tokens.
+ *  Identity colours are also carried by text labels everywhere, so
+ *  nothing depends on colour alone.
+ * ------------------------------------------------------------------ */
+:root{
+  --bg:        #fbfaf8;
+  --surface:   #ffffff;
+  --surface-2: #f3f1ed;
+  --ink:       #1a1a1a;
+  --ink-2:     #454545;
+  --ink-3:     #6e6e6e;
+  --rule:      #e0ddd6;
+  --rule-2:    #cbc7bd;
+
+  --s1:  #1d4ed8;   /* Stage 1 / software teacher — blue   */
+  --s2:  #0d7a6f;   /* Stage 2                     — teal   */
+  --s3:  #c2410c;   /* Stage 3 / spiking           — orange */
+  --s1-w:#e4ecfd;   /* washes */
+  --s2-w:#dcf1ee;
+  --s3-w:#fce9df;
+
+  --good:  #0f7a45;
+  --warn:  #9a6700;
+  --accent:#7a1fa2;
+
+  --code-bg: #f3f1ed;
+  --maxw: 50rem;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:        #16171a;
+    --surface:   #1e2024;
+    --surface-2: #26282d;
+    --ink:       #eceef1;
+    --ink-2:     #c2c6cd;
+    --ink-3:     #949aa3;
+    --rule:      #33363c;
+    --rule-2:    #474b53;
+
+    --s1:  #7ba6f7;
+    --s2:  #4ec9b8;
+    --s3:  #f89a63;
+    --s1-w:#1e2a44;
+    --s2-w:#16332f;
+    --s3-w:#3a2417;
+
+    --good:  #4ec98a;
+    --warn:  #d9a41f;
+    --accent:#c48ae0;
+
+    --code-bg: #26282d;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16171a; --surface:#1e2024; --surface-2:#26282d;
+  --ink:#eceef1; --ink-2:#c2c6cd; --ink-3:#949aa3;
+  --rule:#33363c; --rule-2:#474b53;
+  --s1:#7ba6f7; --s2:#4ec9b8; --s3:#f89a63;
+  --s1-w:#1e2a44; --s2-w:#16332f; --s3-w:#3a2417;
+  --good:#4ec98a; --warn:#d9a41f; --accent:#c48ae0;
+  --code-bg:#26282d;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  font-size:17px; line-height:1.65;
+  font-feature-settings:"kern" 1;
+}
+.wrap{max-width:var(--maxw); margin:0 auto; padding:0 1.25rem 6rem}
+/* Break out of the text column so diagrams and the big results table get room.
+   Undone below 640px, where the container is already the full width. */
+.wide{width:min(62rem, calc(100vw - 2.5rem)); position:relative; left:50%; transform:translateX(-50%)}
+
+/* ---------- typography ---------- */
+h1{font-size:2.35rem; line-height:1.15; letter-spacing:-.02em; margin:0 0 .6rem; font-weight:680}
+h2{font-size:1.5rem; line-height:1.25; letter-spacing:-.01em; margin:3.6rem 0 .3rem; font-weight:660;
+   padding-top:1.6rem; border-top:1px solid var(--rule)}
+h3{font-size:1.13rem; margin:2.2rem 0 .3rem; font-weight:660; letter-spacing:-.005em}
+h4{font-size:.97rem; margin:1.5rem 0 .25rem; font-weight:660; color:var(--ink-2)}
+p{margin:.85rem 0}
+a{color:var(--s1)}
+strong{font-weight:640}
+.lede{font-size:1.17rem; line-height:1.6; color:var(--ink-2)}
+.eyebrow{font-size:.74rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:660; margin:0 0 .8rem}
+.sectnum{color:var(--ink-3); font-weight:500; margin-right:.5rem}
+.small{font-size:.87rem; color:var(--ink-3)}
+
+code,kbd{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  font-size:.86em; background:var(--code-bg); padding:.1em .34em; border-radius:4px}
+pre{background:var(--code-bg); border:1px solid var(--rule); border-radius:8px;
+  padding:.9rem 1rem; overflow-x:auto; font-size:.83rem; line-height:1.55; margin:1.1rem 0}
+pre code{background:none; padding:0; font-size:1em}
+
+/* ---------- header ---------- */
+header.top{padding:4.5rem 0 0}
+.byline{color:var(--ink-3); font-size:.9rem; margin-top:1.6rem;
+  padding-top:1rem; border-top:1px solid var(--rule)}
+
+/* ---------- stat strip ---------- */
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+  gap:.75rem; margin:2rem 0 .5rem}
+.stat{background:var(--surface); border:1px solid var(--rule); border-radius:10px; padding:.85rem .95rem}
+.stat .v{font-size:1.5rem; font-weight:680; letter-spacing:-.02em; line-height:1.1; display:block}
+.stat .k{font-size:.76rem; color:var(--ink-3); margin-top:.3rem; display:block; line-height:1.35}
+
+/* ---------- callouts ---------- */
+.note{border-left:3px solid var(--rule-2); background:var(--surface);
+  padding:.85rem 1.1rem; margin:1.5rem 0; border-radius:0 8px 8px 0}
+.note.warn{border-left-color:var(--warn)}
+.note.key{border-left-color:var(--accent)}
+.note .lbl{display:block; font-size:.72rem; letter-spacing:.11em; text-transform:uppercase;
+  font-weight:680; color:var(--ink-3); margin-bottom:.35rem}
+.note.warn .lbl{color:var(--warn)}
+.note.key  .lbl{color:var(--accent)}
+.note p:first-of-type{margin-top:0} .note p:last-child{margin-bottom:0}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto; margin:1.4rem 0; border:1px solid var(--rule); border-radius:10px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:.88rem}
+th,td{padding:.55rem .8rem; text-align:left; border-bottom:1px solid var(--rule)}
+thead th{font-size:.74rem; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:660; white-space:nowrap; background:var(--surface-2)}
+tbody tr:last-child td{border-bottom:none}
+td.n,th.n{text-align:right; font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap}
+tr.hi td{background:var(--s3-w); font-weight:640}
+caption{caption-side:bottom; text-align:left; padding:.6rem .8rem;
+  color:var(--ink-3); font-size:.8rem; line-height:1.5}
+
+/* ---------- figures ---------- */
+figure{margin:2.2rem 0; padding:0}
+.figbox{background:var(--surface); border:1px solid var(--rule); border-radius:12px;
+  padding:1.1rem; overflow-x:auto}
+figure svg{display:block; width:100%; height:auto; min-width:34rem}
+figcaption{color:var(--ink-3); font-size:.85rem; line-height:1.55; margin-top:.7rem}
+figcaption b{color:var(--ink-2); font-weight:640}
+
+/* SVG shared classes — kept small so diagrams stay easy to hand-edit */
+.svg-l    {font:600 11px -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; fill:var(--ink)}
+.svg-s    {font:500 10px -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; fill:var(--ink-3)}
+.svg-m    {font:500 10.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; fill:var(--ink-2)}
+.svg-t    {font:680 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; fill:var(--ink)}
+.svg-box  {fill:var(--surface-2); stroke:var(--rule-2); stroke-width:1}
+.svg-ln   {stroke:var(--rule-2); stroke-width:1.6; fill:none}
+.svg-ax   {stroke:var(--rule-2); stroke-width:1; fill:none}
+
+/* ---------- misc ---------- */
+ul,ol{padding-left:1.3rem} li{margin:.4rem 0}
+.pill{display:inline-block; font-size:.72rem; font-weight:660; padding:.12rem .5rem;
+  border-radius:999px; letter-spacing:.02em; vertical-align:.08em}
+.p1{background:var(--s1-w); color:var(--s1)}
+.p2{background:var(--s2-w); color:var(--s2)}
+.p3{background:var(--s3-w); color:var(--s3)}
+hr{border:none; border-top:1px solid var(--rule); margin:2.5rem 0}
+.toc{background:var(--surface); border:1px solid var(--rule); border-radius:10px;
+  padding:1rem 1.2rem; margin:2.5rem 0; font-size:.9rem}
+.toc ol{margin:.4rem 0 0; padding-left:1.2rem; color:var(--ink-3)}
+.toc a{text-decoration:none; color:var(--ink-2)}
+.toc a:hover{text-decoration:underline; color:var(--s1)}
+@media (max-width:640px){
+  body{font-size:16px} h1{font-size:1.9rem} .wrap{padding:0 1rem 4rem}
+  header.top{padding-top:2.5rem}
+  .wide{width:auto; left:auto; transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="top">
+  <p class="eyebrow">Lookup tables → spiking networks · Walker2d</p>
+  <h1>A lookup table that learned to walk — and then became a spiking network</h1>
+  <p class="lede">
+    We wanted to show that <b>lookup-table models transfer to the spiking domain in practice,
+    not just in principle</b>. So we trained one to control a Walker2d robot, turned it into a
+    pure spiking neural network by direct construction, and measured whether the robot still
+    walked. It does — indistinguishably from the software policy it came from.
+  </p>
+  <p class="byline">
+    2,889 neurons · 25,953 synapses · ~155 ticks per decision · no external clock ·
+    no gradient descent inside the network · running live in the browser demo.
+  </p>
+</header>
+
+<div class="stats">
+  <div class="stat"><span class="v" style="color:var(--s3)">6312</span>
+    <span class="k">Spiking network return<br>(±27, ~515 episodes)</span></div>
+  <div class="stat"><span class="v" style="color:var(--s1)">6253</span>
+    <span class="k">Software teacher return<br>(±36, ~521 episodes)</span></div>
+  <div class="stat"><span class="v">+1.31σ</span>
+    <span class="k">Difference — statistically indistinguishable</span></div>
+  <div class="stat"><span class="v">98.7%</span>
+    <span class="k">Actions identical to the teacher, tick for tick</span></div>
+</div>
+
+<div class="toc">
+  <b>What follows</b>
+  <ol>
+    <li><a href="#arc">The idea in one picture</a></li>
+    <li><a href="#lut">Part 1 — training a lookup table to walk</a></li>
+    <li><a href="#snn">Part 2 — building the spiking network</a></li>
+    <li><a href="#fit">Part 3 — the one thing we had to fit</a></li>
+    <li><a href="#results">Results</a></li>
+    <li><a href="#deploy">It is live</a></li>
+    <li><a href="#honest">What we are <i>not</i> claiming</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="arc"><span class="sectnum">1</span>The idea in one picture</h2>
+
+<p>
+Spiking neural networks are attractive because they are cheap in hardware: a neuron does
+nothing until a spike arrives, and information can live in <em>when</em> a spike happens rather
+than in a multiplied number. The usual difficulty is getting a <em>good</em> network into that
+form. Training directly in spikes is hard; converting a trained conventional network is lossy.
+</p>
+<p>
+A <b>lookup-table (LUT) policy</b> sidesteps both. It never multiplies anything. It only ever
+<em>compares</em> its inputs to each other, uses the pattern of comparisons as an address, and
+reads out a stored value. Comparisons are the one thing spike timing does natively — whichever
+neuron fires first wins — so the translation is a <em>construction</em>, not an approximation.
+Almost every weight and delay in the finished network is computed in closed form from the
+trained table.
+</p>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 250" role="img" aria-label="The arc: train a constrained lookup-table policy with PPO, construct a three-stage spiking network from it, fit only the readout weights, deploy.">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+      <path d="M0,0 L7,3.2 L0,6.4 Z" fill="var(--rule-2)"/>
+    </marker>
+  </defs>
+
+  <!-- 1 TASK -->
+  <rect x="10" y="60" width="140" height="96" rx="10" class="svg-box"/>
+  <text class="svg-t" x="80" y="86" text-anchor="middle">Walker2d</text>
+  <text class="svg-s" x="80" y="106" text-anchor="middle">17-D observation</text>
+  <text class="svg-s" x="80" y="121" text-anchor="middle">6-D torque action</text>
+  <text class="svg-s" x="80" y="140" text-anchor="middle">MuJoCo physics</text>
+
+  <line x1="154" y1="108" x2="188" y2="108" class="svg-ln" marker-end="url(#ah)"/>
+
+  <!-- 2 LUT -->
+  <rect x="192" y="42" width="192" height="132" rx="10" fill="var(--s1-w)" stroke="var(--s1)" stroke-width="1.3"/>
+  <text class="svg-t" x="288" y="66" text-anchor="middle" fill="var(--s1)">1 · Train the LUT</text>
+  <text class="svg-s" x="288" y="86" text-anchor="middle">PPO, 201M env-steps</text>
+  <text class="svg-m" x="288" y="104" text-anchor="middle">32 tables × 64 rows × 6</text>
+  <text class="svg-s" x="288" y="124" text-anchor="middle">+ four deliberate constraints</text>
+  <text class="svg-s" x="288" y="139" text-anchor="middle">so that it is <tspan font-style="italic">buildable</tspan> in spikes</text>
+  <text class="svg-s" x="288" y="160" text-anchor="middle" fill="var(--s1)">→ a competitive walker</text>
+
+  <line x1="388" y1="108" x2="422" y2="108" class="svg-ln" marker-end="url(#ah)"/>
+
+  <!-- 3 CONSTRUCT -->
+  <rect x="426" y="42" width="206" height="132" rx="10" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.3"/>
+  <text class="svg-t" x="529" y="66" text-anchor="middle" fill="var(--s3)">2 · Construct the SNN</text>
+  <text class="svg-s" x="529" y="86" text-anchor="middle">3 stages, derived in closed form</text>
+  <text class="svg-s" x="529" y="103" text-anchor="middle">order → lookup → readout</text>
+  <text class="svg-s" x="529" y="123" text-anchor="middle">+ a little post-training on</text>
+  <text class="svg-s" x="529" y="138" text-anchor="middle">the 12,288 readout weights only</text>
+  <text class="svg-s" x="529" y="160" text-anchor="middle" fill="var(--s3)">→ a pure spiking network</text>
+
+  <line x1="636" y1="108" x2="670" y2="108" class="svg-ln" marker-end="url(#ah)"/>
+
+  <!-- 4 DEPLOY -->
+  <rect x="674" y="60" width="216" height="96" rx="10" class="svg-box"/>
+  <text class="svg-t" x="782" y="86" text-anchor="middle">3 · Deployed</text>
+  <text class="svg-s" x="782" y="106" text-anchor="middle">live in the browser demo,</text>
+  <text class="svg-s" x="782" y="121" text-anchor="middle">driving real MuJoCo physics</text>
+  <text class="svg-s" x="782" y="141" text-anchor="middle" fill="var(--good)">on par with its teacher</text>
+
+  <!-- footer band -->
+  <rect x="10" y="196" width="880" height="42" rx="8" fill="var(--surface-2)" stroke="var(--rule)"/>
+  <text class="svg-l" x="450" y="215" text-anchor="middle">The whole point: step 2 is a <tspan font-style="italic">construction</tspan>, not a retraining.</text>
+  <text class="svg-s" x="450" y="230" text-anchor="middle">No backpropagation ever runs inside the spiking network. Every delay, and all but the readout weights, come straight from the trained table.</text>
+</svg>
+</div>
+<figcaption><b>The arc.</b> Train under constraints that make the policy physically realisable;
+construct the network; check the robot still walks.</figcaption>
+</figure>
+
+<!-- ================================================================= -->
+<h2 id="lut"><span class="sectnum">2</span>Part 1 — training a lookup table to walk</h2>
+
+<h3>The architecture: compare, address, look up</h3>
+<p>
+The policy holds <b>32 independent lookup tables</b>. Each table owns 6 fixed pairs of
+observation coordinates — its <em>anchor pairs</em>. For an observation <code>x</code>, each
+pair contributes one bit:
+</p>
+
+<pre><code>bit_i   = 1[ x[a_i] &gt; x[b_i] ]        6 anchor pairs per table, packed MSB-first
+addr_t  = the 6 bits of table t       →  one of 64 rows
+row_t   = weights[t, addr_t]          weights: (32 tables, 64 rows, 6 outputs)
+
+mu[o]   = 32·τ · log( (1/32) · Σ_t exp( row_t[o] / τ ) )      τ = 0.09377
+action  = clip(mu, −1, 1)</code></pre>
+
+<p>
+That is <b>12,288 learnable numbers</b> (32 × 64 × 6) plus a single learned temperature
+<code>τ</code>, and — this is the load-bearing part — <b>no arithmetic is ever performed on the
+observation</b>. The policy only asks which of two coordinates is larger. The addressing is
+exact rather than approximate, and "which is larger" is precisely the question a race between
+two spikes answers.
+</p>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 300" role="img" aria-label="Anchor-pair lookup table: six comparisons per table form a six-bit address, selecting one of 64 rows of six values; 32 tables are pooled by a log-sum-exp into six outputs.">
+  <defs>
+    <marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+      <path d="M0,0 L7,3.2 L0,6.4 Z" fill="var(--rule-2)"/>
+    </marker>
+  </defs>
+
+  <text class="svg-s" x="52" y="26" text-anchor="middle">observation</text>
+  <text class="svg-m" x="52" y="40" text-anchor="middle">x ∈ ℝ¹⁷</text>
+  <rect x="26" y="50" width="52" height="196" rx="6" class="svg-box"/>
+  <!-- coordinate ticks -->
+  <g stroke="var(--rule-2)" stroke-width="1">
+    <line x1="26" y1="72"  x2="78" y2="72"/><line x1="26" y1="94"  x2="78" y2="94"/>
+    <line x1="26" y1="116" x2="78" y2="116"/><line x1="26" y1="138" x2="78" y2="138"/>
+    <line x1="26" y1="160" x2="78" y2="160"/><line x1="26" y1="182" x2="78" y2="182"/>
+    <line x1="26" y1="204" x2="78" y2="204"/><line x1="26" y1="226" x2="78" y2="226"/>
+  </g>
+  <circle cx="52" cy="83"  r="4" fill="var(--s1)"/>
+  <circle cx="52" cy="149" r="4" fill="var(--s1)"/>
+
+  <!-- comparators -->
+  <path d="M84 116 C 118 116, 118 96, 152 96" class="svg-ln"/>
+  <path d="M84 172 C 118 172, 118 106, 152 106" class="svg-ln"/>
+  <text class="svg-s" x="118" y="66" text-anchor="middle">6 comparisons</text>
+
+  <rect x="152" y="60" width="86" height="176" rx="8" fill="var(--s1-w)" stroke="var(--s1)" stroke-width="1.2"/>
+  <text class="svg-l" x="195" y="82" text-anchor="middle" fill="var(--s1)">x[a] &gt; x[b]</text>
+  <g class="svg-m" text-anchor="middle" fill="var(--ink)">
+    <text x="195" y="108">1</text><text x="195" y="126">0</text><text x="195" y="144">1</text>
+    <text x="195" y="162">1</text><text x="195" y="180">0</text><text x="195" y="198">0</text>
+  </g>
+  <text class="svg-s" x="195" y="222" text-anchor="middle">6 bits</text>
+
+  <line x1="242" y1="148" x2="276" y2="148" class="svg-ln" marker-end="url(#ah2)"/>
+  <text class="svg-s" x="259" y="138" text-anchor="middle">addr</text>
+
+  <!-- table -->
+  <rect x="280" y="60" width="150" height="176" rx="8" class="svg-box"/>
+  <text class="svg-l" x="355" y="80" text-anchor="middle">table t — 64 rows</text>
+  <g stroke="var(--rule)" stroke-width="1">
+    <line x1="280" y1="92" x2="430" y2="92"/><line x1="280" y1="112" x2="430" y2="112"/>
+    <line x1="280" y1="132" x2="430" y2="132"/><line x1="280" y1="152" x2="430" y2="152"/>
+    <line x1="280" y1="172" x2="430" y2="172"/><line x1="280" y1="192" x2="430" y2="192"/>
+    <line x1="280" y1="212" x2="430" y2="212"/>
+  </g>
+  <rect x="280" y="152" width="150" height="20" fill="var(--s1)" opacity=".22"/>
+  <text class="svg-m" x="355" y="166" text-anchor="middle">row = 6 values</text>
+  <text class="svg-s" x="355" y="230" text-anchor="middle">selected row → one value per output</text>
+
+  <line x1="434" y1="148" x2="470" y2="148" class="svg-ln" marker-end="url(#ah2)"/>
+
+  <!-- 32 tables stack -->
+  <g>
+    <rect x="486" y="52" width="150" height="176" rx="8" class="svg-box" opacity=".35"/>
+    <rect x="480" y="60" width="150" height="176" rx="8" class="svg-box" opacity=".6"/>
+    <rect x="474" y="68" width="150" height="176" rx="8" class="svg-box"/>
+    <text class="svg-l" x="549" y="112" text-anchor="middle">× 32 tables</text>
+    <text class="svg-s" x="549" y="134" text-anchor="middle">each with its own</text>
+    <text class="svg-s" x="549" y="149" text-anchor="middle">anchor pairs and rows</text>
+    <text class="svg-m" x="549" y="176" text-anchor="middle">32 × 64 × 6</text>
+    <text class="svg-m" x="549" y="193" text-anchor="middle" fill="var(--s1)">= 12,288 entries</text>
+  </g>
+
+  <line x1="628" y1="148" x2="664" y2="148" class="svg-ln" marker-end="url(#ah2)"/>
+
+  <!-- pooling -->
+  <rect x="668" y="68" width="216" height="176" rx="8" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.2"/>
+  <text class="svg-t" x="776" y="92" text-anchor="middle" fill="var(--s3)">soft pooling over tables</text>
+  <text class="svg-m" x="776" y="118" text-anchor="middle">32τ · log( mean_t e^(w_t/τ) )</text>
+  <line x1="692" y1="132" x2="860" y2="132" class="svg-ax"/>
+  <text class="svg-s" x="776" y="152" text-anchor="middle">τ → ∞  recovers a plain sum</text>
+  <text class="svg-s" x="776" y="168" text-anchor="middle">τ → 0  recovers 32 · max</text>
+  <text class="svg-s" x="776" y="188" text-anchor="middle">learned τ = 0.09377 sits between</text>
+  <text class="svg-l" x="776" y="216" text-anchor="middle">→ 6 torques, clipped to [−1, 1]</text>
+
+  <text class="svg-s" x="450" y="276" text-anchor="middle">No multiplication touches the observation anywhere along this path — only comparisons, an address, and a stored value.</text>
+</svg>
+</div>
+<figcaption><b>The anchor-pair lookup table.</b> Six comparisons pick a row; 32 tables vote;
+a temperature-controlled soft pooling turns their votes into six torques. The pooling looks
+like an odd choice until Part 2 — it is the piece a spiking membrane can compute for free.</figcaption>
+</figure>
+
+<h3>Training it: PPO on 201 million environment steps</h3>
+<p>
+The table was trained from scratch with a GPU-resident PPO implementation (PyTorch + NVIDIA
+Warp for the batched physics — not JAX), running 8,192 Walker2d environments in parallel.
+</p>
+
+<div class="tw">
+<table>
+  <caption>PPO configuration. The critic is a <code>[17, 256, 256, 1]</code> Tanh MLP whose final
+  linear readout is replaced by the <em>same</em> soft pooling used by the policy.</caption>
+  <tbody>
+    <tr><td>environments × rollout × updates</td><td class="n">8,192 × 32 × 768 → 201M env-steps</td></tr>
+    <tr><td>epochs / minibatches</td><td class="n">4 / 8</td></tr>
+    <tr><td>clip ε / GAE λ / γ</td><td class="n">0.2 / 0.95 / 0.99</td></tr>
+    <tr><td>learning rate</td><td class="n">3e−4, cosine → 3e−5</td></tr>
+    <tr><td>entropy / value / max-grad</td><td class="n">0.0 / 0.5 / 0.5</td></tr>
+    <tr><td>target KL</td><td class="n">0.02, early-stop at 1.5×</td></tr>
+    <tr><td>log-σ floor</td><td class="n">−1.897, re-clamped every update</td></tr>
+    <tr><td>parameters</td><td class="n">82,953</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Four deliberate constraints — and why each one exists</h3>
+<p>
+A freely trained policy is continuous at both ends: it reads real-valued observations and emits
+real-valued torques. A spiking network can do neither. So after the main run we did a short
+<b>384-update quantisation-aware fine-tune</b> that put the physical limitations into the
+training loop, where the policy could adapt to them instead of suffering them at conversion
+time. Each constraint answers a specific property of the spiking substrate.
+</p>
+
+<h4><span class="pill p1">Constraint 1</span> &nbsp;Input: 128 Gaussian-companded buckets, one shared map</h4>
+<p>
+A spike happens at an integer tick, so the observation must become an integer before it can
+enter the network. We map each coordinate through
+<code>tick = round(127 · Φ(x/σ))</code> — a Gaussian companding curve that spends its resolution
+where observations actually live, rather than uniformly across a range they rarely reach.
+</p>
+<p>
+The map is <b>shared across all 17 coordinates out of necessity, not convenience</b>. The LUT
+addresses by comparing coordinates <em>to each other</em>; a per-coordinate map would silently
+change the meaning of every address bit. The width σ = 1 was measured, not assumed: it is an
+interior minimum of the address-bit flip rate (<b>0.486%</b>, against 1.39% at σ = 0.5 and
+1.16% at σ = 3.0), and it coincides with the principled value for unit-variance observations.
+</p>
+
+<h4><span class="pill p1">Constraint 2</span> &nbsp;Output: the soft (log-sum-exp) pooling</h4>
+<p>
+This one was not added for quantisation — it is the architecture. But it is the reason the
+readout is buildable at all. As Part 2 shows, a synapse can supply an exponential, a dendrite
+can supply a sum, and an exponentially growing membrane supplies a logarithm as its
+time-to-threshold. A log-sum-exp is therefore something a single neuron computes
+<em>physically</em>. A plain sum would have been fine too; a softmax or a matmul would not.
+</p>
+
+<h4><span class="pill p1">Constraint 3</span> &nbsp;Output: clip to [−1, 1], then 22 uniform levels</h4>
+<p>
+The spiking readout reports its answer as the <em>tick</em> at which a neuron fires — an
+integer. The action is therefore inherently discrete, at a step of 2/21 ≈ 0.0952. Rather than
+discover this after conversion, we trained through it, using a straight-through estimator so
+gradients still flow. The policy learns to be good at the actions it can actually express.
+</p>
+
+<h4><span class="pill p1">Constraint 4</span> &nbsp;An L2 penalty on out-of-band outputs — the one that mattered most</h4>
+<p>
+The first fine-tuning run raised return by +411 and yet made the spiking network
+<em>worse</em>. The reason: the policy's raw, pre-clip output sprawled far outside [−1, 1] —
+about 51% of components — and the fine-tune left it exactly as sprawled while making the table
+weights <em>wider</em>.
+</p>
+<p>
+That is structural, not bad luck. The clip's gradient is exactly zero outside the band, and an
+out-of-band action is <b>free twice over</b>: MuJoCo clamps <code>ctrl</code> to its range
+(verified — +3.3 and +1.0 produce bit-identical trajectories), and the training environment
+clamps before computing control cost. Nothing anywhere pulled the raw value back in. But in the
+spiking network the raw value <em>is</em> a physical span — of delays, then of weights — and
+sprawl costs ticks. So we made it cost something in training too:
+</p>
+<pre><code>loss += w · mean_batch( Σ_o relu( |mu_raw[o]| − 1 )² )        w = 0.3</code></pre>
+
+<div class="tw">
+<table>
+  <caption>The penalty weight was chosen by a 20-update sweep, not guessed. Pulling the raw output
+  in shrinks the delay span the spiking network has to physically realise.</caption>
+  <thead><tr><th></th><th class="n">parent</th><th class="n">fine-tune, no penalty</th><th class="n">fine-tune + L2</th></tr></thead>
+  <tbody>
+    <tr><td>raw output outside [−1, 1]</td><td class="n">51.6%</td><td class="n">53.9%</td><td class="n">~13%</td></tr>
+    <tr class="hi"><td>mean readout span</td><td class="n">74.7</td><td class="n">79.0</td><td class="n">63.8 ticks</td></tr>
+    <tr><td>largest delay required</td><td class="n">84</td><td class="n">96</td><td class="n">81 ticks</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note warn">
+  <span class="lbl">An honest caveat about the word "quantised"</span>
+  <p>The <b>table weights themselves were never quantised</b>. They remain float32 — 12,286
+  distinct values out of 12,288, on no grid whatsoever. "Quantisation-aware" here means
+  <em>at the interfaces</em>: what enters the network and what leaves it are discrete; what is
+  stored inside is not. (Part 3 later puts the <em>readout</em> weights on an 8-bit grid, but
+  that is a separate step with a different motivation.)</p>
+</div>
+
+<p>
+The result of Part 1 is an ordinary, competitive Walker2d policy with a natural gait, which
+happens to be expressible as 12,288 stored numbers and a pile of comparisons.
+</p>
+
+<!-- ================================================================= -->
+<h2 id="snn"><span class="sectnum">3</span>Part 2 — building the spiking network</h2>
+
+<p>
+Everything from here on is <b>construction</b>. The three stages map one-to-one onto the three
+things the LUT does: work out the comparisons, use them as an address, and pool the results.
+</p>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 330" role="img" aria-label="The three-stage spiking pipeline: latency-coded inputs, order detection by dual-rail winner-take-all, one-hot lookup cell selection, and an amplitude-encoded readout, with a tick budget along the bottom.">
+  <defs>
+    <marker id="ah3" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+      <path d="M0,0 L7,3.2 L0,6.4 Z" fill="var(--rule-2)"/>
+    </marker>
+  </defs>
+
+  <!-- INPUT -->
+  <rect x="8" y="46" width="112" height="164" rx="9" class="svg-box"/>
+  <text class="svg-t" x="64" y="68" text-anchor="middle">input</text>
+  <text class="svg-s" x="64" y="86" text-anchor="middle">17 neurons</text>
+  <text class="svg-s" x="64" y="104" text-anchor="middle">one spike each</text>
+  <!-- spike raster -->
+  <g stroke="var(--s1)" stroke-width="2.4">
+    <line x1="30" y1="122" x2="30" y2="136"/>
+    <line x1="52" y1="140" x2="52" y2="154"/>
+    <line x1="40" y1="158" x2="40" y2="172"/>
+    <line x1="78" y1="176" x2="78" y2="190"/>
+  </g>
+  <line x1="22" y1="196" x2="106" y2="196" class="svg-ax"/>
+  <text class="svg-s" x="64" y="208" text-anchor="middle">bigger value → earlier</text>
+
+  <line x1="124" y1="128" x2="152" y2="128" class="svg-ln" marker-end="url(#ah3)"/>
+
+  <!-- STAGE 1 -->
+  <rect x="156" y="34" width="196" height="188" rx="10" fill="var(--s1-w)" stroke="var(--s1)" stroke-width="1.3"/>
+  <text class="svg-t" x="254" y="56" text-anchor="middle" fill="var(--s1)">Stage 1 — order</text>
+  <text class="svg-s" x="254" y="74" text-anchor="middle">136 dual-rail comparators</text>
+  <text class="svg-s" x="254" y="89" text-anchor="middle">(272 rails + 272 inhibitors)</text>
+  <text class="svg-s" x="254" y="104" text-anchor="middle">272 memory cells</text>
+  <!-- two rails diverging -->
+  <line x1="182" y1="160" x2="326" y2="160" class="svg-ax"/>
+  <path d="M182 160 C 220 158, 250 140, 300 118" stroke="var(--s1)" stroke-width="2" fill="none"/>
+  <path d="M182 160 C 220 162, 250 182, 300 202" stroke="var(--rule-2)" stroke-width="2" fill="none"/>
+  <text class="svg-s" x="316" y="118" fill="var(--s1)">wins</text>
+  <text class="svg-s" x="312" y="208">loses</text>
+  <text class="svg-s" x="254" y="140" text-anchor="middle">V = 0 is <tspan font-style="italic">unstable</tspan></text>
+
+  <line x1="356" y1="140" x2="384" y2="140" class="svg-ln" marker-end="url(#ah3)"/>
+  <text class="svg-m" x="370" y="118" text-anchor="middle" fill="var(--s1)">192</text>
+  <text class="svg-s" x="370" y="130" text-anchor="middle" fill="var(--s1)">bits</text>
+
+  <!-- STAGE 2 -->
+  <rect x="388" y="34" width="164" height="188" rx="10" fill="var(--s2-w)" stroke="var(--s2)" stroke-width="1.3"/>
+  <text class="svg-t" x="470" y="56" text-anchor="middle" fill="var(--s2)">Stage 2 — lookup</text>
+  <text class="svg-s" x="470" y="74" text-anchor="middle">2,048 cell neurons</text>
+  <text class="svg-s" x="470" y="89" text-anchor="middle">(32 tables × 64 rows)</text>
+  <!-- coincidence grid -->
+  <g>
+    <rect x="410" y="104" width="120" height="66" rx="5" fill="var(--surface)" stroke="var(--rule-2)"/>
+    <g fill="var(--rule-2)">
+      <circle cx="424" cy="118" r="3.4"/><circle cx="448" cy="118" r="3.4"/>
+      <circle cx="472" cy="118" r="3.4"/><circle cx="496" cy="118" r="3.4"/><circle cx="518" cy="118" r="3.4"/>
+      <circle cx="424" cy="140" r="3.4"/><circle cx="472" cy="140" r="3.4"/>
+      <circle cx="496" cy="140" r="3.4"/><circle cx="518" cy="140" r="3.4"/>
+      <circle cx="424" cy="158" r="3.4"/><circle cx="448" cy="158" r="3.4"/>
+      <circle cx="496" cy="158" r="3.4"/><circle cx="518" cy="158" r="3.4"/>
+    </g>
+    <circle cx="448" cy="140" r="6" fill="var(--s2)"/>
+  </g>
+  <text class="svg-m" x="470" y="188" text-anchor="middle">6 × 0.18 = 1.08 &gt; 1.0</text>
+  <text class="svg-s" x="470" y="205" text-anchor="middle">exactly one cell per table</text>
+
+  <line x1="556" y1="140" x2="584" y2="140" class="svg-ln" marker-end="url(#ah3)"/>
+  <text class="svg-m" x="570" y="118" text-anchor="middle" fill="var(--s2)">32</text>
+  <text class="svg-s" x="570" y="130" text-anchor="middle" fill="var(--s2)">cells</text>
+
+  <!-- STAGE 3 -->
+  <rect x="588" y="34" width="196" height="188" rx="10" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.3"/>
+  <text class="svg-t" x="686" y="56" text-anchor="middle" fill="var(--s3)">Stage 3 — readout</text>
+  <text class="svg-s" x="686" y="74" text-anchor="middle">6 output neurons</text>
+  <text class="svg-s" x="686" y="89" text-anchor="middle">value carried in the weight</text>
+  <!-- exponential rise to threshold -->
+  <line x1="612" y1="196" x2="762" y2="196" class="svg-ax"/>
+  <line x1="612" y1="112" x2="762" y2="112" stroke="var(--s3)" stroke-width="1" stroke-dasharray="4 3"/>
+  <text class="svg-s" x="768" y="115" fill="var(--s3)">θ</text>
+  <path d="M616 190 C 660 186, 692 168, 716 112" stroke="var(--s3)" stroke-width="2.2" fill="none"/>
+  <circle cx="716" cy="112" r="4" fill="var(--s3)"/>
+  <text class="svg-s" x="686" y="212" text-anchor="middle">firing time = the answer</text>
+
+  <line x1="788" y1="128" x2="816" y2="128" class="svg-ln" marker-end="url(#ah3)"/>
+  <rect x="820" y="90" width="72" height="76" rx="8" class="svg-box"/>
+  <text class="svg-l" x="856" y="118" text-anchor="middle">6</text>
+  <text class="svg-s" x="856" y="136" text-anchor="middle">torques</text>
+  <text class="svg-s" x="856" y="152" text-anchor="middle">22 levels</text>
+
+  <!-- tick budget -->
+  <text class="svg-s" x="8" y="254">tick budget of one decision</text>
+  <line x1="8" y1="266" x2="892" y2="266" class="svg-ax"/>
+  <g stroke="var(--rule-2)" stroke-width="1">
+    <line x1="8" y1="262" x2="8" y2="270"/><line x1="300" y1="262" x2="300" y2="270"/>
+    <line x1="360" y1="262" x2="360" y2="270"/><line x1="892" y1="262" x2="892" y2="270"/>
+  </g>
+  <rect x="8"   y="270" width="292" height="14" rx="3" fill="var(--s1)" opacity=".3"/>
+  <rect x="300" y="270" width="60"  height="14" rx="3" fill="var(--s2)" opacity=".45"/>
+  <rect x="360" y="270" width="532" height="14" rx="3" fill="var(--s3)" opacity=".3"/>
+  <text class="svg-s" x="154" y="298" text-anchor="middle">inputs arrive &amp; comparators settle (~0–127)</text>
+  <text class="svg-s" x="330" y="298" text-anchor="middle">gate</text>
+  <text class="svg-s" x="626" y="298" text-anchor="middle">membrane climbs to threshold</text>
+  <text class="svg-s" x="450" y="318" text-anchor="middle">138 / 154.5 / 167 ticks — shortest, mean, longest. The network stops when it is done, not when a clock says so.</text>
+</svg>
+</div>
+<figcaption><b>The three stages.</b> 2,889 neurons and 25,953 synapses in total. Everything is
+derived from the trained table; the only thing that was subsequently fitted is the set of
+weights on the arrows entering Stage 3.</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <caption>Neuron census. The engine constants are
+  <code>DE=3, DI=2, W_EXC=1.5, W_INH=−10, TAU_M_RAIL=20, TAU_MEM=1200, W_MEM=W_GATE=0.6,
+  W_AND=0.18, W_DET=0.06, D_GATE=6, D_OUT=1, TAU_M_OUT=31.257</code>.</caption>
+  <thead><tr><th>population</th><th class="n">count</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td>input + detector</td><td class="n">18</td><td>one latency-coded spike per observation coordinate</td></tr>
+    <tr><td>comparator rails</td><td class="n">272</td><td>136 dual-rail winner-take-all pairs</td></tr>
+    <tr><td>inhibitory interneurons</td><td class="n">272</td><td>each rail vetoes the other</td></tr>
+    <tr><td>memory cells</td><td class="n">272</td><td>hold the decided bit until the lookup fires</td></tr>
+    <tr><td>LUT cells</td><td class="n">2,048</td><td>32 tables × 64 rows</td></tr>
+    <tr><td>outputs</td><td class="n">6</td><td>one per torque</td></tr>
+    <tr><td>completion detector</td><td class="n">1</td><td>fires when the last input has arrived</td></tr>
+    <tr class="hi"><td>total</td><td class="n">2,889</td><td>25,953 synapses</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ---------------- Stage 1 ---------------- -->
+<h3><span class="pill p1">Stage 1</span> &nbsp;Order detection — races, not subtractions</h3>
+
+<p>
+Every observation coordinate is emitted as a <b>first-spike latency</b>: bigger value, earlier
+spike.
+</p>
+<pre><code>tick = 127 − searchsorted(bucket_edges, x_norm)      larger value → EARLIER spike</code></pre>
+<p>
+Only the bucket <em>edges</em> cross into the network. It consumes tick <em>ordering</em> and
+never the dequantised value, so the software-side "what number did that bucket mean" table
+never has to exist in hardware. Ordering is preserved exactly, ties included — which is why
+Stage-1 agreement with the software LUT is <b>bit-exact: 100.0000%, 0 wrong bits out of
+98,304</b>, not merely close.
+</p>
+
+<h4>The comparator: an unstable equilibrium that remembers</h4>
+<p>
+136 <b>dual-rail winner-take-all</b> pairs resolve the 192 address bits (many bits share an
+anchor pair). Each pair is two neurons that excite themselves and inhibit each other. The
+crucial detail is that the rails are <b>anti-leaky</b> — their membrane grows away from rest
+rather than decaying towards it. That makes <code>V = 0</code> an <em>unstable</em> equilibrium:
+the neuron that gets its input first runs away upward and fires; the other runs away downward
+and stays silent for the rest of the episode.
+</p>
+<p>
+This matters because the 17 input spikes are spread over roughly 85 ticks. A decision made at
+tick 12 has to survive until tick 127. A leaky comparator would forget it. An anti-leaky one
+<em>self-reinforces</em> the decision and holds it with no maintenance current at all.
+</p>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 296" role="img" aria-label="Dual-rail comparator behaviour: with a clear winner the rails diverge; on an exact tie both rails would fire, which one extra tick of delay on the greater-than rail fixes, removing 136 tie-detector neurons.">
+  <!-- LEFT: clear winner -->
+  <text class="svg-t" x="30" y="26">A · clear winner</text>
+  <text class="svg-s" x="30" y="44">the two spikes are ≥1 tick apart</text>
+  <line x1="30" y1="150" x2="360" y2="150" class="svg-ax"/>
+  <line x1="30" y1="96" x2="360" y2="96" stroke="var(--rule-2)" stroke-width="1" stroke-dasharray="4 3"/>
+  <text class="svg-s" x="366" y="99">threshold 1.0</text>
+  <path d="M30 150 L96 150 C 130 148, 160 132, 196 96" stroke="var(--s1)" stroke-width="2.4" fill="none"/>
+  <circle cx="196" cy="96" r="4.5" fill="var(--s1)"/>
+  <text class="svg-s" x="206" y="88" fill="var(--s1)">fires · +1.519</text>
+  <path d="M30 150 L96 150 C 124 152, 140 176, 168 210" stroke="var(--ink-3)" stroke-width="2.4" fill="none" stroke-dasharray="5 3"/>
+  <text class="svg-s" x="176" y="214">silent · −8.606</text>
+  <text class="svg-s" x="30" y="238">A gap of 10.1 against a threshold of 1.0 —</text>
+  <text class="svg-s" x="30" y="252">structural, not tuned.</text>
+
+  <line x1="448" y1="20" x2="448" y2="258" stroke="var(--rule)" stroke-width="1"/>
+
+  <!-- RIGHT: tie -->
+  <text class="svg-t" x="478" y="26">B · exact tie, and the fix</text>
+  <text class="svg-s" x="478" y="44">both coordinates land in the same bucket</text>
+
+  <text class="svg-s" x="478" y="76">before — the veto arrives one tick too late</text>
+  <g>
+    <line x1="478" y1="118" x2="660" y2="118" class="svg-ax"/>
+    <line x1="540" y1="92" x2="540" y2="118" stroke="var(--s3)" stroke-width="2.4"/>
+    <line x1="546" y1="92" x2="546" y2="118" stroke="var(--s3)" stroke-width="2.4"/>
+    <text class="svg-s" x="674" y="100" fill="var(--s3)">both rails fire ✗</text>
+    <text class="svg-s" x="478" y="136">excitation at t, veto at t+1 — nothing left to cancel</text>
+  </g>
+
+  <text class="svg-s" x="478" y="176">after — the “greater-than” rail waits one tick (DE_GT = 4)</text>
+  <g>
+    <line x1="478" y1="218" x2="660" y2="218" class="svg-ax"/>
+    <line x1="546" y1="192" x2="546" y2="218" stroke="var(--s2)" stroke-width="2.4"/>
+    <text class="svg-s" x="674" y="200" fill="var(--s2)">one rail fires ✓</text>
+    <text class="svg-s" x="478" y="236">the veto now lands exactly on the tie</text>
+  </g>
+
+  <!-- full-width band, so nothing can collide with the panels above -->
+  <rect x="14" y="268" width="872" height="22" rx="6" fill="var(--s2-w)" stroke="var(--s2)" stroke-width="1"/>
+  <text class="svg-l" x="450" y="283" text-anchor="middle">One tick of delay reproduces the software's strict <tspan font-family="ui-monospace,Menlo,monospace">&gt;</tspan> exactly — and deletes 136 neurons and 408 synapses.</text>
+</svg>
+</div>
+<figcaption><b>Ties are not an edge case here.</b> There are <em>zero</em> exact float ties in
+the data, but once inputs are bucketed, 0.95% of address slots and <b>77% of samples</b> contain
+two coordinates in the same bucket. The original design spent 136 dedicated tie-detector neurons
+on this. Delaying the greater-than rail's excitation by a single tick does the same job for
+free.</figcaption>
+</figure>
+
+<p>
+Membrane traces on the real kernel showed exactly why ties were a problem: <b>the
+cross-inhibition lands one tick after the excitation it must cancel</b>. On an exact tie both
+rails see a clean +1.519 and both fire. One tick apart, the loser sees +1.5 − 10 = −8.5 in a
+single tick and never rises. Adding one tick of delay to the greater-than rail
+(<code>DE_GT = 4</code>) aligns the tie case with its veto, leaves the one-apart case untouched,
+and reproduces the software's strict <code>&gt;</code> convention exactly.
+</p>
+
+<h4>Self-timing: the network has no clock</h4>
+<p>
+A single <b>leak-free completion detector</b> takes all 17 inputs at weight 0.06 with threshold
+1.0. Since each input fires exactly once, <code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it
+fire <em>precisely</em> when the last input arrives — no earlier, no later. That one neuron
+replaces what used to be an external fixed-tick stimulus, so the network now takes <b>no
+external drive at all</b>: it is triggered entirely by its own inputs and finishes when it is
+finished.
+</p>
+<p>
+It then waits out the comparator pipeline (<code>D_GATE = 6</code>), because the last rail
+resolves at <code>t_last+3</code> and its tie veto at <code>t_last+5</code>. Gating any earlier
+was measured, and cost real accuracy — 99.9196% bit parity with 78 cases where two cells fired
+at once.
+</p>
+
+<!-- ---------------- Stage 2 ---------------- -->
+<h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence, with a proof</h3>
+<p>
+2,048 neurons, one per lookup cell. Each listens to the six memory cells that spell out its
+address. Six coincident spikes at weight 0.18 give <b>1.08 &gt; 1.0</b> and it fires; five give
+<b>0.90 &lt; 1.0</b> and it does not.
+</p>
+<p>
+The cells are <b>leak-free</b>, and that is what turns a heuristic into a guarantee. A wrong
+cell at Hamming distance <em>k</em> from the correct address receives exactly <code>6 − k</code>
+spikes, so its membrane rises monotonically to at most 0.90 and stays there <b>for all
+time</b> — there is no transient that could overshoot the threshold and no decay that could
+lose a correct one. Measured over 16,384 table selections: <b>0 tables selected nothing,
+0 tables selected more than one</b>.
+</p>
+
+<!-- ---------------- Stage 3 ---------------- -->
+<h3><span class="pill p3">Stage 3</span> &nbsp;The readout — where the physics does the arithmetic</h3>
+
+<p>
+This is the part that makes the whole thing work, and it is worth stating plainly:
+<b>the output neuron does not compute a log-sum-exp; it <em>is</em> one</b>.
+</p>
+<p>
+Each selected cell connects to each output with <b>delay 1</b> and weight
+<code>β_o · exp(w_t / τ)</code> — the stored table value lives in the <em>amplitude</em> of the
+synapse. All 32 selected cells therefore land on a single tick, and the membrane integrates
+<code>V₀ = Σ_t exp(w_t / τ)</code> in one step. The output neuron is anti-leaky and exactly
+linear, so from there
+<code>V(t) = V₀ · e^(t/τ_eff)</code>, and its threshold crossing is
+</p>
+<pre><code>T = τ_eff · ( log θ − log Σ_t e^(w_t/τ) )
+  = const − (τ_eff / 32τ) · mu</code></pre>
+<p>
+The synapses supply the <b>exp</b>. The dendrite supplies the <b>sum</b>. Time-to-threshold
+under exponential growth supplies the <b>log</b>. That is the entire pooling operation from
+Part 1, evaluated by physics rather than by arithmetic.
+</p>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 300" role="img" aria-label="The amplitude-encoded readout: each selected cell's stored value becomes a synaptic weight of beta times e to the w over tau; all arrive on one tick summing to V-zero; an exponentially growing membrane reaches threshold at a time that is the logarithm of that sum.">
+  <defs>
+    <marker id="ah4" markerWidth="8" markerHeight="8" refX="6.4" refY="2.9" orient="auto">
+      <path d="M0,0 L6.4,2.9 L0,5.8 Z" fill="var(--s3)"/>
+    </marker>
+  </defs>
+
+  <!-- selected cells -->
+  <text class="svg-t" x="14" y="30">32 selected cells</text>
+  <text class="svg-s" x="14" y="46">one per table, all firing together</text>
+  <g fill="var(--s2)">
+    <circle cx="40" cy="88" r="9"/><circle cx="40" cy="130" r="9"/>
+    <circle cx="40" cy="172" r="9"/><circle cx="40" cy="214" r="9"/>
+  </g>
+  <text class="svg-s" x="40" y="248" text-anchor="middle">⋮</text>
+
+  <!-- synapses with amplitude -->
+  <g stroke="var(--s3)" fill="none">
+    <path d="M52 88  L214 140" stroke-width="4.5" marker-end="url(#ah4)"/>
+    <path d="M52 130 L214 146" stroke-width="1.6" marker-end="url(#ah4)"/>
+    <path d="M52 172 L214 152" stroke-width="7"   marker-end="url(#ah4)"/>
+    <path d="M52 214 L214 158" stroke-width="2.6" marker-end="url(#ah4)"/>
+  </g>
+  <text class="svg-l" x="130" y="70" text-anchor="middle" fill="var(--s3)">weight = β · e^(w/τ)</text>
+  <text class="svg-s" x="130" y="248" text-anchor="middle">thicker = larger stored value</text>
+  <text class="svg-s" x="130" y="264" text-anchor="middle">every delay is 1 — they all land on the same tick</text>
+
+  <!-- output neuron -->
+  <circle cx="238" cy="149" r="22" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.6"/>
+  <text class="svg-l" x="238" y="154" text-anchor="middle" fill="var(--s3)">Σ</text>
+  <text class="svg-m" x="238" y="196" text-anchor="middle">V₀ = Σ e^(w/τ)</text>
+  <text class="svg-s" x="238" y="212" text-anchor="middle">the dendrite does the sum</text>
+
+  <!-- membrane plot -->
+  <g transform="translate(320,0)">
+    <line x1="30" y1="240" x2="500" y2="240" class="svg-ax"/>
+    <line x1="30" y1="240" x2="30"  y2="50"  class="svg-ax"/>
+    <text class="svg-s" x="265" y="266" text-anchor="middle">ticks after the completion event</text>
+    <text class="svg-s" x="12" y="145" text-anchor="middle" transform="rotate(-90 12 145)">membrane V</text>
+    <line x1="30" y1="70" x2="500" y2="70" stroke="var(--s3)" stroke-width="1.2" stroke-dasharray="5 3"/>
+    <text class="svg-s" x="506" y="73" fill="var(--s3)">θ</text>
+
+    <!-- three traces: bigger V0 crosses sooner -->
+    <path d="M30 214 C 110 208, 160 176, 196 70" stroke="var(--s3)" stroke-width="2.4" fill="none"/>
+    <path d="M30 228 C 130 222, 200 190, 250 70" stroke="var(--s3)" stroke-width="2.2" fill="none" opacity=".62"/>
+    <path d="M30 236 C 160 230, 250 200, 320 70" stroke="var(--s3)" stroke-width="2" fill="none" opacity=".38"/>
+    <circle cx="196" cy="70" r="4.5" fill="var(--s3)"/>
+    <circle cx="250" cy="70" r="4" fill="var(--s3)" opacity=".62"/>
+    <circle cx="320" cy="70" r="3.5" fill="var(--s3)" opacity=".38"/>
+
+    <g stroke="var(--rule-2)" stroke-width="1" stroke-dasharray="3 3">
+      <line x1="196" y1="70" x2="196" y2="240"/>
+      <line x1="320" y1="70" x2="320" y2="240"/>
+    </g>
+    <text class="svg-s" x="196" y="256" text-anchor="middle">T</text>
+    <text class="svg-s" x="152" y="96" text-anchor="end" fill="var(--s3)">large V₀ → early T</text>
+    <text class="svg-s" x="360" y="120" fill="var(--ink-3)">small V₀ → late T</text>
+
+    <rect x="336" y="146" width="176" height="76" rx="8" fill="var(--surface-2)" stroke="var(--rule)"/>
+    <text class="svg-m" x="424" y="168" text-anchor="middle">T = τ_eff·(log θ − log V₀)</text>
+    <text class="svg-s" x="424" y="188" text-anchor="middle">exponential growth turns</text>
+    <text class="svg-s" x="424" y="203" text-anchor="middle">the sum into its logarithm</text>
+    <text class="svg-s" x="424" y="216" text-anchor="middle" fill="var(--s3)">for free</text>
+  </g>
+
+  <text class="svg-s" x="450" y="290" text-anchor="middle">Decode in software:  mu = slope · (T − t_last) + offset,  slope = −32τ/τ_eff.  Silence decodes to −1.</text>
+</svg>
+</div>
+<figcaption><b>exp in the synapse, sum in the dendrite, log in the membrane.</b> The stored
+table value rides in the synaptic amplitude, the 32 selected cells all arrive on one tick, and
+the time the anti-leaky membrane takes to reach threshold <em>is</em> the logarithm of their
+sum.</figcaption>
+</figure>
+
+<p>
+An earlier version of the design encoded each stored value as a <b>delay</b> instead. It is
+algebraically equivalent — because the output neuron is exactly linear, shifting arrival times
+by <code>a_t = A − (τ_eff/τ)·w_t</code> gives the same result up to the constant
+<code>β_o = α_o · e^(−A/τ_eff)</code> — but it is much more expensive:
+</p>
+
+<div class="tw">
+<table>
+  <caption>Amplitude encoding is not merely faster; it is also <em>strictly more faithful</em>.
+  The delay path had to round every delay to an integer tick, so it evaluated a
+  <em>quantised</em> log-sum-exp — worth up to a quarter tick of error. It also depended on
+  synaptic integration across ticks, which this kernel does not provide.</caption>
+  <thead><tr><th></th><th class="n">delay-encoded</th><th class="n">amplitude-encoded</th></tr></thead>
+  <tbody>
+    <tr><td>Stage-3 delay span</td><td class="n">91 ticks</td><td class="n">1</td></tr>
+    <tr><td>largest delay (engine cap 255)</td><td class="n">91</td><td class="n">3–6</td></tr>
+    <tr><td>ticks per decision</td><td class="n">309</td><td class="n">~155</td></tr>
+    <tr class="hi"><td>CPU time per action</td><td class="n">12.9 ms</td><td class="n">~6 ms</td></tr>
+    <tr><td>synapse count</td><td class="n">—</td><td class="n">unchanged (pure re-weighting)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <span class="lbl">Self-timing has a consequence for the decode</span>
+  <p>Because the network starts when its inputs arrive rather than on a clock, the origin of
+  time moves with every observation. The decode therefore <b>must</b> be referenced to the
+  completion event — <code>T − t_last</code>, not <code>T</code>. Using an absolute reference
+  was tried, and within-one-level accuracy collapsed from 100% to 50–70%.</p>
+</div>
+
+<h3>The lattice — an elegant choice that came with a bill</h3>
+<p>
+<code>TAU_M_OUT</code> was set to 31.257 so that 22 ticks span exactly 22 output levels. Neat —
+but it makes the <b>decode lattice pitch equal the output grid step</b>: 0.09523729 against
+0.09523810. Three consequences follow, and the third one cost us a lot of time.
+</p>
+<ul>
+  <li><b>Every decoded value sits at the same phase relative to the output grid.</b> So shifting
+  the decode offset moves <em>no</em> samples across a level boundary, or <em>all</em> of them.
+  We verified this the hard way: an on-policy offset recalibration left five of six action
+  dimensions bit-identical, flipped the sixth wholesale, and scored −175 in the walker.</li>
+  <li><b>The closed-form model can be checked.</b> Solving it against the network's measured
+  spike ticks gives phase 0.750 and base +13 — <em>the same values on all six dimensions,
+  independently</em>. That agreement is the evidence the model is structurally right.</li>
+  <li><b>The rounding bias is one-sided.</b> The crossing tick is the <em>ceiling</em> of a
+  continuous time, and the decode slope is negative. So rounding the tick <em>up</em> always
+  rounds the action <em>down</em>. Not sometimes — always.</li>
+</ul>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 210" role="img" aria-label="Because the crossing tick is rounded up and the decode slope is negative, every rounding error moves the action down by exactly one level; measured, 100 percent of errors were minus one level.">
+  <text class="svg-t" x="14" y="26">Why the error can only go one way</text>
+
+  <!-- continuous time axis -->
+  <text class="svg-s" x="14" y="58">continuous crossing time</text>
+  <line x1="180" y1="54" x2="640" y2="54" class="svg-ax"/>
+  <g stroke="var(--rule-2)" stroke-width="1">
+    <line x1="220" y1="48" x2="220" y2="60"/><line x1="300" y1="48" x2="300" y2="60"/>
+    <line x1="380" y1="48" x2="380" y2="60"/><line x1="460" y1="48" x2="460" y2="60"/>
+    <line x1="540" y1="48" x2="540" y2="60"/><line x1="620" y1="48" x2="620" y2="60"/>
+  </g>
+  <circle cx="345" cy="54" r="4.5" fill="var(--s1)"/>
+  <text class="svg-s" x="345" y="40" text-anchor="middle" fill="var(--s1)">true value</text>
+
+  <!-- ceil arrow -->
+  <path d="M345 62 L345 84 L380 84 L380 100" stroke="var(--s3)" stroke-width="1.8" fill="none"/>
+  <path d="M376 96 L380 104 L384 96 Z" fill="var(--s3)"/>
+  <text class="svg-s" x="404" y="80" fill="var(--s3)">the neuron can only fire on a whole tick → ceil</text>
+
+  <!-- discrete tick axis -->
+  <text class="svg-s" x="14" y="112">tick the neuron actually fires</text>
+  <line x1="180" y1="108" x2="640" y2="108" class="svg-ax"/>
+  <g stroke="var(--rule-2)" stroke-width="1">
+    <line x1="220" y1="102" x2="220" y2="114"/><line x1="300" y1="102" x2="300" y2="114"/>
+    <line x1="380" y1="102" x2="380" y2="114"/><line x1="460" y1="102" x2="460" y2="114"/>
+    <line x1="540" y1="102" x2="540" y2="114"/><line x1="620" y1="102" x2="620" y2="114"/>
+  </g>
+  <circle cx="380" cy="108" r="4.5" fill="var(--s3)"/>
+
+  <!-- action axis, reversed -->
+  <path d="M380 116 L380 138" stroke="var(--s3)" stroke-width="1.8"/>
+  <path d="M376 134 L380 142 L384 134 Z" fill="var(--s3)"/>
+  <text class="svg-s" x="392" y="134">slope is <tspan font-style="italic">negative</tspan> — later tick means smaller action</text>
+
+  <text class="svg-s" x="14" y="166">decoded action (22 levels)</text>
+  <line x1="180" y1="162" x2="640" y2="162" class="svg-ax"/>
+  <g stroke="var(--rule-2)" stroke-width="1">
+    <line x1="220" y1="156" x2="220" y2="168"/><line x1="300" y1="156" x2="300" y2="168"/>
+    <line x1="380" y1="156" x2="380" y2="168"/><line x1="460" y1="156" x2="460" y2="168"/>
+    <line x1="540" y1="156" x2="540" y2="168"/><line x1="620" y1="156" x2="620" y2="168"/>
+  </g>
+  <circle cx="345" cy="162" r="4.5" fill="var(--s1)" opacity=".55"/>
+  <circle cx="300" cy="162" r="5" fill="var(--s3)"/>
+  <path d="M338 162 L310 162" stroke="var(--s3)" stroke-width="1.8"/>
+  <path d="M314 158 L306 162 L314 166 Z" fill="var(--s3)"/>
+  <text class="svg-s" x="300" y="186" text-anchor="middle" fill="var(--s3)">always one level LOW, never high</text>
+
+  <rect x="668" y="40" width="220" height="130" rx="9" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.2"/>
+  <text class="svg-l" x="778" y="66" text-anchor="middle" fill="var(--s3)">measured</text>
+  <text class="svg-s" x="778" y="90"  text-anchor="middle">100% of errors were exactly −1 level</text>
+  <text class="svg-s" x="778" y="110" text-anchor="middle">~21% of all actions affected</text>
+  <text class="svg-s" x="778" y="130" text-anchor="middle">mean bias −0.207 levels</text>
+  <text class="svg-l" x="778" y="156" text-anchor="middle">worth −165 of return</text>
+</svg>
+</div>
+<figcaption><b>A systematic, strictly one-sided bias.</b> A symmetric error of this size would
+have averaged out. A one-sided one becomes a small constant torque offset on every joint, every
+step — and the walker feels it.</figcaption>
+</figure>
+
+<!-- ================================================================= -->
+<h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
+
+<p>
+At this point the network was a faithful construction and still <b>−164.8 ± 50.3 of return</b>
+behind its teacher. The lattice argument above says the bias cannot be removed by recalibrating
+the decode — any offset shift moves nothing or everything. Adding output levels does not help
+either; 22 levels can already represent the right answers. But <b>changing individual stored
+weights is not degenerate with a global offset</b>, and that is the opening.
+</p>
+
+<h4>Coordinate descent, no gradients</h4>
+<p>
+Two gradient-based attempts failed first, and both failures were informative: a
+straight-through optimiser diverged outright (the loss <em>rose</em> 29%), and the closed-form
+model was not faithful enough to optimise against until it was phase-pinned to the network's
+measured ticks. Coordinate descent avoids both problems, and the structure of the network makes
+it very cheap:
+</p>
+<p>
+weight <code>(t, k, o)</code> affects only output dimension <code>o</code>, and only those states
+whose table <code>t</code> happened to select cell <code>k</code> — and it enters through a
+<em>sum</em>. So evaluating a candidate move is just
+<code>S′ = S − exp(w_old) + exp(w_new)</code> over the affected states alone.
+</p>
+
+<ul>
+  <li><b>Objective:</b> level-mismatch against the software teacher's 22-level action, scored by
+  the phase-pinned closed form with the tick <code>ceil</code> <em>inside</em> the loss — so the
+  optimiser sees the same rounding the hardware will.</li>
+  <li><b>Constraint:</b> weights confined to an <b>8-bit log-domain grid</b>, enforced
+  <em>during</em> the fit rather than applied afterwards. (8 bits was shown to cost nothing
+  versus full precision, and sits comfortably inside the sensitivity bound: a relative weight
+  error δ shifts the crossing by <code>τ_eff·δ</code>, so half an output level needs δ &lt; 1.6%.)</li>
+  <li><b>Data:</b> 153,600 teacher input→output pairs from 512 independent rollouts, split
+  <em>by seed</em> — 115,200 train (seeds 0–2), 38,400 held out (seed 3).</li>
+  <li><b>Two mandatory gates before any move was accepted:</b> the scorer had to reproduce the
+  true network's baseline behaviour, and a zero-step run had to reproduce that baseline exactly.</li>
+</ul>
+
+<p>
+Loss fell from 151,004 to 17,100 in three sweeps — about six seconds. <b>5,390 of the 12,288
+weights moved</b>, with a maximum log-domain drift of 0.261. Validated on the real spiking
+network, on GPU, with measured spike ticks, on held-out states:
+</p>
+
+<div class="tw">
+<table>
+  <caption>The one-sided −1 mass collapses from 15–26% to 1–2% on <em>every</em> dimension, with a
+  matching +1 mass — symmetric, roughly 15× smaller, and not an aggregate cancellation of two
+  large opposite errors.</caption>
+  <thead><tr><th></th><th class="n">exact agreement</th><th class="n">mean signed error (levels)</th></tr></thead>
+  <tbody>
+    <tr><td>constructed, unfitted</td><td class="n">80.83%</td><td class="n">−0.158 … −0.260, all negative</td></tr>
+    <tr class="hi"><td>after the 8-bit fit</td><td class="n">98.58%</td><td class="n">−0.004 … +0.002</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note warn">
+  <span class="lbl">The weights and the decode offset are one object</span>
+  <p>Changing the weights changes the crossing ticks, so the fit <b>also re-derives the decode
+  offset</b> — by −0.22 to −0.32 of a level. We learned this the expensive way: an evaluation
+  that combined the fitted weights with the <em>old</em> offset mis-decoded by a quarter of a
+  level (the same magnitude as the bias just removed) and scored <b>−197</b>. That number
+  supported a confident and completely wrong conclusion — that return had somehow decoupled
+  from action agreement.</p>
+  <p>With its matching offset, the very same set of weights scores <b>+58.8</b>. The two are a
+  <b>pair</b> and must never be used apart; the evaluation harness now refuses to run weights
+  without an offset, and both are baked together into the shipped artefact.</p>
+</div>
+
+<p>
+So the honest summary of "how much training happened inside the spiking network" is: none, in
+the usual sense. No backpropagation, no surrogate gradients, no spike-time learning rule.
+A gradient-free search adjusted 5,390 numbers on a discrete grid to compensate for a known,
+characterised rounding artefact of the readout.
+</p>
+
+<!-- ================================================================= -->
+<h2 id="results"><span class="sectnum">5</span>Results</h2>
+
+<h3>Stage-by-stage parity, 512 held-out samples</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>stage</th><th>result</th></tr></thead>
+  <tbody>
+    <tr><td>Stage 1 — address bits</td><td><b>100.0000%</b> — 0 wrong of 98,304, ties included</td></tr>
+    <tr><td>Stage 2 — one-hot selection</td><td><b>0 empty, 0 multiple</b> of 16,384 selections</td></tr>
+    <tr><td>Stage 3 — within one level</td><td><b>100.000%</b> on every output dimension</td></tr>
+    <tr class="hi"><td>Stage 3 — exactly equal action</td><td><b>98.72%</b> (4,096 held-out states, shipped artefact)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Closed-loop walking</h3>
+<p>
+The measurement that actually matters. 256 environments × 1,200 steps × 2 seeds, matched
+physics (solver 100 / line-search 50), deterministic, paired — roughly 520 completed episodes
+per arm.
+</p>
+
+<div class="tw wide">
+<table>
+  <caption>Two secondary signals point the same way: the fitted spiking build has
+  <em>lower</em> per-episode variance than the teacher (605 vs 828) and its episodes last
+  <em>longer</em> (986 vs 979). The tail failures that characterised every earlier spiking build
+  are gone.</caption>
+  <thead>
+    <tr><th>build</th><th class="n">n</th><th class="n">mean return</th><th class="n">sd</th>
+        <th class="n">se</th><th class="n">median</th><th class="n">ep. length</th>
+        <th class="n">vs software</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>software teacher</td><td class="n">521</td><td class="n">6253.4</td><td class="n">828.1</td>
+        <td class="n">36.3</td><td class="n">6407.9</td><td class="n">979</td><td class="n">—</td></tr>
+    <tr><td>spiking, constructed only</td><td class="n">523</td><td class="n">6119.4</td><td class="n">935.4</td>
+        <td class="n">40.9</td><td class="n">6330.5</td><td class="n">969</td>
+        <td class="n">−164.8 ± 50.3</td></tr>
+    <tr class="hi"><td>spiking, 8-bit weight-fitted</td><td class="n">515</td><td class="n">6312.2</td><td class="n">604.7</td>
+        <td class="n">26.6</td><td class="n">6415.9</td><td class="n">986</td>
+        <td class="n">+58.8 ± 45.0 &nbsp;(+1.31σ)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+<b>Indistinguishable from the teacher</b> at +1.31σ, and +192.8 ± 48.8 (+3.95σ) better than the
+same network without the weight fit.
+</p>
+
+<div class="stats">
+  <div class="stat"><span class="v">2,889</span><span class="k">neurons</span></div>
+  <div class="stat"><span class="v">25,953</span><span class="k">synapses</span></div>
+  <div class="stat"><span class="v">154.5</span><span class="k">ticks per decision<br>(138 – 167, data-dependent)</span></div>
+  <div class="stat"><span class="v">~6 ms</span><span class="k">per action, single CPU core</span></div>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="deploy"><span class="sectnum">6</span>It is live</h2>
+<p>
+The network is deployed in the interactive Walker2d stand, selectable as
+<b>“Spiking LUT quantised (handcrafted SNN)”</b> alongside the software policies. It drives a
+real MuJoCo simulation on the server, one independent instance per viewer, and both
+spike-visualisation panels — the raster and the network graph — populate from its actual
+activity.
+</p>
+<p>
+The actor is pure NumPy at inference: no PyTorch, no SciPy. It runs on CPU at roughly 6 ms per
+action against a 33 ms frame budget at 30 steps per second.
+</p>
+<p style="margin-top:1.4rem">
+  <a href="../walker2d-viz/"><b>→ Open the live demo</b></a>
+</p>
+
+<!-- ================================================================= -->
+<h2 id="honest"><span class="sectnum">7</span>What we are <em>not</em> claiming</h2>
+
+<div class="note warn">
+  <span class="lbl">+58.8 is not a win</span>
+  <p>The spiking network scored higher than its teacher. At 1.31σ that is <b>noise</b>. The
+  correct reading is "indistinguishable", and the number should not be quoted as an improvement.
+  There is no mechanism by which discarding information would make the policy better.</p>
+</div>
+
+<p>Other limits worth stating plainly:</p>
+<ul>
+  <li><b>Table weights are not quantised.</b> Only the interfaces and the readout weights are on
+  grids. A genuinely all-integer model is further work.</li>
+  <li><b>The fit used teacher-visited states only.</b> All 153,600 pairs come from the software
+  policy's own trajectories. It transferred to closed-loop control at 98.58% agreement — but
+  there was no guarantee in advance that it would.</li>
+  <li><b>One task, one policy.</b> This is an existence proof on Walker2d, not a general
+  conversion pipeline with error bars across a benchmark suite.</li>
+  <li><b>The tick budget is a real cost.</b> ~155 ticks per decision is cheap for this
+  simulator, but it is a latency floor that a matmul does not have.</li>
+</ul>
+
+<h3>Four traps, each of which produced a wrong answer before it was caught</h3>
+<ol>
+  <li><b>Censored evaluation.</b> Any rollout shorter than the 1,000-step episode limit measures
+  only the episodes that <em>failed</em> — the successful ones never complete and are never
+  counted. A 600-step "cheap screen" returned n = 1 and a meaningless mean.</li>
+  <li><b>Exact-match is the wrong calibration objective.</b> Maximising exact agreement
+  re-selects the biased-low decode. The objective that matters is a zero mean <em>signed</em>
+  residual.</li>
+  <li><b>Underpowered evaluations.</b> At n = 65 the standard error is ~110, so a real effect of
+  ~165 sits inside the noise. ~520 episodes brings it to ~30–40.</li>
+  <li><b>Weights and offset are a pair.</b> Covered above — it cost the single most confidently
+  wrong conclusion in this whole line of work.</li>
+</ol>
+
+<hr>
+
+<h3>Reproduction</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>src/tiny_lut_quantised_pipeline.py</code></td><td>builds and verifies the network</td></tr>
+    <tr><td><code>src/tiny_lut_quantised_export.py</code></td><td>exports the actor artefact</td></tr>
+    <tr><td><code>actors/spiking_lut_quantised.py</code></td><td>the deployed actor (pure NumPy)</td></tr>
+    <tr><td><code>src/collect_teacher_io.py</code></td><td>the 153K-pair teacher dataset</td></tr>
+    <tr><td><code>src/stage3_cd_bigdata.py</code></td><td>the 8-bit coordinate-descent fit</td></tr>
+    <tr><td><code>src/eval_gtskew_large.py</code></td><td>the paired closed-loop walker evaluation</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="small" style="margin-top:2.5rem; padding-top:1.2rem; border-top:1px solid var(--rule)">
+Draft — expect revisions. Research branch
+<code>research/lut2spnet-quantised-amplitude</code>; deployment branch
+<code>live/walker2d-viz</code>.
+</p>
+
+</div>
+</body>
+</html>
