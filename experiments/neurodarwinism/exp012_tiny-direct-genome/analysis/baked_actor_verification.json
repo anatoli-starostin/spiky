@@ -1,0 +1,40 @@
+{
+ "backup": "/home/astarostin/projects/spiky/experiments/neurodarwinism/exp012_tiny-direct-genome/deploy_quantised/spiking_lut_quantised_actor_GTSKEW_verified.npz.bak",
+ "weights_changed": 12287,
+ "offset_shift_levels": [
+  -0.2616583422721712,
+  -0.32133135415293324,
+  -0.3013598501658794,
+  -0.243520158370095,
+  -0.26682089811689425,
+  -0.21983583891776393
+ ],
+ "on_8bit_grid": true,
+ "n_states": 4096,
+ "per_dim_exact": [
+  0.9833984375,
+  0.99072265625,
+  0.9892578125,
+  0.98681640625,
+  0.9853515625,
+  0.987548828125
+ ],
+ "per_dim_within1": [
+  1.0,
+  1.0,
+  1.0,
+  1.0,
+  1.0,
+  1.0
+ ],
+ "per_dim_mean_signed": [
+  -0.0048828125,
+  0.0,
+  0.00390625,
+  -0.005859375,
+  0.00244140625,
+  -0.002197265625
+ ],
+ "overall_exact": 0.9871826171875,
+ "latency_ms": 6.132005453109741
+}

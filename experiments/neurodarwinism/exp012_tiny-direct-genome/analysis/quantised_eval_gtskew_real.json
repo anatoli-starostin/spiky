@@ -1,0 +1,32 @@
+{
+ "baseline_no_jitter": {
+  "n": 0,
+  "mean": NaN,
+  "sd": NaN,
+  "median": NaN,
+  "se": NaN,
+  "wall_s": 5.8
+ },
+ "jittered": {
+  "n": 0,
+  "mean": NaN,
+  "sd": NaN,
+  "median": NaN,
+  "se": NaN,
+  "wall_s": 1.9
+ },
+ "delta": {
+  "value": NaN,
+  "se": NaN,
+  "sigma": NaN
+ },
+ "real_snn": {
+  "n": 65,
+  "mean": 6080.45751953125,
+  "sd": 873.7667846679688,
+  "se": 108.37743122915757,
+  "mean_len": 967.892333984375,
+  "n_ticks": 167,
+  "wall_s": 81.1
+ }
+}

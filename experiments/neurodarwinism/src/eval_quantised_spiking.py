@@ -140,7 +140,8 @@ def main():
                      "exp012_tiny-direct-genome/deploy_quantised/"
                      "spiking_lut_quantised_actor.npz")
         net, ids, nsyn, n_ticks, nneur, aff_, win, beta, dmax = QP.build(
-            Zn, list(range(6)), True, float(Zq["tau_m_out"]), "cuda", 6, 3.0)
+            Zn, list(range(6)), False, float(Zq["tau_m_out"]), "cuda", 6, 3.0,
+            True)                       # tie_break=False, gt_skew=True
         aff = Zq["affine"].astype(np.float64)
         env2 = WarpWalker2dVecEnv(num_envs=a.real_envs, seed=0, solver_iters=100,
                                   ls_iters=50, obs_clip_vel=10.0)

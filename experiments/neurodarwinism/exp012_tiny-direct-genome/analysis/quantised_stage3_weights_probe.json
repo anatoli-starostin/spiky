@@ -1,0 +1,14 @@
+{
+ "table_dtype": "float32",
+ "table_entries": 12288,
+ "table_distinct": 12286,
+ "table_min": -0.4781893491744995,
+ "table_max": 0.21551835536956787,
+ "table_gap_ratio": 10128048.0,
+ "stage3_synapses": 12288,
+ "stage3_distinct": 12286,
+ "stage3_min": 0.00012416155299746945,
+ "stage3_max": 0.20274532848376417,
+ "stage3_bits": 13.584727667963922,
+ "stage3_gap_ratio": 37213529.81848078
+}

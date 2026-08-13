@@ -1,0 +1,73 @@
+{
+ "neurons": 3024,
+ "synapses": 26344,
+ "n_ticks": 309,
+ "n": 4000,
+ "tie_break": true,
+ "mem_margin": 0.13615840826510928,
+ "stage1_one_rail": 1.0,
+ "stage1_bit_acc": 1.0,
+ "stage2_onehot": 1.0,
+ "per_dim": {
+  "0": {
+   "r2_lutq": 0.9863331062914498,
+   "r2_teacher": 0.8978711771329718,
+   "mse_lutq": 0.006963388749938241,
+   "max_err": 0.18354477659342056,
+   "frac_fired": 1.0,
+   "max_out_tick": 298,
+   "last_arrival": 234,
+   "measured_settle": 64
+  },
+  "1": {
+   "r2_lutq": 0.9925850028772399,
+   "r2_teacher": 0.9660936046937536,
+   "mse_lutq": 0.00711837925974902,
+   "max_err": 0.1890442566921842,
+   "frac_fired": 1.0,
+   "max_out_tick": 288,
+   "last_arrival": 223,
+   "measured_settle": 65
+  },
+  "2": {
+   "r2_lutq": 0.9917416944575461,
+   "r2_teacher": 0.9655122173463274,
+   "mse_lutq": 0.00657835818500631,
+   "max_err": 0.17890421210677232,
+   "frac_fired": 1.0,
+   "max_out_tick": 284,
+   "last_arrival": 221,
+   "measured_settle": 63
+  },
+  "3": {
+   "r2_lutq": 0.9923043834766379,
+   "r2_teacher": 0.964293413774256,
+   "mse_lutq": 0.007365611794026367,
+   "max_err": 0.1871788045452169,
+   "frac_fired": 1.0,
+   "max_out_tick": 272,
+   "last_arrival": 207,
+   "measured_settle": 65
+  },
+  "4": {
+   "r2_lutq": 0.9890306523160026,
+   "r2_teacher": 0.9476119541421943,
+   "mse_lutq": 0.007086529126014093,
+   "max_err": 0.19669743050263766,
+   "frac_fired": 1.0,
+   "max_out_tick": 285,
+   "last_arrival": 222,
+   "measured_settle": 63
+  },
+  "5": {
+   "r2_lutq": 0.9964189238593598,
+   "r2_teacher": 0.9803654505049776,
+   "mse_lutq": 0.007130785882363693,
+   "max_err": 0.17886632755405518,
+   "frac_fired": 1.0,
+   "max_out_tick": 292,
+   "last_arrival": 226,
+   "measured_settle": 66
+  }
+ }
+}

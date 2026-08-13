@@ -83,6 +83,25 @@ W_DET = 0.06
 # AFTER +5, or memory latches before the last comparator has decided. Measured directly:
 # with delay 1 the gate regressed to 99.9196% bit parity and 78 multi-selects. Hence 6.
 D_GATE = 6
+# GT-SKEW (replaces the 136 tie-detector neurons).
+#
+# Measured on the real kernel (tiny_tie_trace.py): the cross-inhibition lands exactly ONE
+# TICK AFTER the excitation it must cancel. So on an exact tie both rails see pure +1.5187
+# and BOTH fire (the veto is late); 1 tick apart, the loser sees +1.5-10 = -8.5 in a single
+# tick and never rises. That is why ties needed a separate detector.
+#
+# Adding one tick to the GT rail's excitation aligns the tie case with the veto without
+# touching the 1-apart case:
+#   tie        -> GT excitation coincides with the LT inhibition -> -8.5, silent -> bit 0
+#   a earlier  -> GT fires, LT inhibition not until +2           -> bit 1
+#   a later    -> GT meets a runaway-negative membrane           -> bit 0
+# which is exactly the software's strict `d > 0`. It is structural, not tuned: the gap
+# between "fires" (+1.519) and "silent" (-8.606) is 10.1 against a threshold of 1.0.
+#
+# All 136 pairs have anchor_a as the LOWER index (measured), so the GT rail is always r0 --
+# but the skew is applied through the pair's own orientation below, not by index, so it does
+# not depend on that accident.
+DE_GT = DE + 1
 
 
 def calib(tau_m, n_euler=2, dt=0.5):
@@ -127,7 +146,8 @@ def stage3_amplitudes(W, tau, tau_eff, dims, cross_at=3.0, clip=1.0):
     return beta, aff, win
 
 
-def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=3.0):
+def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6,
+          cross_at=3.0, gt_skew=False):
     from spiky.spnet.spnet import LIFNeuronMeta, NeuronMeta, SpikingNet, SynapseMeta
     from spiky.util.synapse_growth import SynapseGrowthEngine
     pairs, slot = pair_list(Z)
@@ -138,7 +158,7 @@ def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=
     clip = float(Z["out_quant_clip"]) if "out_quant_clip" in Z.files else 1.0
     beta, aff, win = stage3_amplitudes(W, tau, tau_eff, dims, cross_at, clip)
 
-    dmax = max(DE, DI, D_OUT, D_GATE)
+    dmax = max(DE, DE_GT, DI, D_OUT, D_GATE)
     assert dmax <= 255, f"delay {dmax} exceeds the engine's 255-tick synapse limit"
     smetas = [SynapseMeta(learning_rate=0.0, min_delay=d, max_delay=d, initial_weight=0.0,
                           min_weight=-1e4, max_weight=1e4, initial_noise_level=0.0,
@@ -151,7 +171,8 @@ def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=
                         b=0.0, c=0.0, d=0.0, spike_threshold=1.0),
              LIFNeuronMeta(neuron_type=2, tau=TAU_M_RAIL, threshold=1.0),
              LIFNeuronMeta(neuron_type=3, tau=TAU_MEM, threshold=1.0),
-             LIFNeuronMeta(neuron_type=4, tau=TAU_M_RAIL, threshold=TH_TIE),
+             *([] if not tie_break else
+               [LIFNeuronMeta(neuron_type=4, tau=TAU_M_RAIL, threshold=TH_TIE)]),
              # Change B: leak-free (g=1) so the 6-way AND no longer depends on the
              # arrival phase -- a wrong cell is bounded by 5*0.18 = 0.90 for ALL time.
              NeuronMeta(neuron_type=5, cf_2=0.0, cf_1=0.0, cf_0=0.0, a=0.0, b=0.0,
@@ -160,11 +181,15 @@ def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=
                         b=0.0, c=0.0, d=0.0, spike_threshold=1.0),
              NeuronMeta(neuron_type=7, cf_2=0.0, cf_1=0.0, cf_0=0.0, a=0.0, b=0.0,
                         c=0.0, d=0.0, spike_threshold=1.0)]        # completion detector
-    counts = [18, 2 * P, 2 * P, 2 * P, P, 2048, NT, 1]
+    counts = ([18, 2 * P, 2 * P, 2 * P] + ([P] if tie_break else [])
+              + [2048, NT, 1])
     net = SpikingNet(synapse_metas=smetas, neuron_metas=metas, neuron_counts=counts,
                      initial_synapse_capacity=1 << 23, summation_dtype=torch.float32)
     net.to_device(device)
-    ids = [net.get_neuron_ids_by_meta(i).cpu().numpy() for i in range(8)]
+    NTY = 8 if tie_break else 7
+    ids = [net.get_neuron_ids_by_meta(i).cpu().numpy() for i in range(NTY)]
+    if not tie_break:                      # keep index names stable downstream
+        ids = ids[:4] + [np.zeros(0, np.int64)] + ids[4:]
     inp = ids[0][:17]
     det = ids[7][0]                     # Change A: the internal gate
     E = [(1, inp[j], det, W_DET) for j in range(17)]
@@ -172,7 +197,9 @@ def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=
         r0, r1 = ids[1][2 * p], ids[1][2 * p + 1]
         i0, i1 = ids[2][2 * p], ids[2][2 * p + 1]
         m0, m1 = ids[3][2 * p], ids[3][2 * p + 1]
-        E += [(DE, inp[a], r0, W_EXC), (DE, inp[b], r1, W_EXC),
+        # r0 is the GT rail (driven by the pair's anchor_a); it carries the +1 skew.
+        de_gt, de_lt = (DE_GT, DE) if gt_skew else (DE, DE)
+        E += [(de_gt, inp[a], r0, W_EXC), (de_lt, inp[b], r1, W_EXC),
               (DI, inp[a], i0, W_EXC), (DI, inp[b], i1, W_EXC),
               (1, i0, r1, W_INH), (1, i1, r0, W_INH),
               (1, r0, m0, W_MEM), (1, r1, m1, W_MEM),
@@ -197,10 +224,10 @@ def build(Z, dims, tie_break, tau_m_out=10.0, device="cuda", margin=6, cross_at=
     wts = np.array([w for *_, w in E], np.float64)
     ge = SynapseGrowthEngine(device=device, synapse_group_size=64,
                              max_groups_in_buffer=max(1 << 19, 4 * len(tri)))
-    for i in range(8):
+    for i in range(NTY):
         ge.register_neuron_type(max_synapses=1 << 15, growth_command_list=[])
-    for i in range(8):
-        tt = torch.tensor(ids[i], dtype=torch.int32)
+    for i, gi in enumerate([j for j in range(8) if len(ids[j])]):
+        tt = torch.tensor(ids[gi], dtype=torch.int32)
         ge.add_neurons(neuron_type_index=i, identifiers=tt,
                        coordinates=torch.stack([torch.arange(tt.numel()).float(),
                                                 torch.zeros(tt.numel()),
@@ -260,6 +287,8 @@ def main():
     ap.add_argument("--cross-at", type=float, default=3.0)
     ap.add_argument("--margin", type=int, default=6)
     ap.add_argument("--no-tie-break", action="store_true")
+    ap.add_argument("--gt-skew", action="store_true",
+                    help="+1 tick on the GT rail; replaces the tie detectors")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -291,7 +320,8 @@ def main():
                    -CLIP, CLIP)
 
     net, ids, nsyn, n_ticks, nneur, aff, win, beta, dmax = build(
-        Z, dims, not a.no_tie_break, a.tau_m_out, a.device, a.margin, a.cross_at)
+        Z, dims, not a.no_tie_break, a.tau_m_out, a.device, a.margin, a.cross_at,
+        a.gt_skew)
     print(f"neurons {nneur}  synapses {nsyn}  n_ticks {n_ticks}  dmax {dmax}  "
           f"tau_m_out {a.tau_m_out}  levels_representable "
           f"{int(2*CLIP/(32*tau/calib(a.tau_m_out)))+1}")
@@ -313,6 +343,20 @@ def main():
             gt = 2 * p + (0 if a_first else 1)
             bits_snn[:, t, j] = M[:, gt] > 0
     s1 = float((bits_snn == bits_sw).mean())
+    # CHECK B: split parity by whether the slot was a TICK-TIE -- a wrong skew direction
+    # fails only here, and would be invisible in the aggregate.
+    tie_slot = ticks[:, A_] == ticks[:, B_]
+    s1_tie = float((bits_snn == bits_sw)[tie_slot].mean()) if tie_slot.any() else float("nan")
+    s1_non = float((bits_snn == bits_sw)[~tie_slot].mean())
+    # 1-tick-apart genuine comparisons, the tightest non-tie
+    near = np.abs(ticks[:, A_].astype(int) - ticks[:, B_].astype(int)) == 1
+    s1_near = float((bits_snn == bits_sw)[near].mean()) if near.any() else float("nan")
+    print(f"CHECK B  tied slots      : {s1_tie*100:.4f}%  (n={int(tie_slot.sum()):,}, "
+          f"{tie_slot.mean()*100:.2f}% of slots; samples with >=1 tie "
+          f"{tie_slot.any((1,2)).mean()*100:.2f}%)")
+    print(f"CHECK B  non-tied slots  : {s1_non*100:.4f}%  (n={int((~tie_slot).sum()):,})")
+    print(f"CHECK B  1-tick-apart    : {s1_near*100:.4f}%  (n={int(near.sum()):,})")
+    print(f"CHECK D  census          : {nneur} neurons, {nsyn} synapses, dmax {dmax}")
 
     # ---- Stage 2: one-hot ---------------------------------------------------------------
     per_table = C.reshape(len(C), 32, 64).sum(-1)
@@ -333,7 +377,11 @@ def main():
         # tick is no longer measured against a fixed origin. Stage 3 is an ABSOLUTE-time
         # code, so it needs a reference: the detector's own firing tick, which is
         # t_last + 1 and is known from the input encoding at zero cost.
-        n_after = (T[:, oi] - t_last).astype(np.float64)
+        # HALF-TICK DEBIAS. T is the ceil of the continuous crossing time and the decode
+        # slope is NEGATIVE, so rounding the tick UP rounds the action DOWN -- measured on
+        # 5,120 on-policy states as 100% one-sided -1 errors at ~21%, mean -0.207 levels.
+        # The unbiased estimate of the continuous crossing is t ~ T - 0.5.
+        n_after = (T[:, oi] - t_last - 0.5).astype(np.float64)
         live = T[:, oi] < n_ticks
         fit = live.copy(); fit[half:] = False
         off = float(np.median(mu_sw[fit, o] - sl * n_after[fit])) if fit.any() else 0.0
@@ -343,15 +391,10 @@ def main():
         # spiking tick grid and the software level grid are the same lattice up to a shift.
         # Getting that shift wrong costs a whole level on ~half the samples for no reason.
         # Search it on the FIRST half only and apply to the second.
-        if fit.any():
-            cand = off + np.linspace(-STEP, STEP, 81)
-            score = []
-            for c in cand:
-                m = sl * n_after[fit] + c
-                q = np.clip(np.round((np.clip(m, -CLIP, CLIP) + CLIP) / STEP) * STEP - CLIP,
-                            -CLIP, CLIP)
-                score.append((np.abs(q - q_sw[fit, o]) < 1e-9).mean())
-            off = float(cand[int(np.argmax(score))])
+        # NOTE: no exact-match phase search here, deliberately. Maximising exact-match
+        # re-selects the biased-low offset (verified: the search returned a 0.0 shift on the
+        # on-policy set while the mean signed residual sat at -0.207 levels). The mean fit
+        # above centres the residual instead, which is the objective that matters for return.
         aff[o] = (sl, off)
         mu = sl * n_after + off
         mu = np.where(~live, -CLIP, mu)                        # silence -> -1

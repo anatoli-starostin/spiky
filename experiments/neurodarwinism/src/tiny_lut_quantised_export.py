@@ -58,7 +58,13 @@ def main():
         n_ticks=np.int64(int(C["n_ticks"])),
         tau_m_out=np.float64(float(C["tau_m_out"])),
         beta=np.array([C["beta"][str(o)] for o in dims], np.float64),
-        affine=np.array([C["affine"][str(o)] for o in dims], np.float64),  # (6,2) slope,off
+        # The pipeline decodes mu = slope*(T - t_last - 0.5) + off_p, but the ACTOR applies
+        # mu = slope*(T - t_last) + off_a. Fold the half-tick in so the two agree exactly:
+        #   off_a = off_p - 0.5*slope   (slope is negative, so this ADDS half a level)
+        affine=np.array([[C["affine"][str(o)][0],
+                          C["affine"][str(o)][1] - 0.5 * C["affine"][str(o)][0]]
+                         for o in dims], np.float64),
+        half_tick_debias=np.int64(1),
     )
     npz = os.path.join(a.out, f"{a.stem}.npz")
     np.savez_compressed(npz, **Q)

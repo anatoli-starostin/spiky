@@ -1,0 +1,58 @@
+{
+ "ckpt": "/home/astarostin/projects/spiky/../ckpt_backups/exp19_walker2d_lut/deploy_matched/actor_s2.pt",
+ "obs": "/home/astarostin/projects/spiky/experiments/neurodarwinism/data/distill_exp19_100k.npz",
+ "n_ticks": 128,
+ "clip_vel": 10.0,
+ "sweep": [
+  {
+   "sigma": 0.5,
+   "flip_rate": 0.013943958096206188,
+   "tie_rate": 0.0314943753182888,
+   "buckets_used": 128,
+   "end_bucket_mass": 0.19151529669761658
+  },
+  {
+   "sigma": 0.75,
+   "flip_rate": 0.005925728939473629,
+   "tie_rate": 0.012476249597966671,
+   "buckets_used": 128,
+   "end_bucket_mass": 0.04693058878183365
+  },
+  {
+   "sigma": 1.0,
+   "flip_rate": 0.004862864501774311,
+   "tie_rate": 0.009499218314886093,
+   "buckets_used": 128,
+   "end_bucket_mass": 0.013167059049010277
+  },
+  {
+   "sigma": 1.25,
+   "flip_rate": 0.005360051989555359,
+   "tie_rate": 0.010550676845014095,
+   "buckets_used": 128,
+   "end_bucket_mass": 0.006894117686897516
+  },
+  {
+   "sigma": 1.5,
+   "flip_rate": 0.005764739587903023,
+   "tie_rate": 0.011510833166539669,
+   "buckets_used": 127,
+   "end_bucket_mass": 0.00513352919369936
+  },
+  {
+   "sigma": 2.0,
+   "flip_rate": 0.007740676868706942,
+   "tie_rate": 0.01520249992609024,
+   "buckets_used": 125,
+   "end_bucket_mass": 0.002155882306396961
+  },
+  {
+   "sigma": 3.0,
+   "flip_rate": 0.011590884998440742,
+   "tie_rate": 0.02142900973558426,
+   "buckets_used": 115,
+   "end_bucket_mass": 1.764705871210026e-06
+  }
+ ],
+ "best_sigma": 1.0
+}

@@ -7,8 +7,8 @@
   "tau_m_out": 31.257,
   "n_ticks": 167,
   "dmax": 6,
-  "neurons": 3025,
-  "synapses": 26361,
+  "neurons": 2889,
+  "synapses": 25953,
   "levels": 22,
   "verification": {
     "stage1_bit_parity": 1.0,

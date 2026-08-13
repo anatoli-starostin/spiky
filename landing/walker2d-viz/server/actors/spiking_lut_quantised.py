@@ -46,6 +46,13 @@ W_DET = 0.06
 # at t_last+3, its tie detector at +4, and the tie veto reaches memory at +5. Gating earlier
 # measured 99.9196% bit parity and 78 multi-selects.
 D_GATE = 6
+# GT-SKEW replaces the 136 tie-detector neurons. Measured on the real kernel: the
+# cross-inhibition lands one tick AFTER the excitation it must cancel, so on an exact tie
+# both rails see pure +1.5187 and both fire. Adding one tick to the GT rail's excitation
+# makes the tie coincide with the veto (-8.5, silent -> bit 0) while leaving the 1-tick-apart
+# case untouched -- exactly the software's strict `d > 0`. Structural, not tuned: the gap
+# between fires (+1.519) and silent (-8.606) is 10.1 against a threshold of 1.0.
+DE_GT = DE + 1
 
 
 def _pairs(anchor_a, anchor_b):
@@ -91,7 +98,7 @@ class SpikingLutQuantisedActor(Actor):
         pairs, slot = _pairs(A_, B_)
         P = len(pairs)
 
-        dmax = max(DE, DI, self.d_out, D_GATE)
+        dmax = max(DE, DE_GT, DI, self.d_out, D_GATE)
         smetas = [SynapseMeta(learning_rate=0.0, min_delay=d, max_delay=d, initial_weight=0.0,
                               min_weight=-1e4, max_weight=1e4, initial_noise_level=0.0,
                               weight_decay=0.9, weight_scaling_cf=0.0,
@@ -102,17 +109,18 @@ class SpikingLutQuantisedActor(Actor):
                  NeuronMeta(neuron_type=1, cf_1=+1.0 / TAU_M_RAIL, **anti),
                  LIFNeuronMeta(neuron_type=2, tau=TAU_M_RAIL, threshold=1.0),
                  LIFNeuronMeta(neuron_type=3, tau=TAU_MEM, threshold=1.0),
-                 LIFNeuronMeta(neuron_type=4, tau=TAU_M_RAIL, threshold=1.0),
+                 # (tie detectors removed -- the GT skew handles ties)
                  # leak-free: the 6-way AND no longer depends on arrival phase;
                  # a wrong cell is bounded by 5*0.18 = 0.90 for ALL time.
-                 NeuronMeta(neuron_type=5, cf_1=0.0, **anti),
-                 NeuronMeta(neuron_type=6, cf_1=+1.0 / tau_m_out, **anti),
-                 NeuronMeta(neuron_type=7, cf_1=0.0, **anti)]   # completion detector
-        counts = [18, 2 * P, 2 * P, 2 * P, P, 2048, 6, 1]
+                 NeuronMeta(neuron_type=4, cf_1=0.0, **anti),
+                 NeuronMeta(neuron_type=5, cf_1=+1.0 / tau_m_out, **anti),
+                 NeuronMeta(neuron_type=6, cf_1=0.0, **anti)]   # completion detector
+        counts = [18, 2 * P, 2 * P, 2 * P, 2048, 6, 1]
         net = SpikingNet(synapse_metas=smetas, neuron_metas=metas, neuron_counts=counts,
                          initial_synapse_capacity=1 << 23, summation_dtype=torch.float32)
         net.to_device("cpu")
-        ids = [net.get_neuron_ids_by_meta(i).cpu().numpy() for i in range(8)]
+        ids = [net.get_neuron_ids_by_meta(i).cpu().numpy() for i in range(7)]
+        ids = ids[:4] + [np.zeros(0, np.int64)] + ids[4:]   # keep downstream indices stable
         inp = ids[0][:17]
         det = ids[7][0]                       # the INTERNAL gate; no external stimulus
         E = [(1, inp[j], det, W_DET) for j in range(17)]
@@ -120,13 +128,11 @@ class SpikingLutQuantisedActor(Actor):
             r0, r1 = ids[1][2 * p], ids[1][2 * p + 1]
             i0, i1 = ids[2][2 * p], ids[2][2 * p + 1]
             m0, m1 = ids[3][2 * p], ids[3][2 * p + 1]
-            td = ids[4][p]
-            E += [(DE, inp[a], r0, W_EXC), (DE, inp[b], r1, W_EXC),
+            E += [(DE_GT, inp[a], r0, W_EXC), (DE, inp[b], r1, W_EXC),
                   (DI, inp[a], i0, W_EXC), (DI, inp[b], i1, W_EXC),
                   (1, i0, r1, W_INH), (1, i1, r0, W_INH),
                   (1, r0, m0, W_MEM), (1, r1, m1, W_MEM),
-                  (D_GATE, det, m0, W_GATE), (D_GATE, det, m1, W_GATE),
-                  (1, r0, td, W_TIE), (1, r1, td, W_TIE), (1, td, m0, -W_MEM)]
+                  (D_GATE, det, m0, W_GATE), (D_GATE, det, m1, W_GATE)]
         for t in range(32):
             for k in range(64):
                 cell = ids[5][t * 64 + k]
@@ -143,10 +149,10 @@ class SpikingLutQuantisedActor(Actor):
         wts = np.array([w for *_, w in E], np.float64)
         ge = SynapseGrowthEngine(device="cpu", synapse_group_size=64,
                                  max_groups_in_buffer=max(1 << 19, 4 * len(tri)))
-        for i in range(8):
+        for i in range(7):
             ge.register_neuron_type(max_synapses=1 << 15, growth_command_list=[])
-        for i in range(8):
-            tt = torch.tensor(ids[i], dtype=torch.int32)
+        for i, gi in enumerate([j for j in range(8) if len(ids[j])]):
+            tt = torch.tensor(ids[gi], dtype=torch.int32)
             ge.add_neurons(neuron_type_index=i, identifiers=tt,
                            coordinates=torch.stack([torch.arange(tt.numel()).float(),
                                                     torch.zeros(tt.numel()),

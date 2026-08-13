@@ -1,0 +1,167 @@
+{
+ "step": "A",
+ "pair": [
+  3,
+  12
+ ],
+ "n": 4000,
+ "t_in": 128,
+ "tau_m": 20.0,
+ "tie_frac": 0.00525,
+ "best": {
+  "dE": 3,
+  "dI": 1,
+  "w_inh": -4.0,
+  "acc_nontied": 1.0,
+  "clean_wta": 0.831,
+  "both_fired": 0.16375,
+  "neither": 0.00525
+ },
+ "step_B": {
+  "pair": [
+   3,
+   12
+  ],
+  "n": 2000,
+  "tau_m": 20.0,
+  "tie_frac": 0.0,
+  "rows": [
+   {
+    "anti_leaky": false,
+    "n_ticks": 160,
+    "loser_false_fire": 0.0015,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   },
+   {
+    "anti_leaky": false,
+    "n_ticks": 320,
+    "loser_false_fire": 0.0015,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   },
+   {
+    "anti_leaky": false,
+    "n_ticks": 640,
+    "loser_false_fire": 0.0015,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   },
+   {
+    "anti_leaky": true,
+    "n_ticks": 160,
+    "loser_false_fire": 0.0,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   },
+   {
+    "anti_leaky": true,
+    "n_ticks": 320,
+    "loser_false_fire": 0.0,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   },
+   {
+    "anti_leaky": true,
+    "n_ticks": 640,
+    "loser_false_fire": 0.0,
+    "winner_fires": 1.0,
+    "winner_spikes_median": 1.0,
+    "winner_spikes_max": 1
+   }
+  ],
+  "mechanism": "anti-leaky rails: V=0 is an unstable equilibrium, so a net-negative first input runs the loser away DOWNWARD permanently -- no renewed inhibition needed"
+ },
+ "step_C": {
+  "pair": [
+   3,
+   12
+  ],
+  "n": 4000,
+  "window": [
+   200,
+   240
+  ],
+  "n_ticks": 320,
+  "tie_frac": 0.00525,
+  "best": {
+   "w_mem": 0.6,
+   "w_gate": 0.6,
+   "tau_mem": 600.0,
+   "winner_fires": 1.0,
+   "winner_exactly_once": 1.0,
+   "loser_silent": 1.0,
+   "in_window": 1.0,
+   "any_spike_before_T1": 0.0,
+   "early_input_before_T1": 0.0,
+   "spike_tick_min": 203,
+   "spike_tick_max": 203
+  }
+ },
+ "scale_up": {
+  "n_pairs": 136,
+  "n_slots": 192,
+  "n": 4000,
+  "neurons": 834,
+  "synapses": 1360,
+  "window": [
+   200,
+   240
+  ],
+  "mem_margin": 0.03351641218524337,
+  "acc_overall": 0.9855872395833334,
+  "acc_nontied": 1.0,
+  "tie_frac": 0.0278125,
+  "loser_false_fire": 0.0278125,
+  "out_of_window": 0.0,
+  "spike_ticks": [
+   203
+  ],
+  "per_table_acc": [
+   0.9924583333333333,
+   0.9675416666666666,
+   0.9792916666666667,
+   0.994125,
+   0.9718333333333333,
+   0.998125,
+   0.9775833333333334,
+   0.9820833333333333,
+   0.9640416666666667,
+   0.9882916666666667,
+   0.9905833333333334,
+   0.99575,
+   0.9949166666666667,
+   0.9905833333333334,
+   0.9975416666666667,
+   0.9781666666666666,
+   0.9945833333333334,
+   0.9906666666666667,
+   0.9941666666666666,
+   0.96925,
+   0.973875,
+   0.9811666666666666,
+   0.9954583333333333,
+   0.996,
+   0.9798333333333333,
+   0.9864583333333333,
+   0.9975,
+   0.9939583333333334,
+   0.99425,
+   0.9394583333333333,
+   0.9969583333333333,
+   0.9922916666666667
+  ]
+ },
+ "quantized_ties": {
+  "t128_tie": 0.030006458333333333,
+  "t128_exact_float_tie": 0.0,
+  "t512_tie": 0.008520625,
+  "n": 100000,
+  "zero_var_coords": []
+ }
+}
