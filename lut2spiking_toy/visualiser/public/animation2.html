@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Composing two LUTs — charge-domain summation</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>Composing two LUTs — y = LUT₁(x) + LUT₂(x)</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <a href="single_table.html">Single-table demo</a> · <b>Two-table composition</b></p>
+    <p>
+      Two tables read the SAME input x. Each has its own detector→decoder branch, but both share ONE input
+      population and converge onto ONE shared row of output neurons. Latencies don't sum, so each table deposits
+      its selected output vector as synaptic <b>charge</b>; the shared outputs accumulate <code>O₁[r₁] + O₂[r₂]</code>
+      and then <b>emit real output spikes</b> at latencies encoding the sum.
+    </p>
+  </header>
+
+  <div class="stack">
+    <!-- INPUT + PLAYBACK -->
+    <div class="panel">
+      <h2>Input &amp; playback</h2>
+      <div id="sliders"></div>
+      <div class="btns"><button id="rand">🎲 Randomize x</button><button id="reset" class="ghost">Reset to 0</button></div>
+      <div class="ctl" style="margin-top:10px;flex-wrap:wrap">
+        <button id="play">▶ Play</button>
+        <button id="restart" class="ghost">⟲ Restart</button>
+        <label>speed <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span class="mono" id="simtime" style="margin-left:6px">t = 0.00</span>
+      </div>
+      <div class="ctl"><label class="small">scrub</label><input type="range" id="scrub" min="0" max="12" step="0.02" value="0" style="flex:1" /></div>
+      <p class="small">Edge colour = synapse weight: <span style="color:#5b9dff">■ −</span> · <span style="color:#6b7280">■ 0</span> · <span style="color:#ff6b6b">■ +</span>; nodes fill with membrane V/θ; green <b>CLOCK</b> pulse drives the readout.</p>
+    </div>
+
+    <!-- UNIFIED GRAPH -->
+    <div class="panel">
+      <h2>One network — shared inputs → two detector/decoder bands → shared summing outputs → output spikes</h2>
+      <p class="hint">Left→right: ONE shared input population (drawn once) fans out to <span style="color:var(--spike)">Table 1 (upper band)</span> and <span style="color:var(--out)">Table 2 (lower band)</span>; each does its detector → complement → 1-of-8 row-select; both winning rows converge on the 4 <b>shared output neurons</b> that accumulate the summed charge and fire.</p>
+      <canvas id="graph" height="560"></canvas>
+      <details style="margin-top:8px">
+        <summary>How the middle layers are wired — DETECT · COMPL · ROWS</summary>
+        <ul class="small" style="margin:6px 0 4px;padding-left:18px">
+          <li><b style="color:var(--addr)">DETECT (H<sub>k</sub>)</b> — one hyperplane sign-test each. After the green <b>CLOCK</b> readout pulse, H<sub>k</sub> fires iff its margin ⟨W<sub>k</sub>,x⟩+b<sub>k</sub> ≥ 0 → that spike is address <b>bit k = 1</b>; silence = bit 0. Its incoming edges are the weighted input→detector synapses (W<sub>d</sub>=−W), coloured <span style="color:#5b9dff">■&nbsp;−</span>/<span style="color:#ff6b6b">■&nbsp;+</span> by weight.</li>
+          <li><b style="color:var(--warn)">COMPL (C<sub>k</sub>)</b> — the negated bit. The CLOCK drives C<sub>k</sub> excitatorily, and H<sub>k</sub> sends an <b style="color:var(--lut)">inhibitory</b> synapse to C<sub>k</sub> (drawn <span style="color:var(--lut)">┄ dashed purple</span>), so C<sub>k</sub> fires iff H<sub>k</sub> did <b>not</b> (C<sub>k</sub> = NOT H<sub>k</sub>). Every bit is now available as a spike in <b>both polarities</b>.</li>
+          <li><b style="color:var(--row)">ROWS (2<sup>K</sup> one-hot)</b> — each row = one address pattern; a K-way coincidence <b>AND</b>. Row r takes one excitatory literal synapse from H<sub>k</sub> if r's bit k=1, else from C<sub>k</sub>; threshold just under K, so exactly the one row matching the detector bits fires.</li>
+        </ul>
+        <p class="small" style="margin:4px 0 0">Edge legend: <span style="color:#5b9dff">■</span>/<span style="color:#ff6b6b">■</span> weighted input→detector (blue −, red +) · <span style="color:var(--lut)">┄</span> inhibitory H→C · thin solid literal→row and row→output coincidence links. Opacity ∝ |weight|.</p>
+      </details>
+    </div>
+
+    <!-- LUT PANELS -->
+    <div class="panel">
+      <h2>What each table selects</h2>
+      <div class="two">
+        <div>
+          <h3 class="sub" style="color:var(--spike)">Table 1 (seed 0)</h3>
+          <table id="lut1_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+          <p class="small">address <b id="lut1_addr" class="mono"></b> → row <b id="lut1_row" class="mono"></b> · O₁[r₁]:</p><div id="lut1_out"></div>
+        </div>
+        <div>
+          <h3 class="sub" style="color:var(--out)">Table 2 (seed 1)</h3>
+          <table id="lut2_tests"><thead><tr><th>H</th><th>margin</th><th>bit</th></tr></thead><tbody></tbody></table>
+          <p class="small">address <b id="lut2_addr" class="mono"></b> → row <b id="lut2_row" class="mono"></b> · O₂[r₂]:</p><div id="lut2_out"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OUTPUT SPIKES -->
+    <div class="panel">
+      <h2>Output spikes — the shared neurons firing (spikes in → spikes out)</h2>
+      <p class="hint">After the summed charge settles, each output neuron fires once at <code>t_out = GZ + α + β·S</code> (α=5, β=1, bigger value = LATER — the same latency code as the inputs, so outputs are composable). Below: a full discrete-time axis from START to the last output spike, then the <code>O₁[r₁] + O₂[r₂] = S</code> breakdown.</p>
+      <div id="tickinfo" class="banner ok" style="font-size:14px;font-weight:700;margin:0 0 8px">⏱ …</div>
+      <canvas id="oraster" height="240"></canvas>
+      <p class="small" style="margin:4px 0 0">One <b>tick</b> = one latency unit (β=1) — the quantum of the first-spike code (inputs at <code>t=α+x</code>, readout CLOCK at <code>t=5</code>). The whole computation resolves in the number of ticks shown above.</p>
+      <div id="sumrows" style="margin-top:12px"></div>
+      <div id="cbanner" class="banner ok">charge = LUT₁(x) + LUT₂(x)</div>
+      <p class="legend" id="cnote"></p>
+
+      <h3 class="sub" style="margin-top:14px;color:var(--ink)">Ground truth vs emitted spike — live check for THIS input</h3>
+      <p class="hint">Left path: the direct LUT sum <code>O₁[r₁][j] + O₂[r₂][j]</code> from the two tables' true selected rows. Right path: the value decoded from the actual emitted output <b>spike time</b>, <code>S = (t_out − α − GZ)/β</code>. They must match.</p>
+      <table id="gtmatch"><thead><tr><th>dim</th><th>O₁[r₁]</th><th>O₂[r₂]</th><th>ground-truth Σ</th><th>emitted (from spike)</th><th>match</th></tr></thead><tbody></tbody></table>
+      <p class="legend" id="gtnote"></p>
+    </div>
+
+    <!-- SCALING TO N TABLES -->
+    <div class="panel">
+      <h2>Scaling to N tables — neuron &amp; synapse budget</h2>
+      <p class="hint">All N tables <b>share</b> the input population, the CLOCK, and the summing output neurons; each table adds one fixed block (2K detectors+complements + 2<sup>K</sup> decoder rows). For this shape (D=6, K=3, 2<sup>K</sup>=8, Dout=4):</p>
+      <p class="small mono" style="line-height:1.8">Neurons = (2 + D + Dout) + N·(2K + 2<sup>K</sup>) = <b>12 + 14·N</b><br>Synapses = 1 + N·(D·K + 3K + K·2<sup>K</sup> + 2<sup>K</sup>·Dout) = <b>1 + 83·N</b></p>
+      <table id="scaletable"><thead><tr><th>N tables</th><th>neurons</th><th>synapses</th></tr></thead><tbody></tbody></table>
+      <p class="small" id="scalenote"></p>
+    </div>
+
+    <!-- VERIFICATION -->
+    <div class="panel">
+      <h2>Verified</h2>
+      <p class="small">Over 50,000 random inputs (<code>analysis/composition_check.py</code>): the charge-accumulated output equals the true <code>O₁[r₁]+O₂[r₂]</code> to <b>0.00e+00</b>; the emitted output-spike times decode <code>(t_out−α)/β</code> back to the sum to <b>8.9e-16</b> — 100% match. Latencies don't sum; charge does.</p>
+    </div>
+  </div>
+
+  <script src="lut_spiking.js"></script>
+  <script src="animate2.js"></script>
+</body>
+</html>
