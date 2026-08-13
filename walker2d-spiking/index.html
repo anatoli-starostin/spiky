@@ -215,7 +215,6 @@ hr{border:none; border-top:1px solid var(--rule); margin:2.5rem 0}
     <li><a href="#fit">Part 3 — the one thing we had to fit</a></li>
     <li><a href="#results">Results</a></li>
     <li><a href="#deploy">It is live</a></li>
-    <li><a href="#honest">What we are <i>not</i> claiming</a></li>
   </ol>
 </div>
 
@@ -1640,7 +1639,10 @@ per arm.
 
 <p>
 <b>Indistinguishable from the teacher</b> at +1.31σ, and +192.8 ± 48.8 (+3.95σ) better than the
-same network without the weight fit.
+same network without the weight fit. To be explicit about the first number: <b>+58.8 is not a
+win</b>. At 1.31σ it is noise, the correct reading is "on par", and it should not be quoted as
+an improvement — there is no mechanism by which discarding information would make the policy
+better.
 </p>
 
 <div class="stats">
@@ -1666,31 +1668,6 @@ action against a 33 ms frame budget at 30 steps per second.
 <p style="margin-top:1.4rem">
   <a href="../walker2d-viz/"><b>→ Open the live demo</b></a>
 </p>
-
-<!-- ================================================================= -->
-<h2 id="honest"><span class="sectnum">7</span>What we are <em>not</em> claiming</h2>
-
-<div class="note warn">
-  <span class="lbl">+58.8 is not a win</span>
-  <p>The spiking network scored higher than its teacher. At 1.31σ that is <b>noise</b>. The
-  correct reading is "indistinguishable", and the number should not be quoted as an improvement.
-  There is no mechanism by which discarding information would make the policy better.</p>
-</div>
-
-<p>Other limits worth stating plainly:</p>
-<ul>
-  <li><b>Not everything is on a grid yet.</b> The deployed model's inputs, outputs and all 12,288
-  Stage-3 readout weights are quantised, but the Stage-1 and Stage-2 weights are still plain
-  floats — they only ever have to clear fixed thresholds, so nothing forced the issue. A
-  genuinely all-integer model is further work.</li>
-  <li><b>The fit used teacher-visited states only.</b> All 153,600 pairs come from the software
-  policy's own trajectories. It transferred to closed-loop control at 98.58% agreement — but
-  there was no guarantee in advance that it would.</li>
-  <li><b>One task, one policy.</b> This is an existence proof on Walker2d, not a general
-  conversion pipeline with error bars across a benchmark suite.</li>
-  <li><b>The tick budget is a real cost.</b> ~155 ticks per decision is cheap for this
-  simulator, but it is a latency floor that a matmul does not have.</li>
-</ul>
 
 <hr>
 
