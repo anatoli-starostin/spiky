@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp028_restore_v",
+  "best_val_bpb": 1.3333929203653339,
+  "final_val_bpb": 1.3338564126989785,
+  "n_params": 108253092,
+  "training_time_hours": 5.103
+}

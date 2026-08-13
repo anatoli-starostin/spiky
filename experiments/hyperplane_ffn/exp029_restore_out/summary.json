@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp029_restore_out",
+  "best_val_bpb": 1.2584272804095324,
+  "final_val_bpb": 1.2584272804095324,
+  "n_params": 195959844,
+  "training_time_hours": 4.625
+}

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp027_restore_qk",
+  "best_val_bpb": 1.3259468562807328,
+  "final_val_bpb": 1.3259468562807328,
+  "n_params": 85528740,
+  "training_time_hours": 5.128
+}

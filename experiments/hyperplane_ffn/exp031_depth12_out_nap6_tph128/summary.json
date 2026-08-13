@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp031_depth12_out_nap6_tph128",
+  "best_val_bpb": 1.284397944466769,
+  "final_val_bpb": 1.2844609907441746,
+  "n_params": 89502024,
+  "training_time_hours": 1.356
+}
