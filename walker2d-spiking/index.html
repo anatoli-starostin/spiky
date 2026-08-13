@@ -649,7 +649,13 @@ weights on the arrows entering Stage 3.</figcaption>
 </div>
 
 <!-- ---------------- Stage 1 ---------------- -->
-<h3><span class="pill p1">Stage 1</span> &nbsp;Order detection — races, not subtractions</h3>
+<h3><span class="pill p1">Stage 1</span> &nbsp;Order detection — the comparator, in full</h3>
+
+<p>
+This is the heart of the network, so it is worth going through one comparison unit synapse by
+synapse. Everything below is the wiring as it is actually built, in
+<code>tiny_lut_quantised_pipeline.py</code> and, identically, in the deployed actor.
+</p>
 
 <p>
 Every observation coordinate is emitted as a <b>first-spike latency</b>: bigger value, earlier
@@ -664,19 +670,496 @@ Stage-1 agreement with the software LUT is <b>bit-exact: 100.0000%, 0 wrong bits
 98,304</b>, not merely close.
 </p>
 
-<h4>The comparator: an unstable equilibrium that remembers</h4>
+<h4>The problem: a decision made at tick 12 has to survive until tick 127</h4>
 <p>
-136 <b>dual-rail winner-take-all</b> pairs resolve the 192 address bits (many bits share an
-anchor pair). Each pair is two neurons that excite themselves and inhibit each other. The
-crucial detail is that the rails are <b>anti-leaky</b> — their membrane grows away from rest
-rather than decaying towards it. That makes <code>V = 0</code> an <em>unstable</em> equilibrium:
-the neuron that gets its input first runs away upward and fires; the other runs away downward
-and stays silent for the rest of the episode.
+The 17 input spikes do not arrive together. They are spread across roughly <b>85 ticks</b>,
+because that is what latency coding means — a large coordinate fires almost immediately, a
+small one fires much later. A comparator whose two inputs both happen to be large might settle
+its answer at tick 12; another might not settle until tick 120.
 </p>
 <p>
-This matters because the 17 input spikes are spread over roughly 85 ticks. A decision made at
-tick 12 has to survive until tick 127. A leaky comparator would forget it. An anti-leaky one
-<em>self-reinforces</em> the decision and holds it with no maintenance current at all.
+But the lookup in Stage 2 needs <em>all 192 address bits at once</em>. So every early decision
+has to be held, unchanged and unmaintained, until the last one is in. A conventional leaky
+neuron cannot do that: whatever charge encodes the decision decays away long before the window
+closes. This is the problem the comparator design exists to solve, and it solves it with
+<b>one sign</b>.
+</p>
+
+<h4>Six neurons, ten synapses, no loops</h4>
+<p>
+One comparison unit — deciding whether coordinate <b>A</b> spiked before coordinate <b>B</b> —
+is exactly six neurons: two <b>rails</b> <code>r0</code>/<code>r1</code>, two <b>inhibitory
+interneurons</b> <code>i0</code>/<code>i1</code>, and two <b>memory cells</b>
+<code>m0</code>/<code>m1</code>. There are 136 such units, covering the 192 address bits
+(bits that compare the same pair of coordinates share a unit).
+</p>
+
+<div class="tw wide">
+<table>
+  <caption>The complete synapse list for one unit. <b>There are no recurrent synapses anywhere
+  in this network</b> — no neuron connects to itself, and neither rail connects to the other.
+  The inhibition is <em>feed-forward-crossed</em>: each interneuron is driven by an
+  <em>input</em>, not by the rival rail, and drives only the opposite rail. Ten synapses × 136
+  units, plus the detector's 17 inputs and Stages 2–3, reproduces the shipped total of 25,953
+  synapses exactly.</caption>
+  <thead><tr><th class="n">#</th><th>source → target</th><th class="n">weight</th>
+             <th class="n">delay</th><th>role</th></tr></thead>
+  <tbody>
+    <tr class="hi"><td class="n">1</td><td>input A → <b>r0</b></td><td class="n">+1.5</td><td class="n">4</td>
+        <td>excite the “greater-than” rail — <b>carries the skew</b></td></tr>
+    <tr><td class="n">2</td><td>input B → <b>r1</b></td><td class="n">+1.5</td><td class="n">3</td>
+        <td>excite the “less-than” rail</td></tr>
+    <tr><td class="n">3</td><td>input A → i0</td><td class="n">+1.5</td><td class="n">2</td>
+        <td>A also drives its interneuron, on a shorter path</td></tr>
+    <tr><td class="n">4</td><td>input B → i1</td><td class="n">+1.5</td><td class="n">2</td>
+        <td>likewise for B</td></tr>
+    <tr><td class="n">5</td><td>i0 → <b>r1</b></td><td class="n">−10.0</td><td class="n">1</td>
+        <td>A vetoes the <em>other</em> rail</td></tr>
+    <tr><td class="n">6</td><td>i1 → <b>r0</b></td><td class="n">−10.0</td><td class="n">1</td>
+        <td>B vetoes the <em>other</em> rail</td></tr>
+    <tr><td class="n">7</td><td>r0 → m0</td><td class="n">+0.6</td><td class="n">1</td>
+        <td>half the charge the memory cell needs</td></tr>
+    <tr><td class="n">8</td><td>r1 → m1</td><td class="n">+0.6</td><td class="n">1</td>
+        <td>likewise</td></tr>
+    <tr><td class="n">9</td><td>completion detector → m0</td><td class="n">+0.6</td><td class="n">6</td>
+        <td>the gate pulse — the other half</td></tr>
+    <tr><td class="n">10</td><td>completion detector → m1</td><td class="n">+0.6</td><td class="n">6</td>
+        <td>likewise</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h4>The one sign flip that makes it work</h4>
+<p>
+A normal leaky neuron obeys <code>v′ = −v/τ</code>. Its voltage always slides back to zero:
+zero is a <b>valley</b>, and any decision written into the membrane rolls back down into it.
+</p>
+<p>
+The rails invert that single sign. They are not leaky-integrate-and-fire neurons at all but a
+raw membrane with <code>v′ = <b>+</b>v/τ</code>, τ = 20 — in the engine's parameters,
+<code>cf_1 = +0.05</code> where a leaky neuron would carry <code>−0.05</code>. Now zero is a
+<b>hilltop</b>: an unstable equilibrium. A membrane sitting exactly at zero stays there, but the
+instant it is pushed it accelerates away and never comes back.
+</p>
+
+<div class="note key">
+  <span class="lbl">What that buys</span>
+  <p>The rail that receives its <b>+1.5</b> first runs away <em>upward</em>, crosses threshold
+  and fires. The rail that receives the <b>−10</b> veto first runs away <em>downward</em> — and
+  keeps going, for the rest of the episode. Measured on the real kernel, a vetoed rail reads
+  <code>−8.61, −9.04, −9.50, −9.98, −10.49 …</code>, multiplying by <code>1.0506</code> every
+  single tick. By the time the gate pulse arrives ~120 ticks later it is near <b>−3,400</b>.
+  No later excitation can rescue it; +1.5 against −3,400 is nothing.</p>
+  <p>So the decision is held by the <b>losing rail's own membrane sign</b>. Not by a latch, not
+  by a feedback synapse, not by a maintenance current — there is nothing to maintain. That is
+  how a decision made at tick 12 is still intact at tick 127.</p>
+</div>
+
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 940 640" role="img" aria-label="Animated data flow through one comparison unit: input A fires before input B, spikes travel along the labelled synapses, the winning rail crosses threshold and fires while the vetoed rail diverges exponentially downward, and the memory cell holds half its charge until the completion-detector gate pulse arrives and pushes it over threshold.">
+  <defs>
+    <marker id="cah" markerWidth="8" markerHeight="8" refX="7.2" refY="2.9" orient="auto">
+      <path d="M0,0 L7.2,2.9 L0,5.8 Z" fill="var(--rule-2)"/>
+    </marker>
+    <marker id="cahd" markerWidth="9" markerHeight="9" refX="4" refY="7" orient="auto">
+      <path d="M0,0 L8,0 L4,8 Z" fill="var(--s3)"/>
+    </marker>
+    <!-- the reveal sweep: one animated rect drives every trace in the lower panel -->
+    <clipPath id="sweepclip">
+      <!-- width=790 is the no-animation fallback: if SMIL is unavailable the traces
+           are simply all visible. The <animate> below overrides it when it runs. -->
+      <rect x="100" y="300" width="790" height="340">
+        <animate attributeName="width" dur="11s" repeatCount="indefinite"
+                 values="0;0;548;600;660;790;790"
+                 keyTimes="0;0.0545;0.5127;0.5636;0.6364;0.7091;1"/>
+      </rect>
+    </clipPath>
+  </defs>
+
+  <text class="svg-t" x="16" y="24">One comparison unit, playing at ~2 ticks per second</text>
+  <text class="svg-s" x="16" y="42">A is one bucket larger than B, so A spikes first and the answer is bit = 1</text>
+
+  <!-- ================= WIRING PANEL ================= -->
+  <!-- edges (drawn first so neurons sit on top) -->
+  <g fill="none" stroke="var(--rule-2)" stroke-width="1.5">
+    <path id="eAr0" d="M85,90  L374,90"  marker-end="url(#cah)"/>
+    <path id="eBr1" d="M85,230 L374,230" marker-end="url(#cah)"/>
+    <path id="eAi0" d="M82,101 L202,126" marker-end="url(#cah)"/>
+    <path id="eBi1" d="M82,219 L202,204" marker-end="url(#cah)"/>
+    <path id="ei0r1" d="M225,142 L376,222" marker-end="url(#cah)"/>
+    <path id="ei1r0" d="M225,188 L376,108" marker-end="url(#cah)"/>
+    <path id="er0m0" d="M406,90  L566,90"  marker-end="url(#cah)"/>
+    <path id="er1m1" d="M406,230 L566,230" marker-end="url(#cah)"/>
+    <path id="edm0" d="M478,149 L568,99"  marker-end="url(#cah)"/>
+    <path id="edm1" d="M478,171 L568,221" marker-end="url(#cah)"/>
+  </g>
+
+  <!-- edge labels -->
+  <text class="svg-s" x="230" y="80"  text-anchor="middle" fill="var(--s1)">+1.5 · delay 4  ← the slow one</text>
+  <text class="svg-s" x="230" y="246" text-anchor="middle" fill="var(--s1)">+1.5 · delay 3</text>
+  <text class="svg-s" x="126" y="130">+1.5 · d2</text>
+  <text class="svg-s" x="126" y="205">+1.5 · d2</text>
+  <text class="svg-s" x="300" y="126" text-anchor="middle" fill="var(--s3)">−10 · d1</text>
+  <text class="svg-s" x="300" y="208" text-anchor="middle" fill="var(--s3)">−10 · d1</text>
+  <text class="svg-s" x="486" y="82"  text-anchor="middle">+0.6 · d1</text>
+  <text class="svg-s" x="486" y="244" text-anchor="middle">+0.6 · d1</text>
+  <text class="svg-s" x="546" y="120" text-anchor="middle" fill="var(--accent)">+0.6 · d6</text>
+  <text class="svg-s" x="546" y="203" text-anchor="middle" fill="var(--accent)">+0.6 · d6</text>
+
+  <!-- travelling spikes -->
+  <!-- A -> i0 -->
+  <circle r="4.5" fill="var(--s1)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.053;0.056;0.205;0.209;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.0545;0.2073;1" keyPoints="0;0;1;1"
+                   path="M82,101 L202,126"/>
+  </circle>
+  <!-- A -> r0 : the slow one, delay 4 -->
+  <circle r="5" fill="var(--s1)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.053;0.056;0.281;0.285;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.0545;0.2836;1" keyPoints="0;0;1;1"
+                   path="M85,90 L374,90"/>
+  </circle>
+  <!-- B -> i1 -->
+  <circle r="4.5" fill="var(--s1)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.091;0.094;0.243;0.247;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.0927;0.2455;1" keyPoints="0;0;1;1"
+                   path="M82,219 L202,204"/>
+  </circle>
+  <!-- B -> r1 -->
+  <circle r="5" fill="var(--s1)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.091;0.094;0.281;0.285;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.0927;0.2836;1" keyPoints="0;0;1;1"
+                   path="M85,230 L374,230"/>
+  </circle>
+  <!-- i0 -> r1 : the veto that wins -->
+  <circle r="6" fill="var(--s3)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.205;0.209;0.281;0.285;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.2073;0.2836;1" keyPoints="0;0;1;1"
+                   path="M225,142 L376,222"/>
+  </circle>
+  <!-- i1 -> r0 : arrives after r0 has already fired -->
+  <circle r="6" fill="var(--s3)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.55;0.55;0;0" keyTimes="0;0.243;0.247;0.318;0.322;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.2455;0.3218;1" keyPoints="0;0;1;1"
+                   path="M225,188 L376,108"/>
+  </circle>
+  <!-- r0 -> m0 -->
+  <circle r="5" fill="var(--s2)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.281;0.285;0.356;0.360;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.2836;0.36;1" keyPoints="0;0;1;1"
+                   path="M406,90 L566,90"/>
+  </circle>
+  <!-- detector -> m0 : the gate pulse, much later -->
+  <circle r="5.5" fill="var(--accent)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.561;0.564;0.633;0.637;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.5636;0.6364;1" keyPoints="0;0;1;1"
+                   path="M478,149 L568,99"/>
+  </circle>
+  <!-- detector -> m1 -->
+  <circle r="5.5" fill="var(--accent)" opacity="0">
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.5;0.5;0;0" keyTimes="0;0.561;0.564;0.633;0.637;1"/>
+    <animateMotion dur="11s" repeatCount="indefinite" calcMode="linear"
+                   keyTimes="0;0.5636;0.6364;1" keyPoints="0;0;1;1"
+                   path="M478,171 L568,221"/>
+  </circle>
+
+  <!-- neuron: input A -->
+  <circle cx="70" cy="90" r="15" fill="none" stroke="var(--s1)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="15;15;30;15;15" keyTimes="0;0.0545;0.075;0.095;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3;0;0" keyTimes="0;0.0545;0.075;0.095;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.9;0;0" keyTimes="0;0.0545;0.075;0.095;1"/>
+  </circle>
+  <circle cx="70" cy="90" r="15" fill="var(--s1-w)" stroke="var(--s1)" stroke-width="1.6"/>
+  <text class="svg-l" x="70" y="95" text-anchor="middle" fill="var(--s1)">A</text>
+  <text class="svg-s" x="70" y="63" text-anchor="middle">input A · fires at t = 0</text>
+
+  <!-- neuron: input B -->
+  <circle cx="70" cy="230" r="15" fill="none" stroke="var(--s1)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="15;15;30;15;15" keyTimes="0;0.0927;0.113;0.133;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3;0;0" keyTimes="0;0.0927;0.113;0.133;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.9;0;0" keyTimes="0;0.0927;0.113;0.133;1"/>
+  </circle>
+  <circle cx="70" cy="230" r="15" fill="var(--s1-w)" stroke="var(--s1)" stroke-width="1.6"/>
+  <text class="svg-l" x="70" y="235" text-anchor="middle" fill="var(--s1)">B</text>
+  <text class="svg-s" x="70" y="262" text-anchor="middle">input B · fires at t = 1</text>
+
+  <!-- neuron: i0 -->
+  <circle cx="215" cy="130" r="13" fill="none" stroke="var(--s3)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="13;13;26;13;13" keyTimes="0;0.2073;0.228;0.248;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3;0;0" keyTimes="0;0.2073;0.228;0.248;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.9;0;0" keyTimes="0;0.2073;0.228;0.248;1"/>
+  </circle>
+  <circle cx="215" cy="130" r="13" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.5"/>
+  <text class="svg-l" x="215" y="134" text-anchor="middle" fill="var(--s3)">i0</text>
+
+  <!-- neuron: i1 -->
+  <circle cx="215" cy="200" r="13" fill="none" stroke="var(--s3)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="13;13;26;13;13" keyTimes="0;0.2455;0.266;0.286;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3;0;0" keyTimes="0;0.2455;0.266;0.286;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.9;0;0" keyTimes="0;0.2455;0.266;0.286;1"/>
+  </circle>
+  <circle cx="215" cy="200" r="13" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.5"/>
+  <text class="svg-l" x="215" y="204" text-anchor="middle" fill="var(--s3)">i1</text>
+  <text class="svg-s" x="215" y="286" text-anchor="middle">inhibitory interneurons —</text>
+  <text class="svg-s" x="215" y="299" text-anchor="middle">each vetoes the OTHER rail</text>
+
+  <!-- neuron: r0 (winner) -->
+  <circle cx="390" cy="90" r="16" fill="none" stroke="var(--s2)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="16;16;36;16;16" keyTimes="0;0.2836;0.308;0.330;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3.5;0;0" keyTimes="0;0.2836;0.308;0.330;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;0;0" keyTimes="0;0.2836;0.308;0.330;1"/>
+  </circle>
+  <circle cx="390" cy="90" r="16" fill="var(--s2-w)" stroke="var(--s2)" stroke-width="1.8"/>
+  <text class="svg-l" x="390" y="95" text-anchor="middle" fill="var(--s2)">r0</text>
+  <text class="svg-s" x="390" y="60" text-anchor="middle" fill="var(--s2)">GT rail — wins</text>
+
+  <!-- neuron: r1 (loser) -->
+  <circle cx="390" cy="230" r="16" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.8"
+          stroke-dasharray="4 3"/>
+  <text class="svg-l" x="390" y="235" text-anchor="middle" fill="var(--s3)">r1</text>
+  <text class="svg-s" x="390" y="266" text-anchor="middle" fill="var(--s3)">LT rail — vetoed, silent</text>
+
+  <!-- completion detector -->
+  <circle cx="470" cy="160" r="12" fill="none" stroke="var(--accent)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="12;12;26;12;12" keyTimes="0;0.5636;0.584;0.604;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3;0;0" keyTimes="0;0.5636;0.584;0.604;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;0.9;0;0" keyTimes="0;0.5636;0.584;0.604;1"/>
+  </circle>
+  <circle cx="470" cy="160" r="12" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.6"/>
+  <text class="svg-s" x="470" y="164" text-anchor="middle" fill="var(--accent)">det</text>
+  <text class="svg-s" x="452" y="196" text-anchor="middle">completion</text>
+  <text class="svg-s" x="452" y="209" text-anchor="middle">detector</text>
+
+  <!-- memory cells -->
+  <circle cx="580" cy="90" r="14" fill="none" stroke="var(--accent)" stroke-width="0" opacity="0">
+    <animate attributeName="r" dur="11s" repeatCount="indefinite"
+             values="14;14;34;14;14" keyTimes="0;0.6364;0.661;0.683;1"/>
+    <animate attributeName="stroke-width" dur="11s" repeatCount="indefinite"
+             values="0;0;3.5;0;0" keyTimes="0;0.6364;0.661;0.683;1"/>
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;0;0" keyTimes="0;0.6364;0.661;0.683;1"/>
+  </circle>
+  <circle cx="580" cy="90" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="580" y="95" text-anchor="middle" fill="var(--accent)">m0</text>
+  <circle cx="580" cy="230" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5"
+          stroke-dasharray="4 3"/>
+  <text class="svg-l" x="580" y="235" text-anchor="middle" fill="var(--ink-3)">m1</text>
+
+  <!-- result -->
+  <text class="svg-t" x="640" y="86" fill="var(--s2)" opacity="0">bit = 1
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.6364;0.661;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="640" y="102" opacity="0">A spiked first
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.6364;0.661;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="640" y="234" fill="var(--ink-3)">m1 stays silent</text>
+
+  <text class="svg-s" x="700" y="150">Six neurons. Ten synapses.</text>
+  <text class="svg-s" x="700" y="166">No neuron connects to itself;</text>
+  <text class="svg-s" x="700" y="182">neither rail connects to the other.</text>
+
+  <!-- ================= TRACE PANEL ================= -->
+  <line x1="16" y1="316" x2="924" y2="316" stroke="var(--rule)" stroke-width="1"/>
+  <text class="svg-t" x="16" y="338">Membrane voltage of the two rails</text>
+
+  <!-- v axis -->
+  <line x1="110" y1="330" x2="110" y2="520" class="svg-ax"/>
+  <line x1="110" y1="374" x2="890" y2="374" class="svg-ax"/>
+  <line x1="110" y1="352" x2="890" y2="352" stroke="var(--s2)" stroke-width="1" stroke-dasharray="5 3"/>
+  <text class="svg-s" x="104" y="356" text-anchor="end" fill="var(--s2)">1.0</text>
+  <text class="svg-s" x="104" y="378" text-anchor="end">0</text>
+  <text class="svg-s" x="104" y="424" text-anchor="end">−8.6</text>
+  <text class="svg-s" x="104" y="494" text-anchor="end">−11.6</text>
+  <!-- axis break -->
+  <g stroke="var(--surface)" stroke-width="5">
+    <line x1="104" y1="392" x2="116" y2="386"/><line x1="104" y1="400" x2="116" y2="394"/>
+  </g>
+  <g stroke="var(--rule-2)" stroke-width="1.2">
+    <line x1="104" y1="392" x2="116" y2="386"/><line x1="104" y1="400" x2="116" y2="394"/>
+  </g>
+
+  <!-- tick axis -->
+  <g stroke="var(--rule)" stroke-width="1">
+    <line x1="120" y1="370" x2="120" y2="378"/><line x1="208" y1="370" x2="208" y2="378"/>
+    <line x1="296" y1="370" x2="296" y2="378"/><line x1="384" y1="370" x2="384" y2="378"/>
+    <line x1="472" y1="370" x2="472" y2="378"/><line x1="560" y1="370" x2="560" y2="378"/>
+    <line x1="648" y1="370" x2="648" y2="378"/>
+  </g>
+  <g class="svg-s" text-anchor="middle" fill="var(--ink-3)">
+    <text x="120" y="390">0</text><text x="208" y="390">2</text><text x="296" y="390">4</text>
+    <text x="384" y="390">6</text><text x="472" y="390">8</text><text x="560" y="390">10</text>
+    <text x="648" y="390">12</text><text x="674" y="390">⋯</text>
+    <text x="760" y="390">~127</text>
+  </g>
+  <text class="svg-s" x="820" y="390" fill="var(--ink-3)">ticks</text>
+
+  <!-- revealed traces -->
+  <g clip-path="url(#sweepclip)">
+    <!-- winner r0 -->
+    <path d="M120,374 L384,374 L384,341" stroke="var(--s2)" stroke-width="2.6" fill="none"/>
+    <line x1="384" y1="341" x2="384" y2="326" stroke="var(--s2)" stroke-width="2.6"/>
+    <circle cx="384" cy="326" r="4.5" fill="var(--s2)"/>
+    <path d="M384,374 L890,374" stroke="var(--s2)" stroke-width="1.4" fill="none"
+          stroke-dasharray="3 4" opacity=".5"/>
+    <!-- loser r1 : plunge, then runaway -->
+    <path d="M120,374 L384,374 L384,420 L428,430 L472,441 L516,452 L560,464 L604,477 L648,490
+             C 668,500 686,512 700,522" stroke="var(--s3)" stroke-width="2.6" fill="none"
+          marker-end="url(#cahd)"/>
+    <!-- m0 charge -->
+    <path d="M120,600 L472,600 L472,576 L648,577 L700,578 L760,578 L760,554"
+          stroke="var(--accent)" stroke-width="2.4" fill="none"/>
+    <line x1="760" y1="554" x2="760" y2="538" stroke="var(--accent)" stroke-width="2.4"/>
+    <circle cx="760" cy="538" r="4.5" fill="var(--accent)"/>
+  </g>
+
+  <!-- now line -->
+  <line x1="100" y1="326" x2="100" y2="612" stroke="var(--ink-3)" stroke-width="1" opacity=".45">
+    <animate attributeName="x1" dur="11s" repeatCount="indefinite"
+             values="100;100;648;700;760;890;890"
+             keyTimes="0;0.0545;0.5127;0.5636;0.6364;0.7091;1"/>
+    <animate attributeName="x2" dur="11s" repeatCount="indefinite"
+             values="100;100;648;700;760;890;890"
+             keyTimes="0;0.0545;0.5127;0.5636;0.6364;0.7091;1"/>
+  </line>
+
+  <!-- trace annotations, timed -->
+  <text class="svg-s" x="396" y="332" fill="var(--s2)" opacity="0">crosses 1.0 → fires
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.2836;0.305;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="396" y="414" fill="var(--s3)" opacity="0">−10 veto lands
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.2836;0.305;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="716" y="508" fill="var(--s3)" opacity="0">× 1.0506 every tick
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.5127;0.535;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="716" y="522" fill="var(--s3)" opacity="0">≈ −3,400 by the gate
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.5127;0.535;0.930;0.975;1"/>
+  </text>
+
+  <!-- m0 charge track labels -->
+  <line x1="110" y1="600" x2="890" y2="600" class="svg-ax"/>
+  <line x1="110" y1="560" x2="890" y2="560" stroke="var(--accent)" stroke-width="1" stroke-dasharray="5 3"/>
+  <text class="svg-s" x="104" y="564" text-anchor="end" fill="var(--accent)">1.0</text>
+  <text class="svg-s" x="104" y="604" text-anchor="end">0</text>
+  <text class="svg-t" x="16" y="546">Charge on memory cell m0</text>
+  <text class="svg-s" x="486" y="592" opacity="0">+0.6 from r0 — not enough on its own
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.36;0.382;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="600" y="618" opacity="0">decays with τ = 1200 — barely at all
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.5127;0.535;0.930;0.975;1"/>
+  </text>
+  <text class="svg-s" x="772" y="536" fill="var(--accent)" opacity="0">+0.6 gate → 1.14 → fires
+    <animate attributeName="opacity" dur="11s" repeatCount="indefinite"
+             values="0;0;1;1;0;0" keyTimes="0;0.6364;0.658;0.930;0.975;1"/>
+  </text>
+</svg>
+</div>
+<figcaption><b>One comparison unit, animated.</b> A fires one tick before B. The
+excitation to the winning rail is deliberately the <em>slowest</em> path in the unit (delay 4),
+while the veto travels A → i0 → r1 and arrives first. At tick 6 the two rails separate for
+good: r0 crosses threshold and fires; r1 takes the −10 and begins the exponential runaway that
+no later input can undo. The winning rail leaves 0.6 on its memory cell — not enough to fire it
+— and that charge simply sits there until the completion detector's gate pulse adds the second
+0.6 about 120 ticks later. <span class="small">Every path also carries a fixed 2-tick kernel
+latency on top of its synapse delay; only the differences matter, so the timeline above is
+drawn relative to A.</span></figcaption>
+</figure>
+
+<h4>The memory cells are an AND gate, not a latch</h4>
+<p>
+It is tempting to read <code>m0</code> as a flip-flop that stores the bit. It is not — there is
+no bistability and no feedback anywhere near it. <code>m0</code> is a leaky neuron with
+threshold 1.0 and exactly two inputs, each worth <b>+0.6</b>: one from its rail, one from the
+completion detector. <b>Neither can fire it alone</b> (0.6 &lt; 1.0); together they give 1.2 and
+it fires. It is a coincidence detector.
+</p>
+<p>
+So the rail spikes at some early, unpredictable tick and leaves 0.6 of sub-threshold charge
+behind. That charge leaks away with <b>τ = 1200</b> — a time constant chosen precisely so that
+the worst case survives the whole input window: an early rail and a late gate are ~127 ticks
+apart, and
+</p>
+<pre><code>0.6 · e^(−127/1200) + 0.6  =  0.539 + 0.6  =  1.139  &gt;  1.0    ✓</code></pre>
+<p>
+Their purpose is <b>re-timing</b>, not memory. They convert "my rail fired at some unpredictable
+early tick" into "a spike at one common tick", which is what lets Stage 2 do a plain 6-way
+coincidence (<code>6 × 0.18 = 1.08 &gt; 1.0</code>) without knowing anything about arrival
+order. The decision itself was already safe — held by the losing rail's runaway membrane.
+</p>
+
+<h4>Self-timing: the network has no clock</h4>
+<p>
+The gate pulse comes from a single <b>leak-free completion detector</b> taking all 17 inputs at
+weight 0.06 with threshold 1.0. Since each input fires exactly once,
+<code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it fire <em>precisely</em> when the last input
+arrives — no earlier, no later. That one neuron replaces what used to be an external fixed-tick
+stimulus, so the network now takes <b>no external drive at all</b>: it is triggered entirely by
+its own inputs and finishes when it is finished.
+</p>
+<p>
+It then waits out the comparator pipeline (<code>D_GATE = 6</code>), because the last rail
+resolves at <code>t_last+3</code> and its tie veto at <code>t_last+5</code>. Gating any earlier
+was measured, and cost real accuracy — 99.9196% bit parity with 78 cases where two cells fired
+at once.
+</p>
+
+<h4>Ties, and the one tick that fixed them</h4>
+<p>
+Everything above assumed a clear winner. Ties are not an edge case: there are <em>zero</em>
+exact float ties in the data, but once the inputs are bucketed, 0.95% of address slots and
+<b>77% of samples</b> contain two coordinates in the same bucket.
+</p>
+<p>
+Membrane traces on the real kernel showed why they broke the comparator: <b>the cross-inhibition
+lands one tick after the excitation it must cancel</b>. On an exact tie both rails see a clean
++1.5187 and <em>both</em> fire before either veto arrives — two bits asserted where there should
+be one. (Both then get vetoed and dive away: <code>−10.13, −10.64, −11.18, −11.74, −12.34 …</code>
+— but too late, the spikes are already out.) One tick apart, the loser sees +1.5 − 10 = −8.5 in a
+single tick and never rises at all.
 </p>
 
 <figure class="wide">
@@ -732,31 +1215,28 @@ free.</figcaption>
 </figure>
 
 <p>
-Membrane traces on the real kernel showed exactly why ties were a problem: <b>the
-cross-inhibition lands one tick after the excitation it must cancel</b>. On an exact tie both
-rails see a clean +1.519 and both fire. One tick apart, the loser sees +1.5 − 10 = −8.5 in a
-single tick and never rises. Adding one tick of delay to the greater-than rail
-(<code>DE_GT = 4</code>) aligns the tie case with its veto, leaves the one-apart case untouched,
-and reproduces the software's strict <code>&gt;</code> convention exactly.
-</p>
-
-<h4>Self-timing: the network has no clock</h4>
-<p>
-A single <b>leak-free completion detector</b> takes all 17 inputs at weight 0.06 with threshold
-1.0. Since each input fires exactly once, <code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it
-fire <em>precisely</em> when the last input arrives — no earlier, no later. That one neuron
-replaces what used to be an external fixed-tick stimulus, so the network now takes <b>no
-external drive at all</b>: it is triggered entirely by its own inputs and finishes when it is
-finished.
+The fix is <b>synapse #1's delay, and nothing else</b>: 4 instead of 3, on the GT rail only. That
+one extra tick slides the GT rail's excitation from arriving <em>one tick before</em> the veto to
+arriving <em>with</em> it, so on a tie the GT rail is cancelled and stays silent while the LT rail
+still fires — which is bit 0, exactly the software's strict <code>&gt;</code>. The one-apart case
+is untouched, because there the veto was never simultaneous to begin with.
 </p>
 <p>
-It then waits out the comparator pipeline (<code>D_GATE = 6</code>), because the last rail
-resolves at <code>t_last+3</code> and its tie veto at <code>t_last+5</code>. Gating any earlier
-was measured, and cost real accuracy — 99.9196% bit parity with 78 cases where two cells fired
-at once.
+That deleted <b>136 tie-detector neurons and 408 synapses</b> — and it is structural rather than
+tuned: the gap between "fires" (+1.519) and "silent" (−8.606) is 10.1 against a threshold of 1.0.
 </p>
 
-<!-- ---------------- Stage 2 ---------------- -->
+<div class="note warn">
+  <span class="lbl">One honest caveat about the skew</span>
+  <p>The extra tick is hardwired to <code>r0</code>, and <code>r0</code> is always driven by the
+  <em>lower-indexed</em> of the pair's two coordinates. So the skew sits on the correct rail only
+  for slots whose own <code>anchor_a</code> is that lower index. We checked the trained policy's
+  anchor arrays directly: <b>all 192 slots satisfy it</b>, which is why Stage-1 parity is
+  100.0000%.</p>
+  <p>But that is a property of <em>this</em> policy, not a structural guarantee. A future policy
+  with a slot whose <code>anchor_a</code> were the higher index would put the skew on the wrong
+  rail and invert that slot's tie behaviour. Worth a check, not an assumption.</p>
+</div>
 <h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence, with a proof</h3>
 <p>
 2,048 neurons, one per lookup cell. Each listens to the six memory cells that spell out its
