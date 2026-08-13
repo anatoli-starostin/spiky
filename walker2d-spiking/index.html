@@ -520,6 +520,53 @@ Everything from here on is <b>construction</b>. The three stages map one-to-one 
 things the LUT does: work out the comparisons, use them as an address, and pool the results.
 </p>
 
+<h3>First, the substrate: what <code>spnet</code> actually simulates</h3>
+<p>
+The network runs on <b>spnet</b>, our spiking simulator. It is worth two minutes, because several
+things that look like design decisions later are really properties of this substrate.
+</p>
+<p>
+<b>Time is discrete.</b> The simulation advances in integer <b>ticks</b>. A spike is an event at a
+tick boundary — there is no sub-tick timing, and nothing ever happens between ticks. A synapse is
+just two numbers, a <b>weight</b> and an <b>integer delay in ticks</b> (1 to 255): a spike
+emitted at tick <i>t</i> lands on its target at tick <i>t + delay</i>.
+</p>
+<p>
+<b>A neuron is a handful of coefficients.</b> Every neuron's membrane follows the same quadratic
+(Izhikevich) ODE, and a neuron <em>type</em> is nothing but a choice of its coefficients, a
+threshold, and a reset rule:
+</p>
+<pre><code>v′ = cf₂·v² + cf₁·v + cf₀ − u + I         spnet.py:14
+
+    leaky integrate-and-fire :  cf₂ = 0,  cf₁ = −1/τ     spnet.py:57
+    our anti-leak rails      :  cf₂ = 0,  cf₁ = <b>+</b>1/τ</code></pre>
+<p>
+That is the whole of the "one sign flip" you will meet in Stage 1 — the anti-leak neurons are not
+a special mechanism, they are the ordinary machinery with <code>cf₁</code> given the opposite
+sign. When <code>v</code> reaches the threshold the neuron emits a spike and resets, and the
+input current <code>I</code> is delivered per tick rather than accumulated across ticks.
+</p>
+<p>
+<b>The ODE is integrated by Euler.</b> Each tick is stepped as <b>two Euler half-steps of
+dt = 0.5</b> (<code>N_EULER_STEPS 2</code>, <code>EULER_DT 0.5f</code> in the kernel). That is a
+detail, but two of its consequences run through the rest of this page:
+</p>
+<ul>
+  <li>Because ticks are integers, <b>a threshold crossing can only be reported as a whole
+  tick</b> — the true crossing time is continuous, but what the network can say is the ceiling of
+  it. That is the seed of the decode lattice, and of the one-sided rounding bias that Part 3 has
+  to remove.</li>
+  <li>Two half-steps of Euler are not the same as the exact exponential, so the membrane's
+  effective growth constant is slightly larger than its nominal τ: <code>τ = 31.257</code> gives
+  <code>τ_eff = 31.506</code>. Everything downstream uses <code>τ_eff</code>, which is why that
+  second number keeps appearing.</li>
+</ul>
+<p>
+So: integer ticks, weight-and-delay synapses, and a membrane that is three coefficients and a
+threshold. Nothing else. Every mechanism in the three stages below is built out of exactly those
+pieces.
+</p>
+
 <figure class="wide">
 <div class="figbox">
 <svg viewBox="0 0 900 330" role="img" aria-label="The three-stage spiking pipeline: latency-coded inputs, order detection by dual-rail winner-take-all, one-hot lookup cell selection, and an amplitude-encoded readout, with a tick budget along the bottom.">
@@ -1390,30 +1437,20 @@ anti-leak membrane climbs, and therefore how much output value a single tick of 
 worth — the <b>pitch of the decode lattice</b>.
 </p>
 <p>
-It was set to <b>31.257 ticks</b> to make that pitch line up with the output quantisation step.
-It does, almost exactly: <b>0.09523729</b> of output per tick against a grid step of
-2/21 = <b>0.09523810</b>, agreeing to eight parts in ten million. So 22 ticks map onto 22 output
-levels, one tick per level. That is the elegant part — every tick the neuron could possibly fire
-on lands on a value the policy is actually able to emit, and no resolution is wasted on either
-side.
+At <b>31.257 ticks</b> that pitch is <b>0.09523729</b> of output per tick, against an output grid
+step of 2/21 = <b>0.09523810</b> — equal to eight parts in ten million. So 22 ticks map onto 22
+output levels, one tick per level: every tick the neuron could fire on lands on a value the
+policy can actually emit, and no resolution is wasted. That is the elegant part.
 </p>
 <p>
-It is also the bill. Because the two pitches are <em>equal</em> rather than merely close, the
-decode lattice and the output grid never slide relative to one another. Three consequences
-follow, and the third one cost us a lot of time.
+The bill is that the two grids are now <b>pinned</b> to each other, and two things follow.
+<b>Recalibration has no purchase:</b> every decoded value sits at the same phase relative to the
+output grid, so shifting the decode offset moves <em>no</em> samples across a level boundary, or
+<em>all</em> of them. And <b>the rounding error is one-sided:</b> as the primer said, a crossing
+can only be reported as a whole tick, so the reported time is a <em>ceiling</em> — and with a
+negative decode slope, rounding the tick <em>up</em> always rounds the action <em>down</em>. Not
+sometimes. Always.
 </p>
-<ul>
-  <li><b>Every decoded value sits at the same phase relative to the output grid.</b> So shifting
-  the decode offset moves <em>no</em> samples across a level boundary, or <em>all</em> of them.
-  We verified this the hard way: an on-policy offset recalibration left five of six action
-  dimensions bit-identical, flipped the sixth wholesale, and scored −175 in the walker.</li>
-  <li><b>The closed-form model can be checked.</b> Solving it against the network's measured
-  spike ticks gives phase 0.750 and base +13 — <em>the same values on all six dimensions,
-  independently</em>. That agreement is the evidence the model is structurally right.</li>
-  <li><b>The rounding bias is one-sided.</b> The crossing tick is the <em>ceiling</em> of a
-  continuous time, and the decode slope is negative. So rounding the tick <em>up</em> always
-  rounds the action <em>down</em>. Not sometimes — always.</li>
-</ul>
 
 <figure class="wide">
 <div class="figbox">
@@ -1481,46 +1518,30 @@ step — and the walker feels it.</figcaption>
 <h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
 
 <p>
-At this point the network was a faithful construction and still <b>−164.8 ± 50.3 of return</b>
-behind its teacher. The lattice argument above says the bias cannot be removed by recalibrating
-the decode — any offset shift moves nothing or everything. Adding output levels does not help
-either; 22 levels can already represent the right answers. But <b>changing individual stored
-weights is not degenerate with a global offset</b>, and that is the opening.
+That one-sided bias was worth <b>−164.8 ± 50.3 of return</b> — small per action, but it is a
+constant nudge on every joint on every step. It cannot be calibrated away, because the lattice is
+pinned. It is not a resolution problem either; 22 levels can already represent the right answers.
+But a change to an <em>individual</em> stored weight is <b>not</b> degenerate with a global
+offset — and that opening turns out to be a cheap one.
 </p>
 
-<h4>Coordinate descent, no gradients</h4>
+<h4>A short, gradient-free nudge to the readout weights</h4>
 <p>
-Two gradient-based attempts failed first, and both failures were informative: a
-straight-through optimiser diverged outright (the loss <em>rose</em> 29%), and the closed-form
-model was not faithful enough to optimise against until it was phase-pinned to the network's
-measured ticks. Coordinate descent avoids both problems, and the structure of the network makes
-it very cheap:
+The structure makes the search almost free. Weight <code>(t, k, o)</code> affects only output
+dimension <code>o</code>, and only those states whose table <code>t</code> selected cell
+<code>k</code> — and it enters through a <em>sum</em>, so a candidate move costs just
+<code>S′ = S − exp(w_old) + exp(w_new)</code> over the affected states. Plain coordinate descent
+against 153,600 teacher input→output pairs (115,200 train, 38,400 held out, split by seed), with
+the tick <code>ceil</code> <em>inside</em> the objective so the search sees the same rounding the
+hardware will.
 </p>
 <p>
-weight <code>(t, k, o)</code> affects only output dimension <code>o</code>, and only those states
-whose table <code>t</code> happened to select cell <code>k</code> — and it enters through a
-<em>sum</em>. So evaluating a candidate move is just
-<code>S′ = S − exp(w_old) + exp(w_new)</code> over the affected states alone.
-</p>
-
-<ul>
-  <li><b>Objective:</b> level-mismatch against the software teacher's 22-level action, scored by
-  the phase-pinned closed form with the tick <code>ceil</code> <em>inside</em> the loss — so the
-  optimiser sees the same rounding the hardware will.</li>
-  <li><b>Constraint:</b> weights confined to an <b>8-bit log-domain grid</b>, enforced
-  <em>during</em> the fit rather than applied afterwards. (8 bits was shown to cost nothing
-  versus full precision, and sits comfortably inside the sensitivity bound: a relative weight
-  error δ shifts the crossing by <code>τ_eff·δ</code>, so half an output level needs δ &lt; 1.6%.)</li>
-  <li><b>Data:</b> 153,600 teacher input→output pairs from 512 independent rollouts, split
-  <em>by seed</em> — 115,200 train (seeds 0–2), 38,400 held out (seed 3).</li>
-  <li><b>Two mandatory gates before any move was accepted:</b> the scorer had to reproduce the
-  true network's baseline behaviour, and a zero-step run had to reproduce that baseline exactly.</li>
-</ul>
-
-<p>
-Loss fell from 151,004 to 17,100 in three sweeps — about six seconds. <b>5,390 of the 12,288
-weights moved</b>, with a maximum log-domain drift of 0.261. Validated on the real spiking
-network, on GPU, with measured spike ticks, on held-out states:
+The weights stay on an <b>8-bit log-domain grid</b> throughout — the constraint is enforced
+during the search, not applied afterwards, and it costs nothing: a relative weight error δ shifts
+the crossing by <code>τ_eff·δ</code>, so half an output level needs δ &lt; 1.6%, which 8 bits
+clears comfortably. Three sweeps, about six seconds, <b>5,390 of the 12,288 weights moved</b>,
+maximum log-domain drift 0.261. Validated on the real spiking network, on GPU, with measured
+spike ticks, on held-out states:
 </p>
 
 <div class="tw">
@@ -1539,21 +1560,19 @@ network, on GPU, with measured spike ticks, on held-out states:
 <div class="note warn">
   <span class="lbl">The weights and the decode offset are one object</span>
   <p>Changing the weights changes the crossing ticks, so the fit <b>also re-derives the decode
-  offset</b> — by −0.22 to −0.32 of a level. We learned this the expensive way: an evaluation
-  that combined the fitted weights with the <em>old</em> offset mis-decoded by a quarter of a
-  level (the same magnitude as the bias just removed) and scored <b>−197</b>. That number
-  supported a confident and completely wrong conclusion — that return had somehow decoupled
-  from action agreement.</p>
-  <p>With its matching offset, the very same set of weights scores <b>+58.8</b>. The two are a
-  <b>pair</b> and must never be used apart; the evaluation harness now refuses to run weights
-  without an offset, and both are baked together into the shipped artefact.</p>
+  offset</b> — by −0.22 to −0.32 of a level. The two are a <b>pair</b> and must never be used
+  apart. Fitted weights read with the old offset mis-decode by about a quarter of a level — the
+  same magnitude as the bias just removed — and they do it <em>silently</em>: no error, no
+  warning, just a worse walker. Both are baked together into the shipped artefact, and the
+  evaluation harness refuses to run weights without a matching offset.</p>
 </div>
 
 <p>
-So the honest summary of "how much training happened inside the spiking network" is: none, in
-the usual sense. No backpropagation, no surrogate gradients, no spike-time learning rule.
-A gradient-free search adjusted 5,390 numbers on a discrete grid to compensate for a known,
-characterised rounding artefact of the readout.
+So "how much training happened inside the spiking network" has a clean answer: <b>none</b>. No
+backpropagation, no surrogate gradients, no spike-time learning rule. A gradient-free search
+moved 5,390 numbers on a discrete grid to cancel a known, characterised rounding artefact of the
+readout — a few seconds of post-processing on top of a network that was otherwise built, not
+trained.
 </p>
 
 <!-- ================================================================= -->
