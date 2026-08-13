@@ -116,6 +116,78 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
     return out_flat.view(B, n_heads, n_outputs), index
 
 
+def _lse_init_offset(tau: float, sigma: float, tph: int, n_samples: int = 200_000,
+                     seed: int = 12345) -> float:
+    """Weight centre `mu` that makes the log-sum-exp readout start at output ~ 0.
+
+    Under `out = tau * log(sum_t exp(w_t/tau))` with w_t = mu + delta_t, the output is
+    `mu + tau*log(sum_t exp(delta_t/tau))`, so the centre that zeroes it is
+
+        mu = -tau * log(tph)  -  tau * E[ log( (1/tph) sum_t exp(delta_t/tau) ) ]
+
+    The first term is the leading `log(tph)` offset; the second is the Jensen gap of the
+    spread (strictly positive, and NOT negligible once sigma/tau ~ 1 -- at tau=0.05,
+    sigma=0.032 it is ~3e-3, comparable to the whole output std). It has no closed form
+    for uniform delta, so it is estimated by Monte Carlo on a dedicated, fixed-seed
+    generator -- deterministic across runs and it never touches global RNG state.
+    """
+    gen = torch.Generator().manual_seed(seed)
+    delta = (torch.rand(n_samples, tph, generator=gen) - 0.5) * (2.0 * sigma)
+    gap = float((tau * (torch.logsumexp(delta / tau, dim=1) - math.log(tph))).mean())
+    return -tau * math.log(tph) - gap
+
+
+def _exp_outputs_fwd(x, weights, anchor_a_long, anchor_b_long, powers,
+                     n_heads, tph, table_dim, tau, exp_clamp, scale="mean"):
+    """`exp_outputs=True` readout: temperature-tau log-sum-exp across a head's tables.
+
+    Replaces the plain sum-over-tables reduction of `_soft_lut_fwd_body` with
+
+        out[b, h, o] = tau * log( sum_t exp( w_sel[b, h, t, o] / tau ) )
+
+    where `w_sel` is the same hard single-row selection per table the sum path uses --
+    the sign-pack index is computed identically (`d > 0`), so the ROWS chosen are
+    bit-identical to `forward_mode="hard"`; only how they are combined changes.
+
+    Deliberately plain autograd rather than a custom Function. The hand-written soft
+    backward exists to supply a full-K surrogate gradient for `x` and the two
+    temperatures; under the anchor-pair configuration this path targets (fixed anchors,
+    `learnable_temps=False`, LUT as the first layer) `grad_x` is discarded and the
+    temperatures are buffers, while the weight gradient is a plain scatter at the chosen
+    row with no temperature dependence. So autograd loses nothing here and gets the
+    softmax-weighted weight gradient that log-sum-exp requires exactly right, instead of
+    the broadcast-of-grad_out the sum path hard-codes.
+
+    `torch.logsumexp` subtracts the row max internally, so exp() cannot overflow
+    regardless of `tau`; the explicit clamp guards the degenerate `tau -> 0` case, where
+    an unbounded `w/tau` would reach inf and turn the max-subtraction into inf - inf = NaN.
+    """
+    B, _ = x.shape
+    n_tables = anchor_a_long.shape[0]
+    n_outputs = weights.shape[2]
+    with torch.no_grad():
+        d = x[:, anchor_a_long] - x[:, anchor_b_long]
+        bits = (d > 0).to(torch.int64)
+        index = (bits * powers.view(1, 1, -1)).sum(dim=-1)              # [B, n_tables]
+        offset = torch.arange(n_tables, device=weights.device,
+                              dtype=index.dtype) * table_dim
+        flat_idx = (index + offset.view(1, -1)).reshape(-1)
+    w_sel = weights.view(n_tables * table_dim, n_outputs)[flat_idx]     # [B*n_tables, o]
+    w_sel = w_sel.view(B, n_heads, tph, n_outputs)
+    z = torch.clamp(w_sel / tau, min=-exp_clamp, max=exp_clamp)
+    lse = torch.logsumexp(z, dim=2)                                    # [B, n_heads, o]
+    if scale == "sum":
+        # SUM-SCALED variant: T * tau * log( (1/T) sum_t exp(w_t/tau) ).
+        # This is the smooth generalisation of the PLAIN SUM the additive path uses:
+        #   tau -> inf  =>  T * mean(w)   = sum_t w_t   (exactly exp10's readout)
+        #   tau -> 0    =>  T * max(w)
+        # and its gradient sums to T over tables, matching the additive path, where the
+        # bare log-sum-exp ("mean" scale) sums to 1 -- a factor-T loss of output
+        # sensitivity that no initialisation can restore.
+        return tph * tau * (lse - math.log(tph))
+    return tau * lse
+
+
 # =============================================================================
 # Shared soft backward (used by both hard and hybrid_smooth forward modes)
 # =============================================================================
@@ -587,6 +659,11 @@ class FastMultiHeadLut(nn.Module):
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
         device: Optional[torch.device] = None,
+        exp_outputs: bool = False,
+        exp_outputs_tau_init: float = 0.1,
+        exp_outputs_clamp: float = 60.0,
+        exp_outputs_init: str = "logspace",
+        exp_outputs_scale: str = "mean",
     ):
         super().__init__()
         if forward_mode not in _FORWARD_MODES:
@@ -608,6 +685,47 @@ class FastMultiHeadLut(nn.Module):
         self.weight_dtype = weight_dtype
         self.forward_mode = forward_mode
         self.use_bf16 = bool(use_bf16)
+
+        # --- exp_outputs: log-sum-exp table aggregation (opt-in, default off) ---
+        # When False NOTHING below is created and every existing code path is untouched,
+        # so all prior results stay bit-reproducible.
+        self.exp_outputs = bool(exp_outputs)
+        self.exp_outputs_clamp = float(exp_outputs_clamp)
+        self.exp_outputs_init = str(exp_outputs_init)
+        self.exp_outputs_scale = str(exp_outputs_scale)
+        if self.exp_outputs and self.exp_outputs_init not in ("logspace", "additive"):
+            raise ValueError(
+                "exp_outputs_init must be 'logspace' or 'additive', got "
+                f"{exp_outputs_init!r}"
+            )
+        if self.exp_outputs and self.exp_outputs_scale not in ("mean", "sum"):
+            raise ValueError(
+                f"exp_outputs_scale must be 'mean' or 'sum', got {exp_outputs_scale!r}"
+            )
+        if self.exp_outputs:
+            if forward_mode != "hard":
+                raise ValueError(
+                    "exp_outputs=True is only defined for forward_mode='hard' "
+                    f"(the sum-over-tables reduction it replaces), got {forward_mode!r}"
+                )
+            if use_bf16:
+                raise ValueError(
+                    "exp_outputs=True requires use_bf16=False: the log-sum-exp readout "
+                    "runs in the weights' storage dtype and has no bf16 compute path yet."
+                )
+            if exp_outputs_tau_init <= 0:
+                raise ValueError(
+                    f"exp_outputs_tau_init must be > 0, got {exp_outputs_tau_init}"
+                )
+            # tau = softplus(tau_raw), floored: matches how exp16 constrains its `t`, so
+            # the two experiments differ in the readout and not in how positivity is
+            # imposed. The floor stops a runaway-negative tau_raw from underflowing
+            # softplus to 0 and dividing by zero.
+            self.exp_outputs_tau_floor = 1e-3
+            tau_raw0 = math.log(math.expm1(float(exp_outputs_tau_init)))
+            self.exp_outputs_tau_raw = nn.Parameter(
+                torch.tensor(tau_raw0, dtype=torch.float32, device=device or torch.device("cpu"))
+            )
 
         n_lookup_tables = n_heads * tables_per_head
         self.n_lookup_tables = n_lookup_tables
@@ -640,10 +758,32 @@ class FastMultiHeadLut(nn.Module):
         rng_kwargs: dict = {"device": dev}
         if random_seed is not None:
             rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
-        weights_init = (
-            (torch.rand(n_lookup_tables, self.table_dim, n_outputs, **rng_kwargs) - 0.5)
-            * (2.0 * initial_weights_noise)
-        ).to(weight_dtype)
+        # ONE draw regardless of init mode: drawing twice would advance the RNG and
+        # silently change every parameter constructed after this module (e.g. the MLP
+        # critic in the walker2d-lut arches), making runs non-comparable.
+        _u = torch.rand(n_lookup_tables, self.table_dim, n_outputs, **rng_kwargs) - 0.5
+        weights_init = (_u * (2.0 * initial_weights_noise)).to(weight_dtype)
+        if self.exp_outputs and self.exp_outputs_init == "logspace":
+            # WEIGHTS-AS-LOGARITHMS init. Under the log-sum-exp readout the weights sit
+            # inside exp(), so the additive default (centred at 0, spread 1e-3) makes
+            # every term ~1: the sum collapses to tph, the output pins at tau*log(tph),
+            # and the per-table gradients are a uniform 1/tph. Two corrections:
+            #
+            #  SPREAD  log-sum-exp averages where the plain sum accumulates
+            #          (std(out) ~ sigma/sqrt(T) instead of sigma*sqrt(T)), so matching
+            #          the additive readout's output spread needs a per-entry spread
+            #          T times LARGER: sigma_log = initial_weights_noise * tph.
+            #  CENTRE  shift to _lse_init_offset(...) so the readout starts at ~0
+            #          instead of tau*log(tph).
+            #
+            # Net effect: the head starts with exp10's output statistics (mean ~0, std
+            # matched) instead of a saturated constant. Verified in
+            # experiments/walker2d-lut/exp17_.../design_init.py.
+            sigma_log = float(initial_weights_noise) * tables_per_head
+            mu = _lse_init_offset(float(exp_outputs_tau_init), sigma_log, tables_per_head)
+            self.exp_outputs_init_sigma = sigma_log
+            self.exp_outputs_init_mu = mu
+            weights_init = (mu + _u * (2.0 * sigma_log)).to(weight_dtype)
         self.weights = nn.Parameter(weights_init)
 
         # bit_matrix and MSB powers for the soft backward surrogate.
@@ -696,6 +836,11 @@ class FastMultiHeadLut(nn.Module):
                 torch.tensor(log_Tx_init, dtype=torch.float32, device=dev),
             )
 
+    @property
+    def exp_outputs_tau(self) -> torch.Tensor:
+        """The positive temperature tau used by the `exp_outputs` log-sum-exp readout."""
+        return F.softplus(self.exp_outputs_tau_raw).clamp_min(self.exp_outputs_tau_floor)
+
     def _hard_eval_native(self, x: torch.Tensor,
                           weights_compute: torch.Tensor) -> torch.Tensor:
         """Hard-mode eval via the MSB-first lutorch_cuda bit-pack kernel.
@@ -721,6 +866,14 @@ class FastMultiHeadLut(nn.Module):
         if x.dim() != 2 or x.shape[1] != self.input_dim:
             raise ValueError(
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
+            )
+        if self.exp_outputs:
+            # One branch for train and eval alike: plain autograd, so the log-sum-exp
+            # weight gradient (softmax-weighted across tables) and d/dtau are exact.
+            return _exp_outputs_fwd(
+                x, self.weights, self.soft_anchor_a_long, self.soft_anchor_b_long,
+                self.soft_powers, self.n_heads, self.tables_per_head, self.table_dim,
+                self.exp_outputs_tau, self.exp_outputs_clamp, self.exp_outputs_scale,
             )
         if self.forward_mode == "hybrid_smooth":
             return _FastMHLutHybridSmooth.apply(

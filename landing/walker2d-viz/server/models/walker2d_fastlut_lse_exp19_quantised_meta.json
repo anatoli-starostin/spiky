@@ -1,0 +1,36 @@
+{
+  "source_experiment": "exp23_qat_obs_quant / qat_n22_l2 (QAT fine-tune of exp19_lut-lse-expmlpcrit-t32)",
+  "parent_checkpoint": "exp19_lut-lse-expmlpcrit-t32/deploy_matched/actor_s2.pt (final_ep_ret 5966.3)",
+  "arch": "fastlut_lse_sum_expmlpcrit",
+  "seed": 0,
+  "final_ep_ret": 5867.325350667123,
+  "obs_dim": 17,
+  "act_dim": 6,
+  "tables_per_head": 32,
+  "n_anchor_pairs": 6,
+  "tau_actor": 0.09376807657041418,
+  "readout": "T * tau * log((1/T) * sum_t exp(w_t / tau))  over T=32 tables",
+  "obs_normalisation": "x = (obs - obs_mean) / sqrt(obs_var + 1e-8)  (stats in the npz)",
+  "input_quantisation": {
+    "kind": "Gaussian companding, ONE shared monotone map over all 17 coords",
+    "ticks": 128,
+    "sigma": 1.0,
+    "forward": "tick = round(127 * Phi(x / sigma)); x_hat = dequant[tick]",
+    "deployed_as": "searchsorted(in_quant_edges, x) -> in_quant_dequant[tick] (no scipy needed; verified bit-identical to the training map)",
+    "why_shared": "the LUT addresses by comparisons BETWEEN coordinates (bit = 1[x[a] > x[b]]), so a per-coordinate map would change the meaning of every address bit spanning two maps"
+  },
+  "output_quantisation": {
+    "kind": "uniform, models the spiking Stage-3 first-spike readout",
+    "levels": 22,
+    "clip": 1.0,
+    "step": 0.09523809523809523,
+    "forward": "clip(mean, -1, 1) then snap to linspace(-1, 1, 22)",
+    "note": "the EMITTED action is strictly within [-1, 1] and always exactly on one of the 22 grid points; both rails are exactly representable"
+  },
+  "oob_penalty": 0.3,
+  "oob_penalty_form": "loss += w * mean_batch( sum_o relu(|mu_raw[o]| - 1)^2 )",
+  "oob_penalty_why": "the clip's gradient is exactly zero outside [-1,1] and an out-of-band action is free in both physics and reward, so nothing else pulls the RAW readout in-band; without this term the LUT weights widen and the spiking delay span grows",
+  "action_postprocess": "clip(mean, -1, 1) then 22-level uniform quantisation",
+  "numpy_torch_parity_max_abs": 5.676632852669172e-08,
+  "note": "Actor only. The critic is not needed at inference. This artifact is only correct WITH both quantisers applied \u2014 the policy was trained with them in the loop."
+}

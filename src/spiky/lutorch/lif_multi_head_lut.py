@@ -8,9 +8,12 @@ Structure (three nested levels):
   n_det digits combine MIXED-RADIX into an index over M**n_det cells, each holding an n_outputs vector.
   n_det=1 => one LIF + M buckets => exactly the Bucket notion of a table.
 
-Input latency coding is FIXED (no latency_c/latency_alpha params), slope alpha=3: t = clamp(t_window*(0.5 -
-3*x/32), 0, t_window) (= 16 - 3x at t_window=32, matching the old ProductBucketLIFMHL). Expects ~unit-variance
-input — center at half-window, saturating (clamped) at x = +-16/3 ≈ +-5.33.
+Input timing uses the UNIVERSAL parameterization (the only path): a LEARNABLE per-input-channel gain
+(latency slope) + a single trainable scalar baseline C (DC offset) + FREE signed per-synapse delays, with
+positivity/window-bounding enforced on the FINAL arrival:  a = clamp(C - gain*x + delay, 0, t_window).
+At INIT (gain = t_window*3/32, C = 0.5*t_window, delay = 0) this reproduces the original fixed slope-3 code
+t = clamp(t_window*(0.5 - 3x/32), 0, t_window) (= 16 - 3x at t_window=32, the old ProductBucketLIFMHL) EXACTLY,
+so a freshly-constructed module behaves like the historical code at step 0. Expects ~unit-variance input.
 
 forward() branches on self.training (standard PyTorch convention). In TRAINING mode it is straight-through:
 value == the hard winner, weight-grad to the winners, address-grad via the soft distribution against a detached
@@ -21,7 +24,8 @@ freeze_temperature=True to fix them at 1.0 (non-trainable), which mimics the old
 buffers and prevents them from collapsing during training.
 
 n_tables = n_heads * tables_per_head. Machinery: latency coding, bounded-excitatory w = w_max*sigmoid(w_raw)
-hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum first-spike membrane, per-detector clamped delay,
+hot init, tau = softplus(tau_raw)+1.0 floor, the O(N) cumsum first-spike membrane, per-input-channel gain +
+scalar baseline C + free signed delays,
 trainable strictly-increasing boundaries, trainable per-TABLE soft temperatures log_T_cross / log_T_bkt init
 at 1.0, table_init; plus the mixed-radix gather (hard) + rank-1 tensor-product contraction (soft address
 readout, sequential einsums, no dense outer product) for the n_det>1 combination. M**n_det capped at 65536.
@@ -38,13 +42,38 @@ __all__ = ["LIFMultiHeadLUT"]
 MAX_CELLS = 65536
 
 
+def _lse_output_center(tau: float, sigma: float, tph: int, scale: str,
+                       n_samples: int = 200_000, seed: int = 12345) -> float:
+    """Additive table centre `mu` that makes the exp_outputs log-sum-exp OUTPUT readout start at ~0
+    for per-table values w_t = mu + delta_t, delta_t ~ N(0, sigma) (the LIF table's own init spread).
+
+    For the SUM-SCALED readout out = tph*tau*(logsumexp_t(w/tau) - log tph): with w = mu + delta,
+    E[out] = tph*(mu + gap), gap = E[tau*(logsumexp(delta/tau) - log tph)] >= 0 (the Jensen spread),
+    so mu = -gap zeroes it. For the bare "mean" readout out = tau*logsumexp(w/tau), mu = -(gap +
+    tau*log tph). Fixed-seed Monte-Carlo — deterministic and never touches global RNG state.
+    """
+    gen = torch.Generator().manual_seed(seed)
+    delta = sigma * torch.randn(n_samples, tph, generator=gen)
+    gap = float((tau * (torch.logsumexp(delta / tau, dim=1) - math.log(tph))).mean())
+    return -gap if scale == "sum" else -(gap + tau * math.log(tph))
+
+
 class LIFMultiHeadLUT(nn.Module):
     def __init__(self, input_dim: int, n_heads: int, n_outputs: int, tables_per_head: int = 1, n_det: int = 1,
                  *, n_buckets: int = 16, w_max: float = 2.0, t_window: float = 32.0, delay_init_std: float = 0.0,
-                 freeze_temperature: bool = False, table_init: Optional[torch.Tensor] = None, device=None):
-        # delay_init_std: std (scale) of the half-normal delay initialization; 0.0 => all delays init to zero
-        # (neutral start). Delays are non-negative (causal).
+                 freeze_temperature: bool = False,
+                 exp_outputs: bool = False, exp_outputs_scale: str = "sum",
+                 exp_outputs_tau_init: float = 0.1, exp_outputs_clamp: float = 60.0,
+                 exp_outputs_init: str = "additive",
+                 table_init: Optional[torch.Tensor] = None, device=None):
+        # delay_init_std: std (scale) of the delay initialization; 0.0 => all delays init to zero (the
+        # neutral start). Delays are FREE (signed, zero-centered) — positivity is enforced on the FINAL
+        # arrival, not on the delay (see the universal timing block and _membrane below).
         # freeze_temperature: if True, log_T_cross/log_T_bkt are fixed at 0.0 (T=1.0) and non-trainable.
+        # Timing (the only path): arrival = clamp(baseline_C - gain*x + delay, 0, t_window), with a
+        # LEARNABLE per-input-channel gain (slope, init t_window*3/32 = old alpha=3) and a single trainable
+        # scalar baseline_C (DC offset, init 0.5*t_window). At init this reproduces the original fixed
+        # slope-3 latency code EXACTLY (see class docstring).
         super().__init__()
         if n_buckets < 2 or n_buckets > 256:
             raise ValueError(f"n_buckets must be in [2,256], got {n_buckets}")
@@ -66,11 +95,11 @@ class LIFMultiHeadLUT(nn.Module):
         tsh = (T, D)             # per-detector scalars (tau)
         step = self.t_window / M
         inv_softplus_step = math.log(math.expm1(step)) if step > 0 else 0.0
-        # half-normal non-negative delay init. std==0.0 => exactly zeros AND consumes NO RNG draw, so the
-        # default is byte-identical to the prior zero init and downstream params' RNG order is unaffected.
-        # std>0 draws randn here (consuming RNG at this same sequence point) — expected/intended.
+        # delay init. std==0.0 => exactly zeros AND consumes NO RNG draw (the neutral start). std>0 draws a
+        # zero-centered SIGNED gaussian: delays are free/signed now (no causal >=0 clamp) — positivity is
+        # enforced on the final arrival, not here.
         if float(delay_init_std) > 0.0:
-            init = (float(delay_init_std) * torch.randn(*dsh, device=dev)).abs()
+            init = float(delay_init_std) * torch.randn(*dsh, device=dev)
         else:
             init = torch.zeros(*dsh, device=dev)
         self.delay = nn.Parameter(init)
@@ -91,6 +120,51 @@ class LIFMultiHeadLUT(nn.Module):
             self.table = nn.Parameter(0.1 * torch.randn(T, self.cells, O, device=dev))
         self.register_buffer("theta_mem", torch.tensor(1.0, device=dev))
         self.register_buffer("radix", (M ** (D - 1 - torch.arange(D))).long())    # row-major mixed-radix
+        # --- universal timing parameterization (ALWAYS ON; the only timing path) ---
+        # per-INPUT-CHANNEL gain owns the latency slope. Init t_window*3/32 reproduces the original fixed
+        # alpha=3 EXACTLY (old latency = t_window*(0.5 - 3x/32) = 0.5*t_window - (t_window*3/32)*x). Each
+        # obs channel gets its own time-sensitivity; also absorbs input normalization.
+        self.gain = nn.Parameter(torch.full((N,), self.t_window * 3.0 / 32.0, device=dev))
+        # single trainable BASELINE C owns the DC offset the old fixed code carried in its 0.5*t_window
+        # centre. Scalar (NOT per-synapse) so a global delay shift can't trade off against it.
+        self.baseline_C = nn.Parameter(torch.tensor(0.5 * self.t_window, device=dev))
+
+        # --- exp_outputs: sum-scaled log-sum-exp OUTPUT readout (opt-in; default OFF) ---
+        # Ported from FastMultiHeadLUT (exp17's working form). Replaces the plain sum-over-tables-within-
+        # head reduction with the SUM-SCALED log-sum-exp:  out = tph*tau*( logsumexp_t(w_t/tau) - log tph )
+        #   tau -> inf  =>  tph*mean(w) = sum_t w_t   (EXACTLY the plain-sum readout — identity limit)
+        #   tau -> 0    =>  tph*max(w)
+        # Its per-table gradient sums to tph (matching the plain sum); the bare "mean" LSE sums to 1
+        # (a factor-tph output-sensitivity loss that no init can restore — the broken first attempt).
+        # tau = softplus(tau_raw), floored. Params allocated ONLY when enabled => default state_dict /
+        # param_count / RNG order untouched. Default scale="sum" (the form that worked) — a deliberate
+        # divergence from FastMHL's "mean" default; both are supported for parity.
+        self.exp_outputs = bool(exp_outputs)
+        self.exp_outputs_scale = str(exp_outputs_scale)
+        self.exp_outputs_clamp = float(exp_outputs_clamp)
+        self.exp_outputs_init = str(exp_outputs_init)
+        if self.exp_outputs:
+            if self.exp_outputs_scale not in ("mean", "sum"):
+                raise ValueError(f"exp_outputs_scale must be 'mean' or 'sum', got {exp_outputs_scale!r}")
+            if self.exp_outputs_init not in ("additive", "logspace"):
+                raise ValueError(f"exp_outputs_init must be 'additive' or 'logspace', got {exp_outputs_init!r}")
+            if exp_outputs_tau_init <= 0:
+                raise ValueError(f"exp_outputs_tau_init must be > 0, got {exp_outputs_tau_init}")
+            # tau = softplus(tau_raw), floored (matches FastMHL): the floor stops a runaway-negative
+            # tau_raw from underflowing to 0 and NaNing the readout.
+            self.exp_outputs_tau_floor = 1e-3
+            tau_raw0 = math.log(math.expm1(float(exp_outputs_tau_init)))
+            self.exp_outputs_tau_raw = nn.Parameter(torch.tensor(tau_raw0, dtype=torch.float32, device=dev))
+            if self.exp_outputs_init == "logspace":
+                # centre the table so the sum-scaled LSE output starts ~0 (well-scaled small-tau start),
+                # mirroring FastMHL's log-space init. sigma taken from the table's own per-element std;
+                # fixed-seed MC, no global RNG touched. "additive" (default) leaves the table as-is, so
+                # the tau->inf limit reproduces the existing plain-sum module EXACTLY.
+                sigma_log = float(self.table.detach().std())
+                mu = _lse_output_center(float(exp_outputs_tau_init), sigma_log,
+                                        self.tables_per_head, self.exp_outputs_scale)
+                with torch.no_grad():
+                    self.table.add_(mu)
 
     @property
     def w(self):
@@ -112,12 +186,32 @@ class LIFMultiHeadLUT(nn.Module):
     def boundaries(self):
         return self.beta_base + torch.cumsum(F.softplus(self.beta_raw), dim=-1)   # (T,D,M-1)
 
-    def latency(self, x):
-        # Fixed latency code, slope alpha=3 (matches the old ProductBucketLIFMHL 16 - 3x at t_window=32).
-        # Center at half-window (x=0 -> t_window/2); effective slope = 3*t_window/32, saturating (clamped) at
-        # x = +-16/3 ≈ +-5.33 regardless of t_window (i.e. +-5.33 sigma for unit-variance input). t_window is
-        # the structural time-axis scale.
-        return torch.clamp(self.t_window * (0.5 - 3.0 * x / 32.0), 0.0, self.t_window)
+    @property
+    def exp_outputs_tau(self):
+        """Positive temperature tau for the exp_outputs log-sum-exp readout (softplus, floored)."""
+        return F.softplus(self.exp_outputs_tau_raw).clamp_min(self.exp_outputs_tau_floor)
+
+    def _reduce_tables(self, rows):
+        """Combine the `tables_per_head` per-table row values WITHIN each head.
+        rows: (B, n_tables = n_heads*tph, O) -> (B, n_heads, O).
+
+        Default: plain sum (bit-identical to the historical reduction). exp_outputs: sum-scaled (or
+        bare 'mean') log-sum-exp with trainable temperature tau. Applied to the SAME straight-through
+        `rows` the sum path uses, so the forward VALUE is still the hard winner and BOTH the hard-table
+        gradient and the soft-address gradient flow through — now softmax(rows/tau)-weighted across
+        tables instead of uniform. Under no_grad (eval) it is a pure value computation, matching train."""
+        B = rows.shape[0]
+        r = rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs)
+        if not self.exp_outputs:
+            return r.sum(dim=2)
+        tph, tau = self.tables_per_head, self.exp_outputs_tau
+        # clamp guards the degenerate tau->0 (w/tau -> inf -> NaN); logsumexp subtracts the row max so
+        # exp() never overflows regardless of tau.
+        z = torch.clamp(r / tau, min=-self.exp_outputs_clamp, max=self.exp_outputs_clamp)
+        lse = torch.logsumexp(z, dim=2)                                  # (B, n_heads, O)
+        if self.exp_outputs_scale == "sum":
+            return tph * tau * (lse - math.log(tph))                     # tau->inf == plain sum
+        return tau * lse                                                 # bare mean-scaled LSE
 
     def param_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -125,10 +219,16 @@ class LIFMultiHeadLUT(nn.Module):
     def _membrane(self, x):
         """Shared hard core: sorted arrival times a_srt and the O(N) cumsum LIF membrane V, both (B,T,D,N)."""
         B, T, D = x.shape[0], self.n_tables, self.n_det
-        lat = self.latency(x)
-        # delay clamped to [0, t_window]: non-negative floor = causality; upper bound keeps arrival in
-        # [0, 2*t_window] so exp(a/tau) stays float32-safe. delay is (T,D,N).
-        a = lat.view(B, 1, 1, -1) + torch.clamp(self.delay, 0.0, self.t_window).unsqueeze(0)   # (B,T,D,N)
+        # Universal timing: arrival = clamp( C - gain_i*x_i + delay , 0, t_window ).
+        #   gain (per input channel) owns the latency slope; C (scalar) owns the DC offset; delay is FREE
+        #   (signed — NO >=0 clamp). Positivity/window-bounding is enforced on the FINAL absolute arrival
+        #   (not on delay), so there is no saturating boundary at the synapses' operating point; the clamp
+        #   to [0, t_window] also keeps exp(a/tau) float32-safe. At init (delay=0, gain=t_window*3/32,
+        #   C=0.5*t_window) this equals the original fixed code clamp(0.5*t_window - (t_window*3/32)*x, 0, t_window).
+        raw = (self.baseline_C
+               - self.gain.view(1, 1, 1, -1) * x.view(B, 1, 1, -1)
+               + self.delay.unsqueeze(0))                                       # (B,T,D,N)
+        a = torch.clamp(raw, 0.0, self.t_window)
         a_srt, idx = torch.sort(a, dim=-1)
         w_srt = self.w.unsqueeze(0).expand(B, -1, -1, -1).gather(-1, idx)
         tv = self.tau.view(1, T, D, 1)
@@ -201,7 +301,7 @@ class LIFMultiHeadLUT(nn.Module):
             y_hard = self._hard_read(b_hard)                          # (B,T,O) value + weight grad to winner
             y_addr = self._soft_read(p)                              # address grad, detached table
             rows = y_hard + y_addr - y_addr.detach()                 # forward value == hard
-            return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+            return self._reduce_tables(rows)
         with torch.no_grad():                                        # efficient hard inference, no grad graph
             a_srt, V = self._membrane(x)
             t_hard = self._t_hard(a_srt, V)
@@ -210,4 +310,4 @@ class LIFMultiHeadLUT(nn.Module):
             idx = (b_hard * self.radix.view(1, 1, -1)).sum(-1)      # (B,T) mixed-radix cell index
             tt = torch.arange(T, device=x.device).view(1, T).expand(B, T)
             rows = self.table[tt, idx]                              # (B,T,O)
-            return rows.view(B, self.n_heads, self.tables_per_head, self.n_outputs).sum(dim=2)
+            return self._reduce_tables(rows)
