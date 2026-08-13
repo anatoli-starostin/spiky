@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp13_lut-anchor-pair-lutcrit-t32",
+  "description": "Anchor-pair LUT actor (FastMultiHeadLut) + anchor-pair LUT critic (arch `fastlut2`), tph=32. Fully-LUT counterpart of exp10 (same actor, MLP critic -> anchor-pair LUT critic).",
+  "algo": "ppo",
+  "arch": "fastlut2",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 14342,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_run": "src/run_bench13.sh"
+}

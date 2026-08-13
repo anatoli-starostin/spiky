@@ -1,0 +1,16 @@
+{
+  "exp_name": "exp01_ppo-sac-baseline",
+  "description": "PPO-vs-SAC equal-data baseline. GPU-resident PPO (768 upd) vs batched SAC (UTD 4, ~equal env-steps), MLP arch, 3 seeds each. PPO dominates in the 8192-env massively-parallel regime; SAC is high-variance and underperforms.",
+  "algo": "ppo+sac",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 384,
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench2"
+}

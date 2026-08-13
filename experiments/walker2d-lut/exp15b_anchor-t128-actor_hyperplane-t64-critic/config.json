@@ -1,0 +1,27 @@
+{
+  "exp_name": "exp15b_anchor-t128-actor_hyperplane-t64-critic",
+  "description": "MIXED LUT arch: anchor-pair LUT actor (FastMultiHeadLut, fixed anchors, tph=128) + HYPERPLANE LUT critic (HyperLUTHead, learned sign-test addressing via STE, tph=64, scalar V). Tests whether a learned-addressing hyperplane critic beats the fixed-anchor LUT critic (exp15) for an anchor-pair actor. Compare vs exp12 (MLP critic) and exp15 (anchor LUT critic), all t128.",
+  "algo": "ppo",
+  "actor": "anchor-pair FastMultiHeadLut",
+  "critic": "hyperplane HyperLUTHead",
+  "actor_tables_per_head": 128,
+  "critic_tables_per_head": 64,
+  "arch": "fastlut_hypcrit",
+  "tables_per_head": 128,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 60166,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_run": "src/run_exp15b.sh"
+}

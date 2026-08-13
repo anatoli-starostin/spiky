@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp07_lut-hyperplane-t32-lutcrit",
+  "description": "Hyperplane-LUT actor (tph=32) + hyperplane-LUT critic (tph=32) - fully-LUT actor+value.",
+  "algo": "ppo",
+  "arch": "hyperlut2",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 21254,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench9"
+}

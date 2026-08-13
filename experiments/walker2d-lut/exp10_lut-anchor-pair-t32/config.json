@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp10_lut-anchor-pair-t32",
+  "description": "Anchor-pair LUT actor (FastMultiHeadLut, fixed sign(x[a]-x[b]) addressing, only tables train), tph=32, + MLP critic.",
+  "algo": "ppo",
+  "arch": "fastlut",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 82951,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32"
+}

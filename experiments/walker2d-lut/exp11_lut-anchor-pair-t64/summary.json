@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp11_lut-anchor-pair-t64",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 5761.2,
+  "ppo_best_std": 270.1,
+  "ppo_final_mean": 5755.3,
+  "ppo_final_std": 272.2,
+  "params": 95239,
+  "throughput_env_per_s_mean": 156797,
+  "training_time_hours_mean": 0.357,
+  "per_seed": {
+    "0": {
+      "best": 5476.4,
+      "final": 5475.1
+    },
+    "1": {
+      "best": 6124.0,
+      "final": 6124.0
+    },
+    "2": {
+      "best": 5683.1,
+      "final": 5666.6
+    }
+  }
+}

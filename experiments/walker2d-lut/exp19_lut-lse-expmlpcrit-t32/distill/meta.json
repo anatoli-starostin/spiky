@@ -1,0 +1,93 @@
+{
+ "source_checkpoint": "exp19_lut-lse-expmlpcrit-t32/rerun_ckpt/actor_s1.pt",
+ "arch": "fastlut_lse_sum_expmlpcrit",
+ "tables_per_head": 32,
+ "seed_of_policy": 1,
+ "policy_final_ep_ret": 5373.851293103448,
+ "tau": 0.09036567807197571,
+ "exp_clamp": 60.0,
+ "n_envs": 250,
+ "n_steps": 400,
+ "warmup": 0,
+ "n_pairs": 100000,
+ "dither_fraction": 0.3,
+ "policy_std": 0.20623525977134705,
+ "dither_std": 0.06187057793140411,
+ "env": {
+  "obs_clip_vel": null,
+  "solver_iters": 10,
+  "ls_iters": 8,
+  "reset_noise": 0.005,
+  "max_steps": 1000,
+  "seed": 0
+ },
+ "collection_seed": 0,
+ "wall_s": 1.9,
+ "stats": {
+  "finished_episodes": 7,
+  "finished_return_mean": 1280.4056396484375,
+  "finished_return_min": 885.2371826171875,
+  "finished_return_max": 1818.79833984375,
+  "finished_length_mean": 271.28570556640625,
+  "healthy_fraction": 0.99993,
+  "inflight_return_mean": 2020.7916259765625,
+  "inflight_length_mean": 392.40399169921875,
+  "reward_per_step": 5.141607424583435,
+  "x": {
+   "shape": [
+    100000,
+    17
+   ],
+   "dtype": "float32",
+   "nan_inf": 0,
+   "min": -74.95744323730469,
+   "max": 72.41830444335938,
+   "mean": 0.2949139475822449,
+   "std": 6.079987049102783
+  },
+  "x_norm": {
+   "shape": [
+    100000,
+    17
+   ],
+   "dtype": "float32",
+   "nan_inf": 0,
+   "min": -7.327686309814453,
+   "max": 8.649429321289062,
+   "mean": -0.03222000598907471,
+   "std": 1.1254500150680542
+  },
+  "y_prelog": {
+   "shape": [
+    100000,
+    6
+   ],
+   "dtype": "float64",
+   "nan_inf": 0,
+   "min": 8.94761306461267,
+   "max": 100.7718231493136,
+   "mean": 43.63133314261755,
+   "std": 15.04917252192341
+  },
+  "y_action_mean": {
+   "shape": [
+    100000,
+    6
+   ],
+   "dtype": "float64",
+   "nan_inf": 0,
+   "min": -3.685037851333618,
+   "max": 3.3171372413635254,
+   "mean": 0.695709278726721,
+   "std": 1.13085347878007
+  },
+  "y_prelog_strictly_positive": true,
+  "max_abs_z": 5.941345691680908,
+  "clamp": 60.0,
+  "distinct_observations": 100000,
+  "distinct_outputs": 64571,
+  "reproduction_err_max": 1.5214893500647975e-06,
+  "reproduction_err_mean": 2.982777704655902e-07,
+  "reproduction_err_rel_max": 4.128829638789651e-07
+ }
+}

@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp12_lut-anchor-pair-t128",
+  "description": "Anchor-pair LUT actor (FastMultiHeadLut), tph=128, + MLP critic. Anchor-pair beats hyperplane at every tph and is ~20-27% faster.",
+  "algo": "ppo",
+  "arch": "fastlut",
+  "tables_per_head": 128,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 119815,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t128"
+}

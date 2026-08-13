@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp17_lut-anchor-pair-t32-logsumexp",
+  "description": "exp10 with the anchor-pair actor's sum-over-tables readout replaced by a SUM-SCALED (mean-normalised) temperature-tau log-sum-exp: out = T * tau * log((1/T) * sum_t exp(w_t/tau)). This generalises the SUM rather than the mean: tau->inf recovers exp10's sum_t w_t exactly, tau->0 gives T*max(w). tau is the only new trainable parameter (softplus, > 0). Everything else identical to exp10.",
+  "algo": "ppo",
+  "arch": "fastlut_lse_sum",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 82952,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "forked_from": "exp10_lut-anchor-pair-t32",
+  "readout": "T * tau * log((1/T) * sum_tables exp(w / tau))",
+  "flag": "FastMultiHeadLut(exp_outputs=True, exp_outputs_scale=\"sum\", exp_outputs_init=\"additive\", exp_outputs_tau_init=0.05)",
+  "tau_init": 0.05,
+  "tau_parameterization": "softplus(tau_raw), floored at 1e-3",
+  "weight_init": "plain additive U(+-initial_weights_noise) \u2014 no special init",
+  "exp_clamp": 60.0,
+  "init_note": "at init the readout matches exp10's plain sum to 5.4% of the output std (residual = the Jensen gap, predicted 1.07e-4, measured 1.79e-4); gradient sums to 32 over tables, matching exp10, against 1 for the plain log-sum-exp",
+  "abandoned_attempts": "plain log-sum-exp (exp_outputs_scale='mean') with additive init (final 495) and with log-space init (plateaued ~350, stopped at update 430) \u2014 both kept under attempt*/",
+  "host": "gpustar (RTX 5090)"
+}

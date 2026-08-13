@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp10_lut-anchor-pair-t32",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 5551.0,
+  "ppo_best_std": 175.9,
+  "ppo_final_mean": 5488.4,
+  "ppo_final_std": 179.9,
+  "params": 82951,
+  "throughput_env_per_s_mean": 168258,
+  "training_time_hours_mean": 0.332,
+  "per_seed": {
+    "0": {
+      "best": 5424.8,
+      "final": 5319.3
+    },
+    "1": {
+      "best": 5799.8,
+      "final": 5737.6
+    },
+    "2": {
+      "best": 5428.5,
+      "final": 5408.3
+    }
+  }
+}

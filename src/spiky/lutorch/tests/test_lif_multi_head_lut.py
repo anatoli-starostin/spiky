@@ -49,45 +49,51 @@ def test_tph_summation():
     assert torch.allclose(y, rows.view(4, 3, 5, 6).sum(2), atol=1e-6)
 
 
-# ---- fixed latency code ----
-def test_latency_fixed_formula():
-    """latency = clamp(t_window*(0.5 - 3x/32), 0, t_window): slope alpha=3, saturating at x=+-16/3."""
+# ---- universal timing (the only path) ----
+def test_universal_timing_init_reproduces_fixed_code():
+    """At INIT the universal timing arrival clamp(baseline_C - gain*x + delay, 0, t_window) reproduces
+    the ORIGINAL fixed slope-3 latency code clamp(t_window*(0.5 - 3x/32), 0, t_window) EXACTLY (delay=0)."""
     m = _m()
     TW = m.t_window                                                     # 32 -> map = 16 - 3x
-    sat = 16.0 / 3.0                                                    # ~5.33: saturation point
-    assert torch.allclose(m.latency(torch.zeros(3)), torch.full((3,), TW / 2), atol=1e-6)   # x=0 -> half window
-    # +4 is NO LONGER clamped: 16 - 3*4 = 4 (positive), not 0
-    assert torch.allclose(m.latency(torch.tensor(4.0)), torch.tensor(4.0), atol=1e-6)
-    assert torch.allclose(m.latency(torch.tensor(-4.0)), torch.tensor(28.0), atol=1e-6)      # 16 + 12
-    # saturates to 0 at x=+16/3 (and stays 0 beyond), to t_window at x=-16/3
-    assert torch.allclose(m.latency(torch.tensor(sat)), torch.tensor(0.0), atol=1e-5)
-    assert torch.allclose(m.latency(torch.tensor(-sat)), torch.tensor(TW), atol=1e-5)
-    assert torch.allclose(m.latency(torch.tensor(8.0)), torch.tensor(0.0), atol=1e-6)        # beyond -> stays 0
-    assert torch.allclose(m.latency(torch.tensor(-8.0)), torch.tensor(TW), atol=1e-6)
-    xs = torch.linspace(-8, 8, 300)
-    lat = m.latency(xs)
-    assert (lat[1:] - lat[:-1] <= 1e-6).all(), "latency must be monotonically non-increasing in x"
-    assert not hasattr(m, "latency_c") and not hasattr(m, "latency_alpha")   # params removed
+    # init: per-channel gain = t_window*3/32 (= old alpha=3), scalar baseline C = 0.5*t_window, delay 0
+    assert m.gain.shape == (m.input_dim,)
+    assert torch.allclose(m.gain, torch.full_like(m.gain, TW * 3.0 / 32.0), atol=1e-6)
+    assert float(m.baseline_C.detach()) == pytest.approx(0.5 * TW)
+    assert torch.equal(m.delay, torch.zeros_like(m.delay))
+    # the retired fixed-path surface is gone
+    assert not hasattr(m, "latency") and not hasattr(m, "universal_timing")
+    # arrival at init == the old fixed latency formula, per input channel (delay=0 => same for every
+    # table/detector); compare the sorted arrival _membrane produces against the reference.
+    x = torch.randn(8, 17)
+    old_latency = torch.clamp(TW * (0.5 - 3.0 * x / 32.0), 0.0, TW)     # (B, N)
+    a_srt, _ = m._membrane(x)                                           # (B, T, D, N) sorted along N
+    B, T, D, N = a_srt.shape
+    expected = torch.sort(old_latency, dim=-1).values                  # (B, N)
+    assert torch.allclose(a_srt, expected.view(B, 1, 1, N).expand(B, T, D, N), atol=1e-5)
+    # anchors of the reproduced code: x=0 -> half window; monotonically non-increasing in x
+    assert torch.allclose(torch.clamp(TW * (0.5 - 3.0 * torch.zeros(3) / 32.0), 0.0, TW),
+                          torch.full((3,), TW / 2), atol=1e-6)
 
 
-# ---- bounded positive-only delay ----
+# ---- free signed delays; positivity on the FINAL arrival ----
 def test_delay_default_zero_init():
     m = _m()                                              # delay_init_std unset -> default 0.0
     assert torch.equal(m.delay, torch.zeros_like(m.delay))
 
 
-def test_delay_positive_init_and_clamp():
+def test_delay_free_signed_and_arrival_positivity():
+    """Delays are FREE and SIGNED (no >=0 clamp): std>0 gives a zero-centered spread that goes negative.
+    Positivity/window-bounding is enforced on the FINAL arrival, not on the delay."""
     m = _m(delay_init_std=4.0)
     d = m.delay.detach()
-    assert (d >= 0).all(), "half-normal init must be non-negative (causal)"
     assert d.std() > 0, "delay_init_std>0 must give nonzero spread"
-    # raw init is in-range, so the clamp used in forward is a no-op here
-    assert torch.equal(torch.clamp(d, 0.0, m.t_window), d)
-    # even if a delay is pushed out of range, the effective (clamped) delay stays in [0, t_window]
+    assert (d < 0).any(), "signed (zero-centered) init must produce some negative delays"
+    # delays feed the arrival UNCLAMPED; positivity still holds on the final arrival for any delay.
     with torch.no_grad():
-        m.delay[0, 0, 0] = -5.0; m.delay[0, 0, 1] = 10 * m.t_window
-    eff = torch.clamp(m.delay, 0.0, m.t_window)
-    assert (eff >= 0).all() and (eff <= m.t_window).all()
+        m.delay[0, 0, 0] = -100.0 * m.t_window
+        m.delay[0, 0, 1] = 100.0 * m.t_window
+    a_srt, _ = m._membrane(torch.randn(8, 17))
+    assert (a_srt >= 0).all() and (a_srt <= m.t_window).all(), "final arrival must stay in [0, t_window]"
     assert torch.isfinite(m(torch.randn(8, 17))).all()
 
 
@@ -195,6 +201,10 @@ def test_all_params_incl_temperatures_get_gradient():
     for name, pp in m.named_parameters():
         assert pp.grad is not None and torch.isfinite(pp.grad).all() and pp.grad.abs().sum() > 0, f"{name} no grad"
     assert m.log_T_cross.shape == (m.n_tables,) and m.log_T_bkt.shape == (m.n_tables,)   # trainable per-table temps
+    # the universal-timing params are registered and receive gradient via the ST address path
+    names = dict(m.named_parameters())
+    assert "gain" in names and "baseline_C" in names
+    assert names["gain"].grad.abs().sum() > 0 and names["baseline_C"].grad.abs().sum() > 0
 
 
 def test_table_init_and_cell_cap():

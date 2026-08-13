@@ -1,0 +1,71 @@
+{
+  "exp_name": "exp16_lut-anchor-pair-t32-expout",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "forked_from": "exp10_lut-anchor-pair-t32",
+  "output_transform": "mean -> c + exp(mean / t)",
+  "ppo_best_mean": 4843.1,
+  "ppo_best_std": 91.2,
+  "ppo_final_mean": 4819.2,
+  "ppo_final_std": 70.1,
+  "params": 82953,
+  "throughput_env_per_s_mean": 269799,
+  "training_time_hours_mean": 0.207,
+  "collapsed_seeds": [],
+  "collapse_criterion": "final/best < 0.90",
+  "learned_transform": {
+    "0": {
+      "c": -1.8062,
+      "t": 0.7556
+    },
+    "1": {
+      "c": -1.7832,
+      "t": 0.7675
+    },
+    "2": {
+      "c": -1.7741,
+      "t": 0.7504
+    }
+  },
+  "learned_c_mean": -1.7878,
+  "learned_t_mean": 0.7578,
+  "per_seed": {
+    "0": {
+      "best": 4763.0,
+      "final": 4763.0,
+      "final_over_best": 1.0,
+      "c": -1.8062,
+      "t": 0.7556
+    },
+    "1": {
+      "best": 4795.7,
+      "final": 4776.7,
+      "final_over_best": 0.996,
+      "c": -1.7832,
+      "t": 0.7675
+    },
+    "2": {
+      "best": 4970.6,
+      "final": 4918.0,
+      "final_over_best": 0.989,
+      "c": -1.7741,
+      "t": 0.7504
+    }
+  },
+  "vs_exp10_committed": {
+    "reference_final": 5488.4,
+    "reference_std": 179.9,
+    "delta": -669.2,
+    "welch_se": 136.5,
+    "welch_abs_t": 4.9,
+    "pct_of_reference": 87.8
+  },
+  "vs_exp10_gpustar_repro": {
+    "reference_final": 6063.9,
+    "reference_std": 879.3,
+    "delta": -1244.7,
+    "welch_se": 623.7,
+    "welch_abs_t": 2.0,
+    "pct_of_reference": 79.5
+  }
+}

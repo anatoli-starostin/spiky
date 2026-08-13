@@ -1,0 +1,29 @@
+{
+  "exp_name": "exp15b_anchor-t128-actor_hyperplane-t64-critic",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 5061.8,
+  "ppo_best_std": 196.7,
+  "ppo_final_mean": 5053.4,
+  "ppo_final_std": 186.1,
+  "params": 60166,
+  "throughput_env_per_s_mean": 93100,
+  "training_time_hours_mean": 0.601,
+  "avg_epochs_per_update_mean": 3.99,
+  "vs_exp12_MLPcritic_final": 6077.7,
+  "vs_exp15_anchorLUTcritic_final": 3344.0,
+  "per_seed": {
+    "0": {
+      "best": 5042.5,
+      "final": 5042.5
+    },
+    "1": {
+      "best": 4831.1,
+      "final": 4831.1
+    },
+    "2": {
+      "best": 5311.8,
+      "final": 5286.6
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "exp_name": "exp18ctl_lut-lse-plaincrit-t32",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 2056.4,
+  "ppo_best_std": 1159.1,
+  "ppo_final_mean": 1922.2,
+  "ppo_final_std": 1047.8,
+  "params": 14343,
+  "throughput_env_per_s_mean": 228744,
+  "training_time_hours_mean": 0.244,
+  "collapsed_seeds": [],
+  "collapse_criterion": "final/best < 0.90",
+  "tau_init": 0.05,
+  "learned_tau_actor": {
+    "per_seed": {
+      "0": 0.0713,
+      "1": 0.07065,
+      "2": 0.06974
+    },
+    "mean": 0.07056
+  },
+  "learned_tau_critic": null,
+  "warmup_updates_to": {
+    "1000": 220.0,
+    "3000": null,
+    "5000": null
+  },
+  "per_seed": {
+    "0": {
+      "best": 3690.9,
+      "final": 3396.2,
+      "final_over_best": 0.92,
+      "tau_actor": 0.0713,
+      "tau_critic": null
+    },
+    "1": {
+      "best": 1131.5,
+      "final": 1053.2,
+      "final_over_best": 0.931,
+      "tau_actor": 0.07065,
+      "tau_critic": null
+    },
+    "2": {
+      "best": 1346.9,
+      "final": 1317.3,
+      "final_over_best": 0.978,
+      "tau_actor": 0.06974,
+      "tau_critic": null
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "exp_name": "exp00_ppo-384-baseline",
+  "description": "Early PPO baseline: 3 seeds x 384 updates (~101M env-steps), constant LR 3e-4, MLP actor-critic. Superseded by the 768-update stabilization series (exp02-exp05); kept as the earlier reference point.",
+  "algo": "ppo",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 384,
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench3"
+}

@@ -1,0 +1,20 @@
+{
+  "exp_name": "exp04_ppo-cosine-logstd-floor",
+  "description": "PPO stabilization step 3 - cosine LR 3e-4->1e-5 + log_std floor (std>=0.15) + entropy 0.005. Improves reliability, caps peak.",
+  "algo": "ppo",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 1e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.005,
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench6"
+}
