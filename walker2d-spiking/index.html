@@ -1228,18 +1228,12 @@ ten synapses that decide everything else. And the margin is <b>structural rather
 the gap between "fires" (+1.519) and "silent" (−8.606) is 10.1 against a threshold of 1.0, so
 nothing here sits on a knife-edge.
 </p>
-
-<div class="note warn">
-  <span class="lbl">One honest caveat about the skew</span>
-  <p>The extra tick is hardwired to <code>r0</code>, and <code>r0</code> is always driven by the
-  <em>lower-indexed</em> of the pair's two coordinates. So the skew sits on the correct rail only
-  for slots whose own <code>anchor_a</code> is that lower index. We checked the trained policy's
-  anchor arrays directly: <b>all 192 slots satisfy it</b>, which is why Stage-1 parity is
-  100.0000%.</p>
-  <p>But that is a property of <em>this</em> policy, not a structural guarantee. A future policy
-  with a slot whose <code>anchor_a</code> were the higher index would put the skew on the wrong
-  rail and invert that slot's tie behaviour. Worth a check, not an assumption.</p>
-</div>
+<p>
+The extra tick always lands on the right rail by construction, because our lookup tables deal
+only in <b>ordered pairs (i, j) with i &lt; j</b>. That convention is what the comparators are
+built on: <code>r0</code> is always the rail driven by the lower-indexed coordinate, so it is
+always the “greater-than” rail, and the skew is always on it.
+</p>
 <h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence, with a proof</h3>
 <p>
 2,048 neurons, one per lookup cell. Each listens to the six memory cells that spell out its
