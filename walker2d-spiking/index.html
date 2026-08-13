@@ -1234,7 +1234,7 @@ only in <b>ordered pairs (i, j) with i &lt; j</b>. That convention is what the c
 built on: <code>r0</code> is always the rail driven by the lower-indexed coordinate, so it is
 always the “greater-than” rail, and the skew is always on it.
 </p>
-<h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence, with a proof</h3>
+<h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence</h3>
 <p>
 2,048 neurons, one per lookup cell. Each listens to the six memory cells that spell out its
 address. Six coincident spikes at weight 0.18 give <b>1.08 &gt; 1.0</b> and it fires; five give
