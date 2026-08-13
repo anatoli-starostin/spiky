@@ -1261,7 +1261,9 @@ Each selected cell connects to each output with <b>delay 1</b> and weight
 <code>β_o · exp(w_t / τ)</code> — the stored table value lives in the <em>amplitude</em> of the
 synapse. All 32 selected cells therefore land on a single tick, and the membrane integrates
 <code>V₀ = Σ_t exp(w_t / τ)</code> in one step. The output neuron is anti-leaky and exactly
-linear, so from there
+linear — its <b>membrane time constant is <code>TAU_M_OUT = 31.257</code> ticks</b>, which sets
+how fast it climbs, and <code>τ_eff = 31.506</code> is the exact per-tick growth constant that
+follows from it once the engine's two Euler half-steps are inverted. So from there
 <code>V(t) = V₀ · e^(t/τ_eff)</code>, and its threshold crossing is
 </p>
 <pre><code>T = τ_eff · ( log θ − log Σ_t e^(w_t/τ) )
@@ -1382,9 +1384,23 @@ by <code>a_t = A − (τ_eff/τ)·w_t</code> gives the same result up to the con
 
 <h3>The lattice — an elegant choice that came with a bill</h3>
 <p>
-<code>TAU_M_OUT</code> was set to 31.257 so that 22 ticks span exactly 22 output levels. Neat —
-but it makes the <b>decode lattice pitch equal the output grid step</b>: 0.09523729 against
-0.09523810. Three consequences follow, and the third one cost us a lot of time.
+The output neuron's membrane time constant, <code>TAU_M_OUT</code>, is the one number in Stage 3
+that was <em>chosen</em> rather than derived from the trained table. It controls how fast that
+anti-leak membrane climbs, and therefore how much output value a single tick of crossing time is
+worth — the <b>pitch of the decode lattice</b>.
+</p>
+<p>
+It was set to <b>31.257 ticks</b> to make that pitch line up with the output quantisation step.
+It does, almost exactly: <b>0.09523729</b> of output per tick against a grid step of
+2/21 = <b>0.09523810</b>, agreeing to eight parts in ten million. So 22 ticks map onto 22 output
+levels, one tick per level. That is the elegant part — every tick the neuron could possibly fire
+on lands on a value the policy is actually able to emit, and no resolution is wasted on either
+side.
+</p>
+<p>
+It is also the bill. Because the two pitches are <em>equal</em> rather than merely close, the
+decode lattice and the output grid never slide relative to one another. Three consequences
+follow, and the third one cost us a lot of time.
 </p>
 <ul>
   <li><b>Every decoded value sits at the same phase relative to the output grid.</b> So shifting
