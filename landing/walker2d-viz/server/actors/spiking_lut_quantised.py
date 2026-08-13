@@ -165,6 +165,61 @@ class SpikingLutQuantisedActor(Actor):
         self._torch = torch
         self.net, self.ids = net, ids
 
+        # ---- spike-viz interface (additive; mirrors spiking_lut.py so the raster + network panels work) ----
+        # ROW order puts the internal COMPLETION gate (ids[7]) right AFTER the inputs (ids[0]); the rest
+        # follow. ids[4] is the empty tie slot. Both panels (raster y-axis + network graph) group by these
+        # bands, and spikes + topology share this same row space.
+        ordered = [self.ids[0], self.ids[7], self.ids[1], self.ids[2],
+                   self.ids[3], self.ids[4], self.ids[5], self.ids[6]]
+        row_ids = np.concatenate(ordered)
+        self._all_oid = torch.as_tensor(row_ids.astype(np.int32))
+        self._n_rows = int(self._all_oid.numel())
+        o = np.cumsum([0] + [len(a) for a in ordered])    # o[5]==o[6] (empty tie slot)
+        self._bands = [
+            {"name": "S1 inputs",       "start": int(o[0]), "end": int(o[1]), "color": "#e6194B"},
+            {"name": "completion gate", "start": int(o[1]), "end": int(o[2]), "color": "#42d4f4"},
+            {"name": "S1 rails",        "start": int(o[2]), "end": int(o[4]), "color": "#f58231"},
+            {"name": "S1 memory",       "start": int(o[4]), "end": int(o[5]), "color": "#3cb44b"},
+            {"name": "S2 cells",        "start": int(o[6]), "end": int(o[7]), "color": "#4363d8"},
+            {"name": "S3 outputs",      "start": int(o[7]), "end": int(o[8]), "color": "#f032e6"},
+        ]
+        id2row = {int(nid): r for r, nid in enumerate(row_ids)}
+        self._edge_src = np.fromiter((id2row[int(s)] for _, s, _, _ in E), np.uint16, len(E))
+        self._edge_tgt = np.fromiter((id2row[int(t)] for _, _, t, _ in E), np.uint16, len(E))
+        self._edge_dly = np.fromiter((int(d) for d, _, _, _ in E), np.uint16, len(E))
+        self._edge_exc = np.fromiter((1 if w >= 0 else 0 for _, _, _, w in E), np.uint16, len(E))
+
+    def spike_layout(self):
+        return {"n_ticks": int(self.n_ticks), "n_rows": int(self._n_rows), "bands": self._bands}
+
+    def read_spikes(self):
+        """(row uint16, tick uint16) pairs for the LAST act(), little-endian bytes."""
+        torch = self._torch
+        from spiky.spnet.spnet import NeuronDataType
+        R = self.net.export_neuron_data(self._all_oid, 1, NeuronDataType.Spike, 0, self.n_ticks - 1)
+        idx = torch.nonzero(R.reshape(self._n_rows, self.n_ticks).ne(0), as_tuple=False)  # [K,2]=(row,tick)
+        if idx.numel() == 0:
+            return b""
+        a = idx.to(torch.int32).cpu().numpy()
+        inter = np.empty(a.shape[0] * 2, dtype="<u2")
+        inter[0::2] = a[:, 0].astype("<u2")
+        inter[1::2] = a[:, 1].astype("<u2")
+        return inter.tobytes()
+
+    def topology_meta(self):
+        return {"n_nodes": int(self._n_rows), "n_edges": int(len(self._edge_src)),
+                "n_ticks": int(self.n_ticks), "bands": self._bands}
+
+    def topology_payload(self):
+        """One-time edge list: (src_row, tgt_row, delay, is_excitatory) uint16 quads, LE bytes."""
+        n = len(self._edge_src)
+        out = np.empty(n * 4, dtype="<u2")
+        out[0::4] = self._edge_src
+        out[1::4] = self._edge_tgt
+        out[2::4] = self._edge_dly
+        out[3::4] = self._edge_exc
+        return out.tobytes()
+
     def _encode(self, xn):
         """shared Gaussian-companded latency code; larger value -> earlier tick"""
         g = np.searchsorted(self.edges, np.asarray(xn).ravel(), side="left")
