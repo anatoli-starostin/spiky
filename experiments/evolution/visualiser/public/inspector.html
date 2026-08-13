@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spnet inspector — graph · activity · raster</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .insp { display: grid; grid-template-columns: 1fr 300px; gap: 12px; padding: 12px; max-width: 1300px; margin: 0 auto; }
+    @media (max-width: 820px) { .insp { grid-template-columns: 1fr; } }
+    #side { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 12px; font-size: 12.5px; min-height: 200px; }
+    #side h3 { margin: 0 0 8px; font-size: 14px; }
+    #side table { width: 100%; font-size: 12px; }
+    #side td { padding: 2px 6px; }
+    #side td:first-child { color: var(--muted); }
+    .ctl button, .ctl select { margin-right: 6px; }
+    canvas { width: 100%; display: block; background: #0b0f16; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+  <header>
+    <h1>spnet inspector</h1>
+    <p class="nav"><a href="index.html">Contents</a> · <b>Live spnet graph / activity / raster</b></p>
+    <p>Loads <code>graph.json</code> + <code>activity.json</code> exported from a live spiky SpikingNet. Three linked views: the wiring graph (click a node or edge for details), the spike-propagation animation, and the spike raster with a scrubber — the animation and raster share one playhead.</p>
+  </header>
+
+  <div class="stack">
+    <div class="panel">
+      <div class="ctl" style="flex-wrap:wrap">
+        <button id="play">▶ Play</button>
+        <button id="step">⇥ Step</button>
+        <button id="restart" class="ghost">⟲ Restart</button>
+        <label>speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span class="mono" id="tickinfo" style="margin-left:8px"></span>
+      </div>
+      <div class="insp">
+        <div>
+          <canvas id="graph" height="520"></canvas>
+          <p class="small" id="glegend"></p>
+        </div>
+        <div id="side"><h3>Click a node or edge</h3><p class="small">Nodes are coloured by layer; edges by weight sign (blue −, red +), thickness by |weight|, dashed = larger delay. Click for full NeuronMeta / synapse fields.</p></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Spike raster — drag to scrub (drives the animation)</h2>
+      <canvas id="raster" height="300"></canvas>
+    </div>
+  </div>
+
+  <script src="inspector.js"></script>
+</body>
+</html>

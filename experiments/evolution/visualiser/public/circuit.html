@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pure spiking circuit — LUT ⇄ spikes (minimal)</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="errbar" style="display:none"></div>
+
+  <header>
+    <h1>Pure spiking circuit — LUT&nbsp;⇄&nbsp;spikes</h1>
+    <p class="nav"><a href="index.html">Full explainer</a> · <b>Circuit only</b> · <a href="animate.html">Animation</a></p>
+    <p>What the lookup table computes for an input, and the same result emerging from a genuine event-driven spiking network — side by side.</p>
+  </header>
+
+  <div class="stack">
+    <!-- PANEL 1: INPUT + LUT GROUND TRUTH -->
+    <div class="panel">
+      <h2>1 · Input &amp; what the LUT computes</h2>
+      <p class="hint">Drag x<sub>i</sub> ∈ [−1, 1]. Per hyperplane k: margin <code>m_k = ⟨W_k,x⟩ + b_k</code>, bit = [m_k &gt; 0]. The 3 bits pick a row; the row's stored 4-vector is the LUT output.</p>
+      <div id="sliders"></div>
+      <div class="btns">
+        <button id="rand">🎲 Randomize x</button>
+        <button id="reset" class="ghost">Reset to 0</button>
+      </div>
+      <h3 class="sub" style="margin-top:12px">Input spike latencies  t_i = α + β·x_i  (α=3, β=1)</h3>
+      <table id="latencies"><thead><tr><th>input</th><th>x_i</th><th>t_i (spike time)</th></tr></thead><tbody></tbody></table>
+      <p class="small">Larger x<sub>i</sub> ⇒ larger t<sub>i</sub> ⇒ <b>later</b> spike (further right in the raster below). These t<sub>i</sub> are the actual input-neuron spike times from the simulation.</p>
+      <h3 class="sub" style="margin-top:12px">LUT computation</h3>
+      <table id="lutmath"><thead><tr><th>k</th><th>m_k = ⟨W_k,x⟩+b_k</th><th>bit</th></tr></thead><tbody></tbody></table>
+      <p class="small">→ selected row <b id="lut_row" class="mono"></b> · stored output vector O[row]:</p>
+      <div id="lut_out"></div>
+    </div>
+
+    <!-- PANEL 2: PURE SPIKING CIRCUIT -->
+    <div class="panel">
+      <h2>2 · Pure spiking circuit (event-driven simulation)</h2>
+      <p class="hint">
+        A real network of leak-free integrate-and-fire neurons wired by synapses (weight <b>and</b> conduction delay).
+        Every spike is emitted by the simulator; the bits, winning row and output are read back <b>from the emergent spikes</b>,
+        no analytic margin. START → inputs → CLOCK gates the detectors → complements (feedforward inhibition) →
+        one row wins by 3-way coincidence → outputs fire with the stored value carried in the delay.
+      </p>
+      <canvas id="circuit" height="600"></canvas>
+      <p class="small">Time increases left → right (← earlier · later →). Input rows stay x0…x5 top-to-bottom; each spikes at its own t<sub>i</sub> from the table above.</p>
+      <div class="compare" style="margin-top:10px">
+        <div class="cmp lut">
+          <h3>LUT ground truth</h3>
+          <div class="small">bits <span id="clut_bits"></span> → row <b id="clut_row" class="mono"></b></div>
+          <div id="clut_vec"></div>
+        </div>
+        <div class="cmp spk">
+          <h3>Read back from spikes</h3>
+          <div class="small">bits <span id="csim_bits"></span> → row <b id="csim_row" class="mono"></b></div>
+          <div id="csim_vec"></div>
+        </div>
+      </div>
+      <div id="cbanner" class="banner ok">MATCH ✓</div>
+      <p class="legend" id="cnote"></p>
+    </div>
+  </div>
+
+  <script src="lut_spiking.js"></script>
+  <script src="circuit.js"></script>
+</body>
+</html>
