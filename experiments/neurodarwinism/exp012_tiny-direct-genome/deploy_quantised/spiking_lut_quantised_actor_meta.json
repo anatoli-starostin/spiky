@@ -1,0 +1,35 @@
+{
+  "source": "exp012 amplitude-encoded spiking LUT (tiny_lut_quantised_pipeline.py)",
+  "policy": "walker2d_fastlut_lse_exp19_quantised.npz",
+  "stage3_encoding": "AMPLITUDE: every selected-cell->output synapse has delay=1 and weight beta_o*exp(w/tau); all 32 land on one tick and the linear anti-leak membrane integrates sum_t exp(w_t/tau) directly",
+  "readout": "T = first output-spike tick; mu = slope*T + offset; silence -> -clip; then snap to the output grid",
+  "decode_slope_theory": -0.09523729409162479,
+  "tau_m_out": 31.257,
+  "n_ticks": 167,
+  "dmax": 6,
+  "neurons": 3025,
+  "synapses": 26361,
+  "levels": 22,
+  "verification": {
+    "stage1_bit_parity": 1.0,
+    "stage2_none": 0,
+    "stage2_multi": 0,
+    "stage3_exact": {
+      "0": 0.748046875,
+      "1": 0.76953125,
+      "2": 0.751953125,
+      "3": 0.779296875,
+      "4": 0.748046875,
+      "5": 0.82421875
+    },
+    "stage3_within_one_level": {
+      "0": 1.0,
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0
+    }
+  },
+  "note": "Only in_quant_edges crosses into the SNN -- the network consumes tick ORDERING only, so in_quant_dequant is not needed at inference."
+}
