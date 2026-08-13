@@ -1136,9 +1136,9 @@ order. The decision itself was already safe — held by the losing rail's runawa
 The gate pulse comes from a single <b>leak-free completion detector</b> taking all 17 inputs at
 weight 0.06 with threshold 1.0. Since each input fires exactly once,
 <code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it fire <em>precisely</em> when the last input
-arrives — no earlier, no later. That one neuron replaces what used to be an external fixed-tick
-stimulus, so the network now takes <b>no external drive at all</b>: it is triggered entirely by
-its own inputs and finishes when it is finished.
+arrives — no earlier, no later. That one neuron is what removes the need for an external
+fixed-tick stimulus, so the network takes <b>no external drive at all</b>: it is triggered
+entirely by its own inputs and finishes when it is finished.
 </p>
 <p>
 It then waits out the comparator pipeline (<code>D_GATE = 6</code>), because the last rail
@@ -1164,7 +1164,7 @@ single tick and never rises at all.
 
 <figure class="wide">
 <div class="figbox">
-<svg viewBox="0 0 900 296" role="img" aria-label="Dual-rail comparator behaviour: with a clear winner the rails diverge; on an exact tie both rails would fire, which one extra tick of delay on the greater-than rail fixes, removing 136 tie-detector neurons.">
+<svg viewBox="0 0 900 296" role="img" aria-label="Dual-rail comparator behaviour: with a clear winner the rails diverge; on an exact tie the raw timing would let both rails fire, which the one extra tick of delay on the greater-than rail resolves.">
   <!-- LEFT: clear winner -->
   <text class="svg-t" x="30" y="26">A · clear winner</text>
   <text class="svg-s" x="30" y="44">the two spikes are ≥1 tick apart</text>
@@ -1182,10 +1182,10 @@ single tick and never rises at all.
   <line x1="448" y1="20" x2="448" y2="258" stroke="var(--rule)" stroke-width="1"/>
 
   <!-- RIGHT: tie -->
-  <text class="svg-t" x="478" y="26">B · exact tie, and the fix</text>
+  <text class="svg-t" x="478" y="26">B · exact tie — why the GT rail waits a tick</text>
   <text class="svg-s" x="478" y="44">both coordinates land in the same bucket</text>
 
-  <text class="svg-s" x="478" y="76">before — the veto arrives one tick too late</text>
+  <text class="svg-s" x="478" y="76">raw timing — the veto is inherently one tick late</text>
   <g>
     <line x1="478" y1="118" x2="660" y2="118" class="svg-ax"/>
     <line x1="540" y1="92" x2="540" y2="118" stroke="var(--s3)" stroke-width="2.4"/>
@@ -1194,7 +1194,7 @@ single tick and never rises at all.
     <text class="svg-s" x="478" y="136">excitation at t, veto at t+1 — nothing left to cancel</text>
   </g>
 
-  <text class="svg-s" x="478" y="176">after — the “greater-than” rail waits one tick (DE_GT = 4)</text>
+  <text class="svg-s" x="478" y="176">so the “greater-than” rail waits one tick (DE_GT = 4)</text>
   <g>
     <line x1="478" y1="218" x2="660" y2="218" class="svg-ax"/>
     <line x1="546" y1="192" x2="546" y2="218" stroke="var(--s2)" stroke-width="2.4"/>
@@ -1204,26 +1204,29 @@ single tick and never rises at all.
 
   <!-- full-width band, so nothing can collide with the panels above -->
   <rect x="14" y="268" width="872" height="22" rx="6" fill="var(--s2-w)" stroke="var(--s2)" stroke-width="1"/>
-  <text class="svg-l" x="450" y="283" text-anchor="middle">One tick of delay reproduces the software's strict <tspan font-family="ui-monospace,Menlo,monospace">&gt;</tspan> exactly — and deletes 136 neurons and 408 synapses.</text>
+  <text class="svg-l" x="450" y="283" text-anchor="middle">One tick of delay on the GT rail reproduces the software's strict <tspan font-family="ui-monospace,Menlo,monospace">&gt;</tspan> exactly — on ties and on everything else.</text>
 </svg>
 </div>
 <figcaption><b>Ties are not an edge case here.</b> There are <em>zero</em> exact float ties in
 the data, but once inputs are bucketed, 0.95% of address slots and <b>77% of samples</b> contain
-two coordinates in the same bucket. The original design spent 136 dedicated tie-detector neurons
-on this. Delaying the greater-than rail's excitation by a single tick does the same job for
-free.</figcaption>
+two coordinates in the same bucket. They are handled by the delay on the greater-than rail's own
+excitation synapse — no extra machinery, and no special case anywhere in the
+network.</figcaption>
 </figure>
 
 <p>
-The fix is <b>synapse #1's delay, and nothing else</b>: 4 instead of 3, on the GT rail only. That
-one extra tick slides the GT rail's excitation from arriving <em>one tick before</em> the veto to
-arriving <em>with</em> it, so on a tie the GT rail is cancelled and stays silent while the LT rail
-still fires — which is bit 0, exactly the software's strict <code>&gt;</code>. The one-apart case
-is untouched, because there the veto was never simultaneous to begin with.
+Ties are resolved by <b>synapse #1's delay, and nothing else</b>. That is exactly why the GT
+rail's excitation carries a delay of 4 while everything else in the unit is faster: the extra
+tick slides it from arriving <em>one tick before</em> the veto to arriving <em>with</em> it. On a
+tie the GT rail is therefore cancelled and stays silent, while the LT rail still fires — which is
+bit 0, exactly the software's strict <code>&gt;</code>. The clear-winner case is unaffected,
+because there the veto was never simultaneous to begin with.
 </p>
 <p>
-That deleted <b>136 tie-detector neurons and 408 synapses</b> — and it is structural rather than
-tuned: the gap between "fires" (+1.519) and "silent" (−8.606) is 10.1 against a threshold of 1.0.
+No detector, no special case, no extra neuron anywhere: ties fall out of the same six neurons and
+ten synapses that decide everything else. And the margin is <b>structural rather than tuned</b> —
+the gap between "fires" (+1.519) and "silent" (−8.606) is 10.1 against a threshold of 1.0, so
+nothing here sits on a knife-edge.
 </p>
 
 <div class="note warn">
