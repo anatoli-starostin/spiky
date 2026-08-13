@@ -1,0 +1,24 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+LIF-SAC actor nap=6 tph=32 heads=1 seed=1 | 12 outputs/cell (6 mu + 6 log-sigma) | detectors 62,785 + table 24,576 = 87,361 params | rows 32x64 = 2,048 | eps 2.0->0.3, eval at 0.3
+[  500/10000] steps    32,000 | MJX ret      8.8 | row-cov   0.0% | eps  2.00 | tbit 1.000 | best      8.8 |   2.2m
+[ 1000/10000] steps    64,000 | MJX ret    246.5 | row-cov 100.0% | eps  1.91 | tbit 0.086 | best    246.5 |   4.6m
+[ 1500/10000] steps    96,000 | MJX ret    359.9 | row-cov 100.0% | eps  1.82 | tbit 0.087 | best    359.9 |   6.9m
+[ 2000/10000] steps   128,000 | MJX ret    383.5 | row-cov 100.0% | eps  1.73 | tbit 0.082 | best    383.5 |   9.2m
+[ 2500/10000] steps   160,000 | MJX ret    381.5 | row-cov 100.0% | eps  1.64 | tbit 0.094 | best    383.5 |  11.5m
+[ 3000/10000] steps   192,000 | MJX ret    789.6 | row-cov 100.0% | eps  1.55 | tbit 0.104 | best    789.6 |  13.8m
+[ 3500/10000] steps   224,000 | MJX ret   1178.0 | row-cov 100.0% | eps  1.46 | tbit 0.109 | best   1178.0 |  16.1m
+[ 4000/10000] steps   256,000 | MJX ret   1730.7 | row-cov 100.0% | eps  1.37 | tbit 0.117 | best   1730.7 |  18.4m
+[ 4500/10000] steps   288,000 | MJX ret   1542.0 | row-cov 100.0% | eps  1.28 | tbit 0.123 | best   1730.7 |  20.7m
+[ 5000/10000] steps   320,000 | MJX ret   1493.0 | row-cov 100.0% | eps  1.19 | tbit 0.130 | best   1730.7 |  23.0m
+[ 5500/10000] steps   352,000 | MJX ret   2063.0 | row-cov 100.0% | eps  1.11 | tbit 0.134 | best   2063.0 |  25.3m
+[ 6000/10000] steps   384,000 | MJX ret   3567.7 | row-cov 100.0% | eps  1.02 | tbit 0.141 | best   3567.7 |  27.6m
+[ 6500/10000] steps   416,000 | MJX ret   2121.5 | row-cov 100.0% | eps  0.93 | tbit 0.151 | best   3567.7 |  29.9m
+[ 7000/10000] steps   448,000 | MJX ret   3228.3 | row-cov 100.0% | eps  0.84 | tbit 0.152 | best   3567.7 |  32.2m
+[ 7500/10000] steps   480,000 | MJX ret   3133.6 | row-cov 100.0% | eps  0.75 | tbit 0.160 | best   3567.7 |  34.5m
+[ 8000/10000] steps   512,000 | MJX ret   4277.1 | row-cov 100.0% | eps  0.66 | tbit 0.164 | best   4277.1 |  36.7m
+[ 8500/10000] steps   544,000 | MJX ret   4453.6 | row-cov 100.0% | eps  0.57 | tbit 0.165 | best   4453.6 |  39.0m
+[ 9000/10000] steps   576,000 | MJX ret   4023.9 | row-cov 100.0% | eps  0.48 | tbit 0.172 | best   4453.6 |  41.3m
+[ 9500/10000] steps   608,000 | MJX ret   3888.7 | row-cov 100.0% | eps  0.39 | tbit 0.177 | best   4453.6 |  43.6m
+[10000/10000] steps   640,000 | MJX ret   4302.2 | row-cov 100.0% | eps  0.30 | tbit 0.184 | best   4453.6 |  45.7m
+done: best MJX 4453.6 over 640,000 env-steps in 45.7 min

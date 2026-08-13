@@ -1,0 +1,31 @@
+{
+ "indices_match": true,
+ "hyperplane_weight (w)": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "exact": true
+ },
+ "hyperplane_bias (b)": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "exact": true
+ },
+ "vs torch HyperplaneMHLUT": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "exact": true
+ },
+ "vs torch FastMultiHeadLut": {
+  "max_abs": 0.0,
+  "max_rel": 0.0,
+  "exact": true
+ },
+ "summary": {
+  "worst_rel": 0.0,
+  "tol": 5e-06,
+  "verdict": "PASS",
+  "indices_match": true,
+  "policy": "canonical_full_coverage",
+  "device": "cpu"
+ }
+}

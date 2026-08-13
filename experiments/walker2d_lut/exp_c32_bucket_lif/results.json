@@ -1,0 +1,58 @@
+{
+ "seeds": {
+  "0": 1739.8916561137648,
+  "1": 725.5036616785897,
+  "2": 1057.7021550171494
+ },
+ "mean": 1174.3658242698345,
+ "sd": 517.1591240674182,
+ "n": 3,
+ "actor_params": 7840,
+ "frontend_params": 1696,
+ "table_params": 6144,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -3133.634175730165,
+   "welch_se": 361.7105493836102
+  },
+  {
+   "name": "exp_c31 PureLIF (TTFS bits)",
+   "mean": 2951.2,
+   "sd": 2109.2,
+   "n": 3,
+   "params": 31392,
+   "front_end": 6816,
+   "delta": -1776.8341757301653,
+   "welch_se": 1253.8179293137925
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": -2912.4341757301654,
+   "welch_se": 645.4794082969597
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": -2756.9341757301654,
+   "welch_se": 451.152302297934
+  }
+ ]
+}

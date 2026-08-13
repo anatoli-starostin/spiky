@@ -1,0 +1,38 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+MHL-LIF SAC actor heads=1 tph=32 n_det=1 buckets=64 seed=1 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 3,232 + table 24,576 = 27,808 params (99.2% of the 28,032 hyperplane baseline; 27,744 trainable) | cells 32x64 = 2,048 | delay_init_std=4.0 table_init_std=0.01768 | temperatures FROZEN at 1.0 | no eps
+[  500/10000] steps    32,000 | MJX ret     61.6 | cell-cov   0.0% | digit 51.625 | nosp 0.483 | eff  7.72/64 | Tbkt 1.000 | Tcr 1.000 | best     61.6 |   2.8m
+[ 1000/10000] steps    64,000 | MJX ret     -9.8 | cell-cov  59.5% | digit 60.028 | nosp 0.705 | eff  2.14/64 | Tbkt 1.000 | Tcr 1.000 | best     61.6 |   5.0m
+[ 1500/10000] steps    96,000 | MJX ret    106.8 | cell-cov  65.1% | digit 57.787 | nosp 0.349 | eff  3.47/64 | Tbkt 1.000 | Tcr 1.000 | best    106.8 |   6.6m
+[ 2000/10000] steps   128,000 | MJX ret    457.6 | cell-cov  66.4% | digit 56.076 | nosp 0.244 | eff  3.05/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |   8.1m
+[ 2500/10000] steps   160,000 | MJX ret    411.5 | cell-cov  67.0% | digit 54.692 | nosp 0.157 | eff  4.56/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |   9.5m
+[ 3000/10000] steps   192,000 | MJX ret    420.3 | cell-cov  69.1% | digit 52.549 | nosp 0.151 | eff  4.41/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  11.0m
+[ 3500/10000] steps   224,000 | MJX ret    327.6 | cell-cov  71.3% | digit 51.375 | nosp 0.167 | eff  5.69/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  12.5m
+[ 4000/10000] steps   256,000 | MJX ret    369.9 | cell-cov  72.2% | digit 50.091 | nosp 0.140 | eff  6.83/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  14.0m
+[ 4500/10000] steps   288,000 | MJX ret    364.1 | cell-cov  72.9% | digit 50.255 | nosp 0.088 | eff  5.17/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  15.4m
+[ 5000/10000] steps   320,000 | MJX ret    363.5 | cell-cov  73.8% | digit 48.610 | nosp 0.091 | eff  5.89/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  16.9m
+[ 5500/10000] steps   352,000 | MJX ret    445.2 | cell-cov  74.2% | digit 48.920 | nosp 0.094 | eff  6.16/64 | Tbkt 1.000 | Tcr 1.000 | best    457.6 |  18.3m
+[ 6000/10000] steps   384,000 | MJX ret    477.3 | cell-cov  74.9% | digit 48.112 | nosp 0.043 | eff  6.83/64 | Tbkt 1.000 | Tcr 1.000 | best    477.3 |  19.8m
+[ 6500/10000] steps   416,000 | MJX ret    477.0 | cell-cov  75.1% | digit 47.478 | nosp 0.064 | eff  6.80/64 | Tbkt 1.000 | Tcr 1.000 | best    477.3 |  21.2m
+[ 7000/10000] steps   448,000 | MJX ret    525.3 | cell-cov  75.5% | digit 46.864 | nosp 0.062 | eff  6.73/64 | Tbkt 1.000 | Tcr 1.000 | best    525.3 |  22.7m
+[ 7500/10000] steps   480,000 | MJX ret    567.7 | cell-cov  75.9% | digit 46.260 | nosp 0.048 | eff  7.66/64 | Tbkt 1.000 | Tcr 1.000 | best    567.7 |  24.1m
+[ 8000/10000] steps   512,000 | MJX ret    472.4 | cell-cov  76.1% | digit 45.859 | nosp 0.058 | eff  7.41/64 | Tbkt 1.000 | Tcr 1.000 | best    567.7 |  25.6m
+[ 8500/10000] steps   544,000 | MJX ret    574.1 | cell-cov  76.3% | digit 47.319 | nosp 0.062 | eff  6.91/64 | Tbkt 1.000 | Tcr 1.000 | best    574.1 |  27.0m
+[ 9000/10000] steps   576,000 | MJX ret    539.2 | cell-cov  76.4% | digit 47.106 | nosp 0.061 | eff  7.05/64 | Tbkt 1.000 | Tcr 1.000 | best    574.1 |  28.5m
+[ 9500/10000] steps   608,000 | MJX ret    578.5 | cell-cov  76.5% | digit 48.201 | nosp 0.060 | eff  6.47/64 | Tbkt 1.000 | Tcr 1.000 | best    578.5 |  29.9m
+[10000/10000] steps   640,000 | MJX ret    607.1 | cell-cov  76.6% | digit 46.568 | nosp 0.055 | eff  7.04/64 | Tbkt 1.000 | Tcr 1.000 | best    607.1 |  31.2m
+done: best MJX 607.1 over 640,000 env-steps in 31.2 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+Traceback (most recent call last):
+  File "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c43_1det_64bkt/eval_mhl_cpu.py", line 138, in <module>
+    main()
+  File "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c43_1det_64bkt/eval_mhl_cpu.py", line 117, in main
+    fn, n, meta = load_actor(path)
+                  ^^^^^^^^^^^^^^^^
+  File "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c43_1det_64bkt/eval_mhl_cpu.py", line 87, in load_actor
+    raise ValueError(f"{base}: bucket boundaries are not strictly increasing")
+ValueError: mhl_sac_c43_s1_actor.npz: bucket boundaries are not strictly increasing
+  note: 5 of 1984 boundary gaps are exactly 0 (float32 cumsum resolution at boundary magnitudes up to 51.0) — 5 empty buckets, addressing still monotone
+mhl_sac_c43_s1_actor.npz (27,808 params = 3,232 front-end + 24,576 table) [eval] 1 det x 64 bkt = 64 cells / tph32
+  CPU-reference 100-ep deterministic: 601.7 +/- 11.1  full 0/100  vel 1.631 m/s  len 229  [18s]

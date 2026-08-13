@@ -1,0 +1,39 @@
+{
+ "rows": [
+  {
+   "label": "seed 4 @ 10k",
+   "checkpoint": "lut_sac_c21_seed4_20k_at10000_actor.npz",
+   "mean": 5286.557120404921,
+   "sd": 51.538888787604904,
+   "median": 5291.752913649123,
+   "p10": 5227.494949833881,
+   "worst": 5022.071321535153,
+   "best": 5372.663950906002,
+   "full": 100,
+   "fell": 0,
+   "len_mean": 1000.0,
+   "vel": 4.289752972074487,
+   "vel_surv": 4.289752972074487,
+   "z": 1.0998897088993702,
+   "energy": 3.195851669565787
+  },
+  {
+   "label": "seed 4 @ 20k",
+   "checkpoint": "lut_sac_c21_seed4_20k_actor.npz",
+   "mean": 5647.482926605437,
+   "sd": 595.1892176260802,
+   "median": 5742.327256816428,
+   "p10": 5644.27828229478,
+   "worst": 802.0988133420163,
+   "best": 5908.610888502642,
+   "full": 97,
+   "fell": 3,
+   "len_mean": 985.51,
+   "vel": 4.715095200862809,
+   "vel_surv": 4.745724232135473,
+   "z": 1.08825061196024,
+   "energy": 3.364926093829343
+  }
+ ],
+ "verdict": "SPEED BOUGHT AT THE COST OF RELIABILITY. The 20k policy is +0.425 m/s faster and its MEDIAN episode is +451 better, but it now falls in 3/100 episodes against 0/100 at 10k. The +361 mean is real but it is a faster, more fragile gait -- not a strictly better one. Which to prefer depends on whether the metric that matters is mean return or worst-case survival."
+}

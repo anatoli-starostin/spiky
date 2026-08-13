@@ -1,0 +1,165 @@
+{
+ "checkpoint": "lut_sac_c21_seed4_20k_actor.npz",
+ "episodes": 100,
+ "protocol": "perturb.eval_batched, seed0=0, nominal model, hard forward, deterministic (tanh of row mean)",
+ "quantization": "symmetric per-table max-abs, qmax = 2^(bits-1) - 1, dequantized to float32",
+ "rows": [
+  {
+   "part": "baseline",
+   "table_bits": null,
+   "addr_bits": null,
+   "mean": 5647.482926605437,
+   "std": 592.2057942392679,
+   "full_length": 97,
+   "episodes": 100,
+   "on_record": 5647.482926605437,
+   "retention_pct": 100.0
+  },
+  {
+   "part": "A_table",
+   "table_bits": 8,
+   "addr_bits": null,
+   "mean": 5673.105395512464,
+   "std": 554.5741985017746,
+   "full_length": 98,
+   "episodes": 100,
+   "retention_pct": 100.45369714685316
+  },
+  {
+   "part": "A_table",
+   "table_bits": 6,
+   "addr_bits": null,
+   "mean": 5691.903618535539,
+   "std": 624.8263948959305,
+   "full_length": 97,
+   "episodes": 100,
+   "retention_pct": 100.78655734789096
+  },
+  {
+   "part": "A_table",
+   "table_bits": 4,
+   "addr_bits": null,
+   "mean": 5649.747987331098,
+   "std": 387.1113719585954,
+   "full_length": 96,
+   "episodes": 100,
+   "retention_pct": 100.040107438218
+  },
+  {
+   "part": "A_table",
+   "table_bits": 3,
+   "addr_bits": null,
+   "mean": 4308.149967087728,
+   "std": 1827.1730414886717,
+   "full_length": 73,
+   "episodes": 100,
+   "retention_pct": 76.2844265857259
+  },
+  {
+   "part": "A_table",
+   "table_bits": 2,
+   "addr_bits": null,
+   "mean": 299.8351038551836,
+   "std": 193.8502135617268,
+   "full_length": 0,
+   "episodes": 100,
+   "retention_pct": 5.309181236168997
+  },
+  {
+   "part": "B_addr",
+   "table_bits": null,
+   "addr_bits": 8,
+   "mean": 5752.58085245434,
+   "std": 92.32722600188679,
+   "full_length": 100,
+   "episodes": 100,
+   "sign_flip_frac": 0.0063734895833333334,
+   "sign_decisions": 19200000,
+   "retention_pct": 101.86096934182454
+  },
+  {
+   "part": "B_addr",
+   "table_bits": null,
+   "addr_bits": 6,
+   "mean": 5645.467454093999,
+   "std": 552.184399639699,
+   "full_length": 97,
+   "episodes": 100,
+   "sign_flip_frac": 0.029773737186893974,
+   "sign_decisions": 18943104,
+   "retention_pct": 99.9643120211671
+  },
+  {
+   "part": "B_addr",
+   "table_bits": null,
+   "addr_bits": 4,
+   "mean": 5868.950129302359,
+   "std": 73.22064574765976,
+   "full_length": 100,
+   "episodes": 100,
+   "sign_flip_frac": 0.10535302083333334,
+   "sign_decisions": 19200000,
+   "retention_pct": 103.92152053534477
+  },
+  {
+   "part": "B_addr",
+   "table_bits": null,
+   "addr_bits": 3,
+   "mean": 2060.061274811796,
+   "std": 1083.560062252868,
+   "full_length": 4,
+   "episodes": 100,
+   "sign_flip_frac": 0.18306763351244654,
+   "sign_decisions": 8754240,
+   "retention_pct": 36.47751222242381
+  },
+  {
+   "part": "B_addr",
+   "table_bits": null,
+   "addr_bits": 2,
+   "mean": 32.170423482393396,
+   "std": 59.17156319044108,
+   "full_length": 0,
+   "episodes": 100,
+   "sign_flip_frac": 0.330184604192243,
+   "sign_decisions": 1407552,
+   "retention_pct": 0.5696418014977559
+  },
+  {
+   "part": "C_both",
+   "table_bits": 4,
+   "addr_bits": 8,
+   "mean": 5540.369092099286,
+   "std": 790.8779780013157,
+   "full_length": 92,
+   "episodes": 100,
+   "sign_flip_frac": 0.006363374378570644,
+   "sign_decisions": 18640896,
+   "retention_pct": 98.10333495650718
+  },
+  {
+   "part": "C_both",
+   "table_bits": 8,
+   "addr_bits": 4,
+   "mean": 5879.869233821702,
+   "std": 79.38679020234626,
+   "full_length": 100,
+   "episodes": 100,
+   "sign_flip_frac": 0.10514458333333333,
+   "sign_decisions": 19200000,
+   "retention_pct": 104.11486515738699
+  },
+  {
+   "part": "C_both",
+   "table_bits": 4,
+   "addr_bits": 4,
+   "mean": 5750.029282715554,
+   "std": 569.8540722505073,
+   "full_length": 97,
+   "episodes": 100,
+   "sign_flip_frac": 0.10857028485671069,
+   "sign_decisions": 18955776,
+   "retention_pct": 101.81578868750569
+  }
+ ]
+}

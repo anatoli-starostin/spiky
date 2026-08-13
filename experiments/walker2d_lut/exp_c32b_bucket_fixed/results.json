@@ -1,0 +1,68 @@
+{
+ "seeds": {
+  "0": 777.1332618981479,
+  "1": 3234.182562334916,
+  "2": 2112.208650708101
+ },
+ "mean": 2041.1748249803884,
+ "sd": 1230.0638883782983,
+ "n": 3,
+ "actor_params": 7840,
+ "frontend_params": 1696,
+ "table_params": 6144,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -2266.8251750196114,
+   "welch_se": 738.9423014219578
+  },
+  {
+   "name": "exp_c31 PureLIF (TTFS bits)",
+   "mean": 2951.2,
+   "sd": 2109.2,
+   "n": 3,
+   "params": 31392,
+   "front_end": 6816,
+   "delta": -910.0251750196114,
+   "welch_se": 1409.702310122287
+  },
+  {
+   "name": "exp_c32 BROKEN bucket (free-signed w)",
+   "mean": 1174.4,
+   "sd": 517.2,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 866.7748249803883,
+   "welch_se": 770.4009798999347
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": -2045.6251750196118,
+   "welch_se": 912.0552997657431
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": -1890.1251750196118,
+   "welch_se": 786.6000274371422
+  }
+ ]
+}

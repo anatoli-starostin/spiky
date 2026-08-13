@@ -1,0 +1,17 @@
+{
+ "actor": "pure_lif_sac_smoke_actor.npz",
+ "params": 31392,
+ "episodes": 5,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 240.35111167677832,
+ "cpu_reference_std": 137.70243354520605,
+ "full_length": 0,
+ "velocity": 0.6217506966258423,
+ "length_mean": 126.0,
+ "heads": 1,
+ "tph": 32,
+ "nap": 6,
+ "eval_eps": 0.30000001192092896,
+ "detector_params": 6816,
+ "table_params": 24576
+}

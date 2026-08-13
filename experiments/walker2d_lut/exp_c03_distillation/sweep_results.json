@@ -1,0 +1,587 @@
+{
+ "teacher": 5555.5,
+ "completed": 13,
+ "results": [
+  {
+   "name": "hyperplane_nap4_tph8_h1",
+   "module": "hyperplane",
+   "nap": 4,
+   "tph": 8,
+   "heads": 1,
+   "rows": 16,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 768,
+   "index_params": 576,
+   "total_params": 1346,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.029478344400942387,
+   "heldout_action_mse": 0.02550823614001274,
+   "eval_mean": 441.08191496815977,
+   "eval_std": 30.94955045381407,
+   "teacher_retention_pct": 7.939553864965525,
+   "solved": false,
+   "train_s": 14.5,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.06371045378756499
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.03349566267481114
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.030927564504584
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.030110317024048667
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.029701178485457093
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.029478344400942387
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap4_tph8_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap4_tph32_h1",
+   "module": "hyperplane",
+   "nap": 4,
+   "tph": 32,
+   "heads": 1,
+   "rows": 16,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 3072,
+   "index_params": 2304,
+   "total_params": 5378,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.01029372069805464,
+   "heldout_action_mse": 0.008649795316159725,
+   "eval_mean": 5511.9177551795065,
+   "eval_std": 431.0785621119005,
+   "teacher_retention_pct": 99.2155117483486,
+   "solved": true,
+   "train_s": 38.8,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.02814737609573311
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.012983126914702516
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.011473897062890238
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.010754653887523904
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.010420303786041914
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.01029372069805464
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap4_tph32_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap6_tph16_h1",
+   "module": "hyperplane",
+   "nap": 6,
+   "tph": 16,
+   "heads": 1,
+   "rows": 64,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 6144,
+   "index_params": 1728,
+   "total_params": 7874,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.00954231784842001,
+   "heldout_action_mse": 0.008032908663153648,
+   "eval_mean": 4998.866954081746,
+   "eval_std": 1301.2830275767792,
+   "teacher_retention_pct": 89.98050497852122,
+   "solved": true,
+   "train_s": 34.8,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.027642997073251734
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.011806278723075665
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.01051005302044728
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.009954649517493763
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.009660959773779891
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.00954231784842001
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap6_tph16_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap6_tph64_h1",
+   "module": "hyperplane",
+   "nap": 6,
+   "tph": 64,
+   "heads": 1,
+   "rows": 64,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 24576,
+   "index_params": 6912,
+   "total_params": 31490,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.0037276985647086295,
+   "heldout_action_mse": 0.0030384764540940523,
+   "eval_mean": 5582.805892963172,
+   "eval_std": 28.856073181764852,
+   "teacher_retention_pct": 100.49151098844698,
+   "solved": true,
+   "train_s": 39.2,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.01402131362342511
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.005435364491982097
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.004544497364626753
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.004102461604104056
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0038451883346585893
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.0037276985647086295
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap6_tph64_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap8_tph16_h1",
+   "module": "hyperplane",
+   "nap": 8,
+   "tph": 16,
+   "heads": 1,
+   "rows": 256,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 24576,
+   "index_params": 2304,
+   "total_params": 26882,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.006195283513954681,
+   "heldout_action_mse": 0.005282395984977484,
+   "eval_mean": 5484.470089224405,
+   "eval_std": 588.5314143405985,
+   "teacher_retention_pct": 98.72144882052748,
+   "solved": true,
+   "train_s": 40.1,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.021264732862987624
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.007933308855614251
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.006966940078697526
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.006534315786775328
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0062996264496587495
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.006195283513954681
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap8_tph16_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap8_tph64_h1",
+   "module": "hyperplane",
+   "nap": 8,
+   "tph": 64,
+   "heads": 1,
+   "rows": 256,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 98304,
+   "index_params": 9216,
+   "total_params": 107522,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.002430253611408563,
+   "heldout_action_mse": 0.0019974634051322937,
+   "eval_mean": 5584.28584481299,
+   "eval_std": 37.77216466102156,
+   "teacher_retention_pct": 100.51815038813771,
+   "solved": true,
+   "train_s": 41.9,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.010517042487699581
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.003919380903815967
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.00323632723430673
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.002819199546143992
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0025599319044550158
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.002430253611408563
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap8_tph64_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap8_tph256_h1",
+   "module": "hyperplane",
+   "nap": 8,
+   "tph": 256,
+   "heads": 1,
+   "rows": 256,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 393216,
+   "index_params": 36864,
+   "total_params": 430082,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.0014925960075070162,
+   "heldout_action_mse": 0.001196224824525416,
+   "eval_mean": 5578.797439709621,
+   "eval_std": 33.36222403933648,
+   "teacher_retention_pct": 100.41935810835426,
+   "solved": true,
+   "train_s": 66.9,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.007880849488262572
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.0035222256201068694
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.0028893208086391495
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.002251759376434062
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0017489549960557872
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.0014925960075070162
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap8_tph256_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap10_tph64_h1",
+   "module": "hyperplane",
+   "nap": 10,
+   "tph": 64,
+   "heads": 1,
+   "rows": 1024,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 393216,
+   "index_params": 11520,
+   "total_params": 404738,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.001783115121663692,
+   "heldout_action_mse": 0.0014957025414332747,
+   "eval_mean": 5576.883918123402,
+   "eval_std": 38.220525158600395,
+   "teacher_retention_pct": 100.38491437536497,
+   "solved": true,
+   "train_s": 90.0,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.008963873889201923
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.0033597502256424274
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.0027257955700784402
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.0022601350220139526
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0019424382245459783
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.001783115121663692
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap10_tph64_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap10_tph256_h1",
+   "module": "hyperplane",
+   "nap": 10,
+   "tph": 256,
+   "heads": 1,
+   "rows": 1024,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 1572864,
+   "index_params": 46080,
+   "total_params": 1618946,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.001576257336021095,
+   "heldout_action_mse": 0.001293663284741342,
+   "eval_mean": 5575.337708302645,
+   "eval_std": 31.903308564619742,
+   "teacher_retention_pct": 100.35708232027082,
+   "solved": true,
+   "train_s": 177.8,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.008493682381028773
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.0045533991822002485
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.0035434949779911623
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.002546824364252808
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0018930479916558051
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.001576257336021095
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap10_tph256_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap12_tph64_h1",
+   "module": "hyperplane",
+   "nap": 12,
+   "tph": 64,
+   "heads": 1,
+   "rows": 4096,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 1572864,
+   "index_params": 13824,
+   "total_params": 1586690,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.0014510387368881531,
+   "heldout_action_mse": 0.0012358574895188212,
+   "eval_mean": 5568.860028881889,
+   "eval_std": 38.600428781926475,
+   "teacher_retention_pct": 100.24048292470326,
+   "solved": true,
+   "train_s": 188.2,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.008171403464339788
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.0032302336621945656
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.0025838763720452207
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.002031584928277403
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.0016477898255604468
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.0014510387368881531
+    }
+   ],
+   "checkpoint": "lut_hyperplane_nap12_tph64_h1.pt"
+  },
+  {
+   "name": "hyperplane_nap12_tph256_h1",
+   "failed": true,
+   "error": ", this process has 17.22 GiB memory in use. Of the allocated memory 16.53 GiB is allocated by PyTorch, and 84.22 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)\n"
+  },
+  {
+   "name": "fast_nap8_tph64_h1",
+   "module": "fast",
+   "nap": 8,
+   "tph": 64,
+   "heads": 1,
+   "rows": 256,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 98304,
+   "index_params": 0,
+   "total_params": 98306,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.011290950350798933,
+   "heldout_action_mse": 0.010096428915858269,
+   "eval_mean": 4084.2638152241443,
+   "eval_std": 1763.5173889800296,
+   "teacher_retention_pct": 73.51748384887308,
+   "solved": true,
+   "train_s": 38.0,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.017665166763384792
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.01218464096174971
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.011899712622287695
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.0116489000900619
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.011431994397067364
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.011290950350798933
+    }
+   ],
+   "checkpoint": "lut_fast_nap8_tph64_h1.pt"
+  },
+  {
+   "name": "fast_nap10_tph256_h1",
+   "module": "fast",
+   "nap": 10,
+   "tph": 256,
+   "heads": 1,
+   "rows": 1024,
+   "forward_mode": "hybrid_smooth",
+   "table_params": 1572864,
+   "index_params": 0,
+   "total_params": 1572866,
+   "dataset_pairs": 4001792,
+   "epochs": 6,
+   "final_action_mse": 0.004055842854456257,
+   "heldout_action_mse": 0.003673098050057888,
+   "eval_mean": 5358.822876982055,
+   "eval_std": 827.7199555707374,
+   "teacher_retention_pct": 96.45977638344084,
+   "solved": true,
+   "train_s": 178.0,
+   "history": [
+    {
+     "epoch": 0,
+     "action_mse": 0.01159218281360692
+    },
+    {
+     "epoch": 1,
+     "action_mse": 0.007958750492638642
+    },
+    {
+     "epoch": 2,
+     "action_mse": 0.006517776423453248
+    },
+    {
+     "epoch": 3,
+     "action_mse": 0.0052519315356119875
+    },
+    {
+     "epoch": 4,
+     "action_mse": 0.004456804134428288
+    },
+    {
+     "epoch": 5,
+     "action_mse": 0.004055842854456257
+    }
+   ],
+   "checkpoint": "lut_fast_nap10_tph256_h1.pt"
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+{
+ "actor": "lut_sac_smoke_f1p703_actor.npz",
+ "params": 28416,
+ "phase_freq": 1.7029999494552612,
+ "episodes": 20,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 478.43366951575683,
+ "cpu_reference_std": 144.1382950717463,
+ "full_length": 0,
+ "vel_mean": 1.4182636775568163
+}

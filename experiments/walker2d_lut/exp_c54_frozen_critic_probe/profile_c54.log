@@ -1,0 +1,60 @@
+exp_c54 — per-iteration cost attribution for the frozen-critic idea
+==================================================================
+
+Ran with:
+  XLA_FLAGS=--xla_gpu_deterministic_ops=true CUBLAS_WORKSPACE_CONFIG=:4096:8 \
+  XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  python mhl_sac.py --seed 0 --profile-iters 40 --freeze-critic {0,1}
+
+CONTEXT THAT LIMITS THESE NUMBERS. Every measurement below was taken while the three
+exp_c36b anchor seeds were training on the same GPU, so the ABSOLUTE figures are inflated
+roughly 3x against exp_c50's uncontended ~0.223 s/iter. Read the ratios, not the absolutes.
+
+FIRST ATTEMPT (discarded). A single A then a single B run gave:
+  full SAC       rollout 224.18 ms   update 311.17 ms   total 535.34 ms
+  frozen critic  rollout 176.06 ms   update 243.79 ms   total 419.85 ms
+which reads as a 21.6% total saving -- except that ROLLOUT also "sped up" by 21%, and the
+--freeze-critic flag cannot touch the rollout. That was contention drift, not the critic.
+Discarded, and the design changed to interleaved A/B with rollout as an explicit control.
+
+INTERLEAVED A/B, three rounds, 40 post-warmup iterations each
+------------------------------------------------------------
+                    update block (ms/iter)          rollout (ms/iter)
+  full SAC        459.67   421.25   428.63       290.98   200.08   202.09
+  frozen critic   345.84   357.42   340.89       203.63   300.97   186.53
+
+  update block:   mean 436.52 (sd 20.4)  vs  348.05 (sd  8.5)   -88.47 ms   -20.3%
+  rollout:        mean 231.05            vs  230.38             -0.67 ms    -0.3%
+
+  Welch on the update block: se 12.76, |t| 6.93.
+
+THE ROLLOUT IS THE CONTROL. The flag cannot affect it, and its two group means agree to
+0.67 ms out of 231 -- so the two groups experienced comparable contention on average and
+the update-block difference is attributable to the critic rather than to drift.
+
+WHAT IT MEANS
+-------------
+  per full iteration:  667.6 -> 578.4 ms   =  13.4% saving
+
+Dropping critic learning removes 20.3% of the update block and 13.4% of the iteration.
+Rollout is ~35% of the iteration and the frozen-critic idea does not touch it, so ~13% is
+the CEILING on what this can buy in speed even if the critic were free.
+
+For scale: exp_c53 measured 12.9% end-to-end from a one-line change to the spike-time
+formulation, with no new machinery and no frozen artifacts to manage.
+
+WHAT IS SKIPPED under --freeze-critic 1, i.e. what the 20.3% consists of:
+  * the target-network forward passes (q1t, q2t on the next state)
+  * the twin-Q loss and its gradient
+  * the critic optimiser step
+  * the target EMA
+The actor still forwards through the critic to compute its own loss, so the critic is
+still EVALUATED once per update; what disappears is differentiating and updating it.
+
+NOTE ON WHY THE PROBES THIS WAS BUILT FOR DID NOT RUN. exp_c54's two probes (frozen-critic
+reliability vs Monte-Carlo returns, and a short actor-only fine-tune) both need a TRAINED
+critic. No trainer in this chapter ever saved one -- `mhl_sac.py` writes only the actor
+pytree -- and a scan of all 331 .npz files in the chapter found zero critics. The critic
+for exp_c50 seed 0 is exactly recoverable (that run is deterministic: same seed, same
+pinned flags, same code reproduce the identical actor), but regenerating it costs a full
+10,000-iteration run, which the task excluded.

@@ -1,0 +1,164 @@
+[
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "mass",
+  "value": 0.7,
+  "mean": 2163.989257098296,
+  "std": 1620.389713127018,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "mass",
+  "value": 0.85,
+  "mean": 4319.743708548126,
+  "std": 1190.3264716199685,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "mass",
+  "value": 1.0,
+  "mean": 5304.117233363146,
+  "std": 38.51136272730218,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "mass",
+  "value": 1.15,
+  "mean": 3960.268854486871,
+  "std": 1921.0616755270134,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "mass",
+  "value": 1.3,
+  "mean": 343.6849073735206,
+  "std": 817.5619866672166,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "gravity",
+  "value": 0.85,
+  "mean": 4178.570530440934,
+  "std": 1103.8545294224825,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "gravity",
+  "value": 1.0,
+  "mean": 5304.117233363146,
+  "std": 38.51136272730218,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "gravity",
+  "value": 1.15,
+  "mean": 2438.1352790579676,
+  "std": 2494.4286902021076,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "friction",
+  "value": 0.5,
+  "mean": 4762.398555667318,
+  "std": 786.2176109871424,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "friction",
+  "value": 0.75,
+  "mean": 5262.006792586023,
+  "std": 71.54094554394624,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "friction",
+  "value": 1.0,
+  "mean": 5304.117233363146,
+  "std": 38.51136272730218,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "friction",
+  "value": 1.5,
+  "mean": 5159.00090321906,
+  "std": 887.8955644595168,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "friction",
+  "value": 2.0,
+  "mean": 4120.709083259876,
+  "std": 1317.1078150373876,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "geometry",
+  "value": 0.9,
+  "mean": 4031.384941450939,
+  "std": 1605.2362540212603,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "geometry",
+  "value": 0.95,
+  "mean": 5231.587239942483,
+  "std": 447.31308921558144,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "geometry",
+  "value": 1.0,
+  "mean": 5304.117233363146,
+  "std": 38.51136272730218,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "geometry",
+  "value": 1.05,
+  "mean": 3552.581264054259,
+  "std": 2429.857258967841,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-matched",
+  "axis": "geometry",
+  "value": 1.1,
+  "mean": 172.63524332360845,
+  "std": 865.3803358483796,
+  "episodes": 100,
+  "solved": false
+ }
+]

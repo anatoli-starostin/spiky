@@ -1,0 +1,14 @@
+{
+ "c39 stock (offset 0)": {
+  "init_agreement": 0.6344129774305555,
+  "init_floor": 0.49482915322813725,
+  "final_agreement": 0.35427008734809023,
+  "final_floor": 0.3361366604351335
+ },
+ "c40 structured (offset 2)": {
+  "init_agreement": 0.6517995198567709,
+  "init_floor": 0.5240875410123004,
+  "final_agreement": 0.3745744493272569,
+  "final_floor": 0.3536402461015516
+ }
+}

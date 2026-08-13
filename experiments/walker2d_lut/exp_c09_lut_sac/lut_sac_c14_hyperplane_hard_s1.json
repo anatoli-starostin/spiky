@@ -1,0 +1,197 @@
+{
+ "config": {
+  "iters": 10000,
+  "envs": 64,
+  "rollout": 1,
+  "updates": 32,
+  "batch": 512,
+  "buffer": 1000000,
+  "warmup": 500,
+  "lr": 0.0003,
+  "actor_lr": 0.0003,
+  "gamma": 0.99,
+  "tau": 0.005,
+  "nap": 6,
+  "tph": 32,
+  "heads": 1,
+  "target_entropy": -6.0,
+  "row_clip": 1.0,
+  "coverage_bonus": 0.0,
+  "eval_every": 500,
+  "eval_episodes": 20,
+  "addressing": "hyperplane",
+  "seed": 1,
+  "anchor_policy": "balanced",
+  "forward_mode": "hard",
+  "tag": "_c14_hyperplane_hard_s1",
+  "out": null
+ },
+ "table_params": 24576,
+ "index_params": 3456,
+ "total_params": 28032,
+ "total_env_steps": 640000,
+ "wall_s": 2044.6,
+ "best_mjx": 5048.6494140625,
+ "history": [
+  {
+   "iter": 500,
+   "env_steps": 32000,
+   "mjx_return": 16.05185317993164,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 83.8
+  },
+  {
+   "iter": 1000,
+   "env_steps": 64000,
+   "mjx_return": 105.33522033691406,
+   "row_coverage": 0.9873046875,
+   "alpha": 0.061166416853666306,
+   "elapsed_s": 206.9
+  },
+  {
+   "iter": 1500,
+   "env_steps": 96000,
+   "mjx_return": 264.02923583984375,
+   "row_coverage": 0.9990234375,
+   "alpha": 0.05239812657237053,
+   "elapsed_s": 310.6
+  },
+  {
+   "iter": 2000,
+   "env_steps": 128000,
+   "mjx_return": 340.684326171875,
+   "row_coverage": 1.0,
+   "alpha": 0.04320979490876198,
+   "elapsed_s": 413.5
+  },
+  {
+   "iter": 2500,
+   "env_steps": 160000,
+   "mjx_return": 987.3375854492188,
+   "row_coverage": 1.0,
+   "alpha": 0.0459882952272892,
+   "elapsed_s": 513.5
+  },
+  {
+   "iter": 3000,
+   "env_steps": 192000,
+   "mjx_return": 602.4542236328125,
+   "row_coverage": 1.0,
+   "alpha": 0.0456940233707428,
+   "elapsed_s": 615.6
+  },
+  {
+   "iter": 3500,
+   "env_steps": 224000,
+   "mjx_return": 1345.6251220703125,
+   "row_coverage": 1.0,
+   "alpha": 0.05619120970368385,
+   "elapsed_s": 718.7
+  },
+  {
+   "iter": 4000,
+   "env_steps": 256000,
+   "mjx_return": 1760.9486083984375,
+   "row_coverage": 1.0,
+   "alpha": 0.06095040962100029,
+   "elapsed_s": 820.1
+  },
+  {
+   "iter": 4500,
+   "env_steps": 288000,
+   "mjx_return": 2648.80908203125,
+   "row_coverage": 1.0,
+   "alpha": 0.06708642095327377,
+   "elapsed_s": 921.8
+  },
+  {
+   "iter": 5000,
+   "env_steps": 320000,
+   "mjx_return": 4042.69482421875,
+   "row_coverage": 1.0,
+   "alpha": 0.07230096310377121,
+   "elapsed_s": 1025.1
+  },
+  {
+   "iter": 5500,
+   "env_steps": 352000,
+   "mjx_return": 3225.510498046875,
+   "row_coverage": 1.0,
+   "alpha": 0.07547430694103241,
+   "elapsed_s": 1127.6
+  },
+  {
+   "iter": 6000,
+   "env_steps": 384000,
+   "mjx_return": 4231.39111328125,
+   "row_coverage": 1.0,
+   "alpha": 0.07214607298374176,
+   "elapsed_s": 1230.3
+  },
+  {
+   "iter": 6500,
+   "env_steps": 416000,
+   "mjx_return": 4532.5908203125,
+   "row_coverage": 1.0,
+   "alpha": 0.0744980052113533,
+   "elapsed_s": 1332.8
+  },
+  {
+   "iter": 7000,
+   "env_steps": 448000,
+   "mjx_return": 3562.918701171875,
+   "row_coverage": 1.0,
+   "alpha": 0.07458643615245819,
+   "elapsed_s": 1434.5
+  },
+  {
+   "iter": 7500,
+   "env_steps": 480000,
+   "mjx_return": 4189.91845703125,
+   "row_coverage": 1.0,
+   "alpha": 0.07604838162660599,
+   "elapsed_s": 1537.1
+  },
+  {
+   "iter": 8000,
+   "env_steps": 512000,
+   "mjx_return": 3918.0546875,
+   "row_coverage": 1.0,
+   "alpha": 0.07804317772388458,
+   "elapsed_s": 1640.0
+  },
+  {
+   "iter": 8500,
+   "env_steps": 544000,
+   "mjx_return": 4780.83642578125,
+   "row_coverage": 1.0,
+   "alpha": 0.0795946791768074,
+   "elapsed_s": 1742.5
+  },
+  {
+   "iter": 9000,
+   "env_steps": 576000,
+   "mjx_return": 4616.7685546875,
+   "row_coverage": 1.0,
+   "alpha": 0.0798264816403389,
+   "elapsed_s": 1845.0
+  },
+  {
+   "iter": 9500,
+   "env_steps": 608000,
+   "mjx_return": 5048.6494140625,
+   "row_coverage": 1.0,
+   "alpha": 0.07946185767650604,
+   "elapsed_s": 1949.2
+  },
+  {
+   "iter": 10000,
+   "env_steps": 640000,
+   "mjx_return": 5033.34375,
+   "row_coverage": 1.0,
+   "alpha": 0.08026258647441864,
+   "elapsed_s": 2044.6
+  }
+ ]
+}

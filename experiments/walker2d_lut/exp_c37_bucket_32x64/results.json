@@ -1,0 +1,88 @@
+{
+ "seeds": {
+  "0": 1758.777926445032,
+  "1": 1842.2287727518392,
+  "2": 3992.3279118061964
+ },
+ "mean": 2531.1115370010225,
+ "sd": 1266.1382157712528,
+ "n": 3,
+ "actor_params": 28992,
+ "frontend_params": 4416,
+ "table_params": 24576,
+ "baseline_total": 28032,
+ "baseline_front": 3456,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -1776.8884629989775,
+   "welch_se": 758.9808926967819
+  },
+  {
+   "name": "exp_c32b bucket 16x32",
+   "mean": 2041.2,
+   "sd": 1230.1,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 489.91153700102245,
+   "welch_se": 1019.1911811883663
+  },
+  {
+   "name": "exp_c33 bucket 64x32",
+   "mean": 1536.2,
+   "sd": 1416.8,
+   "n": 3,
+   "params": 27808,
+   "front_end": 3232,
+   "delta": 994.9115370010225,
+   "welch_se": 1097.0305710471962
+  },
+  {
+   "name": "exp_c36 bucket 16x128",
+   "mean": 4246.1,
+   "sd": 298.4,
+   "n": 3,
+   "params": 31360,
+   "front_end": 6784,
+   "delta": -1714.9884629989779,
+   "welch_se": 751.0322987809094
+  },
+  {
+   "name": "exp_c32 BROKEN bucket (free-signed w)",
+   "mean": 1174.4,
+   "sd": 517.2,
+   "n": 3,
+   "params": 7840,
+   "front_end": 1696,
+   "delta": 1356.7115370010224,
+   "welch_se": 789.6416532065693
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": -1555.6884629989777,
+   "welch_se": 928.3647669309753
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": -1400.1884629989777,
+   "welch_se": 805.4538309624811
+  }
+ ]
+}

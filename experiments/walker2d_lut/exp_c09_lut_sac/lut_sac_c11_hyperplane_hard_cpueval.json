@@ -1,0 +1,8 @@
+{
+ "actor": "lut_sac_c11_hyperplane_hard_actor.npz",
+ "params": 28032,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 5146.908851312515,
+ "cpu_reference_std": 28.150716537357123
+}

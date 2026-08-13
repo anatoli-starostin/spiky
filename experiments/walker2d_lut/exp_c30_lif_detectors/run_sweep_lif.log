@@ -1,0 +1,13 @@
+LIF-SAC 3-seed sweep starting 2026-08-03T03:12:53Z
+XLA_FLAGS=--xla_gpu_deterministic_ops=true  CUBLAS_WORKSPACE_CONFIG=:4096:8
+=== launch seed=0  2026-08-03T03:12:53Z ===
+=== launch seed=1  2026-08-03T03:13:18Z ===
+=== launch seed=2  2026-08-03T03:13:43Z ===
+ALL 3 LIF RUNS DONE 2026-08-03T04:00:23Z
+lif_sac_c30_s0_actor.npz (87,361 params = 62,785 detectors + 24,576 table) [hard] nap6/tph32 eps=0.30000001192092896
+  CPU-reference 100-ep deterministic: 3268.8 +/- 958.8  full 57/100  vel 2.903 m/s  len 834  [15s]
+lif_sac_c30_s1_actor.npz (87,361 params = 62,785 detectors + 24,576 table) [hard] nap6/tph32 eps=0.30000001192092896
+  CPU-reference 100-ep deterministic: 4381.2 +/- 697.5  full 97/100  vel 3.467 m/s  len 974  [8s]
+lif_sac_c30_s2_actor.npz (87,361 params = 62,785 detectors + 24,576 table) [hard] nap6/tph32 eps=0.30000001192092896
+  CPU-reference 100-ep deterministic: 4143.8 +/- 1173.3  full 66/100  vel 3.724 m/s  len 868  [13s]
+LIF EVALS DONE 2026-08-03T04:01:02Z

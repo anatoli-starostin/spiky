@@ -1,0 +1,100 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+=== exp_c31 seed 0 — parameter teardown ===
+states: 4,096 sampled from 23,704 visited by the deployed policy (24 episodes)
+
+--- TABLE (32 tables x 64 rows x 12 outputs = 24,576) ---
+  init   std 0.1008  range [-0.466, +0.371]
+  final  std 0.1833  range [-2.169, +1.639]
+  |delta| mean 0.1149  max 2.072
+    entries moved > 0.01 :  71.8%
+    entries moved > 0.1  :  38.8%
+    entries moved > 0.5  :   2.8%
+  mu half   (6 outputs): std 0.2277 range [-2.169, +1.639]
+  sigma half(6 outputs): std 0.1238 range [-0.466, +0.994]  (init biased -1/32 = -0.031)
+  |sum of mu over tables| would saturate tanh (>2.0) for 12.8% of (row, action) pairs
+
+--- ADDRESSING, on states the deployed policy actually visits ---
+  rows reached: 31.3% of 2,048  (training-cumulative coverage was 78.4%)
+  distinct rows per table: min 7 median 20 max 58 of 64
+  address entropy per table: mean 2.72 bits of a possible 6.00
+  most-used row's share: mean 38.2%  (median 34.6%)
+  bits set: 39.2%  (training log said 39.3%)
+  per-bit-position occupancy: 35%, 44%, 35%, 45%, 41%, 36%
+  detectors never firing: 36 of 192;  always firing: 0
+
+--- DELAY (192 detectors x 17 channels), init ALL ZERO ---
+  final  mean -0.0001  std 0.8251  range [-3.874, +4.353]
+  latency spread of the inputs themselves: t = clip(16 - 3x, 0, 32), std over visited states 2.597
+  pairwise arrival orders flipped vs delay=0: 8.3% of 136 pairs
+  detectors whose full sort order is UNCHANGED from delay=0: 0.4%
+  pushed EARLIEST (most negative mean delay):
+      L leg ang      -0.412
+      z height       -0.251
+      R foot ang     -0.198
+      R leg vel      -0.188
+  pushed LATEST:
+      vx             +1.268
+      torso ang      +0.516
+      torso angvel   +0.216
+      R thigh vel    +0.090
+
+--- w (192 x 17 synaptic drive), init 0.2*randn ---
+  init  std 0.1993   final std 0.6473  (3.25x)
+  range [-4.092, +4.318]   |delta| mean 0.4327
+  channels by mean |w| (the drive the detectors key off):
+      vx             1.1771   (init 0.1593)
+      torso ang      0.8236   (init 0.1421)
+      R thigh ang    0.4737   (init 0.1517)
+      vz             0.4422   (init 0.1596)
+      L thigh ang    0.3970   (init 0.1568)
+      z height       0.3778   (init 0.1744)
+    ... weakest: L leg vel 0.273, L foot vel 0.236, R foot vel 0.235
+
+--- DEADLINE L (192), init 16.000 = 0.5*t_window ---
+  final mean 16.288  std 0.513  range [15.430, 17.881]
+  moved |delta| mean 0.437  max 1.881
+  fraction of first-spike times BELOW the deadline (= bit set): 39.2%
+  t_hard: 46.1% of detector/state pairs never fire (t = t_window)
+
+--- PER-LUT time constants (32 each) ---
+  tau      init 1.3143 -> final mean 4.8795 [2.002, 9.725]
+  T_cross  init 1.0000 -> final mean 0.4490 [0.2877, 0.6641]
+  temp_bit init 1.0000 -> final mean 0.003987 [0.001972, 0.005841]   (251x sharper)
+
+--- DOES EACH CHANNEL REACH THE DECISION? ---
+  53.9% of (state, detector) pairs fire at all
+  % of FIRING pairs where the channel arrives at or before the spike:
+      L leg ang       96.8%   (mean |w| 0.363)
+      torso ang       65.9%   (mean |w| 0.824)
+      L foot ang      53.1%   (mean |w| 0.304)
+      L thigh ang     50.4%   (mean |w| 0.397)
+      R leg ang       49.5%   (mean |w| 0.323)
+      R thigh ang     47.6%   (mean |w| 0.474)
+      vz              43.0%   (mean |w| 0.442)
+      L foot vel      42.8%   (mean |w| 0.236)
+      R foot vel      40.1%   (mean |w| 0.235)
+      R foot ang      38.8%   (mean |w| 0.321)
+      R leg vel       37.8%   (mean |w| 0.281)
+      L thigh vel     37.1%   (mean |w| 0.314)
+      R thigh vel     35.9%   (mean |w| 0.377)
+      torso angvel    35.8%   (mean |w| 0.361)
+      L leg vel       32.9%   (mean |w| 0.273)
+      z height        30.5%   (mean |w| 0.378)
+      vx              10.1%   (mean |w| 1.177)
+  --> vx: largest |w| in the bank (1.177) but reaches the decision in only 10.1% of firing pairs (mean 44.0%).
+      vx mean arrival 19.77 vs mean spike time 15.12, deadline 16.29. Its weight is largely INERT in the deployed hard readout.
+
+--- SPECIALISATION ---
+  bit toggle rate per step: mean 15.80%  max 38.97%
+  detectors constant across ALL sampled states: 36 of 192 (19%)
+  of the 156 live detectors, mean occupancy 48.3%
+  channel each live detector correlates with most:
+      torso ang       27 detectors  (mean |r| 0.60)
+      L foot ang      19 detectors  (mean |r| 0.46)
+      L leg ang       12 detectors  (mean |r| 0.73)
+      R leg ang       12 detectors  (mean |r| 0.58)
+      vz              10 detectors  (mean |r| 0.50)
+      L foot vel      10 detectors  (mean |r| 0.52)
+
+wrote analysis_seed0.npz

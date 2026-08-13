@@ -1,0 +1,125 @@
+patched (scratch, /tmp only): +table_init_std on /tmp/mhl_ref_c44/spiky/lutorch/lif_multi_head_lut.py
+staged origin/exp/lif-detectors-mhl:src/spiky/lutorch/lif_multi_head_lut.py (24c0e60a) -> /tmp/mhl_ref_c44  (218 lines)
+--- torch reference (spiky venv, CPU, eager) ---
+torch 2.9.1+cu130  batch 24
+run   cfg {'input_dim': 17, 'n_heads': 1, 'n_outputs': 12, 'tables_per_head': 64, 'n_det': 1, 'n_buckets': 32}  freeze_temperature=True  delay_init_std=4  boundary_offset=0.0 table_init_std=0.0125
+  [run] train(ST) vs eval(hard) forward: max|diff| 3.725e-08 (no-grad 3.725e-08)
+          partition sums to 1: max|Sum g - 1| = 1.192e-07   cells used 15/32   boundaries increasing: True
+/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c44_64tab_32bkt/torch_ref_dump.py:164: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  f"eff w in [{float(m.w.min()):.3f}, {float(m.w.max()):.3f}]   "
+          table grad scatter: 500 of 2048 cells touched, 1548 EXACTLY 0.0 (cap 1536)   NO-SPIKE mass 0.203   eff w in [0.051, 0.833]   tau mean 2.313
+          trainable params with gradient: 6/6
+perturbed cfg {'input_dim': 17, 'n_heads': 1, 'n_outputs': 12, 'tables_per_head': 64, 'n_det': 1, 'n_buckets': 32}  freeze_temperature=False
+  [perturbed] train(ST) vs eval(hard) forward: max|diff| 4.768e-07 (no-grad 4.768e-07)
+          partition sums to 1: max|Sum g - 1| = 1.192e-07   cells used 22/32   boundaries increasing: True
+          table grad scatter: 502 of 2048 cells touched, 1546 EXACTLY 0.0 (cap 1536)   NO-SPIKE mass 0.023   eff w in [0.005, 1.427]   tau mean 2.089
+          trainable params with gradient: 8/8
+alt   cfg {'input_dim': 17, 'n_heads': 2, 'n_outputs': 12, 'tables_per_head': 3, 'n_det': 6, 'n_buckets': 2}  freeze_temperature=False
+  [alt] train(ST) vs eval(hard) forward: max|diff| 5.960e-08 (no-grad 5.960e-08)
+          partition sums to 1: max|Sum g - 1| = 0.000e+00   cells used 40/64   boundaries increasing: n/a (M=2)
+          table grad scatter: 58 of 384 cells touched, 326 EXACTLY 0.0 (cap 144)   NO-SPIKE mass 0.021   eff w in [0.008, 1.774]   tau mean 2.035
+          trainable params with gradient: 8/8
+
+  shipped config params: 28,992 total, 28,864 trainable
+    delay 1,088, w_raw 1,088, tau_raw 64, beta_base 64, beta_raw 1,984, log_T_cross 64, log_T_bkt 64, table 24,576
+    vs the 28,032 hyperplane baseline: 103.4% (trainable 103.0%)
+torch reference written to /tmp/mhl_ref_c44/torch_reference.npz
+--- JAX port (mjx venv, CPU) ---
+torch reports 28,992 params for the shipped config (28,864 trainable)
+
+--- case: run  (heads=1 tph=64 n_det=1 n_buckets=32 -> 64 tables x 32 cells, FROZEN temps) ---
+  PASS  run: radix is trivial at n_det=1             radix [np.int32(1)]
+  PASS  run: cell index == the single bucket digit   0 of 1536 differ
+  PASS  run: all 31 boundaries strictly increasing   min gap 1.00000 over 64x31 = 1984 gaps
+  PASS  run: torch table drawn at the reduced std    mu-half std 0.01247 vs requested 0.01250 (stock would be 0.1)
+  PASS  run: jax table_init_std scales the draw      std ratio 0.1250 vs requested 0.1250
+  PASS  run: summed mu-head output std ~0.1 (fan-in corrected) sum over 64 tables gives std 0.1052 (stock 0.1 would give 0.800)
+  PASS  run: radix (MSB-first)                       [np.int32(1)]
+  PASS  run: boundaries                              rel 0.000e+00
+  PASS  run: t_hard                                  rel 0.000e+00
+  PASS  run: t_soft                                  rel 2.036e-07
+  PASS  run: soft partition g                        rel 4.172e-07
+  PASS  run: bucket digits EXACT                     0 of 1536 differ
+  PASS  run: mixed-radix cell index EXACT            0 of 1536 differ; 15/32 cells used
+  PASS  run: y_hard_read (ST value half)             rel 0.000e+00
+  PASS  run: y_addr (ST gradient half)               rel 1.770e-08
+  PASS  run: forward train (torch m.train())         rel 5.960e-08
+  PASS  run: forward eval  (torch m.eval())          rel 5.215e-08
+  PASS  run: train == eval (jax side)                max|diff| 2.980e-08
+  PASS  run: no 'soft' forward mode exists           mode='soft' rejected — the reference has no soft forward
+  PASS  run: partition sums to 1 (per detector)      max|Sum g - 1| 1.192e-07
+  PASS  run: boundaries strictly increasing          min gap 1.0000
+  PASS  run: grad beta_base                          rel 9.313e-08
+  PASS  run: grad beta_raw                           rel 6.054e-08
+  PASS  run: grad delay                              rel 1.618e-08
+  PASS  run: grad log_T_bkt FROZEN -> 0              unmasked |grad|max 2.027e-01 (nonzero => freeze is real, not a dead path)
+  PASS  run: grad log_T_bkt                          rel 0.000e+00
+  PASS  run: grad log_T_cross FROZEN -> 0            unmasked |grad|max 1.026e-01 (nonzero => freeze is real, not a dead path)
+  PASS  run: grad log_T_cross                        rel 0.000e+00
+  PASS  run: grad table                              rel 0.000e+00
+  PASS  run: grad tau_raw                            rel 2.247e-08
+  PASS  run: grad w_raw                              rel 1.397e-08
+  PASS  run: table grad is a hard scatter            500 of 2048 cells touched (cap 1536), 1548 EXACTLY 0.0
+  PASS  run: table touched-count matches torch       jax 500 vs torch 500
+  PASS  run: no dead trainable parameter             all 6 receive gradient
+  PASS  run: frozen temps pinned at T=1.0            log_T_cross = log_T_bkt = 0.0 exactly
+  PASS  run: torch reports requires_grad=False       both temperatures non-trainable in the reference
+
+--- case: perturbed  (heads=1 tph=64 n_det=1 n_buckets=32 -> 64 tables x 32 cells, trainable temps) ---
+  PASS  perturbed: radix (MSB-first)                 [np.int32(1)]
+  PASS  perturbed: boundaries                        rel 2.064e-07
+  PASS  perturbed: t_hard                            rel 0.000e+00
+  PASS  perturbed: t_soft                            rel 1.773e-07
+  PASS  perturbed: soft partition g                  rel 1.311e-06
+  PASS  perturbed: bucket digits EXACT               0 of 1536 differ
+  PASS  perturbed: mixed-radix cell index EXACT      0 of 1536 differ; 22/32 cells used
+  PASS  perturbed: y_hard_read (ST value half)       rel 0.000e+00
+  PASS  perturbed: y_addr (ST gradient half)         rel 8.792e-07
+  PASS  perturbed: forward train (torch m.train())   rel 1.046e-07
+  PASS  perturbed: forward eval  (torch m.eval())    rel 1.308e-07
+  PASS  perturbed: train == eval (jax side)          max|diff| 3.576e-07
+  PASS  perturbed: no 'soft' forward mode exists     mode='soft' rejected — the reference has no soft forward
+  PASS  perturbed: partition sums to 1 (per detector) max|Sum g - 1| 1.192e-07
+  PASS  perturbed: boundaries strictly increasing    min gap 0.4595
+  PASS  perturbed: grad beta_base                    rel 1.602e-06
+  PASS  perturbed: grad beta_raw                     rel 1.720e-06
+  PASS  perturbed: grad delay                        rel 7.749e-07
+  PASS  perturbed: grad log_T_bkt                    rel 2.203e-06
+  PASS  perturbed: grad log_T_cross                  rel 1.864e-06
+  PASS  perturbed: grad table                        rel 0.000e+00
+  PASS  perturbed: grad tau_raw                      rel 9.127e-07
+  PASS  perturbed: grad w_raw                        rel 1.286e-06
+  PASS  perturbed: table grad is a hard scatter      502 of 2048 cells touched (cap 1536), 1546 EXACTLY 0.0
+  PASS  perturbed: table touched-count matches torch jax 502 vs torch 502
+  PASS  perturbed: no dead trainable parameter       all 8 receive gradient
+
+--- case: alt  (heads=2 tph=3 n_det=6 n_buckets=2 -> 6 tables x 64 cells, trainable temps) ---
+  PASS  alt: radix (MSB-first)                       [np.int32(32), np.int32(16), np.int32(8), np.int32(4), np.int32(2), np.int32(1)]
+  PASS  alt: boundaries                              rel 0.000e+00
+  PASS  alt: t_hard                                  rel 0.000e+00
+  PASS  alt: t_soft                                  rel 2.430e-07
+  PASS  alt: soft partition g                        rel 5.960e-07
+  PASS  alt: bucket digits EXACT                     0 of 864 differ
+  PASS  alt: mixed-radix cell index EXACT            0 of 144 differ; 40/64 cells used
+  PASS  alt: y_hard_read (ST value half)             rel 0.000e+00
+  PASS  alt: y_addr (ST gradient half)               rel 2.272e-07
+  PASS  alt: forward train (torch m.train())         rel 4.983e-08
+  PASS  alt: forward eval  (torch m.eval())          rel 0.000e+00
+  PASS  alt: train == eval (jax side)                max|diff| 5.960e-08
+  PASS  alt: no 'soft' forward mode exists           mode='soft' rejected — the reference has no soft forward
+  PASS  alt: partition sums to 1 (per detector)      max|Sum g - 1| 0.000e+00
+  ----  alt: boundaries strictly increasing         n/a — one boundary per detector at M=2
+  PASS  alt: grad beta_base                          rel 8.121e-07
+  PASS  alt: grad beta_raw                           rel 8.196e-07
+  PASS  alt: grad delay                              rel 1.565e-07
+  PASS  alt: grad log_T_bkt                          rel 1.126e-06
+  PASS  alt: grad log_T_cross                        rel 2.682e-07
+  PASS  alt: grad table                              rel 0.000e+00
+  PASS  alt: grad tau_raw                            rel 1.245e-07
+  PASS  alt: grad w_raw                              rel 1.490e-07
+  PASS  alt: table grad is a hard scatter            58 of 384 cells touched (cap 144), 326 EXACTLY 0.0
+  PASS  alt: table touched-count matches torch       jax 58 vs torch 58
+  PASS  alt: no dead trainable parameter             all 8 receive gradient
+
+PARITY OK — 87 checks over 3 cases, all within 2e-05 relative

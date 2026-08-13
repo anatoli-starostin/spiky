@@ -1,0 +1,25 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+LUT-SAC actor nap=6 tph=32 heads=1 seed=4 addressing=hyperplane/anchor_pairs(canonical_full_coverage) | 12 outputs/cell (6 mu + 6 log-sigma) | table 24,576 + addressing 3,456 = 28,032 params | rows 32x64 = 2,048
+  output quantization: K = 5 levels/joint on [-1, 1], straight-through, applied to env step AND critic input
+[  500/10000] steps    32,000 | MJX ret      4.2 | row-cov   0.0% | best      4.2 |   1.9m
+[ 1000/10000] steps    64,000 | MJX ret    202.9 | row-cov  96.9% | best    202.9 |   4.6m
+[ 1500/10000] steps    96,000 | MJX ret    266.1 | row-cov  99.5% | best    266.1 |   6.9m
+[ 2000/10000] steps   128,000 | MJX ret    676.6 | row-cov  99.9% | best    676.6 |   9.4m
+[ 2500/10000] steps   160,000 | MJX ret    621.2 | row-cov  99.9% | best    676.6 |  11.6m
+[ 3000/10000] steps   192,000 | MJX ret   1115.9 | row-cov 100.0% | best   1115.9 |  13.8m
+[ 3500/10000] steps   224,000 | MJX ret   2314.3 | row-cov 100.0% | best   2314.3 |  15.9m
+[ 4000/10000] steps   256,000 | MJX ret   1949.0 | row-cov 100.0% | best   2314.3 |  18.0m
+[ 4500/10000] steps   288,000 | MJX ret   1998.5 | row-cov 100.0% | best   2314.3 |  20.0m
+[ 5000/10000] steps   320,000 | MJX ret   1650.7 | row-cov 100.0% | best   2314.3 |  22.1m
+[ 5500/10000] steps   352,000 | MJX ret   2915.8 | row-cov 100.0% | best   2915.8 |  24.1m
+[ 6000/10000] steps   384,000 | MJX ret   3584.5 | row-cov 100.0% | best   3584.5 |  26.2m
+[ 6500/10000] steps   416,000 | MJX ret   3558.9 | row-cov 100.0% | best   3584.5 |  28.2m
+[ 7000/10000] steps   448,000 | MJX ret   3776.2 | row-cov 100.0% | best   3776.2 |  30.2m
+[ 7500/10000] steps   480,000 | MJX ret   3759.7 | row-cov 100.0% | best   3776.2 |  32.1m
+[ 8000/10000] steps   512,000 | MJX ret   3763.9 | row-cov 100.0% | best   3776.2 |  34.1m
+[ 8500/10000] steps   544,000 | MJX ret   3793.0 | row-cov 100.0% | best   3793.0 |  36.1m
+[ 9000/10000] steps   576,000 | MJX ret   3721.3 | row-cov 100.0% | best   3793.0 |  38.0m
+[ 9500/10000] steps   608,000 | MJX ret   3672.5 | row-cov 100.0% | best   3793.0 |  40.0m
+[10000/10000] steps   640,000 | MJX ret   3754.1 | row-cov 100.0% | best   3793.0 |  41.7m
+done: best MJX 3793.0 over 640,000 env-steps in 41.7 min

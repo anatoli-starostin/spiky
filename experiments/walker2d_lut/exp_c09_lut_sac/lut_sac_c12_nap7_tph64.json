@@ -1,0 +1,195 @@
+{
+ "config": {
+  "iters": 10000,
+  "envs": 64,
+  "rollout": 1,
+  "updates": 32,
+  "batch": 512,
+  "buffer": 1000000,
+  "warmup": 500,
+  "lr": 0.0003,
+  "actor_lr": 0.0003,
+  "gamma": 0.99,
+  "tau": 0.005,
+  "nap": 7,
+  "tph": 64,
+  "heads": 1,
+  "target_entropy": -6.0,
+  "row_clip": 1.0,
+  "coverage_bonus": 0.0,
+  "eval_every": 500,
+  "eval_episodes": 20,
+  "addressing": "anchors",
+  "forward_mode": "hard",
+  "tag": "_c12_nap7_tph64",
+  "out": null
+ },
+ "table_params": 98304,
+ "index_params": 8064,
+ "total_params": 106368,
+ "total_env_steps": 640000,
+ "wall_s": 2142.2,
+ "best_mjx": 4768.8681640625,
+ "history": [
+  {
+   "iter": 500,
+   "env_steps": 32000,
+   "mjx_return": 2.9422662258148193,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 75.8
+  },
+  {
+   "iter": 1000,
+   "env_steps": 64000,
+   "mjx_return": 280.65948486328125,
+   "row_coverage": 0.8409423828125,
+   "alpha": 0.062287334352731705,
+   "elapsed_s": 205.5
+  },
+  {
+   "iter": 1500,
+   "env_steps": 96000,
+   "mjx_return": 192.9154815673828,
+   "row_coverage": 0.8974609375,
+   "alpha": 0.05802173167467117,
+   "elapsed_s": 314.4
+  },
+  {
+   "iter": 2000,
+   "env_steps": 128000,
+   "mjx_return": 452.58514404296875,
+   "row_coverage": 0.914306640625,
+   "alpha": 0.05520017817616463,
+   "elapsed_s": 422.1
+  },
+  {
+   "iter": 2500,
+   "env_steps": 160000,
+   "mjx_return": 768.7688598632812,
+   "row_coverage": 0.96826171875,
+   "alpha": 0.05487494170665741,
+   "elapsed_s": 530.2
+  },
+  {
+   "iter": 3000,
+   "env_steps": 192000,
+   "mjx_return": 1791.134033203125,
+   "row_coverage": 0.9793701171875,
+   "alpha": 0.06296699494123459,
+   "elapsed_s": 637.4
+  },
+  {
+   "iter": 3500,
+   "env_steps": 224000,
+   "mjx_return": 1714.2802734375,
+   "row_coverage": 0.9818115234375,
+   "alpha": 0.06866912543773651,
+   "elapsed_s": 744.8
+  },
+  {
+   "iter": 4000,
+   "env_steps": 256000,
+   "mjx_return": 2979.948974609375,
+   "row_coverage": 0.986083984375,
+   "alpha": 0.0745333731174469,
+   "elapsed_s": 850.6
+  },
+  {
+   "iter": 4500,
+   "env_steps": 288000,
+   "mjx_return": 4055.15673828125,
+   "row_coverage": 0.9896240234375,
+   "alpha": 0.08420197665691376,
+   "elapsed_s": 957.6
+  },
+  {
+   "iter": 5000,
+   "env_steps": 320000,
+   "mjx_return": 4442.251953125,
+   "row_coverage": 0.989990234375,
+   "alpha": 0.08451718091964722,
+   "elapsed_s": 1064.3
+  },
+  {
+   "iter": 5500,
+   "env_steps": 352000,
+   "mjx_return": 4567.8154296875,
+   "row_coverage": 0.9901123046875,
+   "alpha": 0.08321753889322281,
+   "elapsed_s": 1169.8
+  },
+  {
+   "iter": 6000,
+   "env_steps": 384000,
+   "mjx_return": 4756.62548828125,
+   "row_coverage": 0.990234375,
+   "alpha": 0.08107087016105652,
+   "elapsed_s": 1276.3
+  },
+  {
+   "iter": 6500,
+   "env_steps": 416000,
+   "mjx_return": 4461.94140625,
+   "row_coverage": 0.990234375,
+   "alpha": 0.08421549201011658,
+   "elapsed_s": 1384.8
+  },
+  {
+   "iter": 7000,
+   "env_steps": 448000,
+   "mjx_return": 4520.3525390625,
+   "row_coverage": 0.990234375,
+   "alpha": 0.08120449632406235,
+   "elapsed_s": 1492.0
+  },
+  {
+   "iter": 7500,
+   "env_steps": 480000,
+   "mjx_return": 4676.93701171875,
+   "row_coverage": 0.9903564453125,
+   "alpha": 0.08233920484781265,
+   "elapsed_s": 1599.5
+  },
+  {
+   "iter": 8000,
+   "env_steps": 512000,
+   "mjx_return": 4684.79443359375,
+   "row_coverage": 0.9903564453125,
+   "alpha": 0.08414442092180252,
+   "elapsed_s": 1709.6
+  },
+  {
+   "iter": 8500,
+   "env_steps": 544000,
+   "mjx_return": 4651.3896484375,
+   "row_coverage": 0.9903564453125,
+   "alpha": 0.08597113192081451,
+   "elapsed_s": 1818.7
+  },
+  {
+   "iter": 9000,
+   "env_steps": 576000,
+   "mjx_return": 4637.53125,
+   "row_coverage": 0.990478515625,
+   "alpha": 0.08600430190563202,
+   "elapsed_s": 1926.2
+  },
+  {
+   "iter": 9500,
+   "env_steps": 608000,
+   "mjx_return": 4714.8212890625,
+   "row_coverage": 0.990478515625,
+   "alpha": 0.08095455169677734,
+   "elapsed_s": 2032.8
+  },
+  {
+   "iter": 10000,
+   "env_steps": 640000,
+   "mjx_return": 4768.8681640625,
+   "row_coverage": 0.9906005859375,
+   "alpha": 0.07958371937274933,
+   "elapsed_s": 2142.2
+  }
+ ]
+}

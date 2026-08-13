@@ -1,0 +1,89 @@
+{
+ "cpu_baseline_env_sps": 14835,
+ "frame_skip": 4,
+ "xml": "/home/astarostin/projects/spiky/.venv/lib/python3.12/site-packages/gymnasium/envs/mujoco/assets/walker2d_v5.xml",
+ "note": "env-steps, not physics steps",
+ "results": [
+  {
+   "iterations": 100,
+   "ls_iterations": 50,
+   "n_envs": 4096,
+   "env_steps_per_sec": 79568.7,
+   "speedup_vs_cpu": 5.36,
+   "gpu_util": 86,
+   "gpu_mem_mb": 3068
+  },
+  {
+   "iterations": 100,
+   "ls_iterations": 50,
+   "n_envs": 16384,
+   "env_steps_per_sec": 183732.7,
+   "speedup_vs_cpu": 12.39,
+   "gpu_util": 92,
+   "gpu_mem_mb": 3836
+  },
+  {
+   "iterations": 100,
+   "ls_iterations": 50,
+   "n_envs": 32768,
+   "env_steps_per_sec": 175496.8,
+   "speedup_vs_cpu": 11.83,
+   "gpu_util": 100,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 10,
+   "ls_iterations": 8,
+   "n_envs": 4096,
+   "env_steps_per_sec": 158802.1,
+   "speedup_vs_cpu": 10.7,
+   "gpu_util": 98,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 10,
+   "ls_iterations": 8,
+   "n_envs": 16384,
+   "env_steps_per_sec": 340190.0,
+   "speedup_vs_cpu": 22.93,
+   "gpu_util": 82,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 10,
+   "ls_iterations": 8,
+   "n_envs": 32768,
+   "env_steps_per_sec": 317702.2,
+   "speedup_vs_cpu": 21.42,
+   "gpu_util": 76,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 4,
+   "ls_iterations": 4,
+   "n_envs": 4096,
+   "env_steps_per_sec": 178350.2,
+   "speedup_vs_cpu": 12.02,
+   "gpu_util": 98,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 4,
+   "ls_iterations": 4,
+   "n_envs": 16384,
+   "env_steps_per_sec": 388124.1,
+   "speedup_vs_cpu": 26.16,
+   "gpu_util": 98,
+   "gpu_mem_mb": 4860
+  },
+  {
+   "iterations": 4,
+   "ls_iterations": 4,
+   "n_envs": 32768,
+   "env_steps_per_sec": 390821.8,
+   "speedup_vs_cpu": 26.34,
+   "gpu_util": 99,
+   "gpu_mem_mb": 4862
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+PureLIF-SAC actor nap=6 tph=32 heads=1 seed=0 | 12 outputs/cell (6 mu + 6 log-sigma) | detectors 6,816 + table 24,576 = 31,392 params (63.9% of the 49,152 LUT baseline) | rows 32x64 = 2,048 | eps INERT (module ignores it); sharpness is trainable T_cross/temp_bit
+[  100/700] steps     6,400 | MJX ret      4.3 | row-cov   0.0% | bits   0.4% | tbit 1.000 | tcr 1.000 | best      4.3 |   1.8m
+[  200/700] steps    12,800 | MJX ret      4.3 | row-cov   0.0% | bits   0.6% | tbit 1.000 | tcr 1.000 | best      4.3 |   2.3m
+[  300/700] steps    19,200 | MJX ret      4.3 | row-cov   0.0% | bits   0.2% | tbit 1.000 | tcr 1.000 | best      4.3 |   2.8m
+[  400/700] steps    25,600 | MJX ret      4.3 | row-cov   0.0% | bits   0.3% | tbit 1.000 | tcr 1.000 | best      4.3 |   3.4m
+[  500/700] steps    32,000 | MJX ret      4.3 | row-cov   0.0% | bits   0.2% | tbit 1.000 | tcr 1.000 | best      4.3 |   3.9m
+[  600/700] steps    38,400 | MJX ret     60.1 | row-cov  61.5% | bits  31.6% | tbit 0.620 | tcr 0.785 | best     60.1 |   6.1m
+[  700/700] steps    44,800 | MJX ret    319.4 | row-cov  72.5% | bits  22.6% | tbit 0.296 | tcr 0.672 | best    319.4 |   8.2m
+done: best MJX 319.4 over 44,800 env-steps in 8.2 min

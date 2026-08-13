@@ -1,0 +1,17 @@
+{
+ "actor": "lif_sac_c30b_s0_actor.npz",
+ "params": 48193,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 3478.095317615632,
+ "cpu_reference_std": 272.8853915893695,
+ "full_length": 97,
+ "velocity": 2.5219442243233123,
+ "length_mean": 988.52,
+ "heads": 1,
+ "tph": 32,
+ "nap": 6,
+ "eval_eps": 0.30000001192092896,
+ "detector_params": 23617,
+ "table_params": 24576
+}

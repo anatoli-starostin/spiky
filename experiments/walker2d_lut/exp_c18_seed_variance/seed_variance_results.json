@@ -1,0 +1,63 @@
+{
+ "seeds": [
+  {
+   "seed": 0,
+   "mean": 4120.608304718486,
+   "std": 143.78324661773044,
+   "mjx_best": 4328.5,
+   "train_row_cov": 100.0
+  },
+  {
+   "seed": 1,
+   "mean": 4017.3172660653318,
+   "std": 857.1275691682453,
+   "mjx_best": 4561.7,
+   "train_row_cov": 100.0
+  },
+  {
+   "seed": 2,
+   "mean": 4369.879828282303,
+   "std": 42.63204727504502,
+   "mjx_best": 4360.1,
+   "train_row_cov": 100.0
+  },
+  {
+   "seed": 3,
+   "mean": 3951.4891525925004,
+   "std": 356.64929995460324,
+   "mjx_best": 4016.0,
+   "train_row_cov": 100.0
+  },
+  {
+   "seed": 4,
+   "mean": 5286.557120404921,
+   "std": 51.280546866102114,
+   "mjx_best": 5519.4,
+   "train_row_cov": 100.0
+  },
+  {
+   "seed": 5,
+   "mean": 4102.068140844218,
+   "std": 32.68908040873653,
+   "mjx_best": 4234.8,
+   "train_row_cov": 100.0
+  }
+ ],
+ "mean": 4307.986635484627,
+ "sd": 500.1046218891684,
+ "min": 3951.4891525925004,
+ "max": 5286.557120404921,
+ "spread": 1335.0679678124206,
+ "argmin_seed": 3,
+ "argmax_seed": 4,
+ "mean_episode_sd": 247.36029838174383,
+ "n_seeds": 6,
+ "notes": [
+  "Each row is now reproducible: determinism was verified in exp_c17 (bit-identical checkpoints), so re-running any seed returns its number exactly. The 500 sd is therefore seed sensitivity, not run noise.",
+  "The spread is LARGE: sd 500 on a mean of 4308 is 12% of the score, and the min-max gap is 1335. Any A/B on this config that moves the mean by less than ~408 at 6 seeds is not measurable. See diag_seeds.py for the why.",
+  "exp_c15 measured this same config at 3 seeds WITHOUT determinism and got 4318.5 +/- 178.0. That sd was contaminated by run noise (exp_c16: 663 at a fixed seed) and should be read as superseded, not as agreeing or disagreeing with this one."
+ ],
+ "c15_mean": 4318.5,
+ "c15_sd": 178.0,
+ "c16_run_sd": 662.6
+}

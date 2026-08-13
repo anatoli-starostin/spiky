@@ -1,0 +1,50 @@
+{
+ "seeds": {
+  "0": 4262.0728822031,
+  "1": 4073.321342667688,
+  "2": 518.1584605408285
+ },
+ "mean": 2951.1842284705385,
+ "sd": 2109.174619721353,
+ "n": 3,
+ "actor_params": 31392,
+ "front_end_params": 6816,
+ "table_params": 24576,
+ "baseline_params": 28032,
+ "param_matched": false,
+ "anchors": [
+  {
+   "name": "exp_c18 hyperplane nap6/tph32",
+   "mean": 4308.0,
+   "sd": 500.1,
+   "n": 6,
+   "params": 28032,
+   "front_end": 3456,
+   "delta": -1356.8157715294615,
+   "welch_se": 1234.729063597451,
+   "front_end_ratio": 1.9722222222222223
+  },
+  {
+   "name": "exp_c30 dense-P LIF",
+   "mean": 3931.3,
+   "sd": 585.8,
+   "n": 3,
+   "params": 87361,
+   "front_end": 62785,
+   "delta": -980.1157715294617,
+   "welch_se": 1263.8274165508403,
+   "front_end_ratio": 0.10856096201321971
+  },
+  {
+   "name": "exp_c30b factorised-P LIF",
+   "mean": 4086.8,
+   "sd": 991.2,
+   "n": 3,
+   "params": 48193,
+   "front_end": 23617,
+   "delta": -1135.6157715294617,
+   "welch_se": 1345.4980510919509,
+   "front_end_ratio": 0.28860566541050936
+  }
+ ]
+}

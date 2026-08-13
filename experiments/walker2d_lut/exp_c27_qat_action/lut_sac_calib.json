@@ -1,0 +1,77 @@
+{
+ "config": {
+  "iters": 1000,
+  "envs": 64,
+  "rollout": 1,
+  "updates": 32,
+  "batch": 512,
+  "buffer": 1000000,
+  "warmup": 500,
+  "lr": 0.0003,
+  "actor_lr": 0.0003,
+  "gamma": 0.99,
+  "tau": 0.005,
+  "nap": 6,
+  "tph": 32,
+  "heads": 1,
+  "target_entropy": -6.0,
+  "row_clip": 1.0,
+  "coverage_bonus": 0.0,
+  "eval_every": 250,
+  "eval_episodes": 5,
+  "addressing": "hyperplane",
+  "seed": 4,
+  "anchor_policy": "balanced",
+  "hyperplane_init": "anchor_pairs",
+  "hyperplane_anchor_policy": "canonical_full_coverage",
+  "forward_mode": "hard",
+  "action_levels": 0,
+  "quant_penalty": 1.0,
+  "penalty_levels": 5,
+  "tag": "_calib",
+  "out": null,
+  "snap_every": 0,
+  "checkpoint_at": "",
+  "freeze_wb_from": null
+ },
+ "table_params": 24576,
+ "index_params": 3456,
+ "total_params": 28032,
+ "total_env_steps": 64000,
+ "wall_s": 378.5,
+ "best_mjx": 349.216552734375,
+ "history": [
+  {
+   "iter": 250,
+   "env_steps": 16000,
+   "mjx_return": 20.365955352783203,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 115.9
+  },
+  {
+   "iter": 500,
+   "env_steps": 32000,
+   "mjx_return": 20.36599349975586,
+   "row_coverage": 0.0,
+   "alpha": null,
+   "elapsed_s": 178.8
+  },
+  {
+   "iter": 750,
+   "env_steps": 48000,
+   "mjx_return": 76.1583023071289,
+   "row_coverage": 0.9072265625,
+   "alpha": 0.08372283726930618,
+   "elapsed_s": 286.7
+  },
+  {
+   "iter": 1000,
+   "env_steps": 64000,
+   "mjx_return": 349.216552734375,
+   "row_coverage": 0.97607421875,
+   "alpha": 0.09028850495815277,
+   "elapsed_s": 378.5
+  }
+ ]
+}

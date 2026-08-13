@@ -1,0 +1,10 @@
+{
+ "params": "ppo_policy_full.msgpack",
+ "episodes": 3,
+ "mean_return": 5564.441035135998,
+ "std_return": 22.432235076921383,
+ "solved": true,
+ "video": "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c02_mjx_scaffold/walker2d_mjx_ppo_cpu_eval.mp4",
+ "video_return": 5581.816590367386,
+ "video_steps": 1000
+}

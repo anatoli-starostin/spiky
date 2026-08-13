@@ -1,0 +1,11 @@
+{
+ "shape": [
+  2048,
+  2,
+  6
+ ],
+ "max_abs_diff": 0.0,
+ "bitwise_identical": true,
+ "sum_order_bound": 7.368746082647704e-06,
+ "verdict": "EXACT"
+}

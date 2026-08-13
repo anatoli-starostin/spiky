@@ -1,0 +1,48 @@
+{
+ "name": "hyperplane_nap6_tph32_h1_sac",
+ "module": "hyperplane",
+ "nap": 6,
+ "tph": 32,
+ "heads": 1,
+ "rows": 64,
+ "forward_mode": "hybrid_smooth",
+ "table_params": 12288,
+ "index_params": 3456,
+ "total_params": 15746,
+ "dataset_pairs": 4000256,
+ "epochs": 6,
+ "final_action_mse": 0.004323449866086642,
+ "heldout_action_mse": 0.003411252750083804,
+ "eval_mean": 5157.212423208279,
+ "eval_std": 627.7110777428079,
+ "teacher_retention_pct": 97.79672361679901,
+ "solved": true,
+ "train_s": 36.5,
+ "history": [
+  {
+   "epoch": 0,
+   "action_mse": 0.011192602974736727
+  },
+  {
+   "epoch": 1,
+   "action_mse": 0.0054154600714310455
+  },
+  {
+   "epoch": 2,
+   "action_mse": 0.004858962178600525
+  },
+  {
+   "epoch": 3,
+   "action_mse": 0.004569033221398923
+  },
+  {
+   "epoch": 4,
+   "action_mse": 0.004400451848432269
+  },
+  {
+   "epoch": 5,
+   "action_mse": 0.004323449866086642
+  }
+ ],
+ "checkpoint": "lut_hyperplane_nap6_tph32_h1_sac.pt"
+}

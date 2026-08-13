@@ -1,0 +1,97 @@
+{
+  "experiment": "exp_c02_mjx_scaffold",
+  "phase": "roadmap step 1b — GPU-parallel simulation + PPO track",
+  "issue": 75,
+  "branch": "walker2d-lut",
+  "implementer": "gpustar (RTX 5090)",
+  "goal": "Batched GPU simulation of Walker2d for fast wall-clock iteration, and to enable the CMA-ES LUT-from-scratch arm (roadmap step 3), whose cost is dominated by rollouts.",
+  "engine": {
+    "choice": "MuJoCo MJX (JAX)",
+    "why": "runs the same MuJoCo model and dynamics as Walker2d-v5 — loads the identical walker2d_v5.xml — so the comparison against the SAC reference stays honest",
+    "brax_rejected_because": [
+      "brax warns on import that it is not actively maintained (points to MJX / mujoco_playground)",
+      "brax's PPO calls the removed jax.device_put_replicated and crashes on jax 0.11"
+    ]
+  },
+  "env": {
+    "id": "MJX Walker2d (mjx_walker2d.py)",
+    "xml": "gymnasium/envs/mujoco/assets/walker2d_v5.xml",
+    "obs_dim": 17,
+    "act_dim": 6,
+    "frame_skip": 4,
+    "dt": 0.008,
+    "reward": "healthy(1.0) + 1.0 * dx/dt - 1e-3 * ||a||^2",
+    "terminate": "z not in [0.8, 2.0] or |torso angle| > 1",
+    "truncate_steps": 1000,
+    "reset_noise": 5e-3
+  },
+  "solver": {
+    "iterations": 10,
+    "ls_iterations": 8,
+    "stock_xml": {"iterations": 100, "ls_iterations": 50},
+    "decision": "10/8 approved 2026-07-28; measured, not assumed",
+    "open_loop_mean_dqpos": {
+      "mjx_100_50_vs_cpu": 0.3399,
+      "mjx_10_8_vs_cpu": 0.3409,
+      "mjx_10_8_vs_mjx_100_50": 0.0319
+    },
+    "closed_loop_return": {
+      "mjx_10_8": [1160.7, 55.4],
+      "mjx_100_50": [1157.9, 50.5],
+      "cpu_reference": [1178.3, 51.5],
+      "transfer_gap_pct": 1.5
+    },
+    "note": "the reduced solver adds +0.3% on top of the MJX-vs-MuJoCo-C engine gap, which exists at any solver setting"
+  },
+  "ppo": {
+    "implementation": "purejaxrl-style, hand-written (ppo_mjx.py) — brax's PPO is unusable on jax 0.11",
+    "num_envs": 4096,
+    "rollout": 32,
+    "batch_per_iter": 131072,
+    "iters": 1526,
+    "total_env_steps": 200015872,
+    "epochs": 4,
+    "minibatches": 8,
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip": 0.2,
+    "entropy_coef": 0.001,
+    "net_arch": [256, 256],
+    "activation": "tanh"
+  },
+  "throughput_env_steps_per_sec": {
+    "cpu_single_env_baseline": 14835,
+    "mjx_10_8_16384_envs": 340190,
+    "mjx_10_8_32768_envs": 317702,
+    "mjx_100_50_16384_envs": 183733,
+    "full_ppo_loop_4096_envs": 130000,
+    "note": "env-steps, NOT physics steps (frame_skip=4). Fusing the 4 frame-skip steps into one jitted lax.scan was worth 3x."
+  },
+  "measured": {
+    "wall_clock_min": 27.4,
+    "end_to_end_env_steps_per_sec": 121686,
+    "cpu_reference_eval_100ep": [5555.5, 34.4],
+    "solved": true,
+    "gpu_mem_gb_at_32768_envs": 4.9
+  },
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090 (sm_120)",
+    "driver": "595.71.05"
+  },
+  "versions": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0 (cuda12 plugin, CUDA 12.9)",
+    "mujoco": "3.10.0",
+    "mujoco-mjx": "3.10.0",
+    "brax": "0.14.2 (installed; PPO unusable)",
+    "flax": "0.12.8",
+    "optax": "0.2.8",
+    "python": "3.12.13"
+  },
+  "env_vars_required": {
+    "XLA_PYTHON_CLIENT_PREALLOCATE": "false — else JAX grabs ~75% of VRAM",
+    "MUJOCO_GL": "glfw — EGL throws EGLError on this box, osmesa not installed"
+  },
+  "status": "COMPLETE — baseline established; ready for the LUT policy arms (roadmap steps 2-3)"
+}

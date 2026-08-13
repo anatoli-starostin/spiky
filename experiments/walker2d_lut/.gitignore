@@ -1,0 +1,70 @@
+# Run artifacts for the walker2d_lut chapter — regenerable, kept out of git.
+# (The repo-wide rule only covers experiments/**/*.pt; SB3 writes .zip and the JAX
+#  side writes .msgpack, so they are named explicitly here.)
+#
+# NOTE: patterns are deliberately UNANCHORED (no leading path segment). A pattern
+# containing a mid-string "/" is anchored to this directory, so "run_seed*/ckpt/"
+# would NOT match exp_c01_sac_baseline/run_seed0/ckpt/ — use "**/" or a bare glob.
+
+# Checkpoints / trained weights
+**/ckpt/
+*.zip
+*.msgpack
+
+# Raw frame dumps, video, and debug contact sheets (figures ARE committed)
+*.npz
+*.mp4
+cam_*.png
+
+# TensorBoard event files
+**/tb/
+
+# Full per-iteration PPO log (482 KB of JSON); the downsampled curve is committed
+ppo_mjx_full.json
+ppo_mjx_108.json
+*.json.partial
+
+# Local scratch
+__pycache__/
+MUJOCO_LOG.TXT
+.slack_*.handle
+
+# exp_c03/c04/c05 artifacts
+obs.npy
+act.npy
+*.npy
+torch_reference.npz
+sweep_partial.json
+
+# exp_c06
+torch_grads.npz
+lut_scratch_params.npz
+ppo_lut_scratch.json
+
+# in-progress artifacts
+*.partial
+
+# Deliberate exception: the four completed 2x2 actor checkpoints (114 KB each,
+# 456 KB total). They are the deliverable artifacts of a finished study and are
+# what any re-evaluation needs without a 30-minute retrain. Everything else stays
+# out -- this is a narrow negation, not a relaxation of the no-checkpoints rule.
+!exp_c09_lut_sac/lut_sac_c11_*_actor.npz
+
+# Second deliberate exception: the single best LUT-SAC policy of the chapter
+# (exp_c21, seed 4 @ 20,000 iters, hyperplane x hard, CPU-reference 5647.5 --
+# the first from-scratch LUT past all three anchors). 114 KB. This is the one
+# deployable artifact worth carrying in git; its @10k sibling, the snapshot
+# trace, and every other c12-c22 actor stay out.
+!exp_c09_lut_sac/lut_sac_c21_seed4_20k_actor.npz
+
+# ...and its 4-bit quantized twin (32 KB): int4 symmetric per-table codes for both
+# the table content and the addressing, CPU-reference 5743.1 = 101.7% of the fp32
+# policy. make_int4.py regenerates it from the actor above, so this negation buys
+# convenience rather than irreplaceability -- but it is the deployable artifact.
+!exp_c09_lut_sac/lut_sac_c21_seed4_20k_int4.npz
+
+# exp_c25's four sweep arms (116 KB each, 464 KB total). Kept because the whole
+# point of that offshoot is a four-way comparison: without all four checkpoints the
+# control cannot be re-scored against the phase arms, and a 40-minute retrain per arm
+# would not reproduce them bit-for-bit anyway. The smoke-test checkpoint stays out.
+!exp_c25_phase_sac/lut_sac_c25_f*_actor.npz

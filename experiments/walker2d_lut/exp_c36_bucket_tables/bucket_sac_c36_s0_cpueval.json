@@ -1,0 +1,17 @@
+{
+ "actor": "bucket_sac_c36_s0_actor.npz",
+ "params": 31360,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4527.779779348928,
+ "cpu_reference_std": 35.347484122061175,
+ "full_length": 100,
+ "velocity": 3.5309698810894603,
+ "length_mean": 1000.0,
+ "heads": 1,
+ "tph": 128,
+ "n_buckets": 16,
+ "eval_eps": 0.30000001192092896,
+ "frontend_params": 6784,
+ "table_params": 24576
+}

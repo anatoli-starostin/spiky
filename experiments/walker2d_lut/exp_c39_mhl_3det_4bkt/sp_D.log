@@ -1,0 +1,30 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+TRANSPLANT: actor init from seed 2, all other randomness from seed 0
+TABLE SPLIT: front-end init from seed 2, TABLE init from seed 0
+MHL-LIF SAC actor heads=1 tph=32 n_det=3 buckets=4 seed=0 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 3,808 + table 24,576 = 28,384 params (101.3% of the 28,032 hyperplane baseline; 28,320 trainable) | cells 32x64 = 2,048 | delay_init_std=4.0 | temperatures FROZEN at 1.0 | no eps
+[  500/10000] steps    32,000 | MJX ret     -8.6 | cell-cov   0.0% | digit 2.637 | nosp 0.578 | eff  5.22/64 | Tbkt 1.000 | Tcr 1.000 | best     -8.6 |   2.9m
+[ 1000/10000] steps    64,000 | MJX ret      4.0 | cell-cov  41.9% | digit 2.536 | nosp 0.536 | eff  2.52/64 | Tbkt 1.000 | Tcr 1.000 | best      4.0 |   5.1m
+[ 1500/10000] steps    96,000 | MJX ret    263.5 | cell-cov  46.7% | digit 2.295 | nosp 0.343 | eff  4.02/64 | Tbkt 1.000 | Tcr 1.000 | best    263.5 |   7.0m
+[ 2000/10000] steps   128,000 | MJX ret    371.3 | cell-cov  49.0% | digit 2.253 | nosp 0.287 | eff  4.15/64 | Tbkt 1.000 | Tcr 1.000 | best    371.3 |   8.7m
+[ 2500/10000] steps   160,000 | MJX ret    338.1 | cell-cov  50.0% | digit 2.156 | nosp 0.236 | eff  4.96/64 | Tbkt 1.000 | Tcr 1.000 | best    371.3 |  10.3m
+[ 3000/10000] steps   192,000 | MJX ret    481.6 | cell-cov  50.8% | digit 2.167 | nosp 0.210 | eff  4.67/64 | Tbkt 1.000 | Tcr 1.000 | best    481.6 |  11.8m
+[ 3500/10000] steps   224,000 | MJX ret    449.3 | cell-cov  52.5% | digit 2.112 | nosp 0.188 | eff  5.25/64 | Tbkt 1.000 | Tcr 1.000 | best    481.6 |  13.3m
+[ 4000/10000] steps   256,000 | MJX ret    628.5 | cell-cov  53.3% | digit 2.180 | nosp 0.194 | eff  4.34/64 | Tbkt 1.000 | Tcr 1.000 | best    628.5 |  14.8m
+[ 4500/10000] steps   288,000 | MJX ret    864.5 | cell-cov  53.4% | digit 2.115 | nosp 0.169 | eff  4.85/64 | Tbkt 1.000 | Tcr 1.000 | best    864.5 |  16.3m
+[ 5000/10000] steps   320,000 | MJX ret    732.0 | cell-cov  53.7% | digit 2.119 | nosp 0.163 | eff  4.49/64 | Tbkt 1.000 | Tcr 1.000 | best    864.5 |  17.8m
+[ 5500/10000] steps   352,000 | MJX ret    573.5 | cell-cov  53.9% | digit 2.152 | nosp 0.155 | eff  5.11/64 | Tbkt 1.000 | Tcr 1.000 | best    864.5 |  19.3m
+[ 6000/10000] steps   384,000 | MJX ret   1102.1 | cell-cov  54.1% | digit 2.160 | nosp 0.148 | eff  4.91/64 | Tbkt 1.000 | Tcr 1.000 | best   1102.1 |  20.8m
+[ 6500/10000] steps   416,000 | MJX ret   1005.1 | cell-cov  54.4% | digit 2.123 | nosp 0.124 | eff  4.43/64 | Tbkt 1.000 | Tcr 1.000 | best   1102.1 |  22.3m
+[ 7000/10000] steps   448,000 | MJX ret   1218.2 | cell-cov  55.1% | digit 2.154 | nosp 0.118 | eff  4.70/64 | Tbkt 1.000 | Tcr 1.000 | best   1218.2 |  23.8m
+[ 7500/10000] steps   480,000 | MJX ret   1579.5 | cell-cov  56.1% | digit 2.095 | nosp 0.092 | eff  4.41/64 | Tbkt 1.000 | Tcr 1.000 | best   1579.5 |  25.3m
+[ 8000/10000] steps   512,000 | MJX ret   1580.0 | cell-cov  57.6% | digit 2.054 | nosp 0.060 | eff  4.93/64 | Tbkt 1.000 | Tcr 1.000 | best   1580.0 |  26.7m
+[ 8500/10000] steps   544,000 | MJX ret   1550.1 | cell-cov  58.4% | digit 2.003 | nosp 0.048 | eff  5.15/64 | Tbkt 1.000 | Tcr 1.000 | best   1580.0 |  28.3m
+[ 9000/10000] steps   576,000 | MJX ret   1866.8 | cell-cov  58.5% | digit 2.046 | nosp 0.046 | eff  5.87/64 | Tbkt 1.000 | Tcr 1.000 | best   1866.8 |  29.8m
+[ 9500/10000] steps   608,000 | MJX ret   1661.1 | cell-cov  58.7% | digit 2.023 | nosp 0.030 | eff  5.84/64 | Tbkt 1.000 | Tcr 1.000 | best   1866.8 |  31.3m
+[10000/10000] steps   640,000 | MJX ret   2010.4 | cell-cov  59.4% | digit 2.008 | nosp 0.030 | eff  6.21/64 | Tbkt 1.000 | Tcr 1.000 | best   2010.4 |  32.4m
+done: best MJX 2010.4 over 640,000 env-steps in 32.4 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+mhl_sac_sp_D_actor.npz (28,384 params = 3,808 front-end + 24,576 table) [eval] 3 det x 4 bkt = 64 cells / tph32
+  CPU-reference 100-ep deterministic: 1867.5 +/- 677.0  full 3/100  vel 2.583 m/s  len 514  [50s]

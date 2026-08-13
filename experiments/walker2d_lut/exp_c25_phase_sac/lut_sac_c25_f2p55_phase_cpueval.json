@@ -1,0 +1,11 @@
+{
+ "actor": "lut_sac_c25_f2p55_actor.npz",
+ "params": 28416,
+ "phase_freq": 2.549999952316284,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 4545.278113431019,
+ "cpu_reference_std": 138.6266562415804,
+ "full_length": 97,
+ "vel_mean": 3.568102616249194
+}

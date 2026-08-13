@@ -1,0 +1,29 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+MHL-LIF SAC actor heads=1 tph=64 n_det=1 buckets=32 seed=1 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 2,400 + table 24,576 = 26,976 params (96.2% of the 28,032 hyperplane baseline; 26,848 trainable) | cells 64x32 = 2,048 | delay_init_std=4.0 table_init_std=0.01250 share_betas=True | temperatures FROZEN at 1.0 | no eps
+[  500/10000] steps    32,000 | MJX ret     27.6 | cell-cov   0.0% | digit 25.506 | nosp 0.487 | eff  5.58/32 | Tbkt 1.000 | Tcr 1.000 | best     27.6 |   2.8m
+[ 1000/10000] steps    64,000 | MJX ret    326.1 | cell-cov  58.9% | digit 30.487 | nosp 0.389 | eff  1.38/32 | Tbkt 1.000 | Tcr 1.000 | best    326.1 |   4.8m
+[ 1500/10000] steps    96,000 | MJX ret    -51.2 | cell-cov  61.1% | digit 30.208 | nosp 0.365 | eff  2.18/32 | Tbkt 1.000 | Tcr 1.000 | best    326.1 |   6.1m
+[ 2000/10000] steps   128,000 | MJX ret    294.9 | cell-cov  62.5% | digit 29.863 | nosp 0.231 | eff  2.82/32 | Tbkt 1.000 | Tcr 1.000 | best    326.1 |   7.6m
+[ 2500/10000] steps   160,000 | MJX ret    355.6 | cell-cov  63.1% | digit 30.008 | nosp 0.157 | eff  2.29/32 | Tbkt 1.000 | Tcr 1.000 | best    355.6 |   9.1m
+[ 3000/10000] steps   192,000 | MJX ret    544.7 | cell-cov  63.3% | digit 29.957 | nosp 0.144 | eff  2.26/32 | Tbkt 1.000 | Tcr 1.000 | best    544.7 |  10.6m
+[ 3500/10000] steps   224,000 | MJX ret    546.2 | cell-cov  64.2% | digit 29.306 | nosp 0.110 | eff  3.52/32 | Tbkt 1.000 | Tcr 1.000 | best    546.2 |  12.0m
+[ 4000/10000] steps   256,000 | MJX ret    491.1 | cell-cov  64.3% | digit 29.391 | nosp 0.089 | eff  3.31/32 | Tbkt 1.000 | Tcr 1.000 | best    546.2 |  13.5m
+[ 4500/10000] steps   288,000 | MJX ret    870.5 | cell-cov  64.9% | digit 28.757 | nosp 0.079 | eff  4.64/32 | Tbkt 1.000 | Tcr 1.000 | best    870.5 |  15.0m
+[ 5000/10000] steps   320,000 | MJX ret    777.9 | cell-cov  65.3% | digit 28.988 | nosp 0.055 | eff  4.22/32 | Tbkt 1.000 | Tcr 1.000 | best    870.5 |  16.4m
+[ 5500/10000] steps   352,000 | MJX ret    829.2 | cell-cov  65.8% | digit 28.708 | nosp 0.059 | eff  5.19/32 | Tbkt 1.000 | Tcr 1.000 | best    870.5 |  17.9m
+[ 6000/10000] steps   384,000 | MJX ret   1047.7 | cell-cov  65.8% | digit 29.127 | nosp 0.057 | eff  4.47/32 | Tbkt 1.000 | Tcr 1.000 | best   1047.7 |  19.3m
+[ 6500/10000] steps   416,000 | MJX ret   1643.3 | cell-cov  65.8% | digit 29.154 | nosp 0.063 | eff  4.31/32 | Tbkt 1.000 | Tcr 1.000 | best   1643.3 |  20.8m
+[ 7000/10000] steps   448,000 | MJX ret   1707.3 | cell-cov  66.0% | digit 29.018 | nosp 0.075 | eff  4.42/32 | Tbkt 1.000 | Tcr 1.000 | best   1707.3 |  22.3m
+[ 7500/10000] steps   480,000 | MJX ret   1020.7 | cell-cov  66.0% | digit 28.689 | nosp 0.049 | eff  4.79/32 | Tbkt 1.000 | Tcr 1.000 | best   1707.3 |  23.7m
+[ 8000/10000] steps   512,000 | MJX ret   1256.6 | cell-cov  66.0% | digit 28.743 | nosp 0.039 | eff  4.65/32 | Tbkt 1.000 | Tcr 1.000 | best   1707.3 |  25.2m
+[ 8500/10000] steps   544,000 | MJX ret   1299.7 | cell-cov  66.0% | digit 28.579 | nosp 0.046 | eff  4.75/32 | Tbkt 1.000 | Tcr 1.000 | best   1707.3 |  26.7m
+[ 9000/10000] steps   576,000 | MJX ret   2557.5 | cell-cov  66.0% | digit 28.392 | nosp 0.046 | eff  4.80/32 | Tbkt 1.000 | Tcr 1.000 | best   2557.5 |  28.1m
+[ 9500/10000] steps   608,000 | MJX ret   1419.0 | cell-cov  66.0% | digit 28.206 | nosp 0.069 | eff  5.05/32 | Tbkt 1.000 | Tcr 1.000 | best   2557.5 |  29.6m
+[10000/10000] steps   640,000 | MJX ret   2173.3 | cell-cov  66.0% | digit 28.164 | nosp 0.054 | eff  4.97/32 | Tbkt 1.000 | Tcr 1.000 | best   2557.5 |  31.0m
+done: best MJX 2557.5 over 640,000 env-steps in 31.0 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+  note: SHARED bucket ladder — one beta_base scalar and one 31-vector broadcast to all 64 tables
+mhl_sac_c45_s1_actor.npz (26,976 params = 2,400 front-end + 24,576 table) [eval] 1 det x 32 bkt = 32 cells / tph64
+  CPU-reference 100-ep deterministic: 2255.7 +/- 1205.9  full 21/100  vel 2.785 m/s  len 576  [41s]

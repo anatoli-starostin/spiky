@@ -1,0 +1,63 @@
+{
+ "cpu_baseline_sps": 14835,
+ "xml": "/home/astarostin/projects/spiky/.venv/lib/python3.12/site-packages/gymnasium/envs/mujoco/assets/walker2d_v5.xml",
+ "device": "NVIDIA GeForce RTX 5090",
+ "results": [
+  {
+   "n_envs": 1,
+   "steps_per_sec": 25.6,
+   "speedup_vs_cpu": 0.0,
+   "compile_s": 8.28,
+   "gpu_util": 88,
+   "gpu_mem_mb": 3094
+  },
+  {
+   "n_envs": 64,
+   "steps_per_sec": 1376.9,
+   "speedup_vs_cpu": 0.09,
+   "compile_s": 9.07,
+   "gpu_util": 91,
+   "gpu_mem_mb": 3094
+  },
+  {
+   "n_envs": 256,
+   "steps_per_sec": 4804.0,
+   "speedup_vs_cpu": 0.32,
+   "compile_s": 10.39,
+   "gpu_util": 92,
+   "gpu_mem_mb": 3094
+  },
+  {
+   "n_envs": 1024,
+   "steps_per_sec": 20241.1,
+   "speedup_vs_cpu": 1.36,
+   "compile_s": 9.37,
+   "gpu_util": 94,
+   "gpu_mem_mb": 3095
+  },
+  {
+   "n_envs": 4096,
+   "steps_per_sec": 69474.2,
+   "speedup_vs_cpu": 4.68,
+   "compile_s": 10.63,
+   "gpu_util": 94,
+   "gpu_mem_mb": 3094
+  },
+  {
+   "n_envs": 8192,
+   "steps_per_sec": 126316.3,
+   "speedup_vs_cpu": 8.51,
+   "compile_s": 11.35,
+   "gpu_util": 96,
+   "gpu_mem_mb": 3466
+  },
+  {
+   "n_envs": 16384,
+   "steps_per_sec": 243447.9,
+   "speedup_vs_cpu": 16.41,
+   "compile_s": 10.93,
+   "gpu_util": 96,
+   "gpu_mem_mb": 3978
+  }
+ ]
+}

@@ -1,0 +1,7 @@
+{
+ "params": 26880,
+ "episodes": 100,
+ "cpu_reference_mean": 4406.935397671061,
+ "cpu_reference_std": 426.7848511568154,
+ "solved": true
+}

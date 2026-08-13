@@ -1,0 +1,53 @@
+{
+ "source": "lut_sac_c21_seed4_20k_actor.npz",
+ "std_dropped": "lut_sac_c21_seed4_20k_meanonly_actor.npz",
+ "action_max_abs_delta": 0.0,
+ "tables_whose_scale_was_set_by_std": 1,
+ "int4_scale_shrink": {
+  "min": 0.9896747469902039,
+  "max": 1.0,
+  "mean": 0.999677300453186
+ },
+ "rows": [
+  {
+   "label": "original (12-col)",
+   "params": 28032,
+   "mean": 5647.482926605437,
+   "sd": 595.1892176260802,
+   "full": 97,
+   "fell": 3,
+   "len_mean": 985.51,
+   "vel": 4.715095200862809
+  },
+  {
+   "label": "std-dropped (6-col)",
+   "params": 15744,
+   "mean": 5647.482926605437,
+   "sd": 595.1892176260802,
+   "full": 97,
+   "fell": 3,
+   "len_mean": 985.51,
+   "vel": 4.715095200862809
+  },
+  {
+   "label": "int4 original (12-col)",
+   "params": 28032,
+   "mean": 5750.029282715554,
+   "sd": 572.724891791215,
+   "full": 97,
+   "fell": 3,
+   "len_mean": 987.28,
+   "vel": 4.807004727161817
+  },
+  {
+   "label": "int4 std-dropped (6-col)",
+   "params": 15744,
+   "mean": 5588.338790854249,
+   "sd": 1067.655557358512,
+   "full": 93,
+   "fell": 7,
+   "len_mean": 961.09,
+   "vel": 4.737487805634856
+  }
+ ]
+}

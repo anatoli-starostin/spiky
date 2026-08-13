@@ -1,0 +1,164 @@
+[
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "mass",
+  "value": 0.7,
+  "mean": 1647.4379250333268,
+  "std": 1503.2610854532895,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "mass",
+  "value": 0.85,
+  "mean": 3381.4177656008087,
+  "std": 1978.8187582093233,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "mass",
+  "value": 1.0,
+  "mean": 4560.132118780899,
+  "std": 1605.2367378913514,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "mass",
+  "value": 1.15,
+  "mean": 800.594741811158,
+  "std": 888.3425259355096,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "mass",
+  "value": 1.3,
+  "mean": 794.5771896374347,
+  "std": 1029.8013293967756,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "gravity",
+  "value": 0.85,
+  "mean": 3222.853058167251,
+  "std": 1289.4049396829125,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "gravity",
+  "value": 1.0,
+  "mean": 4560.132118780899,
+  "std": 1605.2367378913514,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "gravity",
+  "value": 1.15,
+  "mean": 2060.0046413694845,
+  "std": 1771.2579712306128,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "friction",
+  "value": 0.5,
+  "mean": 3003.5830665445146,
+  "std": 1930.6402588255428,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "friction",
+  "value": 0.75,
+  "mean": 4050.7982387822058,
+  "std": 1997.36336284655,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "friction",
+  "value": 1.0,
+  "mean": 4560.132118780899,
+  "std": 1605.2367378913514,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "friction",
+  "value": 1.5,
+  "mean": 5195.507749404451,
+  "std": 62.07775996448096,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "friction",
+  "value": 2.0,
+  "mean": 3780.0125429851014,
+  "std": 1514.2453336128956,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "geometry",
+  "value": 0.9,
+  "mean": 3178.3949211073673,
+  "std": 1525.6218039716775,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "geometry",
+  "value": 0.95,
+  "mean": 4695.723460271917,
+  "std": 1330.501796398577,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "geometry",
+  "value": 1.0,
+  "mean": 4560.132118780899,
+  "std": 1605.2367378913514,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "geometry",
+  "value": 1.05,
+  "mean": 4077.255782887799,
+  "std": 1901.5265694661487,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-SAC-distilled",
+  "axis": "geometry",
+  "value": 1.1,
+  "mean": 1595.4288889095906,
+  "std": 1567.3837832995368,
+  "episodes": 100,
+  "solved": false
+ }
+]

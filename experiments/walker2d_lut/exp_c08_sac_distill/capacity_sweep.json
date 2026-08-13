@@ -1,0 +1,290 @@
+[
+ {
+  "name": "hyperplane_nap4_tph32_h1_sac",
+  "module": "hyperplane",
+  "nap": 4,
+  "tph": 32,
+  "heads": 1,
+  "rows": 16,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 3072,
+  "index_params": 2304,
+  "total_params": 5378,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.006605465077703483,
+  "heldout_action_mse": 0.005161701701581478,
+  "eval_mean": 4512.09019343629,
+  "eval_std": 1603.3384894370192,
+  "teacher_retention_pct": 85.56320767315755,
+  "solved": true,
+  "train_s": 32.3,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.016393252142674487
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.008179825827475546
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.0072446200117797085
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.006861066499144816
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.006680345396534158
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.006605465077703483
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap4_tph32_h1_sac.pt"
+ },
+ {
+  "name": "hyperplane_nap5_tph32_h1_sac",
+  "module": "hyperplane",
+  "nap": 5,
+  "tph": 32,
+  "heads": 1,
+  "rows": 32,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 6144,
+  "index_params": 2880,
+  "total_params": 9026,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.005328341524620525,
+  "heldout_action_mse": 0.004165873397141695,
+  "eval_mean": 4274.619201004383,
+  "eval_std": 1882.2009568816036,
+  "teacher_retention_pct": 81.06002201623969,
+  "solved": true,
+  "train_s": 33.0,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.013200990286499232
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.0065553717598601504
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.005883319774779995
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.005567037429828502
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.005399589176331723
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.005328341524620525
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap5_tph32_h1_sac.pt"
+ },
+ {
+  "name": "hyperplane_nap6_tph32_h1_sac",
+  "module": "hyperplane",
+  "nap": 6,
+  "tph": 32,
+  "heads": 1,
+  "rows": 64,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 12288,
+  "index_params": 3456,
+  "total_params": 15746,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.004323449866086642,
+  "heldout_action_mse": 0.003411252750083804,
+  "eval_mean": 5157.212423208279,
+  "eval_std": 627.7110777428079,
+  "teacher_retention_pct": 97.79672361679901,
+  "solved": true,
+  "train_s": 36.5,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.011192602974736727
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.0054154600714310455
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.004858962178600525
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.004569033221398923
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.004400451848432269
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.004323449866086642
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap6_tph32_h1_sac.pt"
+ },
+ {
+  "name": "hyperplane_nap5_tph64_h1_sac",
+  "module": "hyperplane",
+  "nap": 5,
+  "tph": 64,
+  "heads": 1,
+  "rows": 32,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 12288,
+  "index_params": 5760,
+  "total_params": 18050,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.003566277375374157,
+  "heldout_action_mse": 0.002771232509985566,
+  "eval_mean": 5305.383278809972,
+  "eval_std": 40.67748939971617,
+  "teacher_retention_pct": 100.60650204441106,
+  "solved": true,
+  "train_s": 37.5,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.009764492196378252
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.0046309782087146385
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.004079536638617684
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.00380145864190007
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.003642375986034539
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.003566277375374157
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap5_tph64_h1_sac.pt"
+ },
+ {
+  "name": "hyperplane_nap7_tph32_h1_sac",
+  "module": "hyperplane",
+  "nap": 7,
+  "tph": 32,
+  "heads": 1,
+  "rows": 128,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 24576,
+  "index_params": 4032,
+  "total_params": 28610,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.003529305864444201,
+  "heldout_action_mse": 0.0028047659434378147,
+  "eval_mean": 5248.124910511209,
+  "eval_std": 484.7201649604804,
+  "teacher_retention_pct": 99.52070600582564,
+  "solved": true,
+  "train_s": 38.0,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.009847922505406266
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.004517050099045756
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.004013814791162941
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.0037558555935097277
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.003605660646066039
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.003529305864444201
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap7_tph32_h1_sac.pt"
+ },
+ {
+  "name": "hyperplane_nap6_tph64_h1_sac",
+  "module": "hyperplane",
+  "nap": 6,
+  "tph": 64,
+  "heads": 1,
+  "rows": 64,
+  "forward_mode": "hybrid_smooth",
+  "table_params": 24576,
+  "index_params": 6912,
+  "total_params": 31490,
+  "dataset_pairs": 4000256,
+  "epochs": 6,
+  "final_action_mse": 0.002867178995969522,
+  "heldout_action_mse": 0.002234002575278282,
+  "eval_mean": 5280.7488833674315,
+  "eval_std": 38.031839913898644,
+  "teacher_retention_pct": 100.13935759410307,
+  "solved": true,
+  "train_s": 34.4,
+  "history": [
+   {
+    "epoch": 0,
+    "action_mse": 0.00835653187871193
+   },
+   {
+    "epoch": 1,
+    "action_mse": 0.003849816547475801
+   },
+   {
+    "epoch": 2,
+    "action_mse": 0.003382956301392682
+   },
+   {
+    "epoch": 3,
+    "action_mse": 0.0031130289392675595
+   },
+   {
+    "epoch": 4,
+    "action_mse": 0.0029488428599357634
+   },
+   {
+    "epoch": 5,
+    "action_mse": 0.002867178995969522
+   }
+  ],
+  "checkpoint": "lut_hyperplane_nap6_tph64_h1_sac.pt"
+ }
+]

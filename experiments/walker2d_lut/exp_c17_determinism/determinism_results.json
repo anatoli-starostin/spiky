@@ -1,0 +1,61 @@
+{
+ "tensors": {
+  "w": {
+   "elements": 3264,
+   "max_abs": 0.0,
+   "mean_abs": 0.0,
+   "n_differing": 0,
+   "identical": true
+  },
+  "b": {
+   "elements": 192,
+   "max_abs": 0.0,
+   "mean_abs": 0.0,
+   "n_differing": 0,
+   "identical": true
+  },
+  "weights": {
+   "elements": 24576,
+   "max_abs": 0.0,
+   "mean_abs": 0.0,
+   "n_differing": 0,
+   "identical": true
+  },
+  "log_T_soft": {
+   "elements": 1,
+   "max_abs": 0.0,
+   "mean_abs": 0.0,
+   "n_differing": 0,
+   "identical": true
+  },
+  "log_T_sel": {
+   "elements": 1,
+   "max_abs": 0.0,
+   "mean_abs": 0.0,
+   "n_differing": 0,
+   "identical": true
+  }
+ },
+ "all_identical": true,
+ "total_elements": 28034,
+ "total_differing": 0,
+ "worst_abs": 0.0,
+ "returns": [
+  {
+   "rep": "a",
+   "mean": 4120.608304718486,
+   "std": 143.78324661773044,
+   "mjx": 4328.5
+  },
+  {
+   "rep": "b",
+   "mean": 4120.608304718486,
+   "std": 143.78324661773044,
+   "mjx": 4328.5
+  }
+ ],
+ "delta": 0.0,
+ "c16_delta": 999.1,
+ "c16_run_sd": 662.6,
+ "verdict": "CONFIRMED AND FIXED: the two checkpoints are BIT-FOR-BIT IDENTICAL across all 28,034 parameters. Deterministic GPU ops remove the nondeterminism entirely, so the atomics-based scatter path was the source. Every A/B in exp_c12..exp_c16 can now be redone on a footing where a fixed seed reproduces."
+}

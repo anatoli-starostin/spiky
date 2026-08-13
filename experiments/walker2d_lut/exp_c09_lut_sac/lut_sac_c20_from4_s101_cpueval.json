@@ -1,0 +1,8 @@
+{
+ "actor": "lut_sac_c20_from4_s101_actor.npz",
+ "params": 28032,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 3463.6598573446736,
+ "cpu_reference_std": 65.81736794693306
+}

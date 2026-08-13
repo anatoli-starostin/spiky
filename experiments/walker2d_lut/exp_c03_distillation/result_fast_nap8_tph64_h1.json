@@ -1,0 +1,48 @@
+{
+ "name": "fast_nap8_tph64_h1",
+ "module": "fast",
+ "nap": 8,
+ "tph": 64,
+ "heads": 1,
+ "rows": 256,
+ "forward_mode": "hybrid_smooth",
+ "table_params": 98304,
+ "index_params": 0,
+ "total_params": 98306,
+ "dataset_pairs": 4001792,
+ "epochs": 6,
+ "final_action_mse": 0.011290950350798933,
+ "heldout_action_mse": 0.010096428915858269,
+ "eval_mean": 4084.2638152241443,
+ "eval_std": 1763.5173889800296,
+ "teacher_retention_pct": 73.51748384887308,
+ "solved": true,
+ "train_s": 38.0,
+ "history": [
+  {
+   "epoch": 0,
+   "action_mse": 0.017665166763384792
+  },
+  {
+   "epoch": 1,
+   "action_mse": 0.01218464096174971
+  },
+  {
+   "epoch": 2,
+   "action_mse": 0.011899712622287695
+  },
+  {
+   "epoch": 3,
+   "action_mse": 0.0116489000900619
+  },
+  {
+   "epoch": 4,
+   "action_mse": 0.011431994397067364
+  },
+  {
+   "epoch": 5,
+   "action_mse": 0.011290950350798933
+  }
+ ],
+ "checkpoint": "lut_fast_nap8_tph64_h1.pt"
+}

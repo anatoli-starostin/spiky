@@ -1,0 +1,17 @@
+{
+ "actor": "bucket_sac_c32b_s0_actor.npz",
+ "params": 7840,
+ "episodes": 100,
+ "forward_mode": "hard",
+ "cpu_reference_mean": 777.1332618981479,
+ "cpu_reference_std": 70.65989581675869,
+ "full_length": 0,
+ "velocity": 2.301037912060824,
+ "length_mean": 235.32,
+ "heads": 1,
+ "tph": 32,
+ "n_buckets": 16,
+ "eval_eps": 0.30000001192092896,
+ "frontend_params": 1696,
+ "table_params": 6144
+}

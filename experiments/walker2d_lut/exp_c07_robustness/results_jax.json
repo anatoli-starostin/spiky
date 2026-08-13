@@ -1,0 +1,326 @@
+[
+ {
+  "policy": "PPO-MLP",
+  "axis": "mass",
+  "value": 0.7,
+  "mean": 2897.1249445555372,
+  "std": 1308.1410580975164,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "mass",
+  "value": 0.85,
+  "mean": 3882.3072919308756,
+  "std": 1224.4608578585605,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "mass",
+  "value": 1.0,
+  "mean": 5566.622264364147,
+  "std": 34.50440214091937,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "mass",
+  "value": 1.15,
+  "mean": 894.570915880137,
+  "std": 358.2764573516876,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "mass",
+  "value": 1.3,
+  "mean": 405.36327913390465,
+  "std": 23.469108901800467,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "gravity",
+  "value": 0.85,
+  "mean": 5205.890300156625,
+  "std": 446.97426336849713,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "gravity",
+  "value": 1.0,
+  "mean": 5566.622264364147,
+  "std": 34.50440214091937,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "gravity",
+  "value": 1.15,
+  "mean": 3085.881988179758,
+  "std": 1964.113428514106,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "friction",
+  "value": 0.5,
+  "mean": 981.7413010618272,
+  "std": 1254.6720931040768,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "friction",
+  "value": 0.75,
+  "mean": 5465.630777365507,
+  "std": 274.1363968455477,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "friction",
+  "value": 1.0,
+  "mean": 5566.622264364147,
+  "std": 34.50440214091937,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "friction",
+  "value": 1.5,
+  "mean": 1200.8187293654273,
+  "std": 380.5712296545511,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "friction",
+  "value": 2.0,
+  "mean": 464.17133613053886,
+  "std": 7.1785947153955405,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "geometry",
+  "value": 0.9,
+  "mean": 5122.918028210763,
+  "std": 981.3193309819982,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "geometry",
+  "value": 0.95,
+  "mean": 5513.571874585887,
+  "std": 223.58912530351094,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "geometry",
+  "value": 1.0,
+  "mean": 5566.622264364147,
+  "std": 34.50440214091937,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "geometry",
+  "value": 1.05,
+  "mean": 4474.561721931222,
+  "std": 1562.1748591332964,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "PPO-MLP",
+  "axis": "geometry",
+  "value": 1.1,
+  "mean": 2272.747649690904,
+  "std": 1274.3067408599481,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "mass",
+  "value": 0.7,
+  "mean": 2501.9906681403877,
+  "std": 1841.3904936571744,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "mass",
+  "value": 0.85,
+  "mean": 4198.146465306047,
+  "std": 808.1536777623802,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "mass",
+  "value": 1.0,
+  "mean": 4406.935397670414,
+  "std": 426.784851156617,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "mass",
+  "value": 1.15,
+  "mean": 4363.079198823639,
+  "std": 588.9682727382104,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "mass",
+  "value": 1.3,
+  "mean": 2177.4826738456454,
+  "std": 908.0179617655243,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "gravity",
+  "value": 0.85,
+  "mean": 4101.9389451552115,
+  "std": 439.8141044487516,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "gravity",
+  "value": 1.0,
+  "mean": 4406.935397670414,
+  "std": 426.784851156617,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "gravity",
+  "value": 1.15,
+  "mean": 4638.995849865795,
+  "std": 547.5403567645685,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "friction",
+  "value": 0.5,
+  "mean": 398.64512168238014,
+  "std": 1045.8231513927271,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "friction",
+  "value": 0.75,
+  "mean": 3957.587544498762,
+  "std": 1369.8028372948474,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "friction",
+  "value": 1.0,
+  "mean": 4406.935397670414,
+  "std": 426.784851156617,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "friction",
+  "value": 1.5,
+  "mean": 1183.7036071121815,
+  "std": 1125.9907370147703,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "friction",
+  "value": 2.0,
+  "mean": 291.7751788804883,
+  "std": 17.82702474400077,
+  "episodes": 100,
+  "solved": false
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "geometry",
+  "value": 0.9,
+  "mean": 4342.370598691245,
+  "std": 366.36576887007146,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "geometry",
+  "value": 0.95,
+  "mean": 4377.211943313713,
+  "std": 364.611936735787,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "geometry",
+  "value": 1.0,
+  "mean": 4406.935397670414,
+  "std": 426.784851156617,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "geometry",
+  "value": 1.05,
+  "mean": 4474.9892826561045,
+  "std": 68.84262840406885,
+  "episodes": 100,
+  "solved": true
+ },
+ {
+  "policy": "LUT-scratch",
+  "axis": "geometry",
+  "value": 1.1,
+  "mean": 4315.399613483121,
+  "std": 221.82862179697693,
+  "episodes": 100,
+  "solved": true
+ }
+]

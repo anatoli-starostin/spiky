@@ -1,0 +1,8 @@
+{
+ "mu": "es_mlp_sepcma_mu.npy",
+ "policy": "mlp",
+ "episodes": 30,
+ "cpu_reference_mean": 2996.686762524898,
+ "cpu_reference_std": 913.7904587073566,
+ "solved": false
+}

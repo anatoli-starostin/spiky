@@ -1,0 +1,708 @@
+{
+ "nominal": {
+  "PPO-MLP": 5566.622264364147,
+  "SAC-MLP": 5277.371994842502,
+  "LUT-distilled": 5567.095906910487,
+  "LUT-scratch": 4406.935397670414
+ },
+ "known": {
+  "LUT-distilled": 5511.9,
+  "SAC-MLP": 5273.4,
+  "PPO-MLP": 5555.5,
+  "LUT-scratch": 4406.9
+ },
+ "params": {
+  "LUT-distilled": 5378,
+  "SAC-MLP": 73484,
+  "PPO-MLP": 71948,
+  "LUT-scratch": 26880
+ },
+ "summary": {
+  "PPO-MLP": {
+   "worst_retained_per_axis": [
+    0.07282033159119118,
+    0.5543544795440232,
+    0.08338473747393013,
+    0.4082812775424615
+   ],
+   "mean_retained": 0.2797102065379015
+  },
+  "SAC-MLP": {
+   "worst_retained_per_axis": [
+    0.7339919629259605,
+    0.8101950119018874,
+    0.8072676085603367,
+    0.8836284920404124
+   ],
+   "mean_retained": 0.8087707688571492
+  },
+  "LUT-distilled": {
+   "worst_retained_per_axis": [
+    0.06537747885152088,
+    0.15677226604074657,
+    0.0632027349798182,
+    0.1815057957008374
+   ],
+   "mean_retained": 0.11671456889323077
+  },
+  "LUT-scratch": {
+   "worst_retained_per_axis": [
+    0.4941036065554086,
+    0.9307917123821626,
+    0.06620818154827636,
+    0.9792291522504096
+   ],
+   "mean_retained": 0.6175831631840644
+  }
+ },
+ "rows": [
+  {
+   "policy": "LUT-distilled",
+   "axis": "mass",
+   "value": 0.7,
+   "mean": 2009.000219324742,
+   "std": 1160.737848869887,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "mass",
+   "value": 0.85,
+   "mean": 4331.797203175758,
+   "std": 1117.6943310970635,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "mass",
+   "value": 1.0,
+   "mean": 5567.095906910487,
+   "std": 53.26566226935996,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "mass",
+   "value": 1.15,
+   "mean": 618.9046669533874,
+   "std": 35.928000137964396,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "mass",
+   "value": 1.3,
+   "mean": 363.96269491842884,
+   "std": 5.985526919337475,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "gravity",
+   "value": 0.85,
+   "mean": 5223.357553917681,
+   "std": 499.1253741235992,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "gravity",
+   "value": 1.0,
+   "mean": 5567.095906910487,
+   "std": 53.26566226935996,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "gravity",
+   "value": 1.15,
+   "mean": 872.7662405925222,
+   "std": 118.8835044944672,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "friction",
+   "value": 0.5,
+   "mean": 351.85568721169415,
+   "std": 18.268031516851817,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "friction",
+   "value": 0.75,
+   "mean": 4547.52512542272,
+   "std": 1376.0292555560961,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "friction",
+   "value": 1.0,
+   "mean": 5567.095906910487,
+   "std": 53.26566226935996,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "friction",
+   "value": 1.5,
+   "mean": 745.639855577519,
+   "std": 204.03084353360651,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "friction",
+   "value": 2.0,
+   "mean": 408.8245473929708,
+   "std": 5.3527309609539575,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "geometry",
+   "value": 0.9,
+   "mean": 5346.483564744999,
+   "std": 226.06628739218223,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "geometry",
+   "value": 0.95,
+   "mean": 5499.694294854347,
+   "std": 426.69172186652577,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "geometry",
+   "value": 1.0,
+   "mean": 5567.095906910487,
+   "std": 53.26566226935996,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "geometry",
+   "value": 1.05,
+   "mean": 1736.6072292027318,
+   "std": 1208.0233620544846,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-distilled",
+   "axis": "geometry",
+   "value": 1.1,
+   "mean": 1010.460172326663,
+   "std": 101.82228301857924,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "mass",
+   "value": 0.7,
+   "mean": 4665.481222130405,
+   "std": 556.6403925547711,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "mass",
+   "value": 0.85,
+   "mean": 4386.450502311363,
+   "std": 1313.3285560163517,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "mass",
+   "value": 1.0,
+   "mean": 5277.371994842502,
+   "std": 32.41047254566146,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "mass",
+   "value": 1.15,
+   "mean": 4939.171104743717,
+   "std": 556.3685041317258,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "mass",
+   "value": 1.3,
+   "mean": 3873.54862958494,
+   "std": 1757.4319295872094,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "gravity",
+   "value": 0.85,
+   "mean": 4275.7004661721085,
+   "std": 949.400586378041,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "gravity",
+   "value": 1.0,
+   "mean": 5277.371994842502,
+   "std": 32.41047254566146,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "gravity",
+   "value": 1.15,
+   "mean": 5317.277022387644,
+   "std": 40.973350138457825,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "friction",
+   "value": 0.5,
+   "mean": 5126.365682390592,
+   "std": 88.97576527398485,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "friction",
+   "value": 0.75,
+   "mean": 5255.437228000602,
+   "std": 50.421657232374024,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "friction",
+   "value": 1.0,
+   "mean": 5277.371994842502,
+   "std": 32.41047254566146,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "friction",
+   "value": 1.5,
+   "mean": 5320.489843498524,
+   "std": 35.541643041608374,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "friction",
+   "value": 2.0,
+   "mean": 4260.251469759801,
+   "std": 39.950978089673804,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "geometry",
+   "value": 0.9,
+   "mean": 4663.236257738983,
+   "std": 1079.421121285324,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "geometry",
+   "value": 0.95,
+   "mean": 5217.060431946124,
+   "std": 509.9135703745503,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "geometry",
+   "value": 1.0,
+   "mean": 5277.371994842502,
+   "std": 32.41047254566146,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "geometry",
+   "value": 1.05,
+   "mean": 5203.885914264799,
+   "std": 44.03650948440178,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "SAC-MLP",
+   "axis": "geometry",
+   "value": 1.1,
+   "mean": 4911.228323091747,
+   "std": 101.15516804543418,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "mass",
+   "value": 0.7,
+   "mean": 2897.1249445555372,
+   "std": 1308.1410580975164,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "mass",
+   "value": 0.85,
+   "mean": 3882.3072919308756,
+   "std": 1224.4608578585605,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "mass",
+   "value": 1.0,
+   "mean": 5566.622264364147,
+   "std": 34.50440214091937,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "mass",
+   "value": 1.15,
+   "mean": 894.570915880137,
+   "std": 358.2764573516876,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "mass",
+   "value": 1.3,
+   "mean": 405.36327913390465,
+   "std": 23.469108901800467,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "gravity",
+   "value": 0.85,
+   "mean": 5205.890300156625,
+   "std": 446.97426336849713,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "gravity",
+   "value": 1.0,
+   "mean": 5566.622264364147,
+   "std": 34.50440214091937,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "gravity",
+   "value": 1.15,
+   "mean": 3085.881988179758,
+   "std": 1964.113428514106,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "friction",
+   "value": 0.5,
+   "mean": 981.7413010618272,
+   "std": 1254.6720931040768,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "friction",
+   "value": 0.75,
+   "mean": 5465.630777365507,
+   "std": 274.1363968455477,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "friction",
+   "value": 1.0,
+   "mean": 5566.622264364147,
+   "std": 34.50440214091937,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "friction",
+   "value": 1.5,
+   "mean": 1200.8187293654273,
+   "std": 380.5712296545511,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "friction",
+   "value": 2.0,
+   "mean": 464.17133613053886,
+   "std": 7.1785947153955405,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "geometry",
+   "value": 0.9,
+   "mean": 5122.918028210763,
+   "std": 981.3193309819982,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "geometry",
+   "value": 0.95,
+   "mean": 5513.571874585887,
+   "std": 223.58912530351094,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "geometry",
+   "value": 1.0,
+   "mean": 5566.622264364147,
+   "std": 34.50440214091937,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "geometry",
+   "value": 1.05,
+   "mean": 4474.561721931222,
+   "std": 1562.1748591332964,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "PPO-MLP",
+   "axis": "geometry",
+   "value": 1.1,
+   "mean": 2272.747649690904,
+   "std": 1274.3067408599481,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "mass",
+   "value": 0.7,
+   "mean": 2501.9906681403877,
+   "std": 1841.3904936571744,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "mass",
+   "value": 0.85,
+   "mean": 4198.146465306047,
+   "std": 808.1536777623802,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "mass",
+   "value": 1.0,
+   "mean": 4406.935397670414,
+   "std": 426.784851156617,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "mass",
+   "value": 1.15,
+   "mean": 4363.079198823639,
+   "std": 588.9682727382104,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "mass",
+   "value": 1.3,
+   "mean": 2177.4826738456454,
+   "std": 908.0179617655243,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "gravity",
+   "value": 0.85,
+   "mean": 4101.9389451552115,
+   "std": 439.8141044487516,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "gravity",
+   "value": 1.0,
+   "mean": 4406.935397670414,
+   "std": 426.784851156617,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "gravity",
+   "value": 1.15,
+   "mean": 4638.995849865795,
+   "std": 547.5403567645685,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "friction",
+   "value": 0.5,
+   "mean": 398.64512168238014,
+   "std": 1045.8231513927271,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "friction",
+   "value": 0.75,
+   "mean": 3957.587544498762,
+   "std": 1369.8028372948474,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "friction",
+   "value": 1.0,
+   "mean": 4406.935397670414,
+   "std": 426.784851156617,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "friction",
+   "value": 1.5,
+   "mean": 1183.7036071121815,
+   "std": 1125.9907370147703,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "friction",
+   "value": 2.0,
+   "mean": 291.7751788804883,
+   "std": 17.82702474400077,
+   "episodes": 100,
+   "solved": false
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "geometry",
+   "value": 0.9,
+   "mean": 4342.370598691245,
+   "std": 366.36576887007146,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "geometry",
+   "value": 0.95,
+   "mean": 4377.211943313713,
+   "std": 364.611936735787,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "geometry",
+   "value": 1.0,
+   "mean": 4406.935397670414,
+   "std": 426.784851156617,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "geometry",
+   "value": 1.05,
+   "mean": 4474.9892826561045,
+   "std": 68.84262840406885,
+   "episodes": 100,
+   "solved": true
+  },
+  {
+   "policy": "LUT-scratch",
+   "axis": "geometry",
+   "value": 1.1,
+   "mean": 4315.399613483121,
+   "std": 221.82862179697693,
+   "episodes": 100,
+   "solved": true
+  }
+ ]
+}

@@ -1,0 +1,29 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+Bucket-LIF SAC actor buckets=16 tph=32 heads=1 seed=0 | 12 outputs/cell (6 mu + 6 log-sigma) | front-end 1,696 + table 6,144 = 7,840 params (28.0% of the 28,032 hyperplane baseline; front-end 49.1% of its 3,456) | rows 32x16 = 512 | eps INERT; sharpness is trainable T_cross/T_bkt
+  boundary-init=quantile: probed 4,096 random-policy states | boundaries [2.00,30.00] -> [13.54,32.60] | init occupancy entropy 2.97 of 4.00 bits (= 7.8 of 16 effective buckets)
+[  500/10000] steps    32,000 | MJX ret     -4.4 | bkt-cov   0.0% | bkt  6.30±3.89 | Tbkt 1.000 | Tcr 1.000 | best     -4.4 |   2.9m
+[ 1000/10000] steps    64,000 | MJX ret    214.2 | bkt-cov  86.9% | bkt  6.89±4.87 | Tbkt 0.356 | Tcr 0.384 | best    214.2 |   8.4m
+[ 1500/10000] steps    96,000 | MJX ret    570.6 | bkt-cov  90.6% | bkt  6.08±4.76 | Tbkt 0.180 | Tcr 0.342 | best    570.6 |  12.9m
+[ 2000/10000] steps   128,000 | MJX ret    392.7 | bkt-cov  92.0% | bkt  5.16±4.82 | Tbkt 0.069 | Tcr 0.332 | best    570.6 |  17.4m
+[ 2500/10000] steps   160,000 | MJX ret    405.7 | bkt-cov  92.4% | bkt  5.20±4.83 | Tbkt 0.041 | Tcr 0.306 | best    570.6 |  21.6m
+[ 3000/10000] steps   192,000 | MJX ret    429.9 | bkt-cov  92.8% | bkt  4.99±4.89 | Tbkt 0.025 | Tcr 0.300 | best    570.6 |  26.0m
+[ 3500/10000] steps   224,000 | MJX ret    554.7 | bkt-cov  92.8% | bkt  4.76±4.93 | Tbkt 0.017 | Tcr 0.300 | best    570.6 |  30.4m
+[ 4000/10000] steps   256,000 | MJX ret    821.1 | bkt-cov  93.0% | bkt  4.88±4.94 | Tbkt 0.013 | Tcr 0.297 | best    821.1 |  34.9m
+[ 4500/10000] steps   288,000 | MJX ret    758.9 | bkt-cov  93.0% | bkt  4.82±4.80 | Tbkt 0.010 | Tcr 0.294 | best    821.1 |  39.4m
+[ 5000/10000] steps   320,000 | MJX ret    870.7 | bkt-cov  93.2% | bkt  4.69±4.79 | Tbkt 0.009 | Tcr 0.295 | best    870.7 |  43.8m
+[ 5500/10000] steps   352,000 | MJX ret    985.2 | bkt-cov  93.2% | bkt  4.34±4.72 | Tbkt 0.007 | Tcr 0.296 | best    985.2 |  48.1m
+[ 6000/10000] steps   384,000 | MJX ret   1203.9 | bkt-cov  93.2% | bkt  4.68±4.89 | Tbkt 0.006 | Tcr 0.296 | best   1203.9 |  52.6m
+[ 6500/10000] steps   416,000 | MJX ret   1227.4 | bkt-cov  93.2% | bkt  4.72±4.92 | Tbkt 0.006 | Tcr 0.296 | best   1227.4 |  57.0m
+[ 7000/10000] steps   448,000 | MJX ret   1211.3 | bkt-cov  93.2% | bkt  4.54±4.86 | Tbkt 0.005 | Tcr 0.294 | best   1227.4 |  61.4m
+[ 7500/10000] steps   480,000 | MJX ret    826.4 | bkt-cov  93.2% | bkt  4.82±4.91 | Tbkt 0.005 | Tcr 0.291 | best   1227.4 |  65.8m
+[ 8000/10000] steps   512,000 | MJX ret   1064.1 | bkt-cov  93.2% | bkt  4.57±4.93 | Tbkt 0.005 | Tcr 0.287 | best   1227.4 |  70.2m
+[ 8500/10000] steps   544,000 | MJX ret   1421.9 | bkt-cov  93.2% | bkt  4.62±4.86 | Tbkt 0.005 | Tcr 0.280 | best   1421.9 |  74.6m
+[ 9000/10000] steps   576,000 | MJX ret   1700.6 | bkt-cov  93.2% | bkt  4.32±4.79 | Tbkt 0.004 | Tcr 0.274 | best   1700.6 |  79.0m
+[ 9500/10000] steps   608,000 | MJX ret   2113.1 | bkt-cov  93.2% | bkt  4.26±4.74 | Tbkt 0.004 | Tcr 0.265 | best   2113.1 |  83.3m
+[10000/10000] steps   640,000 | MJX ret   1961.5 | bkt-cov  93.2% | bkt  4.45±4.82 | Tbkt 0.004 | Tcr 0.264 | best   2113.1 |  87.1m
+done: best MJX 2113.1 over 640,000 env-steps in 87.1 min
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+bucket_sac_c35_s0_actor.npz (7,840 params = 1,696 front-end + 6,144 table) [hard] 16 buckets / tph32
+  CPU-reference 100-ep deterministic: 1975.9 +/- 439.6  full 0/100  vel 2.579 m/s  len 550  [43s]

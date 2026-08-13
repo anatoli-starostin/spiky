@@ -1,0 +1,8 @@
+{
+ "mu": "es_mlp_openai_mu.npy",
+ "policy": "mlp",
+ "episodes": 30,
+ "cpu_reference_mean": 2051.076634085082,
+ "cpu_reference_std": 157.6512764778262,
+ "solved": false
+}

@@ -1,0 +1,10 @@
+{
+ "actor": "lut_sac_c11_hyperplane_hard_actor.npz",
+ "forward_mode": "hard",
+ "seed": 0,
+ "episode_return": 5039.177192606616,
+ "steps": 1000,
+ "fps": 125,
+ "duration_s": 8.0,
+ "frames_npz": "/home/astarostin/projects/spiky/experiments/walker2d_lut/exp_c13_anchors_multiseed/ref_hyperplane_frames.npz"
+}

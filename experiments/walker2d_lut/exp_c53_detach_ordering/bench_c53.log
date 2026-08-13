@@ -1,0 +1,18 @@
+device NVIDIA GeForce RTX 5090   XLA_FLAGS=--xla_gpu_deterministic_ops=true
+batch 512, 1 head x 128 tables x 1 det x 16 buckets, 100 reps after 10 warmup
+
+  scope                        soft ms  detach ms   speedup  soft it/s  detach it/s
+  first_spike  forward           1.196      1.358     0.88x      836.4        736.3
+  first_spike  value+grad        0.731      0.549     1.33x     1368.2       1822.6
+  apply        forward           1.477      1.368     1.08x      677.1        731.0
+  apply        value+grad        0.601      0.594     1.01x     1664.8       1683.5
+  peak device memory (MB)        134.5      134.5
+
+  ATTRIBUTION, on the isolated block that differs:
+    forward     0.88x  — dropping the sigmoid, cumprod and weighted sum over N
+    value+grad  1.33x  — the same, plus the VJP of the cumprod-survival chain
+    => the saving is predominantly in the BACKWARD: differentiating through the
+       soft crossing costs more than computing it.
+
+  Whole-module value+grad: 0.601 -> 0.594 ms (+0.007 ms, 1.01x). A SAC iteration runs 32 updates,
+  so that is ~0.2 ms/iter against exp_c50's measured ~220 ms/iter — about 0.1%.
