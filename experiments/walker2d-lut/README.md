@@ -187,6 +187,10 @@ and run with `process_ticks` in `act()`. What the stand runs is the real simulat
 
 ## Reproducing the headline result
 
+**[`REPRODUCE.md`](REPRODUCE.md) is the full runbook** — every step the blog post describes, with
+the command that actually runs it, marked as either runnable here or living on
+`research/walker2d-lut`, and the number each one should produce. The short version:
+
 The construction pipeline needs no arguments — both its inputs are committed and resolved
 relative to the script:
 

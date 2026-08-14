@@ -1,0 +1,302 @@
+# Reproducing *"A lookup table that learned to walk — and then became a spiking network"*
+
+Every step the post describes, with the command that actually runs it.
+
+Each step is labelled:
+
+- **[on-branch]** — runnable from what this branch carries. Commands here were executed or
+  `--help`-checked against this tree.
+- **[research branch]** — the full run lives on `research/walker2d-lut` and needs a GPU and
+  hours. The command is documented so it's on the record, but this branch ships the *resulting
+  artefact* instead, and the step below it consumes that artefact.
+
+The single most important one is [Step 3](#step-3-build-the-spiking-network-on-branch): the
+headline network rebuilds from committed inputs with no arguments, in under a minute.
+
+---
+
+## Prerequisites
+
+- The spiky venv at `~/projects/spiky/.venv` — **torch 2.9.1+cu130**, `warp-lang`,
+  `mujoco-warp`, gymnasium, mujoco.
+- The `spiky_cuda` extension built for your GPU (see the repo root README). The construction
+  pipeline runs the real `spnet` kernels, so a CUDA device is required.
+- Run everything with the repo's `src/` importable:
+
+```bash
+export PYTHONPATH=~/projects/spiky/src
+export WARP_CACHE_PATH=/tmp/warp_cache TRITON_CACHE_DIR=/tmp/triton_cache
+```
+
+The construction scripts resolve their inputs relative to themselves, so `cd` into the directory
+you are running from rather than invoking by long path.
+
+---
+
+## Step 0 — check the toolchain **[on-branch]**
+
+```bash
+cd ~/projects/spiky
+python -m pytest src/spiky/lutorch/tests/ -q                    # expect: 232 passed
+cd src/spiky/spnet/tests && python run_tests_with_different_seeds.py   # expect: 64 ok, 8 skipped, 0 failed
+```
+
+The 8 spnet skips are `test_explicit_weight_alignment` and `test_synapse_growth_lowlevel` under
+`summation_dtype=int32` only; both pass under float32. That is expected, not a gap.
+
+`src/spiky/lut_fused/tests/` is **intentionally not part of this branch's verification** — this
+branch does not touch `src/spiky/lut_fused` (byte-identical to `main`), and the suite costs ~20
+minutes of GPU. Run it if you change anything under `lut_fused/` or `native/`.
+
+---
+
+## Step 1 — train the LUT teacher **[research branch]**
+
+The post's Part 1. Three runs, none of whose training data this branch carries — it carries the
+exported actors instead.
+
+### 1a. The PPO recipe (exp05)
+
+Note this one is a **plain MLP** policy (`config.json`: `"arch": "mlp"`). It exists to establish
+the stabilization flags, not to produce a policy. Everything downstream inherits them.
+
+```bash
+cd experiments/walker2d-lut/src
+python ppo.py --arch mlp --envs 8192 --rollout 32 --updates 768 --seed 0 \
+    --lr-schedule cosine --lr-min 3e-5 --logstd-min -1.897 \
+    --ent-coef 0.0 --target-kl 0.02 --norm-returns --out ppo_s0.json
+```
+Expected, over seeds 0/1/2: **final 5952.1 ± 415.9, best 5985.3 ± 423.9, 0/3 collapsed**
+(`exp05_ppo-truncbootstrap-retnorm-kl/summary.json`). ~0.34 h/seed.
+
+### 1b. The LUT actor (exp19) — "201 million environment steps"
+
+```bash
+cd experiments/walker2d-lut/src
+python ppo.py --arch fastlut_lse_sum_expmlpcrit --tables-per-head 32 \
+    --envs 8192 --rollout 32 --updates 768 --seed 2 \
+    --lr-schedule cosine --lr-min 3e-5 --logstd-min -1.897 \
+    --ent-coef 0.0 --target-kl 0.02 --norm-returns \
+    --out ppo_s2.json --save-model actor_s2.pt
+```
+8192 × 32 × 768 = **201,326,592 env-steps**. Expected over 3 seeds: **final 5553.1 ± 223.6, 0/3
+collapsed**; seed 2 reaches **5966.3** and is the checkpoint that ships.
+
+> `run_exp19.sh` in that folder is the original launcher and calls `train.py`, a dispatcher not
+> carried here. The command above is the same run driven through `ppo.py` directly, which is
+> carried. `--save-model` is what produces the `.pt` the next step resumes from.
+
+**Ships instead:** `exp19_lut-lse-expmlpcrit-t32/deploy/walker2d_fastlut_lse_exp19.npz`
+(seed 2, τ 0.086469), exported with `export_for_viz.py --ckpt <actor_s2.pt>`.
+
+### 1c. The quantisation-aware fine-tune (exp23) — the post's "four deliberate constraints"
+
+Resumes from 1b's checkpoint with both quantisers in the training loop:
+
+```bash
+cd experiments/walker2d-lut/src
+python ppo_qat_obs.py --arch fastlut_lse_sum_expmlpcrit --tables-per-head 32 \
+    --envs 8192 --updates 768 --seed 0 --init-from <path-to>/actor_s2.pt \
+    --lr-schedule cosine --lr-min 3e-5 --logstd-min -1.897 \
+    --ent-coef 0.0 --target-kl 0.02 --norm-returns \
+    --obs-clip-vel 10 --solver-iters 100 --ls-iters 50 \
+    --quant-ticks 128 --quant-sigma 1.0 \
+    --out-quant-levels 22 --out-quant-clip 1.0 --oob-penalty 0.3 \
+    --out qat_s0.json --save-model qat_s0.pt
+```
+
+Those flags are the post's four constraints, one for one:
+
+| post's constraint | flag |
+|---|---|
+| 128 Gaussian-companded buckets, one shared map | `--quant-ticks 128 --quant-sigma 1.0` |
+| log-sum-exp pooling | in the arch (`fastlut_lse_sum_expmlpcrit`) |
+| clip to [−1,1], then 22 uniform levels | `--out-quant-levels 22 --out-quant-clip 1.0` |
+| L2 penalty on out-of-band outputs | `--oob-penalty 0.3` |
+
+`--solver-iters 100 --ls-iters 50` matter: they are the deployment-matched physics the checkpoint
+was trained under, and evaluating without them measures a different environment.
+
+Expected: **final 5867.3** (arm `qat_n22_l2`, seed 0) — 1.7% under the unquantised parent.
+
+Then export:
+```bash
+cd experiments/walker2d-lut/exp23_qat_obs_quant
+python export_quantised.py --ckpt <path-to>/qat_s0.pt --out ../exp19_lut-lse-expmlpcrit-t32/deploy/quantised
+```
+The exporter runs a **parity gate** and refuses to write if numpy and torch disagree.
+
+**Ships instead:**
+`exp19_lut-lse-expmlpcrit-t32/deploy/quantised/walker2d_fastlut_lse_exp19_quantised.npz`
+(τ 0.093768) — this is the *software teacher* every spiking number below is measured against.
+
+---
+
+## Step 2 — the substrate
+
+Nothing to run. The post's Part 2 opens on `spnet`, the spiking simulator, which is already on
+`main` (`src/spiky/spnet/` + `native/`) and unchanged by this branch. Step 0's spnet suite is the
+check that it works.
+
+---
+
+## Step 3 — build the spiking network **[on-branch]**
+
+**This is the headline result, and it needs no arguments.** Both inputs — the exp23 teacher and
+the 100,000-observation set — are committed, and the script resolves them relative to itself.
+
+```bash
+cd experiments/walker2d-lut/walker2d-spiking
+python tiny_lut_quantised_pipeline.py --gt-skew --no-tie-break --tau-m-out 31.257
+```
+
+Expected output (the numbers the post quotes):
+
+```
+neurons 2889  synapses 25953  n_ticks 167  dmax 6  tau_m_out 31.257  levels_representable 22
+CHECK B  tied slots      : 100.0000%
+CHECK B  non-tied slots  : 100.0000%
+CHECK D  census          : 2889 neurons, 25953 synapses, dmax 6
+EPISODE (data-dependent): min 142  mean 154.7  max 167
+STAGE 1 bit parity : 100.0000%   (0 bad of 12288)
+STAGE 2 one-hot    : 0 none, 0 multi of 2048
+STAGE 3 exact match on the 22-level grid:
+  dim 0..5: within-1-level 100.000%, max|err| 0.0952
+```
+
+**`--gt-skew` does not imply `--no-tie-break`**, despite what its help text suggests. Pass both.
+With `--gt-skew` alone you silently build the **3,025-neuron** variant that still carries the 136
+tie-detector neurons — the post's "one tick that fixed them" section is exactly this difference:
+136 neurons and 408 synapses removed.
+
+Defaults worth knowing: `--n 512` samples (the post's "512 held-out samples"), `--tau-m-out 10.0`
+resolves only 7 output levels, which is why 31.257 is passed explicitly.
+
+Add `--out calib.json` to write the calibration file the exporter needs.
+
+### The delay-based build **[on-branch]**
+
+The stand serves a second spiking actor, from the earlier delay-encoded construction:
+
+```bash
+cd experiments/walker2d-lut/walker2d-spiking
+python tiny_lut_full_pipeline.py --n 512
+python tiny_lut_export_actor.py     # no flags; writes server/models/spiking_lut_actor.npz
+```
+
+---
+
+## Step 4 — the weight fit **[on-branch, chained]**
+
+The post's Part 3: "the one thing we had to fit". Each command produces the next one's input, so
+run them in order. All are runnable here; they need a GPU and write into
+`walker2d-spiking/{analysis,deploy_quantised}/`, which they create.
+
+```bash
+cd experiments/walker2d-lut/walker2d-spiking
+
+# 4a. export the constructed actor (needs Step 3's --out calib.json)
+python tiny_lut_quantised_export.py --calib calib.json --out deploy_quantised
+
+# 4b. the 153K-pair teacher dataset  (4 seeds x 128 envs x 300 steps)
+python collect_teacher_io.py --out analysis/software_teacher_io_dataset_100k.npz
+
+# 4c. gradient-free coordinate descent on the 12,288 Stage-3 weights, held on the 8-bit
+#     log-domain grid during the fit
+python stage3_cd_bigdata.py --out analysis/stage3_cd_bigdata.json
+
+# 4d. bake the fitted weight+offset PAIR into the artefact and verify end to end
+python bake_and_verify_actor.py --n 4096 --out analysis/baked_actor_verification.json
+```
+
+Expected from 4c/4d, matching the post: **5,390 weights moved**, held-out true-SNN agreement
+**80.83% → 98.58%**, mean signed bias −0.197 → −0.0004; and from the bake, **98.72% exactly-equal
+actions over 4,096 held-out states, 100% within one level**, ~6 ms per action.
+
+> **The weights and the offset are a pair.** The coordinate descent re-derives the decode offset
+> because changing the weights changes the crossing ticks. Using fitted weights with the old
+> offset mis-decodes by about a quarter of a level and scores −197 instead of +58.8 — a
+> confident, wrong answer. `bake_and_verify_actor.py` writes both together;
+> `eval_gtskew_large.py` refuses `--weights` without `--offset`.
+
+> `bake_and_verify_actor.py` **rewrites the actor npz in place** (backing up to
+> `*_GTSKEW_verified.npz.bak` first). It is not a read-only check.
+
+---
+
+## Step 5 — closed-loop evaluation **[on-branch]**
+
+The post's "the measurement that actually matters": 256 envs × 1,200 steps × 2 seeds, matched
+physics, deterministic, paired — ~520 completed episodes per arm.
+
+```bash
+cd experiments/walker2d-lut/walker2d-spiking
+python eval_gtskew_large.py --envs 256 --steps 1200 --seeds 0,7 --out analysis/eval.json
+```
+
+Expected (post's results table):
+
+| build | n | mean | se | vs software |
+|---|---:|---:|---:|---:|
+| software teacher | 521 | 6253.4 | 36.3 | — |
+| spiking, constructed only | 523 | 6119.4 | 40.9 | −164.8 ± 50.3 |
+| spiking, 8-bit weight-fitted | 515 | 6312.2 | 26.6 | **+58.8 ± 45.0 (+1.31σ)** |
+
+**+58.8 is not a win.** At 1.31σ it is noise; the correct reading is "on par". The post says so
+explicitly and so should any reuse of the number.
+
+Two traps the post's own history records: anything shorter than the 1000-step episode limit
+measures only the episodes that *failed* (a 600-step screen once returned n=1), and at n=65 the
+standard error is ~110, so a real effect of ~165 hides inside the noise. ~520 episodes gives
+se 30–40.
+
+---
+
+## Step 6 — the served actors **[on-branch]**
+
+Where each model in `landing/walker2d-viz/server/models/` comes from:
+
+| model | served as | produced by |
+|---|---|---|
+| `spiking_lut_quantised_actor.npz` | "Spiking LUT quantised (handcrafted SNN)" | Steps 3 + 4 |
+| `spiking_lut_actor.npz` | "Spiking LUT (handcrafted SNN)" | Step 3, delay-based build |
+| `walker2d_fastlut_lse_exp19_quantised.npz` | "fastlut_lse (exp19, quantised)" | Step 1c |
+| `walker2d_fastlut_lse_exp19.npz` | "fastlut_lse (exp19)" | Step 1b |
+
+Sanity-check that all of them load and act:
+
+```bash
+cd landing/walker2d-viz/server
+python -c "
+from actors import discover_actors
+print(sorted(discover_actors()))"
+```
+
+The served `spiking_lut_quantised.py` is **not** pure numpy: numpy handles the input companding
+and the output decode, but the network is built through `spiky.spnet` at construction and stepped
+with `process_ticks` in `act()`. What the stand runs is the real simulator.
+
+---
+
+## Which numbers come from where
+
+| post's claim | reproduced by | on this branch? |
+|---|---|---|
+| 201M environment steps | Step 1b | no — artefact ships |
+| four deliberate constraints | Step 1c flags | no — artefact ships |
+| 2,889 neurons / 25,953 synapses | Step 3 | **yes** |
+| 154.5 ticks per decision (138–167) | Step 3 (`EPISODE` line) | **yes** |
+| Stage 1 — 100.0000% address bits | Step 3 | **yes** |
+| Stage 2 — 0 empty, 0 multiple | Step 3 | **yes** |
+| Stage 3 — 100% within one level | Step 3 | **yes** |
+| Stage 3 — 98.72% exactly equal | Step 4d | **yes** (needs the chain) |
+| 5,390 weights moved, 80.83% → 98.58% | Step 4c | **yes** (needs the chain) |
+| closed-loop 6312.2 ± 26.6 vs 6253.4 ± 36.3 | Step 5 | **yes** (needs the chain) |
+| ~6 ms per action | Step 4d (`latency_ms`) | **yes** |
+
+The post's own *Reproduction* box is older than this branch: it lists the construction scripts
+under `src/`, which is where they lived before the tree moved to
+`experiments/walker2d-lut/walker2d-spiking/`; it describes the deployed actor as "pure NumPy";
+and it names the research branch `research/lut2spnet-quantised-amplitude`, which has since been
+absorbed into `research/walker2d-lut` and archived as tag
+`archive/research-lut2spnet-quantised-amplitude`. This file supersedes it.
