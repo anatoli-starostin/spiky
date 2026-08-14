@@ -18,6 +18,13 @@ Backward (both modes; "always soft"):
     chosen row in "hard" mode; a 2-row scatter at main + alt in
     "hybrid_smooth" mode.
 
+`exp_outputs=True` (opt-in, "hard" only) swaps the sum-over-tables reduction
+for a temperature-tau log-sum-exp. Its forward is the hard sign-pack lookup
+unchanged; its backward uses the same soft surrogate for inputs and
+temperatures, weighted per table by the log-sum-exp softmax rather than the
+sum path's uniform broadcast, and the exact autograd gradient for the weights
+and tau.
+
 See doc/lutorch/lutgpt_research_report.pdf for the math (Section~2).
 """
 import math
@@ -137,41 +144,36 @@ def _lse_init_offset(tau: float, sigma: float, tph: int, n_samples: int = 200_00
     return -tau * math.log(tph) - gap
 
 
-def _exp_outputs_fwd(x, weights, anchor_a_long, anchor_b_long, powers,
-                     n_heads, tph, table_dim, tau, exp_clamp, scale="mean"):
-    """`exp_outputs=True` readout: temperature-tau log-sum-exp across a head's tables.
+def _exp_outputs_index(x, anchor_a_long, anchor_b_long, powers, table_dim, device):
+    """Hard sign-pack row selection for the `exp_outputs` readout.
 
-    Replaces the plain sum-over-tables reduction of `_soft_lut_fwd_body` with
+    Same arithmetic as the index computation in `_soft_lut_fwd_body`, so the rows
+    chosen are bit-identical to `forward_mode="hard"`. Returns both the per-table
+    row index (the soft backward needs it to pin its surrogate to the row forward
+    actually took) and the flattened gather index.
+    """
+    n_tables = anchor_a_long.shape[0]
+    d = x[:, anchor_a_long] - x[:, anchor_b_long]
+    bits = (d > 0).to(torch.int64)
+    index = (bits * powers.view(1, 1, -1)).sum(dim=-1)                  # [B, n_tables]
+    offset = torch.arange(n_tables, device=device, dtype=index.dtype) * table_dim
+    flat_idx = (index + offset.view(1, -1)).reshape(-1)
+    return index, flat_idx
 
-        out[b, h, o] = tau * log( sum_t exp( w_sel[b, h, t, o] / tau ) )
 
-    where `w_sel` is the same hard single-row selection per table the sum path uses --
-    the sign-pack index is computed identically (`d > 0`), so the ROWS chosen are
-    bit-identical to `forward_mode="hard"`; only how they are combined changes.
+def _exp_outputs_readout(weights, flat_idx, B, n_heads, tph, tau, exp_clamp,
+                         scale="mean"):
+    """The differentiable tail of the `exp_outputs` readout: gather + log-sum-exp.
 
-    Deliberately plain autograd rather than a custom Function. The hand-written soft
-    backward exists to supply a full-K surrogate gradient for `x` and the two
-    temperatures; under the anchor-pair configuration this path targets (fixed anchors,
-    `learnable_temps=False`, LUT as the first layer) `grad_x` is discarded and the
-    temperatures are buffers, while the weight gradient is a plain scatter at the chosen
-    row with no temperature dependence. So autograd loses nothing here and gets the
-    softmax-weighted weight gradient that log-sum-exp requires exactly right, instead of
-    the broadcast-of-grad_out the sum path hard-codes.
+    Kept as one function so the forward, the eval shortcut and the backward replay
+    all run the *same* expression -- forward bit-identity is then structural rather
+    than something three copies have to agree on.
 
     `torch.logsumexp` subtracts the row max internally, so exp() cannot overflow
     regardless of `tau`; the explicit clamp guards the degenerate `tau -> 0` case, where
     an unbounded `w/tau` would reach inf and turn the max-subtraction into inf - inf = NaN.
     """
-    B, _ = x.shape
-    n_tables = anchor_a_long.shape[0]
-    n_outputs = weights.shape[2]
-    with torch.no_grad():
-        d = x[:, anchor_a_long] - x[:, anchor_b_long]
-        bits = (d > 0).to(torch.int64)
-        index = (bits * powers.view(1, 1, -1)).sum(dim=-1)              # [B, n_tables]
-        offset = torch.arange(n_tables, device=weights.device,
-                              dtype=index.dtype) * table_dim
-        flat_idx = (index + offset.view(1, -1)).reshape(-1)
+    n_tables, table_dim, n_outputs = weights.shape
     w_sel = weights.view(n_tables * table_dim, n_outputs)[flat_idx]     # [B*n_tables, o]
     w_sel = w_sel.view(B, n_heads, tph, n_outputs)
     z = torch.clamp(w_sel / tau, min=-exp_clamp, max=exp_clamp)
@@ -186,6 +188,33 @@ def _exp_outputs_fwd(x, weights, anchor_a_long, anchor_b_long, powers,
         # sensitivity that no initialisation can restore.
         return tph * tau * (lse - math.log(tph))
     return tau * lse
+
+
+def _exp_outputs_fwd(x, weights, anchor_a_long, anchor_b_long, powers,
+                     n_heads, tph, table_dim, tau, exp_clamp, scale="mean"):
+    """`exp_outputs=True` readout: temperature-tau log-sum-exp across a head's tables.
+
+    Replaces the plain sum-over-tables reduction of `_soft_lut_fwd_body` with
+
+        out[b, h, o] = tau * log( sum_t exp( w_sel[b, h, t, o] / tau ) )
+
+    where `w_sel` is the same hard single-row selection per table the sum path uses --
+    the sign-pack index is computed identically (`d > 0`), so the ROWS chosen are
+    bit-identical to `forward_mode="hard"`; only how they are combined changes.
+
+    Plain autograd, used on the **eval** path where no surrogate is needed. The row
+    selection is discrete, so `x` carries no gradient through this function -- training
+    goes through `_FastMHLutExpOutputs`, which computes the identical forward and adds
+    the soft surrogate `grad_x`.
+    """
+    B, _ = x.shape
+    with torch.no_grad():
+        _index, flat_idx = _exp_outputs_index(
+            x, anchor_a_long, anchor_b_long, powers, table_dim, weights.device,
+        )
+    return _exp_outputs_readout(
+        weights, flat_idx, B, n_heads, tph, tau, exp_clamp, scale,
+    )
 
 
 # =============================================================================
@@ -352,6 +381,130 @@ class _FastMHLutSoft(torch.autograd.Function):
         # 12 forward inputs -> 12 grad returns.
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
                 None, None, None, None, None, None, None, None)
+
+
+# =============================================================================
+# exp_outputs=True: log-sum-exp forward + soft backward
+# =============================================================================
+
+class _FastMHLutExpOutputs(torch.autograd.Function):
+    """`exp_outputs=True`: exact log-sum-exp forward, surrogate input gradient.
+
+    Forward is bit-identical to `_exp_outputs_fwd` -- it calls the same two helpers,
+    so the hard `(d > 0)` sign-pack picks the same rows and the `tau * logsumexp`
+    readout returns the same values.
+
+    Backward has two halves with different characters:
+
+      - `weights` and `tau` get the EXACT gradient of the readout. They are obtained
+        by replaying the (cheap: one gather + elementwise + a logsumexp over `tph`)
+        readout tail under `enable_grad` and letting autograd differentiate it, rather
+        than by re-deriving the softmax / clamp-mask / scale algebra by hand. That
+        makes them definitionally equal to what the plain-autograd implementation
+        this Function replaces produced -- there is no second formula to drift.
+      - `x` and the two temperatures get the same full-K softmax surrogate the
+        standard modes use (`_soft_lut_bwd_body`), because the discrete row selection
+        has no usable derivative of its own. Without it `x` is not in the graph at
+        all and anything differentiable upstream silently receives nothing.
+
+    The one correction versus `_FastMHLutSoft`'s caller: that path builds `grad_pt`
+    by broadcasting `grad_out` uniformly across a head's `tph` tables, which is the
+    derivative of the SUM reduction. Under log-sum-exp the per-table sensitivity is
+
+        dL/dw_sel[b, h, t, o] = grad_out[b, h, o] * softmax_t(w_sel / tau)[b, h, t, o]
+
+    (times `tph` in the "sum" scale, and zeroed where the clamp bound). `grad_pt`
+    here is exactly that quantity, taken straight off the replay, so the softmax
+    weights, the clamp mask and the scale factor are all included without a second
+    derivation. The surrogate then linearises the readout in `w_sel` and asks the
+    usual question -- how does the loss move if this table's selected ROW moves --
+    which is the first-order term; the second-order effect of a row change on the
+    softmax weights themselves is not modelled, as in every other mode here.
+
+    Not double-differentiable, like `_FastMHLutSoft` and `_FastMHLutHybridSmooth`.
+    """
+
+    @staticmethod
+    def forward(ctx, x, weights, tau, log_T_soft, log_T_sel,
+                anchor_a_long, anchor_b_long, bit_matrix, powers,
+                n_heads, tph, table_dim, exp_clamp, scale):
+        B, _ = x.shape
+        index, flat_idx = _exp_outputs_index(
+            x, anchor_a_long, anchor_b_long, powers, table_dim, weights.device,
+        )
+        out = _exp_outputs_readout(
+            weights, flat_idx, B, n_heads, tph, tau, exp_clamp, scale,
+        )
+        ctx.save_for_backward(x, weights, tau, log_T_soft, log_T_sel,
+                              anchor_a_long, anchor_b_long, bit_matrix,
+                              index, flat_idx)
+        ctx.n_heads = n_heads
+        ctx.tph = tph
+        ctx.table_dim = table_dim
+        ctx.exp_clamp = exp_clamp
+        ctx.scale = scale
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        (x, weights, tau, log_T_soft, log_T_sel,
+         anchor_a_long, anchor_b_long, bit_matrix,
+         index, flat_idx) = ctx.saved_tensors
+        n_heads = ctx.n_heads
+        tph = ctx.tph
+        table_dim = ctx.table_dim
+        B = x.shape[0]
+        n_tables = anchor_a_long.shape[0]
+        n_outputs = weights.shape[2]
+
+        need_w   = ctx.needs_input_grad[1]
+        need_tau = ctx.needs_input_grad[2]
+        need_surrogate = (ctx.needs_input_grad[0]
+                          or ctx.needs_input_grad[3]
+                          or ctx.needs_input_grad[4])
+
+        # --- exact half: replay the readout tail and let autograd do the algebra.
+        with torch.enable_grad():
+            w_flat = weights.detach().reshape(
+                n_tables * table_dim, n_outputs).requires_grad_(True)
+            tau_ = tau.detach().requires_grad_(True)
+            w_sel = w_flat[flat_idx].view(B, n_heads, tph, n_outputs)
+            z = torch.clamp(w_sel / tau_, min=-ctx.exp_clamp, max=ctx.exp_clamp)
+            lse = torch.logsumexp(z, dim=2)
+            if ctx.scale == "sum":
+                out = tph * tau_ * (lse - math.log(tph))
+            else:
+                out = tau_ * lse
+        wanted = [w_sel]
+        i_w = i_tau = None
+        if need_w:
+            i_w = len(wanted)
+            wanted.append(w_flat)
+        if need_tau:
+            i_tau = len(wanted)
+            wanted.append(tau_)
+        replayed = torch.autograd.grad(out, wanted, grad_out)
+        grad_w_sel = replayed[0]
+        grad_weights = (replayed[i_w].view(n_tables, table_dim, n_outputs)
+                        if need_w else None)
+        grad_tau = replayed[i_tau] if need_tau else None
+
+        # --- surrogate half: the discrete row selection has no derivative, so `x`
+        # and the temperatures come from the same full-K softmax surrogate the
+        # standard modes use, driven by the log-sum-exp-weighted per-table
+        # sensitivity above instead of the sum path's uniform broadcast.
+        grad_x = grad_log_Ts = grad_log_Tx = None
+        if need_surrogate:
+            grad_pt = grad_w_sel.reshape(B, n_tables, n_outputs)
+            grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                index, log_T_soft.exp(), log_T_sel.exp(), weights.dtype,
+                compute_weight_grad=False,
+            )
+
+        # 14 forward inputs -> 14 grad returns.
+        return (grad_x, grad_weights, grad_tau, grad_log_Ts, grad_log_Tx,
+                None, None, None, None, None, None, None, None, None)
 
 
 # =============================================================================
@@ -868,12 +1021,24 @@ class FastMultiHeadLut(nn.Module):
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
             )
         if self.exp_outputs:
-            # One branch for train and eval alike: plain autograd, so the log-sum-exp
-            # weight gradient (softmax-weighted across tables) and d/dtau are exact.
-            return _exp_outputs_fwd(
-                x, self.weights, self.soft_anchor_a_long, self.soft_anchor_b_long,
-                self.soft_powers, self.n_heads, self.tables_per_head, self.table_dim,
-                self.exp_outputs_tau, self.exp_outputs_clamp, self.exp_outputs_scale,
+            if not torch.is_grad_enabled():
+                # Eval: no surrogate to supply, so skip the Function and its saved
+                # tensors. Same two helpers, so the output is bit-identical.
+                return _exp_outputs_fwd(
+                    x, self.weights, self.soft_anchor_a_long, self.soft_anchor_b_long,
+                    self.soft_powers, self.n_heads, self.tables_per_head, self.table_dim,
+                    self.exp_outputs_tau, self.exp_outputs_clamp, self.exp_outputs_scale,
+                )
+            # Train: same forward, plus a soft surrogate grad_x so the LUT can sit on
+            # top of a differentiable module. The weight and tau gradients are the
+            # exact autograd ones either way.
+            return _FastMHLutExpOutputs.apply(
+                x, self.weights, self.exp_outputs_tau,
+                self.log_soft_score_temp, self.log_select_temp,
+                self.soft_anchor_a_long, self.soft_anchor_b_long,
+                self.soft_bit_matrix, self.soft_powers,
+                self.n_heads, self.tables_per_head, self.table_dim,
+                self.exp_outputs_clamp, self.exp_outputs_scale,
             )
         if self.forward_mode == "hybrid_smooth":
             return _FastMHLutHybridSmooth.apply(
