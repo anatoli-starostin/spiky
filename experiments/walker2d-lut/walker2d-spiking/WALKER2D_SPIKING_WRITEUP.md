@@ -316,8 +316,9 @@ claim is "indistinguishable", and the number should not be quoted as a gain.
 **Files.** The quantised path is a fork throughout: the delay-based `tiny_lut_full_pipeline.py`
 and the deployed `spiking_lut.py` were left untouched by this work.
 
-Paths below are repo-relative; the scripts themselves hardcode them under
-`/home/astarostin/projects/spiky/`, so a clone elsewhere needs the roots adjusted.
+Paths below are repo-relative, and so are the scripts': every one of them resolves its
+inputs and outputs from its own `__file__`, so a clone or a worktree anywhere runs against
+its own tree with no roots to adjust.
 
 All ten live in `experiments/walker2d-lut/walker2d-spiking/` unless noted.
 

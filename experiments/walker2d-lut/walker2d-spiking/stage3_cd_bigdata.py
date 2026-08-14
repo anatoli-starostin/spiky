@@ -19,21 +19,19 @@ import time
 import numpy as np
 import torch
 
-sys.path.insert(0, "/home/astarostin/projects/spiky/experiments/walker2d-lut/src")
+# Everything resolves relative to this file, the way tiny_lut_quantised_pipeline.py does,
+# so a clone or a worktree anywhere runs against its own tree.
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 import tiny_lut_quantised_pipeline as QP                    # noqa: E402
 
-NPZ = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/"
-       "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
-       "walker2d_fastlut_lse_exp19_quantised.npz")
-ACT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
-       "deploy_quantised/spiking_lut_quantised_actor.npz")
-DATA = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
-        "analysis/software_teacher_io_dataset_100k.npz")
+NPZ = os.path.join(HERE, "..", "exp19_lut-lse-expmlpcrit-t32", "deploy", "quantised",
+                   "walker2d_fastlut_lse_exp19_quantised.npz")
+ACT = os.path.join(HERE, "deploy_quantised", "spiking_lut_quantised_actor.npz")
+DATA = os.path.join(HERE, "analysis", "software_teacher_io_dataset_100k.npz")
 # The fit's outputs; §4 of the write-up: these two are a PAIR and must never be used apart.
-WOUT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
-        "deploy_quantised/stage3_weights_bigdata.npy")
-OOUT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
-        "deploy_quantised/stage3_offset_bigdata.npy")
+WOUT = os.path.join(HERE, "deploy_quantised", "stage3_weights_bigdata.npy")
+OOUT = os.path.join(HERE, "deploy_quantised", "stage3_offset_bigdata.npy")
 PHASE, BASE = 0.750, 13.0
 
 
