@@ -23,12 +23,18 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
   log-sum-exp pooling (learned τ=0.09377), 201M env-steps.
 
 ### Stage B — construct the spiking network (closed-form, no backprop inside the net)
-- `experiments/walker2d-lut/walker2d-spiking/` (26 files) — the analytic **3-stage construction**
-  (order → lookup → readout) that turns the trained table into an spnet network;
-  *(relocated from the historically-misnamed `experiments/neurodarwinism/src/`)*;
-  entry point **`tiny_lut_quantised_pipeline.py`** ("builds and verifies the network",
-  identical wiring to the deployed actor), with its `tiny_lut_order_*` / `stage2` /
-  `output_stage` / `stage3_*` siblings.
+- `experiments/walker2d-lut/walker2d-spiking/` (10 scripts + `data/`) — the analytic **3-stage
+  construction** (order → lookup → readout) that turns the trained table into an spnet network;
+  *(relocated from the historically-misnamed `experiments/neurodarwinism/src/`)*. Entry point
+  **`tiny_lut_quantised_pipeline.py`** ("builds and verifies the network", identical wiring to
+  the deployed actor); it imports `tiny_lut_order_full` → `tiny_lut_order_detect`. Then
+  `tiny_lut_quantised_export.py`, `collect_teacher_io.py`, `stage3_cd_bigdata.py`,
+  `bake_and_verify_actor.py`, `eval_gtskew_large.py`, and the delay-based
+  `tiny_lut_full_pipeline.py` + `tiny_lut_export_actor.py` (which produce the separately-served
+  `spiking_lut_actor.npz`).
+- `walker2d-spiking/data/distill_exp19_100k.npz` (21.6 MB) — the 100,000 real Walker2d
+  observations every verification number in the write-up is measured on. Committed, and every
+  script resolves it relative to itself, so the pipeline runs with no arguments.
 - `src/spiky/lutorch/fast_multi_head_lut.py` — the LUT extension the programme adds on top of the
   core library; it backs the exp19 actor (`fastlut_lse_sum_expmlpcrit`) the story ships.
 - The spiking simulator itself (`spnet`, `src/spiky/spnet/` + `native/`) is **already on main**.
@@ -60,6 +66,12 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
   a no-op on them. They are already on main (66446ff5) and retiring a library class is not this PR's job;
   the reworked version stays on `research/walker2d-lut`.
 - `exp19.../distill/spiking/` (~180 files) — the earlier *trainable*-SNN distillation R&D; the shipped net is the **analytic** construction.
+- The construction tree's 16 stepwise / diagnostic / negative-result scripts — the Stage-1 latch
+  and gate stages, the Stage-2 and output-stage exploration, the Izhikevich probes, the membrane
+  traces, the on-policy recalibration, the paired action diagnostic, and the earlier and failed
+  Stage-3 fits. Nothing imports them, none produces a file this branch carries, and none is cited
+  in the write-up as the source of a reported number; their *results* are reported there and the
+  code stays on `research/walker2d-lut`.
 - `exp23` sweep/probe/`qat_*`/raw `.npy` trees, all `progress_monitor*.py`, `run_bench*.sh`, `*.gpu` traces — dev clutter.
 
 ## Notes for review (with gpustar)

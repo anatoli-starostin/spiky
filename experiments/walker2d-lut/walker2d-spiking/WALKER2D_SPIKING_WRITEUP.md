@@ -313,20 +313,37 @@ claim is "indistinguishable", and the number should not be quoted as a gain.
 
 ## 6. Notes for reproduction
 
-**Files** (all forked; the delay-based `tiny_lut_full_pipeline.py` and the deployed
-`spiking_lut.py` are untouched):
+**Files.** The quantised path is a fork throughout: the delay-based `tiny_lut_full_pipeline.py`
+and the deployed `spiking_lut.py` were left untouched by this work.
 
 Paths below are repo-relative; the scripts themselves hardcode them under
 `/home/astarostin/projects/spiky/`, so a clone elsewhere needs the roots adjusted.
 
+All ten live in `experiments/walker2d-lut/walker2d-spiking/` unless noted.
+
 | file | role |
 |---|---|
-| `experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py` | builds and verifies the network |
-| `experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_export.py` | exports the actor artefact |
+| `tiny_lut_quantised_pipeline.py` | **entry point** — builds and verifies the network |
+| `tiny_lut_order_full.py` | the 136 comparators; the entry point imports `pair_list` from it |
+| `tiny_lut_order_detect.py` | one dual-rail comparator; imported by the two above |
+| `tiny_lut_quantised_export.py` | exports the actor artefact |
+| `collect_teacher_io.py` | the 153K teacher dataset |
+| `stage3_cd_bigdata.py` | the 8-bit coordinate-descent fit |
+| `bake_and_verify_actor.py` | bakes the fitted weight+offset pair in, verifies end to end |
+| `eval_gtskew_large.py` | the paired walker eval |
+| `tiny_lut_full_pipeline.py` | the earlier **delay-based** build |
+| `tiny_lut_export_actor.py` | exports it to `landing/walker2d-viz/server/models/spiking_lut_actor.npz` |
 | `landing/walker2d-viz/server/actors/spiking_lut_quantised.py` | the served actor |
-| `experiments/walker2d-lut/walker2d-spiking/collect_teacher_io.py` | the 153K teacher dataset |
-| `experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py` | the 8-bit coordinate-descent fit |
-| `experiments/walker2d-lut/walker2d-spiking/eval_gtskew_large.py` | the paired walker eval |
+
+The delay-based pair is here because the demo stand still serves what it produced, as the
+separate "Spiking LUT (handcrafted SNN)" actor.
+
+The step-by-step construction scripts behind §3 — the Stage-1 latch and gate stages, the
+Stage-2 and output-stage exploration, the Izhikevich probes, the membrane traces that dated the
+cross-inhibition, the on-policy recalibration, the paired action diagnostic and the two failed
+differentiable fits of §4 — are kept on `research/walker2d-lut`. Their results are reported
+throughout this document; only the code is elsewhere, so this branch carries the path to the
+shipped network and nothing else.
 
 The served actor is **not** pure numpy. Numpy does the input companding and the output decode,
 and there is no scipy anywhere — but the network itself is built and run on the spnet engine:

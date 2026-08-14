@@ -26,7 +26,6 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "..", "src")
-DEPS = os.path.join(HERE, "..", "_qat_deps")
 
 
 def softplus(x):
@@ -126,7 +125,6 @@ def main():
           f"step {2*a.out_quant_clip/(a.out_quant_levels-1):.6f}")
 
     # ---- parity gate: numpy vs the real torch module + the training-time quantisers ----
-    sys.path.insert(0, DEPS)
     sys.path.insert(0, SRC)
     from models import REGISTRY                       # noqa: E402
     from obs_quant import GaussianCompandingQuantizer  # noqa: E402

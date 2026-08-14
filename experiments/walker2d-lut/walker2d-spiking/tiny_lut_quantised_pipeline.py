@@ -85,7 +85,8 @@ W_DET = 0.06
 D_GATE = 6
 # GT-SKEW (replaces the 136 tie-detector neurons).
 #
-# Measured on the real kernel (tiny_tie_trace.py): the cross-inhibition lands exactly ONE
+# Measured on the real kernel (membrane traces, kept on research/walker2d-lut): the
+# cross-inhibition lands exactly ONE
 # TICK AFTER the excitation it must cancel. So on an exact tie both rails see pure +1.5187
 # and BOTH fire (the veto is late); 1 tick apart, the loser sees +1.5-10 = -8.5 in a single
 # tick and never rises. That is why ties needed a separate detector.
