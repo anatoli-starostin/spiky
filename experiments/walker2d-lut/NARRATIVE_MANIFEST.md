@@ -52,10 +52,13 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 - `experiments/walker2d_lut/` (1,488 files) — the separate JAX/MJX **c36 reproduction** track.
 - `experiments/neurodarwinism/exp012_tiny-direct-genome/` analysis/probe/deploy sub-trees (kept only the write-up, now at `experiments/walker2d-lut/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`).
 - `exp00–04, exp06–18, exp20–22` — superseded / alternative-architecture runs; the story uses **exp05 recipe + exp19 actor**.
-- `src/spiky/lutorch/{lif_multi_head_lut,lif_layer}.py` + their tests, and the `liflut_mlpexpcrit` /
+- `src/spiky/lutorch/lif_layer.py` + `tests/test_lif_layer.py`, and the `liflut_mlpexpcrit` /
   `liflayer_mlpexpcrit` arches in `models.py` — the *trainable*-LIF actor line, which only ever served the
   excluded exp20/exp21. Nothing on the story's path imports them: the construction pipeline and both
   deployed actors use `spiky.spnet` + `spiky.util.synapse_growth` only, and exp19 uses `FastMultiHeadLut`.
+  Note `src/spiky/lutorch/lif_multi_head_lut.py` and its test are **untouched from main** — this branch is
+  a no-op on them. They are already on main (66446ff5) and retiring a library class is not this PR's job;
+  the reworked version stays on `research/walker2d-lut`.
 - `exp19.../distill/spiking/` (~180 files) — the earlier *trainable*-SNN distillation R&D; the shipped net is the **analytic** construction.
 - `exp23` sweep/probe/`qat_*`/raw `.npy` trees, all `progress_monitor*.py`, `run_bench*.sh`, `*.gpu` traces — dev clutter.
 

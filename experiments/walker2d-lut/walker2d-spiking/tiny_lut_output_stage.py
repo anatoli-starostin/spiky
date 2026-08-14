@@ -138,7 +138,7 @@ def main():
     a = ap.parse_args()
 
     import os
-    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
+    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
                              "distill_exp19_100k.npz"))
     x = Z["x_norm"].astype(np.float64)
     ntr = len(x) - 4000

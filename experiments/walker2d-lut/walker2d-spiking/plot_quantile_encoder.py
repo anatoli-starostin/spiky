@@ -18,8 +18,8 @@ import matplotlib.pyplot as plt        # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 NPZ = os.path.join(HERE, "..", "..", "..", "landing", "walker2d-viz", "server", "models",
                    "spiking_lut_actor.npz")
-DATA = os.path.join(HERE, "..", "data", "distill_exp19_100k.npz")
-OUT = os.path.join(HERE, "..", "exp012_tiny-direct-genome", "analysis",
+DATA = os.path.join(HERE, "data", "distill_exp19_100k.npz")
+OUT = os.path.join(HERE, "analysis",
                    "quantile_encoder_plot.png")
 
 INK, MUTE = "#2b2b2b", "#6b6b6b"

@@ -334,13 +334,17 @@ and there is no scipy anywhere — but the network itself is built and run on th
 `SynapseGrowthEngine`, and `act()` calls `process_ticks`. What runs in the demo stand is the
 real simulator, not a numpy replay of it.
 
-**Inputs this branch does not carry.** The scripts read three things from
-`experiments/walker2d-lut/walker2d-spiking/` that are outputs of earlier stages, not source, and
-so live on `research/walker2d-lut` instead:
+**The observation set is carried.** `data/distill_exp19_100k.npz` (21.6 MB, 100,000 real
+Walker2d states) is committed here, and every script in this directory resolves it relative to
+itself — so the pipeline and its twelve siblings run with no `--data` argument. That file is what
+every verification number in this document is measured on: the pipeline takes the held-out tail
+of `--n` states from it.
+
+**Inputs this branch does not carry.** Two stage outputs, both regenerable, live on
+`research/walker2d-lut`:
 
 | path | what produces it |
 |---|---|
-| `data/distill_exp19_100k.npz` | the pipeline's `--data` default; pass `--data` to point elsewhere |
 | `analysis/software_teacher_io_dataset_100k.npz` | `collect_teacher_io.py --out` |
 | `deploy_quantised/spiking_lut_quantised_actor.npz` | `tiny_lut_quantised_export.py`; a byte-identical copy of the shipped build is on this branch at `landing/walker2d-viz/server/models/` |
 

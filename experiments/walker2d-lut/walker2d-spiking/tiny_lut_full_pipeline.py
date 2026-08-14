@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     dims = [int(v) for v in a.dims.split(",")]
-    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
+    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
                              "distill_exp19_100k.npz"))
     x = Z["x_norm"].astype(np.float64)
     A_, B_ = Z["anchor_a"], Z["anchor_b"]

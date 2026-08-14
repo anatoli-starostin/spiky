@@ -274,13 +274,15 @@ def run(net, ids, ticks, n_ticks, device="cuda"):
 
 
 def main():
+    # Resolve the defaults relative to this file, the way the sibling scripts do, so a clone
+    # or a worktree anywhere finds the committed data/ and the exp19 teacher without flags.
+    here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--npz", default="/home/astarostin/projects/spiky/experiments/"
-                                     "walker2d-lut/exp19_lut-lse-expmlpcrit-t32/deploy/"
-                                     "quantised/walker2d_fastlut_lse_exp19_quantised.npz")
-    ap.add_argument("--data", default="/home/astarostin/projects/spiky/experiments/"
-                                      "walker2d-lut/walker2d-spiking/data/"
-                                      "distill_exp19_100k.npz")
+    ap.add_argument("--npz", default=os.path.join(
+        here, "..", "exp19_lut-lse-expmlpcrit-t32", "deploy", "quantised",
+        "walker2d_fastlut_lse_exp19_quantised.npz"))
+    ap.add_argument("--data", default=os.path.join(
+        here, "data", "distill_exp19_100k.npz"))
     ap.add_argument("--n", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=32)
     ap.add_argument("--dims", default="0,1,2,3,4,5")

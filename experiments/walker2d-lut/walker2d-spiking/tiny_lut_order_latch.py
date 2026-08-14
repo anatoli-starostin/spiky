@@ -97,7 +97,7 @@ def main():
     ap.add_argument("--tau-m", type=float, default=20.0)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
+    Z = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
                              "distill_exp19_100k.npz"))
     x = Z["x_norm"].astype(np.float64)
     A_, B_ = int(Z["anchor_a"][0, 0]), int(Z["anchor_b"][0, 0])
