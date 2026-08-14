@@ -12,6 +12,28 @@ per-machine notes — they are how you *implement* the steps below, not part of 
 method. What is shared, and belongs here, is the **branch logic** and the **multi-machine
 coordination model**.
 
+## Branch prefixes
+
+A small, scannable convention, so you can tell at a glance what a branch is for and how much
+care it needs.
+
+| Prefix | Meaning |
+|---|---|
+| `main` | Stable trunk, and the curated source of truth. Everything durable lands here eventually, and **only through a reviewed pull request**. |
+| `research/` | **The idea branches** — one per idea, per the section below. All experimental work, analysis and write-up for that idea happens here. |
+| `live/` | A branch that a **running deployment** is served from. Treat as protected: **never force-push** — a live service depends on it. How a given `live/` branch is deployed is documented on that branch itself (for `live/walker2d-viz`, see `landing/walker2d-viz/DEPLOYMENT.md`), because deployment is host-specific and so out of scope here. |
+| `gh-pages` | The published static site. Deployed by GitHub Pages straight from the branch — a push *is* a release. |
+| `exp/` | Legacy experiment branches, predating the one-idea-one-issue-one-branch rule. Kept for reference; new work uses `research/`. |
+| `archive/` | Retired branches kept for reference. More often the retirement is recorded as a **tag** — `archive/<name>` — rather than a branch, which preserves the history without leaving a branch that looks active. |
+
+Two clarifications, because these are easy to get wrong:
+
+- **`research/` is not a "writeup branch".** It is where the *work* happens — the scratch
+  experiments, the data, and the eventual narrative. `main` is the curated end state.
+- **`archive/` is not a way to delete something.** Nothing is hard-deleted (see the two exits
+  below). An `archive/<name>` tag is a durable marker on history that has been retired, so a
+  branch label can be tidied up without the commits becoming unreachable.
+
 ## The unit of work: one idea, one issue, one branch
 
 Research is structured as **one idea → one GitHub issue → one branch** — no giant
