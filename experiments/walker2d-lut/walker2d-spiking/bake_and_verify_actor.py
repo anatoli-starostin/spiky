@@ -14,14 +14,19 @@ import types
 
 import numpy as np
 
-BASE = "/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking"
+# Everything resolves relative to this file, the way tiny_lut_quantised_pipeline.py does,
+# so a clone or a worktree anywhere runs against its own tree.
+BASE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.join(BASE, "..", "..", "..")
 ACT = f"{BASE}/deploy_quantised/spiking_lut_quantised_actor.npz"
 WOPT = f"{BASE}/deploy_quantised/stage3_weights_bigdata.npy"
 OOPT = f"{BASE}/deploy_quantised/stage3_offset_bigdata.npy"
-POL = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/"
-       "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
-       "walker2d_fastlut_lse_exp19_quantised.npz")
+POL = os.path.join(BASE, "..", "exp19_lut-lse-expmlpcrit-t32", "deploy", "quantised",
+                   "walker2d_fastlut_lse_exp19_quantised.npz")
 DATA = f"{BASE}/analysis/software_teacher_io_dataset_100k.npz"
+# The served actor module, staged into /tmp below and loaded the way the server loads it.
+SERVED_ACTOR = os.path.join(REPO, "landing", "walker2d-viz", "server", "actors",
+                            "spiking_lut_quantised.py")
 
 
 def main():
@@ -68,8 +73,7 @@ def main():
     STAGE = "/tmp/_bake_check"
     shutil.rmtree(STAGE, ignore_errors=True)
     os.makedirs(STAGE + "/actors"); os.makedirs(STAGE + "/models")
-    shutil.copy("/home/astarostin/projects/spiky/landing/walker2d-viz/server/actors/"
-                "spiking_lut_quantised.py", STAGE + "/actors/")
+    shutil.copy(SERVED_ACTOR, STAGE + "/actors/")
     shutil.copy(ACT, STAGE + "/models/")
     open(STAGE + "/actors/__init__.py", "w").close()
     with open(STAGE + "/actors/base.py", "w") as f:

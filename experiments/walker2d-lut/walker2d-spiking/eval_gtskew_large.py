@@ -17,15 +17,18 @@ import time
 import numpy as np
 import torch
 
-sys.path.insert(0, "/home/astarostin/projects/spiky/experiments/walker2d-lut/src")
+# Everything resolves relative to this file, the way tiny_lut_quantised_pipeline.py does,
+# so a clone or a worktree anywhere runs against its own tree. `warp_env` genuinely lives
+# in the training tree next door; the pipeline module is this script's own neighbour.
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "src"))
+sys.path.insert(0, HERE)
 from warp_env import WarpWalker2dVecEnv                     # noqa: E402
 import tiny_lut_quantised_pipeline as QP                    # noqa: E402
 
-NPZ = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/"
-       "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
-       "walker2d_fastlut_lse_exp19_quantised.npz")
-ACT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
-       "deploy_quantised/spiking_lut_quantised_actor.npz")
+NPZ = os.path.join(HERE, "..", "exp19_lut-lse-expmlpcrit-t32", "deploy", "quantised",
+                   "walker2d_fastlut_lse_exp19_quantised.npz")
+ACT = os.path.join(HERE, "deploy_quantised", "spiking_lut_quantised_actor.npz")
 
 
 def main():

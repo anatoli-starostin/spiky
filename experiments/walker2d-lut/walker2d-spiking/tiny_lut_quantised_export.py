@@ -24,11 +24,14 @@ import tiny_lut_quantised_pipeline as P
 
 
 def main():
+    # Resolve the default relative to this file, the way tiny_lut_quantised_pipeline.py does,
+    # so a clone or a worktree anywhere finds the exp19 teacher without flags.
+    here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", default=P.__dict__.get("_DEFAULT_NPZ") or
-                    "/home/astarostin/projects/spiky/experiments/walker2d-lut/"
-                    "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
-                    "walker2d_fastlut_lse_exp19_quantised.npz")
+                    os.path.join(here, "..", "exp19_lut-lse-expmlpcrit-t32", "deploy",
+                                 "quantised",
+                                 "walker2d_fastlut_lse_exp19_quantised.npz"))
     ap.add_argument("--calib", required=True,
                     help="the JSON written by tiny_lut_quantised_pipeline.py --out "
                          "(supplies the validated beta + decode affine)")

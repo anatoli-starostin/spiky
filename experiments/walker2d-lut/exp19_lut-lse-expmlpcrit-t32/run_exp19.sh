@@ -20,11 +20,14 @@
 #
 # Every other flag is exp10's, verbatim: 8192 envs, 768 updates, bench7 recipe, 3 seeds.
 set -uo pipefail
-SRC=/home/astarostin/projects/spiky/experiments/walker2d-lut/src
-OUT=/home/astarostin/projects/spiky/experiments/walker2d-lut/exp19_lut-lse-expmlpcrit-t32
+# Resolve everything relative to this script, so a clone or a worktree anywhere runs
+# against its own tree. Override PY if your interpreter is not the repo venv.
+OUT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SRC=$(cd "$OUT/../src" && pwd)
+REPO=$(cd "$OUT/../../.." && pwd)
 cd "$SRC"
 export WARP_CACHE_PATH=/tmp/warp_cache TRITON_CACHE_DIR=/tmp/triton_cache
-PY=/home/astarostin/projects/spiky/.venv/bin/python
+PY=${PY:-$REPO/.venv/bin/python}
 
 mkdir -p "$OUT"
 
