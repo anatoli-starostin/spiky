@@ -17,7 +17,8 @@ PPO stabilization step 4 (WINNER) - cosine 3e-4->3e-5 + log_std floor + exact tr
 
 ## Files
 
-- `config.json` / `summary.json` / `metrics.csv` - convention metadata (generated from the raw runs).
-- `ppo_s{0,1,2}.json` - raw per-seed run records (full per-update history).
-- `*.gpu` / `agg.gpu` - GPU utilization traces.
+- `config.json` / `summary.json` - convention metadata (generated from the raw runs).
+- Not carried on this branch, kept with the full run on `research/walker2d-lut`: `metrics.csv`,
+  the raw per-seed records `ppo_s{0,1,2}.json` (full per-update history), and the `*.gpu` /
+  `agg.gpu` utilization traces.
 - provenance: originally `bench7/`; delegated tasks in the walker2d-lut programme.

@@ -21,7 +21,8 @@ difference between the two experiments is the critic's readout.
 drifts *up* toward the plain sum (0.0849 vs the control's 0.0887, |t| 1.46 — not
 distinguishable), and the critic's own τ_c rises too, 0.25 → 0.2797.**
 
-![result](exp19_result.png)
+*(The result plot `exp19_result.png` is not carried on this branch; it is with the full run on
+`research/walker2d-lut`. The numbers it charts are tabulated below.)*
 
 ## 1. The result
 
