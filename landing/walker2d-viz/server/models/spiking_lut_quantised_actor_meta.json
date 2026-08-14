@@ -1,0 +1,40 @@
+{
+  "source": "exp012 amplitude-encoded spiking LUT (tiny_lut_quantised_pipeline.py)",
+  "policy": "walker2d_fastlut_lse_exp19_quantised.npz",
+  "stage3_encoding": "AMPLITUDE: every selected-cell->output synapse has delay=1 and weight beta_o*exp(w/tau); all 32 land on one tick and the linear anti-leak membrane integrates sum_t exp(w_t/tau) directly",
+  "readout": "T = first output-spike tick; mu = slope*T + offset; silence -> -clip; then snap to the output grid",
+  "decode_slope_theory": -0.09523729409162479,
+  "tau_m_out": 31.257,
+  "n_ticks": 167,
+  "dmax": 6,
+  "neurons": 2889,
+  "synapses": 25953,
+  "levels": 22,
+  "stage3_weights": "FITTED, not the teacher table: the 8-bit log-domain coordinate-descent fit (stage3_weights_bigdata.npy) baked in together with its matched offset (stage3_offset_bigdata.npy) -- the two are a pair and must never be used apart. The npz records the same in its stage3_fit key. 12,287 of 12,288 weights moved; all land on the 8-bit grid.",
+  "verification": {
+    "stage1_bit_parity": 1.0,
+    "stage2_none": 0,
+    "stage2_multi": 0,
+    "stage1_stage2_measured_by": "tiny_lut_quantised_pipeline.py (address decoding, independent of the Stage-3 weights)",
+    "stage3_measured_by": "bake_and_verify_actor.py on the baked artefact",
+    "stage3_n_states": 4096,
+    "stage3_exact": {
+      "0": 0.9833984375,
+      "1": 0.99072265625,
+      "2": 0.9892578125,
+      "3": 0.98681640625,
+      "4": 0.9853515625,
+      "5": 0.987548828125
+    },
+    "stage3_exact_overall": 0.9871826171875,
+    "stage3_within_one_level": {
+      "0": 1.0,
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0
+    }
+  },
+  "note": "Only in_quant_edges crosses into the SNN -- the network consumes tick ORDERING only, so in_quant_dequant is not needed at inference."
+}
