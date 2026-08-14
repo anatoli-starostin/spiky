@@ -28,8 +28,8 @@ import tiny_lut_quantised_pipeline as QP                    # noqa: E402
 NPZ = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/"
        "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
        "walker2d_fastlut_lse_exp19_quantised.npz")
-ACT = ("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-       "exp012_tiny-direct-genome/deploy_quantised/spiking_lut_quantised_actor.npz")
+ACT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+       "deploy_quantised/spiking_lut_quantised_actor.npz")
 
 
 def ste_round(x):

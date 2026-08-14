@@ -25,10 +25,15 @@ import tiny_lut_quantised_pipeline as QP                    # noqa: E402
 NPZ = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/"
        "exp19_lut-lse-expmlpcrit-t32/deploy/quantised/"
        "walker2d_fastlut_lse_exp19_quantised.npz")
-ACT = ("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-       "exp012_tiny-direct-genome/deploy_quantised/spiking_lut_quantised_actor.npz")
-DATA = ("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-        "exp012_tiny-direct-genome/analysis/software_teacher_io_dataset_100k.npz")
+ACT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+       "deploy_quantised/spiking_lut_quantised_actor.npz")
+DATA = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+        "analysis/software_teacher_io_dataset_100k.npz")
+# The fit's outputs; §4 of the write-up: these two are a PAIR and must never be used apart.
+WOUT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+        "deploy_quantised/stage3_weights_bigdata.npy")
+OOUT = ("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+        "deploy_quantised/stage3_offset_bigdata.npy")
 PHASE, BASE = 0.750, 13.0
 
 
@@ -194,12 +199,10 @@ def main():
               f"overall {np.mean(snn[name]['exact'])*100:.2f}%")
         print(f"  signed {[round(v,4) for v in snn[name]['mean_signed']]}")
 
-    np.save("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-            "exp012_tiny-direct-genome/deploy_quantised/"
-            "stage3_weights_bigdata.npy", Lc * tau)
-    np.save("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-            "exp012_tiny-direct-genome/deploy_quantised/"
-            "stage3_offset_bigdata.npy", off2)
+    # deploy_quantised/ is an output dir, not tracked — create it on first run.
+    os.makedirs(os.path.dirname(WOUT), exist_ok=True)
+    np.save(WOUT, Lc * tau)
+    np.save(OOUT, off2)
     print(f"offset shift vs baseline (level units): "
           f"{[round(float((off2[o]-off[o])/ST),4) for o in range(6)]}")
     print("saved stage3_weights_bigdata.npy")

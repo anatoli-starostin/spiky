@@ -316,14 +316,36 @@ claim is "indistinguishable", and the number should not be quoted as a gain.
 **Files** (all forked; the delay-based `tiny_lut_full_pipeline.py` and the deployed
 `spiking_lut.py` are untouched):
 
+Paths below are repo-relative; the scripts themselves hardcode them under
+`/home/astarostin/projects/spiky/`, so a clone elsewhere needs the roots adjusted.
+
 | file | role |
 |---|---|
-| `src/tiny_lut_quantised_pipeline.py` | builds and verifies the network |
-| `src/tiny_lut_quantised_export.py` | exports the actor artefact |
-| `landing/.../actors/spiking_lut_quantised.py` | the actor (pure numpy, no torch, no scipy) |
-| `src/collect_teacher_io.py` | the 153K teacher dataset |
-| `src/stage3_cd_bigdata.py` | the 8-bit coordinate-descent fit |
-| `src/eval_gtskew_large.py` | the paired walker eval |
+| `experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py` | builds and verifies the network |
+| `experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_export.py` | exports the actor artefact |
+| `landing/walker2d-viz/server/actors/spiking_lut_quantised.py` | the served actor |
+| `experiments/walker2d-lut/walker2d-spiking/collect_teacher_io.py` | the 153K teacher dataset |
+| `experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py` | the 8-bit coordinate-descent fit |
+| `experiments/walker2d-lut/walker2d-spiking/eval_gtskew_large.py` | the paired walker eval |
+
+The served actor is **not** pure numpy. Numpy does the input companding and the output decode,
+and there is no scipy anywhere — but the network itself is built and run on the spnet engine:
+`__init__` imports torch and `spiky.spnet`, grows the 2,889 neurons through
+`SynapseGrowthEngine`, and `act()` calls `process_ticks`. What runs in the demo stand is the
+real simulator, not a numpy replay of it.
+
+**Inputs this branch does not carry.** The scripts read three things from
+`experiments/walker2d-lut/walker2d-spiking/` that are outputs of earlier stages, not source, and
+so live on `research/walker2d-lut` instead:
+
+| path | what produces it |
+|---|---|
+| `data/distill_exp19_100k.npz` | the pipeline's `--data` default; pass `--data` to point elsewhere |
+| `analysis/software_teacher_io_dataset_100k.npz` | `collect_teacher_io.py --out` |
+| `deploy_quantised/spiking_lut_quantised_actor.npz` | `tiny_lut_quantised_export.py`; a byte-identical copy of the shipped build is on this branch at `landing/walker2d-viz/server/models/` |
+
+`stage3_cd_bigdata.py` creates `deploy_quantised/` itself and writes the fitted
+`stage3_weights_bigdata.npy` + `stage3_offset_bigdata.npy` pair there.
 
 **Traps worth knowing**, each of which cost a wrong result before being caught:
 
@@ -337,6 +359,15 @@ claim is "indistinguishable", and the number should not be quoted as a gain.
 5. **Open-loop data.** All fitting uses teacher-visited states. It transferred here at 98.58%
    agreement; it did not need to.
 
-**Not done:** the fitted weights are **not** baked into the shipped actor
-(`spiking_lut_quantised_actor.npz` remains the verified GT-skew build), nothing is deployed,
-and the server has not been rebuilt.
+**Shipped:** the fitted weights **are** baked into `spiking_lut_quantised_actor.npz`, together
+with the offset they were fitted against — §4's rule that the two travel as a pair is honoured in
+the artefact itself. The file carries `stage3_fit = "coord-descent 8-bit log-domain, 153k teacher
+pairs"`; its `weights` differ from the teacher table by up to 2.56e-02 and match
+`stage3_weights_bigdata.npy` to 1.5e-08, and its per-dim `affine` offsets are
+`stage3_offset_bigdata.npy` exactly. The pre-fit GT-skew build — the one this paragraph used to
+describe — is kept on `research/walker2d-lut` as
+`spiking_lut_quantised_actor_GTSKEW_verified.npz.bak`, whose weights still match the teacher
+table exactly.
+
+The actor is deployed: it ships in `landing/walker2d-viz/server/models/` and the demo stand
+serves it as **"Spiking LUT quantised (handcrafted SNN)"**.

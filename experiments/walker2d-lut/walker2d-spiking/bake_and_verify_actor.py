@@ -14,7 +14,7 @@ import types
 
 import numpy as np
 
-BASE = "/home/astarostin/projects/spiky/experiments/neurodarwinism/exp012_tiny-direct-genome"
+BASE = "/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking"
 ACT = f"{BASE}/deploy_quantised/spiking_lut_quantised_actor.npz"
 WOPT = f"{BASE}/deploy_quantised/stage3_weights_bigdata.npy"
 OOPT = f"{BASE}/deploy_quantised/stage3_offset_bigdata.npy"

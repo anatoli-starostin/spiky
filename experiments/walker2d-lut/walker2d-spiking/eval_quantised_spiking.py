@@ -136,9 +136,8 @@ def main():
 
     # ---------------- (a) real SNN in the loop ----------------
     if not a.skip_real:
-        Zq = np.load("/home/astarostin/projects/spiky/experiments/neurodarwinism/"
-                     "exp012_tiny-direct-genome/deploy_quantised/"
-                     "spiking_lut_quantised_actor.npz")
+        Zq = np.load("/home/astarostin/projects/spiky/experiments/walker2d-lut/walker2d-spiking/"
+                     "deploy_quantised/spiking_lut_quantised_actor.npz")
         net, ids, nsyn, n_ticks, nneur, aff_, win, beta, dmax = QP.build(
             Zn, list(range(6)), False, float(Zq["tau_m_out"]), "cuda", 6, 3.0,
             True)                       # tie_break=False, gt_skew=True

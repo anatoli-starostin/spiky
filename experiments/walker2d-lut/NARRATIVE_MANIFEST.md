@@ -6,7 +6,7 @@
 deploy the live demo** — as a reviewable PR candidate into `main`. Curated for
 clarity, not completeness; the full research trees stay on `research/walker2d-lut`.
 
-The narrative doc is **`experiments/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`**
+The narrative doc is **`experiments/walker2d-lut/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`**
 (and gpustar's public write-up, *"A lookup table that learned to walk — and then
 became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 
@@ -23,14 +23,14 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
   log-sum-exp pooling (learned τ=0.09377), 201M env-steps.
 
 ### Stage B — construct the spiking network (closed-form, no backprop inside the net)
-- `experiments/walker2d-spiking/` (26 files) — the analytic **3-stage construction**
+- `experiments/walker2d-lut/walker2d-spiking/` (26 files) — the analytic **3-stage construction**
   (order → lookup → readout) that turns the trained table into an spnet network;
   *(relocated from the historically-misnamed `experiments/neurodarwinism/src/`)*;
   entry point **`tiny_lut_quantised_pipeline.py`** ("builds and verifies the network",
   identical wiring to the deployed actor), with its `tiny_lut_order_*` / `stage2` /
   `output_stage` / `stage3_*` siblings.
-- `src/spiky/lutorch/{lif_layer,lif_multi_head_lut,fast_multi_head_lut}.py` (+ `tests/test_lif_layer.py`)
-  — the LIF layer and LUT extensions the programme adds on top of the core library.
+- `src/spiky/lutorch/fast_multi_head_lut.py` — the LUT extension the programme adds on top of the
+  core library; it backs the exp19 actor (`fastlut_lse_sum_expmlpcrit`) the story ships.
 - The spiking simulator itself (`spnet`, `src/spiky/spnet/` + `native/`) is **already on main**.
 
 ### Stage C — quantise the weights (8-bit, log-domain)
@@ -50,15 +50,21 @@ became a spiking network"*, on `gh-pages` at `walker2d-spiking/`).
 
 ## Deliberately EXCLUDED (kept on `research/walker2d-lut`, not part of the story)
 - `experiments/walker2d_lut/` (1,488 files) — the separate JAX/MJX **c36 reproduction** track.
-- `experiments/neurodarwinism/exp012_tiny-direct-genome/` analysis/probe/deploy sub-trees (kept only the write-up, now at `experiments/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`).
+- `experiments/neurodarwinism/exp012_tiny-direct-genome/` analysis/probe/deploy sub-trees (kept only the write-up, now at `experiments/walker2d-lut/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`).
 - `exp00–04, exp06–18, exp20–22` — superseded / alternative-architecture runs; the story uses **exp05 recipe + exp19 actor**.
+- `src/spiky/lutorch/{lif_multi_head_lut,lif_layer}.py` + their tests, and the `liflut_mlpexpcrit` /
+  `liflayer_mlpexpcrit` arches in `models.py` — the *trainable*-LIF actor line, which only ever served the
+  excluded exp20/exp21. Nothing on the story's path imports them: the construction pipeline and both
+  deployed actors use `spiky.spnet` + `spiky.util.synapse_growth` only, and exp19 uses `FastMultiHeadLut`.
 - `exp19.../distill/spiking/` (~180 files) — the earlier *trainable*-SNN distillation R&D; the shipped net is the **analytic** construction.
 - `exp23` sweep/probe/`qat_*`/raw `.npy` trees, all `progress_monitor*.py`, `run_bench*.sh`, `*.gpu` traces — dev clutter.
 
 ## Notes for review (with gpustar)
 - The served `spiking_lut_quantised.py` **builds the net via `spiky.spnet` (torch) at
-  construction** (lazy import in `__init__`); the public write-up's "pure NumPy at inference"
-  describes a numpy replay — worth reconciling which actor the PR should ship as canonical.
+  construction** (lazy import in `__init__`) and runs it through `process_ticks` in `act()`.
+  §6 of the write-up used to call it "pure numpy"; that has been corrected to say what it is.
 - Provisional branch name. The construction code was relocated from its historically-misnamed
-  home `experiments/neurodarwinism/src/` to **`experiments/walker2d-spiking/`**; the
-  `experiments/neurodarwinism/` path no longer exists on this branch.
+  home `experiments/neurodarwinism/src/` to **`experiments/walker2d-lut/walker2d-spiking/`**; the
+  `experiments/neurodarwinism/` path no longer exists on this branch, and the scripts' hardcoded
+  paths under it were re-pointed to the new home (see §6 of the write-up for what still has to
+  be supplied by hand).
