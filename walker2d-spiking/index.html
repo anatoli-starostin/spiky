@@ -1671,8 +1671,12 @@ spike-visualisation panels — the raster and the network graph — populate fro
 activity.
 </p>
 <p>
-The actor is pure NumPy at inference: no PyTorch, no SciPy. It runs on CPU at roughly 6 ms per
-action against a 33 ms frame budget at 30 steps per second.
+Nothing is emulated. NumPy does the two ends — the companding that turns an observation into
+input ticks, and the decode that turns a firing tick back into an action — but everything
+between them is the network itself, built through <code>spiky.spnet</code> at construction and
+advanced tick by tick with <code>process_ticks</code> on every call. What the stand runs is the
+real simulator, not a re-implementation of it. It still fits in roughly 6 ms per action on one
+CPU core, against a 33 ms frame budget at 30 steps per second.
 </p>
 <p style="margin-top:1.4rem">
   <a href="../walker2d-viz/"><b>→ Open the live demo</b></a>
@@ -1685,19 +1689,21 @@ action against a 33 ms frame budget at 30 steps per second.
 <table>
   <thead><tr><th>file</th><th>role</th></tr></thead>
   <tbody>
-    <tr><td><code>src/tiny_lut_quantised_pipeline.py</code></td><td>builds and verifies the network</td></tr>
-    <tr><td><code>src/tiny_lut_quantised_export.py</code></td><td>exports the actor artefact</td></tr>
-    <tr><td><code>actors/spiking_lut_quantised.py</code></td><td>the deployed actor (pure NumPy)</td></tr>
-    <tr><td><code>src/collect_teacher_io.py</code></td><td>the 153K-pair teacher dataset</td></tr>
-    <tr><td><code>src/stage3_cd_bigdata.py</code></td><td>the 8-bit coordinate-descent fit</td></tr>
-    <tr><td><code>src/eval_gtskew_large.py</code></td><td>the paired closed-loop walker evaluation</td></tr>
+    <tr><td><code>experiments/walker2d-lut/REPRODUCE.md</code></td><td>the runbook — every step in this post, with the number it should print</td></tr>
+    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py</code></td><td>builds and verifies the network</td></tr>
+    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_export.py</code></td><td>exports the actor artefact</td></tr>
+    <tr><td><code>landing/walker2d-viz/server/actors/spiking_lut_quantised.py</code></td><td>the deployed actor</td></tr>
+    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/collect_teacher_io.py</code></td><td>the 153K-pair teacher dataset</td></tr>
+    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py</code></td><td>the 8-bit coordinate-descent fit</td></tr>
+    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/eval_gtskew_large.py</code></td><td>the paired closed-loop walker evaluation</td></tr>
   </tbody>
 </table>
 </div>
 
 <p class="small" style="margin-top:2.5rem; padding-top:1.2rem; border-top:1px solid var(--rule)">
-Draft — expect revisions. Research branch
-<code>research/lut2spnet-quantised-amplitude</code>; deployment branch
+Draft — expect revisions. The code above is merged to <code>main</code> (PR #100); the full
+research tree, including everything this post leaves out, is on
+<code>research/walker2d-lut</code>; the stand is deployed from
 <code>live/walker2d-viz</code>.
 </p>
 
