@@ -161,12 +161,13 @@ check that it works.
 
 ## Step 3 — build the spiking network **[minutes]**
 
-**This is the headline result, and it needs no arguments.** Both inputs — the exp23 teacher and
-the 100,000-observation set — are committed, and the script resolves them relative to itself.
+**This is the headline result, and it needs no input arguments.** Both inputs — the exp23
+teacher and the 100,000-observation set — are committed, and the script resolves them relative
+to itself. The shipped build is the default configuration.
 
 ```bash
 cd experiments/walker2d-lut/walker2d-spiking
-python tiny_lut_quantised_pipeline.py --gt-skew --no-tie-break --tau-m-out 31.257
+python tiny_lut_quantised_pipeline.py --tau-m-out 31.257
 ```
 
 Expected output (the numbers the post quotes):
@@ -183,13 +184,8 @@ STAGE 3 exact match on the 22-level grid:
   dim 0..5: within-1-level 100.000%, max|err| 0.0952
 ```
 
-**`--gt-skew` does not imply `--no-tie-break`**, despite what its help text suggests. Pass both.
-With `--gt-skew` alone you silently build the **3,025-neuron** variant that still carries the 136
-tie-detector neurons — the post's "one tick that fixed them" section is exactly this difference:
-136 neurons and 408 synapses removed.
-
-Defaults worth knowing: `--n 512` samples (the post's "512 held-out samples"), `--tau-m-out 10.0`
-resolves only 7 output levels, which is why 31.257 is passed explicitly.
+Defaults worth knowing: `--n 512` samples (the post's "512 held-out samples"), and
+`--tau-m-out 10.0` resolves only 7 output levels, which is why 31.257 is passed explicitly.
 
 Add `--out calib.json` to write the calibration file the exporter needs.
 

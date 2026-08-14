@@ -5,10 +5,7 @@ Four stages, end to end:
 **train a LUT policy with PPO → construct a spiking network from it in closed form →
 quantise → deploy it in the live demo stand.**
 
-The narrative document is
-[`walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`](walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md) —
-the design, the numbers, and the traps. This README is the map: what is here, how to run it,
-and what deliberately isn't.
+This README is the map: what is here, how to run it, and what deliberately isn't.
 
 The headline: a handcrafted spiking network of **2,889 neurons and 25,953 synapses**, running
 ~155 integer ticks per action on the `spnet` engine, is statistically indistinguishable from the
@@ -19,7 +16,10 @@ one output level.
 ## Scope of this branch
 
 This directory is **curated for the story, not for completeness**. It carries only what
-supports the arc above, as a reviewable PR candidate. The full research trees — every
+supports the story told in the post —
+[*A lookup table that learned to walk — and then became a spiking
+network*](https://anatoli-starostin.github.io/spiky/walker2d-spiking/) —
+as a reviewable PR candidate. The full research trees — every
 superseded run, every probe, every negative result — stay on `research/walker2d-lut`.
 [What stays there](#what-is-not-here) is listed at the bottom, so nothing here implies a file
 exists when it doesn't.
@@ -199,12 +199,12 @@ and run with `process_ticks` in `act()`. What the stand runs is the real simulat
 the command that actually runs it, marked as either runnable here or living on
 `research/walker2d-lut`, and the number each one should produce. The short version:
 
-The construction pipeline needs no arguments — both its inputs are committed and resolved
-relative to the script:
+The construction pipeline needs no input arguments — both its inputs are committed and
+resolved relative to the script, and the shipped build is the default:
 
 ```bash
 cd walker2d-spiking
-python tiny_lut_quantised_pipeline.py --gt-skew --no-tie-break --tau-m-out 31.257
+python tiny_lut_quantised_pipeline.py --tau-m-out 31.257
 ```
 
 which prints, on the shipped configuration:
@@ -216,9 +216,6 @@ STAGE 1 bit parity : 100.0000%   (0 bad of 98304)
 STAGE 2 one-hot    : 0 none, 0 multi of 16384
 STAGE 3 exact match on the 22-level grid: within-1-level 100.000% on all six dims
 ```
-
-**`--gt-skew` does not imply `--no-tie-break`** despite what its help text suggests — pass both,
-or you silently build the 3,025-neuron variant with the tie detectors still in.
 
 Training (`ppo.py` is the entry point; `run_exp19.sh` calls it with these flags for 3 seeds):
 
@@ -250,8 +247,7 @@ Deliberately excluded, kept on `research/walker2d-lut`:
   `summarize_bench.py`, the `run_bench*.sh` orchestrators, `progress_monitor*.py`, and their
   probe outputs.
 - **`exp012_tiny-direct-genome/` analysis, probe and deploy sub-trees** — the construction's
-  ~50 result artefacts. Only the write-up came across, now at
-  `walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md`.
+  ~50 result artefacts. Only the write-up came across.
 - **`exp19.../distill/spiking/`** (~180 files) — the earlier *trainable*-SNN distillation R&D.
   The shipped network is the analytic construction instead.
 - **The construction tree's 16 stepwise, diagnostic and negative-result scripts** — the Stage-1
