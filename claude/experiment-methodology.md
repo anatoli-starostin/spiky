@@ -21,6 +21,7 @@ care it needs.
 |---|---|
 | `main` | Stable trunk, and the curated source of truth. Everything durable lands here eventually, and **only through a reviewed pull request**. |
 | `research/` | **The idea branches** — one per idea, per the section below. All experimental work, analysis and write-up for that idea happens here. |
+| `feature/<topic>-to-<goal>` | A curated slice cut from a research branch and based off `main` — minimal and coherent, carrying only what tells the end-to-end story — opened as a PR into `main`. Optional; see the two exits below. |
 | `live/` | A branch that a **running deployment** is served from. Treat as protected: **never force-push** — a live service depends on it. How a given `live/` branch is deployed is documented on that branch itself (for `live/walker2d-viz`, see `landing/walker2d-viz/DEPLOYMENT.md`), because deployment is host-specific and so out of scope here. |
 | `gh-pages` | The published static site. Deployed by GitHub Pages straight from the branch — a push *is* a release. |
 | `exp/` | Legacy experiment branches, predating the one-idea-one-issue-one-branch rule. Kept for reference; new work uses `research/`. |
@@ -69,6 +70,13 @@ An idea-branch, and the issue behind it, ends one of two ways, decided **by resu
   (b) a short findings note under `docs/findings/<idea>.md` (what won, why, key numbers),
   and (c) the *decisive* experiment(s)' data. Losing/scratch runs stay behind on the branch;
   they do not come into `main`. This keeps `main` a curated record, not a dumping ground.
+
+  When the research branch has grown too messy to merge as it stands, curate the PR instead
+  of merging the branch: cut a **`feature/<topic>-to-<goal>`** branch off `main`, carry across
+  only the material that tells the end-to-end story, and open the PR from there. This is a
+  step *within* this exit, not an alternative to the research branch — a small, clean idea
+  still PRs directly from `research/<slug>`. The walker2d work took the long form:
+  `research/walker2d-lut` → the curated `feature/walker2d-lut-to-spiking` → PR #100 → `main`.
 - **Failure → abandon the branch.** Leave it on the remote, unmerged, never deleted (it stays
   a searchable record). **Close the issue** with a short autopsy comment, and write a one-line
   autopsy to `docs/dead-ends.md` on `main`
