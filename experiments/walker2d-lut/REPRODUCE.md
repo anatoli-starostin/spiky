@@ -161,13 +161,13 @@ check that it works.
 
 ## Step 3 — build the spiking network **[minutes]**
 
-**This is the headline result, and it needs no input arguments.** Both inputs — the exp23
-teacher and the 100,000-observation set — are committed, and the script resolves them relative
-to itself. The shipped build is the default configuration.
+**This is the headline result, and it needs no arguments.** Both inputs — the exp23 teacher and
+the 100,000-observation set — are committed, and the script resolves them relative to itself.
+The shipped build is the default configuration.
 
 ```bash
 cd experiments/walker2d-lut/walker2d-spiking
-python tiny_lut_quantised_pipeline.py --tau-m-out 31.257
+python tiny_lut_quantised_pipeline.py
 ```
 
 Expected output (the numbers the post quotes):
@@ -184,8 +184,9 @@ STAGE 3 exact match on the 22-level grid:
   dim 0..5: within-1-level 100.000%, max|err| 0.0952
 ```
 
-Defaults worth knowing: `--n 512` samples (the post's "512 held-out samples"), and
-`--tau-m-out 10.0` resolves only 7 output levels, which is why 31.257 is passed explicitly.
+Defaults worth knowing: `--n 512` samples (the post's "512 held-out samples") and
+`--tau-m-out 31.257`, the output membrane constant that makes the readout resolve the 22
+levels the post quotes. Lower it and you get fewer levels — 10.0 resolves only 7.
 
 Add `--out calib.json` to write the calibration file the exporter needs.
 

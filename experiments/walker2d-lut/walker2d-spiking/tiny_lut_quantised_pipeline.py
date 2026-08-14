@@ -287,13 +287,9 @@ def main():
     ap.add_argument("--n", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=32)
     ap.add_argument("--dims", default="0,1,2,3,4,5")
-    ap.add_argument("--tau-m-out", type=float, default=10.0)
+    ap.add_argument("--tau-m-out", type=float, default=31.257)
     ap.add_argument("--cross-at", type=float, default=3.0)
     ap.add_argument("--margin", type=int, default=6)
-    # The shipped build is GT-skew ON / tie detectors OFF: +1 tick on the GT rail
-    # resolves the ties structurally, which is what lets the 136 tie-detector neurons
-    # and their 408 synapses go. Both are defaults so a bare invocation reproduces it;
-    # the inverses below exist only to rebuild the superseded variants.
     ap.add_argument("--tie-break", dest="no_tie_break", action="store_false",
                     help="rebuild with the explicit tie-detector neurons (superseded)")
     ap.add_argument("--no-gt-skew", dest="gt_skew", action="store_false",

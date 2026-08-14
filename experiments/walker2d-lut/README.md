@@ -199,12 +199,12 @@ and run with `process_ticks` in `act()`. What the stand runs is the real simulat
 the command that actually runs it, marked as either runnable here or living on
 `research/walker2d-lut`, and the number each one should produce. The short version:
 
-The construction pipeline needs no input arguments — both its inputs are committed and
-resolved relative to the script, and the shipped build is the default:
+The construction pipeline needs no arguments — its inputs are committed and resolved
+relative to the script, and the shipped build is the default configuration:
 
 ```bash
 cd walker2d-spiking
-python tiny_lut_quantised_pipeline.py --tau-m-out 31.257
+python tiny_lut_quantised_pipeline.py
 ```
 
 which prints, on the shipped configuration:
