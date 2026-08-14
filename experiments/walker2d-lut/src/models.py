@@ -89,19 +89,6 @@ class MLPActorCritic(BaseActorCritic):
         return self.pi(obs), self.vf(obs).squeeze(-1)
 
 
-class QCritic(nn.Module):
-    """SAC state-action value Q(obs, act) -> scalar. Standard MLP, independent of the
-    actor architecture: the swappable/exotic part is the ACTOR (from REGISTRY); the
-    critic is a plain value estimator, so LUT/LIF actors compose without a bespoke Q."""
-
-    def __init__(self, obs_dim, act_dim, hidden=(256, 256)):
-        super().__init__()
-        self.net = _ortho(_mlp([obs_dim + act_dim, *hidden, 1]), gain=1.0)
-
-    def forward(self, obs, act):
-        return self.net(torch.cat([obs, act], dim=-1)).squeeze(-1)
-
-
 @register("hyperlut")
 class HyperLUTActorCritic(BaseActorCritic):
     """Hyperplane-LUT policy (the int4 LUT-SAC actor lineage) + a standard MLP critic.

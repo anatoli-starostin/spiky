@@ -65,8 +65,8 @@ The chain is: **1b produces the checkpoint 1c resumes from, and 1c's export prod
 teacher Step 3 builds against.** `--save-model` is the link — without it no `.pt` is written and
 `--init-from` has nothing to read.
 
-Either launcher works: `train.py --algo {ppo,sac}` (the dispatcher `run_exp19.sh` calls) or
-`ppo.py` / `ppo_qat_obs.py` directly. The commands below use the direct form.
+The trainers are `ppo.py` and `ppo_qat_obs.py`, invoked directly. This branch is PPO-only — there
+is no SAC trainer and no `--algo` dispatcher.
 
 ### 1a. The PPO recipe (exp05)
 
@@ -95,9 +95,10 @@ python ppo.py --arch fastlut_lse_sum_expmlpcrit --tables-per-head 32 \
 8192 × 32 × 768 = **201,326,592 env-steps**. Expected over 3 seeds: **final 5553.1 ± 223.6, 0/3
 collapsed**; seed 2 reaches **5966.3** and is the checkpoint that ships.
 
-`exp19_lut-lse-expmlpcrit-t32/run_exp19.sh` is the original launcher — it runs all three seeds in
-parallel through `train.py --algo ppo` with these exact flags, and samples `nvidia-smi` alongside.
-It works as written; its paths are absolute to `~/projects/spiky`.
+`exp19_lut-lse-expmlpcrit-t32/run_exp19.sh` runs all three seeds in parallel with these exact
+flags and samples `nvidia-smi` alongside. Its paths are absolute to `~/projects/spiky`. It
+originally went through a `train.py --algo {ppo,sac}` dispatcher; with SAC gone from this branch
+it calls `ppo.py` directly, which is the only change from the version that produced the run.
 
 Export the trained actor:
 ```bash

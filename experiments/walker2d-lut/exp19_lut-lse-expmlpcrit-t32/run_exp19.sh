@@ -34,7 +34,7 @@ SAMP=$!
 start=$SECONDS
 pids=()
 for s in 0 1 2; do
-  $PY -u train.py --algo ppo --arch fastlut_lse_sum_expmlpcrit --tables-per-head 32 \
+  $PY -u ppo.py --arch fastlut_lse_sum_expmlpcrit --tables-per-head 32 \
       --envs 8192 --graph --updates 768 --seed "$s" --lr-schedule cosine --lr-min 3e-5 \
       --logstd-min -1.897 --ent-coef 0.0 --target-kl 0.02 --norm-returns \
       --out "$OUT/ppo_s${s}.json" > "$OUT/ppo_s${s}.log" 2>&1 &

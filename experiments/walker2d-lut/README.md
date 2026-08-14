@@ -33,7 +33,7 @@ anything the story needs.
 
 ```
 walker2d-lut/
-├─ src/                                 the RL framework: 9 files, shared by every run
+├─ src/                                 the RL framework: 7 files, shared by every run
 ├─ exp05_ppo-truncbootstrap-retnorm-kl/ the winning PPO stabilization recipe
 ├─ exp19_lut-lse-expmlpcrit-t32/        the run that produced the deployable actor
 │   └─ deploy/                          the exported float actor, and quantised/ beside it
@@ -73,12 +73,10 @@ Physics runs batched on the GPU via **MuJoCo-Warp**; policy and value nets are e
   attached, for the QAT fine-tune of Stage C.
 - **`obs_quant.py` / `act_quant.py`** — the Gaussian-companding observation quantiser and the
   uniform action quantiser.
-- **`sac.py`** — GPU-resident SAC (on-device replay buffer, twin critics + targets, squashed
-  Gaussian actor, auto entropy temperature), reusing the same registry for its actor. Off the
-  LUT→spiking path, carried so `train.py` is whole.
-- **`train.py`** — the one-line dispatcher: `--algo {ppo,sac}`, everything else passes through.
-  This is what `run_exp19.sh` calls.
 - **`buffers.py`** — `GPUReplayBuffer` (circular, all on GPU).
+
+`ppo.py` is the training entry point; `run_exp19.sh` calls it directly. This branch is
+**PPO-only** — there is no SAC trainer and no `--algo` dispatcher.
 
 #### exp05 — the PPO stabilization recipe, established on a **plain MLP** policy
 
@@ -222,7 +220,7 @@ STAGE 3 exact match on the 22-level grid: within-1-level 100.000% on all six dim
 **`--gt-skew` does not imply `--no-tie-break`** despite what its help text suggests — pass both,
 or you silently build the 3,025-neuron variant with the tie detectors still in.
 
-Training (either `train.py --algo ppo` — what `run_exp19.sh` calls — or `ppo.py` directly):
+Training (`ppo.py` is the entry point; `run_exp19.sh` calls it with these flags for 3 seeds):
 
 ```bash
 cd src
@@ -243,8 +241,11 @@ Deliberately excluded, kept on `research/walker2d-lut`:
 - **exp00–04, exp06–18, exp20–22** and their `figures/` — the PPO stabilization sweep, the
   hyperplane-LUT and alternative anchor-pair architectures, and the LIF-actor runs. The story
   uses the exp05 recipe and the exp19 actor; the rest is context, not path.
-- **`cpu_sac_baseline/`** — the single-CPU SB3-SAC reference runs. (`src/sac.py` itself *is*
-  carried, so `train.py --algo sac` works; SAC is simply not on the LUT→spiking path.)
+- **All SAC** — `cpu_sac_baseline/` (the single-CPU SB3-SAC reference runs), `src/sac.py` (the
+  batched GPU SAC trainer) and `src/train.py` (the `--algo` dispatcher that existed to choose
+  between the two). This branch is PPO-only. The demo stand still *serves* two SAC-derived
+  actors — "Walker2d SAC baseline" and "Walker2d LUT-SAC c21" — but those are deployed
+  checkpoints already on `main`, not something this branch trains.
 - **`src/` benchmarking tooling** — `probe_throughput.py`, `rollout_bench.py`, `capture_test.py`,
   `summarize_bench.py`, the `run_bench*.sh` orchestrators, `progress_monitor*.py`, and their
   probe outputs.
