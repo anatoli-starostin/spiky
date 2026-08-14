@@ -211,9 +211,9 @@ which prints, on the shipped configuration:
 
 ```
 CHECK D  census          : 2889 neurons, 25953 synapses, dmax 6
-EPISODE (data-dependent): min 142  mean 154.7  max 167
-STAGE 1 bit parity : 100.0000%   (0 bad of 12288)
-STAGE 2 one-hot    : 0 none, 0 multi of 2048
+EPISODE (data-dependent): min 138  mean 154.5  max 167
+STAGE 1 bit parity : 100.0000%   (0 bad of 98304)
+STAGE 2 one-hot    : 0 none, 0 multi of 16384
 STAGE 3 exact match on the 22-level grid: within-1-level 100.000% on all six dims
 ```
 
