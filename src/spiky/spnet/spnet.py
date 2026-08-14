@@ -11,7 +11,7 @@ from spiky.util.synapse_growth import ChunkOfConnections
 @dataclass(frozen=True, order=True)
 class NeuronMeta:
     # Izhikevitch model:
-    #   v' = cf_2 * v**2 + cf_1 * v + cf_0 - u - I
+    #   v' = cf_2 * v**2 + cf_1 * v + cf_0 - u + I
     #   u' = a(b * v - u)
     #   if v >= spike_threshold:
     #     v = c
