@@ -309,6 +309,25 @@ construct the network; check the robot still walks.</figcaption>
 <!-- ================================================================= -->
 <h2 id="lut"><span class="sectnum">2</span>Part 1 — training a lookup table to walk</h2>
 
+<h3>The task: 17 numbers in, 6 torques out</h3>
+<p>
+Walker2d is a standard MuJoCo control benchmark: a two-legged figure in the vertical plane with
+six hinge joints — thigh, leg and foot on each side. The policy is called once per control step
+and sees <b>17 numbers</b>; it emits <b>6</b>.
+</p>
+<p>
+The 17 are torso height, torso angle and the six joint angles (8 positions), then the torso's
+forward, vertical and angular velocity and the six joint angular velocities (9 velocities;
+clipped to ±10 before the policy sees them). Forward <em>position</em> is deliberately left out,
+so the policy cannot tell how far it has already walked. The 6 are one torque per joint, each in
+[−1, 1].
+</p>
+<p>
+Reward is forward velocity, plus a bonus for each step spent upright, minus a small control
+cost. The episode ends when the torso leaves a healthy height band (0.8 – 2.0) or tilts past
+1 radian — that is, when the walker falls. Walking fast without falling is the whole task.
+</p>
+
 <h3>The architecture: compare, address, look up</h3>
 <p>
 The lookup-table idea is not ours. It was introduced in the
