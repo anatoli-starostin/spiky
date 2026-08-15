@@ -279,25 +279,25 @@ function drawSpikes(a) {
   const nt = spikeMeta.n_ticks
   sctx.clearRect(0, 0, W, H)
   sctx.textAlign = 'right'; sctx.textBaseline = 'middle'; sctx.font = '10px sans-serif'
-  // Band-weighted vertical layout. A uniform row/nr mapping gave the dense S2-cells band
-  // (~2048 of ~2889 rows) ~71% of the height and squeezed the 272-row green memory band into
-  // ~9% (~0.13 px/row) — far thinner than the dot, so adjacent memory rows blurred together.
-  // Instead cap the dense band(s) to a thin strip and share the rest by row count, so the
-  // sparse, interesting bands (memory, rails, inputs, outputs) get ~1 px per row and the
-  // per-neuron firing is legible. Rows stay linear within each band.
+  // Per-band vertical allocation. Every semantic band gets a readable FLOOR, then the remaining
+  // height is shared by row count with the densest band(s) CAPPED at `min(rows, CAP)` — so no single
+  // band dominates and ALL bands stay legible. Sharing height purely by raw row count let the two
+  // 272-row bands (memory + rails) dominate (~226px each) while the lookup band (S2 cells, capped)
+  // got ~77px and the 6 output rows only ~5px. With the floor+cap the memory band no longer dominates
+  // and the lookup + output bands get real space. Rows stay linear within each band.
   const bands = spikeMeta.bands
-  let sparseRows = 0, denseRows = 0
-  for (const b of bands) { const n = b.end - b.start; if (n > 400) denseRows += n; else sparseRows += n }
-  const denseH = denseRows ? Math.min(0.14 * ph, 90) : 0        // dense S2-cells: a capped strip
-  const perRow = (ph - denseH) / Math.max(1, sparseRows)        // px/row for the sparse bands
+  const FLOOR = 16, CAP = 300                                   // px floor per band; row cap for dense bands
+  const eff = bands.map(b => Math.min(b.end - b.start, CAP))
+  const effSum = eff.reduce((s, v) => s + v, 0)
+  const K = Math.max(0, ph - FLOOR * bands.length) / Math.max(1, effSum)   // px per capped row
   const top = {}, rh = {}
   let y = PADT
-  for (const b of bands) {
+  bands.forEach((b, i) => {
     const n = b.end - b.start
-    const h = (n > 400) ? denseH : n * perRow
+    const h = FLOOR + K * eff[i]
     top[b.name] = y; rh[b.name] = n ? h / n : 0
     y += h
-  }
+  })
   for (const b of bands) {                                      // stage bands: faint tint + label
     const y0 = top[b.name], y1 = top[b.name] + (b.end - b.start) * rh[b.name]
     sctx.fillStyle = b.color + '22'
