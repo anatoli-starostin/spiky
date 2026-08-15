@@ -483,6 +483,18 @@ training loop, so the policy could adapt to them rather than meet them for the f
 conversion. Each constraint answers a specific property of the spiking substrate.
 </p>
 
+<div class="note warn">
+  <span class="lbl">What "quantised" means <em>here</em>, in the software teacher</span>
+  <p>During PPO, the teacher's <b>table weights are never quantised</b>. They stay float32 —
+  12,286 distinct values out of 12,288, on no grid whatsoever. "Quantisation-aware" at this
+  stage means <em>at the interfaces</em>: what enters the policy and what leaves it are
+  discrete; what is stored inside is not.</p>
+  <p>That is a statement about the <b>software teacher only</b>. The spiking model built from it
+  in Part 2 is a different object, and its readout weights <em>are</em> genuinely quantised — to
+  8 bits, in the log domain. That is what the word means in the deployed model's name, and it is
+  the subject of Part 3.</p>
+</div>
+
 <h4><span class="pill p1">Constraint 1</span> &nbsp;Input: 128 Gaussian-companded buckets, one shared map</h4>
 <p>
 A spike happens at an integer tick, so the observation must become an integer before it can
@@ -581,18 +593,6 @@ inside a finite tick budget. So we made sprawl cost something in training too:
   ablations (0.1), <b>15–18% of the raw readout is still outside the band</b> after a full run.
   The clip still has zero gradient out there — the penalty simply adds the only live gradient
   that pulls inward, and it is fighting an objective that does not care.</p>
-</div>
-
-<div class="note warn">
-  <span class="lbl">What "quantised" means <em>here</em>, in the software teacher</span>
-  <p>During PPO, the teacher's <b>table weights are never quantised</b>. They stay float32 —
-  12,286 distinct values out of 12,288, on no grid whatsoever. "Quantisation-aware" at this
-  stage means <em>at the interfaces</em>: what enters the policy and what leaves it are
-  discrete; what is stored inside is not.</p>
-  <p>That is a statement about the <b>software teacher only</b>. The spiking model built from it
-  in Part 2 is a different object, and its readout weights <em>are</em> genuinely quantised — to
-  8 bits, in the log domain. That is what the word means in the deployed model's name, and it is
-  the subject of Part 3.</p>
 </div>
 
 <p>
