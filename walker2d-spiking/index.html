@@ -821,7 +821,8 @@ its answer at tick 12; another might not settle until tick 120.
 But the lookup in Stage 2 needs <em>all 192 address bits at once</em>. So every early decision
 has to be held, unchanged and unmaintained, until the last one is in. A conventional leaky
 neuron cannot do that: whatever charge encodes the decision decays away long before the window
-closes. That is the problem the comparator solves, and it solves it with <b>one sign</b>.
+closes. That is the problem the comparator solves, and it solves it by flipping <b>one sign</b>
+in the membrane equation.
 </p>
 
 <h4>Six neurons, ten synapses, no loops</h4>
