@@ -781,7 +781,7 @@ weights on the arrows entering Stage 3.</figcaption>
     <tr><td>input + detector</td><td class="n">18</td><td>one latency-coded spike per observation coordinate</td></tr>
     <tr><td>comparator rails</td><td class="n">272</td><td>136 dual-rail winner-take-all pairs</td></tr>
     <tr><td>inhibitory interneurons</td><td class="n">272</td><td>each rail vetoes the other</td></tr>
-    <tr><td>memory cells</td><td class="n">272</td><td>hold the decided bit until the lookup fires</td></tr>
+    <tr><td>memory neurons</td><td class="n">272</td><td>hold the decided bit until the lookup fires</td></tr>
     <tr><td>LUT cells</td><td class="n">2,048</td><td>32 tables × 64 rows</td></tr>
     <tr><td>outputs</td><td class="n">6</td><td>one per torque</td></tr>
     <tr><td>completion detector</td><td class="n">1</td><td>fires when the last input has arrived</td></tr>
@@ -839,7 +839,7 @@ closes.
 <p>
 One comparison unit — deciding whether coordinate <b>A</b> spiked before coordinate <b>B</b> —
 is exactly six neurons: two <b>rails</b> <code>r0</code>/<code>r1</code>, two <b>inhibitory
-interneurons</b> <code>i0</code>/<code>i1</code>, and two <b>memory cells</b>
+interneurons</b> <code>i0</code>/<code>i1</code>, and two <b>memory neurons</b>
 <code>m0</code>/<code>m1</code>. There are 136 such units, covering the 192 address bits
 (bits that compare the same pair of coordinates share a unit).
 </p>
@@ -868,7 +868,7 @@ interneurons</b> <code>i0</code>/<code>i1</code>, and two <b>memory cells</b>
     <tr><td class="n">6</td><td>i1 → <b>r0</b></td><td class="n">−10.0</td><td class="n">1</td>
         <td>B vetoes the <em>other</em> rail</td></tr>
     <tr><td class="n">7</td><td>r0 → m0</td><td class="n">+0.6</td><td class="n">1</td>
-        <td>half the charge the memory cell needs</td></tr>
+        <td>half the charge the memory neuron needs</td></tr>
     <tr><td class="n">8</td><td>r1 → m1</td><td class="n">+0.6</td><td class="n">1</td>
         <td>likewise</td></tr>
     <tr><td class="n">9</td><td>completion detector → m0</td><td class="n">+0.6</td><td class="n">6</td>
@@ -1252,14 +1252,14 @@ instant it is pushed it accelerates away and never comes back.
 excitation to the winning rail is deliberately the <em>slowest</em> path in the unit (delay 4),
 while the veto travels A → i0 → r1 and arrives first. At tick 6 the two rails separate for
 good: r0 crosses threshold and fires; r1 takes the −10 and begins the exponential runaway that
-no later input can undo. The winning rail leaves 0.6 on its memory cell — not enough to fire it
+no later input can undo. The winning rail leaves 0.6 on its memory neuron — not enough to fire it
 — and that charge simply sits there until the completion detector's gate pulse adds the second
 0.6 about 120 ticks later. <span class="small">Every path also carries a fixed 2-tick kernel
 latency on top of its synapse delay; only the differences matter, so the timeline above is
 drawn relative to A.</span></figcaption>
 </figure>
 
-<h4>The memory cells are an AND gate</h4>
+<h4>The memory neurons are an AND gate</h4>
 <p>
 <code>m0</code> is a leaky neuron with
 threshold 1.0 and exactly two inputs, each worth <b>+0.6</b>: one from its rail, one from the
@@ -1281,11 +1281,14 @@ order. The decision itself was already safe — held by the losing rail's runawa
 </p>
 
 <p>
-The completion detector then waits out the comparator pipeline (<code>D_GATE = 6</code>),
-because the last rail
-resolves at <code>t_last+3</code> and its tie veto at <code>t_last+5</code>. Gating any earlier
-was measured, and cost real accuracy — 99.9196% bit parity with 78 cases where two cells fired
-at once.
+<code>D_GATE = 6</code> is the conduction delay on the two synapses that carry the gate pulse
+from the completion detector into a unit's memory neurons, and its job is to make the gate
+<em>late</em> enough. The detector fires at <code>t_last+1</code>, but the comparator is not
+finished then: the greater-than rail's excitation from that last input carries the extra tick of
+skew and lands at <code>t_last+4</code>, reaching its memory neuron at <code>t_last+5</code>. A
+delay of 6 puts the gate pulse at <code>t_last+7</code>, after every comparator has decided.
+Gating earlier was measured and cost real accuracy — at delay 1, 99.9196% bit parity with 78
+cases where two lookup cells fired at once.
 </p>
 
 <h4>Ties, and the one tick that fixed them</h4>
@@ -1374,7 +1377,7 @@ always the “greater-than” rail, and the skew is always on it.
 </p>
 <h3><span class="pill p2">Stage 2</span> &nbsp;Lookup — one-hot by coincidence</h3>
 <p>
-2,048 neurons, one per lookup cell. Each listens to the six memory cells that spell out its
+2,048 neurons, one per lookup cell. Each listens to the six memory neurons that spell out its
 address. Six coincident spikes at weight 0.18 give <b>1.08 &gt; 1.0</b> and it fires; five give
 <b>0.90 &lt; 1.0</b> and it does not.
 </p>
