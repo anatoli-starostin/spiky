@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp037_compressionmhl_inner64_residual_4k",
+  "best_val_bpb": 1.4144670967712774,
+  "final_val_bpb": 1.4144670967712774,
+  "total_params": 35795328,
+  "training_time_hours": 0.18
+}
