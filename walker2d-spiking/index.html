@@ -170,6 +170,13 @@ hr{border:none; border-top:1px solid var(--rule); margin:2.5rem 0}
 .toc ol{margin:.4rem 0 0; padding-left:1.2rem; color:var(--ink-3)}
 .toc a{text-decoration:none; color:var(--ink-2)}
 .toc a:hover{text-decoration:underline; color:var(--s1)}
+details.fold{border:1px solid var(--rule); border-radius:10px; background:var(--surface);
+  padding:.5rem .95rem; margin:1.4rem 0}
+details.fold > summary{cursor:pointer; font-size:.9rem; color:var(--ink-2);
+  list-style:revert; padding:.25rem 0}
+details.fold > summary:hover{color:var(--s1)}
+details.fold[open] > summary{margin-bottom:.6rem; border-bottom:1px solid var(--rule);
+  padding-bottom:.5rem}
 @media (max-width:640px){
   body{font-size:16px} h1{font-size:1.9rem} .wrap{padding:0 1rem 4rem}
   header.top{padding-top:2.5rem}
@@ -235,6 +242,12 @@ neuron fires first wins — so the translation is a <em>construction</em>, not a
 Almost every weight and delay in the finished network is computed in closed form from the
 trained table.
 </p>
+<p>
+The order matters for reading what follows. The policy is trained first, as ordinary software,
+with a handful of constraints chosen so that it is <b>later buildable in spikes</b>; the spiking
+network is constructed from the finished table afterwards. Part 1 is the training, Part 2 the
+construction.
+</p>
 
 <figure class="wide">
 <div class="figbox">
@@ -260,7 +273,7 @@ trained table.
   <text class="svg-s" x="288" y="86" text-anchor="middle">PPO, 201M env-steps</text>
   <text class="svg-m" x="288" y="104" text-anchor="middle">32 tables × 64 rows × 6</text>
   <text class="svg-s" x="288" y="124" text-anchor="middle">+ four deliberate constraints</text>
-  <text class="svg-s" x="288" y="139" text-anchor="middle">so that it is <tspan font-style="italic">buildable</tspan> in spikes</text>
+  <text class="svg-s" x="288" y="139" text-anchor="middle">so that it is <tspan font-style="italic">later buildable</tspan> in spikes</text>
   <text class="svg-s" x="288" y="160" text-anchor="middle" fill="var(--s1)">→ a competitive walker</text>
 
   <line x1="388" y1="108" x2="422" y2="108" class="svg-ln" marker-end="url(#ah)"/>
@@ -297,6 +310,15 @@ construct the network; check the robot still walks.</figcaption>
 <h2 id="lut"><span class="sectnum">2</span>Part 1 — training a lookup table to walk</h2>
 
 <h3>The architecture: compare, address, look up</h3>
+<p>
+The lookup-table idea is not ours. It was introduced in the
+<a href="https://arxiv.org/pdf/2512.11843"><b>Spiking Manifesto</b></a> (E. Izhikevich), which
+argued for tables addressed by spike-order comparisons as the natural computational primitive
+for a spiking substrate. What follows is that idea <em>implemented and optimised</em> in
+<a href="https://github.com/anatoli-starostin/spiky">spiky</a>: a differentiable, GPU-resident
+LUT layer — <a href="https://github.com/anatoli-starostin/spiky/blob/main/src/spiky/lutorch/fast_multi_head_lut.py"><code>fast_multi_head_lut.py</code></a> —
+trained end to end by policy gradient, then compiled into an actual network of spiking neurons.
+</p>
 <p>
 The policy holds <b>32 independent lookup tables</b>. Each table owns 6 fixed pairs of
 observation coordinates — its <em>anchor pairs</em>. For an observation <code>x</code>, each
@@ -405,13 +427,17 @@ like an odd choice until Part 2 — it is the piece a spiking membrane can compu
 
 <h3>Training it: PPO on 201 million environment steps</h3>
 <p>
-The table was trained from scratch with a GPU-resident PPO implementation (PyTorch + NVIDIA
-Warp for the batched physics — not JAX), running 8,192 Walker2d environments in parallel.
+The table was trained from scratch with a GPU-resident PPO implementation
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo.py"><code>ppo.py</code></a> —
+PyTorch + NVIDIA Warp for the batched physics, not JAX), running 8,192 Walker2d environments
+in parallel. 82,953 parameters, 201M environment steps.
 </p>
 
+<details class="fold">
+<summary>The full PPO configuration</summary>
 <div class="tw">
 <table>
-  <caption>PPO configuration. The critic is a <code>[17, 256, 256, 1]</code> Tanh MLP whose final
+  <caption>The critic is a <code>[17, 256, 256, 1]</code> Tanh MLP whose final
   linear readout is replaced by the <em>same</em> soft pooling used by the policy.</caption>
   <tbody>
     <tr><td>environments × rollout × updates</td><td class="n">8,192 × 32 × 768 → 201M env-steps</td></tr>
@@ -425,12 +451,15 @@ Warp for the batched physics — not JAX), running 8,192 Walker2d environments i
   </tbody>
 </table>
 </div>
+</details>
 
 <h3>Four deliberate constraints — and why each one exists</h3>
 <p>
 A freely trained policy is continuous at both ends: it reads real-valued observations and emits
 real-valued torques. A spiking network can do neither. So after the main run we did a short
-<b>384-update quantisation-aware fine-tune</b> that put the physical limitations into the
+<b>384-update quantisation-aware fine-tune</b>
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo_qat_obs.py"><code>ppo_qat_obs.py</code></a>)
+that put the physical limitations into the
 training loop, where the policy could adapt to them instead of suffering them at conversion
 time. Each constraint answers a specific property of the spiking substrate.
 </p>
@@ -439,7 +468,9 @@ time. Each constraint answers a specific property of the spiking substrate.
 <p>
 A spike happens at an integer tick, so the observation must become an integer before it can
 enter the network. We map each coordinate through
-<code>tick = round(127 · Φ(x/σ))</code> — a Gaussian companding curve that spends its resolution
+<code>tick = round(127 · Φ(x/σ))</code>
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/obs_quant.py"><code>obs_quant.py</code></a>)
+— a Gaussian companding curve that spends its resolution
 where observations actually live, rather than uniformly across a range they rarely reach.
 </p>
 <p>
@@ -452,49 +483,93 @@ interior minimum of the address-bit flip rate (<b>0.486%</b>, against 1.39% at �
 
 <h4><span class="pill p1">Constraint 2</span> &nbsp;Output: the soft (log-sum-exp) pooling</h4>
 <p>
-This one was not added for quantisation — it is the architecture. But it is the reason the
-readout is buildable at all. As Part 2 shows, a synapse can supply an exponential, a dendrite
-can supply a sum, and an exponentially growing membrane supplies a logarithm as its
-time-to-threshold. A log-sum-exp is therefore something a single neuron computes
-<em>physically</em>. A plain sum would have been fine too; a softmax or a matmul would not.
+This one was not added for quantisation — it is the architecture, and the reason for it is
+<b>Dale's law</b>. We set out to build a network in which every neuron is single-signed: all of
+a neuron's outgoing synapses excitatory, or all inhibitory, never a mixture. Real neurons are
+like that, and it is a constraint you either design for from the start or fail retroactively.
+</p>
+<p>
+The log-sum-exp is what lets the output stage honour it. The weight a Stage-2 cell delivers to
+an output neuron is <code>β_o · exp(w/τ)</code>, and an exponential is <em>always positive</em> —
+so every synapse in the readout is excitatory, whatever the sign of the stored table value. The
+signs and the ordering are not lost; they are recovered by the logarithm on the other side, and
+the logarithm is not arithmetic we perform but the
+<a href="#snn">time-to-threshold of an anti-leaky output neuron</a>. The exponential lives in the
+synapse, the sum in the dendrite, the logarithm in the membrane.
+</p>
+<p>
+A plain sum would have worked as software, and we measured that it trains and quantises just as
+well. But delivering signed table values as a sum requires <b>genuinely signed synapses</b> —
+some of them inhibitory, from cells that are excitatory elsewhere — and that is exactly the
+single-signed promise, broken by construction. That, not the numerics, is why the exponential is
+here.
+</p>
+<div class="note key">
+  <span class="lbl">Dale's law holds for the whole network, not just the readout</span>
+  <p>Checked on the built network, every presynaptic neuron's outgoing weights:
+  <b>2,610 purely excitatory, 272 purely inhibitory, zero mixed</b>. The only negative weight
+  anywhere is a single value emitted by the 272 winner-take-all rail interneurons of Stage 1.
+  One small inhibitory population doing one job; everything else excitatory.</p>
+</div>
+<p>
+It is also <b>biologically motivated</b> — motivated, not accurate. A perfectly non-leaky
+integrator is an idealisation, but regenerative, anti-leaky membrane dynamics are not: the
+persistent sodium current <em>I<sub>NaP</sub></em> and dendritic calcium plateau potentials both
+produce membranes that accelerate rather than decay, and the exponential integrate-and-fire
+model bakes an <code>exp()</code> term in precisely to capture the sodium upstroke. The
+anti-leaky output neuron has a mechanistic hook in that literature rather than being an
+arbitrary convenience.
+</p>
+<p>
+And there is a smaller pleasure worth stating plainly: we did not choose a log-sum-exp because
+the task needed one. We chose the neurons, and the log-sum-exp came out of them for free.
 </p>
 
 <h4><span class="pill p1">Constraint 3</span> &nbsp;Output: clip to [−1, 1], then 22 uniform levels</h4>
 <p>
 The spiking readout reports its answer as the <em>tick</em> at which a neuron fires — an
 integer. The action is therefore inherently discrete, at a step of 2/21 ≈ 0.0952. Rather than
-discover this after conversion, we trained through it, using a straight-through estimator so
-gradients still flow. The policy learns to be good at the actions it can actually express.
+discover this after conversion, we trained through it
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/act_quant.py"><code>act_quant.py</code></a>),
+using a straight-through estimator so gradients still flow. The policy learns to be good at the
+actions it can actually express.
 </p>
 
-<h4><span class="pill p1">Constraint 4</span> &nbsp;An L2 penalty on out-of-band outputs — the one that mattered most</h4>
+<h4><span class="pill p1">Constraint 4</span> &nbsp;An L2 penalty on out-of-band outputs</h4>
 <p>
-The first fine-tuning run raised return by +411 and yet made the spiking network
-<em>worse</em>. The reason: the policy's raw, pre-clip output sprawled far outside [−1, 1] —
-about 51% of components — and the fine-tune left it exactly as sprawled while making the table
-weights <em>wider</em>.
+Here is the asymmetry this constraint exists for. <b>Sprawl is free for the task and expensive
+for the spikes.</b> Nothing in the reinforcement-learning problem discourages the policy from
+emitting a torque of +3.3 where +1.0 would do: the clip's gradient is exactly zero outside the
+band, MuJoCo clamps <code>ctrl</code> to its range (verified — +3.3 and +1.0 produce
+bit-identical trajectories), and the training environment clamps before computing control cost.
+An out-of-band action is <b>free twice over</b>. The table is welcome to be as large and as
+sprawling as accuracy wants.
 </p>
 <p>
-That is structural, not bad luck. The clip's gradient is exactly zero outside the band, and an
-out-of-band action is <b>free twice over</b>: MuJoCo clamps <code>ctrl</code> to its range
-(verified — +3.3 and +1.0 produce bit-identical trajectories), and the training environment
-clamps before computing control cost. Nothing anywhere pulled the raw value back in. But in the
-spiking network the raw value <em>is</em> a physical span — of delays, then of weights — and
-sprawl costs ticks. So we made it cost something in training too:
+The spiking network pays for it anyway, because everything the table asks for has to be
+<em>realised</em> — as neurons, as synapses, and as dynamic range the readout must resolve
+inside a finite tick budget. So we made sprawl cost something in training too:
 </p>
 <pre><code>loss += w · mean_batch( Σ_o relu( |mu_raw[o]| − 1 )² )        w = 0.3</code></pre>
 
 <div class="tw">
 <table>
-  <caption>The penalty weight was chosen by a 20-update sweep, not guessed. Pulling the raw output
-  in shrinks the delay span the spiking network has to physically realise.</caption>
+  <caption>The penalty weight was chosen by a 20-update sweep, not guessed. The first fine-tuning
+  run — no penalty — raised return by +411 and still made the spiking network worse, because it
+  left the readout exactly as sprawled while widening the table weights.</caption>
   <thead><tr><th></th><th class="n">parent</th><th class="n">fine-tune, no penalty</th><th class="n">fine-tune + L2</th></tr></thead>
   <tbody>
-    <tr><td>raw output outside [−1, 1]</td><td class="n">51.6%</td><td class="n">53.9%</td><td class="n">~13%</td></tr>
-    <tr class="hi"><td>mean readout span</td><td class="n">74.7</td><td class="n">79.0</td><td class="n">63.8 ticks</td></tr>
-    <tr><td>largest delay required</td><td class="n">84</td><td class="n">96</td><td class="n">81 ticks</td></tr>
+    <tr class="hi"><td>raw output outside [−1, 1]</td><td class="n">51.6%</td><td class="n">53.9%</td><td class="n">~13%</td></tr>
   </tbody>
 </table>
+</div>
+
+<div class="note warn">
+  <span class="lbl">The penalty helps; it does not solve it</span>
+  <p>Out-of-band output is reduced, not removed. At the lighter weight we later used for
+  ablations (0.1), <b>15–18% of the raw readout is still outside the band</b> after a full run.
+  The clip still has zero gradient out there — the penalty simply adds the only live gradient
+  that pulls inward, and it is fighting an objective that does not care.</p>
 </div>
 
 <div class="note warn">
@@ -519,12 +594,17 @@ happens to be expressible as 12,288 stored numbers and a pile of comparisons.
 
 <p>
 Everything from here on is <b>construction</b>. The three stages map one-to-one onto the three
-things the LUT does: work out the comparisons, use them as an address, and pool the results.
+things the LUT does: work out the comparisons, use them as an address, and pool the results. The
+whole build is one script —
+<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py"><code>tiny_lut_quantised_pipeline.py</code></a>,
+which takes no arguments — and it verifies itself against the software table as it goes.
 </p>
 
 <h3>First, the substrate: what <code>spnet</code> actually simulates</h3>
 <p>
-The network runs on <b>spnet</b>, our spiking simulator. It is worth two minutes, because several
+The network runs on <b>spnet</b>
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/src/spiky/spnet/spnet.py"><code>spnet.py</code></a>),
+our spiking simulator. It is worth two minutes, because several
 things that look like design decisions later are really properties of this substrate.
 </p>
 <p>
@@ -1533,6 +1613,7 @@ The structure makes the search almost free. Weight <code>(t, k, o)</code> affect
 dimension <code>o</code>, and only those states whose table <code>t</code> selected cell
 <code>k</code> — and it enters through a <em>sum</em>, so a candidate move costs just
 <code>S′ = S − exp(w_old) + exp(w_new)</code> over the affected states. Plain coordinate descent
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py"><code>stage3_cd_bigdata.py</code></a>)
 against 153,600 teacher input→output pairs (115,200 train, 38,400 held out, split by seed), with
 the tick <code>ceil</code> <em>inside</em> the objective so the search sees the same rounding the
 hardware will.
@@ -1674,9 +1755,10 @@ activity.
 Nothing is emulated. NumPy does the two ends — the companding that turns an observation into
 input ticks, and the decode that turns a firing tick back into an action — but everything
 between them is the network itself, built through <code>spiky.spnet</code> at construction and
-advanced tick by tick with <code>process_ticks</code> on every call. What the stand runs is the
-real simulator, not a re-implementation of it. It still fits in roughly 6 ms per action on one
-CPU core, against a 33 ms frame budget at 30 steps per second.
+advanced tick by tick with <code>process_ticks</code> on every call
+(<a href="https://github.com/anatoli-starostin/spiky/blob/main/landing/walker2d-viz/server/actors/spiking_lut_quantised.py"><code>spiking_lut_quantised.py</code></a>).
+What the stand runs is the real simulator, not a re-implementation of it. It still fits in
+roughly 6 ms per action on one CPU core, against a 33 ms frame budget at 30 steps per second.
 </p>
 <p style="margin-top:1.4rem">
   <a href="../walker2d-viz/"><b>→ Open the live demo</b></a>
@@ -1685,17 +1767,26 @@ CPU core, against a 33 ms frame budget at 30 steps per second.
 <hr>
 
 <h3>Reproduction</h3>
+<p>
+Each piece is linked from the point in the story where it first comes up; this is the index.
+Everything is on <code>main</code>, and
+<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/REPRODUCE.md"><b>REPRODUCE.md</b></a>
+is the runbook — every step above, with the number it should print.
+</p>
 <div class="tw">
 <table>
   <thead><tr><th>file</th><th>role</th></tr></thead>
   <tbody>
-    <tr><td><code>experiments/walker2d-lut/REPRODUCE.md</code></td><td>the runbook — every step in this post, with the number it should print</td></tr>
-    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py</code></td><td>builds and verifies the network</td></tr>
-    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_export.py</code></td><td>exports the actor artefact</td></tr>
-    <tr><td><code>landing/walker2d-viz/server/actors/spiking_lut_quantised.py</code></td><td>the deployed actor</td></tr>
-    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/collect_teacher_io.py</code></td><td>the 153K-pair teacher dataset</td></tr>
-    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py</code></td><td>the 8-bit coordinate-descent fit</td></tr>
-    <tr><td><code>experiments/walker2d-lut/walker2d-spiking/eval_gtskew_large.py</code></td><td>the paired closed-loop walker evaluation</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/REPRODUCE.md"><code>REPRODUCE.md</code></a></td><td>the runbook — every step in this post, with the number it should print</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/src/spiky/lutorch/fast_multi_head_lut.py"><code>fast_multi_head_lut.py</code></a></td><td>the differentiable LUT layer the policy is built from</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo.py"><code>ppo.py</code></a></td><td>the PPO trainer (Part 1)</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo_qat_obs.py"><code>ppo_qat_obs.py</code></a></td><td>the quantisation-aware fine-tune — the four constraints</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_pipeline.py"><code>tiny_lut_quantised_pipeline.py</code></a></td><td>builds and verifies the network (Part 2)</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/tiny_lut_quantised_export.py"><code>tiny_lut_quantised_export.py</code></a></td><td>exports the actor artefact</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/landing/walker2d-viz/server/actors/spiking_lut_quantised.py"><code>spiking_lut_quantised.py</code></a></td><td>the deployed actor</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/collect_teacher_io.py"><code>collect_teacher_io.py</code></a></td><td>the 153K-pair teacher dataset</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/stage3_cd_bigdata.py"><code>stage3_cd_bigdata.py</code></a></td><td>the 8-bit coordinate-descent fit (Part 3)</td></tr>
+    <tr><td><a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/walker2d-spiking/eval_gtskew_large.py"><code>eval_gtskew_large.py</code></a></td><td>the paired closed-loop walker evaluation</td></tr>
   </tbody>
 </table>
 </div>
