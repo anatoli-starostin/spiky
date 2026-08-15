@@ -807,9 +807,7 @@ spike.
 <p>
 Only the bucket <em>edges</em> cross into the network. It consumes tick <em>ordering</em> and
 never the dequantised value, so the software-side "what number did that bucket mean" table
-never has to exist in hardware. Ordering is preserved exactly, ties included, which is why
-Stage-1 agreement with the software LUT is <b>bit-exact: 100.0000%, 0 wrong bits out of
-98,304</b>, not merely close.
+never has to exist in hardware.
 </p>
 
 <h4>The problem: a decision made at tick 12 has to survive until tick 127</h4>
