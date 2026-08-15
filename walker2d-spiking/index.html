@@ -1632,87 +1632,11 @@ policy can actually emit, and no resolution is wasted.
 <h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
 
 <p>
-The simulator advances in whole ticks, so a crossing time can only be reported as a
-<em>ceiling</em> — and with a negative decode slope, rounding the tick <em>up</em> always rounds
-the action <em>down</em>. The error is one-sided rather than symmetric: a small constant offset on
-every joint on every step, worth <b>−164.8 ± 50.3 of return</b> — return being the reward summed
-over an episode, of which a good one totals about 6,300; the ± is a standard error over roughly
-520 episodes, not a spread.
-</p>
-
-<figure class="wide">
-<div class="figbox">
-<svg viewBox="0 0 900 210" role="img" aria-label="Because the crossing tick is rounded up and the decode slope is negative, every rounding error moves the action down by exactly one level; measured, 100 percent of errors were minus one level.">
-  <text class="svg-t" x="14" y="26">Why the error can only go one way</text>
-
-  <!-- continuous time axis -->
-  <text class="svg-s" x="14" y="58">continuous crossing time</text>
-  <line x1="180" y1="54" x2="640" y2="54" class="svg-ax"/>
-  <g stroke="var(--rule-2)" stroke-width="1">
-    <line x1="220" y1="48" x2="220" y2="60"/><line x1="300" y1="48" x2="300" y2="60"/>
-    <line x1="380" y1="48" x2="380" y2="60"/><line x1="460" y1="48" x2="460" y2="60"/>
-    <line x1="540" y1="48" x2="540" y2="60"/><line x1="620" y1="48" x2="620" y2="60"/>
-  </g>
-  <circle cx="345" cy="54" r="4.5" fill="var(--s1)"/>
-  <text class="svg-s" x="345" y="40" text-anchor="middle" fill="var(--s1)">true value</text>
-
-  <!-- ceil arrow -->
-  <path d="M345 62 L345 84 L380 84 L380 100" stroke="var(--s3)" stroke-width="1.8" fill="none"/>
-  <path d="M376 96 L380 104 L384 96 Z" fill="var(--s3)"/>
-  <text class="svg-s" x="404" y="80" fill="var(--s3)">the neuron can only fire on a whole tick → ceil</text>
-
-  <!-- discrete tick axis -->
-  <text class="svg-s" x="14" y="112">tick the neuron actually fires</text>
-  <line x1="180" y1="108" x2="640" y2="108" class="svg-ax"/>
-  <g stroke="var(--rule-2)" stroke-width="1">
-    <line x1="220" y1="102" x2="220" y2="114"/><line x1="300" y1="102" x2="300" y2="114"/>
-    <line x1="380" y1="102" x2="380" y2="114"/><line x1="460" y1="102" x2="460" y2="114"/>
-    <line x1="540" y1="102" x2="540" y2="114"/><line x1="620" y1="102" x2="620" y2="114"/>
-  </g>
-  <circle cx="380" cy="108" r="4.5" fill="var(--s3)"/>
-
-  <!-- action axis, reversed -->
-  <path d="M380 116 L380 138" stroke="var(--s3)" stroke-width="1.8"/>
-  <path d="M376 134 L380 142 L384 134 Z" fill="var(--s3)"/>
-  <text class="svg-s" x="392" y="134">slope is <tspan font-style="italic">negative</tspan> — later tick means smaller action</text>
-
-  <text class="svg-s" x="14" y="166">decoded action (22 levels)</text>
-  <line x1="180" y1="162" x2="640" y2="162" class="svg-ax"/>
-  <g stroke="var(--rule-2)" stroke-width="1">
-    <line x1="220" y1="156" x2="220" y2="168"/><line x1="300" y1="156" x2="300" y2="168"/>
-    <line x1="380" y1="156" x2="380" y2="168"/><line x1="460" y1="156" x2="460" y2="168"/>
-    <line x1="540" y1="156" x2="540" y2="168"/><line x1="620" y1="156" x2="620" y2="168"/>
-  </g>
-  <circle cx="345" cy="162" r="4.5" fill="var(--s1)" opacity=".55"/>
-  <circle cx="300" cy="162" r="5" fill="var(--s3)"/>
-  <path d="M338 162 L310 162" stroke="var(--s3)" stroke-width="1.8"/>
-  <path d="M314 158 L306 162 L314 166 Z" fill="var(--s3)"/>
-  <text class="svg-s" x="300" y="186" text-anchor="middle" fill="var(--s3)">always one level LOW, never high</text>
-
-  <rect x="668" y="40" width="220" height="130" rx="9" fill="var(--s3-w)" stroke="var(--s3)" stroke-width="1.2"/>
-  <text class="svg-l" x="778" y="66" text-anchor="middle" fill="var(--s3)">measured</text>
-  <text class="svg-s" x="778" y="90"  text-anchor="middle">100% of errors were exactly −1 level</text>
-  <text class="svg-s" x="778" y="110" text-anchor="middle">~21% of all actions affected</text>
-  <text class="svg-s" x="778" y="130" text-anchor="middle">mean bias −0.207 levels</text>
-  <text class="svg-l" x="778" y="156" text-anchor="middle">worth −165 of return</text>
-</svg>
-</div>
-<figcaption><b>A systematic, strictly one-sided bias.</b> A symmetric error of this size would
-have averaged out. A one-sided one becomes a small constant torque offset on every joint on every
-step, and it costs return.</figcaption>
-</figure>
-<p>
-No recalibration removes it. The tick lattice and the output grid have the same pitch, so
-shifting the decode offset moves either every sample across a level boundary or none of them. It
-is not a resolution problem either; 22 levels can already represent the right answers. What is
-<em>not</em> degenerate with a global offset is a change to an <em>individual</em> stored weight,
-and that is the opening we used.
-</p>
-<p>
-The search that exploits it is <b>gradient-free</b>: it tries integer steps on a grid and keeps
-the ones that help. That grid is the 8-bit log-domain grid the shipped weights live on, so the
-same pass that cancels the rounding bias also leaves the readout quantised to 8 bits — a
-property worth having on its own.
+<code>spnet</code> advances in whole ticks, so the readout can only fire on a tick boundary and
+every action it reports is quantised. That leaves a small residual inaccuracy, and no simple
+recalibration removes it. The workaround is a short <b>gradient-free</b> fit of the readout
+weights — and the same pass leaves those weights on an 8-bit grid, which is worth having on its
+own.
 </p>
 
 <h4>A short, gradient-free nudge to the readout weights</h4>
