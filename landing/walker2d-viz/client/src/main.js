@@ -411,6 +411,41 @@ function netLoop(ts) {
 function netStart() { if (!netRunning) { netRunning = true; netLastTs = 0; netRAF = requestAnimationFrame(netLoop) } }
 function netStop() { netRunning = false; if (netRAF) cancelAnimationFrame(netRAF); netRAF = 0 }
 
+// ---- per-actor spiking-view adaptation ----
+// The spike raster + network graph only make sense for actors that expose read_spikes (the server
+// advertises which via the `spiking` list in its `actors` message + a `spiking` flag in `state`).
+// On actor-switch we (a) clear both canvases + drop stale layout state so no frozen frame lingers,
+// and (b) show/hide the spike+network controls & panels for the selected actor.
+let spikingActors = null            // Set of actor names with the spike/network view; null until the server tells us
+let curVizActor = null              // last actor we applied the viz UI for (avoid redundant work on every state msg)
+function activeIsSpiking(name) { return !spikingActors || spikingActors.has(name) }   // unknown -> assume yes (don't hide)
+function resetVizCanvases() {
+  spikeMeta = null; netMeta = null; netEdges = null; netSrcIdx = null; netFire = null; netPos = null; netBg = null
+  if (sctx) sctx.clearRect(0, 0, spikeCanvas.width, spikeCanvas.height)
+  if (nctx) nctx.clearRect(0, 0, netCanvas.width, netCanvas.height)
+}
+function applyActorViz(name) {
+  if (name == null || name === curVizActor) return
+  curVizActor = name
+  resetVizCanvases()                                   // kill any frozen frame from the previous actor
+  const spk = activeIsSpiking(name)
+  for (const id of ['showspikes', 'shownetwork']) {    // hide the toggles' rows when not applicable
+    const cb = $(id); if (!cb) continue
+    const row = cb.closest ? cb.closest('.row') : null
+    if (row) row.style.display = spk ? 'flex' : 'none'
+  }
+  const note = $('vizNote'); if (note) note.style.display = spk ? 'none' : 'flex'
+  if (!spk) {                                          // non-spiking: hide both panels, stop the net animation
+    $('spikePanel').style.display = 'none'
+    $('networkPanel').style.display = 'none'
+    netStop()
+  } else {                                             // spiking: restore panels per the user's checkbox state
+    $('spikePanel').style.display = $('showspikes').checked ? 'block' : 'none'
+    $('networkPanel').style.display = $('shownetwork').checked ? 'block' : 'none'
+    if ($('shownetwork').checked) netStart()
+  }
+}
+
 const overlay = $('overlay'), overlayMsg = $('overlayMsg')
 function showOverlay(msg) { if (overlayMsg) overlayMsg.textContent = msg; if (overlay) overlay.style.display = 'flex' }
 function hideOverlay() { if (overlay) overlay.style.display = 'none' }
@@ -454,6 +489,7 @@ function connect(url) {
       const sel = $('actor')                           // reflect it in the selector so the user sees "zero".
       if (sel && m.actor) sel.value = m.actor          // programmatic set does NOT fire onchange -> not a user interaction
       $('actorName').textContent = m.actor
+      applyActorViz(m.actor)                           // adapt the spike/network view to the (server-)switched actor
       return
     }
     if (m.type === 'actors') {
@@ -461,6 +497,7 @@ function connect(url) {
       for (const name of m.actors) {
         const o = document.createElement('option'); o.value = o.textContent = name; sel.appendChild(o)
       }
+      if (Array.isArray(m.spiking)) spikingActors = new Set(m.spiking)   // which actors have the spike/network view
       if (m.active) sel.value = m.active
       // Restore the user's chosen actor + toggles after a (re)connect (the fresh session starts on the
       // server default). No-op on the first connect (lastActor is null).
@@ -472,6 +509,7 @@ function connect(url) {
       if (lastNoReset) send({ cmd: 'no_reset', value: true })
       if (lastShowSpikes) send({ cmd: 'show_spikes', value: true })
       if (lastShowNetwork) send({ cmd: 'show_network', value: true })
+      curVizActor = null; applyActorViz(sel.value)         // set up the spike/network UI for the active actor
     } else if (m.type === 'state') {
       pushState(m.qpos, m.step, m.sps)                // update interpolation target (no geometry rebuild)
       $('env').textContent = m.env
@@ -479,6 +517,7 @@ function connect(url) {
       $('reward').textContent = (+m.reward).toFixed(2)
       $('ret').textContent = (+m.return).toFixed(1)
       $('actorName').textContent = m.actor
+      applyActorViz(m.actor)                         // no-op unless the active actor changed (guards on curVizActor)
       paused = !!m.paused                            // reflect server pause state
       $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
       $('pauseBtn').classList.toggle('active', paused)
@@ -512,7 +551,7 @@ function setFold(collapsed) {
 $('foldBtn').onclick = () => setFold(!ui.classList.contains('collapsed'))
 setFold(innerWidth < 620)                                 // default: collapsed on narrow/mobile, expanded on wide
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
-$('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }) }
+$('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }); applyActorViz(e.target.value) }
 $('noreset').onchange = (e) => { lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
 $('showspikes').onchange = (e) => {
   lastShowSpikes = e.target.checked

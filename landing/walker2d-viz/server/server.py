@@ -107,6 +107,7 @@ class Sim:
             self.actor_name = name
             self.actor = self.registry[name](self.env.action_space)
             self._zero_settle = ZERO_SETTLE if name == "zero" else 0   # a (re)selected zero topples, then idles
+            self._spike_meta_sent = False; self._net_topo_sent = False  # re-send layout/topology for the new actor
             self.touch()
 
     async def set_actor_async(self, name):
@@ -121,6 +122,7 @@ class Sim:
             self.actor_name = name
             self.actor = actor
             self._zero_settle = ZERO_SETTLE if name == "zero" else 0
+            self._spike_meta_sent = False; self._net_topo_sent = False  # re-send layout/topology for the new actor
             self.touch()
 
     def _auto_zero(self):
@@ -194,7 +196,11 @@ class Sim:
             self.env.close()
 
     def actor_list_msg(self):
-        return json.dumps({"type": "actors", "actors": sorted(self.registry.keys()), "active": self.actor_name})
+        # `spiking` = the subset of actors that expose the spike/network view (implement read_spikes);
+        # the client uses it to show/hide the spike raster + network-graph panels per selected actor.
+        return json.dumps({"type": "actors", "actors": sorted(self.registry.keys()),
+                           "active": self.actor_name,
+                           "spiking": sorted(n for n, c in self.registry.items() if hasattr(c, "read_spikes"))})
 
     def state_msg(self):
         data = self.env.unwrapped.data
@@ -207,6 +213,7 @@ class Sim:
             "step": self.step_count,
             "mode": self.mode,
             "actor": self.actor_name,
+            "spiking": hasattr(self.actor, "read_spikes"),   # does the active actor expose the spike/network view?
             "sps": self.sps,
             "paused": self.paused,
             "no_reset": self.no_reset,
