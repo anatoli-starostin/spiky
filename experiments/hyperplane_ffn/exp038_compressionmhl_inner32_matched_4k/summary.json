@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp038_compressionmhl_inner32_matched_4k",
+  "best_val_bpb": 1.4218086752706265,
+  "final_val_bpb": 1.4218086752706265,
+  "total_params": 35795136,
+  "training_time_hours": 0.229
+}
