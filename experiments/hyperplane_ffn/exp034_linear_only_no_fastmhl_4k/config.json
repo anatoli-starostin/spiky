@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp034_linear_only_no_fastmhl_4k",
+  "description": "LINEAR-ONLY control for exp033 (the linear-only ablation). Each block's dense 384->1536->384 GELU FFN is replaced by ONLY a single plain nn.Linear(384->384) with bias -- no GELU, no hidden expansion, and NO FastMHL. x = x + linear(ln2(x)); Linear weight zero-init'd for a residual-identity start. Purpose: isolate the FastMHL path's contribution via a three-way comparison at matched 4096 steps -- exp032 vanilla dense FFN (1.39371) vs exp034 linear-only vs exp033 linear+hard-FastMHL (param-matched, 1.41430). INTENTIONALLY NOT param-matched: with the FFN removed and no LUT this model is ~29.6M (< exp032's 35.79M) -- that is expected and fine for a control. Everything else byte-identical to exp032/exp033: MinimalGPT+RoPE, d384/6L/6H/seq512, device_bs 48, total_bs 24576 (grad_accum 1), n_steps 4096, lr 3e-4, wd 0.1, warmup 0.1, eval_every 200, eval_steps 10, seed 1, fp32 (compute_dtype:bf16 unused, no autocast), vocab 32768, same base_data_climbmix subset + tokenizer. Optimizer identical to exp032: Linear weight -> wd 0.1 group, bias -> no-wd group. Compare final val_bpb against exp032 1.39371 and exp033 1.41430.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 4096,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
