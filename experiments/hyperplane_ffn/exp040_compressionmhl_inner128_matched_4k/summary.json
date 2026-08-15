@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp040_compressionmhl_inner128_matched_4k",
+  "best_val_bpb": 1.3990288131967934,
+  "final_val_bpb": 1.3990288131967934,
+  "total_params": 35795712,
+  "training_time_hours": 0.157
+}
