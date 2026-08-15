@@ -167,6 +167,9 @@ class MinimalGPT(nn.Module):
         if isinstance(m, (nn.Linear, nn.Embedding)):
             nn.init.normal_(m.weight, std=0.02)
 
+    def get_device(self):
+        return self.tok_emb.weight.device
+
     def forward(self, idx, targets=None, loss_reduction='mean'):
         x = self.tok_emb(idx)
         for block in self.blocks:
