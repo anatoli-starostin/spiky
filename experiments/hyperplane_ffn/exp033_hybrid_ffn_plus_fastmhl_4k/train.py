@@ -147,28 +147,27 @@ class MinimalAttention(nn.Module):
 
 
 class MinimalBlock(nn.Module):
-    """exp033 HYBRID block: the vanilla dense FFN is AUGMENTED (not replaced) with a
-    second, parallel FastMultiHeadLUT path on the same LayerNorm'd input. The two
-    outputs are SUMMED into the residual:
+    """exp033 HYBRID block (Linear variant): the FFN slot is TWO parallel paths summed
+    into the residual -- the dense 384->1536->384 GELU MLP has been REMOVED and replaced
+    by a single plain Linear:
 
-        h = ln2(x);  x = x + mlp(h) + fastmhl(h)
+        h = ln2(x);  x = x + linear(h) + fastmhl(h)
 
-    Everything else (attention sub-block, LayerNorms, residual structure) is byte-identical
-    to exp032/exp002. Gradients flow through BOTH paths simultaneously (mlp is dense; the
-    FastMHL surrogate backward emits grads for its LUT tables and, densely, back to h).
-    At init the LUT tables are ~zero (init_weights_noise=1e-3), so the block ≈ the vanilla
-    FFN and the LUT path grows only if it helps.
+    Path A = one nn.Linear(n_embd -> n_embd) with bias, NO hidden expansion, NO GELU --
+    the simple gradient-highway map. Path B = the plain fixed-anchor-pair FastMultiHeadLUT
+    (hard forward, full soft-surrogate backward -> grads reach its tables AND flow back
+    into h). Attention sub-block, LayerNorms and residual structure are byte-identical to
+    exp032/exp002. Both paths train simultaneously. The Linear's weight is zero-init'd
+    (residual-branch identity start, as vanilla did for the FFN output) and the LUT tables
+    are ~zero init, so the second sub-block ~= 0 at step 0 and each path grows on its merit.
     """
     def __init__(self, n_embd, n_head, layer_idx):
         super().__init__()
         self.ln1  = nn.LayerNorm(n_embd)
         self.attn = MinimalAttention(n_embd, n_head)
         self.ln2  = nn.LayerNorm(n_embd)
-        self.mlp  = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd, bias=False),
-            nn.GELU(),
-            nn.Linear(4 * n_embd, n_embd, bias=False),
-        )
+        # Path A: a SINGLE plain Linear (no hidden expansion, no GELU, no second linear).
+        self.lin = nn.Linear(n_embd, n_embd, bias=True)
         # Path B: plain fixed-anchor-pair FastMHL. Per-layer seed so anchor pairs and
         # table inits are decorrelated across depth. Built on CPU here; the model-level
         # .to(DEVICE) moves its Parameter + buffers onto the GPU.
@@ -183,11 +182,11 @@ class MinimalBlock(nn.Module):
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
         h = self.ln2(x)
-        ffn_out = self.mlp(h)                                   # dense path A: [B, T, C]
+        lin_out = self.lin(h)                                  # dense path A: [B, T, C]
         B, T, C = h.shape
         lut_out = self.lut(h.reshape(B * T, C))                # [B*T, LUT_HEADS, LUT_NOUT]
-        lut_out = lut_out.reshape(B, T, C).to(ffn_out.dtype)   # heads*nout == C
-        x = x + ffn_out + lut_out                              # parallel-sum into residual
+        lut_out = lut_out.reshape(B, T, C).to(lin_out.dtype)   # heads*nout == C
+        x = x + lin_out + lut_out                              # parallel-sum into residual
         return x
 
 
@@ -206,7 +205,7 @@ class MinimalGPT(nn.Module):
         # Zero-init output projections so residual branches start as identity.
         for block in self.blocks:
             nn.init.zeros_(block.attn.proj.weight)
-            nn.init.zeros_(block.mlp[-1].weight)
+            nn.init.zeros_(block.lin.weight)   # path-A Linear: residual-identity start
 
     @staticmethod
     def _init_weights(m):
