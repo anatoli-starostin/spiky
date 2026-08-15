@@ -1605,13 +1605,15 @@ by <code>a_t = A − (τ_eff/τ)·w_t</code> gives the same result up to the con
 </table>
 </div>
 
-<div class="note">
-  <span class="lbl">Self-timing has a consequence for the decode</span>
-  <p>Because the network starts when its inputs arrive rather than on a clock, the origin of
-  time moves with every observation. The decode therefore <b>must</b> be referenced to the
-  completion event — <code>T − t_last</code>, not <code>T</code>. Using an absolute reference
-  was tried, and within-one-level accuracy collapsed from 100% to 50–70%.</p>
-</div>
+<p>
+Because the network starts when its inputs arrive rather than on a clock, the origin of time
+moves with every observation, so the decode is referenced to the completion event:
+<code>T − t_last</code>. That reference is available two ways. It is the completion detector's
+own firing tick less its fixed one-tick latency — the detector fires at <code>t_last+1</code>, so
+its time-to-first-spike carries <code>t_last</code>. It is also just the largest of the 17 input
+ticks, which the encoder has already computed on the way in; that is the form the deployed
+decode uses, because it is free.
+</p>
 
 <h3>The lattice — a neat choice with a cost</h3>
 <p>
