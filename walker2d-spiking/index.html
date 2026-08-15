@@ -1380,6 +1380,22 @@ address. Six coincident spikes at weight 0.18 give <b>1.08 &gt; 1.0</b> and it f
 <b>0.90 &lt; 1.0</b> and it does not.
 </p>
 <p>
+The wiring is one rule. Each comparison unit has <em>two</em> memory neurons — <code>m0</code>
+fires when its bit is 1, <code>m1</code> when it is 0 — so a lookup neuron never needs an
+inhibitory input. It takes its excitation from whichever of the two carries the value its own
+address requires:
+</p>
+<pre><code>row 37 of table t   →   address   1   0   0   1   0   1
+                        wire from  m0  m1  m1  m0  m1  m0    ← the row's six comparison units
+
+  six excitatory synapses, +0.18 each, delay 1, threshold 1.0
+  all six arrive  →  6 × 0.18 = 1.08 ≥ 1.0  →  fires</code></pre>
+<p>
+Every comparison unit fires exactly one of its two memory neurons, so each bit delivers its 0.18
+to precisely those lookup neurons that ask for the value it has just decided. Only the neuron
+whose address agrees on all six collects the full six.
+</p>
+<p>
 The neurons are <b>leak-free</b>, and that is what turns a heuristic into a guarantee. A wrong
 neuron at Hamming distance <em>k</em> from the correct address receives exactly <code>6 − k</code>
 spikes, so its membrane rises monotonically to at most 0.90 and stays there <b>for all
