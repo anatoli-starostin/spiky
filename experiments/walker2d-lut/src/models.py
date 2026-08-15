@@ -523,6 +523,53 @@ class FastLUTLSESumExpMLPCriticActorCritic(BaseActorCritic):
                     tau_critic=float(self.tau_critic.detach()))
 
 
+@register("fastlut_sum_expmlpcrit")
+class FastLUTSumExpMLPCriticActorCritic(FastLUTLSESumExpMLPCriticActorCritic):
+    """POOLING ABLATION: exp19's arch with the actor's log-sum-exp pooling replaced by a
+    PLAIN SUM. Everything else is exp19's, including the exponential MLP critic.
+
+    exp19 pools a head's T=32 tables with  out = T*tau*log((1/T) sum_t exp(w_t/tau)) ;
+    here they are simply added,  out = sum_t w_t , which is what `exp_outputs=False` does
+    (F.embedding_bag(mode='sum') in _soft_lut_fwd_body). The sum-scaled log-sum-exp was
+    built precisely so that tau -> inf recovers this, so the ablation is the tau -> inf
+    limit of the baseline rather than a different architecture.
+
+    The RNG stream is identical to exp19's, so the two arms start from bit-identical
+    weights. FastMultiHeadLut makes ONE `torch.rand` draw for the tables regardless of
+    `exp_outputs` (deliberately -- drawing twice would shift every parameter constructed
+    after it), exp19 uses `exp_outputs_init="additive"` whose init formula is the one the
+    non-exponential path uses anyway, and the only object `exp_outputs=True` adds is the
+    `tau_raw` scalar, built from `torch.tensor` and consuming no RNG. The critic is
+    therefore constructed against the same generator state in both arms.
+
+    Only the ACTOR's pooling changes; the critic keeps its exponential readout, so this
+    isolates the actor-side operator rather than confounding it with the critic.
+    """
+
+    def __init__(self, obs_dim, act_dim, tables_per_head=32, nap=6, hidden=(256, 256),
+                 initial_weights_noise=0.001, log_std_init=0.0, tau_init=0.05,
+                 tau_critic_init=0.25, critic_clamp=60.0):
+        # Deliberately skips the parent's __init__ (it would build an exp_outputs actor);
+        # everything below is that __init__ with the single pooling change.
+        BaseActorCritic.__init__(self, obs_dim, act_dim, log_std_init)
+        from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+        self.actor_lut = FastMultiHeadLut(
+            input_dim=obs_dim, n_heads=1, n_outputs=act_dim, n_anchor_pairs=nap,
+            tables_per_head=tables_per_head, forward_mode="hard", use_bf16=False,
+            initial_weights_noise=initial_weights_noise,
+            exp_outputs=False)                      # <-- THE ONE DIFFERENCE FROM exp19
+        # IDENTICAL construction to exp10/exp17/exp19's critic -- same call, same RNG draw.
+        self.vf = _ortho(_mlp([obs_dim, *hidden, 1]), gain=1.0)
+        self.critic_clamp = float(critic_clamp)
+        self.tau_c_floor = 1e-3
+        self.tau_c_raw = nn.Parameter(
+            torch.tensor(math.log(math.expm1(float(tau_critic_init))), dtype=torch.float32))
+
+    def extra_log(self):
+        # No actor tau in this arm; the critic still has one.
+        return dict(tau_actor=float("nan"), tau_critic=float(self.tau_critic.detach()))
+
+
 class _FastLUTLSESum2Base(BaseActorCritic):
     """exp18: BOTH actor and critic are anchor-pair LUTs with the sum-scaled log-sum-exp
     readout — the exp17 actor paired with a value head carrying the same exponential
