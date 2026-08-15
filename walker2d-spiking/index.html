@@ -810,6 +810,17 @@ never the dequantised value, so the software-side "what number did that bucket m
 never has to exist in hardware.
 </p>
 
+<h4>Self-timing: the network has no clock</h4>
+<p>
+One neuron watches for the end of the input window: a single <b>leak-free completion
+detector</b> taking all 17 inputs at weight 0.06 with threshold 1.0. Since each input fires
+exactly once, <code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it fire <em>precisely</em> when
+the last input arrives — no earlier, no later. The spike it emits is the <b>gate pulse</b>.
+That one neuron is what removes the need for an external fixed-tick stimulus, so the network
+takes <b>no external drive at all</b>: it is triggered entirely by its own inputs and finishes
+when it is finished.
+</p>
+
 <h4>The problem: a decision made at tick 12 has to survive until tick 127</h4>
 <p>
 The 17 input spikes do not arrive together. They are spread across roughly <b>85 ticks</b>,
@@ -1271,17 +1282,9 @@ coincidence (<code>6 × 0.18 = 1.08 &gt; 1.0</code>) without knowing anything ab
 order. The decision itself was already safe — held by the losing rail's runaway membrane.
 </p>
 
-<h4>Self-timing: the network has no clock</h4>
 <p>
-The gate pulse comes from a single <b>leak-free completion detector</b> taking all 17 inputs at
-weight 0.06 with threshold 1.0. Since each input fires exactly once,
-<code>16 × 0.06 &lt; 1.0 ≤ 17 × 0.06</code> makes it fire <em>precisely</em> when the last input
-arrives — no earlier, no later. That one neuron is what removes the need for an external
-fixed-tick stimulus, so the network takes <b>no external drive at all</b>: it is triggered
-entirely by its own inputs and finishes when it is finished.
-</p>
-<p>
-It then waits out the comparator pipeline (<code>D_GATE = 6</code>), because the last rail
+The completion detector then waits out the comparator pipeline (<code>D_GATE = 6</code>),
+because the last rail
 resolves at <code>t_last+3</code> and its tie veto at <code>t_last+5</code>. Gating any earlier
 was measured, and cost real accuracy — 99.9196% bit parity with 78 cases where two cells fired
 at once.
