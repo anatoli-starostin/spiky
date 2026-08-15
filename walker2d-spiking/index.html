@@ -615,7 +615,9 @@ which takes no arguments — and it verifies itself against the software table a
 <p>
 The network runs on <b>spnet</b>
 (<a href="https://github.com/anatoli-starostin/spiky/blob/main/src/spiky/spnet/spnet.py"><code>spnet.py</code></a>),
-our spiking simulator. It is worth a short detour: several
+our spiking simulator — originally a precise CUDA implementation of
+<a href="https://www.izhikevich.org/publications/spnet.htm">Izhikevich's 2006 spnet</a>, later
+extended to support different neuron types. It is worth a short detour: several
 things that look like design decisions later are properties of this substrate.
 </p>
 <p>
