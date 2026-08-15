@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp032_fast_vanilla_baseline_4k",
+  "best_val_bpb": 1.3937099515176643,
+  "final_val_bpb": 1.3937099515176643,
+  "total_params": 35792640,
+  "training_time_hours": 0.14
+}
