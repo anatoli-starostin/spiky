@@ -169,8 +169,18 @@ class SpikingLutQuantisedActor(Actor):
         # ROW order puts the internal COMPLETION gate (ids[7]) right AFTER the inputs (ids[0]); the rest
         # follow. ids[4] is the empty tie slot. Both panels (raster y-axis + network graph) group by these
         # bands, and spikes + topology share this same row space.
+        #
+        # Memory cells (ids[3], the green "S1 memory" band) are wired interleaved per pair:
+        # ids[3][2p]=m0 (driven by r0, the greater-than / "positive" rail) and ids[3][2p+1]=m1 (the
+        # "negative" rail). Exactly one of each pair ever fires, so with the pos/neg rows adjacent the
+        # firing looked simultaneous. Regroup the DISPLAY rows so all positives (m0, even indices) come
+        # first, then all negatives (m1, odd indices) — within each half still ordered by pair index p.
+        # This is display-only: the wiring in E uses neuron IDs, and edges/spikes are remapped through
+        # id2row (rebuilt from row_ids below), so the network's function, pairing and labels are unchanged.
+        mem_grouped = (np.concatenate([self.ids[3][0::2], self.ids[3][1::2]])
+                       if len(self.ids[3]) else self.ids[3])
         ordered = [self.ids[0], self.ids[7], self.ids[1], self.ids[2],
-                   self.ids[3], self.ids[4], self.ids[5], self.ids[6]]
+                   mem_grouped, self.ids[4], self.ids[5], self.ids[6]]
         row_ids = np.concatenate(ordered)
         self._all_oid = torch.as_tensor(row_ids.astype(np.int32))
         self._n_rows = int(self._all_oid.numel())
