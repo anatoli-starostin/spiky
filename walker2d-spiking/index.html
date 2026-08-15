@@ -451,6 +451,12 @@ implementation
 PyTorch + NVIDIA Warp for the batched physics, not JAX), running 8,192 Walker2d environments
 in parallel. 82,953 parameters, 201M environment steps.
 </p>
+<p>
+The same trainer produces the plain-MLP baseline every LUT experiment is measured against — a
+<code>[17, 256, 256, 6]</code> Tanh policy of <b>142,605 parameters</b>, which scores
+<b>5331.2 ± 30.5</b> over 30 gymnasium <code>Walker2d-v5</code> episodes. The lookup table is the
+smaller model.
+</p>
 
 <details class="fold">
 <summary>The full PPO configuration</summary>
