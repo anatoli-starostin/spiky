@@ -211,8 +211,95 @@ construction exists and is cheap: exp/sum/log map onto synapse/dendrite/membrane
 and the 33 %-narrower weight range means fewer ticks of delay span.
 
 **One-line takeaway:** log pooling is not required by the quantisation — on the 22 action
-levels the two poolings are indistinguishable — so the honest claim is that the exponential
-was chosen because it is what a neuron computes for free, not because the LUT needed it.
+levels the two poolings are indistinguishable and 8 bits is free for both — but it *is*
+required by **this** spiking build, whose output neuron is an anti-leaky membrane whose
+time-to-threshold is a logarithm. The exponential's justification is the substrate, not the
+numerics.
+
+## The spiking analogue of plain sum — BLOCKED, and the reason is the finding
+
+The natural next step is to build arm B's spiking counterpart and see whether it still walks.
+**It is not a config flip, and the reason is more interesting than the result would have
+been: both spiking pipelines are structurally built on the exponential.**
+
+Where it is baked in, in the amplitude build
+(`experiments/neurodarwinism/src/tiny_lut_quantised_pipeline.py`):
+
+| line | what |
+|---|---|
+| 156, 299 | `tau = float(Z["tau_actor"])` — a **required field** of the policy npz. Arm B has no `tau`; there is nothing to read. |
+| 222 | the synaptic weight is literally `beta[o] * np.exp(W[t,k,o] / tau)` — **the synapse supplies the exponential** |
+| 127-141 | the calibration solves `n = tau_eff · log(1/(beta·S))` with `S = Σ_t exp(w_t/tau)`, then picks `beta` from the reachable output range — **the whole crossing-time calculus assumes the log** |
+| 317 | the reference readout it validates against is `log(exp(sel/tau).mean(1))` |
+
+And the output neuron itself, in **both** pipelines:
+
+```python
+NeuronMeta(neuron_type=6, cf_2=0.0, cf_1=+1.0 / TAU_M_OUT, cf_0=0.0, ...)
+```
+
+`cf_1` is **positive** — an anti-leaky, exponentially *growing* membrane. Its time-to-threshold
+is what supplies the logarithm. That is the mechanism the post describes as "an exponentially
+growing membrane supplies a logarithm as its time-to-threshold", and it is a property of the
+neuron type, not a parameter.
+
+The delay-encoded build is not an escape hatch: `tiny_lut_full_pipeline.py`'s own docstring
+says *"STAGE 3 — 6 anti-leaky output neurons, arrival-time logsumexp → affine decode"*, it
+hardcodes `TAU = 0.09036568`, its amplitude calibration is
+`amps[o] = 1/(2·Σ exp((arr.max()-arr)/tau_eff))`, and its reference readout is
+`TPH·TAU·(log(Σ exp(ws_q/TAU)) − log(TPH))`. **Delay vs amplitude is a choice about how the
+weight is delivered; both pool with a log-sum-exp.** There is no plain-sum readout anywhere
+in the repo.
+
+### What a clean plain-sum path would take
+
+Stages 1 and 2 — order detection and one-hot lookup — are pooling-independent and would carry
+over unchanged. Stage 3 is a new construction:
+
+1. **A different output neuron.** A perfect integrator (`cf_2 = 0, cf_1 = 0`) with a constant
+   drive `cf_0 = I` crosses threshold at `T = (θ − Σ_t w_t)/I` — affine in the plain sum,
+   which is exactly what is wanted. spnet supports it; it is a `NeuronMeta` away.
+2. **A new calibration.** The `beta` / `tau_eff` log-crossing solve is replaced by choosing
+   `I`, `θ` and the affine decode so the reachable `Σ w` range maps onto the tick budget.
+3. **Signed weight delivery.** The exponential made every synaptic weight positive; a plain
+   sum needs signed weights. spnet allows negative weights, but the memory/gate charge
+   accounting in Stage 2→3 assumes the current sign convention and would need rechecking.
+4. **A new export + actor.** The npz carries `tau_actor`, `beta` and the affine decode; a
+   plain-sum artefact needs its own fields and its own numpy actor.
+5. **Re-verification end to end** — Stage-3 parity, the tick budget, and the coordinate-descent
+   weight fit all assume the log domain and would be redone.
+
+That is a Stage-3 rebuild on the scale of the original, not an afternoon. Reported rather than
+hacked around, per the brief.
+
+## What *can* be measured without the spiking substrate: 8-bit weight quantisation
+
+The other half of the question needs no new neuron. Each arm's weights quantised to **256
+levels on its own natural grid** — log domain (`L = W/τ`) for A, linear in `W` for B, since
+there is no τ to divide by — and evaluated in **gymnasium Walker2d-v5, 30 episodes**, with the
+same input (128-tick companding) and output (22-level) quantisers.
+
+| arm | seed | float32 | 8-bit | full-1000 (float → 8-bit) |
+|---|---|---:|---:|---|
+| A log-sum-exp | 0 | 5857.9 ± 773.4 | 5695.9 ± 1183.7 | 28/30 → 28/30 |
+| A | 1 | 5580.1 ± 947.5 | 5763.0 ± 90.0 | 29/30 → **30/30** |
+| A | 2 | 5520.3 ± 55.8 | 5517.6 ± 73.9 | 30/30 → 30/30 |
+| B plain sum | 0 | 5839.3 ± 160.7 | 5847.5 ± 124.6 | 30/30 → 30/30 |
+| B | 1 | **6587.1 ± 78.5** | **6597.1 ± 52.7** | 30/30 → 30/30 |
+| B | 2 | 6411.9 ± 502.6 | 6275.6 ± 983.9 | 29/30 → 29/30 |
+
+| arm | float mean | 8-bit mean | Δ |
+|---|---:|---:|---:|
+| A (log grid) | 5652.7 | 5658.8 | **+6.1** |
+| B (linear grid) | 6279.4 | 6240.1 | **−39.4** |
+
+**8 bits is free for both.** Both deltas are far inside the seed spread — the log grid is not
+buying robustness to quantisation that the linear grid lacks. Plain sum survives 8-bit
+*linear* weight quantisation exactly as well as log-sum-exp survives 8-bit *log* quantisation.
+
+Arm B's deploy seed by the usual criterion (deployed performance, never-falls preferred) is
+**seed 1** — highest mean (6587.1), lowest spread (± 78.5) and 30/30 full episodes, both
+before and after quantisation. No trade-off to make.
 
 ## Caveats
 
