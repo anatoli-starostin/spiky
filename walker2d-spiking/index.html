@@ -1615,7 +1615,7 @@ ticks, which the encoder has already computed on the way in; that is the form th
 decode uses, because it is free.
 </p>
 
-<h3>The lattice — a neat choice with a cost</h3>
+<h3>The lattice — a neat choice</h3>
 <p>
 The output neuron's membrane time constant, <code>TAU_M_OUT</code>, is the one number in Stage 3
 that was <em>chosen</em> rather than derived from the trained table. It controls how fast that
@@ -1626,16 +1626,17 @@ worth — the <b>pitch of the decode lattice</b>.
 At <b>31.257 ticks</b> that pitch is <b>0.09523729</b> of output per tick, against an output grid
 step of 2/21 = <b>0.09523810</b> — equal to eight parts in ten million. So 22 ticks map onto 22
 output levels, one tick per level: every tick the neuron could fire on lands on a value the
-policy can actually emit, and no resolution is wasted. That is the upside.
+policy can actually emit, and no resolution is wasted.
 </p>
+
+<!-- ================================================================= -->
+<h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
+
 <p>
-The cost is that the two grids are now <b>pinned</b> to each other, and two things follow.
-<b>Recalibration has no purchase:</b> every decoded value sits at the same phase relative to the
-output grid, so shifting the decode offset moves <em>no</em> samples across a level boundary, or
-<em>all</em> of them. And <b>the rounding error is one-sided:</b> as the primer said, a crossing
-can only be reported as a whole tick, so the reported time is a <em>ceiling</em> — and with a
-negative decode slope, rounding the tick <em>up</em> always rounds the action <em>down</em>. Not
-sometimes. Always.
+The simulator advances in whole ticks, so a crossing time can only be reported as a
+<em>ceiling</em> — and with a negative decode slope, rounding the tick <em>up</em> always rounds
+the action <em>down</em>. The error is one-sided rather than symmetric: a small constant offset on
+every joint on every step, worth <b>−164.8 ± 50.3 of return</b>.
 </p>
 
 <figure class="wide">
@@ -1699,16 +1700,12 @@ sometimes. Always.
 have averaged out. A one-sided one becomes a small constant torque offset on every joint on every
 step, and it costs return.</figcaption>
 </figure>
-
-<!-- ================================================================= -->
-<h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
-
 <p>
-That one-sided bias was worth <b>−164.8 ± 50.3 of return</b> — small per action, but constant on
-every joint on every step. It cannot be calibrated away, because the lattice is pinned. It is not
-a resolution problem either; 22 levels can already represent the right answers. But a change to
-an <em>individual</em> stored weight is <b>not</b> degenerate with a global offset, and that is a
-cheap opening.
+No recalibration removes it. The tick lattice and the output grid have the same pitch, so
+shifting the decode offset moves either every sample across a level boundary or none of them. It
+is not a resolution problem either; 22 levels can already represent the right answers. What is
+<em>not</em> degenerate with a global offset is a change to an <em>individual</em> stored weight,
+and that is the opening we used.
 </p>
 
 <h4>A short, gradient-free nudge to the readout weights</h4>
