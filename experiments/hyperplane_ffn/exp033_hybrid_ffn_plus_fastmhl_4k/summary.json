@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp033_hybrid_ffn_plus_fastmhl_4k",
+  "best_val_bpb": 1.414295434064538,
+  "final_val_bpb": 1.414295434064538,
+  "total_params": 35794944,
+  "training_time_hours": 0.142
+}
