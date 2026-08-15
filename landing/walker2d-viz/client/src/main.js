@@ -276,20 +276,44 @@ function drawSpikes(a) {
   const W = spikeCanvas.width, H = spikeCanvas.height
   const PADL = 92, PADR = 8, PADT = 6, PADB = 6
   const pw = W - PADL - PADR, ph = H - PADT - PADB
-  const nt = spikeMeta.n_ticks, nr = spikeMeta.n_rows
+  const nt = spikeMeta.n_ticks
   sctx.clearRect(0, 0, W, H)
   sctx.textAlign = 'right'; sctx.textBaseline = 'middle'; sctx.font = '10px sans-serif'
-  for (const b of spikeMeta.bands) {                       // stage bands: faint tint + label
-    const y0 = PADT + (b.start / nr) * ph, y1 = PADT + (b.end / nr) * ph
+  // Band-weighted vertical layout. A uniform row/nr mapping gave the dense S2-cells band
+  // (~2048 of ~2889 rows) ~71% of the height and squeezed the 272-row green memory band into
+  // ~9% (~0.13 px/row) — far thinner than the dot, so adjacent memory rows blurred together.
+  // Instead cap the dense band(s) to a thin strip and share the rest by row count, so the
+  // sparse, interesting bands (memory, rails, inputs, outputs) get ~1 px per row and the
+  // per-neuron firing is legible. Rows stay linear within each band.
+  const bands = spikeMeta.bands
+  let sparseRows = 0, denseRows = 0
+  for (const b of bands) { const n = b.end - b.start; if (n > 400) denseRows += n; else sparseRows += n }
+  const denseH = denseRows ? Math.min(0.14 * ph, 90) : 0        // dense S2-cells: a capped strip
+  const perRow = (ph - denseH) / Math.max(1, sparseRows)        // px/row for the sparse bands
+  const top = {}, rh = {}
+  let y = PADT
+  for (const b of bands) {
+    const n = b.end - b.start
+    const h = (n > 400) ? denseH : n * perRow
+    top[b.name] = y; rh[b.name] = n ? h / n : 0
+    y += h
+  }
+  for (const b of bands) {                                      // stage bands: faint tint + label
+    const y0 = top[b.name], y1 = top[b.name] + (b.end - b.start) * rh[b.name]
     sctx.fillStyle = b.color + '22'
     sctx.fillRect(PADL, y0, pw, Math.max(1, y1 - y0))
     sctx.fillStyle = '#b9c6d6'
     sctx.fillText(b.name, PADL - 6, (y0 + y1) / 2)
   }
-  for (let i = 0; i < a.length; i += 2) {                  // one dot per fired neuron at its tick
+  for (let i = 0; i < a.length; i += 2) {                       // one dot per fired neuron at its tick
     const row = a[i], tick = a[i + 1]
-    sctx.fillStyle = bandColorFor(row)
-    sctx.fillRect(PADL + (tick / nt) * pw, PADT + (row / nr) * ph, 2.2, 2.2)
+    let bt = null
+    for (const b of bands) if (row >= b.start && row < b.end) { bt = b; break }
+    if (!bt) continue
+    const yy = top[bt.name] + (row - bt.start) * rh[bt.name]
+    const dh = Math.max(1, Math.min(2.4, rh[bt.name]))          // dot height <= its row height (no overspill)
+    sctx.fillStyle = bt.color
+    sctx.fillRect(PADL + (tick / nt) * pw, yy, 2.2, dh)
   }
 }
 
