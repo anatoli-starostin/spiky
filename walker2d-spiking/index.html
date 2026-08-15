@@ -1694,24 +1694,6 @@ network, on GPU, with measured spike ticks, on held-out states:
 </table>
 </div>
 
-<div class="note warn">
-  <span class="lbl">The weights and the decode offset are one object</span>
-  <p>Changing the weights changes the crossing ticks, so the fit <b>also re-derives the decode
-  offset</b> — by −0.22 to −0.32 of a level. The two are a <b>pair</b> and must never be used
-  apart. Fitted weights read with the old offset mis-decode by about a quarter of a level — the
-  same magnitude as the bias just removed — and they do it <em>silently</em>: no error, no
-  warning, just a worse walker. Both are baked together into the shipped artefact, and the
-  evaluation harness refuses to run weights without a matching offset.</p>
-</div>
-
-<p>
-So "how much training happened inside the spiking network" has a clean answer: <b>none</b>. No
-backpropagation, no surrogate gradients, no spike-time learning rule. A gradient-free search
-moved 5,390 numbers on a discrete grid to cancel a known, characterised rounding artefact of the
-readout — a few seconds of post-processing on top of a network that was otherwise built, not
-trained.
-</p>
-
 <!-- ================================================================= -->
 <h2 id="results"><span class="sectnum">5</span>Results</h2>
 
