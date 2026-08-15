@@ -495,14 +495,13 @@ where observations actually live, rather than uniformly across a range they rare
 <p>
 The map is <b>shared across all 17 coordinates out of necessity, not convenience</b>. The LUT
 addresses by comparing coordinates <em>to each other</em>; a per-coordinate map would silently
-change the meaning of every address bit. The width σ = 1 was measured, not assumed: it is an
-interior minimum of the address-bit flip rate (<b>0.486%</b>, against 1.39% at σ = 0.5 and
-1.16% at σ = 3.0), and it coincides with the principled value for unit-variance observations.
+change the meaning of every address bit. We used σ = 1, which turned out to be close enough to
+the real observation distributions.
 </p>
 
 <h4><span class="pill p1">Constraint 2</span> &nbsp;Output: the soft (log-sum-exp) pooling</h4>
 <p>
-This one is not about quantisation. It is the architecture, and the reason is <b>Dale's law</b>:
+This one is architectural, and the reason is <b>Dale's law</b>:
 every neuron single-signed, with all of its outgoing synapses excitatory or all inhibitory,
 never a mixture. Real neurons are like that. You either design for it from the start or fail it
 retroactively.
