@@ -900,8 +900,8 @@ instant it is pushed it accelerates away and never comes back.
   <code>−8.61, −9.04, −9.50, −9.98, −10.49 …</code>, multiplying by <code>1.0506</code> every
   single tick. By the time the gate pulse arrives ~120 ticks later it is near <b>−3,400</b>.
   No later excitation can rescue it; +1.5 against −3,400 is nothing.</p>
-  <p>So the decision is held by the <b>losing rail's own membrane sign</b>. Not by a latch, not
-  by a feedback synapse, not by a maintenance current — there is nothing to maintain. That is
+  <p>So the decision is held by the <b>losing rail's own membrane sign</b>. Not by a feedback
+  synapse, not by a maintenance current — there is nothing to maintain. That is
   how a decision made at tick 12 is still intact at tick 127.</p>
 </div>
 
@@ -1259,10 +1259,9 @@ latency on top of its synapse delay; only the differences matter, so the timelin
 drawn relative to A.</span></figcaption>
 </figure>
 
-<h4>The memory cells are an AND gate, not a latch</h4>
+<h4>The memory cells are an AND gate</h4>
 <p>
-It is tempting to read <code>m0</code> as a flip-flop that stores the bit. It is not — there is
-no bistability and no feedback anywhere near it. <code>m0</code> is a leaky neuron with
+<code>m0</code> is a leaky neuron with
 threshold 1.0 and exactly two inputs, each worth <b>+0.6</b>: one from its rail, one from the
 completion detector. <b>Neither can fire it alone</b> (0.6 &lt; 1.0); together they give 1.2 and
 it fires. It is a coincidence detector.
