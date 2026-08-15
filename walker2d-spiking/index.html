@@ -516,10 +516,10 @@ logarithm is not arithmetic we perform but the
 synapse, the sum in the dendrite, the logarithm in the membrane.
 </p>
 <p>
-A plain sum works in software; we measured that it trains and quantises just as well. But
-summing signed table values needs <b>genuinely signed synapses</b> — inhibitory ones, from cells
-that are excitatory elsewhere — which breaks the single-signed rule by construction. That, not
-the numerics, is why the exponential is here.
+A plain sum computes the right thing — we measured that it trains and quantises just as well.
+But building one out of spiking neurons would need <b>genuinely signed synapses</b>: inhibitory
+ones, on cells that are excitatory elsewhere, which breaks the single-signed rule by
+construction. That, not the numerics, is why the exponential is here.
 </p>
 <div class="note key">
   <span class="lbl">Dale's law holds for the whole network, not just the readout</span>
