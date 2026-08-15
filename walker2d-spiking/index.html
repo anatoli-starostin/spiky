@@ -243,7 +243,7 @@ Almost every weight and delay in the finished network is computed in closed form
 trained table.
 </p>
 <p>
-The order matters for reading what follows. The policy is trained first, as ordinary software,
+The order matters. The policy is trained first, as ordinary software,
 with a handful of constraints chosen so that it is <b>later buildable in spikes</b>; the spiking
 network is constructed from the finished table afterwards. Part 1 is the training, Part 2 the
 construction.
@@ -334,10 +334,9 @@ action  = clip(mu, −1, 1)</code></pre>
 
 <p>
 That is <b>12,288 learnable numbers</b> (32 × 64 × 6) plus a single learned temperature
-<code>τ</code>, and — this is the load-bearing part — <b>no arithmetic is ever performed on the
-observation</b>. The policy only asks which of two coordinates is larger. The addressing is
-exact rather than approximate, and "which is larger" is precisely the question a race between
-two spikes answers.
+<code>τ</code>, and <b>no arithmetic is ever performed on the observation</b>. The policy only
+asks which of two coordinates is larger. The addressing is exact rather than approximate, and
+"which is larger" is what a race between two spikes answers.
 </p>
 
 <figure class="wide">
@@ -420,14 +419,15 @@ two spikes answers.
   <text class="svg-s" x="450" y="276" text-anchor="middle">No multiplication touches the observation anywhere along this path — only comparisons, an address, and a stored value.</text>
 </svg>
 </div>
-<figcaption><b>The anchor-pair lookup table.</b> Six comparisons pick a row; 32 tables vote;
-a temperature-controlled soft pooling turns their votes into six torques. The pooling looks
-like an odd choice until Part 2 — it is the piece a spiking membrane can compute for free.</figcaption>
+<figcaption><b>The anchor-pair lookup table.</b> Six comparisons pick a row in each of the 32
+tables; a temperature-controlled soft pooling combines the 32 rows into six torques. Part 2
+explains the pooling: a spiking membrane computes it for free.</figcaption>
 </figure>
 
 <h3>Training it: PPO on 201 million environment steps</h3>
 <p>
-The table was trained from scratch with a GPU-resident PPO implementation
+The table was trained from scratch with a GPU-resident PPO (proximal policy optimisation)
+implementation
 (<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo.py"><code>ppo.py</code></a> —
 PyTorch + NVIDIA Warp for the batched physics, not JAX), running 8,192 Walker2d environments
 in parallel. 82,953 parameters, 201M environment steps.
@@ -460,8 +460,8 @@ real-valued torques. A spiking network can do neither. So after the main run we 
 <b>384-update quantisation-aware fine-tune</b>
 (<a href="https://github.com/anatoli-starostin/spiky/blob/main/experiments/walker2d-lut/src/ppo_qat_obs.py"><code>ppo_qat_obs.py</code></a>)
 that put the physical limitations into the
-training loop, where the policy could adapt to them instead of suffering them at conversion
-time. Each constraint answers a specific property of the spiking substrate.
+training loop, so the policy could adapt to them rather than meet them for the first time at
+conversion. Each constraint answers a specific property of the spiking substrate.
 </p>
 
 <h4><span class="pill p1">Constraint 1</span> &nbsp;Input: 128 Gaussian-companded buckets, one shared map</h4>
@@ -483,26 +483,25 @@ interior minimum of the address-bit flip rate (<b>0.486%</b>, against 1.39% at �
 
 <h4><span class="pill p1">Constraint 2</span> &nbsp;Output: the soft (log-sum-exp) pooling</h4>
 <p>
-This one was not added for quantisation — it is the architecture, and the reason for it is
-<b>Dale's law</b>. We set out to build a network in which every neuron is single-signed: all of
-a neuron's outgoing synapses excitatory, or all inhibitory, never a mixture. Real neurons are
-like that, and it is a constraint you either design for from the start or fail retroactively.
+This one is not about quantisation. It is the architecture, and the reason is <b>Dale's law</b>:
+every neuron single-signed, with all of its outgoing synapses excitatory or all inhibitory,
+never a mixture. Real neurons are like that. You either design for it from the start or fail it
+retroactively.
 </p>
 <p>
-The log-sum-exp is what lets the output stage honour it. The weight a Stage-2 cell delivers to
-an output neuron is <code>β_o · exp(w/τ)</code>, and an exponential is <em>always positive</em> —
-so every synapse in the readout is excitatory, whatever the sign of the stored table value. The
-signs and the ordering are not lost; they are recovered by the logarithm on the other side, and
-the logarithm is not arithmetic we perform but the
-<a href="#snn">time-to-threshold of an anti-leaky output neuron</a>. The exponential lives in the
+The log-sum-exp is what makes it possible in the output stage. A Stage-2 cell delivers
+<code>β_o · exp(w/τ)</code> to an output neuron, and an exponential is <em>always positive</em>,
+so every readout synapse is excitatory whatever the sign of the stored table value. The signs
+and the ordering are not lost — the logarithm on the other side recovers them, and that
+logarithm is not arithmetic we perform but the
+<a href="#snn">time-to-threshold of an anti-leaky output neuron</a>. The exponential is in the
 synapse, the sum in the dendrite, the logarithm in the membrane.
 </p>
 <p>
-A plain sum would have worked as software, and we measured that it trains and quantises just as
-well. But delivering signed table values as a sum requires <b>genuinely signed synapses</b> —
-some of them inhibitory, from cells that are excitatory elsewhere — and that is exactly the
-single-signed promise, broken by construction. That, not the numerics, is why the exponential is
-here.
+A plain sum works in software; we measured that it trains and quantises just as well. But
+summing signed table values needs <b>genuinely signed synapses</b> — inhibitory ones, from cells
+that are excitatory elsewhere — which breaks the single-signed rule by construction. That, not
+the numerics, is why the exponential is here.
 </p>
 <div class="note key">
   <span class="lbl">Dale's law holds for the whole network, not just the readout</span>
@@ -513,16 +512,15 @@ here.
 </div>
 <p>
 It is also <b>biologically motivated</b> — motivated, not accurate. A perfectly non-leaky
-integrator is an idealisation, but regenerative, anti-leaky membrane dynamics are not: the
-persistent sodium current <em>I<sub>NaP</sub></em> and dendritic calcium plateau potentials both
-produce membranes that accelerate rather than decay, and the exponential integrate-and-fire
-model bakes an <code>exp()</code> term in precisely to capture the sodium upstroke. The
-anti-leaky output neuron has a mechanistic hook in that literature rather than being an
-arbitrary convenience.
+integrator is an idealisation; anti-leaky membrane dynamics are not. The persistent sodium
+current <em>I<sub>NaP</sub></em> and dendritic calcium plateau potentials both produce membranes
+that accelerate rather than decay, and the exponential integrate-and-fire model carries an
+<code>exp()</code> term for the sodium upstroke. The anti-leaky output neuron has a hook in that
+literature; it is not an arbitrary convenience.
 </p>
 <p>
-And there is a smaller pleasure worth stating plainly: we did not choose a log-sum-exp because
-the task needed one. We chose the neurons, and the log-sum-exp came out of them for free.
+We did not pick a log-sum-exp because the task needed one. We picked the neurons, and the
+log-sum-exp fell out of them.
 </p>
 
 <h4><span class="pill p1">Constraint 3</span> &nbsp;Output: clip to [−1, 1], then 22 uniform levels</h4>
@@ -537,13 +535,12 @@ actions it can actually express.
 
 <h4><span class="pill p1">Constraint 4</span> &nbsp;An L2 penalty on out-of-band outputs</h4>
 <p>
-Here is the asymmetry this constraint exists for. <b>Sprawl is free for the task and expensive
-for the spikes.</b> Nothing in the reinforcement-learning problem discourages the policy from
-emitting a torque of +3.3 where +1.0 would do: the clip's gradient is exactly zero outside the
-band, MuJoCo clamps <code>ctrl</code> to its range (verified — +3.3 and +1.0 produce
-bit-identical trajectories), and the training environment clamps before computing control cost.
-An out-of-band action is <b>free twice over</b>. The table is welcome to be as large and as
-sprawling as accuracy wants.
+This constraint exists for one asymmetry: <b>sprawl is free for the task and expensive for the
+spikes.</b> Nothing in the reinforcement-learning problem discourages the policy from emitting a
+torque of +3.3 where +1.0 would do. The clip's gradient is exactly zero outside the band, MuJoCo
+clamps <code>ctrl</code> to its range (verified — +3.3 and +1.0 produce bit-identical
+trajectories), and the training environment clamps before computing control cost. An
+out-of-band action is <b>free twice over</b>, so the table can sprawl as far as accuracy wants.
 </p>
 <p>
 The spiking network pays for it anyway, because everything the table asks for has to be
@@ -585,8 +582,8 @@ inside a finite tick budget. So we made sprawl cost something in training too:
 </div>
 
 <p>
-The result of Part 1 is an ordinary, competitive Walker2d policy with a natural gait, which
-happens to be expressible as 12,288 stored numbers and a pile of comparisons.
+Part 1 ends with an ordinary, competitive Walker2d policy with a natural gait — one that happens
+to be expressible as 12,288 stored numbers and a pile of comparisons.
 </p>
 
 <!-- ================================================================= -->
@@ -604,8 +601,8 @@ which takes no arguments — and it verifies itself against the software table a
 <p>
 The network runs on <b>spnet</b>
 (<a href="https://github.com/anatoli-starostin/spiky/blob/main/src/spiky/spnet/spnet.py"><code>spnet.py</code></a>),
-our spiking simulator. It is worth two minutes, because several
-things that look like design decisions later are really properties of this substrate.
+our spiking simulator. It is worth a short detour: several
+things that look like design decisions later are properties of this substrate.
 </p>
 <p>
 <b>Time is discrete.</b> The simulation advances in integer <b>ticks</b>. A spike is an event at a
@@ -781,7 +778,7 @@ weights on the arrows entering Stage 3.</figcaption>
 <h3><span class="pill p1">Stage 1</span> &nbsp;Order detection — the comparator, in full</h3>
 
 <p>
-This is the heart of the network, so it is worth going through one comparison unit synapse by
+This is the core of the network, so here is one comparison unit synapse by
 synapse. Everything below is the wiring as it is actually built, in
 <code>tiny_lut_quantised_pipeline.py</code> and, identically, in the deployed actor.
 </p>
@@ -794,7 +791,7 @@ spike.
 <p>
 Only the bucket <em>edges</em> cross into the network. It consumes tick <em>ordering</em> and
 never the dequantised value, so the software-side "what number did that bucket mean" table
-never has to exist in hardware. Ordering is preserved exactly, ties included — which is why
+never has to exist in hardware. Ordering is preserved exactly, ties included, which is why
 Stage-1 agreement with the software LUT is <b>bit-exact: 100.0000%, 0 wrong bits out of
 98,304</b>, not merely close.
 </p>
@@ -810,8 +807,7 @@ its answer at tick 12; another might not settle until tick 120.
 But the lookup in Stage 2 needs <em>all 192 address bits at once</em>. So every early decision
 has to be held, unchanged and unmaintained, until the last one is in. A conventional leaky
 neuron cannot do that: whatever charge encodes the decision decays away long before the window
-closes. This is the problem the comparator design exists to solve, and it solves it with
-<b>one sign</b>.
+closes. That is the problem the comparator solves, and it solves it with <b>one sign</b>.
 </p>
 
 <h4>Six neurons, ten synapses, no loops</h4>
@@ -1336,11 +1332,8 @@ single tick and never rises at all.
   <text class="svg-l" x="450" y="283" text-anchor="middle">One tick of delay on the GT rail reproduces the software's strict <tspan font-family="ui-monospace,Menlo,monospace">&gt;</tspan> exactly — on ties and on everything else.</text>
 </svg>
 </div>
-<figcaption><b>Ties are not an edge case here.</b> There are <em>zero</em> exact float ties in
-the data, but once inputs are bucketed, 0.95% of address slots and <b>77% of samples</b> contain
-two coordinates in the same bucket. They are handled by the delay on the greater-than rail's own
-excitation synapse — no extra machinery, and no special case anywhere in the
-network.</figcaption>
+<figcaption><b>How a tie is resolved.</b> By the delay on the greater-than rail's own excitation
+synapse — no extra machinery, and no special case anywhere in the network.</figcaption>
 </figure>
 
 <p>
@@ -1382,8 +1375,7 @@ lose a correct one. Measured over 16,384 table selections: <b>0 tables selected 
 <h3><span class="pill p3">Stage 3</span> &nbsp;The readout — where the physics does the arithmetic</h3>
 
 <p>
-This is the part that makes the whole thing work, and it is worth stating plainly:
-<b>the output neuron does not compute a log-sum-exp; it <em>is</em> one</b>.
+<b>The output neuron does not compute a log-sum-exp; it <em>is</em> one.</b>
 </p>
 <p>
 Each selected cell connects to each output with <b>delay 1</b> and weight
@@ -1511,7 +1503,7 @@ by <code>a_t = A − (τ_eff/τ)·w_t</code> gives the same result up to the con
   was tried, and within-one-level accuracy collapsed from 100% to 50–70%.</p>
 </div>
 
-<h3>The lattice — an elegant choice that came with a bill</h3>
+<h3>The lattice — a neat choice with a cost</h3>
 <p>
 The output neuron's membrane time constant, <code>TAU_M_OUT</code>, is the one number in Stage 3
 that was <em>chosen</em> rather than derived from the trained table. It controls how fast that
@@ -1522,10 +1514,10 @@ worth — the <b>pitch of the decode lattice</b>.
 At <b>31.257 ticks</b> that pitch is <b>0.09523729</b> of output per tick, against an output grid
 step of 2/21 = <b>0.09523810</b> — equal to eight parts in ten million. So 22 ticks map onto 22
 output levels, one tick per level: every tick the neuron could fire on lands on a value the
-policy can actually emit, and no resolution is wasted. That is the elegant part.
+policy can actually emit, and no resolution is wasted. That is the upside.
 </p>
 <p>
-The bill is that the two grids are now <b>pinned</b> to each other, and two things follow.
+The cost is that the two grids are now <b>pinned</b> to each other, and two things follow.
 <b>Recalibration has no purchase:</b> every decoded value sits at the same phase relative to the
 output grid, so shifting the decode offset moves <em>no</em> samples across a level boundary, or
 <em>all</em> of them. And <b>the rounding error is one-sided:</b> as the primer said, a crossing
@@ -1592,19 +1584,19 @@ sometimes. Always.
 </svg>
 </div>
 <figcaption><b>A systematic, strictly one-sided bias.</b> A symmetric error of this size would
-have averaged out. A one-sided one becomes a small constant torque offset on every joint, every
-step — and the walker feels it.</figcaption>
+have averaged out. A one-sided one becomes a small constant torque offset on every joint on every
+step, and it costs return.</figcaption>
 </figure>
 
 <!-- ================================================================= -->
 <h2 id="fit"><span class="sectnum">4</span>Part 3 — the one thing we had to fit</h2>
 
 <p>
-That one-sided bias was worth <b>−164.8 ± 50.3 of return</b> — small per action, but it is a
-constant nudge on every joint on every step. It cannot be calibrated away, because the lattice is
-pinned. It is not a resolution problem either; 22 levels can already represent the right answers.
-But a change to an <em>individual</em> stored weight is <b>not</b> degenerate with a global
-offset — and that opening turns out to be a cheap one.
+That one-sided bias was worth <b>−164.8 ± 50.3 of return</b> — small per action, but constant on
+every joint on every step. It cannot be calibrated away, because the lattice is pinned. It is not
+a resolution problem either; 22 levels can already represent the right answers. But a change to
+an <em>individual</em> stored weight is <b>not</b> degenerate with a global offset, and that is a
+cheap opening.
 </p>
 
 <h4>A short, gradient-free nudge to the readout weights</h4>
@@ -1630,7 +1622,7 @@ network, on GPU, with measured spike ticks, on held-out states:
 
 <div class="note key">
   <span class="lbl">What spnet actually stores in the synapse</span>
-  <p>Worth being precise about, because the grid and the synapse are not the same numbers. A
+  <p>The grid and the synapse are not the same numbers. A
   spnet synapse is only ever a <b>(weight, integer delay)</b> pair, and the engine does no
   exponentiation at runtime — when a spike arrives it adds the stored number straight onto the
   postsynaptic membrane. So what sits in the synapse table is not the teacher weight
@@ -1698,7 +1690,7 @@ trained.
 
 <h3>Closed-loop walking</h3>
 <p>
-The measurement that actually matters. 256 environments × 1,200 steps × 2 seeds, matched
+The measurement that matters. 256 environments × 1,200 steps × 2 seeds, matched
 physics (solver 100 / line-search 50), deterministic, paired — roughly 520 completed episodes
 per arm.
 </p>
@@ -1729,7 +1721,7 @@ per arm.
 
 <p>
 <b>Indistinguishable from the teacher</b> at +1.31σ, and +192.8 ± 48.8 (+3.95σ) better than the
-same network without the weight fit. To be explicit about the first number: <b>+58.8 is not a
+same network without the weight fit. To be explicit: <b>+58.8 is not a
 win</b>. At 1.31σ it is noise, the correct reading is "on par", and it should not be quoted as
 an improvement — there is no mechanism by which discarding information would make the policy
 better.
