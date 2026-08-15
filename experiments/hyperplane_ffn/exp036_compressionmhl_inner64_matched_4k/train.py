@@ -179,7 +179,7 @@ class MinimalBlock(nn.Module):
         h = self.ln2(x)
         B, T, C = h.shape
         ffn_out = self.ffn(h.reshape(B * T, C))                # [B*T, n_embd]
-        x = x + ffn_out.reshape(B, T, C).to(h.dtype)           # CompressedLUT is the whole FFN slot
+        x = x + ffn_out.reshape(B, T, C).to(h.dtype)           # CompressionMHL is the whole FFN slot
         return x
 
 
