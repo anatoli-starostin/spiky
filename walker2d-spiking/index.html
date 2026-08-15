@@ -1380,16 +1380,93 @@ address. Six coincident spikes at weight 0.18 give <b>1.08 &gt; 1.0</b> and it f
 <b>0.90 &lt; 1.0</b> and it does not.
 </p>
 <p>
-The wiring is one rule. Each comparison unit has <em>two</em> memory neurons — <code>m0</code>
-fires when its bit is 1, <code>m1</code> when it is 0 — so a lookup neuron never needs an
-inhibitory input. It takes its excitation from whichever of the two carries the value its own
-address requires:
+The wiring is one rule. Each comparison unit has <em>two</em> memory neurons, so a lookup neuron
+never needs an inhibitory input: it takes its excitation from whichever of the two carries the
+value its own address requires.
 </p>
-<pre><code>row 37 of table t   →   address   1   0   0   1   0   1
-                        wire from  m0  m1  m1  m0  m1  m0    ← the row's six comparison units
 
-  six excitatory synapses, +0.18 each, delay 1, threshold 1.0
-  all six arrive  →  6 × 0.18 = 1.08 ≥ 1.0  →  fires</code></pre>
+<figure class="wide">
+<div class="figbox">
+<svg viewBox="0 0 900 516" role="img" aria-label="Wiring one lookup neuron for row 37 of a table, address 100101. Six comparison units are stacked on the left, each with two memory neurons m0 and m1; for every address bit the neuron matching the required value is drawn solid and connected by an excitatory synapse of weight plus 0.18 and delay 1, while the other is dimmed and unconnected. The six synapses converge on a single leak-free lookup neuron with threshold 1.0, which reaches 1.08 when all six arrive.">
+  <defs>
+    <marker id="lah" markerWidth="8" markerHeight="8" refX="7.2" refY="2.9" orient="auto">
+      <path d="M0,0 L7.2,2.9 L0,5.8 Z" fill="var(--rule-2)"/>
+    </marker>
+  </defs>
+
+  <text class="svg-t" x="16" y="24">Wiring one lookup neuron — row 37 of table t, address 100101</text>
+  <text class="svg-s" x="16" y="42"><tspan font-family="ui-monospace,Menlo,monospace">m0</tspan> fires when its bit is 1, <tspan font-family="ui-monospace,Menlo,monospace">m1</tspan> when it is 0. Choosing between them is how a 0 is encoded — never a negative weight.</text>
+
+  <text class="svg-s" x="96"  y="70" text-anchor="middle">address bit</text>
+  <text class="svg-s" x="300" y="70" text-anchor="middle">its two memory neurons</text>
+
+  <g fill="none" stroke="var(--rule-2)" stroke-width="1.5">
+    <path d="M314,95  L668.8,247.6" marker-end="url(#lah)"/>
+    <path d="M314,195 L666.5,255.3" marker-end="url(#lah)"/>
+    <path d="M314,261 L666.0,261.0" marker-end="url(#lah)"/>
+    <path d="M314,293 L666.1,263.8" marker-end="url(#lah)"/>
+    <path d="M314,393 L667.8,272.0" marker-end="url(#lah)"/>
+    <path d="M314,425 L668.7,274.3" marker-end="url(#lah)"/>
+  </g>
+  <text class="svg-s" x="530" y="104" text-anchor="middle" fill="var(--s2)">six excitatory synapses · +0.18 each · delay 1</text>
+
+  <text class="svg-m" x="96" y="116" text-anchor="middle">bit 0 = 1</text>
+  <circle cx="300" cy="95" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="100" text-anchor="middle" fill="var(--accent)">m0</text>
+  <circle cx="300" cy="129" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="134" text-anchor="middle" fill="var(--ink-3)">m1</text>
+
+  <text class="svg-m" x="96" y="182" text-anchor="middle">bit 1 = 0</text>
+  <circle cx="300" cy="161" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="166" text-anchor="middle" fill="var(--ink-3)">m0</text>
+  <circle cx="300" cy="195" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="200" text-anchor="middle" fill="var(--accent)">m1</text>
+
+  <text class="svg-m" x="96" y="248" text-anchor="middle">bit 2 = 0</text>
+  <circle cx="300" cy="227" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="232" text-anchor="middle" fill="var(--ink-3)">m0</text>
+  <circle cx="300" cy="261" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="266" text-anchor="middle" fill="var(--accent)">m1</text>
+
+  <text class="svg-m" x="96" y="314" text-anchor="middle">bit 3 = 1</text>
+  <circle cx="300" cy="293" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="298" text-anchor="middle" fill="var(--accent)">m0</text>
+  <circle cx="300" cy="327" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="332" text-anchor="middle" fill="var(--ink-3)">m1</text>
+
+  <text class="svg-m" x="96" y="380" text-anchor="middle">bit 4 = 0</text>
+  <circle cx="300" cy="359" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="364" text-anchor="middle" fill="var(--ink-3)">m0</text>
+  <circle cx="300" cy="393" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="398" text-anchor="middle" fill="var(--accent)">m1</text>
+
+  <text class="svg-m" x="96" y="446" text-anchor="middle">bit 5 = 1</text>
+  <circle cx="300" cy="425" r="14" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.7"/>
+  <text class="svg-l" x="300" y="430" text-anchor="middle" fill="var(--accent)">m0</text>
+  <circle cx="300" cy="459" r="14" fill="var(--surface-2)" stroke="var(--rule-2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text class="svg-l" x="300" y="464" text-anchor="middle" fill="var(--ink-3)">m1</text>
+
+  <!-- the lookup neuron -->
+  <circle cx="700" cy="261" r="30" fill="var(--s2-w)" stroke="var(--s2)" stroke-width="1.8"/>
+  <text class="svg-l" x="700" y="258" text-anchor="middle" fill="var(--s2)">row 37</text>
+  <text class="svg-s" x="700" y="272" text-anchor="middle" fill="var(--s2)">leak-free</text>
+  <text class="svg-s" x="700" y="315" text-anchor="middle">threshold 1.0</text>
+  <text class="svg-l" x="700" y="200" text-anchor="middle" fill="var(--s2)">lookup neuron</text>
+
+  <text class="svg-m" x="700" y="360" text-anchor="middle">6 × 0.18 = 1.08 ≥ 1.0</text>
+  <text class="svg-l" x="700" y="378" text-anchor="middle" fill="var(--good)">→ fires</text>
+  <text class="svg-s" x="700" y="400" text-anchor="middle">one bit wrong → 5 × 0.18 = 0.90</text>
+  <text class="svg-s" x="700" y="414" text-anchor="middle">→ silent, for all time</text>
+
+  <text class="svg-s" x="450" y="500" text-anchor="middle">The dimmed neuron in each pair is not inhibiting anything — it simply has no synapse onto this lookup neuron.</text>
+</svg>
+</div>
+<figcaption><b>How a lookup neuron is addressed.</b> Row 37 is <code>100101</code>, so it draws
+one excitatory synapse from <code>m0</code> where its bit is 1 and from <code>m1</code> where the
+bit is 0. Every one of the 2,048 lookup neurons is wired by the same rule, from its own
+row index.</figcaption>
+</figure>
+
 <p>
 Every comparison unit fires exactly one of its two memory neurons, so each bit delivers its 0.18
 to precisely those lookup neurons that ask for the value it has just decided. Only the neuron
