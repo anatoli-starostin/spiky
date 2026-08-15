@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp034_linear_only_no_fastmhl_4k",
+  "best_val_bpb": 1.479704920904734,
+  "final_val_bpb": 1.479704920904734,
+  "total_params": 29601792,
+  "training_time_hours": 0.115
+}
