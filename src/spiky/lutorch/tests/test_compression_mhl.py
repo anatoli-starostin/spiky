@@ -177,3 +177,109 @@ def test_param_count_matches_module_both_modes():
         pi = CompressionMultiHeadLUT.param_count(32, 32, inner, nap=nap, tph=tph, n_heads=1,
                                                  joint_head_compression=False)["total"]
         assert pj == pi
+
+
+# ----------------------------- separate inner_in/inner_out + -1 no-projection -----------------------------
+
+def test_inner_dim_shim_equals_explicit_in_out():
+    x = torch.randn(8, 32)
+    torch.manual_seed(1)
+    a = CompressionMultiHeadLUT(32, 32, inner_dim=8, nap=4, tph=6, use_bf16=False, random_seed=2)
+    torch.manual_seed(1)
+    b = CompressionMultiHeadLUT(32, 32, inner_in_dim=8, inner_out_dim=8, nap=4, tph=6,
+                                use_bf16=False, random_seed=2)
+    with torch.no_grad():
+        assert torch.allclose(a(x), b(x), atol=1e-6)
+    assert sum(p.numel() for p in a.parameters()) == sum(p.numel() for p in b.parameters())
+
+
+def test_conflicting_or_missing_inner_args_raise():
+    with pytest.raises(ValueError):                       # both shim and explicit
+        CompressionMultiHeadLUT(32, 32, 8, inner_in_dim=8, nap=4, tph=6)
+    with pytest.raises(ValueError):                       # neither given
+        CompressionMultiHeadLUT(32, 32, nap=4, tph=6)
+    with pytest.raises(ValueError):                       # only one explicit
+        CompressionMultiHeadLUT(32, 32, inner_in_dim=8, nap=4, tph=6)
+
+
+def test_separate_in_out_dims_shapes_grads_params():
+    for joint in (True, False):
+        m = CompressionMultiHeadLUT(32, 40, inner_in_dim=8, inner_out_dim=12, nap=4, tph=6,
+                                    n_heads=2, joint_head_compression=joint,
+                                    use_bf16=False, random_seed=0)
+        x = torch.randn(16, 32, requires_grad=True)
+        out = m(x)
+        assert out.shape == (16, 40)
+        out.pow(2).mean().backward()
+        assert m.compress.weight.grad.abs().sum() > 0
+        assert m.decompress.weight.grad.abs().sum() > 0
+        for w in _lut_tables(m):
+            assert w.grad is not None and w.grad.abs().sum() > 0
+        assert x.grad is not None and x.grad.abs().sum() > 0
+        f = CompressionMultiHeadLUT.param_count(32, 40, inner_in_dim=8, inner_out_dim=12,
+                                                nap=4, tph=6, n_heads=2,
+                                                joint_head_compression=joint)
+        assert sum(p.numel() for p in m.parameters()) == f["total"]
+
+
+def test_minus1_no_projection_shapes_grads_params():
+    cases = [dict(inner_in_dim=-1, inner_out_dim=8),    # no compress
+             dict(inner_in_dim=8, inner_out_dim=-1),    # no decompress
+             dict(inner_in_dim=-1, inner_out_dim=-1)]   # pure FastMHL slot
+    for joint in (True, False):
+        for kw in cases:
+            m = CompressionMultiHeadLUT(32, 32, nap=4, tph=6, n_heads=2,
+                                        joint_head_compression=joint, use_bf16=False,
+                                        random_seed=0, **kw)
+            x = torch.randn(12, 32, requires_grad=True)
+            out = m(x)
+            assert out.shape == (12, 32), (joint, kw)
+            out.pow(2).mean().backward()
+            for w in _lut_tables(m):
+                assert w.grad is not None and w.grad.abs().sum() > 0
+            assert x.grad is not None and x.grad.abs().sum() > 0
+            if kw["inner_in_dim"] == -1:
+                assert isinstance(m.compress, torch.nn.Identity)
+            else:
+                assert m.compress.weight.grad.abs().sum() > 0
+            if kw["inner_out_dim"] == -1:
+                assert isinstance(m.decompress, torch.nn.Identity)
+            else:
+                assert m.decompress.weight.grad.abs().sum() > 0
+            f = CompressionMultiHeadLUT.param_count(32, 32, nap=4, tph=6, n_heads=2,
+                                                    joint_head_compression=joint, **kw)
+            assert sum(p.numel() for p in m.parameters()) == f["total"], (joint, kw)
+            if kw["inner_in_dim"] == -1:
+                assert f["compress"] == 0
+            if kw["inner_out_dim"] == -1:
+                assert f["decompress"] == 0
+
+
+def test_both_minus1_equals_plain_fastmhl():
+    from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+    m = CompressionMultiHeadLUT(32, 32, inner_in_dim=-1, inner_out_dim=-1, nap=4, tph=6,
+                                n_heads=1, use_bf16=False, random_seed=9)
+    lut = FastMultiHeadLut(input_dim=32, n_heads=1, n_outputs=32, n_anchor_pairs=4,
+                           tables_per_head=6, forward_mode="hard", use_bf16=False, random_seed=9)
+    x = torch.randn(8, 32)
+    with torch.no_grad():
+        assert torch.allclose(m(x), lut(x).sum(dim=1), atol=1e-6)
+    # no projection params at all
+    f = CompressionMultiHeadLUT.param_count(32, 32, inner_in_dim=-1, inner_out_dim=-1,
+                                            nap=4, tph=6, n_heads=1)
+    assert f["compress"] == 0 and f["decompress"] == 0
+
+
+def test_inner_residual_dim_validation():
+    with pytest.raises(ValueError):                      # mismatched in/out
+        CompressionMultiHeadLUT(32, 32, inner_in_dim=8, inner_out_dim=12, nap=4, tph=6,
+                                inner_residual=True)
+    # matching (incl -1/-1 when input_dim==output_dim) works and flows grad
+    for kw in [dict(inner_in_dim=8, inner_out_dim=8), dict(inner_in_dim=-1, inner_out_dim=-1)]:
+        m = CompressionMultiHeadLUT(32, 32, nap=4, tph=6, inner_residual=True,
+                                    use_bf16=False, random_seed=0, **kw)
+        x = torch.randn(8, 32, requires_grad=True)
+        out = m(x)
+        assert out.shape == (8, 32)
+        out.pow(2).mean().backward()
+        assert x.grad is not None and x.grad.abs().sum() > 0
