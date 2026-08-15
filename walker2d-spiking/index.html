@@ -1707,6 +1707,12 @@ is not a resolution problem either; 22 levels can already represent the right an
 <em>not</em> degenerate with a global offset is a change to an <em>individual</em> stored weight,
 and that is the opening we used.
 </p>
+<p>
+The search that exploits it is <b>gradient-free</b>: it tries integer steps on a grid and keeps
+the ones that help. That grid is the 8-bit log-domain grid the shipped weights live on, so the
+same pass that cancels the rounding bias also leaves the readout quantised to 8 bits — a
+property worth having on its own.
+</p>
 
 <h4>A short, gradient-free nudge to the readout weights</h4>
 <p>
