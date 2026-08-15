@@ -1635,7 +1635,9 @@ policy can actually emit, and no resolution is wasted.
 The simulator advances in whole ticks, so a crossing time can only be reported as a
 <em>ceiling</em> — and with a negative decode slope, rounding the tick <em>up</em> always rounds
 the action <em>down</em>. The error is one-sided rather than symmetric: a small constant offset on
-every joint on every step, worth <b>−164.8 ± 50.3 of return</b>.
+every joint on every step, worth <b>−164.8 ± 50.3 of return</b> — return being the reward summed
+over an episode, of which a good one totals about 6,300; the ± is a standard error over roughly
+520 episodes, not a spread.
 </p>
 
 <figure class="wide">
