@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp035_fastmhl_only_matched_4k",
+  "best_val_bpb": 1.4710629342905446,
+  "final_val_bpb": 1.4710629342905446,
+  "total_params": 35792640,
+  "training_time_hours": 0.139
+}
