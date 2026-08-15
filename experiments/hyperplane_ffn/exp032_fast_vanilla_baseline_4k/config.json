@@ -1,0 +1,19 @@
+{
+  "exp_name": "exp032_fast_vanilla_baseline_4k",
+  "description": "FAST vanilla-transformer comparison baseline. Byte-for-byte clone of exp002_untied_vanilla_baseline_nebius (pure MinimalGPT + RoPE, untied head, standard dense GELU FFN 384->1536->384 -- NO LUT / hyperplane modules anywhere; train.py copied verbatim, it is fully config-driven) with EXACTLY ONE change: n_steps 16000 -> 4096. Everything else is byte-identical to exp002: d_model 384, 6 layers, 6 heads, seq 512, device_batch_size 48, total_batch_size 24576 (grad_accum 1), lr 3e-4, wd 0.1, warmup 0.1, eval_every 200, eval_steps 10, seed 1, bf16, vocab 32768, same base_data_climbmix subset + tokenizer. Purpose: a quick (~8 min on H100) dense-FFN anchor to A/B future LUT/hyperplane experiments against without the ~0.54h full-baseline wait. NOT the reproducibility anchor -- exp002 (1.20144 bpb, 16k steps) remains the on-box reference number; this short run trains 4096/16000 = 25.6% of the steps so it will land HIGHER, and is only a fast relative yardstick.",
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 4096,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
