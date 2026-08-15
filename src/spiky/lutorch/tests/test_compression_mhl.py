@@ -65,3 +65,38 @@ def test_determinism():
     x = torch.randn(8, 32)
     with torch.no_grad():
         assert torch.equal(m(x), m(x))
+
+
+def test_inner_residual_shapes_and_grads():
+    m = _mk(inner_residual=True)
+    assert m.inner_residual is True
+    x = torch.randn(64, 32, requires_grad=True)
+    out = m(x)
+    assert out.shape == (64, 32)
+    out.pow(2).mean().backward()
+    for name, p in [("compress.w", m.compress.weight), ("lut.tables", m.lut.weights),
+                    ("decompress.w", m.decompress.weight)]:
+        assert p.grad is not None and p.grad.abs().sum() > 0, f"no grad for {name}"
+    assert x.grad is not None and x.grad.abs().sum() > 0
+
+
+def test_inner_residual_adds_zero_params():
+    off = sum(p.numel() for p in _mk(inner_residual=False).parameters())
+    on = sum(p.numel() for p in _mk(inner_residual=True).parameters())
+    assert off == on                              # the inner skip is parameter-free
+
+
+def test_inner_residual_changes_output():
+    # Same module/weights, only the flag toggled -> the skip must change the output
+    # (y + z reaches decompress via BOTH the skip and the lut path).
+    m = _mk(inner_residual=True)
+    x = torch.randn(16, 32)
+    with torch.no_grad():
+        out_on = m(x)
+        m.inner_residual = False
+        out_off = m(x)
+    assert not torch.allclose(out_on, out_off)
+    # The difference is exactly decompress applied to the skipped z:
+    with torch.no_grad():
+        z = m.compress(x)
+        assert torch.allclose(out_on - out_off, m.decompress(z) - m.decompress.bias, atol=1e-4)

@@ -38,6 +38,10 @@ class CompressionMultiHeadLUT(nn.Module):
         tph: FastMHL tables_per_head.
         n_heads: FastMHL output heads (default 1). Heads are summed before decompress,
             so the reduced vector is always [N, inner_dim] (a no-op squeeze when n_heads=1).
+        inner_residual: if True, add the compressed input `z` to the LUT output before
+            decompress (`y = lut(z) + z`), so the LUT learns a residual over the compressed
+            vector. Adds ZERO parameters. Requires the LUT output dim == inner_dim (always
+            true here). Default False (plain feed-forward bottleneck).
         forward_mode: "hard" (default) or "hybrid_smooth"; passed to FastMHL.
         weight_dtype: FastMHL table storage dtype (default fp32).
         use_bf16: FastMHL bf16-autocast flag (default False — these experiments run fp32).
@@ -58,6 +62,7 @@ class CompressionMultiHeadLUT(nn.Module):
         nap: int,
         tph: int,
         n_heads: int = 1,
+        inner_residual: bool = False,
         forward_mode: str = "hard",
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = False,
@@ -72,6 +77,7 @@ class CompressionMultiHeadLUT(nn.Module):
         self.nap = nap
         self.tph = tph
         self.n_heads = n_heads
+        self.inner_residual = bool(inner_residual)
 
         self.compress = nn.Linear(input_dim, inner_dim, device=device)
         self.lut = FastMultiHeadLut(
@@ -97,6 +103,8 @@ class CompressionMultiHeadLUT(nn.Module):
         z = self.compress(x)                       # [N, inner]
         y = self.lut(z)                            # [N, n_heads, inner]
         y = y.sum(dim=1).to(z.dtype)               # combine heads -> [N, inner]
+        if self.inner_residual:
+            y = y + z                              # inner skip: LUT learns a residual over z
         return self.decompress(y)                  # [N, output_dim]
 
     @staticmethod
