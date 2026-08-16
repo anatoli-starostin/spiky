@@ -174,5 +174,13 @@ only in the head/dim split — a clean 16k split comparison. **exp_n_0003 (H6/d6
 vs exp_n_0002 H12/d64 (1.20823) **+0.0117** — i.e. at 16k more HEADS (H12) beats fewer-wider heads (H6)
 even though H6 here carries more tables/head (tph128 vs 84); vs exp_n_0001 D5 H12/d32 (1.22473) −0.0048
 (marginally better, but +6.49M params); vs tied dense 16k (1.19665) +0.0233. So at 16k the head-count lever
-(→H12) still dominates the split, echoing the 4k Sweep-D optimum. [exp_n_0004 H8/d48 pending — the direct
-same-params counterpart to exp_n_0003.]
+(→H12) still dominates the split, echoing the 4k Sweep-D optimum.
+
+**exp_n_0004 (H8/d48/tph128) = 1.21738** (best=final) — the same-params (36.78M) counterpart to exp_n_0003:
+H8/d48 beats H6/d64 by **−0.00256** at fixed params/throughput/tph, confirming that at 16k more-but-narrower
+heads still help along the H·d=384 line (H6 < H8, extrapolating toward the ~H12 optimum). vs exp_n_0001 D5
+H12/d32 (1.22473) −0.0074; vs tied dense 16k (1.19665) +0.0207. Net of the tph=128 16k pair: the split
+ranking is the same as 4k Sweep-D (more heads better), but the best 16k LUT slot overall stays exp_n_0002
+(H12/d64, 1.20823) — bought with +46.7% params (44.45M) — and nothing crosses tied dense (23.21M, 1.19665).
+Overall 16k verdict: head count is the top lever, wider d helps only with the longer schedule, and the
+CompressionMHL slot needs ~1.9× dense's params just to get within +0.012 of it — dense stays more efficient.
