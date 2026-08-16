@@ -1,0 +1,11 @@
+# exp085_compressionmhl_C9_6h_64-64_nap6_g1_tied2x_4k
+
+Sweep C run C9_6h_64-64_nap6_g1: **tied** unembedder, **4096 steps**, **2x dense-FFN budget** (per-layer 2,359,296), **AdamW-LUT** (standard Sweep-B trainer: single AdamW, LUT tables in the no-wd group).
+
+FFN slot: x = x + 1*Linear(384->384)(h) + CompressionMultiHeadLUT(h), h=ln2(x); n_heads=6, inner_in=64, inner_out=64, nap=6, gamma=1, **tph=78**, independent per-head, hard.
+
+Per-layer FFN slot params = compress 147,840 + lut 1,916,928 + decompress 147,840 + Linear 147,840 = **2,360,448** (budget 2,359,296).
+
+TOTAL = tied floor 16,131,840 + 6*2,360,448 = **30,294,528** (target 30,287,616, delta +6,912 = +0.0228%).
+
+Reference to beat: tied dense baseline exp055 (4k) 1.35543; also compare to the Sweep-B AdamW-LUT 1x-budget run of the same shape.
