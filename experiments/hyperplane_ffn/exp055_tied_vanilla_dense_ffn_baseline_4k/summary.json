@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp055_tied_vanilla_dense_ffn_baseline_4k",
+  "best_val_bpb": 1.3554326390356826,
+  "final_val_bpb": 1.3554326390356826,
+  "total_params": 23209728,
+  "training_time_hours": 0.535
+}

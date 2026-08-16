@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp063_compressionmhl_B8_3h_32-32_nap6_g0_tied_4k",
+  "best_val_bpb": 1.3858235648139299,
+  "final_val_bpb": 1.3858235648139299,
+  "total_params": 23212608,
+  "training_time_hours": 0.889
+}

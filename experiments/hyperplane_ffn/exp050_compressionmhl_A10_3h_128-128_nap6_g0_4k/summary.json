@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp050_compressionmhl_A10_3h_128-128_nap6_g0_4k",
+  "best_val_bpb": 1.3969781696310837,
+  "final_val_bpb": 1.3969781696310837,
+  "total_params": 35797248,
+  "training_time_hours": 0.603
+}
