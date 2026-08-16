@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp090_disjoint_compress_joint_decompress_tied_4k",
+  "best_val_bpb": 1.3990294443096858,
+  "final_val_bpb": 1.3990294443096858,
+  "total_params": 23214336,
+  "training_time_hours": 0.185
+}
