@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp072_compressionmhl_6heads_inner64_lionlut_4k",
+  "best_val_bpb": 1.3876670455727014,
+  "final_val_bpb": 1.3876670455727014,
+  "total_params": 35797248,
+  "training_time_hours": 0.18
+}
