@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp073_tied_vanilla_baseline_16k",
+  "best_val_bpb": 1.1966460553057294,
+  "final_val_bpb": 1.1966460553057294,
+  "total_params": 23209728,
+  "training_time_hours": 1.391
+}
