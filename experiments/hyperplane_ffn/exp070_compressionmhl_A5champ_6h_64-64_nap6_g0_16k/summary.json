@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp070_compressionmhl_A5champ_6h_64-64_nap6_g0_16k",
+  "best_val_bpb": 1.2310256145640985,
+  "final_val_bpb": 1.2310256145640985,
+  "total_params": 35797248,
+  "training_time_hours": 0.693
+}
