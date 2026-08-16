@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp093_48-48_tph128_tied_4k",
+  "best_val_bpb": 1.3606188092291795,
+  "final_val_bpb": 1.3606188092291795,
+  "total_params": 31618752,
+  "training_time_hours": 0.286
+}
