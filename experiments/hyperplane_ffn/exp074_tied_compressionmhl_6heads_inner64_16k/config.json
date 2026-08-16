@@ -27,5 +27,11 @@
   "lut_forward_mode": "hard",
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,
-  "lut_base_seed": 1000
+  "lut_base_seed": 1000,
+  "lut_optimizer": "lion",
+  "lut_lr": 0.0002,
+  "lut_betas": [
+    0.9,
+    0.95
+  ]
 }

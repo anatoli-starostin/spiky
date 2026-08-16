@@ -55,6 +55,8 @@ LUT_FWD    = cfg.get('lut_forward_mode', 'hard')
 LUT_BF16   = cfg.get('lut_use_bf16', False)
 LUT_NOISE  = cfg.get('lut_init_weights_noise', 1e-3)
 LUT_SEED   = cfg.get('lut_base_seed', 1000)
+LUT_LR     = cfg['lut_lr']                                # Lion lr for the LUT table weights
+LUT_BETAS  = tuple(cfg.get('lut_betas', (0.9, 0.95)))     # Lion betas (b2=0.95 sweet spot)
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -181,20 +183,76 @@ class MinimalGPT(nn.Module):
         return logits
 
 
-def setup_optimizer(model, lr, weight_decay):
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (verbatim from the earlier hyperplane_ffn experiments exp006-017 /
+    examples/lutgpt). Standard Lion: m <- b2*m + (1-b2)*g; update <- sign(b1*m + (1-b1)*g);
+    p <- p*(1-lr*wd) - lr*update. Keeps an fp32 master + fp32 momentum for low-precision
+    params (here the tables are fp32, so the plain fp32 branch is used)."""
+    def __init__(self, params, lr=2e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self):
+        for grp in self.param_groups:
+            lr, (b1, b2), wd = grp['lr'], grp['betas'], grp['weight_decay']
+            for p in grp['params']:
+                if p.grad is None:
+                    continue
+                st = self.state[p]
+                is_low = p.dtype != torch.float32
+                if 'exp_avg' not in st:
+                    st['exp_avg'] = torch.zeros_like(p, dtype=torch.float32)
+                    if is_low:
+                        st['master'] = p.detach().to(torch.float32).clone()
+                m = st['exp_avg']
+                g_f = p.grad if p.grad.dtype == torch.float32 else p.grad.to(torch.float32)
+                if is_low:
+                    master = st['master']
+                    if wd != 0:
+                        master.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    master.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
+                    p.data.copy_(master)
+                else:
+                    if wd != 0:
+                        p.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    p.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
+
+
+def setup_optimizers(model, lr, lut_lr, lut_betas, weight_decay):
+    """Hybrid: the FastMHL LUT-table weights -> Lion (wd 0); everything else (compress/
+    decompress linears, attention, embeddings, norms, lm_head) -> AdamW exactly as before
+    (2-D -> wd, 1-D -> no wd). Two optimizers, both get the warmup+cosine schedule."""
     lut_ids = {id(p) for m in model.modules() if isinstance(m, FastMultiHeadLut)
                for p in m.parameters(recurse=False)}
-    decay, nodecay = [], []
+    lut_params, decay, nodecay = [], [], []
     for p in model.parameters():
         if not p.requires_grad:
             continue
-        (nodecay if (id(p) in lut_ids or p.ndim < 2) else decay).append(p)
-    groups = [dict(params=decay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
-              dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0)]
-    opt = torch.optim.AdamW(groups)
-    for g in opt.param_groups:
-        g['initial_lr'] = g['lr']
-    return opt
+        if id(p) in lut_ids:
+            lut_params.append(p)
+        elif p.ndim < 2:
+            nodecay.append(p)
+        else:
+            decay.append(p)
+    adam = torch.optim.AdamW([
+        dict(params=decay,   lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
+        dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
+    ])
+    lion = Lion([dict(params=lut_params, lr=lut_lr, weight_decay=0.0)],
+                lr=lut_lr, betas=lut_betas)
+    opts = [adam, lion]
+    for o in opts:
+        for g in o.param_groups:
+            g['initial_lr'] = g['lr']
+    n_lut = sum(p.numel() for p in lut_params)
+    n_adam = sum(p.numel() for p in decay) + sum(p.numel() for p in nodecay)
+    print(f'Hybrid optimizer | Lion(LUT tables)={n_lut:,} lr={lut_lr} betas={lut_betas} wd=0 | '
+          f'AdamW(rest)={n_adam:,} lr={lr} (decay wd={weight_decay})')
+    return opts
 
 
 def get_lr_scale(step, n_steps, warmup_frac):
@@ -213,7 +271,7 @@ print(f'Params: {total_params:,}')
 if os.environ.get('SMOKE'):
     print('SMOKE OK'); sys.exit(0)
 
-optimizer = setup_optimizer(model, lr=LR, weight_decay=WD)
+optimizers = setup_optimizers(model, lr=LR, lut_lr=LUT_LR, lut_betas=LUT_BETAS, weight_decay=WD)
 tokens_per_step = DEVICE_BS * SEQ_LEN
 grad_accum = max(1, TOTAL_BS // tokens_per_step)
 print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | effective batch: {grad_accum * tokens_per_step:,} tokens')
@@ -226,9 +284,10 @@ ema, best_bpb, t0 = None, float('inf'), time.time()
 model.train()
 for step in range(1, N_STEPS + 1):
     lr_scale = get_lr_scale(step, N_STEPS, WARMUP_FRAC)
-    for g in optimizer.param_groups:
-        g['lr'] = g['initial_lr'] * lr_scale
-    optimizer.zero_grad(set_to_none=True)
+    for opt in optimizers:
+        for g in opt.param_groups:
+            g['lr'] = g['initial_lr'] * lr_scale
+        opt.zero_grad(set_to_none=True)
     accum_loss = 0.0
     for _ in range(grad_accum):
         x, y = next(train_loader)
@@ -236,7 +295,8 @@ for step in range(1, N_STEPS + 1):
         (loss / grad_accum).backward()
         accum_loss += loss.item() / grad_accum
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
+    for opt in optimizers:
+        opt.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
     if step % 100 == 0 or step == 1:
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')

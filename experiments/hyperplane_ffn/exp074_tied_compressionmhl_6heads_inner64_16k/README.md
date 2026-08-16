@@ -7,6 +7,11 @@ Clone of exp060 (B5, tied LUT 6h, tph=36) with n_steps 4096→16000; otherwise i
 exp073/exp002: d384/6L/6H/seq512, device_bs 48, total_bs 24576, lr 3e-4, wd 0.1, warmup 0.1,
 seed 1, eval_every 200.
 
+**LUT tables on LION** (per the exp072 result): the FastMHL table weights are trained by Lion
+(lr 2e-4, betas (0.9,0.95), wd 0); everything else (compress/decompress linears, attention,
+embeddings, norms, tied lm_head/tok_emb) on AdamW (lr 3e-4, wd 0.1). Two optimizers share the
+warmup+cosine schedule. Confirmed split: Lion(LUT tables)=5,308,416 · AdamW(rest)=17,905,920.
+
 **Params: 23,214,336** = tied floor 16,131,840 + 6×LUT-slot 1,180,416 (compress 147,840 +
 FastMHL 6·36·64·64=884,736 + decompress 147,840). Param-matched to the tied dense slot
 (1,179,648/layer) within +768/layer (+0.02% total). Tying confirmed by the count +
