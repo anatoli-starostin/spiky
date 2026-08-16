@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp092_C1_48-48_matched_4k",
+  "best_val_bpb": 1.3616811300053528,
+  "final_val_bpb": 1.3616811300053528,
+  "total_params": 30291648,
+  "training_time_hours": 0.46
+}

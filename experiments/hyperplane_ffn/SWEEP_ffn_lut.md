@@ -96,3 +96,11 @@ Repeat of Sweep B at 2× the per-layer FFN budget (2,359,296; target total 30,28
 | 13 | C10 exp086 | 6h 64/-1 (no decompress) | 15 | 1.41704 | +0.06161 | — |
 
 **Findings:** 2× budget helped clearly — best C5 (1.36453) is well below the Sweep-B best (B4 1.37955), and the same-shape C1 (2×) beats its 1× twin B5 by **−0.0150**. But it still does NOT beat the tied dense baseline (best C5 is +0.0091 short of 1.35543); doubling closed most of the Sweep-B gap (~+0.024 → +0.009) without closing it. Levers hold: nap5 ≥ nap6 > nap7; NARROW inner (64) beats wider (64<96<128<192) — at 2× budget with 6 heads the extra params are better spent on MORE tables (higher tph) than a wider inner; wide-read asymmetry (128/64) helps, wide-write (64/128) hurts; gamma still hurts (C9); dropping a projection is worst (C10/C11).
+
+### Sweep C follow-ups (exp091/exp092) — forked from C1 (exp075, 1.36613; tied dense exp055 1.35543)
+| exp | change from C1 | tph | total params | val_bpb | vs C1 | vs tied-dense | crosses dense? |
+|-----|----------------|----:|-------------:|--------:|------:|--------------:|:--------------:|
+| exp091 | tph 84→96 (OVER budget +5.9%) | 96 | 32,061,696 | 1.36532 | −0.00081 | +0.00989 | no |
+| exp092 | inner 64/64→48/48 (param-matched) | 116 | 30,291,648 | **1.36168** | **−0.00445** | +0.00625 | no |
+
+**exp092 is the best tied-2×-budget result** — narrower inner (48) with more tables (tph 84→116) beats C1's 64/64 by −0.0044, extending the "narrow inner + more tables" trend (Sweep C: 64<96<128<192; now 48<64). The optimum inner is ≤48. But it's still +0.0063 above tied dense — no crossover. exp091 shows pushing tph past the budget (+5.9% params) barely helps (−0.0008) — table count past budget is not the lever. Net: at the 2× tied budget the CompressionMHL slot gets to within ~+0.006 of tied dense but does not cross it; a narrower inner is the better use of budget than more tables-over-budget.
