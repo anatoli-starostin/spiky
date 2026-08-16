@@ -74,3 +74,25 @@ _(All runs step-limited at 4096, best=final. exp070 re-runs the Sweep-A champion
 | exp045 / exp072 | untied CompressionMHL 6h | 4k | AdamW / Lion | 1.39063 / **1.38767** | 4k: Lion −0.0030 vs AdamW |
 
 **Findings:** (1) At 4k, Lion on the LUT tables beats AdamW by −0.0030 (exp072<exp045). (2) That edge does NOT survive to 16k — exp070-Lion (1.23289) is marginally worse than exp070-AdamW (1.23103); Lion ≈ AdamW at full budget. (3) The dense FFN wins decisively at 16k in BOTH untied (+0.031) and tied (+0.038) settings, at every checkpoint — no crossover. (4) Tying helps the dense model at 16k too (tied dense 1.19665 < untied dense 1.20144). So the LUT FFN slot's competitiveness is a short-schedule (4k) phenomenon; at the full budget the dense GELU FFN is clearly ahead regardless of LUT optimizer or tying.
+
+## Sweep C — tied, 4096 steps, 2× FFN budget, AdamW-LUT (exp075-087)
+
+Repeat of Sweep B at 2× the per-layer FFN budget (2,359,296; target total 30,287,616). Fixed 6 heads, hard, AdamW-LUT. Reference: tied dense exp055 (4k) **1.35543**.
+
+| rank | run | config | tph | val_bpb | Δ vs tied-dense 1.35543 | vs 1× (Sweep B) |
+|------|-----|--------|----:|--------:|------------------------:|-----------------|
+| 1 | C5 exp079 | 6h 64/64 nap5 | 168 | **1.36453** | +0.00910 | — |
+| 2 | C1 exp075 | 6h 64/64 nap6 | 84 | 1.36613 | +0.01070 | B5 1.38111 → **−0.01498** |
+| 3 | C7 exp081 | 6h 128/64 nap6 | 78 | 1.36952 | +0.01409 | — |
+| 4 | C2 exp076 | 6h 96/96 nap6 | 52 | 1.37093 | +0.01550 | — |
+| 5 | C6 exp080 | 6h 64/64 nap7 | 42 | 1.37125 | +0.01582 | — |
+| 6 | C12 exp083 | 6h 96/96 nap5 | 104 | 1.37138 | +0.01595 | — |
+| 7 | C3 exp077 | 6h 128/128 nap6 | 36 | 1.37509 | +0.01966 | — |
+| 8 | C9 exp085 | 6h 64/64 nap6 g1 | 78 | 1.37615 | +0.02072 | — |
+| 9 | C4 exp078 | 6h 192/192 nap6 | 20 | 1.37850 | +0.02307 | — |
+| 10 | C8 exp082 | 6h 64/128 nap6 | 39 | 1.37904 | +0.02361 | — |
+| 11 | C13 exp084 | 6h 128/128 nap7 | 18 | 1.38157 | +0.02614 | — |
+| 12 | C11 exp087 | 6h -1/64 (no compress) | 90 | 1.39623 | +0.04080 | — |
+| 13 | C10 exp086 | 6h 64/-1 (no decompress) | 15 | 1.41704 | +0.06161 | — |
+
+**Findings:** 2× budget helped clearly — best C5 (1.36453) is well below the Sweep-B best (B4 1.37955), and the same-shape C1 (2×) beats its 1× twin B5 by **−0.0150**. But it still does NOT beat the tied dense baseline (best C5 is +0.0091 short of 1.35543); doubling closed most of the Sweep-B gap (~+0.024 → +0.009) without closing it. Levers hold: nap5 ≥ nap6 > nap7; NARROW inner (64) beats wider (64<96<128<192) — at 2× budget with 6 heads the extra params are better spent on MORE tables (higher tph) than a wider inner; wide-read asymmetry (128/64) helps, wide-write (64/128) hurts; gamma still hurts (C9); dropping a projection is worst (C10/C11).

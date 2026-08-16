@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp082_compressionmhl_C8_6h_64-128_nap6_tied2x_4k",
+  "best_val_bpb": 1.3790420990066075,
+  "final_val_bpb": 1.3790420990066075,
+  "total_params": 30292224,
+  "training_time_hours": 0.805
+}
