@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp091_C1_tph96_tied_4k",
+  "best_val_bpb": 1.365322651394641,
+  "final_val_bpb": 1.365322651394641,
+  "total_params": 32061696,
+  "training_time_hours": 0.435
+}
