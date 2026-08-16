@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp100_D7_H24_d16_tied_4k",
+  "best_val_bpb": 1.3638952318102004,
+  "final_val_bpb": 1.3638952318102004,
+  "total_params": 30292224,
+  "training_time_hours": 1.154
+}

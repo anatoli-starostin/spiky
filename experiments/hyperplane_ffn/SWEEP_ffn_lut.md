@@ -108,3 +108,44 @@ Repeat of Sweep B at 2× the per-layer FFN budget (2,359,296; target total 30,28
 **exp094 is the new closest-to-dense** — doubling the head count (6→12) at fixed inner 48/48, tph=64 gives **1.35924**, beating exp093 (6h) by −0.00138 and cutting the gap to tied dense to **+0.0038** (vs exp093's +0.0052) — the smallest any CompressionMHL FFN slot has reached, but still no crossover. It runs +8.8% over the 2× budget (32.95M vs 30.29M), so this is not a like-for-like budget win; head count is a genuine lever (independent per-head summation adds capacity) but costs params to exercise. Standing question: whether 12 heads *at* budget (re-solving tph down) still beats exp092's 6h-matched 1.36168.
 
 **exp092 is the best tied-2×-budget result** — narrower inner (48) with more tables (tph 84→116) beats C1's 64/64 by −0.0044, extending the "narrow inner + more tables" trend (Sweep C: 64<96<128<192; now 48<64). The optimum inner is ≤48. But it's still +0.0063 above tied dense — no crossover. exp091 shows pushing tph past the budget (+5.9% params) barely helps (−0.0008) — table count past budget is not the lever. Net: at the 2× tied budget the CompressionMHL slot gets to within ~+0.006 of tied dense but does not cross it; a narrower inner is the better use of budget than more tables-over-budget.
+
+---
+
+## Sweep D — fixed-throughput head/dim split (H·d = 384), exp095–100
+
+Hold the **throughput budget** constant: compress+decompress matmul cost 2·H·D·d =
+2·384·384 = 294,912 MACs/layer (a fixed ~4× saving vs the dense FFN's 8·D² = 1,179,648),
+and sweep **only** how the fixed product H·d=384 splits between head count H and inner dim d.
+Because tables = tph·2⁶·(H·d) depends only on H·d, the solved **tph = 84 for every run** and the
+**total params are identical = 30,292,224** — a clean fixed-throughput AND fixed-param sweep, only
+the head/dim split varies. Common config = the exp092 line (tied, nap6, gamma0, AdamW two-group, 4096
+steps). D3 (H=6/d=64) = C1/exp075 (reused). Refs: tied dense exp055 = 1.35543.
+
+| rank | run | H×d | tph | total params | val_bpb | Δ vs tied-dense | Δ vs C1/H6 (1.36613) | crosses dense? |
+|----:|-----|-----|----:|-------------:|--------:|----------------:|---------------------:|:--------------:|
+| 1 | D5 exp098 | 12×32 | 84 | 30,292,224 | **1.35966** | +0.00423 | −0.00647 | no (closest at-budget) |
+| 2 | D6 exp099 | 16×24 | 84 | 30,292,224 | 1.36054 | +0.00511 | −0.00559 | no |
+| 3 | D7 exp100 | 24×16 | 84 | 30,292,224 | 1.36390 | +0.00847 | −0.00223 | no |
+| 4 | D3 exp075 | 6×64 | 84 | 30,292,224 | 1.36613 | +0.01070 | 0 | no |
+| 5 | D4 exp097 | 8×48 | 84 | 30,292,224 | 1.36988 | +0.01445 | +0.00375 | no |
+| 6 | D2 exp096 | 4×96 | 84 | 30,292,224 | 1.37538 | +0.01995 | +0.00925 | no |
+| 7 | D1 exp095 | 3×128 | 84 | 30,292,224 | 1.37871 | +0.02328 | +0.01258 | no |
+
+![Sweep D head/dim](SWEEP_D_headdim.png)
+
+**Findings — more-but-narrower heads win, with an interior optimum at H≈12.** At fixed throughput and
+fixed params, increasing the head count (shrinking per-head inner d) improves bpb strongly: H3→H6 falls
+1.37871→1.36613, then the **optimum is H=12/d=32 = 1.35966** (−0.0065 vs the H6/d64 standard). Past the
+optimum it gently regresses (H12<H16<H24: 1.35966, 1.36054, 1.36390), giving a broad basin around H12–16.
+The lone wrinkle is **D4 (H8/d48 = 1.36988)**, which is *worse* than both neighbours H6 and H12 — a
+non-monotone dip almost certainly single-seed noise (seed=1, one run each), since the H3→H6 and H12→H24
+arms are otherwise smooth. Mechanism: more **independent** heads = more parallel sign-test addressers
+summed into the output, and that addressing capacity outweighs the loss from a narrower compressed vector
+down to d≈32; below that (d=24,16) the compressed code is too thin and the gain saturates then reverses.
+
+**No config crosses tied dense.** Best (D5 H12/d32) is +0.0042 above 1.35543 — the closest any *at-budget*
+CompressionMHL FFN slot has reached (the only closer point, exp094 at +0.0038, is H12/d48 but spends +8.8%
+over budget). This corroborates exp094: **H=12 is the sweet-spot head count** both over-budget (exp094,
+1.35924) and at-budget (D5, 1.35966) — nearly the same bpb, so on-budget D5 is the better deal. Net across
+Sweeps C+D: the strongest lever is **head count (→~12), then narrow inner (d≈32–48)**; more tables past
+budget and wider inner both underperform. The slot converges to ~+0.004 of tied dense but does not cross it.

@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp097_D4_H8_d48_tied_4k",
+  "best_val_bpb": 1.3698784975868292,
+  "final_val_bpb": 1.3698784975868292,
+  "total_params": 30292224,
+  "training_time_hours": 0.834
+}
