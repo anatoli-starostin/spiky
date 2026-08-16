@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp074_tied_compressionmhl_6heads_inner64_16k",
+  "best_val_bpb": 1.2347157316461037,
+  "final_val_bpb": 1.2347157316461037,
+  "total_params": 23214336,
+  "training_time_hours": 1.773
+}
