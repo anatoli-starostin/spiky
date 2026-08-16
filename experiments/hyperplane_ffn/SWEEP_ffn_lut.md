@@ -167,3 +167,12 @@ dim **depends on budget**: narrow d=32 wins at 4k (Sweep D), but wider d=64 wins
 compressed code needs the longer schedule to be exploited. Caveat: the gain rode a +46.7% param increase
 (44.45M ≈ 1.9× tied dense's 23.21M), and dense still wins per-param — so this is a capacity effect, not a
 sign the LUT slot overtakes dense.
+
+**16k head/dim split at tph=128 (exp_n_0003 / exp_n_0004).** Both fix H·d=384 (fixed-throughput,
+~4× cheaper than dense) and tph=128 → identical **36,780,288 params** (+21.4% over 2× budget), differing
+only in the head/dim split — a clean 16k split comparison. **exp_n_0003 (H6/d64) = 1.21994** (best 1.21981):
+vs exp_n_0002 H12/d64 (1.20823) **+0.0117** — i.e. at 16k more HEADS (H12) beats fewer-wider heads (H6)
+even though H6 here carries more tables/head (tph128 vs 84); vs exp_n_0001 D5 H12/d32 (1.22473) −0.0048
+(marginally better, but +6.49M params); vs tied dense 16k (1.19665) +0.0233. So at 16k the head-count lever
+(→H12) still dominates the split, echoing the 4k Sweep-D optimum. [exp_n_0004 H8/d48 pending — the direct
+same-params counterpart to exp_n_0003.]
