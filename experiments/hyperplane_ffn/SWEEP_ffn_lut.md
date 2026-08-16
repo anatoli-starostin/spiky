@@ -158,3 +158,12 @@ Ran the Sweep-D winner **D5 (H12/d32, 30,292,224 params)** at the full **16000-s
 with budget**: +0.0042 at 4k → +0.0281 at 16k. Dense benefits far more from the longer schedule than the
 CompressionMHL LUT slot — the slot's short-horizon competitiveness is a low-budget effect that erodes at
 full budget, consistent with every other 16k pairing where dense wins.
+
+**Inner-dim at 16k flips vs 4k (exp_n_0002).** Cloning exp_n_0001 with inner **d=32→64** (H stays 12,
+so H·d 384→768, breaking fixed-throughput; params 30.29M→**44,450,304**, +46.7%) gives 16k **val_bpb =
+1.20823** — **−0.0165 better** than the d=32 champion at 16k (1.22473), cutting the gap to tied dense 16k
+(1.19665) from +0.0281 down to **+0.0116** (closest a LUT slot has reached at 16k). So the optimal inner
+dim **depends on budget**: narrow d=32 wins at 4k (Sweep D), but wider d=64 wins at 16k — a wider
+compressed code needs the longer schedule to be exploited. Caveat: the gain rode a +46.7% param increase
+(44.45M ≈ 1.9× tied dense's 23.21M), and dense still wins per-param — so this is a capacity effect, not a
+sign the LUT slot overtakes dense.
