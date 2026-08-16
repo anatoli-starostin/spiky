@@ -102,6 +102,9 @@ Repeat of Sweep B at 2× the per-layer FFN budget (2,359,296; target total 30,28
 |-----|----------------|----:|-------------:|--------:|------:|--------------:|:--------------:|
 | exp091 | tph 84→96 (OVER budget +5.9%) | 96 | 32,061,696 | 1.36532 | −0.00081 | +0.00989 | no |
 | exp092 | inner 64/64→48/48 (param-matched) | 116 | 30,291,648 | 1.36168 | −0.00445 | +0.00625 | no |
-| exp093 | inner 48/48, tph 116→128 (OVER +4.4%) | 128 | 31,618,752 | **1.36062** | −0.00551 | +0.00519 | no (closest) |
+| exp093 | inner 48/48, tph 116→128 (OVER +4.4%) | 128 | 31,618,752 | 1.36062 | −0.00551 | +0.00519 | no |
+| exp094 | 6h→**12 heads**, inner 48/48, tph=64 fixed (OVER +8.8%) | 64 | 32,947,584 | **1.35924** | −0.00689 | +0.00381 | no (closest yet) |
+
+**exp094 is the new closest-to-dense** — doubling the head count (6→12) at fixed inner 48/48, tph=64 gives **1.35924**, beating exp093 (6h) by −0.00138 and cutting the gap to tied dense to **+0.0038** (vs exp093's +0.0052) — the smallest any CompressionMHL FFN slot has reached, but still no crossover. It runs +8.8% over the 2× budget (32.95M vs 30.29M), so this is not a like-for-like budget win; head count is a genuine lever (independent per-head summation adds capacity) but costs params to exercise. Standing question: whether 12 heads *at* budget (re-solving tph down) still beats exp092's 6h-matched 1.36168.
 
 **exp092 is the best tied-2×-budget result** — narrower inner (48) with more tables (tph 84→116) beats C1's 64/64 by −0.0044, extending the "narrow inner + more tables" trend (Sweep C: 64<96<128<192; now 48<64). The optimum inner is ≤48. But it's still +0.0063 above tied dense — no crossover. exp091 shows pushing tph past the budget (+5.9% params) barely helps (−0.0008) — table count past budget is not the lever. Net: at the 2× tied budget the CompressionMHL slot gets to within ~+0.006 of tied dense but does not cross it; a narrower inner is the better use of budget than more tables-over-budget.

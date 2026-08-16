@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp094_12heads_48-48_tph64_tied_4k",
+  "best_val_bpb": 1.3592426675672482,
+  "final_val_bpb": 1.3592426675672482,
+  "total_params": 32947584,
+  "training_time_hours": 0.301
+}

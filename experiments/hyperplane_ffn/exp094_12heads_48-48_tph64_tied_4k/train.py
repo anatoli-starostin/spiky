@@ -9,6 +9,13 @@ Unembedder is tied (lm_head.weight = tok_emb.weight) when tie_unembedder=True, e
 Outputs alongside: metrics.csv, summary.json, loss.png, checkpoint.pt.
 """
 import sys, os, json, math, time, csv
+# Live-log fix: force line-buffered stdout so `step N |` / [VAL] lines reach
+# run.log immediately even when stdout is redirected to a file (block-buffered by
+# default). Belt-and-suspenders with `python -u` / PYTHONUNBUFFERED=1 at launch.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
