@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0001_D5champ_H12_d32_16k",
+  "best_val_bpb": 1.224734996808859,
+  "final_val_bpb": 1.224734996808859,
+  "total_params": 30292224,
+  "training_time_hours": 1.288
+}

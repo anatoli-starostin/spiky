@@ -149,3 +149,12 @@ over budget). This corroborates exp094: **H=12 is the sweet-spot head count** bo
 1.35924) and at-budget (D5, 1.35966) — nearly the same bpb, so on-budget D5 is the better deal. Net across
 Sweeps C+D: the strongest lever is **head count (→~12), then narrow inner (d≈32–48)**; more tables past
 budget and wider inner both underperform. The slot converges to ~+0.004 of tied dense but does not cross it.
+
+### 16k confirm of the D5 champion (exp_n_0001)
+
+Ran the Sweep-D winner **D5 (H12/d32, 30,292,224 params)** at the full **16000-step** budget
+(`exp_n_0001_D5champ_H12_d32_16k`): **final val_bpb = 1.22473**. vs **tied dense 16k exp073 = 1.19665 →
++0.02808 (dense wins)**; vs 4k D5 = 1.35966 → −0.13493 (compute effect). **The gap to tied dense WIDENS
+with budget**: +0.0042 at 4k → +0.0281 at 16k. Dense benefits far more from the longer schedule than the
+CompressionMHL LUT slot — the slot's short-horizon competitiveness is a low-budget effect that erodes at
+full budget, consistent with every other 16k pairing where dense wins.
