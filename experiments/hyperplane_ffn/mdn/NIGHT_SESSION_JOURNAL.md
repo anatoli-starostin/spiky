@@ -126,6 +126,15 @@ tail σ2…σ12 (3–15k) all clear 0.1% so real structure ≈ rank ≥12 there.
 rank@1%, rank@0.1%, rank@1%(excluding σ1), stable rank, participation ratio — so M=1-vs-M=8 is judgeable
 on the tail, not just the outlier-dominated 1% count.
 
+**Step 3 RESULT (exp_n_0011, JOINT E2 — unfrozen vanilla backbone, warm M=8, 4000 steps):** final val_bpb
+**1.39690**, STILL DESCENDING steeply (1000:1.610 → 2000:1.467 → 3000:1.416 → 4000:1.397), 1.78h. vs
+vanilla baseline 1.19832 → **+0.199 (+16.6% rel)**. Joint helps a lot: −0.108 vs frozen E1's plateau
+(1.505), and unlike frozen it has NOT plateaued — the unfreeze removes the dense-head handicap as predicted.
+Not yet within the 2% target (1.222) at 4k, but the steep still-descending curve says a longer/16k joint run
+would close much of the gap. Rank: rank@0.1%=8, rank@1%(ex-σ1)=35 — still below the M=1 ceiling (100) and
+dense (385), i.e. even jointly the M=8 head is not yet exercising high rank. **Step 4 (exp_n_0012 = joint
+M=1) running** to test whether the mixture buys rank/bpb over M=1 at this better regime.
+
 ## E0 OVERRIDE (owner, task 4ba87cb0) — proceed past the gate.
 
 Owner explicitly overrode the E0-hard kill: E0-hard is a false-negative (E0-soft: baseline argmax at

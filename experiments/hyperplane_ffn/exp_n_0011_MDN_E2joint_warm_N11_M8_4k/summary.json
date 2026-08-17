@@ -1,0 +1,41 @@
+{
+  "exp_name": "exp_n_0011_MDN_E2joint_warm_N11_M8_4k",
+  "baseline": "exp073_tied_vanilla_baseline_16k",
+  "n_maps": 11,
+  "n_mix": 8,
+  "x_init": "warm",
+  "freeze_backbone": false,
+  "final_val_bpb": 1.396900364429616,
+  "best_val_bpb": 1.396900364429616,
+  "head_params": 1422112,
+  "dense_head_params": 12582912,
+  "head_reduction": 8.848045723543574,
+  "rank_ceiling_m1": 100,
+  "dense_rank_ceiling": 385,
+  "rank_diag": {
+    "rank_1pct": 1,
+    "rank_0p1pct": 8,
+    "rank_1pct_ex1": 35,
+    "stable_rank": 1.0,
+    "participation_ratio": 1.0,
+    "top_sv": [
+      3769903.25,
+      10015.455,
+      5476.915,
+      4748.166,
+      4536.294,
+      4403.808,
+      4168.148,
+      3984.994,
+      3630.477,
+      3525.258,
+      3474.872,
+      3270.803,
+      3197.634,
+      3134.978,
+      3086.473,
+      2999.229
+    ]
+  },
+  "training_time_hours": 1.7751536894506879
+}
