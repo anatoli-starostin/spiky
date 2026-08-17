@@ -138,6 +138,23 @@ head is representationally alive (learns strongly from a cold random start) but 
 to judge the gate; a longer E1 or joint E2 is needed for a real verdict. The clean, budget-invariant signal
 is the M=1-vs-M=8 comparison (below), which runs at identical settings.
 
+### M=1 vs M=8 — the load-bearing test (exp_n_0007 vs exp_n_0006, identical 2000-step/batch-8192 settings)
+
+| run | M | head params | reduction | final val_bpb | time |
+|-----|--:|--:|--:|--:|--:|
+| exp_n_0006 | 8 | 1,422,112 | 8.85× | 1.62447 | 0.88h |
+| exp_n_0007 | 1 | 1,152,612 | 10.92× | **1.60401** | 0.16h |
+
+**M=1 marginally BEATS M=8 (ΔM8−M1 = +0.0205) at this budget** — the OPPOSITE of the spec's central
+claim (§4.4/§7.1: the M-mixture should recover the rank a single component lacks and beat M=1). Taken at
+face value this is a red flag for the stated mechanism. BUT there's a real confound: both heads are
+undertrained (M=1 still descending 1.607→1.604 at step 2000), and M=8 carries 8× more P-parameters
+(384·M·(9N+1)) that must be learned, so at 2000 cold frozen steps M=8 is more optimization-limited relative
+to its capacity — its extra components haven't differentiated yet (at cold init all M components are ~equal,
+contributing only a +log M constant the softmax absorbs). So this does NOT yet falsify the mixture claim,
+but it does show the mixture buys nothing at short budget and costs compute (5.6× slower). The spec's proper
+test is the §6 effective-rank diagnostic (SVD of the log-prob matrix) at convergence — not run here.
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8

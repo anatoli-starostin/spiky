@@ -1,0 +1,14 @@
+{
+  "exp_name": "exp_n_0007_MDN_E1_cold_N11_M1_4k",
+  "baseline": "exp070_compressionmhl_A5champ_6h_64-64_nap6_g0_16k",
+  "n_maps": 11,
+  "n_mix": 1,
+  "x_init": "cold",
+  "freeze_backbone": true,
+  "final_val_bpb": 1.6040063418255335,
+  "best_val_bpb": 1.6040063418255335,
+  "head_params": 1152612,
+  "dense_head_params": 12582912,
+  "head_reduction": 10.916867081029869,
+  "training_time_hours": 0.1569486893547906
+}
