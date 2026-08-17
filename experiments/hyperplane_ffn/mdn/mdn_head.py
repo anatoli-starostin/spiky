@@ -13,6 +13,7 @@ Interface matches an unembedder: forward(h) -> logits [.., V]. Also `.decorrelat
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as cp
 
 # lower-tri 3x3 packing of the 6 raw numbers: (0,0),(1,0),(1,1),(2,0),(2,1),(2,2)
 _DIAG_IDX = [0, 2, 5]     # raw positions that are diagonal entries
@@ -75,20 +76,32 @@ class MDNHead(nn.Module):
         logdet_half = diag_raw.sum(-1)                       # [B,M,N]  (= sum_i log L_ii)
         return logpi, mu, logdet_half, Lam
 
-    def forward(self, h):
-        """h [.., d] -> logits [.., V]. Streams over (m,n) to bound memory at O(Bn*V)."""
-        shp = h.shape[:-1]
-        h = h.reshape(-1, self.d)
-        Bn = h.shape[0]
+    def _logits_rows(self, h):
+        """h [b,d] -> logits [b,V]. The (m,n) loop; out-of-place (autograd-safe)."""
         logpi, mu, logdet_half, Lam = self._unpack(h)
-        logphi = h.new_zeros(Bn, self.M, self.V)
+        comps = []
         for m in range(self.M):
+            s = logpi[:, m:m + 1]                            # [b,1] mixture log-weight
             for n in range(self.N):
                 xn = self.X[:, n, :]                         # [V,3]
-                dv = xn.unsqueeze(0) - mu[:, m, n, :].unsqueeze(1)   # [B,V,3]
-                q = torch.einsum('bvi,bij,bvj->bv', dv, Lam[:, m, n], dv)  # [B,V]
-                logphi[:, m, :] += logdet_half[:, m, n:n + 1] - 0.5 * q
-        logits = torch.logsumexp(logphi + logpi.unsqueeze(-1), dim=1) + self.b.unsqueeze(0)  # [B,V]
+                dv = xn.unsqueeze(0) - mu[:, m, n, :].unsqueeze(1)   # [b,V,3]
+                q = torch.einsum('bvi,bij,bvj->bv', dv, Lam[:, m, n], dv)  # [b,V]
+                s = s + (logdet_half[:, m, n:n + 1] - 0.5 * q)          # [b,V] out-of-place
+            comps.append(s)
+        return torch.logsumexp(torch.stack(comps, dim=1), dim=1) + self.b.unsqueeze(0)  # [b,V]
+
+    def forward(self, h, chunk=128):
+        """h [.., d] -> logits [.., V]. When training, gradient-checkpoints over batch chunks so
+        the 88 per-(m,n) [b,V] activations are recomputed in backward instead of all held (else OOM)."""
+        shp = h.shape[:-1]
+        h = h.reshape(-1, self.d)
+        if self.training and chunk and h.shape[0] > chunk and torch.is_grad_enabled():
+            outs = []
+            for i in range(0, h.shape[0], chunk):
+                outs.append(cp.checkpoint(self._logits_rows, h[i:i + chunk], use_reentrant=False))
+            logits = torch.cat(outs, 0)
+        else:
+            logits = self._logits_rows(h)
         return logits.reshape(*shp, self.V)
 
     def decorrelation(self):
