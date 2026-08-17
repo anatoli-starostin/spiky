@@ -155,6 +155,25 @@ contributing only a +log M constant the softmax absorbs). So this does NOT yet f
 but it does show the mixture buys nothing at short budget and costs compute (5.6× slower). The spec's proper
 test is the §6 effective-rank diagnostic (SVD of the log-prob matrix) at convergence — not run here.
 
+### Warm vs cold E1 (exp_n_0008 warm vs exp_n_0006 cold, N11/M8, 2000 steps)
+
+First hit a spec init pathology: warm = standardized PCA X (std 1) + unit-precision init → initial
+Mahalanobis Σ‖x‖²~33 → CE ~31 (diverging). Fixed with an overall ×0.02 init scale (cold regime) that
+keeps the PCA *directions* while starting near-unigram; documented as `warm_x_scale`.
+
+| init | final val_bpb (2k) | vs cold |
+|------|--:|--:|
+| cold (exp_n_0006) | 1.62447 | — |
+| **warm PCA (exp_n_0008)** | **1.56668** | **−0.0578** |
+
+Warm beats cold by 0.058 (still descending at step 2000). Per spec §4.5, a cold–warm gap of this size
+says cold's weak number is substantially an **OPTIMIZATION** problem — the PCA-warm start finds a better
+basin — not a hard representational failure. BUT warm still sits +0.336 (+27% rel) above the baseline
+1.231, so it's not just optimization either: the frozen backbone (optimized for a DENSE head) plus 2000
+undertrained steps both cap it. Verdict: the MDN head is representationally alive and optimization-sensitive;
+a real gate verdict needs a longer E1 and/or joint E2 (unfreeze the backbone), which was out of tonight's
+time budget.
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
