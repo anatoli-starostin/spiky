@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0009_H8_d48_tph128_residual_16k",
+  "best_val_bpb": 1.2269610897586627,
+  "final_val_bpb": 1.2269610897586627,
+  "total_params": 36780288,
+  "training_time_hours": 1.342
+}

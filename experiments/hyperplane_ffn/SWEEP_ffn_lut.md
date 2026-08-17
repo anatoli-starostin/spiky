@@ -195,3 +195,11 @@ more tables help at 16k but cost +6.49M params (over budget). vs tied dense 16k 
 FINAL 16k picture: best LUT slot = exp_n_0002 (H12/d64, 1.20823, 44.45M); split optimum plateaus H8–H12;
 tables and wider-d both help at 16k but only by spending params; **nothing crosses tied dense (1.19665)**
 and dense remains the most parameter-efficient. This closes the CompressionMHL FFN-slot line.
+
+**Inner residual skip HURTS (exp_n_0009).** Cloning exp_n_0004 (H8/d48/tph128) with the LUT's inner
+residual on (`y_h = lut(z_h) + z_h` — LUT learns a delta on its compressed input, added back before
+decompress; param-free, so 36,780,288 = identical to exp_n_0004) gives 16k **val_bpb = 1.22696** —
+**+0.00958 WORSE** than the no-skip twin (1.21738). Clean isolation (only the skip differs): forcing the
+compressed input through as a residual constrains the slot worse than letting the LUT+decompress learn the
+full transform. vs exp_n_0002 (1.20823) +0.0187; vs tied dense 16k (1.19665) +0.0303. So the skip is not a
+useful lever for this FFN-slot design.
