@@ -125,6 +125,19 @@ confirm exp_n_0008 if a probe is within striking distance. GPU serial. Baseline 
   run serially right after (a guard loop waits for exp_n_0006/summary.json). Cold loss falling fast
   (7.95→7.70 in 3 steps).
 
+### E1 RESULT (exp_n_0006, frozen backbone, cold, N11/M8, 2000 steps, batch 8192)
+
+final val_bpb = **1.62447** (head 1,422,112 = **8.85× < dense**), 0.88h. Baseline = exp070's own dense
+head = 1.23103. So +0.393 abs / +32% rel — does NOT clear the loose ~10% E1 gate at this budget.
+BUT the head is clearly **undertrained, not saturated**: monotonic descent 2.03→1.62, still falling at
+step 2000 (last 200 steps −0.0045). Trajectory: 200:2.028 400:1.856 600:1.774 800:1.723 1000:1.691
+1200:1.666 1400:1.648 1600:1.636 1800:1.629 2000:1.624. Two known handicaps compound the raw number:
+(a) only 2000 cold steps (spec expects "train to plateau"; this isn't plateaued), (b) the frozen backbone
+was optimized for a DENSE head, disadvantaging any new head (why the spec's gate is loose). Read: the MDN
+head is representationally alive (learns strongly from a cold random start) but 2000 frozen steps is too few
+to judge the gate; a longer E1 or joint E2 is needed for a real verdict. The clean, budget-invariant signal
+is the M=1-vs-M=8 comparison (below), which runs at identical settings.
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
