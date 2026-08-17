@@ -93,6 +93,14 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
+## E0 OVERRIDE (owner, task 4ba87cb0) — proceed past the gate.
+
+Owner explicitly overrode the E0-hard kill: E0-hard is a false-negative (E0-soft: baseline argmax at
+median rank 1/32768; geometry localizes the mode, only blurs the top-20 tail — precisely what the
+M-component mixture is meant to recover). Authorized to proceed. Plan: (1) build MDN head module + test;
+(2) E1 frozen-backbone cold 4k = exp_n_0006; (3) M=1 vs M=8 load-bearing test = exp_n_0007; (4) 16k
+confirm exp_n_0008 if a probe is within striking distance. GPU serial. Baseline = exp070 untied head.
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
