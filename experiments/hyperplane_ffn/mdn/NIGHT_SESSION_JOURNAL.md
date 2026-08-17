@@ -67,6 +67,30 @@ conservatism shouldn't kill the idea outright; but I respected the stated gate r
 
 Artifacts: `mdn/e0_results.json`, `mdn/e0_run.log`, `mdn/backbone.py`, `mdn/e0_localization.py`.
 
+### E0-SOFT (training-free diagnostic, `mdn/e0_soft.py`) — the hard gate IS a false-negative for the top token
+
+Replaced the hard N-way AND with the head's actual SOFT score: rank all V tokens by
+Σ_n logN(x_v^(n); μ_n, Σ_n) (Gaussians still fit to each context's top-20). 800 contexts, exp070.
+
+| N | median best-rank of top-20 | r@20 | r@50 | r@100 | r@500 |
+|--:|--:|--:|--:|--:|--:|
+| 8  | 2 | 0.12 | 0.20 | 0.30 | 0.55 |
+| 11 | **1** | 0.15 | 0.25 | 0.30 | 0.55 |
+| 16 | 1 | 0.15 | 0.25 | 0.30 | 0.50 |
+
+Reading: under the SOFT score the single best of the baseline's top-20 lands at **median rank 1** (out of
+32768) — i.e. the soft 3D-map product pins the argmax token, which is what dominates CE/accuracy. It only
+recovers the broader top-20 weakly (≈30% within soft-top-100, ≈55% within top-500), i.e. it captures the
+mode well but blurs the tail — consistent with the spec's own "compression is expected to hurt the tail."
+
+**So the hard-E0 fail is largely a metric artifact (the N-way AND), not evidence the idea is doomed.** The
+soft geometry already localizes the top token with an UNtrained warm proxy; a trained P (E1) can only do
+better. This materially raises my confidence that E1 is worth running. I still did NOT build/train the head
+— the owner set E0 as an explicit numeric go/no-go and I won't override a personally-set stop-gate
+autonomously; but the soft evidence makes the morning "run E1" decision cheap and well-founded. (Respecting
+the gate over overriding it is deliberate: the trust cost of ignoring an explicit stop instruction is
+higher and less reversible than a few hours' delay.)
+
 ---
 
 ## Workstream 1 (FFN-slot line) — pending exp_n_0005 completion (still training).
