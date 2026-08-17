@@ -93,7 +93,29 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
-## FINAL MDN VERDICT (vanilla backbone, task a294eda8) — viable compression, steep ppl cost, rank-capped
+## GEOMETRY SWEEP + DECISIVE CONTROL (task eabca65d) — VERDICT REVERSED: geometry adds real value
+
+Generalized the head to arbitrary block B + added LowRankLinearHead control (logits=(h·Vd)·Uvᵀ+b, rank r).
+Joint E2, M=1, warm, 4k, vanilla exp073 backbone (baseline 1.19832). MDN geometry points vs low-rank-linear
+controls at MATCHED params (r≈B·N):
+
+| MDN point | comp | MDN bpb | eff rank | ‖ control | LR bpb | MDN wins by |
+|-----------|-----:|--------:|---------:|:--|-------:|-----------:|
+| B4/N11 | 8.20× | 1.34681 | 46 | r45 | 1.40770 | **−0.061** |
+| B5/N11 | 6.55× | 1.31925 | 57 | r57 | 1.38973 | **−0.070** |
+| B3/N24 | 5.08× | 1.29367 | 75 | r74 | 1.36948 | **−0.076** |
+| B4/N24 | 3.80× | 1.26999 | 98 | r99 | 1.35535 | **−0.085** |
+| B5/N24 | 3.03× | **1.25570** | 123 | r124 | 1.34113 | **−0.085** |
+
+**HEAD-DIAGONAL VERDICT: the B-D Gaussian geometry BEATS plain low-rank-linear at EVERY matched-param point
+by −0.06 to −0.085 bpb.** It is NOT low-rank-linear in disguise — the per-context nonlinearity (μ,Λ are
+functions of h, so logit_v is nonlinear in h, vs the control's static rank-r linear map) buys real
+expressiveness. This OVERTURNS the earlier "rank-capped dead-end" read: that was an artifact of the tiny
+B3/N11 geometry. Scaling B,N lifts the rank (46→123, tracking B·N) and monotonically lowers bpb; best B5/N24
+= 1.25570 at 3.03× compression = **+4.8% over baseline at 4k, still descending**. 16k confirms of B5/N24
+(best MDN) and r124 (best control) launched for the converged, equal-budget comparison.
+
+## FINAL MDN VERDICT (vanilla backbone, task a294eda8) — SUPERSEDED by the geometry sweep above
 
 Baseline = vanilla dense head exp073 = **1.19832**. Best MDN = joint M=1, N=11, 16k = **1.37632 (best)** /
 1.38200 (final), head **1,152,612 = 10.9× < dense 12.58M**, still.

@@ -1,0 +1,21 @@
+{
+  "exp_name": "exp_n_0025_LOWRANK_r124_16k",
+  "baseline_exp": "~/projects/spiky/experiments/hyperplane_ffn/exp073_tied_vanilla_baseline_16k",
+  "n_maps": 11,
+  "n_mix": 1,
+  "x_init": "warm",
+  "freeze_backbone": false,
+  "gamma_dec": 0.01,
+  "n_steps": 16000,
+  "device_batch_size": 16,
+  "total_batch_size": 8192,
+  "seq_len": 512,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "head_type": "lowrank",
+  "rank": 124
+}
