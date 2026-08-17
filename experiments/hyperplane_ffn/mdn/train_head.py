@@ -18,7 +18,7 @@ if NANOCHAT_ROOT not in sys.path:
     sys.path.insert(0, NANOCHAT_ROOT)
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 import backbone as bb
-from mdn_head import MDNHead
+from mdn_head import MDNHead, LowRankLinearHead
 from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.common import get_base_dir
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
@@ -30,7 +30,9 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(cfg['random_seed']); np.random.seed(cfg['random_seed'])
 
 BASELINE = os.path.expanduser(cfg['baseline_exp'])
-N, M = cfg['n_maps'], cfg['n_mix']
+HEAD_TYPE = cfg.get('head_type', 'mdn')                     # 'mdn' | 'lowrank'
+N, M = cfg.get('n_maps', 11), cfg.get('n_mix', 1)
+BLOCK = cfg.get('block', 3); RANK = cfg.get('rank')
 X_INIT = cfg.get('x_init', 'cold'); FREEZE = bool(cfg.get('freeze_backbone', True))
 GAMMA_DEC = cfg.get('gamma_dec', 1e-2)
 DBS, TBS, NSTEPS = cfg['device_batch_size'], cfg['total_batch_size'], cfg['n_steps']
@@ -49,23 +51,28 @@ if not FREEZE:
     for p in model.parameters():
         p.requires_grad_(True)
 
-# ---- X init ----
-x_init = None
-if X_INIT == 'warm':
-    Wc = (Wdense - Wdense.mean(0)).cpu().numpy()
-    _, S, Vt = np.linalg.svd(Wc, full_matrices=False)
-    Xp = Wc @ Vt.T[:, :3 * N]                               # [V,3N] PCA coords
-    Xp = (Xp - Xp.mean(0)) / (Xp.std(0) + 1e-8)             # standardize columns (spec)
-    # Overall init scale: standardized (std 1) X with unit-precision init gives a huge initial
-    # Mahalanobis (Σ_n||x||^2 ~ 33 -> CE ~31). Scale to the cold regime (std ~0.02) so warm starts
-    # near-unigram like cold but keeps the PCA *directions*; L learns the precision/scale from there.
-    Xp = Xp * float(cfg.get('warm_x_scale', 0.02))
-    x_init = Xp.reshape(V, N, 3)
 b_init = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unigram_logfreq.npy'))
-head = MDNHead(D, V, n_maps=N, n_mix=M, gamma_dec=GAMMA_DEC, x_init=x_init, b_init=b_init, device=DEVICE)
-hp = MDNHead.param_count(D, V, N, M)
-print(f"[MDN] head params = {hp['total']:,} (X={hp['X']:,} P={hp['P']:,} b={hp['b']:,}) | "
-      f"dense head {DENSE_HEAD_PARAMS:,} -> reduction {DENSE_HEAD_PARAMS/hp['total']:.2f}x")
+if HEAD_TYPE == 'lowrank':
+    head = LowRankLinearHead(D, V, rank=RANK, b_init=b_init, device=DEVICE)
+    hp = LowRankLinearHead.param_count(D, V, RANK)
+    print(f"[HEAD] lowrank r={RANK} params = {hp['total']:,} (Uv={hp['Uv']:,} Vd={hp['Vd']:,} b={hp['b']:,}) | "
+          f"dense {DENSE_HEAD_PARAMS:,} -> reduction {DENSE_HEAD_PARAMS/hp['total']:.2f}x")
+else:
+    # ---- X init (MDN) ----
+    x_init = None
+    if X_INIT == 'warm':
+        Wc = (Wdense - Wdense.mean(0)).cpu().numpy()
+        _, S, Vt = np.linalg.svd(Wc, full_matrices=False)
+        Xp = Wc @ Vt.T[:, :BLOCK * N]                          # [V, B*N] PCA coords
+        Xp = (Xp - Xp.mean(0)) / (Xp.std(0) + 1e-8)            # standardize columns (spec)
+        # scale to cold regime so warm starts near-unigram but keeps PCA directions (see journal)
+        Xp = Xp * float(cfg.get('warm_x_scale', 0.02))
+        x_init = Xp.reshape(V, N, BLOCK)
+    head = MDNHead(D, V, n_maps=N, n_mix=M, block=BLOCK, gamma_dec=GAMMA_DEC,
+                   x_init=x_init, b_init=b_init, device=DEVICE)
+    hp = MDNHead.param_count(D, V, N, M, BLOCK)
+    print(f"[MDN] B={BLOCK} N={N} M={M} head params = {hp['total']:,} (X={hp['X']:,} P={hp['P']:,} b={hp['b']:,}) | "
+          f"dense head {DENSE_HEAD_PARAMS:,} -> reduction {DENSE_HEAD_PARAMS/hp['total']:.2f}x")
 
 # ---- optimizer (AdamW two-group: X,b,P.bias no-wd; P.weight wd; + backbone if joint) ----
 pg = head.param_groups()
@@ -185,8 +192,9 @@ rk = effective_rank()
 rank_ceiling_m1 = 9 * N + 1
 print(f"[rank] rank@1%={rk['rank_1pct']} rank@0.1%={rk['rank_0p1pct']} rank@1%(ex-σ1)={rk['rank_1pct_ex1']} "
       f"stable={rk['stable_rank']} PR={rk['participation_ratio']} (M=1 ceiling {rank_ceiling_m1}, dense 385)")
-summary = dict(exp_name=cfg['exp_name'], baseline=os.path.basename(BASELINE), n_maps=N, n_mix=M,
-               x_init=X_INIT, freeze_backbone=FREEZE, final_val_bpb=val_bpbs[-1], best_val_bpb=best,
+summary = dict(exp_name=cfg['exp_name'], baseline=os.path.basename(BASELINE), head_type=HEAD_TYPE,
+               n_maps=N, n_mix=M, block=BLOCK, rank=RANK, x_init=X_INIT, freeze_backbone=FREEZE,
+               final_val_bpb=val_bpbs[-1], best_val_bpb=best,
                head_params=hp['total'], dense_head_params=DENSE_HEAD_PARAMS,
                head_reduction=DENSE_HEAD_PARAMS / hp['total'],
                rank_ceiling_m1=rank_ceiling_m1, dense_rank_ceiling=385, rank_diag=rk,
