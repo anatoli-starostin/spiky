@@ -87,14 +87,14 @@ class MDNHead(nn.Module):
             xn = self.X[:, n, :]                             # [V,3]
             Ln = Lam[:, :, n]                                # [b,M,3,3]
             mn = mu[:, :, n, :]                              # [b,M,3]
-            xquad = torch.stack([xn[:, 0] ** 2, xn[:, 1] ** 2, xn[:, 2] ** 2,
-                                 2 * xn[:, 0] * xn[:, 1], 2 * xn[:, 0] * xn[:, 2],
-                                 2 * xn[:, 1] * xn[:, 2]], dim=1)         # [V,6]
+            xq_t = torch.stack([xn[:, 0] ** 2, xn[:, 1] ** 2, xn[:, 2] ** 2,
+                                2 * xn[:, 0] * xn[:, 1], 2 * xn[:, 0] * xn[:, 2],
+                                2 * xn[:, 1] * xn[:, 2]], dim=0)          # [6,V]
             lam6 = torch.stack([Ln[..., 0, 0], Ln[..., 1, 1], Ln[..., 2, 2],
                                 Ln[..., 0, 1], Ln[..., 0, 2], Ln[..., 1, 2]], dim=-1)   # [b,M,6]
-            t1 = torch.matmul(xquad, lam6.reshape(bm, 6).t()).reshape(self.V, b, self.M).permute(1, 2, 0)  # [b,M,V]
+            t1 = torch.matmul(lam6, xq_t)                               # [b,M,6]@[6,V] = [b,M,V] (no permute)
             Lammu = torch.matmul(Ln, mn.unsqueeze(-1)).squeeze(-1)       # [b,M,3]
-            t2 = torch.matmul(xn, Lammu.reshape(bm, 3).t()).reshape(self.V, b, self.M).permute(1, 2, 0)    # [b,M,V]
+            t2 = torch.matmul(Lammu, xn.t())                            # [b,M,3]@[3,V] = [b,M,V]
             t3 = (mn * Lammu).sum(-1).unsqueeze(-1)                      # [b,M,1]
             logphi = logphi - 0.5 * (t1 - 2.0 * t2 + t3)
         return torch.logsumexp(logphi + logpi.unsqueeze(-1), dim=1) + self.b.unsqueeze(0)  # [b,V]

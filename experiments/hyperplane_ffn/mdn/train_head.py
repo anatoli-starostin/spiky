@@ -139,6 +139,8 @@ for step in range(1, NSTEPS + 1):
     torch.nn.utils.clip_grad_norm_(
         [p for grp in opt.param_groups for p in grp['params'] if p.requires_grad], 1.0)
     opt.step()
+    if step <= 5 or step % 25 == 0:
+        print(f"  [t] step {step} | {(time.time() - t0) / step:.2f}s/step avg | loss={acc_loss:.3f}", flush=True)
     ema = acc_loss if ema is None else 0.9 * ema + 0.1 * acc_loss
     if step % EVAL_EVERY == 0 or step == NSTEPS:
         bpb = eval_bpb(EVAL_STEPS)
