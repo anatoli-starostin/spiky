@@ -3,56 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LUT → Spiking — Walker2d live demo</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="robots" content="noindex" />
+  <title>Under construction</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(1200px 800px at 50% 30%, #1b2233 0%, #0d1017 70%);
+      color: #e6e6e6;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+      text-align: center; padding: 1.5rem;
+    }
+    .card { max-width: 32rem; }
+    .badge { font-size: 3rem; line-height: 1; margin-bottom: 1rem; }
+    h1 { font-size: 1.7rem; font-weight: 680; letter-spacing: -0.01em; margin: 0 0 0.6rem; }
+    p { color: #9fb0c3; font-size: 1.02rem; line-height: 1.6; margin: 0.4rem 0; }
+    .rule { width: 3rem; height: 3px; border-radius: 3px; background: #2D5BFF; margin: 1.2rem auto; }
+  </style>
 </head>
 <body>
-  <div id="errbar" style="display:none"></div>
-
-  <header>
-    <h1>LUT → Spiking networks</h1>
-    <p>
-      A trained <b>lookup-table (LUT) network</b> can be turned into a real <b>spiking</b> network
-      (Izhikevich / SPNet) by <b>direct construction</b> — no retraining — via latency coding: a vector is
-      represented by the <i>first-spike times</i> of one population of neurons, and the constructed spiking
-      circuit re-emits the LUT's output as the spike times of another population.
-    </p>
-  </header>
-
-  <div class="stack">
-    <div class="panel">
-      <h2>Demo</h2>
-      <div class="cards">
-        <a class="card" href="walker2d-viz/">
-          <h3>Walker2d — live spiking controller (interactive stand)</h3>
-          <p>A real <b>Walker2d</b> SAC control policy (32 lookup tables over the 17-D observation) compiled
-             into a <b>latency-coded spiking network</b> and run <b>live</b> in your browser against a real
-             MuJoCo simulation on the server. Pick an actor (LUT-SAC / int4 / SAC baseline), pause &amp; step,
-             toggle free-fall, adjust speed — and watch the decoded actions drive the walker in real time.
-             Each viewer gets its own independent simulation.</p>
-        </a>
-      </div>
-      <!-- The older LUT-to-spiking construction demos (single_table, animation2-4, inspector, evolved_izh,
-           evolved_assoc, smartinit, walker_demo, ...) are currently UNLISTED from this landing page. Their
-           files remain on the gh-pages branch and are still reachable by direct URL. -->
-      <p class="small" style="margin-top:12px">Older construction demos are currently unlisted; their pages
-        remain reachable by direct URL.</p>
-    </div>
-
-    <div class="panel">
-      <h2>Write-up</h2>
-      <div class="cards">
-        <a class="card" href="walker2d-spiking/">
-          <h3>A lookup table that learned to walk — and then became a spiking network</h3>
-          <p>How the policy behind the demo was built. A <b>Walker2d</b> LUT policy turned into a real
-             <b>spiking network</b> by direct construction — <b>2,889 neurons, 25,953 synapses</b>, ~155
-             integer ticks per decision, no external clock and no gradient descent inside the network.
-             It walks <b>indistinguishably</b> from the software policy it came from (6312 vs 6253 return,
-             +1.31&sigma;), with 98.7% of actions identical tick for tick. Covers the whole construction:
-             order detection, lookup, and the amplitude-encoded first-spike readout.</p>
-        </a>
-      </div>
-    </div>
+  <div class="card">
+    <div class="badge">🚧</div>
+    <h1>Under construction</h1>
+    <div class="rule"></div>
+    <p>This site is temporarily offline while we make some changes.</p>
+    <p>Please check back soon.</p>
   </div>
 </body>
 </html>
