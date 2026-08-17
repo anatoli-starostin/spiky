@@ -130,6 +130,29 @@ def fcfg_from_config(cfg):
     )
 
 
+def _flex_init(m):
+    if isinstance(m, (nn.Linear, nn.Embedding)):
+        nn.init.normal_(m.weight, std=0.02)
+
+
+def build_fresh(dims, device='cpu'):
+    """Randomly-initialized VANILLA (dense-GELU-FFN) MinimalGPT, flex-trainer init (std 0.02 +
+    zero-init attn.proj & mlp last layer). No pretrained weights. `dims` = a config dict with
+    depth/n_embd/n_head/seq_len/tokenizer_vocab_size. .head is unused (replaced by the MDN head)."""
+    fcfg = dict(ffn_type='dense', gamma=0, lut_in=None, lut_out=None, lut_nap=None, lut_tph=None,
+                lut_heads=1, lut_joint=False, lut_fwd='hard', lut_bf16=False, lut_noise=1e-3, lut_seed=0)
+    model = MinimalGPT(dims['tokenizer_vocab_size'], dims['n_embd'], dims['n_head'],
+                       dims['depth'], dims['seq_len'], fcfg, tie=False)
+    model.apply(_flex_init)
+    for block in model.blocks:
+        nn.init.zeros_(block.attn.proj.weight)
+        nn.init.zeros_(block.mlp[-1].weight)
+    model.to(device)
+    for p in model.parameters():
+        p.requires_grad_(True)
+    return model
+
+
 def load_pretrained(exp_dir, device='cpu'):
     """Build MinimalGPT from <exp_dir>/config.json and load <exp_dir>/checkpoint.pt.
     Returns (model, cfg). Model is in eval mode with grads off."""

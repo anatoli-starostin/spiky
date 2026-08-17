@@ -31,6 +31,7 @@ torch.manual_seed(cfg['random_seed']); np.random.seed(cfg['random_seed'])
 
 BASELINE = os.path.expanduser(cfg['baseline_exp'])
 HEAD_TYPE = cfg.get('head_type', 'mdn')                     # 'mdn' | 'lowrank'
+FROM_SCRATCH = bool(cfg.get('from_scratch', False))         # fresh random backbone, train end-to-end
 N, M = cfg.get('n_maps', 11), cfg.get('n_mix', 1)
 BLOCK = cfg.get('block', 3); RANK = cfg.get('rank')
 X_INIT = cfg.get('x_init', 'cold'); FREEZE = bool(cfg.get('freeze_backbone', True))
@@ -43,13 +44,20 @@ GRAD_ACCUM = max(1, TBS // (DBS * SEQ))
 print(f"[MDN] {cfg['exp_name']}  baseline={os.path.basename(BASELINE)} N={N} M={M} init={X_INIT} "
       f"freeze={FREEZE} steps={NSTEPS} dbs={DBS} accum={GRAD_ACCUM}")
 
-model, bcfg, (miss, unexp) = bb.load_pretrained(BASELINE, device=DEVICE)
+if FROM_SCRATCH:
+    bcfg = json.load(open(os.path.join(BASELINE, 'config.json')))   # dims only, NO weights
+    model = bb.build_fresh(bcfg, device=DEVICE)
+    FREEZE = False; X_INIT = 'cold'                                  # cold headline: no pretrained, no warm
+    Wdense = None
+    print(f"[SCRATCH] fresh random vanilla backbone (dense FFN), end-to-end cold; dims from {os.path.basename(BASELINE)}")
+else:
+    model, bcfg, (miss, unexp) = bb.load_pretrained(BASELINE, device=DEVICE)
+    Wdense = model.head.weight.detach().float()
+    if not FREEZE:
+        for p in model.parameters():
+            p.requires_grad_(True)
 D, V = bcfg['n_embd'], bcfg['tokenizer_vocab_size']
-Wdense = model.head.weight.detach().float()
 DENSE_HEAD_PARAMS = V * D                                   # 12,582,912 (bias-free)
-if not FREEZE:
-    for p in model.parameters():
-        p.requires_grad_(True)
 
 b_init = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unigram_logfreq.npy'))
 if HEAD_TYPE == 'lowrank':
