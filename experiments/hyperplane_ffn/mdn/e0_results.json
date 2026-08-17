@@ -1,0 +1,46 @@
+{
+  "baseline": "exp070_compressionmhl_A5champ_6h_64-64_nap6_g0_16k",
+  "n_contexts": 1000,
+  "tied": false,
+  "results": {
+    "4": {
+      "median_sum_bits": 6.344590034700021,
+      "median_top20_in_intersection": 0.45,
+      "median_intersection_frac_of_V": 0.0160064697265625,
+      "mean_sum_bits": 7.033670933699566,
+      "p25_sum_bits": 4.529748189055838,
+      "p75_sum_bits": 8.841645572487543
+    },
+    "8": {
+      "median_sum_bits": 9.30611294971365,
+      "median_top20_in_intersection": 0.25,
+      "median_intersection_frac_of_V": 0.0021820068359375,
+      "mean_sum_bits": 10.03949130377161,
+      "p25_sum_bits": 6.861503036177649,
+      "p75_sum_bits": 12.095072785685788
+    },
+    "11": {
+      "median_sum_bits": 11.349015233602291,
+      "median_top20_in_intersection": 0.15,
+      "median_intersection_frac_of_V": 0.000823974609375,
+      "mean_sum_bits": 12.153256166064311,
+      "p25_sum_bits": 8.308960545512909,
+      "p75_sum_bits": 14.83749536172581
+    },
+    "16": {
+      "median_sum_bits": 14.112955936202816,
+      "median_top20_in_intersection": 0.1,
+      "median_intersection_frac_of_V": 0.000244140625,
+      "mean_sum_bits": 15.078801253055273,
+      "p25_sum_bits": 10.607385767544148,
+      "p75_sum_bits": 18.12467155986203
+    }
+  },
+  "gate": {
+    "median_sum_bits": 11.349015233602291,
+    "median_top20_in_intersection": 0.15,
+    "bits_ok": false,
+    "overlap_ok": false,
+    "passed": false
+  }
+}
