@@ -115,6 +115,27 @@ B3/N11 geometry. Scaling B,N lifts the rank (46→123, tracking B·N) and monoto
 = 1.25570 at 3.03× compression = **+4.8% over baseline at 4k, still descending**. 16k confirms of B5/N24
 (best MDN) and r124 (best control) launched for the converged, equal-budget comparison.
 
+### FROM-SCRATCH (task 9dfddefb) — worse than the retrofit; rank ceiling unchanged; maps NOT collapsed
+
+Fresh random vanilla backbone + cold MDN head, end-to-end 16k (no pretrained weights, no warm init):
+| point | scratch bpb | vs retrofit | rank(ex-σ1) | decorr between/within |
+|-------|--:|--:|--:|--:|
+| B3/N11 (exp_n_0026) | 1.45826 | retrofit 1.37632 → **+0.082 worse** | 35 | 0.182 / 0.232 |
+| B5/N24 (exp_n_0027) | 1.36830 | retrofit(16k) 1.24520 → **+0.123 worse** | 122 | 0.082 / 0.107 |
+
+**Co-evolving from scratch does NOT beat retrofitting onto a pretrained backbone — it's clearly worse**
+(the exp073 backbone is a big 16k head start the from-scratch run can't match in one 16k budget). The
+spec's "cold headline" (architecture works with no dense model) is technically true — it does learn
+(1.458/1.368) — but at meaningfully worse bpb. RANK CEILING UNCHANGED: from-scratch rank (35, 122) equals
+the retrofit's and still tracks B·N — rank is a property of the GEOMETRY, not the training regime.
+
+DECORRELATION verdict (task 77d7ba51): trained between-map |corr| = **0.182 (B3/N11)** and **0.082 (B5/N24)**
+vs the ~0.025 random floor. So the γ=1e-2 reg did NOT hold the maps at the floor — they became several×
+more correlated than random, MORE so for the smaller geometry (fewer maps forced to share structure). BUT
+they did NOT collapse (collapse → corr→1 and rank≪B·N; instead rank≈B·N and corr≈0.08–0.18) — the maps
+stayed mostly distinct with modest correlation. So the reg keeps them from collapsing but doesn't achieve
+full decorrelation; larger N decorrelates better.
+
 ### 16k CONFIRMS (converged, equal-budget) — the geometry advantage is REAL but MODEST
 
 | run | steps | val_bpb | rank(ex-σ1) | comp |

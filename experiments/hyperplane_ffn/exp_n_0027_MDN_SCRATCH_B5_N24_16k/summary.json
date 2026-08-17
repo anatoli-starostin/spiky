@@ -1,0 +1,49 @@
+{
+  "exp_name": "exp_n_0027_MDN_SCRATCH_B5_N24_16k",
+  "baseline": "exp073_tied_vanilla_baseline_16k",
+  "head_type": "mdn",
+  "n_maps": 24,
+  "n_mix": 1,
+  "block": 5,
+  "rank": null,
+  "x_init": "cold",
+  "freeze_backbone": false,
+  "final_val_bpb": 1.3682992802434812,
+  "best_val_bpb": 1.3682992802434812,
+  "head_params": 4150113,
+  "dense_head_params": 12582912,
+  "head_reduction": 3.031944431392591,
+  "rank_ceiling_m1": 217,
+  "dense_rank_ceiling": 385,
+  "rank_diag": {
+    "rank_1pct": 1,
+    "rank_0p1pct": 7,
+    "rank_1pct_ex1": 122,
+    "stable_rank": 1.0,
+    "participation_ratio": 1.0,
+    "top_sv": [
+      7705211.5,
+      27096.5,
+      19189.1,
+      14602.119,
+      11280.071,
+      9156.238,
+      7999.385,
+      7455.442,
+      6786.531,
+      6383.963,
+      6329.696,
+      5242.454,
+      5147.401,
+      5059.451,
+      4905.8,
+      4731.566
+    ]
+  },
+  "decorr": {
+    "between_map_abs_corr": 0.082,
+    "within_map_abs_corr": 0.1067,
+    "between_map_max_abs": 0.7165
+  },
+  "training_time_hours": 2.386703121728367
+}
