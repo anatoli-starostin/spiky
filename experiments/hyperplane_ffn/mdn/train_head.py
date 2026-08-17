@@ -128,8 +128,18 @@ def effective_rank(n_ctx=2048, thresh=0.01):
     L = torch.cat(rows, 0)[:n_ctx].float()
     L = L - L.mean(0, keepdim=True)
     s = torch.linalg.svdvals(L)
-    r = int((s > thresh * s[0]).sum().item())
-    return r, [round(float(v), 3) for v in s[:12]]
+    s2 = s * s
+    fro2 = float(s2.sum())
+    # spec metric (1% of max) is fragile to a dominant outlier σ1; report finer measures too:
+    diag = dict(
+        rank_1pct=int((s > 0.01 * s[0]).sum().item()),        # spec §6
+        rank_0p1pct=int((s > 0.001 * s[0]).sum().item()),
+        rank_1pct_ex1=int((s[1:] > 0.01 * s[1]).sum().item()) + 1 if len(s) > 1 else 1,  # 1% of σ2 (drop the outlier)
+        stable_rank=round(fro2 / float(s2[0]), 3),            # ||L||_F^2 / σ1^2
+        participation_ratio=round(fro2 * fro2 / float((s2 * s2).sum()), 3),
+        top_sv=[round(float(v), 3) for v in s[:16]],
+    )
+    return diag
 
 
 if SMOKE:
@@ -171,16 +181,16 @@ for step in range(1, NSTEPS + 1):
         val_steps.append(step); val_bpbs.append(bpb); tr_losses.append(ema)
         print(f'step {step:6d} | loss={ema:.4f} | [VAL] bpb={bpb:.4f} | lr={lr:.2e}')
 
-eff_r, eff_s = effective_rank()
+rk = effective_rank()
 rank_ceiling_m1 = 9 * N + 1
-print(f"[rank] effective rank@1% = {eff_r} (M=1 ceiling 9N+1={rank_ceiling_m1}, dense ceiling 385) "
-      f"top-sv={eff_s[:6]}")
+print(f"[rank] rank@1%={rk['rank_1pct']} rank@0.1%={rk['rank_0p1pct']} rank@1%(ex-σ1)={rk['rank_1pct_ex1']} "
+      f"stable={rk['stable_rank']} PR={rk['participation_ratio']} (M=1 ceiling {rank_ceiling_m1}, dense 385)")
 summary = dict(exp_name=cfg['exp_name'], baseline=os.path.basename(BASELINE), n_maps=N, n_mix=M,
                x_init=X_INIT, freeze_backbone=FREEZE, final_val_bpb=val_bpbs[-1], best_val_bpb=best,
                head_params=hp['total'], dense_head_params=DENSE_HEAD_PARAMS,
                head_reduction=DENSE_HEAD_PARAMS / hp['total'],
-               effective_rank_1pct=eff_r, rank_ceiling_m1=rank_ceiling_m1, dense_rank_ceiling=385,
-               top_singular_values=eff_s, training_time_hours=(time.time() - t0) / 3600)
+               rank_ceiling_m1=rank_ceiling_m1, dense_rank_ceiling=385, rank_diag=rk,
+               training_time_hours=(time.time() - t0) / 3600)
 json.dump(summary, open(os.path.join(EXP_DIR, 'summary.json'), 'w'), indent=2)
 fig, ax = plt.subplots(1, 2, figsize=(11, 4))
 ax[0].plot(val_steps, tr_losses); ax[0].set(title='train ce', xlabel='step'); ax[0].grid(True)

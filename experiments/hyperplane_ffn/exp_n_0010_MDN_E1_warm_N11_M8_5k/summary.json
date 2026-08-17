@@ -1,0 +1,31 @@
+{
+  "exp_name": "exp_n_0010_MDN_E1_warm_N11_M8_5k",
+  "baseline": "exp073_tied_vanilla_baseline_16k",
+  "n_maps": 11,
+  "n_mix": 8,
+  "x_init": "warm",
+  "freeze_backbone": true,
+  "final_val_bpb": 1.5047967856608855,
+  "best_val_bpb": 1.5047967856608855,
+  "head_params": 1422112,
+  "dense_head_params": 12582912,
+  "head_reduction": 8.848045723543574,
+  "effective_rank_1pct": 1,
+  "rank_ceiling_m1": 100,
+  "dense_rank_ceiling": 385,
+  "top_singular_values": [
+    2661241.75,
+    15032.596,
+    6913.019,
+    5028.696,
+    4796.528,
+    4401.493,
+    3865.667,
+    3808.99,
+    3496.104,
+    3370.319,
+    3177.706,
+    3046.001
+  ],
+  "training_time_hours": 2.200156486100621
+}

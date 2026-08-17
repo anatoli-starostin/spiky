@@ -117,6 +117,15 @@ Re-pointed the MDN configs at exp073 (SMOKE: loads 0/0, warm init OK) and re-ran
 - Steps 3–5 (joint E2 warm 4k = exp_n_0011; M=1 rank verdict = exp_n_0012; conditional 16k confirm =
   exp_n_0013) follow serially, each decided on the prior result.
 
+**Step 2 RESULT (exp_n_0010, warm E1 M=8, 5000 steps, FROZEN vanilla exp073 backbone):** final val_bpb
+**1.50480**, cleanly PLATEAUED (4600:1.5053, 4800:1.5057, 5000:1.5048). vs vanilla baseline 1.19832 →
+**+0.306 (+26% rel)** — frozen E1 caps well short. So the frozen backbone (trained for a tied dense head)
+is the binding handicap, exactly as predicted → the joint E2 (unfreeze) is the test that matters. Effective
+rank: spec rank@1% = 1, BUT that's a threshold artifact — σ1 (2.66M) is a 177× outlier over σ2 (15k); the
+tail σ2…σ12 (3–15k) all clear 0.1% so real structure ≈ rank ≥12 there. Enhanced the diagnostic to log
+rank@1%, rank@0.1%, rank@1%(excluding σ1), stable rank, participation ratio — so M=1-vs-M=8 is judgeable
+on the tail, not just the outlier-dominated 1% count.
+
 ## E0 OVERRIDE (owner, task 4ba87cb0) — proceed past the gate.
 
 Owner explicitly overrode the E0-hard kill: E0-hard is a false-negative (E0-soft: baseline argmax at
