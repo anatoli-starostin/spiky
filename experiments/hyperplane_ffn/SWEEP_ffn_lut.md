@@ -184,3 +184,14 @@ ranking is the same as 4k Sweep-D (more heads better), but the best 16k LUT slot
 (H12/d64, 1.20823) — bought with +46.7% params (44.45M) — and nothing crosses tied dense (23.21M, 1.19665).
 Overall 16k verdict: head count is the top lever, wider d helps only with the longer schedule, and the
 CompressionMHL slot needs ~1.9× dense's params just to get within +0.012 of it — dense stays more efficient.
+
+**exp_n_0005 (H12/d32/tph128) = 1.21739** (best=final) completes the fixed-params (36.78M) tph=128/16k
+split family, and the head-count gain **SATURATES**: H12 (1.21739) essentially TIES H8 (exp_n_0004,
+1.21738; Δ +0.0000084), both beating H6 (exp_n_0003, 1.21994 → H12 is −0.00255 vs H6). So the 16k split
+optimum is a **plateau over H8–H12 ≈ 1.2174**, not a peak at H12 — the earlier "extrapolate to H12"
+guess was only half right (H12 matches, does not beat, H8). Also the clean **tph 84→128 effect at
+H12/d32**: exp_n_0001 (tph84, 30.29M) 1.22473 → exp_n_0005 (tph128, 36.78M) 1.21739 = **−0.00734**, i.e.
+more tables help at 16k but cost +6.49M params (over budget). vs tied dense 16k (1.19665): +0.02074.
+FINAL 16k picture: best LUT slot = exp_n_0002 (H12/d64, 1.20823, 44.45M); split optimum plateaus H8–H12;
+tables and wider-d both help at 16k but only by spending params; **nothing crosses tied dense (1.19665)**
+and dense remains the most parameter-efficient. This closes the CompressionMHL FFN-slot line.

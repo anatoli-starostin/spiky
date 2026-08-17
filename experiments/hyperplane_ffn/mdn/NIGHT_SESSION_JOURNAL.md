@@ -93,6 +93,10 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
-## Workstream 1 (FFN-slot line) — pending exp_n_0005 completion (still training).
+## Workstream 1 (FFN-slot line) — DONE, line closed.
 
-_(updated as the session proceeds)_
+exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
+(exp_n_0004 1.21738), both beat H6 (exp_n_0003 1.21994) — split optimum is a plateau H8–H12 ≈ 1.2174,
+not a peak at H12. tph84→128 at H12/d32 = −0.00734 (exp_n_0001 1.22473 → 1.21739), via +6.49M params.
+vs tied dense 16k 1.19665: +0.0207 — no crossover. Best 16k LUT slot stays exp_n_0002 (H12/d64, 1.20823,
+44.45M). CompressionMHL FFN-slot line CLOSED per instruction (no more FFN-slot runs). Committed+pushed.

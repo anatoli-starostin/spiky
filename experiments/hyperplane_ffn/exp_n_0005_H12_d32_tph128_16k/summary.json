@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0005_H12_d32_tph128_16k",
+  "best_val_bpb": 1.21738529273102,
+  "final_val_bpb": 1.21738529273102,
+  "total_params": 36780288,
+  "training_time_hours": 1.621
+}
