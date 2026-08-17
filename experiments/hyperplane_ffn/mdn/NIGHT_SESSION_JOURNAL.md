@@ -93,6 +93,19 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
+## BASELINE SWITCH → vanilla backbone (owner, task ae7edd72)
+
+exp070 (CompressionMHL LUT-FFN backbone) confounds the unembedder test → switched ALL MDN runs to a
+**VANILLA dense-GELU-FFN backbone**. Scanned every on-disk checkpoint: only two vanilla (ffn_type=dense)
+checkpoints load into our flex backbone with **0 key mismatches** — **exp073** (tied dense, 16k, depth6/384)
+and **exp055** (tied dense, 4k). The untied vanilla runs exp003 (1.20144) and exp032 are from the OLD
+config/model schema (no ffn_type field) and FAIL to load into the flex MinimalGPT — not usable without a
+schema shim. So the best loadable vanilla backbone = **exp073** (16k, fully trained). Recomputed its
+dense-head baseline with our own eval: **val_bpb 1.19832** (matches the reported 1.19665 up to eval
+sampling). Backbone is tied (head==tok_emb) — its backbone FFN is still genuine vanilla-dense; warm-PCA
+init uses the tied W. **Baseline changed: exp070 (LUT-FFN, 1.23103) → exp073 (vanilla dense, 1.19832).**
+Re-pointed the MDN configs at exp073 (SMOKE: loads 0/0, warm init OK) and re-ran the plan on it.
+
 ## MDN research continuation (owner, task a294eda8) — rank instrumentation + longer/joint runs
 
 - **Step 1 DONE:** effective-rank diagnostic (spec §6) wired into `train_head.py` — SVD of the mean-centered
