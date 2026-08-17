@@ -101,6 +101,22 @@ M-component mixture is meant to recover). Authorized to proceed. Plan: (1) build
 (2) E1 frozen-backbone cold 4k = exp_n_0006; (3) M=1 vs M=8 load-bearing test = exp_n_0007; (4) 16k
 confirm exp_n_0008 if a probe is within striking distance. GPU serial. Baseline = exp070 untied head.
 
+### MDN head build + E1 (post-override)
+
+- `mdn/mdn_head.py` — drop-in Multi-Map 3D Unembedder. N=11/M=8 = **1,422,112 params = 8.85× < dense
+  12,582,912**. Unit test (`test_mdn_head.py`) passes: param-count, shapes [B,d]→[B,V] & [B,T,d]→[B,T,V],
+  finite nonzero grads on all params, softmax normalization, decorrelation scalar.
+- Two perf fixes were needed to make training tractable: (1) gradient-checkpoint the forward over batch
+  chunks (else the 88 per-(m,n) [b,V] activations OOM at ~118GB); (2) replace the [b,M,V,3] broadcast +
+  einsum with the **expanded-Mahalanobis matmul** form (q = xᵀΛx − 2xᵀΛμ + μᵀΛμ via [V,small]×[small,bM]
+  GEMMs) + vectorize over M. Net ~13× speedup: 24s/step → **~1.8s/step** (E1 4k ≈ 2h). Numerically
+  identical (test loss 6.9076 unchanged across rewrites).
+- `mdn/train_head.py` — E1/E2 trainer (frozen/joint backbone + MDN head, AdamW two-group [X,b,P.bias
+  no-wd; P.weight wd], warmup+cosine, grad-clip 1.0, manual bpb eval). `build_unigram.py` →
+  `unigram_logfreq.npy` (6.55M tokens, 32393/32768 seen) for b init. TRITON_CACHE_DIR/MPLCONFIGDIR →
+  /tmp (cage: ~/.triton is read-only).
+- **exp_n_0006** (E1, cold, N11/M8, 4k, frozen backbone) RUNNING. exp_n_0007 (M=1) queued next (serial).
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
