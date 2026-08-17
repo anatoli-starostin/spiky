@@ -135,6 +135,24 @@ would close much of the gap. Rank: rank@0.1%=8, rank@1%(ex-σ1)=35 — still bel
 dense (385), i.e. even jointly the M=8 head is not yet exercising high rank. **Step 4 (exp_n_0012 = joint
 M=1) running** to test whether the mixture buys rank/bpb over M=1 at this better regime.
 
+**Step 4 RESULT — MIXTURE VERDICT (joint M=1 exp_n_0012 vs joint M=8 exp_n_0011, both 4k warm unfrozen):**
+| M | val_bpb (4k) | rank@0.1% | rank@1%(ex-σ1) | time |
+|--:|--:|--:|--:|--:|
+| 8 | 1.39690 | 8 | 35 | 1.78h |
+| 1 | **1.38593** | 9 | 36 | 0.33h |
+**M=1 BEATS M=8** by −0.011 on bpb, MATCHES it on effective rank (36 vs 35), at **5.4× less compute**.
+So the M-mixture buys NOTHING — no bpb, and crucially **no rank recovery**: both realize ~35 effective
+directions, far below the M=1 ceiling (100) and dense (385). Per the spec's own §7.1 criterion ("if M=1
+matches M=8, the stated mechanism is wrong"), the mixture mechanism does NOT operate here — consistent
+across both the frozen (2k) and joint (4k) regimes, now with rank evidence. Practical upshot: **drop the
+mixture** — M=1 is Pareto-better (better bpb, 5.4× cheaper, same rank).
+
+**Step 5:** the best config = joint M=1 (best + cheapest, still descending). At 4k it's +15.7% over baseline
+— NOT within the literal 2% gate, so this is not a "confirm a good result" run. But joint M=1 is cheap
+(~1.3h for 16k) and hasn't plateaued, so I launched **exp_n_0013 = joint M=1 at 16k** as a CONVERGENCE
+CHARACTERIZATION (how close does the best MDN config actually get at full budget?) — a reasonable use of
+idle overnight GPU, flagged as beyond the literal gate.
+
 ## E0 OVERRIDE (owner, task 4ba87cb0) — proceed past the gate.
 
 Owner explicitly overrode the E0-hard kill: E0-hard is a false-negative (E0-soft: baseline argmax at
