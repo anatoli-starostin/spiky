@@ -55,7 +55,11 @@ if X_INIT == 'warm':
     Wc = (Wdense - Wdense.mean(0)).cpu().numpy()
     _, S, Vt = np.linalg.svd(Wc, full_matrices=False)
     Xp = Wc @ Vt.T[:, :3 * N]                               # [V,3N] PCA coords
-    Xp = (Xp - Xp.mean(0)) / (Xp.std(0) + 1e-8)             # standardize columns
+    Xp = (Xp - Xp.mean(0)) / (Xp.std(0) + 1e-8)             # standardize columns (spec)
+    # Overall init scale: standardized (std 1) X with unit-precision init gives a huge initial
+    # Mahalanobis (Σ_n||x||^2 ~ 33 -> CE ~31). Scale to the cold regime (std ~0.02) so warm starts
+    # near-unigram like cold but keeps the PCA *directions*; L learns the precision/scale from there.
+    Xp = Xp * float(cfg.get('warm_x_scale', 0.02))
     x_init = Xp.reshape(V, N, 3)
 b_init = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unigram_logfreq.npy'))
 head = MDNHead(D, V, n_maps=N, n_mix=M, gamma_dec=GAMMA_DEC, x_init=x_init, b_init=b_init, device=DEVICE)
