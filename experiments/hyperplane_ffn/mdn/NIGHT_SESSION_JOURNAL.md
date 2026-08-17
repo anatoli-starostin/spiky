@@ -164,11 +164,11 @@ keeps the PCA *directions* while starting near-unigram; documented as `warm_x_sc
 | init | final val_bpb (2k) | vs cold |
 |------|--:|--:|
 | cold (exp_n_0006) | 1.62447 | — |
-| **warm PCA (exp_n_0008)** | **1.56668** | **−0.0578** |
+| **warm PCA (exp_n_0008)** | **1.58240** | **−0.0421** |
 
-Warm beats cold by 0.058 (still descending at step 2000). Per spec §4.5, a cold–warm gap of this size
+Warm beats cold by 0.042 (still descending at step 2000). Per spec §4.5, a cold–warm gap of this size
 says cold's weak number is substantially an **OPTIMIZATION** problem — the PCA-warm start finds a better
-basin — not a hard representational failure. BUT warm still sits +0.336 (+27% rel) above the baseline
+basin — not a hard representational failure. BUT warm still sits +0.351 (+29% rel) above the baseline
 1.231, so it's not just optimization either: the frozen backbone (optimized for a DENSE head) plus 2000
 undertrained steps both cap it. Verdict: the MDN head is representationally alive and optimization-sensitive;
 a real gate verdict needs a longer E1 and/or joint E2 (unfreeze the backbone), which was out of tonight's
@@ -181,7 +181,7 @@ At 2000 frozen-backbone steps (batch 8192, baseline = exp070 dense head 1.23103)
 |-----|------|--:|--:|------|
 | exp_n_0006 | cold | 8 | 1.62447 | undertrained, still descending |
 | exp_n_0007 | cold | 1 | 1.60401 | ~ties/beats M=8; 5.6× cheaper |
-| exp_n_0008 | warm | 8 | 1.56668 | best; −0.058 vs cold |
+| exp_n_0008 | warm | 8 | 1.58240 | best; −0.042 vs cold |
 
 Three honest reads: (1) the head LEARNS from cold (2.03→1.62 monotone) and is 8.85× smaller than the dense
 head — representationally alive. (2) The M-mixture does NOT help at this budget (M=1 ≥ M=8) — contradicts

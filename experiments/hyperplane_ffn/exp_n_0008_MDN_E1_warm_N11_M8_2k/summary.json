@@ -5,10 +5,10 @@
   "n_mix": 8,
   "x_init": "warm",
   "freeze_backbone": true,
-  "final_val_bpb": 1.5666828469749787,
-  "best_val_bpb": 1.5666828469749787,
+  "final_val_bpb": 1.5823955147184965,
+  "best_val_bpb": 1.5823955147184965,
   "head_params": 1422112,
   "dense_head_params": 12582912,
   "head_reduction": 8.848045723543574,
-  "training_time_hours": 1.8926095300912857
+  "training_time_hours": 1.9118298216660818
 }
