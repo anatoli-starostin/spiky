@@ -114,6 +114,24 @@ def eval_bpb(steps):
     return tot_nats / tot_bytes / math.log(2)
 
 
+@torch.no_grad()
+def effective_rank(n_ctx=2048, thresh=0.01):
+    """Spec §6: SVD the [n_ctx x V] logit matrix; count singular values > 1% of the largest.
+    Mean-center over contexts first (drops the shared bias/const/frequency direction), so the
+    count measures how many independent context-conditional directions the head spans. For M=1
+    this is bounded by ~9N (rank ceiling 9N+1 minus the removed const); M>1 can exceed it."""
+    vl = val_factory(); rows = []; got = 0
+    while got < n_ctx:
+        x, y = next(vl)
+        lg = head(model.hidden(x)).reshape(-1, V)
+        rows.append(lg); got += lg.shape[0]
+    L = torch.cat(rows, 0)[:n_ctx].float()
+    L = L - L.mean(0, keepdim=True)
+    s = torch.linalg.svdvals(L)
+    r = int((s > thresh * s[0]).sum().item())
+    return r, [round(float(v), 3) for v in s[:12]]
+
+
 if SMOKE:
     x, y = next(train_loader)
     h = hidden(x); logits = head(h)
@@ -153,10 +171,16 @@ for step in range(1, NSTEPS + 1):
         val_steps.append(step); val_bpbs.append(bpb); tr_losses.append(ema)
         print(f'step {step:6d} | loss={ema:.4f} | [VAL] bpb={bpb:.4f} | lr={lr:.2e}')
 
+eff_r, eff_s = effective_rank()
+rank_ceiling_m1 = 9 * N + 1
+print(f"[rank] effective rank@1% = {eff_r} (M=1 ceiling 9N+1={rank_ceiling_m1}, dense ceiling 385) "
+      f"top-sv={eff_s[:6]}")
 summary = dict(exp_name=cfg['exp_name'], baseline=os.path.basename(BASELINE), n_maps=N, n_mix=M,
                x_init=X_INIT, freeze_backbone=FREEZE, final_val_bpb=val_bpbs[-1], best_val_bpb=best,
                head_params=hp['total'], dense_head_params=DENSE_HEAD_PARAMS,
-               head_reduction=DENSE_HEAD_PARAMS / hp['total'], training_time_hours=(time.time() - t0) / 3600)
+               head_reduction=DENSE_HEAD_PARAMS / hp['total'],
+               effective_rank_1pct=eff_r, rank_ceiling_m1=rank_ceiling_m1, dense_rank_ceiling=385,
+               top_singular_values=eff_s, training_time_hours=(time.time() - t0) / 3600)
 json.dump(summary, open(os.path.join(EXP_DIR, 'summary.json'), 'w'), indent=2)
 fig, ax = plt.subplots(1, 2, figsize=(11, 4))
 ax[0].plot(val_steps, tr_losses); ax[0].set(title='train ce', xlabel='step'); ax[0].grid(True)
