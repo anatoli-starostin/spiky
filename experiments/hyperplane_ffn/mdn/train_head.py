@@ -157,6 +157,28 @@ def effective_rank(n_ctx=2048, thresh=0.01):
     return diag
 
 
+@torch.no_grad()
+def decorr_stats():
+    """How decorrelated the N per-map coordinate blocks of X actually became. Returns avg |corr|
+    BETWEEN maps (off-block) vs WITHIN a map (within-block off-diagonal), on standardized columns."""
+    if HEAD_TYPE != 'mdn':
+        return None
+    X = head.X.reshape(V, N * BLOCK).float()
+    Xz = (X - X.mean(0)) / (X.std(0) + 1e-6)
+    C = (Xz.t() @ Xz) / V                                   # [N*B, N*B] correlation
+    A = C.abs()
+    dB = N * BLOCK
+    inblock = torch.zeros(dB, dB, device=C.device, dtype=torch.bool)
+    for n in range(N):
+        inblock[BLOCK * n:BLOCK * n + BLOCK, BLOCK * n:BLOCK * n + BLOCK] = True
+    eye = torch.eye(dB, device=C.device, dtype=torch.bool)
+    offblock = ~inblock
+    within = inblock & ~eye
+    return dict(between_map_abs_corr=round(float(A[offblock].mean()), 4),
+                within_map_abs_corr=round(float(A[within].mean()), 4) if within.any() else 0.0,
+                between_map_max_abs=round(float(A[offblock].max()), 4))
+
+
 if SMOKE:
     x, y = next(train_loader)
     h = hidden(x); logits = head(h)
@@ -206,6 +228,7 @@ summary = dict(exp_name=cfg['exp_name'], baseline=os.path.basename(BASELINE), he
                head_params=hp['total'], dense_head_params=DENSE_HEAD_PARAMS,
                head_reduction=DENSE_HEAD_PARAMS / hp['total'],
                rank_ceiling_m1=rank_ceiling_m1, dense_rank_ceiling=385, rank_diag=rk,
+               decorr=decorr_stats(),
                training_time_hours=(time.time() - t0) / 3600)
 json.dump(summary, open(os.path.join(EXP_DIR, 'summary.json'), 'w'), indent=2)
 fig, ax = plt.subplots(1, 2, figsize=(11, 4))
