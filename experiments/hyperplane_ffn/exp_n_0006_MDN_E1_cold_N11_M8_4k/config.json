@@ -6,7 +6,7 @@
   "x_init": "cold",
   "freeze_backbone": true,
   "gamma_dec": 0.01,
-  "n_steps": 4096,
+  "n_steps": 2000,
   "device_batch_size": 16,
   "total_batch_size": 8192,
   "seq_len": 512,

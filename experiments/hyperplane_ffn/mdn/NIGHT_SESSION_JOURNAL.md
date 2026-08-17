@@ -115,7 +115,15 @@ confirm exp_n_0008 if a probe is within striking distance. GPU serial. Baseline 
   no-wd; P.weight wd], warmup+cosine, grad-clip 1.0, manual bpb eval). `build_unigram.py` →
   `unigram_logfreq.npy` (6.55M tokens, 32393/32768 seen) for b init. TRITON_CACHE_DIR/MPLCONFIGDIR →
   /tmp (cage: ~/.triton is read-only).
-- **exp_n_0006** (E1, cold, N11/M8, 4k, frozen backbone) RUNNING. exp_n_0007 (M=1) queued next (serial).
+- **Cost reality:** the head is memory-bound writing the [b,M,V] score tensor 88×/step; even after the
+  matmul rewrites it settles at ~2s/step at batch 8192 (was 24s at batch 24576 with the naive einsum).
+  To guarantee BOTH E1 and the M=1 load-bearing test finish within the night, I reduced scope to
+  **n_steps=2000, total_batch=8192** (a legitimate frozen-backbone plateau probe per the spec's "train to
+  plateau, far less than full pretraining"; the M=1-vs-M=8 comparison — the key deliverable — uses
+  identical settings so it's clean). Dir names still say "4k" but summary.json records the true n_steps=2000.
+- **exp_n_0006** (E1 cold N11/M8, 2000 steps, frozen) RUNNING (~1.1h). **exp_n_0007** (M=1) auto-queued to
+  run serially right after (a guard loop waits for exp_n_0006/summary.json). Cold loss falling fast
+  (7.95→7.70 in 3 steps).
 
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
