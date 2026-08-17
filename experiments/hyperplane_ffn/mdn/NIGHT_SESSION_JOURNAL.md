@@ -115,6 +115,20 @@ B3/N11 geometry. Scaling B,N lifts the rank (46→123, tracking B·N) and monoto
 = 1.25570 at 3.03× compression = **+4.8% over baseline at 4k, still descending**. 16k confirms of B5/N24
 (best MDN) and r124 (best control) launched for the converged, equal-budget comparison.
 
+### 16k CONFIRMS (converged, equal-budget) — the geometry advantage is REAL but MODEST
+
+| run | steps | val_bpb | rank(ex-σ1) | comp |
+|-----|------:|--------:|---:|-----:|
+| MDN B5/N24 (exp_n_0024) | 16k | **1.24520** (best 1.24301) | 122 | 3.03× |
+| low-rank r124 (exp_n_0025) | 16k | 1.26174 | 124 | 3.04× |
+
+At CONVERGENCE the MDN geometry still beats the matched-param low-rank-linear control, but by only
+**−0.0165** — NOT the −0.085 the 4k probe showed. The 4k gap overstated it: the low-rank control was simply
+undertrained at 4k (LR gained −0.079 from 4k→16k; MDN only −0.011). So the honest head-diagonal verdict is:
+**the Gaussian geometry adds real but MODEST value (~−0.017 bpb) at matched params & converged budget** — a
+genuine win, not a dominant one. Neither reaches the 2% target: MDN B5/N24 = +3.9% over dense 1.19832, LR
+r124 = +5.3%. Lesson: always compare at converged budget — 4k probes flatter the more-nonlinear head.
+
 ## FINAL MDN VERDICT (vanilla backbone, task a294eda8) — SUPERSEDED by the geometry sweep above
 
 Baseline = vanilla dense head exp073 = **1.19832**. Best MDN = joint M=1, N=11, 16k = **1.37632 (best)** /
