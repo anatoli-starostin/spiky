@@ -72,33 +72,45 @@ class MDNHead(nn.Module):
                 L[..., r, c] = torch.exp(torch.clamp(raw6[..., k], -self.diag_clamp, self.diag_clamp))
             else:
                 L[..., r, c] = raw6[..., k]
-        Lam = L @ L.transpose(-1, -2)                        # [B,M,N,3,3] precision (PD)
         logdet_half = diag_raw.sum(-1)                       # [B,M,N]  (= sum_i log L_ii)
-        return logpi, mu, logdet_half, Lam
+        return logpi, mu, logdet_half, L                     # return Cholesky L directly
 
     def _logits_rows(self, h):
-        """h [b,d] -> logits [b,V]. The (m,n) loop; out-of-place (autograd-safe)."""
-        logpi, mu, logdet_half, Lam = self._unpack(h)
-        comps = []
-        for m in range(self.M):
-            s = logpi[:, m:m + 1]                            # [b,1] mixture log-weight
-            for n in range(self.N):
-                xn = self.X[:, n, :]                         # [V,3]
-                dv = xn.unsqueeze(0) - mu[:, m, n, :].unsqueeze(1)   # [b,V,3]
-                q = torch.einsum('bvi,bij,bvj->bv', dv, Lam[:, m, n], dv)  # [b,V]
-                s = s + (logdet_half[:, m, n:n + 1] - 0.5 * q)          # [b,V] out-of-place
-            comps.append(s)
-        return torch.logsumexp(torch.stack(comps, dim=1), dim=1) + self.b.unsqueeze(0)  # [b,V]
+        """h [b,d] -> logits [b,V]. Loops only over the N maps, vectorizing the M components into
+        one batched einsum per map (16-32x fewer kernel launches than the m,n double loop)."""
+        logpi, mu, logdet_half, L = self._unpack(h)          # mu [b,M,N,3], L [b,M,N,3,3]
+        b = h.shape[0]; bm = b * self.M
+        Lam = L @ L.transpose(-1, -2)                        # [b,M,N,3,3] precision
+        # q_mn(v) = x^T Λ x - 2 x^T Λμ + μ^T Λμ  (expanded Mahalanobis -> only [V,small]x[small,bM] matmuls)
+        logphi = logdet_half.sum(2).unsqueeze(-1)            # [b,M,1]
+        for n in range(self.N):
+            xn = self.X[:, n, :]                             # [V,3]
+            Ln = Lam[:, :, n]                                # [b,M,3,3]
+            mn = mu[:, :, n, :]                              # [b,M,3]
+            xquad = torch.stack([xn[:, 0] ** 2, xn[:, 1] ** 2, xn[:, 2] ** 2,
+                                 2 * xn[:, 0] * xn[:, 1], 2 * xn[:, 0] * xn[:, 2],
+                                 2 * xn[:, 1] * xn[:, 2]], dim=1)         # [V,6]
+            lam6 = torch.stack([Ln[..., 0, 0], Ln[..., 1, 1], Ln[..., 2, 2],
+                                Ln[..., 0, 1], Ln[..., 0, 2], Ln[..., 1, 2]], dim=-1)   # [b,M,6]
+            t1 = torch.matmul(xquad, lam6.reshape(bm, 6).t()).reshape(self.V, b, self.M).permute(1, 2, 0)  # [b,M,V]
+            Lammu = torch.matmul(Ln, mn.unsqueeze(-1)).squeeze(-1)       # [b,M,3]
+            t2 = torch.matmul(xn, Lammu.reshape(bm, 3).t()).reshape(self.V, b, self.M).permute(1, 2, 0)    # [b,M,V]
+            t3 = (mn * Lammu).sum(-1).unsqueeze(-1)                      # [b,M,1]
+            logphi = logphi - 0.5 * (t1 - 2.0 * t2 + t3)
+        return torch.logsumexp(logphi + logpi.unsqueeze(-1), dim=1) + self.b.unsqueeze(0)  # [b,V]
 
-    def forward(self, h, chunk=128):
+    def forward(self, h, chunk=1024):
         """h [.., d] -> logits [.., V]. When training, gradient-checkpoints over batch chunks so
         the 88 per-(m,n) [b,V] activations are recomputed in backward instead of all held (else OOM)."""
         shp = h.shape[:-1]
         h = h.reshape(-1, self.d)
-        if self.training and chunk and h.shape[0] > chunk and torch.is_grad_enabled():
+        if chunk and h.shape[0] > chunk:
+            train_cp = self.training and torch.is_grad_enabled()
             outs = []
             for i in range(0, h.shape[0], chunk):
-                outs.append(cp.checkpoint(self._logits_rows, h[i:i + chunk], use_reentrant=False))
+                hc = h[i:i + chunk]
+                oc = cp.checkpoint(self._logits_rows, hc, use_reentrant=False) if train_cp else self._logits_rows(hc)
+                outs.append(oc)
             logits = torch.cat(outs, 0)
         else:
             logits = self._logits_rows(h)
