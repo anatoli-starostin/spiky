@@ -93,6 +93,17 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
+## MDN research continuation (owner, task a294eda8) — rank instrumentation + longer/joint runs
+
+- **Step 1 DONE:** effective-rank diagnostic (spec §6) wired into `train_head.py` — SVD of the mean-centered
+  [n_ctx×V] logit matrix, count sv>1% max; logs `effective_rank_1pct` + M=1 ceiling (9N+1=100) + dense
+  ceiling 385 + top singular values in every summary. (Untrained head → rank 1, one dominant direction.)
+- **Step 2 RUNNING:** longer warm-PCA E1, M=8. Owner asked 8000 steps (~4.4h at ~2s/step); I run **5000**
+  (~2.8h) as exp_n_0010 — a clear plateau read + rank at a much better budget while preserving GPU time for
+  the PRIMARY joint E2 (step 3) and the M=1 rank verdict (step 4). Serial GPU.
+- Steps 3–5 (joint E2 warm 4k = exp_n_0011; M=1 rank verdict = exp_n_0012; conditional 16k confirm =
+  exp_n_0013) follow serially, each decided on the prior result.
+
 ## E0 OVERRIDE (owner, task 4ba87cb0) — proceed past the gate.
 
 Owner explicitly overrode the E0-hard kill: E0-hard is a false-negative (E0-soft: baseline argmax at
