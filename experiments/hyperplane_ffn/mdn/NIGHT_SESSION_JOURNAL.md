@@ -174,6 +174,24 @@ undertrained steps both cap it. Verdict: the MDN head is representationally aliv
 a real gate verdict needs a longer E1 and/or joint E2 (unfreeze the backbone), which was out of tonight's
 time budget.
 
+### MDN VERDICT (tonight, reduced budget) — promising, not conclusive
+
+At 2000 frozen-backbone steps (batch 8192, baseline = exp070 dense head 1.23103):
+| run | init | M | val_bpb | note |
+|-----|------|--:|--:|------|
+| exp_n_0006 | cold | 8 | 1.62447 | undertrained, still descending |
+| exp_n_0007 | cold | 1 | 1.60401 | ~ties/beats M=8; 5.6× cheaper |
+| exp_n_0008 | warm | 8 | 1.56668 | best; −0.058 vs cold |
+
+Three honest reads: (1) the head LEARNS from cold (2.03→1.62 monotone) and is 8.85× smaller than the dense
+head — representationally alive. (2) The M-mixture does NOT help at this budget (M=1 ≥ M=8) — contradicts
+the spec's load-bearing claim, but confounded by undertraining of M=8's 8× larger P; the §6 effective-rank
+diagnostic at convergence is the real test (not run). (3) Warm > cold by 0.058 → cold's weak absolute number
+is substantially OPTIMIZATION, not geometry. NONE reach the loose 10% E1 gate (all +27–32% rel over
+baseline) but ALL are undertrained on a dense-optimized frozen backbone. See `mdn/E1_trajectories.png`.
+Next to settle it: longer E1 (5–10k steps) and/or joint E2 (unfreeze backbone) + the effective-rank
+instrumentation — beyond tonight's compute budget.
+
 ## Workstream 1 (FFN-slot line) — DONE, line closed.
 
 exp_n_0005 (H12/d32/tph128, 16k, 36.78M) = **1.21739**. Head-count gain **saturates**: H12 ties H8
