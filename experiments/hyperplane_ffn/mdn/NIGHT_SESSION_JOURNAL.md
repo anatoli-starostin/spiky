@@ -93,6 +93,30 @@ higher and less reversible than a few hours' delay.)
 
 ---
 
+## FINAL MDN VERDICT (vanilla backbone, task a294eda8) — viable compression, steep ppl cost, rank-capped
+
+Baseline = vanilla dense head exp073 = **1.19832**. Best MDN = joint M=1, N=11, 16k = **1.37632 (best)** /
+1.38200 (final), head **1,152,612 = 10.9× < dense 12.58M**, still.
+| run | regime | M | steps | val_bpb | rank@1%(ex-σ1) |
+|-----|--------|--:|------:|--:|--:|
+| exp_n_0010 | frozen E1 | 8 | 5000 | 1.50480 (plateau) | ~ (rank@1%=1) |
+| exp_n_0011 | joint E2 | 8 | 4000 | 1.39690 | 35 |
+| exp_n_0012 | joint E2 | 1 | 4000 | 1.38593 | 36 |
+| exp_n_0013 | joint E2 | 1 | 16000 | **1.37632 best** | 35 |
+
+**Verdict:** (1) The MDN 3D-unembedder WORKS as a large compression — 10.9× smaller head — and joint
+training + warm init are essential (frozen E1 plateaus at 1.505; joint reaches 1.376). (2) But it converges
+to **+0.178 / +15% rel over the dense baseline** and does NOT approach the 2% target — worse than the
+codebook-method reference (~4% for big reductions) the spec cited. (3) The M-mixture is a DEAD END —
+M=1 ≥ M=8 on bpb AND rank across every regime; no rank recovery (spec §7.1 mechanism refuted). (4) ROOT
+CAUSE = the **rank cap**: the head realizes only ~35 effective logit directions vs dense 385, regardless of
+M or budget — the 3D-blocked-Gaussian geometry simply cannot span enough directions. Schedule note: the 4k
+"steep descent" was largely the aggressive 4k cosine; on the full 16k schedule it plateaus ~1.38 (16k only
+−0.01 vs 4k). CONCLUSION: interesting, honest operating point (10.9× head compression at +15% ppl), but
+not competitive with dense at matched quality, and the mixture idea should be dropped. To push further
+you'd need a higher-rank map (bigger block dim than 3, or more maps N≫11) — which erodes the compression
+that is the whole point.
+
 ## BASELINE SWITCH → vanilla backbone (owner, task ae7edd72)
 
 exp070 (CompressionMHL LUT-FFN backbone) confounds the unembedder test → switched ALL MDN runs to a
