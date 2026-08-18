@@ -135,6 +135,7 @@ class MinimalBlock(nn.Module):
                 nap=LUT_NAP, tph=LUT_TPH, n_heads=LUT_HEADS,
                 joint_head_compression=LUT_JOINT, forward_mode=LUT_FWD,
                 use_bf16=LUT_BF16, initial_weights_noise=LUT_NOISE,
+                learnable_temps=False,   # pinned: fixed-temp (ortho A/B vs 0031; default flipped to True)
                 random_seed=LUT_SEED + layer_idx)
 
     def forward(self, x, cos, sin):

@@ -583,7 +583,7 @@ class FastMultiHeadLut(nn.Module):
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         soft_score_temp: float = 0.5,
         select_temp: float = 0.5,
-        learnable_temps: bool = False,
+        learnable_temps: bool = True,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
         device: Optional[torch.device] = None,
