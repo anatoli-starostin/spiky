@@ -253,6 +253,15 @@ anything a slight regression). The ~0.03 LUT-vs-dense gap at 16k H16/d24 is not 
 artifact; it's the routing/capacity of the slot itself. Next: exp_n_0034 (nap5/tph128, same recipe) tests
 whether the nap/tph split moves it.
 
+**RESULT — exp_n_0034 (nap5/tph128, same MeanAbsNorm+Lion recipe as exp_n_0035, 16k) = 1.235338** (best=final,
+1.61 h, 27,343,296 params). **nap/tph A/B verdict (fixed 2^nap·tph=4096 budget): nap6/tph64 (exp_n_0035,
+1.231325) BEATS nap5/tph128 (exp_n_0034, 1.235338) by +0.0040** — finer routing RESOLUTION (more clusters/table)
+beats table MULTIPLICITY (more tables/head) at fixed budget. Both use the Lion+MeanAbsNorm recipe and both are
+WORSE than plain-AdamW learnable-temp exp_n_0033 (1.228762): 0034 +0.0066, 0035 +0.0026 — reconfirming the
+best-practice pairing hurts here. Ranking so far (H16/d24, 16k): exp_n_0033 1.228762 &lt; exp_n_0030 1.229361
+&lt; exp_n_0035 1.231325 &lt; exp_n_0034 1.235338; all ~+0.032–0.039 over tied dense (1.19665). Next in queue:
+0037 (drop attn out_proj) → 0036 (orthogonal init + clean AdamW).
+
 ### New AdamW baseline + orthogonal head-init (exp_n_0036)
 
 **exp_n_0036 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0035's train.py with three changes, running after
