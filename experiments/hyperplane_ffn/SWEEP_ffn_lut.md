@@ -311,7 +311,7 @@ smallest LUT gap yet at H16/d24, vs 0033's +0.0321). New ranking: **exp_n_0038 1
 
 ### Single-slot width probe: H8/d48 tph128 (exp_n_0039) — BUILT, not launched
 
-**exp_n_0039 (H8/d48/tph128/nap6, tied, 16k; dir still named H16_d24_tph256 — a kept misnomer) — clone of
+**exp_n_0039 (H8/d48/tph128/nap6, tied, 16k; dir exp_n_0039_H8_d48_tph128_16k) — clone of
 exp_n_0033 evolved to a single-slot H8/d48/tph128 probe.** Same single FFN slot as 0033, but lut_n_heads=8,
 inner_in=inner_out=48, tph=128, nap6. H·d = 8·48 = 384 (so compress/decompress stay 384→384). Motivation
 (gpustar's exp_g_0006): H8/d48 matches H16/d24 in loss but ~28% faster — this tests that width at 2× tables in a

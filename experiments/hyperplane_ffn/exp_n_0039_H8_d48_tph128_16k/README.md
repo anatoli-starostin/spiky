@@ -1,9 +1,5 @@
 # exp_n_0039 — single-slot H8/d48, tph128, nap6, tied, 16k
 
-> **NOTE:** the dir name still reads `H16_d24_tph256` (from the first build) but the experiment is now
-> **H8/d48/tph128** (single slot). Dir/config exp_name kept for path stability; actual config below. (Can be
-> renamed on request.)
-
 Clone of **exp_n_0033**'s recipe/config/train.py, evolved to a **single-slot H8/d48/tph128** probe: same single
 FFN slot `x = x + CompressionMHL(ln2(x))`, but **lut_n_heads=8, inner_in=inner_out=48, tph=128, nap6** (was
 H16/d24 in 0033). **H·d = 8·48 = 384 still**, so compress stays Linear(384→384) and decompress Linear(384→384),
