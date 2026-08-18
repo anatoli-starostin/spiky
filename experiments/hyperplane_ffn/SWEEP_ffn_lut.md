@@ -252,3 +252,17 @@ and a compress/decompress bottleneck, the extra MeanAbsNorm + sign-based table u
 anything a slight regression). The ~0.03 LUT-vs-dense gap at 16k H16/d24 is not an optimizer/normalization
 artifact; it's the routing/capacity of the slot itself. Next: exp_n_0034 (nap5/tph128, same recipe) tests
 whether the nap/tph split moves it.
+
+### New AdamW baseline + orthogonal head-init (exp_n_0036)
+
+**exp_n_0036 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0035's train.py with three changes, running after
+exp_n_0034.** (1) **AdamW everywhere** — Lion hybrid removed; one standard AdamW over all params (lr 3e-4, betas
+(0.9,0.95), eps 1e-8; 2-D weights → decay wd 0.1, LUT tables+temps+1-D → nodecay wd 0, matching exp_n_0033's
+single-AdamW convention). (2) **No MeanAbsNorm** (`lut_pre_meanabsnorm=False`; the block's LayerNorm pre-norm
+stays). (3) **NEW: orthogonal per-head init of the compress projection** — each head's `[24,384]` block of
+`compress.weight` initialised with `nn.init.orthogonal_` (orthonormal rows; verified worst `max|BBᵀ−I|`=8.9e-07
+over all 16 heads). Params = 27,343,296 (identical; orthogonal init changes values not counts). Serial order
+0033 done → 0035 (1.231325) → 0034 → 0036. Question: with the Lion+MeanAbsNorm best-practice pairing shown NOT
+to help (exp_n_0035 regressed to 1.231325 vs plain-AdamW exp_n_0033's 1.228762), does orthonormal head-init give
+a clean AdamW baseline any edge on the ~0.032 gap to dense? exp_n_0034 stays apples-to-apples with exp_n_0035
+(Lion+MeanAbsNorm), untouched.
