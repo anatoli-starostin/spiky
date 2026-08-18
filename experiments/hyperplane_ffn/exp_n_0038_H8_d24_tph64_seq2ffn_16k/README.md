@@ -1,8 +1,5 @@
 # exp_n_0038 — sequential TWO half-head-count CompressionMHL sub-blocks per FFN slot, H8/d24/tph64, nap6, tied, 16k
 
-> **NOTE:** the dir name still says `tph32` (from the first build) but **tph is now 64** in both sub-blocks
-> (updated per task). Dir/name kept for path stability; the actual config is H8/d24/**tph64**/nap6.
-
 Clone of **exp_n_0033**'s recipe/config/train.py with **one architectural change**: the single FFN-slot op
 `x = x + CompressionMHL(ln2(x))` is replaced by a **sequential two-sub-block** structure inside every
 transformer block — two separate CompressionMHL modules stacked, each with its OWN pre-LayerNorm and its OWN

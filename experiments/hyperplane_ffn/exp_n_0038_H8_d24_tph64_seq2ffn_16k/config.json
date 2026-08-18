@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp_n_0038_H8_d24_tph32_seq2ffn_16k",
+  "exp_name": "exp_n_0038_H8_d24_tph64_seq2ffn_16k",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": true,

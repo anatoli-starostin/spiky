@@ -288,7 +288,7 @@ LUT point.**
 
 ### Depth over width: sequential two half-head-count FFN sub-blocks (exp_n_0038) — BUILT, not launched
 
-**exp_n_0038 (seq-2 FFN, H8/d24/tph64/nap6, tied, 16k — dir name still says tph32 but tph is now 64) — clone
+**exp_n_0038 (seq-2 FFN, H8/d24/tph64/nap6, tied, 16k; dir exp_n_0038_H8_d24_tph64_seq2ffn_16k) — clone
 of exp_n_0033 with a SEQUENTIAL two-sub-block FFN slot.** Each block's single `x = x + CompressionMHL(ln2(x))`
 becomes two stacked CompressionMHL, each with its own pre-LN + residual: `h = x + ffn_a(ln2_a(x)); out = h +
 ffn_b(ln2_b(h))`. Each sub-block is **H8/tph64** (half the head count of 0033's H16, same tph64; d24, nap6
