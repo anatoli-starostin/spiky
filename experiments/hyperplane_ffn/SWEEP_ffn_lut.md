@@ -290,3 +290,13 @@ Linear(384→384): 884,736 weight from the decay group 17,891,328 → 17,006,592
 9,451,968 → 9,449,664). LUT tables unchanged 9,437,184. = 1.140× tied dense. **Serial order: 0034 (done) → 0037
 → 0036.** 0034 and 0036 untouched. Question: is the learned compression matrix doing real work, or does routing
 FastMHL on raw fixed head-partitions of the residual stream match it (−0.89M params for free)?
+
+**RESULT — exp_n_0037 STOPPED EARLY @ step 10000/16000 (last val_bpb = 1.282485). Answer: the learned
+compression matrix is doing REAL work — it can't be deleted.** The fixed-partition slot (frozen axis-aligned
+head-partition, no learned compress) tracked a **steady ~+0.025 bpb BEHIND exp_n_0033** (learned compression =
+learnable-hyperplane routing) at matched steps — +0.02556 @9600, +0.02511 @9800, +0.02507 @10000, flat across
+the whole run with no sign of closing. That gap is ~6–10× the ~0.002–0.004 spreads between all the
+recipe/optimizer variants (0030/0033/0035), so it's a real architectural effect, not noise: **replacing the
+learned compress Linear with a fixed contiguous partition costs ~0.025 bpb** — the compression matrix earns its
+0.89M params. Stopped early once the trajectory was unambiguous (GPU freed). exp_n_0036 (orthogonal-init + clean
+AdamW) is HELD pending this call.

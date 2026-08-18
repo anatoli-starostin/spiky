@@ -1,5 +1,12 @@
 # exp_n_0037 — H16/d24, FIXED-PARTITION FFN slot (no learned compress), AdamW, tph64/nap6, tied, 16k
 
+> **STOPPED EARLY @ step 10000/16000 (last val_bpb = 1.282485).** Verdict: the fixed-partition FFN slot
+> (frozen axis-aligned head-partition, no learned compression) tracked a **steady ~+0.025 bpb behind
+> exp_n_0033** (learned compression = learnable-hyperplane routing) at matched steps (+0.02556 @9600, +0.02511
+> @9800, +0.02507 @10000 — flat, not closing). That's ~6–10× the spread between recipe variants, so it's a real
+> architectural effect: **the learned compression matrix is doing real work and can't be deleted** — a fixed
+> partition costs ~0.025 bpb. Killed once unambiguous to free the GPU; exp_n_0036 held pending this result.
+
 **NOTE — the dir name `no_attn_outproj` is a MISNOMER kept for queue/waiter stability.** This slot was
 re-tasked from option B (drop attention out_proj) to **option A** (per the owner), keeping the same
 experiment name/dir so all serial-queue waiter wiring stays intact (0034 → 0037 → 0036). This experiment
