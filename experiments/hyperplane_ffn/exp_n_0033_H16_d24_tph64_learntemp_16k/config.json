@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp_n_0033_H16_d24_tph128_learntemp_16k",
+  "exp_name": "exp_n_0033_H16_d24_tph64_learntemp_16k",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": true,
@@ -21,7 +21,7 @@
   "lut_inner_in_dim": 24,
   "lut_inner_out_dim": 24,
   "lut_n_anchor_pairs": 6,
-  "lut_tables_per_head": 128,
+  "lut_tables_per_head": 64,
   "lut_n_heads": 16,
   "lut_joint_head_compression": false,
   "lut_forward_mode": "hard",
