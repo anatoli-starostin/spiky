@@ -211,3 +211,14 @@ dense) but keeps FLOPs identical (compress/decompress unchanged, routing is sign
 LUT slot exp_n_0002 (H12/d64, 1.20823, 44.45M) it's +0.0021 (bigger AND slightly worse), and vs tied dense
 (1.19665) +0.0137 — still no crossover. So more clusters help per the nap6→7 comparison, but not enough to
 beat the best point or dense, and the gain costs ~2× table params.
+
+### H16 head-count push + learnable-temps A/B (exp_n_0030 / exp_n_0033)
+
+**exp_n_0030 (H16/d24/tph64, fixed-temp, 16k) = 1.22936** (27,343,104 params, 1.18× dense — the leanest
+point). vs exp_n_0004 (H8/d48/tph128, 1.21738) **+0.012** and vs exp_n_0005 (H12/d32/tph128, 1.21739) +0.012:
+pushing head count to H16 with fewer tables/head (tph64) and narrower d=24 UNDERPERFORMS the H8/H12 tph128
+points — head count past ~H8-12 with reduced tables does not help; the tables budget matters more. vs tied
+dense (1.19665) +0.0327. This is the FIXED-TEMP baseline for the learnable-temps A/B: exp_n_0033 (identical
+H16/d24/tph64/nap6/tied but learnable_temps=True) runs next to test whether learnable soft/select temps —
+which every strong past LUT result (exp010=1.19399) had, and which the current CompressionMHL line had
+dropped — recover loss. (learnable_temps is now the default going forward; exp_n_0030 ran before the flip.)

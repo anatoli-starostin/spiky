@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0030_H16_d24_tph64_16k",
+  "best_val_bpb": 1.2293612909776641,
+  "final_val_bpb": 1.2293612909776641,
+  "total_params": 27343104,
+  "training_time_hours": 1.267
+}
