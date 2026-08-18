@@ -309,6 +309,18 @@ smallest LUT gap yet at H16/d24, vs 0033's +0.0321). New ranking: **exp_n_0038 1
 < exp_n_0030 1.229361 < exp_n_0035 1.231325 < exp_n_0034 1.235338.** Takeaway: **stacking routed FFN sub-blocks
 (depth) is the first lever that moves the LUT slot toward dense** — worth pushing (3+ sub-blocks? deeper/narrower?).
 
+### Single-slot capacity probe: 4× tables in ONE slot (exp_n_0039) — BUILT, not launched
+
+**exp_n_0039 (H16/d24/tph256/nap6, tied, 16k) — clone of exp_n_0033 with ONE knob changed: tph 64 → 256 (4×
+tables), single slot UNCHANGED.** A capacity reachability probe: does throwing 4× raw table count at one wide
+slot close the gap to dense, or does a single slot saturate? Single-slot forward identical to 0033 (only tph
+differs). **LUT tables = 16·256·2⁶·24/layer × 6 = 37,748,736 (exactly 4× 0033's 9,437,184). Params =
+55,654,848 (SMOKE-confirmed)** = 0033 + 28,311,552 (all extra tables) = 2.398× tied dense (by far the heaviest
+LUT FFN in the sweep; vs exp_n_0004's 36,780,288, +18.9M). decay(2-D)=17,891,328 (identical to 0033),
+nodecay=37,763,520 [tables 37,748,736]. Built + SMOKE-passed; awaiting launch. Question: does 4× capacity in one
+slot beat exp_n_0033 (1.228762) / exp_n_0038 (seq-2 depth-win, 1.2259986) — or does raw width saturate, leaving
+depth as the real lever?
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's
