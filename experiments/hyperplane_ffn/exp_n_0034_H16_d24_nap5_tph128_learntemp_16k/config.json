@@ -28,5 +28,11 @@
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
-  "lut_learnable_temps": true
+  "lut_learnable_temps": true,
+  "lut_pre_meanabsnorm": true,
+  "lut_lr": 0.0002,
+  "lut_betas": [
+    0.9,
+    0.95
+  ]
 }

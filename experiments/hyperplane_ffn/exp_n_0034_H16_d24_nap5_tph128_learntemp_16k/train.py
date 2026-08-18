@@ -62,6 +62,9 @@ LUT_FWD    = cfg.get('lut_forward_mode', 'hard')
 LUT_BF16   = cfg.get('lut_use_bf16', False)
 LUT_NOISE  = cfg.get('lut_init_weights_noise', 1e-3)
 LUT_LEARNTEMP = bool(cfg.get('lut_learnable_temps', False))   # learnable T_soft/T_sel per head
+LUT_PREMAN = bool(cfg.get('lut_pre_meanabsnorm', False))      # MeanAbsNorm on compressed z before FastMHL
+LUT_LR     = float(cfg.get('lut_lr', 2e-4))                    # Lion lr for the LUT-table param group
+LUT_BETAS  = tuple(cfg.get('lut_betas', (0.9, 0.95)))         # Lion betas
 LUT_SEED   = cfg.get('lut_base_seed', 1000)
 
 BASE_DIR = get_base_dir()
@@ -135,7 +138,7 @@ class MinimalBlock(nn.Module):
                 nap=LUT_NAP, tph=LUT_TPH, n_heads=LUT_HEADS,
                 joint_head_compression=LUT_JOINT, forward_mode=LUT_FWD,
                 use_bf16=LUT_BF16, initial_weights_noise=LUT_NOISE,
-                learnable_temps=LUT_LEARNTEMP,
+                learnable_temps=LUT_LEARNTEMP, pre_lut_meanabsnorm=LUT_PREMAN,
                 random_seed=LUT_SEED + layer_idx)
 
     def forward(self, x, cos, sin):
@@ -190,20 +193,71 @@ class MinimalGPT(nn.Module):
         return logits
 
 
-def setup_optimizer(model, lr, weight_decay):
-    lut_ids = {id(p) for m in model.modules() if isinstance(m, FastMultiHeadLut)
-               for p in m.parameters(recurse=False)}
-    decay, nodecay = [], []
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (verbatim from exp006-017 / lutgpt). m<-b2*m+(1-b2)*g; update<-sign(b1*m+(1-b1)*g);
+    p<-p*(1-lr*wd)-lr*update. fp32 master+momentum for low-precision params (fp32 tables use plain branch)."""
+    def __init__(self, params, lr=2e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self):
+        for grp in self.param_groups:
+            lr, (b1, b2), wd = grp['lr'], grp['betas'], grp['weight_decay']
+            for p in grp['params']:
+                if p.grad is None:
+                    continue
+                st = self.state[p]
+                is_low = p.dtype != torch.float32
+                if 'exp_avg' not in st:
+                    st['exp_avg'] = torch.zeros_like(p, dtype=torch.float32)
+                    if is_low:
+                        st['master'] = p.detach().to(torch.float32).clone()
+                m = st['exp_avg']
+                g_f = p.grad if p.grad.dtype == torch.float32 else p.grad.to(torch.float32)
+                if is_low:
+                    master = st['master']
+                    if wd != 0:
+                        master.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    master.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
+                    p.data.copy_(master)
+                else:
+                    if wd != 0:
+                        p.mul_(1.0 - lr * wd)
+                    update = (m * b1 + g_f * (1.0 - b1)).sign_()
+                    p.add_(update, alpha=-lr)
+                    m.mul_(b2).add_(g_f, alpha=1.0 - b2)
+
+
+def setup_optimizers(model, lr, lut_lr, lut_betas, weight_decay):
+    """Hybrid (historical best-practice, exp010 / examples/lutgpt): ONLY the FastMHL LUT-table tensors
+    (`weights`, ndim>=3) -> Lion (wd 0); everything else -> AdamW (2-D wd, 1-D no-wd). The 0-dim learnable
+    log-temp scalars are therefore on AdamW-nodecay, exactly as exp010/lutgpt route them (they group the
+    ndim>=3 tables to Lion and let scalar temps fall through to AdamW). Returns [adam, lion]."""
+    lut_ids = {id(m.weights) for m in model.modules() if isinstance(m, FastMultiHeadLut)}
+    lut_params, decay, nodecay = [], [], []
     for p in model.parameters():
         if not p.requires_grad:
             continue
-        (nodecay if (id(p) in lut_ids or p.ndim < 2) else decay).append(p)
-    groups = [dict(params=decay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
-              dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0)]
-    opt = torch.optim.AdamW(groups)
-    for g in opt.param_groups:
-        g['initial_lr'] = g['lr']
-    return opt
+        if id(p) in lut_ids:
+            lut_params.append(p)
+        elif p.ndim < 2:
+            nodecay.append(p)
+        else:
+            decay.append(p)
+    adam = torch.optim.AdamW([
+        dict(params=decay,   lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
+        dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0),
+    ])
+    lion = Lion([dict(params=lut_params, lr=lut_lr, weight_decay=0.0)], lr=lut_lr, betas=lut_betas)
+    opts = [adam, lion]
+    for o in opts:
+        for g in o.param_groups:
+            g['initial_lr'] = g['lr']
+    print(f"Hybrid optimizer | Lion(LUT tables only)={sum(p.numel() for p in lut_params):,} lr={lut_lr} "
+          f"betas={lut_betas} wd=0 | AdamW(rest incl. temps) lr={lr} decay_wd={weight_decay}")
+    return opts
 
 
 def get_lr_scale(step, n_steps, warmup_frac):
@@ -222,7 +276,7 @@ print(f'Params: {total_params:,}')
 if os.environ.get('SMOKE'):
     print('SMOKE OK'); sys.exit(0)
 
-optimizer = setup_optimizer(model, lr=LR, weight_decay=WD)
+optimizers = setup_optimizers(model, LR, LUT_LR, LUT_BETAS, WD)
 tokens_per_step = DEVICE_BS * SEQ_LEN
 grad_accum = max(1, TOTAL_BS // tokens_per_step)
 print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | effective batch: {grad_accum * tokens_per_step:,} tokens')
@@ -235,9 +289,11 @@ ema, best_bpb, t0 = None, float('inf'), time.time()
 model.train()
 for step in range(1, N_STEPS + 1):
     lr_scale = get_lr_scale(step, N_STEPS, WARMUP_FRAC)
-    for g in optimizer.param_groups:
-        g['lr'] = g['initial_lr'] * lr_scale
-    optimizer.zero_grad(set_to_none=True)
+    for o in optimizers:
+        for g in o.param_groups:
+            g['lr'] = g['initial_lr'] * lr_scale
+    for o in optimizers:
+        o.zero_grad(set_to_none=True)
     accum_loss = 0.0
     for _ in range(grad_accum):
         x, y = next(train_loader)
@@ -245,7 +301,8 @@ for step in range(1, N_STEPS + 1):
         (loss / grad_accum).backward()
         accum_loss += loss.item() / grad_accum
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
+    for o in optimizers:
+        o.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
     if step % 100 == 0 or step == 1:
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')
