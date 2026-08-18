@@ -276,15 +276,17 @@ to help (exp_n_0035 regressed to 1.231325 vs plain-AdamW exp_n_0033's 1.228762),
 a clean AdamW baseline any edge on the ~0.032 gap to dense? exp_n_0034 stays apples-to-apples with exp_n_0035
 (Lion+MeanAbsNorm), untouched.
 
-### Drop the attention out-projection (exp_n_0037)
+### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
-**exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the attention
-output projection (`out_proj`) is REMOVED.** The attention sub-block returns the concatenation of its per-head
-outputs directly (width n_head·head_dim = 6·64 = 384 = n_embd, so no projection needed); residual add → ln2 →
-CompressionMHL FFN slot are all unchanged. **Params = 26,458,560 = exp_n_0036's 27,343,296 − 884,736** (exactly
-6 layers × 384×384, bias-free out_proj); the drop lands entirely in the AdamW decay group (2-D weights
-17,891,328 → 17,006,592). = 1.140× tied dense. Keeps the exp_n_0036 recipe otherwise (AdamW-everywhere, no
-MeanAbsNorm, learnable temps, orthogonal compress init, grad-clip 1.0, warmup+cosine, 16k). Question: can the
-FFN slot's learned compression absorb head-mixing so the attention out-proj is redundant (−0.88M params for
-free), or does dropping it hurt? **Serial order (reordered): 0034 (running) → 0037 → 0036.** 0034 and 0036 are
-untouched.
+**exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's
+learned compression matrix is REPLACED by a fixed contiguous partition.** (Re-tasked from an earlier option B
+— drop attn out_proj — to this option A; the dir name `no_attn_outproj` is a kept misnomer so the serial-queue
+waiters stay wired.) CompressionMHL's `compress = Linear(384 → 16·24)` is replaced by `nn.Identity()`, so the
+raw 384-dim h reshapes straight into 16 heads × 24 dims — head h routes on the fixed slice `h*24:(h+1)*24`, no
+learned compression weight/bias. Attention **out_proj is RESTORED** (normal MinimalAttention), ln1/ln2 vanilla;
+recipe otherwise = exp_n_0036 (AdamW-everywhere, no MeanAbsNorm, learnable temps ON; the orthogonal compress
+init is dropped — nothing to init). **Params = 26,456,256 = exp_n_0036's 27,343,296 − 887,040** (compress
+Linear(384→384): 884,736 weight from the decay group 17,891,328 → 17,006,592, + 2,304 bias from nodecay
+9,451,968 → 9,449,664). LUT tables unchanged 9,437,184. = 1.140× tied dense. **Serial order: 0034 (done) → 0037
+→ 0036.** 0034 and 0036 untouched. Question: is the learned compression matrix doing real work, or does routing
+FastMHL on raw fixed head-partitions of the residual stream match it (−0.89M params for free)?

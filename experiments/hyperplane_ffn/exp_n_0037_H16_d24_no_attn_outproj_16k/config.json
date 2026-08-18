@@ -30,5 +30,6 @@
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
   "lut_pre_meanabsnorm": false,
-  "compress_ortho_init": true
+  "compress_ortho_init": false,
+  "ffn_fixed_partition": true
 }

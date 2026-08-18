@@ -1,35 +1,34 @@
-# exp_n_0037 — H16/d24, NO attention out-projection, orthoinit + AdamW, tph64/nap6, tied, 16k
+# exp_n_0037 — H16/d24, FIXED-PARTITION FFN slot (no learned compress), AdamW, tph64/nap6, tied, 16k
 
-Clone of **exp_n_0036**'s train.py with **one architectural change** (option B): the attention output
-projection (`out_proj`) is **removed** from `MinimalAttention`. Instead of applying `proj`, the attention
-sub-block returns the **concatenation of its per-head outputs directly** — width = `n_head * head_dim` =
-6·64 = 384 = `n_embd`, so dimensions match with no projection.
+**NOTE — the dir name `no_attn_outproj` is a MISNOMER kept for queue/waiter stability.** This slot was
+re-tasked from option B (drop attention out_proj) to **option A** (per the owner), keeping the same
+experiment name/dir so all serial-queue waiter wiring stays intact (0034 → 0037 → 0036). This experiment
+is **option A: fixed-partition FFN**, and it KEEPS the attention out_proj.
 
-Pipeline becomes: attention heads → concat (width 384) → residual add `x = x + attn(...)` → the existing
-`ln2` LayerNorm → the CompressionMHL FFN slot (learned compression matrix intact). Everything downstream is
-unchanged; only the attention out-projection is gone.
+Clone of **exp_n_0036**'s train.py with **one architectural change** (option A): inside the CompressionMHL
+FFN slot, the **learned compression matrix is removed and replaced by a fixed contiguous partition.**
+CompressionMHL normally does `compress = Linear(384 → n_heads·inner_in = 16·24 = 384)`, then
+`view(N, n_heads, inner_in)`, then per-head FastMHL. Here `compress` is replaced by `nn.Identity()`, so the
+raw 384-dim `h` is reshaped straight into 16 heads × 24 dims — **head h reads the fixed slice
+`h*24:(h+1)*24`** with no learned compression weight/bias. Verified: `compress` is Identity with **0 learnable
+params**; forward (N,384)→(N,384); partition head0←x[:,0:24], head15←x[:,360:384].
 
-**Change (verbatim):**
-```python
-# MinimalAttention.__init__: self.proj = nn.Linear(...) REMOVED
-# MinimalAttention.forward:
-    y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-    return y.transpose(1, 2).contiguous().view(B, T, C)   # concat per-head outputs, no out_proj
-```
-The `nn.init.zeros_(block.attn.proj.weight)` line in `MinimalGPT.__init__` is also removed (nothing to init).
-Confirmed structurally: no `self.proj` / `.proj(` references remain in the attention code (out_proj is *gone*,
-not merely zeroed).
+**Everything else is vanilla / exp_n_0036 recipe:**
+- Attention **out_proj RESTORED** (normal `MinimalAttention`, `self.proj = Linear(384→384, bias=False)` intact);
+  residual add and both LayerNorms (ln1, ln2) untouched.
+- **AdamW everywhere** (no Lion), **no MeanAbsNorm**, **learnable temperatures ON**.
+- The orthogonal per-head compress init from exp_n_0036 **no longer applies** (there is no compress matrix to
+  init) — dropped cleanly via `compress_ortho_init=False`. (The `_ortho_init_compress_heads` helper remains in
+  the file but is gated off and never called.)
+- H16/d24/tph64/nap6, tied, warmup+cosine floor schedule, grad-clip 1.0, 16k steps, all data/backbone settings.
 
-**Param count: 26,458,560** (SMOKE-confirmed) = exp_n_0036's 27,343,296 **− 884,736** — exactly 6 layers ×
-384×384 (out_proj weight, `bias=False`). The drop lands entirely in the AdamW decay group (2-D weights):
-17,891,328 → **17,006,592**; nodecay (LUT tables+temps+1-D) unchanged at 9,451,968. = 1.140× tied dense
-(23,209,728). Optimizer print:
-`AdamW-everywhere (no Lion) | decay(2-D weights)=17,006,592 wd=0.1 | nodecay(LUT tables+temps+1-D)=9,451,968 wd=0 | lr=0.0003 betas=(0.9, 0.95) eps=1e-8 [LUT tables=9,437,184 in nodecay]`.
+**Param count: 26,456,256** (SMOKE-confirmed) = exp_n_0036's 27,343,296 **− 887,040** = the removed compress
+`Linear(384→384)`: 884,736 weight (6×384×384, → was in the AdamW decay group: 17,891,328 → 17,006,592) **+ 2,304
+bias** (6×384, → was in nodecay: 9,451,968 → 9,449,664). LUT tables unchanged at 9,437,184. = 1.140× tied dense.
+Optimizer print:
+`AdamW-everywhere (no Lion) | decay(2-D weights)=17,006,592 wd=0.1 | nodecay(LUT tables+temps+1-D)=9,449,664 wd=0 | lr=0.0003 betas=(0.9, 0.95) eps=1e-8 [LUT tables=9,437,184 in nodecay]`.
 
-**exp_n_0036 recipe otherwise identical:** AdamW everywhere (no Lion), no MeanAbsNorm, learnable temperatures
-ON, orthogonal per-head init of the compress projection, H16/d24/tph64/nap6, tied, warmup+cosine floor schedule,
-grad-clip 1.0, 16k steps, all data/backbone settings.
-
-Runs 16k. **Serial order: 0034 (running) → 0037 → 0036** (per the reorder — 0037 runs BEFORE 0036). exp_n_0034
-and exp_n_0036 are NOT modified. Question: does dropping the attention out-projection (letting the FFN slot's
-learned compression absorb the head-mixing) hurt, help, or wash — at −0.88M params?
+Runs 16k. **Serial order (unchanged): 0034 (done) → 0037 → 0036.** Waiters unchanged (0037 keys off
+exp_n_0034/summary.json; 0036 keys off exp_n_0037/summary.json). 0034 & 0036 untouched. Question: can the
+FastMHL routing work on raw fixed head-partitions of the residual stream — i.e. is the learned compression
+matrix doing real work, or is a fixed partition (−0.89M params) just as good?

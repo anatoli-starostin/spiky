@@ -67,6 +67,7 @@ LUT_LR     = float(cfg.get('lut_lr', 2e-4))                    # Lion lr for the
 LUT_BETAS  = tuple(cfg.get('lut_betas', (0.9, 0.95)))         # Lion betas
 LUT_SEED   = cfg.get('lut_base_seed', 1000)
 LUT_ORTHO  = bool(cfg.get('compress_ortho_init', False))       # orthogonal per-head init of the compress proj
+FFN_PARTITION = bool(cfg.get('ffn_fixed_partition', False))    # option A: fixed contiguous partition (no learned compress)
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -107,8 +108,7 @@ class MinimalAttention(nn.Module):
         super().__init__()
         self.n_head = n_head
         self.qkv = nn.Linear(n_embd, 3 * n_embd, bias=False)
-        # exp_n_0037: NO output projection. The concatenated per-head outputs
-        # (width n_head*head_dim = n_embd) are returned directly.
+        self.proj = nn.Linear(n_embd, n_embd, bias=False)
 
     def forward(self, x, cos, sin):
         B, T, C = x.size()
@@ -118,8 +118,7 @@ class MinimalAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         q, k = apply_rope(q, k, cos[:T], sin[:T])
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        # exp_n_0037: return concatenated per-head outputs directly (no out_proj).
-        return y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 
 
 class MinimalBlock(nn.Module):
@@ -143,6 +142,13 @@ class MinimalBlock(nn.Module):
                 use_bf16=LUT_BF16, initial_weights_noise=LUT_NOISE,
                 learnable_temps=LUT_LEARNTEMP, pre_lut_meanabsnorm=LUT_PREMAN,
                 random_seed=LUT_SEED + layer_idx)
+            if FFN_PARTITION:
+                # option A (exp_n_0037): REMOVE the learned compress Linear — replace it with a
+                # fixed contiguous partition. compress becomes Identity, so in the slot's forward
+                # `self.compress(h).view(N, n_heads, inner_in)` reshapes the raw 384-dim h into
+                # 16 heads x 24 dims (head h reads the fixed slice h*24:(h+1)*24). No learned
+                # compression weight/bias; each head's FastMHL routes on its own raw sub-block.
+                self.ffn.compress = nn.Identity()
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
@@ -188,7 +194,7 @@ class MinimalGPT(nn.Module):
         self.head = nn.Linear(n_embd, vocab_size, bias=False)
         self.apply(self._init_weights)
         for block in self.blocks:
-            # exp_n_0037: attn.proj removed — nothing to zero-init on the attention side.
+            nn.init.zeros_(block.attn.proj.weight)
             if FFN_TYPE == 'dense':
                 nn.init.zeros_(block.mlp[-1].weight)
             else:
