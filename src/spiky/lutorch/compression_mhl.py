@@ -92,6 +92,7 @@ class CompressionMultiHeadLUT(nn.Module):
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
         learnable_temps: bool = True,
+        pre_lut_meanabsnorm: bool = False,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):
@@ -123,6 +124,7 @@ class CompressionMultiHeadLUT(nn.Module):
         self.n_heads = n_heads
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
+        self.pre_lut_meanabsnorm = bool(pre_lut_meanabsnorm)   # MeanAbsNorm on compressed z before FastMHL
 
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
@@ -166,6 +168,8 @@ class CompressionMultiHeadLUT(nn.Module):
             )
         if self.joint_head_compression:
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
+            if self.pre_lut_meanabsnorm:
+                z = z / (z.abs().mean(-1, keepdim=True) + 1e-6)   # MeanAbsNorm before FastMHL
             y = self.lut(z).sum(dim=1).to(z.dtype)     # [N, eff_out]
             if self.inner_residual:
                 y = y + z                              # eff_in == eff_out guaranteed
@@ -178,6 +182,8 @@ class CompressionMultiHeadLUT(nn.Module):
         parts = []
         for h, lut in enumerate(self.luts):
             z_h = z[:, h, :] if self.has_compress else x        # [N, eff_in] (all heads read x if -1)
+            if self.pre_lut_meanabsnorm:
+                z_h = z_h / (z_h.abs().mean(-1, keepdim=True) + 1e-6)   # MeanAbsNorm before FastMHL
             y_h = lut(z_h).sum(dim=1).to(z_h.dtype)             # [N, eff_out]
             if self.inner_residual:
                 y_h = y_h + z_h

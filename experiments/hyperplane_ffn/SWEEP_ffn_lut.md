@@ -222,3 +222,19 @@ dense (1.19665) +0.0327. This is the FIXED-TEMP baseline for the learnable-temps
 H16/d24/tph64/nap6/tied but learnable_temps=True) runs next to test whether learnable soft/select temps —
 which every strong past LUT result (exp010=1.19399) had, and which the current CompressionMHL line had
 dropped — recover loss. (learnable_temps is now the default going forward; exp_n_0030 ran before the flip.)
+
+**RESULT — exp_n_0033 (H16/d24/tph64/nap6/tied, learnable_temps=True, 16k) = 1.228762.** vs exp_n_0030
+(fixed-temp, 1.22936) **−0.0006 — a wash.** Learnable soft/select temperatures make essentially no difference
+at matched steps on the modern CompressionMHL backbone (unlike the historical lutgpt line where they mattered);
+the ~0.032 gap to tied dense (1.19665) is unchanged. Same 27.34M params (192 temp scalars are negligible).
+
+### Historical best-practice reproduction: MeanAbsNorm + Lion (exp_n_0035)
+
+**exp_n_0035 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0033 with two documented historical best-practice
+changes, running.** (1) **MeanAbsNorm** on each head's compressed z BEFORE FastMHL routing, param-free
+`z_h/(z_h.abs().mean(-1)+1e-6)`, behind guarded flag `pre_lut_meanabsnorm` (**default False**, module tests
+19/19 pass). (2) **Hybrid Lion optimizer**: Lion on the LUT table + temp params (9,437,376; lr=2e-4,
+betas=(0.9,0.95), wd=0), AdamW on the rest (lr=3e-4, decay_wd=0.1); both share warmup+cosine. Params =
+27,343,296 (1.178× dense; MeanAbsNorm is param-free, Lion changes only the optimizer). Serial order
+0033 → 0035 → 0034. Question: do MeanAbsNorm + Lion — the pairing behind the strong historical LUT results
+(exp010=1.19399) — close any of the ~0.032 bpb gap to dense at 16k that learnable temps alone did not?
