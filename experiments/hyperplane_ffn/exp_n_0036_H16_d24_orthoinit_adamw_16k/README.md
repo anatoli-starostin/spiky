@@ -1,5 +1,13 @@
 # exp_n_0036 — H16/d24, orthogonal head-init + AdamW-everywhere, tph64/nap6, tied, 16k
 
+> **STOPPED EARLY @ step 5200/16000 (last val_bpb = 1.334241).** Verdict: **orthogonal per-head init of the
+> compression matrix does NOT beat default (std0.02) init — the effect washes out.** This run is a clean
+> single-variable A/B vs exp_n_0033 (identical config + AdamW-everywhere optimizer + seeds, only
+> `compress_ortho_init`). At matched steps it tracked a steady **~+0.0075 bpb behind exp_n_0033** (+0.00755
+> @4600, +0.00817 @4800, +0.00737 @5000, +0.00755 @5200) — a tiny −0.0007 edge at step 200 reversed by ~step
+> 4600; flat and if anything marginally worse thereafter. Init choice is not the lever; not worth carrying
+> forward. Killed early to free the GPU. exp_n_0033 (default init, 1.228762) remains the best H16/d24 LUT point.
+
 Clone of **exp_n_0035**'s train.py with exactly **three changes**, making this the new **AdamW baseline recipe**
 (and isolating orthogonal head-init as the single new ingredient). Everything else — H16/d24, tph64, nap6, tied,
 vanilla exp073 backbone, std0.02 init, warmup+cosine floor schedule, grad-clip 1.0, 16k steps, all data/backbone

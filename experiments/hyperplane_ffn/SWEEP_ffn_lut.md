@@ -276,6 +276,16 @@ to help (exp_n_0035 regressed to 1.231325 vs plain-AdamW exp_n_0033's 1.228762),
 a clean AdamW baseline any edge on the ~0.032 gap to dense? exp_n_0034 stays apples-to-apples with exp_n_0035
 (Lion+MeanAbsNorm), untouched.
 
+**RESULT — exp_n_0036 STOPPED EARLY @ step 5200/16000 (last val_bpb = 1.334241). Answer: orthogonal per-head
+init of the compression matrix does NOT beat default (std0.02) init — the effect washes out.** exp_n_0036 is
+exactly exp_n_0033 + orthogonal compress init (verified single-variable A/B: configs identical but
+`compress_ortho_init`; same AdamW-everywhere optimizer, same seeds). At matched steps it tracked a **steady
+~+0.0075 bpb BEHIND exp_n_0033** (default init): +0.00755 @4600, +0.00817 @4800, +0.00737 @5000, +0.00755
+@5200 — flat, if anything marginally worse (a tiny −0.0007 edge at step 200 reversed by ~step 4600). So
+orthonormal head bases give no lasting advantage on this backbone; init choice is not the lever. Stopped early
+and freed the GPU; not worth carrying forward. **exp_n_0033 (default init, 1.228762) remains the best H16/d24
+LUT point.**
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's
