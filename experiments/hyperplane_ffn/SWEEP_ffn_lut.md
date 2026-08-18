@@ -266,3 +266,16 @@ over all 16 heads). Params = 27,343,296 (identical; orthogonal init changes valu
 to help (exp_n_0035 regressed to 1.231325 vs plain-AdamW exp_n_0033's 1.228762), does orthonormal head-init give
 a clean AdamW baseline any edge on the ~0.032 gap to dense? exp_n_0034 stays apples-to-apples with exp_n_0035
 (Lion+MeanAbsNorm), untouched.
+
+### Drop the attention out-projection (exp_n_0037)
+
+**exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the attention
+output projection (`out_proj`) is REMOVED.** The attention sub-block returns the concatenation of its per-head
+outputs directly (width n_head·head_dim = 6·64 = 384 = n_embd, so no projection needed); residual add → ln2 →
+CompressionMHL FFN slot are all unchanged. **Params = 26,458,560 = exp_n_0036's 27,343,296 − 884,736** (exactly
+6 layers × 384×384, bias-free out_proj); the drop lands entirely in the AdamW decay group (2-D weights
+17,891,328 → 17,006,592). = 1.140× tied dense. Keeps the exp_n_0036 recipe otherwise (AdamW-everywhere, no
+MeanAbsNorm, learnable temps, orthogonal compress init, grad-clip 1.0, warmup+cosine, 16k). Question: can the
+FFN slot's learned compression absorb head-mixing so the attention out-proj is redundant (−0.88M params for
+free), or does dropping it hurt? **Serial order (reordered): 0034 (running) → 0037 → 0036.** 0034 and 0036 are
+untouched.
