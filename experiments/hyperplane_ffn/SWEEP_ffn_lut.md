@@ -309,17 +309,20 @@ smallest LUT gap yet at H16/d24, vs 0033's +0.0321). New ranking: **exp_n_0038 1
 < exp_n_0030 1.229361 < exp_n_0035 1.231325 < exp_n_0034 1.235338.** Takeaway: **stacking routed FFN sub-blocks
 (depth) is the first lever that moves the LUT slot toward dense** — worth pushing (3+ sub-blocks? deeper/narrower?).
 
-### Single-slot capacity probe: 4× tables in ONE slot (exp_n_0039) — BUILT, not launched
+### Single-slot width probe: H8/d48 tph128 (exp_n_0039) — BUILT, not launched
 
-**exp_n_0039 (H16/d24/tph256/nap6, tied, 16k) — clone of exp_n_0033 with ONE knob changed: tph 64 → 256 (4×
-tables), single slot UNCHANGED.** A capacity reachability probe: does throwing 4× raw table count at one wide
-slot close the gap to dense, or does a single slot saturate? Single-slot forward identical to 0033 (only tph
-differs). **LUT tables = 16·256·2⁶·24/layer × 6 = 37,748,736 (exactly 4× 0033's 9,437,184). Params =
-55,654,848 (SMOKE-confirmed)** = 0033 + 28,311,552 (all extra tables) = 2.398× tied dense (by far the heaviest
-LUT FFN in the sweep; vs exp_n_0004's 36,780,288, +18.9M). decay(2-D)=17,891,328 (identical to 0033),
-nodecay=37,763,520 [tables 37,748,736]. Built + SMOKE-passed; awaiting launch. Question: does 4× capacity in one
-slot beat exp_n_0033 (1.228762) / exp_n_0038 (seq-2 depth-win, 1.2259986) — or does raw width saturate, leaving
-depth as the real lever?
+**exp_n_0039 (H8/d48/tph128/nap6, tied, 16k; dir still named H16_d24_tph256 — a kept misnomer) — clone of
+exp_n_0033 evolved to a single-slot H8/d48/tph128 probe.** Same single FFN slot as 0033, but lut_n_heads=8,
+inner_in=inner_out=48, tph=128, nap6. H·d = 8·48 = 384 (so compress/decompress stay 384→384). Motivation
+(gpustar's exp_g_0006): H8/d48 matches H16/d24 in loss but ~28% faster — this tests that width at 2× tables in a
+single slot. **LUT tables = 8·128·2⁶·48/layer × 6 = 18,874,368 (2× 0033's 9,437,184). Params = 36,780,384
+(SMOKE-confirmed)** = 0033 + 9,437,088 (one extra 0033-tables-worth −96 temp scalars, since 8 heads → 96 temps vs
+0033's 192) = 1.585× tied dense. Near-identical to exp_n_0004 (36,780,288, H8/d48/tph128; +96 = this run's 96
+learnable-temp scalars, which 0004 lacked as params). decay(2-D)=17,891,328 (identical to 0033),
+nodecay=18,889,056 [tables 18,874,368]. Built + SMOKE-passed; awaiting launch. Question: does the wider-d
+H8/d48 shape at 2× tables beat exp_n_0033 (1.228762) / exp_n_0038 (seq-2 depth-win, 1.2259986) in a single slot,
+or does single-slot width saturate — leaving depth as the real lever? (History note: first built as H16/d24
+tph256 = 55,654,848; then tph→128 = H16/d24 36,780,480; then width→H8/d48 = 36,780,384, this entry.)
 
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
