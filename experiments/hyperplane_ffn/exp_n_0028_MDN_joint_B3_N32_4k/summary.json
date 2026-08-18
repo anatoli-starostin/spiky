@@ -1,0 +1,49 @@
+{
+  "exp_name": "exp_n_0028_MDN_joint_B3_N32_4k",
+  "baseline": "exp073_tied_vanilla_baseline_16k",
+  "head_type": "mdn",
+  "n_maps": 32,
+  "n_mix": 1,
+  "block": 3,
+  "rank": null,
+  "x_init": "warm",
+  "freeze_backbone": false,
+  "final_val_bpb": 1.270016069688927,
+  "best_val_bpb": 1.270016069688927,
+  "head_params": 3289761,
+  "dense_head_params": 12582912,
+  "head_reduction": 3.824871168452663,
+  "rank_ceiling_m1": 289,
+  "dense_rank_ceiling": 385,
+  "rank_diag": {
+    "rank_1pct": 1,
+    "rank_0p1pct": 9,
+    "rank_1pct_ex1": 99,
+    "stable_rank": 1.0,
+    "participation_ratio": 1.0,
+    "top_sv": [
+      2697930.0,
+      5223.111,
+      4064.874,
+      3457.485,
+      3421.202,
+      3108.913,
+      2960.031,
+      2830.634,
+      2714.45,
+      2637.943,
+      2363.786,
+      2349.99,
+      2304.967,
+      2276.752,
+      2221.125,
+      2116.268
+    ]
+  },
+  "decorr": {
+    "between_map_abs_corr": 0.0674,
+    "within_map_abs_corr": 0.0854,
+    "between_map_max_abs": 0.7021
+  },
+  "training_time_hours": 0.7566977155870861
+}

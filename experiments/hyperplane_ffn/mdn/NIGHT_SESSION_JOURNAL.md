@@ -115,6 +115,16 @@ B3/N11 geometry. Scaling B,N lifts the rank (46→123, tracking B·N) and monoto
 = 1.25570 at 3.03× compression = **+4.8% over baseline at 4k, still descending**. 16k confirms of B5/N24
 (best MDN) and r124 (best control) launched for the converged, equal-budget comparison.
 
+### B3/N32 — the B/N split is a WASH at fixed B·N (task 288e47dd / 288eff4c)
+
+exp_n_0028 (B3/N32, joint warm 4k) = **1.27002**, rank 99, 3,289,761 params (3.82×), between-map |corr| 0.067.
+Matched to B4/N24 (B·N=96 both): B4/N24 = 1.26999 (rank 98, 3.80×). So **B3/N32 ≈ B4/N24 (Δ +0.00003)** —
+many-thin-3D-maps neither beats nor loses to fatter-blocks at matched B·N. **MDN quality is governed by B·N**
+(the total coordinate dimension ≈ effective rank ≈ params/V), NOT by how it splits into block-dim × map-count.
+Practical implication: prefer **B=3** — same quality, cheapest per-map compute, best for the sublinear 3D-decode
+story (E3), and it decorrelates better at high N (B3/N32 corr 0.067 < B3/N11 0.182). vs B5/N24 (1.25570, B·N=120)
+still lower, confirming more B·N → lower bpb.
+
 ### FROM-SCRATCH (task 9dfddefb) — worse than the retrofit; rank ceiling unchanged; maps NOT collapsed
 
 Fresh random vanilla backbone + cold MDN head, end-to-end 16k (no pretrained weights, no warm init):
