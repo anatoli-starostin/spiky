@@ -324,6 +324,18 @@ H8/d48 shape at 2× tables beat exp_n_0033 (1.228762) / exp_n_0038 (seq-2 depth-
 or does single-slot width saturate — leaving depth as the real lever? (History note: first built as H16/d24
 tph256 = 55,654,848; then tph→128 = H16/d24 36,780,480; then width→H8/d48 = 36,780,384, this entry.)
 
+**RESULT — exp_n_0039 = 1.216393 (final; best=final; 16k; 1.33 h). NEW CAMPAIGN BEST LUT slot — lowest val_bpb
+of any LUT FFN so far.** Beats every prior point: vs exp_n_0004 (H8/d48/tph128 fixed-temp, 1.217377) −0.00098
+(clean learnable-vs-fixed-temps A/B — configs differ only by lut_learnable_temps — so **learnable temps give a
+small but real edge here, ~0.001**); vs exp_n_0033 (1.228762) −0.0124; vs exp_n_0038 (seq-2 depth-win, 1.2259986)
+−0.0096. **Gap to tied dense (1.19665) shrinks to +0.0197 — the smallest LUT-vs-dense gap yet** (vs 0038's
++0.0293). Caveat: 0039 is not matched-params — it carries 2× tables + wider d (36.78M vs 0033/0038's ~27.3M), so
+this is "spend more capacity, get closer," not a free win like 0038's depth result. New ranking: **0039 1.216393
+< 0004 1.217377 < 0038 1.2259986 < 0033 1.228762 < 0030 1.229361 < 0035 1.231325 < 0034 1.235338.** Two levers
+now proven to move the LUT slot toward dense: **wider-d + more tables (width/capacity, 0039)** and **stacked
+sub-blocks (depth, 0038)** — worth combining. exp_n_0040 (H8/d48/tph256, 2× 0039's tables) is built to probe how
+far single-slot capacity reaches.
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

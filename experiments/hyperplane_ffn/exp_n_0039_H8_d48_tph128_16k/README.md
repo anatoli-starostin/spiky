@@ -1,5 +1,12 @@
 # exp_n_0039 — single-slot H8/d48, tph128, nap6, tied, 16k
 
+> **RESULT: final_val_bpb = 1.216393 (best=final; 16k, 1.33 h). NEW CAMPAIGN BEST LUT slot** — lowest val_bpb of
+> any LUT FFN so far. Beats exp_n_0004 (fixed-temp twin, 1.217377) by −0.00098 in a clean learnable-vs-fixed-temps
+> A/B (configs differ only by `lut_learnable_temps`) → learnable temps give a small but real edge here. Also beats
+> exp_n_0033 (1.228762, −0.0124) and the seq-2 depth-win exp_n_0038 (1.2259986, −0.0096). **Gap to tied dense
+> (1.19665) shrinks to +0.0197 — smallest LUT gap yet.** Caveat: not matched-params (2× tables + wider d, 36.78M),
+> so this is "more capacity → closer," unlike 0038's free depth win. Width/capacity and depth are both real levers.
+
 Clone of **exp_n_0033**'s recipe/config/train.py, evolved to a **single-slot H8/d48/tph128** probe: same single
 FFN slot `x = x + CompressionMHL(ln2(x))`, but **lut_n_heads=8, inner_in=inner_out=48, tph=128, nap6** (was
 H16/d24 in 0033). **H·d = 8·48 = 384 still**, so compress stays Linear(384→384) and decompress Linear(384→384),
