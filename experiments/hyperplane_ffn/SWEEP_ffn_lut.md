@@ -300,6 +300,15 @@ as 0033). A clean **depth-vs-width A/B at equal params AND equal total tables**:
 slot into two stacked H8/tph64 slots (each with its own norm+residual) beat exp_n_0033's single slot (1.228762)?
 Built + SMOKE-passed; awaiting launch.
 
+**RESULT — exp_n_0038 = 1.2259986 (final; best 1.2259694; 16k; 1.29 h). YES — depth beats width. This is the
+FIRST experiment in the whole H16/d24 campaign to BEAT exp_n_0033 (1.228762): −0.0028.** At equal params
+(27,350,208) and EQUAL total LUT tables (9,437,184), splitting one H16/tph64 slot into two sequentially-stacked
+H8/tph64 sub-blocks (each with its own pre-LN + residual) improves loss by ~0.0028 — two routed passes with an
+intermediate norm/residual beat one wide routed pass. Gap to tied dense (1.19665) shrinks to **+0.0293** (the
+smallest LUT gap yet at H16/d24, vs 0033's +0.0321). New ranking: **exp_n_0038 1.2259986 < exp_n_0033 1.228762
+< exp_n_0030 1.229361 < exp_n_0035 1.231325 < exp_n_0034 1.235338.** Takeaway: **stacking routed FFN sub-blocks
+(depth) is the first lever that moves the LUT slot toward dense** — worth pushing (3+ sub-blocks? deeper/narrower?).
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

@@ -1,5 +1,12 @@
 # exp_n_0038 — sequential TWO half-head-count CompressionMHL sub-blocks per FFN slot, H8/d24/tph64, nap6, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2259986 (best 1.2259694; 16k, 1.29 h). DEPTH BEATS WIDTH — this is the FIRST
+> experiment in the H16/d24 campaign to BEAT exp_n_0033 (1.228762), by −0.0028**, at equal params (27,350,208)
+> and EQUAL total LUT tables (9,437,184). Splitting one H16/tph64 slot into two sequentially-stacked H8/tph64
+> sub-blocks (each with its own pre-LN + residual) helps: two routed passes with an intermediate norm/residual
+> beat one wide routed pass. Gap to tied dense (1.19665) shrinks to +0.0293 — the smallest LUT gap yet at
+> H16/d24. Stacking routed FFN sub-blocks is the first lever that moves the slot toward dense.
+
 Clone of **exp_n_0033**'s recipe/config/train.py with **one architectural change**: the single FFN-slot op
 `x = x + CompressionMHL(ln2(x))` is replaced by a **sequential two-sub-block** structure inside every
 transformer block — two separate CompressionMHL modules stacked, each with its OWN pre-LayerNorm and its OWN
