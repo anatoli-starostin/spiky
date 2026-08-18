@@ -286,17 +286,19 @@ orthonormal head bases give no lasting advantage on this backbone; init choice i
 and freed the GPU; not worth carrying forward. **exp_n_0033 (default init, 1.228762) remains the best H16/d24
 LUT point.**
 
-### Depth over width: sequential two half-size FFN sub-blocks (exp_n_0038) — BUILT, not launched
+### Depth over width: sequential two half-head-count FFN sub-blocks (exp_n_0038) — BUILT, not launched
 
-**exp_n_0038 (seq-2 FFN, H8/d24/tph32/nap6, tied, 16k) — clone of exp_n_0033 with a SEQUENTIAL two-sub-block
-FFN slot.** Each block's single `x = x + CompressionMHL(ln2(x))` becomes two stacked half-size CompressionMHL,
-each with its own pre-LN + residual: `h = x + ffn_a(ln2_a(x)); out = h + ffn_b(ln2_b(h))`. Each sub-block is
-half-size (H8/tph32 vs 0033's H16/tph64; d24, nap6 unchanged). Plain AdamW (0033 grouping); learnable temps;
-no MeanAbsNorm/Lion. **Params = 22,631,616 (SMOKE-confirmed) — LOWER than 0033 (27,343,296) by 4,711,680:
-tables HALVE to 4,718,592 (2×393,216/layer) while the two 384→192 projection pairs = one 384→384 pair; small
-extras = a 2nd pre-LN/block + proj biases. = 0.975× tied dense (the leanest LUT FFN yet, just under dense).**
-Question: does depth (two sequential routed sub-blocks) beat width (one big slot) at HALF the table budget —
-i.e. does stacking beat exp_n_0033's 1.228762 with 0.5× the tables? Built + SMOKE-passed; awaiting launch.
+**exp_n_0038 (seq-2 FFN, H8/d24/tph64/nap6, tied, 16k — dir name still says tph32 but tph is now 64) — clone
+of exp_n_0033 with a SEQUENTIAL two-sub-block FFN slot.** Each block's single `x = x + CompressionMHL(ln2(x))`
+becomes two stacked CompressionMHL, each with its own pre-LN + residual: `h = x + ffn_a(ln2_a(x)); out = h +
+ffn_b(ln2_b(h))`. Each sub-block is **H8/tph64** (half the head count of 0033's H16, same tph64; d24, nap6
+unchanged). Plain AdamW (0033 grouping); learnable temps; no MeanAbsNorm/Lion. **Params = 27,350,208
+(SMOKE-confirmed) — essentially EQUAL to 0033 (27,343,296), only +6,912: LUT tables now EXACTLY equal 0033's
+9,437,184 (2×H8/tph64 = 1×H16/tph64), projections equal 0033's single 384→384 pair, and the +6,912 is just the
+extra ln2_b LayerNorm/block (4,608) + the second sub-block's proj biases (2,304).** = 1.178× tied dense (same
+as 0033). A clean **depth-vs-width A/B at equal params AND equal total tables**: does splitting one H16/tph64
+slot into two stacked H8/tph64 slots (each with its own norm+residual) beat exp_n_0033's single slot (1.228762)?
+Built + SMOKE-passed; awaiting launch.
 
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 

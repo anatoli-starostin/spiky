@@ -21,7 +21,7 @@
   "lut_inner_in_dim": 24,
   "lut_inner_out_dim": 24,
   "lut_n_anchor_pairs": 6,
-  "lut_tables_per_head": 32,
+  "lut_tables_per_head": 64,
   "lut_n_heads": 8,
   "lut_joint_head_compression": false,
   "lut_forward_mode": "hard",

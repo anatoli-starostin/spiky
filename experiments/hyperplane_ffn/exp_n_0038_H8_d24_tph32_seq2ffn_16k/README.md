@@ -1,4 +1,7 @@
-# exp_n_0038 — sequential TWO half-size CompressionMHL sub-blocks per FFN slot, H8/d24/tph32, nap6, tied, 16k
+# exp_n_0038 — sequential TWO half-head-count CompressionMHL sub-blocks per FFN slot, H8/d24/tph64, nap6, tied, 16k
+
+> **NOTE:** the dir name still says `tph32` (from the first build) but **tph is now 64** in both sub-blocks
+> (updated per task). Dir/name kept for path stability; the actual config is H8/d24/**tph64**/nap6.
 
 Clone of **exp_n_0033**'s recipe/config/train.py with **one architectural change**: the single FFN-slot op
 `x = x + CompressionMHL(ln2(x))` is replaced by a **sequential two-sub-block** structure inside every
@@ -8,10 +11,11 @@ residual add:
 h   = x + ffn_a(ln2_a(x))     # sub-block 1
 out = h + ffn_b(ln2_b(h))     # sub-block 2
 ```
-Attention + ln1 are exactly as 0033; ln_f and everything else unchanged. **Each sub-block is HALF-SIZE vs
-0033: H (lut_n_heads)=8, d (inner_in=inner_out)=24, tph=32; nap=6 unchanged.** learnable_temps=true,
+Attention + ln1 are exactly as 0033; ln_f and everything else unchanged. **Each sub-block: H (lut_n_heads)=8
+(half of 0033's 16), d (inner_in=inner_out)=24, tph=64, nap=6.** So each sub-block has HALF the head count but
+the SAME tph as 0033 — i.e. two stacked H8/tph64 slots vs one H16/tph64 slot. learnable_temps=true,
 joint_head_compression=false, forward_mode=hard; no MeanAbsNorm, no Lion — plain **AdamW everywhere** with the
-same grouping as 0033 (2-D weights→decay wd0.1; LUT tables+temps+1-D→nodecay wd0). Each sub-block's
+same grouping as 0033 (2-D→decay wd0.1; LUT tables+temps+1-D→nodecay wd0). Each sub-block's
 compress = Linear(384→H·d=192), decompress = Linear(192→384).
 
 **Block forward (verbatim):**
@@ -29,23 +33,23 @@ def forward(self, x, cos, sin):
     return h + out_b
 ```
 
-**Params = 22,631,616 (SMOKE-confirmed) — LOWER than exp_n_0033's 27,343,296 by 4,711,680**, exactly as
-expected: tables halve (two half-size sub-blocks), while the two 384→192 projection pairs equal one 384→384
-pair; the small extras are a second pre-LN per block + proj biases. Per-component breakdown:
-- **LUT tables: 4,718,592** = 2 sub-blocks × (8 heads · 32 tph · 2⁶ rows · 24) = 786,432/layer × 6 — **exactly
-  HALF** of 0033's 9,437,184.
+**Params = 27,350,208 (SMOKE-confirmed) — essentially EQUAL to exp_n_0033's 27,343,296, only +6,912 larger.**
+Now that tph=64, the total LUT tables EXACTLY equal 0033's, and the whole model is 0033 + the two structural
+extras (a 2nd pre-LN per block + one extra sub-block's proj biases). Per-component breakdown:
+- **LUT tables: 9,437,184** = 2 sub-blocks × (8 heads · 64 tph · 2⁶ rows · 24 out) = 1,572,864/layer × 6 —
+  **exactly EQUAL** to 0033's 9,437,184 (2×H8/tph64 tables = 1×H16/tph64 tables).
 - **Compress+decompress weights: 1,769,472** = 2 × (384·192 + 192·384)/layer × 6 — **equal** to 0033's single
-  384→384 pair (294,912/layer). (In the AdamW decay group.)
-- decay(2-D) total = 17,891,328 (tok_emb 12,582,912 + attn qkv/proj 3,538,944 + the 1,769,472 projections) —
-  identical to 0033's decay group.
-- nodecay total = 4,740,288 = tables 4,718,592 + temps 192 + LN 1-D (ln1+ln2_a+ln2_b per block + ln_f =
-  14,592) + proj biases 6,912.
-- = 0.975× tied dense (23,209,728) — the two half-size LUT sub-blocks make this the leanest LUT FFN yet, just
-  UNDER dense.
+  384→384 pair.
+- decay(2-D) total = **17,891,328** — identical to 0033 (tok_emb 12,582,912 + attn qkv/proj 3,538,944 + the
+  1,769,472 projections).
+- nodecay total = **9,458,880** = tables 9,437,184 + temps 192 + LN 1-D (ln1+ln2_a+ln2_b/block + ln_f = 14,592)
+  + proj biases 6,912.
+- The **+6,912 over 0033** = extra `ln2_b` LayerNorm (768/block × 6 = 4,608) + extra sub-block proj biases
+  (2,304 more than 0033's single slot). = 1.178× tied dense (same as 0033).
 
 **Optimizer print (SMOKE):**
-`AdamW (0033 grouping) | decay(2-D weights)=17,891,328 wd=0.1 | nodecay(LUT tables+temps+1-D)=4,740,288 wd=0 | lr=0.0003 betas=(0.9, 0.95) eps=1e-8 [LUT tables=4,718,592 in nodecay]`
+`AdamW (0033 grouping) | decay(2-D weights)=17,891,328 wd=0.1 | nodecay(LUT tables+temps+1-D)=9,458,880 wd=0 | lr=0.0003 betas=(0.9, 0.95) eps=1e-8 [LUT tables=9,437,184 in nodecay]`
 
-Not launched yet (built + SMOKE-passed only). Question: does depth (two sequential routed sub-blocks) buy more
-than width (one big slot) at HALF the table budget — i.e. does stacking beat exp_n_0033 (1.228762) despite 0.5×
-the tables?
+Not launched yet (built + SMOKE-passed only). Clean depth-vs-width A/B at ~equal params & EQUAL total tables:
+does splitting one H16/tph64 slot into two stacked H8/tph64 slots (each with its own norm+residual) beat
+exp_n_0033's single slot (1.228762)?
