@@ -203,3 +203,11 @@ decompress; param-free, so 36,780,288 = identical to exp_n_0004) gives 16k **val
 compressed input through as a residual constrains the slot worse than letting the LUT+decompress learn the
 full transform. vs exp_n_0002 (1.20823) +0.0187; vs tied dense 16k (1.19665) +0.0303. So the skip is not a
 useful lever for this FFN-slot design.
+
+**nap 6→7 (more clusters/table) HELPS, at 2× table params (exp_n_0029).** Cloning exp_n_0004 (H8/d48/tph128)
+with nap 6→7 (2⁷=128 clusters/table instead of 64) doubles the LUT tables (36.78M → **55,654,656**, 2.40×
+dense) but keeps FLOPs identical (compress/decompress unchanged, routing is sign-tests). 16k **val_bpb =
+1.21035** — **−0.00703 vs the nap6 twin exp_n_0004 (1.21738)**: finer routing is a real lever. But vs the best
+LUT slot exp_n_0002 (H12/d64, 1.20823, 44.45M) it's +0.0021 (bigger AND slightly worse), and vs tied dense
+(1.19665) +0.0137 — still no crossover. So more clusters help per the nap6→7 comparison, but not enough to
+beat the best point or dense, and the gain costs ~2× table params.
