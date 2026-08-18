@@ -91,6 +91,7 @@ class CompressionMultiHeadLUT(nn.Module):
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
+        learnable_temps: bool = False,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):
@@ -126,7 +127,8 @@ class CompressionMultiHeadLUT(nn.Module):
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
             weight_dtype=weight_dtype, use_bf16=use_bf16,
-            initial_weights_noise=initial_weights_noise, device=device,
+            initial_weights_noise=initial_weights_noise, learnable_temps=learnable_temps,
+            device=device,
         )
         if self.joint_head_compression:
             # JOINT: one shared compress feeds all heads; a single FastMHL(n_heads) reads the
