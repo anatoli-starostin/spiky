@@ -241,3 +241,14 @@ the ndim routing that exp010/lutgpt use, so temps get magnitude-aware AdamW upda
 27,343,296 (1.178× dense; MeanAbsNorm is param-free, Lion changes only the optimizer). Serial order
 0033 → 0035 → 0034. Question: do MeanAbsNorm + Lion — the pairing behind the strong historical LUT results
 (exp010=1.19399) — close any of the ~0.032 bpb gap to dense at 16k that learnable temps alone did not?
+
+**RESULT — exp_n_0035 = 1.231325 (final, 16k; best=final; 1.32 h).** NO — the historical best-practice pairing
+did **not** recover the gap; it made it marginally WORSE. vs exp_n_0033 (learnable-temp, plain AdamW, 1.228762)
+**+0.0026** and vs exp_n_0030 (fixed-temp, 1.229361) **+0.0020**; gap to tied dense (1.19665) = **+0.0347**
+(vs exp_n_0033's +0.0321). The matched-step curve tracked a hair behind 0033/0030 the whole run, not just at the
+end. **Conclusion: MeanAbsNorm-on-compressed-router-input + Lion-on-tables (the exp006-017/lutgpt recipe) does
+not transfer to the modern CompressionMHL FFN-slot backbone** — with a LayerNorm pre-norm already in the block
+and a compress/decompress bottleneck, the extra MeanAbsNorm + sign-based table updates give nothing here (if
+anything a slight regression). The ~0.03 LUT-vs-dense gap at 16k H16/d24 is not an optimizer/normalization
+artifact; it's the routing/capacity of the slot itself. Next: exp_n_0034 (nap5/tph128, same recipe) tests
+whether the nap/tph split moves it.

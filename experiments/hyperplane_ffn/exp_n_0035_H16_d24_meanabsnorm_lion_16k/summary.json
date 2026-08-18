@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0035_H16_d24_meanabsnorm_lion_16k",
+  "best_val_bpb": 1.2313247620751078,
+  "final_val_bpb": 1.2313247620751078,
+  "total_params": 27343296,
+  "training_time_hours": 1.323
+}
