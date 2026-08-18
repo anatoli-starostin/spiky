@@ -233,8 +233,11 @@ the ~0.032 gap to tied dense (1.19665) is unchanged. Same 27.34M params (192 tem
 **exp_n_0035 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0033 with two documented historical best-practice
 changes, running.** (1) **MeanAbsNorm** on each head's compressed z BEFORE FastMHL routing, param-free
 `z_h/(z_h.abs().mean(-1)+1e-6)`, behind guarded flag `pre_lut_meanabsnorm` (**default False**, module tests
-19/19 pass). (2) **Hybrid Lion optimizer**: Lion on the LUT table + temp params (9,437,376; lr=2e-4,
-betas=(0.9,0.95), wd=0), AdamW on the rest (lr=3e-4, decay_wd=0.1); both share warmup+cosine. Params =
+19/19 pass). (2) **Hybrid Lion optimizer** (faithful to exp010 / examples/lutgpt): Lion on the LUT **table
+tensors only** (ndim≥3 `weights`; 9,437,184; lr=2e-4, betas=(0.9,0.95), wd=0); AdamW on the rest **including
+the 192 learnable log-temp scalars** (lr=3e-4, decay_wd=0.1, eps=1e-8); both share warmup+cosine + grad-clip 1.0.
+(An initial "all FastMHL params" grouping had swept the 0-dim temps onto Lion's fixed sign-step — corrected to
+the ndim routing that exp010/lutgpt use, so temps get magnitude-aware AdamW updates.) Params =
 27,343,296 (1.178× dense; MeanAbsNorm is param-free, Lion changes only the optimizer). Serial order
 0033 → 0035 → 0034. Question: do MeanAbsNorm + Lion — the pairing behind the strong historical LUT results
 (exp010=1.19399) — close any of the ~0.032 bpb gap to dense at 16k that learnable temps alone did not?

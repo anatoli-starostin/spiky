@@ -231,10 +231,11 @@ class Lion(torch.optim.Optimizer):
 
 
 def setup_optimizers(model, lr, lut_lr, lut_betas, weight_decay):
-    """Hybrid (historical best-practice, exp072/074/exp010): FastMHL LUT-table params (tables +
-    learnable temps) -> Lion (wd 0); everything else -> AdamW (2-D wd, 1-D no-wd). Returns [adam, lion]."""
-    lut_ids = {id(p) for m in model.modules() if isinstance(m, FastMultiHeadLut)
-               for p in m.parameters(recurse=False)}
+    """Hybrid (historical best-practice, exp010 / examples/lutgpt): ONLY the FastMHL LUT-table tensors
+    (`weights`, ndim>=3) -> Lion (wd 0); everything else -> AdamW (2-D wd, 1-D no-wd). The 0-dim learnable
+    log-temp scalars are therefore on AdamW-nodecay, exactly as exp010/lutgpt route them (they group the
+    ndim>=3 tables to Lion and let scalar temps fall through to AdamW). Returns [adam, lion]."""
+    lut_ids = {id(m.weights) for m in model.modules() if isinstance(m, FastMultiHeadLut)}
     lut_params, decay, nodecay = [], [], []
     for p in model.parameters():
         if not p.requires_grad:
@@ -254,8 +255,8 @@ def setup_optimizers(model, lr, lut_lr, lut_betas, weight_decay):
     for o in opts:
         for g in o.param_groups:
             g['initial_lr'] = g['lr']
-    print(f"Hybrid optimizer | Lion(LUT tables+temps)={sum(p.numel() for p in lut_params):,} lr={lut_lr} "
-          f"betas={lut_betas} wd=0 | AdamW(rest) lr={lr} decay_wd={weight_decay}")
+    print(f"Hybrid optimizer | Lion(LUT tables only)={sum(p.numel() for p in lut_params):,} lr={lut_lr} "
+          f"betas={lut_betas} wd=0 | AdamW(rest incl. temps) lr={lr} decay_wd={weight_decay}")
     return opts
 
 
