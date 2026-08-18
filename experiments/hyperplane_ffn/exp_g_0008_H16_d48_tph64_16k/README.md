@@ -65,6 +65,74 @@ exp_g_0007). `exp_g_0008` makes 16 per layer; `exp_g_0006` and `exp_n_0039` make
 Expect `exp_g_0008` ≈ 1.28 h and `exp_n_0039` ≈ 0.93 h at 16k steps on the 5090 —
 i.e. the width route costs ~38% more wall time for the same table budget.
 
-## Status
+## Status: RUN STOPPED EARLY BY DECISION at step 5,600 / 16,000
 
-Built, config-diffed, smoke-tested. Training run **not** launched.
+Not a failure and not a crash — the run was halted deliberately because it had already
+answered its question, and the GPU was worth more elsewhere. `metrics.csv` holds the 28
+completed evals (steps 200–5,600); there is no `summary.json` and no `loss.png`, because
+`train.py` writes those only on normal completion. **Do not compare this partial curve's
+endpoint to any finished run's endpoint** — 1.305 at step 5,600 is a mid-descent value,
+not a result.
+
+### Why it was stopped
+
+`exp_g_0008` (width route: H16/d48/tph64) tracked **exactly on top of** `exp_n_0004`
+(tables route: H8/d48/tph128) at equal LUT table budget — 18,874,368 tables either way.
+Matched-step deltas, every 400 steps:
+
+```
+  step      0008      0033     d0033      0004     d0004
+   400  2.156616  2.180203 -0.023587  2.164642 -0.008026
+   800  1.867482  1.884572 -0.017090  1.874255 -0.006773
+  1200  1.728855  1.744175 -0.015320  1.731982 -0.003127
+  1600  1.631663  1.644111 -0.012448  1.634255 -0.002592
+  2000  1.548743  1.567088 -0.018345  1.553280 -0.004537
+  2400  1.474846  1.494078 -0.019232  1.475826 -0.000980
+  2800  1.428004  1.441477 -0.013473  1.427340 +0.000664
+  3200  1.394296  1.406083 -0.011787  1.394575 -0.000279
+  3600  1.372046  1.385222 -0.013176  1.372351 -0.000305
+  4000  1.354348  1.365938 -0.011590  1.354194 +0.000154
+  4400  1.338652  1.348817 -0.010165  1.338849 -0.000197
+  4800  1.326550  1.337571 -0.011021  1.326035 +0.000515
+  5200  1.314381  1.326689 -0.012308  1.315032 -0.000651
+  5600  1.305459  1.317376 -0.011917  1.306566 -0.001107
+```
+
+Read the two delta columns together. Against `exp_n_0033` the gap is **stable and large**,
+sitting near **−0.012** with no sign of closing. Against `exp_n_0004` the initial −0.008
+converged by ~step 2,400 and thereafter **oscillates around zero and repeatedly changes
+sign** (−0.00098, +0.00066, −0.00028, −0.00031, +0.00015, +0.00052, −0.00065, −0.00111).
+A delta that flips sign at the ±0.0006 level is noise, not a trend.
+
+### Conclusion
+
+**At equal table budget, the two ways of spending a 2× FFN slot land on the same loss
+curve.** Whether the doubling goes into more tables per head or more heads, the result is
+the same — *the benefit is the table budget, not its arrangement.*
+
+That makes width the worse buy. It costs **+1,771,872 params** (the doubled
+compress/decompress projections, which the `tph` route leaves untouched) and **16 vs 8
+per-head LUT invocations per layer**, for no gain in loss. **Don't pay for width.**
+
+### Caveats — this is suggestive, not decisive
+
+- **Not a clean A/B.** `exp_g_0008` carries +4.82% params over `exp_n_0004` *and* has
+  `lut_learnable_temps: true` while `exp_n_0004` does not. Two arms differing in three ways
+  landing on one curve is evidence, not proof. `exp_n_0039` (= `exp_n_0004` + learnable
+  temps) is the run that isolates the temps.
+- **Single seed each.** The ±0.0006 wobble is about the size of the `exp_g_0006`-vs-`0033`
+  edge that was itself judged too small to call real.
+- **Stopped at 35% of budget.** Curves can separate late: `exp_g_0007` converged to +0.0063
+  by step 8,000 and then re-opened to +0.008. This one was never given the chance to do
+  that, so "equivalent" is established only over steps 2,400–5,600.
+
+### Wall-time forecast: wrong, and by how much
+
+This README predicted ≈1.28 h from the invocation-count rule. Actual pace was ~5,600 steps
+in ~33 min, extrapolating to **≈1.6 h** — the rule **under-predicts** here by ~25%. The
+16-invocation count evidently is not the whole story once the projections double as well.
+Treat the invocation-count heuristic as a within-host ordering hint, not a quantitative
+predictor. (Wall times are in any case **not comparable between hosts** — `exp_n_0004`'s
+1.323 h was measured on the nebius H100, not this 5090.)
+
+Tracking issue: **#108**.
