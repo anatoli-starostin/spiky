@@ -91,7 +91,7 @@ class CompressionMultiHeadLUT(nn.Module):
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
-        learnable_temps: bool = False,
+        learnable_temps: bool = True,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):

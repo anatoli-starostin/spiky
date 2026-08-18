@@ -158,7 +158,8 @@ def test_param_count_matches_module_both_modes():
     for inner, nap, tph, nh in cases:
         for joint in (True, False):
             m = CompressionMultiHeadLUT(32, 32, inner, nap=nap, tph=tph, n_heads=nh,
-                                        joint_head_compression=joint, use_bf16=False, random_seed=0)
+                                        joint_head_compression=joint, use_bf16=False,
+                                        learnable_temps=False, random_seed=0)
             measured = sum(p.numel() for p in m.parameters())
             f = CompressionMultiHeadLUT.param_count(32, 32, inner, nap=nap, tph=tph,
                                                     n_heads=nh, joint_head_compression=joint)
@@ -206,7 +207,7 @@ def test_separate_in_out_dims_shapes_grads_params():
     for joint in (True, False):
         m = CompressionMultiHeadLUT(32, 40, inner_in_dim=8, inner_out_dim=12, nap=4, tph=6,
                                     n_heads=2, joint_head_compression=joint,
-                                    use_bf16=False, random_seed=0)
+                                    use_bf16=False, learnable_temps=False, random_seed=0)
         x = torch.randn(16, 32, requires_grad=True)
         out = m(x)
         assert out.shape == (16, 40)
@@ -230,7 +231,7 @@ def test_minus1_no_projection_shapes_grads_params():
         for kw in cases:
             m = CompressionMultiHeadLUT(32, 32, nap=4, tph=6, n_heads=2,
                                         joint_head_compression=joint, use_bf16=False,
-                                        random_seed=0, **kw)
+                                        learnable_temps=False, random_seed=0, **kw)
             x = torch.randn(12, 32, requires_grad=True)
             out = m(x)
             assert out.shape == (12, 32), (joint, kw)
