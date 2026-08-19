@@ -125,8 +125,15 @@ matched-step vs exp_n_0033:
 ```
 
 Half the tables costs real ground early (+0.010 at step 2,000) and smoothing pays it back
-gradually, crossing over around step 10,000. **A short-budget run would have concluded the
-opposite.** Anything reading this line at ≤8k steps should not be trusted on the sign.
+gradually. On the full 200-step grid the transition is not a single clean crossing: the delta
+**first dips negative at step 6,800**, then oscillates about zero through step 9,000 (last
+positive eval: +0.000066 at 9,000), and is **negative at every one of the 35 evals from step
+9,200 to 16,000**. So the honest description is *first crossing at 6,800, durable from 9,200* —
+not the "around step 10,000" a coarse every-2000 sampling suggests. Mean delta over the last
+quarter (steps 12,200–16,000): **−0.000879**.
+
+**A short-budget run would have concluded the opposite.** Anything reading this line at ≤6k steps
+gets the wrong sign, and anything in 6.8k–9k reads noise.
 
 ### How strongly to hold it
 
