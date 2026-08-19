@@ -358,6 +358,15 @@ width d is more param-efficient than raw table count**: shrinking d and compensa
 d48 buys more per param than extra tph. Ranking unchanged at the top: 0040 1.204266 < 0039 1.216393 < 0041
 1.216945 < 0004 1.217377 < 0038 < 0033. Next: exp_n_0042 (same d32 but nap5, coarser routing, ⅓ 0040's tables).
 
+**RESULT — exp_n_0042 (H8/d32/tph256/nap5, 29,898,336 params, tables 12,582,912, tied, 16k) = 1.2235820
+(final; best 1.2234587; 1.51 h). Coarser routing (nap 6→5) HURTS: +0.0066 vs exp_n_0041 (nap6, 1.216945)** —
+reconfirming finer routing resolution helps (echoes exp_n_0035 nap6 > exp_n_0034 nap5). Both d32 runs stay
+behind the d48 line (0040 1.204266, 0039 1.216393). So the narrower-d/coarser-routing directions do NOT recover
+0040's gains — **d48 + finer routing + more tables is the winning combination so far.** Full ranking (H8/d48/d32
++ H16/d24 LUT family): **0040 1.204266 < 0039 1.216393 < 0041 1.216945 < 0004 1.217377 < 0042 1.223582 < 0038
+1.2259986 < 0033 1.228762 < 0030 < 0035 < 0034.** exp_n_0043 (H8/d48/tph128/nap8, 4× routing rows, built not
+launched) probes whether finer routing at d48 pushes further.
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

@@ -1,5 +1,10 @@
 # exp_n_0042 — single-slot H8/d32, tph256, nap5, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2235820 (best 1.2234587; 16k, 1.51 h). Coarser routing (nap 6→5) HURTS: +0.0066
+> vs exp_n_0041 (nap6, 1.216945)** — reconfirms finer routing helps. Both d32 runs stay behind the d48 line
+> (0040 1.204266, 0039 1.216393); narrower-d/coarser-routing does not recover 0040's gains. d48 + finer routing
+> + more tables is the winning combo so far.
+
 Clone of **exp_n_0040_H8_d48_tph256_16k** with **TWO changes: inner d (both in/out) 48 → 32 AND nap 6 → 5**
 (H stays 8, tph 256). Same as exp_n_0041 but with **nap 5 (2⁵=32 clusters per table instead of 2⁶=64)** —
 halves the routing rows. Single-slot CompressionMHL, tied, learnable_temps=true, joint=false, hard, no
