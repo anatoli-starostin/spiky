@@ -381,6 +381,20 @@ rows) and d48 width move the needle but with diminishing returns; depth (0038) w
 queued: exp_n_0044 (tph64 + hybrid_smooth forward) — tests whether a softer forward is a near-free lever at the
 lean 1× budget.
 
+### hybrid_smooth forward looks like a param-efficiency lever (exp_n_0044)
+
+**RESULT — exp_n_0044 (H8/d48/tph64/nap6, hybrid_smooth forward, 27,343,200 params, tables 9,437,184, tied,
+16k) = 1.2175917 (final=best; 1.23 h). Promising: at the LEANEST budget (1× 0033 tables, 9.4M) the softer 2-row
+forward nearly TIES exp_n_0039 (hard, tph128, 18.9M tables, 1.2163933) — within +0.0012 while using HALF the
+tables and 9.4M fewer params.** So hybrid_smooth appears worth roughly a table-DOUBLING, param-free — a genuine
+param-efficiency lever (contrast the fixed-partition/orthogonal-init dead-ends). Same-table-budget point
+(9,437,184) vs exp_n_0033 (H16/d24, hard, 1.228762): −0.0112, though that also folds in the d48-width benefit.
+**Caveat: not a perfectly clean A/B** — the tight comparison (0044 vs 0039) differs in tph too; a hard-forward
+H8/d48/tph64 baseline would isolate the hybrid_smooth delta exactly (worth building). Ranking: 0043 1.202920 <
+0040 1.204266 < 0039 1.216393 < 0041 1.216945 < 0004 1.217377 < 0044 1.217592 < 0042 1.223582 < 0038 < 0033.
+Levers proven: depth (0038, free), width d48 + capacity (diminishing), and now **hybrid_smooth forward (free,
+~2× table-equivalent)** — the two "free" levers (depth + soft forward) are the most interesting to combine.
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

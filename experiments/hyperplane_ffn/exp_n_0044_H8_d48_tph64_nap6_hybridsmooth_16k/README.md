@@ -1,5 +1,12 @@
 # exp_n_0044 — single-slot H8/d48, tph64, nap6, **hybrid_smooth** forward, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2175917 (best=final; 16k, 1.23 h). hybrid_smooth looks like a param-efficiency
+> lever.** At the LEANEST budget (tph64 = 1× 0033 tables, 9.4M, 27.3M params) the softer 2-row forward nearly
+> TIES exp_n_0039 (hard, tph128, 18.9M tables, 1.2163933) — within +0.0012 at HALF the tables / 9.4M fewer
+> params. So hybrid_smooth ≈ worth a table-doubling, param-free. Caveat: not a perfectly clean A/B (0044 vs 0039
+> also differs in tph) — a hard-forward H8/d48/tph64 baseline would isolate the exact delta. Depth (0038) and
+> hybrid_smooth are the two "free" levers so far — worth combining.
+
 Clone of **exp_n_0039_H8_d48_tph128_16k** with **two changes: tph 128 → 64 AND forward mode hard →
 hybrid_smooth** (config key `lut_forward_mode`). Single-slot CompressionMHL, H8, d48/48, nap6, tied,
 learnable_temps=true, joint=false, no MeanAbsNorm/Lion, plain AdamW (0033 grouping). Everything except tph +
