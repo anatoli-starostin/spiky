@@ -1,5 +1,13 @@
 # exp_n_0045 — single-slot H8/d48, tph256, nap7, tied, 16k
 
+> **⭐ MILESTONE RESULT: final_val_bpb = 1.1977670 (best 1.1975260; 16k, 3.28 h). Essentially MATCHES tied
+> dense (1.19665) — gap +0.00112 final / +0.00088 best, the closest any LUT FFN has reached.** Reachability =
+> YES: the CompressionMHL slot CAN hit dense quality, but at ~4× dense params (93.4M) and ~2.35× slower
+> wall-clock. **Table-multiplicity A/B: beats equal-budget exp_n_0043 (tph128/nap8, 1.2029199) by −0.00515 — a
+> CLEAR win** (mid-run ~0.0035 lead grew to −0.0052). So at the big 75.5M-table budget, table MULTIPLICITY
+> (more tph, coarser routing) beats routing RESOLUTION (higher nap) — OPPOSITE of the small-scale 0035>0034
+> finding; the lever flips with scale. New campaign best.
+
 Clone of **exp_n_0043_H8_d48_tph128_nap8_16k** with **two knobs changed at FIXED table budget: tph 128 → 256
 AND nap 8 → 7**. Because the table budget is `H · tph · 2^nap · d`, doubling tph (128→256) exactly cancels
 halving the rows (nap 8→7, 2⁸→2⁷), so the **total tables and param count are IDENTICAL to 0043**. Single-slot

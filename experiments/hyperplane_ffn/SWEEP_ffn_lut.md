@@ -419,3 +419,20 @@ recipe/optimizer variants (0030/0033/0035), so it's a real architectural effect,
 learned compress Linear with a fixed contiguous partition costs ~0.025 bpb** — the compression matrix earns its
 0.89M params. Stopped early once the trajectory was unambiguous (GPU freed). exp_n_0036 (orthogonal-init + clean
 AdamW) is HELD pending this call.
+
+### ⭐ MILESTONE — exp_n_0045 essentially MATCHES tied dense; table-multiplicity beats routing-resolution
+
+**RESULT — exp_n_0045 (H8/d48/tph256/nap7, 93,403,488 params, tables 75,497,472, tied, 16k) = 1.1977670
+(final; best 1.1975260; 3.28 h). This is the CLOSEST any LUT FFN has reached tied dense (1.19665): gap
++0.00112 final / +0.00088 best — essentially matching dense quality.** So the CompressionMHL slot CAN reach
+dense — reachability is answered YES — but only at ~4× dense params (93.4M) and ~2.35× slower wall-clock.
+**Multiplicity-vs-resolution A/B (vs equal-budget exp_n_0043 tph128/nap8, 1.2029199): exp_n_0045 wins by
+−0.00515 — now a CLEAR win, not noise** (the ~0.0035 mid-run lead grew to −0.0052 final). So **at the large
+75.5M-table budget, table MULTIPLICITY (more tph, coarser routing) beats routing RESOLUTION (higher nap, fewer
+tables)** — the OPPOSITE of the small-scale exp_n_0035>exp_n_0034 nap finding (finer routing wins when small).
+The lever flips with scale. New top ranking: **exp_n_0045 1.197767 < exp_n_0043 1.202920 < exp_n_0040 1.204266
+< exp_n_0002 1.2082 < exp_n_0029 1.2104 < exp_n_0039 1.216393 < ...** — exp_n_0045 is the new campaign best and
+the first LUT FFN within ~0.001 of dense. Practical caveat: 93.4M/2.398×-dense/3.28h is a heavy price for
+matching a 23.2M/1.39h dense MLP; the win is on the research question (reachability + FLOP-count), not efficiency.
+Next lever to combine: the two *free* wins — depth (exp_n_0038) + hybrid_smooth (exp_n_0044) — on top of this
+multiplicity/d48/capacity recipe.
