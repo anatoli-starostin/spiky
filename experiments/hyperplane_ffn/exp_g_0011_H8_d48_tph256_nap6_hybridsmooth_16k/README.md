@@ -88,6 +88,90 @@ At 55.65M this is **2.4× the dense baseline's 23,209,728 params** — far outsi
 vanilla budget" framing of #108. It is a *mechanism* probe (does smoothing scale?), not a
 candidate architecture. `exp_g_0009`/`exp_g_0010` remain the on-budget arms.
 
+## Result — completed 16,000 steps
+
+**final = best = `1.1924158633660322`** · 55,654,752 params · **3.304 h** on the 5090.
+
+### It beats the dense baseline — a first for this sweep
+
+| | val_bpb | Δ 0011 |
+|---|--:|--:|
+| target | 1.190000 | +0.002416 |
+| **dense `exp073` (tied vanilla)** | **1.196646** | **−0.004230** |
+| `exp_n_0040` (this config, **hard**) | 1.204266 | −0.011850 |
+
+`exp_g_0011` is the **first CompressionMHL arm to go below the dense baseline**, and it lands
+**+0.002416 short of the 1.19 target**. It first crossed the dense line at **step 14,200** and was
+still descending at the budget (15,800 → 16,000: −0.000087), so more steps would likely take it
+further.
+
+The caveat that governs how much this is worth: **55.65M params is 2.40× the dense baseline's
+23.21M**. This beats dense on loss, not on parameters.
+
+### The single-variable result
+
+Against `exp_n_0040` — identical config, identical `train.py`, only `forward_mode` differs:
+
+```
+   2000:  1.522079  vs  1.529504   -0.007425
+   4000:  1.337673  vs  1.344143   -0.006470
+   6000:  1.278559  vs  1.287058   -0.008499
+   8000:  1.246819  vs  1.256450   -0.009631
+  10000:  1.223199  vs  1.233506   -0.010307
+  12000:  1.207787  vs  1.218426   -0.010639
+  14000:  1.196844  vs  1.208523   -0.011679
+  16000:  1.192416  vs  1.204266   -0.011850
+
+better at 73/80 evals · last-quarter mean −0.011697 · range −0.012262 .. −0.011198
+```
+
+The gap **widens monotonically** through training and the last quarter never comes near zero. This
+is the strongest single-variable effect measured in the sweep — an order of magnitude larger than
+any width effect.
+
+### Correction: this README's own prediction was wrong
+
+Before the run, this file posed two readings and backed the second — that smoothing *substitutes
+for table budget* and would therefore **diminish** as tables grow, giving a gain smaller than the
+−0.010743 measured at tph64.
+
+**The benefit did not diminish. It grew:** −0.011850 at tph256 against −0.010743 at tph64.
+
+The diagnosis is more interesting than the error. The substitution mechanism was right; the
+inference from it was not. Test the rule directly on every single-variable pair available:
+
+| | smooth | hard at 2× the tph | diff |
+|---|--:|--:|--:|
+| smooth tph32 vs hard tph64 | 1.227724 | 1.228335 | −0.000611 |
+| smooth tph64 vs hard tph128 | 1.217592 | 1.217377 | +0.000215 |
+
+**`hybrid_smooth` at tph *N* ≈ hard at tph *2N*** — both checks inside ±0.0007, at **half** the LUT
+parameters. The substitution is worth *one doubling wherever you stand*. Its value in bpb therefore
+tracks what a doubling is worth, and in this range doublings are **not** getting cheaper:
+
+```
+hard tph64  -> tph128:  -0.010958
+hard tph128 -> tph256:  -0.013111
+```
+
+So the absolute benefit holds up (and drifts slightly upward) simply because the underlying
+doubling gains do. The prediction would only have been right if the hard curve were flattening,
+and over this range it isn't. **The error was assuming diminishing returns without checking the
+curve they were supposed to diminish along.**
+
+The rule also predicts a hypothetical hard tph512 would land near 1.1924 — needing **604M LUT
+params against this run's 302M**.
+
+### Holding
+
+- **Solid:** the −0.011850 effect. Monotone, widening, 73/80 evals, last quarter tight and far from
+  zero, single-variable, exactly param-matched (`hybrid_smooth` adds no parameters). This one does
+  not need hedging.
+- **Single seed**, like everything in this sweep.
+- **The doubling-equivalence rule rests on two points.** Two agreements inside ±0.0007 are
+  striking, but two is not many; a third (e.g. `exp_n_0004` tph128 smooth vs a hard tph256, which
+  is `exp_n_0040`) would test it properly and is a cheap run.
+
 ## Status
 
-Built, cross-checked, smoke-tested, committed before launch. 16,000-step run launched on the 5090.
+Complete. Results committed and pushed. `checkpoint.pt` not committed (gitignored).
