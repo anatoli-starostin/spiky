@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0047_H8_d48_tph64_bs48_24k",
+  "best_val_bpb": 1.2056566118490948,
+  "final_val_bpb": 1.2056566118490948,
+  "total_params": 27343200,
+  "training_time_hours": 1.382
+}

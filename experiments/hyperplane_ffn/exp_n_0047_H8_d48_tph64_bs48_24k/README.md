@@ -1,5 +1,14 @@
 # exp_n_0047 — H8/d48/tph64 hard, standard batch (48), 24000 steps — same-total-tokens control for exp_n_0046
 
+> **RESULT: final_val_bpb = 1.2056566 (best=final; 24k, 1.38 h). Disentangles tokens vs batch-shape.** vs
+> exp_g_0006 (1.228335, standard batch, EXACTLY comparable val 245,760): **−0.0227** — the clean measure of the
+> "1.5× more training tokens" effect (same batch + same val sample) → **more tokens is the dominant lever**. vs
+> exp_n_0046 (1.196862, bigger batch, same total tokens): **+0.0088** — the more-steps route doesn't fully reach
+> the bigger-batch route (the larger batch adds a further edge, though part of the +0.0088 is 0046's larger val
+> sample of 368,640). Verdict: **~73% of 0046's −0.031 gain is from more TOTAL TOKENS** (cleanly −0.023 here),
+> the rest a batch-shape/val-sample mix. Gap to dense +0.0090.
+
+
 Clone of **exp_n_0046** with three changes: `device_batch_size` 72→48, `total_batch_size` 36864→24576,
 `n_steps` 16000→24000. Everything else identical (H8/d48/tph64 hard forward, tied, nap6, seq_len 512, depth 6,
 n_embd 384, n_head 6, seed 1, bf16, AdamW lr 3e-4 betas 0.9/0.95 eps 1e-8, 0033 grouping).

@@ -453,3 +453,18 @@ val tokens vs baseline's 245,760 — but a −0.0315 move dwarfs any ~0.001 samp
 Control queued: exp_n_0047 (standard batch, 24k steps → SAME 589.8M tokens) will disentangle "more tokens" from
 "bigger batch shape" — if 0047 also lands ~1.197, the win is total tokens; if it stays ~1.228, it's the batch.
 This is the single most important lever found: scale training tokens, not table params.
+
+**CONTROL RESULT — exp_n_0047 (H8/d48/tph64 hard, standard batch bs48, 24k steps → SAME 589.8M total tokens as
+0046) = 1.2056566 (final=best; 1.38 h). Disentangles tokens vs batch-shape:**
+- **vs exp_g_0006 (1.228335, standard batch, 393.2M tokens, EXACTLY comparable val 245,760): −0.0227.** This is
+  the CLEAN measure of the "1.5× more training tokens" effect — **−0.023, confirming more tokens is the dominant
+  lever** (both 0047 and the baseline use the same batch + same val sample, so this is apples-to-apples).
+- **vs exp_n_0046 (1.196862, bigger batch, same 589.8M tokens): +0.0088.** So the more-steps route does NOT fully
+  reach the bigger-batch route — the larger batch adds a further edge. BUT part of that +0.0088 is the val-sample
+  difference (0046 evals 368,640 val tokens vs 0047's 245,760), so the *pure* batch-shape effect is smaller than
+  +0.0088 and not cleanly isolable here.
+**Verdict: ~73% of exp_n_0046's −0.031 gain over the baseline is from MORE TOTAL TOKENS (cleanly −0.023 via
+0047), the rest a batch-shape/val-sample mix.** Both confirm: scaling training tokens closes most of the
+LUT-vs-dense gap. Gap to dense: 0046 +0.0002 (best), 0047 +0.0090. Ranking: **0046 1.196862 < 0045 1.197767 <
+0043 1.202920 < 0040 1.204266 < 0047 1.205657 < ...** — 0046 stays best (though its val sample differs); 0047 is
+the cleanly-comparable confirmation that training-token scaling is the real lever.
