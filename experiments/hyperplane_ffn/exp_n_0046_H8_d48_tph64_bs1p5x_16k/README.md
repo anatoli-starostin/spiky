@@ -1,5 +1,15 @@
 # exp_n_0046 — H8/d48/tph64, hard forward, tied, **1.5× batch**, 16k
 
+> **🚨 RESULT: final_val_bpb = 1.1968618 (best=final; 16k, 1.35 h). Essentially MATCHES tied dense (1.19665) —
+> gap +0.00021, the smallest LUT-vs-dense gap of the campaign, at a LEAN 27.3M params (1.178× dense).** vs the
+> same-config hard baseline exp_g_0006 (standard batch, 1.228335): **−0.0315** — a huge jump from just 1.5× more
+> training tokens. Biggest finding of the sweep: **the LUT-vs-dense gap was largely a TRAINING-TOKEN /
+> surrogate-gradient-density problem, not a capacity one.** More tokens ≫ more tables for param-efficiency
+> (exp_n_0045 needed 93.4M/4× params for a slightly worse +0.0011). New campaign best + efficiency winner.
+> (Val-comparability caveat: evals 368,640 val tokens vs baseline's 245,760 — but −0.0315 dwarfs any ~0.001
+> sample effect. exp_n_0047 = same-total-tokens control disentangles tokens-vs-batch-shape.)
+
+
 Single-slot CompressionMHL, **H8 / d48 / tph64 / nap6, hard forward, tied, learnable_temps=true**, plain AdamW
 (0033 grouping: lr 3e-4, betas 0.9/0.95, eps 1e-8, 2-D decay wd 0.1 / LUT+temps+1-D nodecay wd 0), seq_len 512,
 depth 6, n_embd 384, n_head 6, seed 1, bf16, 16k steps. **The only change vs a standard H8/d48/tph64 hard run is

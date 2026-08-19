@@ -436,3 +436,20 @@ the first LUT FFN within ~0.001 of dense. Practical caveat: 93.4M/2.398×-dense/
 matching a 23.2M/1.39h dense MLP; the win is on the research question (reachability + FLOP-count), not efficiency.
 Next lever to combine: the two *free* wins — depth (exp_n_0038) + hybrid_smooth (exp_n_0044) — on top of this
 multiplicity/d48/capacity recipe.
+
+### 🚨 BIGGEST FINDING — more TRAINING TOKENS ≫ more tables: exp_n_0046 matches dense at 1.18× params
+
+**RESULT — exp_n_0046 (H8/d48/tph64 hard, tied, 1.5× batch = 36,864 tok/step, 16k steps → 589.8M total tokens,
+27,343,200 params) = 1.1968618 (final=best; 1.35 h). Essentially MATCHES tied dense (1.19665): gap +0.00021 —
+the smallest LUT-vs-dense gap of the whole campaign, AND at a LEAN budget (1.178× dense params, 1.35 h).** vs the
+SAME-config hard baseline exp_g_0006 (standard batch, 393.2M tokens, 1.228335): **−0.0315** — a massive jump from
+just 1.5× more training tokens. This reframes the entire sweep: **the LUT-vs-dense gap was largely a
+TRAINING-TOKEN / surrogate-gradient-density problem, not a capacity problem.** More tokens (denser per-cluster
+soft-surrogate gradient) is a FAR more param-efficient lever than more tables: exp_n_0046 reaches dense with
+27.3M params (1.35 h) where exp_n_0045 needed 93.4M / 3.28 h (4× params) for a slightly WORSE +0.0011 gap.
+**exp_n_0046 is the new campaign best and the efficiency winner** (val-comparability caveat: 0046 evals 368,640
+val tokens vs baseline's 245,760 — but a −0.0315 move dwarfs any ~0.001 sample-size effect). Ranking:
+**exp_n_0046 1.196862 < dense-ish… < exp_n_0045 1.197767 < exp_n_0043 1.202920 < exp_n_0040 1.204266 < …**
+Control queued: exp_n_0047 (standard batch, 24k steps → SAME 589.8M tokens) will disentangle "more tokens" from
+"bigger batch shape" — if 0047 also lands ~1.197, the win is total tokens; if it stays ~1.228, it's the batch.
+This is the single most important lever found: scale training tokens, not table params.
