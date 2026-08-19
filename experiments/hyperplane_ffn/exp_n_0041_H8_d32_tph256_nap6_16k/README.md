@@ -1,5 +1,11 @@
 # exp_n_0041 — single-slot H8/d32, tph256, nap6, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2169448 (best=final; 16k, 1.96 h). Narrowing d 48→32 HURTS: +0.0127 vs exp_n_0040
+> (d48, 1.2042656).** Notably 0041 (d32, 42.5M params, 25.2M tables) ≈ exp_n_0039 (d48, 36.8M, 18.9M tables):
+> 1.2169448 vs 1.2163933 — nearly identical despite 0041's extra tables/params. So **per-head width d is more
+> param-efficient than raw table count** — shrinking d and compensating with tph does not pay. d48 stays the
+> better shape.
+
 Clone of **exp_n_0040_H8_d48_tph256_16k** with **ONE change: inner d (both in/out) 48 → 32** (H stays 8, tph
 256, nap 6). Single-slot CompressionMHL, tied, learnable_temps=true, joint=false, hard, no MeanAbsNorm/Lion,
 plain AdamW (0033 grouping). **H·d = 8·32 = 256 now** (was 384), so the projections shrink: compress becomes

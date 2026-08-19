@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0041_H8_d32_tph256_nap6_16k",
+  "best_val_bpb": 1.216944775932108,
+  "final_val_bpb": 1.216944775932108,
+  "total_params": 42481248,
+  "training_time_hours": 1.959
+}

@@ -348,6 +348,16 @@ dense params, 2.13 h). New ranking: **0040 1.204266 < 0039 1.216393 < 0004 1.217
 1.228762 < 0030 < 0035 < 0034.** Queued next (built, not launched): exp_n_0041 (H8/d32/tph256/nap6, narrower d)
 and exp_n_0042 (H8/d32/tph256/nap5) — test whether narrower-d/coarser-routing keeps the gains at fewer params.
 
+### Narrower d hurts: H8/d32/tph256 (exp_n_0041)
+
+**RESULT — exp_n_0041 (H8/d32/tph256/nap6, 42,481,248 params, tables 25,165,824, tied, 16k) = 1.2169448
+(final=best; 1.96 h). Narrowing per-head d 48→32 COSTS +0.0127 vs exp_n_0040 (d48, 1.2042656)** — the wider d48
+matters. Telling: **exp_n_0041 (d32, 42.5M params, 25.2M tables) ≈ exp_n_0039 (d48, 36.8M params, 18.9M tables):
+1.2169448 vs 1.2163933** — nearly identical despite 0041 carrying MORE tables and MORE params. So **per-head
+width d is more param-efficient than raw table count**: shrinking d and compensating with tables does not pay;
+d48 buys more per param than extra tph. Ranking unchanged at the top: 0040 1.204266 < 0039 1.216393 < 0041
+1.216945 < 0004 1.217377 < 0038 < 0033. Next: exp_n_0042 (same d32 but nap5, coarser routing, ⅓ 0040's tables).
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's
