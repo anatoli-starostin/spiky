@@ -367,6 +367,20 @@ behind the d48 line (0040 1.204266, 0039 1.216393). So the narrower-d/coarser-ro
 1.2259986 < 0033 1.228762 < 0030 < 0035 < 0034.** exp_n_0043 (H8/d48/tph128/nap8, 4× routing rows, built not
 launched) probes whether finer routing at d48 pushes further.
 
+### Finer routing at d48 nudges best, but param-inefficient: nap8 (exp_n_0043)
+
+**RESULT — exp_n_0043 (H8/d48/tph128/nap8, 93,403,488 params, tables 75,497,472, tied, 16k) = 1.2029199
+(final; best 1.2022929; 2.95 h). NEW campaign best, but barely — beats exp_n_0040 (tph256, 1.2042656) by only
+−0.0013 while carrying 2× the tables (75.5M vs 37.7M) and 1.68× the params (93.4M vs 55.65M).** So finer routing
+(nap 6→8, 4× rows) DOES help and reaches the lowest LUT val_bpb yet (gap to dense +0.0063 final / +0.0056 best,
+closest yet), but it's **very param-inefficient** — the capacity-scaling curve is flattening near ~1.20 (0039→0040
+= 2× tables bought −0.012; 0040→0043 = 2× more tables bought only −0.0013). Single-slot H8/d48 appears to be
+approaching a floor ~+0.006 above tied dense. New ranking (top): **0043 1.202920 < 0040 1.204266 < 0039 1.216393
+< 0041 1.216945 < 0004 1.217377 < 0042 1.223582 < 0038 < 0033.** Levers so far: capacity (tables via tph or nap
+rows) and d48 width move the needle but with diminishing returns; depth (0038) was the only *free* win. Next
+queued: exp_n_0044 (tph64 + hybrid_smooth forward) — tests whether a softer forward is a near-free lever at the
+lean 1× budget.
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

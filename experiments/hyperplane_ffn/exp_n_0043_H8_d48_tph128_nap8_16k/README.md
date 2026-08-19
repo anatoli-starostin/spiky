@@ -1,5 +1,12 @@
 # exp_n_0043 — single-slot H8/d48, tph128, nap8, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2029199 (best 1.2022929; 16k, 2.95 h). NEW campaign best — but barely, and
+> param-inefficient.** Beats exp_n_0040 (tph256, 1.2042656) by only −0.0013 while carrying 2× the tables (75.5M
+> vs 37.7M) and 1.68× the params (93.4M vs 55.65M). So finer routing (nap 6→8, 4× rows) reaches the lowest LUT
+> val_bpb yet (gap to dense +0.0063 final / +0.0056 best) but scaling is flattening near ~1.20: 0039→0040 (2×
+> tables) bought −0.012; 0040→0043 (2× more tables) only −0.0013. Single-slot H8/d48 looks to be nearing a floor
+> ~+0.006 above tied dense.
+
 Clone of **exp_n_0039_H8_d48_tph128_16k** with **ONE knob changed: nap (lut_n_anchor_pairs) 6 → 8** (2⁸ = 256
 rows per table instead of 2⁶ = 64 — 4× the routing rows). Single-slot CompressionMHL, H8, d48/48, tph128, tied,
 learnable_temps=true, joint=false, hard forward, no MeanAbsNorm/Lion, plain AdamW (0033 grouping). Everything
