@@ -336,6 +336,18 @@ now proven to move the LUT slot toward dense: **wider-d + more tables (width/cap
 sub-blocks (depth, 0038)** — worth combining. exp_n_0040 (H8/d48/tph256, 2× 0039's tables) is built to probe how
 far single-slot capacity reaches.
 
+### Single-slot capacity keeps paying: H8/d48 tph256 (exp_n_0040)
+
+**RESULT — exp_n_0040 (H8/d48/tph256, 4× 0033 tables, 55,654,752 params, tied, 16k) = 1.2042656 (final=best;
+2.13 h). NEW campaign best — capacity has NOT saturated.** Doubling tables again (0039 tph128 → 0040 tph256)
+bought another **−0.0121** (1.216393 → 1.204266). **Gap to tied dense (1.19665) now just +0.0076 — by far the
+closest any LUT FFN has reached** (0039 was +0.0197, 0038 +0.0293, 0033 +0.0321). The tph-scaling curve at H8/d48
+is still steeply downward: tph128 +0.0197 → tph256 +0.0076 vs dense. So raw single-slot table capacity is a
+strong lever here (unlike the fixed-partition/orthogonal-init dead-ends) — but it's expensive (0040 = 2.398×
+dense params, 2.13 h). New ranking: **0040 1.204266 < 0039 1.216393 < 0004 1.217377 < 0038 1.2259986 < 0033
+1.228762 < 0030 < 0035 < 0034.** Queued next (built, not launched): exp_n_0041 (H8/d32/tph256/nap6, narrower d)
+and exp_n_0042 (H8/d32/tph256/nap5) — test whether narrower-d/coarser-routing keeps the gains at fewer params.
+
 ### Fixed-partition FFN slot — no learned compress (exp_n_0037, option A)
 
 **exp_n_0037 (H16/d24/tph64/nap6/tied, 16k) — clone of exp_n_0036 with ONE architectural change: the FFN slot's

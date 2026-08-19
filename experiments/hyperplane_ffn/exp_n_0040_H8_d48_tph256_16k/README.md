@@ -1,5 +1,12 @@
 # exp_n_0040 — single-slot H8/d48, tph256, nap6, tied, 16k
 
+> **RESULT: final_val_bpb = 1.2042656 (best=final; 16k, 2.13 h). NEW campaign best — single-slot capacity has
+> NOT saturated.** Doubling tables (0039 tph128 → tph256) bought another **−0.0121** (1.216393 → 1.204266).
+> **Gap to tied dense (1.19665) is now just +0.0076 — the closest any LUT FFN has reached** (0039 +0.0197). The
+> H8/d48 tph-scaling curve is still steeply downward, so raw table capacity is a real lever — but expensive
+> (55.65M = 2.398× dense, 2.13 h). Ranking: 0040 < 0039 < 0004 < 0038 < 0033. Next: narrower-d 0041/0042 probe
+> whether fewer params keep the gains.
+
 Clone of **exp_n_0039_H8_d48_tph128_16k** with **ONE knob changed: tph (lut_tables_per_head) 128 → 256** (2× the
 tables). Single-slot CompressionMHL FFN (`x = x + CompressionMHL(ln2(x))`), H8 (lut_n_heads=8), d48
 (inner_in=inner_out=48), nap6, tie_unembedder=true, lut_learnable_temps=true, joint=false, hard forward, no

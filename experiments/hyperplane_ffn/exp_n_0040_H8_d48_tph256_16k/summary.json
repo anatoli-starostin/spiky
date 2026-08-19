@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0040_H8_d48_tph256_16k",
+  "best_val_bpb": 1.2042656390341915,
+  "final_val_bpb": 1.2042656390341915,
+  "total_params": 55654752,
+  "training_time_hours": 2.132
+}
