@@ -1,10 +1,14 @@
 # exp_n_0054 — soft-forward annealing with adaptive handoff to the hard FastMHL, H8/d48/tph64, 16k
 
-> **STATUS: code-before-run (smoke-tested on all 5 checks; full 16k run pending confirmation).** Trains the
-> CompressionMHL FFN-slot LUT with the soft full-K surrogate math run ON THE FORWARD (pure autograd, no STE)
-> while annealing the temperature soft→sharp, then **adaptively hands off** to the real FastMHL
-> hard-forward/soft-backward path once the soft blend is sharp enough. Compared against exp_n_0052
-> (1.2285517, hard-forward batched control) and dense (1.196646).
+> **RESULT: final_val_bpb = 1.2573194 (best = final; 16k, 1.05 h). Soft-forward annealing + handoff HURTS —
+> worse than plain hard/soft training.** vs the hard-forward control **exp_n_0052 (1.2285517): +0.0288**; vs
+> dense (1.196646): +0.0607. Handoff fired exactly at step 8000 (top1_threshold; mean top-1 mass 0.9446, temp
+> 0.171, soft→hard logit gap 0.050). The soft phase left the hard-deployable metric far behind (hard-eval bpb
+> ~1.35 at handoff vs exp_n_0052's ~1.28 at the same step); the 8000-step hard phase recovered to 1.257 but
+> never caught up. **Takeaway: the soft weighted-sum forward optimizes a blended objective that ≠ the hard
+> argmax lookup used at eval, so the soft phase is ~wasted for the hard metric — it's better to train the real
+> hard-forward/soft-backward (STE) path from step 0.** The gap trajectory (below) confirms the mismatch persists
+> even at high top-1 mass (gap still 0.05 at top-1 0.94).
 
 ## Idea
 `FastMultiHeadLut` normally does a **hard** gather on the forward and only uses the soft full-K surrogate on the
