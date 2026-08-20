@@ -1,0 +1,62 @@
+exp_g_0015b — INTENTIONALLY SKIPPED, stopped at step 8,400 / 16,000
+==================================================================
+
+Stopped by decision (Anatoli, via the queue), not a crash and not a failure.
+There is deliberately NO summary.json: this run did not finish, and no fake
+terminal record should be manufactured for it. metrics.csv and train.log are
+left intact as partial evidence.
+
+Arm: B (autoencoder warmup on N(0,1) input) with warmup_load_decompress=false,
+i.e. compress+tables warmed, decompress kept at MinimalGPT's zero-init so the
+FFN residual branch starts at 0 like every other arm.
+
+State at the stop
+-----------------
+    step 8,400   val_bpb 1.274502
+    arm A control (exp_g_0014) at the same step: 1.275593
+    delta: -0.001091  (0015b AHEAD)
+
+    Ahead of the control at 42 / 42 evals.
+
+Trajectory of the lead vs arm A (negative = 0015b better):
+
+     200  -0.045674      2000  -0.054382      5000  -0.007262
+     600  -0.026443      2400  -0.038708      6000  -0.005132
+    1000  -0.021072      3000  -0.022043      7000  -0.002804
+    1400  -0.020909      3600  -0.015464      8000  -0.003236
+    1800  -0.045587      4000  -0.012136      8400  -0.001091
+
+Reading this honestly
+---------------------
+The stop was made on the basis that arm B's early lead had vanished. The data
+says something slightly different, and it is worth recording precisely:
+
+  * The lead DECAYED sharply -- peak -0.0544 at step 2,000, down to -0.0011 by
+    step 8,400, a monotone-ish convergence toward zero.
+  * But it had NOT vanished at the stop: 0015b was still ahead at EVERY ONE of
+    its 42 evals, including the last.
+
+So the defensible statement is "the advantage is converging to zero and looks
+likely to be gone or negligible by step 16,000", not "the advantage is gone".
+Whether it would have crossed is untested -- and this line has form for late
+crossings in both directions (exp_g_0009 crossed from behind at ~step 6,800;
+exp_g_0007 converged and then re-opened).
+
+What this run still established
+-------------------------------
+Together with exp_g_0015 (same warmup, warmup_load_decompress=TRUE, which
+finished at 1.239134 -- worse than the control at 80/80 evals), the pair
+isolates the zero-init collision cleanly:
+
+    warmed tables + warmed decompress  ->  WORSE at 80/80 evals   (+0.011071 final)
+    warmed tables + zero-init decompress -> BETTER at 42/42 evals (mid-run)
+
+The harm in exp_g_0015 came from loading the warmed decompress -- which destroys
+MinimalGPT's zero-init and makes the FFN residual branch live at step 0 -- and
+not from the warmed tables. That was the confound flagged in the README before
+either arm was launched, and it is now measured.
+
+Superseded by
+-------------
+exp_g_0016b (arm C: warmup on REAL captured activations, zero-init decompress),
+which is the same clean configuration on a better-warmed set of tables.

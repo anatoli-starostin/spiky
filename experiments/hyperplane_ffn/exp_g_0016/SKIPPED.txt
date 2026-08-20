@@ -1,0 +1,52 @@
+exp_g_0016 — INTENTIONALLY SKIPPED, never launched
+==================================================
+
+Skipped by decision (Anatoli), not a failure. There is deliberately NO
+summary.json and no metrics.csv: this run was never started, and no terminal
+record should be manufactured for it. The committed config.json / train.py /
+README.md stand, and warmup_mse.csv holds the warmup that WAS run for it.
+
+Arm: C (autoencoder warmup on REAL captured activations) with
+warmup_load_decompress=TRUE -- i.e. the warmed decompress loaded into the model.
+
+Why it was dropped
+------------------
+Arm B measured this exact flag and found it harmful, so running arm C with it
+would have spent ~1 h of GPU re-measuring a confound already established:
+
+    exp_g_0015   warmed tables + WARMED decompress
+                 final 1.239134 vs control 1.228063  ->  +0.011071 WORSE
+                 worse than the control at 80 / 80 evals
+
+    exp_g_0015b  warmed tables + ZERO-INIT decompress
+                 stopped at step 8,400, ahead at 42 / 42 evals
+
+Loading a warmed decompress destroys MinimalGPT's zero-init of that weight, so
+the FFN residual branch is live at step 0 instead of starting at zero. That was
+flagged in the README as a second changed variable before either arm ran, and
+arm B then measured it: the damage came from the flag, not from the warmed
+tables.
+
+Running exp_g_0016 would therefore have confounded arm C's real question --
+"do tables warmed on REAL activations beat random init?" -- with a variable
+already known to hurt.
+
+The warmup itself was completed
+-------------------------------
+exp_g_0016's warmup ran (twice: once before commit 3328bf5c changed the
+CompressionMHL default to the batched path, and again afterwards against the
+current library). Its cached weights are what exp_g_0016b loads. Warmup MSE,
+start -> floor, from the regenerated run:
+
+    L0 1.0287 -> 0.1689     L3 1.0084 -> 0.0789
+    L1 1.0078 -> 0.0687     L4 1.0115 -> 0.0785
+    L2 1.0080 -> 0.0767     L5 1.0148 -> 0.0708
+
+(vs arm B's N(0,1) floors of ~0.36 -- real activations are far more
+reconstructible, which is the whole premise of arm C.)
+
+Superseded by
+-------------
+exp_g_0016b -- same arm C warmed tables, with the zero-init decompress
+preserved. That is the clean single-variable test of whether real-activation
+warmup helps, and it is the only arm of this set still running.
