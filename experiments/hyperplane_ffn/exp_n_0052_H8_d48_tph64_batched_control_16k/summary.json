@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0052_H8_d48_tph64_batched_control_16k",
+  "best_val_bpb": 1.2285517309149068,
+  "final_val_bpb": 1.2285517309149068,
+  "total_params": 27343116,
+  "training_time_hours": 1.973
+}

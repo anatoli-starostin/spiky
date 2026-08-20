@@ -1,8 +1,11 @@
 # exp_n_0051 — reconstruction-auxiliary CompressionMHL (whole-module mirror), H8/d48/tph64, 16k
 
-> **STATUS: code-before-run (smoke-tested, full 16k run pending owner confirmation).** Tests whether a
-> training-only reconstruction auxiliary — forcing the FFN slot to be near-lossless — speeds convergence
-> vs the free-row control **exp_g_0006 (1.228335)** at the matched standard 16k rung.
+> **RESULT: final_val_bpb = 1.2276884 (best = final; 16k, 2.51 h). Small but real win from the reconstruction
+> auxiliary.** Final train CE 3.8415, final recon 0.3199. Isolated recon effect (vs the matched batched control
+> exp_n_0052 = 1.2285517, same batched forward, no mirror): **−0.00086 bpb**. vs the loop-path free-row control
+> exp_g_0006 (1.228335): **−0.00065** (= −0.00086 recon gain + 0.00022 batched-shared-temperature penalty). vs
+> dense (1.196646): **+0.0310** — the auxiliary does NOT close the ~0.031 LUT-vs-dense gap; it's a marginal
+> improvement, a few× the run-to-run noise floor. Forcing near-lossless heads helps a little but is not the lever.
 
 ## Idea
 Each block's forward FFN slot is a `CompressionMultiHeadLUT` (input `[N,384]` → output `[N,384]`). During

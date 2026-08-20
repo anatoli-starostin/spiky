@@ -1,0 +1,12 @@
+{
+  "exp_name": "exp_n_0051_H8_d48_tph64_recon_16k",
+  "best_val_bpb": 1.2276884473671819,
+  "final_val_bpb": 1.2276884473671819,
+  "final_train_ce": 3.8414934149522293,
+  "final_train_recon": 0.31989316694434156,
+  "lambda_recon": 0.1,
+  "forward_trainable_params": 27343116,
+  "mirror_aux_trainable_params": 11211276,
+  "total_trainable_params": 38554392,
+  "training_time_hours": 2.51
+}

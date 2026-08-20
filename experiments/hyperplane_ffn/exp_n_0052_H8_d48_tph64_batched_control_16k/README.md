@@ -1,9 +1,11 @@
 # exp_n_0052 — batched-path reproduction of exp_g_0006 (isolates the shared-temperature effect), H8/d48/tph64, 16k
 
-> **STATUS: code-before-run (sanity-tested, full 16k run launching in parallel with exp_n_0051).** A plain
-> forward-only run identical to the free-row control **exp_g_0006 (1.228335)** except the forward
-> CompressionMHL uses the **batched** path (`batched_multi_head_input=True`). No reconstruction mirror, no aux
-> loss — this isolates the batched-vs-loop (shared-vs-per-head temperature) effect on its own.
+> **RESULT: final_val_bpb = 1.2285517 (best = final; 16k, 1.973 h). The batched shared-temperature effect is
+> essentially zero.** vs the loop-path free-row control **exp_g_0006 (1.228335)**: **+0.00022 bpb** — within
+> run-to-run noise. Collapsing 8 per-head `(T_soft, T_sel)` pairs into one shared pair (the batched path) does
+> not measurably hurt convergence; the batched `multi_head_input` path is a near-free drop-in for training as
+> well as inference, validating the new batched default. vs dense (1.196646): +0.0319. This is the matched
+> batched control for exp_n_0051 (recon-aux): `0051 − 0052 = −0.00086` isolates the reconstruction auxiliary.
 
 ## What this measures
 exp_g_0006 (gpustar, the loop-path free-row control) uses the independent per-head loop, so with
