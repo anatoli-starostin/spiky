@@ -1,0 +1,21 @@
+{
+  "exp_name": "exp_n_0055_distill_dense_to_lut_16k",
+  "dense_val_bpb": 1.1966460553057294,
+  "loaded_dense_val_bpb": 1.1966460553057294,
+  "swapin_val_bpb": 1.3553412854445042,
+  "delta_vs_dense": 0.15869523013877473,
+  "final_block_mse": {
+    "b0": 0.002526,
+    "b1": 0.003652,
+    "b2": 0.008191,
+    "b3": 0.009666,
+    "b4": 0.014036,
+    "b5": 0.026322
+  },
+  "lut_params_per_block": 1868546,
+  "lut_params_total": 11211276,
+  "tokens_streamed_per_block": 393216000,
+  "n_steps": 16000,
+  "lut_config": "exp_n_0052 (H8/d48/tph64/nap6 hard batched learnable_temps)",
+  "training_time_hours": 0.757
+}
