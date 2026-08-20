@@ -28,5 +28,9 @@
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
-  "lut_learnable_temps": true
+  "lut_learnable_temps": true,
+  "ft_steps": 5000,
+  "ft_lr": 0.0001,
+  "ft_warmup_frac": 0.05,
+  "ft_eval_every": 250
 }
