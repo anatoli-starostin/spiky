@@ -93,6 +93,7 @@ class CompressionMultiHeadLUT(nn.Module):
         initial_weights_noise: float = 1e-3,
         learnable_temps: bool = True,
         pre_lut_meanabsnorm: bool = False,
+        batched_multi_head_input: bool = False,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):
@@ -125,6 +126,22 @@ class CompressionMultiHeadLUT(nn.Module):
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
         self.pre_lut_meanabsnorm = bool(pre_lut_meanabsnorm)   # MeanAbsNorm on compressed z before FastMHL
+        # OPTIONAL, default OFF: replace the independent path's per-head ModuleList
+        # with a single batched multi_head_input FastMHL (bit-identical init, ~2x
+        # faster hard eval). Only valid on the independent path with per-head
+        # compression, where each head reads its own inner_in slice.
+        self.batched_multi_head_input = bool(batched_multi_head_input)
+        if self.batched_multi_head_input:
+            if self.joint_head_compression:
+                raise ValueError(
+                    "batched_multi_head_input applies to the independent per-head "
+                    "path; it is incompatible with joint_head_compression."
+                )
+            if not self.has_compress:
+                raise ValueError(
+                    "batched_multi_head_input requires per-head compression "
+                    "(inner_in_dim != -1) so each head reads its own input slice."
+                )
 
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
@@ -150,14 +167,23 @@ class CompressionMultiHeadLUT(nn.Module):
             # the concatenated per-head outputs (== summed per-head decompress).
             self.compress = (nn.Linear(input_dim, n_heads * in_raw, device=device)
                              if self.has_compress else nn.Identity())
-            self.luts = nn.ModuleList([
-                FastMultiHeadLut(
-                    input_dim=eff_in, n_heads=1, n_outputs=eff_out,
-                    random_seed=(None if random_seed is None else random_seed + h),
-                    **_lut_kw,
+            if self.batched_multi_head_input:
+                # One batched multi_head_input FastMHL replacing the ModuleList:
+                # block-diagonal per-head routing with the SAME seed+h convention,
+                # so this is a bit-identical, faster drop-in for self.luts.
+                self.lut_batched = FastMultiHeadLut(
+                    input_dim=eff_in, n_heads=n_heads, n_outputs=eff_out,
+                    multi_head_input=True, random_seed=random_seed, **_lut_kw,
                 )
-                for h in range(n_heads)
-            ])
+            else:
+                self.luts = nn.ModuleList([
+                    FastMultiHeadLut(
+                        input_dim=eff_in, n_heads=1, n_outputs=eff_out,
+                        random_seed=(None if random_seed is None else random_seed + h),
+                        **_lut_kw,
+                    )
+                    for h in range(n_heads)
+                ])
             self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
                                if self.has_decompress else nn.Identity())
 
@@ -179,6 +205,18 @@ class CompressionMultiHeadLUT(nn.Module):
         N = x.shape[0]
         if self.has_compress:
             z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)   # [N, H, inner_in]
+        if self.batched_multi_head_input:
+            # Batched drop-in equivalent of the per-head loop below (has_compress
+            # guaranteed True by the constructor check).
+            z3 = z
+            if self.pre_lut_meanabsnorm:
+                z3 = z3 / (z3.abs().mean(-1, keepdim=True) + 1e-6)   # per-head MeanAbsNorm
+            y = self.lut_batched(z3).to(z3.dtype)              # [N, H, eff_out]
+            if self.inner_residual:
+                y = y + z3                                      # eff_in == eff_out
+            if self.has_decompress:
+                return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
+            return y.sum(dim=1)                                 # [N, eff_out]
         parts = []
         for h, lut in enumerate(self.luts):
             z_h = z[:, h, :] if self.has_compress else x        # [N, eff_in] (all heads read x if -1)
