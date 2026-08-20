@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0050_H8_d48_tph64_hypernet2M_16k",
+  "best_val_bpb": 1.2860195297841697,
+  "final_val_bpb": 1.2860195297841697,
+  "total_params": 29430160,
+  "training_time_hours": 1.509
+}

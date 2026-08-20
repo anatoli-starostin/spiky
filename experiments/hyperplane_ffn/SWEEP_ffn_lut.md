@@ -486,3 +486,19 @@ params is a dead-end at this budget; the free rows are the right representation.
 per-table low-rank residual might recover it, but that defeats the param-efficiency motive.) Ranking unchanged
 at top (0049 sits near the bottom): 0046 1.196862 < 0045 1.197767 < 0043 1.202920 < 0040 1.204266 < 0047
 1.205657 < … < 0049 1.259109.
+
+### Bigger generator doesn't rescue it — hypernet is a dead-end at any size (exp_n_0050, negative)
+
+**RESULT — exp_n_0050 (hypernet-reparametrized LUT with a ~2M-param generator, 60× exp_n_0049's 34K; H8/d48/tph64
+hard, standard batch, 16k steps; gen = 2,086,960: MLP Linear(262→1152)²→48 + Embedding(3072,128) table +
+Embedding(48,64) module + Embedding(64,64) cluster; 27M-model, 19.99M trainable) = 1.2860195 (final=best; 1.51 h).
+STILL a big regression: +0.0577 vs the matched free-row control exp_g_0006 (1.228335, same 16k/standard-batch),
++0.0894 vs dense.** So scaling the generator 60× did NOT recover the free-row capacity. It even finished ABOVE
+exp_n_0049's 34K generator (1.259109), but that's confounded by 0049 running 24k steps (589.8M tokens) vs 0050's
+16k (393.2M) — netting out the ~0.023 token effect, the 2M generator ≈ the 34K one at matched tokens, i.e.
+**generator SIZE barely moves the needle; the reparametrization itself is the ceiling.** (Note the 2M gen DID fit
+faster early — step-200 bpb 2.629 vs 0049's 2.773 — but converged no better.) Mechanism clean again (grads reach
+the 2M gen, bake to plain static LUT EXACT max diff 0.0). **Firm verdict: reparametrizing LUT rows through a shared
+generator is a dead-end regardless of generator size — the free per-row parameters are irreplaceable at this
+budget.** Ranking (bottom): … < 0047 1.205657 < 0049 1.259109 < 0050 1.286020. Two hypernet sizes (34K, 2M) both
+fail; the free-row LUT + more training tokens (exp_n_0046) remains the winning recipe.
