@@ -49,6 +49,9 @@ EVAL_EVERY, EVAL_STEPS, TIE = cfg['eval_every'], cfg['eval_steps'], bool(cfg['ti
 LAM_TARGET, LAM_RAMP = float(cfg['lambda_reg_target']), float(cfg['lambda_ramp_frac'])
 LUT_BATCH = int(cfg['lut_batch_tokens'])
 CKPT_EVERY = int(cfg.get('ckpt_every', 4000))
+# Decoupled batch sizes (asymmetric-batch variant). Default = lut_batch_tokens (symmetric).
+REG_BATCH = int(cfg.get('reg_batch_tokens', LUT_BATCH))          # tokens for the FFN->LUT regularizer
+LUT_FIT_BATCH = int(cfg.get('lut_fit_batch_tokens', LUT_BATCH))  # tokens for the LUT-fitting loss
 L = dict(inner_in=cfg['lut_inner_in_dim'], inner_out=cfg['lut_inner_out_dim'], nap=cfg['lut_n_anchor_pairs'],
          tph=cfg['lut_tables_per_head'], heads=cfg['lut_n_heads'], joint=cfg['lut_joint_head_compression'],
          batched=cfg['lut_batched_multi_head_input'], fwd=cfg['lut_forward_mode'], bf16=cfg['lut_use_bf16'],
@@ -180,7 +183,8 @@ dense_params = sum(p.numel() for p in model.parameters())
 lut_params = sum(p.numel() for lu in luts for p in lu.parameters())
 print(f'PARAM COUNTS | dense (deployable)={dense_params:,} | 6 LUTs (co-trained)={lut_params:,}')
 print(f'LUT config (== exp_n_0052): H{L["heads"]}/d{L["inner_in"]}/tph{L["tph"]}/nap{L["nap"]} batched={L["batched"]} | '
-      f'lambda_target={LAM_TARGET} ramp_frac={LAM_RAMP} | lut_batch_tokens={LUT_BATCH} (dense CE full {DEVICE_BS*SEQ_LEN})')
+      f'lambda_target={LAM_TARGET} ramp_frac={LAM_RAMP} | lut_fit_batch={LUT_FIT_BATCH} reg_batch={REG_BATCH} '
+      f'({"symmetric" if REG_BATCH==LUT_FIT_BATCH else "ASYMMETRIC"}) | dense CE full {DEVICE_BS*SEQ_LEN})')
 
 @torch.no_grad()
 def swapin_bpb():
@@ -219,14 +223,22 @@ for step in range(1, N_STEPS + 1):
     x, y = next(train_loader)
     ce = model(x, y)                                  # hooks fill caps[b]=(x_b, ffn_out_b) with grad
     ntok = caps[0][0].shape[0]
-    idx = torch.randperm(ntok, device=DEVICE)[:min(LUT_BATCH, ntok)]
+    sym = (REG_BATCH == LUT_FIT_BATCH)
+    idx_fit = torch.randperm(ntok, device=DEVICE)[:min(LUT_FIT_BATCH, ntok)]
+    idx_reg = idx_fit if sym else torch.randperm(ntok, device=DEVICE)[:min(REG_BATCH, ntok)]
     loss_lut_sum, loss_reg_sum = 0.0, 0.0
     for b in range(DEPTH):
         x_b, ffn_b = caps[b]
-        x_sub, ffn_sub = x_b[idx], ffn_b[idx]
-        lut_out = luts[b](x_sub.detach())             # grad -> LUT params only
-        loss_lut = F.mse_loss(lut_out, ffn_sub.detach())      # trains LUT
-        loss_reg = F.mse_loss(ffn_sub, lut_out.detach())      # pulls FFN/upstream toward LUT
+        # LUT-fitting loss on the (small) fit subsample -- grad -> LUT params only
+        lut_fit = luts[b](x_b[idx_fit].detach())
+        loss_lut = F.mse_loss(lut_fit, ffn_b[idx_fit].detach())
+        # Reg loss (pulls FFN/upstream toward the LUT) -- grad -> FFN/upstream only, LUT target detached.
+        if sym:
+            loss_reg = F.mse_loss(ffn_b[idx_fit], lut_fit.detach())
+        else:                                          # asymmetric: reg on a richer (e.g. full) token set
+            with torch.no_grad():
+                lut_reg = luts[b](x_b[idx_reg].detach())
+            loss_reg = F.mse_loss(ffn_b[idx_reg], lut_reg)
         loss_lut_sum = loss_lut_sum + loss_lut
         loss_reg_sum = loss_reg_sum + loss_reg
         m = loss_lut.item()
@@ -273,6 +285,7 @@ summary = {'exp_name': cfg['exp_name'], 'dense_own_bpb': final_dense, 'swapin_bp
            'swapin_delta_vs_dense_1p19665': final_swap - 1.196646,
            'swapin_delta_vs_e2e_lut_0052': final_swap - 1.2285517,
            'lambda_reg_target': LAM_TARGET, 'lut_batch_tokens': LUT_BATCH,
+           'reg_batch_tokens': REG_BATCH, 'lut_fit_batch_tokens': LUT_FIT_BATCH,
            'dense_params': dense_params, 'lut_params': lut_params,
            'checkpoint': 'checkpoint_final.pt (dense model + 6 LUT state_dicts)',
            'final_imitation_mse': ema_imit, 'final_reg_mse': ema_reg,
