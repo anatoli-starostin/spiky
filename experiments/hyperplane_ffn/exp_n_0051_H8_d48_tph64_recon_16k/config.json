@@ -24,7 +24,7 @@
   "lut_tables_per_head": 64,
   "lut_n_heads": 8,
   "lut_joint_head_compression": false,
-  "lut_batched_multi_head_input": false,
+  "lut_batched_multi_head_input": true,
   "lut_forward_mode": "hard",
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,

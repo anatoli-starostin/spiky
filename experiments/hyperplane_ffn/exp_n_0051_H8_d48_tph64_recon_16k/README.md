@@ -24,15 +24,21 @@ The mirrors are **not** referenced in `model.forward`, so val/bpb (CE) is comput
 CompressionMHL. Mirrors are trainable during training (added to the optimizer, LUT tables → nodecay group),
 and are **dropped from the saved checkpoint** (`recon.*` keys excluded) — the shipped model is the unchanged slot.
 
-## Config (matches exp_g_0006 / exp_n_0047 forward exactly)
+## Config
 H8 / d48 / tph64 / nap6, hard routing, device_bs 48, grad_accum 1, **16000 steps**, warmup 1600, seed 1,
-clean val 245,760 tokens (eval_steps 10 × bs 48 × seq 512). Forward CMHL forced to the **independent loop path**
-(`lut_batched_multi_head_input=false`) so it is bit-identical to exp_g_0006 (per-head temperatures) — the batched
-default would share temps across heads and perturb the surrogate-gradient dynamics of the baseline. No edits to
-the shared modules `fast_multi_head_lut.py` / `compression_mhl.py`; the mirror is just a second CMHL in train.py.
+clean val 245,760 tokens (eval_steps 10 × bs 48 × seq 512). No edits to the shared modules
+`fast_multi_head_lut.py` / `compression_mhl.py`; the mirror is just a second CMHL in train.py.
 
-## Smoke test (40-step, real model size)
-Builds ✓; mirror trains ✓; **recon finite and decreasing** (raw 0.65 → 0.39 over 40 steps after the zero-init
-decompress transient) ✓; val/bpb path clean and mirror-excluded ✓.
-Param counts: **forward trainable 27,343,200** (== exp_g_0006), **mirror aux trainable 11,211,360**,
-**total trainable 38,554,560**.
+**Forward slot uses `batched_multi_head_input=true` (the batched FastMHL path).** With `learnable_temps=true`
+this means the per-head temperature is **shared** — a single `(T_soft, T_sel)` pair across all 8 heads — rather
+than per-head as in the exp_g_0006 loop-path control. So this run is **NOT bit-comparable to exp_g_0006 at the
+temperature level**; it is the intended batched config. (The hard forward and per-head surrogate gradients are
+otherwise identical to the loop path up to float reassociation; only the shared-temperature parametrization
+differs — see the batched-vs-loop audit.) The mirror CMHL also uses the batched path (identical structure).
+
+## Smoke test (real model size, batched forward)
+Builds ✓; mirror trains ✓; **recon finite and decreasing** (after the zero-init decompress transient) ✓;
+val/bpb path clean and mirror-excluded ✓.
+Param counts (batched path): **forward trainable 27,343,116**, **mirror aux trainable 11,211,276**,
+**total trainable 38,554,392**. (The batched path has 84 fewer params than the loop path — one shared
+`(T_soft, T_sel)` pair per block instead of 8 per-head pairs.)
