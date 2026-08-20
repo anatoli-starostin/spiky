@@ -31,5 +31,6 @@
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
   "soft_anneal_temp_start": 0.5,
-  "soft_anneal_temp_floor": 0.02
+  "soft_anneal_temp_floor": 0.02,
+  "handoff_top1_threshold": 0.85
 }

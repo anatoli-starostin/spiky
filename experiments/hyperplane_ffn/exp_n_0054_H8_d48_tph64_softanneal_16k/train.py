@@ -71,6 +71,8 @@ LUT_SEED   = cfg.get('lut_base_seed', 1000)
 # Soft-anneal knobs: temps decay exponentially start -> floor over all n_steps.
 SOFT_START = float(cfg.get('soft_anneal_temp_start', 0.5))
 SOFT_FLOOR = float(cfg.get('soft_anneal_temp_floor', 0.02))
+# Adaptive handoff: once mean top-1 softmax mass >= this, switch soft -> real FastMHL hard path.
+HANDOFF_THRESH = float(cfg.get('handoff_top1_threshold', 0.85))
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -201,7 +203,7 @@ class MinimalGPT(nn.Module):
 
 
 def setup_optimizer(model, lr, weight_decay):
-    lut_ids = {id(p) for m in model.modules() if isinstance(m, (FastMultiHeadLut, SoftAnnealLut))
+    lut_ids = {id(p) for m in model.modules() if isinstance(m, FastMultiHeadLut)
                for p in m.parameters(recurse=False)}
     decay, nodecay = [], []
     for p in model.parameters():
@@ -213,7 +215,7 @@ def setup_optimizer(model, lr, weight_decay):
     opt = torch.optim.AdamW(groups)
     for g in opt.param_groups:
         g['initial_lr'] = g['lr']
-    n_lut = sum(m.weights.numel() for m in model.modules() if isinstance(m, (FastMultiHeadLut, SoftAnnealLut)))
+    n_lut = sum(m.weights.numel() for m in model.modules() if isinstance(m, FastMultiHeadLut))
     print(f"AdamW (0033 grouping) | decay(2-D weights)={sum(p.numel() for p in decay):,} wd={weight_decay} | "
           f"nodecay(LUT tables+temps+1-D)={sum(p.numel() for p in nodecay):,} wd=0 | lr={lr} betas=(0.9, 0.95) "
           f"eps=1e-8 [LUT tables={n_lut:,} in nodecay]")
@@ -226,6 +228,33 @@ def get_lr_scale(step, n_steps, warmup_frac):
         return step / max(w, 1)
     progress = (step - w) / max(n_steps - w, 1)
     return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))
+
+
+def set_hard_mode(luts, hard):
+    prev = [l.hard for l in luts]
+    for l in luts:
+        l.hard = hard
+    return prev
+
+
+def restore_modes(luts, prev):
+    for l, h in zip(luts, prev):
+        l.hard = h
+
+
+@torch.no_grad()
+def model_soft_hard_gap(model, luts, x):
+    """End-to-end relative L2 gap between soft-mode and hard-mode logits on batch x."""
+    was = model.training
+    model.eval()
+    prev = set_hard_mode(luts, False); ls = model(x)
+    set_hard_mode(luts, True);         lh = model(x)
+    restore_modes(luts, prev)
+    if was:
+        model.train()
+    num = (ls - lh).pow(2).sum().sqrt()
+    den = lh.pow(2).sum().sqrt() + 1e-8
+    return float((num / den).item())
 
 
 model = MinimalGPT(vocab_size=VOCAB_SIZE, n_embd=N_EMBD, n_head=N_HEAD, n_layer=DEPTH, seq_len=SEQ_LEN).to(DEVICE)
@@ -269,16 +298,30 @@ csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
 csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb', 'temp'])
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
+handed_off, handoff_info, mean_top1 = False, {}, 0.0
 
 model.train()
 for step in range(1, N_STEPS + 1):
     lr_scale = get_lr_scale(step, N_STEPS, WARMUP_FRAC)
     for g in optimizer.param_groups:
         g['lr'] = g['initial_lr'] * lr_scale
-    # anneal the soft temperatures (same value for both), set before train + eval forwards
+    # anneal the soft temperatures (same value for both)
     t_cur = anneal_temp(step, N_STEPS, SOFT_START, SOFT_FLOOR)
     for sal in soft_luts:
         sal.set_temps(t_cur, t_cur)
+    # ADAPTIVE HANDOFF: once the soft blend is sharp enough (mean top-1 softmax mass
+    # >= threshold, i.e. soft output ~= hard output), switch every slot to the real
+    # FastMHL hard-forward/soft-backward path and continue training from there.
+    if (not handed_off) and mean_top1 >= HANDOFF_THRESH:
+        xp, _ = next(train_loader)
+        gap = model_soft_hard_gap(model, soft_luts, xp)      # end-to-end soft-vs-hard logit gap
+        for sal in soft_luts:
+            sal.set_hard(seed_fmhl_temps_to=t_cur)           # continuity: seed learnable temps to t_cur
+        handed_off = True
+        handoff_info = {'step': step, 'mean_top1': round(mean_top1, 4),
+                        'temp': round(t_cur, 5), 'soft_hard_logit_gap': round(gap, 5)}
+        print(f'*** HANDOFF at step {step}: mean_top1={mean_top1:.4f} temp={t_cur:.5f} '
+              f'soft->hard logit_gap={gap:.5f} -> real FastMHL STE path ***')
     optimizer.zero_grad(set_to_none=True)
     accum_loss = 0.0
     for _ in range(grad_accum):
@@ -288,17 +331,23 @@ for step in range(1, N_STEPS + 1):
         accum_loss += loss.item() / grad_accum
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
+    if not handed_off:
+        mean_top1 = sum(s.last_top1 for s in soft_luts) / len(soft_luts)
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
+    mode = 'hard' if handed_off else 'soft'
     if step % 100 == 0 or step == 1:
-        print(f'step {step:6d} | loss={ema:.4f} | temp={t_cur:.4f} | lr={lr_scale * LR:.2e}')
+        print(f'step {step:6d} | loss={ema:.4f} | {mode} temp={t_cur:.4f} top1={mean_top1:.4f} | lr={lr_scale * LR:.2e}')
     if step % EVAL_EVERY == 0 or step == N_STEPS:
+        # TRUE hard-eval bpb: always evaluate through the real FastMHL hard path.
+        prev = set_hard_mode(soft_luts, True)
         model.eval()
         bpb = evaluate_bpb(model, val_loader_factory(), EVAL_STEPS, token_bytes)
+        model.train()
+        restore_modes(soft_luts, prev)
         best_bpb = min(best_bpb, bpb)
-        print(f'[VAL] step {step}: bpb={bpb:.4f} | temp={t_cur:.4f}')
+        print(f'[VAL] step {step}: hard_bpb={bpb:.4f} | {mode} temp={t_cur:.4f} top1={mean_top1:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
         csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}', f'{t_cur:.6f}']); csv_f.flush()
-        model.train()
 
 csv_f.close()
 elapsed = time.time() - t0
@@ -311,7 +360,8 @@ summary = {'exp_name': cfg['exp_name'], 'best_val_bpb': best_bpb,
            'final_val_bpb': val_bpbs[-1] if val_bpbs else None,
            'total_params': total_params,
            'soft_anneal_temp_start': SOFT_START, 'soft_anneal_temp_floor': SOFT_FLOOR,
-           'n_soft_luts': len(soft_luts),
+           'handoff_top1_threshold': HANDOFF_THRESH, 'n_soft_luts': len(soft_luts),
+           'handed_off': handed_off, 'handoff': handoff_info,
            'training_time_hours': round(elapsed / 3600, 3)}
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
