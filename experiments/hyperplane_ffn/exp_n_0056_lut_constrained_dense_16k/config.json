@@ -31,5 +31,6 @@
   "lut_learnable_temps": true,
   "lambda_reg_target": 0.1,
   "lambda_ramp_frac": 1.0,
-  "lut_batch_tokens": 4096
+  "lut_batch_tokens": 4096,
+  "ckpt_every": 4000
 }

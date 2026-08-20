@@ -48,6 +48,7 @@ LR, WD, WARMUP_FRAC = cfg['lr'], cfg['weight_decay'], cfg['lr_warmup_fraction']
 EVAL_EVERY, EVAL_STEPS, TIE = cfg['eval_every'], cfg['eval_steps'], bool(cfg['tie_unembedder'])
 LAM_TARGET, LAM_RAMP = float(cfg['lambda_reg_target']), float(cfg['lambda_ramp_frac'])
 LUT_BATCH = int(cfg['lut_batch_tokens'])
+CKPT_EVERY = int(cfg.get('ckpt_every', 4000))
 L = dict(inner_in=cfg['lut_inner_in_dim'], inner_out=cfg['lut_inner_out_dim'], nap=cfg['lut_n_anchor_pairs'],
          tph=cfg['lut_tables_per_head'], heads=cfg['lut_n_heads'], joint=cfg['lut_joint_head_compression'],
          batched=cfg['lut_batched_multi_head_input'], fwd=cfg['lut_forward_mode'], bf16=cfg['lut_use_bf16'],
@@ -192,9 +193,19 @@ def swapin_bpb():
 
 grad_accum = max(1, TOTAL_BS // (DEVICE_BS * SEQ_LEN))
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
-csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'lambda', 'dense_bpb', 'swapin_bpb'] + [f'mse_b{b}' for b in range(DEPTH)])
+csv_w = csv.writer(csv_f)
+csv_w.writerow(['step', 'lambda', 'train_ce', 'imitation_mse', 'reg_mse'] +
+               [f'mse_b{b}' for b in range(DEPTH)] + ['dense_bpb', 'swapin_bpb'])
 hist = {'step': [], 'dense': [], 'swap': [], 'mse': {b: [] for b in range(DEPTH)}}
 mse_ema = [None] * DEPTH
+ema_ce = ema_imit = ema_reg = None
+
+def save_ckpt(step, tag='latest'):
+    """Reloadable checkpoint: dense model weights + all 6 co-trained LUT state_dicts."""
+    path = os.path.join(EXP_DIR, f'checkpoint_{tag}.pt')
+    torch.save({'step': step, 'model': model.state_dict(),
+                'luts': [lu.state_dict() for lu in luts], 'config': cfg}, path)
+    print(f'  [ckpt] saved {path} (dense + 6 LUTs, step {step})')
 t0 = time.time()
 model.train()
 for lu in luts:
@@ -224,17 +235,25 @@ for step in range(1, N_STEPS + 1):
     total.backward()
     torch.nn.utils.clip_grad_norm_([p for g in opt.param_groups for p in g['params']], 1.0)
     opt.step()
+    ce_v, imit_v, reg_v = ce.item(), float(loss_lut_sum.item()), float(loss_reg_sum.item())
+    ema_ce = ce_v if ema_ce is None else 0.99 * ema_ce + 0.01 * ce_v
+    ema_imit = imit_v if ema_imit is None else 0.99 * ema_imit + 0.01 * imit_v
+    ema_reg = reg_v if ema_reg is None else 0.99 * ema_reg + 0.01 * reg_v
     if step % 100 == 0 or step == 1:
-        print(f'step {step:6d} | lam={lam:.4f} | CE={ce.item():.4f} | MSE ' + ' '.join(f'b{b}={mse_ema[b]:.4f}' for b in range(DEPTH)))
+        print(f'step {step:6d} | lam={lam:.4f} | CE={ema_ce:.4f} imit={ema_imit:.4f} reg={ema_reg:.4f} | MSE ' + ' '.join(f'b{b}={mse_ema[b]:.4f}' for b in range(DEPTH)))
+    if step % CKPT_EVERY == 0:
+        save_ckpt(step)
     if step % EVAL_EVERY == 0 or step == N_STEPS:
         model.eval(); d_bpb = evaluate_bpb(model, val_loader_factory(), EVAL_STEPS, token_bytes); model.train()
         s_bpb = swapin_bpb()
         hist['step'].append(step); hist['dense'].append(d_bpb); hist['swap'].append(s_bpb)
         for b in range(DEPTH):
             hist['mse'][b].append(mse_ema[b])
-        csv_w.writerow([step, f'{lam:.5f}', f'{d_bpb:.6f}', f'{s_bpb:.6f}'] + [f'{mse_ema[b]:.6f}' for b in range(DEPTH)]); csv_f.flush()
+        csv_w.writerow([step, f'{lam:.5f}', f'{ema_ce:.6f}', f'{ema_imit:.6f}', f'{ema_reg:.6f}'] +
+                       [f'{mse_ema[b]:.6f}' for b in range(DEPTH)] + [f'{d_bpb:.6f}', f'{s_bpb:.6f}']); csv_f.flush()
         print(f'[VAL] step {step}: dense_bpb={d_bpb:.5f} swapin_bpb={s_bpb:.5f} (lam={lam:.4f})')
 csv_f.close()
+save_ckpt(N_STEPS, tag='final')      # dense + 6 LUTs, reloadable without re-distillation
 
 # ---------------- plots ----------------
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -255,6 +274,8 @@ summary = {'exp_name': cfg['exp_name'], 'dense_own_bpb': final_dense, 'swapin_bp
            'swapin_delta_vs_e2e_lut_0052': final_swap - 1.2285517,
            'lambda_reg_target': LAM_TARGET, 'lut_batch_tokens': LUT_BATCH,
            'dense_params': dense_params, 'lut_params': lut_params,
+           'checkpoint': 'checkpoint_final.pt (dense model + 6 LUT state_dicts)',
+           'final_imitation_mse': ema_imit, 'final_reg_mse': ema_reg,
            'training_time_hours': round((time.time() - t0) / 3600, 3)}
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
