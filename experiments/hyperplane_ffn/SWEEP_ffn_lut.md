@@ -468,3 +468,21 @@ This is the single most important lever found: scale training tokens, not table 
 LUT-vs-dense gap. Gap to dense: 0046 +0.0002 (best), 0047 +0.0090. Ranking: **0046 1.196862 < 0045 1.197767 <
 0043 1.202920 < 0040 1.204266 < 0047 1.205657 < ...** — 0046 stays best (though its val sample differs); 0047 is
 the cleanly-comparable confirmation that training-token scaling is the real lever.
+
+### Hypernetwork-reparametrized LUT — the rows NEED their capacity (exp_n_0049, negative)
+
+**RESULT — exp_n_0049 (H8/d48/tph64 hard, clone of exp_n_0047, LUT rows reparametrized as
+row = f_theta(cluster_code, table_emb, module_emb) via ONE shared 33.7K-param generator MLP; 9.44M free-row
+originals frozen+excluded so table capacity is driven by ~34K hypernet params; all in train.py, no module edits;
+27,376,912 total / 17.9M trainable, 1.96 h) = 1.2591091 (final=best). BIG REGRESSION: +0.0535 vs the
+apples-to-apples free-row control exp_n_0047 (1.205657), +0.0625 vs dense.** So the hypernet hypothesis
+(shared-gradient row generation fixes rare-cluster gradient starvation → better) is FALSE here: **the ~280×
+table-param compression (9.44M free rows → 34K shared-gen) UNDERFITS badly** — the rows genuinely need their
+own capacity; a tiny shared MLP + per-table 8-d embedding can't reproduce 3072 tables × 64 rows × 48 dims.
+The mechanism itself is sound and clean — register_parametrization drove training, grads reached the hypernet,
+and remove_parametrizations baked to a plain static LUT with EXACT forward equivalence (max|pre−post|=0.0) — but
+the capacity trade loses far more than the gradient-sharing gains. **Verdict: reparametrizing the tables to fewer
+params is a dead-end at this budget; the free rows are the right representation.** (A much larger generator or
+per-table low-rank residual might recover it, but that defeats the param-efficiency motive.) Ranking unchanged
+at top (0049 sits near the bottom): 0046 1.196862 < 0045 1.197767 < 0043 1.202920 < 0040 1.204266 < 0047
+1.205657 < … < 0049 1.259109.
