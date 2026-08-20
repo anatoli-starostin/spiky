@@ -31,10 +31,17 @@ unpinned over all K and run on the forward.
 `SoftAnnealLut` (experiment-local, torch.compile'd) **wraps** a real per-head FastMHL and **shares its weight /
 anchor / bit_matrix tensors** — so the soft phase trains the FastMHL's own `weights`, and at handoff there is
 nothing to copy: we just flip `mode` to delegate to `fmhl(x)` (real hard forward + STE backward), seeding the
-FastMHL's learnable log-temps to the current annealed value for continuity. Temps anneal exponentially
-`soft_anneal_temp_start=0.5 → soft_anneal_temp_floor=0.02` over 16k steps; handoff fires when mean top-1 mass ≥
-`handoff_top1_threshold=0.85` (a knob). **Eval always reports the TRUE hard-eval bpb** — every eval forces the
-FastMHL hard path (even during the soft phase), so val bpb is always the deployable number.
+FastMHL's learnable log-temps to the current annealed value for continuity. **Eval always reports the TRUE
+hard-eval bpb** — every eval forces the FastMHL hard path (even during the soft phase), so val bpb is always the
+deployable number.
+
+**Handoff timing (full-run scale adjustment):** temps anneal exponentially `soft_anneal_temp_start=0.5 →
+soft_anneal_temp_floor=0.02` over a **stretched horizon `soft_anneal_over_steps=24000`** (> the 16k training
+steps), so the blend sharpens gradually and top-1 mass approaches the threshold near mid-run rather than early.
+Handoff fires when mean top-1 mass ≥ `handoff_top1_threshold=0.85` **and** `step ≥ handoff_min_step=8000` (guard
+against too-early handoff), and is **force-fired at `handoff_max_step=10000`** even if the threshold is not
+reached. With this schedule temp≈0.17 (top-1≈0.93) at step 8000, so the handoff lands at ≈step 8000 (~50% of
+training). A per-eval soft-vs-hard logit-gap trajectory is logged through the soft phase.
 
 ## No shared-module edits
 `fast_multi_head_lut.py` / `compression_mhl.py` are untouched. `train.py` builds the standard CompressionMHL

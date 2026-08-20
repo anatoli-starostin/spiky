@@ -73,6 +73,11 @@ SOFT_START = float(cfg.get('soft_anneal_temp_start', 0.5))
 SOFT_FLOOR = float(cfg.get('soft_anneal_temp_floor', 0.02))
 # Adaptive handoff: once mean top-1 softmax mass >= this, switch soft -> real FastMHL hard path.
 HANDOFF_THRESH = float(cfg.get('handoff_top1_threshold', 0.85))
+# Anneal horizon (may exceed n_steps to stretch the schedule so the 0.85 crossing lands mid-run).
+SOFT_OVER = int(cfg.get('soft_anneal_over_steps', cfg.get('n_steps')))
+# Handoff can't fire before HANDOFF_MIN (prevents too-early handoff); forced by HANDOFF_MAX.
+HANDOFF_MIN = int(cfg.get('handoff_min_step', 0))
+HANDOFF_MAX = int(cfg.get('handoff_max_step', cfg.get('n_steps')))
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -276,7 +281,8 @@ for block in model.blocks:
         ffn.luts[h] = sal           # nn.ModuleList __setitem__ re-registers the module
         soft_luts.append(sal)
 print(f'soft-anneal: swapped {len(soft_luts)} per-head FastMHL -> SoftAnnealLut '
-      f'(temps anneal {SOFT_START} -> {SOFT_FLOOR}, exp decay over n_steps)')
+      f'(temps anneal {SOFT_START} -> {SOFT_FLOOR} exp over {SOFT_OVER} steps; '
+      f'handoff top1>={HANDOFF_THRESH} within [{HANDOFF_MIN}, {HANDOFF_MAX}])')
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f'MinimalGPT: depth={DEPTH}, dim={N_EMBD}, heads={N_HEAD}, seq_len={SEQ_LEN} | ffn={FFN_TYPE} tie={TIE} gamma={GAMMA}')
@@ -285,9 +291,14 @@ print(f'Params: {total_params:,}')
 if os.environ.get('SMOKE'):
     print('SMOKE OK'); sys.exit(0)
 if os.environ.get('SMOKE_STEPS'):          # inert for the real run; short sanity only
+    _orig_nsteps = N_STEPS
     N_STEPS = int(os.environ['SMOKE_STEPS'])
     EVAL_EVERY = max(1, N_STEPS)
-    print(f'*** SMOKE_STEPS={N_STEPS}: short sanity run ***')
+    _sc = N_STEPS / max(_orig_nsteps, 1)   # scale anneal horizon + handoff guards to the smoke length
+    SOFT_OVER = max(1, int(SOFT_OVER * _sc))
+    HANDOFF_MIN = int(HANDOFF_MIN * _sc)
+    HANDOFF_MAX = max(1, int(HANDOFF_MAX * _sc))
+    print(f'*** SMOKE_STEPS={N_STEPS}: short sanity (SOFT_OVER={SOFT_OVER} HANDOFF_MIN={HANDOFF_MIN} HANDOFF_MAX={HANDOFF_MAX}) ***')
 
 optimizer = setup_optimizer(model, lr=LR, weight_decay=WD)
 tokens_per_step = DEVICE_BS * SEQ_LEN
@@ -299,29 +310,34 @@ csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb', 'tem
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 handed_off, handoff_info, mean_top1 = False, {}, 0.0
+gap_traj = []   # soft-vs-hard logit gap trajectory over the soft phase (step, temp, top1, gap)
 
 model.train()
 for step in range(1, N_STEPS + 1):
     lr_scale = get_lr_scale(step, N_STEPS, WARMUP_FRAC)
     for g in optimizer.param_groups:
         g['lr'] = g['initial_lr'] * lr_scale
-    # anneal the soft temperatures (same value for both)
-    t_cur = anneal_temp(step, N_STEPS, SOFT_START, SOFT_FLOOR)
+    # anneal the soft temperatures (same value for both); horizon SOFT_OVER (>= n_steps)
+    # stretches the schedule so the 0.85 top-1 crossing lands mid-run rather than early.
+    t_cur = anneal_temp(step, SOFT_OVER, SOFT_START, SOFT_FLOOR)
     for sal in soft_luts:
         sal.set_temps(t_cur, t_cur)
-    # ADAPTIVE HANDOFF: once the soft blend is sharp enough (mean top-1 softmax mass
-    # >= threshold, i.e. soft output ~= hard output), switch every slot to the real
-    # FastMHL hard-forward/soft-backward path and continue training from there.
-    if (not handed_off) and mean_top1 >= HANDOFF_THRESH:
+    # ADAPTIVE HANDOFF: switch every slot to the real FastMHL hard-forward/soft-backward
+    # path once the soft blend is sharp enough (mean top-1 mass >= threshold) AND we are
+    # past HANDOFF_MIN (no too-early handoff); forced at HANDOFF_MAX regardless.
+    fire_thresh = (mean_top1 >= HANDOFF_THRESH and step >= HANDOFF_MIN)
+    fire_forced = (step >= HANDOFF_MAX)
+    if (not handed_off) and (fire_thresh or fire_forced):
         xp, _ = next(train_loader)
         gap = model_soft_hard_gap(model, soft_luts, xp)      # end-to-end soft-vs-hard logit gap
         for sal in soft_luts:
             sal.set_hard(seed_fmhl_temps_to=t_cur)           # continuity: seed learnable temps to t_cur
         handed_off = True
         handoff_info = {'step': step, 'mean_top1': round(mean_top1, 4),
-                        'temp': round(t_cur, 5), 'soft_hard_logit_gap': round(gap, 5)}
-        print(f'*** HANDOFF at step {step}: mean_top1={mean_top1:.4f} temp={t_cur:.5f} '
-              f'soft->hard logit_gap={gap:.5f} -> real FastMHL STE path ***')
+                        'temp': round(t_cur, 5), 'soft_hard_logit_gap': round(gap, 5),
+                        'trigger': 'forced_max_step' if (fire_forced and not fire_thresh) else 'top1_threshold'}
+        print(f'*** HANDOFF at step {step} ({handoff_info["trigger"]}): mean_top1={mean_top1:.4f} '
+              f'temp={t_cur:.5f} soft->hard logit_gap={gap:.5f} -> real FastMHL STE path ***')
     optimizer.zero_grad(set_to_none=True)
     accum_loss = 0.0
     for _ in range(grad_accum):
@@ -345,7 +361,15 @@ for step in range(1, N_STEPS + 1):
         model.train()
         restore_modes(soft_luts, prev)
         best_bpb = min(best_bpb, bpb)
-        print(f'[VAL] step {step}: hard_bpb={bpb:.4f} | {mode} temp={t_cur:.4f} top1={mean_top1:.4f}')
+        # soft-vs-hard gap probe (only meaningful during the soft phase)
+        gap_str = ''
+        if not handed_off:
+            xg, _ = next(train_loader)
+            g = model_soft_hard_gap(model, soft_luts, xg)
+            gap_traj.append({'step': step, 'temp': round(t_cur, 4),
+                             'top1': round(mean_top1, 4), 'gap': round(g, 5)})
+            gap_str = f' soft_hard_gap={g:.5f}'
+        print(f'[VAL] step {step}: hard_bpb={bpb:.4f} | {mode} temp={t_cur:.4f} top1={mean_top1:.4f}{gap_str}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
         csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}', f'{t_cur:.6f}']); csv_f.flush()
 
@@ -360,8 +384,10 @@ summary = {'exp_name': cfg['exp_name'], 'best_val_bpb': best_bpb,
            'final_val_bpb': val_bpbs[-1] if val_bpbs else None,
            'total_params': total_params,
            'soft_anneal_temp_start': SOFT_START, 'soft_anneal_temp_floor': SOFT_FLOOR,
-           'handoff_top1_threshold': HANDOFF_THRESH, 'n_soft_luts': len(soft_luts),
-           'handed_off': handed_off, 'handoff': handoff_info,
+           'soft_anneal_over_steps': SOFT_OVER, 'handoff_top1_threshold': HANDOFF_THRESH,
+           'handoff_min_step': HANDOFF_MIN, 'handoff_max_step': HANDOFF_MAX,
+           'n_soft_luts': len(soft_luts), 'handed_off': handed_off, 'handoff': handoff_info,
+           'soft_hard_gap_trajectory': gap_traj,
            'training_time_hours': round(elapsed / 3600, 3)}
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)

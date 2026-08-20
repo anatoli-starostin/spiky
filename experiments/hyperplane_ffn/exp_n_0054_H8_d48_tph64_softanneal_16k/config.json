@@ -32,5 +32,8 @@
   "lut_learnable_temps": true,
   "soft_anneal_temp_start": 0.5,
   "soft_anneal_temp_floor": 0.02,
-  "handoff_top1_threshold": 0.85
+  "soft_anneal_over_steps": 24000,
+  "handoff_top1_threshold": 0.85,
+  "handoff_min_step": 8000,
+  "handoff_max_step": 10000
 }
