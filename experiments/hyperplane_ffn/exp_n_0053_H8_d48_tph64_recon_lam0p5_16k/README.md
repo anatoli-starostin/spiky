@@ -1,15 +1,18 @@
 # exp_n_0053 — reconstruction-auxiliary CMHL, λ_recon=0.5 sweep point, H8/d48/tph64, 16k
 
-> **STATUS: code-before-run (sanity-tested, full 16k run launching — GPU idle).** Identical to exp_n_0051
-> (whole-module mirror reconstruction, batched forward) except **`lambda_recon` 0.1 → 0.5**. Sweeps the recon
-> MSE coefficient to see whether stronger reconstruction pressure improves the small win exp_n_0051 showed.
+> **RESULT: final_val_bpb = 1.2323435 (best = final; 16k, 1.63 h). λ=0.5 HURTS — the recon coefficient overshoots.**
+> Final train CE 3.8603, final recon 0.2178 (much lower than λ=0.1's 0.32 — the 5× coefficient does drive
+> reconstruction harder). But bpb is **+0.0047 worse than λ=0.1 (1.2276884)** and **+0.0038 worse than even the
+> no-recon control exp_n_0052 (1.2285517)**. So stronger reconstruction pressure pulls capacity/gradient away
+> from the CE task and is net negative. The recon auxiliary has a narrow beneficial regime: λ=0.1 is a small win,
+> λ=0.5 is worse than no recon at all. Optimal λ is small (≤0.1). vs dense (1.196646): +0.0357.
 
 ## The sweep
 | run | λ_recon | val_bpb |
 |-----|---------|---------|
 | exp_n_0052 (batched control, no recon) | — | 1.2285517 |
-| exp_n_0051 (recon) | 0.1 | 1.2276884 |
-| **exp_n_0053 (this run)** | **0.5** | *pending* |
+| exp_n_0051 (recon) | 0.1 | **1.2276884** (best — small win) |
+| **exp_n_0053 (this run)** | **0.5** | 1.2323435 (hurts: worse than no-recon) |
 
 The question: does 5× stronger reconstruction pressure improve, match, or hurt vs λ=0.1? Too-strong a recon
 coefficient could pull capacity away from the CE task; too-weak leaves the near-lossless pressure ineffective.
