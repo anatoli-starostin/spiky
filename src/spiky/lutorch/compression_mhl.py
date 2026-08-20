@@ -93,7 +93,7 @@ class CompressionMultiHeadLUT(nn.Module):
         initial_weights_noise: float = 1e-3,
         learnable_temps: bool = True,
         pre_lut_meanabsnorm: bool = False,
-        batched_multi_head_input: bool = False,
+        batched_multi_head_input: bool = True,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):
@@ -126,22 +126,19 @@ class CompressionMultiHeadLUT(nn.Module):
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
         self.pre_lut_meanabsnorm = bool(pre_lut_meanabsnorm)   # MeanAbsNorm on compressed z before FastMHL
-        # OPTIONAL, default OFF: replace the independent path's per-head ModuleList
-        # with a single batched multi_head_input FastMHL (bit-identical init, ~2x
-        # faster hard eval). Only valid on the independent path with per-head
-        # compression, where each head reads its own inner_in slice.
-        self.batched_multi_head_input = bool(batched_multi_head_input)
-        if self.batched_multi_head_input:
-            if self.joint_head_compression:
-                raise ValueError(
-                    "batched_multi_head_input applies to the independent per-head "
-                    "path; it is incompatible with joint_head_compression."
-                )
-            if not self.has_compress:
-                raise ValueError(
-                    "batched_multi_head_input requires per-head compression "
-                    "(inner_in_dim != -1) so each head reads its own input slice."
-                )
+        # Default ON: replace the independent path's per-head ModuleList with a
+        # single batched multi_head_input FastMHL (bit-identical init, ~2x faster
+        # hard eval). It only applies to the independent path with per-head
+        # compression (each head reads its own inner_in slice); for any other
+        # config -- joint_head_compression, or no per-head compress -- we fall
+        # back GRACEFULLY to the per-head loop path instead of raising, so the
+        # default is safe for every existing CompressionMHL config.
+        self._batched_multi_head_input_requested = bool(batched_multi_head_input)
+        self.batched_multi_head_input = (
+            self._batched_multi_head_input_requested
+            and not self.joint_head_compression
+            and self.has_compress
+        )
 
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
