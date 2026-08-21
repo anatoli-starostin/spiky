@@ -1,0 +1,124 @@
+{
+  "exp_name": "exp_n_0071_head0_sigmoid_slope_16384_40k",
+  "target": "exp_n_0052 block0 head0 (48->48)",
+  "front_end": "b=sigmoid(k*d), k per-feature trainable slope (len 384, init 1.0), no STE",
+  "H": 16384,
+  "fit_steps": 40000,
+  "body_init": "first linear default; output linear zero-init",
+  "refs": {
+    "hard_sign_ste_wide_37d32491": 0.8672
+  },
+  "learned_k_stats": {
+    "min": 1.0,
+    "median": 12.432,
+    "max": 16.65,
+    "abs_median": 12.432,
+    "abs_max": 16.65
+  },
+  "final_r2": 0.82327,
+  "peak_r2": 0.82327,
+  "peak_step": 40000,
+  "final_val_mse": 0.0038,
+  "trajectory": [
+    {
+      "step": 2000,
+      "val_mse": 0.030884,
+      "r2": -0.43634
+    },
+    {
+      "step": 4000,
+      "val_mse": 0.016842,
+      "r2": 0.21669
+    },
+    {
+      "step": 6000,
+      "val_mse": 0.007108,
+      "r2": 0.66943
+    },
+    {
+      "step": 8000,
+      "val_mse": 0.013379,
+      "r2": 0.37776
+    },
+    {
+      "step": 10000,
+      "val_mse": 0.006128,
+      "r2": 0.71502
+    },
+    {
+      "step": 12000,
+      "val_mse": 0.005908,
+      "r2": 0.72521
+    },
+    {
+      "step": 14000,
+      "val_mse": 0.004977,
+      "r2": 0.76853
+    },
+    {
+      "step": 16000,
+      "val_mse": 0.00475,
+      "r2": 0.7791
+    },
+    {
+      "step": 18000,
+      "val_mse": 0.004569,
+      "r2": 0.78752
+    },
+    {
+      "step": 20000,
+      "val_mse": 0.004487,
+      "r2": 0.79132
+    },
+    {
+      "step": 22000,
+      "val_mse": 0.004429,
+      "r2": 0.79403
+    },
+    {
+      "step": 24000,
+      "val_mse": 0.004297,
+      "r2": 0.80015
+    },
+    {
+      "step": 26000,
+      "val_mse": 0.004143,
+      "r2": 0.80734
+    },
+    {
+      "step": 28000,
+      "val_mse": 0.004067,
+      "r2": 0.81087
+    },
+    {
+      "step": 30000,
+      "val_mse": 0.003994,
+      "r2": 0.81425
+    },
+    {
+      "step": 32000,
+      "val_mse": 0.003938,
+      "r2": 0.81685
+    },
+    {
+      "step": 34000,
+      "val_mse": 0.003888,
+      "r2": 0.81919
+    },
+    {
+      "step": 36000,
+      "val_mse": 0.003856,
+      "r2": 0.82067
+    },
+    {
+      "step": 38000,
+      "val_mse": 0.003819,
+      "r2": 0.82238
+    },
+    {
+      "step": 40000,
+      "val_mse": 0.0038,
+      "r2": 0.82327
+    }
+  ]
+}
