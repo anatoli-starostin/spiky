@@ -1,9 +1,14 @@
 # exp_n_0056 — LUT-representability-constrained dense training
 
-> **STATUS: code-before-run (smoke passed; queued behind exp_n_0055 on the H100).** Train a vanilla dense
-> transformer from scratch on the LM objective, but constrain every FFN to stay reproducible by a LUT of fixed
-> (exp_n_0052) capacity. The dense FFN gives a smooth, fully-differentiable optimization path while being
-> regularized to stay LUT-friendly; the deployable artifact is the swap-in model (FFNs → co-trained LUTs).
+> **BASELINE RESULT (4096 / λ0.1 / annealed, 16k, 0.67 h): dense-own bpb 1.1963480, swap-in bpb 1.3578040.**
+> The representability constraint at λ0.1 costs the dense model **nothing** — dense-own 1.19635 ≈ the vanilla
+> dense baseline 1.196646 (even a hair better). But the swap-in (deployable LUT) is **+0.1612 vs dense** and
+> **+0.1293 WORSE than end-to-end LUT exp_n_0052 (1.2285517)** — at λ0.1 the FFN is NOT pulled hard enough toward
+> the LUT to be representable (per-block MSE b0 0.0024 → b5 0.0203, growing with depth; swap-in↔dense-own gap
+> +0.161). This directly motivates the **high-λ** sweep (λ 0.5, 1.0): pull the FFN harder so swap-in approaches
+> dense-own while dense-own stays near 1.19 (the win condition). This is the base run of the overnight sweep
+> (batch size, λ ladder, anneal-vs-constant, asymmetric batches, FFN width) — see exp_n_0057…exp_n_0066 and
+> `exp_n_0056_night_log.txt`. Reloadable dense+6-LUT checkpoint saved (checkpoint_final.pt).
 
 ## Co-training (per block b, per step)
 `x_b = ln2(x)` fed to the FFN; `ffn_b(x_b)` = dense FFN output:

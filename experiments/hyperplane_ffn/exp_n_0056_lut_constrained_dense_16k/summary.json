@@ -1,0 +1,23 @@
+{
+  "exp_name": "exp_n_0056_lut_constrained_dense_16k",
+  "dense_own_bpb": 1.196348012242282,
+  "swapin_bpb": 1.357804045728967,
+  "final_block_mse": {
+    "b0": 0.002356,
+    "b1": 0.003272,
+    "b2": 0.007004,
+    "b3": 0.008093,
+    "b4": 0.011337,
+    "b5": 0.020327
+  },
+  "swapin_delta_vs_dense_1p19665": 0.16115804572896697,
+  "swapin_delta_vs_e2e_lut_0052": 0.12925234572896716,
+  "lambda_reg_target": 0.1,
+  "lut_batch_tokens": 4096,
+  "dense_params": 23209728,
+  "lut_params": 11211276,
+  "checkpoint": "checkpoint_final.pt (dense model + 6 LUT state_dicts)",
+  "final_imitation_mse": 0.052388531545675555,
+  "final_reg_mse": 0.052388531545675555,
+  "training_time_hours": 0.668
+}
