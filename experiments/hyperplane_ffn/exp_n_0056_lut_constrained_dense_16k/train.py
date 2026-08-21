@@ -50,6 +50,7 @@ LAM_TARGET, LAM_RAMP = float(cfg['lambda_reg_target']), float(cfg['lambda_ramp_f
 LAMBDA_ANNEAL = bool(cfg.get('lambda_anneal', True))   # False -> constant lambda=target from step 0
 LUT_BATCH = int(cfg['lut_batch_tokens'])
 CKPT_EVERY = int(cfg.get('ckpt_every', 4000))
+FFN_HIDDEN_MULT = int(cfg.get('ffn_hidden_mult', 4))   # dense FFN hidden = mult*n_embd (LUT capacity unchanged)
 # Decoupled batch sizes (asymmetric-batch variant). Default = lut_batch_tokens (symmetric).
 REG_BATCH = int(cfg.get('reg_batch_tokens', LUT_BATCH))          # tokens for the FFN->LUT regularizer
 LUT_FIT_BATCH = int(cfg.get('lut_fit_batch_tokens', LUT_BATCH))  # tokens for the LUT-fitting loss
@@ -102,7 +103,8 @@ class MinimalBlock(nn.Module):
     def __init__(self, n_embd, n_head, layer_idx):
         super().__init__()
         self.ln1 = nn.LayerNorm(n_embd); self.attn = MinimalAttention(n_embd, n_head); self.ln2 = nn.LayerNorm(n_embd)
-        self.mlp = nn.Sequential(nn.Linear(n_embd, 4 * n_embd, bias=False), nn.GELU(), nn.Linear(4 * n_embd, n_embd, bias=False))
+        hid = FFN_HIDDEN_MULT * n_embd
+        self.mlp = nn.Sequential(nn.Linear(n_embd, hid, bias=False), nn.GELU(), nn.Linear(hid, n_embd, bias=False))
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
         return x + self.mlp(self.ln2(x))
@@ -289,6 +291,7 @@ summary = {'exp_name': cfg['exp_name'], 'dense_own_bpb': final_dense, 'swapin_bp
            'swapin_delta_vs_e2e_lut_0052': final_swap - 1.2285517,
            'lambda_reg_target': LAM_TARGET, 'lut_batch_tokens': LUT_BATCH,
            'reg_batch_tokens': REG_BATCH, 'lut_fit_batch_tokens': LUT_FIT_BATCH, 'lambda_anneal': LAMBDA_ANNEAL,
+           'ffn_hidden_mult': FFN_HIDDEN_MULT,
            'dense_params': dense_params, 'lut_params': lut_params,
            'checkpoint': 'checkpoint_final.pt (dense model + 6 LUT state_dicts)',
            'final_imitation_mse': ema_imit, 'final_reg_mse': ema_reg,
