@@ -1,9 +1,14 @@
 # exp_n_0067 — MLP-approximates-LUT ablation (the function-class gap, from the other side)
 
-> **STATUS: code-before-run (smoke passed; queued after the exp_n_0056 λ2/4/8 extension).** Question: how well
-> can a standard 2-layer widening GELU MLP approximate a TRAINED CompressionMHL, as a function of MLP hidden
-> width? If even wide MLPs can't fit the LUT, the discrete hyperplane routing is a fundamentally different
-> (spiky/non-smooth) function than a smooth GELU MLP represents.
+> **RESULT: a smooth GELU MLP CANNOT fully fit the trained LUT — approximation MSE FLOORS regardless of width.**
+> Fitting 2-layer MLPs (w = 4…64×) to exp_n_0052's trained LUTs: **block 0** plateaus at R²≈0.93 (val MSE ~1.5e-4),
+> **block 5** at R²≈0.88, and the **single FastMHL head** at only **R²≈0.69** — and going from 4× to 64× width
+> (up to ~10× the LUT's own params) does NOT lower the error; for the blocks it even *degrades* (overfits). The
+> raw FastMHL head (hard sign-test routing, no smoothing compress/decompress Linears) is the LEAST
+> MLP-representable. So the LUT's discrete hyperplane routing is a genuinely non-smooth function **outside the
+> smooth GELU-MLP function class** — the unifying explanation for why (from the other side) a dense FFN can't be
+> made cheaply LUT-representable either (exp_n_0055/0056). The two function classes are fundamentally different.
+> See `mlp_approx_curves.png`.
 
 ## Targets (trained LUTs from exp_n_0052, val_bpb 1.2285517)
 Load exp_n_0052's checkpoint (the 6 trained CompressionMHL blocks; loads exact, missing=0). Study:

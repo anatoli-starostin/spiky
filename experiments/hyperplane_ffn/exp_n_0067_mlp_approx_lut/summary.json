@@ -1,0 +1,165 @@
+{
+  "exp_name": "exp_n_0067_mlp_approx_lut",
+  "target": "exp_n_0052 trained LUTs (val_bpb 1.2285517)",
+  "n_collect": 320000,
+  "widths": [
+    4,
+    8,
+    16,
+    32,
+    64
+  ],
+  "fit_steps": 4000,
+  "results": {
+    "block0": {
+      "lut_params": 1868546,
+      "sweep": [
+        {
+          "width": 4,
+          "hid": 1536,
+          "params": 1181568,
+          "train_mse": 0.000147,
+          "val_mse": 0.00017,
+          "r2": 0.92767,
+          "target_var": 0.002356
+        },
+        {
+          "width": 8,
+          "hid": 3072,
+          "params": 2362752,
+          "train_mse": 0.000133,
+          "val_mse": 0.000161,
+          "r2": 0.93167,
+          "target_var": 0.002356
+        },
+        {
+          "width": 16,
+          "hid": 6144,
+          "params": 4725120,
+          "train_mse": 0.000121,
+          "val_mse": 0.000154,
+          "r2": 0.93459,
+          "target_var": 0.002356
+        },
+        {
+          "width": 32,
+          "hid": 12288,
+          "params": 9449856,
+          "train_mse": 0.000121,
+          "val_mse": 0.000162,
+          "r2": 0.93119,
+          "target_var": 0.002356
+        },
+        {
+          "width": 64,
+          "hid": 24576,
+          "params": 18899328,
+          "train_mse": 0.000127,
+          "val_mse": 0.000183,
+          "r2": 0.92217,
+          "target_var": 0.002356
+        }
+      ]
+    },
+    "block5": {
+      "lut_params": 1868546,
+      "sweep": [
+        {
+          "width": 4,
+          "hid": 1536,
+          "params": 1181568,
+          "train_mse": 0.004931,
+          "val_mse": 0.005568,
+          "r2": 0.8841,
+          "target_var": 0.048042
+        },
+        {
+          "width": 8,
+          "hid": 3072,
+          "params": 2362752,
+          "train_mse": 0.004467,
+          "val_mse": 0.005533,
+          "r2": 0.88482,
+          "target_var": 0.048042
+        },
+        {
+          "width": 16,
+          "hid": 6144,
+          "params": 4725120,
+          "train_mse": 0.00403,
+          "val_mse": 0.005752,
+          "r2": 0.88028,
+          "target_var": 0.048042
+        },
+        {
+          "width": 32,
+          "hid": 12288,
+          "params": 9449856,
+          "train_mse": 0.003769,
+          "val_mse": 0.006065,
+          "r2": 0.87375,
+          "target_var": 0.048042
+        },
+        {
+          "width": 64,
+          "hid": 24576,
+          "params": 18899328,
+          "train_mse": 0.003768,
+          "val_mse": 0.006334,
+          "r2": 0.86815,
+          "target_var": 0.048042
+        }
+      ]
+    },
+    "head0": {
+      "lut_params": 196608,
+      "sweep": [
+        {
+          "width": 4,
+          "hid": 192,
+          "params": 18672,
+          "train_mse": 0.008661,
+          "val_mse": 0.008917,
+          "r2": 0.58531,
+          "target_var": 0.021502
+        },
+        {
+          "width": 8,
+          "hid": 384,
+          "params": 37296,
+          "train_mse": 0.00764,
+          "val_mse": 0.007958,
+          "r2": 0.62989,
+          "target_var": 0.021502
+        },
+        {
+          "width": 16,
+          "hid": 768,
+          "params": 74544,
+          "train_mse": 0.006974,
+          "val_mse": 0.007343,
+          "r2": 0.65847,
+          "target_var": 0.021502
+        },
+        {
+          "width": 32,
+          "hid": 1536,
+          "params": 149040,
+          "train_mse": 0.006492,
+          "val_mse": 0.006911,
+          "r2": 0.67857,
+          "target_var": 0.021502
+        },
+        {
+          "width": 64,
+          "hid": 3072,
+          "params": 298032,
+          "train_mse": 0.006253,
+          "val_mse": 0.006686,
+          "r2": 0.68904,
+          "target_var": 0.021502
+        }
+      ]
+    }
+  }
+}
