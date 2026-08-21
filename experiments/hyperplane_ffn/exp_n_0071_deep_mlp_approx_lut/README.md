@@ -1,5 +1,15 @@
 # exp_n_0071 — DEPTH sweep of MLP-approximates-LUT (does composition break the floor?)
 
+> **HEAD-0 RESULT (head0_depth_sweep.py): depth PARTLY breaks the floor but hits a new one ~0.79 — it does NOT
+> reach 1.0.** Fitting deep pre-norm residual MLPs (depth {2,3,4,6,8} × width {16,32,64}, cosine LR, 10k steps)
+> to block-0 head 0 (48→48): depth 2 tops out at R² **0.713** (≈ the exp_n_0067 2-layer floor 0.689), but
+> **depth 3 jumps to R² ~0.79** (best **0.7884** at depth3×width32) — so composition/depth IS a real missing
+> ingredient (+0.08 R² from one extra hidden layer). BUT beyond depth 3 it **plateaus then degrades** (depth 8 →
+> 0.74–0.77, overfitting at up to 57M params). So a deep MLP captures ~79% of the head's output variance vs ~69%
+> for a shallow one, but the last ~21% is still irreducible: the hard hyperplane-routing head is **partly
+> compositional (depth helps) yet still genuinely non-smooth (floors at ~0.79, not 1.0)**. Refines the exp_n_0067
+> conclusion. (The general all-block depth sweep in depth_approx.py remains held.)
+
 > **STATUS: code-before-run (smoke passed; full sweep running).** exp_n_0067 showed a **2-layer** GELU MLP's
 > approximation of the trained LUT FLOORS even at 64× width (block0 R²≈0.93, block5 ≈0.88, single FastMHL head
 > ≈0.69). But the LUT's hard routing is piecewise-CONSTANT (hyperplane-bounded cells, discontinuous) and a
