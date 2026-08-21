@@ -1,0 +1,27 @@
+{
+  "exp_name": "exp_n_0060_lutconstr_bestbatch_lam1p0",
+  "dense_own_bpb": 1.1959369999710907,
+  "swapin_bpb": 1.3485199017467357,
+  "final_block_mse": {
+    "b0": 0.001177,
+    "b1": 0.001543,
+    "b2": 0.002879,
+    "b3": 0.003134,
+    "b4": 0.004015,
+    "b5": 0.006144
+  },
+  "swapin_delta_vs_dense_1p19665": 0.15187390174673565,
+  "swapin_delta_vs_e2e_lut_0052": 0.11996820174673584,
+  "lambda_reg_target": 1.0,
+  "lut_batch_tokens": 24576,
+  "reg_batch_tokens": 24576,
+  "lut_fit_batch_tokens": 24576,
+  "lambda_anneal": true,
+  "ffn_hidden_mult": 4,
+  "dense_params": 23209728,
+  "lut_params": 11211276,
+  "checkpoint": "checkpoint_final.pt (dense model + 6 LUT state_dicts)",
+  "final_imitation_mse": 0.0188921139209651,
+  "final_reg_mse": 0.0188921139209651,
+  "training_time_hours": 1.097
+}

@@ -1,0 +1,27 @@
+{
+  "exp_name": "exp_n_0064_lutconstr_ffn8x_bestcfg",
+  "dense_own_bpb": 1.1792527417687382,
+  "swapin_bpb": 1.3684228357004524,
+  "final_block_mse": {
+    "b0": 0.001983,
+    "b1": 0.002558,
+    "b2": 0.004388,
+    "b3": 0.004621,
+    "b4": 0.005097,
+    "b5": 0.008173
+  },
+  "swapin_delta_vs_dense_1p19665": 0.17177683570045232,
+  "swapin_delta_vs_e2e_lut_0052": 0.1398711357004525,
+  "lambda_reg_target": 1.0,
+  "lut_batch_tokens": 24576,
+  "reg_batch_tokens": 24576,
+  "lut_fit_batch_tokens": 24576,
+  "lambda_anneal": true,
+  "ffn_hidden_mult": 8,
+  "dense_params": 30287616,
+  "lut_params": 11211276,
+  "checkpoint": "checkpoint_final.pt (dense model + 6 LUT state_dicts)",
+  "final_imitation_mse": 0.026819375707978977,
+  "final_reg_mse": 0.026819375707978977,
+  "training_time_hours": 1.199
+}
