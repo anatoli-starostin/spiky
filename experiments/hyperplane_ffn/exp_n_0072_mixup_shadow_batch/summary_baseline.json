@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp_n_0072_mixup_shadow_batch",
+  "run_tag": "baseline",
+  "mixup": false,
+  "n_steps": 6000,
+  "mixup_alpha": 0.2,
+  "mixup_lambda": 1.0,
+  "mixup_level": "embedding",
+  "best_val_bpb": 1.3123904242158972,
+  "final_val_bpb": 1.3123904242158972,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "last_routing_probe": {
+    "real_cells": 196331,
+    "shadow_cells": 196321,
+    "union_cells": 196398,
+    "total_cells": 196608,
+    "off_dist_frac": 0.0003,
+    "cov_real_frac": 0.9986,
+    "cov_union_frac": 0.9989
+  },
+  "total_params": 27343116,
+  "training_time_hours": 0.359
+}
