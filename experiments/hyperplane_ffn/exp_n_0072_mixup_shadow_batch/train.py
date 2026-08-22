@@ -53,8 +53,18 @@ cfg = json.load(open(os.path.join(EXP_DIR, 'config.json')))
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(cfg['random_seed'])
 
-RUN_TAG = os.environ.get('RUN_TAG', 'mixup')   # 'baseline' | 'mixup'
-MIXUP = (RUN_TAG == 'mixup')
+RUN_TAG = os.environ.get('RUN_TAG', 'mixup')   # filename tag for this run's metrics/summary
+# AUX_MODE: 'baseline' (real only) | 'global_embedding' (old embedding-mixup shadow batch)
+#           | 'per_lut_local' (NEW: per-LUT local auxiliary batches in each LUT's own input space)
+AUX_MODE = os.environ.get('AUX_MODE',
+    'global_embedding' if RUN_TAG == 'mixup' else ('baseline' if RUN_TAG == 'baseline' else 'per_lut_local'))
+MIXUP = (AUX_MODE == 'global_embedding')       # keep old global-embedding mode available
+PER_LUT = (AUX_MODE == 'per_lut_local')
+# per-LUT mix strength -> Beta(a,a). Actual MIXING is strongest when alpha is near 0.5
+# (Beta with a>1), weakest/U-shaped near the endpoints (a<1). Ordered by real mixing:
+MIX_STRENGTH = os.environ.get('MIX_STRENGTH', 'mild')
+STRENGTH_BETA = {'mild': (0.2, 0.2), 'ushaped': (0.5, 0.5), 'uniform': (1.0, 1.0),
+                 'strong': (2.0, 2.0), 'center': (5.0, 5.0)}
 DEPTH, N_EMBD, N_HEAD, SEQ_LEN = cfg['depth'], cfg['n_embd'], cfg['n_head'], cfg['seq_len']
 DEVICE_BS, TOTAL_BS, N_STEPS = cfg['device_batch_size'], cfg['total_batch_size'], cfg['n_steps']
 LR, WD, WARMUP_FRAC = cfg['lr'], cfg['weight_decay'], cfg['lr_warmup_fraction']
@@ -63,8 +73,10 @@ TIE = bool(cfg['tie_unembedder'])
 LUT_IN, LUT_OUT = cfg['lut_inner_in_dim'], cfg['lut_inner_out_dim']
 LUT_NAP, LUT_TPH, LUT_HEADS = cfg['lut_n_anchor_pairs'], cfg['lut_tables_per_head'], cfg['lut_n_heads']
 MIX_ALPHA, MIX_LAMBDA = cfg['mixup_alpha'], cfg['mixup_lambda']
+AUX_LAMBDA = float(os.environ.get('AUX_LAMBDA', str(cfg['mixup_lambda'])))
 PROBE_EVERY = cfg['routing_probe_every']
 REF_DENSE, REF_LUT = cfg['tied_dense_ref_bpb'], cfg['e2e_lut_ref_bpb']
+N_STEPS = int(os.environ.get('AUX_STEPS', N_STEPS))   # allow shorter prototype sweeps
 
 if os.environ.get('SMOKE_STEPS'):
     N_STEPS = int(os.environ['SMOKE_STEPS']); EVAL_EVERY = max(1, N_STEPS); PROBE_EVERY = max(1, N_STEPS//2)
@@ -159,6 +171,43 @@ def shadow_loss_fn(model, x, y):
     ce_b = F.cross_entropy(logits.view(-1,V), y_b.reshape(-1), ignore_index=-1, reduction='none').view(B,T).mean(1)
     return (alpha*ce_a + (1.0-alpha)*ce_b).mean()
 
+# --- per-LUT local auxiliary batches (AUX_MODE='per_lut_local') ---
+def _alpha_strength(n, device):
+    a,b = STRENGTH_BETA[MIX_STRENGTH]
+    return Beta(a, b).sample((n,)).to(device)
+
+def per_lut_aux(model, x, y):
+    """Real forward on the big real batch (captures each LUT's actual input z and
+    output out); then for EACH LUT independently build a local aux batch by mixing in
+    that LUT's own input space, run the LUT-only forward on x_mix, and MSE-regress to
+    the detached interpolated output y_mix. Returns (real_loss, aux_loss, cov_stats)."""
+    caps={}; handles=[]
+    for bi,blk in enumerate(model.blocks):
+        def mk(bi):
+            def hook(mod,inp,out): caps[bi]=(inp[0].detach(), out.detach())
+            return hook
+        handles.append(blk.ffn.lut_batched.register_forward_hook(mk(bi)))
+    real_loss = model(x, y)                      # real forward -> fills caps (detached)
+    for h in handles: h.remove()
+    aux_terms=[]; new_frac=[]; aux_mse=[]
+    for bi,blk in enumerate(model.blocks):
+        m=blk.ffn.lut_batched; z,out = caps[bi]           # z:[N,in_flat]  out:[N,heads,odim]
+        N=z.shape[0]; perm=torch.randperm(N, device=z.device)
+        al=_alpha_strength(N, z.device)
+        za=al.view(N,*([1]*(z.dim()-1))); oa=al.view(N,*([1]*(out.dim()-1)))
+        x_mix = za*z + (1.0-za)*z[perm]                   # mix in the LUT's own input space
+        y_mix = (oa*out + (1.0-oa)*out[perm]).detach()    # interpolated output target (detached)
+        pred = m(x_mix)                                   # LUT-only forward (cheap)
+        term = F.mse_loss(pred, y_mix); aux_terms.append(term); aux_mse.append(term.item())
+        with torch.no_grad():                             # new-cell coverage vs real, this LUT
+            real_c=set(cells_hit(z,m,bi).tolist()); mix_c=set(cells_hit(x_mix,m,bi).tolist())
+            new_frac.append(len(mix_c-real_c)/max(len(mix_c),1))
+    aux_loss=torch.stack(aux_terms).mean()
+    cov={'aux_new_cell_frac':round(sum(new_frac)/len(new_frac),4),
+         'aux_mse_mean':round(sum(aux_mse)/len(aux_mse),6),
+         'aux_new_cell_per_block':[round(f,4) for f in new_frac]}
+    return real_loss, aux_loss, cov
+
 # --- routing instrumentation ---
 def cells_hit(zf, m, bi):
     if zf.dim()==3: zf=zf.reshape(zf.shape[0],-1)
@@ -194,66 +243,73 @@ def routing_stats(model, x, y):
 
 model = MinimalGPT(VOCAB_SIZE, N_EMBD, N_HEAD, DEPTH, SEQ_LEN).to(DEVICE)
 total_params=sum(p.numel() for p in model.parameters())
-print(f'[{RUN_TAG}] MinimalGPT depth={DEPTH} dim={N_EMBD} | params={total_params:,} | mixup={MIXUP} alpha={MIX_ALPHA} lambda={MIX_LAMBDA} | n_steps={N_STEPS}')
+print(f'[{RUN_TAG}] MinimalGPT depth={DEPTH} dim={N_EMBD} | params={total_params:,} | aux_mode={AUX_MODE} strength={MIX_STRENGTH}{STRENGTH_BETA.get(MIX_STRENGTH)} aux_lambda={AUX_LAMBDA} | n_steps={N_STEPS}')
 optimizer=setup_optimizer(model,LR,WD)
 tokens_per_step=DEVICE_BS*SEQ_LEN; grad_accum=max(1,TOTAL_BS//tokens_per_step)
 print(f'tokens/micro={tokens_per_step:,} grad_accum={grad_accum} eff_batch={grad_accum*tokens_per_step:,} real tokens/step')
 
 csv_f=open(os.path.join(EXP_DIR,f'metrics_{RUN_TAG}.csv'),'w',newline=''); csv_w=csv.writer(csv_f)
-csv_w.writerow(['step','train_loss','shadow_loss','val_bpb','off_dist_frac','cov_real_frac','cov_union_frac'])
+csv_w.writerow(['step','train_loss','aux_loss','val_bpb','off_dist_frac','cov_real_frac','cov_union_frac','aux_new_cell_frac','aux_mse'])
 val_bpbs, val_steps, ema, best_bpb, t0 = [], [], None, float('inf'), time.time()
-last_probe={}
+last_probe={}; last_aux_cov={}
 model.train()
 for step in range(1,N_STEPS+1):
     lr_scale=get_lr_scale(step,N_STEPS,WARMUP_FRAC)
     for g in optimizer.param_groups: g['lr']=g['initial_lr']*lr_scale
     optimizer.zero_grad(set_to_none=True)
-    accum_real=0.0; accum_shadow=0.0
+    accum_real=0.0; accum_aux=0.0
     for _ in range(grad_accum):
         x,y=next(train_loader)
-        real_loss=model(x,y)
-        if MIXUP:
-            sh=shadow_loss_fn(model,x,y)
-            loss=real_loss + MIX_LAMBDA*sh; accum_shadow+=sh.item()/grad_accum
+        if PER_LUT:
+            real_loss, aux, cov = per_lut_aux(model,x,y)
+            loss=real_loss + AUX_LAMBDA*aux; accum_aux+=aux.item()/grad_accum; last_aux_cov=cov
+        elif MIXUP:
+            real_loss=model(x,y); sh=shadow_loss_fn(model,x,y)
+            loss=real_loss + AUX_LAMBDA*sh; accum_aux+=sh.item()/grad_accum
         else:
-            loss=real_loss
+            real_loss=model(x,y); loss=real_loss
         (loss/grad_accum).backward(); accum_real+=real_loss.item()/grad_accum
     torch.nn.utils.clip_grad_norm_(model.parameters(),1.0); optimizer.step()
     ema=accum_real if ema is None else 0.99*ema+0.01*accum_real
     if step%100==0 or step==1:
-        print(f'[{RUN_TAG}] step {step:5d} | real={ema:.4f} | shadow={accum_shadow:.4f} | lr={lr_scale*LR:.2e}')
-    if step%PROBE_EVERY==0 or step==N_STEPS:
+        extra=f' | aux_new_cell={last_aux_cov.get("aux_new_cell_frac")}' if PER_LUT else ''
+        print(f'[{RUN_TAG}] step {step:5d} | real={ema:.4f} | aux={accum_aux:.4f} | lr={lr_scale*LR:.2e}{extra}')
+    if (step%PROBE_EVERY==0 or step==N_STEPS) and not PER_LUT:
         last_probe=routing_stats(model,x,y)
-        print(f'[{RUN_TAG}] probe step {step}: off_dist={last_probe["off_dist_frac"]} cov_real={last_probe["cov_real_frac"]} cov_union={last_probe["cov_union_frac"]} ({last_probe["real_cells"]}->{last_probe["union_cells"]}/{last_probe["total_cells"]})')
+        print(f'[{RUN_TAG}] probe step {step}: off_dist={last_probe["off_dist_frac"]} cov_real={last_probe["cov_real_frac"]} cov_union={last_probe["cov_union_frac"]}')
     if step%EVAL_EVERY==0 or step==N_STEPS:
         model.eval(); bpb=evaluate_bpb(model,val_loader_factory(),EVAL_STEPS,token_bytes); model.train()
         best_bpb=min(best_bpb,bpb); val_bpbs.append(bpb); val_steps.append(step)
-        print(f'[{RUN_TAG}] [VAL] step {step}: bpb={bpb:.4f} (dense ref {REF_DENSE}, lut ref {REF_LUT})')
-        csv_w.writerow([step,f'{ema:.6f}',f'{accum_shadow:.6f}',f'{bpb:.6f}',
-                        last_probe.get('off_dist_frac',''),last_probe.get('cov_real_frac',''),last_probe.get('cov_union_frac','')]); csv_f.flush()
+        print(f'[{RUN_TAG}] [VAL] step {step}: bpb={bpb:.4f} (dense ref {REF_DENSE}, lut ref {REF_LUT})'
+              + (f' | aux_new_cell={last_aux_cov.get("aux_new_cell_frac")} aux_mse={last_aux_cov.get("aux_mse_mean")}' if PER_LUT else ''))
+        csv_w.writerow([step,f'{ema:.6f}',f'{accum_aux:.6f}',f'{bpb:.6f}',
+                        last_probe.get('off_dist_frac',''),last_probe.get('cov_real_frac',''),last_probe.get('cov_union_frac',''),
+                        last_aux_cov.get('aux_new_cell_frac',''),last_aux_cov.get('aux_mse_mean','')]); csv_f.flush()
 csv_f.close()
 elapsed=time.time()-t0
-summary={'exp_name':cfg['exp_name'],'run_tag':RUN_TAG,'mixup':MIXUP,'n_steps':N_STEPS,
-         'mixup_alpha':MIX_ALPHA,'mixup_lambda':MIX_LAMBDA,'mixup_level':cfg['mixup_level'],
+summary={'exp_name':cfg['exp_name'],'run_tag':RUN_TAG,'aux_mode':AUX_MODE,'mix_strength':MIX_STRENGTH,
+         'mix_strength_beta':STRENGTH_BETA.get(MIX_STRENGTH),'aux_lambda':AUX_LAMBDA,'n_steps':N_STEPS,
          'best_val_bpb':best_bpb,'final_val_bpb':val_bpbs[-1] if val_bpbs else None,
-         'refs':{'tied_dense':REF_DENSE,'e2e_lut':REF_LUT},'last_routing_probe':last_probe,
+         'refs':{'tied_dense':REF_DENSE,'e2e_lut':REF_LUT},
+         'last_routing_probe':last_probe,'last_aux_cov':last_aux_cov,
          'total_params':total_params,'training_time_hours':round(elapsed/3600,3)}
 json.dump(summary,open(os.path.join(EXP_DIR,f'summary_{RUN_TAG}.json'),'w'),indent=2)
-print(f'[{RUN_TAG}] DONE best_bpb={best_bpb:.4f} final={summary["final_val_bpb"]}')
+print(f'[{RUN_TAG}] DONE best_bpb={best_bpb:.4f} final={summary["final_val_bpb"]} aux_cov={last_aux_cov}')
 
-# combined plot when both runs present
-def load_csv(tag):
-    p=os.path.join(EXP_DIR,f'metrics_{tag}.csv')
-    if not os.path.exists(p): return None
-    import csv as _c; rows=list(_c.DictReader(open(p)))
+# combined plot over ALL metrics_*.csv present (baseline + any variants)
+import glob as _glob
+def load_csv(path):
+    import csv as _c; rows=list(_c.DictReader(open(path)))
     return [(int(r['step']),float(r['val_bpb'])) for r in rows if r['val_bpb']]
-b=load_csv('baseline'); m=load_csv('mixup')
-if b and m:
-    plt.figure(figsize=(9,5))
-    plt.plot([s for s,_ in b],[v for _,v in b],'o-',c='tab:blue',label='baseline (real only)')
-    plt.plot([s for s,_ in m],[v for _,v in m],'o-',c='tab:red',label='mixup shadow-batch')
+files=sorted(_glob.glob(os.path.join(EXP_DIR,'metrics_*.csv')))
+if len(files)>=2:
+    plt.figure(figsize=(10,6))
+    for p in files:
+        tag=os.path.basename(p)[len('metrics_'):-len('.csv')]; pts=load_csv(p)
+        if pts: plt.plot([s for s,_ in pts],[v for _,v in pts],'o-',ms=3,label=tag)
     plt.axhline(REF_DENSE,ls='--',c='k',label=f'tied dense {REF_DENSE}')
     plt.axhline(REF_LUT,ls='--',c='gray',label=f'e2e LUT {REF_LUT}')
-    plt.xlabel('step'); plt.ylabel('val bpb'); plt.title('exp_n_0072 mixup shadow-batch vs baseline (equal real-token budget)')
+    plt.xlabel('step'); plt.ylabel('val bpb'); plt.title('exp_n_0072: aux variants vs baseline (equal real-token budget)')
     plt.legend(fontsize=8); plt.grid(True,alpha=0.3); plt.tight_layout(); plt.savefig(os.path.join(EXP_DIR,'compare_bpb.png'),dpi=120); plt.close()
+    print('wrote compare_bpb.png over', [os.path.basename(f) for f in files])
     print('wrote compare_bpb.png')
