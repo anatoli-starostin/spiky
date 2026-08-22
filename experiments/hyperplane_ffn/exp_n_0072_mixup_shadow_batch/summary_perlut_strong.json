@@ -1,0 +1,33 @@
+{
+  "exp_name": "exp_n_0072_mixup_shadow_batch",
+  "run_tag": "perlut_strong",
+  "aux_mode": "per_lut_local",
+  "mix_strength": "strong",
+  "mix_strength_beta": [
+    2.0,
+    2.0
+  ],
+  "aux_lambda": 1.0,
+  "n_steps": 3000,
+  "best_val_bpb": 1.4346950538645926,
+  "final_val_bpb": 1.4346950538645926,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "last_routing_probe": {},
+  "last_aux_cov": {
+    "aux_new_cell_frac": 0.0012,
+    "aux_mse_mean": 0.004799,
+    "aux_new_cell_per_block": [
+      0.0,
+      0.0026,
+      0.003,
+      0.0011,
+      0.0002,
+      0.0
+    ]
+  },
+  "total_params": 27343116,
+  "training_time_hours": 0.33
+}
