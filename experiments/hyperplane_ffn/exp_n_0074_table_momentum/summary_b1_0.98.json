@@ -1,0 +1,18 @@
+{
+  "exp_name": "exp_n_0074_table_momentum",
+  "run_tag": "b1_0.98",
+  "b1_table": 0.98,
+  "batch_scale": 1.0,
+  "device_batch": 48,
+  "total_batch": 24576,
+  "n_steps": 3000,
+  "token_budget": 73728000,
+  "best_val_bpb": 1.4456371314152225,
+  "final_val_bpb": 1.4456371314152225,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "total_params": 27343116,
+  "training_time_hours": 0.179
+}
