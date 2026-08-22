@@ -1,0 +1,18 @@
+{
+  "exp_name": "exp_n_0073_sparse_adam_lut",
+  "opt_mode": "sparse",
+  "n_steps": 3000,
+  "betas": [
+    0.9,
+    0.95
+  ],
+  "best_val_bpb": 1.4323537828119215,
+  "final_val_bpb": 1.4323537828119215,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "diagnostic": null,
+  "total_params": 27343116,
+  "training_time_hours": 0.183
+}

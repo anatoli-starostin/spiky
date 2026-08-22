@@ -1,0 +1,71 @@
+{
+  "exp_name": "exp_n_0073_sparse_adam_lut",
+  "opt_mode": "baseline",
+  "n_steps": 3000,
+  "betas": [
+    0.9,
+    0.95
+  ],
+  "best_val_bpb": 1.4339374028372371,
+  "final_val_bpb": 1.4339374028372371,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "diagnostic": {
+    "total_cells": 196608,
+    "cells_ever_hit": 196512,
+    "cells_never_hit": 96,
+    "distinct_cells_per_step_mean": 183960.0,
+    "distinct_cells_per_step_frac": 0.9357,
+    "per_cell_mean_gap": {
+      "mean": 1.059,
+      "median": 1.019,
+      "p90": 1.101,
+      "p99": 1.43,
+      "max": 342.0
+    },
+    "per_cell_max_gap": {
+      "mean": 61.805,
+      "median": 21.0,
+      "p90": 184.0,
+      "p99": 328.0,
+      "max": 1178.0
+    },
+    "mean_gap_frequent_decile": {
+      "mean": 1.0,
+      "median": 1.0,
+      "p90": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "mean_gap_tail_decile": {
+      "mean": 1.344,
+      "median": 1.139,
+      "p90": 1.43,
+      "p99": 4.621,
+      "max": 342.0
+    },
+    "momentum_decay_at_gap": {
+      "median_gap": 1.019,
+      "p99_gap": 1.43,
+      "max_gap": 1178.0,
+      "beta1_0.9__at_median": 0.8982,
+      "beta1_0.9__at_p99": 0.8601,
+      "beta1_0.9__at_max": 0.0,
+      "beta2_0.95(recipe)__at_median": 0.9491,
+      "beta2_0.95(recipe)__at_p99": 0.9293,
+      "beta2_0.95(recipe)__at_max": 0.0,
+      "beta2_0.999(task)__at_p99": 0.9986,
+      "beta2_0.999(task)__at_max": 0.3077
+    },
+    "wd_note": "exp_n_0052 puts LUT tables in the wd=0 nodecay group -> ZERO shrink between hits in the actual recipe",
+    "hypothetical_wd0.1_shrink": {
+      "per_step_at_peakLR": 3e-05,
+      "between_hits_at_p99gap": 4.3e-05,
+      "between_hits_at_maxgap": 0.034723
+    }
+  },
+  "total_params": 27343116,
+  "training_time_hours": 0.222
+}
