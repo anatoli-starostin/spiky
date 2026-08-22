@@ -1,0 +1,76 @@
+{
+  "window_steps": 500,
+  "lr": 3e-05,
+  "total_cells": 196608,
+  "note": "measured at the exp_n_0052 checkpoint (near-converged); LR=3e-5 (~frozen)",
+  "cells_ever_hit": 196512,
+  "cells_never_hit": 96,
+  "frac_hit_every_step": 0.9983,
+  "frac_rare_le0.5": 0.0,
+  "frac_very_rare_le0.05": 0.0,
+  "per_cell_hit_fraction": {
+    "mean": 0.9999,
+    "median": 1.0,
+    "p90": 1.0,
+    "p99": 1.0,
+    "max": 1.0
+  },
+  "per_cell_mean_gap": {
+    "mean": 1.0002,
+    "median": 1.0,
+    "p90": 1.0,
+    "p99": 1.0,
+    "max": 3.709
+  },
+  "per_cell_max_gap": {
+    "mean": 1.0042,
+    "median": 1.0,
+    "p90": 1.0,
+    "p99": 1.0,
+    "max": 16.0
+  },
+  "resid_per_token_overall": {
+    "mean": 0.0,
+    "median": 0.0,
+    "p90": 0.0,
+    "p99": 0.0,
+    "max": 0.0
+  },
+  "buckets": {
+    "every_step(>0.99)": {
+      "n": 196277,
+      "frac_of_cells": 0.9983,
+      "mean_hit_frac": 1.0,
+      "mean_tokens_over_window": 192321.7,
+      "resid_per_token_mean": 0.0,
+      "resid_per_token_median": 0.0
+    },
+    "frequent(0.5-0.99)": {
+      "n": 228,
+      "frac_of_cells": 0.0012,
+      "mean_hit_frac": 0.9207,
+      "mean_tokens_over_window": 1812.5,
+      "resid_per_token_mean": 1e-05,
+      "resid_per_token_median": 1e-05
+    },
+    "rare(0.05-0.5)": {
+      "n": 7,
+      "frac_of_cells": 0.0,
+      "mean_hit_frac": 0.3726,
+      "mean_tokens_over_window": 257.9,
+      "resid_per_token_mean": 2e-05,
+      "resid_per_token_median": 2e-05
+    },
+    "very_rare(0<..<=0.05)": {
+      "n": 0
+    },
+    "never(0)": {
+      "n": 96,
+      "frac_of_cells": 0.0005,
+      "mean_hit_frac": 0.0,
+      "mean_tokens_over_window": 0.0,
+      "resid_per_token_mean": null,
+      "resid_per_token_median": null
+    }
+  }
+}
