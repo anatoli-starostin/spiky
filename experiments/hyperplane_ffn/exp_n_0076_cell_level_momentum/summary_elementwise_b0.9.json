@@ -1,0 +1,17 @@
+{
+  "exp_name": "exp_n_0076_cell_level_momentum",
+  "run_tag": "elementwise_b0.9",
+  "opt_mode": "elementwise",
+  "b1_table": 0.9,
+  "b2": 0.95,
+  "n_steps": 3000,
+  "best_val_bpb": 1.434402690817177,
+  "final_val_bpb": 1.434402690817177,
+  "max_grad_norm": 5.802,
+  "refs": {
+    "tied_dense": 1.196646,
+    "e2e_lut": 1.2285517
+  },
+  "total_params": 27343116,
+  "training_time_hours": 0.179
+}
