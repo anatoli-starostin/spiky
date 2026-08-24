@@ -1,0 +1,40 @@
+==============================================================================
+FLOPs + memory-bandwidth profile — exp073_tied_vanilla_baseline_16k
+==============================================================================
+config: depth=6 n_embd=384 n_head=6 (head_dim=64) seq_len=512 vocab=32768 tie_unembed=True
+FFN: DENSE MLP  n_embd->1536->n_embd (GELU, no bias) — NOT a LUT
+total params: 23,209,728   checkpoint_loaded=True   dtype for bytes: bf16 (2 B)
+
+--- FLOPs ground-truth (FlopCounterMode) vs analytic matmul estimate ---
+prefill FlopCounter total (1x512): 26.172G FLOPs  -> 51.118M/token
+prefill analytic matmul/token     : 51.118M  (proj 21.234M + unembed 25.166M + attn_full 4.719M)
+  reconcile: counter vs analytic gap = +0.00%  (matches => counter trustworthy)
+  note: FlopCounter does NOT discount the causal mask; physically-causal attn is ~half
+        (2.364M attn => 48.763M/token real compute)
+decode FlopCounter proj (1x1)     : 46.409M/token (SDPA~0 at T=1); + analytic decode-attn 4.719M => 51.127M/token
+decode analytic matmul/token      : 51.118M
+
+--- dense MLP FFN: two full matmuls per layer (n_embd<->hidden), no gather/routing ---
+
+==============================================================================
+RESULTS TABLE  (per token)
+==============================================================================
+scope / regime             FLOPs/tok   bytes/tok       dense        LUT     act/KV   AI(F/B)
+--------------------------------------------------------------------------------------------
+whole-model  decode          51.127M     51.142M     46.420M        0.0     4.722M      1.00
+whole-model  prefill         51.118M     93.759K     91.431K        0.0     2.328K    545.21
+block-only   decode          14.156M     14.165M     14.156M        0.0     9.216K      1.00
+block-only   prefill         14.156M     29.184K     27.648K        0.0     1.536K    485.05
+--------------------------------------------------------------------------------------------
+
+--- key byte facts ---
+dense FFN weights/layer       = 2*n_embd*hidden*2 = 2*384*1536*2 = 2,359,296 B (both matmuls read in full every forward — no LUT sparsity)
+dense weights (all layers)    = 21,253,632 B ; tied unembed = 25,165,824 B
+KV-cache read/token (decode)  = 2*6*512*384*2 = 4,718,592 B
+
+--- reading ---
+decode is memory-bound: low AI (weights + unembed re-read every token dominate; LUT rows tiny).
+prefill is compute-bound: high AI (weights amortized over the sequence).
+Dense MLP: both FFN matmuls are full dense weight reads (no gather sparsity).
+Assumptions: decode re-reads every weight per token (batch1, no reuse); prefill reads each
+weight once and reuses across T tokens; act/KV terms marked approx (dense/LUT terms are exact).

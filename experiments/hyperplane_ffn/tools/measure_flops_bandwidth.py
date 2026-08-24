@@ -72,23 +72,32 @@ class MinimalBlock(nn.Module):
         n_embd, n_head = cfg['n_embd'], cfg['n_head']
         self.ln1 = nn.LayerNorm(n_embd); self.attn = MinimalAttention(n_embd, n_head)
         self.ln2 = nn.LayerNorm(n_embd)
+        self.ffn_type = cfg.get('ffn_type', 'compression')
         self.lin = None
-        self.ffn = CompressionMultiHeadLUT(
-            input_dim=n_embd, output_dim=n_embd,
-            inner_in_dim=cfg.get('lut_inner_in_dim', cfg.get('lut_inner_dim')),
-            inner_out_dim=cfg.get('lut_inner_out_dim', cfg.get('lut_inner_dim')),
-            nap=cfg['lut_n_anchor_pairs'], tph=cfg['lut_tables_per_head'],
-            n_heads=cfg.get('lut_n_heads', 1),
-            joint_head_compression=cfg.get('lut_joint_head_compression', False),
-            batched_multi_head_input=bool(cfg.get('lut_batched_multi_head_input', False)),
-            forward_mode=cfg.get('lut_forward_mode', 'hard'),
-            use_bf16=cfg.get('lut_use_bf16', False),
-            initial_weights_noise=cfg.get('lut_init_weights_noise', 1e-3),
-            learnable_temps=bool(cfg.get('lut_learnable_temps', False)),
-            random_seed=cfg.get('lut_base_seed', 1000) + layer_idx)
+        if self.ffn_type == 'dense':
+            hidden = cfg.get('mlp_hidden', 4 * n_embd)
+            self.mlp = nn.Sequential(nn.Linear(n_embd, hidden, bias=False), nn.GELU(),
+                                     nn.Linear(hidden, n_embd, bias=False))
+        else:
+            self.ffn = CompressionMultiHeadLUT(
+                input_dim=n_embd, output_dim=n_embd,
+                inner_in_dim=cfg.get('lut_inner_in_dim', cfg.get('lut_inner_dim')),
+                inner_out_dim=cfg.get('lut_inner_out_dim', cfg.get('lut_inner_dim')),
+                nap=cfg['lut_n_anchor_pairs'], tph=cfg['lut_tables_per_head'],
+                n_heads=cfg.get('lut_n_heads', 1),
+                joint_head_compression=cfg.get('lut_joint_head_compression', False),
+                batched_multi_head_input=bool(cfg.get('lut_batched_multi_head_input', False)),
+                forward_mode=cfg.get('lut_forward_mode', 'hard'),
+                use_bf16=cfg.get('lut_use_bf16', False),
+                initial_weights_noise=cfg.get('lut_init_weights_noise', 1e-3),
+                learnable_temps=bool(cfg.get('lut_learnable_temps', False)),
+                random_seed=cfg.get('lut_base_seed', 1000) + layer_idx)
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
-        h = self.ln2(x); B, T, C = h.shape
+        h = self.ln2(x)
+        if self.ffn_type == 'dense':
+            return x + self.mlp(h)
+        B, T, C = h.shape
         out = self.ffn(h.reshape(B * T, C)).reshape(B, T, C).to(h.dtype)
         return x + out
 
@@ -155,10 +164,26 @@ def main():
     # --- dims ---
     n_embd = cfg['n_embd']; n_head = cfg['n_head']; head_dim = n_embd // n_head
     n_layer = cfg['depth']; vocab = cfg['tokenizer_vocab_size']; T = cfg['seq_len']
-    H = cfg.get('lut_n_heads', 1); nap = cfg['lut_n_anchor_pairs']; tph = cfg['lut_tables_per_head']
-    inner_in = cfg.get('lut_inner_in_dim', cfg.get('lut_inner_dim'))
-    inner_out = cfg.get('lut_inner_out_dim', cfg.get('lut_inner_dim'))
-    cells = 2 ** nap
+    ffn_type = cfg.get('ffn_type', 'compression')
+    if ffn_type == 'dense':
+        hidden = cfg.get('mlp_hidden', 4 * n_embd)
+        H = nap = tph = inner_in = inner_out = cells = 0
+        ffn_matmul_per_layer = 2 * n_embd * hidden + 2 * hidden * n_embd     # fc1 + fc2
+        ffn_dense_params_per_layer = n_embd * hidden + hidden * n_embd       # weights, no bias
+        lut_full_params = lut_selected_params = 0
+        routing_ops_tok = 0
+    else:
+        hidden = None
+        H = cfg.get('lut_n_heads', 1); nap = cfg['lut_n_anchor_pairs']; tph = cfg['lut_tables_per_head']
+        inner_in = cfg.get('lut_inner_in_dim', cfg.get('lut_inner_dim'))
+        inner_out = cfg.get('lut_inner_out_dim', cfg.get('lut_inner_dim'))
+        cells = 2 ** nap
+        ffn_matmul_per_layer = 2 * n_embd * (H * inner_in) + 2 * (H * inner_out) * n_embd  # compress+decompress
+        ffn_dense_params_per_layer = (n_embd * (H * inner_in) + (H * inner_in)             # compress w+b
+                                      + (H * inner_out) * n_embd + n_embd)                 # decompress w+b
+        lut_full_params = H * tph * cells * inner_out
+        lut_selected_params = H * tph * inner_out
+        routing_ops_tok = (nap * tph * 4 + tph * inner_out) * H * n_layer
 
     model = MinimalGPT(cfg).to(dev).eval()
     ckpt = os.path.join(exp, 'checkpoint.pt')
@@ -180,8 +205,7 @@ def main():
         return 2 * in_f * out_f
     proj_per_layer = (lin_flops(3 * n_embd, n_embd)      # qkv
                       + lin_flops(n_embd, n_embd)         # attn out proj
-                      + lin_flops(H * inner_in, n_embd)   # compress
-                      + lin_flops(n_embd, H * inner_out)) # decompress
+                      + ffn_matmul_per_layer)             # FFN (dense MLP or LUT compress+decompress)
     proj_all = proj_per_layer * n_layer
     unembed = lin_flops(vocab, n_embd)
     # attention analytic. NOTE: torch FlopCounterMode counts SDPA at the FULL T^2 cost and
@@ -195,27 +219,19 @@ def main():
     analytic_decode_tok  = proj_all + unembed + attn_decode_tok
     # decode FLOPs (ground truth projections from FlopCounter(1,1) + analytic decode attn)
     fdec_tok = flops_decode1_total + attn_decode_tok
-    # block-only analytic (compress+decompress matmuls)
-    ffn_proj_per_layer = lin_flops(H * inner_in, n_embd) + lin_flops(n_embd, H * inner_out)
-    ffn_flops_tok = ffn_proj_per_layer * n_layer   # same in decode & prefill (per-token proj)
-
-    # ---- LUT routing arithmetic the counter misses (hand-count, per token, whole model) ----
-    # per head per layer: nap*tph anchor-diff subs + nap*tph sign tests + nap*tph bit mult + nap*tph bit add
-    #                     + embedding_bag sum: tph rows of inner_out summed -> ~tph*inner_out adds
-    per_head_layer = (nap * tph) * 4 + tph * inner_out
-    routing_ops_tok = per_head_layer * H * n_layer
+    # block-only FFN matmul FLOPs/token (dense: fc1+fc2 ; LUT: compress+decompress)
+    ffn_flops_tok = ffn_matmul_per_layer * n_layer   # same in decode & prefill (per-token proj)
+    # (routing_ops_tok already computed above: LUT hand-count, or 0 for dense)
 
     # ============ Bandwidth (analytic bytes/token, bf16) ============
     # dense weight params (read in full each forward): all Linear weights+biases + LayerNorms
     dense_attn_per_layer = (3 * n_embd) * n_embd + n_embd * n_embd            # qkv + proj (no bias)
     dense_ln_per_layer   = 2 * (2 * n_embd)                                    # ln1+ln2 (w+b)
-    dense_ffn_per_layer  = (n_embd * (H * inner_in) + (H * inner_in)          # compress w+b
-                            + (H * inner_out) * n_embd + n_embd)              # decompress w+b
+    dense_ffn_per_layer  = ffn_dense_params_per_layer                          # dense MLP or LUT compress+decompress
     dense_per_layer = dense_attn_per_layer + dense_ln_per_layer + dense_ffn_per_layer
     dense_all_params = dense_per_layer * n_layer + 2 * n_embd                 # + final ln_f
     unembed_params = vocab * n_embd                                           # tied head, read full for logits
-    lut_full_params = H * tph * cells * inner_out                             # whole table (per layer)
-    lut_selected_params = H * tph * inner_out                                 # selected rows/token (per layer)
+    # lut_full_params / lut_selected_params already set above (0 for dense)
 
     dense_all_B = dense_all_params * BYTES
     unembed_B = unembed_params * BYTES
@@ -266,9 +282,12 @@ def main():
     p("="*78)
     p(f"config: depth={n_layer} n_embd={n_embd} n_head={n_head} (head_dim={head_dim}) seq_len={T} "
       f"vocab={vocab} tie_unembed={cfg.get('tie_unembedder')}")
-    p(f"LUT: n_heads(H)={H} inner_in={inner_in} inner_out={inner_out} tables_per_head(tph)={tph} "
-      f"nap={nap} -> cells/table=2^{nap}={cells}  forward_mode={cfg.get('lut_forward_mode')} "
-      f"path={'batched' if cfg.get('lut_batched_multi_head_input') else 'per-head-loop'}")
+    if ffn_type == 'dense':
+        p(f"FFN: DENSE MLP  n_embd->{hidden}->n_embd (GELU, no bias) — NOT a LUT")
+    else:
+        p(f"FFN: LUT  n_heads(H)={H} inner_in={inner_in} inner_out={inner_out} tables_per_head(tph)={tph} "
+          f"nap={nap} -> cells/table=2^{nap}={cells}  forward_mode={cfg.get('lut_forward_mode')} "
+          f"path={'batched' if cfg.get('lut_batched_multi_head_input') else 'per-head-loop'}")
     p(f"total params: {total_params:,}   checkpoint_loaded={loaded}   dtype for bytes: bf16 (2 B)")
     p("")
     p("--- FLOPs ground-truth (FlopCounterMode) vs analytic matmul estimate ---")
@@ -284,10 +303,13 @@ def main():
       f"(SDPA~0 at T=1); + analytic decode-attn {fnum(attn_decode_tok)} => {fnum(fdec_tok)}/token")
     p(f"decode analytic matmul/token      : {fnum(analytic_decode_tok)}")
     p("")
-    p("--- LUT routing arithmetic missed by the counter (hand-counted, per token, whole model) ---")
-    p(f"anchor diffs+sign+bitpack: {nap}*{tph}*4*{H}*{n_layer} + embag sum {tph}*{inner_out}*{H}*{n_layer}")
-    p(f"  = {routing_ops_tok:,} ops/token  vs prefill matmul {fnum(fpref_tok)} "
-      f"=> {routing_ops_tok/fpref_tok*100:.3f}% (negligible; counter total trustworthy)")
+    if ffn_type != 'dense':
+        p("--- LUT routing arithmetic missed by the counter (hand-counted, per token, whole model) ---")
+        p(f"anchor diffs+sign+bitpack: {nap}*{tph}*4*{H}*{n_layer} + embag sum {tph}*{inner_out}*{H}*{n_layer}")
+        p(f"  = {routing_ops_tok:,} ops/token  vs prefill matmul {fnum(fpref_tok)} "
+          f"=> {routing_ops_tok/fpref_tok*100:.3f}% (negligible; counter total trustworthy)")
+    else:
+        p("--- dense MLP FFN: two full matmuls per layer (n_embd<->hidden), no gather/routing ---")
     p("")
     p("="*78)
     p("RESULTS TABLE  (per token)")
@@ -305,16 +327,23 @@ def main():
     p("-"*len(hdr))
     p("")
     p("--- key byte facts ---")
-    p(f"LUT selected-rows/token/layer = H*tph*inner_out*2 = {H}*{tph}*{inner_out}*2 = {lut_sel_B_layer:,} B")
-    p(f"LUT full table/layer          = H*tph*cells*inner_out*2 = {lut_full_B_layer:,} B "
-      f"(selected = 1/{cells} = {lut_sel_B_layer/lut_full_B_layer*100:.2f}% of full)")
+    if ffn_type != 'dense':
+        p(f"LUT selected-rows/token/layer = H*tph*inner_out*2 = {H}*{tph}*{inner_out}*2 = {lut_sel_B_layer:,} B")
+        p(f"LUT full table/layer          = H*tph*cells*inner_out*2 = {lut_full_B_layer:,} B "
+          f"(selected = 1/{cells} = {lut_sel_B_layer/lut_full_B_layer*100:.2f}% of full)")
+    else:
+        p(f"dense FFN weights/layer       = 2*n_embd*hidden*2 = 2*{n_embd}*{hidden}*2 = {ffn_dense_per_layer_B:,} B "
+          f"(both matmuls read in full every forward — no LUT sparsity)")
     p(f"dense weights (all layers)    = {dense_all_B:,} B ; tied unembed = {unembed_B:,} B")
     p(f"KV-cache read/token (decode)  = 2*{n_layer}*{T}*{n_embd}*2 = {kv_read_B:,} B")
     p("")
     p("--- reading ---")
     p("decode is memory-bound: low AI (weights + unembed re-read every token dominate; LUT rows tiny).")
     p("prefill is compute-bound: high AI (weights amortized over the sequence).")
-    p("The LUT selected-rows sparsity makes LUT byte traffic ~2 orders below the dense weight reads.")
+    if ffn_type != 'dense':
+        p("The LUT selected-rows sparsity makes LUT byte traffic ~2 orders below the dense weight reads.")
+    else:
+        p("Dense MLP: both FFN matmuls are full dense weight reads (no gather sparsity).")
     p("Assumptions: decode re-reads every weight per token (batch1, no reuse); prefill reads each")
     p("weight once and reuses across T tokens; act/KV terms marked approx (dense/LUT terms are exact).")
     out = "\n".join(L)
