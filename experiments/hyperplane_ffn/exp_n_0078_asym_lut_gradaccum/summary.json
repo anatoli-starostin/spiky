@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp_n_0078_asym_lut_gradaccum",
+  "best_val_bpb": 1.2253962453418967,
+  "final_val_bpb": 1.2253962453418967,
+  "ref_1x_lut_bpb": 1.2285517,
+  "ref_1p5x_batch_bpb": 1.196862,
+  "max_gradnorm": 5.976975440979004,
+  "total_params": 27343116,
+  "training_time_hours": 1.387
+}
