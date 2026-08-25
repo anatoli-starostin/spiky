@@ -10,6 +10,7 @@ import progress
 D = '/home/astarostin/projects/spiky/experiments/hyperplane_ffn/exp101_sweep_outproj'
 H = os.environ['BAR_HANDLE']
 TOTAL = 12
+STEPS_PER = int(os.environ.get('STEPS_PER_RUN', 4000))   # for fractional (smooth) bar fill
 
 for _ in range(1400):                       # ~ up to 11.6h at 30s cadence
     done, running = {}, {}
@@ -28,6 +29,9 @@ for _ in range(1400):                       # ~ up to 11.6h at 30s cadence
             except Exception:
                 running[tag] = 0
     ndone = len(done)
+    # Fractional fill: count completed runs AND in-flight step progress, so the bar
+    # moves smoothly instead of sitting at 0% until the first run completes.
+    frac = (ndone * STEPS_PER + sum(min(s, STEPS_PER) for s in running.values())) / (TOTAL * STEPS_PER)
     best = min(done.items(), key=lambda kv: kv[1]) if done else None
     beststr = f"best {best[0]}={best[1]:.4f}" if best else "best —"
     runstr = ", ".join(f"{t}@{s}" for t, s in sorted(running.items()))
@@ -39,5 +43,5 @@ for _ in range(1400):                       # ~ up to 11.6h at 30s cadence
         progress.progress_done(H, ok=True,
             final_text=f"12/12 done · winner {ranked[0][0]} {ranked[0][1]:.4f} · top3: {top}")
         break
-    progress.progress_update(H, pct=100.0 * ndone / TOTAL, stats=stats)
+    progress.progress_update(H, pct=100.0 * frac, stats=stats)
     time.sleep(30)
