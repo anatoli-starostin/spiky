@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0017_sweep_qkv_qkvin24_tph64",
+  "best_val_bpb": 1.4856001551690121,
+  "final_val_bpb": 1.4856001551690121,
+  "n_params": 65693520,
+  "training_time_hours": 0.827
+}

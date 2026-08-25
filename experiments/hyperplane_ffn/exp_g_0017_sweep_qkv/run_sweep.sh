@@ -60,4 +60,4 @@ while [ $i -lt $n ]; do
   echo "=== WAVE $wave complete ==="
   i=$((i+WIDE)); wave=$((wave+1))
 done
-echo "=== SWEEP COMPLETE (12/12) ==="
+echo "=== SWEEP COMPLETE (${n}/${n}) ==="
