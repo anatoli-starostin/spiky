@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp101_sweep_outproj_in96_tph128",
+  "best_val_bpb": 1.4927133789312503,
+  "final_val_bpb": 1.4927133789312503,
+  "n_params": 62859888,
+  "training_time_hours": 1.406
+}
