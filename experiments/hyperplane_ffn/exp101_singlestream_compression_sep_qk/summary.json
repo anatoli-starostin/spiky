@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp101_singlestream_compression_sep_qk",
+  "best_val_bpb": 1.3021306140172313,
+  "final_val_bpb": 1.3021306140172313,
+  "n_params": 47817072,
+  "training_time_hours": 1.152
+}
