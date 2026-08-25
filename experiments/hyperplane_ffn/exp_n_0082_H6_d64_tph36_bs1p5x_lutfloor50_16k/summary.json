@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0082_H6_d64_tph36_bs1p5x_lutfloor50_16k",
+  "best_val_bpb": 1.2060085773870834,
+  "final_val_bpb": 1.2060085773870834,
+  "total_params": 23214348,
+  "training_time_hours": 2.15
+}
