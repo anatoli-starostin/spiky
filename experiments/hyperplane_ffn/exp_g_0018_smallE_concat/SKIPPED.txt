@@ -1,0 +1,47 @@
+exp_g_0018_smallE_concat — STOPPED BY DECISION at step 5,200 / 16,000
+======================================================================
+
+Stopped by decision, not a crash and not a failure. There is deliberately NO
+summary.json: this run did not complete, and no terminal record should be
+manufactured for it. The committed metrics.csv / temperatures.csv /
+weight_deltas.csv are PARTIAL curves, preserved as ablation evidence.
+
+What this arm tests
+-------------------
+The NO-RESIDUAL arm of the residual ablation: layer_combine="concat", i.e. pure
+concatenation with the additive skip REMOVED. Each block reads the previous
+block's output (y_l = block_l(y_{l-1})), all 6 outputs are concatenated at the
+end -> LayerNorm(384) -> untied Linear(384 -> 32768).
+
+exp103's blocks have no FFN, so `x_next = x + out_e` was its ONLY skip
+connection; replacing summation with concatenation therefore removes the
+residual path entirely -- 6 stacked attention blocks with no skip.
+
+State at the stop
+-----------------
+    step 5,200 / 16,000     26 evals (steps 200 .. 5,200)
+    last val_bpb            1.491504
+
+Result it contributed
+---------------------
+Paired with exp_g_0019 (identical except layer_combine="residual_sum"), this is
+half the evidence for the residual ablation. train.py is BYTE-IDENTICAL between
+the two arms and both smoke to the same 41,343,152 params -- an additive skip
+adds no parameters -- so the difference is attributable to the residual path
+alone.
+
+Matched-step outcome over the 26 common evals:
+
+  * this arm (no residual) starts far AHEAD: +0.060772 at step 200
+  * that lead decays monotonically through step 2,000 (+0.000516)
+  * CROSSOVER at step 2,200; from there exp_g_0019 leads at every one of the
+    16 remaining evals, no inversions
+  * gap widens to -0.008271 by step 5,200
+
+So the no-residual arm's early advantage was transient, and the residual arm was
+winning by a still-growing margin where this run's data stops. Single seed.
+
+Pairs with
+----------
+exp_g_0019_smallE_concat_residual (the residual arm, also stopped by decision,
+at step 8,200).

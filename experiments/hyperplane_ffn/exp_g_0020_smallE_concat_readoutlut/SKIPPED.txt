@@ -1,0 +1,57 @@
+exp_g_0020_smallE_concat_readoutlut — STOPPED BY DECISION at step 1,600 / 16,000
+================================================================================
+
+Stopped by decision, not a crash and not a failure. There is deliberately NO
+summary.json: this run did not complete, and no terminal record should be
+manufactured for it. The committed metrics.csv / temperatures.csv /
+weight_deltas.csv are PARTIAL curves, preserved as the READOUT-LUT REFERENCE.
+
+What this arm tests
+-------------------
+exp_g_0019 (residual_sum, the arm that won the residual ablation) plus a READOUT
+LUT inserted into the readout path between two LayerNorms:
+
+  concat(6 layer outputs) [384] -> LayerNorm(384) -> readout_lut
+                                -> LayerNorm(384) -> untied Linear(384 -> 32768)
+
+readout_lut = CompressionMultiHeadLUT(n_heads=8, input_dim=384, output_dim=384,
+inner_dim=48, nap=6, tph=64, hard, bf16): compress Linear(384 -> 8*48=384) ->
+per-head FastMHL routing -> decompress Linear(384 -> 384). Stock collapsed-output
+class (not the multihead_output subclass), since output_dim is set.
+
+Cost: +1,869,314 params over exp_g_0019 (1,868,546 for the LUT, 84% of which is
+tables, plus 768 for the second LayerNorm). Total 43,212,466.
+
+State at the stop
+-----------------
+    step 1,600 / 16,000     8 evals (steps 200 .. 1,600)
+    last val_bpb            1.709449
+
+Why it is kept
+--------------
+This is the ONLY baseline exp_g_0021 can be measured against. exp_g_0021 is this
+config with one further change -- out_proj's decompress removed
+(out_inner_out 48 -> -1) -- so the two are a clean single-variable pair over
+these 8 evals.
+
+Matched-step outcome vs exp_g_0021 over the 8 common evals:
+
+    step 200    delta +0.009363   this arm ahead
+    step 600    delta -0.007124   0021 ahead
+    step 1,400  delta -0.004208   0021 ahead, lead shrinking
+    step 1,600  delta +0.000174   converged -- effectively a tie
+
+  (delta = 0021 - 0020; negative = 0021 better)
+
+0021 led at 5 of the 8 evals, by up to -0.0079 mid-range, with the gap closing
+monotonically from step 800 until the curves meet at 1,600. Note that quoting
+step 1,600 alone reads as "0020 wins" when the trajectory says "0021 led, then
+converged" -- the crossing happens to land exactly on the last eval.
+
+Caveat: only 8 evals, 10% of the training budget, single seed. This line has
+reversed late more than once (exp_g_0018 led for 2,200 steps then lost
+permanently; exp_g_0016b led until step 6,000 then reversed).
+
+Superseded by
+-------------
+exp_g_0021_smallE_concat_readout_noutdecomp.

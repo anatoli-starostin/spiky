@@ -1,0 +1,51 @@
+exp_g_0019_smallE_concat_residual — STOPPED BY DECISION at step 8,200 / 16,000
+==============================================================================
+
+Stopped by decision, not a crash and not a failure. There is deliberately NO
+summary.json: this run did not complete, and no terminal record should be
+manufactured for it. The committed metrics.csv / temperatures.csv /
+weight_deltas.csv are PARTIAL curves, preserved as ablation evidence.
+
+What this arm tests
+-------------------
+The RESIDUAL arm of the residual ablation: layer_combine="residual_sum". The
+additive skip is restored (x_next = x_flat + out_e, exp103's original single
+residual stream) while the CONCAT READOUT is kept -- every layer's output is
+still stashed and all 6 concatenated at the end -> LayerNorm(384) -> untied
+Linear(384 -> 32768).
+
+Its whole purpose is to separate the two things exp_g_0018 changed at once:
+"small E + concat readout" (shared by both arms) vs "no residual" (0018 only).
+
+State at the stop
+-----------------
+    step 8,200 / 16,000     41 evals (steps 200 .. 8,200)
+    last val_bpb            1.423842
+
+Result: THIS ARM WON THE ABLATION
+---------------------------------
+train.py is BYTE-IDENTICAL to exp_g_0018's and both smoke to the same
+41,343,152 params (an additive skip adds none), so the difference is
+attributable to the residual path alone.
+
+Matched-step outcome over the 26 evals the two arms share:
+
+    step 200    delta +0.060772   0018 (no residual) far ahead
+    step 2,000  delta +0.000516   lead nearly gone
+    step 2,200  delta -0.001197   CROSSOVER
+    step 5,200  delta -0.008271   this arm ahead, gap still widening
+
+  (delta = 0019 - 0018; negative = residual better)
+
+Ahead at all 16 evals after the crossover, no inversions, gap widening
+monotonically in trend. The no-residual arm's early lead was transient.
+
+Caveat: single seed each, and -0.008 is not large -- but it is sign-stable
+across 16 consecutive evals, which is a stronger signal than the magnitude
+alone suggests.
+
+Superseded by
+-------------
+exp_g_0020 (same config plus a readout LUT), which is why this run was stopped
+before its budget. The residual_sum setting it validated is carried forward into
+exp_g_0020 and exp_g_0021.
