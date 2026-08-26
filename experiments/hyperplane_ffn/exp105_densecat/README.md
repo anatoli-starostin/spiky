@@ -24,8 +24,10 @@ So q/k/v param cost GROWS with layer index (compress widens), out_proj is flat.
 ## Readout on the final stream
 Readout reads the **final (N_LAYERS+1)·E = 448** running stream (emb + all layer outputs —
 the natural choice, since the running stream literally ends at 7E; 6E=384 would exclude the
-embedding). `ln_final(448) → readout_lut CompressionMHL(448→448, inner48/nap6/tph64/heads8)
-→ ln_readout(448) → unembedder Linear(448→32768)`.
+embedding). It then OUTPUTS 384 (the vanilla/reference unembedder dim), so:
+`ln_final(448) → readout_lut CompressionMHL(input 448 → output 384, inner48/nap6/tph64/heads8)
+→ ln_readout(384) → unembedder Linear(384→32768)`. (readout in≠out: compress 448→8·48=384,
+decompress 8·48=384→384.)
 
 ## Per-concat LayerNorms (addendum): PRE-norm convention
 exp_g_0021 uses **PRE-norm** (`ln_pre` applied at the block's start, before q/k/v). So the
@@ -34,9 +36,11 @@ LayerNorm(2E), …, LayerNorm(6E)** feeding layers 0..5, plus `ln_final = LayerN
 on the final concat before readout. No separate/duplicate norms; consistent pre-norm.
 
 ## Verified params (build + fwd/bwd smoke; NOT launched)
-TOTAL **58,140,146**. Per-site totals (×6 layers): q_lut 4,290,060 · k_lut 4,290,060 ·
-v_lut 5,469,708 · out_proj 25,389,324 · rest 18,700,994 (tok_emb 2,097,152 + readout_lut
-1,917,762 + unembedder 14,680,064 + norms). Per-layer q grows 346,370 (L0) → 1,083,650 (L5).
+TOTAL **56,018,226** (readout output 448→384 shrinks the unembedder input, saving 2,121,920:
+unembedder 14,680,064→12,582,912 = -2,097,152, readout decompress -24,640, ln_readout -128).
+Per-site q/k/v/out_proj totals unchanged (q_lut 4,290,060 · k_lut 4,290,060 · v_lut 5,469,708
+· out_proj 25,389,324); readout_lut 1,893,122 · unembedder 12,582,912 (384→32768) · tok_emb
+2,097,152. Per-layer q grows 346,370 (L0) → 1,083,650 (L5).
 No duplicate config keys; effective tph q/k=4, v=8, out=128.
 
 Everything else = exp_g_0021: E=64, d_qk=64, d_v=16, H=6, 6 layers, seq 512, vocab 32768,

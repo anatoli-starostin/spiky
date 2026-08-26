@@ -305,7 +305,8 @@ _RO_TPH  = cfg.get('readout_lut_tph', 64)
 # running stream after the last layer = (N_LAYERS+1)*E (emb + all N_LAYERS outputs), which
 # is what the readout reads.
 READOUT_DIM = (N_LAYERS + 1) * E     # 7*64 = 448 (emb + 6 layer outputs) — the final stream
-CONCAT_DIM = READOUT_DIM             # readout/ln_final/unembed are sized to the full stream
+CONCAT_DIM = READOUT_DIM             # ln_final + readout INPUT are sized to the full stream
+READOUT_OUT = N_LAYERS * E           # 6*64 = 384 — readout OUTPUT / unembedder INPUT (vanilla dim)
 
 def _make_q(seed_offset, in_dim):
     return CompressionMultiHeadLUTMH(
@@ -485,16 +486,16 @@ class Model(nn.Module):
         # -> decompress Linear(8*48=384 -> 384).
         if _READOUT_LUT:
             self.readout_lut = CompressionMultiHeadLUT(
-                input_dim=CONCAT_DIM, output_dim=CONCAT_DIM, inner_dim=_RO_IN,
+                input_dim=CONCAT_DIM, output_dim=READOUT_OUT, inner_dim=_RO_IN,
                 nap=_RO_NAP, tph=_RO_TPH, n_heads=_RO_H,
                 forward_mode="hard", use_bf16=True,
-                random_seed=cfg['random_seed'] + 900, device=DEVICE)
-            self.ln_readout = nn.LayerNorm(CONCAT_DIM)
+                random_seed=cfg['random_seed'] + 900, device=DEVICE)   # 448 -> 384
+            self.ln_readout = nn.LayerNorm(READOUT_OUT)
         else:
             self.readout_lut = None
         # UNTIED by construction: tok_emb_E is [V, E=64] while this is [V, 384];
         # the shapes cannot be shared even accidentally.
-        self.unembedder = nn.Linear(CONCAT_DIM, VOCAB_SIZE, bias=False)
+        self.unembedder = nn.Linear(READOUT_OUT, VOCAB_SIZE, bias=False)   # 384 -> V
 
     def get_device(self):
         # Required by nanochat.loss_eval.evaluate_bpb.
