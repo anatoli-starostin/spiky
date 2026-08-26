@@ -75,6 +75,10 @@ V_LUT_NAP    = cfg.get('v_lut_n_anchor_pairs', 6)
 V_LUT_TPH    = cfg.get('v_lut_tables_per_head', 8)
 V_LUT_HEADS  = cfg.get('v_lut_n_heads', 4)
 V_LUT_FWD    = cfg.get('v_lut_forward_mode', LUT_FWD)
+# v_lut-specific table-cell init noise (default = shared LUT_NOISE). Cells init
+# uniform(-noise,noise); v_lut V output signal RMS scales ~linearly with it. Raised
+# for fix (B) to match the dense Linear V's ~0.388 step-0 RMS. FFN LUT uses LUT_NOISE.
+V_LUT_NOISE  = cfg.get('v_lut_init_weights_noise', LUT_NOISE)
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -124,7 +128,7 @@ class MinimalAttention(nn.Module):
                 nap=V_LUT_NAP, tph=V_LUT_TPH, n_heads=V_LUT_HEADS,
                 joint_head_compression=False, forward_mode=V_LUT_FWD,
                 batched_multi_head_input=True,
-                use_bf16=LUT_BF16, initial_weights_noise=LUT_NOISE,
+                use_bf16=LUT_BF16, initial_weights_noise=V_LUT_NOISE,
                 learnable_temps=LUT_LEARNTEMP,
                 random_seed=LUT_SEED + 500 + layer_idx)
         else:
@@ -191,6 +195,11 @@ class MinimalGPT(nn.Module):
         self.apply(self._init_weights)
         for block in self.blocks:
             nn.init.zeros_(block.attn.proj.weight)
+            # fix (B): zero the v_lut decompress BIAS so step-0 V is input-dependent
+            # (not a ~0.058 constant offset), matching the (bias-free) dense Linear V.
+            if V_LUT_ENABLE and getattr(block.attn, 'v_lut', None) is not None \
+                    and block.attn.v_lut.has_decompress and block.attn.v_lut.decompress.bias is not None:
+                nn.init.zeros_(block.attn.v_lut.decompress.bias)
             if FFN_TYPE == 'dense':
                 nn.init.zeros_(block.mlp[-1].weight)
             else:

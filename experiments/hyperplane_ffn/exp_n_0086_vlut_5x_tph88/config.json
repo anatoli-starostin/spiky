@@ -37,5 +37,7 @@
   "v_lut_n_anchor_pairs": 6,
   "v_lut_tables_per_head": 88,
   "v_lut_n_heads": 4,
-  "v_lut_forward_mode": "hard"
+  "v_lut_forward_mode": "hard",
+  "_init_fix_note": "FIX (B) (relaunch): match the v_lut's step-0 V output to the dense Linear V (~0.388 RMS, input-dependent). (1) v_lut_init_weights_noise 0.001->0.363 (~54x the earlier 0.00669) so the table-signal RMS reaches ~0.384 — the earlier ~6.69x was mis-derived (the init output was dominated by the decompress bias, not the table signal). (2) the v_lut's decompress Linear BIAS is zeroed at init (in train.py MinimalGPT init) so V is input-dependent, not a ~0.058 constant. v_lut-specific; the FFN-slot LUT init (lut_init_weights_noise=0.001) is UNCHANGED.",
+  "v_lut_init_weights_noise": 0.363
 }
