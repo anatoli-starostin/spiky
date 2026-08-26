@@ -1,6 +1,6 @@
 {
-  "exp_name": "exp_n_0087_vsw_anchor_dense",
-  "_sweep_note": "vsweep RUN 0 (ANCHOR = adjusted exp_n_0084): DENSE Linear V (v_lut disabled -> fused-qkv dense path = exp_n_0084's architecture), untied unembedder, FFN slot unchanged (n_heads4/inner48/nap7/tph256), n_steps=3500 with the sweep's cosine schedule. Apples-to-apples dense-V reference; every v_lut config is scored against THIS run's short-run val_bpb + slope.",
+  "exp_name": "exp_n_0088_vsw_vlut_base",
+  "_sweep_note": "vsweep RUN 1: v_lut BASELINE (H4/in24/out24/nap6/tph88, init-B, AdamW-standard), n_steps=3500. An ordinary sweep entry scored against the dense-V anchor (exp_n_0087). Not the anchor itself.",
   "_arch_note": "exp_n_0085 with ONE change: the attention v_lut's tph 8->88 (nap=6, inner_in=24, inner_out=24, n_heads=4 ALL UNCHANGED). This grows the v_lut ~5x in params via table count only (tables = n_heads*tph*2^nap*inner_out = 4*88*64*24 = 540,672/layer), keeping FLOPs/bandwidth low (still gather-read; tph=88 means 88 gathers/head). Per-layer v_lut 122,880 -> 614,400 (exactly 5.0x). Everything else identical to exp_n_0085: dense q/k Linear, out_proj Linear, FFN slot n_heads=4/inner48/nap7/tph256, untied unembedder, depth 6, n_embd 384, 6 attn heads d=64, seq 512, device_batch 24/grad_accum 2. v_lut emits 384 reshaped to 6 attn heads x 64 for SDPA. Tests whether a 5x-param, low-bandwidth routed V beats the dense Linear V. Targets: exp_n_0084 1.1987 (dense-V), exp_n_0045 1.1977 (tied).",
   "gamma": 0,
   "ffn_type": "compression",
@@ -32,7 +32,7 @@
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
-  "v_lut": false,
+  "v_lut": true,
   "v_lut_inner_in_dim": 24,
   "v_lut_inner_out_dim": 24,
   "v_lut_n_anchor_pairs": 6,
