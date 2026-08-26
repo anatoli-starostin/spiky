@@ -7,14 +7,14 @@
   "n_embd": 384,
   "n_head": 6,
   "seq_len": 512,
-  "device_batch_size": 48,
+  "device_batch_size": 12,
   "total_batch_size": 24576,
   "n_steps": 16000,
   "lr": 0.0003,
   "weight_decay": 0.1,
   "lr_warmup_fraction": 0.1,
   "eval_every": 200,
-  "eval_steps": 10,
+  "eval_steps": 40,
   "random_seed": 1,
   "compute_dtype": "bf16",
   "tokenizer_vocab_size": 32768,
@@ -33,5 +33,5 @@
   "raw_nap": 7,
   "raw_tph": 2048,
   "raw_n_heads": 1,
-  "description": "exp_g_0023 - the NO-COMPRESSION pair of exp_n_0045_H8_d48_tph256_nap7_16k. exp_n_0045 has exactly ONE CompressionMHL site: the FFN slot of each MinimalBlock, CompressionMultiHeadLUT(input_dim=384, output_dim=384, inner_in=48, inner_out=48, nap=7, tph=256, n_heads=8, hard). Here that site is replaced by a RAW FastMultiHeadLut(input_dim=384, n_heads=1, n_outputs=384, nap=7, tph=2048, hard) -- no compress projection (it routes on the full 384-d site input) and no decompress (its tables emit the full 384-d output directly). Everything else is exp_n_0045: MinimalGPT depth 6, n_embd 384, n_head 6, seq 512, vocab 32768, tied unembedder, standard Linear attention (no LUT there), AdamW, 24,576 tok/step, 16,000 steps. WARNING: this is ~8x the FFN parameters of exp_n_0045 -- tables scale as n_heads*tph*2^nap*n_outputs, and dropping the compression means n_outputs is 384 rather than the 48-wide inner width. Shared lutorch NOT modified."
+  "description": "exp_g_0023 - the NO-COMPRESSION pair of exp_n_0045_H8_d48_tph256_nap7_16k. exp_n_0045 has exactly ONE CompressionMHL site: the FFN slot of each MinimalBlock, CompressionMultiHeadLUT(input_dim=384, output_dim=384, inner_in=48, inner_out=48, nap=7, tph=256, n_heads=8, hard). Here that site is replaced by a RAW FastMultiHeadLut(input_dim=384, n_heads=1, n_outputs=384, nap=7, tph=2048, hard) -- no compress projection (it routes on the full 384-d site input) and no decompress (its tables emit the full 384-d output directly). Everything else is exp_n_0045: MinimalGPT depth 6, n_embd 384, n_head 6, seq 512, vocab 32768, tied unembedder, standard Linear attention (no LUT there), AdamW, 24,576 tok/step, 16,000 steps. WARNING: this is ~8x the FFN parameters of exp_n_0045 -- tables scale as n_heads*tph*2^nap*n_outputs, and dropping the compression means n_outputs is 384 rather than the 48-wide inner width. Shared lutorch NOT modified. MEMORY FIX: device_batch_size 48 -> 12 with grad_accum 4 and eval_steps 10 -> 40. tokens/step stays exactly 24,576 and the validation budget stays exactly 245,760 tokens (40*12*512 == 10*48*512), so nothing scientific changes -- only the per-micro-batch memory footprint. At device_batch_size 48 this OOMs in the BACKWARD on a 32 GB card; exp_n_0045's reference run used an 80 GB H100, which is why the original batch was viable there and is not here."
 }
