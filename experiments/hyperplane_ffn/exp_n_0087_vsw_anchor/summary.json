@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0087_vsw_anchor_dense",
+  "best_val_bpb": 1.397906084973322,
+  "final_val_bpb": 1.397906084973322,
+  "total_params": 67351692,
+  "training_time_hours": 0.444
+}
