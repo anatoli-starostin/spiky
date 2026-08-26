@@ -1,5 +1,26 @@
 """LOCAL override: use the BATCHED multi_head_input FastMHL even with no compress.
 
+RETAINED BUT **NOT USED** -- documented negative work. train.py imports the STOCK
+CompressionMultiHeadLUT instead, for two measured reasons:
+
+  1. WRONG PARAMETERIZATION for this ablation. Batching collapses the loop's
+     per-head (log_soft_score_temp, log_select_temp) -- 8 pairs, 16 scalars per
+     slot -- into ONE shared pair (2 per slot), -84 params over 6 layers. The
+     exp_n_0045 checkpoint this experiment ablates has the PER-HEAD temps
+     (93,403,488 params; its profiler output says "path=per-head-loop", and the
+     run predates the batched path by one day: 2026-08-19 vs 3328bf5c 2026-08-20).
+     Using this class would change the temperature parameterization on top of the
+     compress ablation, making it a two-variable experiment.
+  2. IT COSTS MEMORY, it does not save it. The backward surrogate becomes ONE
+     [N, 2048, 128] tensor instead of 8 sequential [N, 256, 128] ones: 6.44 GB at
+     device_bs 12 and 25.77 GB at 48, versus the loop's ~4.25 GB total peak at 12.
+     So batching would also have forced a batch-size difference from exp_n_0045.
+
+The code below is correct and verified (max |loop - batched| = 0.000e+00 over a
+64-row batch, table init and block-diagonal anchors matching head-for-head); it is
+kept because the "batch the heads" idea is a reasonable thing to reach for again,
+and this records why it is the wrong tool for THIS experiment.
+
 The shared CompressionMultiHeadLUT gates its batched path on `has_compress`:
 
     self.batched_multi_head_input = (requested and not joint and self.has_compress)

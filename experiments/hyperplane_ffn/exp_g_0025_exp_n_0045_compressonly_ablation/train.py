@@ -33,11 +33,15 @@ from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.loss_eval import evaluate_bpb
 
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut       # optimizer isinstance route
-from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT  # noqa: F401 (kept for isinstance/lineage)
-# exp_g_0025: LOCAL override so the FFN slot batches its heads even with no
-# compress projection. Shared src/spiky/lutorch/ is untouched; exp_n_0045 keeps
-# importing the stock class.
-from local_mh_compression import BatchedNoCompressMHL as CompressionMultiHeadLUT
+from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
+# exp_g_0025 uses the STOCK class, which with inner_in_dim=-1 (no compress) falls
+# back to the per-head loop over 8 single-head FastMHLs -- exactly the code path
+# exp_n_0045 ran on 2026-08-19, one day before the batched path existed. That
+# matters: the loop gives each head its OWN (log_soft_score_temp, log_select_temp),
+# 16 per slot, which is what the exp_n_0045 checkpoint has (93,403,488 params,
+# profiler: "path=per-head-loop"). The batched path shares one pair per slot (2),
+# so it would silently change the temperature parameterization on top of the
+# compress ablation. See local_mh_compression.py -- retained, NOT used.
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(EXP_DIR, 'config.json')) as f:
