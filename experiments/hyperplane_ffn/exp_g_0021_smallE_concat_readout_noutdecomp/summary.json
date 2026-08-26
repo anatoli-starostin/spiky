@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0021_smallE_concat_readout_noutdecomp",
+  "best_val_bpb": 1.3406161999734172,
+  "final_val_bpb": 1.3406161999734172,
+  "n_params": 49356082,
+  "training_time_hours": 1.877
+}
