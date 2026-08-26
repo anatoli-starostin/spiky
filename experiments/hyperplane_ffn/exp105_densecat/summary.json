@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp105_densecat",
+  "best_val_bpb": 1.3013186377088504,
+  "final_val_bpb": 1.3022383901348409,
+  "n_params": 56018226,
+  "training_time_hours": 1.885
+}
