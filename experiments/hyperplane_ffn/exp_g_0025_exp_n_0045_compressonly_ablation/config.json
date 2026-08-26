@@ -7,14 +7,14 @@
   "n_embd": 384,
   "n_head": 6,
   "seq_len": 512,
-  "device_batch_size": 48,
+  "device_batch_size": 12,
   "total_batch_size": 24576,
   "n_steps": 16000,
   "lr": 0.0003,
   "weight_decay": 0.1,
   "lr_warmup_fraction": 0.1,
   "eval_every": 200,
-  "eval_steps": 10,
+  "eval_steps": 40,
   "random_seed": 1,
   "compute_dtype": "bf16",
   "tokenizer_vocab_size": 32768,
@@ -29,5 +29,5 @@
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
-  "description": "exp_g_0025 - the CLEAN one-variable compress ablation of exp_n_0045. Exactly ONE field differs from exp_n_0045_H8_d48_tph256_nap7_16k: lut_inner_in_dim 48 -> -1, which drops the compress projection so the FFN LUT routes on the full 384-d slot input. Everything else is held: inner_out_dim=48 (decompress kept), nap=7, tph=256, n_heads=8, joint_head_compression=False, forward_mode=hard, learnable_temps=True, depth 6, n_embd 384, n_head 6, plain Linear attention, seq 512, vocab 32768, tied unembedder, AdamW, 24,576 tok/step, eval_every 200, 16,000 steps, seed 1. CONTRAST WITH exp_g_0024, which is NOT a clean ablation: it also changed n_heads 8 -> 1 and tph 256 -> 2048, so its -0.035 gap against exp_n_0045 confounds the dropped compress with a completely different head/table geometry. This experiment isolates the compress projection alone. train.py is byte-identical to exp_n_0045's; the change is config-only (LUT_IN is read straight from lut_inner_in_dim, whose source comment already documents -1 => no compress). Shared lutorch NOT modified."
+  "description": "exp_g_0025 - the CLEAN one-variable compress ablation of exp_n_0045. Exactly ONE field differs from exp_n_0045_H8_d48_tph256_nap7_16k: lut_inner_in_dim 48 -> -1, which drops the compress projection so the FFN LUT routes on the full 384-d slot input. Everything else is held: inner_out_dim=48 (decompress kept), nap=7, tph=256, n_heads=8, joint_head_compression=False, forward_mode=hard, learnable_temps=True, depth 6, n_embd 384, n_head 6, plain Linear attention, seq 512, vocab 32768, tied unembedder, AdamW, 24,576 tok/step, eval_every 200, 16,000 steps, seed 1. CONTRAST WITH exp_g_0024, which is NOT a clean ablation: it also changed n_heads 8 -> 1 and tph 256 -> 2048, so its -0.035 gap against exp_n_0045 confounds the dropped compress with a completely different head/table geometry. This experiment isolates the compress projection alone. train.py is byte-identical to exp_n_0045's; the change is config-only (LUT_IN is read straight from lut_inner_in_dim, whose source comment already documents -1 => no compress). Shared lutorch NOT modified. BATCHED-HEADS FIX: the FFN slot now uses a LOCAL override (local_mh_compression.BatchedNoCompressMHL) so the 8 heads run as ONE batched multi_head_input FastMHL instead of a python per-head loop, even with no compress. Verified numerically identical to the loop it replaces (max abs diff 0.000e+00, table init and block-diagonal anchors matching head-for-head). BATCH: device_batch_size 48 -> 12 with grad_accum 4 and eval_steps 10 -> 40; tokens/step stays 24,576 and val tokens stay 245,760 (40*12*512 == 10*48*512). Required because batching makes the backward surrogate ONE [N,2048,128] tensor instead of 8 sequential [N,256,128] ones: 6.44 GB at bs=12 but 25.77 GB at bs=48."
 }

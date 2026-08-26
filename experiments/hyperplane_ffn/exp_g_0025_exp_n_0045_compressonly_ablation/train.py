@@ -33,7 +33,11 @@ from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.loss_eval import evaluate_bpb
 
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut       # optimizer isinstance route
-from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
+from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT  # noqa: F401 (kept for isinstance/lineage)
+# exp_g_0025: LOCAL override so the FFN slot batches its heads even with no
+# compress projection. Shared src/spiky/lutorch/ is untouched; exp_n_0045 keeps
+# importing the stock class.
+from local_mh_compression import BatchedNoCompressMHL as CompressionMultiHeadLUT
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(EXP_DIR, 'config.json')) as f:
