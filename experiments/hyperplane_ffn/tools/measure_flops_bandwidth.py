@@ -178,12 +178,19 @@ def main():
         inner_in = cfg.get('lut_inner_in_dim', cfg.get('lut_inner_dim'))
         inner_out = cfg.get('lut_inner_out_dim', cfg.get('lut_inner_dim'))
         cells = 2 ** nap
-        ffn_matmul_per_layer = 2 * n_embd * (H * inner_in) + 2 * (H * inner_out) * n_embd  # compress+decompress
-        ffn_dense_params_per_layer = (n_embd * (H * inner_in) + (H * inner_in)             # compress w+b
-                                      + (H * inner_out) * n_embd + n_embd)                 # decompress w+b
-        lut_full_params = H * tph * cells * inner_out
-        lut_selected_params = H * tph * inner_out
-        routing_ops_tok = (nap * tph * 4 + tph * inner_out) * H * n_layer
+        # -1 sentinels: inner_in=-1 -> no compress (LUT reads x, eff_in=n_embd);
+        #               inner_out=-1 -> no decompress (LUT emits n_embd, heads summed).
+        has_c = inner_in != -1
+        has_d = inner_out != -1
+        eff_in  = n_embd if inner_in  == -1 else inner_in
+        eff_out = n_embd if inner_out == -1 else inner_out
+        ffn_matmul_per_layer = ((2 * n_embd * (H * inner_in) if has_c else 0)               # compress
+                                + (2 * (H * inner_out) * n_embd if has_d else 0))           # decompress
+        ffn_dense_params_per_layer = (((n_embd * (H * inner_in) + (H * inner_in)) if has_c else 0)   # compress w+b
+                                      + (((H * inner_out) * n_embd + n_embd) if has_d else 0))       # decompress w+b
+        lut_full_params = H * tph * cells * eff_out
+        lut_selected_params = H * tph * eff_out
+        routing_ops_tok = (nap * tph * 4 + tph * eff_out) * H * n_layer
 
     model = MinimalGPT(cfg).to(dev).eval()
     ckpt = os.path.join(exp, 'checkpoint.pt')
@@ -328,8 +335,9 @@ def main():
     p("")
     p("--- key byte facts ---")
     if ffn_type != 'dense':
-        p(f"LUT selected-rows/token/layer = H*tph*inner_out*2 = {H}*{tph}*{inner_out}*2 = {lut_sel_B_layer:,} B")
-        p(f"LUT full table/layer          = H*tph*cells*inner_out*2 = {lut_full_B_layer:,} B "
+        p(f"LUT selected-rows/token/layer = H*tph*eff_out*2 = {H}*{tph}*{eff_out}*2 = {lut_sel_B_layer:,} B "
+          f"(eff_out={eff_out}{'  [no-decompress => =n_embd]' if inner_out==-1 else ''})")
+        p(f"LUT full table/layer          = H*tph*cells*eff_out*2 = {lut_full_B_layer:,} B "
           f"(selected = 1/{cells} = {lut_sel_B_layer/lut_full_B_layer*100:.2f}% of full)")
     else:
         p(f"dense FFN weights/layer       = 2*n_embd*hidden*2 = 2*{n_embd}*{hidden}*2 = {ffn_dense_per_layer_B:,} B "
