@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0100_vsw_in256match",
+  "best_val_bpb": 1.4044827078757471,
+  "final_val_bpb": 1.4044827078757471,
+  "total_params": 105797016,
+  "training_time_hours": 0.626
+}
