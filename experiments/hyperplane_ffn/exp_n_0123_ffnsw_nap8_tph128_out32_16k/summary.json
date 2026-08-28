@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0123_ffnsw_nap8_tph128_out32_16k",
+  "best_val_bpb": 1.197494184170692,
+  "final_val_bpb": 1.197494184170692,
+  "total_params": 54621324,
+  "training_time_hours": 1.691
+}
