@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0120_ffnsw_S2a_nap9_tph64_16k",
+  "best_val_bpb": 1.198535913831346,
+  "final_val_bpb": 1.1985914026334317,
+  "total_params": 67351692,
+  "training_time_hours": 1.669
+}
