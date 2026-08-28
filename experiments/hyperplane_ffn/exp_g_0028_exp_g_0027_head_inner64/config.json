@@ -9,7 +9,7 @@
   "n_embd": 384,
   "n_head": 6,
   "seq_len": 512,
-  "_mem_note": "device_batch_size 24 / grad_accum 2 inherited unchanged from exp_g_0026 (effective batch 24,576 tokens identical). The extra CompressionMHL adds a 7th LUT slot worth of backward-surrogate activation, ~1/6 more LUT activation memory than exp_g_0026; verified by a real forward+backward smoke before launch.",
+  "_mem_note": "device_batch_size 24 / grad_accum 2 inherited unchanged from exp_g_0027 (effective batch 24,576 tokens identical). REQUIRES PYTORCH_ALLOC_CONF=expandable_segments:True at launch. First launch attempt OOM'd before step 1: it needed 6.00 GiB for the LUT backward surrogate [12288, 1024, 128] fp32 with 5.62 GiB free, while 7.13 GiB sat reserved-but-unallocated as allocator fragmentation. expandable_segments collapses that gap to 0.4 GiB and the run fits: peak 24.57 GiB allocated / 24.98 GiB reserved on a 31.4 GiB card, 6.4 GiB headroom, measured over a full real training step (grad_accum 2, real data) PLUS a real evaluate_bpb. It changes allocator behaviour only -- the math and the effective batch are untouched. Note the widened head slot does NOT widen the [N, n_tables, 2^nap] surrogate (inner dim is the VALUE width, not the key width); the extra memory over exp_g_0027's 23.54 GiB is ~1 GiB of wider values, which is what pushed a run that already sat near the ceiling over it. The first smoke MISSED this because it ran one micro-batch per backward instead of the real grad_accum=2 loop and never touched the eval path; the smoke now replicates both.",
   "device_batch_size": 24,
   "total_batch_size": 24576,
   "n_steps": 16000,
