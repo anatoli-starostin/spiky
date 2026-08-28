@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0112_ffnsw_S1c_32o24_tph256",
+  "best_val_bpb": 1.4051913103003522,
+  "final_val_bpb": 1.4051913103003522,
+  "total_params": 66982668,
+  "training_time_hours": 0.612
+}

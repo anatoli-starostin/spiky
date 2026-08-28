@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0110_ffnsw_S1b_in32_tph192",
+  "best_val_bpb": 1.4020841193268732,
+  "final_val_bpb": 1.4020841193268732,
+  "total_params": 67056396,
+  "training_time_hours": 0.489
+}
