@@ -36,13 +36,22 @@ float weights are never needed again.
 
 Design decisions, all reported explicitly rather than assumed:
 
-  * BIAS IS DROPPED ENTIRELY. There is no bias term and no flag for one: the routing
-    test is purely `<q, x> > 0`, the pure anchor-pair "compare to zero" form.
-    HyperplaneMultiHeadLUT's per-hyperplane bias is retained only as a frozen
-    all-zero buffer, because the inherited autograd Functions take it as a positional
-    argument -- it is not a Parameter, receives no gradient, and never moves off zero.
-    So `TernaryHyperplaneMultiHeadLUT` has one FEWER learnable tensor than
+  * BIAS IS OFF BY DEFAULT. At the default `trainable_bias=False` there is no bias
+    term: the routing test is purely `<q, x> > 0`, the pure anchor-pair "compare to
+    zero" form. HyperplaneMultiHeadLUT's per-hyperplane bias is retained only as a
+    frozen all-zero buffer, because the inherited autograd Functions take it as a
+    positional argument -- it is not a Parameter, receives no gradient, and never
+    moves off zero. So by default this class has one FEWER learnable tensor than
     HyperplaneMultiHeadLUT, not one more.
+
+    `trainable_bias=True` promotes it back to a Parameter of shape `[n_tables, nap]`
+    -- one scalar per hyperplane -- and the test becomes `<q, x> + b > 0`, letting
+    each hyperplane place its dead zone off-centre on its own projection axis. It is
+    zeroed at construction either way, so a trainable-bias run starts from exactly the
+    same function a default run does and diverges only as `b` learns. Unlike the
+    shadow weights, `b` is NOT discarded at deployment: it survives as the comparison
+    threshold (see `bake_routing()`), and inference stays multiplication-free because
+    a threshold is not a coefficient.
 
   * T IS PER TABLE, stored as `log_ternary_temp` with shape `[n_tables, 1, 1]` so it
     broadcasts over the `(nap, input_dim)` axes of that table's hyperplane block.
@@ -201,6 +210,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         ternary_temp_init: float = 0.5,
         nonzero_penalty_weight: float = 0.0,
         balanced_target_zero_frac: float = 1.0 / 3.0,
+        trainable_bias: bool = False,
         **kwargs,
     ):
         # "balanced_ternary" is this subclass's own init mode; the parent validates
@@ -225,13 +235,23 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                        dtype=torch.float32, device=dev)
         )
 
-        # NO BIAS. The routing test is <q, x> > 0. The inherited autograd Functions
-        # take b as a positional argument, so it stays as a frozen all-zero BUFFER --
-        # demoted from Parameter, so it receives no gradient, is not returned by
-        # .parameters(), and can never move off zero.
-        b = self.hyperplane_bias.detach().zero_()
-        del self.hyperplane_bias
-        self.register_buffer("hyperplane_bias", b)
+        # BIAS. Default: none. The routing test is <q, x> > 0, and the inherited
+        # autograd Functions take b as a positional argument, so it stays a frozen
+        # all-zero BUFFER -- demoted from Parameter, so it receives no gradient, is not
+        # returned by .parameters(), and can never move off zero.
+        #
+        # trainable_bias=True instead KEEPS the parent's Parameter, giving each
+        # hyperplane one scalar threshold: the routing test becomes <q, x> + b > 0, so
+        # the dead zone can sit off-centre on that hyperplane's own projection axis.
+        # It is zeroed at construction either way, so a trainable-bias run starts from
+        # exactly the same function a default run does and only diverges as b learns.
+        self.trainable_bias = bool(trainable_bias)
+        with torch.no_grad():
+            self.hyperplane_bias.zero_()
+        if not self.trainable_bias:
+            b = self.hyperplane_bias.detach()
+            del self.hyperplane_bias
+            self.register_buffer("hyperplane_bias", b)
 
         # Plain Python float, deliberately NOT a Parameter or buffer: it must not
         # appear in state_dict, so enabling or disabling the penalty never changes a
@@ -350,8 +370,36 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         depends on it only through q. Returned as int8, which is how you would store
         it (or convert to two index lists per hyperplane for a multiplication-free
         add/subtract kernel).
+
+        NOTE: this returns the routing weights ONLY. With `trainable_bias=True` the
+        deployed artifact also needs the per-hyperplane bias, since the test is
+        `<q, x> + b > 0`; use `bake_routing()` for the complete artifact.
         """
         return self.hard_ternary_weight().to(torch.int8).cpu()
+
+    def bake_routing(self) -> dict:
+        """The COMPLETE deployment artifact for this module's routing.
+
+        Returns `{"ternary_weight": q int8, "bias": b or None}`.
+
+        `q` replaces the float `hyperplane_weight`, which is then discardable -- that
+        is the whole point of the shadow-weight scheme. `b` is NOT discardable: with
+        `trainable_bias=True` it is a genuine learned degree of freedom that survives
+        into inference as the comparison threshold, one fp scalar per hyperplane. It is
+        `None` when the bias is disabled, in which case the test is against zero.
+
+        Inference stays multiplication-free either way:
+
+            proj = sum(x[i] for q_i = +1) - sum(x[i] for q_i = -1)
+            bit  = proj + b > 0          # or proj > 0 when bias is None
+
+        i.e. adds, subtracts, and one compare per hyperplane.
+        """
+        return {
+            "ternary_weight": self.bake_ternary_weights(),
+            "bias": (self.hyperplane_bias.detach().cpu().clone()
+                     if self.trainable_bias else None),
+        }
 
     def ternary_stats(self) -> dict:
         """Fractions of +1 / 0 / -1 in the realized routing, for monitoring."""
@@ -676,6 +724,99 @@ def _sanity() -> None:
                  and ap.hyperplane_init == 'anchor_pairs')
     print(f'  anchor_pairs path untouched (still exact, sigma None): {untouched}')
     ok &= thirds and targeted and untouched and bool((bal.hard_ternary_weight() != 0).any())
+
+    print('\n=== (10) trainable_bias=False is a verified NO-OP ===')
+    off_a = TernaryHyperplaneMultiHeadLUT(**kw)
+    off_b = TernaryHyperplaneMultiHeadLUT(**kw, trainable_bias=False)
+    on = TernaryHyperplaneMultiHeadLUT(**kw, trainable_bias=True)
+    pa = {n: tuple(p.shape) for n, p in off_a.named_parameters()}
+    pb = {n: tuple(p.shape) for n, p in off_b.named_parameters()}
+    pon = {n: tuple(p.shape) for n, p in on.named_parameters()}
+    print(f'  default == explicit False (params): {pa == pb}')
+    print(f'  hyperplane_bias in params: off {"hyperplane_bias" in pa}, '
+          f'on {"hyperplane_bias" in pon}  (False / True expected)')
+    print(f'  state_dict keys identical off vs on: '
+          f'{sorted(off_a.state_dict()) == sorted(on.state_dict())}  '
+          f'(same names -- buffer vs Parameter)')
+    n_off = sum(p.numel() for p in off_a.parameters())
+    n_on = sum(p.numel() for p in on.parameters())
+    bshape = tuple(on.hyperplane_bias.shape)
+    print(f'  bias shape {bshape} = [n_tables, nap] = one scalar per hyperplane')
+    print(f'  param count {n_off:,} -> {n_on:,}  (delta +{n_on - n_off:,} '
+          f'= {bshape[0]}*{bshape[1]})')
+    # b starts at zero, so the flag-on forward at init must equal the flag-off forward
+    with torch.no_grad():
+        on.load_state_dict(off_a.state_dict())
+    same_fwd = bool(torch.equal(off_a(x), on(x)))
+    print(f'  b is zero at init: {bool((on.hyperplane_bias == 0).all())}')
+    print(f'  forward identical at init (b=0): {same_fwd}')
+    off_a.zero_grad(set_to_none=True); on.zero_grad(set_to_none=True)
+    off_a(x).sum().backward(); on(x).sum().backward()
+    same_grad = bool(torch.equal(off_a.hyperplane_weight.grad,
+                                 on.hyperplane_weight.grad))
+    print(f'  hyperplane_weight grads identical at init: {same_grad}')
+    print(f'  off-path bias still a buffer, requires_grad '
+          f'{off_a.hyperplane_bias.requires_grad} (False expected)')
+    noop_bias = (pa == pb and 'hyperplane_bias' not in pa
+                 and 'hyperplane_bias' in pon and same_fwd and same_grad
+                 and not off_a.hyperplane_bias.requires_grad
+                 and n_on - n_off == bshape[0] * bshape[1])
+    print(f'  => trainable_bias=False no-op verified: {noop_bias}')
+    ok &= noop_bias
+
+    print('\n=== (11) trainable_bias=True: b is a real trainable DOF ===')
+    print(f'  is a Parameter: {isinstance(on.hyperplane_bias, nn.Parameter)}   '
+          f'requires_grad {on.hyperplane_bias.requires_grad}')
+    gb = on.hyperplane_bias.grad
+    print(f'  grad after backward: finite={bool(torch.isfinite(gb).all())} '
+          f'nonzero={bool((gb != 0).any())}  |g|max {float(gb.abs().max()):.3e}')
+    # Optimize the BIAS ONLY, so what moves is attributable to b and nothing else.
+    b0 = on.hyperplane_bias.detach().clone()
+    q0 = on.hard_ternary_weight().clone()
+    opt = torch.optim.SGD([on.hyperplane_bias], lr=1e-2)
+    for _ in range(20):
+        opt.zero_grad(set_to_none=True)
+        on(x).sum().backward()
+        opt.step()
+    moved = float((on.hyperplane_bias.detach() - b0).abs().max())
+    print(f'  20 steps on b ALONE moved it by up to {moved:.6f}  '
+          f'({int((on.hyperplane_bias.detach() != 0).sum())}'
+          f'/{on.hyperplane_bias.numel()} entries off zero)')
+    # b shifts the routing DECISION threshold; it cannot change q, which is the
+    # ternarized WEIGHTS. Assert that, rather than implying otherwise.
+    q_unchanged = bool(torch.equal(on.hard_ternary_weight(), q0))
+    print(f'  q itself unchanged by b, as it must be (q = ternary(stanh(w,T)), '
+          f'independent of b): {q_unchanged}')
+    print(f'  what b moves is the comparison threshold: the test is '
+          f'<q,x> + b > 0 instead of <q,x> > 0')
+    bias_live = (isinstance(on.hyperplane_bias, nn.Parameter)
+                 and bool((gb != 0).any()) and moved > 0 and q_unchanged)
+    print(f'  => bias is live: {bias_live}')
+
+    print('\n  deployment artifact:')
+    art_on, art_off = on.bake_routing(), off_a.bake_routing()
+    print(f'    trainable_bias=True  -> q {tuple(art_on["ternary_weight"].shape)} '
+          f'{art_on["ternary_weight"].dtype}, bias '
+          f'{tuple(art_on["bias"].shape)}  (RETAINED)')
+    print(f'    trainable_bias=False -> q {tuple(art_off["ternary_weight"].shape)} '
+          f'{art_off["ternary_weight"].dtype}, bias {art_off["bias"]}  '
+          f'(None -- test is against zero)')
+    art_ok = (art_on['bias'] is not None and art_off['bias'] is None
+              and art_on['ternary_weight'].dtype == torch.int8)
+    print(f'  => bake_routing carries q AND b: {art_ok}')
+
+    # the machinery that must keep working with the extra parameter present
+    pen_on = TernaryHyperplaneMultiHeadLUT(**kw, trainable_bias=True,
+                                           nonzero_penalty_weight=0.5)
+    sp = pen_on.sparsity_penalty()
+    st_on = pen_on.ternary_stats()
+    print(f'  sparsity_penalty with bias on: {float(sp):.6f} '
+          f'(finite {bool(torch.isfinite(sp))}) -- surrogate is about w, not b')
+    print(f'  ternary_stats / ternary_temp_per_head still fine: '
+          f'{len(st_on)} stats, T view {tuple(pen_on.ternary_temp_per_head().shape)}')
+    print(f'  all-zero guard still sees the routing: '
+          f'{bool((pen_on.hard_ternary_weight() != 0).any())}')
+    ok &= bias_live and art_ok and bool(torch.isfinite(sp))
 
     print('\nSANITY: ' + ('PASS' if ok else 'FAIL'))
     if not ok:
