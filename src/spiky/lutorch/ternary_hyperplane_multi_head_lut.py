@@ -65,6 +65,35 @@ overrides only the two places the hyperplane weights are consumed, substituting 
 for `w`. Subclassing rather than copying keeps the two modules from drifting apart:
 there is exactly one implementation of the routing math in the tree.
 
+OPTIONAL SPARSITY PENALTY (off by default)
+------------------------------------------
+`nonzero_penalty_weight` (lambda, default 0.0) adds a soft L0-surrogate that
+discourages DENSE routing -- fewer non-zero {-1,+1} components per hyperplane, i.e.
+cheaper add/subtract kernels at deployment. It is a loss term only: the forward, the
+routing and the parameter set are untouched, and at the default 0.0 the class is a
+bit-for-bit no-op against the un-penalized version (verified in the sanity checks).
+
+    surrogate = mean over ALL hyperplane weight elements of |tanh(w_i / (2T))|
+    penalty   = lambda * surrogate
+
+Each term is ~0 inside the dead zone and ~1 when saturated, so the surrogate is a
+smooth stand-in for "fraction of components that are non-zero" -- the same `stanh`
+the routing already uses, so nothing new is introduced. MEAN, not sum, so lambda has
+the same meaning at any (n_tables, nap, input_dim) shape.
+
+Wiring it into a training loop -- sum over the slots and add to the loss:
+
+    pen = sum(m.sparsity_penalty() for m in model.modules()
+              if isinstance(m, TernaryHyperplaneMultiHeadLUT))
+    (loss + pen).backward()
+
+The penalty gradient reaches BOTH `hyperplane_weight` (pulling weights toward the
+dead zone) and `log_ternary_temp` (widening the band). Both routes genuinely sparsify,
+so both are wired -- but note the failure mode: T -> infinity zeroes the routing
+entirely and drives the penalty to 0, so lambda must stay small enough that the task
+loss opposes it. Watch `ternary_stats()["frac_zero"]` and `T_max` during training; if
+T inflation dominates, detaching T inside `sparsity_surrogate` is a one-line change.
+
 Neither HyperplaneMultiHeadLUT nor CompressionMultiHeadLUT is modified by this file.
 """
 import math
@@ -132,6 +161,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         tables_per_head: int = 1,
         *,
         ternary_temp_init: float = 0.5,
+        nonzero_penalty_weight: float = 0.0,
         **kwargs,
     ):
         super().__init__(
@@ -156,6 +186,15 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         b = self.hyperplane_bias.detach().zero_()
         del self.hyperplane_bias
         self.register_buffer("hyperplane_bias", b)
+
+        # Plain Python float, deliberately NOT a Parameter or buffer: it must not
+        # appear in state_dict, so enabling or disabling the penalty never changes a
+        # checkpoint's shape and never invalidates an existing run.
+        if nonzero_penalty_weight < 0:
+            raise ValueError(
+                f"nonzero_penalty_weight must be >= 0, got {nonzero_penalty_weight}"
+            )
+        self.nonzero_penalty_weight = float(nonzero_penalty_weight)
 
         nz = int((self.hard_ternary_weight() != 0).sum())
         if nz == 0:
@@ -203,6 +242,43 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         s = self.soft_ternary_weight()
         q_hard = torch.sign(s) * (s.abs() > 0.5).to(s.dtype)
         return s + (q_hard - s).detach()
+
+    # ---- optional soft sparsity penalty (off by default) --------------------
+
+    def sparsity_surrogate(self) -> torch.Tensor:
+        """RAW, UNWEIGHTED smooth surrogate for the fraction of non-zero components.
+
+        `mean(|tanh(w / (2T))|)` over every hyperplane weight element. Each term is
+        ~0 inside the dead zone (component quantizes to 0) and ~1 when saturated
+        (component quantizes to +-1), so the mean approximates the fraction of
+        components the routing actually uses. MEAN rather than sum, so the value is
+        dimension-invariant and lambda means the same thing at any shape.
+
+        Always differentiable and always computed -- this is the quantity to LOG.
+        `sparsity_penalty()` is what you add to the loss.
+        """
+        return self.soft_ternary_weight().abs().mean()
+
+    def sparsity_penalty(self) -> torch.Tensor:
+        """LAMBDA-WEIGHTED penalty term, ready to add straight to the loss.
+
+        Returns `nonzero_penalty_weight * sparsity_surrogate()`.
+
+        When `nonzero_penalty_weight == 0` (the default) it returns a detached zero
+        scalar and computes NOTHING: no surrogate, no graph nodes, no gradient. Adding
+        it to a loss is then a genuine no-op, which is what keeps this class
+        bit-for-bit identical to the un-penalized version at default settings.
+
+        Sum it over the slots and add it once:
+
+            pen = sum(m.sparsity_penalty() for m in model.modules()
+                      if isinstance(m, TernaryHyperplaneMultiHeadLUT))
+            (loss + pen).backward()
+        """
+        if self.nonzero_penalty_weight == 0.0:
+            return torch.zeros((), device=self.hyperplane_weight.device,
+                               dtype=torch.float32)
+        return self.nonzero_penalty_weight * self.sparsity_surrogate()
 
     def bake_ternary_weights(self) -> torch.Tensor:
         """Deployment helper: the {-1, 0, +1} routing, detached and on CPU.
@@ -410,6 +486,94 @@ def _sanity() -> None:
         warned = any(issubclass(x_.category, RuntimeWarning) for x_ in w)
     print(f'  T=1.0 would zero an anchor-pairs init, and the constructor warns: {warned}')
     ok &= warned
+
+    print('\n=== (6) lambda=0 is a verified NO-OP (the exp_g_0030 guarantee) ===')
+    z = TernaryHyperplaneMultiHeadLUT(**kw)                       # default lambda=0
+    pz = TernaryHyperplaneMultiHeadLUT(**kw, nonzero_penalty_weight=0.7)
+    pen0 = z.sparsity_penalty()
+    print(f'  default nonzero_penalty_weight: {z.nonzero_penalty_weight} (0.0 expected)')
+    print(f'  sparsity_penalty() -> {float(pen0):.1f}  requires_grad={pen0.requires_grad} '
+          f'grad_fn={pen0.grad_fn}  (0.0 / False / None expected)')
+    same_params = ({n: tuple(p.shape) for n, p in z.named_parameters()}
+                   == {n: tuple(p.shape) for n, p in pz.named_parameters()})
+    same_sd = sorted(z.state_dict()) == sorted(pz.state_dict())
+    print(f'  lambda adds no parameters: {same_params}')
+    print(f'  lambda adds no state_dict entries: {same_sd}  '
+          f'(so it never invalidates a checkpoint)')
+    # forward is untouched by lambda: same inputs, same weights -> same output
+    with torch.no_grad():
+        pz.load_state_dict(z.state_dict())
+    fz, fp = z(x), pz(x)
+    print(f'  forward identical with lambda=0 vs lambda=0.7: '
+          f'{bool(torch.equal(fz, fp))}  (penalty is loss-only)')
+    # grads through the model must be untouched when the penalty is never added
+    z.zero_grad(set_to_none=True); pz.zero_grad(set_to_none=True)
+    z(x).sum().backward(); pz(x).sum().backward()
+    grads_same = bool(torch.equal(z.hyperplane_weight.grad, pz.hyperplane_weight.grad))
+    print(f'  forward-only grads identical: {grads_same}')
+    noop = (z.nonzero_penalty_weight == 0.0 and float(pen0) == 0.0
+            and not pen0.requires_grad and pen0.grad_fn is None
+            and same_params and same_sd and bool(torch.equal(fz, fp)) and grads_same)
+    print(f'  => lambda=0 no-op verified: {noop}')
+    ok &= noop
+
+    print('\n=== (7) lambda>0: the penalty is live and actually sparsifies ===')
+    s = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
+                                      hyperplane_init_scale=1.0,
+                                      nonzero_penalty_weight=1.0)
+    with torch.no_grad():
+        s.hyperplane_weight.normal_(0.0, 1.0)
+    p0 = s.sparsity_penalty()
+    print(f'  penalty value {float(p0):.6f}  finite={bool(torch.isfinite(p0))}  '
+          f'scalar={p0.dim() == 0}  requires_grad={p0.requires_grad}')
+    s.zero_grad(set_to_none=True)
+    p0.backward()
+    gw_ok = bool((s.hyperplane_weight.grad != 0).any())
+    gT_ok = bool((s.log_ternary_temp.grad != 0).any())
+    print(f'  penalty grad -> hyperplane_weight: {gw_ok}   -> log_ternary_temp: {gT_ok}')
+    before = s.ternary_stats()
+    opt = torch.optim.SGD([s.hyperplane_weight, s.log_ternary_temp], lr=0.5)
+    for _ in range(30):
+        opt.zero_grad(set_to_none=True)
+        s.sparsity_penalty().backward()
+        opt.step()
+    after = s.ternary_stats()
+    print(f'  30 steps of descent on the PENALTY ALONE:')
+    print(f'    frac_zero  {before["frac_zero"]:.4f} -> {after["frac_zero"]:.4f}   '
+          f'({after["frac_zero"] - before["frac_zero"]:+.4f})')
+    print(f'    nonzeros/hyperplane {before["nonzero_per_hyperplane"]:.2f} -> '
+          f'{after["nonzero_per_hyperplane"]:.2f}')
+    print(f'    T {before["T_max"]:.4f} -> {after["T_max"]:.4f}  '
+          f'(band widening is the second, legitimate route to sparsity)')
+    sparsified = after['frac_zero'] > before['frac_zero']
+    print(f'  penalty measurably increased the zero fraction: {sparsified}')
+    ok &= (gw_ok and gT_ok and sparsified and bool(torch.isfinite(p0))
+           and p0.dim() == 0)
+
+    print('\n=== (8) the surrogate tracks actual density ===')
+    t = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
+                                      hyperplane_init_scale=1.0,
+                                      nonzero_penalty_weight=1.0)
+    with torch.no_grad():
+        t.hyperplane_weight.normal_(0.0, 1.0)
+    print(f'  {"T":>8} {"surrogate":>10} {"frac_nonzero":>13}  (should move together)')
+    pairs = []
+    for T in (0.02, 0.1, 0.3, 1.0, 3.0, 20.0):
+        with torch.no_grad():
+            t.log_ternary_temp.fill_(math.log(T))
+        sur = float(t.sparsity_surrogate().detach())
+        nz = 1.0 - t.ternary_stats()['frac_zero']
+        pairs.append((sur, nz))
+        print(f'  {T:>8.2f} {sur:>10.4f} {nz:>13.4f}')
+    mono_s = all(b[0] <= a[0] + 1e-12 for a, b in zip(pairs, pairs[1:]))
+    print(f'  surrogate decreases monotonically as the band widens: {mono_s}')
+    print(f'  deep in the dead zone (T=20) surrogate ~ {pairs[-1][0]:.4f}, '
+          f'density {pairs[-1][1]:.4f}')
+    print(f'  saturated (T=0.02)       surrogate ~ {pairs[0][0]:.4f}, '
+          f'density {pairs[0][1]:.4f}')
+    tracks = mono_s and pairs[-1][0] < 0.05 and pairs[0][0] > 0.9
+    print(f'  surrogate tracks density: {tracks}')
+    ok &= tracks
 
     print('\nSANITY: ' + ('PASS' if ok else 'FAIL'))
     if not ok:
