@@ -133,6 +133,14 @@ _ANCHOR_SAFE_T = 1.0 / _ZERO_BAND_PER_T
 # reject an unknown name, so "balanced_ternary" is intercepted here and the parent is
 # constructed with "random" before the weights are redrawn.
 _BALANCED_TERNARY = "balanced_ternary"
+_NEAR_ZERO_TERNARY = "near_zero_ternary"
+
+# Both custom modes use the SAME derivation -- a zero-mean Gaussian whose std is chosen
+# to hit a target zero-fraction -- and differ only in that target. balanced_ternary
+# aims for equal thirds; near_zero_ternary aims for a nearly-degenerate start where
+# essentially every component quantizes to 0, so the routing has to GROW structure
+# from nothing. Keeping one code path means the two cannot drift apart.
+_INIT_TARGETS = {_BALANCED_TERNARY: 1.0 / 3.0, _NEAR_ZERO_TERNARY: 0.999}
 
 
 def _balanced_sigma(temp: float, target_zero_frac: float = 1.0 / 3.0) -> float:
@@ -182,8 +190,13 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
     inherited autograd Functions take it as a positional argument.
 
     Init modes: the parent's `"anchor_pairs"` (default) and `"random"`, plus this
-    subclass's `"balanced_ternary"` -- a zero-mean Gaussian draw whose std is chosen so
-    the step-0 routing quantizes to approximately equal thirds of -1 / 0 / +1. Where
+    subclass's `"balanced_ternary"` and `"near_zero_ternary"` -- zero-mean Gaussian
+    draws whose std is chosen to hit a target zero-fraction (1/3 and 0.999
+    respectively), via the same sigma = T*ln3 / Phi^-1((1+f)/2) derivation.
+    `near_zero_ternary` starts the routing nearly degenerate -- essentially every
+    component quantizes to 0 -- so the model has to GROW routing structure from
+    nothing, which is what makes its zero->nonzero transition count the quantity of
+    interest. Where
     `anchor_pairs` pins exactly 2 non-zeros per hyperplane and puts every component
     maximally far from the dead-zone boundary (zeros at w=0, +-1s at |w|=1, against a
     boundary at 0.5493), `balanced_ternary` spreads components across the boundary so a
@@ -218,8 +231,8 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         # against its own set and would reject the name, so build it as "random" and
         # redraw below. The parent's anchor_pairs / random paths are untouched.
         requested_init = kwargs.get("hyperplane_init", "anchor_pairs")
-        balanced = requested_init == _BALANCED_TERNARY
-        if balanced:
+        custom_init = requested_init in _INIT_TARGETS
+        if custom_init:
             kwargs["hyperplane_init"] = "random"
         super().__init__(
             input_dim, n_heads, n_outputs, n_anchor_pairs, tables_per_head, **kwargs
@@ -310,9 +323,14 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         # -1 / 0 / +1, instead of anchor_pairs' 2 nonzeros per hyperplane with every
         # component sitting maximally far from the dead-zone boundary.
         self.balanced_sigma = None
-        if balanced:
-            self.balanced_sigma = _balanced_sigma(ternary_temp_init,
-                                                  balanced_target_zero_frac)
+        if custom_init:
+            # An explicit balanced_target_zero_frac always wins; otherwise the mode's
+            # own default applies, so near_zero_ternary does not silently inherit 1/3.
+            target = (balanced_target_zero_frac
+                      if balanced_target_zero_frac != 1.0 / 3.0
+                      else _INIT_TARGETS[requested_init])
+            self.balanced_target_zero_frac = target
+            self.balanced_sigma = _balanced_sigma(ternary_temp_init, target)
             gen = None
             if kwargs.get("random_seed") is not None:
                 gen = torch.Generator(device=self.hyperplane_weight.device)
@@ -321,7 +339,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                 gen.manual_seed(int(kwargs["random_seed"]) + 2)
             with torch.no_grad():
                 self.hyperplane_weight.normal_(0.0, self.balanced_sigma, generator=gen)
-            self.hyperplane_init = _BALANCED_TERNARY   # report what was ACTUALLY used
+            self.hyperplane_init = requested_init      # report what was ACTUALLY used
 
         nz = int((self.hard_ternary_weight() != 0).sum())
         if nz == 0:
