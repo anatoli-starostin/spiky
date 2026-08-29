@@ -120,6 +120,34 @@ _ZERO_BAND_PER_T = math.log(3.0)
 # it needs T * ln3 < 1, i.e. T < 1/ln3 ~= 0.9102.
 _ANCHOR_SAFE_T = 1.0 / _ZERO_BAND_PER_T
 
+# Extra init mode this subclass adds. The parent validates its own set and would
+# reject an unknown name, so "balanced_ternary" is intercepted here and the parent is
+# constructed with "random" before the weights are redrawn.
+_BALANCED_TERNARY = "balanced_ternary"
+
+
+def _balanced_sigma(temp: float, target_zero_frac: float = 1.0 / 3.0) -> float:
+    """Weight std that makes a zero-mean Gaussian init quantize to equal thirds.
+
+    For w ~ N(0, sigma^2) the component is 0 exactly when |w| <= band = T*ln3, so
+
+        P(zero) = 2*Phi(band/sigma) - 1 = target
+        =>  band/sigma = Phi^-1((1 + target)/2)
+        =>  sigma      = band / Phi^-1((1 + target)/2)
+
+    At the default target 1/3 that inverse-CDF factor is Phi^-1(2/3) ~= 0.43073, so
+    sigma ~= 2.5504 * T. With T = 0.5 (band 0.5493) that gives sigma ~= 1.2754.
+
+    P(+1) == P(-1) automatically, since the draw is symmetric about zero -- the only
+    free knob is the scale relative to the band.
+    """
+    if not (0.0 < target_zero_frac < 1.0):
+        raise ValueError(f"target_zero_frac must be in (0, 1), got {target_zero_frac}")
+    band = temp * _ZERO_BAND_PER_T
+    z = float(torch.special.ndtri(torch.tensor((1.0 + target_zero_frac) / 2.0,
+                                               dtype=torch.float64)))
+    return band / z
+
 
 class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
     """HyperplaneMultiHeadLUT with straight-through ternary {-1, 0, +1} routing.
@@ -144,6 +172,16 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
     `hyperplane_bias` survives only as a frozen all-zero BUFFER, because the
     inherited autograd Functions take it as a positional argument.
 
+    Init modes: the parent's `"anchor_pairs"` (default) and `"random"`, plus this
+    subclass's `"balanced_ternary"` -- a zero-mean Gaussian draw whose std is chosen so
+    the step-0 routing quantizes to approximately equal thirds of -1 / 0 / +1. Where
+    `anchor_pairs` pins exactly 2 non-zeros per hyperplane and puts every component
+    maximally far from the dead-zone boundary (zeros at w=0, +-1s at |w|=1, against a
+    boundary at 0.5493), `balanced_ternary` spreads components across the boundary so a
+    fraction of them are within reach of flipping. `sigma = T*ln3 / Phi^-1((1+f)/2)`,
+    i.e. ~2.5504*T at the default third; `balanced_target_zero_frac` moves that target.
+    The realized split is not assumed -- check it with `ternary_stats()`.
+
     Note on random init: `hyperplane_init="random"` draws rows with std
     `initial_weights_noise` (default 1e-3). Against a band of ~0.55 that quantizes to
     all zeros, so a random init needs `hyperplane_init_scale` on the order of T (or
@@ -162,8 +200,16 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         *,
         ternary_temp_init: float = 0.5,
         nonzero_penalty_weight: float = 0.0,
+        balanced_target_zero_frac: float = 1.0 / 3.0,
         **kwargs,
     ):
+        # "balanced_ternary" is this subclass's own init mode; the parent validates
+        # against its own set and would reject the name, so build it as "random" and
+        # redraw below. The parent's anchor_pairs / random paths are untouched.
+        requested_init = kwargs.get("hyperplane_init", "anchor_pairs")
+        balanced = requested_init == _BALANCED_TERNARY
+        if balanced:
+            kwargs["hyperplane_init"] = "random"
         super().__init__(
             input_dim, n_heads, n_outputs, n_anchor_pairs, tables_per_head, **kwargs
         )
@@ -195,6 +241,23 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                 f"nonzero_penalty_weight must be >= 0, got {nonzero_penalty_weight}"
             )
         self.nonzero_penalty_weight = float(nonzero_penalty_weight)
+
+        # Balanced-ternary init: redraw w so the step-0 routing is ~equal thirds of
+        # -1 / 0 / +1, instead of anchor_pairs' 2 nonzeros per hyperplane with every
+        # component sitting maximally far from the dead-zone boundary.
+        self.balanced_sigma = None
+        if balanced:
+            self.balanced_sigma = _balanced_sigma(ternary_temp_init,
+                                                  balanced_target_zero_frac)
+            gen = None
+            if kwargs.get("random_seed") is not None:
+                gen = torch.Generator(device=self.hyperplane_weight.device)
+                # +2: the parent already consumed random_seed for the anchors and
+                # random_seed+1 for the LUT tables.
+                gen.manual_seed(int(kwargs["random_seed"]) + 2)
+            with torch.no_grad():
+                self.hyperplane_weight.normal_(0.0, self.balanced_sigma, generator=gen)
+            self.hyperplane_init = _BALANCED_TERNARY   # report what was ACTUALLY used
 
         nz = int((self.hard_ternary_weight() != 0).sum())
         if nz == 0:
@@ -574,6 +637,45 @@ def _sanity() -> None:
     tracks = mono_s and pairs[-1][0] < 0.05 and pairs[0][0] > 0.9
     print(f'  surrogate tracks density: {tracks}')
     ok &= tracks
+
+    print('\n=== (9) balanced_ternary init gives ~equal thirds at step 0 ===')
+    # A bigger module: the split is a sample statistic, and 384 components is too few
+    # to read a third off cleanly.
+    bkw = dict(input_dim=256, n_heads=4, n_outputs=32, n_anchor_pairs=6,
+               tables_per_head=32, random_seed=7)
+    bal = TernaryHyperplaneHelper = TernaryHyperplaneMultiHeadLUT(
+        **bkw, hyperplane_init='balanced_ternary', ternary_temp_init=0.5)
+    bs = bal.ternary_stats()
+    print(f'  T {0.5}  ->  band {0.5 * _ZERO_BAND_PER_T:.4f}, '
+          f'sigma {bal.balanced_sigma:.4f}  (expected ~2.5504*T = 1.2752)')
+    print(f'  step-0 split   -1 {bs["frac_neg"]:.4f}   0 {bs["frac_zero"]:.4f}   '
+          f'+1 {bs["frac_pos"]:.4f}   over {bal.hyperplane_weight.numel():,} components')
+    print(f'  measured w std {float(bal.hyperplane_weight.std().detach()):.4f}')
+    print(f'  hyperplane_init reports: {bal.hyperplane_init!r}')
+    thirds = all(abs(v - 1 / 3) < 0.02
+                 for v in (bs['frac_neg'], bs['frac_zero'], bs['frac_pos']))
+    print(f'  all three within 0.02 of 1/3: {thirds}')
+    print(f'  nonzeros per hyperplane {bs["nonzero_per_hyperplane"]:.2f} '
+          f'(vs anchor_pairs\' exactly 2.00 over {bkw["input_dim"]} components)')
+    # the all-zero guard must still be satisfied
+    print(f'  routing not all-zero: {bool((bal.hard_ternary_weight() != 0).any())}')
+    # a different target must move the split predictably
+    b2 = TernaryHyperplaneMultiHeadLUT(**bkw, hyperplane_init='balanced_ternary',
+                                       ternary_temp_init=0.5,
+                                       balanced_target_zero_frac=0.6)
+    s2 = b2.ternary_stats()
+    print(f'  target_zero_frac 0.60 -> measured frac_zero {s2["frac_zero"]:.4f} '
+          f'(sigma {b2.balanced_sigma:.4f})')
+    targeted = abs(s2['frac_zero'] - 0.6) < 0.02
+    print(f'  retargeting works: {targeted}')
+    # and the anchor_pairs path must be completely unaffected
+    ap = TernaryHyperplaneMultiHeadLUT(**bkw)
+    apq = ap.hard_ternary_weight()
+    untouched = (bool(torch.equal(apq, ap.hyperplane_weight.detach()))
+                 and ap.balanced_sigma is None
+                 and ap.hyperplane_init == 'anchor_pairs')
+    print(f'  anchor_pairs path untouched (still exact, sigma None): {untouched}')
+    ok &= thirds and targeted and untouched and bool((bal.hard_ternary_weight() != 0).any())
 
     print('\nSANITY: ' + ('PASS' if ok else 'FAIL'))
     if not ok:

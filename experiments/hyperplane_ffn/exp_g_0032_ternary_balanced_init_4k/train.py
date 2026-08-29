@@ -82,10 +82,14 @@ LUT_NOISE  = cfg.get('lut_init_weights_noise', 1e-3)
 LUT_LEARNTEMP = bool(cfg.get('lut_learnable_temps', False))   # learnable T_soft/T_sel per head
 LUT_SEED   = cfg.get('lut_base_seed', 1000)
 LUT_HP_INIT = cfg.get('lut_hyperplane_init', 'anchor_pairs')
-# T init for the ternary straight-through routing. The dead zone is |w| <= T*ln3, so
-# T=0.5 (band 0.5493) leaves an anchor_pairs init -- entries exactly {-1, 0, +1} --
-# completely intact: the routing reduces to anchor pairs at step 0, matching
-# exp_g_0029's clean start. T=1.0 would put the band at 1.0986 > 1 and zero it all.
+# T init for the ternary straight-through routing. The dead zone is |w| <= T*ln3.
+# exp_g_0032 pairs T=0.5 (band 0.5493) with hyperplane_init="balanced_ternary", which
+# draws w ~ N(0, sigma^2) with sigma = band / Phi^-1(2/3) ~= 2.5504*T ~= 1.2753, so the
+# step-0 routing quantizes to ~equal thirds of -1 / 0 / +1. That is the whole point of
+# this run: exp_g_0030's anchor_pairs init put EVERY component maximally far from the
+# boundary (zeros at w=0, +-1s at |w|=1, against a boundary at 0.5493) and its ternary
+# values did not move at all early on. A balanced random init spreads components across
+# the boundary so a real fraction of them are within reach of flipping.
 LUT_TERNARY_T = cfg.get('lut_ternary_temp_init', 0.5)
 
 BASE_DIR = get_base_dir()
@@ -268,9 +272,13 @@ print(f'FFN LUT: {type(_f0).__name__} | compress={_f0.has_compress} '
 print(f'  hyperplanes {tuple(_f0.lut.hyperplane_weight.shape)} on the FULL '
       f'{_f0.input_dim}-dim input, init={_f0.hyperplane_init}')
 _ts = _f0.lut.ternary_stats()
-print(f'  TERNARY routing: T init {LUT_TERNARY_T} (dead zone |w| <= {_ts["T_max"] * 1.0986:.4f}) '
+print(f'  TERNARY routing: init={_f0.lut.hyperplane_init} T init {LUT_TERNARY_T} '
+      f'(dead zone |w| <= {_ts["T_max"] * 1.0986:.4f}, sigma {_f0.lut.balanced_sigma}) '
       f'| +1 {_ts["frac_pos"]:.4f}  0 {_ts["frac_zero"]:.4f}  -1 {_ts["frac_neg"]:.4f} '
       f'| {_ts["nonzero_per_hyperplane"]:.2f} nonzeros/hyperplane')
+_dev = max(abs(_ts[k] - 1/3) for k in ('frac_pos', 'frac_zero', 'frac_neg'))
+print(f'  step-0 split is within {_dev:.4f} of equal thirds '
+      f'({"BALANCED" if _dev < 0.02 else "OFF TARGET -- check sigma/T"})')
 print(f'  bias: {"PARAMETER" if any(n == "hyperplane_bias" for n, _ in _f0.lut.named_parameters()) else "none (frozen zero buffer) — routing test is <q,x> > 0"}')
 print(f'Run length {N_STEPS:,} steps on a {SCHED_STEPS:,}-step LR schedule '
       f'(warmup {int(WARMUP_FRAC * SCHED_STEPS):,})')
