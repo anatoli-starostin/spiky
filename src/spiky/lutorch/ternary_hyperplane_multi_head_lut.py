@@ -211,7 +211,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         nonzero_penalty_weight: float = 0.0,
         balanced_target_zero_frac: float = 1.0 / 3.0,
         trainable_bias: bool = False,
-        normalize_projection: bool = False,
+        normalize_projection=False,
         **kwargs,
     ):
         # "balanced_ternary" is this subclass's own init mode; the parent validates
@@ -261,8 +261,33 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         # sign(<q,x>) for any D > 0. What the divisor changes is the temperature-scaled
         # SOFT path (and, once b is non-zero, where the threshold sits). So enabling it
         # alters the gradient, not the function the model starts from.
-        self.normalize_projection = bool(normalize_projection)
-        self.projection_divisor = float(input_dim) if self.normalize_projection else 1.0
+        # normalize_projection selects the divisor:
+        #   False / "none"            -> 1.0            (off; strict no-op)
+        #   True  / "sqrt_input_dim"  -> sqrt(input_dim) (DEFAULT when enabled)
+        #   "input_dim"               -> input_dim
+        # sqrt(input_dim) is the default-on choice because <q,x> is a sum of +-1
+        # weighted terms, so its scale grows like sqrt(number of terms -- dividing by
+        # sqrt(input_dim) is the matching correction. Dividing by input_dim itself
+        # over-corrects: at 384 it takes score/T from ~32 (saturated) to ~0.08 (flat),
+        # whereas sqrt(384) lands at ~1.6, which is the range the soft-score machinery
+        # is actually shaped for.
+        mode = normalize_projection
+        if mode is True:
+            mode = "sqrt_input_dim"
+        elif mode is False:
+            mode = "none"
+        if mode not in ("none", "sqrt_input_dim", "input_dim"):
+            raise ValueError(
+                f"normalize_projection must be a bool or one of "
+                f"'none' / 'sqrt_input_dim' / 'input_dim', got {normalize_projection!r}"
+            )
+        self.normalize_projection = mode != "none"
+        self.projection_norm = mode
+        self.projection_divisor = {
+            "none": 1.0,
+            "sqrt_input_dim": math.sqrt(float(input_dim)),
+            "input_dim": float(input_dim),
+        }[mode]
 
         self.trainable_bias = bool(trainable_bias)
         with torch.no_grad():
@@ -870,8 +895,14 @@ def _sanity() -> None:
     on = TernaryHyperplaneMultiHeadLUT(**nkw, hyperplane_init='balanced_ternary',
                                         normalize_projection=True)
     xn = torch.randn(64, 256)
-    print(f'  divisor: off {off.projection_divisor}  on {on.projection_divisor} '
-          f'(= input_dim {nkw["input_dim"]})')
+    on_full = TernaryHyperplaneMultiHeadLUT(**nkw, hyperplane_init='balanced_ternary',
+                                            normalize_projection='input_dim')
+    import math as _m
+    print(f'  modes: off {off.projection_norm!r} divisor {off.projection_divisor}  |  '
+          f'on {on.projection_norm!r} divisor {on.projection_divisor:.4f} '
+          f'(= sqrt({nkw["input_dim"]}) = {_m.sqrt(nkw["input_dim"]):.4f})  |  '
+          f'{on_full.projection_norm!r} divisor {on_full.projection_divisor}')
+    print(f'  True defaults to sqrt_input_dim: {on.projection_norm == "sqrt_input_dim"}')
     print(f'  off returns q UNCHANGED (same object, no extra op): '
           f'{off.routing_weight() is not None and off.projection_divisor == 1.0}')
     q_off = off.routing_weight()

@@ -105,7 +105,7 @@ LUT_TRAINABLE_BIAS = bool(cfg.get('lut_trainable_bias', False))
 # The bias lives in the NORMALIZED space: the decision is <q,x>/input_dim + b > 0.
 # Note the hard routing at b=0 is unchanged by this (sign is scale-invariant); what
 # the divisor changes is the gradient path.
-LUT_NORMALIZE_PROJ = bool(cfg.get('lut_normalize_projection', False))
+LUT_NORMALIZE_PROJ = cfg.get('lut_normalize_projection', False)
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -300,12 +300,17 @@ print(f'  trainable_bias={LUT_TRAINABLE_BIAS} -> hyperplane_bias is a '
       f'shape {tuple(_f0.lut.hyperplane_bias.shape)}')
 assert _bias_is_param == LUT_TRAINABLE_BIAS, 'trainable_bias did not take effect'
 _proj = ('<q,x>' if _f0.lut.projection_divisor == 1.0
-         else f'<q,x>/{_f0.lut.projection_divisor:g}')
-print(f'  normalize_projection={LUT_NORMALIZE_PROJ} -> divisor '
-      f'{_f0.lut.projection_divisor} (input_dim {_f0.lut.input_dim})')
+         else f'<q,x>/{_f0.lut.projection_divisor:.3f}')
+print(f'  normalize_projection={LUT_NORMALIZE_PROJ!r} -> mode '
+      f'{_f0.lut.projection_norm!r}, divisor {_f0.lut.projection_divisor:.4f} '
+      f'(input_dim {_f0.lut.input_dim})')
 print(f'  ROUTING DECISION: {_proj}{" + b" if _bias_is_param else ""} > 0')
-assert (_f0.lut.projection_divisor != 1.0) == LUT_NORMALIZE_PROJ, \
+assert _f0.lut.normalize_projection == (LUT_NORMALIZE_PROJ not in (False, 'none')), \
     'normalize_projection did not take effect'
+assert _f0.lut.projection_norm == (
+    'sqrt_input_dim' if LUT_NORMALIZE_PROJ is True else
+    ('none' if LUT_NORMALIZE_PROJ is False else LUT_NORMALIZE_PROJ)), \
+    f'projection_norm is {_f0.lut.projection_norm!r}, expected {LUT_NORMALIZE_PROJ!r}'
 # Measure the quantity the soft-score temperature is actually compared against, so the
 # divisor choice is judged on a number rather than assumed. LayerNorm'd input, so a
 # unit-ish Gaussian probe is representative of what the slot sees.
