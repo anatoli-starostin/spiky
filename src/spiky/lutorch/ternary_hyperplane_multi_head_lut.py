@@ -211,6 +211,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         nonzero_penalty_weight: float = 0.0,
         balanced_target_zero_frac: float = 1.0 / 3.0,
         trainable_bias: bool = False,
+        normalize_projection: bool = False,
         **kwargs,
     ):
         # "balanced_ternary" is this subclass's own init mode; the parent validates
@@ -245,6 +246,24 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         # the dead zone can sit off-centre on that hyperplane's own projection axis.
         # It is zeroed at construction either way, so a trainable-bias run starts from
         # exactly the same function a default run does and only diverges as b learns.
+        # Projection normalization. The routing projection is <q, x>, a sum over up to
+        # input_dim terms, so its scale grows like sqrt(number of non-zeros). With an
+        # anchor-pairs init that is 2 terms; with balanced_ternary it is ~256, which
+        # feeds a ~11x larger score into a soft-score/select machinery whose
+        # temperatures were chosen for anchor-pair scale. Dividing the projection by
+        # `projection_divisor` puts it back in a fixed range.
+        #
+        # Implemented by scaling q, not by editing the parent: the inherited Functions
+        # compute <w, x> + b, so passing q/D gives exactly <q, x>/D + b -- the bias
+        # therefore lives in the NORMALIZED space, added after the divide, as intended.
+        #
+        # Note the hard routing at b = 0 is UNCHANGED by this: sign(<q,x>/D) ==
+        # sign(<q,x>) for any D > 0. What the divisor changes is the temperature-scaled
+        # SOFT path (and, once b is non-zero, where the threshold sits). So enabling it
+        # alters the gradient, not the function the model starts from.
+        self.normalize_projection = bool(normalize_projection)
+        self.projection_divisor = float(input_dim) if self.normalize_projection else 1.0
+
         self.trainable_bias = bool(trainable_bias)
         with torch.no_grad():
             self.hyperplane_bias.zero_()
@@ -363,6 +382,32 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                                dtype=torch.float32)
         return self.nonzero_penalty_weight * self.sparsity_surrogate()
 
+    def routing_weight(self) -> torch.Tensor:
+        """The tensor actually fed to the projection: q, divided by the divisor.
+
+        At the default (normalize_projection=False) the divisor is 1.0 and this
+        returns q UNCHANGED -- the same object, no extra op and no extra graph node,
+        so the default path is a strict no-op.
+        """
+        q = self.ternary_weight()
+        return q if self.projection_divisor == 1.0 else q / self.projection_divisor
+
+    def hard_routing_weight(self) -> torch.Tensor:
+        """Same, for the no_grad hard-eval path."""
+        q = self.hard_ternary_weight()
+        return q if self.projection_divisor == 1.0 else q / self.projection_divisor
+
+    def projection_std(self, x: torch.Tensor) -> float:
+        """Measured std of the routing projection <q,x>/D + b on a real batch.
+
+        Diagnostic: this is the quantity the soft-score temperature is compared
+        against, so it decides whether the surrogate is saturated or flat.
+        """
+        with torch.no_grad():
+            proj = torch.einsum("bd,tkd->btk", x, self.hard_routing_weight())
+            proj = proj + self.hyperplane_bias.unsqueeze(0)
+            return float(proj.std())
+
     def bake_ternary_weights(self) -> torch.Tensor:
         """Deployment helper: the {-1, 0, +1} routing, detached and on CPU.
 
@@ -435,7 +480,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             self.weights.to(torch.bfloat16) if compute_in_bf16 else self.weights
         )
         fwd_body = _pick_fwd_body(x.is_cuda)
-        q = self.hard_ternary_weight()
+        q = self.hard_routing_weight()
         with autocast_ctx:
             out, _ = fwd_body(
                 x, weights_compute, q, self.hyperplane_bias,
@@ -452,7 +497,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             )
         if self.forward_mode == "hybrid_smooth":
             return _HyperplaneMHLutHybridSmooth.apply(
-                x, self.weights, self.ternary_weight(), self.hyperplane_bias,
+                x, self.weights, self.routing_weight(), self.hyperplane_bias,
                 self.log_soft_score_temp, self.log_select_temp,
                 self.soft_bit_matrix, self.soft_powers,
                 self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
@@ -461,7 +506,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         if not torch.is_grad_enabled():
             return self._hard_eval(x)
         return _HyperplaneMHLutSoft.apply(
-            x, self.weights, self.ternary_weight(), self.hyperplane_bias,
+            x, self.weights, self.routing_weight(), self.hyperplane_bias,
             self.log_soft_score_temp, self.log_select_temp,
             self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
@@ -474,7 +519,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
             )
         return _HyperplaneMHLutFullSoft.apply(
-            x, self.weights, self.ternary_weight(), self.hyperplane_bias,
+            x, self.weights, self.routing_weight(), self.hyperplane_bias,
             self.log_soft_score_temp, self.log_select_temp,
             self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
@@ -817,6 +862,50 @@ def _sanity() -> None:
     print(f'  all-zero guard still sees the routing: '
           f'{bool((pen_on.hard_ternary_weight() != 0).any())}')
     ok &= bias_live and art_ok and bool(torch.isfinite(sp))
+
+    print('\n=== (12) normalize_projection: default OFF is a strict no-op ===')
+    nkw = dict(input_dim=256, n_heads=4, n_outputs=32, n_anchor_pairs=6,
+               tables_per_head=32, random_seed=7)
+    off = TernaryHyperplaneMultiHeadLUT(**nkw, hyperplane_init='balanced_ternary')
+    on = TernaryHyperplaneMultiHeadLUT(**nkw, hyperplane_init='balanced_ternary',
+                                        normalize_projection=True)
+    xn = torch.randn(64, 256)
+    print(f'  divisor: off {off.projection_divisor}  on {on.projection_divisor} '
+          f'(= input_dim {nkw["input_dim"]})')
+    print(f'  off returns q UNCHANGED (same object, no extra op): '
+          f'{off.routing_weight() is not None and off.projection_divisor == 1.0}')
+    q_off = off.routing_weight()
+    print(f'  off routing_weight == ternary_weight elementwise: '
+          f'{bool(torch.equal(q_off, off.ternary_weight()))}')
+    same_params = ({n: tuple(p.shape) for n, p in off.named_parameters()}
+                   == {n: tuple(p.shape) for n, p in on.named_parameters()})
+    print(f'  adds no parameters: {same_params}')
+    print(f'  adds no state_dict entries: '
+          f'{sorted(off.state_dict()) == sorted(on.state_dict())}')
+    noop_norm = (off.projection_divisor == 1.0
+                 and bool(torch.equal(q_off, off.ternary_weight())) and same_params)
+    print(f'  => normalize_projection=False no-op verified: {noop_norm}')
+
+    print('\n  what the divisor actually does:')
+    with torch.no_grad():
+        on.load_state_dict(off.state_dict())
+    print(f'    routing_weight scale: off max |q| {float(q_off.abs().max()):.4f}  '
+          f'on max |q/D| {float(on.routing_weight().abs().max()):.6f}')
+    std_off, std_on = off.projection_std(xn), on.projection_std(xn)
+    print(f'    projection std: off {std_off:.4f}  on {std_on:.6f}  '
+          f'(ratio {std_off / std_on:.1f} = D)')
+    print(f'    vs soft_score_temp {float(off.log_soft_score_temp.exp()):.3f}: '
+          f'score/T off {std_off / 0.5:.2f}, on {std_on / 0.5:.4f}')
+    # the HARD routing at b=0 must be unchanged -- sign is scale-invariant
+    off.eval(); on.eval()
+    with torch.no_grad():
+        same_hard = bool(torch.equal(off(xn), on(xn)))
+    off.train(); on.train()
+    print(f'    hard routing identical at b=0 (sign is scale-invariant): {same_hard}')
+    print(f'    -> the divisor changes the SOFT/gradient path, not the initial function')
+    ok_norm = noop_norm and same_hard and std_on < std_off
+    print(f'  => normalization behaves as designed: {ok_norm}')
+    ok &= ok_norm
 
     print('\nSANITY: ' + ('PASS' if ok else 'FAIL'))
     if not ok:

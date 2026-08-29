@@ -98,6 +98,14 @@ LUT_TERNARY_T = cfg.get('lut_ternary_temp_init', 0.5)
 # learns. Note b cannot change q itself (q = ternary(stanh(w, T)) depends on w alone);
 # it moves which row a table selects.
 LUT_TRAINABLE_BIAS = bool(cfg.get('lut_trainable_bias', False))
+# Divide the routing projection by input_dim before the comparison and before the
+# temperature-scaled soft score. The balanced init gives ~256 nonzeros per hyperplane,
+# so raw <q,x> has std ~16 -- roughly 11x the anchor-pairs scale the soft_score /
+# select temperatures (init 0.5) were chosen for, which saturates the surrogate.
+# The bias lives in the NORMALIZED space: the decision is <q,x>/input_dim + b > 0.
+# Note the hard routing at b=0 is unchanged by this (sign is scale-invariant); what
+# the divisor changes is the gradient path.
+LUT_NORMALIZE_PROJ = bool(cfg.get('lut_normalize_projection', False))
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -174,6 +182,7 @@ class MinimalBlock(nn.Module):
                 hyperplane_init=LUT_HP_INIT,
                 ternary_temp_init=LUT_TERNARY_T,
                 trainable_bias=LUT_TRAINABLE_BIAS,
+                normalize_projection=LUT_NORMALIZE_PROJ,
                 random_seed=LUT_SEED + layer_idx)
 
     def forward(self, x, cos, sin):
@@ -288,9 +297,25 @@ _bias_is_param = any(nm == 'hyperplane_bias'
                      for nm, _ in _f0.lut.named_parameters())
 print(f'  trainable_bias={LUT_TRAINABLE_BIAS} -> hyperplane_bias is a '
       f'{"PARAMETER" if _bias_is_param else "frozen zero buffer"}, '
-      f'shape {tuple(_f0.lut.hyperplane_bias.shape)}; routing decision is '
-      f'{"<q,x> + b > 0" if _bias_is_param else "<q,x> > 0"}')
+      f'shape {tuple(_f0.lut.hyperplane_bias.shape)}')
 assert _bias_is_param == LUT_TRAINABLE_BIAS, 'trainable_bias did not take effect'
+_proj = ('<q,x>' if _f0.lut.projection_divisor == 1.0
+         else f'<q,x>/{_f0.lut.projection_divisor:g}')
+print(f'  normalize_projection={LUT_NORMALIZE_PROJ} -> divisor '
+      f'{_f0.lut.projection_divisor} (input_dim {_f0.lut.input_dim})')
+print(f'  ROUTING DECISION: {_proj}{" + b" if _bias_is_param else ""} > 0')
+assert (_f0.lut.projection_divisor != 1.0) == LUT_NORMALIZE_PROJ, \
+    'normalize_projection did not take effect'
+# Measure the quantity the soft-score temperature is actually compared against, so the
+# divisor choice is judged on a number rather than assumed. LayerNorm'd input, so a
+# unit-ish Gaussian probe is representative of what the slot sees.
+_probe = torch.randn(256, N_EMBD, device=DEVICE)
+_pstd = _f0.lut.projection_std(_probe)
+_Ts = float(_f0.lut.log_soft_score_temp.detach().exp())
+print(f'  projection std at init: {_pstd:.6f}   vs soft_score_temp {_Ts:.3f} '
+      f'-> score/T = {_pstd / _Ts:.4f}')
+print(f'    (raw, undivided, would be {_pstd * _f0.lut.projection_divisor:.4f} '
+      f'-> score/T {_pstd * _f0.lut.projection_divisor / _Ts:.2f})')
 _dev = max(abs(_ts[k] - 1/3) for k in ('frac_pos', 'frac_zero', 'frac_neg'))
 print(f'  step-0 split is within {_dev:.4f} of equal thirds '
       f'({"BALANCED" if _dev < 0.02 else "OFF TARGET -- check sigma/T"})')

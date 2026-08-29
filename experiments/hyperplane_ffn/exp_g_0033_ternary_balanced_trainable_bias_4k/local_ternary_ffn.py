@@ -88,6 +88,7 @@ class PureTernaryHyperplaneMHL(nn.Module):
         hyperplane_init_scale=None,
         ternary_temp_init: float = 0.5,
         trainable_bias: bool = False,
+        normalize_projection: bool = False,
         random_seed=None,
         device=None,
     ):
@@ -123,6 +124,7 @@ class PureTernaryHyperplaneMHL(nn.Module):
 
         self.ternary_temp_init = ternary_temp_init
         self.trainable_bias = bool(trainable_bias)
+        self.normalize_projection = bool(normalize_projection)
         self.lut = TernaryHyperplaneMultiHeadLUT(
             input_dim=input_dim, n_heads=n_heads, n_outputs=output_dim,
             n_anchor_pairs=nap, tables_per_head=tph,
@@ -133,6 +135,7 @@ class PureTernaryHyperplaneMHL(nn.Module):
             hyperplane_init_scale=hyperplane_init_scale,
             ternary_temp_init=ternary_temp_init,
             trainable_bias=trainable_bias,
+            normalize_projection=normalize_projection,
             random_seed=random_seed, device=device,
         )
         # The class warns if an init quantizes to an all-zero routing; make it fatal
