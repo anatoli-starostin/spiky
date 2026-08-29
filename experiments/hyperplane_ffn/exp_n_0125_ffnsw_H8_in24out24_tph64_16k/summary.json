@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0125_ffnsw_H8_in24out24_tph64_16k",
+  "best_val_bpb": 1.2033204299048126,
+  "final_val_bpb": 1.2033204299048126,
+  "total_params": 48477324,
+  "training_time_hours": 1.645
+}
