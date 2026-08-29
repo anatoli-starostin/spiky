@@ -143,6 +143,40 @@ _NEAR_ZERO_TERNARY = "near_zero_ternary"
 _INIT_TARGETS = {_BALANCED_TERNARY: 1.0 / 3.0, _NEAR_ZERO_TERNARY: 0.999}
 
 
+def max_entropy_temp(target_zero_frac: float = 1.0 / 3.0) -> float:
+    """T that makes UNIT-STD weights quantize to equal thirds -- no free parameter.
+
+    With normalize_weights the components are standardized to std 1, so the zero
+    fraction is fixed entirely by the band: P(|w| <= band) = 2*Phi(band) - 1. Setting
+    that to f and using band = T*ln3 gives
+
+        T = Phi^-1((1 + f)/2) / ln3
+
+    At f = 1/3 that is Phi^-1(2/3)/ln3 = 0.43073/1.09861 = 0.39207 -- the max-entropy
+    point, equal thirds of -1 / 0 / +1. This is the SAME derivation _balanced_sigma
+    uses, solved for T at sigma = 1 instead of for sigma at fixed T.
+    """
+    z = float(torch.special.ndtri(torch.tensor((1.0 + target_zero_frac) / 2.0,
+                                               dtype=torch.float64)))
+    return z / _ZERO_BAND_PER_T
+
+
+def expected_nonzero_divisor(input_dim: int,
+                             target_zero_frac: float = 1.0 / 3.0) -> float:
+    """D = sqrt(input_dim * nonzero_fraction) -- derived, not a literal.
+
+    <q,x> is a sum over the NON-ZERO components of a hyperplane, so its scale grows
+    like sqrt(that count). At max entropy the count is input_dim * (1 - f), so the
+    matching divisor is sqrt(input_dim * (1 - f)). At input_dim=384, f=1/3 this
+    evaluates to sqrt(256) = 16 -- but it is computed from input_dim, so it stays
+    correct if the width changes.
+
+    A fixed scalar is the RIGHT choice here, unlike sqrt_nonzero_count: normalize_weights
+    pins the density every forward, so there is no drift for a dynamic divisor to track.
+    """
+    return math.sqrt(float(input_dim) * (1.0 - target_zero_frac))
+
+
 def _balanced_sigma(temp: float, target_zero_frac: float = 1.0 / 3.0) -> float:
     """Weight std that makes a zero-mean Gaussian init quantize to equal thirds.
 
@@ -225,6 +259,8 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         balanced_target_zero_frac: float = 1.0 / 3.0,
         trainable_bias: bool = False,
         normalize_projection=False,
+        normalize_weights: bool = False,
+        weight_norm_eps: float = 1e-5,
         **kwargs,
     ):
         # "balanced_ternary" is this subclass's own init mode; the parent validates
@@ -289,11 +325,12 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             mode = "sqrt_input_dim"
         elif mode is False:
             mode = "none"
-        if mode not in ("none", "sqrt_input_dim", "input_dim", "sqrt_nonzero_count"):
+        if mode not in ("none", "sqrt_input_dim", "input_dim", "sqrt_nonzero_count",
+                        "sqrt_expected_nonzero"):
             raise ValueError(
                 f"normalize_projection must be a bool or one of 'none' / "
-                f"'sqrt_input_dim' / 'input_dim' / 'sqrt_nonzero_count', "
-                f"got {normalize_projection!r}"
+                f"'sqrt_input_dim' / 'input_dim' / 'sqrt_nonzero_count' / "
+                f"'sqrt_expected_nonzero', got {normalize_projection!r}"
             )
         self.normalize_projection = mode != "none"
         self.projection_norm = mode
@@ -306,7 +343,17 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             "none": 1.0,
             "sqrt_input_dim": math.sqrt(float(input_dim)),
             "input_dim": float(input_dim),
+            "sqrt_expected_nonzero": expected_nonzero_divisor(
+                input_dim, balanced_target_zero_frac),
         }[mode]
+
+        # Per-hyperplane weight standardization, applied every forward BEFORE
+        # ternarization. It removes the overall-magnitude degree of freedom entirely --
+        # only the direction pattern trains -- and pins the ternary density, which is
+        # what lets a FIXED derived divisor be correct. The gradient flows THROUGH the
+        # normalization (not detached): that is the intended direction-only learning.
+        self.normalize_weights = bool(normalize_weights)
+        self._weight_norm_eps = float(weight_norm_eps)
 
         self.trainable_bias = bool(trainable_bias)
         with torch.no_grad():
@@ -374,9 +421,31 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         """Half-width of the dead zone in weight units: |w| <= T*ln3 maps to 0."""
         return self.ternary_temp.view(-1) * _ZERO_BAND_PER_T
 
+    def normalized_weight(self) -> torch.Tensor:
+        """Per-hyperplane standardized w, or w unchanged when the flag is off.
+
+        w' = (w - mean(w)) / (std(w) + eps), reduced over the input_dim axis, so each
+        hyperplane's weight vector has zero mean and unit std every forward. The eps
+        floor keeps the gradient finite when a hyperplane's components are near-uniform.
+
+        At the default (normalize_weights=False) this returns the Parameter ITSELF --
+        the same object, no op, no graph node -- so the default path is a strict no-op.
+        """
+        w = self.hyperplane_weight
+        if not self.normalize_weights:
+            return w
+        mean = w.mean(dim=-1, keepdim=True)
+        std = w.std(dim=-1, keepdim=True)
+        return (w - mean) / (std + self._weight_norm_eps)
+
     def soft_ternary_weight(self) -> torch.Tensor:
-        """s = tanh(w / (2T)) -- the smooth surrogate the STE differentiates."""
-        return torch.tanh(self.hyperplane_weight / (2.0 * self.ternary_temp))
+        """s = tanh(w / (2T)) -- the smooth surrogate the STE differentiates.
+
+        With normalize_weights on, w is the per-hyperplane standardized weight, so the
+        dead zone |w| <= T*ln3 acts against UNIT-std components and the realized
+        density is set by T alone -- see max_entropy_temp().
+        """
+        return torch.tanh(self.normalized_weight() / (2.0 * self.ternary_temp))
 
     def hard_ternary_weight(self) -> torch.Tensor:
         """q_hard in {-1, 0, +1}, no autograd. This is what you bake and ship."""
