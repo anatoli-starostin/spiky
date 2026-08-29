@@ -289,14 +289,20 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             mode = "sqrt_input_dim"
         elif mode is False:
             mode = "none"
-        if mode not in ("none", "sqrt_input_dim", "input_dim"):
+        if mode not in ("none", "sqrt_input_dim", "input_dim", "sqrt_nonzero_count"):
             raise ValueError(
-                f"normalize_projection must be a bool or one of "
-                f"'none' / 'sqrt_input_dim' / 'input_dim', got {normalize_projection!r}"
+                f"normalize_projection must be a bool or one of 'none' / "
+                f"'sqrt_input_dim' / 'input_dim' / 'sqrt_nonzero_count', "
+                f"got {normalize_projection!r}"
             )
         self.normalize_projection = mode != "none"
         self.projection_norm = mode
-        self.projection_divisor = {
+        # "sqrt_nonzero_count" is DYNAMIC and PER-HYPERPLANE: the divisor is recomputed
+        # every forward from the live routing, so there is no single scalar to store.
+        # projection_divisor is None in that mode -- read projection_norm, not the
+        # scalar, when you need to know what normalization is in force.
+        self.dynamic_divisor = mode == "sqrt_nonzero_count"
+        self.projection_divisor = None if self.dynamic_divisor else {
             "none": 1.0,
             "sqrt_input_dim": math.sqrt(float(input_dim)),
             "input_dim": float(input_dim),
@@ -425,6 +431,24 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                                dtype=torch.float32)
         return self.nonzero_penalty_weight * self.sparsity_surrogate()
 
+    def nonzero_divisor(self) -> torch.Tensor:
+        """Per-hyperplane sqrt(non-zero count), shape [n_tables, nap, 1].
+
+        Computed under no_grad from the HARD routing, so it is a pure scale factor
+        with no gradient of its own -- exactly the treatment the static divisors get.
+        Floored at 1 so a fully-dead hyperplane (all-zero q) never divides by zero; the
+        value there is irrelevant because its projection is identically 0 anyway.
+
+        This is what makes the mode adaptive: as the routing grows non-zeros the
+        divisor grows with it, holding the projection scale -- and hence the
+        temperature-scaled score -- in the same band throughout training. A fixed
+        divisor cannot do that, which is how exp_g_0034 ended up at score/T 0.063 with
+        a divisor tuned for a dense routing.
+        """
+        with torch.no_grad():
+            nz = (self.hard_ternary_weight() != 0).sum(-1, keepdim=True)
+            return nz.clamp(min=1).to(self.hyperplane_weight.dtype).sqrt()
+
     def routing_weight(self) -> torch.Tensor:
         """The tensor actually fed to the projection: q, divided by the divisor.
 
@@ -433,12 +457,30 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         so the default path is a strict no-op.
         """
         q = self.ternary_weight()
+        if self.dynamic_divisor:
+            return q / self.nonzero_divisor()
         return q if self.projection_divisor == 1.0 else q / self.projection_divisor
 
     def hard_routing_weight(self) -> torch.Tensor:
         """Same, for the no_grad hard-eval path."""
         q = self.hard_ternary_weight()
+        if self.dynamic_divisor:
+            return q / self.nonzero_divisor()
         return q if self.projection_divisor == 1.0 else q / self.projection_divisor
+
+    def score_over_temp(self, x: torch.Tensor) -> float:
+        """projection std / soft_score_temp -- the health number for the surrogate.
+
+        Below ~0.2 the soft-score is nearly flat and carries little signal; above ~10
+        it is saturated. Roughly 1-2 is the band the machinery is shaped for.
+        """
+        return self.projection_std(x) / float(self.log_soft_score_temp.detach().exp())
+
+    def mean_nonzero_count(self) -> float:
+        """Mean non-zero components per hyperplane -- what the dynamic divisor tracks."""
+        with torch.no_grad():
+            q = self.hard_ternary_weight()
+            return float((q != 0).sum(-1).to(torch.float32).mean())
 
     def projection_std(self, x: torch.Tensor) -> float:
         """Measured std of the routing projection <q,x>/D + b on a real batch.
