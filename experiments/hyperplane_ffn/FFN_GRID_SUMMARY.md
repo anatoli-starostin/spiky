@@ -56,6 +56,7 @@ noting because nap7/tph256 is a poor allocation of its 67.35M budget.
 - **Best at ~vanilla-adjacent budget (67.35M):** 0131 H2/d96 (1.18883, −0.0078).
 - **Cheapest beating vanilla:** 0127 nap7/tph128 (48.48M, 2.79×, 1.19471, −0.0019).
 
-See `FFN_GRID_plots.png` — (a) params↔bpb Pareto with the vanilla 1.19665 reference line (all routed
-points, including 0084, plotted uniformly by exp id), (b) iso-param diagonals (bpb vs vBW; more tables
-win) with the vanilla line, (c) H2/H4/H8 head line with the vanilla line.
+See `FFN_GRID_plots.png` — points are labeled by architecture (cells×tables; every point has H·d=192,
+with head count shown by color: H2·d96 / H4·d48 / H8·d24), the anchor (H4·d48, 256 cells × 128 tables)
+is a gold star, and the vanilla 1.19665 line is the zero reference. (a) params↔bpb Pareto, (b) iso-param
+diagonals (bpb vs vBW; more tables win), (c) the H2/H4/H8 head line.
