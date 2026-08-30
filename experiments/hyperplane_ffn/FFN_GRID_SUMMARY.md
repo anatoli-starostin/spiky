@@ -8,11 +8,11 @@ Predicted == measured params/FLOP/vBW throughout.
 **Zero-line = VANILLA 4× MLP FFN = `exp073_tied_vanilla_baseline_16k` = 1.19665** (7.08M FFN params /
 14.16M FFN-FLOP / 14.16M vBW; same 16k schedule / effective batch). Per the researcher, tied-vs-untied
 vanilla bpb is within noise, so exp073's tied number is used directly as the untied-grid anchor — no
-correction. **dense-V (exp_n_0084, 1.19866) is kept as a labeled row, not the zero-line** — and note it
-sits **+0.002 ABOVE vanilla** (slightly worse), reinforcing that its nap7/tph256 config is a poor
-allocation of its param budget.
+correction. Every other point is a routed CompressionMHL FFN; exp_n_0084 (nap7/tph256) is one such reuse
+point, not a separate baseline, and it lands **+0.002 above vanilla** (slightly worse), which is worth
+noting because nap7/tph256 is a poor allocation of its 67.35M budget.
 
-| id | new | H | d | nap(cells) | tph | total params | FFN params | ×Van | FFN-FLOP | vBW | val_bpb | Δ vs vanilla |
+| id | kind | H | d | nap(cells) | tph | total params | FFN params | ×Van | FFN-FLOP | vBW | val_bpb | Δ vs vanilla |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0118 | reuse | 4 | 48 | 9(512) | 256 | 180.60M | 151.9M | 21.45× | 2.286M | 2.375M | 1.17460 | **−0.02205** |
 | 0133 | NEW | 4 | 48 | 10(1024) | 128 | 180.60M | 151.9M | 21.45× | 2.040M | 2.081M | 1.17961 | −0.01704 |
@@ -25,7 +25,7 @@ allocation of its param budget.
 | 0127 | NEW | 4 | 48 | 7(128) | 128 | 48.48M | 19.8M | 2.79× | 2.003M | 2.081M | 1.19471 | **−0.00194** |
 | **exp073** | vanilla | — | — | dense 4×MLP | — | 23.21M (tied) | 7.08M | 1.00× | 14.16M | 14.16M | **1.19665** | **0 (zero-line)** |
 | 0120 | reuse | 4 | 48 | 9(512) | 64 | 67.35M | 38.6M | 5.46× | 1.898M | 1.933M | 1.19859 | +0.00194 |
-| 0084 | dense-V | 4 | 48 | 7(128) | 256 | 67.35M | 38.6M | 5.46× | 2.236M | 2.375M | 1.19866 | +0.00201 |
+| 0084 | reuse | 4 | 48 | 7(128) | 256 | 67.35M | 38.6M | 5.46× | 2.236M | 2.375M | 1.19866 | +0.00201 |
 | 0128 | NEW | 4 | 48 | 8(256) | 64 | 48.48M | 19.8M | 2.79× | 1.892M | 1.933M | 1.20228 | +0.00563 |
 | 0125 | reuse | 8 | 24 | 8(256) | 64 | 48.48M | 19.8M | 2.79× | 1.942M | 1.933M | 1.20332 | +0.00667 |
 | 0126 | NEW | 4 | 48 | 7(128) | 64 | 39.04M | 10.3M | 1.46× | 1.886M | 1.933M | 1.20694 | +0.01029 |
@@ -35,8 +35,9 @@ allocation of its param budget.
   while the LUT reads only selected rows.
 - **Best in the 10.8× budget:** 0129 nap8/tph256 (**−0.01517**).
 - **Best overall:** 0118 nap9/tph256 (21.5×, **−0.02205**).
-- **dense-V (0084) sits +0.00201 ABOVE vanilla** — its nap7/tph256 arrangement is one of the worst 67.35M
-  allocations; better routed configs at equal params (0131 −0.0078, 0121 −0.0052) clear both it and vanilla.
+- **0084 (nap7/tph256) sits +0.00201 ABOVE vanilla** — its nap7/tph256 arrangement is one of the worst
+  67.35M allocations; better routed configs at equal params (0131 −0.0078, 0121 −0.0052) clear both it and
+  vanilla.
 - Everything from 2.79× up beats vanilla except the two cell-heavy tph64 configs (0128, 0125) and the
   smallest 1.46× point (0126).
 
@@ -55,6 +56,6 @@ allocation of its param budget.
 - **Best at ~vanilla-adjacent budget (67.35M):** 0131 H2/d96 (1.18883, −0.0078).
 - **Cheapest beating vanilla:** 0127 nap7/tph128 (48.48M, 2.79×, 1.19471, −0.0019).
 
-See `FFN_GRID_plots.png` — (a) params↔bpb Pareto with the vanilla 1.19665 line + dense-V as a labeled
-point, (b) iso-param diagonals (bpb vs vBW; more tables win) with vanilla line, (c) H2/H4/H8 head line
-with vanilla line.
+See `FFN_GRID_plots.png` — (a) params↔bpb Pareto with the vanilla 1.19665 reference line (all routed
+points, including 0084, plotted uniformly by exp id), (b) iso-param diagonals (bpb vs vBW; more tables
+win) with the vanilla line, (c) H2/H4/H8 head line with the vanilla line.
