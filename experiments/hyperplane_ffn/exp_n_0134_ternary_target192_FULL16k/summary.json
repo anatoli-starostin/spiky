@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0134_ternary_target192_FULL16k",
+  "best_val_bpb": 1.1894278233175797,
+  "final_val_bpb": 1.1894278233175797,
+  "total_params": 76373004,
+  "training_time_hours": 1.901
+}
