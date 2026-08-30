@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0036_ternary_normalize_w_4k",
+  "best_val_bpb": 1.3564437806241993,
+  "final_val_bpb": 1.3564437806241993,
+  "total_params": 340169484,
+  "training_time_hours": 1.281
+}
