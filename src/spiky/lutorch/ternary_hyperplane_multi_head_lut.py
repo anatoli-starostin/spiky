@@ -260,6 +260,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         ternary_temp_init: float = 0.5,
         nonzero_penalty_weight: float = 0.0,
         target_nonzero_frac: float = 0.0,
+        topk_per_hyperplane: int = 0,
         balanced_target_zero_frac: float = 1.0 / 3.0,
         trainable_bias: bool = False,
         normalize_projection=False,
@@ -386,6 +387,23 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
             )
         self.target_nonzero_frac = float(target_nonzero_frac)
 
+        # Hard per-hyperplane top-K. 0 (the default) disables it and leaves the dead zone
+        # in charge of density; K > 0 pins EXACTLY K non-zeros per hyperplane in both the
+        # training forward and the hard eval, so what trains is what deploys. Also a plain
+        # int, never a Parameter or buffer: it must not enter state_dict.
+        if not isinstance(topk_per_hyperplane, int) or isinstance(
+            topk_per_hyperplane, bool
+        ):
+            raise TypeError(
+                f"topk_per_hyperplane must be an int, got {type(topk_per_hyperplane)}"
+            )
+        if not (0 <= topk_per_hyperplane <= input_dim):
+            raise ValueError(
+                f"topk_per_hyperplane must be in [0, input_dim={input_dim}], "
+                f"got {topk_per_hyperplane}"
+            )
+        self.topk_per_hyperplane = int(topk_per_hyperplane)
+
         # Balanced-ternary init: redraw w so the step-0 routing is ~equal thirds of
         # -1 / 0 / +1, instead of anchor_pairs' 2 nonzeros per hyperplane with every
         # component sitting maximally far from the dead-zone boundary.
@@ -461,21 +479,65 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         """
         return torch.tanh(self.normalized_weight() / (2.0 * self.ternary_temp))
 
+    def topk_mask(self) -> torch.Tensor:
+        """Bool [n_tables, nap, input_dim]: the K most CONFIDENT components per hyperplane.
+
+        Confidence is |normalized_weight()| -- how far past the dead-zone boundary the
+        component sits. The ternary value itself is only ever {-1, 0, +1} and carries no
+        ordering, so it cannot be ranked; the continuous weight behind it can.
+
+        Detached and non-differentiable by construction: topk returns indices. The
+        gradient path to the masked-out components is preserved in `ternary_weight()`
+        instead, through the straight-through estimator, which is what lets a component
+        that is currently outside the top-K grow and re-enter it later.
+        """
+        conf = self.normalized_weight().detach().abs()
+        idx = conf.topk(self.topk_per_hyperplane, dim=-1).indices
+        return torch.zeros_like(conf, dtype=torch.bool).scatter_(-1, idx, True)
+
+    def _q_hard_from(self, s: torch.Tensor) -> torch.Tensor:
+        """The hard routing value for a given s = tanh(w / 2T).
+
+        Two regimes, and they decide sparsity in different ways:
+
+          topk_per_hyperplane == 0   q = sign(s) * (|s| > 0.5)
+                                     the dead zone decides. Density is whatever T and the
+                                     weight distribution happen to produce.
+
+          topk_per_hyperplane == K   q = sign(s) * topk_mask
+                                     the rank decides. EXACTLY K components per hyperplane
+                                     are non-zero, always -- including any that currently
+                                     sit inside the dead zone, which are still kept at
+                                     their sign if they are among the K most confident.
+                                     That is deliberate: "train what you deploy" means the
+                                     deployed count is a fixed K, not a number that drifts
+                                     with T.
+        """
+        if self.topk_per_hyperplane == 0:
+            return torch.sign(s) * (s.abs() > 0.5).to(s.dtype)
+        return torch.sign(s) * self.topk_mask().to(s.dtype)
+
     def hard_ternary_weight(self) -> torch.Tensor:
         """q_hard in {-1, 0, +1}, no autograd. This is what you bake and ship."""
         with torch.no_grad():
-            s = self.soft_ternary_weight()
-            return torch.sign(s) * (s.abs() > 0.5).to(s.dtype)
+            return self._q_hard_from(self.soft_ternary_weight())
 
     def ternary_weight(self) -> torch.Tensor:
         """q = s + (q_hard - s).detach().
 
         Forward value is exactly ternary; gradient flows through s to both
         `hyperplane_weight` and `log_ternary_temp`.
+
+        Under top-K this identity is what keeps the mask from being a one-way door. The
+        forward value is masked, but the gradient is d/ds of the WHOLE tensor -- the mask
+        never multiplies the backward -- so a component outside the current top-K still
+        receives the full gradient its position would earn, can grow, and can displace a
+        weaker one on a later step. Multiplying the backward by the mask instead would
+        freeze every excluded component at the value it happened to have when it dropped
+        out, and the set could then only shrink.
         """
         s = self.soft_ternary_weight()
-        q_hard = torch.sign(s) * (s.abs() > 0.5).to(s.dtype)
-        return s + (q_hard - s).detach()
+        return s + (self._q_hard_from(s) - s).detach()
 
     # ---- optional soft sparsity penalty (off by default) --------------------
 
@@ -1021,6 +1083,77 @@ def _sanity() -> None:
     print(f'  it HOLDS at the target instead of emptying the router: {held}')
     ok &= (default_zero and bitwise and same_sd_t and hinge_val and active_grad
            and released and held)
+
+    print('\n=== (7c) topk_per_hyperplane: exactly K, and the mask is not a one-way door ===')
+    K = 5
+    base = _fresh()                                   # topk defaults to 0
+    tk = _fresh(topk_per_hyperplane=K)
+    print(f'  default topk_per_hyperplane: {base.topk_per_hyperplane} (0 expected)')
+    default_off = base.topk_per_hyperplane == 0
+
+    # DISABLED path must be bit-for-bit the pre-topk behaviour, not merely equivalent
+    s_ = base.soft_ternary_weight()
+    legacy_hard = torch.sign(s_) * (s_.abs() > 0.5).to(s_.dtype)
+    bit_hard = bool(torch.equal(base.hard_ternary_weight(), legacy_hard))
+    bit_ste = bool(torch.equal(base.ternary_weight(),
+                               s_ + (legacy_hard - s_).detach()))
+    print(f'  K=0 hard_ternary_weight is the old expression, bitwise: {bit_hard}')
+    print(f'  K=0 ternary_weight (STE) is the old expression, bitwise: {bit_ste}')
+    same_sd_k = sorted(base.state_dict()) == sorted(tk.state_dict())
+    same_np = ({n: tuple(p.shape) for n, p in base.named_parameters()}
+               == {n: tuple(p.shape) for n, p in tk.named_parameters()})
+    print(f'  K adds no state_dict entries: {same_sd_k}   no parameters: {same_np}')
+
+    # EXACTLY K non-zeros per hyperplane, in BOTH paths -- this is the deploy guarantee
+    qh = tk.hard_ternary_weight()
+    qs = tk.ternary_weight()
+    per_hp_hard = (qh != 0).sum(-1)
+    per_hp_ste = (qs != 0).sum(-1)
+    exact = bool((per_hp_hard == K).all()) and bool((per_hp_ste == K).all())
+    print(f'  eval path  : {int(per_hp_hard.min())}..{int(per_hp_hard.max())} '
+          f'non-zeros per hyperplane (K={K})')
+    print(f'  train path : {int(per_hp_ste.min())}..{int(per_hp_ste.max())} '
+          f'(the STE forward value must match the eval value)')
+    agree = bool(torch.equal(qh, qs.detach()))
+    print(f'  exactly K in both: {exact}   train forward == eval forward: {agree}')
+    only_pm1 = set(qh.unique().tolist()) <= {-1.0, 0.0, 1.0}
+    print(f'  values still ternary: {only_pm1}')
+
+    # the kept set is the TOP-K BY CONFIDENCE, not by ternary value or by position
+    conf = tk.normalized_weight().detach().abs()
+    kept_min = torch.where(qh != 0, conf,
+                           torch.full_like(conf, float('inf'))).min(-1).values
+    drop_max = torch.where(qh == 0, conf, torch.full_like(conf, -1.0)).max(-1).values
+    ranked = bool((kept_min >= drop_max).all())
+    print(f'  every kept component is more confident than every dropped one: {ranked}')
+
+    # THE ONE THAT MATTERS: gradient must reach components OUTSIDE the mask, or the set
+    # can only ever shrink
+    tk.zero_grad(set_to_none=True)
+    tk(x).sum().backward()
+    g = tk.hyperplane_weight.grad
+    outside = (qh == 0)
+    g_out_live = bool((g[outside] != 0).any())
+    frac_out = float((g[outside] != 0).float().mean())
+    print(f'  masked-OUT components receive gradient: {g_out_live} '
+          f'({frac_out * 100:.1f}% of them non-zero)')
+
+    # and that gradient can actually change the membership
+    m0 = tk.topk_mask().clone()
+    opt = torch.optim.Adam([tk.hyperplane_weight], lr=0.3)
+    for _ in range(25):
+        opt.zero_grad(set_to_none=True)
+        tk(x).sum().backward()
+        opt.step()
+    m1 = tk.topk_mask()
+    entered = int((m1 & ~m0).sum())
+    still_k = bool(((tk.hard_ternary_weight() != 0).sum(-1) == K).all())
+    print(f'  after 25 steps: {entered} components ENTERED the top-K from outside it')
+    print(f'  and the count is still exactly K everywhere: {still_k}')
+    reentry = entered > 0
+    ok &= (default_off and bit_hard and bit_ste and same_sd_k and same_np and exact
+           and agree and only_pm1 and ranked and g_out_live and reentry and still_k)
+
     t = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
                                       hyperplane_init_scale=1.0,
                                       nonzero_penalty_weight=1.0)
