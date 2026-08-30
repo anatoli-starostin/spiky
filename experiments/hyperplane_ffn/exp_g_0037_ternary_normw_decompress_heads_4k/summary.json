@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0037_ternary_normw_decompress_heads_4k",
+  "best_val_bpb": 1.3464589356435328,
+  "final_val_bpb": 1.3464589356435328,
+  "total_params": 76373004,
+  "training_time_hours": 0.571
+}

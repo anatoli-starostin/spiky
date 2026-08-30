@@ -96,12 +96,15 @@ Wiring it into a training loop -- sum over the slots and add to the loss:
               if isinstance(m, TernaryHyperplaneMultiHeadLUT))
     (loss + pen).backward()
 
-The penalty gradient reaches BOTH `hyperplane_weight` (pulling weights toward the
-dead zone) and `log_ternary_temp` (widening the band). Both routes genuinely sparsify,
-so both are wired -- but note the failure mode: T -> infinity zeroes the routing
-entirely and drives the penalty to 0, so lambda must stay small enough that the task
-loss opposes it. Watch `ternary_stats()["frac_zero"]` and `T_max` during training; if
-T inflation dominates, detaching T inside `sparsity_surrogate` is a one-line change.
+The penalty gradient reaches `hyperplane_weight` ONLY: T is DETACHED inside
+`sparsity_surrogate`. Both routes sparsify in principle, but T dominated overwhelmingly
+in practice -- the gradient to log_ternary_temp aggregates over all N components and
+stays O(lambda), while the mean reduction leaves each weight only O(lambda/N), a factor
+of ~1.5M at this shape. Measured before the detach: 60 steps of penalty-only descent
+moved T 0.3921 -> 0.4058 with the weight std unchanged to four decimals, i.e. 100% of
+the sparsification was band-widening rather than weight movement. That also silently
+invalidates the derived divisor, which assumes the max-entropy density. With T detached
+the penalty must act on the weights.
 
 Neither HyperplaneMultiHeadLUT nor CompressionMultiHeadLUT is modified by this file.
 """
@@ -474,10 +477,25 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         components the routing actually uses. MEAN rather than sum, so the value is
         dimension-invariant and lambda means the same thing at any shape.
 
+        T IS DETACHED here, deliberately. The band |w| <= T*ln3 is a function of T,
+        so a penalty that can see T will preferentially widen the band rather than move
+        any weight -- and it does: the gradient to log_ternary_temp AGGREGATES over all
+        N components and stays O(lambda), while the mean reduction leaves each weight
+        only O(lambda/N). Measured before this change, 60 steps of penalty-only descent
+        moved T 0.3921 -> 0.4058 and left the weight std unchanged to four decimals, so
+        the entire sparsification was band-widening. Detaching T removes that channel
+        and forces the penalty to act on the weights, which is what it is for.
+
+        `normalized_weight()` stays IN the graph, so with normalize_weights=True the
+        gradient still reaches `hyperplane_weight` through the standardization.
+
         Always differentiable and always computed -- this is the quantity to LOG.
         `sparsity_penalty()` is what you add to the loss.
         """
-        return self.soft_ternary_weight().abs().mean()
+        # NOT soft_ternary_weight(): that uses the live T, which the penalty would then
+        # inflate instead of sparsifying. Same expression, constant T.
+        T = self.ternary_temp.detach()
+        return torch.tanh(self.normalized_weight() / (2.0 * T)).abs().mean()
 
     def sparsity_penalty(self) -> torch.Tensor:
         """LAMBDA-WEIGHTED penalty term, ready to add straight to the loss.
