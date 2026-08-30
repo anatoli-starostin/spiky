@@ -259,6 +259,7 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         *,
         ternary_temp_init: float = 0.5,
         nonzero_penalty_weight: float = 0.0,
+        target_nonzero_frac: float = 0.0,
         balanced_target_zero_frac: float = 1.0 / 3.0,
         trainable_bias: bool = False,
         normalize_projection=False,
@@ -374,6 +375,16 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
                 f"nonzero_penalty_weight must be >= 0, got {nonzero_penalty_weight}"
             )
         self.nonzero_penalty_weight = float(nonzero_penalty_weight)
+
+        # Optional TARGET density. 0.0 (the default) means "no target": the penalty stays
+        # the original one-way push. > 0 turns it into a one-sided hinge that stops
+        # pushing once the surrogate reaches the target -- see sparsity_penalty(). Also a
+        # plain float, and for the same reason: it must never enter state_dict.
+        if not (0.0 <= target_nonzero_frac <= 1.0):
+            raise ValueError(
+                f"target_nonzero_frac must be in [0, 1], got {target_nonzero_frac}"
+            )
+        self.target_nonzero_frac = float(target_nonzero_frac)
 
         # Balanced-ternary init: redraw w so the step-0 routing is ~equal thirds of
         # -1 / 0 / +1, instead of anchor_pairs' 2 nonzeros per hyperplane with every
@@ -500,12 +511,35 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
     def sparsity_penalty(self) -> torch.Tensor:
         """LAMBDA-WEIGHTED penalty term, ready to add straight to the loss.
 
-        Returns `nonzero_penalty_weight * sparsity_surrogate()`.
+        Two shapes, chosen by `target_nonzero_frac`:
+
+            target == 0  (default)  lambda * surrogate
+                                        a ONE-WAY push: it never stops wanting fewer
+                                        non-zeros, all the way to an empty router.
+
+            target  > 0             lambda * relu(surrogate - target)
+                                        a one-sided HINGE: identical pressure while the
+                                        router is denser than the target, and exactly
+                                        zero gradient once it is at or below it.
+
+        The hinge is plain, not squared, on purpose. A squared hinge's gradient fades as
+        the surrogate approaches the target, so the run drifts in slowly and undershoots
+        under any opposing pull; the plain hinge holds full pressure right up to the
+        boundary and then releases it in one step, which is what "hold AT the target"
+        should mean. The kink at the target is not a problem here -- the surrogate is a
+        mean over ~9.4M components, so it crosses smoothly.
+
+        The target is compared against the SURROGATE, which is a soft proxy for the hard
+        non-zero fraction, not that fraction itself. The two agree in direction but not
+        exactly in value (that calibration is what the drift log is for), so a target of
+        64/384 requests "the surrogate reads 0.1667", and where the hard count settles is
+        a measurement, not a guarantee.
 
         When `nonzero_penalty_weight == 0` (the default) it returns a detached zero
-        scalar and computes NOTHING: no surrogate, no graph nodes, no gradient. Adding
-        it to a loss is then a genuine no-op, which is what keeps this class
-        bit-for-bit identical to the un-penalized version at default settings.
+        scalar and computes NOTHING: no surrogate, no graph nodes, no gradient, and the
+        target is never consulted. Adding it to a loss is then a genuine no-op, which is
+        what keeps this class bit-for-bit identical to the un-penalized version at
+        default settings.
 
         Sum it over the slots and add it once:
 
@@ -516,7 +550,20 @@ class TernaryHyperplaneMultiHeadLUT(HyperplaneMultiHeadLUT):
         if self.nonzero_penalty_weight == 0.0:
             return torch.zeros((), device=self.hyperplane_weight.device,
                                dtype=torch.float32)
-        return self.nonzero_penalty_weight * self.sparsity_surrogate()
+        surrogate = self.sparsity_surrogate()
+        if self.target_nonzero_frac > 0.0:
+            surrogate = torch.relu(surrogate - self.target_nonzero_frac)
+        return self.nonzero_penalty_weight * surrogate
+
+    def sparsity_slack(self) -> torch.Tensor:
+        """`surrogate - target`, detached -- how far above the target the router sits.
+
+        Positive means the hinge is ACTIVE and still pushing; <= 0 means it has released
+        and the penalty is contributing exactly nothing. Returns the raw surrogate when
+        no target is set, so the column means "distance from the floor" either way.
+        This is a logging helper and never touches the graph.
+        """
+        return (self.sparsity_surrogate().detach() - self.target_nonzero_frac)
 
     def nonzero_divisor(self) -> torch.Tensor:
         """Per-hyperplane sqrt(non-zero count), shape [n_tables, nap, 1].
@@ -857,8 +904,15 @@ def _sanity() -> None:
     s.zero_grad(set_to_none=True)
     p0.backward()
     gw_ok = bool((s.hyperplane_weight.grad != 0).any())
-    gT_ok = bool((s.log_ternary_temp.grad != 0).any())
-    print(f'  penalty grad -> hyperplane_weight: {gw_ok}   -> log_ternary_temp: {gT_ok}')
+    # T MUST NOT receive a gradient here. This check used to assert the opposite and was
+    # left behind when sparsity_surrogate() started detaching T -- it then crashed on
+    # `None != 0` rather than failing loudly, which is why it went unnoticed. Detaching T
+    # is the deliberate design (see sparsity_surrogate's docstring: with T live, 60 steps
+    # of penalty-only descent moved T 0.3921 -> 0.4058 and left the weights untouched, so
+    # the whole "sparsification" was band-widening), and this is now its regression test.
+    gT_detached = s.log_ternary_temp.grad is None
+    print(f'  penalty grad -> hyperplane_weight: {gw_ok}   '
+          f'-> log_ternary_temp: None, as intended: {gT_detached}')
     before = s.ternary_stats()
     opt = torch.optim.SGD([s.hyperplane_weight, s.log_ternary_temp], lr=0.5)
     for _ in range(30):
@@ -871,14 +925,102 @@ def _sanity() -> None:
           f'({after["frac_zero"] - before["frac_zero"]:+.4f})')
     print(f'    nonzeros/hyperplane {before["nonzero_per_hyperplane"]:.2f} -> '
           f'{after["nonzero_per_hyperplane"]:.2f}')
-    print(f'    T {before["T_max"]:.4f} -> {after["T_max"]:.4f}  '
-          f'(band widening is the second, legitimate route to sparsity)')
+    print(f'    T {before["T_max"]:.6f} -> {after["T_max"]:.6f}  '
+          f'(UNCHANGED -- every zero came from moving weights, not widening the band)')
     sparsified = after['frac_zero'] > before['frac_zero']
+    T_held = abs(after['T_max'] - before['T_max']) < 1e-9
     print(f'  penalty measurably increased the zero fraction: {sparsified}')
-    ok &= (gw_ok and gT_ok and sparsified and bool(torch.isfinite(p0))
-           and p0.dim() == 0)
+    print(f'  and it did it without touching T: {T_held}')
+    ok &= (gw_ok and gT_detached and sparsified and T_held
+           and bool(torch.isfinite(p0)) and p0.dim() == 0)
 
-    print('\n=== (8) the surrogate tracks actual density ===')
+    print('\n=== (7b) target_nonzero_frac: a hinge that HOLDS instead of pushing ===')
+
+    # Every module in this block starts from the SAME weights, so any difference between
+    # them is the target and nothing else.
+    _base = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
+                                          hyperplane_init_scale=1.0)
+    _REF_W = torch.randn_like(_base.hyperplane_weight)
+
+    def _fresh(**extra):
+        m_ = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
+                                           hyperplane_init_scale=1.0, **extra)
+        with torch.no_grad():
+            m_.hyperplane_weight.copy_(_REF_W)
+        return m_
+
+    # the DISABLED path must be bit-for-bit the old one-way penalty, not merely close
+    off = _fresh(nonzero_penalty_weight=3.0)                       # target defaults to 0
+    off_t = _fresh(nonzero_penalty_weight=3.0, target_nonzero_frac=0.0)   # explicit 0
+    manual = 3.0 * off.sparsity_surrogate()
+    default_zero = (off.target_nonzero_frac == 0.0)
+    bitwise = bool(torch.equal(off.sparsity_penalty(), manual))
+    bitwise &= bool(torch.equal(off_t.sparsity_penalty(), manual))
+    print(f'  default target_nonzero_frac: {off.target_nonzero_frac} (0.0 expected)')
+    print(f'  target=0 gives EXACTLY lambda*surrogate, bitwise: {bitwise}')
+    same_sd_t = sorted(off.state_dict()) == sorted(
+        _fresh(nonzero_penalty_weight=3.0, target_nonzero_frac=0.2).state_dict())
+    print(f'  a target adds no state_dict entries: {same_sd_t}')
+
+    # ABOVE the target -> hinge active, and exactly lambda*(surrogate - target)
+    sur = float(off.sparsity_surrogate())
+    hi = _fresh(nonzero_penalty_weight=3.0, target_nonzero_frac=sur / 2.0)
+    hinge_val = bool(torch.equal(hi.sparsity_penalty(),
+                                 3.0 * (hi.sparsity_surrogate() - sur / 2.0)))
+    hi.zero_grad(set_to_none=True)
+    hi.sparsity_penalty().backward()
+    active_grad = bool((hi.hyperplane_weight.grad != 0).any())
+    print(f'  surrogate {sur:.4f} vs target {sur / 2.0:.4f} -> ABOVE: '
+          f'penalty is lambda*(surrogate-target) bitwise {hinge_val}, '
+          f'gradient live {active_grad}')
+
+    # AT OR BELOW the target -> released: exactly zero value AND exactly zero gradient
+    lo = _fresh(nonzero_penalty_weight=3.0, target_nonzero_frac=min(1.0, sur * 2.0))
+    pen_lo = lo.sparsity_penalty()
+    lo.zero_grad(set_to_none=True)
+    pen_lo.backward()
+    g_lo = lo.hyperplane_weight.grad
+    released = float(pen_lo) == 0.0 and (g_lo is None or not bool((g_lo != 0).any()))
+    print(f'  surrogate {sur:.4f} vs target {min(1.0, sur * 2.0):.4f} -> BELOW: '
+          f'penalty {float(pen_lo):.1f}, gradient all zero: {released}')
+
+    # And the behaviour that is the whole point: descent STOPS at the target.
+    # ADAM, not SGD, deliberately. Under SGD this penalty stalls far above any target --
+    # d|tanh(w/2T)|/dw vanishes for saturated components, so plain gradient descent
+    # cannot pull them back and the surrogate parks around 0.45 whatever the target says.
+    # Adam divides by the per-parameter gradient magnitude and moves them anyway, which
+    # is both what training actually uses and the reason lambda turned out to be a no-op
+    # knob in the exp_g_0039/0040 sweep. Testing the hinge under SGD would be testing a
+    # regime the model never runs in.
+    TGT = 0.25
+    runs = {}
+    for label, tgt in (('hinge', TGT), ('unbounded', 0.0)):
+        h = _fresh(nonzero_penalty_weight=1.0, target_nonzero_frac=tgt)
+        opt = torch.optim.Adam([h.hyperplane_weight], lr=0.02)
+        traj = []
+        for _ in range(400):
+            opt.zero_grad(set_to_none=True)
+            pen = h.sparsity_penalty()
+            if pen.requires_grad:                  # released hinge has nothing to push
+                pen.backward()
+            opt.step()
+            traj.append(float(h.sparsity_surrogate().detach()))
+        runs[label] = (traj, h.ternary_stats())
+    (t_h, s_h), (t_u, s_u) = runs['hinge'], runs['unbounded']
+    print(f'  400 Adam steps on the penalty ALONE, from identical weights:')
+    print(f'    hinge (target {TGT})   surrogate {t_h[0]:.4f} -> {t_h[-1]:.4f}   '
+          f'min {min(t_h):.4f}   frac_zero -> {s_h["frac_zero"]:.4f}')
+    print(f'    unbounded (target 0)  surrogate {t_u[0]:.4f} -> {t_u[-1]:.4f}   '
+          f'min {min(t_u):.4f}   frac_zero -> {s_u["frac_zero"]:.4f}')
+    reached = t_h[-1] <= TGT + 0.02
+    no_undershoot = min(t_h) >= TGT - 0.05
+    stopped_short = s_h['frac_zero'] < s_u['frac_zero'] - 0.05
+    print(f'    reached the target: {reached}   did not undershoot: {no_undershoot}   '
+          f'stopped short of the unbounded run: {stopped_short}')
+    held = reached and no_undershoot and stopped_short
+    print(f'  it HOLDS at the target instead of emptying the router: {held}')
+    ok &= (default_zero and bitwise and same_sd_t and hinge_val and active_grad
+           and released and held)
     t = TernaryHyperplaneMultiHeadLUT(**kw, hyperplane_init='random',
                                       hyperplane_init_scale=1.0,
                                       nonzero_penalty_weight=1.0)
