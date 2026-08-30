@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0040_ternary_sparsity_lam50_4k",
+  "best_val_bpb": 1.362308954853135,
+  "final_val_bpb": 1.362308954853135,
+  "total_params": 76373004,
+  "training_time_hours": 0.591
+}
