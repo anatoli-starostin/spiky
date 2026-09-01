@@ -11,12 +11,15 @@ index kept in shared and fed straight into the gather; **fp32, bit-exact**). See
 
 ## Files
 
+Same file names/structure as gpustar's `../paper_timings/`, so the two folders are drop-in parallel (5090 vs H100).
+
 | file | what |
 |---|---|
-| `phase_split_h100.py` | the measurement harness: builds the three models on their trained checkpoints, times each phase of the fused_v2 slot + the vanilla split + eager-vs-compile, writes `results.json`. Uses the JIT kernels in `..` (`-std=c++20` required). |
-| `make_figure.py` | portable figure generator — reads `results.json`, writes `ffn_phase_split_h100.png`. No hardcoded numbers, no absolute paths (`python paper_timings_h100/make_figure.py`). |
+| `interleaved.py` | interleaved FFN-slot TOTALS (the citable numbers) + the torch.compile check — every variant timed in alternating rounds in one process so drift cancels and the ratios are sound. |
+| `phase_split.py` | the per-phase harness: builds the three models on their trained checkpoints, times each phase of the fused_v2 slot + the vanilla split + eager-vs-compile, writes `results.json`. Uses the JIT kernels in `..` (`-std=c++20` required). |
+| `make_figure.py` | portable figure generator — reads `results.json`, writes `ffn_phase_split.png`. No hardcoded numbers, no absolute paths (`python paper_timings_h100/make_figure.py`). |
 | `results.json` | the committed measured run (the numbers below). |
-| `ffn_phase_split_h100.png` | the figure. |
+| `ffn_phase_split.png` | the figure. |
 
 ## Citable conditions
 
@@ -33,26 +36,34 @@ index kept in shared and fed straight into the gather; **fp32, bit-exact**). See
 
 ## Measured (this repo, the run committed in `results.json`)
 
-**Vanilla dense FFN (bf16), ms/call:** up 384→1536 `0.0526` · GELU `0.0579` · down 1536→384
-`0.0424` · **phase-sum 0.153** (whole-slot eager 0.180, torch.compile 0.157).
+**Vanilla dense FFN (bf16), ms/call:** up 384→1536 `0.0531` · GELU `0.0568` · down 1536→384
+`0.0425` · **phase-sum 0.152** (whole-slot eager 0.153; torch.compile 0.157 — **compile does
+NOT help vanilla on H100**, the bf16 GEMMs are already cuBLAS-optimal).
 
 **Routed best path — fused_v2, per-phase ms/call (bit-exact):**
 
-| model | compress 384→192 | routing+gather (fused) | decompress 192→384 | **slot** | **vs vanilla** |
+| model | compress 384→192 | routing+gather (fused) | decompress 192→384 | **slot (phase-sum)** | **vs vanilla** |
 |---|---|---|---|---|---|
-| 0126 nap7/tph64  | 0.0129 | 0.1411 | 0.0146 | **0.169** | **1.10×** |
-| 0127 nap7/tph128 | 0.0120 | 0.2534 | 0.0131 | **0.278** | **1.82×** |
-| 0128 nap8/tph64  | 0.0126 | 0.1489 | 0.0131 | **0.175** | **1.14×** |
+| 0126 nap7/tph64  | 0.0125 | 0.1416 | 0.0148 | **0.169** | **1.11×** |
+| 0127 nap7/tph128 | 0.0127 | 0.2532 | 0.0134 | **0.279** | **1.83×** |
+| 0128 nap8/tph64  | 0.0130 | 0.1490 | 0.0135 | **0.176** | **1.15×** |
 
 **Phases 2+3 are ONE kernel on the fused path** and cannot be split from a single run. For a
 conceptual phase-2 vs phase-3 number, measured *separately* (standalone routing + Triton
-gather; this is NOT how the fused path runs): routing `0.0615 / 0.1112 / 0.1146`, gather
-`0.1122 / 0.2260 / 0.1198` for 0126/0127/0128.
+gather; this is NOT how the fused path runs): routing `0.0619 / 0.1114 / 0.1143`, gather
+`0.1126 / 0.2260 / 0.1206` for 0126/0127/0128.
 
-**eager vs torch.compile** (routed full slot, fp32 reference path): `0.808/0.806`,
-`1.492/1.490`, `0.949/0.948` — **no change** (6 graph breaks each: Dynamo can't trace the
-custom routing kernel). Vanilla: eager 0.180 / compile 0.157 — the dense GEMMs are already
-cuBLAS-optimal, so compile does not help either path. (torch.compile is not the tool here;
+**Interleaved WHOLE-SLOT totals (the citable end-to-end numbers, `interleaved.py`):** timing
+each slot as ONE call — which includes the inter-phase bf16↔fp32 casts, allocs and the three
+separate kernel launches the per-phase sum omits — gives vanilla `0.154`, and fused_v2
+`0.196 / 0.305 / 0.202` = **1.27× / 1.98× / 1.31×** vanilla for 0126/0127/0128. These run
+~0.15× higher than the phase-sum ratios above; the phase table is the decomposition, the
+interleaved whole-slot is the honest end-to-end figure.
+
+**eager vs torch.compile** (routed full slot, fp32 reference path): `0.809/0.809`,
+`1.492/1.491`, `0.949/0.950` — **no change** (6 graph breaks each: Dynamo can't trace the
+custom routing kernel). Vanilla: eager 0.153 / compile 0.157 — the dense GEMMs are already
+cuBLAS-optimal, so compile helps NEITHER path on H100. (torch.compile is not the tool here;
 the fused_v2 numbers above are the fast path.)
 
 ### Takeaway

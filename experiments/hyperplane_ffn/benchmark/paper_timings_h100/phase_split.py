@@ -87,11 +87,11 @@ def main():
     mlp = van.blocks[0].mlp.to(torch.bfloat16)
     up, gelu, down = mlp[0], mlp[1], mlp[2]
     xv = torch.randn(N, Ch, device=DEV, dtype=torch.bfloat16)
+    xv3 = torch.randn(B, T, Ch, device=DEV, dtype=torch.bfloat16)   # pre-allocated slot input
     h1 = up(xv); g = gelu(h1)
     v = dict(up=ct(lambda: up(xv)), gelu=ct(lambda: gelu(h1)), down=ct(lambda: down(g)))
-    v['slot_eager'] = ct(lambda: van.blocks[0].ffn_slot(torch.randn(B, T, Ch, device=DEV, dtype=torch.bfloat16)))
+    v['slot_eager'] = ct(lambda: van.blocks[0].ffn_slot(xv3))
     cvan = torch.compile(lambda x: van.blocks[0].ffn_slot(x))
-    xv3 = torch.randn(B, T, Ch, device=DEV, dtype=torch.bfloat16)
     for _ in range(6):
         cvan(xv3)
     torch.cuda.synchronize()

@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 _here = os.path.dirname(os.path.abspath(__file__))
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_here, 'results.json')
-out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(_here, 'ffn_phase_split_h100.png')
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(_here, 'ffn_phase_split.png')
 J = json.load(open(src))
 cond = J['conditions']
 v = J['vanilla']
