@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp_n_0153_H2_out96_nap7_tph64",
+  "exp_name": "exp_n_0153_H2d96_nap7_tph64",
   "_arch_note": "[FFN-LUT paper grid G1] plane: H4/d48 nap7(128c)/tph64  C=8192  (~39.0M, FFN~10.3M/1.46x). Base=exp_n_0121; config-only; full 16k schedule identical to 0118-0121 (lr 3e-4, warmup 1600, cosine/16000, device_batch 12 / grad_accum 4, effective batch 24,576). FFN CompressionMHL, untied head, standard dense attention, standard LUT optimizer. Ceiling C=tph*2^nap<=65536 (FFN<=~10.8x vanilla 7.08M). Dense-V/vanilla-FFN baseline exp_n_0084=1.19866 (=grid cell nap7/tph256).",
   "gamma": 0,
   "ffn_type": "compression",
@@ -20,7 +20,7 @@
   "random_seed": 1,
   "compute_dtype": "bf16",
   "tokenizer_vocab_size": 32768,
-  "lut_inner_in_dim": 48,
+  "lut_inner_in_dim": 96,
   "lut_inner_out_dim": 96,
   "lut_n_anchor_pairs": 7,
   "lut_tables_per_head": 64,
@@ -31,5 +31,5 @@
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
-  "_sweep_tag": "A-H2out96"
+  "_sweep_tag": "A-H2d96"
 }
