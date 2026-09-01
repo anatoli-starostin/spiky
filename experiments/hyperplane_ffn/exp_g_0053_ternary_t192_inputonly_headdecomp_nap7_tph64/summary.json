@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_g_0053_ternary_t192_inputonly_headdecomp_nap7_tph64",
+  "best_val_bpb": 1.2068323923191333,
+  "final_val_bpb": 1.2068323923191333,
+  "total_params": 42737676,
+  "training_time_hours": 0.98
+}
