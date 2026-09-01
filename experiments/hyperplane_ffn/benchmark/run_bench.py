@@ -24,13 +24,15 @@ for p in (HERE, os.path.join(REPO, 'src')):
 import bench            # noqa: E402
 import gather           # noqa: E402
 import gather_cuda      # noqa: E402
+import gather_fused     # noqa: E402
 import gather_ternary   # noqa: E402
 import hybrid           # noqa: E402
 import model as M       # noqa: E402
 
 IMPL_LABEL = {'triton': 'Triton gather',
               'cuda-fp32': 'CUDA gather (fp32 table)',
-              'cuda-bf16': 'CUDA gather (bf16 table)'}
+              'cuda-bf16': 'CUDA gather (bf16 table)',
+              'cuda-fused': 'fused routing+gather (bf16 table)'}
 
 
 def family_of(m):
@@ -68,13 +70,17 @@ def main():
                     help='sweep the gather config on this GPU first (whichever '
                          'implementation --gather-impl selected)')
     ap.add_argument('--gather-impl', default='triton',
-                    choices=('triton', 'cuda-fp32', 'cuda-bf16'),
+                    choices=('triton', 'cuda-fp32', 'cuda-bf16', 'cuda-fused'),
                     help='gather kernel. triton (default) is portable and needs no '
                          'compiler. cuda-fp32 is bit-exact and adds software '
                          'pipelining. cuda-bf16 additionally rounds the table to '
-                         'bf16: fastest, but APPROXIMATE (+0.0001 bpb) -- it is '
-                         'checked against a tolerance, not bit-exactness. Both cuda '
-                         'paths need nvcc and fall back to triton if it is missing.')
+                         'bf16: fastest single-kernel path, APPROXIMATE (+0.0001 bpb). '
+                         'cuda-fused also folds the ROUTING into the same kernel and '
+                         'keeps the index in shared, eliminating the 48-96 MB HBM '
+                         'index write -- fastest overall (1.36-2.04x the stage), same '
+                         '+0.0001 bpb (its output is bit-identical to cuda-bf16). All '
+                         'cuda paths need nvcc and fall back to triton if it is '
+                         'missing.')
     ap.add_argument('--gather-tol', type=float, default=1e-2,
                     help='max relative error allowed on the gather output for '
                          '--gather-impl cuda-bf16 (measured 9e-4..1.7e-3)')
@@ -116,13 +122,25 @@ def main():
               f'family has its own kernel -> falling back to triton')
         impl = 'triton'
     if impl != 'triton':
-        ok_ext, msg = gather_cuda.available()
+        mod = gather_fused if impl == 'cuda-fused' else gather_cuda
+        ok_ext, msg = mod.available()
         print(f'gather: {msg}')
+        # the fused kernel packs the index into a byte in shared: nap <= 8, table_dim
+        # <= 256. A model outside that is a clean fallback, not a crash.
+        if ok_ext and impl == 'cuda-fused':
+            ok_sup, why = gather_fused.supported(luts[0])
+            if not ok_sup:
+                print(f'gather: cuda-fused cannot run this model ({why})')
+                ok_ext = False
         if not ok_ext:
             if args.require_gather_impl:
                 print('--require-gather-impl set: aborting rather than falling back.')
                 return 1
             impl = 'triton'
+    if impl == 'cuda-fused':
+        nap = gather_fused.nap_of(luts[0])
+        print(f'gather: routing regime v{"2" if gather_fused.use_v2(luts[0]) else "1"} '
+              f'(nap={nap}; v2 at nap>=8, v1 below -- the winner flips)')
     print(f'gather: using {IMPL_LABEL[impl]}')
 
     cuda_cfg = None
@@ -139,6 +157,19 @@ def main():
                   f'stages={best[3]} (defaults {gather.BLOCK_N}/{gather.NUM_WARPS}/'
                   f'{gather.NUM_STAGES})')
             gather.BLOCK_N, gather.NUM_WARPS, gather.NUM_STAGES = best[1], best[2], best[3]
+        elif impl == 'cuda-fused':
+            best = gather_fused.tune(l, n_tokens=48 * args.seq)
+            if best is None:
+                print('gather tune: no fused config worked; keeping the default')
+            else:
+                cuda_cfg = best[1]
+                print(f'gather tune: {best[0]:.4f} ms at BLOCK_N={best[1]} '
+                      f'routing v{"2" if best[2] else "1"} '
+                      f'(default BLOCK_N={gather_fused.DEFAULT_BLOCK_N}, '
+                      f'dispatched v{"2" if gather_fused.use_v2(l) else "1"})')
+                if best[2] != gather_fused.use_v2(l):
+                    print('  note: the tuner prefers the OTHER routing regime here; '
+                          'the dispatch rule (v2 at nap>=8) may not hold on this GPU')
         else:
             best = gather_cuda.tune(
                 l, table_dtype='bf16' if impl == 'cuda-bf16' else 'fp32',
@@ -155,6 +186,8 @@ def main():
         if fam == 'fastmhl':
             if impl == 'triton':
                 return gather.patch(m)
+            if impl == 'cuda-fused':
+                return gather_fused.patch(m, table_dtype='bf16', block_n=cuda_cfg)
             return gather_cuda.patch(
                 m, table_dtype='bf16' if impl == 'cuda-bf16' else 'fp32', cfg=cuda_cfg)
         if fam == 'ternary':
@@ -166,12 +199,21 @@ def main():
     # so it gets a two-stage check instead of a weakened one: first that the CUDA
     # kernel is bit-exact with an fp32 table (addressing and pipelining are right),
     # then that the bf16 rounding is inside tolerance on the gather output.
-    exact_impl = 'cuda-fp32' if impl == 'cuda-bf16' else impl
-    print(f'\nCORRECTNESS: {IMPL_LABEL[exact_impl]} vs the unpatched fp32 model')
+    exact_impl = {'cuda-bf16': 'cuda-fp32',
+                  'cuda-fused': 'cuda-fused'}.get(impl, impl)
+    exact_note = ' with an fp32 table' if impl in ('cuda-bf16', 'cuda-fused') else ''
+    print(f'\nCORRECTNESS: {IMPL_LABEL[exact_impl]}{exact_note} vs the unpatched '
+          f'fp32 model')
     cand = M.build(exp_dir, load_checkpoint=args.load_checkpoint)[1]
     cand.load_state_dict(ref.state_dict())
-    n = (gather_cuda.patch(cand, table_dtype='fp32', cfg=cuda_cfg)
-         if impl == 'cuda-bf16' else do_patch(cand))
+    if impl == 'cuda-fused':
+        # the fused kernel recomputes the routing too, so this also proves the routing
+        # is bit-exact against the native bit-pack kernel it replaces
+        n = gather_fused.patch(cand, table_dtype='fp32', block_n=cuda_cfg)
+    elif impl == 'cuda-bf16':
+        n = gather_cuda.patch(cand, table_dtype='fp32', cfg=cuda_cfg)
+    else:
+        n = do_patch(cand)
     assert n == n_slots, f'patched {n} of {n_slots} slots'
     ok, diffs = bench.check_bit_exact(ref, cand, seq=args.seq)
     for B, d in diffs.items():
@@ -188,15 +230,19 @@ def main():
     else:
         print(f'  patched {n} LUT slots, all bit-exact')
 
-    if impl == 'cuda-bf16':
+    if impl in ('cuda-bf16', 'cuda-fused'):
         print('\nNUMERICS: bf16 table vs fp32 table, measured on the GATHER output')
         if not args.load_checkpoint:
             print('  WARNING: without --load-checkpoint the table holds random init '
                   'values, so this relative error is indicative only.')
         worst = 0.0
         for i, l in enumerate(luts):
-            rel, dif, scale = gather_cuda.check_table_precision(
-                l, n_tokens=48 * args.seq, cfg=cuda_cfg)
+            rel, dif, scale = (
+                gather_fused.check_table_precision(l, n_tokens=48 * args.seq,
+                                                   block_n=cuda_cfg)
+                if impl == 'cuda-fused' else
+                gather_cuda.check_table_precision(l, n_tokens=48 * args.seq,
+                                                  cfg=cuda_cfg))
             worst = max(worst, rel)
             print(f'  slot {i}: rel {rel:.2e}  max|diff| {dif:.3e}  scale {scale:.3f}')
         ok_tol = worst <= args.gather_tol
@@ -221,7 +267,12 @@ def main():
         opt(torch.randint(0, cfg['tokenizer_vocab_size'], (2, args.seq),
                           device=next(opt.parameters()).device))
     if fam == 'fastmhl':
-        print(f'  native bit-pack kernel calls per forward: {counter["n"]}/{n_slots} '
+        # count_native_calls wraps _hard_eval_native, i.e. it counts FAST-PATH hits, not
+        # bit-pack calls -- so the expected count is n_slots for every impl, including
+        # cuda-fused (which does its routing inside that same call).
+        routing = 'fused in' if impl == 'cuda-fused' else 'native bit-pack'
+        print(f'  fast-path calls per forward: {counter["n"]}/{n_slots} '
+              f'(routing: {routing}) '
               f'-> {"alive" if counter["n"] == n_slots else "LOST (fell back to the "
                    "compiled path -- check the fp32 input hook)"}')
 

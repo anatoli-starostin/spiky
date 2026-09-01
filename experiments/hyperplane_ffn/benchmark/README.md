@@ -41,6 +41,9 @@ Two other measurement rules baked in:
 | `gather.py` | The fused Triton gather+sum kernel replacing `embedding_bag`, plus `patch()` for the FastMultiHeadLut family and `tune()` to re-sweep its config on new hardware. **The default and the portable fallback — needs no compiler.** |
 | `gather_cuda.cu` | Optional hand-written CUDA gather+sum: software-pipelined, fp32 (bit-exact) or bf16 (approximate) table. Faster than Triton, but needs `nvcc`. |
 | `gather_cuda.py` | Builds `gather_cuda.cu` on first use and wires it in, with `patch()`, `tune()` and `check_table_precision()`. **Never raises on a machine without a toolchain** — `available()` reports why and the driver falls back to Triton. |
+| `gather_fused.cu` | **The fastest path on the 5090.** Routing and gather fused into one kernel with the index kept in shared, so the 48–96 MB HBM index write disappears. bf16 table, both routing regimes, row-1-ahead prefetch. |
+| `gather_fused.py` | Wiring for the above: regime dispatch from the model, `patch()`, `tune()`, `check_table_precision()`, `supported()`, same never-raises fallback contract. |
+| `gather_fused_v2_h100.cu`, `route_v2_h100.cu`, `route_shared_h100.cu`, `H100_OPT_NOTES.md` | nebius's H100 prototypes and sweep notes, which `gather_fused.cu` is adapted from. Kept as the H100 reference; not wired into `run_bench.py`. |
 | `gather_ternary.py` | The same gather for the ternary hyperplane family, which is *not* a FastMultiHeadLut subclass and needs its own patch. |
 | `hybrid.py` | hybrid-v2 storage: dense weights **stored** bf16, LUT tables and (for FastMHL) LUT input kept fp32 so the native bit-pack kernel stays alive. |
 | `bench.py` | `burn_in`, `timeit`, `check_bit_exact`, `slot_breakdown`, `interleaved_ab`, `report`. |
@@ -76,7 +79,8 @@ behaviour, so nothing changes unless you ask:
 |---|---|---|---|
 | `triton` *(default)* | yes | no | the portable path; the only one for the ternary family |
 | `cuda-fp32` | yes | yes | software pipelining alone, ~1.2–1.3× the Triton gather |
-| `cuda-bf16` | **no** | yes | + bf16 table; fastest, costs **+0.0001 bpb** — see below |
+| `cuda-bf16` | **no** | yes | + bf16 table, costs **+0.0001 bpb** — see below |
+| `cuda-fused` | **no** | yes | **fastest.** + routing fused in, index kept in shared. Same **+0.0001 bpb** (output is bit-identical to `cuda-bf16`) |
 
 Both `cuda-*` values fall back to `triton` (with a `gather:` line saying so) when the
 extension cannot build, or when the model is not a FastMultiHeadLut. Pass
@@ -191,6 +195,104 @@ Its bottleneck is not the table. At tph=128 its int64 index is
 24576 × 512 × 8 B = **96 MB — exactly this GPU's L2**, while the bf16 table is 6 MB and
 fully resident. It is index-bound, and halving table bytes cannot help an index-bound
 kernel. This is a property of tph=128, not of the kernel.
+
+## The fused routing+gather path (`--gather-impl cuda-fused`) — the best on this box
+
+**All three models beat vanilla end-to-end on this path, and `exp_n_0127` crosses over
+for the first time.** Adapted from nebius's H100 prototype (`gather_fused_v2_h100.cu`,
+`H100_OPT_NOTES.md`) — see the porting notes below, because the 5090 needed three
+changes.
+
+The routing (anchor-compare → index) and the gather+sum become **one kernel**, with the
+index held in **shared memory**. The 48–96 MB int64 index is therefore never written to
+HBM and never read back.
+
+Routing+gather stage, batch 48 × seq 512, trained checkpoints:
+
+| model | native + Triton | native + `cuda-bf16` | **`cuda-fused`** | vs `cuda-bf16` |
+|---|---|---|---|---|
+| `exp_n_0126` | 0.1697 ms | 0.1213 ms | **0.0894 ms** | **1.357×** |
+| `exp_n_0127` | 0.3686 ms | 0.3239 ms | **0.1718 ms** | **1.885×** |
+| `exp_n_0128` | 0.2878 ms | 0.1958 ms | **0.0959 ms** | **2.042×** |
+
+FFN slot and end-to-end vs vanilla (vanilla slot 0.338 ms, e2e 7.84 ms):
+
+| model | slot `cuda-bf16` | **slot `cuda-fused`** | e2e `cuda-bf16` | **e2e `cuda-fused`** |
+|---|---|---|---|---|
+| `exp_n_0126` | 0.2452 (0.73×) | **0.1793 (0.53×)** | 0.93× | **0.88×** |
+| `exp_n_0127` | 0.4156 (1.23×) | **0.2608 (0.77×)** | 1.05× | **0.93×** |
+| `exp_n_0128` | 0.3171 (0.94×) | **0.1868 (0.55×)** | 0.98× | **0.88×** |
+
+### The mechanism — the HBM index write, measured by control
+
+`ncu` is unavailable here (`ERR_NVGPUCTRPERM`), so the claim is tested rather than
+asserted: the kernel has a `spill` flag that runs the identical code and *additionally*
+writes the index to HBM, isolating exactly the write the fusion removes.
+
+| model | index size | fused | fused + spill | the write costs | effective |
+|---|---|---|---|---|---|
+| `exp_n_0126` | 48 MB | 0.0833 | 0.1247 | **+0.0414 ms** | 1.16 TB/s |
+| `exp_n_0127` | **96 MB** | 0.1612 | 0.2482 | **+0.0870 ms** | 1.10 TB/s |
+| `exp_n_0128` | 48 MB | 0.0918 | 0.1305 | **+0.0387 ms** | 1.24 TB/s |
+
+0127's penalty is 2.10× and 2.25× the other two against an index exactly 2× the size, at
+a consistent 1.1–1.2 TB/s — HBM write bandwidth. That is why 0127 gains most: its index
+is 24576 × 512 × 8 B = **96 MB, exactly this GPU's L2**, and it was the one model bound
+on it.
+
+### Numerics: free relative to `cuda-bf16`
+
+The fused **fp32** path is bit-exact vs native routing + the Triton gather (`0.000e+00`
+at batches 1/12/48, all three models) — which also proves the *routing* it replaces is
+bit-exact. The fused **bf16** output is **bit-identical (`0.000e+00`) to the non-fused
+`cuda-bf16` gather** across every routing-regime × BLOCK_N config, so its accuracy cost
+is exactly the already-measured bf16 cost: **+0.00014 / +0.00011 / +0.00007 bpb**. No
+separate val run is needed, and none was done — the identity is the evidence.
+
+### Regime dispatch: the routing winner flips, so it is chosen per model
+
+Standalone routing vs the native kernel, all bit-exact:
+
+| model | native | route_shared (v1) | route_v2 |
+|---|---|---|---|
+| `exp_n_0126` nap7 | 0.0434 | **0.0333 (1.30×)** | 0.0620 (0.70×) |
+| `exp_n_0127` nap7 | 0.0888 | **0.0821 (1.08×)** | 0.1200 (0.74×) |
+| `exp_n_0128` nap8 | 0.1130 | 0.0748 (1.51×) | **0.0635 (1.78×)** |
+
+v2 (column-major z, token-inner, bank-conflict-free) wins the L1-bound `nap≥8` case and
+**regresses 30%** at nap7, where v1 (row-major z, table-inner) wins. `gather_fused.py`
+picks v1 below nap 8 and v2 at/above it, automatically from the model. Inside the fused
+kernel the gap is far smaller (0126: 0.0894 v1 vs 0.0903 v2) because once the index write
+is gone, routing is no longer what the stage is bound on. `--tune-gather` sweeps BLOCK_N
+**and both regimes**, and says so if it disagrees with the dispatch rule.
+
+**This also explains the stage-2 anomaly** recorded against the native routing kernel:
+0128 (nap8) routed in 0.113 ms vs 0126 (nap7) 0.043 ms — 2.60× for +14% work. nebius's
+ncu root-caused it on the H100: the native kernel runs one thread per (token, table) and
+re-reads each token's z-columns through L1 *once per table*, and nap8 tips it over the L1
+throughput cliff. Staging z in shared fixes it here too: best-kernel ratio is **1.91×**,
+down from 2.60×. Reduced, **not eliminated** — nap8 still costs more than the +14% of
+work it does, so something residual remains unexplained.
+
+### Porting notes: three things the 5090 needed that the H100 version does not
+
+1. **bf16 table** (fp32 accumulation). On the H100 bf16 *lost*, so nebius fused against
+   the fp32/Triton gather; here bf16 wins, and it is the deciding change — fused **fp32**
+   is only 0.81× / 1.05× / 1.16× vs `cuda-bf16`, i.e. on 0126 the fusion alone does not
+   pay. This is why the H100 notes and this file recommend different combinations, and
+   neither is wrong for its own box.
+2. **Both routing regimes**, selectable, rather than v2 hardcoded (see above).
+3. **uint8 index in shared** instead of int32 — `nap ≤ 8` packs into a byte exactly, which
+   cuts the shared index footprint 4× and is what lets tph=128 (0127) run at a useful
+   BLOCK_N. Guarded by `TORCH_CHECK` on `nap ≤ 8` and `table_dim ≤ 256`; a model outside
+   those falls back to Triton with a message rather than crashing.
+
+Also carried over the row-1-ahead prefetch from `gather_cuda.cu`: the index latency is
+gone once it lives in shared, but the *row* latency is not.
+
+For reference, the H100 numbers are in `H100_OPT_NOTES.md`. There, fused_v2 reaches
+1.09× / 1.82× / 1.14× the vanilla slot (still losing to dense); here fused+bf16 reaches
+0.53× / 0.77× / 0.55× (winning).
 
 ## Known limitation: the ternary path is correct but not yet tuned here
 
