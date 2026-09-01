@@ -112,6 +112,53 @@ and cannot be: near a score of 0 the rounding flips the sign bit and selects a
 different table row — a discrete change in output, not a tolerance. `fp32` is the
 default for that reason.
 
+## Tune the gather before anything else
+
+**This is the highest-value remaining lever, and it costs nothing.** Config tuning
+moves this kernel *more than any layout change tried*: within a single layout, the
+gather stage ranged **1.65×** across six `BLOCK_N × num_warps` settings on
+`exp_n_0126` (0.1291 → 0.2134 ms) and 1.49× on `exp_n_0127`. No structural change
+measured here came close to that.
+
+The optimum will **not** transfer across architectures. Run with `--tune-gather`
+rather than inheriting the 5090's `BLOCK_N=128 / num_warps=8`:
+
+```bash
+python run_bench.py --exp exp_n_0126_grid_H4d48_nap7_tph64 --tune-gather
+```
+
+`gather.tune()` sweeps BLOCK_N × warps × stages and reports the best config; the
+driver then uses it for the rest of the run.
+
+## Optimization levers tried and rejected (5090)
+
+Three rounds of optimization on the CompressionMHL gather, all measured with the
+harness above, all null or worse. Recorded so nobody re-treads them.
+
+| lever | result | why |
+|---|---|---|
+| **Lower-precision LUT tables** (bf16 / int8), at both tph64 and tph128 | **null** | bf16 was ~16% *slower* on the slot despite half the bytes — the 2-byte load path vectorizes badly for the 48-wide row. int8 was neutral-to-marginal and cost 2.2e-2 in logit space. The gather is not bound by table bytes; this is the **4th** null on table size. |
+| **Vector-width / lane packing** — remove the 25% masked lanes from D=48 running at BD=64 | **null to −18%** | Neutral at tph64, 18% worse at tph128. The 25% is lane *occupancy*, not wasted work: a masked 64-wide load still issues **one** instruction and coalesces the same 192 contiguous bytes, while splitting into three 16-wide loads triples the instruction count. Wrong axis. |
+| **Fusing the decompress Linear** into the gather epilogue | **−70%** (3.4× slower), and not bit-exact | The decompress is only 13–27% of the slot and already runs as a tuned cuBLAS GEMM. Fusing forces one program to own all heads (the decompress mixes them), collapsing the grid by H=4 and blowing up register pressure, and replaces the library GEMM with a hand-rolled `tl.dot`. Also inherently ~2.7× *less* accurate, because a matmul reassociates — bit-exactness and this fusion are in tension by construction. |
+
+**The common thread: the gather is bound by instruction issue and access *count*, not
+by bytes, lanes, or kernel launches.** Every memory-side lever tried has been null.
+Anything that reduces the *number of independent accesses* is worth trying; anything
+that shaves bytes off them is not.
+
+## A recurring artefact that will fool a correctness check
+
+**Without a checkpoint, `train.py` zero-initializes `decompress.weight`**, so the FFN
+slot emits only the decompress bias and its output is completely independent of the
+LUT table. Any logit-diff check then reads a false `0.000e+00` — patched and unpatched
+agree because *neither* depends on what you changed.
+
+This has produced a misleading pass three separate times here (a bf16-table accuracy
+check, a table-precision sweep, and the fused-epilogue sweep). Precision and
+correctness checks must use either a real checkpoint (`--load-checkpoint`) or a
+non-trivial decompress weight. Timing is unaffected — a gather reads its row whatever
+is in it — so only the *numeric* claims are at risk.
+
 ## Things already measured and ruled out
 
 So the H100 side does not re-tread them. All on the 5090, against the dense bf16
