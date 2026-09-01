@@ -27,12 +27,20 @@ Two other measurement rules baked in:
   model is not bit-exact against the unpatched fp32 model. An optimization that
   changes the output is not a speedup.
 
+  The one *deliberately* approximate path, `--gather-impl cuda-bf16`, does not get a
+  weakened assertion — it gets **two** checks. First the same CUDA kernel with an
+  **fp32** table must be bit-exact (proving the addressing and pipelining are right),
+  then the bf16 rounding must be inside a relative tolerance **on the gather output**.
+  Both must pass or nothing is timed.
+
 ## Files
 
 | file | what it is |
 |---|---|
 | `model.py` | Rebuilds an experiment's model from its `config.json` (+ `checkpoint.pt` if asked). Handles all three FFN families: dense vanilla, CompressionMHL/anchor-pair, and the pure-ternary hyperplane family. |
-| `gather.py` | The fused Triton gather+sum kernel replacing `embedding_bag`, plus `patch()` for the FastMultiHeadLut family and `tune()` to re-sweep its config on new hardware. |
+| `gather.py` | The fused Triton gather+sum kernel replacing `embedding_bag`, plus `patch()` for the FastMultiHeadLut family and `tune()` to re-sweep its config on new hardware. **The default and the portable fallback — needs no compiler.** |
+| `gather_cuda.cu` | Optional hand-written CUDA gather+sum: software-pipelined, fp32 (bit-exact) or bf16 (approximate) table. Faster than Triton, but needs `nvcc`. |
+| `gather_cuda.py` | Builds `gather_cuda.cu` on first use and wires it in, with `patch()`, `tune()` and `check_table_precision()`. **Never raises on a machine without a toolchain** — `available()` reports why and the driver falls back to Triton. |
 | `gather_ternary.py` | The same gather for the ternary hyperplane family, which is *not* a FastMultiHeadLut subclass and needs its own patch. |
 | `hybrid.py` | hybrid-v2 storage: dense weights **stored** bf16, LUT tables and (for FastMHL) LUT input kept fp32 so the native bit-pack kernel stays alive. |
 | `bench.py` | `burn_in`, `timeit`, `check_bit_exact`, `slot_breakdown`, `interleaved_ab`, `report`. |
@@ -55,14 +63,34 @@ python run_bench.py --exp exp_g_0053_ternary_t192_inputonly_headdecomp_nap7_tph6
 python run_bench.py --exp exp_n_0126_grid_H4d48_nap7_tph64 \
     --baseline exp_n_0135_untied_vanilla_baseline_16k \
     --batches 12,48,96 --rounds 11 --tune-gather
+
+# the CUDA fast path (needs nvcc; falls back to Triton with a log line if absent)
+python run_bench.py --exp exp_n_0126_grid_H4d48_nap7_tph64 --load-checkpoint \
+    --gather-impl cuda-bf16 --tune-gather
 ```
+
+`--gather-impl` picks the gather kernel and **defaults to `triton`**, the existing
+behaviour, so nothing changes unless you ask:
+
+| value | bit-exact? | needs a compiler? | notes |
+|---|---|---|---|
+| `triton` *(default)* | yes | no | the portable path; the only one for the ternary family |
+| `cuda-fp32` | yes | yes | software pipelining alone, ~1.2–1.3× the Triton gather |
+| `cuda-bf16` | **no** | yes | + bf16 table; fastest, costs **+0.0001 bpb** — see below |
+
+Both `cuda-*` values fall back to `triton` (with a `gather:` line saying so) when the
+extension cannot build, or when the model is not a FastMultiHeadLut. Pass
+`--require-gather-impl` to make that a hard failure instead, and `--gather-tol` to
+change the bf16 tolerance (default `1e-2`; measured 9.4e-4 – 1.8e-3).
 
 `--baseline` defaults to `exp_n_0135_untied_vanilla_baseline_16k` (the untied vanilla
 dense-FFN reference, 1.20144 bpb). `--load-checkpoint` is only needed when the
 *values* matter; pure timing does not need it, since a gather reads a row whatever is
 in it.
 
-Requires `lutorch_cuda` built (the native bit-pack kernel) and Triton.
+Requires `lutorch_cuda` built (the native bit-pack kernel) and Triton. `nvcc` is
+needed **only** for `--gather-impl cuda-*`; without it the harness still runs
+everything on the Triton path.
 
 ## What to report back
 
@@ -79,7 +107,9 @@ it says `disjoint`.
 
 ## 5090 reference numbers, for comparison against the H100
 
-All bit-exact (`max|logit diff| = 0.000e+00`), warmed, interleaved, seq 512:
+All bit-exact (`max|logit diff| = 0.000e+00`), warmed, interleaved, seq 512, on the
+default Triton path. For the faster approximate path see
+[the CUDA gather fast path](#the-cuda-gather-fast-path---gather-impl-cuda-bf16):
 
 | experiment | params | val bpb | slot @48 (optimized) | end-to-end vs vanilla @48 |
 |---|---|---|---|---|
@@ -96,6 +126,71 @@ What the optimization stack is worth on 0126: the shipped fp32 slot is 0.836 ms;
 fused Triton gather alone takes it to ~0.28 ms (5.2× on the gather stage, 0.703 →
 0.135 ms), and hybrid-v2 storage supplies most of the end-to-end gain by keeping
 autocast from re-casting dense weights every forward.
+
+## The CUDA gather fast path (`--gather-impl cuda-bf16`)
+
+Gather stage only, batch 48 × seq 512, trained checkpoints, warmed, 5090:
+
+| model | Triton | cuda-fp32 | cuda-bf16 | bf16 vs cuda-fp32 |
+|---|---|---|---|---|
+| `exp_n_0126` tph64 | 0.1247 ms | 0.1064 ms | **0.0781 ms** | 1.36× |
+| `exp_n_0127` tph128 | 0.3024 ms | 0.2621 ms | **0.2538 ms** | 1.03× |
+| `exp_n_0128` tph64, 256 rows | 0.1777 ms | 0.1300 ms | **0.0826 ms** | 1.57× |
+
+FFN slot at batch 48, and what it does to the vs-vanilla ratio:
+
+| model | slot, Triton | slot, cuda-bf16 | vs vanilla slot |
+|---|---|---|---|
+| `exp_n_0126` | 0.2705 ms | **0.2454 ms** | 0.79× → **0.72×** |
+| `exp_n_0127` | 0.4664 ms | **0.4137 ms** | 1.36× → **1.21×** |
+| `exp_n_0128` | 0.3900 ms | **0.3170 ms** | 1.14× → **0.93×** |
+
+`exp_n_0128` crosses under the vanilla slot for the first time on this path.
+
+**Numerics cost, measured rather than argued: +0.00014 / +0.00011 / +0.00007 bpb**
+(0126/0127/0128) — real `val_bpb` on the nanochat val set, fp32 tables reproducing the
+recorded value exactly. Relative error on the gather output is 9.4e-4 – 1.8e-3.
+
+> Do **not** gate this on a logit-level tolerance. Rounding the table moves full-model
+> logits by ~1.5e-1 *relative* on random tokens — which looks disqualifying and is not:
+> the same change costs +0.0001 bpb on real data. A logit check on random tokens
+> nearly produced exactly the wrong verdict here. The tolerance belongs on the gather
+> output, where the approximation is actually introduced, and the bpb number is what
+> decides adoption.
+
+### Why it works — 32-byte **sectors**, not 128-byte lines
+
+Easy to state wrongly, so state it precisely. Every row pitch here is 32 B aligned, so
+an fp32 48-wide row is exactly **6 sectors** and a bf16 row exactly **3** — packed or
+padded. The bf16 win is halving sectors per gathered row, bounded by 2×.
+
+The 128 B cache-line story is a different (and wrong) model, and it was tested rather
+than assumed: padding the row pitch changes how many 128 B lines a row straddles while
+holding useful bytes and load-instruction count fixed.
+
+| variant | pitch | lines/row | 0126 | 0127 | 0128 |
+|---|---|---|---|---|---|
+| fp32 packed | 192 B | 2.0 | 0.1064 | 0.2621 | 0.1300 |
+| fp32 padded | 256 B | 2.0 | 0.1064 | 0.2596 | 0.1359 |
+| bf16 packed | 96 B | 1.5 | 0.0802 | 0.2615 | 0.0872 |
+| bf16 padded | 128 B | 1.0 | **0.0781** | **0.2538** | **0.0826** |
+
+A line-count model predicts the last row is 1.5× the one above it. Measured 1.03–1.06×
+— **falsified**. The sector model predicts ≈1.0× for both padding steps and gets it
+right. (The padding is kept anyway: it is free and worth 3–6%.)
+
+The second ingredient is **software pipelining**, worth 1.19–1.30× over Triton on its
+own (that is the `cuda-fp32` column). The row load's address comes from an in-loop
+indirect load of the index, so index and row need *different* prefetch depths — index
+2 ahead, row 1 ahead. Triton's `num_stages` drives one depth for the whole loop body
+and cannot express that; sweeping it 1..5 moved these shapes by 0.0–0.3%.
+
+### Why `exp_n_0127` gains almost nothing (1.03×)
+
+Its bottleneck is not the table. At tph=128 its int64 index is
+24576 × 512 × 8 B = **96 MB — exactly this GPU's L2**, while the bf16 table is 6 MB and
+fully resident. It is index-bound, and halving table bytes cannot help an index-bound
+kernel. This is a property of tph=128, not of the kernel.
 
 ## Known limitation: the ternary path is correct but not yet tuned here
 
@@ -130,6 +225,14 @@ python run_bench.py --exp exp_n_0126_grid_H4d48_nap7_tph64 --tune-gather
 `gather.tune()` sweeps BLOCK_N × warps × stages and reports the best config; the
 driver then uses it for the rest of the run.
 
+`--tune-gather` tunes whichever implementation `--gather-impl` selected. For the CUDA
+path it sweeps `(BLOCK_N, threads)` via `gather_cuda.tune()`; the optimum moved when
+pipelining was added, and it is **not** the same across models — on the 5090,
+`exp_n_0126`/`exp_n_0128` want 256/512 while `exp_n_0127` wants 64/256. Both tuners
+sweep against the **real** index: an earlier version tuned on a zeros index, so every
+gather hit row 0, cache behaviour was unrepresentative, and it picked a config 23%
+slower than the true best.
+
 ## Optimization levers tried and rejected (5090)
 
 Three rounds of optimization on the CompressionMHL gather, all measured with the
@@ -137,14 +240,32 @@ harness above, all null or worse. Recorded so nobody re-treads them.
 
 | lever | result | why |
 |---|---|---|
-| **Lower-precision LUT tables** (bf16 / int8), at both tph64 and tph128 | **null** | bf16 was ~16% *slower* on the slot despite half the bytes — the 2-byte load path vectorizes badly for the 48-wide row. int8 was neutral-to-marginal and cost 2.2e-2 in logit space. The gather is not bound by table bytes; this is the **4th** null on table size. |
+| ~~**Lower-precision LUT tables** (bf16 / int8)~~ **— OVERTURNED, see below** | ~~null~~ **1.36–1.57× in a hand-written CUDA kernel** | In *Triton* bf16 was ~16% slower despite half the bytes, and that was recorded here four times as "the gather is not bound by table bytes". That conclusion was wrong: it was a property of **Triton's load path**, not of the problem. Reading the row as 16 B vector loads and converting on arrival makes bf16 the single largest win found — see [the CUDA gather fast path](#the-cuda-gather-fast-path---gather-impl-cuda-bf16). int8 was not retried. |
 | **Vector-width / lane packing** — remove the 25% masked lanes from D=48 running at BD=64 | **null to −18%** | Neutral at tph64, 18% worse at tph128. The 25% is lane *occupancy*, not wasted work: a masked 64-wide load still issues **one** instruction and coalesces the same 192 contiguous bytes, while splitting into three 16-wide loads triples the instruction count. Wrong axis. |
 | **Fusing the decompress Linear** into the gather epilogue | **−70%** (3.4× slower), and not bit-exact | The decompress is only 13–27% of the slot and already runs as a tuned cuBLAS GEMM. Fusing forces one program to own all heads (the decompress mixes them), collapsing the grid by H=4 and blowing up register pressure, and replaces the library GEMM with a hand-rolled `tl.dot`. Also inherently ~2.7× *less* accurate, because a matmul reassociates — bit-exactness and this fusion are in tension by construction. |
 
-**The common thread: the gather is bound by instruction issue and access *count*, not
-by bytes, lanes, or kernel launches.** Every memory-side lever tried has been null.
-Anything that reduces the *number of independent accesses* is worth trying; anything
-that shaves bytes off them is not.
+### Levers rejected in the CUDA kernel (a later round, same rigor)
+
+| lever | result | why |
+|---|---|---|
+| **Deeper software pipeline** — index 3 ahead / row 2 ahead instead of 2/1 | **0.72–0.90×** (slower on every model, every config) | Bit-exact, just slower. 128 registers at 512 threads is the entire 64K register file, i.e. exactly one block per SM. The extra buffers buy latency hiding and pay for it in occupancy — a bad trade in a kernel with plenty of parallelism. Worst at the largest tile every time. |
+| **Narrow (int32/uint8) gather indices** in the CUDA kernel | **1.02–1.12× at best, i.e. dead** | See the artefact note below — the isolated number is not real. Registers barely move (int64 128 → uint8 122), so there is no occupancy win either. Not worth a native uint8-emitting anchor kernel. |
+| **Vectorized index prefetch** — 16 uint8 indices in one `uint4` | **0.79–0.85×** | Breaks the thing that made the kernel fast: the row-1-ahead prefetch has to cross a chunk boundary every 16 tables, where the next index comes from a *different* vector load, so the pipeline stalls once per chunk. Trading 16 cheap index loads for one vector load is a bad deal when index loads were never the bottleneck. |
+
+> **A benchmarking artefact worth internalizing: never time the gather in isolation to
+> judge an index-side change.** A loop over a fixed index tensor re-reads the whole
+> thing every iteration. For `exp_n_0127` that is 96 MB of int64 against a 96 MB L2 —
+> it thrashes exactly at the boundary, and uint8 indices then look **2.13×** faster.
+> In a real forward pass the anchor kernel has just *written* that index, so it is
+> still resident and the width stops mattering: measured **0.99×** in situ. Time
+> `index kernel + gather` together for anything touching the index.
+
+**The common thread, restated after the bf16 result overturned the old one:** the
+gather is bound by **32 B sector traffic and instruction issue**. Halving *sectors*
+per row (bf16 table) is the biggest win found. Reducing the *number of independent
+accesses* still pays. What does not pay: shaving bytes that do not change the sector
+count (see the padding table), narrowing an index that is already L2-resident, and
+anything that buys latency hiding with occupancy.
 
 ## A recurring artefact that will fool a correctness check
 
@@ -164,8 +285,13 @@ is in it — so only the *numeric* claims are at risk.
 So the H100 side does not re-tread them. All on the 5090, against the dense bf16
 addressing GEMM:
 
-- Narrowing the gather index (int32/int16): no gain; the strided index read costs the
-  same number of 32-byte sectors at any width.
+- Narrowing the gather index (int32/int16/uint8): no gain **in situ**. The reason
+  originally recorded here — "the strided index read costs the same number of 32-byte
+  sectors at any width" — is not right; a narrower index genuinely does move fewer
+  sectors. It gains nothing because in a real forward pass the index has just been
+  written by the anchor kernel and is still L2-resident, so its width is not on the
+  critical path. Re-tested in the CUDA kernel where both sides are under our control:
+  1.02–1.12× upper bound even assuming a free uint8-emitting producer.
 - int8 tensor-core addressing: the GEMM is 2× faster but the stage is 24% slower (the
   int32 accumulator can't fuse) and 4.3× more sign flips.
 - 2:4 structured sparsity: sparse tensor cores work on this GPU (1.98× on an 8192³

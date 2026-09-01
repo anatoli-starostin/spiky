@@ -19,7 +19,14 @@ sense that there isn't one -- the same rows are added in the same order).
 
 The index is read as int64 straight from the native bit-pack kernel: converting it
 to int32 first costs a full read+write pass, which is more than the wider loads cost
-inside the kernel. Narrowing the index was measured and is a dead end.
+inside the kernel. Narrowing the index was measured and is a dead end -- re-confirmed
+later in the hand-written CUDA kernel, where the real reason became clear: the index
+has just been written by the anchor kernel and is still L2-resident, so its width is
+not on the critical path. See the README.
+
+A faster, optional CUDA version of this kernel lives in gather_cuda.py (software
+pipelining, and a bf16 table worth 1.36-1.57x). It needs nvcc; THIS kernel stays the
+default and the portable fallback.
 
 D = n_outputs is typically 48, not a power of two, so lanes run at the next power of
 two with a mask; that idle fraction is a known cost of the shape.
