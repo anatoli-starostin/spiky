@@ -1,8 +1,11 @@
 # Ternary FFN — 16K star / one-axis-at-a-time sweep (for the paper)
 
-**Status: the original 10-run star sweep is COMPLETE.** Two follow-on points are still running/queued:
-exp_n_0149 (H8 no-penalty, in-flight) and exp_n_0150 (H1/out192, queued) — this file will get their rows
-when they land.
+**Status: COMPLETE** — the 10-run star sweep plus the two follow-on points (0149 H8-no-penalty, 0150 H1/out192).
+
+**Standout: exp_n_0149 (H8 + no-penalty) = 1.18203** — stacks the two axis-winners (Axis-A H8 × Axis-C no-penalty)
+and ties the sweep-best B4/tph256 (1.18187), confirming the gains combine. exp_n_0150 (H1/out192) = 1.20011
+extends the head axis to its single-head endpoint — the A axis is monotone H1(1.20011) < H2 < H4 < H8, no
+turn-over (the CompressionMHL FFN head line, by contrast, is U-shaped with H2 best / H1 worst).
 
 ## Setup
 One-axis-at-a-time sweep around **exp_n_0134** (ternary target-192 full-16k, **val_bpb 1.18943**), the
@@ -27,8 +30,8 @@ sequential. Derived constants verified at every launch (T=0.392065, D=16, equal-
 | 0139 | C1 | 4 | 48 | 8(256) | 128 | 128 | 76.37M | 1.20460 | +0.01517 |
 | 0146 | B3 | 4 | 48 | 8(256) | 64 | 192 | 52.77M | 1.20600 | +0.01657 |
 | 0148 | C4 | 4 | 48 | 8(256) | 128 | 64 | 76.37M | 1.20942 | +0.01999 |
-| 0149 | A2b | 8 | 24 | 8(256) | 128 | — (no penalty) | 85.84M | *running* | — |
-| 0150 | A0 | 1 | 192 | 8(256) | 128 | 192 | 69.27M | *queued* | — |
+| 0149 | A2b | 8 | 24 | 8(256) | 128 | — (no penalty) | 85.84M | 1.18203 | −0.00740 |
+| 0150 | A0 | 1 | 192 | 8(256) | 128 | 192 | 69.27M | 1.20011 | +0.01068 |
 
 **Best of the sweep: B4 (tph256) = 1.18187**, −0.0076 vs baseline. The top three (tph256, nap10, H8) are
 all "more capacity" configs, all beating baseline by −0.005…−0.008.
