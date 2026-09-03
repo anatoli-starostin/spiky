@@ -86,7 +86,6 @@ class MinimalBlock(nn.Module):
                 nap=cfg['lut_n_anchor_pairs'], tph=cfg['lut_tables_per_head'],
                 n_heads=cfg.get('lut_n_heads', 1),
                 joint_head_compression=cfg.get('lut_joint_head_compression', False),
-                batched_multi_head_input=bool(cfg.get('lut_batched_multi_head_input', False)),
                 forward_mode=cfg.get('lut_forward_mode', 'hard'),
                 use_bf16=cfg.get('lut_use_bf16', False),
                 initial_weights_noise=cfg.get('lut_init_weights_noise', 1e-3),
@@ -294,7 +293,9 @@ def main():
     else:
         p(f"FFN: LUT  n_heads(H)={H} inner_in={inner_in} inner_out={inner_out} tables_per_head(tph)={tph} "
           f"nap={nap} -> cells/table=2^{nap}={cells}  forward_mode={cfg.get('lut_forward_mode')} "
-          f"path={'batched' if cfg.get('lut_batched_multi_head_input') else 'per-head-loop'}")
+          # the per-head-loop path is gone; the independent path is always one batched
+          # FastMHL, block-diagonal when there is a compress and shared-input when not
+          f"path={'joint' if cfg.get('lut_joint_head_compression') else 'batched'}")
     p(f"total params: {total_params:,}   checkpoint_loaded={loaded}   dtype for bytes: bf16 (2 B)")
     p("")
     p("--- FLOPs ground-truth (FlopCounterMode) vs analytic matmul estimate ---")
