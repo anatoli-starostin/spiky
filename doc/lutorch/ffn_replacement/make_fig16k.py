@@ -1,7 +1,8 @@
-import matplotlib; matplotlib.use("Agg")
+import os, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.lines as ml
 from matplotlib.ticker import NullFormatter
+BASE = os.path.dirname(os.path.abspath(__file__))
 
 # 16k-step runs across every family, all committed real values used in the paper's tables.
 # Label style follows Figure 1 (plot_ffn_grid.py): a compact config tag per marker (cells x
@@ -124,5 +125,5 @@ handles.append(ml.Line2D([], [], marker="*", ls="", mfc=GOLD, mec="k", ms=15,
 ax.legend(handles=handles, fontsize=12, title_fontsize=12, loc="lower left", framealpha=0.95, title="family")
 
 fig.tight_layout()
-fig.savefig("/home/astarostin/projects/ffn-lut-paper/fig16k.pdf", bbox_inches="tight", pad_inches=0.12)
+fig.savefig(os.path.join(BASE, "fig16k.pdf"), bbox_inches="tight", pad_inches=0.12)
 print("saved fig16k.pdf")

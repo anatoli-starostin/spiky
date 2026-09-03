@@ -1,11 +1,12 @@
-import csv, matplotlib; matplotlib.use("Agg")
+import csv, os, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Per-step validation bpb for the long (48k-step) runs, read from each run's committed
 # metrics.csv (columns: step, train_loss, val_bpb), copied into long_run_data/ so the figure
 # regenerates standalone. exp_n_0156 (from grid 0128) is omitted: it had no committed
 # metrics.csv at figure time (still training) -- see the printed note.
-ROOT = "/home/astarostin/projects/ffn-lut-paper/long_run_data"
+BASE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.join(BASE, "long_run_data")
 RUNS = [
     ("0151_vanilla",      "vanilla (0151)",             "#111111", "--"),
     ("0152_tph64_nap7",   "LUT 0152 (tph64, nap7)",     "#1D4ED8", "-"),
@@ -63,7 +64,7 @@ fig.legend(handles, labels, fontsize=10, loc="lower center", ncol=4,
            bbox_to_anchor=(0.5, -0.02), framealpha=0.95)
 fig.suptitle("Long 48k-step runs: validation bpb vs. training step", fontsize=14)
 fig.tight_layout(rect=[0, 0.06, 1, 0.95])
-fig.savefig("/home/astarostin/projects/ffn-lut-paper/long_runs_fig.pdf", bbox_inches="tight", pad_inches=0.1)
+fig.savefig(os.path.join(BASE, "long_runs_fig.pdf"), bbox_inches="tight", pad_inches=0.1)
 print("saved long_runs_fig.pdf")
 print("plotted:", [r[1] for r in RUNS])
 print("omitted (pending):", OMITTED)

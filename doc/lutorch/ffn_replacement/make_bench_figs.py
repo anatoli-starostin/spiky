@@ -1,4 +1,4 @@
-import json, matplotlib; matplotlib.use("Agg")
+import json, os, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mp
 
@@ -8,7 +8,8 @@ import matplotlib.patches as mp
 # SAME horizontal stacked-bar layout. Every stage value is read from the committed data --
 # nothing is invented (the only derived quantity is "other" = slot total minus the summed named
 # stages, which is ~0 for the H100 routed bars).
-D = "/home/astarostin/projects/ffn-lut-paper/bench_data"
+BASE = os.path.dirname(os.path.abspath(__file__))
+D = os.path.join(BASE, "bench_data")
 
 # fixed stage order + shared colour scheme (matches gpustar's original 5090 figure).
 # The residual "other" segment is intentionally NOT drawn (removed from bars + legend); the
@@ -80,7 +81,7 @@ fig.legend(handles=handles, fontsize=8.5, ncol=3, loc="lower center",
            bbox_to_anchor=(0.5, -0.01), framealpha=0.95)
 fig.suptitle("FFN-slot phase breakdown (batch 48 x 512 = 24,576 tokens, bf16)", fontsize=13)
 fig.tight_layout(rect=[0, 0.10, 1, 0.95])
-fig.savefig("/home/astarostin/projects/ffn-lut-paper/bench_combined.pdf",
+fig.savefig(os.path.join(BASE, "bench_combined.pdf"),
             bbox_inches="tight", pad_inches=0.08)
 print("saved bench_combined.pdf")
 print("5090 stages:", {n: {k: round(v, 5) for k, v in s.items()} for n, s, t, r in b5})
