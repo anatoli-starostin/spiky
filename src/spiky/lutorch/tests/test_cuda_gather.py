@@ -8,6 +8,7 @@ Split in two:
     fail) when the detected device isn't 5090-class, since the kernel is only expected to
     build/match on the hardware it targets.
 """
+import os
 from unittest import mock
 
 import pytest
@@ -124,3 +125,54 @@ def test_unsupported_shape_never_patched_even_in_force_mode_raises():
     m = _mk(inner_in_dim=32, inner_out_dim=32).cuda()
     with pytest.raises(RuntimeError):
         cg.patch(m, mode="force")
+
+
+# ----------------------------- H100 prototypes stay passive -----------------------------
+
+def test_h100_prototype_kernel_sources_are_shipped():
+    """The three H100 kernels ride along in-tree so the sweep isn't lost and can be picked
+    up for later nebius work -- source files present and non-empty."""
+    assert set(cg.H100_PROTOTYPE_KERNELS) == {
+        "gather_fused_v2_h100", "route_v2_h100", "route_shared_h100"}
+    for name, path in cg.H100_PROTOTYPE_KERNELS.items():
+        assert os.path.isfile(path), f"{name} source missing at {path}"
+        assert os.path.getsize(path) > 0, f"{name} source is empty"
+
+
+def test_h100_prototypes_are_never_compiled_by_the_loader():
+    """The load path builds gather_fused.cu and nothing else. This is the guarantee that
+    using this module can never pull an H100 kernel into a build."""
+    with mock.patch("torch.utils.cpp_extension.load") as fake_load:
+        prev_tried, prev_ext = cg._tried, cg._ext
+        cg._tried, cg._ext = False, None       # reset the one-shot cache so load() runs
+        try:
+            cg.load()
+        finally:
+            cg._tried, cg._ext = prev_tried, prev_ext
+        if fake_load.called:       # not called at all when no CUDA device is present
+            sources = fake_load.call_args.kwargs["sources"]
+            assert len(sources) == 1
+            assert os.path.basename(sources[0]) == "gather_fused.cu"
+            assert not any("h100" in s.lower() for s in sources)
+
+
+def test_no_function_reaches_for_the_h100_prototypes():
+    """No *function* in the module may mention the prototype directory. The passive
+    H100_PROTOTYPE_KERNELS table (module-level data) and the prose explaining why they are
+    inert are both fine -- what would be a bug is executable logic reaching for them."""
+    import ast
+    import inspect
+
+    import spiky.lutorch.cuda_gather as mod
+    tree = ast.parse(inspect.getsource(mod))
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = node.body[1:] if ast.get_docstring(node) else node.body
+        for stmt in body:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
+                        and "h100" in sub.value.lower():
+                    offenders.append(f"{node.name}: {sub.value!r}")
+    assert not offenders, f"function code references an H100 prototype: {offenders}"

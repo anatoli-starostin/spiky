@@ -34,6 +34,20 @@ the hardware dispatch: on 5090-class GPUs it patches in the faster/approximate k
 everything else (H100, older/other cards, CPU, or any future/unrecognized device) it does
 nothing, leaving the model on its existing default gather path, which is unconditionally
 correct and needs no dispatch table of its own.
+
+## The H100 prototype kernels are shipped but PASSIVE
+
+`csrc/h100_prototypes/` carries the three H100 kernels from the same optimization sweep
+(`gather_fused_v2_h100.cu`, `route_v2_h100.cu`, `route_shared_h100.cu`). They are
+source-only: **never compiled, never imported, never reachable from the dispatch.** They
+are here so the H100 work is preserved in-tree and available for later experimentation on
+the nebius H100 box -- not because any device switches to them. `H100_PROTOTYPE_KERNELS`
+below maps their names to paths for inspection/manual builds; reading it compiles nothing.
+
+On H100 the measured result is that this kernel family is *slower* than the vanilla dense
+FFN, so there is no device for which enabling them is currently the right default, and they
+were never wired into a callable Python API on the benchmark side either. Activating one
+would be real integration work, not a dispatch-table entry. See `csrc/README.md`.
 """
 import os
 
@@ -44,6 +58,18 @@ DEFAULT_BLOCK_N = 64              # best across every fused run on the 5090
 PAD_TO = 64
 MAX_NAP = 8                       # index is packed into a byte in shared
 MAX_TABLE_DIM = 256
+
+_CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'csrc')
+
+# PASSIVE. Paths only -- nothing here is compiled, loaded, or dispatched to. Present so the
+# H100 sweep's kernels are inspectable/buildable by hand for future nebius work; see the
+# module docstring and csrc/README.md for why they are inert rather than wired up.
+H100_PROTOTYPE_KERNELS = {
+    'gather_fused_v2_h100': os.path.join(_CSRC, 'h100_prototypes',
+                                         'gather_fused_v2_h100.cu'),
+    'route_v2_h100': os.path.join(_CSRC, 'h100_prototypes', 'route_v2_h100.cu'),
+    'route_shared_h100': os.path.join(_CSRC, 'h100_prototypes', 'route_shared_h100.cu'),
+}
 
 _ext = None
 _error = None
@@ -78,8 +104,9 @@ def load():
         return None
     try:
         from torch.utils.cpp_extension import load as _load
-        src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'csrc', 'gather_fused.cu')
+        # ONLY gather_fused.cu is ever built. csrc/h100_prototypes/ is deliberately not
+        # referenced here -- see H100_PROTOTYPE_KERNELS and the module docstring.
+        src = os.path.join(_CSRC, 'gather_fused.cu')
         # -std=c++20 on BOTH host and CUDA flags: at the default standard this torch
         # build fails compiling its own ATen/core/List_inl.h. Nothing here needs C++20.
         _ext = _load(name='spiky_lutorch_gather_fused', sources=[src],
