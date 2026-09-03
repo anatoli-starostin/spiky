@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0159_long144k_from_0128",
+  "best_val_bpb": 1.148321687338613,
+  "final_val_bpb": 1.1488861505134358,
+  "total_params": 48477324,
+  "training_time_hours": 10.038
+}
