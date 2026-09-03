@@ -20,8 +20,14 @@ def _mk(**kw):
 
 
 def _lut_tables(m):
-    """The LUT weight tensors, across both modes (joint has one FastMHL, independent has one per head)."""
-    return [m.lut.weights] if hasattr(m, "lut") else [lut.weights for lut in m.luts]
+    """The LUT weight tensors, across all three attribute shapes the module can expose:
+    joint (single self.lut), independent+batched (self.lut_batched, the default since
+    batched_multi_head_input=True), and independent+unbatched (self.luts, a ModuleList)."""
+    if hasattr(m, "lut"):
+        return [m.lut.weights]
+    if hasattr(m, "lut_batched"):
+        return [m.lut_batched.weights]
+    return [lut.weights for lut in m.luts]
 
 
 # ----------------------------- basics -----------------------------
