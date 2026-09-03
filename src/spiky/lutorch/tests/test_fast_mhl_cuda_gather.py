@@ -1,4 +1,4 @@
-"""Tests for spiky.lutorch.cuda_gather: hardware dispatch + (when a 5090 is present) the
+"""Tests for spiky.lutorch.fast_mhl_cuda_gather: hardware dispatch + (when a 5090 is present) the
 actual fused kernel's numerics against the native path.
 
 Split in two:
@@ -14,7 +14,7 @@ from unittest import mock
 import pytest
 import torch
 
-from spiky.lutorch import cuda_gather as cg
+from spiky.lutorch import fast_mhl_cuda_gather as cg
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
 
 _HAS_CUDA = torch.cuda.is_available()
@@ -69,7 +69,7 @@ def test_patch_mode_auto_is_noop_on_mocked_non_5090_hardware():
     """The core dispatch contract: on H100 (or anything not 5090-class), auto mode must
     not touch the model at all -- no kernel build attempted, existing gather untouched."""
     m = _mk().cuda()
-    with mock.patch("spiky.lutorch.cuda_gather.is_5090_class_gpu", return_value=False):
+    with mock.patch("spiky.lutorch.fast_mhl_cuda_gather.is_5090_class_gpu", return_value=False):
         assert cg.patch(m, mode="auto") == 0
 
 
@@ -163,7 +163,7 @@ def test_no_function_reaches_for_the_h100_prototypes():
     import ast
     import inspect
 
-    import spiky.lutorch.cuda_gather as mod
+    import spiky.lutorch.fast_mhl_cuda_gather as mod
     tree = ast.parse(inspect.getsource(mod))
     offenders = []
     for node in ast.walk(tree):

@@ -2,14 +2,14 @@
 
 Two categories, and the distinction is load-bearing:
 
-## Active — built on demand by `spiky.lutorch.cuda_gather`
+## Active — built on demand by `spiky.lutorch.fast_mhl_cuda_gather`
 
 | file | what |
 |---|---|
 | `gather_fused.cu` | Fused routing + gather, index kept in shared. The RTX 5090 path. |
 
-This is the only file `cuda_gather.load()` ever compiles, and even that happens lazily on
-first use — never at import. It is reached only when `cuda_gather.patch()` is called AND
+This is the only file `fast_mhl_cuda_gather.load()` ever compiles, and even that happens lazily on
+first use — never at import. It is reached only when `fast_mhl_cuda_gather.patch()` is called AND
 the detected device is 5090-class (see `is_5090_class_gpu()`).
 
 ## Passive — shipped, never compiled, never dispatched to
@@ -23,7 +23,7 @@ the detected device is 5090-class (see `is_5090_class_gpu()`).
 **Nothing in `h100_prototypes/` is compiled, imported, or referenced by the dispatch.**
 They are source-only, carried here so the H100 work is preserved in-tree and available for
 later experimentation on the nebius H100 box — not because anything switches to them. On
-H100 (and every other non-5090-class device) `cuda_gather.patch(mode="auto")` is a no-op
+H100 (and every other non-5090-class device) `fast_mhl_cuda_gather.patch(mode="auto")` is a no-op
 and the model stays on its existing shipping gather path.
 
 Why they are inert rather than wired up: the paper's own measurement is that this family of

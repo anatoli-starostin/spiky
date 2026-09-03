@@ -18,6 +18,21 @@ The legacy `inner_dim` kwarg is still accepted and sets both to the same value.
 
 Reused across the CompressionMHL experiment series (which varies the inner dims and `tph`).
 See `CompressionMultiHeadLUT.param_count(...)` for the exact parameter formula.
+
+INIT-SEEDING CAVEAT for `inner_in_dim=-1` + `joint_head_compression=False`
+-------------------------------------------------------------------------
+The independent path is served by a single batched FastMHL. When there is no compress, all
+heads share the same input, so that module is an ordinary shared-input multi-head FastMHL
+seeded once from `random_seed`. An earlier revision ran this case through a per-head loop of
+single-head LUTs seeded `random_seed + h`, so **models built in that configuration no longer
+initialise identically to ones built before**. Shapes, forward/backward semantics and
+parameter counts are unchanged -- only the initial anchor/table draw differs.
+
+This affects exactly one published configuration: `exp_n_0138` (paper section 5 / Table 3,
+output-compression-only, reported 1.21249 bpb), whose number came from the old seeding and
+is therefore not bit-reproducible from this code. Every other configuration in the paper
+sets `inner_in_dim` to a real width and is unaffected (the block-diagonal `random_seed + h`
+convention is preserved there).
 """
 from typing import Optional
 
@@ -61,7 +76,8 @@ class CompressionMultiHeadLUT(nn.Module):
             lives in one space); raises otherwise. Adds ZERO parameters.
         joint_head_compression: at n_heads>1, whether compress/decompress are shared across
             heads. True -> JOINT (one shared pair + one FastMHL(n_heads)); False (DEFAULT) ->
-            INDEPENDENT (per-head compress/decompress + one single-head FastMHL per head).
+            INDEPENDENT (per-head compress/decompress + one batched FastMHL whose heads
+            route block-diagonally over their own inner_in slices).
             At n_heads=1 the two modes are numerically identical.
         forward_mode: "hard" (default) or "hybrid_smooth"; passed to FastMHL.
         weight_dtype: FastMHL table storage dtype (default fp32).
@@ -92,8 +108,6 @@ class CompressionMultiHeadLUT(nn.Module):
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
         learnable_temps: bool = True,
-        pre_lut_meanabsnorm: bool = False,
-        batched_multi_head_input: bool = True,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
     ):
@@ -125,21 +139,6 @@ class CompressionMultiHeadLUT(nn.Module):
         self.n_heads = n_heads
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
-        self.pre_lut_meanabsnorm = bool(pre_lut_meanabsnorm)   # MeanAbsNorm on compressed z before FastMHL
-        # Default ON: replace the independent path's per-head ModuleList with a
-        # single batched multi_head_input FastMHL (bit-identical init, ~2x faster
-        # hard eval). It only applies to the independent path with per-head
-        # compression (each head reads its own inner_in slice); for any other
-        # config -- joint_head_compression, or no per-head compress -- we fall
-        # back GRACEFULLY to the per-head loop path instead of raising, so the
-        # default is safe for every existing CompressionMHL config.
-        self._batched_multi_head_input_requested = bool(batched_multi_head_input)
-        self.batched_multi_head_input = (
-            self._batched_multi_head_input_requested
-            and not self.joint_head_compression
-            and self.has_compress
-        )
-
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
             weight_dtype=weight_dtype, use_bf16=use_bf16,
@@ -164,23 +163,34 @@ class CompressionMultiHeadLUT(nn.Module):
             # the concatenated per-head outputs (== summed per-head decompress).
             self.compress = (nn.Linear(input_dim, n_heads * in_raw, device=device)
                              if self.has_compress else nn.Identity())
-            if self.batched_multi_head_input:
-                # One batched multi_head_input FastMHL replacing the ModuleList:
-                # block-diagonal per-head routing with the SAME seed+h convention,
-                # so this is a bit-identical, faster drop-in for self.luts.
-                self.lut_batched = FastMultiHeadLut(
-                    input_dim=eff_in, n_heads=n_heads, n_outputs=eff_out,
-                    multi_head_input=True, random_seed=random_seed, **_lut_kw,
-                )
-            else:
-                self.luts = nn.ModuleList([
-                    FastMultiHeadLut(
-                        input_dim=eff_in, n_heads=1, n_outputs=eff_out,
-                        random_seed=(None if random_seed is None else random_seed + h),
-                        **_lut_kw,
-                    )
-                    for h in range(n_heads)
-                ])
+            # ONE batched FastMHL either way -- there is no per-head ModuleList path any
+            # more. Which batching applies depends on whether the heads have private
+            # inputs, and the two are NOT interchangeable:
+            #
+            #   has_compress  -> multi_head_input=True. Each head owns an inner_in slice of
+            #                    the compressed vector, so routing is block-diagonal: head h
+            #                    reads columns [h*eff_in, (h+1)*eff_in). Anchors/weights are
+            #                    drawn per head with seed (random_seed + h), which reproduces
+            #                    the old ModuleList of single-head LUTs BIT-FOR-BIT.
+            #
+            #   no compress   -> shared input. Every head reads the same full x, which is by
+            #                    definition not block-diagonal, so this is the ordinary
+            #                    shared-input multi-head FastMHL (same form the joint path
+            #                    uses) and it draws from `random_seed` as a single module.
+            #
+            # NOTE (behaviour change, deliberate): that second case previously ran through
+            # the per-head loop and therefore seeded head h with (random_seed + h). Folding
+            # it into one shared-input module switches it to the joint convention
+            # (`random_seed`), so a model built here with inner_in_dim=-1 and
+            # joint_head_compression=False no longer initialises identically to one built
+            # before this change. It affects exactly one published configuration --
+            # exp_n_0138 (paper section 5 / Table 3, output-compression-only) -- whose
+            # reported 1.21249 bpb came from the old seeding. Forward/backward semantics,
+            # shapes and parameter counts are unchanged; only the init draw differs.
+            self.lut_batched = FastMultiHeadLut(
+                input_dim=eff_in, n_heads=n_heads, n_outputs=eff_out,
+                multi_head_input=self.has_compress, random_seed=random_seed, **_lut_kw,
+            )
             self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
                                if self.has_decompress else nn.Identity())
 
@@ -191,41 +201,27 @@ class CompressionMultiHeadLUT(nn.Module):
             )
         if self.joint_head_compression:
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
-            if self.pre_lut_meanabsnorm:
-                z = z / (z.abs().mean(-1, keepdim=True) + 1e-6)   # MeanAbsNorm before FastMHL
             y = self.lut(z).sum(dim=1).to(z.dtype)     # [N, eff_out]
             if self.inner_residual:
                 y = y + z                              # eff_in == eff_out guaranteed
             return self.decompress(y)                  # [N, output_dim]  (Identity -> y)
 
-        # INDEPENDENT per-head path.
+        # INDEPENDENT per-head path -- one batched FastMHL, no per-head loop.
         N = x.shape[0]
         if self.has_compress:
             z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)   # [N, H, inner_in]
-        if self.batched_multi_head_input:
-            # Batched drop-in equivalent of the per-head loop below (has_compress
-            # guaranteed True by the constructor check).
-            z3 = z
-            if self.pre_lut_meanabsnorm:
-                z3 = z3 / (z3.abs().mean(-1, keepdim=True) + 1e-6)   # per-head MeanAbsNorm
-            y = self.lut_batched(z3).to(z3.dtype)              # [N, H, eff_out]
-            if self.inner_residual:
-                y = y + z3                                      # eff_in == eff_out
-            if self.has_decompress:
-                return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
-            return y.sum(dim=1)                                 # [N, eff_out]
-        parts = []
-        for h, lut in enumerate(self.luts):
-            z_h = z[:, h, :] if self.has_compress else x        # [N, eff_in] (all heads read x if -1)
-            if self.pre_lut_meanabsnorm:
-                z_h = z_h / (z_h.abs().mean(-1, keepdim=True) + 1e-6)   # MeanAbsNorm before FastMHL
-            y_h = lut(z_h).sum(dim=1).to(z_h.dtype)             # [N, eff_out]
-            if self.inner_residual:
-                y_h = y_h + z_h
-            parts.append(y_h)
+        else:
+            z = x                                               # [N, eff_in], shared by all heads
+        y = self.lut_batched(z).to(z.dtype)                     # [N, H, eff_out]
+        if self.inner_residual:
+            # eff_in == eff_out guaranteed. With per-head inputs z is [N, H, eff_in] and the
+            # skip is per head; with a shared input it is [N, eff_in] and the same x is added
+            # to every head -- which is what the old per-head loop did (z_h = x for all h).
+            y = y + (z if self.has_compress else z.unsqueeze(1))
         if self.has_decompress:
-            return self.decompress(torch.cat(parts, dim=-1))    # [N, H*inner_out] -> [N, output]
-        return sum(parts)                                       # sum per-head [N, eff_out=output]
+            # reshape == the old torch.cat(per-head parts, dim=-1)
+            return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
+        return y.sum(dim=1)                                     # [N, eff_out]
 
     @staticmethod
     def param_count(input_dim: int, output_dim: int, inner_dim: Optional[int] = None,

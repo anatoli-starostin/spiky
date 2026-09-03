@@ -20,7 +20,7 @@ not a new source of error, the existing one.
 
 ## Usage
 
-    from spiky.lutorch.cuda_gather import patch, is_5090_class_gpu
+    from spiky.lutorch.fast_mhl_cuda_gather import patch, is_5090_class_gpu
 
     patch(model)                 # mode="auto" (default): fused kernel iff is_5090_class_gpu(),
                                   # else a no-op -- the model's existing, exact gather is untouched.
