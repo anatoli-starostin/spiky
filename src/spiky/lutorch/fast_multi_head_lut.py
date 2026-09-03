@@ -808,9 +808,10 @@ class FastMultiHeadLut(nn.Module):
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         soft_score_temp: float = 0.5,
         select_temp: float = 0.5,
-        learnable_temps: bool = False,
+        learnable_temps: bool = True,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
+        multi_head_input: bool = False,
         device: Optional[torch.device] = None,
         exp_outputs: bool = False,
         exp_outputs_tau_init: float = 0.1,
@@ -830,6 +831,18 @@ class FastMultiHeadLut(nn.Module):
             )
 
         self.input_dim = input_dim
+        # multi_head_input=False (default): forward takes a single [B, input_dim]
+        # vector shared by all heads (block below is bit-identical to the old code).
+        # multi_head_input=True: forward takes a per-head-stacked input --- either
+        # [B, n_heads, input_dim] or the flat [B, n_heads*input_dim] view --- and
+        # each head's anchor pairs live within its own [0, input_dim) slice
+        # (block-diagonal routing), so head h only reads columns
+        # [h*input_dim, (h+1)*input_dim). Output stays [B, n_heads, n_outputs]
+        # (no cross-head sum), same as the shared-input multi-head case.
+        self.multi_head_input = bool(multi_head_input)
+        self._fwd_input_dim = (
+            n_heads * input_dim if self.multi_head_input else input_dim
+        )
         self.n_heads = n_heads
         self.n_outputs = n_outputs
         self.n_anchor_pairs = n_anchor_pairs
@@ -866,6 +879,12 @@ class FastMultiHeadLut(nn.Module):
                     "exp_outputs=True requires use_bf16=False: the log-sum-exp readout "
                     "runs in the weights' storage dtype and has no bf16 compute path yet."
                 )
+            if self.multi_head_input:
+                raise ValueError(
+                    "exp_outputs=True is not implemented for multi_head_input=True: the "
+                    "per-head block-diagonal init has no logspace/additive exp_outputs "
+                    "counterpart yet."
+                )
             if exp_outputs_tau_init <= 0:
                 raise ValueError(
                     f"exp_outputs_tau_init must be > 0, got {exp_outputs_tau_init}"
@@ -899,45 +918,83 @@ class FastMultiHeadLut(nn.Module):
         self.anchor_sampling_policy = policy
 
         dev = device or torch.device("cpu")
-        anchor_a_long, anchor_b_long = get_balanced_anchor_pairs(
-            n_tables=n_lookup_tables,
-            n_anchor_pairs=n_anchor_pairs,
-            input_dim=input_dim,
-            device=dev,
-            random_seed=random_seed,
-            policy=policy,
-            n_heads=n_heads,
-        )
-        rng_kwargs: dict = {"device": dev}
-        if random_seed is not None:
-            rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
-        # ONE draw regardless of init mode: drawing twice would advance the RNG and
-        # silently change every parameter constructed after this module (e.g. the MLP
-        # critic in the walker2d-lut arches), making runs non-comparable.
-        _u = torch.rand(n_lookup_tables, self.table_dim, n_outputs, **rng_kwargs) - 0.5
-        weights_init = (_u * (2.0 * initial_weights_noise)).to(weight_dtype)
-        if self.exp_outputs and self.exp_outputs_init == "logspace":
-            # WEIGHTS-AS-LOGARITHMS init. Under the log-sum-exp readout the weights sit
-            # inside exp(), so the additive default (centred at 0, spread 1e-3) makes
-            # every term ~1: the sum collapses to tph, the output pins at tau*log(tph),
-            # and the per-table gradients are a uniform 1/tph. Two corrections:
-            #
-            #  SPREAD  log-sum-exp averages where the plain sum accumulates
-            #          (std(out) ~ sigma/sqrt(T) instead of sigma*sqrt(T)), so matching
-            #          the additive readout's output spread needs a per-entry spread
-            #          T times LARGER: sigma_log = initial_weights_noise * tph.
-            #  CENTRE  shift to _lse_init_offset(...) so the readout starts at ~0
-            #          instead of tau*log(tph).
-            #
-            # Net effect: the head starts with exp10's output statistics (mean ~0, std
-            # matched) instead of a saturated constant. Verified in
-            # experiments/walker2d-lut/exp17_.../design_init.py.
-            sigma_log = float(initial_weights_noise) * tables_per_head
-            mu = _lse_init_offset(float(exp_outputs_tau_init), sigma_log, tables_per_head)
-            self.exp_outputs_init_sigma = sigma_log
-            self.exp_outputs_init_mu = mu
-            weights_init = (mu + _u * (2.0 * sigma_log)).to(weight_dtype)
-        self.weights = nn.Parameter(weights_init)
+        if not self.multi_head_input:
+            anchor_a_long, anchor_b_long = get_balanced_anchor_pairs(
+                n_tables=n_lookup_tables,
+                n_anchor_pairs=n_anchor_pairs,
+                input_dim=input_dim,
+                device=dev,
+                random_seed=random_seed,
+                policy=policy,
+                n_heads=n_heads,
+            )
+            rng_kwargs: dict = {"device": dev}
+            if random_seed is not None:
+                rng_kwargs["generator"] = torch.Generator(device=dev).manual_seed(random_seed + 1)
+            # ONE draw regardless of init mode: drawing twice would advance the RNG and
+            # silently change every parameter constructed after this module (e.g. the MLP
+            # critic in the walker2d-lut arches), making runs non-comparable.
+            _u = torch.rand(n_lookup_tables, self.table_dim, n_outputs, **rng_kwargs) - 0.5
+            weights_init = (_u * (2.0 * initial_weights_noise)).to(weight_dtype)
+            if self.exp_outputs and self.exp_outputs_init == "logspace":
+                # WEIGHTS-AS-LOGARITHMS init. Under the log-sum-exp readout the weights sit
+                # inside exp(), so the additive default (centred at 0, spread 1e-3) makes
+                # every term ~1: the sum collapses to tph, the output pins at tau*log(tph),
+                # and the per-table gradients are a uniform 1/tph. Two corrections:
+                #
+                #  SPREAD  log-sum-exp averages where the plain sum accumulates
+                #          (std(out) ~ sigma/sqrt(T) instead of sigma*sqrt(T)), so matching
+                #          the additive readout's output spread needs a per-entry spread
+                #          T times LARGER: sigma_log = initial_weights_noise * tph.
+                #  CENTRE  shift to _lse_init_offset(...) so the readout starts at ~0
+                #          instead of tau*log(tph).
+                #
+                # Net effect: the head starts with exp10's output statistics (mean ~0, std
+                # matched) instead of a saturated constant. Verified in
+                # experiments/walker2d-lut/exp17_.../design_init.py.
+                sigma_log = float(initial_weights_noise) * tables_per_head
+                mu = _lse_init_offset(float(exp_outputs_tau_init), sigma_log, tables_per_head)
+                self.exp_outputs_init_sigma = sigma_log
+                self.exp_outputs_init_mu = mu
+                weights_init = (mu + _u * (2.0 * sigma_log)).to(weight_dtype)
+            self.weights = nn.Parameter(weights_init)
+        else:
+            # Per-head block-diagonal init that reproduces, bit-for-bit, a
+            # ModuleList of independent single-head luts
+            #   [FastMultiHeadLut(n_heads=1, random_seed=random_seed + h) ...]
+            # (the layout CompressionMultiHeadLUT uses on its default path).
+            # Each head h draws its anchors from a fresh Generator seeded
+            # (random_seed + h) over the C(input_dim, 2) pool, offset by
+            # h*input_dim into the flat [B, n_heads*input_dim] view; its weights
+            # draw from Generator(random_seed + h + 1). Same helper, same seeds,
+            # same RNG draw order per head => identical params and buffers.
+            a_parts, b_parts, w_parts = [], [], []
+            for h in range(n_heads):
+                seed_h = None if random_seed is None else random_seed + h
+                a_h, b_h = get_balanced_anchor_pairs(
+                    n_tables=tables_per_head,
+                    n_anchor_pairs=n_anchor_pairs,
+                    input_dim=input_dim,
+                    device=dev,
+                    random_seed=seed_h,
+                    policy=policy,
+                    n_heads=1,
+                )
+                a_parts.append(a_h + h * input_dim)
+                b_parts.append(b_h + h * input_dim)
+                w_kwargs: dict = {"device": dev}
+                if seed_h is not None:
+                    w_kwargs["generator"] = (
+                        torch.Generator(device=dev).manual_seed(seed_h + 1)
+                    )
+                w_h = (
+                    (torch.rand(tables_per_head, self.table_dim, n_outputs, **w_kwargs) - 0.5)
+                    * (2.0 * initial_weights_noise)
+                ).to(weight_dtype)
+                w_parts.append(w_h)
+            anchor_a_long = torch.cat(a_parts, dim=0)
+            anchor_b_long = torch.cat(b_parts, dim=0)
+            self.weights = nn.Parameter(torch.cat(w_parts, dim=0))
 
         # bit_matrix and MSB powers for the soft backward surrogate.
         self.register_buffer(
@@ -1016,7 +1073,22 @@ class FastMultiHeadLut(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() != 2 or x.shape[1] != self.input_dim:
+        if self.multi_head_input:
+            # Accept either [B, n_heads, input_dim] or the flat
+            # [B, n_heads*input_dim] view; anchors index the flat vector.
+            if x.dim() == 3:
+                if x.shape[1] != self.n_heads or x.shape[2] != self.input_dim:
+                    raise ValueError(
+                        f"x shape must be [B, {self.n_heads}, {self.input_dim}] "
+                        f"or [B, {self._fwd_input_dim}], got {tuple(x.shape)}"
+                    )
+                x = x.reshape(x.shape[0], self._fwd_input_dim)
+            elif x.dim() != 2 or x.shape[1] != self._fwd_input_dim:
+                raise ValueError(
+                    f"x shape must be [B, {self.n_heads}, {self.input_dim}] "
+                    f"or [B, {self._fwd_input_dim}], got {tuple(x.shape)}"
+                )
+        elif x.dim() != 2 or x.shape[1] != self.input_dim:
             raise ValueError(
                 f"x shape must be [B, {self.input_dim}], got {tuple(x.shape)}"
             )
