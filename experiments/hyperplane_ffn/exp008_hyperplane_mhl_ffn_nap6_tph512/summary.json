@@ -1,7 +1,0 @@
-{
-  "exp_name": "exp008_hyperplane_mhl_ffn_nap6_tph512",
-  "best_val_bpb": 1.2325346054898851,
-  "final_val_bpb": 1.2325548011024428,
-  "total_params": 111308556,
-  "training_time_hours": 1.066
-}
