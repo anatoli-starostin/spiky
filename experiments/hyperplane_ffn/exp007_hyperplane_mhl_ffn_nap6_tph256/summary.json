@@ -1,7 +1,0 @@
-{
-  "exp_name": "exp007_hyperplane_mhl_ffn_nap6_tph256",
-  "best_val_bpb": 1.2404501811648942,
-  "final_val_bpb": 1.2404501811648942,
-  "total_params": 70011660,
-  "training_time_hours": 0.68
-}
