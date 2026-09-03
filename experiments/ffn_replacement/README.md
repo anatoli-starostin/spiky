@@ -68,20 +68,22 @@ cd paper && latexmk -pdf ffn_replacement.tex
 
 ### Which script builds which figure
 
-Three of the five figures regenerate from committed data; two ship as PDFs only.
+All five figures regenerate from committed data.
 
 | fig | file | generator | reads |
 |---|---|---|---|
 | 1 | `fig16k.pdf` | `paper/make_fig16k.py` | nothing — the 17 (params, bpb) points are inlined in the script |
-| 2 | `FFN_GRID_plots.png` | **none** | — committed image only |
+| 2 | `FFN_GRID_plots.png` | `paper/make_ffn_grid.py` | nothing — the grid values are inlined in the script |
 | 3 | `long_runs_fig.pdf` | `paper/make_long_runs_fig.py` | `../runs/exp_n_015{1,2,5,6}*/metrics.csv` |
-| 4 | `superlong_fig.pdf` | **none** | — committed image only |
+| 4 | `superlong_fig.pdf` | `paper/make_superlong_fig.py` | `../runs/exp_n_015{7,8}*/metrics.csv` |
 | 5 | `bench_combined.pdf` | `paper/make_bench_figs.py` | `../benchmark/paper_timings{,_h100}/results.json` |
 
 ```bash
 cd paper
 python make_fig16k.py          # -> fig16k.pdf
+python make_ffn_grid.py        # -> FFN_GRID_plots.png
 python make_long_runs_fig.py   # -> long_runs_fig.pdf
+python make_superlong_fig.py   # -> superlong_fig.pdf
 python make_bench_figs.py      # -> bench_combined.pdf
 ```
 
@@ -91,12 +93,16 @@ committed timing JSON rather than re-measuring. To actually re-measure, see
 
 Two caveats worth knowing before trusting a regenerated figure:
 
-- **Figure 1 has no data inputs.** Its points are hardcoded in the script, so it
-  redraws the same numbers regardless of what `runs/*/summary.json` says. If a run is
-  ever re-scored, this figure will not follow — edit `pts` by hand. (Its values are the
-  paper's Table 4 `best_val_bpb`, not the `final_val_bpb` in `FFN_GRID_SUMMARY.md`.)
-- **Figures 2 and 4 have no generator anywhere** — not in this folder and not on the
-  research branch. They exist only as the committed image files.
+- **Figures 1 and 2 have no data inputs.** Their values are hardcoded in the scripts,
+  so they redraw the same numbers regardless of what `runs/*/summary.json` says. If a
+  run is ever re-scored, neither will follow — edit the tables by hand. The two also
+  differ by convention: `make_fig16k.py` uses the paper's Table 4 `best_val_bpb`, while
+  `make_ffn_grid.py` uses `final_val_bpb` (matching `FFN_GRID_SUMMARY.md`). Figures 3,
+  4 and 5 *are* driven by committed run data and do follow it.
+- **Re-rendering is not byte-reproducible across machines.** The figures redraw with
+  identical content but not identical bytes — matplotlib/freetype version differences
+  shift the layout by a pixel or two. What is committed here are the original bytes the
+  published PDF was built from; regenerate only when you mean to replace them.
 
 Self-contained: no `\input`, no bibliography file, five stock packages, and all five
 figures sit beside the `.tex`. Verified to build to 13 pages with every reference
