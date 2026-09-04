@@ -1,0 +1,47 @@
+{
+  "exp_name": "exp_block3_h4c48_nap7_tph128",
+  "block": 3,
+  "n_steps": 10000,
+  "tokens_per_step": 24576,
+  "tokens_per_row": 192,
+  "student_params": {
+    "compress": 73920,
+    "lut": 3145728,
+    "decompress": 74112,
+    "total": 3293760
+  },
+  "teacher_ffn_params": 1179648,
+  "student_vs_teacher_ffn": 2.7921549479166665,
+  "train_minutes": 12.953272155920665,
+  "s_per_step": 0.07771963293552399,
+  "heldout_mse": 0.018242423484722773,
+  "teacher_output_var": 0.054326825837294264,
+  "normalized_mse": 0.3357903430500024,
+  "cell_occupancy": {
+    "n_tables": 512,
+    "cells_per_table": 128,
+    "tokens_probed": 122880,
+    "visited_mean": 127.9375,
+    "visited_min": 96,
+    "visited_max": 128,
+    "visited_frac_mean": 0.99951171875,
+    "cells_never_visited": 32,
+    "cells_total": 65536,
+    "frac_cells_never_visited": 0.00048828125,
+    "top10pct_visit_share": 0.24583115577697753
+  },
+  "eval_device_batch_size": 48,
+  "anchored": {
+    "eval_steps": 10,
+    "swapped": 1.1830417857966307,
+    "teacher": 1.151444329946291,
+    "delta": 0.03159745585033957,
+    "published_baseline": 1.151444329946291
+  },
+  "long": {
+    "eval_steps": 50,
+    "swapped": 1.1487813284227437,
+    "teacher": 1.1172802508349262,
+    "delta": 0.031501077587817505
+  }
+}
