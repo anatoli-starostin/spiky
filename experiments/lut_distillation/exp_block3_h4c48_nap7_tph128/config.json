@@ -1,0 +1,50 @@
+{
+  "exp_name": "exp_block3_h4c48_nap7_tph128",
+  "_issue": "#111 — distil LUTs from a pretrained FFN, Goal 1 (feasibility probe)",
+  "_arch_note": "Per-block FFN->CompressionMHL distillation. ONE block of the frozen 48k vanilla baseline is regressed: the student learns block 3's FFN sub-layer map (ln2(x) -> mlp(ln2(x))) with every other teacher weight frozen. Student geometry copies the exp_n_0127 grid cell (H4/c48, nap7/tph128), the cheapest configuration that beat vanilla when trained from scratch (1.19471 @16k). Trained by ordinary gradient descent through the existing FastMultiHeadLut soft surrogate -- compress TRAINS, no closed-form/least-squares fit, no frozen routing. Effective batch matches the teacher's 24,576 tokens/step so LUT-row coverage lands at ~192 tokens/row/table, on the >=200 rule of thumb from claude/experiment-journey.md (gradient sparsity is the known dominant bottleneck).",
+
+  "teacher_exp_dir": "experiments/ffn_replacement/runs/exp_n_0151_long48k_untied_vanilla",
+  "teacher_val_bpb": 1.151444329946291,
+  "block": 3,
+
+  "lut_n_heads": 4,
+  "lut_inner_in_dim": 48,
+  "lut_inner_out_dim": 48,
+  "lut_n_anchor_pairs": 7,
+  "lut_tables_per_head": 128,
+  "lut_joint_head_compression": false,
+  "lut_forward_mode": "hard",
+  "lut_use_bf16": false,
+  "lut_init_weights_noise": 0.001,
+  "lut_learnable_temps": true,
+  "lut_base_seed": 1000,
+
+  "device_batch_size": 12,
+  "grad_accum": 4,
+  "total_batch_size": 24576,
+  "seq_len": 512,
+  "n_steps": 10000,
+  "_steps_note": "Measured 0.14 s/step steady-state on the RTX 5090 in a 20-step smoke run (24,576 tokens/step, 4x grad accum), so 10,000 steps is ~25 min -- inside the 20-40 min probe budget. That is 245.8M tokens of supervision for this one block, about 21% of the 1.18B tokens the teacher itself saw over its 48k steps.",
+
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "lr_final_fraction": 0.1,
+  "optimizer": "AdamW",
+  "adam_betas": [0.9, 0.95],
+  "adam_eps": 1e-8,
+  "_optimizer_note": "setup_optimizer grouping copied from the run dirs' train.py: LUT tables, temperatures and every 1-D parameter get weight_decay=0; only 2-D projection weights (compress/decompress) are decayed.",
+
+  "random_seed": 1234,
+  "compute_dtype": "fp32",
+  "_dtype_note": "Teacher runs fp32 under no_grad for capture, and the student trains fp32, matching lut_use_bf16=false in the grid configs. The teacher's own training used bf16 autocast; capture precision is deliberately the higher one so the regression target is not itself quantised.",
+
+  "log_every": 25,
+  "probe_batches": 20,
+  "eval_device_batch_size": 48,
+  "eval_steps": 10,
+  "eval_steps_long": 50,
+  "_eval_note": "TWO evals, both run on the swapped model AND on the untouched teacher in the same process, so every delta is apples-to-apples. (1) ANCHORED: device_batch 48 x 10 steps = 245,760 val tokens -- this is exactly the protocol the baseline's own train.py used, and it reproduces its published 1.15144 to the digit. Verified before this run: any other setting gives a different number (bs12x10 -> 1.12696, bs48x50 -> 1.11728), because the published figure is a small-sample value of that specific protocol, not a converged val bpb. Comparing against 1.15144 therefore REQUIRES matching bs48 x 10. (2) LONG: device_batch 48 x 50 steps = 1,228,800 val tokens, 5x the data, for a lower-variance version of the delta. The teacher's converged val bpb on that larger sample is ~1.1173.",
+
+  "tokenizer_vocab_size": 32768
+}
