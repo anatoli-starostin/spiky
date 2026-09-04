@@ -1,0 +1,66 @@
+{
+  "shingle_len": 80,
+  "stride": 16,
+  "val_file": "shard_06542.parquet",
+  "train_files": [
+    "shard_00000.parquet",
+    "shard_00001.parquet",
+    "shard_00002.parquet",
+    "shard_00003.parquet"
+  ],
+  "n_docs_indexed": 1200,
+  "bs12_docs": 111,
+  "bs48_docs": 375,
+  "bs12": {
+    "docs": 111,
+    "chars": 288176,
+    "covered_chars": 464,
+    "covered_frac": 0.0016101271445227916,
+    "docs_over_50pct_covered": 0,
+    "heavy_docs": [],
+    "docs_with_any_overlap": 4
+  },
+  "bs48": {
+    "docs": 375,
+    "chars": 1147067,
+    "covered_chars": 1200,
+    "covered_frac": 0.0010461463890077912,
+    "docs_over_50pct_covered": 0,
+    "heavy_docs": [],
+    "docs_with_any_overlap": 9
+  },
+  "full_prefix": {
+    "docs": 1200,
+    "chars": 3556367,
+    "covered_chars": 6128,
+    "covered_frac": 0.001723106754730319,
+    "docs_over_50pct_covered": 0,
+    "heavy_docs": [],
+    "docs_with_any_overlap": 22
+  },
+  "exact_duplicates": [],
+  "top_covered_docs": [
+    762,
+    463,
+    329,
+    820,
+    826,
+    86,
+    1153,
+    271,
+    247,
+    1085
+  ],
+  "top_covered_fracs": [
+    0.3133609958506224,
+    0.20933977455716588,
+    0.15890751086281812,
+    0.12278630460448642,
+    0.09474463360473723,
+    0.06549707602339182,
+    0.0647370059134765,
+    0.06367583212735166,
+    0.06237816764132553,
+    0.054901960784313725
+  ]
+}

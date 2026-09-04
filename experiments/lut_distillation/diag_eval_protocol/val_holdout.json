@@ -1,0 +1,65 @@
+{
+  "data_dir": "/home/astarostin/.cache/nanochat/base_data_climbmix",
+  "train_files": [
+    "shard_00000.parquet",
+    "shard_00001.parquet",
+    "shard_00002.parquet",
+    "shard_00003.parquet"
+  ],
+  "val_file": "shard_06542.parquet",
+  "split_rule": "positional: parquet_paths[:-1] train, parquet_paths[-1:] val",
+  "file_level_overlap": false,
+  "val_prefix_docs": 3000,
+  "val_prefix_chars": 8856711,
+  "train_docs_scanned": 340992,
+  "train_chars_scanned": 1009362138,
+  "shingle_len": 80,
+  "shingle_stride": 32,
+  "exact_duplicate_count": 2,
+  "near_duplicate_count": 230,
+  "exact_examples": [
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 46,
+      "preview": "This sophisticated piece of software turns your computer into a modern, State-of-The-Art spectrum analyzer giving you fe"
+    },
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 55,
+      "preview": "This sophisticated piece of software turns your computer into a modern, State-of-The-Art spectrum analyzer giving you fe"
+    }
+  ],
+  "near_examples": [
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 0,
+      "val_doc": 2389,
+      "shingle": " Allergy and Infectious Diseases (NIAID), part of the National Institutes of Hea"
+    },
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 2,
+      "val_doc": 1148,
+      "shingle": "pe of grinder used to grind and blend materials for use in mineral dressing proc"
+    },
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 2,
+      "val_doc": 2349,
+      "shingle": "features breaking news and videos about the latest discoveries in health, techno"
+    },
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 4,
+      "val_doc": 329,
+      "shingle": "ScienceDaily features breaking news and videos about the latest discoveries in h"
+    },
+    {
+      "shard": "shard_00000.parquet",
+      "rg": 6,
+      "val_doc": 2730,
+      "shingle": "This sophisticated piece of software turns your computer into a modern, State-of"
+    }
+  ],
+  "verdict": "CONTAMINATION FOUND"
+}
