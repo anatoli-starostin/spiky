@@ -1,0 +1,15 @@
+{
+  "run": "exp_n_0135_untied_vanilla_baseline_16k",
+  "description": "Vanilla dense-FFN baseline, 16k steps, GPT-2-scale (6L, d=384, untied, 35.79M). The paper's 1.20144 zero-line (section 3). Re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Rebuilt from config.json (ffn_type=dense) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "corrected_val_bpb": 1.1651468950008814,
+  "originally_reported_bpb": 1.20144,
+  "note": "The corrected bpb (1.16515) is ~0.036 below the originally reported 1.20144. This is NOT a quality change in the model; it is the deeper/cleaner eval window. The original number was scored at bs48 x eval_steps 10 (first ~245,760 val tokens); the corrected protocol scores bs48 x 100 with the anomalously-easy leading 12 rows dropped (~2.45M val tokens), which lands lower and is the batch-size-independent number every other run is now compared against. This is the matched 16k vanilla anchor for the corrected runs_corrected/ scores (e.g. exp_n_0136 naive LUT = 1.19293, +0.0278 vs this)."
+}
