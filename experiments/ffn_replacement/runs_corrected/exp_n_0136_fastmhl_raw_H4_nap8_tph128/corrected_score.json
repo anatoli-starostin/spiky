@@ -1,0 +1,22 @@
+{
+  "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+  "description": "Naive / straightforward LUT replacement (paper section 4: R=512 tables, k=8, ~330.7M params). Re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Model rebuilt from config.json (ffn_lut_kind=fastmhl_raw, raw_n_heads=4/raw_nap=8/raw_tph=128 => R=512, k=8) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "corrected_val_bpb": 1.1929264025964097,
+  "originally_reported_bpb": 1.20567,
+  "matched_vanilla_16k_baseline": {
+    "run": "exp_n_0135_untied_vanilla_baseline_16k",
+    "corrected_val_bpb": 1.1651468950008814,
+    "originally_reported_bpb": 1.20144
+  },
+  "delta_vs_vanilla_corrected": 0.0277795075955283,
+  "delta_vs_vanilla_originally_reported": 0.0042300000000001,
+  "interpretation": "Under the corrected, batch-size-independent protocol the naive LUT sits +0.0278 bpb ABOVE the matched vanilla baseline, versus the +0.0042 gap reported in the paper. The corrected protocol does not overturn the section-4 conclusion (naive LUT is not a quality win vs dense) but widens the deficit; the original small gap was flattered by the batch-coupled eval (0136 was scored at device_batch_size 12, the vanilla anchor at 48)."
+}
