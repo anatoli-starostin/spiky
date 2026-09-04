@@ -1,0 +1,295 @@
+{
+  "protocol_scan": [
+    {
+      "run": "exp_n_0084_untied_nheads4",
+      "device_batch_size": 24,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0118_ffnsw_S2a_nap9_FULL16k",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0119_ffnsw_S2a_nap9_tph128_16k",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0121_ffnsw_nap8_tph128_16k",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0126_grid_H4d48_nap7_tph64",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0127_grid_H4d48_nap7_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0128_grid_H4d48_nap8_tph64",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0129_grid_H4d48_nap8_tph256",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0130_grid_H4d48_nap10_tph64",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0131_grid_H2d96_nap8_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0132_grid_H8d24_nap8_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0133_grid_H4d48_nap10_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0135_untied_vanilla_baseline_16k",
+      "device_batch_size": 48,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "dense"
+    },
+    {
+      "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0137_grid_H1d192_nap8_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0138_outcompress_only_H4_nap8_tph128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0151_long48k_untied_vanilla",
+      "device_batch_size": 48,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "dense"
+    },
+    {
+      "run": "exp_n_0152_long48k_tiny_H4d48_nap7_tph64",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0153_H2d96_nap7_tph64",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0155_long48k_from_0127",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0156_long48k_from_0128",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    },
+    {
+      "run": "exp_n_0157_long144k_vanilla",
+      "device_batch_size": 48,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "dense"
+    },
+    {
+      "run": "exp_n_0158_long144k_from_0127",
+      "device_batch_size": 12,
+      "seq_len": 512,
+      "eval_steps": 10,
+      "eval_every": 200,
+      "ffn_type": "compression"
+    }
+  ],
+  "protocol_groups": {
+    "bs24_seq512_steps10": [
+      "exp_n_0084_untied_nheads4"
+    ],
+    "bs12_seq512_steps10": [
+      "exp_n_0118_ffnsw_S2a_nap9_FULL16k",
+      "exp_n_0119_ffnsw_S2a_nap9_tph128_16k",
+      "exp_n_0121_ffnsw_nap8_tph128_16k",
+      "exp_n_0126_grid_H4d48_nap7_tph64",
+      "exp_n_0127_grid_H4d48_nap7_tph128",
+      "exp_n_0128_grid_H4d48_nap8_tph64",
+      "exp_n_0129_grid_H4d48_nap8_tph256",
+      "exp_n_0130_grid_H4d48_nap10_tph64",
+      "exp_n_0131_grid_H2d96_nap8_tph128",
+      "exp_n_0132_grid_H8d24_nap8_tph128",
+      "exp_n_0133_grid_H4d48_nap10_tph128",
+      "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+      "exp_n_0137_grid_H1d192_nap8_tph128",
+      "exp_n_0138_outcompress_only_H4_nap8_tph128",
+      "exp_n_0152_long48k_tiny_H4d48_nap7_tph64",
+      "exp_n_0153_H2d96_nap7_tph64",
+      "exp_n_0155_long48k_from_0127",
+      "exp_n_0156_long48k_from_0128",
+      "exp_n_0158_long144k_from_0127"
+    ],
+    "bs48_seq512_steps10": [
+      "exp_n_0135_untied_vanilla_baseline_16k",
+      "exp_n_0151_long48k_untied_vanilla",
+      "exp_n_0157_long144k_vanilla"
+    ]
+  },
+  "window_batches": 10,
+  "n_windows": 4,
+  "results": {
+    "0151 vanilla 48k": {
+      "published": 1.151444329946291,
+      "published_bs": 48,
+      "device_batch_size_in_config": 48,
+      "bs12": [
+        1.126963286112637,
+        1.148395437488216,
+        1.1714248999838148,
+        1.1592673815108068
+      ],
+      "bs48": [
+        1.151444329946291,
+        1.1158886297473296,
+        1.1168283836203234,
+        1.1031947895083467
+      ],
+      "reproduces_published": true
+    },
+    "0126 LUT 16k": {
+      "published": 1.20694,
+      "published_bs": 12,
+      "device_batch_size_in_config": 12,
+      "bs12": [
+        1.2069362278002638,
+        1.227689269255286,
+        1.251784947090861,
+        1.2416534668247168
+      ],
+      "bs48": [
+        1.2319435682661297,
+        1.1966498196487183,
+        1.1999121817317775,
+        1.1847295814461702
+      ],
+      "reproduces_published": true
+    },
+    "0127 LUT 16k": {
+      "published": 1.19471,
+      "published_bs": 12,
+      "device_batch_size_in_config": 12,
+      "bs12": [
+        1.1946902337558258,
+        1.2201363096787614,
+        1.2436800323187132,
+        1.2322775330927054
+      ],
+      "bs48": [
+        1.2222989799332127,
+        1.186732546791153,
+        1.189576633332422,
+        1.1759227782999915
+      ],
+      "reproduces_published": true
+    },
+    "0128 LUT 16k": {
+      "published": 1.20228,
+      "published_bs": 12,
+      "device_batch_size_in_config": 12,
+      "bs12": [
+        1.2022703023632206,
+        1.2260963959455848,
+        1.2485637376187055,
+        1.2385066196634629
+      ],
+      "bs48": [
+        1.2287913171466933,
+        1.1928301116727182,
+        1.1951565124197552,
+        1.1808436622672416
+      ],
+      "reproduces_published": true
+    }
+  }
+}
