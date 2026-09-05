@@ -85,9 +85,24 @@ def main():
     print("\n(c) the d_in 32->64 effect, by table budget")
     for a, b, lbl in (('S01', 'S02', 'c256 out32, tables 50.3M'),
                       ('S07', 'R5', 'c128 out64, tables 50.3M'),
-                      ('S05', 'R4', 'c256 out48, tables 75.5M')):
-        print(f"   {lbl:<28} {a} {R[a]['bpb']:.6f} -> {b} {R[b]['bpb']:.6f}  "
-              f"{R[b]['bpb']-R[a]['bpb']:+.6f}")
+                      ('S05', 'R4', 'c256 out48, tables 75.5M'),
+                      ('U1', 'U2', 'c64  out48, tables 18.9M')):
+        if a in R and b in R:
+            print(f"   {lbl:<28} {a} {R[a]['bpb']:.6f} -> {b} {R[b]['bpb']:.6f}  "
+                  f"{R[b]['bpb']-R[a]['bpb']:+.6f}")
+    if all(t in R for t in ('U1', 'U2', 'U3')):
+        print("\n    the SMALL-BUDGET d_in ladder (tables pinned at 18,874,368, only d_in moves)")
+        for t in ('U1', 'U2', 'U3'):
+            r = R[t]
+            print(f"      {t}  d_in {r['d_in']:>3}  H*d_in {r['H']*r['d_in']:>3}  "
+                  f"bpb {r['bpb']:.6f}  vs U1 {r['bpb']-R['U1']['bpb']:+.6f}  "
+                  f"proj FLOPs {r['ratio']:.4f}x")
+        sp = max(R[t]['bpb'] for t in ('U1', 'U2', 'U3')) - \
+            min(R[t]['bpb'] for t in ('U1', 'U2', 'U3'))
+        print(f"      spread {sp:.6f}   (noise floor ~0.002)")
+        print(f"      SIGN OF THE d_in EFFECT: 75.5M tables {R['R4']['bpb']-R['S05']['bpb']:+.6f} "
+              f"(more d_in HURTS)  vs  18.9M tables "
+              f"{R['U3']['bpb']-R['U1']['bpb']:+.6f} (more d_in HELPS)")
     print("\n(d) head trade H4 -> H2, and what actually drives it")
     for a, b, lbl in (('S01', 'S08', 'd_in 32, d_out 32'),
                       ('R4', 'R6', 'd_in 64, d_out 48'),

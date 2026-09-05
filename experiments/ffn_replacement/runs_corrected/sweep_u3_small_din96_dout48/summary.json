@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_u3_small_din96_dout48",
+  "best_val_bpb": 1.451009561142624,
+  "final_val_bpb": 1.451009561142624,
+  "total_params": 48920844,
+  "training_time_hours": 0.222,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

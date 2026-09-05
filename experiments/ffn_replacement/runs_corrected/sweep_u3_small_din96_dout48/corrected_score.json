@@ -1,0 +1,47 @@
+{
+  "run": "sweep_u3_small_din96_dout48",
+  "description": "[SHORT PROXY SWEEP] SMALL-BUDGET d_in LADDER, rung 3 of 3. H*d_in = 384, three times the floor. At the 75.5M budget the equivalent step (S5 -> R4) HURT by +0.0072; this asks whether the sign flips when tables are scarce. H=4 tph=256 cells=64 (nap6) d_in=96 d_out=48 | H*tph=1024 (<=1024 OK), d_in>=32 OK | compress-projection FLOPs H*384*d_in = 147,456 vs vanilla 384*384*4 = 589,824 -> 0.2500x. Budget shared by all 11 runs: 4000 steps, effective batch 24 sequences = 12,288 tokens (device_batch 12 / grad_accum 2), eval every 500 steps. Otherwise exp_n_0118's recipe: untied unembedder, hard forward with learnable temps, independent per-head compression, 6L d=384 on ClimbMix, lr 3e-4, warmup_frac 0.1, cosine. EVAL IS NOT SCALED DOWN \u2014 the corrected protocol (evaluate_bpb_fixed, bs48 x 100, skip 12, 2,451,456 val tokens), identical for every run. *** THE bpb FROM THIS SWEEP IS COMPARABLE ONLY TO THE OTHER SWEEP RUNS, NEVER TO THE 16k/batch-48 ANCHORS (exp_n_0135 1.165147, exp_n_0136 1.192926, exp_n_0118 1.164939, exp_n_0129 1.170961). S0 (sweep_s00_vanilla_dense) is this sweep's own zero-line. ***",
+  "proxy_sweep": true,
+  "comparability_warning": "PROXY BUDGET \u2014 NOT COMPARABLE TO THE 16k ANCHORS. This run is 4,000 steps at an effective batch of 24 sequences (12,288 tokens), one of 11 runs sharing that budget so they can be compared to each other cheaply. The EVAL is the full corrected protocol (evaluate_bpb_fixed: bs48 x 100 batches, leading 12 rows skipped, 2,451,456 val tokens of the held-out shard_06542.parquet, batch-size independent), identical for all 11 \u2014 only its frequency was reduced to every 500 steps. Because the TRAINING budget is 1/8 of the long runs, these bpb values sit far above them and must NEVER be compared with exp_n_0135 (1.165147), exp_n_0136 (1.192926), exp_n_0118 (1.164939) or exp_n_0129 (1.170961). The sweep's own zero-line is sweep_s00_vanilla_dense.",
+  "training_budget": {
+    "n_steps": 4000,
+    "effective_batch_sequences": 24,
+    "effective_batch_tokens": 12288,
+    "device_batch_size": 12,
+    "grad_accum": 2,
+    "eval_every": 500
+  },
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "shape": {
+    "H": 4,
+    "tph": 256,
+    "cells": 64,
+    "d_in": 96,
+    "d_out": 48
+  },
+  "compress_projection_flops": 147456,
+  "compress_projection_flops_ratio_vs_vanilla": 0.25,
+  "decompress_projection_flops": 73728,
+  "projection_flops_total": 221184,
+  "projection_flops_ratio_vs_vanilla_ffn": 0.1875,
+  "total_params": 48920844,
+  "expected_params": 48900000,
+  "param_deviation_vs_brief": 0.00042625766871165645,
+  "proxy_val_bpb": 1.451009561142624,
+  "training_time_hours": 0.222,
+  "best_val_bpb_during_training": 1.451009561142624,
+  "load_missing_keys": 0,
+  "load_unexpected_keys": 0,
+  "sweep_vanilla_anchor": {
+    "run": "sweep_s00_vanilla_dense",
+    "proxy_val_bpb": 1.4747493378259995
+  },
+  "delta_vs_sweep_vanilla": -0.02373977668337557
+}

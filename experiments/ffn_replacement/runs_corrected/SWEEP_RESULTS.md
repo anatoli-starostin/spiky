@@ -1,6 +1,6 @@
-# FFN-shape proxy sweeps — results (18 runs)
+# FFN-shape proxy sweeps — results (21 runs)
 
-Three sweeps, 11 + 6 + 1 runs, all on one budget: 4,000 steps, effective batch 24 sequences
+Four sweeps, 11 + 6 + 1 + 3 runs, all on one budget: 4,000 steps, effective batch 24 sequences
 (12,288 tokens), lr 3e-4 with 10% linear warmup and cosine decay to 0.1× peak parameterised by
 `n_steps=4000`. Every run is scored on the corrected protocol (`evaluate_bpb_fixed`: bs48 × 100,
 leading 12 rows skipped, 2,451,456 val tokens of held-out `shard_06542.parquet`). Setup and
@@ -15,7 +15,7 @@ file map: [`SWEEP_README.md`](SWEEP_README.md). Table and analysis are regenerat
 > **~0.002 noise floor** (set by the S2/S3 pair: differences that small flip sign across eval
 > points).
 
-## All 18 runs
+## All 21 runs
 
 FLOPs are MACs/token for the two dense projections — compress `H·384·d_in` and decompress
 `H·384·d_out` — against vanilla's **whole** FFN at `2·384·1536` = 1,179,648. The first sweep
@@ -31,11 +31,14 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | R5 | H4 c128 in64 out64 | 80,229,900 | 50,331,648 | 1.448518 | −0.026232 | −0.005830 | 98,304 | 98,304 | 0.1667× | 0.32 |
 | **S2** | H4 c256 in64 out32 | 79,934,988 | 50,331,648 | 1.449171 | −0.025578 | −0.005177 | 98,304 | 49,152 | 0.1250× | 0.49 |
 | S3 | H4 c256 in96 out32 | 80,230,668 | 50,331,648 | 1.450713 | −0.024036 | −0.003635 | 147,456 | 49,152 | 0.1667× | 0.49 |
+| U3 | H4 c64 in96 **out48** | 48,920,844 | 18,874,368 | 1.451010 | -0.023740 | -0.003339 | 147,456 | 73,728 | 0.1875x | 0.22 |
 | S10 | H2 c512 in64 out32 | 129,823,500 | 100,663,296 | 1.452450 | −0.022299 | −0.001898 | 49,152 | 24,576 | 0.0625× | 0.87 |
 | S1 | H4 c256 in32 out32 *(control)* | 79,639,308 | 50,331,648 | 1.454348 | −0.020401 | — | 49,152 | 49,152 | 0.0833× | 0.49 |
 | S7 | H4 c128 in32 out64 | 79,934,220 | 50,331,648 | 1.455528 | −0.019222 | +0.001180 | 49,152 | 98,304 | 0.1250× | 0.32 |
 | S8 | H2 c256 in64 out32 | 79,491,852 | 50,331,648 | 1.456473 | −0.018276 | +0.002125 | 49,152 | 24,576 | 0.0625× | 0.49 |
+| U1 | H4 c64 in32 out48 | 48,329,484 | 18,874,368 | 1.457557 | -0.017192 | +0.003209 | 49,152 | 73,728 | 0.1042x | 0.22 |
 | R3 | H4 c128 in32 out96 | 105,394,956 | 75,497,472 | 1.459274 | −0.015475 | +0.004926 | 49,152 | 147,456 | 0.1667× | 0.36 |
+| U2 | H4 c64 in64 out48 | 48,625,164 | 18,874,368 | 1.460133 | -0.014616 | +0.005785 | 98,304 | 73,728 | 0.1458x | 0.22 |
 | R7 | **H2** c256 in32 out48 | 104,583,564 | 75,497,472 | 1.463430 | −0.011319 | +0.009082 | 24,576 | 36,864 | 0.0521× | 0.51 |
 | S9 | H1 c256 in128 out32 | 79,418,124 | 50,331,648 | 1.464401 | −0.010349 | +0.010053 | 49,152 | 12,288 | 0.0521× | 0.46 |
 | S6 | H4 c512 in32 out16 | 79,491,852 | 50,331,648 | 1.469439 | −0.005310 | +0.015091 | 49,152 | 24,576 | 0.0625× | 0.84 |
@@ -43,13 +46,13 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S0 | dense 4× MLP | 35,792,640 | — | 1.474749 | — | +0.020401 | — | — | 1.0000× | 0.07 |
 
 Every LUT shape beats the dense control, by 0.004 to 0.040. **No training instability in any
-of the 18** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
+of the 21** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
 high-`d_in` (S3, S9, R4, R5) and low-`d_out` (S4, S6) configurations. Every built param count
 was verified before its run trained; all landed within 1% of the brief. Sweeps 2 and 3 ran at
 device_batch 12 × accum 2 throughout; in sweep 1 only S6 and S10 needed 6 × 4 (their
 `H·tph·cells = 524,288` buffer is 12.9 GiB at bs12).
 
-![all 18 runs](sweep_all18.png)
+![all 21 runs](sweep_all21.png)
 
 ## (a) The d_out ladder — an inverted U with its minimum at 48
 
@@ -116,7 +119,48 @@ exploit fine routing. R1 shows the same crossover against S5.
 75.5M-table run is the ~105M-total run, so this data cannot separate "table budget" from "model
 size class". A c128/d_out 96 point at d_in 64 would; nothing here has one.
 
-## (d) It was never about head count — the rule is `H · d_in ≥ 128`
+## (c2) The small-budget d_in ladder — the sign flips again, the other way
+
+Every run in the historical 16k grid has `d_in == d_out`, so untying had never been tested at a
+**small** table budget. U1/U2/U3 pin the table budget at **18,874,368** — a quarter of S5's,
+with cells cut to 64 (nap6, only 6 comparisons per address) — and move nothing but `d_in`:
+
+| | d_in | `H·d_in` | params | proxy bpb | vs U1 | proj FLOPs |
+|---|---|---|---|---|---|---|
+| U1 | 32 | 128 | 48,329,484 | 1.457557 | — | 0.1042× |
+| U2 | 64 | 256 | 48,625,164 | 1.460133 | +0.002576 | 0.1458× |
+| U3 | 96 | 384 | 48,920,844 | **1.451010** | **−0.006548** | 0.1875× |
+
+**The `d_in` effect has flipped sign again, and this is the finding.** At 75.5M tables widening
+`d_in` from 32 to 64 *hurt* by +0.007234 (S5 → R4). At 18.9M tables widening it to 96 *helps* by
+−0.006548 (U1 → U3), and U3 beats U1 at all eight eval points with no crossover. Scarce tables
+really do make routing work harder — the hypothesis holds.
+
+But it is **not** a floor that has cleanly risen. U1, sitting exactly at `H·d_in` = 128, is not
+the worst of the three — U2 is, by +0.002576 over U1, and that pair shows the familiar `d_in`
+crossover (U2 leads from step 1000 to 2500, U1 overtakes after 3000), so U1-vs-U2 is best read
+as indistinguishable. What moved is the **optimum**, not a cliff: at 75.5M tables it sits at or
+below 128, at 18.9M tables it is at least 384 and the ladder has not turned over at the top rung
+tested. The spread across the three, **0.009124**, is 4.6× the noise floor.
+
+**Cost, which must not be buried.** Unlike a table-split change, `d_in` moves FLOPs: U3 pays
+0.1875× vanilla projection cost against U1's 0.1042× — 80% more — for its 0.0065 bpb. So a
+small model does not just *prefer* more routing width, it has to *pay* for it, which closes off
+the small end of the design space on the FLOPs axis exactly as the hypothesis anticipated.
+
+For scale: U3 at 18.9M tables (1.451010) still loses to S5 at 75.5M (1.434572) by **+0.016438**,
+so a 4× smaller table budget costs about 0.016 even with the best routing width available to it.
+It does, though, beat S1 (1.454348) and S8 (1.456473) despite having 2.7× fewer tables — because
+it keeps `d_out` at 48 where they use 32, which is the d_out result again.
+
+All three curves are monotone at every eval point with no plateau and no instability; cells = 64
+showed no pathology despite giving only 6 comparisons per address.
+
+## (d) It was never about head count — the rule is `H · d_in ≥ 128` *at 75.5M tables*
+
+Scope note added after U1/U2/U3: everything in this section is measured at cells 256 / d_out 48
+/ 75,497,472 tables. Section (c2) shows the preferred code width moves with the table budget, so
+"≥ 128" is the rule *at that budget*, not a universal constant.
 
 The head trade looked like it depended on how "rich" the config was:
 
