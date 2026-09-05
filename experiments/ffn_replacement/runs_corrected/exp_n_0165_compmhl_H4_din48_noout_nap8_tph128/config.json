@@ -14,7 +14,7 @@
   "lr": 0.0003,
   "weight_decay": 0.1,
   "lr_warmup_fraction": 0.1,
-  "eval_every": 200,
+  "eval_every": 500,
   "random_seed": 1,
   "compute_dtype": "bf16",
   "tokenizer_vocab_size": 32768,
