@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s10_scaled_H2_tph512_c512_din64_dout32",
+  "best_val_bpb": 1.4524501531541096,
+  "final_val_bpb": 1.4524501531541096,
+  "total_params": 129823500,
+  "training_time_hours": 0.868,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
