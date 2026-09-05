@@ -56,8 +56,18 @@ def main():
     del model
     torch.cuda.empty_cache()
 
-    man = json.load(open(os.path.join(HERE, 'sweep_manifest.json')))
-    me = next(r for r in man['runs'] if r['run'] == run)
+    # the run lives in one of the sweep manifests (sweep 1 or sweep 2)
+    me = man = None
+    for mf in ('sweep_manifest.json', 'sweep2_manifest.json'):
+        p = os.path.join(HERE, mf)
+        if not os.path.exists(p):
+            continue
+        m = json.load(open(p))
+        hit = next((r for r in m['runs'] if r['run'] == run), None)
+        if hit is not None:
+            me, man = hit, m
+            break
+    assert me is not None, f'{run} is in neither sweep manifest'
     summ = json.load(open(os.path.join(d, 'summary.json')))
 
     s0_path = os.path.join(HERE, S0, 'corrected_score.json')
@@ -86,6 +96,18 @@ def main():
         'shape': {k: me[k] for k in ('H', 'tph', 'cells', 'd_in', 'd_out')},
         'compress_projection_flops': me['compress_flops'],
         'compress_projection_flops_ratio_vs_vanilla': me['compress_flops_ratio'],
+        # sweep 2 records the decompress side too; derive it for sweep-1 runs so the FLOPs
+        # accounting is complete and symmetric across all 17
+        'decompress_projection_flops': me.get(
+            'decompress_flops',
+            (me['H'] * 384 * me['d_out']) if me['H'] else None),
+        'projection_flops_total': me.get(
+            'projection_flops_total',
+            (me['H'] * 384 * (me['d_in'] + me['d_out'])) if me['H'] else None),
+        'projection_flops_ratio_vs_vanilla_ffn': me.get(
+            'projection_flops_ratio_vs_vanilla_ffn',
+            (me['H'] * 384 * (me['d_in'] + me['d_out']) / (2 * 384 * 1536))
+            if me['H'] else 1.0),
         'total_params': total_params,
         'expected_params': me['expected'],
         'param_deviation_vs_brief': me['deviation'],
