@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_r2_dout96",
+  "best_val_bpb": 1.4444160534828376,
+  "final_val_bpb": 1.4444160534828376,
+  "total_params": 180892428,
+  "training_time_hours": 0.578,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
