@@ -1,6 +1,6 @@
-# FFN-shape proxy sweeps — results (21 runs)
+# FFN-shape proxy sweeps — results (22 runs)
 
-Four sweeps, 11 + 6 + 1 + 3 runs, all on one budget: 4,000 steps, effective batch 24 sequences
+Five sweeps, 11 + 6 + 1 + 3 + 1 runs, all on one budget: 4,000 steps, effective batch 24 sequences
 (12,288 tokens), lr 3e-4 with 10% linear warmup and cosine decay to 0.1× peak parameterised by
 `n_steps=4000`. Every run is scored on the corrected protocol (`evaluate_bpb_fixed`: bs48 × 100,
 leading 12 rows skipped, 2,451,456 val tokens of held-out `shard_06542.parquet`). Setup and
@@ -15,7 +15,7 @@ file map: [`SWEEP_README.md`](SWEEP_README.md). Table and analysis are regenerat
 > **~0.002 noise floor** (set by the S2/S3 pair: differences that small flip sign across eval
 > points).
 
-## All 21 runs
+## All 22 runs
 
 FLOPs are MACs/token for the two dense projections — compress `H·384·d_in` and decompress
 `H·384·d_out` — against vanilla's **whole** FFN at `2·384·1536` = 1,179,648. The first sweep
@@ -38,6 +38,7 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S8 | H2 c256 in64 out32 | 79,491,852 | 50,331,648 | 1.456473 | −0.018276 | +0.002125 | 49,152 | 24,576 | 0.0625× | 0.49 |
 | U1 | H4 c64 in32 out48 | 48,329,484 | 18,874,368 | 1.457557 | -0.017192 | +0.003209 | 49,152 | 73,728 | 0.1042x | 0.22 |
 | R3 | H4 c128 in32 out96 | 105,394,956 | 75,497,472 | 1.459274 | −0.015475 | +0.004926 | 49,152 | 147,456 | 0.1667× | 0.36 |
+| V1 | H8 tph64 c256 in48 out24 | 48,920,844 | 18,874,368 | 1.459698 | -0.015051 | +0.005350 | 147,456 | 73,728 | 0.1875x | 0.28 |
 | U2 | H4 c64 in64 out48 | 48,625,164 | 18,874,368 | 1.460133 | -0.014616 | +0.005785 | 98,304 | 73,728 | 0.1458x | 0.22 |
 | R7 | **H2** c256 in32 out48 | 104,583,564 | 75,497,472 | 1.463430 | −0.011319 | +0.009082 | 24,576 | 36,864 | 0.0521× | 0.51 |
 | S9 | H1 c256 in128 out32 | 79,418,124 | 50,331,648 | 1.464401 | −0.010349 | +0.010053 | 49,152 | 12,288 | 0.0521× | 0.46 |
@@ -46,13 +47,13 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S0 | dense 4× MLP | 35,792,640 | — | 1.474749 | — | +0.020401 | — | — | 1.0000× | 0.07 |
 
 Every LUT shape beats the dense control, by 0.004 to 0.040. **No training instability in any
-of the 21** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
+of the 22** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
 high-`d_in` (S3, S9, R4, R5) and low-`d_out` (S4, S6) configurations. Every built param count
 was verified before its run trained; all landed within 1% of the brief. Sweeps 2 and 3 ran at
 device_batch 12 × accum 2 throughout; in sweep 1 only S6 and S10 needed 6 × 4 (their
 `H·tph·cells = 524,288` buffer is 12.9 GiB at bs12).
 
-![all 21 runs](sweep_all21.png)
+![all 22 runs](sweep_all22.png)
 
 ## (a) The d_out ladder — an inverted U with its minimum at 48
 
@@ -155,6 +156,42 @@ it keeps `d_out` at 48 where they use 32, which is the d_out result again.
 
 All three curves are monotone at every eval point with no plateau and no instability; cells = 64
 showed no pathology despite giving only 6 comparisons per address.
+
+## (c3) V1 — probing a corner the rules reject, and untying does not rescue it
+
+V1 (`exp_n_0172`, H8 / tph64 / cells 256 / d_in 48 / d_out 24) was built to attack two
+established regularities at once. Both predicted it would lose, and it does — though by less
+than the tied comparisons implied.
+
+At the shared 18,874,368 table budget, all four runs:
+
+| | shape | d_in | d_out | proxy bpb | vs U3 |
+|---|---|---|---|---|---|
+| U3 | H4 tph256 c64 | 96 | 48 | **1.451010** | — |
+| U1 | H4 tph256 c64 | 32 | 48 | 1.457557 | +0.006547 |
+| **V1** | **H8 tph64 c256** | 48 | 24 | 1.459698 | +0.008688 |
+| U2 | H4 tph256 c64 | 64 | 48 | 1.460133 | +0.009123 |
+
+*Rank 16 of 22 proxy runs; −0.015051 against the S0 dense anchor.*
+
+**The tph-over-cells rule survives.** V1 sits in the rejected corner (tph 64 / cells 256) while
+U1–U3 sit in the favoured one (tph 256 / cells 64), and V1 loses to U1 by 0.002141 and to U3 by
+0.008688. Untying did *not* rescue it. But the margin is smaller than the tied comparison at this
+same budget suggested (0127 beat 0128 by 0.005454), and V1 is indistinguishable from U2
+(0.000435, well inside noise) — so the fair statement is that the corner is *disfavoured, not
+disqualifying*.
+
+**H8 likewise survives as mildly bad, not fatal** — V1 is mid-pack rather than at the bottom,
+consistent with the 37.7M H-slice where H8 cost 0.0039 rather than collapsing.
+
+**Attribution caveat, and it is a real one.** V1 differs from U1/U2/U3 in *four* things at once —
+H, tph, cells and d_out — so nothing here isolates any single axis. It tests the *conjunction*
+the rules reject, which is what it was for, and the conjunction loses. It is emphatically **not**
+a clean `d_out` result: it is the first run at this budget with d_out 24 rather than 48, but
+cells and tph move with it to hold the budget, exactly the confound the axis analysis described.
+
+Curve monotone at every eval point, no spikes, no NaNs; cells 256 with H8/tph64 showed no
+pathology. Ran at device_batch 12 × grad_accum 2, buffer 3.22 GB, 0.28 h.
 
 ## (d) It was never about head count — the rule is `H · d_in ≥ 128` *at 75.5M tables*
 
