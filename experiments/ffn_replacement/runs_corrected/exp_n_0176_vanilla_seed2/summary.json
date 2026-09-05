@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0176_vanilla_seed2",
+  "best_val_bpb": 1.1617980934113783,
+  "final_val_bpb": 1.1617980934113783,
+  "total_params": 35792640,
+  "training_time_hours": 0.568,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
