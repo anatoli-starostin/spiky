@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0165_compmhl_H4_din48_noout_nap8_tph128",
+  "best_val_bpb": 1.1766150221249316,
+  "final_val_bpb": 1.1766150221249316,
+  "total_params": 331148172,
+  "training_time_hours": 3.37,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
