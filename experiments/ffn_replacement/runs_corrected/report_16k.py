@@ -56,7 +56,13 @@ def load():
             tables=(DEPTH * H * tph * cells * row_width) if row_width else None,
             dbs=cfg.get('device_batch_size'),
             orig=s.get('originally_reported_bpb') or summ.get('final_val_bpb'),
-            corr=s['corrected_val_bpb']))
+            # nebius's worker writes `bpb_fixed`; the local scorer writes `corrected_val_bpb`
+            corr=s.get('corrected_val_bpb', s.get('bpb_fixed')),
+            miss=s.get('load_missing_keys',
+                       (s.get('checkpoint_reload_check') or {}).get('load_missing_keys')),
+            unex=s.get('load_unexpected_keys',
+                       (s.get('checkpoint_reload_check') or {}).get('load_unexpected_keys')),
+            cfg=cfg, summ=summ))
     for r in rows:
         r['delta'] = (r['corr'] - r['orig']) if r['orig'] else None
         r['native'] = r['delta'] is not None and abs(r['delta']) < 1e-12
@@ -74,8 +80,44 @@ def shape(r):
     return f"H{r['H']} tph{r['tph']} c{r['cells']} d{r['d_in']}/{r['d_out']}"
 
 
+def verify(rows):
+    """Independent guard check: rebuild every run from its OWN config.json and compare the
+    parameter count to its OWN summary.json, plus report the state-dict load counts its score
+    file recorded. The rebuild half is checked here from scratch; the load half can only be
+    read back, since the checkpoints for the nebius-side runs are not on this machine."""
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'tools'))
+    sys.path.insert(0, os.path.expanduser('~/projects/nanochat'))
+    from nanochat.common import get_base_dir
+    from nanochat.tokenizer import RustBPETokenizer
+    from model_build import build_model
+    vocab = RustBPETokenizer.from_directory(
+        os.path.join(get_base_dir(), 'tokenizer')).get_vocab_size()
+    print(f"{'run':<6}{'rebuilt':>13}{'summary.json':>15}{'match':>7}"
+          f"{'missing':>9}{'unexpected':>12}   verdict")
+    bad = []
+    for r in sorted(rows, key=lambda r: r['tag']):
+        m = build_model(r['cfg'], vocab, device='cpu')
+        built = sum(p.numel() for p in m.parameters())
+        del m
+        rec = r['summ'].get('total_params')
+        ok_p = rec is None or built == rec
+        ok_l = (r['miss'] in (0, None)) and (r['unex'] in (0, None))
+        v = ('OK' if ok_p and ok_l else
+             'PARAM MISMATCH — do not quote' if not ok_p else 'DIRTY LOAD — do not quote')
+        if not (ok_p and ok_l):
+            bad.append(r['tag'])
+        print(f"{r['tag']:<6}{built:>13,}{(rec or 0):>15,}{str(ok_p):>7}"
+              f"{str(r['miss']):>9}{str(r['unex']):>12}   {v}"
+              + ('   (no total_params recorded)' if rec is None else ''))
+    print(f"\nall runs pass the guard: {not bad}"
+          + ('' if not bad else f"  — failing: {', '.join(bad)}"))
+
+
 def main():
     rows = sorted(load(), key=lambda r: r['corr'])
+    if '--verify' in sys.argv:
+        verify(rows)
+        return
     print(f"ALL 16,000-STEP RUNS SCORED UNDER THE CORRECTED PROTOCOL ({len(rows)})")
     print("evaluate_bpb_fixed: bs48 x 100, skip 12, 2,451,456 val tokens of shard_06542.")
     print(f"Vanilla anchor exp_n_0135 = {ANCHOR:.6f}. "
