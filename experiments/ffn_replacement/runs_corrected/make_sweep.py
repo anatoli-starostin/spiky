@@ -77,7 +77,7 @@ SWEEP = [
 
 
 def build_cfg(name, H, tph, cells, d_in, d_out, note):
-    nap = {128: 7, 256: 8, 512: 9}[cells] if cells else None
+    nap = {64: 6, 128: 7, 256: 8, 512: 9, 1024: 10}[cells] if cells else None
     # soft-backward buffer is [tokens, H*tph, cells] fp32 -> 12.9 GiB at bs12 when
     # H*tph*cells = 524,288, which OOMs the 5090 (see exp_n_0162's train_oom_bs12.log)
     dbs = 6 if (cells and H * tph * cells >= 524_288) else 12
