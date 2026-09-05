@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0170_u3_compmhl_H4_c64_din96_dout48_tph256",
+  "best_val_bpb": 1.1819914994585679,
+  "final_val_bpb": 1.1819914994585679,
+  "total_params": 48920844,
+  "training_time_hours": 1.451,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
