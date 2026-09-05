@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_r5_stack80m_c128_din64_dout64",
+  "best_val_bpb": 1.4485177668410085,
+  "final_val_bpb": 1.4485177668410085,
+  "total_params": 80229900,
+  "training_time_hours": 0.321,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
