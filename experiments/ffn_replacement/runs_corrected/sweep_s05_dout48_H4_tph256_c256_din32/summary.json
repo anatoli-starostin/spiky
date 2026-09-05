@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s05_dout48_H4_tph256_c256_din32",
+  "best_val_bpb": 1.434572341309976,
+  "final_val_bpb": 1.434572341309976,
+  "total_params": 104952588,
+  "training_time_hours": 0.503,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
