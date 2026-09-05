@@ -1,0 +1,15 @@
+{
+  "run": "exp_n_0169_u1_compmhl_H4_c64_din32_dout48_tph256",
+  "description": "REAL 16k run of sweep U1: CompressionMHL H4/nap6(64 cells)/tph256, input d_in=32, output d_out=48. Corrected scaffolding; fixed protocol (bs48x100 skip12, held-out shard_06542 from token 0). device_batch_size 48 / grad_accum 1.",
+  "total_params": 48329484,
+  "training_time_hours": 1.438,
+  "eval_protocol": {"eval_batch_size": 48, "eval_steps": 100, "skip_rows": 12, "val_tokens_scored": 2451456, "batch_size_independent": true, "val_shard": "shard_06542.parquet"},
+  "corrected_val_bpb": 1.1888066943345563,
+  "best_val_bpb": 1.1888066943345563,
+  "checkpoint_reload_check": {"bpb_fixed": 1.1888066943345563, "load_missing_keys": 0, "load_unexpected_keys": 0, "note": "re-scoring the saved checkpoint reproduces summary.json exactly"},
+  "delta_vs_vanilla_0135": 0.023659694334556,
+  "delta_vs_0118_anchor": 0.023867694334556,
+  "delta_vs_0127_16k_ref": 0.001795694334556,
+  "comparison": "corrected vanilla anchor exp_n_0135 = 1.165147; 0118 anchor = 1.164939; 16k reference exp_n_0127 = 1.187011. U1 (nap6/64-cell, din32/dout48, 48.3M) = 1.188807: +0.0237 above vanilla, and essentially matches its 16k reference 0127 (+0.0018). The nap6 (64-cell) budget is materially weaker than the nap8 configs (S5 +0.0079); dropping cells 256->64 costs ~0.016 bpb here.",
+  "training_stability": "clean; monotonic to the end (final VALs 1.1902/1.1893/1.1888). No instability."
+}
