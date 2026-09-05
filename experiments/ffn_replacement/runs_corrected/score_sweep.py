@@ -8,6 +8,7 @@ of runs_corrected/ uses, with the sweep's comparability warning and the delta ag
 
     python score_sweep.py sweep_s01_tied_H4_tph256_c256_din32_dout32
 """
+import glob
 import json
 import os
 import sys
@@ -56,12 +57,9 @@ def main():
     del model
     torch.cuda.empty_cache()
 
-    # the run lives in one of the sweep manifests (sweep 1 or sweep 2)
+    # the run lives in one of the sweep manifests (sweep_manifest.json, sweep2_, sweep3_, ...)
     me = man = None
-    for mf in ('sweep_manifest.json', 'sweep2_manifest.json'):
-        p = os.path.join(HERE, mf)
-        if not os.path.exists(p):
-            continue
+    for p in sorted(glob.glob(os.path.join(HERE, 'sweep*_manifest.json'))):
         m = json.load(open(p))
         hit = next((r for r in m['runs'] if r['run'] == run), None)
         if hit is not None:

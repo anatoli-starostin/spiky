@@ -1,12 +1,13 @@
-"""Combined table and axis analysis over all 17 proxy runs (sweep 1 + sweep 2).
+"""Combined table and axis analysis over every proxy run in runs_corrected/.
 
-Reads every run's corrected_score.json and both manifests, prints the ranking with FULL
+Reads each run's corrected_score.json and every sweep*_manifest.json, prints the ranking with FULL
 projection-FLOPs accounting (compress AND decompress, against vanilla's whole FFN cost of
 2*384*1536 = 1,179,648 MACs/token), and works the axis comparisons the two sweeps set up.
 
     python summarise_all.py            # table + analysis
     python summarise_all.py --json     # same, as JSON on stdout
 """
+import glob
 import json
 import os
 import sys
@@ -17,10 +18,7 @@ VANILLA_FFN_MACS = 2 * 384 * 1536
 
 def load():
     runs = {}
-    for mf in ('sweep_manifest.json', 'sweep2_manifest.json'):
-        p = os.path.join(HERE, mf)
-        if not os.path.exists(p):
-            continue
+    for p in sorted(glob.glob(os.path.join(HERE, 'sweep*_manifest.json'))):
         for r in json.load(open(p))['runs']:
             sp = os.path.join(HERE, r['run'], 'corrected_score.json')
             if not os.path.exists(sp):
