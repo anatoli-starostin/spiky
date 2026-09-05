@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s09_pure_H1_tph1024_c256_din128_dout32",
+  "best_val_bpb": 1.4644007686331517,
+  "final_val_bpb": 1.4644007686331517,
+  "total_params": 79418124,
+  "training_time_hours": 0.461,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
