@@ -1,0 +1,30 @@
+{
+  "n_steps": 4000,
+  "effective_batch_sequences": 24,
+  "effective_batch_tokens": 12288,
+  "eval_every": 500,
+  "vanilla_ffn_macs_per_token": 1179648,
+  "runs": [
+    {
+      "idx": 1,
+      "run": "exp_n_0173_v2_proxy_H8_tph64_c256_din48_dout48",
+      "tag": "V2",
+      "params": 68237580,
+      "expected": 68237580,
+      "deviation": 0.0,
+      "device_batch_size": 12,
+      "grad_accum": 2,
+      "H": 8,
+      "tph": 64,
+      "cells": 256,
+      "d_in": 48,
+      "d_out": 48,
+      "tables": 37748736,
+      "compress_flops": 147456,
+      "decompress_flops": 147456,
+      "projection_flops_total": 294912,
+      "compress_flops_ratio": 0.25,
+      "projection_flops_ratio_vs_vanilla_ffn": 0.25
+    }
+  ]
+}
