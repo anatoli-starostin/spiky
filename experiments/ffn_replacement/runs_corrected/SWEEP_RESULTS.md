@@ -1,6 +1,6 @@
-# FFN-shape proxy sweeps — results (17 runs)
+# FFN-shape proxy sweeps — results (18 runs)
 
-Two sweeps, 11 + 6 runs, all on one budget: 4,000 steps, effective batch 24 sequences
+Three sweeps, 11 + 6 + 1 runs, all on one budget: 4,000 steps, effective batch 24 sequences
 (12,288 tokens), lr 3e-4 with 10% linear warmup and cosine decay to 0.1× peak parameterised by
 `n_steps=4000`. Every run is scored on the corrected protocol (`evaluate_bpb_fixed`: bs48 × 100,
 leading 12 rows skipped, 2,451,456 val tokens of held-out `shard_06542.parquet`). Setup and
@@ -15,7 +15,7 @@ file map: [`SWEEP_README.md`](SWEEP_README.md). Table and analysis are regenerat
 > **~0.002 noise floor** (set by the S2/S3 pair: differences that small flip sign across eval
 > points).
 
-## All 17 runs
+## All 18 runs
 
 FLOPs are MACs/token for the two dense projections — compress `H·384·d_in` and decompress
 `H·384·d_out` — against vanilla's **whole** FFN at `2·384·1536` = 1,179,648. The first sweep
@@ -36,19 +36,20 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S7 | H4 c128 in32 out64 | 79,934,220 | 50,331,648 | 1.455528 | −0.019222 | +0.001180 | 49,152 | 98,304 | 0.1250× | 0.32 |
 | S8 | H2 c256 in64 out32 | 79,491,852 | 50,331,648 | 1.456473 | −0.018276 | +0.002125 | 49,152 | 24,576 | 0.0625× | 0.49 |
 | R3 | H4 c128 in32 out96 | 105,394,956 | 75,497,472 | 1.459274 | −0.015475 | +0.004926 | 49,152 | 147,456 | 0.1667× | 0.36 |
+| R7 | **H2** c256 in32 out48 | 104,583,564 | 75,497,472 | 1.463430 | −0.011319 | +0.009082 | 24,576 | 36,864 | 0.0521× | 0.51 |
 | S9 | H1 c256 in128 out32 | 79,418,124 | 50,331,648 | 1.464401 | −0.010349 | +0.010053 | 49,152 | 12,288 | 0.0521× | 0.46 |
 | S6 | H4 c512 in32 out16 | 79,491,852 | 50,331,648 | 1.469439 | −0.005310 | +0.015091 | 49,152 | 24,576 | 0.0625× | 0.84 |
 | S4 | H4 c256 in32 out16 | 54,326,028 | 25,165,824 | 1.470463 | −0.004287 | +0.016115 | 49,152 | 24,576 | 0.0625× | 0.47 |
 | S0 | dense 4× MLP | 35,792,640 | — | 1.474749 | — | +0.020401 | — | — | 1.0000× | 0.07 |
 
 Every LUT shape beats the dense control, by 0.004 to 0.040. **No training instability in any
-of the 17** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
+of the 18** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
 high-`d_in` (S3, S9, R4, R5) and low-`d_out` (S4, S6) configurations. Every built param count
-was verified before its run trained; all landed within 1% of the brief. All of sweep 2 ran at
-device_batch 12 × accum 2; in sweep 1 only S6 and S10 needed 6 × 4 (their
+was verified before its run trained; all landed within 1% of the brief. Sweeps 2 and 3 ran at
+device_batch 12 × accum 2 throughout; in sweep 1 only S6 and S10 needed 6 × 4 (their
 `H·tph·cells = 524,288` buffer is 12.9 GiB at bs12).
 
-![all 17 runs](sweep_all17.png)
+![all 18 runs](sweep_all18.png)
 
 ## (a) The d_out ladder — an inverted U with its minimum at 48
 
@@ -115,25 +116,50 @@ exploit fine routing. R1 shows the same crossover against S5.
 75.5M-table run is the ~105M-total run, so this data cannot separate "table budget" from "model
 size class". A c128/d_out 96 point at d_in 64 would; nothing here has one.
 
-## (d) The head trade — the gap closes as the config gets richer
+## (d) It was never about head count — the rule is `H · d_in ≥ 128`
+
+The head trade looked like it depended on how "rich" the config was:
 
 | config | H4 | H2 | Δ | proj FLOPs |
 |---|---|---|---|---|
 | d_in 32, d_out 32 | S1 1.454348 | S8 1.456473 | +0.002125 | 0.0833× → 0.0625× |
-| d_in 64, d_out 48 | R4 1.441806 | R6 1.441909 | **+0.000103** | 0.1458× → **0.0729×** |
+| d_in 64, d_out 48 | R4 1.441806 | R6 1.441909 | +0.000103 | 0.1458× → 0.0729× |
+| d_in 32, d_out 48 | S5 1.434572 | **R7 1.463430** | **+0.028858** | 0.1042× → 0.0521× |
 
-At the lean config H2 cost a (marginal) 0.0021; at the rich config it costs 0.000103 — twenty
-times *below* the noise floor. H2 starts slower (+0.0072 at step 2000) and catches up
-completely. Sweep 1 flagged this shape as "may close at 16k"; it closes inside 4k.
+**R7 refutes the "richness" reading outright.** It is the richest config of the three and the
+head penalty there is +0.0289 — the *largest* head effect measured anywhere, fourteen times
+the noise floor, and bigger than collapsing to H1 at the lean config (S9, +0.0101).
 
-Since halving heads halves **both** projections, **R6 is a free halving of the FFN's dense
-projection cost at identical quality** — the cleanest efficiency result in either sweep. H1
-remains clearly worse (S9, +0.010053), so the useful range is H ∈ {2, 4}, not fewer.
+What actually separates the cases is the **total routing code width `H · d_in`** — the number
+of dimensions the sign comparisons are computed over, summed across heads. At cells 256 /
+d_out 48 / 75,497,472 tables, all four points that exist:
 
-Scope: measured at d_in 64 / d_out 48. The best config overall is S5 (H4, d_in 32, d_out 48)
-and its H2 counterpart was **not** run — and halving heads at d_in 32 also halves the *total*
-routing width (4×32 = 128 → 2×32 = 64), a different change from the one tested here
-(4×64 = 256 → 2×64 = 128). H2-at-S5 does not follow from R6 and should not be assumed.
+| | H × d_in | total code | proxy bpb |
+|---|---|---|---|
+| R7 | 2 × 32 | **64** | 1.463430 |
+| S5 | 4 × 32 | 128 | **1.434572** |
+| R6 | 2 × 64 | 128 | 1.441909 |
+| R4 | 4 × 64 | 256 | 1.441806 |
+
+The three configurations at total code ≥ 128 span 1.4346–1.4419; the one at 64 sits 0.021
+below the worst of them. **Total code width ≥ 128 is a binding floor; above it the split
+across heads is a second-order effect** (S5's 4×32 beats R6's 2×64 by 0.0073 — real, but four
+times smaller than the starvation penalty). R6's "free FLOPs halving" works precisely because
+2×64 still totals 128; halving the heads *without* doubling `d_in` breaks the floor.
+
+Note this makes the FLOPs arithmetic transparent: compress cost is `H·384·d_in` = 384 × total
+code width, so it depends on nothing but the code width. R6 and S5 have **identical compress
+cost** (49,152); R6's saving is entirely on the decompress side, where halving heads halves
+`H·384·d_out`. So the real trade R6 offers is "half the decompress projection for +0.0073 bpb",
+not "half of everything for free".
+
+The curve shapes confirm the two cases are different in kind. R6's deficit *converges* to zero
+(+0.0072 at step 2000 → +0.0001 at 4000) — a slow start. R7's *widens* monotonically (+0.0084
+at 500 → +0.0289 at 4000) — a ceiling, and one that should be **worse** at 16k, not better.
+
+H1 remains clearly worse (S9, +0.010053), and S9's total code is 1 × 128 = 128, i.e. it clears
+the floor and still loses — so the floor is necessary, not sufficient. The useful range is
+H ∈ {2, 4} with `H · d_in ≥ 128`.
 
 ## (e) Quality per projection-FLOP
 
@@ -148,12 +174,17 @@ of dense projection cost:
 | R1 | 0.037156 | 0.1250× | 0.2972 | 130,265,868 |
 | S8 | 0.018276 | 0.0625× | 0.2924 | 79,491,852 |
 | S1 | 0.020401 | 0.0833× | 0.2448 | 79,639,308 |
+| … | | | | |
+| R7 | 0.011319 | 0.0521× | 0.2172 | 104,583,564 |
 
 The honest counterweight to the ranking table: **high-d_out shapes buy quality with projection
 FLOPs.** S5 is the best model but at 0.1042× vanilla, twice S8's 0.0625×; R2 reaches 0.1667×
 and is worse than S5 anyway. R6 tops this column because it matches R4's quality at half the
-cost. Note also that projection FLOPs are only part of the story — the table gather itself is
-not counted here, and it scales with `H·tph`, which is 1024 for every LUT run in both sweeps.
+cost. R7 is the cheapest LUT of all 18 at 0.0521× and still ranks near the bottom of this
+column — cutting the routing code below the floor is not a way to buy efficiency.
+
+Note also that projection FLOPs are only part of the story — the table gather itself is not
+counted here, and it scales with `H·tph`, which is 1024 for every LUT run in all three sweeps.
 
 ## (f) Updated recommendation for 16k / batch 48 on nebius-h100
 
@@ -168,8 +199,9 @@ Revised in light of (a)–(e). The post-sweep-1 recommendation (R4, the d_in+d_o
 
 2. **R6 — `H2 / tph512 / cells256 / d_in 64 / d_out 48`, 104,731,404 params, 0.0729× vanilla.**
    0.0073 behind S5 on quality but at 70% of its projection cost, and the best quality-per-FLOP
-   of all 17. This is the efficiency pick, and the one to run if the FFN-replacement claim is
-   about cost rather than raw bpb.
+   of all 18. This is the efficiency pick, and the one to run if the FFN-replacement claim is
+   about cost rather than raw bpb. Note precisely what it buys: its compress cost is identical
+   to S5's (49,152 — both total 128 code dimensions); the saving is entirely decompress.
 
 3. **S2 — `H4 / tph256 / cells256 / d_in 64 / d_out 32`, 79,934,988 params, 0.1250× vanilla.**
    The 80M-class point: 0.0146 behind S5 at 76% of the parameters. R5 ties it (0.000653, inside
@@ -177,13 +209,14 @@ Revised in light of (a)–(e). The post-sweep-1 recommendation (R4, the d_in+d_o
    size class. Worth a slot as the cheap end of the frontier and as the test of whether d_in
    survives a longer schedule.
 
-**One cheap run would sharpen this a lot:** `H2 / tph512 / cells256 / d_in 32 / d_out 48`
-(~104.8M) — the H2 counterpart of S5, which no run in either sweep covers. If the head gap is
-closed there as it is at R4/R6, it would dominate both (1) and (2): S5's quality at roughly
-0.052× vanilla projection FLOPs.
+That run was made — it is **R7**, and the answer is no. R7 (`H2 / tph512 / cells256 / d_in 32 /
+d_out 48`, 104,583,564) reads **1.463430**, +0.028858 behind S5, because halving the heads at
+d_in 32 drops the total routing code from 128 to 64 and starves it. The ranking above is
+therefore unchanged by it, and (d) now states the rule that survives: **`H · d_in ≥ 128`.**
 
 **Do not spend 16k time on**: d_out 16 in any form (S4, S6), d_out ≥ 64 (R1, R2 — past the
-turnover), H = 1 (S9), cells 512 (S6, S10), or the d_in+d_out stack (R4).
+turnover), H = 1 (S9), cells 512 (S6, S10), the d_in+d_out stack (R4), or any shape with
+`H · d_in < 128` (R7).
 
 **Carry these caveats into the 16k reads.** One eighth the training at half the batch, with peak
 LR held at 3e-4 across all 17 for mutual comparability (a √2 rule would suggest 2.12e-4 at this

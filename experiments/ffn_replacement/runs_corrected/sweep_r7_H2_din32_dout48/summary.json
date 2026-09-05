@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_r7_H2_din32_dout48",
+  "best_val_bpb": 1.463430418444985,
+  "final_val_bpb": 1.463430418444985,
+  "total_params": 104583564,
+  "training_time_hours": 0.505,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

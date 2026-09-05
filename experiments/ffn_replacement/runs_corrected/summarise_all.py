@@ -88,12 +88,23 @@ def main():
                       ('S05', 'R4', 'c256 out48, tables 75.5M')):
         print(f"   {lbl:<28} {a} {R[a]['bpb']:.6f} -> {b} {R[b]['bpb']:.6f}  "
               f"{R[b]['bpb']-R[a]['bpb']:+.6f}")
-    print("\n(d) head trade H4 -> H2, lean vs rich config")
+    print("\n(d) head trade H4 -> H2, and what actually drives it")
     for a, b, lbl in (('S01', 'S08', 'd_in 32, d_out 32'),
-                      ('R4', 'R6', 'd_in 64, d_out 48')):
-        print(f"   {lbl:<20} {a} {R[a]['bpb']:.6f} -> {b} {R[b]['bpb']:.6f}  "
-              f"{R[b]['bpb']-R[a]['bpb']:+.6f}   proj FLOPs "
-              f"{R[a]['ratio']:.4f}x -> {R[b]['ratio']:.4f}x")
+                      ('R4', 'R6', 'd_in 64, d_out 48'),
+                      ('S05', 'R7', 'd_in 32, d_out 48')):
+        if a in R and b in R:
+            print(f"   {lbl:<20} {a} {R[a]['bpb']:.6f} -> {b} {R[b]['bpb']:.6f}  "
+                  f"{R[b]['bpb']-R[a]['bpb']:+.6f}   proj FLOPs "
+                  f"{R[a]['ratio']:.4f}x -> {R[b]['ratio']:.4f}x")
+    quad = [t for t in ('R7', 'S05', 'R6', 'R4') if t in R]
+    if len(quad) == 4:
+        print("    at cells 256 / d_out 48 — the rule is the TOTAL routing code width "
+              "H*d_in, not H:")
+        for t in sorted(quad, key=lambda t: R[t]['H'] * R[t]['d_in']):
+            r = R[t]
+            print(f"      {t:<4} H{r['H']} x d_in {r['d_in']:>3} = "
+                  f"{r['H']*r['d_in']:>3} total code   bpb {r['bpb']:.6f}"
+                  f"{'   <- starved' if r['H']*r['d_in'] < 128 else ''}")
     print("\n(e) quality per projection-FLOP — bpb below S0 per unit of proj/vanilla ratio")
     for r in sorted((r for r in R.values() if r['H']),
                     key=lambda r: r['d0'] / r['ratio'])[:6]:
