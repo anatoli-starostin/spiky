@@ -1,0 +1,20 @@
+{
+  "exp_name": "exp_n_0177_vanilla48k_corrected",
+  "ffn_type": "dense",
+  "tie_unembedder": false,
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 48000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 500,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "_arch_note": "Vanilla dense-MLP FFN @48K, RE-RUN of exp_n_0151 with the CORRECTED trainer so the periodic curve is corrected end-to-end. Fork of the exp_n_0135/0151 vanilla config (dense 4x GELU MLP bias=False, untied, 6L d384, ~35.79M), n_steps 48000, bs48/ga1, random_seed 1 (SAME as 0151, so it reproduces 0151's trajectory). KEY vs 0151: every periodic eval (eval_every 500) uses evaluate_bpb_fixed (bs48x100, skip 12, held-out shard_06542 from token 0) instead of the legacy bs48x10 window — so the logged val_bpb curve is on the corrected scale and directly comparable to 0118@48K. Corrected final should land ~1.115420 (0151's re-scored value) as a sanity check. Runs on worker 89.169.123.123."
+}
