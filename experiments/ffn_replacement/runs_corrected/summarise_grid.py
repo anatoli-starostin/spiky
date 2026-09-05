@@ -72,10 +72,16 @@ def main():
 
     print("\nCORRECTION SIZE vs ORIGINAL device_batch_size "
           "(the batch-coupled window: dbs x 512 x eval_steps tokens)")
-    by = {}
+    print("   (runs already TRAINED on the fixed protocol have correction 0 by construction "
+          "and are excluded)")
+    by, native = {}, []
     for r in rows:
-        if r['delta'] is not None:
-            by.setdefault(r['dbs'], []).append(r)
+        if r['delta'] is None:
+            continue
+        if abs(r['delta']) < 1e-12:
+            native.append(r)
+            continue
+        by.setdefault(r['dbs'], []).append(r)
     for dbs in sorted(by):
         ds = [r['delta'] for r in by[dbs]]
         toks = by[dbs][0]['old_tokens']
@@ -83,6 +89,9 @@ def main():
               f"correction mean {sum(ds)/len(ds):+.6f}  "
               f"range [{min(ds):+.6f}, {max(ds):+.6f}]")
         print(f"            runs: " + ", ".join(r['tag'] for r in by[dbs]))
+    if native:
+        print(f"   already on the fixed protocol (correction 0): "
+              + ", ".join(r['tag'] for r in native))
 
     print("\nRANK CHECK — original order vs corrected order (16k runs only, "
           "the only ones on a common training budget)")
@@ -92,6 +101,14 @@ def main():
     print("   by ORIGINAL:  " + " < ".join(r['tag'] for r in o))
     print("   by CORRECTED: " + " < ".join(r['tag'] for r in c))
     print(f"   ordering preserved: {[r['tag'] for r in o] == [r['tag'] for r in c]}")
+    coh = [r for r in k16 if r['dbs'] == 12 and abs(r['delta'] or 1) > 1e-12]
+    oc = [r['tag'] for r in sorted(coh, key=lambda r: r['orig'])]
+    cc = [r['tag'] for r in sorted(coh, key=lambda r: r['corr'])]
+    print(f"\n   WITHIN the bs12 16k cohort (n={len(coh)}) — the only cohort big enough to test:")
+    print("     by ORIGINAL:  " + " < ".join(oc))
+    print("     by CORRECTED: " + " < ".join(cc))
+    print(f"     ordering preserved: {oc == cc}")
+
     print("\n   sign vs the vanilla anchor, before and after:")
     for r in sorted(k16, key=lambda r: r['corr']):
         if r['kind'] == 'dense':
@@ -101,6 +118,40 @@ def main():
         flip = '  <- FLIPS' if (was < 0) != (now < 0) else ''
         print(f"     {r['tag']}  was {was:+.5f} vs 1.20144   now {now:+.5f} vs "
               f"{ANCHOR:.5f}{flip}")
+
+    print("\nISO-PARAMETER CELLS LINES (the proxy sweeps' 'pushing cells up is the wrong "
+          "axis', tested at full length)")
+    groups = {}
+    for r in rows:
+        if r['kind'] == 'compression' and r['n_steps'] == 16000:
+            groups.setdefault(r['params'], []).append(r)
+    for p, g in sorted(groups.items()):
+        g = [r for r in g if r['d_in'] == 48]          # hold d_c fixed within a line
+        if len(g) < 2:
+            continue
+        g.sort(key=lambda r: r['cells'])
+        print(f"   {p:,} params, d_c 48:")
+        for r in g:
+            print(f"      {r['tag']}  tph{r['tph']:<4} cells {r['cells']:>4}  "
+                  f"bpb {r['corr']:.6f}")
+        print(f"      monotone in cells (more cells = worse): "
+              f"{all(g[i]['corr'] < g[i+1]['corr'] for i in range(len(g)-1))}")
+
+    print("\nHEAD SPLIT AT CONSTANT H*d_c (the H*d_in floor test)")
+    hs = {}
+    for r in rows:
+        if r['kind'] == 'compression' and r['n_steps'] == 16000 and r['d_in']:
+            hs.setdefault((r['params'], r['tph'], r['cells']), []).append(r)
+    for k, g in sorted(hs.items()):
+        if len(g) < 2:
+            continue
+        g.sort(key=lambda r: r['corr'])
+        code = g[0]['H'] * g[0]['d_in']
+        print(f"   {k[0]:,} params, tph{k[1]} cells{k[2]}, H*d_c = {code}:")
+        for r in g:
+            print(f"      {r['tag']}  H{r['H']} x d_c {r['d_in']:>3}  bpb {r['corr']:.6f}"
+                  f"  (+{r['corr']-g[0]['corr']:.6f})")
+        print(f"      spread {g[-1]['corr']-g[0]['corr']:.6f}")
 
 
 if __name__ == '__main__':
