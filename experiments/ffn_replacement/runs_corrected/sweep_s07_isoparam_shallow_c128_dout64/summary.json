@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s07_isoparam_shallow_c128_dout64",
+  "best_val_bpb": 1.4555277815422836,
+  "final_val_bpb": 1.4555277815422836,
+  "total_params": 79934220,
+  "training_time_hours": 0.32,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
