@@ -6,7 +6,7 @@
   "runs": [
     {
       "idx": 1,
-      "run": "exp_n_0169_u1_16k_H4_c64_din32_dout48",
+      "run": "exp_n_0171_u1_16k_H4_c64_din32_dout48",
       "params": 48329484,
       "expected": 48329484,
       "deviation": 0.0,
