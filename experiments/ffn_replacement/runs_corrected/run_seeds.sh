@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the 6 second-sweep runs sequentially, in seeds_manifest.json order.
+# Run the 6 second-sweep runs sequentially, in sweep_seeds_manifest.json order.
 # Per run: SMOKE=1 param check -> train (falling back to device_batch 6 x accum 8 if the
 # bs12 attempt dies without a summary) -> score. Local only, no network, no git.
 set -u
@@ -9,7 +9,7 @@ export MPLCONFIGDIR=/tmp/mplcfg
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 RUNS=$("$PY" -c "
-import json;print(' '.join(r['run'] for r in json.load(open('$RC/seeds_manifest.json'))['runs']))")
+import json;print(' '.join(r['run'] for r in json.load(open('$RC/sweep_seeds_manifest.json'))['runs']))")
 
 for r in $RUNS; do
   D="$RC/$r"
@@ -18,7 +18,7 @@ for r in $RUNS; do
   fi
   echo "$(date -Is) === $r : SMOKE param check"
   want=$("$PY" -c "
-import json;m=json.load(open('$RC/seeds_manifest.json'))
+import json;m=json.load(open('$RC/sweep_seeds_manifest.json'))
 print(next(x['params'] for x in m['runs'] if x['run']=='$r'))")
   got=$(cd "$D" && SMOKE=1 "$PY" train.py 2>/dev/null | sed -n 's/.*params=\([0-9,]*\).*/\1/p' | tr -d ,)
   if [ "$got" != "$want" ]; then

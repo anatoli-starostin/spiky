@@ -113,14 +113,14 @@ def main():
                           cfg['lut_inner_in_dim'] / 589824,
                           projection_flops_ratio_vs_vanilla_ffn=cfg['lut_n_heads'] * 384 *
                           (cfg['lut_inner_in_dim'] + cfg['lut_inner_out_dim']) / (2 * 384 * 1536)))
-    with open(os.path.join(HERE, 'seeds_manifest.json'), 'w') as f:
+    with open(os.path.join(HERE, 'sweep_seeds_manifest.json'), 'w') as f:
         json.dump(dict(n_steps=base['n_steps'], effective_batch_sequences=24,
                        effective_batch_tokens=base['total_batch_size'],
                        eval_every=base['eval_every'],
                        vanilla_ffn_macs_per_token=2 * 384 * 1536,
                        cloned_from='sweep_s05_dout48_H4_tph256_c256_din32',
                        runs=order), f, indent=2)
-    print(f'\nwrote {HERE}/seeds_manifest.json')
+    print(f'\nwrote {HERE}/sweep_seeds_manifest.json')
     print('both clones differ from S5 in the seed alone — clear to run')
 
 

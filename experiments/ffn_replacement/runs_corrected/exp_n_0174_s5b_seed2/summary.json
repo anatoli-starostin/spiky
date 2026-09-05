@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0174_s5b_seed2",
+  "best_val_bpb": 1.4524773954388515,
+  "final_val_bpb": 1.4524773954388515,
+  "total_params": 104952588,
+  "training_time_hours": 0.514,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

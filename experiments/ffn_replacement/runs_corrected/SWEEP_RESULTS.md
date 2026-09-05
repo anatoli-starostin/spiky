@@ -12,8 +12,96 @@ file map: [`SWEEP_README.md`](SWEEP_README.md). Table and analysis are regenerat
 > numbers sit far above it and must **never** be read against `exp_n_0135` (1.165147),
 > `exp_n_0136` (1.192926), `exp_n_0118` (1.164939) or `exp_n_0129` (1.170961).
 > **S0 is the zero-line.** Only the *ordering* transfers, and only where a margin clears the
-> **~0.002 noise floor** (set by the S2/S3 pair: differences that small flip sign across eval
-> points).
+> noise floor — **measured at 0.0096 sd for 4k proxy runs and bounded at <=0.0035 for 16k runs**,
+> see the section immediately below. The old "~0.002" figure was an assumption and is wrong.
+
+> # ⚠️ THE NOISE FLOOR IS MEASURED NOW, AND IT IS MUCH LARGER THAN ASSUMED
+>
+> Read this before any comparison below. The "~0.002 noise floor" quoted throughout this
+> document was an **inherited assumption**, never a measurement. It has now been measured, and
+> it is wrong by roughly a factor of five at the 4k proxy budget.
+>
+> Three runs of the **identical S5 config**, differing only in `random_seed`:
+>
+> | | seed | proxy bpb | vs mean |
+> |---|---|---|---|
+> | S5 (`sweep_s05_…`) | 1 | 1.434572 | −0.011020 |
+> | S5b (`exp_n_0174`) | 2 | 1.452477 | +0.006885 |
+> | S5c (`exp_n_0175`) | 3 | 1.449728 | +0.004136 |
+>
+> **mean 1.445593 · sd 0.009642 · range 0.017905** — the sd is **4.8×** the assumed floor and
+> the range is **9.0×** it.
+>
+> **This is a lower bound.** Verified empirically by building the model at two seeds and diffing
+> the state dicts: `random_seed` re-draws 28,118,016 parameters (26.8%) — `tok_emb`, `head`,
+> `attn.qkv`, `ffn.compress.{weight,bias}`, `ffn.decompress.bias` — and leaves 76,951,356
+> untouched, **including the entire 75,497,472-parameter LUT table budget and its anchor pairs**,
+> which are seeded from `lut_base_seed` through their own generator. The training loader is
+> deterministic from token 0 with no shuffle, so **data order is identical too**. True
+> run-to-run variance, with the tables and the data order also re-drawn, can only be larger.
+>
+> **n = 3, so the sd is itself very uncertain**: the χ² 95% interval on it is
+> [0.0056, 0.0606]. Do not treat 0.0096 as a precise floor. A defensible number needs ~10 seeds
+> (≈24% relative error on the sd) and ideally 20 (≈16%); at n = 3 the relative error is ~50%.
+> Note also that two of the three (S5b, S5c) agree to 0.002749 — it is the *original* seed-1 run
+> that sits apart, so the sd is dominated by one draw.
+>
+> ## Where the variance comes from: late divergence
+>
+> | step | 500 | 1000 | 1500 | 2000 | 2500 | 3000 | 3500 | 4000 |
+> |---|---|---|---|---|---|---|---|---|
+> | spread | 0.0029 | 0.0012 | 0.0018 | 0.0032 | 0.0099 | 0.0147 | 0.0171 | 0.0179 |
+>
+> The three trajectories are indistinguishable to step 2000 and then separate monotonically. The
+> 4k proxy therefore measures the runs **at the point of maximum divergence**, which is the worst
+> possible place to read a fine distinction.
+>
+> ## The 16k numbers are NOT this noisy — and there is an internal check that proves it
+>
+> The budget-law fit over the 19 CompressionMHL runs at 16k has a **residual sd of 0.0035**. That
+> residual contains *both* shape effects and seed noise, so 16k seed noise is bounded above by
+> 0.0035 — a third of the 4k figure. If 16k runs had a seed sd of 0.0096, the 16k scatter around
+> the budget law would have to be at least that wide, and it is not.
+>
+> **So: judge 4k proxy comparisons against ~0.0096, and 16k comparisons against ≤0.0035.** The
+> two budgets have different noise floors, and conflating them was the error.
+>
+> ![seed variance](seed_variance.png)
+>
+> ## Recalibration — what survives
+>
+> | claim | margin | verdict |
+> |---|---|---|
+> | budget law, −0.00746/doubling over 4 doublings = 0.0298 total | 19 runs, R² 0.89 | **SURVIVES** — a multi-point trend, 8× the 16k bound |
+> | tph-over-cells, 5 comparisons, margins 0.0028–0.0095 | each ≤ 2.7× the 16k bound | **SURVIVES DIRECTIONALLY** — no single margin is decisive, but 5/5 in the same direction is a sign test at p ≈ 0.03 |
+> | H extremes (H1 +0.0045, H8 +0.0039 vs H2 at 37.7M) | ~1.2× the 16k bound | **WEAK** — 2/2 same direction is p = 0.25; suggestive only |
+> | S5 vs 0129 at 16k, d_in cut +0.002135 | 0.6× the 16k bound | **COLLAPSES** — single pair, inside noise |
+> | U1 vs 0127 at 16k, +0.001796 | 0.5× | **COLLAPSES** |
+> | H2 vs H4 at 37.7M, +0.001349 | 0.4× | **COLLAPSES** (was already called unresolved) |
+> | 0118 vs vanilla, −0.000208 | 0.06× | **"matches to within noise" still holds — but the noise is 17× the margin**, so it neither establishes parity nor excludes a ±0.0035 gap in either direction |
+> | V1 vs U1 at 4k, +0.002141 | 0.22× the 4k sd | **COLLAPSES** |
+> | V1 vs U2 at 4k, +0.000435 | 0.05× | **COLLAPSES** (already called noise) |
+> | V2 vs the budget law, +0.000295 miss | 0.03× | **COLLAPSES** — the "d_out buys exactly the law" reading is unfalsifiable at this precision, not confirmed |
+>
+> ## S5's proxy win was substantially luck
+>
+> S5's three-seed **mean is 1.445593**, which would rank about **5th of 23** rather than 1st;
+> its original 1.434572 was the best of three draws. **11 of the 23 proxy runs fall within one
+> seed-sd of that mean** — so the top third of the proxy ranking cannot be ordered at all.
+>
+> Stated fairly: every other proxy run has only one seed too, so their numbers are equally
+> uncertain and some will have drawn unluckily. The correct conclusion is not "S5 is worse than
+> we thought" but **"the 4k proxy cannot resolve differences below ~0.01, and its fine ranking
+> should not be used"**. The 4/4 proxy-vs-16k rank agreement reported earlier looks better than
+> it should — with 4 items, an exact match has probability 1/24 ≈ 4% by chance, so it is
+> suggestive but was over-read as validation.
+>
+> **Cheapest way to settle it:** two more seeds of R1 (the current proxy runner-up at 1.437593),
+> ~0.6 h on the 5090. If R1's mean also regresses toward ~1.445, the whole top of the proxy
+> ranking is one undifferentiated cluster. Seeds at 16k would be more valuable still but cost
+> ~3 h each.
+
+---
 
 ## All 23 runs
 
