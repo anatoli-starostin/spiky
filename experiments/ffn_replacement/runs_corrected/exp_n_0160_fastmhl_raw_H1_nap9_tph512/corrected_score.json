@@ -1,0 +1,14 @@
+{
+  "run": "exp_n_0160_fastmhl_raw_H1_nap9_tph512",
+  "description": "Pure raw FastMultiHeadLut FFN (raw_n_heads=1), scaled from exp_n_0136: raw_nap 8->9, raw_tph 128->512. R=512 tables, k=9 (2^9=512 rows/table), n_outputs=384. Trained 16k steps under the corrected scaffolding (train_fixed.py); val curve and final score both use the fixed protocol (bs48 x 100 eval steps, skip 12 rows, held-out shard_06542 from token 0).",
+  "total_params": 632694540,
+  "training_time_hours": 5.791,
+  "eval_protocol": {"eval_batch_size": 48, "eval_steps": 100, "skip_rows": 12, "val_tokens_scored": 2451456, "batch_size_independent": true, "val_shard": "shard_06542.parquet"},
+  "corrected_val_bpb": 1.187012952338298,
+  "best_val_bpb": 1.187012952338298,
+  "checkpoint_reload_check": {"bpb_fixed": 1.187012952338298, "load_missing_keys": 0, "load_unexpected_keys": 0, "note": "re-scoring the saved checkpoint reproduces summary.json exactly"},
+  "delta_vs_vanilla_0135": 0.021865852338298,
+  "delta_vs_naive_0136": -0.005913047661702,
+  "comparison": "corrected vanilla anchor exp_n_0135 = 1.165147; naive baseline exp_n_0136 = 1.192926. This run sits +0.0219 ABOVE vanilla (still worse than dense) but -0.0059 BELOW the naive 0136 (the extra table capacity, 632.7M vs 0136's 330.7M, buys a modest bpb gain but does not reach dense quality).",
+  "training_stability": "clean; loss and val_bpb decreased monotonically to the end (final [VAL] steps 15400/15600/15800/16000 = 1.1878/1.1875/1.1872/1.1870). No instability."
+}
