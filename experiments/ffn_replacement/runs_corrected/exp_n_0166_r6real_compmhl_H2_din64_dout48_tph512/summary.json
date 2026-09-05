@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0166_r6real_compmhl_H2_din64_dout48_tph512",
+  "best_val_bpb": 1.1754727206349083,
+  "final_val_bpb": 1.1754727206349083,
+  "total_params": 104731404,
+  "training_time_hours": 3.091,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
