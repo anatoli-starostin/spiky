@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_r6_H2_din64_dout48",
+  "best_val_bpb": 1.4419090134989354,
+  "final_val_bpb": 1.4419090134989354,
+  "total_params": 104731404,
+  "training_time_hours": 0.503,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
