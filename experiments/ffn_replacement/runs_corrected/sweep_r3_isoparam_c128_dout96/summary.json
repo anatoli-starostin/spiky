@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_r3_isoparam_c128_dout96",
+  "best_val_bpb": 1.4592744704465483,
+  "final_val_bpb": 1.4592744704465483,
+  "total_params": 105394956,
+  "training_time_hours": 0.359,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
