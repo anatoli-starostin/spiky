@@ -27,7 +27,9 @@ def load():
             H, d_in, d_out = r['H'], r['d_in'], r['d_out']
             cf = (H * 384 * d_in) if H else None
             df = (H * 384 * d_out) if H else None
-            tag = r['run'].split('_')[1].upper()
+            # manifests may carry an explicit tag (a run named exp_n_XXXX has no useful
+            # positional label); otherwise fall back to the sweep_<tag>_... convention
+            tag = r.get('tag') or r['run'].split('_')[1].upper()
             runs[tag] = dict(
                 tag=tag, run=r['run'], H=H, tph=r['tph'], cells=r['cells'],
                 d_in=d_in, d_out=d_out, params=s['total_params'],
