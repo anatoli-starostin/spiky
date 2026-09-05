@@ -1,0 +1,14 @@
+{
+  "run": "exp_n_0161_fastmhl_raw_H1_nap10_tph256",
+  "description": "Pure raw FastMultiHeadLut FFN (raw_n_heads=1), scaled from exp_n_0136: raw_nap 8->10, raw_tph 128->256. R=256 tables, k=10 (2^10=1024 rows/table), n_outputs=384. Trained 16k steps under the corrected scaffolding; val curve and final score both use the fixed protocol (bs48 x 100, skip 12, held-out shard_06542 from token 0).",
+  "total_params": 632694540,
+  "training_time_hours": 5.317,
+  "eval_protocol": {"eval_batch_size": 48, "eval_steps": 100, "skip_rows": 12, "val_tokens_scored": 2451456, "batch_size_independent": true, "val_shard": "shard_06542.parquet"},
+  "corrected_val_bpb": 1.1936820635864733,
+  "best_val_bpb": 1.1936820635864733,
+  "checkpoint_reload_check": {"bpb_fixed": 1.1936820635864733, "load_missing_keys": 0, "load_unexpected_keys": 0, "note": "re-scoring the saved checkpoint reproduces summary.json exactly"},
+  "delta_vs_vanilla_0135": 0.028535063586473,
+  "delta_vs_naive_0136": 0.000756063586473,
+  "comparison": "corrected vanilla anchor exp_n_0135 = 1.165147; naive baseline exp_n_0136 = 1.192926. This k=10 run sits +0.0285 ABOVE vanilla and is essentially TIED with the naive 0136 (+0.0008), i.e. going to k=10/tph256 (632.7M) did not improve over the original naive 0136 (330.7M) despite ~2x params. The wider k=9/tph512 sibling (exp_n_0160 = 1.187013) is the better of the two.",
+  "training_stability": "clean; k=10 trained stably with no NaN/inf/divergence. Final [VAL] steps 15200..16000 = 1.1948/1.1945/1.1939/1.1942/1.1937 (small fluctuation, no instability)."
+}

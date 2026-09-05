@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0161_fastmhl_raw_H1_nap10_tph256",
+  "best_val_bpb": 1.1936820635864733,
+  "final_val_bpb": 1.1936820635864733,
+  "total_params": 632694540,
+  "training_time_hours": 5.317,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
