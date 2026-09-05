@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s00_vanilla_dense",
+  "best_val_bpb": 1.4747493378259995,
+  "final_val_bpb": 1.4747493378259995,
+  "total_params": 35792640,
+  "training_time_hours": 0.069,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
