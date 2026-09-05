@@ -1,0 +1,13 @@
+{
+  "exp_name": "sweep_s06_isoparam_deep_c512_dout16",
+  "best_val_bpb": 1.4694393416643021,
+  "final_val_bpb": 1.4694393416643021,
+  "total_params": 79491852,
+  "training_time_hours": 0.84,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
