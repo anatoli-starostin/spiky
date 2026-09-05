@@ -1,0 +1,51 @@
+{
+  "run": "exp_n_0151_long48k_untied_vanilla",
+  "description": "Historical ffn_replacement run re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Rebuilt from config.json (ffn_type=dense) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys; rebuilt parameter count matches summary.json exactly. The original number was produced by the batch-coupled eval at device_batch_size 48 x eval_steps 10 = 245,760 val tokens.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "shape": {
+    "kind": "dense",
+    "H": null,
+    "tph": null,
+    "cells": null,
+    "d_in": null,
+    "d_out": null
+  },
+  "total_params": 35792640,
+  "n_steps": 48000,
+  "training_device_batch_size": 48,
+  "original_eval_window": {
+    "device_batch_size": 48,
+    "eval_steps": 10,
+    "val_tokens_scored": 245760,
+    "batch_coupled": true
+  },
+  "compress_projection_flops": null,
+  "decompress_projection_flops": null,
+  "projection_flops_total": null,
+  "projection_flops_ratio_vs_vanilla_ffn": null,
+  "corrected_val_bpb": 1.1154196032137111,
+  "originally_reported_bpb": 1.151444329946291,
+  "originally_reported_best_bpb": 1.1510952456276689,
+  "correction": -0.03602472673257995,
+  "matched_vanilla_16k_baseline": {
+    "run": "exp_n_0135_untied_vanilla_baseline_16k",
+    "corrected_val_bpb": 1.1651468950008814,
+    "originally_reported_bpb": 1.20144
+  },
+  "naive_lut_reference": {
+    "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+    "corrected_val_bpb": 1.1929264025964097
+  },
+  "delta_vs_vanilla_corrected": -0.04972729178717028,
+  "delta_vs_naive_lut_corrected": -0.07750679938269855,
+  "training_time_hours": 1.609,
+  "load_missing_keys": 0,
+  "load_unexpected_keys": 0
+}

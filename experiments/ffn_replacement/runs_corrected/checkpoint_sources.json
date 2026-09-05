@@ -1,0 +1,24 @@
+{
+  "local": {
+    "exp_n_0126_grid_H4d48_nap7_tph64": "/home/astarostin/projects/spiky-fmhl-next/experiments/hyperplane_ffn/exp_n_0126_grid_H4d48_nap7_tph64/checkpoint.pt",
+    "exp_n_0127_grid_H4d48_nap7_tph128": "/home/astarostin/projects/spiky-fmhl-next/experiments/hyperplane_ffn/exp_n_0127_grid_H4d48_nap7_tph128/checkpoint.pt",
+    "exp_n_0128_grid_H4d48_nap8_tph64": "/home/astarostin/projects/spiky-fmhl-next/experiments/hyperplane_ffn/exp_n_0128_grid_H4d48_nap8_tph64/checkpoint.pt",
+    "exp_n_0151_long48k_untied_vanilla": "/home/astarostin/projects/spiky/experiments/ffn_replacement/runs/exp_n_0151_long48k_untied_vanilla/checkpoint.pt"
+  },
+  "missing": [
+    "exp_n_0084_untied_nheads4",
+    "exp_n_0119_ffnsw_S2a_nap9_tph128_16k",
+    "exp_n_0121_ffnsw_nap8_tph128_16k",
+    "exp_n_0130_grid_H4d48_nap10_tph64",
+    "exp_n_0131_grid_H2d96_nap8_tph128",
+    "exp_n_0132_grid_H8d24_nap8_tph128",
+    "exp_n_0137_grid_H1d192_nap8_tph128",
+    "exp_n_0138_outcompress_only_H4_nap8_tph128",
+    "exp_n_0152_long48k_tiny_H4d48_nap7_tph64",
+    "exp_n_0153_H2d96_nap7_tph64",
+    "exp_n_0155_long48k_from_0127",
+    "exp_n_0156_long48k_from_0128",
+    "exp_n_0157_long144k_vanilla",
+    "exp_n_0158_long144k_from_0127"
+  ]
+}
