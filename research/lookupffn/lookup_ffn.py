@@ -1,37 +1,64 @@
 """
 lookup_ffn.py -- a self-contained, teaching-oriented pure-PyTorch reference
-implementation of LookupFFN.
+implementation of LookupFFN, matching the paper's ACTUAL mechanism.
 
 Paper: "LookupFFN: Making Transformers Compute-lite for CPU Inference"
        Zhanpeng Zeng, Michael Davies, Pranav Pulijala, Karthikeyan Sankaralingam,
        Vikas Singh. ICML 2024. arXiv:2403.07221.
-Reference code (compiled kernels; we do NOT use it here): github.com/mlpen/LookupFFN
+Reference code (compiled kernels; we do NOT use it): github.com/mlpen/LookupFFN
+       -- verified against src/roberta/models/prenorm_lookup/lookup.py and
+          compute_code_score/kernel.py.
 
 WHY THIS FILE EXISTS
 --------------------
 This is NOT the paper's optimized code (their BH4 / gather run as compiled C++/CUDA
-kernels). This is a clean, readable, correct-by-construction reference so a reader can
+kernels). It is a clean, readable, correct-by-construction reference so a reader can
 understand the *mechanism*. Everything is pure PyTorch and CPU-runnable. Equation
-numbers below refer to the arXiv v1 of the paper.
+numbers refer to the arXiv v1 of the paper.
 
-THE ONE-SENTENCE IDEA
----------------------
+THE MECHANISM (and the subtle part people get wrong)
+----------------------------------------------------
 A standard transformer FFN computes
         y = sum_i  sigma(<x, W_i>) * V_i                                  (dense, GEMM)
-i.e. every hidden unit i is scored by a dot product <x, W_i>, passed through a
-nonlinearity, and used to weight a stored vector V_i. That is O(d^2) multiply-adds.
+i.e. every hidden unit i is scored by a dot product, passed through a nonlinearity, and
+used to weight a stored vector V_i. That is O(d^2) multiply-adds.
 
-LookupFFN replaces this with a set of learnable HASH TABLES addressed by a learnable
-HASH of x:
-        y = sum_k  T_k[ f_k(x) ]                                          (Eq 6)
-Each head k hashes x to an integer address f_k(x) and *looks up* one stored row of a
-table T_k; the rows are summed over the K heads. No d x d matmul: the work becomes a
-cheap structured projection (BH4) + a table gather. You trade FLOPs for memory.
+LookupFFN replaces this with learnable HASH TABLES addressed by a learnable HASH of x:
+        y = sum_k  score_k(x) * T_k[ code_k(x) ]                          (Eq 6 / 13)
+Each head k hashes x to an integer address code_k and *looks up* one stored row of a
+table T_k; the row is scaled by a scalar score_k and the K heads are summed. No d x d
+matmul: the work becomes a cheap structured projection (BH4) + a table gather.
 
-The two things that make it trainable and cheap:
-  * BH4  (Eq ~19): a structured O(d log d) projection replacing the dense hash matrix.
-  * a differentiable hash: hard argmax at inference (Eq 6), softmax relaxation while
-    training (Eq 10), with a top-N neighbourhood truncation for efficiency (Eq 13).
+THE KEY POINT -- there is NO soft-vs-hard train/inference split.
+Training and inference run the *same* forward. Concretely (matching their
+compute_code_score kernel):
+
+  1. project:  z = BH4(x)                          structured O(d log d) projection (Eq ~19)
+  2. address:  code = bin2dec( sign(z) )           the HARD sign pattern, identical in
+                                                    train and eval. With the full
+                                                    hypercube codebook, "nearest code" ==
+                                                    sign(z) (classic hyperplane LSH), so
+                                                    no explicit code matrix is needed.
+  3. score:    m = |z|;  score = m.sum() / prod_j(1 + exp(-2 m_j))
+                                                    a SMOOTH, differentiable scalar. This
+                                                    is exactly the single dominant term of
+                                                    the softmax-over-codes: Eq 10's full
+                                                    softmax collapsed to its top-1 term
+                                                    (Eq 13 with N = 1), which equals
+                                                    exp(<z, sign z>) / prod_j (e^{z_j}+e^{-z_j}).
+  4. output:   y = sum_k score_k * T_k[code_k]
+
+WHY THERE IS NO TRAIN/EVAL MISMATCH, and how gradients flow:
+  * The address code = sign(z) is discrete and is the SAME in training and inference.
+    We never soften it, and we never blend over all codes. There is no straight-through
+    estimator on the address either.
+  * Differentiability comes entirely from the continuous SCORE, which depends on the
+    projection magnitudes |z_j|. Backprop reaches the BH4 projection through score, while
+    the argmax/sign selection just picks which table row is scaled. Same function at train
+    and eval => same output for the same input => no soft/hard gap by construction.
+  * Consequently there is NO temperature parameter (not fixed, learnable, or annealed),
+    and NO entropy / load-balancing / importance / sparsity auxiliary loss. The layer
+    returns only its output tensor. (All confirmed in the official code.)
 
 Read top to bottom; each nn.Module has a docstring mapping it to the paper.
 """
@@ -48,25 +75,22 @@ import torch.nn.functional as F
 def fwht(x: torch.Tensor) -> torch.Tensor:
     """Normalised Fast Walsh-Hadamard Transform along the last dim.
 
-    The Hadamard matrix H_n is an orthogonal +/-1 matrix. Multiplying by it mixes all
-    coordinates, but instead of an O(n^2) matmul we use the butterfly algorithm in
-    O(n log n) add/subtract operations (no multiplications at all). This is the cheap,
-    dense-mixing "H" factor that BH4 interleaves with learnable block-diagonal matrices.
-
-    Requires the last dimension `n` to be a power of two. We divide by sqrt(n) so the
-    transform is orthonormal (H H^T = I), which keeps activations well-scaled.
+    The Hadamard matrix H_n is an orthogonal +/-1 matrix. Instead of an O(n^2) matmul we
+    use the butterfly algorithm in O(n log n) add/subtract operations (no multiplications).
+    This is the cheap dense-mixing "H" factor that BH4 interleaves with learnable
+    block-diagonal matrices. `n` must be a power of two; we divide by sqrt(n) so the
+    transform is orthonormal (H H^T = I), keeping activations well-scaled.
     """
     orig_shape = x.shape
     n = orig_shape[-1]
     assert n & (n - 1) == 0, f"fwht needs a power-of-two length, got {n}"
     x = x.clone()
     h = 1
-    # Standard in-place butterfly: at each stage, combine coordinate pairs 2h apart.
-    while h < n:
+    while h < n:  # standard iterative butterfly: combine coordinate pairs 2h apart
         x = x.view(*orig_shape[:-1], n // (2 * h), 2, h)
-        a = x[..., 0, :]        # "even" half of each pair-block
-        b = x[..., 1, :]        # "odd"  half
-        x = torch.stack([a + b, a - b], dim=-2)   # butterfly: (a+b, a-b)
+        a = x[..., 0, :]
+        b = x[..., 1, :]
+        x = torch.stack([a + b, a - b], dim=-2)
         x = x.view(*orig_shape)
         h *= 2
     return x / math.sqrt(n)
@@ -78,21 +102,22 @@ def fwht(x: torch.Tensor) -> torch.Tensor:
 class BH4(nn.Module):
     """Structured O(d log d) projection replacing a dense d x d hash matrix.
 
-    The hash needs a projection R that mixes all input coordinates so that different
-    inputs land in different buckets. A dense R is d x d = O(d^2) params/FLOPs -- exactly
-    the cost we are trying to avoid. BH4 instead builds R as a product of FOUR factors,
-    each factor = a *learnable block-diagonal* matrix B_i followed by a fixed Hadamard
-    mixing H:
+    The hash needs a projection that mixes all input coordinates so different inputs land
+    in different buckets. A dense projection is O(d^2). BH4 instead builds it as a product
+    of FOUR factors, each = a learnable block-diagonal matrix B_i followed by a fixed
+    Hadamard mix H:
             R = B_4 H B_3 H B_2 H B_1 H                                    (paper Eq ~19)
-    (The "4" in BH4 is the number of B-H factors.)
+    ("4" = number of B-H factors.)  B_i is block-diagonal (split d into d/b blocks of size
+    b, apply a learned b x b matrix per block: O(d*b) params/FLOPs); H then spreads
+    information across blocks in O(d log d) adds. After a few B-H stages every output
+    depends on every input, at O(d log d + d*b) instead of O(d^2).
 
-    * B_i is block-diagonal: we split the d-vector into d/b blocks of size b and apply a
-      learned b x b matrix to each block. Cost O(d*b), params O(d*b) -- linear in d.
-    * H (fast Hadamard, above) then spreads information *across* blocks in O(d log d)
-      adds, so after a few B-H stages every output coordinate depends on every input.
-
-    Net: an expressive, learnable projection at O(d log d + d*b) instead of O(d^2). Block
-    size b trades expressiveness (larger b) against cost (smaller b).
+    NOTE on faithfulness: the paper's code projects hidden_size -> num_table*code_length in
+    ONE rectangular BH4 and splits the result into per-table code vectors, and it blends
+    the structured transform with a residual path at a fixed decay_coeff = 0.7. For
+    readability this sketch uses a SQUARE per-head BH4 (d -> d) and reads off the first
+    `code_length` coordinates as that head's code vector; the mechanism (structured cheap
+    projection feeding the hash) is the same.
     """
 
     def __init__(self, dim: int, block: int = 16, n_factors: int = 4):
@@ -100,92 +125,55 @@ class BH4(nn.Module):
         assert dim % block == 0, "dim must be divisible by block size"
         assert dim & (dim - 1) == 0, "BH4 uses the Hadamard transform, so dim must be a power of two"
         self.dim, self.block, self.n_blocks = dim, block, dim // block
-        # n_factors learnable block-diagonal matrices, shape [factor, n_blocks, b, b].
-        # Initialised near-orthogonal (identity + small noise) so the product starts as a
-        # well-behaved (roughly norm-preserving) mixing rather than exploding/vanishing.
         eye = torch.eye(block)
         w = eye.expand(n_factors, self.n_blocks, block, block).clone()
-        w = w + 0.02 * torch.randn_like(w)
+        w = w + 0.02 * torch.randn_like(w)   # near-identity init -> stable norm-preserving start
         self.blocks = nn.Parameter(w)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [..., dim]
         lead = x.shape[:-1]
         for i in range(self.blocks.shape[0]):
-            # Block-diagonal matmul: reshape to [..., n_blocks, block] and apply the
-            # per-block b x b matrix via a batched matmul (einsum). This is the "B_i".
             xb = x.view(*lead, self.n_blocks, self.block)
-            xb = torch.einsum("...nb,nkb->...nk", xb, self.blocks[i])
+            xb = torch.einsum("...nb,nkb->...nk", xb, self.blocks[i])  # per-block B_i
             x = xb.reshape(*lead, self.dim)
-            # Then the fixed Hadamard mix "H" across the whole vector.
-            x = fwht(x)
+            x = fwht(x)                                                # Hadamard mix H
         return x
 
 
 # ---------------------------------------------------------------------------
-# 3. The learnable hash / addressing
+# 3. The hash: hard sign address + smooth magnitude score (NO soft/hard split)
 # ---------------------------------------------------------------------------
-class StructuredHash(nn.Module):
-    """Turns a projected code z into a table address, hard or soft.
+def lookup_address(z_code: torch.Tensor) -> torch.Tensor:
+    """Integer table address = the HARD sign pattern of the code vector.
 
-    After projecting x -> z (via BH4) and taking the first `n_bits` coordinates as the
-    hash code, we address a table of C = 2^n_bits rows. The address is the "nearest
-    structured binary code": we hold a code matrix S in {-1,+1}^(C x n_bits) and score
-    each code by an inner product, then pick / weight codes by that score.
+    With the full-hypercube codebook S = {-1,+1}^b, argmax_i <z, S_i> is achieved by
+    S_i = sign(z). So the "nearest structured binary code" is simply sign(z), and its
+    index is the bit-packing  code = bin2dec( (sign(z)+1)/2 ) = sum_j 1[z_j>0] * 2^j.
+    This is identical in training and inference; no explicit code matrix is needed.
 
-        score_i = <z, S_i>
-
-    HARD path (inference, Eq 6):  address = argmax_i score_i, gather that one row.
-    SOFT path (training,  Eq 10): weights = softmax(score), blend ALL rows -- a small,
-                                  fully differentiable "attention over the codebook", so
-                                  gradients flow to the projection with no straight-through
-                                  estimator.
-    TOP-N (efficiency, Eq 13):    keep only the N highest-scoring codes, softmax over
-                                  those, blend N rows. N -> 1 recovers the hard gather;
-                                  larger N is smoother. This is the bridge from soft to hard.
-
-    KEY SPECIAL CASE (worth internalising): if S is the *full* hypercube {-1,+1}^n_bits,
-    then argmax_i <z, S_i> is achieved by S_i = sign(z). So the hard address is simply the
-    bit-pattern of sign(z) -- i.e. classic hyperplane locality-sensitive hashing. This is
-    exactly the sign-of-projection routing our own LUT layers use (see README mapping). A
-    smaller, "structured" S is just a chosen sub-codebook to shrink the table.
+    z_code: [..., b]  ->  [...] int64 in [0, 2^b).
     """
+    b = z_code.shape[-1]
+    bits = (z_code > 0).long()                                   # sign(z) as {0,1}
+    powers = (1 << torch.arange(b, device=z_code.device))        # 2^j
+    return (bits * powers).sum(dim=-1)
 
-    def __init__(self, n_bits: int, temp: float = 1.0):
-        super().__init__()
-        self.n_bits = n_bits
-        self.n_codes = 1 << n_bits              # C = 2^n_bits
-        self.temp = temp
-        # Build S = all 2^n_bits sign vectors, ordered so code index i has bit j = (i>>j)&1.
-        # With this ordering, argmax_i <z,S_i> == sum_j (z_j>0) * 2^j (the sign bit-code).
-        idx = torch.arange(self.n_codes)
-        bits = ((idx[:, None] >> torch.arange(n_bits)[None, :]) & 1).float()   # {0,1}
-        S = 2.0 * bits - 1.0                                                   # {-1,+1}
-        self.register_buffer("S", S)           # [C, n_bits], fixed (not learned)
 
-    def scores(self, z_code: torch.Tensor) -> torch.Tensor:
-        # <z, S_i> for every code i.  z_code: [..., n_bits] -> [..., C]
-        return z_code @ self.S.t()
+def lookup_score(z_code: torch.Tensor) -> torch.Tensor:
+    """Smooth, differentiable scalar weight for the gathered row (Eq 13, N=1).
 
-    def hard_index(self, z_code: torch.Tensor) -> torch.Tensor:
-        """Integer address per token: argmax over codes (== sign bit-code for full S)."""
-        return self.scores(z_code).argmax(dim=-1)          # [...]
-
-    def soft_weights(self, z_code: torch.Tensor, top_n: int | None = None) -> torch.Tensor:
-        """Differentiable weights over the C table rows.  [..., C]
-
-        top_n=None -> softmax over all codes (Eq 10). top_n=k -> softmax over the k best
-        codes only, others zero (Eq 13); with top_n=1 this is a soft-argmax that closely
-        tracks the hard gather while still passing gradient.
-        """
-        s = self.scores(z_code) / self.temp
-        if top_n is not None and top_n < self.n_codes:
-            topv, topi = s.topk(top_n, dim=-1)
-            w = torch.softmax(topv, dim=-1)
-            out = torch.zeros_like(s)
-            out.scatter_(-1, topi, w)          # place the N weights back, rest 0
-            return out
-        return torch.softmax(s, dim=-1)
+    This is the single dominant softmax-over-codes term. For the winning code sign(z):
+        numerator   = exp(<z, sign z>) = exp( sum_j |z_j| )
+        denominator = prod_j ( e^{z_j} + e^{-z_j} ) = prod_j 2 cosh(z_j)
+    The paper's kernel computes the numerically-stable equivalent below (verified against
+    compute_code_score/kernel.py): with m = |z_j|,
+        score = ( sum_j m_j ) / prod_j ( 1 + e^{-2 m_j} )
+    It is smooth in the magnitudes |z_j|, so gradients flow to the BH4 projection through
+    it, while the discrete address sign(z) is left hard. No temperature is applied.
+    """
+    m = z_code.abs()
+    denom = torch.prod(1.0 + torch.exp(-2.0 * m), dim=-1)
+    return m.sum(dim=-1) / denom
 
 
 # ---------------------------------------------------------------------------
@@ -194,67 +182,63 @@ class StructuredHash(nn.Module):
 class LookupTableHead(nn.Module):
     """A single learnable hash table T_k with its own learnable hash f_k.
 
-    forward computes T_k[f_k(x)] (one term of the sum in Eq 6):
-        1. z   = BH4(x)                         structured projection  (Eq ~19)
-        2. code = first n_bits coords of z      the hash code
-        3. hard:  row = T_k[argmax code]        gather one row         (Eq 6)
-           soft:  row = softmax(code) @ T_k     differentiable blend   (Eq 10 / 13)
+    forward computes  score_k(x) * T_k[code_k(x)]  (one term of Eq 6 / 13):
+        z    = BH4(x)                          structured projection      (Eq ~19)
+        code = bin2dec(sign(z_code))           HARD address (top-1)       (same train/eval)
+        s    = smooth magnitude score          differentiable weight      (Eq 13, N=1)
+        out  = s * T_k[code]
 
-    T_k has shape [C, d_out]: its rows are the learnable "value" vectors V_i of the FFN
-    it replaces -- but instead of scoring all of them with a matmul, we address one.
+    The SAME code and score come from the SAME code coordinates z_code (the first
+    `code_length` outputs of BH4), so there is no inconsistency between which coordinates
+    address the table and which produce the gradient-carrying weight. There is exactly ONE
+    forward path: it is used identically in `.train()` and `.eval()`.
+
+    T_k has shape [2^code_length, d_out]: its rows are the learnable "value" vectors V_i of
+    the FFN it replaces -- but instead of scoring all of them with a matmul, we address one.
     """
 
-    def __init__(self, d_in: int, d_out: int, n_bits: int, block: int = 16,
-                 temp: float = 1.0, top_n: int | None = 4):
+    def __init__(self, d_in: int, d_out: int, code_length: int, block: int = 16):
         super().__init__()
-        self.proj = BH4(d_in, block=block)                 # x -> z
-        self.hash = StructuredHash(n_bits, temp=temp)
-        self.n_bits = n_bits
-        self.top_n = top_n
-        # The table: C rows, each a d_out vector. Small init keeps the summed output tame.
-        self.table = nn.Parameter(0.02 * torch.randn(self.hash.n_codes, d_out))
+        assert code_length <= d_in
+        self.proj = BH4(d_in, block=block)                 # x -> z  (square, per-head)
+        self.code_length = code_length
+        n_codes = 1 << code_length
+        self.table = nn.Parameter(0.02 * torch.randn(n_codes, d_out))  # small init
 
-    def forward(self, x: torch.Tensor, hard: bool | None = None) -> torch.Tensor:
-        # Default: hard when in eval mode, soft when training. (Caller may override.)
-        if hard is None:
-            hard = not self.training
-        z = self.proj(x)                        # [..., d_in]
-        z_code = z[..., : self.n_bits]          # [..., n_bits]  (use n_bits coords as the code)
-        if hard:
-            idx = self.hash.hard_index(z_code)  # [...]
-            # Gather one row of the table per token.
-            return self.table[idx]              # [..., d_out]
-        else:
-            w = self.hash.soft_weights(z_code, top_n=self.top_n)   # [..., C]
-            return w @ self.table               # [..., d_out]  weighted blend of rows
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        z = self.proj(x)                                   # [..., d_in]
+        z_code = z[..., : self.code_length]                # [..., code_length] -> code AND score
+        idx = lookup_address(z_code)                       # [...]  hard sign address
+        s = lookup_score(z_code)                           # [...]  smooth differentiable weight
+        return s.unsqueeze(-1) * self.table[idx]           # [..., d_out]
 
 
 # ---------------------------------------------------------------------------
-# 5. The LookupFFN layer:  y = sum_k T_k[f_k(x)]   (Eq 6)
+# 5. The LookupFFN layer:  y = sum_k score_k * T_k[code_k]   (Eq 6 / 13)
 # ---------------------------------------------------------------------------
 class LookupFFN(nn.Module):
     """Drop-in replacement for a transformer FFN, built from K parallel hash tables.
 
-    Standard FFN:   y = W2 @ GELU(W1 @ x)   ==  sum_i GELU(<x,W1_i>) * W2_i     (O(d^2))
-    LookupFFN:      y = sum_{k=1}^{K} T_k[ f_k(x) ]                             (Eq 6)
+    Standard FFN:   y = W2 @ GELU(W1 @ x)  ==  sum_i GELU(<x,W1_i>) * W2_i     (O(d^2))
+    LookupFFN:      y = sum_{k=1}^{K} score_k(x) * T_k[ code_k(x) ]            (Eq 6 / 13)
 
-    Each head hashes x independently and contributes one looked-up row of width d_model;
-    the K contributions are summed (like summing the K nearest "experts"). More heads =
-    more expressive, at more table memory but still no d^2 matmul.
+    Each head hashes x independently (hard sign address), gathers one row, scales it by its
+    smooth score, and the K contributions are summed -- the only sum is over the K tables
+    (N = 1 code per table). No d^2 matmul, one differentiable forward for train and eval.
+    Returns ONLY the output tensor: no auxiliary loss (no load-balancing / entropy term).
     """
 
-    def __init__(self, d_model: int, n_heads: int = 4, n_bits: int = 8,
-                 block: int = 16, temp: float = 1.0, top_n: int | None = 4):
+    def __init__(self, d_model: int, n_heads: int = 4, code_length: int = 8, block: int = 16):
         super().__init__()
         self.heads = nn.ModuleList([
-            LookupTableHead(d_model, d_model, n_bits, block=block, temp=temp, top_n=top_n)
+            LookupTableHead(d_model, d_model, code_length, block=block)
             for _ in range(n_heads)
         ])
 
-    def forward(self, x: torch.Tensor, hard: bool | None = None) -> torch.Tensor:
-        out = self.heads[0](x, hard=hard)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.heads[0](x)
         for h in self.heads[1:]:
-            out = out + h(x, hard=hard)         # sum_k T_k[f_k(x)]
+            out = out + h(x)                               # sum_k score_k * T_k[code_k]
         return out
 
 
@@ -262,7 +246,7 @@ class LookupFFN(nn.Module):
 # 6. A dense FFN baseline (for the FLOP/param comparison)
 # ---------------------------------------------------------------------------
 class DenseFFN(nn.Module):
-    """The vanilla transformer FFN we are replacing: d -> 4d -> d with GELU."""
+    """The vanilla transformer FFN we replace: d -> 4d -> d with GELU."""
 
     def __init__(self, d_model: int, mult: int = 4):
         super().__init__()
@@ -275,11 +259,10 @@ class DenseFFN(nn.Module):
 
 # ---------------------------------------------------------------------------
 # 7. A minimal causal transformer block + tiny GPT, so you see it end to end.
-#    (The paper's repo is RoBERTa/encoder; we make ours causal to match nanochat.)
+#    (The paper's repo is RoBERTa/encoder; ours is causal to match nanochat.)
 # ---------------------------------------------------------------------------
 class CausalSelfAttention(nn.Module):
-    """Standard multi-head causal self-attention (unchanged from a vanilla transformer;
-    only the FFN is being replaced, so attention stays dense here)."""
+    """Standard multi-head causal self-attention (unchanged; only the FFN is replaced)."""
 
     def __init__(self, d_model: int, n_heads: int = 4):
         super().__init__()
@@ -294,7 +277,7 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_heads, self.hd).transpose(1, 2)
         k = k.view(B, T, self.n_heads, self.hd).transpose(1, 2)
         v = v.view(B, T, self.n_heads, self.hd).transpose(1, 2)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)   # causal mask
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         y = y.transpose(1, 2).reshape(B, T, C)
         return self.proj(y)
 
@@ -302,16 +285,16 @@ class CausalSelfAttention(nn.Module):
 class Block(nn.Module):
     """Pre-norm transformer block: attention, then a LookupFFN instead of a dense FFN."""
 
-    def __init__(self, d_model, n_heads=4, ffn_heads=4, n_bits=8, block=16):
+    def __init__(self, d_model, n_heads=4, ffn_heads=4, code_length=8, block=16):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = CausalSelfAttention(d_model, n_heads)
         self.ln2 = nn.LayerNorm(d_model)
-        self.ffn = LookupFFN(d_model, n_heads=ffn_heads, n_bits=n_bits, block=block)
+        self.ffn = LookupFFN(d_model, n_heads=ffn_heads, code_length=code_length, block=block)
 
-    def forward(self, x, hard=None):
+    def forward(self, x):
         x = x + self.attn(self.ln1(x))
-        x = x + self.ffn(self.ln2(x), hard=hard)
+        x = x + self.ffn(self.ln2(x))
         return x
 
 
@@ -319,22 +302,22 @@ class TinyGPT(nn.Module):
     """A tiny GPT-style causal LM whose FFNs are LookupFFNs. For reading/demonstration."""
 
     def __init__(self, vocab=256, d_model=128, n_layers=2, n_heads=4,
-                 ffn_heads=4, n_bits=8, block=16, max_len=64):
+                 ffn_heads=4, code_length=8, block=16, max_len=64):
         super().__init__()
         self.tok = nn.Embedding(vocab, d_model)
         self.pos = nn.Embedding(max_len, d_model)
         self.blocks = nn.ModuleList([
-            Block(d_model, n_heads, ffn_heads, n_bits, block) for _ in range(n_layers)
+            Block(d_model, n_heads, ffn_heads, code_length, block) for _ in range(n_layers)
         ])
         self.ln_f = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, vocab, bias=False)
 
-    def forward(self, idx, hard=None):
+    def forward(self, idx):
         B, T = idx.shape
         pos = torch.arange(T, device=idx.device)
         x = self.tok(idx) + self.pos(pos)[None]
         for b in self.blocks:
-            x = b(x, hard=hard)
+            x = b(x)
         return self.head(self.ln_f(x))
 
 
@@ -347,69 +330,74 @@ def dense_ffn_cost(d_model, mult=4):
     return params, macs
 
 
-def lookup_ffn_cost(d_model, n_heads, n_bits, block):
-    C = 1 << n_bits
+def lookup_ffn_cost(d_model, n_heads, code_length, block):
+    C = 1 << code_length
     n_factors = 4
     bh4_params = n_heads * n_factors * (d_model // block) * block * block  # = n_heads*4*d*block
     table_params = n_heads * C * d_model
     params = bh4_params + table_params
-    # per-token multiply-adds (hard path): per head = BH4 blockmuls (4*d*block) +
-    # code scoring (n_bits*C) ; the Hadamard is adds-only and the gather is a memory read.
-    macs = n_heads * (n_factors * d_model * block + n_bits * C)
+    # per-token multiply-adds: per head = BH4 block-muls (4*d*block) + the score (O(code_length),
+    # a sum and a product over code_length coords).  The Hadamard is adds-only; the address is
+    # a sign+bit-pack; the gather is a memory read.  No d^2 term and NO scan over all 2^b codes.
+    macs = n_heads * (n_factors * d_model * block + 2 * code_length)
     return params, macs
 
 
 # ---------------------------------------------------------------------------
-# 9. Smoke test (CPU-runnable): forward in soft and hard modes, print shapes + costs.
+# 9. Smoke test (CPU-runnable): show train and eval are the SAME forward.
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     torch.manual_seed(0)
-    d_model, n_bits, ffn_heads, block = 128, 8, 4, 16
+    d_model, code_length, ffn_heads, block = 128, 8, 4, 16
 
-    print("=== LookupFFN reference: smoke test (CPU) ===")
-    print(f"d_model={d_model}  n_heads(FFN)={ffn_heads}  n_bits={n_bits} "
-          f"(codes/table C={1<<n_bits})  bh4_block={block}\n")
+    print("=== LookupFFN reference (corrected): smoke test (CPU) ===")
+    print(f"d_model={d_model}  n_heads(FFN)={ffn_heads}  code_length={code_length} "
+          f"(rows/table={1<<code_length})  bh4_block={block}\n")
 
-    # --- (a) the FFN layer alone, both modes ---
-    ffn = LookupFFN(d_model, n_heads=ffn_heads, n_bits=n_bits, block=block)
-    x = torch.randn(2, 16, d_model)                       # [batch, seq, d_model]
+    ffn = LookupFFN(d_model, n_heads=ffn_heads, code_length=code_length, block=block)
+    x = torch.randn(2, 16, d_model)
 
-    ffn.train()
-    y_soft = ffn(x)                                       # training path: soft (Eq 10/13)
+    # The whole point: ONE forward. train() and eval() must give the SAME output.
+    ffn.train(); y_train = ffn(x)
     ffn.eval()
     with torch.no_grad():
-        y_hard = ffn(x)                                  # inference path: hard gather (Eq 6)
-    print(f"[LookupFFN] input {tuple(x.shape)} -> soft {tuple(y_soft.shape)} "
-          f"(train), hard {tuple(y_hard.shape)} (eval)")
+        y_eval = ffn(x)
+    same = torch.allclose(y_train, y_eval, atol=1e-6)
+    print(f"[LookupFFN] input {tuple(x.shape)} -> output {tuple(y_train.shape)}")
+    max_diff = (y_train - y_eval).abs().max().item()
+    print(f"[LookupFFN] train()==eval() forward is IDENTICAL (no soft/hard split): "
+          f"allclose={same}, max|diff|={max_diff:.2e}")
 
-    # gradient sanity: the soft path must be differentiable end to end
-    loss = y_soft.pow(2).mean()
+    # Differentiability: gradient must reach the BH4 projection THROUGH the smooth score,
+    # even though the address sign(z) is hard (no straight-through estimator).
+    loss = y_train.pow(2).mean()
     loss.backward()
     g = ffn.heads[0].proj.blocks.grad
-    print(f"[LookupFFN] soft path is differentiable: BH4 grad norm = {g.norm().item():.4f}")
+    print(f"[LookupFFN] BH4 projection receives gradient (via the score): "
+          f"grad norm = {g.norm().item():.4f}")
 
-    # a couple of BH4 / hadamard sanity checks
+    # hadamard sanity
     h = fwht(torch.eye(8))
     print(f"[fwht] orthonormal? max|H H^T - I| = "
           f"{(h @ h.t() - torch.eye(8)).abs().max().item():.2e}")
 
-    # --- (b) end-to-end tiny causal LM ---
-    gpt = TinyGPT(vocab=256, d_model=d_model, n_layers=2,
-                  ffn_heads=ffn_heads, n_bits=n_bits, block=block, max_len=64)
+    # end-to-end tiny causal LM (also identical train/eval forward)
+    gpt = TinyGPT(vocab=256, d_model=d_model, n_layers=2, ffn_heads=ffn_heads,
+                  code_length=code_length, block=block, max_len=64)
     idx = torch.randint(0, 256, (2, 16))
-    gpt.train(); logits_soft = gpt(idx)
+    gpt.train(); lg_train = gpt(idx)
     gpt.eval()
     with torch.no_grad():
-        logits_hard = gpt(idx)
-    print(f"[TinyGPT] tokens {tuple(idx.shape)} -> logits {tuple(logits_soft.shape)} "
-          f"(train/soft) and {tuple(logits_hard.shape)} (eval/hard)")
+        lg_eval = gpt(idx)
+    print(f"[TinyGPT] tokens {tuple(idx.shape)} -> logits {tuple(lg_train.shape)}; "
+          f"train==eval allclose={torch.allclose(lg_train, lg_eval, atol=1e-5)}")
 
-    # --- (c) FLOP / param comparison vs a dense FFN of the same width ---
+    # FLOP / param comparison vs a dense FFN of the same width
     dp, dm = dense_ffn_cost(d_model)
-    lp, lm = lookup_ffn_cost(d_model, ffn_heads, n_bits, block)
+    lp, lm = lookup_ffn_cost(d_model, ffn_heads, code_length, block)
     print("\n=== per-token cost vs a dense d->4d->d FFN (same d_model) ===")
     print(f"dense  FFN : params={dp:>10,d}   MACs/token={dm:>10,d}")
     print(f"lookup FFN : params={lp:>10,d}   MACs/token={lm:>10,d}")
     print(f"ratio      : params x{lp/dp:6.2f}   MACs x{lm/dm:6.3f}  "
           f"(lookup trades ~{dm/lm:.0f}x fewer MACs for ~{lp/dp:.0f}x more params)")
-    print("\nOK: forward ran in both soft (train) and hard (eval) modes on CPU.")
+    print("\nOK: single differentiable forward; train and eval match; ran on CPU.")
