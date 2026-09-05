@@ -1,0 +1,34 @@
+{
+  "run": "exp_n_0133_grid_H4d48_nap10_tph128",
+  "description": "CompressionMHL FFN, grid cell G9 — iso-C and iso-param with exp_n_0118 but traded the other way (deeper tables, fewer of them). H=4 heads, compress 384->48, LUT, decompress 48->384, nap=10 (2^10=1024 cells/table), tph=128 tables/head, C=tph*2^nap=131072, independent per-head compression, untied unembedder, 16k steps, device_batch 12 x grad_accum 4 (effective 24,576). 180,597,900 params (FFN 151.9M, 21.45x vanilla) — bit-identical param count to exp_n_0118. Re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Rebuilt from config.json (ffn_type=compression) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "corrected_val_bpb": 1.169058537188904,
+  "originally_reported_bpb": 1.1796075611063241,
+  "originally_reported_best_bpb": 1.1791001564309587,
+  "original_eval_window": {
+    "device_batch_size": 12,
+    "eval_steps": 10,
+    "val_tokens_scored": 61440,
+    "batch_coupled": true
+  },
+  "matched_vanilla_16k_baseline": {
+    "run": "exp_n_0135_untied_vanilla_baseline_16k",
+    "corrected_val_bpb": 1.1651468950008814,
+    "originally_reported_bpb": 1.20144
+  },
+  "naive_lut_reference": {
+    "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+    "corrected_val_bpb": 1.1929264025964097
+  },
+  "delta_vs_vanilla_corrected": 0.0039116421880226,
+  "delta_vs_vanilla_originally_reported": -0.02183,
+  "delta_vs_naive_lut_corrected": -0.0238678654075057,
+  "interpretation": "Under the corrected protocol exp_n_0133 sits +0.00391 bpb ABOVE the matched vanilla baseline; the grid summary reported it -0.02183 BELOW. Sign flips, same cause as the rest of the grid (batch-coupled eval at device_batch_size 12). The iso-param comparison with exp_n_0118 SURVIVES correction and keeps its direction: at identical 180,597,900 params and identical C=131072, wide-and-shallow (nap9/tph256, 1.16494) beats deep-and-narrow (nap10/tph128, 1.16906) by 0.00412 corrected, against 0.00501 as originally reported. It beats the naive LUT by 0.0239 bpb at 55% of its parameters."
+}

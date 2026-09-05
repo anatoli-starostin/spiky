@@ -1,0 +1,34 @@
+{
+  "run": "exp_n_0118_ffnsw_S2a_nap9_FULL16k",
+  "description": "CompressionMHL FFN, the FFN-LUT grid's best cell (paper: 'max quality'). H=4 heads, compress 384->48, LUT, decompress 48->384, nap=9 (2^9=512 cells/table), tph=256 tables/head, C=tph*2^nap=131072, independent per-head compression, untied unembedder, 16k steps, device_batch 12 x grad_accum 4 (effective 24,576). 180,597,900 params (FFN 151.9M, 21.45x vanilla). Re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Rebuilt from config.json (ffn_type=compression) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "corrected_val_bpb": 1.1649393287854861,
+  "originally_reported_bpb": 1.1746000695212238,
+  "originally_reported_best_bpb": 1.1743075564160284,
+  "original_eval_window": {
+    "device_batch_size": 12,
+    "eval_steps": 10,
+    "val_tokens_scored": 61440,
+    "batch_coupled": true
+  },
+  "matched_vanilla_16k_baseline": {
+    "run": "exp_n_0135_untied_vanilla_baseline_16k",
+    "corrected_val_bpb": 1.1651468950008814,
+    "originally_reported_bpb": 1.20144
+  },
+  "naive_lut_reference": {
+    "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+    "corrected_val_bpb": 1.1929264025964097
+  },
+  "delta_vs_vanilla_corrected": -0.0002075662153953,
+  "delta_vs_vanilla_originally_reported": -0.02684,
+  "delta_vs_naive_lut_corrected": -0.0279870738109236,
+  "interpretation": "The grid's headline cell. Under the corrected, batch-size-independent protocol exp_n_0118 lands at 1.16494 against the matched vanilla baseline's 1.16515 — a dead heat (-0.00021), not the -0.02684 win reported in the grid summary. Essentially the whole claimed advantage was the batch-coupled eval: 0118 trained at device_batch_size 12 and was therefore scored on the first 61,440 val tokens, while the vanilla anchor at device_batch_size 48 was scored on 245,760. What survives is the comparison against the naive LUT: 0118 is 0.0280 bpb BELOW exp_n_0136, so CompressionMHL is a real improvement over a straightforward LUT replacement at similar or smaller parameter count (180.6M vs 330.7M). The honest corrected statement is 'matches dense', not 'beats dense'."
+}

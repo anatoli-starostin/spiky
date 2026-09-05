@@ -1,0 +1,34 @@
+{
+  "run": "exp_n_0129_grid_H4d48_nap8_tph256",
+  "description": "CompressionMHL FFN, grid cell G5 (the best cell inside the 10.8x FFN-parameter budget). H=4 heads, compress 384->48, LUT, decompress 48->384, nap=8 (2^8=256 cells/table), tph=256 tables/head, C=tph*2^nap=65536, independent per-head compression, untied unembedder, 16k steps, device_batch 12 x grad_accum 4 (effective 24,576). 105,100,428 params (FFN 76.4M, 10.79x vanilla). Re-scored under the FIXED validation protocol (see ../../FIXED_EVAL.md): batch size 48 x 100 eval steps, leading 12 rows skipped, batch-size-INDEPENDENT, on the held-out val shard (shard_06542.parquet) from token 0. Rebuilt from config.json (ffn_type=compression) and loaded from checkpoint.pt with 0 missing / 0 unexpected keys.",
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "val_tokens_scored": 2451456,
+    "batch_size_independent": true,
+    "val_shard": "shard_06542.parquet"
+  },
+  "corrected_val_bpb": 1.170960748465694,
+  "originally_reported_bpb": 1.1814838203745823,
+  "originally_reported_best_bpb": 1.1807374292743926,
+  "original_eval_window": {
+    "device_batch_size": 12,
+    "eval_steps": 10,
+    "val_tokens_scored": 61440,
+    "batch_coupled": true
+  },
+  "matched_vanilla_16k_baseline": {
+    "run": "exp_n_0135_untied_vanilla_baseline_16k",
+    "corrected_val_bpb": 1.1651468950008814,
+    "originally_reported_bpb": 1.20144
+  },
+  "naive_lut_reference": {
+    "run": "exp_n_0136_fastmhl_raw_H4_nap8_tph128",
+    "corrected_val_bpb": 1.1929264025964097
+  },
+  "delta_vs_vanilla_corrected": 0.0058138534648126,
+  "delta_vs_vanilla_originally_reported": -0.01996,
+  "delta_vs_naive_lut_corrected": -0.0219656541307157,
+  "interpretation": "Under the corrected protocol exp_n_0129 sits +0.00581 bpb ABOVE the matched vanilla baseline; the grid summary reported it -0.01996 BELOW. The sign flips. As with the rest of the grid this is the batch-coupled eval, not a change in the model: 0129 trained at device_batch_size 12 and was scored on the first 61,440 val tokens against a vanilla anchor scored on 245,760. It still beats the naive LUT by 0.0220 bpb at a third of its parameters (105.1M vs 330.7M), which is the claim that survives correction."
+}
