@@ -1,6 +1,6 @@
-# FFN-shape proxy sweeps — results (22 runs)
+# FFN-shape proxy sweeps — results (23 runs)
 
-Five sweeps, 11 + 6 + 1 + 3 + 1 runs, all on one budget: 4,000 steps, effective batch 24 sequences
+Six sweeps, 11 + 6 + 1 + 3 + 1 + 1 runs, all on one budget: 4,000 steps, effective batch 24 sequences
 (12,288 tokens), lr 3e-4 with 10% linear warmup and cosine decay to 0.1× peak parameterised by
 `n_steps=4000`. Every run is scored on the corrected protocol (`evaluate_bpb_fixed`: bs48 × 100,
 leading 12 rows skipped, 2,451,456 val tokens of held-out `shard_06542.parquet`). Setup and
@@ -15,7 +15,7 @@ file map: [`SWEEP_README.md`](SWEEP_README.md). Table and analysis are regenerat
 > **~0.002 noise floor** (set by the S2/S3 pair: differences that small flip sign across eval
 > points).
 
-## All 22 runs
+## All 23 runs
 
 FLOPs are MACs/token for the two dense projections — compress `H·384·d_in` and decompress
 `H·384·d_out` — against vanilla's **whole** FFN at `2·384·1536` = 1,179,648. The first sweep
@@ -33,6 +33,7 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S3 | H4 c256 in96 out32 | 80,230,668 | 50,331,648 | 1.450713 | −0.024036 | −0.003635 | 147,456 | 49,152 | 0.1667× | 0.49 |
 | U3 | H4 c64 in96 **out48** | 48,920,844 | 18,874,368 | 1.451010 | -0.023740 | -0.003339 | 147,456 | 73,728 | 0.1875x | 0.22 |
 | S10 | H2 c512 in64 out32 | 129,823,500 | 100,663,296 | 1.452450 | −0.022299 | −0.001898 | 49,152 | 24,576 | 0.0625× | 0.87 |
+| V2 | H8 tph64 c256 in48 out48 | 68,237,580 | 37,748,736 | 1.452538 | -0.022212 | -0.001810 | 147,456 | 147,456 | 0.2500x | 0.29 |
 | S1 | H4 c256 in32 out32 *(control)* | 79,639,308 | 50,331,648 | 1.454348 | −0.020401 | — | 49,152 | 49,152 | 0.0833× | 0.49 |
 | S7 | H4 c128 in32 out64 | 79,934,220 | 50,331,648 | 1.455528 | −0.019222 | +0.001180 | 49,152 | 98,304 | 0.1250× | 0.32 |
 | S8 | H2 c256 in64 out32 | 79,491,852 | 50,331,648 | 1.456473 | −0.018276 | +0.002125 | 49,152 | 24,576 | 0.0625× | 0.49 |
@@ -47,13 +48,13 @@ reported only the compress side, which flattered high-`d_out` shapes; this table
 | S0 | dense 4× MLP | 35,792,640 | — | 1.474749 | — | +0.020401 | — | — | 1.0000× | 0.07 |
 
 Every LUT shape beats the dense control, by 0.004 to 0.040. **No training instability in any
-of the 22** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
+of the 23** — all curves monotone at every eval point, no loss spikes, no NaNs, including the
 high-`d_in` (S3, S9, R4, R5) and low-`d_out` (S4, S6) configurations. Every built param count
 was verified before its run trained; all landed within 1% of the brief. Sweeps 2 and 3 ran at
 device_batch 12 × accum 2 throughout; in sweep 1 only S6 and S10 needed 6 × 4 (their
 `H·tph·cells = 524,288` buffer is 12.9 GiB at bs12).
 
-![all 22 runs](sweep_all22.png)
+![all 23 runs](sweep_all23.png)
 
 ## (a) The d_out ladder — an inverted U with its minimum at 48
 
@@ -192,6 +193,56 @@ cells and tph move with it to hold the budget, exactly the confound the axis ana
 
 Curve monotone at every eval point, no spikes, no NaNs; cells 256 with H8/tph64 showed no
 pathology. Ran at device_batch 12 × grad_accum 2, buffer 3.22 GB, 0.28 h.
+
+## (c4) V2 — doubling d_out buys exactly the budget law, and nothing else
+
+V2 (`exp_n_0173`, H8 / tph64 / cells 256 / d_in 48 / d_out 48) is V1 with the dims tied. Because
+`d_out` enters the table count linearly, that doubles the budget from 18,874,368 to 37,748,736 —
+**exactly one doubling**, at fixed H, tph, cells and d_in.
+
+| | d_out | tables | proxy bpb |
+|---|---|---|---|
+| V1 | 24 | 18,874,368 | 1.459698 |
+| V2 | 48 | 37,748,736 | **1.452538** |
+
+```
+actual            −0.007160
+budget law        −0.007455 per doubling
+miss              +0.000295     (V2 delivers 96% of the law, far inside noise)
+```
+
+**So `d_out`'s benefit here is entirely the table parameters it buys — no shape bonus, no shape
+penalty.** That is a genuinely useful null: on this axis, at this pair of budgets, the parameters
+are the whole story, and there is no separate "wider rows help the routing" effect to claim.
+V2 ranks *11 of 23*, −0.022212 against the S0 dense anchor.
+
+**Two comparisons the framing invited that the data will not support.**
+
+*V2 against 0132* was proposed as the closest thing to a clean tph-vs-`d_out` isolate (H 8, cells
+256 and budget all fixed; only tph 128→64 trading against `d_out` 24→48). The **shapes** do form
+that pair — but 0132 is a *16k* run and V2 is a *4k proxy*, so the two numbers are on different
+training budgets and cannot be differenced. That is precisely the cross-budget error this whole
+line of work exists to correct. To use the pair, one side needs a twin at the other budget.
+
+*V2 as an H8 datapoint*: only V1 and V2 are H8 anywhere in the proxy set, and they differ in
+`d_out`, so there is no proxy H-slice at fixed budget at all. V2 says nothing about whether H8 is
+a bad extreme.
+
+**No proxy peer at this budget.** Read from disk: the proxy budgets present are 18.9M ×4, 25.2M
+×1, 50.3M ×8, 75.5M ×5, 100.7M ×2, 151M ×1 — **V2 is the first proxy run at 37,748,736**, so its
+only same-budget company is the 16k slice it cannot be differenced against.
+
+**Not worth a 16k slot, and this time the cost argument settles it independently.** Calibrating
+proxy→16k on the four shapes that exist at both budgets gives `16k = 0.242892 + 0.647166 × 4k`
+(R² = 0.828, max in-sample residual 0.0039), projecting V2 to ≈ **1.1829, band 1.179–1.187**. The
+16k anchors at that exact budget are 0084 1.177290, 0131 1.179273, 0121 1.180622, 0132 1.183174,
+0137 1.183748 — so V2 projects to *mid-pack*, and even the optimistic end of its band does not
+reach 0084. And **it would pay 0.2500× vanilla projection FLOPs to get there, double the 0.1250×
+every one of those five runs uses.** The projection rests on only four paired shapes and should
+be treated as indicative; the FLOPs argument does not depend on it and holds regardless.
+
+Curve monotone at every eval point, no spikes, no NaNs. Ran at device_batch 12 × grad_accum 2,
+buffer 3.22 GB, 0.287 h.
 
 ## (d) It was never about head count — the rule is `H · d_in ≥ 128` *at 75.5M tables*
 

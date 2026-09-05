@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0173_v2_proxy_H8_tph64_c256_din48_dout48",
+  "best_val_bpb": 1.452537503415736,
+  "final_val_bpb": 1.452537503415736,
+  "total_params": 68237580,
+  "training_time_hours": 0.287,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
