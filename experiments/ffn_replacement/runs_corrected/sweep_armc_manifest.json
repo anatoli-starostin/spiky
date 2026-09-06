@@ -1,0 +1,42 @@
+{
+  "n_steps": 4000,
+  "effective_batch_sequences": 24,
+  "effective_batch_tokens": 12288,
+  "eval_every": 500,
+  "vanilla_ffn_macs_per_token": 1179648,
+  "cloned_from": "sweep_s05_dout48_H4_tph256_c256_din32",
+  "baseline_pair": {
+    "run": "sweep_s05_dout48_H4_tph256_c256_din32",
+    "corrected_val_bpb": 1.434572,
+    "random_seed": 1
+  },
+  "isolates": "selectivity, at matched forward scale vs arm A'",
+  "runs": [
+    {
+      "idx": 1,
+      "run": "exp_n_0182_C_bounded_gain_seed1",
+      "tag": "C1",
+      "params": 104952588,
+      "expected": 104952588,
+      "deviation": 0.0,
+      "device_batch_size": 12,
+      "grad_accum": 2,
+      "H": 4,
+      "tph": 256,
+      "cells": 256,
+      "d_in": 32,
+      "d_out": 48,
+      "random_seed": 1,
+      "forward_confidence": true,
+      "confidence_form": "bounded",
+      "confidence_gain": 12.61,
+      "measured_score_mean": 0.683915,
+      "measured_score_p75_over_p25": 2.06,
+      "compress_flops": 49152,
+      "decompress_flops": 73728,
+      "projection_flops_total": 122880,
+      "compress_flops_ratio": 0.08333333333333333,
+      "projection_flops_ratio_vs_vanilla_ffn": 0.10416666666666667
+    }
+  ]
+}
