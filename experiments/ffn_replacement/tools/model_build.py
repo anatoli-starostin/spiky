@@ -108,7 +108,12 @@ class MinimalBlock(nn.Module):
                     lut_impl=cfg.get('lut_impl', 'fast'),
                     forward_confidence=cfg.get('lut_forward_confidence', False),
                     confidence_form=cfg.get('lut_confidence_form', 'bounded'),
-                    confidence_gain=cfg.get('lut_confidence_gain', 1.0))
+                    confidence_gain=cfg.get('lut_confidence_gain', 1.0),
+                    # Optional skip INSIDE the FFN: decompress(lut(z) + z). Adds no
+                    # parameters and requires eff_in == eff_out. Default False, so every
+                    # existing config builds a bit-identical model to before this line
+                    # existed (verified by param/buffer sha256 on exp_n_0185's config).
+                    inner_residual=cfg.get('lut_inner_residual', False))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
