@@ -126,8 +126,34 @@ tokens_per_step = DEVICE_BS * SEQ_LEN
 grad_accum = max(1, TOTAL_BS // tokens_per_step)
 print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | effective batch: {grad_accum * tokens_per_step:,} tokens')
 
+
+# --- per-layer LayerNorm health, logged alongside the val curve -------------------------
+# Why: exp_n_0184's layer-0 ln2 gain was found collapsed to ~0 (mean 0.000000, norm 0.00386)
+# against Fast's healthy 0.894887 / 17.53908, and with only a FINAL checkpoint saved there
+# was no way to tell whether it never bootstrapped or was alive and died. These columns make
+# that answerable from the run's own metrics.csv.
+#
+# STRICTLY ADDITIVE: 'step', 'train_loss', 'val_bpb' keep their names, order and meaning, so
+# anything reading an older metrics.csv still works; the new columns simply follow them.
+# The gain MEAN is logged as well as the norm, because a gain can drift or change sign
+# pattern while keeping its norm, and mean is the quantity compared across runs.
+N_LAYERS = len(model.blocks)
+LN_COLS = ([f'ln2_norm_L{i}' for i in range(N_LAYERS)]
+           + [f'ln2_mean_L{i}' for i in range(N_LAYERS)]
+           + [f'ln1_norm_L{i}' for i in range(N_LAYERS)])
+
+
+@torch.no_grad()
+def ln_stats():
+    """Read-only scalars off the parameters. No RNG, no graph, no optimiser interaction."""
+    out = [b.ln2.weight.norm().item() for b in model.blocks]
+    out += [b.ln2.weight.mean().item() for b in model.blocks]
+    out += [b.ln1.weight.norm().item() for b in model.blocks]
+    return [f'{v:.6f}' for v in out]
+
+
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
-csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'])
+csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS)
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 
@@ -161,7 +187,7 @@ for step in range(1, N_STEPS + 1):
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}']); csv_f.flush()
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + ln_stats()); csv_f.flush()
 
 csv_f.close()
 elapsed = time.time() - t0
