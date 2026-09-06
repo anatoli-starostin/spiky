@@ -1412,10 +1412,11 @@ class FastMultiHeadLut(nn.Module):
         if policy not in (
             AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE,
             AnchorSamplingPolicy.CANONICAL_DISTINCT,
+            AnchorSamplingPolicy.CANONICAL_DISJOINT,
         ):
             raise ValueError(
-                f"anchor_sampling_policy must be CANONICAL_FULL_COVERAGE or "
-                f"CANONICAL_DISTINCT, got {policy}"
+                f"anchor_sampling_policy must be CANONICAL_FULL_COVERAGE, "
+                f"CANONICAL_DISTINCT or CANONICAL_DISJOINT, got {policy}"
             )
         self.anchor_sampling_policy = policy
 

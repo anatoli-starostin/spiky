@@ -26,6 +26,13 @@ class AnchorSamplingPolicy(str, Enum):
     # canonical-pool tiled-randperm: full coverage of C(input_dim, 2)
     # whenever n_tables * n_anchor_pairs >= P, plus a greedy swap-repair
     # pass to keep within-table distinctness across perm boundaries.
+    CANONICAL_DISJOINT = "canonical_disjoint"
+    # "matching"-style: each table's n_anchor_pairs pairs are COORDINATE-DISJOINT
+    # (no coordinate index appears in more than one pair in that table), i.e. a
+    # partial matching of size n_anchor_pairs on the input_dim coordinates. Built
+    # by rejection sampling from the canonical pool (reject a pair that shares a
+    # coordinate with one already chosen for the current table). Requires
+    # 2*n_anchor_pairs <= input_dim. No cross-table coverage guarantee.
 
 
 class UncertaintyMode(str, Enum):
@@ -200,6 +207,83 @@ def _get_canonical_distinct_pairs(
     return all_a, all_b
 
 
+def _get_canonical_disjoint_pairs(
+    n_tables: int,
+    n_anchor_pairs: int,
+    input_dim: int,
+    device: torch.device,
+    random_seed: Optional[int],
+    n_heads: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Each table's n_anchor_pairs pairs are COORDINATE-DISJOINT: a size-NAP
+    partial matching on the input_dim coordinates (each coordinate used in at
+    most one pair). Requires 2*n_anchor_pairs <= input_dim.
+
+    Built by rejection sampling from the canonical (a<b) pool: draw a uniform
+    pool pair, reject it if either endpoint is already used by a pair chosen for
+    the current table, else accept; repeat until the table has NAP pairs. Each
+    table is sampled independently (n_heads does not change the per-table logic;
+    it is accepted only for signature parity with the other policies).
+
+    Uniformity: at the k-th accepted pair, every pool pair with BOTH endpoints
+    free is equally likely (uniform draw + rejection = uniform over the accept
+    set), and the size of that accept set, C(input_dim - 2(k-1), 2), depends only
+    on k -- not on which coordinates were used. So every ordered sequence of NAP
+    disjoint pairs is equiprobable, hence every unordered matching (= NAP!
+    sequences) is equiprobable. The greedy process is therefore EXACTLY uniform
+    over size-NAP partial matchings.
+
+    Returns (anchor_pairs_a, anchor_pairs_b), both [n_tables, n_anchor_pairs]
+    long, with a < b in every entry.
+    """
+    tri_i, tri_j = _build_canonical_pool(input_dim, device)
+    P = tri_i.shape[0]
+    if 2 * n_anchor_pairs > input_dim:
+        raise ValueError(
+            f"CANONICAL_DISJOINT requires 2*n_anchor_pairs <= input_dim "
+            f"(a size-{n_anchor_pairs} matching needs {2 * n_anchor_pairs} distinct "
+            f"coordinates); got n_anchor_pairs={n_anchor_pairs}, input_dim={input_dim}."
+        )
+
+    gen = None
+    if random_seed is not None:
+        gen = torch.Generator(device=device)
+        gen.manual_seed(random_seed)
+
+    tri_i_l = tri_i.tolist()
+    tri_j_l = tri_j.tolist()
+    all_a = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+    all_b = torch.empty(n_tables, n_anchor_pairs, dtype=torch.long, device=device)
+
+    # Draw candidate pool indices in batches to avoid a device round-trip per draw.
+    _batch = max(4 * n_anchor_pairs, 64)
+    buf, bpos = None, 0
+
+    def _next_index() -> int:
+        nonlocal buf, bpos
+        if buf is None or bpos >= buf.shape[0]:
+            buf = torch.randint(P, (_batch,), device=device, generator=gen)
+            bpos = 0
+        v = int(buf[bpos].item())
+        bpos += 1
+        return v
+
+    for t in range(n_tables):
+        chosen = []
+        used = set()
+        while len(chosen) < n_anchor_pairs:
+            r = _next_index()
+            a, b = tri_i_l[r], tri_j_l[r]
+            if a in used or b in used:
+                continue
+            used.add(a); used.add(b); chosen.append(r)
+        idx = torch.tensor(chosen, dtype=torch.long, device=device)
+        all_a[t] = tri_i[idx]
+        all_b[t] = tri_j[idx]
+
+    return all_a, all_b
+
+
 # =============================================================================
 # Public dispatcher
 # =============================================================================
@@ -239,6 +323,11 @@ def get_balanced_anchor_pairs(
 
     if effective_policy == AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE:
         return _get_canonical_full_coverage_pairs(
+            n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
+        )
+
+    if effective_policy == AnchorSamplingPolicy.CANONICAL_DISJOINT:
+        return _get_canonical_disjoint_pairs(
             n_tables, n_anchor_pairs, input_dim, device, random_seed, n_heads,
         )
 

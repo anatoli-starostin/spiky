@@ -110,6 +110,7 @@ class CompressionMultiHeadLUT(nn.Module):
         joint_head_compression: bool = False,
         forward_mode: str = "hard",
         backward_topk: int = 0,
+        anchor_sampling_policy=None,
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
@@ -216,6 +217,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 confidence_gain=confidence_gain,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
                 device=device, n_heads=n_heads, multi_head_input=mh,
+                anchor_sampling_policy=anchor_sampling_policy,
             )
             if mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
@@ -226,7 +228,7 @@ class CompressionMultiHeadLUT(nn.Module):
 
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
-            backward_topk=backward_topk,
+            backward_topk=backward_topk, anchor_sampling_policy=anchor_sampling_policy,
             weight_dtype=weight_dtype, use_bf16=use_bf16,
             initial_weights_noise=initial_weights_noise, learnable_temps=learnable_temps,
             device=device, forward_confidence=forward_confidence,

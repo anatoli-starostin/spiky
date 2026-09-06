@@ -26,6 +26,14 @@ if NANOCHAT_ROOT not in sys.path:
 
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut          # noqa: E402
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT       # noqa: E402
+from spiky.lutorch.lut_helpers import AnchorSamplingPolicy              # noqa: E402
+
+
+def _anchor_policy(cfg):
+    """Map optional config key 'lut_anchor_policy' (string) to an AnchorSamplingPolicy,
+    or None to keep each module's default (CANONICAL_FULL_COVERAGE)."""
+    v = cfg.get('lut_anchor_policy')
+    return AnchorSamplingPolicy(v) if v else None
 
 
 class RotaryEmbedding(nn.Module):
@@ -93,6 +101,7 @@ class MinimalBlock(nn.Module):
                     input_dim=n_embd, n_heads=int(cfg['raw_n_heads']), n_outputs=n_embd,
                     n_anchor_pairs=int(cfg['raw_nap']), tables_per_head=int(cfg['raw_tph']),
                     forward_mode=fwd, backward_topk=cfg.get('lut_backward_topk', 0),
+                    anchor_sampling_policy=_anchor_policy(cfg),
                     use_bf16=bf16, initial_weights_noise=noise,
                     learnable_temps=learn, random_seed=seed)
             else:
@@ -104,6 +113,7 @@ class MinimalBlock(nn.Module):
                     n_heads=cfg.get('lut_n_heads', 1),
                     joint_head_compression=cfg.get('lut_joint_head_compression', False),
                     forward_mode=fwd, backward_topk=cfg.get('lut_backward_topk', 0),
+                    anchor_sampling_policy=_anchor_policy(cfg),
                     use_bf16=bf16, initial_weights_noise=noise,
                     learnable_temps=learn, random_seed=seed,
                     # LookupFFN-line knobs; both default to the pre-existing behaviour
