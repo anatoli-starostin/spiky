@@ -38,7 +38,7 @@ scale knob:
 | A′ | `bounded_norm` | 0.6838 | 1.09 | **1.441122** (+0.006550) |
 | B | `bounded_norm`, Light impl | 0.6838 | 1.09 | **1.477708** (+0.043136) |
 | C | `bounded` × gain 12.61 | 0.6839 | 2.06 | **1.434988** (+0.000416) |
-| D | `margin` × gain 2.99 | 0.6836 | 3.04 | _running_ |
+| D | `margin` × gain 2.99 | 0.6836 | 3.04 | **1.432430** (−0.002142) |
 
 A′ and C have **the same forward scale to within 0.011%** and differ only in selectivity, so
 C − A′ isolates whether discriminating between confident and unconfident routings is worth
@@ -271,9 +271,100 @@ treat `confidence_gain` as mandatory rather than optional.
 
 ---
 
-## Code
+## Arm D: the third point on the selectivity axis
 
-| commit | what |
+`margin` — the exact LookupFFN kernel form — with gain 2.99 to put it at the same mean. The
+three scaled arms then form a curve rather than a yes/no:
+
+| arm | form | gain | mean | p75/p25 | within-token CV |
+|---|---|---|---|---|---|
+| A′ | `bounded_norm` | 1.00 | 0.6838 | 1.09 | 0.067 |
+| C | `bounded` | 12.61 | 0.6839 | 2.06 | 0.584 |
+| D | `margin` | 2.99 | 0.6836 | 3.04 | 0.946 |
+
+**Confound, recorded before the run rather than discovered after:** `margin` self-normalises
+during training — its `Σ|d|` factor grows with the margins, so its mean rises 0.229 → 0.944
+over 4,000 gate-off steps — while the gain stays fixed at its init value. D's effective scale
+therefore drifts upward as it trains in a way A′'s and C's do not, which makes D a weaker
+one-variable comparison than C vs A′.
+
+### Result: 1.432430 — the only arm below the baseline, and the axis comes out monotone
+
+| arm | within-token CV | final | vs S5 |
+|---|---|---|---|
+| A′ `bounded_norm` | 0.067 | 1.441122 | +0.006550 |
+| C `bounded`×12.61 | 0.584 | 1.434988 | +0.000416 |
+| D `margin`×2.99 | 0.946 | 1.432430 | **−0.002142** |
+
+**More selectivity is monotonically better across all three arms**, spanning 0.0087 bpb from
+the flattest gate to the sharpest. That is a real pattern and it is worth chasing — but it is
+**not yet a result**, and I am not going to call it one:
+
+- The total spread (0.0087) is just *under* the cross-seed sd (0.0096). No individual pair
+  separates.
+- A monotone ordering of three points has probability 1/6 ≈ 0.17 under a null of pure noise.
+  Suggestive, nowhere near conclusive.
+- **The relevant noise figure may nonetheless be smaller than 0.0096.** These three arms share
+  `random_seed=1`, `lut_base_seed=1000` and data order, differing *only* in the gate — they are
+  paired, whereas 0.0096 was measured across re-drawn inits. Paired noise is plausibly much
+  tighter. But we have never measured it, so this cuts both ways: I cannot use 0.0096 to
+  dismiss the trend, and I cannot use "it's paired" to claim it.
+- D also carries its own confound (self-normalising scale drift), so part of D's edge may be
+  scale rather than selectivity.
+
+**The clean follow-up** is 3 seeds each of A′ and D — the two ends of the axis, ~4 GPU-hours —
+which would resolve a 0.0087 effect if it is real. That is the single most informative next
+run in this line, and it is a much better use of GPU than another form.
+
+---
+
+## What the line establishes
+
+1. **`bounded` is an unusable default at nap=8.** It is a product over `nap` factors, so its
+   attenuation compounds with the anchor count: 0.054 at our sizing, an 18.4× forward
+   attenuation and a ~19× cut to the table gradient. It diverged monotonically and had to be
+   stopped. This is now issue #112 and a documented hazard in the source.
+2. **It was a scale failure, not a form failure.** The identical score shape, multiplied by a
+   constant (arm C), lands +0.0004 from the baseline. Nothing about the gate's shape was
+   wrong.
+3. **It would not have healed itself.** Margins widen only 1.69× over a full run, easing
+   bounded's attenuation from 18.4× to 7.7× and stopping there — and that is the *gate-off*
+   trajectory, the optimistic case.
+4. **At matched scale no gate beats the baseline by more than noise** — but the three scaled
+   arms come out **monotone in selectivity** (CV 0.067 → 0.584 → 0.946 giving +0.0066 →
+   +0.0004 → −0.0021, a spread of 0.0087 against a 0.0096 cross-seed sd). Suggestive, not
+   established; the follow-up that would settle it is 3 seeds each of A′ and D.
+5. **Light's detached routing costs +0.043 bpb** — 4.5× the seed sd, a real regression, and
+   marginally worse than the vanilla-dense zero-line. The directional surrogate is worth
+   keeping. Predicted before the run from `cos(light, fast) = +0.576`.
+
+**Recommendation:** if the gate is used at all, `confidence_gain` is mandatory rather than
+optional, and `margin` is the form to reach for — it is both the sharpest and the one the
+original paper uses. `bounded_norm` is the safest *default* (nap-invariant, needs no gain),
+but it is also the flattest and lands furthest behind. `bounded` without a gain should
+arguably be removed as a default.
+
+## What would actually move the needle next
+
+**The single most informative next run: 3 seeds each of A′ and D** (~4 GPU-hours). That is
+the two ends of the selectivity axis, and it is the only way to turn the monotone trend above
+into a result or retire it. Everything else in this line is now measured.
+
+Beyond that, in order of expected value:
+
+- **The +0.043 that Light gives up is the clearest measured quantity here.** It puts a price
+  on the directional surrogate and flips the question this line started with: not "can we drop
+  the surrogate" but "can we make it better".
+- The gate's selectivity might matter more where routing is *less* reliable — small `d_in`,
+  large `nap`, early training — none of which this series varied. Cheap probe first: compute
+  the score's within-token CV across the existing sweep configs and look for a regime where it
+  is much larger than the 0.061–0.946 seen here.
+- **Measure the paired noise floor.** Every marginal claim in this document is limited by a
+  0.0096 sd that was measured across re-drawn inits, while these arms are paired on seed and
+  data order. Two runs differing only by something provably irrelevant would give the right
+  denominator and would sharpen every future comparison at this budget, not just this line's.
+
+## Code
 |---|---|
 | `30fc396e` | arm A stop, `STOPPED.md`, `diag_confidence_gate.py`, `diag_confidence_backward.py` |
 | `f1276ec4` | `bounded_norm` + its analytic backward + tests |

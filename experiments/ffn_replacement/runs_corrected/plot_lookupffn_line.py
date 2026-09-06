@@ -48,30 +48,37 @@ def final_of(run):
 ARMS = [("arm A  bounded", 'exp_n_0178_A_fwdconf_seed1', C_RED),
         ("arm A' bounded_norm", 'exp_n_0180_Aprime_fwdconf_norm_seed1', C_BLUE),
         ("arm B  Light+bnorm", 'exp_n_0181_B_light_bnorm_seed1', C_ORANGE),
-        ("arm C  bounded x12.61", 'exp_n_0182_C_bounded_gain_seed1', '#7a4f9c')]
+        ("arm C  bounded x12.61", 'exp_n_0182_C_bounded_gain_seed1', '#7a4f9c'),
+        ("arm D  margin x2.99", 'exp_n_0183_D_margin_gain_seed1', '#3f8f8f')]
 
-fig = plt.figure(figsize=(17, 9.6))
-gs = fig.add_gridspec(2, 3, hspace=0.34, wspace=0.26)
+fig = plt.figure(figsize=(21.5, 9.6))
+gs = fig.add_gridspec(2, 4, hspace=0.36, wspace=0.30)
 
-# ---- 1. gap to baseline over training -------------------------------------------------
-a = fig.add_subplot(gs[0, :2])
+# ---- 1. gap to baseline over training, full range and zoomed --------------------------
 steps = sorted(BASE)
-a.axhline(0, color='#333', lw=1.4)
-a.axhspan(-SD, SD, color='#2f6f4f', alpha=.13,
-          label=f'±{SD} seed sd (nothing inside this is a result)')
-for label, run, col in ARMS:
-    ev = evals_of(run)
-    xs = [s for s in steps if s in ev]
-    if not xs:
-        continue
-    a.plot(xs, [ev[s] - BASE[s] for s in xs], 'o-', lw=2, ms=6, color=col, label=label)
-a.set_xlabel('step'), a.set_ylabel('bpb gap to baseline S5')
-a.set_title('The gate\'s scale is the whole story: bounded diverges, everything else '
-            'tracks the baseline', fontsize=11.5)
-a.grid(alpha=.25), a.legend(fontsize=8.5, loc='center right')
+for panel, (ax, ylim, title) in enumerate([
+        (fig.add_subplot(gs[0, 0]), None,
+         'Arm A diverges monotonically\n(same score shape as arm C — only the scale differs)'),
+        (fig.add_subplot(gs[0, 1]), (-0.012, 0.055),
+         'Zoomed: at matched SCALE every gate\nsits on the baseline; only Light lags')]):
+    ax.axhline(0, color='#333', lw=1.4)
+    ax.axhspan(-SD, SD, color='#2f6f4f', alpha=.13,
+               label=f'±{SD} seed sd' + ('' if panel else ' (nothing inside is a result)'))
+    for label, run, col in ARMS:
+        ev = evals_of(run)
+        xs = [s for s in steps if s in ev]
+        if xs:
+            ax.plot(xs, [ev[s] - BASE[s] for s in xs], 'o-', lw=2, ms=5.5,
+                    color=col, label=label)
+    if ylim:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel('step'), ax.set_ylabel('bpb gap to baseline S5')
+    ax.set_title(title, fontsize=10.5)
+    ax.grid(alpha=.25), ax.legend(fontsize=8, loc='upper left')
+a = None
 
 # ---- 2. final scores, as deltas (a bar from an arbitrary origin would exaggerate) -------
-b = fig.add_subplot(gs[0, 2])
+b = fig.add_subplot(gs[0, 2:])
 names, vals, cols = ['baseline S5'], [BASE_FINAL], [C_GREEN]
 for label, run, col in ARMS:
     f = final_of(run)
@@ -89,7 +96,7 @@ for i, (v, col) in enumerate(zip(vals, cols)):
                xytext=(11, 0), textcoords='offset points', va='center', fontsize=8)
 b.set_yticks(y), b.set_yticklabels(names, fontsize=8.5)
 b.set_ylim(len(names) - .4, -.6)
-b.set_xlim(-0.012, (VANILLA - BASE_FINAL) * 1.7)
+b.set_xlim(-0.013, (VANILLA - BASE_FINAL) * 2.1)
 b.set_xlabel('final proxy val bpb  −  baseline S5')
 b.set_title('Final score, as a delta\n(a bar from an arbitrary origin would exaggerate these)',
             fontsize=10.5)
@@ -115,9 +122,10 @@ c.set_title('Why bounded fails: a product over nap\nfactors collapses; the geome
 # ---- 4. selectivity --------------------------------------------------------------------
 d = fig.add_subplot(gs[1, 1])
 dd = torch.load('/tmp/margins_anchor.pt')['d']
-sets = [('bounded', _confidence_score(dd, 'bounded'), C_RED),
-        ("bounded_norm\n(arm A', arm B)", _confidence_score(dd, 'bounded_norm'), C_BLUE),
-        ('bounded x12.61\n(arm C)', _confidence_score(dd, 'bounded') * 12.61, '#7a4f9c')]
+sets = [('bounded\n(arm A)', _confidence_score(dd, 'bounded'), C_RED),
+        ("bounded_norm\n(A', B)  CV 0.07", _confidence_score(dd, 'bounded_norm'), C_BLUE),
+        ('bounded x12.61\n(C)  CV 0.58', _confidence_score(dd, 'bounded') * 12.61, '#7a4f9c'),
+        ('margin x2.99\n(D)  CV 0.95', _confidence_score(dd, 'margin') * 2.99, '#3f8f8f')]
 for i, (name, s, col) in enumerate(sets):
     q = torch.quantile(s[torch.randperm(s.numel())[:200000]],
                        torch.tensor([0.05, .25, .5, .75, 0.95]))
@@ -127,10 +135,10 @@ for i, (name, s, col) in enumerate(sets):
     d.annotate(f'p75/p25\n{(q[3]/q[1]).item():.2f}x', (i, q[3]), xytext=(13, 0),
                textcoords='offset points', fontsize=8, va='center')
 d.axhline(1.0, color='#333', ls='--', lw=1.2)
-d.set_yscale('log'), d.set_xticks(range(3))
+d.set_yscale('log'), d.set_xticks(range(len(sets)))
 d.set_xticklabels([s[0] for s in sets], fontsize=8)
 d.set_ylabel('confidence score (log)')
-d.set_title("A' and C share a scale but not a spread —\nthat is the one-variable test",
+d.set_title("Three arms, one scale (0.6838),\nthree spreads — the selectivity axis",
             fontsize=11)
 d.grid(axis='y', alpha=.25)
 
@@ -151,6 +159,25 @@ e.set_xticks(range(3)), e.set_xticklabels(['bounded', 'bounded_norm', 'margin'],
 e.set_ylabel('mean score'), e.legend(fontsize=8), e.grid(axis='y', alpha=.25)
 e.set_title('Margins widen 1.69x with training, but\nbounded only reaches 0.130 — never heals',
             fontsize=11)
+
+# ---- 6. the selectivity trend, as a small overlay axes -------------------------------
+ax6 = fig.add_subplot(gs[1, 3])
+cvs = [0.067, 0.584, 0.946]
+gaps = [f - BASE_FINAL for f in
+        (final_of('exp_n_0180_Aprime_fwdconf_norm_seed1'),
+         final_of('exp_n_0182_C_bounded_gain_seed1'),
+         final_of('exp_n_0183_D_margin_gain_seed1'))]
+ax6.axhspan(-SD, SD, color=C_GREEN, alpha=.18)
+ax6.axhline(0, color='#333', lw=1)
+ax6.plot(cvs, gaps, 'o-', color='#7a4f9c', lw=2, ms=7)
+for cv, g, n in zip(cvs, gaps, ["A'", 'C', 'D']):
+    ax6.annotate(n, (cv, g), xytext=(0, 7), textcoords='offset points',
+                 ha='center', fontsize=8)
+ax6.set_xlabel('within-token CV (how much the gate discriminates)', fontsize=8.5)
+ax6.set_ylabel('final bpb gap to baseline S5', fontsize=8.5)
+ax6.set_title('More selective = better, monotonically —\nbut the whole spread (0.0087) fits '
+              'inside\none seed sd, so this is a lead, not a result', fontsize=10)
+ax6.grid(alpha=.25)
 
 fig.suptitle('The LookupFFN confidence gate on our LUT FFN (#112) — anchor sizing, '
              '4k proxy budget, seed 1', fontsize=13.5, y=0.985)
