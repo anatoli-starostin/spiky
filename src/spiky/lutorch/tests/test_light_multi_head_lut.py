@@ -145,14 +145,21 @@ def test_no_ste_detaching_index_changes_nothing(form):
     (m(xa) * g).sum().backward()
     gx_module = xa.grad.clone()
 
-    # reference forward: identical math, index packed from the NON-detached margins
+    # Reference forward: index packed from the NON-detached margins. It uses the SAME
+    # fused reduction the module uses (F.embedding_bag), so the ONLY difference between
+    # the two is the detach -- which is what this test is about. Comparing against the
+    # unfused `(rows * score).sum(1)` form instead would fail on summation order at the
+    # last ulp and say nothing about STE leakage.
     xb = x0.clone().requires_grad_(True)
     d = xb[:, m.anchor_a] - xb[:, m.anchor_b]
     index = ((d > 0).to(torch.int64) * m.powers.view(1, 1, -1)).sum(dim=-1)  # non-detached input, still non-diff
     flat = m.tables.reshape(m.n_tables * m.table_size, m.output_dim)
-    rows = flat[(index + m.table_offset.view(1, -1)).reshape(-1)].view(5, m.n_tables, m.output_dim)
+    flat_idx = (index + m.table_offset.view(1, -1)).reshape(-1)
     score = _confidence_score(d, form)
-    out_ref = (rows * score.unsqueeze(-1)).sum(dim=1)
+    offsets = torch.arange(5, device=x0.device, dtype=torch.long) * m.n_tables
+    out_ref = torch.nn.functional.embedding_bag(
+        flat_idx, flat, offsets=offsets, mode="sum",
+        per_sample_weights=score.reshape(-1).to(flat.dtype))
     m.tables.grad = None
     (out_ref * g).sum().backward()
     gx_ref = xb.grad.clone()

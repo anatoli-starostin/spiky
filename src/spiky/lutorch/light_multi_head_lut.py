@@ -27,12 +27,13 @@ flow on tensor values.
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 
 from .lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 # Reuse the EXACT score definition FastMultiHeadLut uses, so the two layers are
 # directly comparable in an ablation (same "bounded"/"margin" forms).
-from .fast_multi_head_lut import _confidence_score
+from .fast_multi_head_lut import _confidence_score, _get_native_lutorch_manager
 
 
 class LightMultiHeadLUT(nn.Module):
@@ -176,6 +177,49 @@ class LightMultiHeadLUT(nn.Module):
                            device=dev, generator=gen) - 0.5
         self.tables = nn.Parameter(u * (2.0 * initial_weights_noise))
 
+        # --- native CUDA bit-pack for the ADDRESS (opt-in, exact, train and eval) ---
+        # FastMultiHeadLut uses lutorch_cuda's MSB-first kernel only at eval, and only
+        # when its confidence gate is off -- the kernel returns just the packed index and
+        # throws the margins away, so a gated layer cannot get its score from it.
+        #
+        # Light is in the same position for the SCORE (it still gathers |d| in torch), but
+        # not for the ADDRESS: Light's address is detached by construction, so replacing
+        # its sign+pack with the kernel is exact and is legal in TRAINING as well as eval.
+        # Measured at the anchor sizing: torch sign+pack 1.27 ms vs native 0.12 ms, taking
+        # the fused forward from 3.79 ms to ~2.64 ms.
+        #
+        # Anchors are flattened once here (with per-head offsets for the block-diagonal
+        # case) because the kernel takes a 2-D [n_tables, NAP] anchor table over a flat x.
+        self._native_msb = None
+        mgr = _get_native_lutorch_manager()
+        if mgr is not None:
+            self._native_msb = getattr(mgr, "anchor_pairs_lookup_eval_forward_msb", None)
+        if self.multi_head_input:
+            head_off = torch.arange(self.n_heads, device=dev).view(self.n_heads, 1, 1) \
+                * input_dim
+            a_flat = (anchor_a + head_off).reshape(n_tables, n_anchor_pairs)
+            b_flat = (anchor_b + head_off).reshape(n_tables, n_anchor_pairs)
+        else:
+            a_flat, b_flat = anchor_a, anchor_b
+        self.register_buffer("native_anchor_a", a_flat.contiguous().to(torch.int64))
+        self.register_buffer("native_anchor_b", b_flat.contiguous().to(torch.int64))
+
+    def _pack_index(self, x_flat, d):
+        """Packed row index [B, n_tables], MSB-first. Never differentiable.
+
+        Prefers the native CUDA kernel, which does gather+sign+pack in one pass; falls
+        back to the torch expression everywhere else (CPU, float64, no extension). Both
+        produce the identical integer address -- a test asserts equality -- so this is a
+        speed choice, never a numerics one.
+        """
+        if (self._native_msb is not None and x_flat.is_cuda
+                and x_flat.dtype in (torch.float32, torch.float64)):
+            return self._native_msb(x_flat, self.native_anchor_a, self.native_anchor_b,
+                                    0.0, 256)
+        shape = (1, 1, 1, -1) if d.dim() == 4 else (1, 1, -1)
+        return ((d.detach() > 0).to(torch.int64)
+                * self.powers.view(*shape)).sum(dim=-1)
+
     def _forward_multi_head(self, x: torch.Tensor) -> torch.Tensor:
         """Block-diagonal variant: x [B, n_heads, input_dim] -> [B, n_heads, output_dim].
 
@@ -194,16 +238,45 @@ class LightMultiHeadLUT(nn.Module):
         idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(B, H, T * NAP)
         d = (torch.gather(x, 2, idx_a) - torch.gather(x, 2, idx_b)).view(B, H, T, NAP)
 
-        index = ((d.detach() > 0).to(torch.int64)
-                 * self.powers.view(1, 1, 1, -1)).sum(dim=-1)          # [B, H, T]
+        index = self._pack_index(x.reshape(B, H * self.input_dim), d).view(B, H, T)
 
         flat = self.tables.reshape(H * T * self.table_size, self.output_dim)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
-        rows = flat[flat_idx].view(B, H, T, self.output_dim)
 
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)                # [B, H, T]
-        return (rows * score.unsqueeze(-1)).sum(dim=2)                 # [B, H, output_dim]
+        # One bag per (sample, head), summing that head's T tables.
+        return self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self.output_dim)
+
+    def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
+        """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.
+
+        Mathematically identical to gathering the rows and doing
+        ``(rows * score.unsqueeze(-1)).sum(over tables)`` -- which is how this layer was
+        first written -- but it never materialises the [.., n_tables, output_dim] rows.
+        At the anchor sizing those rows are 6144 x 4 x 256 x 48 x 4B = 1.2 GiB of traffic
+        per layer per call, and removing them makes the forward ~2.3x faster and the peak
+        memory ~2.4x smaller. The naive form is kept as the reference implementation in
+        test_light_embedding_bag_fusion.py, which asserts the two agree.
+
+        The confidence score enters as embedding_bag's `per_sample_weights`, which is
+        exactly what it is: one scalar multiplying one gathered row. That is also what
+        preserves this layer's defining property -- `flat_idx` is an integer tensor built
+        from `d.detach()`, so it carries no gradient and there is still no STE; autograd
+        reaches x ONLY through `per_sample_weights` -> score -> |d| -> d.
+
+        `per_sample_weights` must share the table dtype, so with reduced-precision tables
+        the score is rounded to that dtype before it multiplies (the naive form would have
+        accumulated in the wider of the two). That is a deliberate consequence of fusing:
+        it is what makes the fused kernel single-pass, and it only bites when tables are
+        stored below fp32.
+        """
+        w = flat.dtype
+        offsets = torch.arange(n_bags, device=flat.device, dtype=torch.long) * bag_size
+        return F.embedding_bag(
+            flat_idx, flat, offsets=offsets, mode="sum",
+            per_sample_weights=score.reshape(-1).to(w),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.multi_head_input:
@@ -219,19 +292,18 @@ class LightMultiHeadLUT(nn.Module):
         # and yields an integer index, so NO gradient (and NO straight-through
         # estimator) flows through the code/routing direction. Detaching here is
         # explicit intent; a bool/integer index would carry no grad regardless.
-        index = ((d.detach() > 0).to(torch.int64) * self.powers.view(1, 1, -1)).sum(dim=-1)  # [B, n_tables]
+        index = self._pack_index(x, d)                               # [B, n_tables]
 
         # Gather one row per table. Grad flows to `tables` at the selected rows only.
         flat = self.tables.reshape(self.n_tables * self.table_size, self.output_dim)
         flat_idx = (index + self.table_offset.view(1, -1)).reshape(-1)
-        rows = flat[flat_idx].view(B, self.n_tables, self.output_dim)  # [B, n_tables, output_dim]
 
         # Differentiable confidence gate -- the ONLY path from x to the output grad.
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)              # [B, n_tables]
 
-        # Sum over tables = the ensemble output.
-        return (rows * score.unsqueeze(-1)).sum(dim=1)               # [B, output_dim]
+        # One bag per sample, summing all n_tables = the ensemble output.
+        return self._bagged_sum(flat, flat_idx, score, B, self.n_tables)
 
     def extra_repr(self) -> str:
         return (f"input_dim={self.input_dim}, n_tables={self.n_tables}, "
