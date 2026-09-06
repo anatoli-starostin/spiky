@@ -36,7 +36,7 @@ scale knob:
 | baseline S5 | gate off | — | — | **1.434572** |
 | A | `bounded` | 0.0542 | 2.06 | **stopped at 3,200**, gap +0.225 and widening |
 | A′ | `bounded_norm` | 0.6838 | 1.09 | **1.441122** (+0.006550) |
-| B | `bounded_norm`, Light impl | 0.6838 | 1.09 | _running_ |
+| B | `bounded_norm`, Light impl | 0.6838 | 1.09 | **1.477708** (+0.043136) |
 | C | `bounded` × gain 12.61 | 0.6839 | 2.06 | _queued_ |
 
 A′ and C have **the same forward scale to within 0.011%** and differ only in selectivity, so
@@ -201,7 +201,27 @@ is not arm A's failure mode; there is no forward attenuation here.
 Param count 104,952,576 = baseline − 12 (Light has no learnable temperatures: 2 per layer ×
 6 layers). Projections and table budget match Fast exactly.
 
-_Result pending._
+### Result: 1.477708 — the prediction held
+
+**+0.043136 vs baseline S5, which is 4.5× the seed sd — a real regression, not noise.** It is
+also marginally *worse* than the vanilla-dense zero-line (1.474749, +0.00296), so at this
+budget Light gives up the whole advantage the LUT FFN had over a dense FFN.
+
+| step | B | S5 | gap B | gap A′ | gap A |
+|---|---|---|---|---|---|
+| 500 | 1.8670 | 1.8523 | +0.0147 | +0.0031 | +0.1354 |
+| final | **1.4777** | **1.4346** | **+0.0431** | +0.0066 | (stopped) |
+
+So the directional surrogate is **worth about 0.043 bpb** here. That is the honest measure of
+what Fast's temperature-surrogate backward buys over LookupFFN's pure-autograd one on our
+geometry — and it is exactly the middle outcome the pre-launch measurement pointed to:
+`cos(light, fast) = +0.576` said the score path is *aligned but not equivalent*, so B should
+train (unlike arm A, which had no forward signal at all) and lag (unlike A′, which had the
+full backward). It did both.
+
+**Caveat, stated rather than buried:** one seed. +0.043 is comfortably outside the noise, so
+the *direction* is safe; the *magnitude* is one sample and should not be quoted to three
+decimals as if it were a converged estimate.
 
 ---
 
