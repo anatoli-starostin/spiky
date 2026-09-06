@@ -92,7 +92,8 @@ class MinimalBlock(nn.Module):
                 self.ffn = FastMultiHeadLut(
                     input_dim=n_embd, n_heads=int(cfg['raw_n_heads']), n_outputs=n_embd,
                     n_anchor_pairs=int(cfg['raw_nap']), tables_per_head=int(cfg['raw_tph']),
-                    forward_mode=fwd, use_bf16=bf16, initial_weights_noise=noise,
+                    forward_mode=fwd, backward_topk=cfg.get('lut_backward_topk', 0),
+                    use_bf16=bf16, initial_weights_noise=noise,
                     learnable_temps=learn, random_seed=seed)
             else:
                 self.ffn = CompressionMultiHeadLUT(
@@ -102,7 +103,8 @@ class MinimalBlock(nn.Module):
                     nap=cfg['lut_n_anchor_pairs'], tph=cfg['lut_tables_per_head'],
                     n_heads=cfg.get('lut_n_heads', 1),
                     joint_head_compression=cfg.get('lut_joint_head_compression', False),
-                    forward_mode=fwd, use_bf16=bf16, initial_weights_noise=noise,
+                    forward_mode=fwd, backward_topk=cfg.get('lut_backward_topk', 0),
+                    use_bf16=bf16, initial_weights_noise=noise,
                     learnable_temps=learn, random_seed=seed,
                     # LookupFFN-line knobs; both default to the pre-existing behaviour
                     lut_impl=cfg.get('lut_impl', 'fast'),

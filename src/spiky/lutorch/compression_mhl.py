@@ -81,6 +81,9 @@ class CompressionMultiHeadLUT(nn.Module):
             route block-diagonally over their own inner_in slices).
             At n_heads=1 the two modes are numerically identical.
         forward_mode: "hard" (default) or "hybrid_smooth"; passed to FastMHL.
+        backward_topk: 0 (default, full-K soft surrogate) or >0 for the
+            sparse-Hamming ("soft_topk") backward; passed to FastMHL (fast
+            lut_impl only; ignored on the light path).
         weight_dtype: FastMHL table storage dtype (default fp32).
         use_bf16: FastMHL bf16-autocast flag (default False — these experiments run fp32).
         initial_weights_noise: FastMHL near-zero table init (default 1e-3).
@@ -105,6 +108,7 @@ class CompressionMultiHeadLUT(nn.Module):
         inner_residual: bool = False,
         joint_head_compression: bool = False,
         forward_mode: str = "hard",
+        backward_topk: int = 0,
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = False,
         initial_weights_noise: float = 1e-3,
@@ -183,6 +187,7 @@ class CompressionMultiHeadLUT(nn.Module):
 
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
+            backward_topk=backward_topk,
             weight_dtype=weight_dtype, use_bf16=use_bf16,
             initial_weights_noise=initial_weights_noise, learnable_temps=learnable_temps,
             device=device, forward_confidence=forward_confidence,

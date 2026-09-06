@@ -450,6 +450,196 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
 
 
+@torch.compile(dynamic=True)
+def _soft_lut_bwd_body_topk(grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                            bit_matrix, powers, index, T_soft, T_sel,
+                            topk_n_alt: int,
+                            accum_dtype: torch.dtype,
+                            compute_weight_grad: bool = False):
+    """Sparse-Hamming ("soft_topk") x / temperature backward — TRUE sparse-row.
+
+    The surrogate softmax runs over ONLY the R = 1 + topk_n_alt kept rows:
+    {chosen row} + its `topk_n_alt` least-|d| 1-bit-flip neighbours (the same
+    rows the hybrid_smooth FORWARD gathers: topk_n_alt=1 -> {main, alt}). NO
+    [B, n_tables, K] tensor is built and NO K-row matmul is run — the row-select
+    softmax, the weight matmul (`d_sel_soft`) and the `ts` reduction all contract
+    over the R gathered rows, so cost is O(R) not O(K = 2^NAP). This is the whole
+    point vs the full-K `_soft_lut_bwd_body`; masking all K rows to -inf would
+    keep the expensive full-K matmul, so it is deliberately avoided.
+
+    The math is identical to a full-K softmax restricted to the kept rows (the
+    non-kept rows carry zero surrogate mass), so gradients match the full-K
+    surrogate evaluated on the kept subset.
+
+    `powers` is the module's MSB `soft_powers` buffer (powers[i] = 2^(NAP-1-i));
+    `index ^ powers[p]` flips the bit at anchor position p, matching the hybrid
+    forward's `alt_index = main_index ^ powers[p_star]`.
+
+    Weight grad: hybrid_smooth passes compute_weight_grad=False and supplies its
+    own 2-row grad via `_hybrid_smooth_weight_grad`, so this returns None there;
+    with compute_weight_grad=True it is a 1-row scatter at the chosen row.
+    """
+    B, n_tables_, n_outputs = grad_pt.shape
+    n_tables, NAP = anchor_a_long.shape
+    K = bit_matrix.shape[1]
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d        = x[:, anchor_a_long] - x[:, anchor_b_long]        # [B, nt, NAP]
+    denom    = T_soft + d.abs()
+
+    # p_signs pinned to the chosen row (same MSB reconstruction as full-soft).
+    shifts   = torch.arange(NAP - 1, -1, -1, device=index.device, dtype=index.dtype)
+    bits     = ((index.unsqueeze(-1) >> shifts.view(1, 1, -1)) & 1).to(d.dtype)
+    p_signs  = bits * 2.0 - 1.0
+    p        = p_signs * d.abs() / denom                        # [B, nt, NAP]
+
+    # Kept row indices: chosen + top-k least-|d| 1-bit-flip neighbours.
+    k = int(topk_n_alt)
+    if k >= NAP:
+        top_pos = (torch.arange(NAP, device=index.device, dtype=index.dtype)
+                   .view(1, 1, -1).expand(B, n_tables, -1))
+    else:
+        _, top_pos = d.abs().topk(k, dim=-1, largest=False)     # [B, nt, k]
+    selected_powers = (powers.view(1, 1, -1).to(index.dtype)
+                       .expand(B, n_tables, -1).gather(-1, top_pos))
+    alt_indices  = index.unsqueeze(-1) ^ selected_powers        # [B, nt, k]
+    kept_idx     = torch.cat([index.unsqueeze(-1), alt_indices], dim=-1)  # [B, nt, R], R=1+k
+
+    # Gather the R kept rows' bit-sign patterns (bit_matrix[:, kept]) and weights.
+    # Both gathers produce O(R)-sized tensors; nothing is K-sized.
+    bit_matrix_T = bit_matrix.t().contiguous()                  # [K, NAP]
+    bm_kept = bit_matrix_T[kept_idx].to(p.dtype)                # [B, nt, R, NAP]
+
+    flat_offset = torch.arange(n_tables, device=weights.device, dtype=kept_idx.dtype) * K
+    kept_flat   = (kept_idx + flat_offset.view(1, -1, 1)).reshape(-1)
+    W_kept = weights.view(n_tables * K, n_outputs)[kept_flat].view(B, n_tables, -1, n_outputs)
+
+    # Row-select softmax over the R kept rows only.
+    ts_kept  = torch.einsum("btp,btrp->btr", p, bm_kept)        # [B, nt, R]
+    z_kept   = ts_kept / T_sel
+    sel_soft = F.softmax(z_kept, dim=-1)                        # [B, nt, R]
+
+    # Weight matmul over the R kept rows only (the O(R) replacement for the
+    # full-K einsum("bto,tko->btk")).
+    d_sel_soft = torch.einsum("bto,btro->btr", grad_pt.to(w_dtype), W_kept)   # [B, nt, R]
+
+    sum_term = (d_sel_soft * sel_soft).sum(dim=-1, keepdim=True)
+    d_z      = sel_soft * (d_sel_soft - sum_term)
+    d_ts     = d_z / T_sel
+    grad_log_T_sel = -(d_z * z_kept).sum()
+
+    # Back through the kept rows' bit patterns to p, then the soft-sign Jacobian.
+    d_p = torch.einsum("btr,btrp->btp", d_ts, bm_kept)          # [B, nt, NAP]
+    d_d = d_p * p_signs * d.sign() * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    if compute_weight_grad:
+        flat_idx = (index + flat_offset.view(1, -1)).reshape(-1)
+        grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
+        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
+        grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
+    else:
+        grad_weights = None
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_weights, grad_log_T_soft, grad_log_T_sel
+
+
+@torch.compile(dynamic=True)
+def _hybrid_smooth_2cell_bwd(grad_pt, x, weights, anchor_a_long, anchor_b_long,
+                             powers, main_index, alt_index, u, T_soft, T_sel):
+    """Fast sparse-Hamming backward for the 2-cell case (backward_topk == 1).
+
+    Specialisation of `_soft_lut_bwd_body_topk` at topk_n_alt=1 that avoids the
+    two performance traps a general small-R implementation hits on H100:
+
+      * NO tiny-R einsum (which lowers to per-table GEMV kernels): `d_sel_soft`
+        over the 2 kept rows {main, alt} is an elementwise mul + reduction.
+      * NO topk kernel: the routing (main_index, alt_index, u = sel_alt) is taken
+        straight from what the FORWARD already gathered and saved. p_star is
+        recovered from the saved flip mask (main ^ alt = powers[p_star]).
+
+    Because alt = main with the bit at p_star flipped, the two rows' sign
+    patterns differ only at p_star (s_alt = s_main, negated at p_star), so the
+    gradient back to the anchor margins d is a closed form: a single scatter_add
+    at p_star instead of a full bit_matrix contraction. Only the 2 kept weight
+    rows are read (via embedding gather); the K = 2^NAP table is never streamed
+    per token. Returns (grad_x, grad_log_T_soft, grad_log_T_sel); the weight grad
+    is supplied by the caller's 2-row `_hybrid_smooth_weight_grad`.
+    """
+    B, n_tables, n_outputs = grad_pt.shape
+    NAP = anchor_a_long.shape[1]
+    K = 1 << NAP
+    input_dim = x.shape[1]
+    w_dtype = weights.dtype
+
+    d      = x[:, anchor_a_long] - x[:, anchor_b_long]          # [B, nt, NAP]
+    absd   = d.abs()
+    denom  = T_soft + absd
+
+    # s_main = sign pattern of the chosen row (MSB reconstruction of main_index).
+    shifts = torch.arange(NAP - 1, -1, -1, device=main_index.device, dtype=main_index.dtype)
+    bits   = ((main_index.unsqueeze(-1) >> shifts.view(1, 1, -1)) & 1).to(d.dtype)
+    s_main = bits * 2.0 - 1.0                                   # [B, nt, NAP]
+
+    # p_star from the saved flip mask (consistent with the forward's argmin |d|).
+    flip_mask = main_index ^ alt_index                         # [B, nt] = powers[p_star]
+    p_star = (powers.view(1, 1, -1) == flip_mask.unsqueeze(-1)).to(torch.int64).argmax(-1)  # [B, nt]
+
+    # d_sel_soft over the 2 kept rows via elementwise mul + reduce (no GEMV).
+    offset = torch.arange(n_tables, device=weights.device, dtype=main_index.dtype) * K
+    w_flat = weights.view(n_tables * K, n_outputs)
+    Wm = w_flat[(main_index + offset.view(1, -1)).reshape(-1)].view(B, n_tables, n_outputs)
+    Wa = w_flat[(alt_index  + offset.view(1, -1)).reshape(-1)].view(B, n_tables, n_outputs)
+    gp = grad_pt.to(w_dtype)
+    dsm = (gp * Wm).sum(-1)                                     # [B, nt]
+    dsa = (gp * Wa).sum(-1)
+
+    # 2-way softmax from the forward's blend: sel_main = 1-u, sel_alt = u.
+    sel_main = 1.0 - u
+    sel_alt  = u
+    sum_term = dsm * sel_main + dsa * sel_alt
+    dz_m = sel_main * (dsm - sum_term)
+    dz_a = sel_alt  * (dsa - sum_term)
+    dts_m = dz_m / T_sel
+    dts_a = dz_a / T_sel
+
+    # grad_log_T_sel needs the absolute row logits z = ts/T_sel.
+    ts_main = (absd / denom).sum(-1)                            # <p, s_main> = Σ |d|/denom
+    dmin    = absd.gather(-1, p_star.unsqueeze(-1)).squeeze(-1)
+    denmin  = denom.gather(-1, p_star.unsqueeze(-1)).squeeze(-1)
+    delta_ts = 2.0 * dmin / denmin
+    ts_alt  = ts_main - delta_ts
+    grad_log_T_sel = -(dz_m * ts_main / T_sel + dz_a * ts_alt / T_sel).sum()
+
+    # d_p[p] = dts_m*s_main[p] + dts_a*s_alt[p]; s_alt = s_main except negated at
+    # p_star. So it is (dts_m+dts_a)*s_main everywhere, corrected by -2*dts_a at
+    # p_star (a single scatter_add) — no full bit_matrix contraction.
+    d_p = (dts_m + dts_a).unsqueeze(-1) * s_main               # [B, nt, NAP]
+    s_at_pstar = s_main.gather(-1, p_star.unsqueeze(-1))       # [B, nt, 1]
+    d_p = d_p.scatter_add(-1, p_star.unsqueeze(-1),
+                          (-2.0 * dts_a).unsqueeze(-1) * s_at_pstar)
+
+    d_d = d_p * s_main * d.sign() * (T_soft / (denom * denom))
+    grad_log_T_soft = -(d_d * d).sum()
+
+    grad_x = torch.zeros(B, input_dim, dtype=x.dtype, device=x.device)
+    idx_a_flat = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b_flat = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    d_flat     = d_d.reshape(B, -1).to(x.dtype)
+    grad_x.scatter_add_(1, idx_a_flat,  d_flat)
+    grad_x.scatter_add_(1, idx_b_flat, -d_flat)
+
+    return grad_x, grad_log_T_soft, grad_log_T_sel
+
+
 # =============================================================================
 # forward_mode="hard": hard forward + soft backward
 # =============================================================================
@@ -860,7 +1050,7 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
                 anchor_a_long, anchor_b_long, bit_matrix, powers,
                 n_heads, tph, table_dim, use_bf16,
                 forward_confidence=False, confidence_form="bounded",
-                confidence_gain=1.0):
+                confidence_gain=1.0, backward_topk=0):
         T_soft = log_T_soft.exp()
         T_sel  = log_T_sel.exp()
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
@@ -895,6 +1085,7 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
         ctx.forward_confidence = forward_confidence
         ctx.confidence_form = confidence_form
         ctx.confidence_gain = confidence_gain
+        ctx.backward_topk = int(backward_topk)
         return out
 
     @staticmethod
@@ -936,13 +1127,32 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
                         else torch.amp.autocast("cpu", enabled=False))
         with autocast_ctx:
             # Soft backward gives us grad_x and the temperature grads; we
-            # discard its 1-row weight grad (its compute_weight_grad=False
-            # makes the accum_dtype passed here a no-op).
-            grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
-                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                main_index, T_soft, T_sel, weights.dtype,
-                compute_weight_grad=False,
-            )
+            # discard its weight grad (compute_weight_grad=False makes the
+            # accum_dtype a no-op) and use the 2-row hybrid grad below instead.
+            if ctx.backward_topk == 1:
+                # Fast sparse-Hamming path: 2-cell {main, alt} backward that
+                # reuses the forward's saved routing and does elementwise (not
+                # GEMV) reductions over exactly the 2 kept rows.
+                grad_x, grad_log_Ts, grad_log_Tx = _hybrid_smooth_2cell_bwd(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, powers,
+                    main_index, alt_index, u, T_soft, T_sel,
+                )
+            elif ctx.backward_topk > 1:
+                # General sparse-Hamming ("soft_topk") x/temp gradient: the
+                # surrogate softmax is restricted to {chosen row} + its
+                # backward_topk least-|d| 1-bit-flip neighbours. Weight grad is
+                # still the 2-row hybrid scatter, unchanged.
+                grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_topk(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    powers, main_index, T_soft, T_sel, ctx.backward_topk,
+                    weights.dtype, compute_weight_grad=False,
+                )
+            else:
+                grad_x, _grad_w_unused, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    main_index, T_soft, T_sel, weights.dtype,
+                    compute_weight_grad=False,
+                )
 
         # _hybrid_smooth_weight_grad accumulates in fp32 internally and is
         # numerically lossless w.r.t. the inputs (bf16 grad_pt limits final
@@ -955,10 +1165,10 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
         if grad_x_add is not None:
             grad_x = grad_x + grad_x_add
 
-        # 15 forward inputs -> 15 grad returns.
+        # 16 forward inputs -> 16 grad returns (last is backward_topk, an int).
         return (grad_x, grad_weights, grad_log_Ts, grad_log_Tx,
                 None, None, None, None, None, None, None, None,
-                None, None, None)
+                None, None, None, None)
 
 
 # =============================================================================
@@ -982,6 +1192,13 @@ class FastMultiHeadLut(nn.Module):
             forward path; backward is "soft" in both cases. May be flipped
             at runtime (e.g. soft -> hard finetune) by setting
             `module.forward_mode = "hard"`.
+        backward_topk: 0 (default) uses the full-K soft surrogate for the
+            x / temperature gradients. When > 0 (hybrid_smooth only), selects
+            the sparse-Hamming ("soft_topk") backward: the surrogate softmax is
+            masked to {chosen row} + its `backward_topk` least-|d| 1-bit-flip
+            neighbours, so those gradients flow only through the kept cells
+            (backward_topk >= NAP = the full Hamming-1 ball). The 2-row weight
+            gradient is unchanged.
         forward_confidence: opt-in LookupFFN-style score gate (default False).
             Each gathered row is scaled by a smooth per-(token, table) scalar
             derived from the routing-margin magnitudes |d| (the hard sign
@@ -1046,6 +1263,7 @@ class FastMultiHeadLut(nn.Module):
         tables_per_head: int = 1,
         *,
         forward_mode: str = "hard",
+        backward_topk: int = 0,
         weight_dtype: torch.dtype = torch.float32,
         use_bf16: bool = True,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
@@ -1074,6 +1292,20 @@ class FastMultiHeadLut(nn.Module):
             raise ValueError(
                 f"n_anchor_pairs must be in [1, 15] (K = 2^NAP rows per table), "
                 f"got {n_anchor_pairs}"
+            )
+        # backward_topk > 0 selects the sparse-Hamming ("soft_topk") x/temperature
+        # backward: the surrogate softmax runs over only {chosen row} + its
+        # backward_topk least-|d| 1-bit-flip neighbours (0 = full-K soft, the
+        # historical default). Only implemented for the hybrid_smooth backward.
+        self.backward_topk = int(backward_topk)
+        if self.backward_topk < 0 or self.backward_topk > n_anchor_pairs:
+            raise ValueError(
+                f"backward_topk must be in [0, NAP={n_anchor_pairs}], got {backward_topk!r}"
+            )
+        if self.backward_topk > 0 and forward_mode != "hybrid_smooth":
+            raise ValueError(
+                "backward_topk > 0 (sparse-Hamming backward) is only implemented for "
+                f"forward_mode='hybrid_smooth', got forward_mode={forward_mode!r}"
             )
 
         self.input_dim = input_dim
@@ -1389,6 +1621,7 @@ class FastMultiHeadLut(nn.Module):
                 self.soft_bit_matrix, self.soft_powers,
                 self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
                 self.forward_confidence, self.confidence_form, self.confidence_gain,
+                self.backward_topk,
             )
         # forward_mode == "hard"
         if not torch.is_grad_enabled():
