@@ -1,0 +1,14 @@
+{
+  "run": "exp_n_0171_0118at48k_compmhl_H4_nap9_tph256_in48_out48",
+  "description": "exp_n_0118 (CompressionMHL parity anchor: H4/in48/out48/nap9[512 cells]/tph256, 180.6M) forked to 48,000 steps to test whether its 16k parity with vanilla dense holds at 3x horizon. device_batch_size 12 / grad_accum 4 (nap9 OOMs above bs12), corrected fixed-eval (bs48x100 skip12, held-out shard_06542 from token 0).",
+  "total_params": 180597900,
+  "training_time_hours": 16.254,
+  "eval_protocol": {"eval_batch_size": 48, "eval_steps": 100, "skip_rows": 12, "val_tokens_scored": 2451456, "batch_size_independent": true, "val_shard": "shard_06542.parquet"},
+  "corrected_val_bpb": 1.1345105714811188,
+  "best_val_bpb": 1.1341712925679348,
+  "checkpoint_reload_check": {"bpb_fixed": 1.1345105714811188, "load_missing_keys": 0, "load_unexpected_keys": 0, "note": "re-scoring the saved checkpoint reproduces summary.json exactly"},
+  "delta_vs_vanilla_48k": 0.019090571481119,
+  "delta_vs_0118_16k_self": -0.030428428518881,
+  "comparison": "vanilla@48K corrected (exp_n_0151 / re-logged exp_n_0177) = 1.115420; 0118@16K corrected = 1.164939; vanilla@16K corrected (exp_n_0135) = 1.165147. HEADLINE: 0118's 16k PARITY with vanilla dense does NOT hold at 48k. At 16k 0118 (1.164939) essentially tied vanilla (1.165147, -0.0002). Over 16k->48k both improve, but vanilla improves MORE (1.165147->1.115420 = -0.0497) than 0118 (1.164939->1.134511 = -0.0304), so the tie opens into a +0.0191 gap in vanilla's favor at 48k. The CompressionMHL parity config loses parity at the longer horizon.",
+  "training_stability": "clean; plateaued at the end (final [VAL] steps 47000/47500/48000 = 1.1342/1.1346/1.1345). No instability."
+}

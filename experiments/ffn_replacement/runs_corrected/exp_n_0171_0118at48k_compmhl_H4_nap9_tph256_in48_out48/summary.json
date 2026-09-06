@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0171_0118at48k_compmhl_H4_nap9_tph256_in48_out48",
+  "best_val_bpb": 1.1341712925679348,
+  "final_val_bpb": 1.1345105714811188,
+  "total_params": 180597900,
+  "training_time_hours": 16.254,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
