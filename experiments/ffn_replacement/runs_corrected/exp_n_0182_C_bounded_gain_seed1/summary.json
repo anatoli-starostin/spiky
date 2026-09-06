@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0182_C_bounded_gain_seed1",
+  "best_val_bpb": 1.434988348493029,
+  "final_val_bpb": 1.434988348493029,
+  "total_params": 104952588,
+  "training_time_hours": 0.657,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

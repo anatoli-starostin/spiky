@@ -37,7 +37,8 @@ scale knob:
 | A | `bounded` | 0.0542 | 2.06 | **stopped at 3,200**, gap +0.225 and widening |
 | A′ | `bounded_norm` | 0.6838 | 1.09 | **1.441122** (+0.006550) |
 | B | `bounded_norm`, Light impl | 0.6838 | 1.09 | **1.477708** (+0.043136) |
-| C | `bounded` × gain 12.61 | 0.6839 | 2.06 | _queued_ |
+| C | `bounded` × gain 12.61 | 0.6839 | 2.06 | **1.434988** (+0.000416) |
+| D | `margin` × gain 2.99 | 0.6836 | 3.04 | _running_ |
 
 A′ and C have **the same forward scale to within 0.011%** and differ only in selectivity, so
 C − A′ isolates whether discriminating between confident and unconfident routings is worth
@@ -236,7 +237,37 @@ is a one-variable comparison.
 |---|---|---|---|
 | reading | selectivity is inert; the score mechanism buys nothing on our geometry | selectivity helps, and arm A failed purely on scale | down-weighting uncertain rows costs more than it saves |
 
-_Queued._
+### Result: 1.434988 — +0.000416, the closest any arm gets to the baseline
+
+Arm C tracked S5 essentially exactly, at every eval, and ended **0.0004** away:
+
+| step | C | S5 | gap C | gap A′ | gap A |
+|---|---|---|---|---|---|
+| 500 | 1.8523 | 1.8523 | −0.00003 | +0.0031 | +0.1354 |
+| 1000 | 1.6931 | 1.6934 | −0.00029 | +0.0041 | +0.1748 |
+| 1500 | 1.6067 | 1.6076 | −0.00089 | +0.0032 | +0.1973 |
+| 2000 | 1.5484 | 1.5487 | −0.00032 | +0.0051 | +0.2049 |
+| 2500 | 1.5035 | 1.5018 | +0.00172 | +0.0061 | +0.2168 |
+| 3000 | 1.4691 | 1.4679 | +0.00121 | +0.0069 | +0.2249 |
+| final | **1.4350** | **1.4346** | **+0.00042** | +0.0066 | (stopped) |
+
+**This settles what arm A's failure was: purely scale.** The identical score shape that
+diverged to +0.225 lands at +0.0004 once multiplied by a constant. Nothing about the gate's
+*form* was wrong — only its magnitude, and the magnitude is a one-line knob.
+
+**What it does not settle** is whether selectivity is *useful*. C is numerically the closest
+arm to baseline and A′ is +0.0066 behind it, but that difference is itself **inside the
+0.0096 seed sd**, so C > A′ is not a claim I can make from one seed each. The defensible
+statement is narrower and still worth having:
+
+> At matched forward scale, the confidence gate is **neutral** — it neither helps nor hurts
+> beyond noise, whether it discriminates strongly (C, CV 0.584) or barely at all (A′, CV
+> 0.061). Every difference among the scaled arms is smaller than the seed noise; the only
+> effect large enough to see is the one caused by getting the scale wrong.
+
+Since the gate costs a per-token score computation and buys nothing measurable, the practical
+recommendation is to **leave `forward_confidence` off** at this sizing — and if it is used, to
+treat `confidence_gain` as mandatory rather than optional.
 
 ---
 
