@@ -101,12 +101,19 @@ def _msb_powers(nap: int, device) -> torch.Tensor:
 
 @torch.compile(dynamic=True)
 def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
-                       n_heads, tph, table_dim):
+                       n_heads, tph, table_dim,
+                       forward_confidence: bool = False,
+                       confidence_form: str = "bounded"):
     """Compiled hard forward.
 
     Computes the sign-pack index of the argmax row per (sample, table) at fp32,
     then fuses gather + sum-reduce across the tables_per_head axis via
     F.embedding_bag(mode='sum').
+
+    When `forward_confidence` is set, each gathered row is scaled by the smooth
+    per-(sample, table) confidence score (see `_confidence_score`) via
+    embedding_bag's `per_sample_weights` -- the sign address is unchanged, only
+    the magnitude is gated.
     """
     B, _ = x.shape
     n_tables = anchor_a_long.shape[0]
@@ -119,8 +126,85 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
     flat_indices = (index + table_offset.view(1, -1)).reshape(-1)
     n_bags = B * n_heads
     offsets = torch.arange(n_bags, device=weights.device, dtype=torch.long) * tph
-    out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
+    if forward_confidence:
+        # Row-major (B, n_tables) score matches flat_indices' own reshape(-1)
+        # ordering; cast to the compute dtype embedding_bag expects for its rows.
+        psw = _confidence_score(d, confidence_form).reshape(-1).to(weights_flat.dtype)
+        out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets,
+                                   mode='sum', per_sample_weights=psw)
+    else:
+        out_flat = F.embedding_bag(flat_indices, weights_flat, offsets=offsets, mode='sum')
     return out_flat.view(B, n_heads, n_outputs), index
+
+
+# =============================================================================
+# forward_confidence: LookupFFN-style score gate (opt-in, default off)
+# =============================================================================
+# Multiply each gathered table row by a smooth per-(token, table) scalar `score`
+# derived from the routing margins d = x[anchor_a] - x[anchor_b] (reduced over the
+# NAP anchor axis). The hard sign address is UNCHANGED; the score only modulates
+# magnitude, and it is applied identically in train and eval (a permanent gate).
+# Two forms, with m_j = |d_j| and prob = prod_j sigmoid(2 m_j) (= 1 / prod_j(1+e^{-2m_j})):
+#   "bounded" (default): score = prob                  in (0, 1]  -- no output-scale blowup.
+#   "margin"           : score = (sum_j m_j) * prob    (>= 0, unbounded)  -- the exact
+#                        LookupFFN kernel form (sum|m| / prod(1+e^{-2m}) == (sum|m|)*prob).
+# Everything uses the logsigmoid/softplus form so exp(2m) is never built.
+
+
+def _confidence_score(d, confidence_form: str):
+    """Smooth confidence gate from margins d [B, n_tables, NAP] -> score [B, n_tables]."""
+    m = d.abs()
+    prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))   # prod_j sigmoid(2 m_j), in (0, 1]
+    if confidence_form == "margin":
+        return m.sum(dim=-1) * prob
+    return prob                                           # "bounded"
+
+
+def _confidence_score_and_dscore(d, confidence_form: str):
+    """Score and its derivative w.r.t. m_j = |d_j|, for the analytic backward.
+
+    Returns (score [B, n_tables], dscore_dm [B, n_tables, NAP]).
+      bounded: dscore/dm_j = 2 * score * sigmoid(-2 m_j)
+      margin : dscore/dm_j = prob + 2 * score * sigmoid(-2 m_j),  prob = 1/P
+    (logsigmoid(2m) = -softplus(-2m); prob = exp(sum logsigmoid(2m)) is stable in (0,1].)
+    """
+    m = d.abs()
+    prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))   # [B, n_tables]
+    sig_neg = torch.sigmoid(-2.0 * m)                     # [B, n_tables, NAP], in (0, 0.5]
+    if confidence_form == "margin":
+        score = m.sum(dim=-1) * prob
+        dscore_dm = prob.unsqueeze(-1) + 2.0 * score.unsqueeze(-1) * sig_neg
+    else:
+        score = prob
+        dscore_dm = 2.0 * score.unsqueeze(-1) * sig_neg
+    return score, dscore_dm
+
+
+def _confidence_grad_x(grad_pt, eff_row, d, confidence_form,
+                       anchor_a_long, anchor_b_long, input_dim, dtype, device):
+    """grad_x contribution from the score path, plus the score for weight scaling.
+
+    Additive to (and independent of) the directional surrogate: this is the exact
+    gradient of the score MULTIPLIER, scatter-added at the same anchor positions.
+
+      grad_pt : [B, n_tables, n_out]  upstream grad at each table's output
+      eff_row : [B, n_tables, n_out]  row(s) the score multiplies in forward
+                                      (hard: W[sel]; hybrid: (1-u) W[main] + u W[alt])
+      dL/dscore_t = <grad_pt_t, eff_row_t>
+      dL/dd_j     = dL/dscore_t * (dscore/dm_j) * sign(d_j),  a: +, b: -
+    Returns (score [B, n_tables], grad_x_add [B, input_dim]).
+    """
+    B = grad_pt.shape[0]
+    score, dscore_dm = _confidence_score_and_dscore(d, confidence_form)
+    g_score = (grad_pt.to(eff_row.dtype) * eff_row).sum(dim=-1)         # [B, n_tables]
+    g_d = (g_score.unsqueeze(-1) * dscore_dm * d.sign()).to(dtype)      # [B, n_tables, NAP]
+    grad_x_add = torch.zeros(B, input_dim, dtype=dtype, device=device)
+    idx_a = anchor_a_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    idx_b = anchor_b_long.unsqueeze(0).expand(B, -1, -1).reshape(B, -1)
+    gd_flat = g_d.reshape(B, -1)
+    grad_x_add.scatter_add_(1, idx_a,  gd_flat)
+    grad_x_add.scatter_add_(1, idx_b, -gd_flat)
+    return score, grad_x_add
 
 
 def _lse_init_offset(tau: float, sigma: float, tph: int, n_samples: int = 200_000,
@@ -226,7 +310,8 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                         bit_matrix, index, T_soft, T_sel,
                         accum_dtype: torch.dtype,
                         compute_weight_grad: bool = True,
-                        wgrad_via_bmm: bool = False):
+                        wgrad_via_bmm: bool = False,
+                        confidence_score=None):
     """Soft backward pinned to the actually-chosen index.
 
     Reconstructs p_signs from `index` so the surrogate softmax's argmax matches
@@ -236,6 +321,12 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     `compute_weight_grad=False` skips the 1-row weight scatter — used by
     hybrid_smooth backward, which supplies its own 2-row weight grad via
     `_hybrid_smooth_weight_grad`.
+
+    `confidence_score` ([B, n_tables] or None): when set, the forward gated each
+    row by this score, so the selected-row WEIGHT grad is scaled by it here
+    (dL/dW_sel = score * grad_pt). Only the weight scatter is scaled -- the
+    directional surrogate (grad_x, temp grads) is left intact; the score's own
+    input gradient is added separately by the caller via `_confidence_grad_x`.
 
     `wgrad_via_bmm=True` switches the weight scatter to a sparse-S + bmm
     pattern: build a one-hot S[B, n_tables, K] in `grad_pt.dtype` (bf16 under
@@ -281,6 +372,11 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     grad_log_T_soft = -(d_d * d).sum()
 
     if compute_weight_grad:
+        # Under the confidence gate the forward row is score*W, so the selected-row
+        # weight grad carries the same score factor. Applied only to the weight
+        # scatter; the surrogate above stays on the unscaled grad_pt.
+        grad_pt_w = (grad_pt if confidence_score is None
+                     else grad_pt * confidence_score.unsqueeze(-1))
         if wgrad_via_bmm:
             # Sparse-S + bmm: one-hot at chosen index in bf16, contracted against
             # bf16 grad_pt. cuBLAS bf16 tensor cores use fp32 accumulator
@@ -289,7 +385,7 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
             g_dtype = grad_pt.dtype
             S = torch.zeros(B, n_tables, K, dtype=g_dtype, device=weights.device)
             S.scatter_(2, index.unsqueeze(-1), 1.0)
-            grad_weights = torch.einsum("btk,bto->tko", S, grad_pt).to(accum_dtype)
+            grad_weights = torch.einsum("btk,bto->tko", S, grad_pt_w).to(accum_dtype)
         else:
             flat_offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
             flat_idx    = (index + flat_offset[None, :]).reshape(-1)
@@ -298,7 +394,7 @@ def _soft_lut_bwd_body(grad_pt, x, weights, anchor_a_long, anchor_b_long,
             # boundary. Keeps the K-row index_add bandwidth-light when weights
             # are fp32 master copies.
             grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
-            grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
+            grad_w_flat.index_add_(0, flat_idx, grad_pt_w.reshape(-1, n_outputs).to(accum_dtype))
             grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
     else:
         grad_weights = None
@@ -324,7 +420,8 @@ class _FastMHLutSoft(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weights, log_T_soft, log_T_sel,
                 anchor_a_long, anchor_b_long, bit_matrix, powers,
-                n_heads, tph, table_dim, use_bf16):
+                n_heads, tph, table_dim, use_bf16,
+                forward_confidence=False, confidence_form="bounded"):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
@@ -339,6 +436,8 @@ class _FastMHLutSoft(torch.autograd.Function):
             out, index = _soft_lut_fwd_body(
                 x, weights_compute, anchor_a_long, anchor_b_long, powers,
                 n_heads, tph, table_dim,
+                forward_confidence=forward_confidence,
+                confidence_form=confidence_form,
             )
         # Preserve the contract that output dtype == weights storage dtype.
         # When the body computed in bf16 on fp32-stored weights, cast back so
@@ -350,6 +449,8 @@ class _FastMHLutSoft(torch.autograd.Function):
         ctx.n_heads = n_heads
         ctx.tph = tph
         ctx.use_bf16 = use_bf16
+        ctx.forward_confidence = forward_confidence
+        ctx.confidence_form = confidence_form
         return out
 
     @staticmethod
@@ -364,6 +465,22 @@ class _FastMHLutSoft(torch.autograd.Function):
         n_tables = anchor_a_long.shape[0]
         n_outputs = weights.shape[2]
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+
+        # Confidence gate: compute the score (for the weight-grad scale) and the
+        # additive score->d->x term before the surrogate. eff_row = W[sel].
+        confidence_score = None
+        grad_x_add = None
+        if ctx.forward_confidence:
+            K = bit_matrix.shape[1]
+            d0 = x[:, anchor_a_long] - x[:, anchor_b_long]
+            offset = torch.arange(n_tables, device=weights.device, dtype=index.dtype) * K
+            flat_idx = (index + offset.view(1, -1)).reshape(-1)
+            w_sel = weights.view(n_tables * K, n_outputs)[flat_idx].view(B, n_tables, n_outputs)
+            confidence_score, grad_x_add = _confidence_grad_x(
+                grad_pt, w_sel, d0, ctx.confidence_form,
+                anchor_a_long, anchor_b_long, x.shape[1], x.dtype, x.device,
+            )
+
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
@@ -377,10 +494,14 @@ class _FastMHLutSoft(torch.autograd.Function):
                 grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
                 index, T_soft, T_sel, weights.dtype,
                 wgrad_via_bmm=wgrad_via_bmm,
+                confidence_score=confidence_score,
             )
-        # 12 forward inputs -> 12 grad returns.
+        if grad_x_add is not None:
+            grad_x = grad_x + grad_x_add
+        # 14 forward inputs -> 14 grad returns.
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None,
+                None, None)
 
 
 # =============================================================================
@@ -513,7 +634,7 @@ class _FastMHLutExpOutputs(torch.autograd.Function):
 
 @torch.compile(dynamic=True)
 def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
-                               n_tables, K, n_outputs):
+                               n_tables, K, n_outputs, confidence_score=None):
     """2-row weight gradient for hybrid_smooth backward.
 
     Two index_add scatters into a flat [n_tables*K, n_outputs] fp32
@@ -536,6 +657,9 @@ def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
     """
     B = grad_pt.shape[0]
     g32           = grad_pt.float()
+    if confidence_score is not None:
+        # Both rows carry the same score factor (forward gated the blended row).
+        g32 = g32 * confidence_score.unsqueeze(-1).float()
     one_minus_u32 = (1.0 - u).float()
     u32           = u.float()
     offset = torch.arange(n_tables, device=grad_pt.device, dtype=main_index.dtype) * K
@@ -555,7 +679,9 @@ def _hybrid_smooth_weight_grad(grad_pt, main_index, alt_index, u,
 
 @torch.compile(dynamic=True)
 def _hybrid_smooth_fwd_gather(x, weights, anchor_a_long, anchor_b_long, powers,
-                               T_soft, T_sel, n_heads, tph, table_dim):
+                               T_soft, T_sel, n_heads, tph, table_dim,
+                               forward_confidence: bool = False,
+                               confidence_form: str = "bounded"):
     """Smooth top-2 forward via two F.embedding gathers + blend.
 
       main = sign-pack of (x_a > x_b).
@@ -598,6 +724,9 @@ def _hybrid_smooth_fwd_gather(x, weights, anchor_a_long, anchor_b_long, powers,
     main_rows = F.embedding(main_flat_idx, weights_flat).view(B, n_tables, n_outputs)
     alt_rows  = F.embedding(alt_flat_idx,  weights_flat).view(B, n_tables, n_outputs)
     blended = main_rows * main_w.unsqueeze(-1) + alt_rows * u.unsqueeze(-1)
+    if forward_confidence:
+        # Gate the blended (top-2) row by the confidence score before the tph-sum.
+        blended = blended * _confidence_score(d, confidence_form).unsqueeze(-1)
     # Match the hard path's contract that out.dtype == weights.dtype. Under
     # bf16 autocast .sum() is promoted to fp32 for stability, so an explicit
     # final cast is needed.
@@ -607,7 +736,9 @@ def _hybrid_smooth_fwd_gather(x, weights, anchor_a_long, anchor_b_long, powers,
 
 @torch.compile(dynamic=True)
 def _hybrid_smooth_fwd_bmm(x, weights, anchor_a_long, anchor_b_long, powers,
-                            T_soft, T_sel, n_heads, tph, table_dim, s_dtype):
+                            T_soft, T_sel, n_heads, tph, table_dim, s_dtype,
+                            forward_confidence: bool = False,
+                            confidence_form: str = "bounded"):
     """Smooth top-2 forward via sparse-S + one bmm per head.
 
     Build a sparse selection mass S[B, n_tables, K] with two nonzeros per
@@ -647,6 +778,9 @@ def _hybrid_smooth_fwd_bmm(x, weights, anchor_a_long, anchor_b_long, powers,
     S = torch.zeros(B, n_tables, K, dtype=s_dtype, device=x.device)
     S.scatter_(2, main_index.unsqueeze(-1), main_w.unsqueeze(-1).to(s_dtype))
     S.scatter_(2, alt_index.unsqueeze(-1),  u.unsqueeze(-1).to(s_dtype))
+    if forward_confidence:
+        # Fold the confidence score into S so it scales BOTH nonzeros (main + alt).
+        S = S * _confidence_score(d, confidence_form).unsqueeze(-1).to(s_dtype)
 
     # Per-head contraction over (tph, K). n_tables = n_heads * tph, laid out
     # as [head0_t0..t(tph-1), head1_t0..., ...].
@@ -676,7 +810,8 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weights, log_T_soft, log_T_sel,
                 anchor_a_long, anchor_b_long, bit_matrix, powers,
-                n_heads, tph, table_dim, use_bf16):
+                n_heads, tph, table_dim, use_bf16,
+                forward_confidence=False, confidence_form="bounded"):
         T_soft = log_T_soft.exp()
         T_sel  = log_T_sel.exp()
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
@@ -690,11 +825,15 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
                 out, main_index, alt_index, u = _hybrid_smooth_fwd_bmm(
                     x, weights, anchor_a_long, anchor_b_long, powers,
                     T_soft, T_sel, n_heads, tph, table_dim, s_dtype,
+                    forward_confidence=forward_confidence,
+                    confidence_form=confidence_form,
                 )
             else:
                 out, main_index, alt_index, u = _hybrid_smooth_fwd_gather(
                     x, weights, anchor_a_long, anchor_b_long, powers,
                     T_soft, T_sel, n_heads, tph, table_dim,
+                    forward_confidence=forward_confidence,
+                    confidence_form=confidence_form,
                 )
         ctx.save_for_backward(x, weights, anchor_a_long, anchor_b_long,
                               bit_matrix, main_index, alt_index, u,
@@ -702,6 +841,8 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
         ctx.n_heads = n_heads
         ctx.tph = tph
         ctx.use_bf16 = use_bf16
+        ctx.forward_confidence = forward_confidence
+        ctx.confidence_form = confidence_form
         return out
 
     @staticmethod
@@ -719,6 +860,24 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
         K = bit_matrix.shape[1]
 
         grad_pt = grad_out.unsqueeze(2).expand(B, n_heads, tph, n_outputs).reshape(B, n_tables, n_outputs)
+
+        # Confidence gate: the forward scaled the BLENDED top-2 row by the score,
+        # so eff_row = (1-u) W[main] + u W[alt]. Compute the score (for the 2-row
+        # weight-grad scale) and the additive score->d->x term here.
+        confidence_score = None
+        grad_x_add = None
+        if ctx.forward_confidence:
+            d0 = x[:, anchor_a_long] - x[:, anchor_b_long]
+            offset = torch.arange(n_tables, device=weights.device, dtype=main_index.dtype) * K
+            w_flat = weights.view(n_tables * K, n_outputs)
+            main_rows = w_flat[(main_index + offset.view(1, -1)).reshape(-1)].view(B, n_tables, n_outputs)
+            alt_rows  = w_flat[(alt_index  + offset.view(1, -1)).reshape(-1)].view(B, n_tables, n_outputs)
+            eff_row = main_rows * (1.0 - u).unsqueeze(-1) + alt_rows * u.unsqueeze(-1)
+            confidence_score, grad_x_add = _confidence_grad_x(
+                grad_pt, eff_row, d0, ctx.confidence_form,
+                anchor_a_long, anchor_b_long, x.shape[1], x.dtype, x.device,
+            )
+
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if ctx.use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
@@ -737,11 +896,16 @@ class _FastMHLutHybridSmooth(torch.autograd.Function):
         # precision either way). Cast to weights.dtype at the autograd boundary.
         grad_weights = _hybrid_smooth_weight_grad(
             grad_pt, main_index, alt_index, u, n_tables, K, n_outputs,
+            confidence_score=confidence_score,
         ).to(weights.dtype)
 
-        # 12 forward inputs -> 12 grad returns.
+        if grad_x_add is not None:
+            grad_x = grad_x + grad_x_add
+
+        # 14 forward inputs -> 14 grad returns.
         return (grad_x, grad_weights, grad_log_Ts, grad_log_Tx,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None,
+                None, None)
 
 
 # =============================================================================
@@ -765,6 +929,19 @@ class FastMultiHeadLut(nn.Module):
             forward path; backward is "soft" in both cases. May be flipped
             at runtime (e.g. soft -> hard finetune) by setting
             `module.forward_mode = "hard"`.
+        forward_confidence: opt-in LookupFFN-style score gate (default False).
+            Each gathered row is scaled by a smooth per-(token, table) scalar
+            derived from the routing-margin magnitudes |d| (the hard sign
+            address is unchanged; magnitude only, identical in train and eval).
+            Its gradient flows analytically through the score and is ADDED to
+            the existing directional surrogate. When False, behavior and
+            numerics are bit-identical to without the flag. Not compatible with
+            exp_outputs=True.
+        confidence_form: "bounded" (default) or "margin". "bounded" uses
+            score = prod_j sigmoid(2|d_j|) in (0, 1] (no output-scale blowup);
+            "margin" uses the exact LookupFFN form
+            (sum_j |d_j|) / prod_j (1+exp(-2|d_j|)) (unbounded above). Only
+            used when forward_confidence=True.
         weight_dtype: storage dtype for the LUT weights. Default
             torch.float32 (training-friendly: keeps an fp32 master copy
             and an fp32 .grad for the optimiser). Pass torch.bfloat16 for
@@ -818,6 +995,8 @@ class FastMultiHeadLut(nn.Module):
         exp_outputs_clamp: float = 60.0,
         exp_outputs_init: str = "logspace",
         exp_outputs_scale: str = "mean",
+        forward_confidence: bool = False,
+        confidence_form: str = "bounded",
     ):
         super().__init__()
         if forward_mode not in _FORWARD_MODES:
@@ -852,10 +1031,27 @@ class FastMultiHeadLut(nn.Module):
         self.forward_mode = forward_mode
         self.use_bf16 = bool(use_bf16)
 
+        # --- forward_confidence: LookupFFN-style score gate (opt-in, default off) ---
+        # When False, every code path below is byte-for-byte the current behavior
+        # (forward AND backward) -- same discipline as exp_outputs.
+        self.forward_confidence = bool(forward_confidence)
+        if confidence_form not in ("bounded", "margin"):
+            raise ValueError(
+                f"confidence_form must be 'bounded' or 'margin', got {confidence_form!r}"
+            )
+        self.confidence_form = confidence_form
+
         # --- exp_outputs: log-sum-exp table aggregation (opt-in, default off) ---
         # When False NOTHING below is created and every existing code path is untouched,
         # so all prior results stay bit-reproducible.
         self.exp_outputs = bool(exp_outputs)
+        if self.forward_confidence and self.exp_outputs:
+            raise ValueError(
+                "forward_confidence=True is not supported together with exp_outputs=True: "
+                "the log-sum-exp readout aggregates rows in the exp domain and has no "
+                "per-row multiplicative score path (embedding_bag's per_sample_weights "
+                "does not apply). Use one or the other in v1."
+            )
         self.exp_outputs_clamp = float(exp_outputs_clamp)
         self.exp_outputs_init = str(exp_outputs_init)
         self.exp_outputs_scale = str(exp_outputs_scale)
@@ -1118,6 +1314,7 @@ class FastMultiHeadLut(nn.Module):
                 self.soft_anchor_a_long, self.soft_anchor_b_long,
                 self.soft_bit_matrix, self.soft_powers,
                 self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+                self.forward_confidence, self.confidence_form,
             )
         # forward_mode == "hard"
         if not torch.is_grad_enabled():
@@ -1140,6 +1337,7 @@ class FastMultiHeadLut(nn.Module):
                 self._native_eval_msb is not None
                 and x.is_cuda
                 and x.dtype in (torch.float32, torch.float64)
+                and not self.forward_confidence   # native kernel has no score gate
             )
             with autocast_ctx:
                 if use_native:
@@ -1150,6 +1348,8 @@ class FastMultiHeadLut(nn.Module):
                         self.soft_anchor_a_long, self.soft_anchor_b_long,
                         self.soft_powers,
                         self.n_heads, self.tables_per_head, self.table_dim,
+                        forward_confidence=self.forward_confidence,
+                        confidence_form=self.confidence_form,
                     )
             if compute_in_bf16:
                 out = out.to(self.weights.dtype)
@@ -1159,4 +1359,5 @@ class FastMultiHeadLut(nn.Module):
             self.soft_anchor_a_long, self.soft_anchor_b_long,
             self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
+            self.forward_confidence, self.confidence_form,
         )
