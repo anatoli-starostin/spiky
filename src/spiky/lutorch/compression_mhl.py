@@ -150,21 +150,32 @@ class CompressionMultiHeadLUT(nn.Module):
             raise ValueError(f"lut_impl must be 'fast' or 'light', got {lut_impl!r}")
 
         if lut_impl == "light":
-            # LookupFFN-style control: one LightMultiHeadLUT over n_heads*tph tables,
-            # summed, on the SHARED compressed input. Light has no multi-head input and
-            # no per-head output, so the topology is necessarily the joint one; the table
-            # budget n_heads*tph*2^nap*eff_out is identical to the Fast path's, which is
-            # what makes the ablation fair.
-            self.compress = (nn.Linear(input_dim, in_raw, device=device)
-                             if self.has_compress else nn.Identity())
+            # LookupFFN-style control. The table budget n_heads*tph*2^nap*eff_out is
+            # identical to the Fast path's in BOTH topologies, which is what makes the
+            # ablation fair; only the projections differ, and only in the joint case.
+            #
+            #   independent (default, mirrors Fast's multi_head_input=True): per-head
+            #     compress 384 -> n_heads*eff_in, block-diagonal routing, per-head output
+            #     block, decompress n_heads*eff_out -> 384. Projections match Fast exactly.
+            #   joint / no compress: one shared code, one summed ensemble, one decompress.
+            mh = self.has_compress and not self.joint_head_compression and n_heads > 1
+            self.light_multi_head_input = mh
+            if mh:
+                self.compress = nn.Linear(input_dim, n_heads * in_raw, device=device)
+            else:
+                self.compress = (nn.Linear(input_dim, in_raw, device=device)
+                                 if self.has_compress else nn.Identity())
             self.lut_light = LightMultiHeadLUT(
                 input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                 n_anchor_pairs=nap, confidence_form=confidence_form,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
-                device=device,
+                device=device, n_heads=n_heads, multi_head_input=mh,
             )
-            self.decompress = (nn.Linear(out_raw, output_dim, device=device)
-                               if self.has_decompress else nn.Identity())
+            if mh:
+                self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
+            else:
+                self.decompress = (nn.Linear(out_raw, output_dim, device=device)
+                                   if self.has_decompress else nn.Identity())
             return
 
         _lut_kw = dict(
@@ -229,6 +240,14 @@ class CompressionMultiHeadLUT(nn.Module):
                 f"x shape must be [N, {self.input_dim}], got {tuple(x.shape)}"
             )
         if self.lut_impl == "light":
+            N = x.shape[0]
+            if self.light_multi_head_input:
+                # per-head slice in, per-head block out — same shapes as the Fast path
+                z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)
+                y = self.lut_light(z).to(z.dtype)      # [N, n_heads, eff_out]
+                if self.inner_residual:
+                    y = y + z
+                return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
             # one shared code, one summed ensemble of n_heads*tph tables, one decompress
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
             y = self.lut_light(z).to(z.dtype)          # [N, eff_out]
