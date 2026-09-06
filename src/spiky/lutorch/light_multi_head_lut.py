@@ -191,9 +191,13 @@ class LightMultiHeadLUT(nn.Module):
         # Anchors are flattened once here (with per-head offsets for the block-diagonal
         # case) because the kernel takes a 2-D [n_tables, NAP] anchor table over a flat x.
         self._native_msb = None
+        self._native_msb_scored = None
         mgr = _get_native_lutorch_manager()
         if mgr is not None:
             self._native_msb = getattr(mgr, "anchor_pairs_lookup_eval_forward_msb", None)
+            self._native_msb_scored = getattr(
+                mgr, "anchor_pairs_lookup_eval_forward_msb_scored", None)
+        self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2}[confidence_form]
         if self.multi_head_input:
             head_off = torch.arange(self.n_heads, device=dev).view(self.n_heads, 1, 1) \
                 * input_dim
@@ -278,7 +282,45 @@ class LightMultiHeadLUT(nn.Module):
             per_sample_weights=score.reshape(-1).to(w),
         )
 
+    def _fused_eval(self, x_flat):
+        """Eval-only fast path: address AND score from one native pass, then the bag.
+
+        Returns None when unavailable, so the caller falls through to the autograd path.
+
+        The margins never leave registers here: the kernel gathers each anchor pair,
+        decides its sign bit, and accumulates the score in the same loop. That removes BOTH
+        the torch margin gather (0.65 ms) and the torch score (1.02 ms) at the anchor
+        sizing, for 0.006 ms of extra arithmetic inside the kernel -- the score really is
+        nearly free once the margins are already in hand.
+
+        Eval only, and that is a real restriction rather than an oversight: autograd needs
+        the margins as a differentiable tensor to reach x through the score, and this path
+        deliberately never materialises them. Training therefore keeps the torch path,
+        where the forward is a small share of the step anyway (2.7 ms of a 9.1 ms
+        fwd+bwd), so the leverage is here, at inference.
+        """
+        if (self._native_msb_scored is None or not x_flat.is_cuda
+                or x_flat.dtype not in (torch.float32, torch.float64)):
+            return None
+        index, score = self._native_msb_scored(
+            x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
+            self._score_form_id, self.confidence_gain, 256,
+        )
+        flat = self.tables.reshape(self.n_tables * self.table_size, self.output_dim)
+        flat_idx = (index + self.table_offset.view(1, -1)).reshape(-1)
+        n_bags = x_flat.shape[0] * self.n_heads
+        return self._bagged_sum(flat, flat_idx, score, n_bags, self.tables_per_head)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not torch.is_grad_enabled():
+            B = x.shape[0]
+            x_flat = x.reshape(B, -1)
+            if x_flat.shape[1] == (self.n_heads * self.input_dim if self.multi_head_input
+                                   else self.input_dim):
+                out = self._fused_eval(x_flat.contiguous())
+                if out is not None:
+                    return (out.view(B, self.n_heads, self.output_dim)
+                            if self.multi_head_input else out)
         if self.multi_head_input:
             return self._forward_multi_head(x)
         if x.dim() != 2 or x.shape[1] != self.input_dim:

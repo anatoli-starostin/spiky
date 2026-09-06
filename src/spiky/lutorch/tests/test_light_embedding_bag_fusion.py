@@ -200,6 +200,52 @@ def _margins(m, x):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("form", _FORMS)
+@pytest.mark.parametrize("multi", [False, True])
+@pytest.mark.parametrize("gain", [1.0, 12.61])
+def test_fused_eval_path_matches_the_autograd_path(form, multi, gain):
+    """no_grad forward (native kernel emits index AND score) == the autograd forward.
+
+    Under no_grad the layer takes a path that never materialises the margins: one CUDA pass
+    produces both the packed address and the confidence score. It must return exactly what
+    the differentiable path returns -- the speed-up is not allowed to change the model.
+    """
+    dev = torch.device("cuda:0")
+    kw = dict(output_dim=9, n_anchor_pairs=5, confidence_form=form, confidence_gain=gain,
+              random_seed=7, device=dev)
+    m = (LightMultiHeadLUT(input_dim=16, n_tables=24, n_heads=3, multi_head_input=True, **kw)
+         if multi else LightMultiHeadLUT(input_dim=16, n_tables=24, **kw))
+    if m._native_msb_scored is None:
+        pytest.skip("scored kernel not present in this lutorch_cuda build")
+
+    torch.manual_seed(0)
+    x = (torch.randn(48, 3, 16, device=dev) if multi else torch.randn(48, 16, device=dev)) * 2.0
+
+    with torch.no_grad():
+        y_fused = m(x)                       # takes the native scored path
+    y_autograd = m(x.clone().requires_grad_(True)).detach()   # takes the torch path
+
+    assert y_fused.shape == y_autograd.shape
+    err = (y_fused - y_autograd).abs().max().item()
+    scale = y_autograd.abs().mean().item()
+    assert err < 2e-5 * max(scale, 1e-3), \
+        f"{form} gain={gain} multi={multi}: fused eval differs by {err:.3e} (scale {scale:.3e})"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_fused_eval_is_disabled_under_grad():
+    """The fused path must NOT be taken when grad is on -- it would silently drop grad_x."""
+    dev = torch.device("cuda:0")
+    m = LightMultiHeadLUT(input_dim=16, n_tables=24, output_dim=9, n_anchor_pairs=5,
+                          confidence_form="bounded_norm", random_seed=7, device=dev)
+    x = torch.randn(32, 16, device=dev, requires_grad=True)
+    y = m(x)
+    assert y.requires_grad, "grad-enabled forward lost its graph"
+    y.sum().backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
 def test_fused_forward_runs_in_reduced_precision(dtype):
     """The FORWARD works with fp32, bf16 and fp16 tables -- which is what inference needs."""

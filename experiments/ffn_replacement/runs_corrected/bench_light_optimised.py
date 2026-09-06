@@ -107,23 +107,32 @@ def main():
         with torch.no_grad():
             kern0(xf0, a_f, b_f, 0.0, 256)
 
+    scored0 = getattr(mgr0, 'anchor_pairs_lookup_eval_forward_msb_scored', None)
+
+    def native_scored_only():
+        with torch.no_grad():
+            scored0(xf0, a_f, b_f, 0.0, 0, 1.0, 256)
+
     tot = timed(full)
-    # The module now packs its address with the native kernel, so THAT is the component
-    # in the live path; the torch sign+pack is shown underneath as what it replaced.
-    parts = [('margin gather (2x torch.gather)', gather_only),
-             ('score  (logsigmoid mean)', score_only),
-             ('address (NATIVE bit-pack)', native_idx_only),
+    print('   REPLACED, no longer executed in the eval path:')
+    for nm, fn in (('margin gather (2x torch.gather)', gather_only),
+                   ('score (logsigmoid mean, torch)', score_only),
+                   ('address (torch sign+pack)', index_only),
+                   ('address (native, UNSCORED)', native_idx_only)):
+        print(f'      {nm:<38}{timed(fn):8.3f} ms')
+    print('\n   LIVE eval path:')
+    parts = [('address + score (NATIVE, fused)', native_scored_only),
              ('embedding_bag (gather+weight+sum)', bag_only)]
     acc = 0.0
     for name, fn in parts:
         t = timed(fn)
         acc += t
-        print(f'   {name:<38}{t:8.3f} ms   {t / tot:6.1%} of the full forward')
-    print(f'   {"-" * 38}{"":>8}')
-    print(f'   {"sum of parts":<38}{acc:8.3f} ms   {acc / tot:6.1%}')
-    print(f'   {"FULL fused forward":<38}{tot:8.3f} ms')
-    print(f'   {"(replaced) torch sign+pack":<38}{timed(index_only):8.3f} ms   '
-          f'-- no longer in the path')
+        print(f'      {name:<38}{t:8.3f} ms   {t / tot:6.1%} of the full forward')
+    print(f'      {"-" * 38}{"":>8}')
+    print(f'      {"sum of parts":<38}{acc:8.3f} ms   {acc / tot:6.1%}')
+    print(f'      {"FULL fused forward":<38}{tot:8.3f} ms')
+    print(f'\n   The embedding_bag gather is now {timed(bag_only) / tot:.0%} of the forward:')
+    print('   that is the irreducible part -- one random row read per (token, table).')
 
     print('\n' + '=' * 88)
     print('(b) CAN FAST\'S NATIVE CUDA EVAL KERNEL SERVE LIGHT?')

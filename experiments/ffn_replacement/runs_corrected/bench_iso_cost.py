@@ -34,8 +34,8 @@ TOKENS = 12 * 512
 SLOPE = 0.007455          # bpb per doubling of table params (16k budget law)
 
 # measured, whole model, fp32, this GPU (bench_model_step.py)
-MODEL = {'dense': (19.9, 6.8), 'fast_off': (217.8, 10.3),
-         'fast_gate': (282.2, 11.6), 'light': (68.3, 21.3)}
+MODEL = {'dense': (19.8, 6.9), 'fast_off': (218.0, 10.3),
+         'fast_gate': (282.1, 11.6), 'light': (68.4, 11.1)}
 BPB = {'fast_off': 1.434572, 'light': 1.477708, 'dense': 1.474749}
 SD = 0.0096
 
