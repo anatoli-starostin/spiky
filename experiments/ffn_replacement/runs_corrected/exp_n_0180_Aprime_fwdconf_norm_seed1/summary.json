@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0180_Aprime_fwdconf_norm_seed1",
+  "best_val_bpb": 1.4411223612858626,
+  "final_val_bpb": 1.4411223612858626,
+  "total_params": 104952588,
+  "training_time_hours": 0.656,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

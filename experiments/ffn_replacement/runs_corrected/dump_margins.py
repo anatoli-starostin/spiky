@@ -24,19 +24,26 @@ from nanochat.dataloader import (                                          # noq
     tokenizing_distributed_data_loader_bos_bestfit)
 from model_build import build_model                                        # noqa: E402
 
-OUT = '/tmp/margins_anchor.pt'
 DEV = 'cpu'          # the GPU belongs to whatever is training
+TRAINED = '--trained' in sys.argv
+OUT = '/tmp/margins_anchor_trained.pt' if TRAINED else '/tmp/margins_anchor.pt'
+RUN = 'sweep_s05_dout48_H4_tph256_c256_din32'
 
 
 def main():
-    cfg = json.load(open(os.path.join(RC, 'sweep_s05_dout48_H4_tph256_c256_din32',
-                                      'config.json')))
+    cfg = json.load(open(os.path.join(RC, RUN, 'config.json')))
     tok = RustBPETokenizer.from_directory(os.path.join(get_base_dir(), 'tokenizer'))
     ld = tokenizing_distributed_data_loader_bos_bestfit(tok, 2, 512, split='val', device=DEV)
     x_ids, _ = next(iter(ld))
 
     torch.manual_seed(cfg['random_seed'])
     m = build_model(cfg, tok.get_vocab_size(), device=DEV)
+    if TRAINED:
+        # The SAME model after 4,000 steps: answers whether the margins widen during
+        # training, i.e. whether bounded's attenuation would have healed itself.
+        ck = os.path.join(RC, RUN, 'checkpoint.pt')
+        miss, unexp = m.load_state_dict(torch.load(ck, map_location=DEV), strict=False)
+        print(f'loaded {ck}  (missing {len(miss)}, unexpected {len(unexp)})')
     m.eval()
 
     per_block = []
