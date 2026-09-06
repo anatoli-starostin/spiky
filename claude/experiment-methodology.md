@@ -136,6 +136,40 @@ files, so histories from parallel hosts merge cleanly with essentially no confli
 5. **Back on the originating machine**, `git pull` to bring the results home. The data is now
    on the remote and mirrored wherever anyone pulls.
 
+### Run-folder naming: one prefix per host
+
+Because every machine mints run numbers off the *same* shared branch, two hosts can pick the
+same index at the same time without either seeing the other. So the index is namespaced by
+host:
+
+| Host | Prefix | Example |
+|---|---|---|
+| nebius | `exp_n_NNNN` | `exp_n_0187_B48k_light_bnorm_tph128_nap7_seed1` |
+| gpustar | `exp_g_NNNN` | `exp_g_0189_...` |
+
+A new host takes the next free letter and records it here. With distinct prefixes the two
+sequences cannot collide, whatever order the pushes land in.
+
+**Keep the free-index check anyway.** Before creating a run, verify the index is unused
+against *both* the experiments directory on disk *and* `git log --all` (which catches
+anything another host has pushed but you have not checked out). The prefix removes the
+cross-host collision; the check still catches everything else, including your own mistakes.
+
+**The numbering is not a clean sequence, deliberately.** gpustar's runs up to and including
+`exp_n_0188` were created before this rule and keep the `_n_` prefix; they are **not** being
+renamed. So a reader will see gpustar's `exp_n_0188` followed by gpustar's `exp_g_0189`, and
+`exp_n_0187` belonging to nebius while `exp_n_0188` belongs to gpustar. Renaming a published
+run folder would break every reference to it — commit messages, issue comments, `_arch_note`
+cross-references, and the `run` field stored inside each `corrected_score.json` — so the
+history is left as it is and the discontinuity is documented instead.
+
+**What prompted this.** nebius published `exp_n_0187_B48k_light_bnorm_tph128_nap7_seed1`
+while gpustar was independently preparing its own `exp_n_0187`. Both had verified the index
+was free; neither was wrong at the time it looked. gpustar renumbered to `exp_n_0188` before
+launching, since nebius's was already on the remote and gpustar's had not started — but the
+next such race could be noticed only after both runs had burned GPU time, which is what the
+prefix rule prevents.
+
 ### Invariants and gotchas
 
 - **Every branch traces back to an issue.** If you are on a `research/` branch with no issue,
