@@ -116,7 +116,7 @@ def test_dscore_dm_matches_finite_diff(form):
 # =============================================================================
 # bounded_norm exists because "bounded" is a product over NAP factors, so its
 # attenuation compounds with the anchor count (~0.054 at NAP=8 on real
-# activations, which divides the LUT table gradient by ~19x -- see #111).
+# activations, which divides the LUT table gradient by ~19x -- see #112).
 # The geometric mean is the same ordering with a NAP-independent scale.
 
 @pytest.mark.parametrize("nap", [1, 2, 3, 8])
@@ -148,7 +148,7 @@ def test_bounded_norm_scale_is_nap_independent():
             f"NAP={nap}: normalised score moved with NAP ({s_n.max().item():.6f} vs {ref:.6f})"
         assert abs(s_b.max().item() - ref ** nap) < 1e-12
     # and at NAP=8 the un-normalised form really is the ~15-20x attenuation measured
-    # in #111 (0.0467 at the median margin; mean 0.0542 over the real distribution)
+    # in #112 (0.0467 at the median margin; mean 0.0542 over the real distribution)
     assert 0.04 < ref ** 8 < 0.06 and 0.67 < ref < 0.69
 
 

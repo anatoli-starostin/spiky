@@ -152,7 +152,7 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 #                        per-anchor sigmoids. Same ordering as "bounded" (it is a monotone
 #                        transform of it) but NAP-independent in scale: "bounded" attenuates
 #                        by prod over NAP factors, so at NAP=8 and our margin scale it lands
-#                        at ~0.054 and divides the table gradient by ~19x (measured, #111).
+#                        at ~0.054 and divides the table gradient by ~19x (measured, #112).
 #                        The geometric mean removes that compounding: ~0.69 at the same
 #                        margins, whatever NAP is.
 # Everything uses the logsigmoid/softplus form so exp(2m) is never built.
@@ -961,7 +961,7 @@ class FastMultiHeadLut(nn.Module):
         confidence_form: "bounded" (default), "margin" or "bounded_norm".
             "bounded" uses score = prod_j sigmoid(2|d_j|) in (0, 1] (no
             output-scale blowup) -- but the product is over NAP factors, so it
-            attenuates hard at large NAP (~0.054 at NAP=8, see #111).
+            attenuates hard at large NAP (~0.054 at NAP=8, see #112).
             "margin" uses the exact LookupFFN form
             (sum_j |d_j|) / prod_j (1+exp(-2|d_j|)) (unbounded above).
             "bounded_norm" uses the geometric mean of the same sigmoids,
