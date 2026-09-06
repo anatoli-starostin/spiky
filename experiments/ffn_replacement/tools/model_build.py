@@ -118,7 +118,11 @@ class MinimalBlock(nn.Module):
                     inner_residual=cfg.get('lut_inner_residual', False),
                     # LayerNorm on the compressed code before the lookup; default False so
                     # every existing config builds a bit-identical model.
-                    z_norm=cfg.get('lut_z_norm', False))
+                    z_norm=cfg.get('lut_z_norm', False),
+                    # BH4 shape, read only when lut_impl == 'bh4'. The defaults are the
+                    # reference implementation's n_factors=4 and our parity-matched block.
+                    bh4_block=cfg.get('lut_bh4_block', 4),
+                    bh4_factors=cfg.get('lut_bh4_factors', 4))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
@@ -152,6 +156,21 @@ class MinimalGPT(nn.Module):
             else:
                 if getattr(block.ffn, 'has_decompress', False):
                     nn.init.zeros_(block.ffn.decompress.weight)
+                    # On the BH4 path the decompress BIAS must be zeroed too. Zeroing only
+                    # the weight leaves the branch emitting its bias (norm ~0.82 at init),
+                    # a token-INDEPENDENT constant that accumulates down the residual
+                    # stream; LayerNorm removes each token's mean across dimensions, not a
+                    # direction shared by every token. Anchor-pair addressing cancels that
+                    # offset in d = z[a] - z[b] and never noticed, but BH4 signs the
+                    # coordinates themselves and dies on it. Measured at init on real
+                    # tokens: with the bias left alone the fraction of code coordinates
+                    # whose sign never flips runs 0.00/0.14/0.28/0.38/0.43/0.49 by depth
+                    # and layer 5 reaches only 9.8 of its 128 addresses; with it zeroed
+                    # every layer reads 0.0000 constant and 127.6/128 addresses. Scoped to
+                    # lut_impl='bh4' so every existing config still builds bit-identically.
+                    if cfg.get('lut_impl', 'fast') == 'bh4' \
+                            and block.ffn.decompress.bias is not None:
+                        nn.init.zeros_(block.ffn.decompress.bias)
                 if getattr(block, 'lin', None) is not None:
                     nn.init.zeros_(block.lin.weight)
         if bool(cfg.get('tie_unembedder', False)):

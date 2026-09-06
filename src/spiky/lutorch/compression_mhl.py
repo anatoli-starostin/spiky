@@ -39,6 +39,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
 
@@ -120,6 +121,8 @@ class CompressionMultiHeadLUT(nn.Module):
         confidence_form: str = "bounded",
         confidence_gain: float = 1.0,
         z_norm: bool = False,
+        bh4_block: int = 4,
+        bh4_factors: int = 4,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -162,8 +165,34 @@ class CompressionMultiHeadLUT(nn.Module):
         # on. Default OFF, so existing configs are byte-identical.
         self.z_norm_enabled = bool(z_norm)
         self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
-        if lut_impl not in ("fast", "light"):
-            raise ValueError(f"lut_impl must be 'fast' or 'light', got {lut_impl!r}")
+        if lut_impl not in ("fast", "light", "bh4"):
+            raise ValueError(f"lut_impl must be 'fast', 'light' or 'bh4', got {lut_impl!r}")
+
+        if lut_impl == "bh4":
+            # BH4 replaces compress AND the anchor-pair addressing: a structured
+            # O(d log d) transform whose output COORDINATE signs are the address, i.e.
+            # LookupFFN's routing. decompress is unchanged and still sits on top, and the
+            # tables keep our narrow-rows-plus-decompress layout rather than LookupFFN's
+            # full-width rows. There is no compress and no z_norm on this path -- both
+            # describe a code that no longer exists.
+            if z_norm:
+                raise ValueError("z_norm has no meaning on the bh4 path: it normalises "
+                                 "the compress output, and bh4 has no compress")
+            if inner_residual:
+                raise ValueError("inner_residual has no meaning on the bh4 path: the "
+                                 "skip would add the BH4 code to a table row")
+            self.compress = nn.Identity()
+            self.lut_bh4 = BH4MultiHeadLUT(
+                input_dim=input_dim, n_heads=n_heads, tables_per_head=tph,
+                n_anchor_pairs=nap, output_dim=eff_out, block=bh4_block,
+                n_factors=bh4_factors, confidence_form=confidence_form,
+                confidence_gain=confidence_gain,
+                initial_weights_noise=initial_weights_noise,
+                random_seed=random_seed, device=device,
+            )
+            self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
+                               if self.has_decompress else nn.Identity())
+            return
 
         if lut_impl == "light":
             # LookupFFN-style control. The table budget n_heads*tph*2^nap*eff_out is
@@ -257,6 +286,12 @@ class CompressionMultiHeadLUT(nn.Module):
             raise ValueError(
                 f"x shape must be [N, {self.input_dim}], got {tuple(x.shape)}"
             )
+        if self.lut_impl == "bh4":
+            # No compress: BH4 reads x directly and its coordinate signs ARE the address.
+            N = x.shape[0]
+            y = self.lut_bh4(x).to(x.dtype)            # [N, n_heads, eff_out]
+            return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
+
         if self.lut_impl == "light":
             N = x.shape[0]
             if self.light_multi_head_input:
