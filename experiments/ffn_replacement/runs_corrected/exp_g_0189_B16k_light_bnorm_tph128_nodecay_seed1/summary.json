@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_0189_B16k_light_bnorm_tph128_nodecay_seed1",
+  "best_val_bpb": 1.2074925273398858,
+  "final_val_bpb": 1.2074925273398858,
+  "total_params": 67351680,
+  "training_time_hours": 0.888,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
