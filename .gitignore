@@ -234,3 +234,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# LaTeX build artefacts in doc/
+doc/**/*.aux
+doc/**/*.log
+doc/**/*.out
+doc/**/*.toc
