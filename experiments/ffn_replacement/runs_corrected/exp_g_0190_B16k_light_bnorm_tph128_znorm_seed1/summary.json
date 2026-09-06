@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_0190_B16k_light_bnorm_tph128_znorm_seed1",
+  "best_val_bpb": 1.2039360345703785,
+  "final_val_bpb": 1.2039360345703785,
+  "total_params": 67352256,
+  "training_time_hours": 0.91,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
