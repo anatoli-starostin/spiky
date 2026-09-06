@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0177_vanilla48k_corrected",
+  "best_val_bpb": 1.1150924458675913,
+  "final_val_bpb": 1.115419853142929,
+  "total_params": 35792640,
+  "training_time_hours": 1.72,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
