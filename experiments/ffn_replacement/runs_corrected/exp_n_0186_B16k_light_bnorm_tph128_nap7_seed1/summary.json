@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0186_B16k_light_bnorm_tph128_nap7_seed1",
+  "best_val_bpb": 1.2089869790978105,
+  "final_val_bpb": 1.2089869790978105,
+  "total_params": 48477312,
+  "training_time_hours": 0.899,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
