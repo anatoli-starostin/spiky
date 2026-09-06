@@ -40,6 +40,7 @@ import torch
 import torch.nn as nn
 
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
 
 
 def _resolve_inner(inner_dim, inner_in_dim, inner_out_dim):
@@ -110,6 +111,9 @@ class CompressionMultiHeadLUT(nn.Module):
         learnable_temps: bool = True,
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
+        lut_impl: str = "fast",
+        forward_confidence: bool = False,
+        confidence_form: str = "bounded",
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -139,11 +143,36 @@ class CompressionMultiHeadLUT(nn.Module):
         self.n_heads = n_heads
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
+        self.lut_impl = lut_impl
+        self.forward_confidence = bool(forward_confidence)
+        self.confidence_form = confidence_form
+        if lut_impl not in ("fast", "light"):
+            raise ValueError(f"lut_impl must be 'fast' or 'light', got {lut_impl!r}")
+
+        if lut_impl == "light":
+            # LookupFFN-style control: one LightMultiHeadLUT over n_heads*tph tables,
+            # summed, on the SHARED compressed input. Light has no multi-head input and
+            # no per-head output, so the topology is necessarily the joint one; the table
+            # budget n_heads*tph*2^nap*eff_out is identical to the Fast path's, which is
+            # what makes the ablation fair.
+            self.compress = (nn.Linear(input_dim, in_raw, device=device)
+                             if self.has_compress else nn.Identity())
+            self.lut_light = LightMultiHeadLUT(
+                input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
+                n_anchor_pairs=nap, confidence_form=confidence_form,
+                random_seed=random_seed, initial_weights_noise=initial_weights_noise,
+                device=device,
+            )
+            self.decompress = (nn.Linear(out_raw, output_dim, device=device)
+                               if self.has_decompress else nn.Identity())
+            return
+
         _lut_kw = dict(
             n_anchor_pairs=nap, tables_per_head=tph, forward_mode=forward_mode,
             weight_dtype=weight_dtype, use_bf16=use_bf16,
             initial_weights_noise=initial_weights_noise, learnable_temps=learnable_temps,
-            device=device,
+            device=device, forward_confidence=forward_confidence,
+            confidence_form=confidence_form,
         )
         if self.joint_head_compression:
             # JOINT: one shared compress feeds all heads; a single FastMHL(n_heads) reads the
@@ -199,6 +228,14 @@ class CompressionMultiHeadLUT(nn.Module):
             raise ValueError(
                 f"x shape must be [N, {self.input_dim}], got {tuple(x.shape)}"
             )
+        if self.lut_impl == "light":
+            # one shared code, one summed ensemble of n_heads*tph tables, one decompress
+            z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
+            y = self.lut_light(z).to(z.dtype)          # [N, eff_out]
+            if self.inner_residual:
+                y = y + z
+            return self.decompress(y)
+
         if self.joint_head_compression:
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
             y = self.lut(z).sum(dim=1).to(z.dtype)     # [N, eff_out]

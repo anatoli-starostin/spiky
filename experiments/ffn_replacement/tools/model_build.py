@@ -103,7 +103,11 @@ class MinimalBlock(nn.Module):
                     n_heads=cfg.get('lut_n_heads', 1),
                     joint_head_compression=cfg.get('lut_joint_head_compression', False),
                     forward_mode=fwd, use_bf16=bf16, initial_weights_noise=noise,
-                    learnable_temps=learn, random_seed=seed)
+                    learnable_temps=learn, random_seed=seed,
+                    # LookupFFN-line knobs; both default to the pre-existing behaviour
+                    lut_impl=cfg.get('lut_impl', 'fast'),
+                    forward_confidence=cfg.get('lut_forward_confidence', False),
+                    confidence_form=cfg.get('lut_confidence_form', 'bounded'))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
