@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0184_B16k_light_bnorm_seed1",
+  "best_val_bpb": 1.20107509481405,
+  "final_val_bpb": 1.20107509481405,
+  "total_params": 105100416,
+  "training_time_hours": 1.502,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
