@@ -119,6 +119,7 @@ class CompressionMultiHeadLUT(nn.Module):
         forward_confidence: bool = False,
         confidence_form: str = "bounded",
         confidence_gain: float = 1.0,
+        z_norm: bool = False,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -152,6 +153,15 @@ class CompressionMultiHeadLUT(nn.Module):
         self.forward_confidence = bool(forward_confidence)
         self.confidence_form = confidence_form
         self.confidence_gain = float(confidence_gain)
+        # Optional LayerNorm on the compressed code, applied AFTER compress and BEFORE the
+        # lookup. Nothing else constrains z's scale, and because Light's address is
+        # sign(d.detach()) nothing pulls it back either -- the routing margins are thresholded
+        # against a code free to drift per layer, which is the depth-graded margin profile we
+        # measured (Light |d| 0.00001/0.210/0.388/0.516/0.555/0.781 vs Fast flat ~0.6-0.7).
+        # Normalising each head's code independently gives the margins a stable scale to live
+        # on. Default OFF, so existing configs are byte-identical.
+        self.z_norm_enabled = bool(z_norm)
+        self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
         if lut_impl not in ("fast", "light"):
             raise ValueError(f"lut_impl must be 'fast' or 'light', got {lut_impl!r}")
 
@@ -252,12 +262,17 @@ class CompressionMultiHeadLUT(nn.Module):
             if self.light_multi_head_input:
                 # per-head slice in, per-head block out — same shapes as the Fast path
                 z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)
+                if self.z_norm is not None:
+                    # normalises over the last axis, i.e. each head's own code, independently
+                    z = self.z_norm(z)
                 y = self.lut_light(z).to(z.dtype)      # [N, n_heads, eff_out]
                 if self.inner_residual:
                     y = y + z
                 return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
             # one shared code, one summed ensemble of n_heads*tph tables, one decompress
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)
+            if self.z_norm is not None:
+                z = self.z_norm(z)
             y = self.lut_light(z).to(z.dtype)          # [N, eff_out]
             if self.inner_residual:
                 y = y + z

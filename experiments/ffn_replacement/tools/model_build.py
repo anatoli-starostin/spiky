@@ -115,7 +115,10 @@ class MinimalBlock(nn.Module):
                     # parameters and requires eff_in == eff_out. Default False, so every
                     # existing config builds a bit-identical model to before this line
                     # existed (verified by param/buffer sha256 on exp_n_0185's config).
-                    inner_residual=cfg.get('lut_inner_residual', False))
+                    inner_residual=cfg.get('lut_inner_residual', False),
+                    # LayerNorm on the compressed code before the lookup; default False so
+                    # every existing config builds a bit-identical model.
+                    z_norm=cfg.get('lut_z_norm', False))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
