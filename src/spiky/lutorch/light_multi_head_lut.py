@@ -76,6 +76,7 @@ class LightMultiHeadLUT(nn.Module):
         n_anchor_pairs: int,
         *,
         confidence_form: str = "bounded",
+        confidence_gain: float = 1.0,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
@@ -108,6 +109,10 @@ class LightMultiHeadLUT(nn.Module):
         self.n_anchor_pairs = n_anchor_pairs
         self.table_size = 1 << n_anchor_pairs
         self.confidence_form = confidence_form
+        if not (confidence_gain > 0):
+            raise ValueError(
+                f"confidence_gain must be > 0, got {confidence_gain!r}")
+        self.confidence_gain = float(confidence_gain)
         self.multi_head_input = bool(multi_head_input)
         self.n_heads = n_heads if multi_head_input else 1
         self.tables_per_head = n_tables // self.n_heads
@@ -196,7 +201,8 @@ class LightMultiHeadLUT(nn.Module):
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
         rows = flat[flat_idx].view(B, H, T, self.output_dim)
 
-        score = _confidence_score(d, self.confidence_form)             # [B, H, T]
+        score = _confidence_score(d, self.confidence_form,
+                                  self.confidence_gain)                # [B, H, T]
         return (rows * score.unsqueeze(-1)).sum(dim=2)                 # [B, H, output_dim]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -221,7 +227,8 @@ class LightMultiHeadLUT(nn.Module):
         rows = flat[flat_idx].view(B, self.n_tables, self.output_dim)  # [B, n_tables, output_dim]
 
         # Differentiable confidence gate -- the ONLY path from x to the output grad.
-        score = _confidence_score(d, self.confidence_form)           # [B, n_tables]
+        score = _confidence_score(d, self.confidence_form,
+                                  self.confidence_gain)              # [B, n_tables]
 
         # Sum over tables = the ensemble output.
         return (rows * score.unsqueeze(-1)).sum(dim=1)               # [B, output_dim]

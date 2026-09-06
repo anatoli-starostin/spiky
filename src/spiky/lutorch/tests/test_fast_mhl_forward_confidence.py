@@ -49,14 +49,15 @@ _FORMS = ["bounded", "margin", "bounded_norm"]
 
 
 def _make(*, forward_mode="hard", n_outputs=4, forward_confidence=False,
-          confidence_form="bounded", input_dim=16, n_heads=2, n_anchor_pairs=3,
-          tables_per_head=2, weight_dtype=torch.float64, seed=0, device=_CPU):
+          confidence_form="bounded", confidence_gain=1.0, input_dim=16, n_heads=2,
+          n_anchor_pairs=3, tables_per_head=2, weight_dtype=torch.float64,
+          seed=0, device=_CPU):
     return FastMultiHeadLut(
         input_dim=input_dim, n_heads=n_heads, n_outputs=n_outputs,
         n_anchor_pairs=n_anchor_pairs, tables_per_head=tables_per_head,
         forward_mode=forward_mode, weight_dtype=weight_dtype, use_bf16=False,
         forward_confidence=forward_confidence, confidence_form=confidence_form,
-        random_seed=seed, device=device,
+        confidence_gain=confidence_gain, random_seed=seed, device=device,
     )
 
 
@@ -413,6 +414,99 @@ def test_guard_exp_outputs_incompatible():
         FastMultiHeadLut(input_dim=8, n_heads=1, n_outputs=4, n_anchor_pairs=2,
                          forward_confidence=True, exp_outputs=True, use_bf16=False,
                          device=_CPU)
+
+
+# =============================================================================
+# confidence_gain: a constant multiplier that separates SCALE from SELECTIVITY
+# =============================================================================
+
+@pytest.mark.parametrize("forward_mode", ["hard", "hybrid_smooth"])
+@pytest.mark.parametrize("form", _FORMS)
+def test_gain_one_is_bit_identical(forward_mode, form):
+    """The default gain=1.0 must not perturb ANY existing number, forward or backward."""
+    kw = dict(forward_mode=forward_mode, forward_confidence=True,
+              confidence_form=form, seed=5)
+    m_def = _make(**kw)                       # gain absent -> defaults to 1.0
+    m_one = _make(confidence_gain=1.0, **kw)  # explicitly 1.0
+    torch.manual_seed(1)
+    x = torch.randn(5, m_one.input_dim, dtype=torch.float64) * 3.0
+    g = torch.randn(5, m_one.n_heads, m_one.n_outputs, dtype=torch.float64)
+
+    xd = x.clone().requires_grad_(True)
+    m_def(xd).backward(g)
+    xo = x.clone().requires_grad_(True)
+    m_one(xo).backward(g)
+
+    assert torch.equal(m_def.weights.grad, m_one.weights.grad)
+    assert torch.equal(xd.grad, xo.grad)
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_gain_scales_the_output_exactly(form):
+    """The gate multiplies every gathered row, so gain c scales the WHOLE output by c.
+
+    That exactness is the point: it makes the gain absorbable into the linear decompress
+    downstream, so it changes the optimisation problem (how big the FFN's contribution is
+    per unit of decompress norm) without changing what the model can express.
+    """
+    c = 7.5
+    base = _make(forward_confidence=True, confidence_form=form, seed=3)
+    gained = _make(forward_confidence=True, confidence_form=form, seed=3,
+                   confidence_gain=c)
+    torch.manual_seed(2)
+    x = torch.randn(6, base.input_dim, dtype=torch.float64) * 3.0
+    with torch.no_grad():
+        y0, y1 = base(x), gained(x)
+    err = (y1 - c * y0).abs().max().item()
+    assert err < 1e-12, f"{form}: gain did not scale the output exactly ({err:.2e})"
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_gain_dscore_matches_finite_diff(form):
+    """With a gain the analytic dscore/dm is still the exact derivative (not just scaled)."""
+    c = 3.25
+    torch.manual_seed(0)
+    d = torch.rand(5, 4, 3, dtype=torch.float64) * 2.0 + 0.1
+    _s, dscore_dm = _confidence_score_and_dscore(d, form, c)
+
+    num = torch.zeros_like(d)
+    flat, nflat = d.reshape(-1), num.reshape(-1)
+    eps = 1e-7
+    for i in range(flat.numel()):
+        orig = flat[i].item()
+        flat[i] = orig + eps
+        sp = _confidence_score(d, form, c)
+        flat[i] = orig - eps
+        sm = _confidence_score(d, form, c)
+        flat[i] = orig
+        b, rem = divmod(i, 4 * 3)
+        t, j = divmod(rem, 3)
+        nflat[i] = (sp[b, t] - sm[b, t]) / (2.0 * eps)
+    err = (dscore_dm - num).abs().max().item()
+    assert err < 1e-4, f"{form}: gained dscore/dm max abs err {err:.2e}"
+
+
+def test_gain_grads_scale_linearly():
+    """Table/decompress-side gradients scale with the gain; this is what the arm A
+    diagnosis said was 19x too small under "bounded"."""
+    c = 4.0
+    torch.manual_seed(0)
+    base = _make(forward_confidence=True, confidence_form="bounded_norm", seed=3)
+    gained = _make(forward_confidence=True, confidence_form="bounded_norm", seed=3,
+                   confidence_gain=c)
+    x = torch.randn(6, base.input_dim, dtype=torch.float64) * 3.0
+    g = torch.randn(6, base.n_heads, base.n_outputs, dtype=torch.float64)
+    base(x.clone().requires_grad_(True)).backward(g)
+    gained(x.clone().requires_grad_(True)).backward(g)
+    ratio = (gained.weights.grad.norm() / base.weights.grad.norm()).item()
+    assert abs(ratio - c) < 1e-9, f"grad_W ratio {ratio} != gain {c}"
+
+
+def test_guard_bad_confidence_gain():
+    for bad in (0.0, -1.0):
+        with pytest.raises(ValueError, match="confidence_gain"):
+            FastMultiHeadLut(input_dim=8, n_heads=1, n_outputs=4, n_anchor_pairs=2,
+                             forward_confidence=True, confidence_gain=bad, device=_CPU)
 
 
 def test_guard_bad_confidence_form():

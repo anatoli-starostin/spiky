@@ -114,6 +114,7 @@ class CompressionMultiHeadLUT(nn.Module):
         lut_impl: str = "fast",
         forward_confidence: bool = False,
         confidence_form: str = "bounded",
+        confidence_gain: float = 1.0,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -146,6 +147,7 @@ class CompressionMultiHeadLUT(nn.Module):
         self.lut_impl = lut_impl
         self.forward_confidence = bool(forward_confidence)
         self.confidence_form = confidence_form
+        self.confidence_gain = float(confidence_gain)
         if lut_impl not in ("fast", "light"):
             raise ValueError(f"lut_impl must be 'fast' or 'light', got {lut_impl!r}")
 
@@ -168,6 +170,7 @@ class CompressionMultiHeadLUT(nn.Module):
             self.lut_light = LightMultiHeadLUT(
                 input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                 n_anchor_pairs=nap, confidence_form=confidence_form,
+                confidence_gain=confidence_gain,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
                 device=device, n_heads=n_heads, multi_head_input=mh,
             )
@@ -183,7 +186,7 @@ class CompressionMultiHeadLUT(nn.Module):
             weight_dtype=weight_dtype, use_bf16=use_bf16,
             initial_weights_noise=initial_weights_noise, learnable_temps=learnable_temps,
             device=device, forward_confidence=forward_confidence,
-            confidence_form=confidence_form,
+            confidence_form=confidence_form, confidence_gain=confidence_gain,
         )
         if self.joint_head_compression:
             # JOINT: one shared compress feeds all heads; a single FastMHL(n_heads) reads the

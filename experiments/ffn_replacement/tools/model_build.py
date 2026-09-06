@@ -107,7 +107,8 @@ class MinimalBlock(nn.Module):
                     # LookupFFN-line knobs; both default to the pre-existing behaviour
                     lut_impl=cfg.get('lut_impl', 'fast'),
                     forward_confidence=cfg.get('lut_forward_confidence', False),
-                    confidence_form=cfg.get('lut_confidence_form', 'bounded'))
+                    confidence_form=cfg.get('lut_confidence_form', 'bounded'),
+                    confidence_gain=cfg.get('lut_confidence_gain', 1.0))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
