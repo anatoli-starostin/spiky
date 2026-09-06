@@ -1,6 +1,6 @@
 {
   "exp_name": "exp_n_0184_B16k_light_bnorm_seed1",
-  "_arch_note": "[FFN-LUT paper grid G5] plane+ceiling: H4/d48 nap8(256c)/tph256 C=65536 (~105.1M, FFN~76.4M/10.8x). Base=exp_n_0121; config-only; full 16k schedule identical to 0118-0121 (lr 3e-4, warmup 1600, cosine/16000, device_batch 12 / grad_accum 4, effective batch 24,576). FFN CompressionMHL, untied head, standard dense attention, standard LUT optimizer. Ceiling C=tph*2^nap<=65536 (FFN<=~10.8x vanilla 7.08M). Dense-V/vanilla-FFN baseline exp_n_0084=1.19866 (=grid cell nap7/tph256).",
+  "_arch_note": "ARM B AT 16K \u2014 LightMultiHeadLUT with the normalised confidence gate (lut_impl=\"light\", lut_forward_confidence=true, lut_confidence_form=\"bounded_norm\") on the full 16,000-step schedule. Config cloned verbatim from exp_n_0129 (grid_H4d48_nap8_tph256, the 16k member of this LUT sizing); the ONLY deltas are lut_impl, the two gate keys and exp_name \u2014 random_seed was already 1. Light detaches the routing address (sign(d).detach(), no STE, no temperature surrogate), so x receives gradient ONLY through the confidence score; multi_head_input is auto-enabled, so the projections and table budget match Fast exactly and the only structural difference is the missing directional surrogate. Light has no learnable temperatures, hence exactly 12 parameters fewer than exp_n_0129 (2 per layer x 6 layers): 105,100,416 vs 105,100,428. DELIBERATE DEVIATION FROM THE 4K ARM B (exp_n_0181): lut_inner_in_dim stays at this family's 48 rather than arm B's 32, buying like-for-like comparability with exp_n_0129 at the cost of exact faithfulness to the 4k run; d_in affects only the compress projection, not the table budget. WHY THIS RUN: at 4k, arm B scored 1.477708 against a vanilla-dense zero-line of 1.474749 \u2014 +0.003, INSIDE the 0.0096 seed sd \u2014 so Light matched dense quality with a 5.6x cheaper backward. This tests whether that holds at the full budget, against exp_n_0129 (Fast, gate off) 1.170961 and vanilla dense 1.165147 / 1.161798 (vanilla seed spread 0.00335). Trained with train_fixed.py, so the training-time eval IS the corrected protocol (evaluate_bpb_fixed, bs48 x 100, skip 12, 2,451,456 val tokens). NOTE: the inherited \"eval_steps\": 10 and \"compute_dtype\": \"bf16\" keys are INERT \u2014 eval_config() reads only an optional `fixed_eval` sub-dict (absent here), and compute_dtype has exactly one reference in the codebase, the line in make_sweep.py that writes it. Tables are fp32 (lut_use_bf16 false), which matters because _embedding_bag_per_sample_weights_backward_cuda is not implemented for bf16.",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,
@@ -31,7 +31,7 @@
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
-  "_sweep_tag": "G5",
+  "_sweep_tag": "lookupffn-arm-b-16k",
   "lut_impl": "light",
   "lut_forward_confidence": true,
   "lut_confidence_form": "bounded_norm"
