@@ -144,16 +144,27 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 # derived from the routing margins d = x[anchor_a] - x[anchor_b] (reduced over the
 # NAP anchor axis). The hard sign address is UNCHANGED; the score only modulates
 # magnitude, and it is applied identically in train and eval (a permanent gate).
-# Two forms, with m_j = |d_j| and prob = prod_j sigmoid(2 m_j) (= 1 / prod_j(1+e^{-2m_j})):
+# Three forms, with m_j = |d_j| and prob = prod_j sigmoid(2 m_j) (= 1 / prod_j(1+e^{-2m_j})):
 #   "bounded" (default): score = prob                  in (0, 1]  -- no output-scale blowup.
 #   "margin"           : score = (sum_j m_j) * prob    (>= 0, unbounded)  -- the exact
 #                        LookupFFN kernel form (sum|m| / prod(1+e^{-2m}) == (sum|m|)*prob).
+#   "bounded_norm"     : score = prob ** (1/NAP)       in (0, 1]  -- the GEOMETRIC MEAN of the
+#                        per-anchor sigmoids. Same ordering as "bounded" (it is a monotone
+#                        transform of it) but NAP-independent in scale: "bounded" attenuates
+#                        by prod over NAP factors, so at NAP=8 and our margin scale it lands
+#                        at ~0.054 and divides the table gradient by ~19x (measured, #111).
+#                        The geometric mean removes that compounding: ~0.69 at the same
+#                        margins, whatever NAP is.
 # Everything uses the logsigmoid/softplus form so exp(2m) is never built.
 
 
 def _confidence_score(d, confidence_form: str):
     """Smooth confidence gate from margins d [B, n_tables, NAP] -> score [B, n_tables]."""
     m = d.abs()
+    if confidence_form == "bounded_norm":
+        # geometric mean of the per-anchor sigmoids: prob ** (1/NAP). Computed as
+        # exp(mean logsigmoid(2m)) so exp(2m) is never built, exactly as the other forms.
+        return torch.exp(F.logsigmoid(2.0 * m).mean(dim=-1))
     prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))   # prod_j sigmoid(2 m_j), in (0, 1]
     if confidence_form == "margin":
         return m.sum(dim=-1) * prob
@@ -164,13 +175,23 @@ def _confidence_score_and_dscore(d, confidence_form: str):
     """Score and its derivative w.r.t. m_j = |d_j|, for the analytic backward.
 
     Returns (score [B, n_tables], dscore_dm [B, n_tables, NAP]).
-      bounded: dscore/dm_j = 2 * score * sigmoid(-2 m_j)
-      margin : dscore/dm_j = prob + 2 * score * sigmoid(-2 m_j),  prob = 1/P
+      bounded     : dscore/dm_j = 2 * score * sigmoid(-2 m_j)
+      margin      : dscore/dm_j = prob + 2 * score * sigmoid(-2 m_j),  prob = 1/P
+      bounded_norm: dscore/dm_j = (2/NAP) * score * sigmoid(-2 m_j)
+    The bounded_norm derivative is the exact derivative of the NORMALISED score, not the
+    bounded one rescaled: log score = (1/K) sum_j logsigmoid(2 m_j), so
+    dscore/dm_j = score * d(log score)/dm_j = score * (1/K) * 2 * sigmoid(-2 m_j). It shares
+    the bounded SHAPE only because both are exp of a (weighted) sum of the same logsigmoids;
+    `score` itself differs, so the two are not proportional.
     (logsigmoid(2m) = -softplus(-2m); prob = exp(sum logsigmoid(2m)) is stable in (0,1].)
     """
     m = d.abs()
-    prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))   # [B, n_tables]
     sig_neg = torch.sigmoid(-2.0 * m)                     # [B, n_tables, NAP], in (0, 0.5]
+    if confidence_form == "bounded_norm":
+        score = torch.exp(F.logsigmoid(2.0 * m).mean(dim=-1))          # [B, n_tables]
+        scale = 2.0 / m.shape[-1]
+        return score, scale * score.unsqueeze(-1) * sig_neg
+    prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))   # [B, n_tables]
     if confidence_form == "margin":
         score = m.sum(dim=-1) * prob
         dscore_dm = prob.unsqueeze(-1) + 2.0 * score.unsqueeze(-1) * sig_neg
@@ -937,11 +958,16 @@ class FastMultiHeadLut(nn.Module):
             the existing directional surrogate. When False, behavior and
             numerics are bit-identical to without the flag. Not compatible with
             exp_outputs=True.
-        confidence_form: "bounded" (default) or "margin". "bounded" uses
-            score = prod_j sigmoid(2|d_j|) in (0, 1] (no output-scale blowup);
+        confidence_form: "bounded" (default), "margin" or "bounded_norm".
+            "bounded" uses score = prod_j sigmoid(2|d_j|) in (0, 1] (no
+            output-scale blowup) -- but the product is over NAP factors, so it
+            attenuates hard at large NAP (~0.054 at NAP=8, see #111).
             "margin" uses the exact LookupFFN form
-            (sum_j |d_j|) / prod_j (1+exp(-2|d_j|)) (unbounded above). Only
-            used when forward_confidence=True.
+            (sum_j |d_j|) / prod_j (1+exp(-2|d_j|)) (unbounded above).
+            "bounded_norm" uses the geometric mean of the same sigmoids,
+            prod_j sigmoid(2|d_j|) ** (1/NAP) in (0, 1]: the same ordering as
+            "bounded" but NAP-independent in scale. Only used when
+            forward_confidence=True.
         weight_dtype: storage dtype for the LUT weights. Default
             torch.float32 (training-friendly: keeps an fp32 master copy
             and an fp32 .grad for the optimiser). Pass torch.bfloat16 for
@@ -1035,9 +1061,10 @@ class FastMultiHeadLut(nn.Module):
         # When False, every code path below is byte-for-byte the current behavior
         # (forward AND backward) -- same discipline as exp_outputs.
         self.forward_confidence = bool(forward_confidence)
-        if confidence_form not in ("bounded", "margin"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
-                f"confidence_form must be 'bounded' or 'margin', got {confidence_form!r}"
+                "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
+                f"got {confidence_form!r}"
             )
         self.confidence_form = confidence_form
 

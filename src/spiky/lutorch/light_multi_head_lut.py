@@ -54,7 +54,10 @@ class LightMultiHeadLUT(nn.Module):
         n_anchor_pairs: NAP anchor pairs per table -> ``2 ** NAP`` rows per table.
         confidence_form: "bounded" (default) uses ``prod_j sigmoid(2|d_j|)`` in
             (0, 1]; "margin" uses ``(sum_j |d_j|) * prod_j sigmoid(2|d_j|)``
-            (== the exact LookupFFN score ``sum|d| / prod(1+e^{-2|d|})``).
+            (== the exact LookupFFN score ``sum|d| / prod(1+e^{-2|d|})``);
+            "bounded_norm" uses the geometric mean of the same sigmoids,
+            ``prod_j sigmoid(2|d_j|) ** (1/NAP)`` -- same ordering as "bounded"
+            but without its NAP-dependent attenuation.
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -81,9 +84,10 @@ class LightMultiHeadLUT(nn.Module):
         multi_head_input: bool = False,
     ):
         super().__init__()
-        if confidence_form not in ("bounded", "margin"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
-                f"confidence_form must be 'bounded' or 'margin', got {confidence_form!r}"
+                "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
+                f"got {confidence_form!r}"
             )
         if not (1 <= n_anchor_pairs <= 15):
             raise ValueError(

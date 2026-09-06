@@ -50,6 +50,7 @@ def capture(cfg, ckpt=None, label=''):
             rec['m'] = d.abs().detach().float().flatten()
             rec['sb'] = _confidence_score(d, 'bounded').detach().float().flatten()
             rec['sm'] = _confidence_score(d, 'margin').detach().float().flatten()
+            rec['sn'] = _confidence_score(d, 'bounded_norm').detach().float().flatten()
         h = ffn.register_forward_hook(hook)
         with torch.no_grad():
             m(x_ids)
@@ -73,18 +74,22 @@ recs, dn0, _ = capture(base, label='init')
 allm = torch.cat([r['m'] for r in recs])
 allb = torch.cat([r['sb'] for r in recs])
 allg = torch.cat([r['sm'] for r in recs])
+alln = torch.cat([r['sn'] for r in recs])
 print(f"   |d| (margins, nap=8)   {stats(allm)}")
 print(f"   score BOUNDED          {stats(allb)}")
 print(f"   score MARGIN           {stats(allg)}")
+print(f"   score BOUNDED_NORM     {stats(alln)}")
 print(f"\n   0.5^8 = {0.5**8:.6g}  (the value if every margin were exactly 0)")
 print(f"   bounded mean {allb.mean():.6g}  ->  attenuation factor "
       f"{1/allb.mean():.1f}x on every gathered row")
 print(f"   margin  mean {allg.mean():.6g}  ->  factor {allg.mean():.3f}x "
       f"({'amplifies' if allg.mean() > 1 else 'attenuates'})")
-print('\n   per block (bounded mean / margin mean / |d| median):')
+print(f"   bnorm   mean {alln.mean():.6g}  ->  attenuation factor "
+      f"{1/alln.mean():.2f}x  (target ~0.69 -> ~1.45x)")
+print('\n   per block (bounded / margin / bounded_norm mean, |d| median):')
 for i, r in enumerate(recs):
     print(f'      block {i}: {r["sb"].mean():.6g}   {r["sm"].mean():.6g}   '
-          f'{r["m"].median():.6g}')
+          f'{r["sn"].mean():.6g}   {r["m"].median():.6g}')
 
 print('\n' + '=' * 78)
 print('2. decompress.weight NORM: init vs the TRAINED baseline checkpoint')

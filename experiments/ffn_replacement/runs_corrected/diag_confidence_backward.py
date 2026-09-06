@@ -29,15 +29,17 @@ def probe(**over):
 off = probe()
 bd = probe(forward_confidence=True)
 mg = probe(forward_confidence=True, confidence_form='margin')
+bn = probe(forward_confidence=True, confidence_form='bounded_norm')
 
 print(f"{'':<26}{'|out|':>12}{'grad_x':>12}{'grad_tables':>14}{'grad_dec':>12}{'grad_com':>12}")
-for name, r in (('gate off (baseline)', off), ('gate bounded', bd), ('gate margin', mg)):
+for name, r in (('gate off (baseline)', off), ('gate bounded', bd), ('gate margin', mg),
+                ('gate bounded_norm', bn)):
     print(f"{name:<26}{r['out']:>12.6g}{r['gx']:>12.6g}{r['gtab']:>14.6g}"
           f"{r['gdec']:>12.6g}{r['gcom']:>12.6g}")
 
 print('\nratios vs gate-off:')
-for name, r in (('bounded', bd), ('margin', mg)):
-    print(f"   {name:<10} out {r['out']/off['out']:8.4f}x   grad_x {r['gx']/off['gx']:8.4f}x   "
+for name, r in (('bounded', bd), ('margin', mg), ('bounded_norm', bn)):
+    print(f"   {name:<13} out {r['out']/off['out']:8.4f}x   grad_x {r['gx']/off['gx']:8.4f}x   "
           f"grad_tables {r['gtab']/off['gtab']:8.4f}x   "
           f"grad_dec {r['gdec']/off['gdec']:8.4f}x   grad_com {r['gcom']/off['gcom']:8.4f}x")
 

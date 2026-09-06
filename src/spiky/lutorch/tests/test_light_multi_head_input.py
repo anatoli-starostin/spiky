@@ -121,7 +121,7 @@ def test_single_head_path_unchanged():
     assert torch.equal(a(x), b(x))
 
 
-@pytest.mark.parametrize("form", ["bounded", "margin"])
+@pytest.mark.parametrize("form", ["bounded", "margin", "bounded_norm"])
 def test_gradcheck_float64(form):
     torch.manual_seed(0)
     m = LightMultiHeadLUT(input_dim=6, n_tables=4, output_dim=3, n_anchor_pairs=3,
@@ -150,3 +150,54 @@ def test_compression_mhl_matches_fast_projections_at_anchor_sizing():
     assert sum(f.values()) - sum(g.values()) == 2
     x = torch.randn(3, 384)
     assert light(x).shape == (3, 384)
+
+
+# --- bounded_norm wiring: the value must survive CompressionMHL and model_build ---
+
+@pytest.mark.parametrize("impl", ["fast", "light"])
+def test_bounded_norm_reaches_the_inner_layer(impl):
+    """confidence_form="bounded_norm" is carried to the LUT for BOTH impls and gates."""
+    kw = dict(input_dim=32, output_dim=32, inner_in_dim=8, inner_out_dim=8,
+              nap=4, tph=2, n_heads=2, joint_head_compression=False, random_seed=3)
+    m = CompressionMultiHeadLUT(**kw, lut_impl=impl, forward_confidence=True,
+                                confidence_form="bounded_norm")
+    assert m.confidence_form == "bounded_norm"
+    inner = m.lut_light if impl == "light" else m.lut_batched
+    assert inner.confidence_form == "bounded_norm"
+    if impl == "fast":
+        assert inner.forward_confidence is True
+    # and it changes the output relative to the un-normalised form
+    other = CompressionMultiHeadLUT(**kw, lut_impl=impl, forward_confidence=True,
+                                    confidence_form="bounded")
+    other.load_state_dict(m.state_dict())
+    x = torch.randn(4, 32)
+    with torch.no_grad():
+        assert not torch.allclose(m(x), other(x)), "bounded_norm behaved like bounded"
+
+
+def test_bounded_norm_flows_through_model_build_cfg():
+    """`lut_confidence_form` in the experiment cfg reaches every block's FFN."""
+    import sys
+    from pathlib import Path
+    tools = Path(__file__).resolve().parents[4] / "experiments/ffn_replacement/tools"
+    if not tools.is_dir():
+        pytest.skip("experiment tools not present in this checkout")
+    sys.path.insert(0, str(tools))
+    from model_build import MinimalBlock
+
+    cfg = dict(ffn_type='compression', lut_inner_in_dim=8, lut_inner_out_dim=8,
+               lut_n_anchor_pairs=4, lut_tables_per_head=2, lut_n_heads=2,
+               lut_forward_confidence=True, lut_confidence_form='bounded_norm')
+    blk = MinimalBlock(32, 2, 0, cfg)
+    assert blk.ffn.confidence_form == 'bounded_norm'
+    assert blk.ffn.lut_batched.forward_confidence is True
+    assert blk.ffn.lut_batched.confidence_form == 'bounded_norm'
+
+
+def test_exp_outputs_guard_still_holds_for_bounded_norm():
+    """The forward_confidence + exp_outputs incompatibility is form-independent."""
+    from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+    with pytest.raises(ValueError, match="exp_outputs"):
+        FastMultiHeadLut(input_dim=8, n_heads=1, n_outputs=4, n_anchor_pairs=2,
+                         forward_confidence=True, confidence_form="bounded_norm",
+                         exp_outputs=True, use_bf16=False)

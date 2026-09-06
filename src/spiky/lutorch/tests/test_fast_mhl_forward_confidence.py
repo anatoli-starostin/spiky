@@ -12,6 +12,8 @@ Coverage:
         BOTH confidence_form variants, and of the hard-path analytic grad_x
         (the score->d term, isolated as gated-minus-ungated) and grad_W
         (score-scaled) against numeric finite differences.
+  (i')  "bounded_norm" specifically: closed-form identity score == bounded**(1/NAP),
+        NAP-independence of its scale, and no exp(2m) overflow at large margins.
   (ii)  flag-OFF bit-identity: forward_confidence=False forward AND backward
         are exactly equal to the no-flag default.
   (iii) train() == eval() for the hard path under the gate (hard address).
@@ -43,7 +45,7 @@ from spiky.lutorch.fast_multi_head_lut import (
 
 _CPU = torch.device("cpu")
 _HAS_CUDA = torch.cuda.is_available()
-_FORMS = ["bounded", "margin"]
+_FORMS = ["bounded", "margin", "bounded_norm"]
 
 
 def _make(*, forward_mode="hard", n_outputs=4, forward_confidence=False,
@@ -107,6 +109,95 @@ def test_dscore_dm_matches_finite_diff(form):
 
     err = (dscore_dm - num).abs().max().item()
     assert err < 1e-5, f"{form}: dscore/dm max abs err {err:.2e}"
+
+
+# =============================================================================
+# (i') "bounded_norm" closed-form identities
+# =============================================================================
+# bounded_norm exists because "bounded" is a product over NAP factors, so its
+# attenuation compounds with the anchor count (~0.054 at NAP=8 on real
+# activations, which divides the LUT table gradient by ~19x -- see #111).
+# The geometric mean is the same ordering with a NAP-independent scale.
+
+@pytest.mark.parametrize("nap", [1, 2, 3, 8])
+def test_bounded_norm_equals_bounded_to_the_one_over_nap(nap):
+    """score_norm == score_bounded ** (1/NAP), exactly (this IS the definition)."""
+    torch.manual_seed(0)
+    d = torch.randn(5, 4, nap, dtype=torch.float64) * 1.5
+    s_b = _confidence_score(d, "bounded")
+    s_n = _confidence_score(d, "bounded_norm")
+    err = (s_n - s_b.pow(1.0 / nap)).abs().max().item()
+    assert err < 1e-12, f"NAP={nap}: geomean identity violated by {err:.2e}"
+    assert (s_n > 0).all() and (s_n <= 1.0).all(), "score must stay in (0, 1]"
+
+
+def test_bounded_norm_scale_is_nap_independent():
+    """With every margin equal to m, score_norm == sigmoid(2m) for ANY NAP.
+
+    This is the whole point of the form: "bounded" gives sigmoid(2m)**NAP, which
+    at m=0.38 (our measured median margin) falls from 0.68 at NAP=1 to 0.054 at
+    NAP=8, while the geometric mean stays at 0.68.
+    """
+    m = 0.381                                   # measured median |d| at anchor sizing
+    ref = float(torch.sigmoid(torch.tensor(2.0 * m, dtype=torch.float64)))
+    for nap in (1, 2, 4, 8, 12):
+        d = torch.full((3, 2, nap), m, dtype=torch.float64)
+        s_n = _confidence_score(d, "bounded_norm")
+        s_b = _confidence_score(d, "bounded")
+        assert abs(s_n.max().item() - ref) < 1e-12, \
+            f"NAP={nap}: normalised score moved with NAP ({s_n.max().item():.6f} vs {ref:.6f})"
+        assert abs(s_b.max().item() - ref ** nap) < 1e-12
+    # and at NAP=8 the un-normalised form really is the ~15-20x attenuation measured
+    # in #111 (0.0467 at the median margin; mean 0.0542 over the real distribution)
+    assert 0.04 < ref ** 8 < 0.06 and 0.67 < ref < 0.69
+
+
+def test_bounded_norm_dscore_is_the_normalised_derivative_not_a_rescale():
+    """dscore_norm/dm is d(score_norm)/dm, NOT d(score_bounded)/dm divided by NAP.
+
+    Both share the factor sigmoid(-2m_j) (they are exp of the same logsigmoids),
+    so the ratio must be exactly score_norm / (NAP * score_bounded) -- which at our
+    margins is ~1.6, nowhere near the naive rescale's 1/NAP = 0.125.
+    """
+    torch.manual_seed(1)
+    nap = 8
+    d = torch.randn(6, 3, nap, dtype=torch.float64) * 1.5
+    s_b, db = _confidence_score_and_dscore(d, "bounded")
+    s_n, dn = _confidence_score_and_dscore(d, "bounded_norm")
+
+    expected = (s_n / (nap * s_b)).unsqueeze(-1) * db
+    err = (dn - expected).abs().max().item()
+    assert err < 1e-12, f"bounded_norm derivative is not the exact normalised one: {err:.2e}"
+
+    # It must NOT be the old derivative merely divided by NAP.
+    naive = db / nap
+    assert (dn - naive).abs().max().item() > 1e-3, \
+        "bounded_norm dscore looks like the bounded derivative rescaled"
+
+
+def test_bounded_norm_is_a_monotone_transform_of_bounded():
+    """x**(1/NAP) is increasing, so the two forms rank (token, table) pairs alike."""
+    torch.manual_seed(2)
+    d = torch.randn(200, 1, 8, dtype=torch.float64) * 1.2
+    s_b = _confidence_score(d, "bounded").reshape(-1)
+    s_n = _confidence_score(d, "bounded_norm").reshape(-1)
+    assert torch.equal(s_b.argsort(), s_n.argsort()), "ordering differs from bounded"
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_bounded_norm_numerically_stable_at_extremes(dtype):
+    """No exp(2m) is ever built: huge margins stay finite, zero margins give 0.5."""
+    big = torch.full((2, 2, 8), 1e4, dtype=dtype)
+    s_big = _confidence_score(big, "bounded_norm")
+    assert torch.isfinite(s_big).all(), "overflowed at large margins"
+    assert torch.allclose(s_big, torch.ones_like(s_big)), "large margins should saturate to 1"
+
+    zero = torch.zeros(2, 2, 8, dtype=dtype)
+    s_zero = _confidence_score(zero, "bounded_norm")
+    assert torch.allclose(s_zero, torch.full_like(s_zero, 0.5), atol=1e-7), \
+        "zero margins should give sigmoid(0) = 0.5, not 0.5**NAP"
+    _, dz = _confidence_score_and_dscore(zero, "bounded_norm")
+    assert torch.isfinite(dz).all()
 
 
 # =============================================================================
