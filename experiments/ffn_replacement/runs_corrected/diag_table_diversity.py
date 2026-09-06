@@ -60,7 +60,14 @@ def eff_rank(W):
 def main():
     cfg = json.load(open(os.path.join(D, 'config.json')))
     sd = torch.load(os.path.join(D, 'checkpoint.pt'), map_location=DEV)
-    keys = [k for k in sd if k.endswith('lut_light.tables')]
+    # Light stores its tables as `lut_light.tables`, Fast as `lut_batched.weights`; both are
+    # [n_tables, 2^nap, d_out], so every statistic below applies unchanged to either impl.
+    # This is what lets exp_n_0129 (Fast) be compared against exp_n_0184 (Light) directly.
+    keys = [k for k in sd if k.endswith('lut_light.tables')] or \
+           [k for k in sd if k.endswith('lut_batched.weights')]
+    if not keys:
+        raise SystemExit(f'no LUT table tensors found; keys look like: '
+                         f'{[k for k in list(sd)[:8]]}')
     print(f'run: {RUN}')
     print(f'VERIFIED FROM CONFIG: depth={cfg["depth"]} H={cfg["lut_n_heads"]} '
           f'tph={cfg["lut_tables_per_head"]} nap={cfg["lut_n_anchor_pairs"]} '
@@ -68,7 +75,8 @@ def main():
           f'd_out={cfg["lut_inner_out_dim"]}')
     print(f'VERIFIED FROM CHECKPOINT: {len(keys)} table tensors, '
           f'shape {tuple(sd[keys[0]].shape)}, dtype {sd[keys[0]].dtype}, '
-          f'impl={cfg["lut_impl"]}, gate={cfg["lut_confidence_form"]}, '
+          f'impl={cfg.get("lut_impl", "fast (default)")}, '
+          f'gate={cfg.get("lut_confidence_form", "OFF")}, '
           f'bf16={cfg["lut_use_bf16"]}')
     n_tab_total = sum(sd[k].shape[0] for k in keys)
     print(f'   => {n_tab_total:,} tables of {sd[keys[0]].shape[1]}x{sd[keys[0]].shape[2]}, '
@@ -190,17 +198,44 @@ def main():
 
         def hook(mod, inp, _out, rec=rec, ffn=ffn):
             z = ffn.compress(inp[0]).view(inp[0].shape[0], ffn.n_heads, ffn.inner_in_dim)
-            lut = ffn.lut_light
-            B_, Hh, T = z.shape[0], lut.n_heads, lut.tables_per_head
-            NAP = lut.n_anchor_pairs
-            ia = lut.anchor_a.reshape(1, Hh, T * NAP).expand(B_, Hh, T * NAP)
-            ib = lut.anchor_b.reshape(1, Hh, T * NAP).expand(B_, Hh, T * NAP)
-            d = (torch.gather(z, 2, ia) - torch.gather(z, 2, ib)).view(B_, Hh, T, NAP)
-            idx = ((d > 0).to(torch.int64) * lut.powers.view(1, 1, 1, -1)).sum(-1)
-            flat = lut.tables.reshape(Hh * T * lut.table_size, lut.output_dim)
-            rows = flat[(idx + lut.table_offset.view(1, Hh, T)).reshape(-1)] \
-                .view(B_, Hh, T, lut.output_dim)
-            score = _confidence_score(d, lut.confidence_form, lut.confidence_gain)
+            light = hasattr(ffn, 'lut_light')
+            lut = ffn.lut_light if light else ffn.lut_batched
+            # Fast names things differently and its anchors are [H, tph, NAP] with `weights`
+            # and `soft_*` buffers; the geometry is identical, so the contributions are
+            # computed the same way and the two impls stay directly comparable.
+            if light:
+                T, NAP = lut.tables_per_head, lut.n_anchor_pairs
+                a, b_, powers = lut.anchor_a, lut.anchor_b, lut.powers
+                tables, cells, dout = lut.tables, lut.table_size, lut.output_dim
+                offs = lut.table_offset
+            else:
+                T, NAP = lut.tables_per_head, lut.n_anchor_pairs
+                a, b_ = lut.soft_anchor_a_long, lut.soft_anchor_b_long
+                powers = lut.soft_powers
+                tables, cells, dout = lut.weights, lut.table_dim, lut.n_outputs
+                offs = torch.arange(a.shape[0] * a.shape[1] if a.dim() == 3 else a.shape[0],
+                                    device=z.device) * cells
+            B_, Hh = z.shape[0], ffn.n_heads
+            if light:
+                # Light's anchors are HEAD-LOCAL: they index within each head's d_in slice,
+                # so gather against the [B, H, d_in] view.
+                ia = a.reshape(1, Hh, T * NAP).expand(B_, Hh, T * NAP)
+                ib = b_.reshape(1, Hh, T * NAP).expand(B_, Hh, T * NAP)
+                d = (torch.gather(z, 2, ia) - torch.gather(z, 2, ib)).view(B_, Hh, T, NAP)
+            else:
+                # Fast's anchors already carry the head offset and index the FLAT
+                # [B, H*d_in] code, so they must be applied to the flattened view.
+                zf = z.reshape(B_, -1)
+                d = (zf[:, a.reshape(-1)] - zf[:, b_.reshape(-1)]).view(B_, Hh, T, NAP)
+            idx = ((d > 0).to(torch.int64) * powers.view(1, 1, 1, -1)).sum(-1)
+            flat = tables.reshape(Hh * T * cells, dout)
+            rows = flat[(idx + offs.view(1, Hh, T)).reshape(-1)].view(B_, Hh, T, dout)
+            if getattr(lut, 'forward_confidence', True):
+                score = _confidence_score(d, lut.confidence_form,
+                                          getattr(lut, 'confidence_gain', 1.0))
+            else:
+                # gate off (exp_n_0129): every gathered row enters the sum with weight 1
+                score = torch.ones(B_, Hh, T, dtype=d.dtype)
             rec['C'] = (rows * score.unsqueeze(-1))           # [B, H, T, d_out] contributions
 
         h = ffn.register_forward_hook(hook)
