@@ -1,8 +1,9 @@
 # LightMultiHeadLUT: every run, 16K and 48K
 
 Survey of **all** LightMHL runs on branch `research/ffn_replacement_fix` (issue
-[#112](https://github.com/anatoli-starostin/spiky/issues/112)), as of **2026-09-07 15:20 IDT**,
-remote head `59c7f669`. Sibling of [`LOOKUPFFN_LINE.md`](LOOKUPFFN_LINE.md), which covers the
+[#112](https://github.com/anatoli-starostin/spiky/issues/112)), as of **2026-09-07 17:50 IDT**,
+remote head `189aa69b` — i.e. including `exp_n_0202`, the last 48K run, which completed the
+tables-vs-cells A/B and repriced the whole budget axis (§5, §6, §II.6.7). Sibling of [`LOOKUPFFN_LINE.md`](LOOKUPFFN_LINE.md), which covers the
 earlier 4,000-step confidence-gate arms; this file covers the 16K/48K line that grew out of it.
 
 Every number here is on the corrected protocol (`evaluate_bpb_fixed`, bs48 × 100, leading 12
@@ -163,6 +164,7 @@ At 67.35M the best is `exp_n_0201` at +0.006683 (2.0× sd) — outside the band 
 | `exp_n_0177` | **vanilla dense** | 35,792,640 | **1.115420** | — | 1.72 | 0.129 |
 | `exp_n_0200` | Light+margin, nap8/tph256 | 105,100,992 | **1.134538** | **+0.019118** | 4.69 | 0.351 |
 | `exp_n_0171` | Fast gate-off, nap9/tph256 | 180,597,900 | 1.134511 | +0.019091 | 16.25 | 1.219 |
+| `exp_n_0202` | Light+margin, nap9/tph128 | 105,100,992 | 1.136375 | +0.020955 | 3.24 | 0.243 |
 | `exp_n_0199` | Light+margin, nap8/tph128 disjoint | 67,352,256 | 1.136588 | +0.021168 | 3.10 | 0.232 |
 | `exp_n_0155` | Fast gate-off, nap7/tph128 | 48,477,324 | 1.145471 | +0.030051 | 3.82 | 0.286 |
 | `exp_n_0158` | Fast gate-off, nap7/tph128 **@144K** | 48,477,324 | 1.137558 | +0.026189 *(vs vanilla@144K 1.111369)* | 11.51 | 0.288 |
@@ -182,6 +184,24 @@ architectures, two backward paths, two parameter counts — **the same +0.019 at
 3e-5.** Whatever the LUT FFN is missing, it is not something the confidence form or the routing
 gradient reaches.
 
+### The four 48K LUT runs cluster by `tph`, and by nothing else
+
+With `exp_n_0202` in hand there are four LUT points at 48K, and they fall into two tight pairs
+that are **not** grouped by parameter count, cell count, implementation or backward:
+
+| pair | runs | `tph` | params | vs vanilla | spread within pair |
+|---|---|---|---|---|---|
+| more tables | `0200` Light nap8, `0171` **Fast** nap9 | **256** | 105.1M / 180.6M | +0.019118 / +0.019091 | **0.000027** |
+| fewer tables | `0202` Light nap9, `0199` Light nap8 | **128** | 105.1M / 67.4M | +0.020955 / +0.021168 | **0.000213** |
+
+Inside each pair the parameter count varies by **56–72%**, the cell count `2^K` varies by 2×, and
+in the first pair the *entire backward* differs — and none of that moves the number by more than
+2e-4. Across the pairs, the only structural difference is `tph`, worth **0.0019**.
+
+Four points is not a law, and the pairing could be coincidence. But it sharpens the statement:
+at 48K, the one structural knob still doing anything is **tables per head**, and it is doing
+0.002 per doubling.
+
 **Do not read the step-16,000 row of a 48K run as a 16K result.** It sits on the 48K cosine
 schedule and is systematically worse: vanilla 1.178467 there vs 1.165147 as a finished 16K run.
 Step-aligned on the *same* schedule the gap is already **+0.007966** at step 16,000
@@ -189,15 +209,15 @@ Step-aligned on the *same* schedule the gap is already **+0.007966** at step 16,
 
 Trajectories, all on the 48K schedule:
 
-| step | vanilla | `0200` L/105M | `0199` L/67M | `0171` F/180M | `0155` F/48M |
-|---|---|---|---|---|---|
-| 4,000 | 1.435410 | 1.401593 | 1.423623 | 1.421090 | 1.469477 |
-| 8,000 | 1.249850 | 1.250391 | 1.260585 | 1.254139 | 1.282913 |
-| 16,000 | 1.178467 | 1.186433 | 1.192137 | 1.183450 | 1.210289 |
-| 24,000 | 1.152844 | 1.164719 | 1.168283 | 1.161929 | 1.186517 |
-| 32,000 | 1.133479 | 1.148078 | 1.151254 | 1.146470 | 1.171519 |
-| 40,000 | 1.120560 | 1.139221 | 1.141021 | 1.137995 | 1.161071 |
-| 48,000 | **1.115420** | 1.134538 | 1.136588 | 1.134511 | 1.156018 |
+| step | vanilla | `0200` L/105M | `0202` L/105M | `0199` L/67M | `0171` F/180M | `0155` F/48M |
+|---|---|---|---|---|---|---|
+| 4,000 | 1.435410 | 1.401593 | 1.411217 | 1.423623 | 1.421090 | 1.469477 |
+| 8,000 | 1.249850 | 1.250391 | 1.255513 | 1.260585 | 1.254139 | 1.282913 |
+| 16,000 | 1.178467 | 1.186433 | 1.189308 | 1.192137 | 1.183450 | 1.210289 |
+| 24,000 | 1.152844 | 1.164719 | 1.166313 | 1.168283 | 1.161929 | 1.186517 |
+| 32,000 | 1.133479 | 1.148078 | 1.150745 | 1.151254 | 1.146470 | 1.171519 |
+| 40,000 | 1.120560 | 1.139221 | 1.140835 | 1.141021 | 1.137995 | 1.161071 |
+| 48,000 | **1.115420** | 1.134538 | 1.136375 | 1.136588 | 1.134511 | 1.156018 |
 
 The LUT runs are *ahead* at step 4,000 and lose steadily from step 8,000 on.
 
@@ -216,6 +236,35 @@ The LUT runs are *ahead* at step 4,000 and lose steadily from step 8,000 on.
 | exempt tables from weight decay | 0185 → 0189 | +0.001270 | +0.4 |
 | doubling the table budget | 0192 → 0196 | −0.013168 | −3.9 |
 | doubling the table budget | 0194 → 0201 | −0.012127 | −3.6 |
+
+### The same knobs at 48K — every one of them shrinks
+
+`exp_n_0202` completes the matched 48K forks, so each 16K comparison now has a 48K twin. The
+pairs below are **matched**: the same policy mismatch appears on both sides of each row, so the
+16K and 48K columns are measuring the same thing at two horizons.
+
+| change | 16K pair | Δ @16K | 48K pair | Δ @48K | shrink |
+|---|---|---|---|---|---|
+| doubling **cells** (nap8→9, tph128) | 0198 → 0195 | **−0.006230** (−1.9 sd) | 0199 → 0202 | **−0.000213** (−0.1 sd) | **29×** |
+| doubling **tables** (tph128→256, nap8) | 0198 → 0196 | **−0.010511** (−3.1 sd) | 0199 → 0200 | **−0.002050** (−0.6 sd) | **5.1×** |
+| tables vs cells @105M (equal budget) | 0195 → 0196 | −0.004281 (−1.28 sd) | 0202 → 0200 | −0.001837 (−0.55 sd) | 2.3× |
+
+**Mean bpb per table-budget doubling: −0.008371 at 16K, −0.001131 at 48K — a 7.4× collapse.**
+That reprices the whole budget axis. At 16K rates, closing the +0.019 gap by budget alone needed
+~2.3 doublings (~500M params); at 48K rates it needs **~17 doublings**, i.e. on the order of
+10⁵× the table budget. **Budget is not a route to parity — it is not even a slow route.**
+
+Two consequences worth separating:
+
+- **Cells are effectively dead at 48K.** `0202` (nap9, 105.1M) and `0199` (nap8, 67.4M) land
+  0.000213 apart — 0.06× the seed spread — despite `0202` carrying **56% more parameters**. If
+  that were the only pair one could dismiss it, but it is the *matched fork* of a 16K pair that
+  showed −0.0062, so the effect genuinely evaporated over the horizon rather than never existing.
+- **Tables survive, barely.** −0.002050, 0.6× the seed spread. Below the noise floor by
+  magnitude — but `0202` is behind `0200` at **96 of 96 evals**, with the gap flat near +0.002
+  from step 16,000 on. These are paired runs (same seed, same data order), so an unbroken
+  96-eval sign run is much stronger evidence of a real ordering than the cross-seed sd suggests.
+  **Direction: safe. Magnitude: one seed.**
 
 **Only one of these is a result at one seed: the confidence form.** `margin` is worth
 **−0.0269 bpb, 8× the seed spread**, at fixed geometry, fixed everything. It is the single
@@ -236,34 +285,49 @@ Everything else is inside or barely outside the noise floor on one seed:
 - **Exempting tables from weight decay is not a win.** `exp_g_0189` (no-decay) is +0.001270
   *worse* than its matched control `exp_n_0185`. It was retained because it is harmless and was
   in the config lineage, not because it helped.
-- **Table budget still buys ~0.013 per doubling**, measured twice. That is nearly double the
-  −0.007455/doubling law fitted on the earlier Fast grid, i.e. the Light+margin arm is still on
-  a steeper part of its curve — but note both doublings are +0.019 apart from closing the 48K
-  gap, and the 48K evidence (§4) says the budget is not where the remaining deficit lives.
+- **Table budget buys ~0.013 per doubling *at 16K* — and ~0.001 at 48K.** The 16K figure is
+  nearly double the −0.007455/doubling law fitted on the earlier Fast grid, which read as "the
+  Light+margin arm is still on a steep part of its curve". `exp_n_0202` shows that reading was an
+  artefact of the short horizon: the same doublings are worth 5–29× less at 48K. **The budget
+  law does not survive the horizon**, which is the single most consequential thing `0202` added.
 
 ---
 
-## 6. In progress
+## 6. `exp_n_0202` — the last 48K run, and what it settled
 
-**`exp_n_0202_light_margin_znorm_nap9_48k_seed1`** — nebius, running now.
+**`exp_n_0202_light_margin_znorm_nap9_48k_seed1`** — nebius, **completed cleanly** (commit
+`189aa69b`, 17:39 IDT).
 
 - **Config:** fork of `exp_n_0195` (Light + `margin` + `z_norm` + `tables_no_decay`, H4, nap=9
-  (K=512), tph=128, d48, 105,100,992 params) with **only** `n_steps` 16000 → 48000 (cosine +
+  (K=512), tph=128, d48, **105,100,992 params**) with **only** `n_steps` 16000 → 48000 (cosine +
   warmup auto-stretch to 4,800). Seed 1, `device_batch` 12 × `grad_accum` 4, eval every 500.
-- **Purpose:** completes the 48K three-way at ~105M — `0202` (more **cells**: nap9/tph128) vs
-  `0200` (more **tables**: nap8/tph256, done, 1.134538) — the 48K version of the tables-vs-cells
-  A/B that `0196` vs `0195` ran at 16K.
-- **Progress at the last committed artefact (`59c7f669`, 15:11 IDT):** step **11,000 / 48,000**,
-  val bpb **1.217808** (8500 → 1.247415, 9000 → 1.240118, 9500 → 1.233944, 10000 → 1.227703,
-  10500 → 1.222260, 11000 → 1.217808).
-- **ETA:** its 16K sibling `exp_n_0195` ran 16,000 steps in 1.078 h = **0.2426 s/step**, so 48K
-  ≈ **3.2 h total** and the remaining 37,000 steps ≈ **2.5 h**, i.e. **~17:40 IDT today**. This
-  is extrapolated from the sibling's throughput, not read off the live process; it slips if the
-  H100 is shared.
-- **Prediction:** at 16K, more tables beat more cells by −0.0043 (`0196` 1.163912 vs `0195`
-  1.168194). If that carries, `0202` lands near **1.139** — behind `0200`'s 1.134538 and around
-  +0.024 from vanilla@48K. A materially better result would be the first evidence that the
-  cells axis behaves differently at long horizon.
+- **Result: final 1.136375, best 1.135937 (step 47,000)** — `+0.020955` vs vanilla@48K.
+- **Integrity:** 96/96 evals present, steps contiguous 500…48,000 and strictly increasing, no
+  `CRASHED`/`STOPPED`/`ABANDONED` note. **No stalls or restarts.**
+- **Cost:** 3.239 h, **0.2429 s/step** — the cheapest 105M run in the set, and within 0.2% of the
+  3.23 h predicted from its 16K sibling's throughput.
+- **Scoring:** the corrected trainer wrote this curve, so `metrics.csv`/`summary.json` **are** the
+  corrected metric (bs48 × 100, skip 12); there is no `corrected_score.json` to prefer, and no
+  `checkpoint.pt` was kept.
+
+**Curve:** 4,000 → 1.411217 · 8,000 → 1.255513 · 16,000 → 1.189308 · 24,000 → 1.166313 ·
+32,000 → 1.150745 · 40,000 → 1.140835 · 44,000 → 1.137060 · **48,000 → 1.136375**.
+
+**The prediction was directionally right and quantitatively wrong.** It called ~1.139, behind
+`0200`; the run landed at **1.136375**, behind `0200` by **+0.001837** rather than the ~0.0045
+that carrying the 16K edge forward implied — an over-prediction of 2.3×. The error is itself the
+finding: it assumed a 16K margin transfers to 48K, and the whole point of §5's new table is that
+budget effects **shrink** with horizon.
+
+**Diagnostics available for this run:** only the per-layer `ln1`/`ln2` gain columns — cell
+occupancy, gradient norms and margin distributions are *not* logged during training, exactly the
+gap flagged in §II.6. What the `ln` columns do show: **every layer's `ln2` gain is healthy**
+(19.66 / 19.62 / 19.60 / 19.58 / 19.50 / 18.58 against an init of 19.596), so the layer-0 collapse
+that dogged the `bounded_norm` runs is fully gone and is not what separates `0202` from `0200`
+(whose profile is nearly identical). `ln1_norm_L0` falls to ~9.9 by step 30,500 and recovers to
+10.14 — the same U-shape in all three 48K Light runs; the vanilla baseline predates the `ln`
+logging, so **there is no comparison available** and this should not be read as LUT-specific.
+Nothing in the logged diagnostics bears on the discontinuity hypothesis either way.
 
 ### Incomplete / abandoned
 
@@ -351,7 +415,13 @@ Projection FLOPs for the compression wrapper are 147,456 per token pair (compres
    signal in the survey: the residual deficit is **architecture- and gradient-path-independent**,
    and neither the confidence form nor the parameter budget touches it. Vanilla simply extracts
    1.69× more from the extra 32K steps.
-5. **Confounds, stated.** Every 16K arm here stacks `margin` on top of `z_norm` and
+5. **The budget law does not survive the horizon** — `exp_n_0202`'s contribution. Doubling the
+   table budget is worth −0.008371 per doubling at 16K and **−0.001131 at 48K** (§5), a 7.4×
+   collapse; the cells axis specifically is worth −0.006230 at 16K and **−0.000213 at 48K**, i.e.
+   effectively nothing. Closing +0.019 by budget alone would take ~17 doublings. Combined with
+   (4), **both of the obvious levers — architecture and scale — are now measured and neither
+   works.**
+6. **Confounds, stated.** Every 16K arm here stacks `margin` on top of `z_norm` and
    `tables_no_decay`; `margin`-without-`z_norm` has never been run, so the −0.0269 is the
    *combination*'s credit assigned to the one variable that changed between `0190` and `0192`
    (`z_norm` and `no_decay` were already on in both). Every comparison is one seed against a
@@ -370,8 +440,10 @@ Projection FLOPs for the compression wrapper are 147,456 per token pair (compres
   0.00335.
 - **Deconfound `margin`:** `margin` without `z_norm` at nap8/tph128, one hour, tells us whether
   the −0.0269 is the score or the pair.
-- **Tables over cells, confirmed or retired:** it is 1.3× and 1.6× sd at two budgets. `0202`
-  will give the 48K version of that A/B for free when it lands.
+- **Tables over cells: direction confirmed, magnitude shrunk.** `0202` settled it — more tables
+  still wins at 48K (`0200` ahead at **96/96 evals**) but by only −0.001837, 0.55× the seed
+  spread, against −0.004281 at 16K. Worth keeping as a design default; not worth another run.
+- **A budget sweep is now retired**, not deprioritised. §5's 48K column prices it out.
 
 ---
 
@@ -890,8 +962,14 @@ models differ in the estimator, the parameter count and the table geometry, and 
 the budget. Any theory of the residual gap has to explain why two very different backward passes
 converge on the same number.
 
-The candidate that survives that constraint is the **function class** rather than the
-optimisation: what the layer *can represent*, which both variants share.
+`exp_n_0202` (Light, nap9/tph128, 105M) adds a fourth point at **+0.020955**, and `exp_n_0199`
+(67.4M) a fifth at **+0.021168**. All four LUT runs sit in a **0.0021-wide band** spanning 67M to
+181M parameters, `K ∈ {8,9}`, both backward passes and both anchor policies. Within that band the
+only knob that separates anything is `tph` (§4), worth 0.0019 — and §5 now prices further
+doublings of it at −0.002, i.e. ~17 doublings from parity.
+
+The candidate that survives all of that is the **function class** rather than the optimisation:
+what the layer *can represent*, which every variant shares.
 
 ### (2) Discontinuity at cell boundaries — the strongest a-priori candidate, never tested
 
@@ -960,13 +1038,30 @@ approximately right for that population has never been tested**, and the 48K res
 a claim about *how well the model uses a long schedule*. Of the untried interventions this is
 the one that both fits the evidence in (1) and costs a single run.
 
-### (7) Capacity saturation — evidence points away from it
+### (7) Capacity saturation — **revised by `exp_n_0202`: the evidence now points TOWARD it**
 
-Doubling the table budget still buys **−0.0132 / −0.0121 bpb** (§5), roughly 1.8× the
-`−0.007455`/doubling law fitted on the earlier Fast grid, so the arm is *not* saturated in
-parameters. But that lever is worth ~0.013 per doubling against a 0.019 gap: closing it by budget
-alone needs ~1.5 doublings (~300M params) and would then meet the same 48K horizon problem.
-**Budget is not the answer even though budget still works.**
+*This entry previously read "evidence points away from it", on the strength of the 16K doublings
+(−0.0132 / −0.0121, ~1.8× the −0.007455/doubling law from the Fast grid). `exp_n_0202` supplied
+the matched 48K forks and overturned it.*
+
+Measured at both horizons on matched pairs (§5):
+
+| doubling | @16K | @48K | shrink |
+|---|---|---|---|
+| cells (nap8→9, tph128) | −0.006230 | **−0.000213** | 29× |
+| tables (tph128→256, nap8) | −0.010511 | **−0.002050** | 5.1× |
+| mean per table-budget doubling | −0.008371 | **−0.001131** | 7.4× |
+
+**At the horizon that matters the arm IS saturating**, and the cells axis has essentially stopped
+paying: `0202` (105.1M) and `0199` (67.4M) land 0.000213 apart despite a 56% parameter difference.
+Closing +0.019 by budget alone goes from ~2.3 doublings at 16K rates to **~17 at 48K rates**.
+
+This matters for (1) and (2). The old reading — "budget still works, it is just not efficient" —
+left open that the LUT was under-parameterised for the task. It is not. A model that stops
+converting parameters into loss while a smaller dense model keeps converting *steps* into loss is
+behaving like one whose **hypothesis class is the binding constraint**, which is exactly what (2)
+predicts and what (1)'s architecture-independence already implied. Saturation is now a third
+independent line of evidence for the same conclusion rather than a counter-argument to it.
 
 ### Diagnostics that exist, and what they measure
 
@@ -1004,3 +1099,13 @@ Ordered by what the measurements above support, not by novelty:
    noise floor). Coordinate-sign addressing was tried (BH4) and is worse by +0.019 adjusted. Do
    not spend more here without a new idea about *what* is hashed rather than *how* the pairs are
    drawn.
+6. **Scale is now retired as a lever**, on `exp_n_0202`'s evidence (§II.6.7): −0.001131 per
+   table-budget doubling at 48K, ~17 doublings from parity. Any proposal that closes the gap by
+   growing the tables should be checked against that number first.
+
+**What `exp_n_0202` changed about this ranking:** nothing moved up, but item 5's neighbour —
+"just make it bigger" — moved off the list entirely. Three independent axes (backward pass,
+score form, parameter budget) have now each been measured and each fails to touch the 48K
+deficit. That is what promotes the function-class hypothesis (1)–(2) from "the candidate that
+survives" to "the only candidate anyone has proposed that has not been falsified", and it is why
+the eval-only soft-read-out probe is worth running before any further training run.
