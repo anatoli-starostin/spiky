@@ -329,6 +329,60 @@ that dogged the `bounded_norm` runs is fully gone and is not what separates `020
 logging, so **there is no comparison available** and this should not be read as LUT-specific.
 Nothing in the logged diagnostics bears on the discontinuity hypothesis either way.
 
+## 6b. `exp_g_0193` — margin without z_norm. **Prediction recorded before the result.**
+
+Launched on gpustar 2026-09-07 ~19:30 IDT, ~1 h. This section was written and committed
+**before the run produced a number**, so the reading cannot be retrofitted.
+
+**The question.** §5 credits `margin` with **−0.026855 bpb**, the largest lever on this line
+and the only one outside the noise floor. But that is `exp_g_0190` (bounded_norm + z_norm)
+against `exp_n_0192` (margin + z_norm) — **both with z_norm on**. `margin` has never been run
+without it, so the −0.026855 is strictly *margin-given-z_norm*. §II.6(5) flags this as the one
+place where the mechanism behind this line's only real result is inferred, not observed.
+
+**The run.** `exp_n_0192`'s `config.json` read from disk with exactly one substantive key
+changed, `lut_z_norm: true → false`; 35 of 38 keys byte-identical, the other two being
+`exp_name` and `_arch_note`. Confirmed to have bitten: the LayerNorm module is not
+constructed at all (`compression_mhl.py`:168) and the forward skips it (:302–304), so the
+parameter count drops 67,352,256 → **67,351,680**, matching `exp_g_0189` and `exp_n_0185`.
+
+### What each outcome would mean
+
+| result | reading |
+|---|---|
+| **≈ 1.177** | `margin` stands alone; z_norm contributes nothing to it, and §5's −0.0269 is `margin`'s own. |
+| **≈ 1.181** | the two are *additive*: z_norm's own −0.003556 (0189→0190) simply adds. No interaction. |
+| **1.185–1.195** | real interaction — most of `margin`'s gain survives, but a measurable part of it needed z_norm. |
+| **≈ 1.204** | `margin` does **nothing** without z_norm; the −0.0269 is entirely conditional and §5 must be rewritten. |
+
+### The prediction: **1.185–1.195**, i.e. the third row
+
+Reasoning, stated so it can be wrong for a reason:
+
+1. **The additive null is 1.1806** (1.177081 + 0.003556, giving z_norm back its own measured
+   value). Anything materially worse than that is interaction.
+2. **`margin`'s derivative is *weakest* exactly where an unnormalised code is worst.** §II.3:
+   `∂s/∂m` for `margin` is **0.1×** `bounded_norm`'s at m = 0.00001 and **0.7×** at m = 0.21,
+   overtaking only from m ≈ 0.39. Without z_norm the code scale is unconstrained, and the
+   measured no-z_norm profile (`exp_n_0184`) is exactly that bad regime at the shallow layers:
+   median |d| = 0.00001 / 0.210 / 0.388 / 0.516 / 0.555 / 0.781 by depth. So layers 0–1 start
+   `margin` at a disadvantage.
+3. **But the deficit should be partly self-correcting**, which is why the prediction is not
+   1.204. `margin`'s derivative *grows* with the margin while `bounded_norm`'s *shrinks*, so
+   once any margin growth begins `margin` accelerates and `bounded_norm` stalls. That
+   dynamical asymmetry is what today's `diag_blend_weight.py` measurement shows in its
+   converged form: with z_norm, `margin` (`exp_n_0192`) reaches median |d| = **0.4158 at layer
+   0** where `bounded_norm` (`exp_g_0190`) sits at **0.0001** — a 4,000× difference at the very
+   layer that was dead. `margin` can bootstrap layer 0; the open question is only whether it
+   can do so *without* z_norm handing it a unit-scale code to start from.
+
+Net: most of the gain survives, a real part does not. **1.185–1.195.**
+
+*(The owner's own expectation was truncated in transit and is therefore not recorded here.
+If it should be on the record, it needs to be restated before the run lands.)*
+
+---
+
 ### Incomplete / abandoned
 
 | run | what | stopped at | last bpb | why |
