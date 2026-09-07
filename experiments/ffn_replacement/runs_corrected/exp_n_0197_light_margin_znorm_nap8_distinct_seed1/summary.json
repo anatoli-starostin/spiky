@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0197_light_margin_znorm_nap8_distinct_seed1",
+  "best_val_bpb": 1.1774761532449132,
+  "final_val_bpb": 1.1774761532449132,
+  "total_params": 67352256,
+  "training_time_hours": 1.034,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

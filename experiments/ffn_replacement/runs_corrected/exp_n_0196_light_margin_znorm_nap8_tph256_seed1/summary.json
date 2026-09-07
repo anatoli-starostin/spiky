@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0196_light_margin_znorm_nap8_tph256_seed1",
+  "best_val_bpb": 1.163912494594093,
+  "final_val_bpb": 1.163912494594093,
+  "total_params": 105100992,
+  "training_time_hours": 1.558,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
