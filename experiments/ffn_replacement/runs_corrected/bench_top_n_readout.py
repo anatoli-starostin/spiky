@@ -60,14 +60,25 @@ def timeit(fn, iters, warmup):
     return (time.perf_counter() - t) / iters * 1e3          # ms
 
 
-def bench_layer(tph, n, tau=0.1):
+def bench_layer(tph, n, tau=0.1, impl='light', force_torch=False):
+    """impl='fast' benchmarks FastMultiHeadLut at the same geometry -- the real
+    alternative for a directional routing gradient, whose surrogate is a softmax over
+    ALL 2^nap cells rather than the blend's n. force_torch disables the native fused-eval
+    kernel so the n=1 forward is measured on the same code path the blend must use."""
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     lay = CompressionMultiHeadLUT(
         input_dim=384, output_dim=384, inner_in_dim=48, inner_out_dim=48,
-        nap=8, tph=tph, n_heads=4, lut_impl='light', forward_confidence=True,
-        confidence_form='margin', z_norm=True, random_seed=1000,
-        read_top_n=n, read_tau=tau, device=DEV).to(DEV)
+        nap=8, tph=tph, n_heads=4, lut_impl=impl, forward_confidence=True,
+        confidence_form='margin', z_norm=(impl != 'bh4'), random_seed=1000,
+        **({'read_top_n': n, 'read_tau': tau} if impl == 'light' else {}),
+        device=DEV).to(DEV)
+    if force_torch:
+        from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
+        for m in lay.modules():
+            if isinstance(m, LightMultiHeadLUT):
+                m._native_msb_scored = None
+                m._native_msb = None
     x = torch.randn(N_TOK, 384, device=DEV, requires_grad=True)
 
     def fwd():
@@ -95,14 +106,21 @@ print(f'{"config":26} {"n":>2} {"fwd ms":>9} {"fwd+bwd ms":>12} {"bwd ms":>9} '
       f'{"peak MiB":>10} {"vs n=1 fwd":>11} {"vs n=1 f+b":>11}')
 for tph in (128, 256):
     base = None
-    for n in (1, 2, 3):
-        f, fb, peak, params = bench_layer(tph, n)
-        if base is None:
+    rows = ([('light', 1, False), ('light', 1, True), ('light', 2, False),
+             ('light', 3, False), ('fast', 1, False)])
+    for impl, n, ft in rows:
+        f, fb, peak, params = bench_layer(tph, n, impl=impl, force_torch=ft)
+        if base is None:                       # n=1 on the torch path is the fair baseline
             base = (f, fb)
-        print(f'{"nap8/tph" + str(tph) + " (" + f"{params/1e6:.1f}M)":26} {n:>2} '
-              f'{f:>9.3f} {fb:>12.3f} {fb - f:>9.3f} {peak:>10.1f} '
+        if impl == 'light' and n == 1 and ft:
+            base = (f, base[1])                # forward baseline := torch path
+        lbl = ('Light n=1 (fused eval)' if impl == 'light' and n == 1 and not ft else
+               'Light n=1 (torch path)' if impl == 'light' and n == 1 else
+               f'Light n={n} blend' if impl == 'light' else
+               'FAST (full-2^8 surrogate)')
+        print(f'{lbl:26} {n:>2} {f:>9.3f} {fb:>12.3f} {fb - f:>9.3f} {peak:>10.1f} '
               f'{f / base[0]:>10.2f}x {fb / base[1]:>10.2f}x')
-    print()
+    print(f'   ^ nap8/tph{tph}, {params/1e6:.1f}M FFN params/layer\n')
 
 print('NOTE ON THE FORWARD COLUMN: at n=1 the layer takes the native fused-eval kernel '
       'under no_grad,\nwhile n>1 cannot (it needs the margins), so "fwd" compares the '

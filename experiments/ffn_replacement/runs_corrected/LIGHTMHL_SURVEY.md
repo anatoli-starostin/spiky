@@ -227,7 +227,9 @@ The LUT runs are *ahead* at step 4,000 and lose steadily from step 8,000 on.
 
 | change | runs | Δ bpb | ×sd |
 |---|---|---|---|
-| **`bounded_norm` → `margin`** | 0190 → 0192 | **−0.026855** | **−8.0** |
+| **`bounded_norm` → `margin`** (clean, no z_norm) | 0189 → 0193 | **−0.034641** | **−10.3** |
+| `bounded_norm` → `margin` (both with z_norm) | 0190 → 0192 | −0.026855 | −8.0 |
+| **`z_norm` ON TOP OF `margin`** | 0192 vs 0193 | **+0.004229** | **+1.3** |
 | tables over cells @105M | 0195 → 0196 (tph 128→256 vs nap 9→8) | −0.004281 | −1.3 |
 | tables over cells @67M | 0192 → 0201 (tph 128→256 vs nap 8→7) | −0.005251 | −1.6 |
 | `z_norm` on the code | 0189 → 0190 | −0.003556 | −1.1 |
@@ -380,6 +382,52 @@ Net: most of the gain survives, a real part does not. **1.185–1.195.**
 
 *(The owner's own expectation was truncated in transit and is therefore not recorded here.
 If it should be on the record, it needs to be restated before the run lands.)*
+
+### RESULT: **1.172852** — the prediction was wrong, and informatively so
+
+`exp_g_0193` completed cleanly (16,000/16,000, 0.92 h, 67,351,680 params as required, the
+three periodic checkpoints written at 4,000 / 8,000 / 12,000).
+
+**1.172852 is outside the predicted 1.185–1.195 band, and below even the most optimistic row
+of the table above.** `margin` without z_norm does not merely stand alone — it is
+**−0.004229 BETTER than margin with z_norm** (`exp_n_0192`, 1.177081), 1.26× the seed spread.
+
+The four runs now form a complete 2×2 factorial at nap8/tph128, all seed 1, all
+`tables_no_decay`, differing only in the two flags:
+
+| | no z_norm | z_norm | **effect of z_norm** |
+|---|---|---|---|
+| **`bounded_norm`** | 1.207493 (`0189`) | 1.203936 (`0190`) | **−0.003557** (helps) |
+| **`margin`** | **1.172852 (`0193`)** | 1.177081 (`0192`) | **+0.004229** (hurts) |
+| **effect of `margin`** | **−0.034641** | −0.026855 | interaction **+0.007786** |
+
+**z_norm helps `bounded_norm` and hurts `margin` — the sign flips.** The interaction term is
++0.007786, **2.3× the seed spread**, so this is not noise-level: the two interventions are
+**antagonistic**, doing partly the same job and getting in each other's way when stacked.
+
+**Two corrections to the survey follow from this.**
+
+1. **§5 understated `margin`.** The clean single-variable comparison for the confidence form
+   is now the no-z_norm pair `0189 → 0193`, where the two runs differ in *nothing* but the
+   form: **−0.034641, i.e. 10.3× the seed spread**, not the −0.026855 measured through the
+   z_norm-confounded pair. `margin` is a bigger lever than this file has been claiming.
+2. **z_norm should be dropped from the margin line.** It was adopted on `bounded_norm`
+   evidence (−0.0036 on `0189 → 0190`) and carried forward into every margin run without ever
+   being re-tested there. On `margin` it costs +0.004.
+
+**Why the prediction failed, named rather than waved at.** §II.3 argued from the *static*
+derivative that `margin`'s `∂s/∂m` is weaker than `bounded_norm`'s at small margins (0.1× at
+m = 0.00001, 0.7× at m = 0.21), so an unnormalised code should leave `margin` stuck at the
+shallow layers. That reasoning treated the margin distribution as fixed. It is not — it is the
+*state* of a dynamical system, and `margin`'s derivative **grows** with the margin while
+`bounded_norm`'s shrinks, so `margin` generates its own healthy margins from a cold start
+instead of needing z_norm to hand them over. §II.6(5)'s open question is therefore answered,
+and the answer is the opposite of what was expected: **z_norm is not a precondition for
+`margin`, it is a partial substitute for it, and a slightly costly one.**
+
+---
+
+
 
 ---
 
