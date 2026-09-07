@@ -119,7 +119,13 @@ class MinimalBlock(nn.Module):
                     # LookupFFN-line knobs; both default to the pre-existing behaviour
                     lut_impl=cfg.get('lut_impl', 'fast'),
                     forward_confidence=cfg.get('lut_forward_confidence', False),
-                    confidence_form=cfg.get('lut_confidence_form', 'bounded'),
+                    # DEFAULT CHANGED to 'margin' (was 'bounded'). Verified safe against
+                    # the committed record: of 89 run configs, 28 have the gate on and 21
+                    # are on the light path, and EVERY one of them sets
+                    # lut_confidence_form explicitly -- zero rely on this fallback, so no
+                    # historical run rebuilds differently. See LIGHTMHL_SURVEY.md
+                    # "Current standard configuration".
+                    confidence_form=cfg.get('lut_confidence_form', 'margin'),
                     confidence_gain=cfg.get('lut_confidence_gain', 1.0),
                     # Optional skip INSIDE the FFN: decompress(lut(z) + z). Adds no
                     # parameters and requires eff_in == eff_out. Default False, so every

@@ -119,7 +119,14 @@ class CompressionMultiHeadLUT(nn.Module):
         device: Optional[torch.device] = None,
         lut_impl: str = "fast",
         forward_confidence: bool = False,
-        confidence_form: str = "bounded",
+        # DEFAULT CHANGED to "margin" (was "bounded") -- see the note in
+        # light_multi_head_lut.py. This default reaches both the light and the fast path,
+        # and the evidence supports it on both: on light it is worth -0.034641 (10.3x the
+        # seed spread), and on fast the 4k arms put margin ahead of bounded and
+        # bounded_norm too (1.432430 / 1.434988 / 1.441122), which is what
+        # LOOKUPFFN_LINE.md already recommended when it said `bounded` should arguably
+        # stop being a default. Inert for a fast layer with forward_confidence off.
+        confidence_form: str = "margin",
         confidence_gain: float = 1.0,
         z_norm: bool = False,
         bh4_block: int = 4,

@@ -76,7 +76,16 @@ class LightMultiHeadLUT(nn.Module):
         output_dim: int,
         n_anchor_pairs: int,
         *,
-        confidence_form: str = "bounded",
+        # DEFAULT CHANGED to "margin" (was "bounded"). "margin" is the exact LookupFFN
+        # kernel and is worth -0.034641 bpb over "bounded_norm" on this layer at
+        # nap8/tph128 -- 10.3x the 0.00335 seed spread, measured on the clean pair
+        # exp_g_0189 -> exp_g_0193, which differ in nothing but this string. "bounded" was
+        # already a documented hazard (#112): it is a product over NAP factors, lands at
+        # ~0.054 at nap=8 and diverges. Safe to change: every committed config that uses a
+        # score sets this key explicitly (verified across all 89 runs -- 28 with the gate
+        # on, 21 on the light path, zero relying on this fallback), so no historical run
+        # rebuilds differently.
+        confidence_form: str = "margin",
         confidence_gain: float = 1.0,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         random_seed: Optional[int] = None,

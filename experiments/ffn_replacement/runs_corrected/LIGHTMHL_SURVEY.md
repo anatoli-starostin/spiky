@@ -12,6 +12,60 @@ rows skipped, 2,451,456 held-out tokens of `shard_06542.parquet`). See
 
 ---
 
+## Current standard configuration
+
+> **`confidence_form: margin`, `lut_z_norm: false`.**
+> Reference run: **`exp_g_0193_B16k_light_margin_tph128_noznorm_seed1`** — **1.172852**,
+> 67,351,680 params, nap8/K256, tph128, H4, d_in=d_out=48, 16K steps, seed 1.
+> Fork **that** config for new LightMHL experiments, not `exp_n_0192`'s.
+
+Decided 2026-09-07 on the 2×2 factorial below. All four runs are nap8/tph128, seed 1,
+`tables_no_decay`, and differ **only** in the two flags:
+
+| | no z_norm | z_norm | effect of z_norm |
+|---|---|---|---|
+| **`bounded_norm`** | 1.207493 (`exp_g_0189`) | 1.203936 (`exp_g_0190`) | −0.003557 (helps) |
+| **`margin`** | **1.172852 (`exp_g_0193`)** | 1.177081 (`exp_n_0192`) | **+0.004229 (hurts)** |
+| **effect of `margin`** | **−0.034641** | −0.026855 | interaction **+0.007786** |
+
+### How strongly each half of this is supported — they are NOT the same
+
+**`margin` over `bounded_norm`: very strong.** −0.034641 on the clean pair
+(`exp_g_0189 → exp_g_0193`, differing in nothing but the form) is **10.3× the 0.00335 seed
+spread**. It also reproduces at every other geometry tried and on both hosts. Treat as
+settled.
+
+**Dropping z_norm: weak on its own, and it should not be quoted as if it were the same
+grade of evidence.** +0.004229 is only **~1.26× the seed spread** — inside the range a
+single seed can produce. What actually carries it is not that margin but two structural
+facts: the **interaction term of +0.007786 (2.3× the spread)**, and the **sign flip** —
+z_norm *helps* `bounded_norm` and *hurts* `margin`. A pure noise story would have to
+produce a sign flip and a 2.3×-spread interaction by chance. So this rests on **mechanism,
+not on margin of measurement**, and the mechanism is coherent: both interventions fix the
+same problem (margin scale), so stacking them is redundant and z_norm's constraint on the
+code then costs more than it returns.
+
+**Explicitly untested, and worth saying before anyone leans on it:**
+
+- **One seed.** No replicate at any geometry.
+- **One geometry** — nap8/tph128 only. **Untested at tph256**, which is where the best
+  16K and 48K numbers live (`exp_n_0196`, `exp_n_0200`).
+- **16K only. Untested at 48K**, and §5 shows that *every* effect measured at 16K shrank
+  at 48K, some by 29×. There is no reason to assume this one transfers intact, and some
+  reason to expect it to shrink.
+- Every existing 48K result (`0199`, `0200`, `0202`) was run **with** z_norm, so the whole
+  48K leaderboard is on the *old* standard.
+
+**What would settle it:** `margin`, no z_norm, at **tph256/16K** (≈1.6 h) to test the
+geometry, and at **48K** (≈3-5 h) to test the horizon. Until then this is a sensible default
+chosen on a coherent mechanism, not an established result.
+
+*(Note the asymmetry in what changed: `lut_z_norm`'s code default was **already** `false`,
+so adopting it required no code change at all — only a change in which config gets forked.
+The `confidence_form` default did change, from `bounded` to `margin`.)*
+
+---
+
 ## 0. The bug that started the branch, and the fix
 
 The historical per-run trainers built the val loader at the **training** `device_batch_size`
