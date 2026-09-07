@@ -14,6 +14,77 @@ WHAT CHANGED vs the historical runs/*/train.py (and ONLY this):
 Everything else — model, LR schedule, optimizer grouping, seeds, outputs — is unchanged, so
 configs and checkpoints remain compatible with the historical runs.
 """
+
+# =============================================================================
+# SPIKY-SOURCE OVERRIDE -- import spiky from THIS CHECKOUT, or fail loudly.
+# =============================================================================
+# This run needs lut_read_top_n / lut_read_tau_learnable, which exist only on
+# research/ffn_replacement_fix. A machine whose `spiky` is an editable install
+# pointing at a DIFFERENT checkout (nebius's points at ~/projects/spiky/src on
+# branch hyperplane_ffn_next) would otherwise import a source that predates the
+# blend entirely.
+#
+# Resolved from __file__, never from a home directory, so it works unchanged on
+# any machine and on a fresh clone:
+#     <checkout>/experiments/ffn_replacement/runs_corrected/<run>/train.py
+#      ^-- 4 levels up --------------------------------------------^
+#
+# The editable install registers a MetaPathFinder CLASS appended to
+# sys.meta_path with hard-coded absolute paths. Appended finders sit AFTER
+# PathFinder, so prepending to sys.path is already decisive -- but the finder is
+# dropped as well, because relying on meta_path ordering is a silent dependency.
+# Note the finder is a class, not an instance, so `type(f).__name__` (which the
+# exp_n_* trainers test) does NOT match it; this checks the object's own name.
+#
+# Every failure mode raises here, at import, naming what was sought and where.
+# Falling through to a stale spiky is the one outcome that must never happen:
+# it would train a model silently WITHOUT the blend and report it as a result.
+import os as _os
+import sys as _sys
+
+_CHECKOUT = _os.path.abspath(
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', '..', '..', '..'))
+_SRC = _os.path.join(_CHECKOUT, 'src')
+_PROBE = _os.path.join(_SRC, 'spiky', 'lutorch', 'light_multi_head_lut.py')
+_NEEDS = ('read_top_n', 'read_tau_learnable')
+
+if not _os.path.isfile(_PROBE):
+    raise RuntimeError(
+        f"spiky source not found in this checkout.\n"
+        f"  looked for : {_PROBE}\n"
+        f"  checkout   : {_CHECKOUT}\n"
+        f"  train.py   : {_os.path.abspath(__file__)}\n"
+        f"Expected <checkout>/src/spiky/lutorch/light_multi_head_lut.py, i.e. this file "
+        f"four levels below the repo root. Run it from inside the repo checkout.")
+
+_probe_src = open(_PROBE, encoding='utf-8').read()
+_missing = [k for k in _NEEDS if k not in _probe_src]
+if _missing:
+    raise RuntimeError(
+        f"the spiky source in this checkout is too old for this run.\n"
+        f"  file    : {_PROBE}\n"
+        f"  missing : {_missing}\n"
+        f"This run needs the top-n blended read-out. Check out "
+        f"research/ffn_replacement_fix (or later).")
+
+_sys.path.insert(0, _SRC)
+_sys.meta_path = [
+    _f for _f in _sys.meta_path
+    if 'editable' not in getattr(_f, '__name__', type(_f).__name__).lower()
+    and 'editable' not in getattr(_f, '__module__', type(_f).__module__).lower()
+]
+
+import spiky.lutorch.light_multi_head_lut as _probe_mod   # noqa: E402
+if not _os.path.abspath(_probe_mod.__file__).startswith(_SRC):
+    raise RuntimeError(
+        f"spiky was imported from the WRONG place despite the override.\n"
+        f"  wanted under : {_SRC}\n"
+        f"  actually got : {_probe_mod.__file__}\n"
+        f"Refusing to continue: training against a stale spiky would silently produce a "
+        f"model without the blend.")
+print(f"[spiky-source] {_probe_mod.__file__}", flush=True)
+# =============================================================================
+
 import csv
 import json
 import math
