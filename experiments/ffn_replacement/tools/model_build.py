@@ -132,7 +132,13 @@ class MinimalBlock(nn.Module):
                     # BH4 shape, read only when lut_impl == 'bh4'. The defaults are the
                     # reference implementation's n_factors=4 and our parity-matched block.
                     bh4_block=cfg.get('lut_bh4_block', 4),
-                    bh4_factors=cfg.get('lut_bh4_factors', 4))
+                    bh4_factors=cfg.get('lut_bh4_factors', 4),
+                    # Top-n blended read-out on the light path (default 1 = single cell,
+                    # so every existing config builds a bit-identical model). n>1 makes
+                    # the blend weights differentiable in the margins, which is a
+                    # DIRECTIONAL routing gradient plain Light does not have.
+                    read_top_n=cfg.get('lut_read_top_n', 1),
+                    read_tau=cfg.get('lut_read_tau', 0.1))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)

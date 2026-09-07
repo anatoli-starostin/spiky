@@ -124,6 +124,8 @@ class CompressionMultiHeadLUT(nn.Module):
         z_norm: bool = False,
         bh4_block: int = 4,
         bh4_factors: int = 4,
+        read_top_n: int = 1,
+        read_tau: float = 0.1,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -218,6 +220,11 @@ class CompressionMultiHeadLUT(nn.Module):
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
                 device=device, n_heads=n_heads, multi_head_input=mh,
                 anchor_sampling_policy=anchor_sampling_policy,
+                # Top-n blended read-out. Default 1 == the single-cell layer, so every
+                # existing config builds a bit-identical model. Only the light path takes
+                # these: fast already has a full-2^NAP soft backward, and bh4 addresses by
+                # coordinate sign, where "the nearest cell by margin" is a different object.
+                read_top_n=read_top_n, read_tau=read_tau,
             )
             if mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)

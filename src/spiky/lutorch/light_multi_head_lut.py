@@ -84,6 +84,8 @@ class LightMultiHeadLUT(nn.Module):
         device: Optional[torch.device] = None,
         n_heads: int = 1,
         multi_head_input: bool = False,
+        read_top_n: int = 1,
+        read_tau: float = 0.1,
     ):
         super().__init__()
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
@@ -117,6 +119,26 @@ class LightMultiHeadLUT(nn.Module):
         self.multi_head_input = bool(multi_head_input)
         self.n_heads = n_heads if multi_head_input else 1
         self.tables_per_head = n_tables // self.n_heads
+
+        # --- top-n blended read-out (TRAINING-CAPABLE; default 1 == today's layer) -------
+        # At read_top_n=1 nothing below is reachable and the layer is byte-for-byte the
+        # module it always was. At n>1 the single addressed row becomes a normalised
+        # convex combination of the n nearest cells, and -- unlike probe_soft_readout.py,
+        # which was eval-only and detached the weights -- the weights here are
+        # DIFFERENTIABLE in the margins. That is the point: dw/dm is a term that compares
+        # the table rows of alternative cells and pushes z toward the better one, i.e. a
+        # DIRECTIONAL ROUTING GRADIENT, which plain Light does not have at all. It makes
+        # this layer a sparse top-n cousin of FastMultiHeadLut's full-2^NAP softmax
+        # surrogate, at n gathers instead of 2^NAP.
+        if read_top_n < 1 or read_top_n > n_anchor_pairs + 1:
+            raise ValueError(
+                f"read_top_n must be in [1, n_anchor_pairs+1] (the argmax cell plus at "
+                f"most one flip per anchor); got {read_top_n} with "
+                f"n_anchor_pairs={n_anchor_pairs}")
+        if not (read_tau > 0):
+            raise ValueError(f"read_tau must be > 0, got {read_tau!r}")
+        self.read_top_n = int(read_top_n)
+        self.read_tau = float(read_tau)
 
         dev = device or torch.device("cpu")
         policy = anchor_sampling_policy or AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
@@ -249,6 +271,9 @@ class LightMultiHeadLUT(nn.Module):
 
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)                # [B, H, T]
+        if self.read_top_n > 1:
+            return self._blend_bag(d, index, self.table_offset.view(1, H, T), flat,
+                                   score, B * H, T).view(B, H, self.output_dim)
         # One bag per (sample, head), summing that head's T tables.
         return self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self.output_dim)
 
@@ -282,6 +307,81 @@ class LightMultiHeadLUT(nn.Module):
             per_sample_weights=score.reshape(-1).to(w),
         )
 
+    def _blend_bag(self, d, index, offset, flat, score, n_bags: int, bag: int):
+        """Top-`read_top_n` blended read-out: sum_t score_t * sum_i w_i * flat[c_i].
+
+        CANDIDATES. The cells reachable by flipping one address bit are the Hamming-1
+        neighbours, and under the code-space softmax (see WEIGHTS) flipping bit j costs
+        `2 m_j`, so the nearest neighbours are the SMALLEST-margin bits, ascending. That is
+        the same enumeration probe_soft_readout.py used. For n=3 we therefore take the two
+        smallest SINGLE flips rather than one double flip, and that is forced rather than
+        preferred: the double flip of the two smallest bits costs `2(m_j1 + m_j2)`, which is
+        strictly greater than the second single flip's `2 m_j2` for any m_j1 > 0. So the two
+        smallest singles ARE the two nearest cells; a double flip can never be third-nearest
+        while an unused single flip remains. The candidate set is exactly a Hamming ball of
+        radius 1 around the argmax, truncated to n.
+
+        WEIGHTS. A softmax over the candidates' code-space log-weights, at temperature tau:
+
+            logits = [0, -2 m_j1 / tau, -2 m_j2 / tau, ...]        w = softmax(logits)
+
+        The zero is the argmax cell. This comes from `w(b) ∝ exp(<z, b>)`, whose argmax
+        `b* = sign(d)` scores `sum_j m_j` and whose j-flip scores `sum_j m_j - 2 m_j`, so
+        only the difference `-2 m_j` matters and the normaliser cancels.
+
+        WHY tau EXISTS, recorded because getting this wrong wasted a first attempt. The
+        naive tau=1 weight `exp(-2 m_min)` looks principled and is useless here: `m_min` is
+        the MINIMUM of `n_anchor_pairs` margins, an order statistic that stays around
+        0.05-0.13 even when typical margins are 0.4-0.8, so the neighbour's normalised share
+        came out at median 0.46 / mean 0.44, above 0.3 for 96% of (token, table) pairs
+        (diag_blend_weight.py). That is a coin flip between two unrelated rows, not a blend,
+        and it moved eval bpb by -0.0014 on one checkpoint and +0.0208 on another -- opposite
+        signs, no coherent reading. tau in [0.05, 0.3] fixes it; tau=0.1 was the working
+        value across five checkpoints.
+
+        COMPOSITION WITH THE CONFIDENCE SCORE. The blend weights are normalised over the n
+        candidates (`sum_i w_i = 1`) and sit INSIDE the score: `score_t * sum_i w_i row_i`.
+        So `score` keeps its exact meaning -- a per-(token, table) gate on that table's whole
+        contribution -- and `w` only redistributes *which row* that table reads. The two
+        compose multiplicatively and never interact.
+
+        THE n=1 LIMIT IS EXACT. With one candidate the softmax is `softmax([0]) = [1]`
+        identically, so this reduces to `score_t * flat[c_0]`, which is `_bagged_sum`. It is
+        exact, not approximate, and is asserted by test.
+
+        GRADIENT. `per_sample_weights` is differentiable, so autograd flows to `flat` at all
+        n gathered rows (as before, but now n of them) AND -- new -- through `w` into `m`
+        into `d` into `x`. That second path is the directional routing gradient: dw_i/dm
+        weights each alternative row by how much better it would have been. Plain autograd
+        throughout; no STE, no custom autograd.Function.
+        """
+        n = self.read_top_n
+        K = d.shape[-1]
+        m = d.abs()                                        # differentiable, NOT detached
+        # the (n-1) cheapest flips: smallest margins, ascending
+        mv, mj = torch.topk(m, k=n - 1, dim=-1, largest=False)          # [..., n-1]
+        bits = (d.detach() > 0).to(torch.int64)
+        pw = self.powers[mj]                                            # [..., n-1]
+        bsel = torch.gather(bits, -1, mj)                               # [..., n-1]
+        # bit==1 -> clear it (subtract 2^k); bit==0 -> set it (add 2^k)
+        idx = torch.cat([index.unsqueeze(-1),
+                         index.unsqueeze(-1) + pw * (1 - 2 * bsel)], dim=-1)  # [..., n]
+
+        # The argmax cell's logit is 0. Built from `m`, not from `mv`: at n=1 `mv` has an
+        # EMPTY last dim, so `mv[..., :1]` would stay empty and the softmax would collapse
+        # to nothing. `m` always has n_anchor_pairs >= 1 columns, so this is always [..., 1]
+        # and the n=1 limit really is softmax([0]) = [1].
+        logits = torch.cat([torch.zeros_like(m[..., :1]),
+                            -2.0 * mv / self.read_tau], dim=-1)         # [..., n]
+        w = torch.softmax(logits, dim=-1)                               # [..., n]
+
+        flat_idx = (idx + offset.unsqueeze(-1)).reshape(-1)             # [.. * n]
+        psw = (score.unsqueeze(-1) * w).reshape(-1).to(flat.dtype)
+        offsets = torch.arange(n_bags, device=flat.device,
+                               dtype=torch.long) * (bag * n)
+        return F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum",
+                               per_sample_weights=psw)
+
     def _fused_eval(self, x_flat):
         """Eval-only fast path: address AND score from one native pass, then the bag.
 
@@ -312,7 +412,11 @@ class LightMultiHeadLUT(nn.Module):
         return self._bagged_sum(flat, flat_idx, score, n_bags, self.tables_per_head)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not torch.is_grad_enabled():
+        # The fused eval kernel returns the packed index and the score only -- it never
+        # materialises the margins, and the blend needs them to choose and weight the
+        # neighbours. So it is unavailable at read_top_n > 1, by construction rather than
+        # by oversight.
+        if not torch.is_grad_enabled() and self.read_top_n == 1:
             B = x.shape[0]
             x_flat = x.reshape(B, -1)
             if x_flat.shape[1] == (self.n_heads * self.input_dim if self.multi_head_input
@@ -340,10 +444,14 @@ class LightMultiHeadLUT(nn.Module):
         flat = self.tables.reshape(self.n_tables * self.table_size, self.output_dim)
         flat_idx = (index + self.table_offset.view(1, -1)).reshape(-1)
 
-        # Differentiable confidence gate -- the ONLY path from x to the output grad.
+        # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
+        # the output grad; at n>1 the blend weights add a second, directional one.
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)              # [B, n_tables]
 
+        if self.read_top_n > 1:
+            return self._blend_bag(d, index, self.table_offset.view(1, -1), flat,
+                                   score, B, self.n_tables)
         # One bag per sample, summing all n_tables = the ensemble output.
         return self._bagged_sum(flat, flat_idx, score, B, self.n_tables)
 
