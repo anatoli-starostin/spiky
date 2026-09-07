@@ -406,7 +406,10 @@ class LightMultiHeadLUT(nn.Module):
         K = d.shape[-1]
         m = d.abs()                                        # differentiable, NOT detached
         # the (n-1) cheapest flips: smallest margins, ascending
-        mv, mj = torch.topk(m, k=n - 1, dim=-1, largest=False)          # [..., n-1]
+        if n == 2:
+            mv, mj = m.min(dim=-1, keepdim=True)           # fused argmin == topk(k=1,largest=False)
+        else:
+            mv, mj = torch.topk(m, k=n - 1, dim=-1, largest=False)      # [..., n-1]
         bits = (d.detach() > 0).to(torch.int64)
         pw = self.powers[mj]                                            # [..., n-1]
         bsel = torch.gather(bits, -1, mj)                               # [..., n-1]
