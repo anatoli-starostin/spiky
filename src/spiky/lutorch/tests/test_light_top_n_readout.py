@@ -238,3 +238,189 @@ def test_n1_has_no_routing_gradient_at_all():
     d = x[:, lay.anchor_a] - x[:, lay.anchor_b]
     idx = lay._pack_index(x, d)
     assert not idx.requires_grad and idx.grad_fn is None, "address must carry no grad"
+
+
+# ======================================================================================
+# Learnable / freezable blend temperature (log_tau)
+# ======================================================================================
+def _tau_layer(n=2, tau=0.1445, learn=False):
+    return LightMultiHeadLUT(input_dim=12, n_tables=6, output_dim=5, n_anchor_pairs=4,
+                             confidence_form="margin", random_seed=7,
+                             read_top_n=n, read_tau=tau,
+                             read_tau_learnable=learn).to(torch.float64)
+
+
+def test_n1_bit_identical_with_tau_frozen_and_learnable():
+    """GATE (a), the non-negotiable one: n=1 must be untouched by the tau machinery."""
+    torch.manual_seed(0)
+    x = torch.randn(9, 12, dtype=torch.float64)
+    ref = None
+    for learn in (False, True):
+        lay = _tau_layer(n=1, learn=learn)
+        got = lay(x)
+        if ref is None:
+            ref = got
+        assert torch.equal(got, ref), f"n=1 differs with read_tau_learnable={learn}"
+    # and the blend path itself at n=1, under both modes
+    from spiky.lutorch.fast_multi_head_lut import _confidence_score
+    for learn in (False, True):
+        lay = _tau_layer(n=1, learn=learn)
+        d = x[:, lay.anchor_a] - x[:, lay.anchor_b]
+        index = lay._pack_index(x, d)
+        flat = lay.tables.reshape(lay.n_tables * lay.table_size, lay.output_dim)
+        score = _confidence_score(d, lay.confidence_form, lay.confidence_gain)
+        blend = lay._blend_bag(d, index, lay.table_offset.view(1, -1), flat, score,
+                               x.shape[0], lay.n_tables)
+        assert torch.equal(blend, ref), f"blend at n=1 differs (learnable={learn})"
+
+
+def test_frozen_tau_is_a_buffer_and_does_not_change_param_count():
+    base = _tau_layer(n=1)
+    froz = _tau_layer(n=2, learn=False)
+    lrn = _tau_layer(n=2, learn=True)
+
+    def npar(m):
+        return sum(p.numel() for p in m.parameters())
+
+    assert npar(froz) == npar(base), "frozen tau must not change the parameter count"
+    assert npar(lrn) == npar(base) + 1, "learnable tau should add exactly one scalar"
+    assert 'log_tau' not in dict(froz.named_parameters())
+    assert 'log_tau' in dict(lrn.named_parameters())
+    assert froz.log_tau.requires_grad is False
+    assert 'log_tau' in froz.state_dict() and 'log_tau' in lrn.state_dict()
+    # cross-loadable both ways, so a frozen run's checkpoint can seed a learnable one
+    m1, u1 = lrn.load_state_dict(froz.state_dict(), strict=False)
+    m2, u2 = froz.load_state_dict(lrn.state_dict(), strict=False)
+    assert not m1 and not u1 and not m2 and not u2
+
+
+def test_frozen_tau_receives_no_gradient_and_does_not_move():
+    torch.manual_seed(1)
+    lay = _tau_layer(n=2, learn=False)
+    lay.tables.data.mul_(50.0)
+    before = lay.read_tau.item()
+    x = (torch.randn(8, 12, dtype=torch.float64) * 2.0)
+    lay(x).pow(2).sum().backward()
+    assert lay.log_tau.grad is None, "a frozen tau must not accumulate gradient"
+    assert lay.read_tau.item() == before
+
+
+def test_gradcheck_wrt_log_tau():
+    """GATE (b): float64 gradcheck for the new parameter."""
+    torch.manual_seed(2)
+    lay = _tau_layer(n=3, learn=True)
+    lay.tables.data.mul_(50.0)
+    x = torch.randn(4, 12, dtype=torch.float64) * 2.0
+
+    from spiky.lutorch.fast_multi_head_lut import _confidence_score
+
+    def f(lt):
+        # drive the blend functionally: wrapping lt in nn.Parameter would make a NEW leaf
+        # and silently detach gradcheck's input from the graph, so the check would pass
+        # while testing nothing.
+        d = x[:, lay.anchor_a] - x[:, lay.anchor_b]
+        m = d.abs()
+        mv, mj = torch.topk(m, k=lay.read_top_n - 1, dim=-1, largest=False)
+        bits = (d.detach() > 0).to(torch.int64)
+        index = (bits * lay.powers.view(1, 1, -1)).sum(-1)
+        idx = torch.cat([index.unsqueeze(-1),
+                         index.unsqueeze(-1)
+                         + lay.powers[mj] * (1 - 2 * torch.gather(bits, -1, mj))], -1)
+        w = torch.softmax(torch.cat([torch.zeros_like(m[..., :1]),
+                                     -2.0 * mv / lt.exp()], -1), -1)
+        flat = lay.tables.reshape(lay.n_tables * lay.table_size, lay.output_dim)
+        score = _confidence_score(d, lay.confidence_form, lay.confidence_gain)
+        rows = flat[(idx + lay.table_offset.view(1, -1).unsqueeze(-1))]
+        return (score.unsqueeze(-1).unsqueeze(-1) * w.unsqueeze(-1) * rows).sum((1, 2))
+
+    lt0 = lay.log_tau.detach().clone().requires_grad_(True)
+    assert torch.autograd.gradcheck(f, (lt0,), eps=1e-6, atol=1e-7, rtol=1e-4)
+
+
+def test_tau_gradient_matches_the_closed_form():
+    """GATE (c): dw_k/dtau against the analytic expression, sign and magnitude.
+
+    Our exponent is -2m/tau (the 2 lives in the code, not the temperature), so
+
+        dw_k/dtau = (2 w_k / tau^2) (m_k - sum_l w_l m_l),      m_0 = 0 for the winner
+
+    which is the stated (w_k/tau^2)(m_k - <m>) carrying the same factor 2 as the forward.
+    """
+    torch.manual_seed(3)
+    K, tau = 4, 0.1445
+    m = torch.rand(200, K, dtype=torch.float64) * 0.4
+    mv, _ = torch.sort(m, dim=-1)
+    costs = torch.cat([torch.zeros_like(mv[:, :1]), mv[:, :2]], -1)   # winner + 2 flips
+
+    t = torch.tensor(tau, dtype=torch.float64, requires_grad=True)
+    w = torch.softmax(-2.0 * costs / t, dim=-1)
+    g_auto = torch.autograd.grad(w.sum(), t, retain_graph=True)[0]
+
+    w_d = w.detach()
+    mbar = (w_d * costs).sum(-1, keepdim=True)
+    analytic = (2.0 * w_d / tau ** 2) * (costs - mbar)
+    assert torch.allclose(g_auto, analytic.sum(), atol=1e-9), 'closed form mismatch'
+
+    # sign: the winner (cost 0, below the weighted mean cost) LOSES weight as tau grows
+    assert (analytic[:, 0] < 0).all(), 'winner weight must fall with rising tau'
+    # the costliest listed candidate GAINS
+    assert (analytic[:, -1] > 0).all(), 'far candidate weight must rise with rising tau'
+    # weights live on a simplex, so the derivative sums to zero
+    assert analytic.sum(-1).abs().max() < 1e-8
+
+
+def test_tau_gradient_collapses_at_both_extremes_pointwise():
+    """GATE (d): at a FIXED gap, dL/dtau -> 0 as tau -> 0 AND as tau -> infinity.
+
+    This is the argument for initialising tau at the measured gap. It is a POINTWISE claim
+    -- for one (token, table) whose gap is c -- and it is exact: the sensitivity is
+    (2c/tau^2) w (1-w), which is killed by w(1-w) -> 0 at small tau and by 1/tau^2 at large
+    tau. Its maximiser is tau* = 2c/z* with z* = 2.399379 the maximiser of
+    z^2 sigmoid(z) sigmoid(-z), i.e. tau* = 0.8335*c -- a pure number, scale-free.
+
+    See test_tau_gradient_does_not_collapse_in_aggregate for the caveat that this does NOT
+    carry over to a sum across a realistic margin distribution.
+    """
+    def sens(tau, c):
+        t = torch.tensor(float(tau), dtype=torch.float64, requires_grad=True)
+        costs = torch.tensor([[0.0, float(c)]], dtype=torch.float64)
+        w = torch.softmax(-2.0 * costs / t, -1)
+        return torch.autograd.grad(w[0, 0], t)[0].abs().item()
+
+    for c in (0.0331, 0.0722, 0.1079):        # the measured per-layer gaps, L0 / mid / L5
+        peak = sens(0.8335 * c, c)
+        assert sens(1e-4 * c, c) < peak * 1e-6, f'no collapse as tau->0 at gap {c}'
+        assert sens(1e4 * c, c) < peak * 1e-6, f'no collapse as tau->inf at gap {c}'
+        # tau = delta_m (what the run is initialised at) is near-optimal; 2*delta_m is not
+        assert sens(c, c) > 0.95 * peak, 'tau = delta_m should be >95% of peak sensitivity'
+        assert sens(2 * c, c) < 0.5 * peak, 'tau = 2*delta_m should be well below peak'
+
+
+def test_tau_gradient_does_not_collapse_in_aggregate():
+    """The honest caveat, asserted so it cannot be quietly forgotten.
+
+    Summed over a realistic margin distribution the small-tau collapse DOES NOT happen: the
+    gap distribution has mass arbitrarily close to zero (tokens sitting on a decision
+    boundary), and for those the 1/tau^2 prefactor wins. Measured on a uniform margin draw,
+    at tau=1e-4 roughly 60% of the total |dL/dtau| comes from gaps smaller than tau.
+
+    So shrinking tau does not switch the routing gradient off -- it CONCENTRATES it onto
+    boundary-adjacent tokens. That is a gradient-variance problem, not a vanishing-gradient
+    one, and it is a different failure mode from the pointwise picture above.
+    """
+    torch.manual_seed(4)
+    m = torch.rand(4000, 4, dtype=torch.float64) * 0.4
+    mv, _ = torch.sort(m, dim=-1)
+    costs = torch.cat([torch.zeros_like(mv[:, :1]), mv[:, :1]], -1)
+
+    def agg(tau):
+        t = torch.tensor(float(tau), dtype=torch.float64, requires_grad=True)
+        w = torch.softmax(-2.0 * costs / t, -1)
+        loss = (w * torch.tensor([1.0, -1.0], dtype=torch.float64)).sum()
+        return torch.autograd.grad(loss, t)[0].abs().item()
+
+    small, matched, large = agg(1e-4), agg(0.0722), agg(100.0)
+    assert large < matched * 1e-3, 'the large-tau collapse should survive aggregation'
+    assert small > matched, (
+        'aggregate |dL/dtau| at tiny tau should NOT collapse -- if this ever fails, the '
+        'boundary-token concentration effect has changed and the caveat needs revisiting')

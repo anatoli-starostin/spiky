@@ -208,6 +208,20 @@ summary = {'exp_name': cfg['exp_name'], 'best_val_bpb': best_bpb,
            'total_params': total_params, 'training_time_hours': round(elapsed / 3600, 3),
            'eval_protocol': {'eval_batch_size': EVAL['eval_batch_size'], 'eval_steps': EVAL['eval_steps'],
                              'skip_rows': EVAL['skip_rows'], 'batch_size_independent': True}}
+# Record the RESOLVED per-layer blend temperatures whenever the top-n read-out is on, so a
+# run whose config says lut_read_tau="auto" still says on the record exactly what it used.
+# Purely additive to summary.json; touches nothing in the model, the optimiser or the eval.
+if int(cfg.get('lut_read_top_n', 1)) > 1:
+    from model_build import resolved_read_taus
+    summary['blend_read_out'] = {
+        'read_top_n': int(cfg['lut_read_top_n']),
+        'read_tau_config': cfg.get('lut_read_tau', 0.1),
+        'read_tau_resolved_per_layer': resolved_read_taus(cfg),
+        'read_tau_learnable': bool(cfg.get('lut_read_tau_learnable', False)),
+        'read_tau_final_per_layer': [
+            float(m.read_tau.item()) for m in model.modules()
+            if type(m).__name__ == 'LightMultiHeadLUT'],
+    }
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
 torch.save(model.state_dict(), os.path.join(EXP_DIR, 'checkpoint.pt'))

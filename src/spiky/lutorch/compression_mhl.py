@@ -133,6 +133,7 @@ class CompressionMultiHeadLUT(nn.Module):
         bh4_factors: int = 4,
         read_top_n: int = 1,
         read_tau: float = 0.1,
+        read_tau_learnable: bool = False,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -232,6 +233,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 # these: fast already has a full-2^NAP soft backward, and bh4 addresses by
                 # coordinate sign, where "the nearest cell by margin" is a different object.
                 read_top_n=read_top_n, read_tau=read_tau,
+                read_tau_learnable=read_tau_learnable,
             )
             if mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)

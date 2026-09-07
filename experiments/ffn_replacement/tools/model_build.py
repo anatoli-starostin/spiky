@@ -29,6 +29,60 @@ from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT       # noqa: 
 from spiky.lutorch.lut_helpers import AnchorSamplingPolicy              # noqa: E402
 
 
+DEFAULT_READ_TAU = 0.1
+
+# delta_m measured on exp_g_0193 (the standard config: margin, no z_norm, nap8/tph128) over
+# 8,192 real val tokens by diag_margin_gap.py -- the per-layer median of m_(1), the smallest
+# of the nap anchor margins, which IS the cost gap the n=2 blend has to discriminate.
+#
+# THESE ARE delta_m ITSELF, not a multiple of it. The blend-weight sensitivity
+# |dw/dtau| ~ (2c/tau^2) w(1-w) is maximised at tau* = 2c/z*, where z* = 2.399379 maximises
+# z^2 sigmoid(z) sigmoid(-z) -- i.e. tau* = 0.8335 * delta_m, a pure number independent of
+# scale. So tau = delta_m sits at 95.6% of peak sensitivity, which is why the plain measured
+# gap is the right init and no correction factor is applied. For contrast, tau = 2*delta_m
+# would give 44.8% -- a factor-of-2 slip here halves the routing gradient.
+#
+# PER-LAYER, and the measurement forces it. delta_m spans 3.3x across depth
+# (0.0331 -> 0.1079), so the current flat default of 0.1 sits at only 22.4% of peak
+# sensitivity at layer 0 while reaching 98.5% at layer 5 -- badly mismatched exactly where
+# the routing deficit was measured. Within a layer it is flat (per-head medians span
+# 1.01-1.22x, across-table CV 0.017-0.021), so one scalar per layer is enough and per-head
+# or per-table would buy nothing.
+MEASURED_TAU_G0193 = [0.03309, 0.07241, 0.07801, 0.08158, 0.09190, 0.10786]
+
+
+def _read_tau_for_layer(cfg, layer_idx: int) -> float:
+    """Resolve `lut_read_tau` for one layer: float | per-layer list | "auto".
+
+    "auto" means "initialise from the measured margin gap" and resolves against
+    `lut_read_tau_measured` in the config when present, else the exp_g_0193 measurement
+    above. A maker SHOULD resolve "auto" to explicit numbers at config-creation time so
+    config.json records what actually ran; this path is the fallback, and the trainer
+    writes the resolved per-layer values into summary.json either way.
+    """
+    v = cfg.get('lut_read_tau', DEFAULT_READ_TAU)
+    if isinstance(v, str):
+        if v != 'auto':
+            raise ValueError(f"lut_read_tau must be a number, a per-layer list, or 'auto'; "
+                             f"got {v!r}")
+        table = cfg.get('lut_read_tau_measured', MEASURED_TAU_G0193)
+        if len(table) != cfg['depth']:
+            raise ValueError(f"lut_read_tau='auto' needs one measured tau per layer: got "
+                             f"{len(table)} for depth {cfg['depth']}")
+        return float(table[layer_idx])
+    if isinstance(v, (list, tuple)):
+        if len(v) != cfg['depth']:
+            raise ValueError(f"lut_read_tau list must have one entry per layer: got "
+                             f"{len(v)} for depth {cfg['depth']}")
+        return float(v[layer_idx])
+    return float(v)
+
+
+def resolved_read_taus(cfg):
+    """The per-layer taus this config will actually build with -- for summary.json."""
+    return [_read_tau_for_layer(cfg, i) for i in range(cfg['depth'])]
+
+
 def _anchor_policy(cfg):
     """Map optional config key 'lut_anchor_policy' (string) to an AnchorSamplingPolicy,
     or None to keep each module's default (CANONICAL_FULL_COVERAGE)."""
@@ -144,7 +198,8 @@ class MinimalBlock(nn.Module):
                     # the blend weights differentiable in the margins, which is a
                     # DIRECTIONAL routing gradient plain Light does not have.
                     read_top_n=cfg.get('lut_read_top_n', 1),
-                    read_tau=cfg.get('lut_read_tau', 0.1))
+                    read_tau=_read_tau_for_layer(cfg, layer_idx),
+                    read_tau_learnable=bool(cfg.get('lut_read_tau_learnable', False)))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)

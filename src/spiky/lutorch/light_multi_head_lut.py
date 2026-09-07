@@ -95,6 +95,7 @@ class LightMultiHeadLUT(nn.Module):
         multi_head_input: bool = False,
         read_top_n: int = 1,
         read_tau: float = 0.1,
+        read_tau_learnable: bool = False,
     ):
         super().__init__()
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
@@ -147,7 +148,29 @@ class LightMultiHeadLUT(nn.Module):
         if not (read_tau > 0):
             raise ValueError(f"read_tau must be > 0, got {read_tau!r}")
         self.read_top_n = int(read_top_n)
-        self.read_tau = float(read_tau)
+        self.read_tau_learnable = bool(read_tau_learnable)
+
+        # --- blend temperature, stored as log_tau -------------------------------------
+        # PARAMETERISED AS log_tau, NOT tau: it keeps tau > 0 for free (no clamping, no
+        # projection step, no way for an optimiser step to make the softmax undefined), and
+        # it conditions the problem -- tau is a SCALE, so a multiplicative step is the
+        # natural one, and gradient descent on log_tau is exactly that.
+        #
+        # ONE SCALAR PER LAYER, and the measurement supports that choice rather than merely
+        # permitting it. On exp_g_0193 the per-head medians of m_(1) inside a layer span a
+        # factor of only 1.01-1.22 and the across-table CV is 0.017-0.021 -- flat. ACROSS
+        # layers it is not flat at all: 0.0331 (L0) -> 0.1079 (L5), a 3.3x spread. So a
+        # per-LAYER scalar is right and a single per-MODEL scalar would be wrong; splitting
+        # further (per head or per table) has nothing to buy. See diag_margin_gap.py.
+        #
+        # FROZEN CASE IS A BUFFER, NOT A PARAMETER. Deliberate: `total_params` in the
+        # trainer is `sum(p.numel() for p in model.parameters())` and counts frozen
+        # parameters too, so registering a frozen tau as a Parameter would add +1 per layer
+        # (+6 per model) and shift every leaderboard comparison by that much for no reason.
+        # As a buffer the count is IDENTICAL to today's, and it is trivially absent from the
+        # optimiser. It still lands in the state_dict under the same key, so a frozen
+        # checkpoint loads into a learnable model and vice versa.
+        self._read_tau_init = float(read_tau)   # registered at the end of __init__
 
         dev = device or torch.device("cpu")
         policy = anchor_sampling_policy or AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
@@ -238,6 +261,21 @@ class LightMultiHeadLUT(nn.Module):
             a_flat, b_flat = anchor_a, anchor_b
         self.register_buffer("native_anchor_a", a_flat.contiguous().to(torch.int64))
         self.register_buffer("native_anchor_b", b_flat.contiguous().to(torch.int64))
+
+        log_tau = torch.log(torch.tensor(self._read_tau_init, device=dev))
+        if self.read_tau_learnable:
+            self.log_tau = nn.Parameter(log_tau)
+        else:
+            self.register_buffer("log_tau", log_tau)
+
+    @property
+    def read_tau(self):
+        """The blend temperature, a 0-dim tensor. Differentiable iff read_tau_learnable.
+
+        Read through `log_tau.exp()` on every use rather than cached, so that an optimiser
+        step on log_tau takes effect immediately and a frozen buffer stays exactly its init.
+        """
+        return self.log_tau.exp()
 
     def _pack_index(self, x_flat, d):
         """Packed row index [B, n_tables], MSB-first. Never differentiable.
