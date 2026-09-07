@@ -28,7 +28,16 @@ only measurable effect is on the recorded wall clock (3 extra saves of ~270 MB, 
 """
 import json
 import os
+import sys
 import shutil
+
+# --- guard: a forked trainer must use the shared corrected eval ---------------------------
+# runs_corrected/ still contains one legacy trainer (exp_n_0138, deliberately) whose eval was
+# coupled to the training batch size. fork_trainer() refuses to fork any such file, so a new
+# run cannot inherit that bug. It fires ONLY at fork time, on the source file -- merely
+# having a legacy trainer on disk is fine.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+from fork_trainer import fork_trainer  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'exp_n_0192_repro0191_seed1')
@@ -91,5 +100,5 @@ print(f'  metadata keys differing    : {sorted(d[0] for d in diffs if d[0] in ME
 print(f'  keys compared              : {len(keys)}')
 print(f'  keys identical             : {len(keys) - len(diffs)}')
 
-shutil.copy(os.path.join(HERE, '..', 'train_fixed.py'), os.path.join(DST, 'train.py'))
+fork_trainer(os.path.join(HERE, '..', 'train_fixed.py'), os.path.join(DST, 'train.py'))
 print(f'\ntrainer forked to {NAME}/train.py (periodic checkpointing patched separately)')

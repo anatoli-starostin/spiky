@@ -28,6 +28,14 @@ import sys
 
 import torch
 
+# --- guard: a forked trainer must use the shared corrected eval ---------------------------
+# runs_corrected/ still contains one legacy trainer (exp_n_0138, deliberately) whose eval was
+# coupled to the training batch size. fork_trainer() refuses to fork any such file, so a new
+# run cannot inherit that bug. It fires ONLY at fork time, on the source file -- merely
+# having a legacy trainer on disk is fine.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+from fork_trainer import fork_trainer  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 FR = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(FR, 'tools'))
@@ -87,7 +95,7 @@ def main():
     os.makedirs(d)
     with open(os.path.join(d, 'config.json'), 'w') as f:
         json.dump(cfg, f, indent=2)
-    shutil.copy(os.path.join(FR, 'train_fixed.py'), os.path.join(d, 'train.py'))
+    fork_trainer(os.path.join(FR, 'train_fixed.py'), os.path.join(d, 'train.py'))
 
     vocab = RustBPETokenizer.from_directory(
         os.path.join(get_base_dir(), 'tokenizer')).get_vocab_size()

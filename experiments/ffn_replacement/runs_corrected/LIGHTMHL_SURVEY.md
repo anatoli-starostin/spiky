@@ -105,6 +105,30 @@ Runs from `exp_n_0176` onward use the corrected trainer, so their `metrics.csv` 
 already the corrected metric (`correction: 0.0` in their `corrected_score.json`). Older runs
 were re-scored from checkpoints; **use `corrected_score.json`, not `summary.json`, for those.**
 
+### ⚠ OPEN ITEM — `exp_n_0138` carries an uncorrectable number (deferred to Anatoli)
+
+**Not resolved. Flagged here so it is not forgotten, and explicitly not actioned.**
+
+`exp_n_0138_outcompress_only_H4_nap8_tph128` reports **1.21249**, and that number came from
+the **old batch-coupled eval** — device_batch_size × 512 × 10 tokens, not the 2,451,456-token
+window every other number in this file uses. It is the **only** run in `runs_corrected/`
+without a `corrected_score.json`, and it **can never get one**: `checkpoint_sources.json`
+lists its checkpoint under `missing`, so there is nothing left to re-score.
+
+Why it matters: **it is quoted in the paper (section 5 / Table 3) beside corrected numbers**,
+which is an apples-to-oranges comparison. Scale of the discrepancy, for orientation only —
+the correction for other bs12 runs ran −0.008 to −0.011, so 1.21249 is *probably* ~1.202–1.205
+corrected. **That is an estimate from the class, not a measurement, and it cannot be turned
+into one.** Do not quote it as if it were.
+
+Nothing in this survey depends on it — `exp_n_0138` appears nowhere else in this file.
+
+Its `train.py` is also the one legacy trainer in `runs_corrected/` deliberately left
+uncorrected (owner's instruction, 2026-09-07), while the other 22 were patched. The fork
+guard in `tools/fork_trainer.py` refuses to fork it, so it cannot seed a new run.
+
+---
+
 ### Baselines used throughout
 
 | | bpb | run |

@@ -27,6 +27,14 @@ sys.path.insert(0, os.path.expanduser('~/projects/nanochat'))
 
 from make_sweep import build_cfg, SEQS, N_STEPS, EVAL_EVERY   # noqa: E402
 
+# --- guard: a forked trainer must use the shared corrected eval ---------------------------
+# runs_corrected/ still contains one legacy trainer (exp_n_0138, deliberately) whose eval was
+# coupled to the training batch size. fork_trainer() refuses to fork any such file, so a new
+# run cannot inherit that bug. It fires ONLY at fork time, on the source file -- merely
+# having a legacy trainer on disk is fine.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+from fork_trainer import fork_trainer  # noqa: E402
+
 VANILLA_FFN_MACS = 2 * 384 * 1536
 
 SWEEP3 = [
@@ -54,7 +62,7 @@ def main():
         cfg = build_cfg(name, H, tph, cells, d_in, d_out, note)
         with open(os.path.join(d, 'config.json'), 'w') as f:
             json.dump(cfg, f, indent=2)
-        shutil.copy(os.path.join(FR, 'train_fixed.py'), os.path.join(d, 'train.py'))
+        fork_trainer(os.path.join(FR, 'train_fixed.py'), os.path.join(d, 'train.py'))
         m = build_model(cfg, vocab, device='cpu')
         tot = sum(p.numel() for p in m.parameters())
         del m

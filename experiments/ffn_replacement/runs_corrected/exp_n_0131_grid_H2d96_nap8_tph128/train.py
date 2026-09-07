@@ -1,3 +1,33 @@
+# =============================================================================
+# TRAINER CORRECTED POST-HOC on 2026-09-07 -- READ THIS BEFORE USING ANY NUMBER
+# =============================================================================
+# This file is NOT what produced this run's recorded metrics.csv / summary.json.
+#
+# As actually run, it evaluated with the OLD batch-coupled protocol: the val
+# loader was built at the TRAINING device_batch_size and scored eval_steps=10,
+# so this run's in-run bpb was measured on device_batch_size x 512 x 10 tokens
+# -- a window that differed between runs. That is the bug this branch exists to
+# fix (see ../../FIXED_EVAL.md).
+#
+# The eval path here has since been rewritten to delegate to the shared
+# tools/fixed_eval.py (bs48 x 100, leading 12 rows skipped, clone-then-score,
+# one eval set feeding both the training curve and the final summary), so that
+# runs_corrected/ contains only corrected-eval trainers and forking any file in
+# this tree cannot silently reintroduce the coupling.
+#
+# CONSEQUENCES, stated plainly:
+#   * This run's ORIGINALLY-REPORTED in-run bpb (in metrics.csv and
+#     summary.json) came from the old eval and is NOT what this file would now
+#     produce. Those files are deliberately left untouched as the record.
+#   * The AUTHORITATIVE number for this run is in corrected_score.json, which
+#     was produced by re-scoring its checkpoint under the fixed protocol.
+#   * Re-running this file would produce a corrected curve that does NOT match
+#     this folder's metrics.csv. That is expected, not a bug.
+#
+# The file exactly as it ran is in git history at commit
+#   f1dd5e9d71be04942a85760191d24d29256f4408
+# (`git show f1dd5e9d:experiments/ffn_replacement/runs_corrected/exp_n_0131_grid_H2d96_nap8_tph128/train.py`).
+# =============================================================================
 """Flexible FFN-slot sweep trainer (shared across the exp043+ CompressionMHL sweep).
 
 MinimalGPT + RoPE, config-driven. The FFN slot of every block is one of:
@@ -30,7 +60,21 @@ if NANOCHAT_ROOT not in sys.path:
 from nanochat.common import get_base_dir
 from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
-from nanochat.loss_eval import evaluate_bpb
+# CORRECTED EVAL (2026-09-07): the shared, batch-size-independent eval set. Replaces
+# `from nanochat.loss_eval import evaluate_bpb`, which this file used with a val loader
+# built at the training device_batch_size. Delegating to tools/fixed_eval.py rather than
+# inlining the window keeps every trainer in this tree on one definition.
+def _find_tools():
+    _d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        if os.path.exists(os.path.join(_d, 'tools', 'fixed_eval.py')):
+            return os.path.join(_d, 'tools')
+        _d = os.path.dirname(_d)
+    raise RuntimeError('could not locate ffn_replacement/tools/ (fixed_eval.py)')
+
+
+sys.path.insert(0, _find_tools())
+from fixed_eval import evaluate_bpb_fixed, eval_config
 
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut       # optimizer isinstance route
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
@@ -45,7 +89,10 @@ torch.manual_seed(cfg['random_seed'])
 DEPTH, N_EMBD, N_HEAD, SEQ_LEN = cfg['depth'], cfg['n_embd'], cfg['n_head'], cfg['seq_len']
 DEVICE_BS, TOTAL_BS, N_STEPS = cfg['device_batch_size'], cfg['total_batch_size'], cfg['n_steps']
 LR, WD, WARMUP_FRAC = cfg['lr'], cfg['weight_decay'], cfg['lr_warmup_fraction']
-EVAL_EVERY, EVAL_STEPS = cfg['eval_every'], cfg['eval_steps']
+EVAL_EVERY = cfg['eval_every']
+# `cfg['eval_steps']` is the LEGACY key and is deliberately NOT read: eval_config ignores
+# it, so no old config can re-couple the eval window to the training batch size.
+EVAL = eval_config(cfg)   # fixed eval: bs48 x 100, skip 12 (NOT a function of DEVICE_BS)
 
 FFN_TYPE = cfg.get('ffn_type', 'compression')          # "dense" | "compression"
 GAMMA    = int(cfg.get('gamma', 0))                    # 0/1: parallel Linear(384->384) path
@@ -72,7 +119,8 @@ VOCAB_SIZE = tokenizer.get_vocab_size()
 print(f'Vocab size: {VOCAB_SIZE}')
 assert VOCAB_SIZE == cfg['tokenizer_vocab_size']
 train_loader = tokenizing_distributed_data_loader_bos_bestfit(tokenizer, DEVICE_BS, SEQ_LEN, split='train', device=DEVICE)
-val_loader_factory = lambda: tokenizing_distributed_data_loader_bos_bestfit(tokenizer, DEVICE_BS, SEQ_LEN, split='val', device=DEVICE)
+# (removed 2026-09-07) the val loader was built here at DEVICE_BS -- the bug itself.
+# evaluate_bpb_fixed builds its own loader at the fixed eval batch size.
 token_bytes = get_token_bytes(device=DEVICE)
 
 
@@ -255,7 +303,7 @@ for step in range(1, N_STEPS + 1):
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')
     if step % EVAL_EVERY == 0 or step == N_STEPS:
         model.eval()
-        bpb = evaluate_bpb(model, val_loader_factory(), EVAL_STEPS, token_bytes)
+        bpb = evaluate_bpb_fixed(model, tokenizer, token_bytes, SEQ_LEN, DEVICE, **EVAL)
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
@@ -271,7 +319,11 @@ plt.tight_layout(); plt.savefig(os.path.join(EXP_DIR, 'loss.png'), dpi=120); plt
 
 summary = {'exp_name': cfg['exp_name'], 'best_val_bpb': best_bpb,
            'final_val_bpb': val_bpbs[-1] if val_bpbs else None,
-           'total_params': total_params, 'training_time_hours': round(elapsed / 3600, 3)}
+           'total_params': total_params, 'training_time_hours': round(elapsed / 3600, 3),
+           'eval_protocol': {'eval_batch_size': EVAL['eval_batch_size'],
+                             'eval_steps': EVAL['eval_steps'],
+                             'skip_rows': EVAL['skip_rows'],
+                             'batch_size_independent': True}}
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
 torch.save(model.state_dict(), os.path.join(EXP_DIR, 'checkpoint.pt'))

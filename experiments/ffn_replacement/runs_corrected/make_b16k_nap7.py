@@ -31,6 +31,14 @@ import sys
 
 import torch
 
+# --- guard: a forked trainer must use the shared corrected eval ---------------------------
+# runs_corrected/ still contains one legacy trainer (exp_n_0138, deliberately) whose eval was
+# coupled to the training batch size. fork_trainer() refuses to fork any such file, so a new
+# run cannot inherit that bug. It fires ONLY at fork time, on the source file -- merely
+# having a legacy trainer on disk is fine.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+from fork_trainer import fork_trainer  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 FR = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(FR, 'tools'))
@@ -100,7 +108,7 @@ def main():
         json.dump(cfg, f, indent=2)
     src_train = os.path.join(FR, 'train_fixed.py')
     dst_train = os.path.join(d, 'train.py')
-    shutil.copy(src_train, dst_train)
+    fork_trainer(src_train, dst_train)
     assert open(src_train, 'rb').read() == open(dst_train, 'rb').read(), \
         'train.py is not byte-identical to train_fixed.py'
     print('train.py byte-identical to train_fixed.py: OK')
