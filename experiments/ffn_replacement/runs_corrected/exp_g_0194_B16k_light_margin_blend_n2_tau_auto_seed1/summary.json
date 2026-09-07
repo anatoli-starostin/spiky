@@ -1,0 +1,34 @@
+{
+  "exp_name": "exp_g_0194_B16k_light_margin_blend_n2_tau_auto_seed1",
+  "best_val_bpb": 1.1822586737924121,
+  "final_val_bpb": 1.1822586737924121,
+  "total_params": 67351680,
+  "training_time_hours": 1.664,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "blend_read_out": {
+    "read_top_n": 2,
+    "read_tau_config": "auto",
+    "read_tau_resolved_per_layer": [
+      0.03309,
+      0.07241,
+      0.07801,
+      0.08158,
+      0.0919,
+      0.10786
+    ],
+    "read_tau_learnable": false,
+    "read_tau_final_per_layer": [
+      0.03308999538421631,
+      0.07241000980138779,
+      0.07800999283790588,
+      0.08157999068498611,
+      0.09190000593662262,
+      0.1078600063920021
+    ]
+  }
+}

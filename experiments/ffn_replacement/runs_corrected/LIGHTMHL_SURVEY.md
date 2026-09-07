@@ -509,6 +509,111 @@ and the answer is the opposite of what was expected: **z_norm is not a precondit
 
 ---
 
+## 6c. `exp_g_0194` — the top-2 blend, TRAINED. Final **1.182259**, +0.009407 vs `0193`
+
+First training run with the blend, and therefore the first with a directional routing
+gradient. Frozen tau at the measured per-layer Delta_m, 16K, seed 1, 67,351,680 params
+(param-matched to `exp_g_0193` exactly). 1.664 h, 0.300 s/step.
+
+**Result: 1.182259 against `exp_g_0193`'s 1.172852 — the blend LOSES by +0.009407, which is
++2.81x the 0.00335 seed spread.** Outside the noise band: a real deficit, not a tie. It is
+behind at **32 of 32** evals and never crosses.
+
+| step | `0194` | `0193` | delta | sigma |
+|---|---|---|---|---|
+| 500 | 2.055185 | 2.029398 | +0.025787 | +7.70 |
+| **1,500** | 1.670175 | 1.614276 | **+0.055899** | **+16.69** (peak) |
+| 4,000 | 1.356875 | 1.325009 | +0.031866 | +9.51 |
+| 8,000 | 1.245054 | 1.225082 | +0.019972 | +5.96 |
+| 12,000 | 1.198957 | 1.186580 | +0.012377 | +3.69 |
+| **16,000** | **1.182259** | **1.172852** | **+0.009407** | **+2.81** |
+
+The deficit peaks at step 1,500 and closes monotonically thereafter, but **does not reach
+zero**. Extrapolating the last four evals it is still shrinking at ~0.0002 per 500 steps at
+the end, so a longer run might close it — that is a guess, not a measurement.
+
+**This contradicts the eval-only probe.** On single-winner checkpoints the same blend was
+worth **−0.006** at 16K and **−0.011** at 48K. Trained with, it costs **+0.009**. So the
+post-hoc read-out change and the trained-with change are not the same intervention, which is
+exactly the caveat recorded before the run and is now measured rather than asserted.
+
+### The "mis-set tau" hypothesis — tested and FALSIFIED, in the opposite direction
+
+The proposal was that tau, frozen at a Delta_m measured on a *converged* model, was too
+large early: 2m/tau would start below 1, w1 = sigmoid(-2m/tau) would start near 0.5
+(over-blended), and the deficit would close as margins grew into tau.
+
+Measured on a fixed 8,192-token slab (the corrected eval window, rows [12,28)), identical for
+every checkpoint (`diag_margin_trajectory.py`):
+
+| step | deficit | L0 2m/tau (w1) | L1 | L3 | L5 |
+|---|---|---|---|---|---|
+| 4,000 | +0.031866 | 2.985 (0.0481) | 2.041 (0.1149) | 2.399 (0.0833) | 2.420 (0.0816) |
+| 8,000 | +0.019972 | 2.296 (0.0915) | 1.962 (0.1233) | 2.250 (0.0953) | 2.363 (0.0860) |
+| 12,000 | +0.012377 | 2.201 (0.0996) | 1.917 (0.1282) | 2.173 (0.1022) | 2.305 (0.0907) |
+| 16,000 | +0.009407 | 2.228 (0.0972) | 1.913 (0.1286) | 2.153 (0.1041) | 2.274 (0.0933) |
+
+**Both predictions fail.** `2m/tau` is never below 1 — it sits at **1.9-3.0 throughout** —
+and `w1` is **0.048-0.129**, far BELOW an even blend, not above it. The run was
+**UNDER-blended, not over-blended**: much closer to plain single-winner than to 50/50. The
+premise that margins grow into tau is also wrong; margins *shrink* slightly over training
+(`0193` L0: 0.0349 -> 0.0324).
+
+**A correction that belongs here, because it is the source of the confusion.** `2m/tau = 1`
+and `w1 = sigmoid(-1) = 0.2689` require **tau = 2*Delta_m**. `exp_g_0194` used
+**tau = Delta_m**, whose design point is `2m/tau = 2`, `w1 = sigmoid(-2) = 0.119`. The
+tau = Delta_m choice was made on *peak sensitivity* `|dw/dtau|` (95.6% of maximum, verified
+with the correct -2m/tau convention) and that reasoning stands; but it was reported at launch
+as "matched tau makes 2m/tau = 1, w1 = 0.2689 at every layer", and that was wrong. The
+measured 1.9-3.0 band is consistent with the design point of 2, not with a mis-set tau.
+
+### The control, which is the more interesting finding
+
+Both runs saved checkpoints at the same steps, so `exp_g_0193` gives the margin trajectory of
+an identical model with **no blend at all**. Median m_(1), `0194` / `0193`:
+
+| step | L0 | L1 | L3 | L5 |
+|---|---|---|---|---|
+| 4,000 | 0.0494 / 0.0349 | 0.0739 / 0.0741 | 0.0978 / 0.0915 | 0.1305 / 0.1136 |
+| 16,000 | 0.0369 / 0.0324 | 0.0693 / 0.0726 | 0.0878 / 0.0825 | 0.1227 / 0.1095 |
+
+**The blend widens the margins** — by 5-14% at every layer except L1, and by 42% at L0 early.
+Wider margins mean *smaller* w1, i.e. **less blending**. So the model responds to the blend by
+suppressing it: given a differentiable route to push the runner-up away, it takes it. That is
+a direct, mechanistic reading of what the new routing gradient actually does, and it argues
+against the mundane "the model just absorbs a fixed cost" story — the model is not absorbing
+the blend, it is turning it off.
+
+### What the data cannot settle
+
+**The timing test is unanswerable.** The deficit peaks at step **1,500**; the earliest
+checkpoint is step **4,000**. `2m/tau` at the peak cannot be measured, so whether the early
+deficit tracked a tau mismatch in steps 0-4,000 is simply not determined by these artefacts.
+The per-layer correlation between `2m/tau` and the deficit is +0.93 to +0.997, but **both
+series are monotone in training step, so that correlation is near-tautological** — any
+monotone quantity would score the same. It is reported because it was asked for, not because
+it discriminates.
+
+![margin trajectory](../figs/margin_trajectory_0194.png)
+
+---
+
+## 6d. `exp_g_0195` — ASSIGNED TO NEBIUS, deliberately NOT run on gpustar
+
+Built, gated and committed here; **execution reassigned to nebius before it started**. It is
+not pending and not failed — it has simply never run, and its artefacts are intact and
+runnable so nebius can pick them up from this branch.
+
+Config: `exp_g_0193` + `lut_read_top_n: 2`, `lut_read_tau: 0.5` (flat), `lut_read_tau_learnable:
+true`. Exactly three substantive keys; `lut_read_tau_measured` deliberately absent. Learnable
+tau makes `log_tau` an `nn.Parameter`, so **total_params is 67,351,686 = +6 vs `0193`/`0194`
+and the comparison is NOT param-matched.** `metrics.csv` gains `tau_L0..tau_L5` at every eval
+so tau's trajectory is plottable. tau lands in the no-decay optimiser group (0-dim, and a
+direct parameter of a `tables_no_decay`-exempt module) — verified, since decaying a
+temperature toward zero would look like a result.
+
+---
+
 ### Incomplete / abandoned
 
 | run | what | stopped at | last bpb | why |
