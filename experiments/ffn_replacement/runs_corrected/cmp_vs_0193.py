@@ -28,9 +28,13 @@ def curve(d):
             for r in csv.DictReader(open(p)) if r.get('val_bpb')}
 
 
-def delta_table(run_dir, last=6):
-    """-> (trend_line, [row strings]). Exact step matching only."""
-    new, ref = curve(run_dir), curve(REF)
+def delta_table_vs(run_dir, ref_dir, last=6):
+    """-> (trend_line, [row strings]) against an ARBITRARY reference run.
+
+    Used by exp_g_0195's watcher, which reports against both exp_g_0193 (the shared
+    control) and exp_g_0194 (its direct sibling: same blend, frozen tau vs learnable).
+    """
+    new, ref = curve(run_dir), curve(ref_dir)
     if not new:
         return 'no evals yet', []
     rows, lines = [], []
@@ -40,7 +44,8 @@ def delta_table(run_dir, last=6):
             rows.append((s, d))
             lines.append(f'{s:>6} {new[s]:>9.6f} {ref[s]:>9.6f} {d:>+10.6f} {d / SD:>+6.2f}s')
         else:
-            lines.append(f'{s:>6} {new[s]:>9.6f}   NO EXACT COUNTERPART in exp_g_0193')
+            lines.append(f'{s:>6} {new[s]:>9.6f}   NO EXACT COUNTERPART in '
+                         f'{os.path.basename(ref_dir)[:10]}')
     trend = ''
     if len(rows) >= 2:
         f, l = rows[0][1], rows[-1][1]
@@ -50,6 +55,11 @@ def delta_table(run_dir, last=6):
                  f'("-" = 0194 ahead); |d|={abs(l):.6f} = {abs(l) / SD:.2f}x seed spread'
                  + ('  NOT YET MEANINGFUL' if abs(l) < SD else ''))
     return trend, lines
+
+
+def delta_table(run_dir, last=6):
+    """Against exp_g_0193, the shared control."""
+    return delta_table_vs(run_dir, REF, last=last)
 
 
 def render(run_dir, step=None, total=16000, last=6):
