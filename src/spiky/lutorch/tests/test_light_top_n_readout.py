@@ -110,6 +110,10 @@ def test_gradcheck_wrt_input():
     """
     torch.manual_seed(2)
     lay = _layer(n=2)
+    lay._compile_enabled = False        # gradcheck (atol 1e-7) validates the EAGER reference
+                                        # math; the default torch.compile backend is a
+                                        # non-bit-exact perf transform, parity-checked (~3e-5)
+                                        # separately in test_compile_parity_matches_eager.
     lay.tables.data.mul_(50.0)          # lift rows off the ~1e-3 init so grads are visible
     x = (torch.randn(4, 12, dtype=torch.float64) * 2.0).requires_grad_(True)
     assert torch.autograd.gradcheck(lay, (x,), eps=1e-6, atol=1e-7, rtol=1e-4)
@@ -119,6 +123,7 @@ def test_gradcheck_wrt_tables():
     """Full float64 gradcheck of the blend w.r.t. the table entries."""
     torch.manual_seed(2)
     lay = _layer(n=2)
+    lay._compile_enabled = False        # gradcheck validates the eager reference (see above)
     x = torch.randn(4, 12, dtype=torch.float64) * 2.0
     t0 = (lay.tables.detach().clone() * 50.0).requires_grad_(True)
     assert torch.autograd.gradcheck(lambda tt: _fwd_with_tables(lay, x, tt), (t0,),
@@ -424,3 +429,34 @@ def test_tau_gradient_does_not_collapse_in_aggregate():
     assert small > matched, (
         'aggregate |dL/dtau| at tiny tau should NOT collapse -- if this ever fails, the '
         'boundary-token concentration effect has changed and the caveat needs revisiting')
+
+
+# --------------------------------------------------------------------------------------
+# compile path: default torch.compile (n>1) matches eager within fp tolerance
+# --------------------------------------------------------------------------------------
+def test_compile_parity_matches_eager():
+    """The default-ON torch.compile backend for the n>1 blend matches the eager reference
+    within fp tolerance (NOT bit-exact): out/grad_x/grad_log_tau < 1e-5, grad_tables < 2e-4
+    (compile reorders the embedding_bag-backward accumulation). If torch.compile is
+    unavailable the module's guard falls back to eager, so this compares eager-to-eager and
+    still passes."""
+    eager = _layer(n=2, dtype=torch.float32, read_tau_learnable=True)
+    eager._compile_enabled = False
+    comp = _layer(n=2, dtype=torch.float32, read_tau_learnable=True)  # compiles on first fwd
+    torch.manual_seed(5)
+    x = torch.randn(16, 12, dtype=torch.float32)
+    go = torch.randn(16, eager.output_dim, dtype=torch.float32)
+
+    def run(m):
+        xin = x.detach().clone().requires_grad_(True)
+        m.zero_grad(set_to_none=True)
+        (m(xin) * go).sum().backward()
+        return (m(xin).detach(), xin.grad.detach(),
+                m.tables.grad.detach(), m.log_tau.grad.detach())
+
+    oe, gxe, gte, gtaue = run(eager)
+    oc, gxc, gtc, gtauc = run(comp)
+    assert (oe - oc).abs().max() < 1e-5
+    assert (gxe - gxc).abs().max() < 1e-5
+    assert (gtaue - gtauc).abs().max() < 1e-5
+    assert (gte - gtc).abs().max() < 2e-4

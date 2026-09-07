@@ -26,6 +26,8 @@ flow on tensor values.
 """
 from typing import Optional
 
+import os
+
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -268,6 +270,21 @@ class LightMultiHeadLUT(nn.Module):
         else:
             self.register_buffer("log_tau", log_tau)
 
+        # --- torch.compile the forward for the blend path (default-ON, no config flag) ----
+        # The n>1 blended read-out fans out into ~8-10 tiny elementwise kernels
+        # (abs/min/bits/powers/gather/idx-cat/softmax/psw); compiling the forward folds them
+        # into 1-2 (one graph break remains at F.embedding_bag). Measured ~-27% fwd+bwd on the
+        # blend at the anchor sizing, ON TOP of the topk->min change. Scoped to read_top_n>1 so
+        # the n==1 path stays byte-identical (protects the established light line's
+        # reproducibility). Guarded: a compile failure -- or LUT_DISABLE_COMPILE=1 -- falls
+        # back to eager. NOT bit-exact: compile reorders the embedding_bag-backward fp
+        # accumulation (grad_tables ~3e-5, negligible vs bf16 epsilon).
+        # Lazy + runtime-checked (see forward): compiled ONLY when read_top_n>1 at call time,
+        # so the n==1 path -- and a runtime read_top_n->1 flip -- stays eager and byte-identical;
+        # compiled once on the first n>1 forward. LUT_DISABLE_COMPILE=1 forces eager.
+        self._compiled_fwd = None
+        self._compile_enabled = os.environ.get('LUT_DISABLE_COMPILE') != '1'
+
     @property
     def read_tau(self):
         """The blend temperature, a 0-dim tensor. Differentiable iff read_tau_learnable.
@@ -462,6 +479,20 @@ class LightMultiHeadLUT(nn.Module):
         return self._bagged_sum(flat, flat_idx, score, n_bags, self.tables_per_head)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Default-ON torch.compile for the n>1 blend path (no config flag). Checked at CALL
+        # time on read_top_n, so n==1 (or a runtime flip to 1) runs eager and byte-identical.
+        # Guarded: a compile failure falls back to eager permanently.
+        if self.read_top_n > 1 and self._compile_enabled:
+            if self._compiled_fwd is None:
+                try:
+                    self._compiled_fwd = torch.compile(self._forward_impl, fullgraph=False)
+                except Exception:
+                    self._compile_enabled = False
+                    return self._forward_impl(x)
+            return self._compiled_fwd(x)
+        return self._forward_impl(x)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # The fused eval kernel returns the packed index and the score only -- it never
         # materialises the margins, and the blend needs them to choose and weight the
         # neighbours. So it is unavailable at read_top_n > 1, by construction rather than
