@@ -209,7 +209,10 @@ class MinimalBlock(nn.Module):
                     # address bit the sign of ONE pooled coordinate instead of a pair diff.
                     anchor_mode=cfg.get('lut_anchor_mode', 'pair'),
                     pool_size=cfg.get('lut_pool_size', None),
-                    anchor_unique_partition=bool(cfg.get('lut_anchor_unique_partition', False)))
+                    anchor_unique_partition=bool(cfg.get('lut_anchor_unique_partition', False)),
+                    # Lookup-gated cell: 'constant' (default, unchanged) | 'gated_affine'
+                    # (u+v⊙x) | 'gated_multiply' (v⊙x).
+                    cell_mode=cfg.get('lut_cell_mode', 'constant'))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)

@@ -137,6 +137,7 @@ class CompressionMultiHeadLUT(nn.Module):
         anchor_mode: str = "pair",
         pool_size: Optional[int] = None,
         anchor_unique_partition: bool = False,
+        cell_mode: str = "constant",
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -238,7 +239,7 @@ class CompressionMultiHeadLUT(nn.Module):
                     read_top_n=read_top_n, read_tau=read_tau,
                     read_tau_learnable=read_tau_learnable,
                     anchor_mode="single", pool_size=pool_size, output_heads=n_heads,
-                    anchor_unique_partition=anchor_unique_partition,
+                    anchor_unique_partition=anchor_unique_partition, cell_mode=cell_mode,
                 )
                 self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
                                    if self.has_decompress else nn.Identity())
@@ -267,6 +268,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 # Single-anchor addressing (bit = sign of one pooled coordinate) vs the
                 # default anchor-PAIR difference. pool_size defaults to eff_in.
                 anchor_mode=anchor_mode, pool_size=pool_size,
+                cell_mode=cell_mode,
             )
             if mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)

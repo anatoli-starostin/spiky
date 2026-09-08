@@ -102,11 +102,15 @@ class LightMultiHeadLUT(nn.Module):
         pool_size: Optional[int] = None,
         output_heads: int = 1,
         anchor_unique_partition: bool = False,
+        cell_mode: str = "constant",
     ):
         super().__init__()
         if anchor_mode not in ("pair", "single"):
             raise ValueError(
                 f"anchor_mode must be 'pair' or 'single', got {anchor_mode!r}")
+        if cell_mode not in ("constant", "gated_affine", "gated_multiply"):
+            raise ValueError("cell_mode must be 'constant', 'gated_affine' or "
+                             f"'gated_multiply', got {cell_mode!r}")
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
                 "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
@@ -128,6 +132,20 @@ class LightMultiHeadLUT(nn.Module):
         self.input_dim = input_dim
         self.n_tables = n_tables
         self.output_dim = output_dim
+        # --- cell read-out mode -------------------------------------------------------
+        # "constant"    (default, unchanged): cell stores one vector v_c, returned as-is.
+        # "gated_affine": cell stores [u_c | v_c]; output = u_c + v_c ⊙ x_head (a diagonal,
+        #                 address- and input-dependent affine map; a lookup-gated GLU).
+        # "gated_multiply": output = v_c ⊙ x_head (no additive bias) -- the pure-multiply ablation.
+        # The score-weighted sum over a head's tables factorises exactly:
+        #   Σ_t s_t (u_t + v_t ⊙ x) = (Σ_t s_t u_t) + (Σ_t s_t v_t) ⊙ x = U + V ⊙ x
+        # so ONE bagged gather over [u|v] gives U|V and the modulation is applied once.
+        self.cell_mode = cell_mode
+        self._gated = cell_mode in ("gated_affine", "gated_multiply")
+        if self._gated and input_dim != output_dim:
+            raise ValueError("gated cell_mode requires input_dim == output_dim (the ⊙ is "
+                             f"coordinate-aligned); got input_dim={input_dim}, output_dim={output_dim}")
+        self._tbl_out = output_dim * (2 if self._gated else 1)   # cell stores [u|v] when gated
         self.n_anchor_pairs = n_anchor_pairs
         self.table_size = 1 << n_anchor_pairs
         self.confidence_form = confidence_form
@@ -306,14 +324,14 @@ class LightMultiHeadLUT(nn.Module):
             for h in range(self.n_heads):
                 g_h = (None if random_seed is None
                        else torch.Generator(device=dev).manual_seed(random_seed + h + 1))
-                blocks.append(torch.rand(self.tables_per_head, self.table_size, output_dim,
+                blocks.append(torch.rand(self.tables_per_head, self.table_size, self._tbl_out,
                                          device=dev, generator=g_h) - 0.5)
             u = torch.cat(blocks, dim=0)        # [n_tables, table_size, output_dim]
         else:
             gen = None
             if random_seed is not None:
                 gen = torch.Generator(device=dev).manual_seed(random_seed + 1)
-            u = torch.rand(n_tables, self.table_size, output_dim,
+            u = torch.rand(n_tables, self.table_size, self._tbl_out,
                            device=dev, generator=gen) - 0.5
         self.tables = nn.Parameter(u * (2.0 * initial_weights_noise))
 
@@ -397,6 +415,19 @@ class LightMultiHeadLUT(nn.Module):
         return ((d.detach() > 0).to(torch.int64)
                 * self.powers.view(*shape)).sum(dim=-1)
 
+    def _apply_cell(self, bagged, x_gate):
+        """Map a score-summed bag to the cell output.
+
+        constant: bag IS the output (returned unchanged -> the byte-identical default).
+        gated:    bag is the score-weighted [U | V]; output = U + V ⊙ x_gate (affine) or
+                  V ⊙ x_gate (multiply), where x_gate is the per-head/global input aligned
+                  coordinate-wise with the output (input_dim == output_dim, enforced in init).
+        """
+        if not self._gated:
+            return bagged
+        U, V = bagged[..., :self.output_dim], bagged[..., self.output_dim:]
+        return U + V * x_gate if self.cell_mode == "gated_affine" else V * x_gate
+
     def _forward_multi_head(self, x: torch.Tensor) -> torch.Tensor:
         """Block-diagonal variant: x [B, n_heads, input_dim] -> [B, n_heads, output_dim].
 
@@ -421,16 +452,21 @@ class LightMultiHeadLUT(nn.Module):
 
         index = self._pack_index(x.reshape(B, H * self.input_dim), d).view(B, H, T)
 
-        flat = self.tables.reshape(H * T * self.table_size, self.output_dim)
+        flat = self.tables.reshape(H * T * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
 
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)                # [B, H, T]
         if self.read_top_n > 1:
+            if self._gated:
+                raise NotImplementedError("gated cell_mode is only implemented for read_top_n=1")
             return self._blend_bag(d, index, self.table_offset.view(1, H, T), flat,
                                    score, B * H, T).view(B, H, self.output_dim)
-        # One bag per (sample, head), summing that head's T tables.
-        return self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self.output_dim)
+        # One bag per (sample, head), summing that head's T tables -> [B, H, _tbl_out];
+        # _apply_cell returns it as-is (constant) or forms U + V ⊙ x_head (gated), where
+        # x_head is this head's input slice (dim input_dim == output_dim).
+        bagged = self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self._tbl_out)
+        return self._apply_cell(bagged, x)
 
     def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
         """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.
@@ -558,7 +594,8 @@ class LightMultiHeadLUT(nn.Module):
         fwd+bwd), so the leverage is here, at inference.
         """
         if (self._native_msb_scored is None or not x_flat.is_cuda
-                or x_flat.dtype not in (torch.float32, torch.float64)):
+                or x_flat.dtype not in (torch.float32, torch.float64)
+                or self._gated):        # gated needs the per-head x for U + V ⊙ x -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
@@ -616,7 +653,7 @@ class LightMultiHeadLUT(nn.Module):
         index = self._pack_index(x, d)                               # [B, n_tables]
 
         # Gather one row per table. Grad flows to `tables` at the selected rows only.
-        flat = self.tables.reshape(self.n_tables * self.table_size, self.output_dim)
+        flat = self.tables.reshape(self.n_tables * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, -1)).reshape(-1)
 
         # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
@@ -630,11 +667,17 @@ class LightMultiHeadLUT(nn.Module):
         G = self.output_heads
         n_bags, bag = B * G, self.n_tables // G
         if self.read_top_n > 1:
+            if self._gated:
+                raise NotImplementedError("gated cell_mode is only implemented for read_top_n=1")
             out = self._blend_bag(d, index, self.table_offset.view(1, -1), flat,
                                   score, n_bags, bag)
-        else:
-            out = self._bagged_sum(flat, flat_idx, score, n_bags, bag)
-        return out.view(B, G, self.output_dim) if G > 1 else out
+            return out.view(B, G, self.output_dim) if G > 1 else out
+        if self._gated and G > 1:
+            raise NotImplementedError("gated cell_mode is not supported with output_heads>1")
+        bagged = self._bagged_sum(flat, flat_idx, score, n_bags, bag)   # [n_bags, _tbl_out]
+        if G > 1:
+            return bagged.view(B, G, self.output_dim)   # (only reached when not gated)
+        return self._apply_cell(bagged, x)              # constant -> bag; gated -> U + V ⊙ x
 
     def extra_repr(self) -> str:
         return (f"input_dim={self.input_dim}, n_tables={self.n_tables}, "

@@ -137,3 +137,49 @@ def test_unique_partition_anchor():
         LightMultiHeadLUT(input_dim=384, n_tables=40, output_dim=384, n_anchor_pairs=8,
                           device=torch.device("cpu"), anchor_mode="single", pool_size=384,
                           anchor_unique_partition=True)
+
+
+def _mk_gated(mode, din=8, mh=True):
+    return LightMultiHeadLUT(
+        input_dim=din, n_tables=(2 if mh else 1) * 4, output_dim=din, n_anchor_pairs=5,
+        confidence_form="margin", random_seed=2, device=torch.device("cpu"),
+        n_heads=(2 if mh else 1), multi_head_input=mh, cell_mode=mode)
+
+
+def test_gated_tables_doubled_and_dim_guard():
+    import pytest
+    m = _mk_gated("gated_affine", din=8)
+    assert m.cell_mode == "gated_affine" and m._gated
+    assert tuple(m.tables.shape) == (8, 32, 16)          # last dim = 2*output_dim (u|v)
+    c = _mk_gated("constant", din=8)
+    assert tuple(c.tables.shape) == (8, 32, 8)           # unchanged
+    with pytest.raises(ValueError):                       # gated requires d_in==d_out
+        LightMultiHeadLUT(input_dim=8, n_tables=4, output_dim=6, n_anchor_pairs=4,
+                          device=torch.device("cpu"), cell_mode="gated_affine")
+
+
+def test_apply_cell_is_u_plus_v_times_x():
+    """The core gated math: bag=[U|V], out = U + V*x (affine) / V*x (multiply), elementwise."""
+    for mode in ("gated_affine", "gated_multiply"):
+        m = _mk_gated(mode, din=4)
+        U = torch.tensor([[1., 2., 3., 4.]]); V = torch.tensor([[10., 20., 30., 40.]])
+        x = torch.tensor([[0.5, -1., 2., 0.]])
+        bagged = torch.cat([U, V], dim=-1)               # [1, 8]
+        got = m._apply_cell(bagged, x)
+        want = (U + V * x) if mode == "gated_affine" else (V * x)
+        assert torch.allclose(got, want)
+    # constant mode returns the bag unchanged
+    c = _mk_gated("constant", din=4)
+    b = torch.randn(1, 4)
+    assert torch.equal(c._apply_cell(b, torch.randn(1, 4)), b)
+
+
+def test_gated_forward_runs_and_grad():
+    for mh in (True, False):
+        m = _mk_gated("gated_affine", din=8, mh=mh)
+        x = (torch.randn(3, m.n_heads, 8) if mh else torch.randn(3, 8)).requires_grad_(True)
+        out = m(x)
+        assert out.shape == ((3, m.n_heads, 8) if mh else (3, 8))
+        out.sum().backward()
+        assert m.tables.grad is not None and torch.isfinite(m.tables.grad).all()
+        assert x.grad is not None and torch.isfinite(x.grad).all()   # grad via BOTH score and V⊙x
