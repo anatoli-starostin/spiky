@@ -1407,3 +1407,22 @@ Light + margin + top-2 blend with **learnable per-layer tau (init 0.5)**, no z_n
 - Trajectory: starts worse (softer blend during warmup), crosses 0193 ~step 2500, widens to −3.65σ by 16k.
 
 Full detail: `exp_g_0195_.../ANALYSIS_0195.md`. Follow-ups: 48K fork (exp_g_0203) for the longer-horizon number; eval-only PTQ / no-multiply-int16 study on the 0195 checkpoint.
+
+
+## Quantisation study (STEP 3) — no-multiply-int16 north star, on 0195@16K
+
+Eval-only PTQ fake-quant on the 0195 checkpoint (σ=0.00335, fp32 baseline 1.160637).
+
+- **int8 tables are free** — per-row −0.00σ, per-tensor +0.01σ. The 37.7M table params
+  compress 4× (int8) or 2× (int16) with **zero measurable bpb cost**; the score gate
+  dominates and 8 bits capture the small stored values exactly.
+- **Shift-only tables (each value → nearest 2^k) cost +1.03σ** (1.164086) and the model
+  **stays −2.62σ under the n=1 control 0193** and ~+0.69σ over dense parity. That converts
+  ~96% of the read-out's multiplies (`w·table`, 96 per table) into **shifts** for ≈1σ —
+  the single biggest step toward no-multiply, and it nearly lands for free.
+- **+ pow2 tau adds only +0.22σ** (1.164813) — the routing weight's multiply removes cheaply.
+- **What remains:** score=(Σm)·prob and psw=score·w multiplies (pow2-able at runtime,
+  untested next rung), and **10 transcendentals/table (8 logsigmoid + exp + sigmoid)** —
+  the latter, not the multiplies, is the real work of an all-integer engine (needs
+  LUT/piecewise-linear approx). Op catalog + full ladder: `exp_g_0195_.../QUANT_STUDY_0195.md`.
+- Re-run the ladder on 0203@48K when it lands (better-trained tables usually quantise more robustly).
