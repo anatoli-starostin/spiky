@@ -1452,3 +1452,23 @@ Eval-only PTQ fake-quant on the 0195 checkpoint (σ=0.00335, fp32 baseline 1.160
 - **Direction:** a fixed soft-blend doesn't close the gap to dense at length; to matter
   long-horizon the blend needs capacity that *compounds* (n>2, or learned per-token routing),
   not just a softened argmax. Full detail: `exp_g_0203_.../ANALYSIS_0203.md`.
+
+
+## Capacity & compression-path sweep @48K (0204 / 0205 / 0206 / 0207) — what does NOT close the gap to dense
+
+All forked from 0203 (H4/tph128/nap8, n=2 blend, 1.132300, +5.04σ vs dense@48K 1.115420). σ=0.00335.
+
+| run | change vs 0203 | final val_bpb | vs 0203 | vs dense@48K |
+|---|---|---|---|---|
+| 0203 | — (H4, n2 blend) | 1.132300 | — | +5.04σ |
+| **0204** | nap9 (256→512 **cells**, ×2 capacity) | 1.139720 | +2.21σ (worse) | +7.3σ |
+| **0205** | read_top_n 2→**1** (blend OFF) | 1.136455 | +1.24σ (worse) | +6.3σ |
+| **0206** | H4→**H8**/tph64 (**full-rank** compress, n2) | **1.130397** | **−0.57σ (better)** | **+4.47σ** |
+| 0207 | H8 **+ n=1** (blend off, full-rank) | *running* | — | — |
+| dense | — | 1.115420 | — | 0 |
+
+Reads as a 2×2 (read-out × geometry) plus the capacity point:
+- **Capacity is NOT the bottleneck:** nap9 (0204) doubled the table cells and ended +2.21σ *worse* than 0203 (mild overfit; tables_shape verified (512,512,48) vs (512,256,48)).
+- **The blend is a small net win, not a liability:** n=1 (0205) is +1.24σ *worse* than the n=2 blend at 48K (n=1 only leads in early training). So the top-2 blend adds ~1.2σ.
+- **Full-rank compress helps — but only marginally:** H8 (0206, H·d_in=8·48=384=d_model, no compression) beats H4 by −0.57σ and tracks 0203 a hair ahead the whole way, but it is STILL +4.47σ over dense — it closed only ~11% of the gap. So the compress bottleneck is a *small* contributor, not the explanation.
+- **Net:** no single knob (read-out n, table capacity, compress rank) closes the ~4.5–5σ gap to dense; the effects are all ≲1σ and even the best (0206) plateaus +4.47σ above dense. The gap to a dense MLP is more fundamental than any of these axes. Best LUT-FFN arm to date at 48K = **0206 (H8 n2) 1.130397**. (0207 will complete the H8 n1-vs-n2 cell.) Detail: `exp_g_0206_.../` (run on worker VM 89.169.122.190).
