@@ -93,3 +93,24 @@ def test_single_pool_size_mismatch_raises():
     with pytest.raises(NotImplementedError):
         LightMultiHeadLUT(input_dim=48, n_tables=8, output_dim=48, n_anchor_pairs=6,
                           device=torch.device("cpu"), anchor_mode="single", pool_size=96)
+
+
+def test_output_heads_global_addressing_and_grouping():
+    """output_heads>1: global single-index addressing over the FULL input, output grouped
+    into G head-bags -> [B, G, output_dim]; the heads partition the whole-ensemble sum."""
+    G, tph, nap, pool, dout = 8, 4, 6, 32, 5
+    m = LightMultiHeadLUT(
+        input_dim=pool, n_tables=G * tph, output_dim=dout, n_anchor_pairs=nap,
+        confidence_form="margin", random_seed=3, device=torch.device("cpu"),
+        n_heads=1, multi_head_input=False, anchor_mode="single",
+        pool_size=pool, output_heads=G,
+    )
+    assert m.output_heads == G and m.anchor_mode == "single"
+    assert tuple(m.anchor_c.shape) == (G * tph, nap)          # GLOBAL indices, not per-head
+    x = torch.randn(4, pool)
+    y = m(x)
+    assert tuple(y.shape) == (4, G, dout)                    # per-head grouped output
+    m.output_heads = 1                                       # read as one ensemble
+    full = m(x)                                              # [4, dout] = sum of ALL tables
+    m.output_heads = G
+    assert torch.allclose(y.sum(dim=1), full, atol=1e-5)     # heads partition the ensemble sum

@@ -216,6 +216,32 @@ class CompressionMultiHeadLUT(nn.Module):
             #     compress 384 -> n_heads*eff_in, block-diagonal routing, per-head output
             #     block, decompress n_heads*eff_out -> 384. Projections match Fast exactly.
             #   joint / no compress: one shared code, one summed ensemble, one decompress.
+            if anchor_mode == "single":
+                # SHARED GLOBAL addressing pool + per-head output (asymmetric variant).
+                # ONE compress d_model -> eff_in gives the shared pool z; ALL n_heads*tph
+                # tables draw GLOBAL single-index addresses over the full eff_in pool (no
+                # per-head partition of the addressing input). The ensemble is grouped into
+                # n_heads OUTPUT heads (output_heads=n_heads), each summing its tph tables
+                # into an eff_out row; the heads concat to n_heads*eff_out for decompress.
+                self.light_multi_head_input = False
+                self.light_single_global = True
+                self.compress = (nn.Linear(input_dim, in_raw, device=device)
+                                 if self.has_compress else nn.Identity())
+                self.lut_light = LightMultiHeadLUT(
+                    input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
+                    n_anchor_pairs=nap, confidence_form=confidence_form,
+                    confidence_gain=confidence_gain, random_seed=random_seed,
+                    initial_weights_noise=initial_weights_noise, device=device,
+                    n_heads=1, multi_head_input=False,
+                    anchor_sampling_policy=anchor_sampling_policy,
+                    read_top_n=read_top_n, read_tau=read_tau,
+                    read_tau_learnable=read_tau_learnable,
+                    anchor_mode="single", pool_size=pool_size, output_heads=n_heads,
+                )
+                self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
+                                   if self.has_decompress else nn.Identity())
+                return
+            self.light_single_global = False
             mh = self.has_compress and not self.joint_head_compression and n_heads > 1
             self.light_multi_head_input = mh
             if mh:
@@ -317,6 +343,13 @@ class CompressionMultiHeadLUT(nn.Module):
 
         if self.lut_impl == "light":
             N = x.shape[0]
+            if getattr(self, "light_single_global", False):
+                # shared GLOBAL pool: one code, global single-index addressing, per-head out
+                z = self.compress(x)                       # [N, eff_in]  (the shared pool)
+                if self.z_norm is not None:
+                    z = self.z_norm(z)
+                y = self.lut_light(z).to(z.dtype)          # [N, n_heads, eff_out]
+                return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
             if self.light_multi_head_input:
                 # per-head slice in, per-head block out — same shapes as the Fast path
                 z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)

@@ -100,6 +100,7 @@ class LightMultiHeadLUT(nn.Module):
         read_tau_learnable: bool = False,
         anchor_mode: str = "pair",
         pool_size: Optional[int] = None,
+        output_heads: int = 1,
     ):
         super().__init__()
         if anchor_mode not in ("pair", "single"):
@@ -154,6 +155,25 @@ class LightMultiHeadLUT(nn.Module):
                 "single anchor_mode currently supports pool_size == input_dim only "
                 f"(got pool_size={self.pool_size}, input_dim={input_dim}); a larger pool "
                 "would need a dedicated input_dim->pool_size hyperplane projection.")
+
+        # --- output head-grouping (for the SHARED GLOBAL addressing pool) -------------
+        # output_heads>1 splits the n_tables ensemble into that many contiguous groups and
+        # returns [B, output_heads, output_dim] (each group summed independently), WITHOUT
+        # partitioning the ADDRESSING input -- all tables still address the full [B, input_dim]
+        # pool. This is how the asymmetric shared-pool variant gets a global addressing pool
+        # with per-head output. Only meaningful with multi_head_input=False (global address).
+        self.output_heads = int(output_heads)
+        if self.output_heads < 1:
+            raise ValueError(f"output_heads must be >= 1, got {output_heads}")
+        if self.output_heads > 1:
+            if multi_head_input:
+                raise ValueError(
+                    "output_heads>1 is the global-addressing/per-head-output mode; it "
+                    "requires multi_head_input=False (addressing over the full pool).")
+            if n_tables % self.output_heads != 0:
+                raise ValueError(
+                    f"n_tables ({n_tables}) must be divisible by output_heads "
+                    f"({self.output_heads}).")
 
         # --- top-n blended read-out (TRAINING-CAPABLE; default 1 == today's layer) -------
         # At read_top_n=1 nothing below is reachable and the layer is byte-for-byte the
@@ -584,11 +604,17 @@ class LightMultiHeadLUT(nn.Module):
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)              # [B, n_tables]
 
+        # Output grouping: output_heads==1 sums ALL n_tables into one [B, output_dim]
+        # ensemble (unchanged); output_heads==G returns [B, G, output_dim] by summing G
+        # contiguous table-groups independently (global addressing, per-head output).
+        G = self.output_heads
+        n_bags, bag = B * G, self.n_tables // G
         if self.read_top_n > 1:
-            return self._blend_bag(d, index, self.table_offset.view(1, -1), flat,
-                                   score, B, self.n_tables)
-        # One bag per sample, summing all n_tables = the ensemble output.
-        return self._bagged_sum(flat, flat_idx, score, B, self.n_tables)
+            out = self._blend_bag(d, index, self.table_offset.view(1, -1), flat,
+                                  score, n_bags, bag)
+        else:
+            out = self._bagged_sum(flat, flat_idx, score, n_bags, bag)
+        return out.view(B, G, self.output_dim) if G > 1 else out
 
     def extra_repr(self) -> str:
         return (f"input_dim={self.input_dim}, n_tables={self.n_tables}, "
