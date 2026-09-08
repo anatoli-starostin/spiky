@@ -1484,3 +1484,17 @@ Reads as a 2×2 (read-out × geometry) plus the capacity point:
 - **The blend is a small net win, not a liability:** n=1 (0205) is +1.24σ *worse* than the n=2 blend at 48K (n=1 only leads in early training). So the top-2 blend adds ~1.2σ.
 - **Full-rank compress helps — but only marginally:** H8 (0206, H·d_in=8·48=384=d_model, no compression) beats H4 by −0.57σ and tracks 0203 a hair ahead the whole way, but it is STILL +4.47σ over dense — it closed only ~11% of the gap. So the compress bottleneck is a *small* contributor, not the explanation.
 - **Net:** no single knob (read-out n, table capacity, compress rank) closes the ~4.5–5σ gap to dense; the effects are all ≲1σ and even the best (0206) plateaus +4.47σ above dense. The gap to a dense MLP is more fundamental than any of these axes. Best LUT-FFN arm to date at 48K = **0206 (H8 n2) 1.130397**. (0207 will complete the H8 n1-vs-n2 cell.) Detail: `exp_g_0206_.../` (run on worker VM 89.169.122.190).
+
+
+## Single-ANCHOR addressing @48K (0209, 0210) — worse than pair-difference, as predicted
+
+Extremum probe of the addressing scheme: each address bit = sign of ONE projected coordinate (bit=1[z[c]>0]) instead of the pair difference (bit=1[z[a]−z[b]>0]). anchor_mode="single" (guarded flag; pairs mode byte-identical). σ=0.00335, dense@48K 1.115420.
+
+| run | design | params | final | vs 0206 (best pair) | vs dense |
+|---|---|---|---|---|---|
+| **0209** | single-anchor SHARED-GLOBAL-pool (compress 384→384, GLOBAL single indices over the full 384-pool shared across all 512 tables, H8 output, n1) | 68,237,574 (param-matched to H8 family) | **1.139030** | +2.58σ | +7.05σ |
+| **0210** | single-anchor UNTIED unique-hyperplane extremum (48 tables, nap8 → a PERMUTATION PARTITION of [0,384), each hyperplane used once; NO decompress, cells store full d_model; n1) | 57,913,350 (smaller, not param-matched) | **1.150297** | +5.94σ | +10.41σ |
+
+- **Single-coordinate sign addressing UNDERPERFORMS pair-difference addressing.** Even the param-matched shared-global-pool 0209 (1.139030) is worse than every pair arm except it roughly ties the worst pair arm 0204 (nap9, 1.139720) — i.e. +2.58σ behind the best pair arm 0206. The untied unique-hp extremum 0210 (1.150297) is the worst arm in the whole survey (+10.41σ dense).
+- Consistent with (a) the BH4-style caveat — a single coordinate's sign does NOT cancel a token-independent code offset, which the pair difference z[a]−z[b] does — and (b) the "Revenge of Monosemanticity" lens (arXiv 2608.24007): our addressing hyperplanes are FROZEN, so tables cannot learn the local specialized directions that give dense MLPs their edge; single-coordinate frozen addressing is the least expressive of all and lands worst.
+- **Takeaway for the line:** don't pursue single-anchor addressing further; the pair difference is the better fixed address. The paper-implied next lever is LEARNABLE addressing directions, not a different fixed scheme. Detail: `exp_g_0209_.../`, `exp_g_0210_.../` (0210 run on the worker VM).
