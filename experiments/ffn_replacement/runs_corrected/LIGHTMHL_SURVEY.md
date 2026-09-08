@@ -1464,8 +1464,20 @@ All forked from 0203 (H4/tph128/nap8, n=2 blend, 1.132300, +5.04σ vs dense@48K 
 | **0204** | nap9 (256→512 **cells**, ×2 capacity) | 1.139720 | +2.21σ (worse) | +7.3σ |
 | **0205** | read_top_n 2→**1** (blend OFF) | 1.136455 | +1.24σ (worse) | +6.3σ |
 | **0206** | H4→**H8**/tph64 (**full-rank** compress, n2) | **1.130397** | **−0.57σ (better)** | **+4.47σ** |
-| 0207 | H8 **+ n=1** (blend off, full-rank) | *running* | — | — |
+| **0207** | H8 **+ n=1** (blend off, full-rank) | **1.131286** | **−0.30σ (better)** | +4.74σ |
 | dense | — | 1.115420 | — | 0 |
+
+**Completed 2×2 (read-out × geometry), final val_bpb (σ vs dense):**
+
+| | n=1 (argmax) | n=2 (blend) |
+|---|---|---|
+| **H4/nap8** | 0205 1.136455 (+6.3σ) | 0203 1.132300 (+5.0σ) |
+| **H8/full-rank** | 0207 1.131286 (+4.7σ) | **0206 1.130397 (+4.5σ)** |
+
+Reading the 2×2:
+- **Full-rank compress (H8) helps in BOTH read-outs, and more for n=1:** n=1 H4→H8 = −1.54σ (0207 vs 0205); n=2 H4→H8 = −0.57σ (0206 vs 0203). So widening heads is the single biggest lever (~0.6–1.5σ).
+- **The blend's benefit SHRINKS as heads widen:** n2−n1 is −1.24σ at H4 (0203 vs 0205) but only **−0.30σ at H8** (0206 vs 0207). With full-rank heads the argmax read-out nearly matches the blend — the blend is close to redundant at H8.
+- **Still no closure:** the best cell (0206, H8 n2) is +4.47σ over dense and n=1 H8 (0207) is +4.74σ — a ~0.3σ spread. Every LightMHL arm plateaus ~1.130–1.140; dense is ~4.5σ below all of them. The geometry (compress rank) matters most, the read-out least, capacity is negative — but none reaches dense.
 
 Reads as a 2×2 (read-out × geometry) plus the capacity point:
 - **Capacity is NOT the bottleneck:** nap9 (0204) doubled the table cells and ended +2.21σ *worse* than 0203 (mild overfit; tables_shape verified (512,512,48) vs (512,256,48)).
