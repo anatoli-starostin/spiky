@@ -1394,3 +1394,16 @@ score form, parameter budget) have now each been measured and each fails to touc
 deficit. That is what promotes the function-class hypothesis (1)–(2) from "the candidate that
 survives" to "the only candidate anyone has proposed that has not been falsified", and it is why
 the eval-only soft-read-out probe is worth running before any further training run.
+
+
+## exp_g_0195 — learnable-tau top-2 blend (16K, corrected) — RESULT
+
+Light + margin + top-2 blend with **learnable per-layer tau (init 0.5)**, no z_norm, NAP8/tph128/H4, seed 1; optimized path (topk→min + submodule torch.compile). Final corrected val_bpb **1.160637** (reload-verified, delta 0). σ = 0.00335.
+
+- **−3.65σ vs the n=1 control 0193 (1.172852)** — the blend, with a *tuned* temperature, clearly helps.
+- **−6.45σ vs the frozen-tau blend 0194 (1.182259)** — fixing tau at the measured Δ_m was the mistake; learnable wins big.
+- **Below both vanilla@16K seeds** (−1.35σ vs seed1 1.165147; −0.35σ vs seed2 1.161798) → at/under dense parity at 16K, best Light arm to date.
+- **tau descended 0.5 → [0.158, 0.292, 0.334, 0.380, 0.465, 0.669] (L0..L5)** — toward Δ_m [0.033..0.108] but settling **~4–6× above it**; per-layer order matches Δ_m (sharpest where margins smallest). The routing optimum is a *softer* blend than Δ_m, which is why 0194 failed. Not power-of-2-close (1.17–1.34× off nearest 2^k) — shift-only deploy cost TBD in the PTQ study.
+- Trajectory: starts worse (softer blend during warmup), crosses 0193 ~step 2500, widens to −3.65σ by 16k.
+
+Full detail: `exp_g_0195_.../ANALYSIS_0195.md`. Follow-ups: 48K fork (exp_g_0203) for the longer-horizon number; eval-only PTQ / no-multiply-int16 study on the 0195 checkpoint.
