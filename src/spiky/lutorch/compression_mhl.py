@@ -136,6 +136,7 @@ class CompressionMultiHeadLUT(nn.Module):
         read_tau_learnable: bool = False,
         anchor_mode: str = "pair",
         pool_size: Optional[int] = None,
+        anchor_unique_partition: bool = False,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -237,6 +238,7 @@ class CompressionMultiHeadLUT(nn.Module):
                     read_top_n=read_top_n, read_tau=read_tau,
                     read_tau_learnable=read_tau_learnable,
                     anchor_mode="single", pool_size=pool_size, output_heads=n_heads,
+                    anchor_unique_partition=anchor_unique_partition,
                 )
                 self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
                                    if self.has_decompress else nn.Identity())

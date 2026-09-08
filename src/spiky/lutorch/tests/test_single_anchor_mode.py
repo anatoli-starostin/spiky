@@ -114,3 +114,26 @@ def test_output_heads_global_addressing_and_grouping():
     full = m(x)                                              # [4, dout] = sum of ALL tables
     m.output_heads = G
     assert torch.allclose(y.sum(dim=1), full, atol=1e-5)     # heads partition the ensemble sum
+
+
+def test_unique_partition_anchor():
+    """anchor_unique_partition: n_tables*nap == pool_size, indices are a permutation of
+    [0,pool_size) (every hyperplane used exactly once)."""
+    pool, nt, nap = 384, 48, 8
+    m = LightMultiHeadLUT(
+        input_dim=pool, n_tables=nt, output_dim=pool, n_anchor_pairs=nap,
+        confidence_form="margin", random_seed=1, device=torch.device("cpu"),
+        n_heads=1, multi_head_input=False, anchor_mode="single", pool_size=pool,
+        anchor_unique_partition=True,
+    )
+    assert tuple(m.anchor_c.shape) == (nt, nap)
+    flat = m.anchor_c.flatten().sort().values
+    assert torch.equal(flat, torch.arange(pool))              # genuine partition of [0,384)
+    x = torch.randn(3, pool)
+    assert tuple(m(x).shape) == (3, pool)                     # 48 tables summed -> [B, pool]
+    # mismatch (n_tables*nap != pool_size) must raise
+    import pytest
+    with pytest.raises(ValueError):
+        LightMultiHeadLUT(input_dim=384, n_tables=40, output_dim=384, n_anchor_pairs=8,
+                          device=torch.device("cpu"), anchor_mode="single", pool_size=384,
+                          anchor_unique_partition=True)

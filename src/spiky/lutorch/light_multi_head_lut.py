@@ -101,6 +101,7 @@ class LightMultiHeadLUT(nn.Module):
         anchor_mode: str = "pair",
         pool_size: Optional[int] = None,
         output_heads: int = 1,
+        anchor_unique_partition: bool = False,
     ):
         super().__init__()
         if anchor_mode not in ("pair", "single"):
@@ -149,6 +150,7 @@ class LightMultiHeadLUT(nn.Module):
         # score, blend, read-out are untouched. The pair-only native CUDA kernel is disabled
         # in single mode (torch addressing path is used).
         self.anchor_mode = anchor_mode
+        self.anchor_unique_partition = bool(anchor_unique_partition)
         self.pool_size = int(pool_size) if pool_size is not None else input_dim
         if anchor_mode == "single" and self.pool_size != input_dim:
             raise NotImplementedError(
@@ -219,7 +221,25 @@ class LightMultiHeadLUT(nn.Module):
 
         dev = device or torch.device("cpu")
         policy = anchor_sampling_policy or AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
-        if self.anchor_mode == "single":
+        if self.anchor_mode == "single" and self.anchor_unique_partition:
+            # UNIQUE / UNTIED extremum: n_tables*NAP == pool_size, so the anchor indices are a
+            # PERMUTATION PARTITION of [0, pool_size) -- every hyperplane used EXACTLY once,
+            # no index shared between tables. Deterministic (seeded) permutation, frozen.
+            # Non-multi-head (global addressing) only.
+            if self.multi_head_input:
+                raise ValueError("anchor_unique_partition requires multi_head_input=False "
+                                 "(global addressing over the shared pool).")
+            if n_tables * n_anchor_pairs != self.pool_size:
+                raise ValueError(
+                    "anchor_unique_partition requires n_tables*n_anchor_pairs == pool_size "
+                    f"(got {n_tables}*{n_anchor_pairs}={n_tables*n_anchor_pairs} != "
+                    f"pool_size={self.pool_size}).")
+            g = (torch.Generator(device=dev).manual_seed(random_seed)
+                 if random_seed is not None else None)
+            perm = torch.randperm(self.pool_size, device=dev, generator=g)
+            anchor_c = perm.reshape(n_tables, n_anchor_pairs).to(torch.int64)
+            self.register_buffer("anchor_c", anchor_c.contiguous())
+        elif self.anchor_mode == "single":
             # SINGLE-anchor addressing: draw NAP single indices per table into the per-head
             # pool [0, pool_size). Frozen buffer, seeded per head (random_seed + h) like the
             # pairs so the two modes are init-comparable head for head. Shape matches

@@ -204,7 +204,8 @@ class MinimalBlock(nn.Module):
                     # every existing config builds a bit-identical model. 'single' makes each
                     # address bit the sign of ONE pooled coordinate instead of a pair diff.
                     anchor_mode=cfg.get('lut_anchor_mode', 'pair'),
-                    pool_size=cfg.get('lut_pool_size', None))
+                    pool_size=cfg.get('lut_pool_size', None),
+                    anchor_unique_partition=bool(cfg.get('lut_anchor_unique_partition', False)))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
