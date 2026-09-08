@@ -89,14 +89,33 @@ rounding of it destroys that.
 - The **10 transcendentals/table** (8 logsigmoid + exp + sigmoid) remain the other integer-
   engine cost, addressed by LUT / piecewise-linear approximation — a separate untested axis.
 
+## 3d — same ladder on 0203@48K (better-trained checkpoint)
+
+Re-ran the table rungs on the 48K checkpoint (baseline 1.132300). Mixed vs the 16K read:
+
+| rung | 0195@16K Δ | 0203@48K Δ |
+|---|---|---|
+| int16 per-row | −0.00σ | −0.00σ |
+| int8 per-row | −0.00σ | −0.00σ |
+| int8 per-tensor | +0.01σ | +0.02σ |
+| **pow2 tables** | **+1.03σ** | **+1.85σ** |
+| pow2 tables + tau | +1.25σ | +2.09σ |
+
+- **int8/int16 tables stay free** on the better-trained model — the deployment verdict (int
+  tables are free) is robust to training length. ✓
+- **But shift-only pow2 tables cost MORE at 48K (+1.85σ vs +1.03σ)** — the opposite of the
+  "usually more robust" expectation. The longer-trained tables carry finer structure that
+  nearest-2^k rounding cannot represent; more training makes them *less* pow2-friendly, not
+  more. Reinforces: int tables yes, shift-only tables only if ~2σ is affordable.
+
 ## Caveats & next
 
 - Eval-only fake-quant (quantise→dequantise in fp for the forward); it measures the
   *representation* cost, not a real integer kernel's accumulation/rounding. A real int16
   kernel accumulates in int32 and rounds once — expected to match or beat fake-quant.
-- Measured on **0195@16K**. Re-run the full ladder on the **0203@48K** checkpoint when it
-  lands — a better-trained table may quantise more robustly, and it is worth re-checking
-  whether the longer run narrows the +3.26σ score·w-rounding penalty.
+- Table rungs re-checked on **0203@48K** (§3d): int free, shift-only *costlier* with training.
+  The pow2 score·w rungs (§3c) were not re-run on 48K; the +3.26σ penalty there is unlikely
+  to narrow given shift-only tables got worse, not better, with more training.
 - The pow2 score/w rungs use *hard* nearest-2^k rounding. A learned/annealed pow2 (or a
   2-bit mantissa "pow2×{1,1.5}") would sit between int and shift-only and might recover most
   of the +3.26σ — an untested middle ground if a multiply-lean engine needs score/w cheaper.
