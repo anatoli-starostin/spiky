@@ -1431,3 +1431,24 @@ Eval-only PTQ fake-quant on the 0195 checkpoint (σ=0.00335, fp32 baseline 1.160
 - **10 transcendentals/table (8 logsigmoid + exp + sigmoid)** remain the separate all-integer
   cost (LUT/piecewise-linear approx) — unmeasured axis.
 - Re-run the ladder on 0203@48K when it lands (better-trained tables usually quantise more robustly).
+
+
+## exp_g_0203 — 48K learnable-tau top-2 blend — RESULT (reverses the 16K read)
+
+48K fresh fork of 0195 (only change n_steps 16000→48000, warmup→4800). Reload-verified
+**1.132300** (best 1.131621), delta 0. Refs: vanilla@48K 1.115420 (0177); σ=0.00335.
+
+- **+5.04σ ABOVE vanilla@48K** (final) / +4.84σ (best). **The learnable-tau blend does NOT
+  beat dense at 48K — it is ~1.3% relative behind.** −8.46σ vs 0195@16K (the arch improves a
+  lot with steps, but dense improves faster).
+- **The 16K "parity" was a crossover artifact.** Matched-step vs vanilla@48K: starts far
+  behind (soft-blend warmup, +18σ@500), **crosses ~step 4500 and briefly leads (−0.86σ@5500)**,
+  holds parity to ~17k, then **dense pulls away monotonically** — +1σ@22k, +2σ@29k, +3σ@34k,
+  +4σ@40k, **+5σ@48k**. The blend's benefit is front-loaded and bounded: it smooths the
+  read-out while tables are under-trained, then dense catches up and overtakes.
+- tau descended further (~2–4.7× Δ_m at 48K vs ~4–6× at 16K) — migrates toward Δ_m with steps
+  but never reaches it. 48K taus land closer to powers of two (L1–L3,L5 within 0.81–1.02× of
+  2^k) than 0195's.
+- **Direction:** a fixed soft-blend doesn't close the gap to dense at length; to matter
+  long-horizon the blend needs capacity that *compounds* (n>2, or learned per-token routing),
+  not just a softened argmax. Full detail: `exp_g_0203_.../ANALYSIS_0203.md`.
