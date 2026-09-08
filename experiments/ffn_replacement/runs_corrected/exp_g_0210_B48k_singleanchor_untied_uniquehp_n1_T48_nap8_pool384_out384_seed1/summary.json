@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_0210_B48k_singleanchor_untied_uniquehp_n1_T48_nap8_pool384_out384_seed1",
+  "best_val_bpb": 1.150126024045591,
+  "final_val_bpb": 1.1502966007367499,
+  "total_params": 57913350,
+  "training_time_hours": 1.957,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
