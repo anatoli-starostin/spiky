@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0211_dense_relu_48k_seed1",
+  "best_val_bpb": 1.1213929115194896,
+  "final_val_bpb": 1.1214758880198041,
+  "total_params": 35792640,
+  "training_time_hours": 1.706,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
