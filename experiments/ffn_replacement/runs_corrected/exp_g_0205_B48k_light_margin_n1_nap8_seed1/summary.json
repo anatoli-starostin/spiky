@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_0205_B48k_light_margin_n1_nap8_seed1",
+  "best_val_bpb": 1.1364546459018927,
+  "final_val_bpb": 1.1364546459018927,
+  "total_params": 67351686,
+  "training_time_hours": 3.03,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
