@@ -134,6 +134,8 @@ class CompressionMultiHeadLUT(nn.Module):
         read_top_n: int = 1,
         read_tau: float = 0.1,
         read_tau_learnable: bool = False,
+        anchor_mode: str = "pair",
+        pool_size: Optional[int] = None,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -234,6 +236,9 @@ class CompressionMultiHeadLUT(nn.Module):
                 # coordinate sign, where "the nearest cell by margin" is a different object.
                 read_top_n=read_top_n, read_tau=read_tau,
                 read_tau_learnable=read_tau_learnable,
+                # Single-anchor addressing (bit = sign of one pooled coordinate) vs the
+                # default anchor-PAIR difference. pool_size defaults to eff_in.
+                anchor_mode=anchor_mode, pool_size=pool_size,
             )
             if mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)

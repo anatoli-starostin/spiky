@@ -98,8 +98,13 @@ class LightMultiHeadLUT(nn.Module):
         read_top_n: int = 1,
         read_tau: float = 0.1,
         read_tau_learnable: bool = False,
+        anchor_mode: str = "pair",
+        pool_size: Optional[int] = None,
     ):
         super().__init__()
+        if anchor_mode not in ("pair", "single"):
+            raise ValueError(
+                f"anchor_mode must be 'pair' or 'single', got {anchor_mode!r}")
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
                 "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
@@ -131,6 +136,24 @@ class LightMultiHeadLUT(nn.Module):
         self.multi_head_input = bool(multi_head_input)
         self.n_heads = n_heads if multi_head_input else 1
         self.tables_per_head = n_tables // self.n_heads
+
+        # --- addressing mode ----------------------------------------------------------
+        # "pair"   (default, unchanged): bit_i = 1[x[a_i] - x[b_i] > 0]  (hyperplane e_a-e_b)
+        # "single":                      bit_i = 1[x[c_i] > 0]           (one coordinate vs 0)
+        # In "single" mode each bit is ONE coordinate's sign; c_i indexes the per-head pool
+        # of `pool_size` features. pool_size decouples the addressing pool from output_dim;
+        # currently supported only when it equals input_dim (index the existing per-head
+        # compressed features directly -- no extra projection). Everything downstream is
+        # identical: d = x[c] plays the role d = x[a]-x[b] had, so sign->bit, |d|->margin,
+        # score, blend, read-out are untouched. The pair-only native CUDA kernel is disabled
+        # in single mode (torch addressing path is used).
+        self.anchor_mode = anchor_mode
+        self.pool_size = int(pool_size) if pool_size is not None else input_dim
+        if anchor_mode == "single" and self.pool_size != input_dim:
+            raise NotImplementedError(
+                "single anchor_mode currently supports pool_size == input_dim only "
+                f"(got pool_size={self.pool_size}, input_dim={input_dim}); a larger pool "
+                "would need a dedicated input_dim->pool_size hyperplane projection.")
 
         # --- top-n blended read-out (TRAINING-CAPABLE; default 1 == today's layer) -------
         # At read_top_n=1 nothing below is reachable and the layer is byte-for-byte the
@@ -176,7 +199,26 @@ class LightMultiHeadLUT(nn.Module):
 
         dev = device or torch.device("cpu")
         policy = anchor_sampling_policy or AnchorSamplingPolicy.CANONICAL_FULL_COVERAGE
-        if self.multi_head_input:
+        if self.anchor_mode == "single":
+            # SINGLE-anchor addressing: draw NAP single indices per table into the per-head
+            # pool [0, pool_size). Frozen buffer, seeded per head (random_seed + h) like the
+            # pairs so the two modes are init-comparable head for head. Shape matches
+            # anchor_a: [n_heads, tables_per_head, NAP] (multi-head) or [n_tables, NAP].
+            def _draw_c(nt, seed):
+                g = (torch.Generator(device=dev).manual_seed(seed)
+                     if seed is not None else None)
+                return torch.randint(0, self.pool_size, (nt, n_anchor_pairs),
+                                     device=dev, generator=g, dtype=torch.int64)
+            if self.multi_head_input:
+                anchor_c = torch.stack([
+                    _draw_c(self.tables_per_head,
+                            None if random_seed is None else random_seed + h)
+                    for h in range(self.n_heads)
+                ])                                   # [H, T, NAP]
+            else:
+                anchor_c = _draw_c(n_tables, random_seed)   # [n_tables, NAP]
+            self.register_buffer("anchor_c", anchor_c.contiguous())
+        elif self.multi_head_input:
             # BLOCK-DIAGONAL routing: head h reads its OWN [input_dim] slice of the
             # compressed code, so anchors index within a head, not across heads. Each
             # head draws from a fresh generator seeded (random_seed + h) -- the SAME
@@ -194,6 +236,8 @@ class LightMultiHeadLUT(nn.Module):
                 b_list.append(b_h)
             anchor_a = torch.stack(a_list)      # [n_heads, tables_per_head, NAP]
             anchor_b = torch.stack(b_list)
+            self.register_buffer("anchor_a", anchor_a.contiguous())
+            self.register_buffer("anchor_b", anchor_b.contiguous())
         else:
             # Same anchor-pair geometry as FastMultiHeadLut with n_heads=1 (all tables
             # form one summed head), so the routing margins are drawn identically.
@@ -201,8 +245,8 @@ class LightMultiHeadLUT(nn.Module):
                 n_tables=n_tables, n_anchor_pairs=n_anchor_pairs, input_dim=input_dim,
                 device=dev, random_seed=random_seed, policy=policy, n_heads=1,
             )
-        self.register_buffer("anchor_a", anchor_a.contiguous())   # [n_tables, NAP] or [H, T, NAP]
-        self.register_buffer("anchor_b", anchor_b.contiguous())
+            self.register_buffer("anchor_a", anchor_a.contiguous())   # [n_tables, NAP]
+            self.register_buffer("anchor_b", anchor_b.contiguous())
         # MSB-first bit-pack powers, matching FastMultiHeadLut's index convention.
         self.register_buffer(
             "powers",
@@ -246,23 +290,26 @@ class LightMultiHeadLUT(nn.Module):
         #
         # Anchors are flattened once here (with per-head offsets for the block-diagonal
         # case) because the kernel takes a 2-D [n_tables, NAP] anchor table over a flat x.
+        # The native kernel is PAIR-only; in "single" mode it stays disabled (None) so
+        # _pack_index and _fused_eval take the torch path over the single-index margins.
         self._native_msb = None
         self._native_msb_scored = None
-        mgr = _get_native_lutorch_manager()
-        if mgr is not None:
-            self._native_msb = getattr(mgr, "anchor_pairs_lookup_eval_forward_msb", None)
-            self._native_msb_scored = getattr(
-                mgr, "anchor_pairs_lookup_eval_forward_msb_scored", None)
         self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2}[confidence_form]
-        if self.multi_head_input:
-            head_off = torch.arange(self.n_heads, device=dev).view(self.n_heads, 1, 1) \
-                * input_dim
-            a_flat = (anchor_a + head_off).reshape(n_tables, n_anchor_pairs)
-            b_flat = (anchor_b + head_off).reshape(n_tables, n_anchor_pairs)
-        else:
-            a_flat, b_flat = anchor_a, anchor_b
-        self.register_buffer("native_anchor_a", a_flat.contiguous().to(torch.int64))
-        self.register_buffer("native_anchor_b", b_flat.contiguous().to(torch.int64))
+        if self.anchor_mode == "pair":
+            mgr = _get_native_lutorch_manager()
+            if mgr is not None:
+                self._native_msb = getattr(mgr, "anchor_pairs_lookup_eval_forward_msb", None)
+                self._native_msb_scored = getattr(
+                    mgr, "anchor_pairs_lookup_eval_forward_msb_scored", None)
+            if self.multi_head_input:
+                head_off = torch.arange(self.n_heads, device=dev).view(self.n_heads, 1, 1) \
+                    * input_dim
+                a_flat = (anchor_a + head_off).reshape(n_tables, n_anchor_pairs)
+                b_flat = (anchor_b + head_off).reshape(n_tables, n_anchor_pairs)
+            else:
+                a_flat, b_flat = anchor_a, anchor_b
+            self.register_buffer("native_anchor_a", a_flat.contiguous().to(torch.int64))
+            self.register_buffer("native_anchor_b", b_flat.contiguous().to(torch.int64))
 
         log_tau = torch.log(torch.tensor(self._read_tau_init, device=dev))
         if self.read_tau_learnable:
@@ -324,9 +371,13 @@ class LightMultiHeadLUT(nn.Module):
                 f"got {tuple(x.shape)}"
             )
         # gather the per-head anchor coordinates out of each head's own slice
-        idx_a = self.anchor_a.reshape(1, H, T * NAP).expand(B, H, T * NAP)
-        idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(B, H, T * NAP)
-        d = (torch.gather(x, 2, idx_a) - torch.gather(x, 2, idx_b)).view(B, H, T, NAP)
+        if self.anchor_mode == "single":
+            idx_c = self.anchor_c.reshape(1, H, T * NAP).expand(B, H, T * NAP)
+            d = torch.gather(x, 2, idx_c).view(B, H, T, NAP)          # single-coordinate value
+        else:
+            idx_a = self.anchor_a.reshape(1, H, T * NAP).expand(B, H, T * NAP)
+            idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(B, H, T * NAP)
+            d = (torch.gather(x, 2, idx_a) - torch.gather(x, 2, idx_b)).view(B, H, T, NAP)
 
         index = self._pack_index(x.reshape(B, H * self.input_dim), d).view(B, H, T)
 
@@ -513,7 +564,10 @@ class LightMultiHeadLUT(nn.Module):
         B = x.shape[0]
 
         # Routing margins -- differentiable in x (this is what score() reads).
-        d = x[:, self.anchor_a] - x[:, self.anchor_b]                # [B, n_tables, NAP]
+        if self.anchor_mode == "single":
+            d = x[:, self.anchor_c]                                  # [B, n_tables, NAP]
+        else:
+            d = x[:, self.anchor_a] - x[:, self.anchor_b]            # [B, n_tables, NAP]
 
         # Hard sign address, FULLY DETACHED: the comparison is taken on d.detach()
         # and yields an integer index, so NO gradient (and NO straight-through

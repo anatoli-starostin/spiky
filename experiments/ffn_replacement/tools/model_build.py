@@ -199,7 +199,12 @@ class MinimalBlock(nn.Module):
                     # DIRECTIONAL routing gradient plain Light does not have.
                     read_top_n=cfg.get('lut_read_top_n', 1),
                     read_tau=_read_tau_for_layer(cfg, layer_idx),
-                    read_tau_learnable=bool(cfg.get('lut_read_tau_learnable', False)))
+                    read_tau_learnable=bool(cfg.get('lut_read_tau_learnable', False)),
+                    # Single-anchor addressing (light path). Default 'pair' == unchanged, so
+                    # every existing config builds a bit-identical model. 'single' makes each
+                    # address bit the sign of ONE pooled coordinate instead of a pair diff.
+                    anchor_mode=cfg.get('lut_anchor_mode', 'pair'),
+                    pool_size=cfg.get('lut_pool_size', None))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
