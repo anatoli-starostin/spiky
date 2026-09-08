@@ -1420,9 +1420,14 @@ Eval-only PTQ fake-quant on the 0195 checkpoint (σ=0.00335, fp32 baseline 1.160
   **stays −2.62σ under the n=1 control 0193** and ~+0.69σ over dense parity. That converts
   ~96% of the read-out's multiplies (`w·table`, 96 per table) into **shifts** for ≈1σ —
   the single biggest step toward no-multiply, and it nearly lands for free.
-- **+ pow2 tau adds only +0.22σ** (1.164813) — the routing weight's multiply removes cheaply.
-- **What remains:** score=(Σm)·prob and psw=score·w multiplies (pow2-able at runtime,
-  untested next rung), and **10 transcendentals/table (8 logsigmoid + exp + sigmoid)** —
-  the latter, not the multiplies, is the real work of an all-integer engine (needs
-  LUT/piecewise-linear approx). Op catalog + full ladder: `exp_g_0195_.../QUANT_STUDY_0195.md`.
+- **+ pow2 tau adds only +0.22σ** (1.164813) — the routing weight's own multiply removes cheaply.
+- **But a FULLY multiply-free read-out is NOT free:** rounding the data-dependent score & w to
+  pow2 too costs +3.26σ together, and the full shift-only stack (tables+tau+score+w) is
+  **+5.39σ — above the n=1 control 0193**. score·w carries the routing info the blend exists
+  for; hard pow2 rounding of it destroys the advantage. **Verdict: target int16/int8 tables +
+  real integer score·w (multiply-lean), not pure shift.** Shift-only *tables* (+1.03σ) is the
+  viable aggressive knob; multiply-free is off the table. Op catalog + full ladder (rungs
+  0–10): `exp_g_0195_.../QUANT_STUDY_0195.md`.
+- **10 transcendentals/table (8 logsigmoid + exp + sigmoid)** remain the separate all-integer
+  cost (LUT/piecewise-linear approx) — unmeasured axis.
 - Re-run the ladder on 0203@48K when it lands (better-trained tables usually quantise more robustly).

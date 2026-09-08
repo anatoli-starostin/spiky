@@ -54,22 +54,50 @@ table read); the transcendentals (10/table: 8 logsigmoid + exp + sigmoid) are el
   sitting 1.17–1.34× off the nearest 2^k (see ANALYSIS_0195): not tight, but the +0.22σ
   says the blend tolerates the rounding.
 
-## What remains for a true no-multiply int engine
+## 3c — pow2 score & w, and the FULL shift-only read-out (MEASURED)
 
 The MULs left after rung 6 are the **2 psw = score·w** scalars/table and the **1 score =
-(Σm)·prob**. Removing them needs score and w themselves in pow2 (data-dependent →
-runtime round-to-exponent, cheap) — an untested rung, the obvious next probe. The harder
-cost is the **10 transcendentals/table** (8 logsigmoid + exp + sigmoid): a pure-integer
-engine replaces these with LUTs / piecewise-linear approximations. **The transcendental
-gate, not the multiplies, is the real work of an all-integer deployment** — the multiplies
-shift away for ≈1σ; the score's logsigmoid/exp is where the approximation error will live.
+(Σm)·prob**. Rung 5's cheapness made "pow2 the rest too" look free; **it is not.** These
+rungs round the *data-dependent* score and blend weights to powers of two as well (eager
+path, patched `_blend_bag`; a no-rounding sanity eval reproduces 1.160637 exactly, Δ 0, so
+the numbers are faithful).
+
+| rung | scheme | val_bpb | Δ vs fp32 | σ | vs 0193 control |
+|---|---|---|---|---|---|
+| 7 | pow2 **w** only | 1.166091 | +0.005454 | +1.63σ | −2.02σ |
+| 8 | pow2 **score** only | 1.164493 | +0.003856 | +1.15σ | −2.49σ |
+| 9 | pow2 score **+** w | 1.171558 | +0.010921 | +3.26σ | −0.39σ |
+| 10 | **FULL shift-only** (tables+tau+score+w) | 1.178680 | +0.018043 | **+5.39σ** | **+1.74σ** |
+
+**The correction:** rounding score and w to pow2 is NOT cheap — together +3.26σ, and the
+*full* multiply-free read-out is **+5.39σ, which lands ABOVE the n=1 control 0193**. A truly
+multiply-free read-out erases the blend's entire advantage and then some. The earlier draft
+called the remaining multiplies "cheap to remove" — that was wrong; only the *tables* shift
+away cheaply. score·w carries the routing information the blend exists for, and hard pow2
+rounding of it destroys that.
+
+## Verdict for a no-multiply / int deployment
+
+- **The right target is int16 (or int8) tables + real integer arithmetic**, not pure shifts.
+  int8 tables are free; int16 trivially so. Keep score & w in int (multiply in int16/int32
+  accumulate, round once) rather than forcing them to powers of two.
+- **Shift-only *tables* (rung 5, +1.03σ) is a viable aggressive knob** on top of int score/w
+  — it removes 96 of ~100 MUL/table and the model stays −2.62σ under the n=1 control. This is
+  the sweet spot if a multiply-lean (not multiply-free) engine is the goal.
+- **A fully multiply-free read-out is off the table** at this training length: +5.39σ, worse
+  than n=1. The blend is not worth keeping if score·w must be shift-only.
+- The **10 transcendentals/table** (8 logsigmoid + exp + sigmoid) remain the other integer-
+  engine cost, addressed by LUT / piecewise-linear approximation — a separate untested axis.
 
 ## Caveats & next
 
 - Eval-only fake-quant (quantise→dequantise in fp for the forward); it measures the
   *representation* cost, not a real integer kernel's accumulation/rounding. A real int16
   kernel accumulates in int32 and rounds once — expected to match or beat fake-quant.
-- Measured on **0195@16K**. Re-run this ladder on the **0203@48K** checkpoint when it lands
-  — a better-trained table may quantise differently (usually *more* robustly).
-- Next rung: pow2 **score & w** (all-shift read-out); then a piecewise-linear logsigmoid to
-  bound the transcendental-approximation error.
+- Measured on **0195@16K**. Re-run the full ladder on the **0203@48K** checkpoint when it
+  lands — a better-trained table may quantise more robustly, and it is worth re-checking
+  whether the longer run narrows the +3.26σ score·w-rounding penalty.
+- The pow2 score/w rungs use *hard* nearest-2^k rounding. A learned/annealed pow2 (or a
+  2-bit mantissa "pow2×{1,1.5}") would sit between int and shift-only and might recover most
+  of the +3.26σ — an untested middle ground if a multiply-lean engine needs score/w cheaper.
+- Transcendental axis (piecewise-linear logsigmoid/exp) remains unmeasured.
