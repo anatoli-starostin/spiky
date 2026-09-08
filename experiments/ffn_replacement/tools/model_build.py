@@ -139,8 +139,12 @@ class MinimalBlock(nn.Module):
         self.ffn_type = cfg.get('ffn_type', 'compression')
         gamma = int(cfg.get('gamma', 0))
         if self.ffn_type == 'dense':
+            # Activation configurable; default 'gelu' == the historical dense baseline
+            # (byte-identical), 'relu' for the ReLU ablation. Same widths / no bias / no
+            # extra params either way.
+            _act = {'gelu': nn.GELU, 'relu': nn.ReLU}[cfg.get('dense_activation', 'gelu')]
             self.mlp = nn.Sequential(
-                nn.Linear(n_embd, 4 * n_embd, bias=False), nn.GELU(),
+                nn.Linear(n_embd, 4 * n_embd, bias=False), _act(),
                 nn.Linear(4 * n_embd, n_embd, bias=False))
         else:
             self.lin = nn.Linear(n_embd, n_embd, bias=True) if gamma == 1 else None
