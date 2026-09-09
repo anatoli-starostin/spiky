@@ -103,14 +103,15 @@ class LightMultiHeadLUT(nn.Module):
         output_heads: int = 1,
         anchor_unique_partition: bool = False,
         cell_mode: str = "constant",
+        margin_signed: bool = True,
     ):
         super().__init__()
         if anchor_mode not in ("pair", "single"):
             raise ValueError(
                 f"anchor_mode must be 'pair' or 'single', got {anchor_mode!r}")
-        if cell_mode not in ("constant", "gated_affine", "gated_multiply"):
-            raise ValueError("cell_mode must be 'constant', 'gated_affine' or "
-                             f"'gated_multiply', got {cell_mode!r}")
+        if cell_mode not in ("constant", "gated_affine", "gated_multiply", "margin_readout"):
+            raise ValueError("cell_mode must be 'constant', 'gated_affine', "
+                             f"'gated_multiply' or 'margin_readout', got {cell_mode!r}")
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
                 "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
@@ -146,6 +147,13 @@ class LightMultiHeadLUT(nn.Module):
             raise ValueError("gated cell_mode requires input_dim == output_dim (the ⊙ is "
                              f"coordinate-aligned); got input_dim={input_dim}, output_dim={output_dim}")
         self._tbl_out = output_dim * (2 if self._gated else 1)   # cell stores [u|v] when gated
+        # "margin_readout": cell keeps a bias v_c (constant store), PLUS a per-TABLE matrix
+        # W_t (output_dim x nap); output = v_c + W_t · m, where m is that table's nap addressing
+        # margins -- SIGNED (raw anchor distances) by default, |m| if margin_signed=False. Adds
+        # n_tables*output_dim*nap params model-wide; the score-weighted head sum factorises so
+        # term1 = the usual constant read-out and term2 = score-weighted W_t·m (an einsum).
+        self._margin = cell_mode == "margin_readout"
+        self.margin_signed = bool(margin_signed)
         self.n_anchor_pairs = n_anchor_pairs
         self.table_size = 1 << n_anchor_pairs
         self.confidence_form = confidence_form
@@ -335,6 +343,14 @@ class LightMultiHeadLUT(nn.Module):
                            device=dev, generator=gen) - 0.5
         self.tables = nn.Parameter(u * (2.0 * initial_weights_noise))
 
+        # Per-table margin-readout matrix W_t [n_tables, output_dim, n_anchor_pairs]. Small init
+        # (like the tables) so the FFN still starts ~0 (decompress is zeroed at init anyway).
+        if self._margin:
+            gen_w = (torch.Generator(device=dev).manual_seed(random_seed + 7)
+                     if random_seed is not None else None)
+            w = torch.rand(n_tables, output_dim, n_anchor_pairs, device=dev, generator=gen_w) - 0.5
+            self.margin_W = nn.Parameter(w * (2.0 * initial_weights_noise))
+
         # --- native CUDA bit-pack for the ADDRESS (opt-in, exact, train and eval) ---
         # FastMultiHeadLut uses lutorch_cuda's MSB-first kernel only at eval, and only
         # when its confidence gate is off -- the kernel returns just the packed index and
@@ -458,15 +474,22 @@ class LightMultiHeadLUT(nn.Module):
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)                # [B, H, T]
         if self.read_top_n > 1:
-            if self._gated:
-                raise NotImplementedError("gated cell_mode is only implemented for read_top_n=1")
+            if self._gated or self._margin:
+                raise NotImplementedError("gated/margin cell_mode is only implemented for read_top_n=1")
             return self._blend_bag(d, index, self.table_offset.view(1, H, T), flat,
                                    score, B * H, T).view(B, H, self.output_dim)
         # One bag per (sample, head), summing that head's T tables -> [B, H, _tbl_out];
         # _apply_cell returns it as-is (constant) or forms U + V ⊙ x_head (gated), where
         # x_head is this head's input slice (dim input_dim == output_dim).
         bagged = self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self._tbl_out)
-        return self._apply_cell(bagged, x)
+        out = self._apply_cell(bagged, x)
+        if self._margin:
+            # term2: Σ_t score_t · (W_t · m_t), m = signed margins d (or |d|). W [H,T,d_out,nap].
+            m = d if self.margin_signed else d.abs()                      # [B, H, T, nap]
+            W = self.margin_W.reshape(H, T, self.output_dim, self.n_anchor_pairs)
+            Wm = torch.einsum('htdn,bhtn->bhtd', W, m)                    # W_t · m_t per table
+            out = out + torch.einsum('bht,bhtd->bhd', score, Wm)         # score-weighted head sum
+        return out
 
     def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
         """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.
@@ -595,7 +618,7 @@ class LightMultiHeadLUT(nn.Module):
         """
         if (self._native_msb_scored is None or not x_flat.is_cuda
                 or x_flat.dtype not in (torch.float32, torch.float64)
-                or self._gated):        # gated needs the per-head x for U + V ⊙ x -> torch path
+                or self._gated or self._margin):   # gated/margin need x or margins -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
@@ -667,17 +690,22 @@ class LightMultiHeadLUT(nn.Module):
         G = self.output_heads
         n_bags, bag = B * G, self.n_tables // G
         if self.read_top_n > 1:
-            if self._gated:
-                raise NotImplementedError("gated cell_mode is only implemented for read_top_n=1")
+            if self._gated or self._margin:
+                raise NotImplementedError("gated/margin cell_mode is only implemented for read_top_n=1")
             out = self._blend_bag(d, index, self.table_offset.view(1, -1), flat,
                                   score, n_bags, bag)
             return out.view(B, G, self.output_dim) if G > 1 else out
-        if self._gated and G > 1:
-            raise NotImplementedError("gated cell_mode is not supported with output_heads>1")
+        if (self._gated or self._margin) and G > 1:
+            raise NotImplementedError("gated/margin cell_mode is not supported with output_heads>1")
         bagged = self._bagged_sum(flat, flat_idx, score, n_bags, bag)   # [n_bags, _tbl_out]
         if G > 1:
-            return bagged.view(B, G, self.output_dim)   # (only reached when not gated)
-        return self._apply_cell(bagged, x)              # constant -> bag; gated -> U + V ⊙ x
+            return bagged.view(B, G, self.output_dim)   # (only reached when not gated/margin)
+        out = self._apply_cell(bagged, x)               # constant -> bag; gated -> U + V ⊙ x
+        if self._margin:
+            m = d if self.margin_signed else d.abs()                     # [B, n_tables, nap]
+            Wm = torch.einsum('tdn,btn->btd', self.margin_W, m)          # W_t · m_t per table
+            out = out + torch.einsum('bt,btd->bd', score, Wm)            # score-weighted sum
+        return out
 
     def extra_repr(self) -> str:
         return (f"input_dim={self.input_dim}, n_tables={self.n_tables}, "

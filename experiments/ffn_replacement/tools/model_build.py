@@ -212,7 +212,8 @@ class MinimalBlock(nn.Module):
                     anchor_unique_partition=bool(cfg.get('lut_anchor_unique_partition', False)),
                     # Lookup-gated cell: 'constant' (default, unchanged) | 'gated_affine'
                     # (u+v⊙x) | 'gated_multiply' (v⊙x).
-                    cell_mode=cfg.get('lut_cell_mode', 'constant'))
+                    cell_mode=cfg.get('lut_cell_mode', 'constant'),
+                    margin_signed=bool(cfg.get('lut_margin_signed', True)))
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)

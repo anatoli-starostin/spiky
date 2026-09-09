@@ -174,6 +174,36 @@ def test_apply_cell_is_u_plus_v_times_x():
     assert torch.equal(c._apply_cell(b, torch.randn(1, 4)), b)
 
 
+def test_margin_readout_is_v_plus_W_times_signed_margins():
+    """margin_readout: output = v_c + W_t · m with SIGNED margins m = x[a]-x[b].
+    Zero the bias store v so the output isolates term2 = Σ_t score_t (W_t · m_t); compare to
+    a hand-computed einsum from the module's own W, margins, and score."""
+    import torch
+    from spiky.lutorch.fast_multi_head_lut import _confidence_score
+    nap, nt, din, dout = 5, 6, 8, 4
+    m = LightMultiHeadLUT(
+        input_dim=din, n_tables=nt, output_dim=dout, n_anchor_pairs=nap,
+        confidence_form="margin", random_seed=4, device=torch.device("cpu"),
+        n_heads=1, multi_head_input=False, cell_mode="margin_readout", margin_signed=True)
+    assert m.cell_mode == "margin_readout" and m._margin
+    assert tuple(m.margin_W.shape) == (nt, dout, nap)     # per-table W [n_tables, d_out, nap]
+    with torch.no_grad(): m.tables.zero_()                 # isolate the margin term
+    x = torch.randn(3, din)
+    out = m(x)
+    # reference: SIGNED margins, score = confidence(|d|), term2 = Σ_t score·(W_t·d_t)
+    d = x[:, m.anchor_a] - x[:, m.anchor_b]                # [B, nt, nap] signed
+    score = _confidence_score(d, "margin", 1.0)            # [B, nt]
+    Wm = torch.einsum('tdn,btn->btd', m.margin_W, d)
+    ref = torch.einsum('bt,btd->bd', score, Wm)
+    assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
+    # signed vs abs really differ
+    m2 = LightMultiHeadLUT(input_dim=din, n_tables=nt, output_dim=dout, n_anchor_pairs=nap,
+        confidence_form="margin", random_seed=4, device=torch.device("cpu"),
+        n_heads=1, multi_head_input=False, cell_mode="margin_readout", margin_signed=False)
+    with torch.no_grad(): m2.tables.zero_()
+    assert not torch.allclose(m2(x), out)                  # |m| path differs from signed
+
+
 def test_gated_forward_runs_and_grad():
     for mh in (True, False):
         m = _mk_gated("gated_affine", din=8, mh=mh)
