@@ -227,9 +227,54 @@ class MinimalBlock(nn.Module):
             self.mlp = nn.Sequential(nn.Linear(n_embd, 4 * n_embd, bias=False), _acth(),
                                      nn.Linear(4 * n_embd, n_embd, bias=False))
             self.gate_theta = nn.Parameter(torch.zeros(()))   # sigmoid(0)=0.5 at init
+        # --- residual-STACK hybrid (diagnostic): FFN and LUT sub-blocks IN SERIES, each with
+        # its own LayerNorm + residual + a learnable per-layer LayerScale scalar (s_ffn, s_lut,
+        # init 0.1). Replaces this block's single FFN residual. Distinct from hybrid_gate. ---
+        self.hybrid_stack = bool(cfg.get('hybrid_stack', False))
+        if self.hybrid_stack:
+            if self.ffn_type == 'dense':
+                raise ValueError("hybrid_stack needs the LUT (compression) ffn; ffn_type must "
+                                 "be 'compression', not 'dense'.")
+            if getattr(self, 'hybrid', False):
+                raise ValueError("hybrid_gate and hybrid_stack are mutually exclusive.")
+            self.stack_order = cfg.get('hybrid_stack_order', 'ffn_lut')   # primary FFN->LUT
+            if self.stack_order not in ('ffn_lut', 'lut_ffn'):
+                raise ValueError(f"hybrid_stack_order must be 'ffn_lut' or 'lut_ffn', got {self.stack_order!r}")
+            _acts = {'gelu': nn.GELU, 'relu': nn.ReLU}[cfg.get('dense_activation', 'gelu')]
+            self.mlp = nn.Sequential(nn.Linear(n_embd, 4 * n_embd, bias=False), _acts(),
+                                     nn.Linear(4 * n_embd, n_embd, bias=False))
+            self.ln_a = nn.LayerNorm(n_embd)     # norm before the 1st sub-block
+            self.ln_b = nn.LayerNorm(n_embd)     # norm before the 2nd sub-block
+            self.s_ffn = nn.Parameter(torch.full((), 0.1))   # LayerScale dials (no penalty)
+            self.s_lut = nn.Parameter(torch.full((), 0.1))
+            self._ratio_ffn = None               # realized ||branch||/||stream|| (set in forward)
+            self._ratio_lut = None
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
+        if getattr(self, 'hybrid_stack', False):
+            # two sub-blocks in series, each with own LN + residual + LayerScale scalar.
+            B, T, C = x.shape
+
+            def _lut(z):
+                o = self.ffn(z.reshape(B * T, C))
+                if o.dim() == 3:
+                    o = o.sum(dim=1)
+                return o.reshape(B, T, C).to(z.dtype)
+
+            def _ratio(o, stream):   # realized contribution: mean_token ||o|| / ||stream||
+                with torch.no_grad():
+                    return (o.norm(dim=-1) / stream.norm(dim=-1).clamp_min(1e-9)).mean().detach()
+
+            if self.stack_order == 'ffn_lut':
+                o1 = self.s_ffn * self.mlp(self.ln_a(x)); x1 = x + o1
+                o2 = self.s_lut * _lut(self.ln_b(x1));    x2 = x1 + o2
+                self._ratio_ffn, self._ratio_lut = _ratio(o1, x1), _ratio(o2, x2)
+            else:  # lut_ffn control
+                o1 = self.s_lut * _lut(self.ln_a(x));     x1 = x + o1
+                o2 = self.s_ffn * self.mlp(self.ln_b(x1)); x2 = x1 + o2
+                self._ratio_lut, self._ratio_ffn = _ratio(o1, x1), _ratio(o2, x2)
+            return x2
         h = self.ln2(x)
         if getattr(self, 'hybrid', False):
             # o = g·FFN(h) + (1-g)·LUT(h), one shared normed input, convex per-layer gate.
@@ -294,6 +339,11 @@ class MinimalGPT(nn.Module):
                 # init and the block output is 0 (gate sits at 0.5) — a clean, well-behaved start.
                 if getattr(block, 'hybrid', False):
                     nn.init.zeros_(block.mlp[-1].weight)
+                # hybrid_stack: zero the FFN sub-block's last Linear too (its LUT sub-block's
+                # decompress weight is already zeroed above); both branches then start ~0 and
+                # the LayerScale scalars (0.1) dial them up as they train.
+                if getattr(block, 'hybrid_stack', False):
+                    nn.init.zeros_(block.mlp[-1].weight)
         if bool(cfg.get('tie_unembedder', False)):
             self.head.weight = self.tok_emb.weight
 
@@ -320,6 +370,23 @@ class MinimalGPT(nn.Module):
     def hybrid_gates(self):
         """Per-layer gate values g_l = sigmoid(theta_l) as floats (for logging)."""
         return [float(torch.sigmoid(b.gate_theta).item()) for b in self.hybrid_blocks()]
+
+    def hybrid_stack_blocks(self):
+        return [b for b in self.blocks if getattr(b, 'hybrid_stack', False)]
+
+    @torch.no_grad()
+    def hybrid_stack_stats(self):
+        """Per-layer LayerScale scalars s_ffn/s_lut and the realized output-norm ratios
+        ratio_ffn/ratio_lut from the most recent forward (floats; NaN before any forward)."""
+        hb = self.hybrid_stack_blocks()
+        def rv(x):
+            return float(x.item()) if x is not None else float('nan')
+        return {
+            's_ffn': [float(b.s_ffn.item()) for b in hb],
+            's_lut': [float(b.s_lut.item()) for b in hb],
+            'ratio_ffn': [rv(b._ratio_ffn) for b in hb],
+            'ratio_lut': [rv(b._ratio_lut) for b in hb],
+        }
 
     def forward(self, idx, targets=None, loss_reduction='mean'):
         x = self.tok_emb(idx)

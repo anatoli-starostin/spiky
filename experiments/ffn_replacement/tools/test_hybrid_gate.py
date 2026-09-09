@@ -62,6 +62,40 @@ def test_gate_reflects_theta_per_layer():
     assert abs(m.hybrid_gate_penalty().item() - sum(gates)) < 1e-5
 
 
+def _cfg_stack(order="ffn_lut"):
+    c = _cfg(False)                       # base compression config, hybrid_gate off
+    c["hybrid_stack"] = True
+    c["hybrid_stack_order"] = order
+    return c
+
+
+def test_hybrid_stack_forward_scalars_learnable_and_ratios():
+    torch.manual_seed(0)
+    m = build_model(_cfg_stack(), vocab_size=1024, device="cpu")
+    NL = len(m.blocks)
+    for b in m.blocks:                    # each block: dense mlp + LUT ffn + ln_a/ln_b + scales
+        assert b.hybrid_stack and b.stack_order == "ffn_lut"
+        assert hasattr(b, "s_ffn") and hasattr(b, "s_lut") and hasattr(b, "ln_a") and hasattr(b, "ln_b")
+        assert abs(b.s_ffn.item() - 0.1) < 1e-6 and abs(b.s_lut.item() - 0.1) < 1e-6
+    x = torch.randint(0, 1024, (2, 64)); y = torch.randint(0, 1024, (2, 64))
+    m(x, y).backward()                    # both LayerScale scalars get finite grad (learnable)
+    for b in m.blocks:
+        assert b.s_ffn.grad is not None and torch.isfinite(b.s_ffn.grad).all()
+        assert b.s_lut.grad is not None and torch.isfinite(b.s_lut.grad).all()
+    st = m.hybrid_stack_stats()           # per-layer scalars + realized norm-ratios logged
+    assert set(st) == {"s_ffn", "s_lut", "ratio_ffn", "ratio_lut"}
+    assert all(len(st[k]) == NL for k in st)
+    assert all(r >= 0 for r in st["ratio_ffn"]) and all(r >= 0 for r in st["ratio_lut"])
+    assert m(x).shape == (2, 64, 1024)
+
+
+def test_hybrid_stack_order_control_runs():
+    m = build_model(_cfg_stack("lut_ffn"), vocab_size=1024, device="cpu")
+    assert all(b.stack_order == "lut_ffn" for b in m.blocks)
+    x = torch.randint(0, 1024, (2, 32))
+    assert m(x).shape == (2, 32, 1024)
+
+
 def test_nonhybrid_path_unchanged():
     m = build_model(_cfg(False), vocab_size=1024, device="cpu")
     for b in m.blocks:
