@@ -1498,3 +1498,19 @@ Extremum probe of the addressing scheme: each address bit = sign of ONE projecte
 - **Single-coordinate sign addressing UNDERPERFORMS pair-difference addressing.** Even the param-matched shared-global-pool 0209 (1.139030) is worse than every pair arm except it roughly ties the worst pair arm 0204 (nap9, 1.139720) — i.e. +2.58σ behind the best pair arm 0206. The untied unique-hp extremum 0210 (1.150297) is the worst arm in the whole survey (+10.41σ dense).
 - Consistent with (a) the BH4-style caveat — a single coordinate's sign does NOT cancel a token-independent code offset, which the pair difference z[a]−z[b] does — and (b) the "Revenge of Monosemanticity" lens (arXiv 2608.24007): our addressing hyperplanes are FROZEN, so tables cannot learn the local specialized directions that give dense MLPs their edge; single-coordinate frozen addressing is the least expressive of all and lands worst.
 - **Takeaway for the line:** don't pursue single-anchor addressing further; the pair difference is the better fixed address. The paper-implied next lever is LEARNABLE addressing directions, not a different fixed scheme. Detail: `exp_g_0209_.../`, `exp_g_0210_.../` (0210 run on the worker VM).
+
+
+## Lookup-GATED cell (0213) — the best LUT arm, closes ~12% of the gap to dense
+
+`cell_mode='gated_affine'` on 0207's geometry: each cell stores [u_c | v_c] and the head output is **u_c + v_c ⊙ x_head** (an address- AND input-dependent diagonal affine map / lookup-gated GLU) instead of a constant value. n=1, pair addressing, H8/tph64/nap8/d48; table params double (75,497,472), TOTAL 105,986,310. σ=0.00335, dense GELU@48K 1.115420.
+
+| run | cell | final | vs 0207 (constant twin) | vs 0206 (prev best LUT) | vs dense GELU |
+|---|---|---|---|---|---|
+| **0213** | **gated_affine (u+v⊙x)** | **1.128510** | **−0.23σ** | **−0.56σ (better)** | **+3.91σ** |
+| 0207 | constant | 1.131286 | — | — | +4.74σ |
+| 0206 | constant (n2 blend) | 1.130397 | — | — | +4.47σ |
+| dense GELU (0177) | — | 1.115420 | — | — | 0 |
+
+- **0213 is the NEW BEST LUT arm** (1.128510), beating the prior best 0206 by −0.56σ, and it posts the **smallest LUT-vs-dense gap in the whole survey (+3.91σ vs 0206's +4.47σ)** — within-cell affine interpolation closed ~0.56σ (~12%) of the gap that a constant value store leaves.
+- **But it does NOT reach dense**, and the closure is modest. Its early matched-step behaviour was striking (at step 11k it was −1.1σ *under* the dense curve — the first LUT arm ever to track below dense) but the lead **fully reversed** as dense kept descending (step 30.5k: +1.88σ above dense), ending +3.91σ. Same early-lead-compression pattern the blend/geometry arms showed.
+- **Read:** address-dependent within-cell interpolation (a learned diagonal-affine per cell) is the most productive LUT lever found — it beats every constant-cell variant — and it points the same way as the monosemanticity lens (make the read-out do more *learned, input-conditioned* work per address). It is the direction to push (richer per-cell maps; and the still-untried LEARNABLE addressing). Even so, plain dense (GELU 1.11542, ReLU 1.12148) still beats it. Sibling ablation `gated_multiply` (v⊙x, no bias) is a one-flag run away. Detail: `exp_g_0213_.../`.
