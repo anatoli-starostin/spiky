@@ -258,6 +258,21 @@ class MinimalBlock(nn.Module):
             self.s_lut = nn.Parameter(torch.full((), 0.1))
             self._ratio_ffn = None               # realized ||branch||/||stream|| (set in forward)
             self._ratio_lut = None
+        # --- additive parallel hybrid (diagnostic): o = FFN(h) + LUT(h), plain SUM, NO gate,
+        # no LayerScale, no forced mixing. Distinct from hybrid_gate (convex) & hybrid_stack
+        # (series). FFN width from dense_inner_dim; LUT from the lut_* keys. ---
+        self.hybrid_add = bool(cfg.get('hybrid_add', False))
+        if self.hybrid_add:
+            if self.ffn_type == 'dense':
+                raise ValueError("hybrid_add needs the LUT (compression) ffn; ffn_type must be 'compression'.")
+            if getattr(self, 'hybrid', False) or getattr(self, 'hybrid_stack', False):
+                raise ValueError("hybrid_add is mutually exclusive with hybrid_gate / hybrid_stack.")
+            _acta = {'gelu': nn.GELU, 'relu': nn.ReLU}[cfg.get('dense_activation', 'gelu')]
+            hida = int(cfg.get('dense_inner_dim', 4 * n_embd))
+            self.mlp = nn.Sequential(nn.Linear(n_embd, hida, bias=False), _acta(),
+                                     nn.Linear(hida, n_embd, bias=False))
+            self._add_nffn = None                # realized per-branch output norms (set in forward)
+            self._add_nlut = None
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
@@ -284,6 +299,19 @@ class MinimalBlock(nn.Module):
                 o2 = self.s_ffn * self.mlp(self.ln_b(x1)); x2 = x1 + o2
                 self._ratio_lut, self._ratio_ffn = _ratio(o1, x1), _ratio(o2, x2)
             return x2
+        if getattr(self, 'hybrid_add', False):
+            # o = FFN(h) + LUT(h): plain additive parallel, no gate, one shared LN input.
+            h = self.ln2(x)
+            B, T, C = h.shape
+            o_lut = self.ffn(h.reshape(B * T, C))
+            if o_lut.dim() == 3:
+                o_lut = o_lut.sum(dim=1)
+            o_lut = o_lut.reshape(B, T, C).to(h.dtype)
+            o_ffn = self.mlp(h)
+            with torch.no_grad():
+                self._add_nffn = o_ffn.norm(dim=-1).mean().detach()
+                self._add_nlut = o_lut.norm(dim=-1).mean().detach()
+            return x + o_ffn + o_lut
         h = self.ln2(x)
         if getattr(self, 'hybrid', False):
             # o = g·FFN(h) + (1-g)·LUT(h), one shared normed input, convex per-layer gate.
@@ -353,6 +381,10 @@ class MinimalGPT(nn.Module):
                 # the LayerScale scalars (0.1) dial them up as they train.
                 if getattr(block, 'hybrid_stack', False):
                     nn.init.zeros_(block.mlp[-1].weight)
+                # hybrid_add: zero the FFN branch's last Linear too (LUT decompress already
+                # zeroed above) -> identity block at init, both branches train up from zero.
+                if getattr(block, 'hybrid_add', False):
+                    nn.init.zeros_(block.mlp[-1].weight)
         if bool(cfg.get('tie_unembedder', False)):
             self.head.weight = self.tok_emb.weight
 
@@ -396,6 +428,18 @@ class MinimalGPT(nn.Module):
             'ratio_ffn': [rv(b._ratio_ffn) for b in hb],
             'ratio_lut': [rv(b._ratio_lut) for b in hb],
         }
+
+    def hybrid_add_blocks(self):
+        return [b for b in self.blocks if getattr(b, 'hybrid_add', False)]
+
+    @torch.no_grad()
+    def hybrid_add_stats(self):
+        """Per-layer realized output norms of the FFN and LUT branches (o = FFN + LUT), from
+        the most recent forward (floats; NaN before any forward). Confirms both branches live."""
+        hb = self.hybrid_add_blocks()
+        def rv(x):
+            return float(x.item()) if x is not None else float('nan')
+        return {'n_ffn': [rv(b._add_nffn) for b in hb], 'n_lut': [rv(b._add_nlut) for b in hb]}
 
     def forward(self, idx, targets=None, loss_reduction='mean'):
         x = self.tok_emb(idx)
