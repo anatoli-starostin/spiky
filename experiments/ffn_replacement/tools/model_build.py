@@ -136,7 +136,13 @@ class MinimalBlock(nn.Module):
         self.ln1 = nn.LayerNorm(n_embd)
         self.attn = MinimalAttention(n_embd, n_head)
         self.ln2 = nn.LayerNorm(n_embd)
-        self.ffn_type = cfg.get('ffn_type', 'compression')
+        # Per-layer FFN type (depth-heterogeneous models): ffn_type_per_layer[layer_idx] wins
+        # when present, else the uniform cfg['ffn_type']. 'lut' is an alias for 'compression'.
+        # Absent => byte-identical to before. LUT layers read the shared lut_* keys; dense
+        # layers read dense_* keys — one config carries both.
+        _per = cfg.get('ffn_type_per_layer')
+        _t = (_per[layer_idx] if _per else cfg.get('ffn_type', 'compression'))
+        self.ffn_type = 'compression' if _t == 'lut' else _t
         gamma = int(cfg.get('gamma', 0))
         if self.ffn_type == 'dense':
             # Activation configurable; default 'gelu' == the historical dense baseline
