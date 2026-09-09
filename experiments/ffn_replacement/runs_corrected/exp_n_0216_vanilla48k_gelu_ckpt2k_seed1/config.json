@@ -1,0 +1,20 @@
+{
+  "exp_name": "exp_n_0216_vanilla48k_gelu_ckpt2k_seed1",
+  "_arch_note": "PART A of task ea0ea758: RE-RUN of the dense-GELU floor exp_n_0177 recipe (whose checkpoint was pruned) with FREQUENT checkpointing so per-layer parameter drift can be measured over training. Config is byte-identical to exp_n_0177_vanilla48k_corrected (vanilla dense 4x GELU MLP bias=False, untied, 6L d384 6heads seq512, ~35.79M params, bs48/ga1 eff 24576, n_steps 48000, lr 3e-4 wd 0.1 warmup 0.1, seed 1, corrected fixed eval bs48x100 skip12). ONLY operational change: CKPT_EVERY=2000 (set in the run wrapper) and ALL intermediate checkpoints kept (no pruning) -> 24 step-checkpoints checkpoint_step2000..48000.pt plus the final checkpoint.pt. Corrected final should reproduce ~1.115420 as a sanity check (same seed/recipe as 0177/0151). Fresh from step 0. TRITON_CACHE_DIR=~/.cache/triton set in wrapper. QUEUED strictly behind exp_g_0215 (codebook) on the H100 -- launches only after 0215 frees the GPU, so it never disturbs the running codebook job.",
+  "ffn_type": "dense",
+  "tie_unembedder": false,
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 48000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 500,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
