@@ -143,9 +143,12 @@ class MinimalBlock(nn.Module):
             # (byte-identical), 'relu' for the ReLU ablation. Same widths / no bias / no
             # extra params either way.
             _act = {'gelu': nn.GELU, 'relu': nn.ReLU}[cfg.get('dense_activation', 'gelu')]
+            # Hidden width defaults to the usual 4x (byte-identical to every existing dense
+            # run); dense_inner_dim overrides it, e.g. =d_model for a narrowed baseline.
+            hid = int(cfg.get('dense_inner_dim', 4 * n_embd))
             self.mlp = nn.Sequential(
-                nn.Linear(n_embd, 4 * n_embd, bias=False), _act(),
-                nn.Linear(4 * n_embd, n_embd, bias=False))
+                nn.Linear(n_embd, hid, bias=False), _act(),
+                nn.Linear(hid, n_embd, bias=False))
         else:
             self.lin = nn.Linear(n_embd, n_embd, bias=True) if gamma == 1 else None
             fwd = cfg.get('lut_forward_mode', 'hard')

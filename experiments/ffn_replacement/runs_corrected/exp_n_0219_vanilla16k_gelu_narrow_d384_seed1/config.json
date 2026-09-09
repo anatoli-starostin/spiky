@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp_n_0219_vanilla16k_gelu_narrow_d384_seed1",
+  "_arch_note": "NARROWED vanilla dense-GELU baseline (task 61838fe7). Standard MinimalGPT/MinimalBlock, plain 2-layer GELU MLP FFN, but WITHOUT the usual 4x widening: dense_inner_dim=384 (=d_model) instead of 4*d_model=1536. No LUT, no hybrid. Everything else identical to the standard vanilla baseline (exp_n_0177/0216 recipe) on the proper 16k schedule (same as exp_n_0135/0176): n_steps=16000, linear warmup 1600 (0.1 frac), cosine decay to 0.1x floor, peak LR 3.0e-4, wd 0.1, d_model=384, 6L 6heads seq512, untied, bs48/ga1 eff 24576, seed 1, corrected fixed eval bs48x100 skip12. Purpose: an iso-d_model (1x, not 4x) dense FFN baseline to sit alongside the 16k hybrids (0217 1.140920 / 0218 1.147392) and the full-width 16k vanilla (0135 seed1 1.165147 / 0176 seed2 1.161798) -- shows what a parameter-lean dense FFN (inner=384) achieves vs the full 4x FFN and vs the LUT arms. FFN params/layer = 2*384*384 = 294,912 (vs 4x = 1,179,648). TRITON_CACHE_DIR set in wrapper.",
+  "ffn_type": "dense",
+  "dense_activation": "gelu",
+  "dense_inner_dim": 384,
+  "tie_unembedder": false,
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 16000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 500,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768
+}
