@@ -245,7 +245,10 @@ class MinimalGPT(nn.Module):
             if block.ffn_type == 'dense':
                 nn.init.zeros_(block.mlp[-1].weight)
             else:
-                if getattr(block.ffn, 'has_decompress', False):
+                if getattr(block.ffn, 'has_decompress', False) \
+                        and hasattr(block.ffn.decompress, 'weight'):
+                    # codebook read-out makes decompress an Identity (its M decode lives in
+                    # LightMHL, deliberately init'd small rather than zeroed) -> nothing to zero.
                     nn.init.zeros_(block.ffn.decompress.weight)
                     # On the BH4 path the decompress BIAS must be zeroed too. Zeroing only
                     # the weight leaves the branch emitting its bias (norm ~0.82 at init),

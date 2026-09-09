@@ -104,14 +104,16 @@ class LightMultiHeadLUT(nn.Module):
         anchor_unique_partition: bool = False,
         cell_mode: str = "constant",
         margin_signed: bool = True,
+        codebook_out_dim: Optional[int] = None,
     ):
         super().__init__()
         if anchor_mode not in ("pair", "single"):
             raise ValueError(
                 f"anchor_mode must be 'pair' or 'single', got {anchor_mode!r}")
-        if cell_mode not in ("constant", "gated_affine", "gated_multiply", "margin_readout"):
-            raise ValueError("cell_mode must be 'constant', 'gated_affine', "
-                             f"'gated_multiply' or 'margin_readout', got {cell_mode!r}")
+        if cell_mode not in ("constant", "gated_affine", "gated_multiply", "margin_readout",
+                             "codebook"):
+            raise ValueError("cell_mode must be 'constant', 'gated_affine', 'gated_multiply', "
+                             f"'margin_readout' or 'codebook', got {cell_mode!r}")
         if confidence_form not in ("bounded", "margin", "bounded_norm"):
             raise ValueError(
                 "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
@@ -154,6 +156,21 @@ class LightMultiHeadLUT(nn.Module):
         # term1 = the usual constant read-out and term2 = score-weighted W_t·m (an einsum).
         self._margin = cell_mode == "margin_readout"
         self.margin_signed = bool(margin_signed)
+        # "codebook": each addressed cell stores a single SCALAR w_c (r=1), NOT a vector. Per
+        # table t the coefficient is g_t = s_t · w_{c_t} (score × addressed scalar); the T
+        # coefficients (all heads, NO cross-table sum) concatenate into g ∈ R^T and are decoded
+        # by ONE shared matrix M ∈ R^{codebook_out_dim × T}: y = M · g. Replaces the usual
+        # gather-and-sum read-out + decompress. Multi-head-input path only (read_top_n=1).
+        self._codebook = cell_mode == "codebook"
+        if self._codebook:
+            if codebook_out_dim is None:
+                raise ValueError("cell_mode='codebook' requires codebook_out_dim (the M output "
+                                 "width, i.e. d_model)")
+            if not multi_head_input:
+                raise NotImplementedError("codebook cell_mode is implemented for the "
+                                          "multi_head_input path only")
+            self.codebook_out_dim = int(codebook_out_dim)
+            self._tbl_out = 1                                    # scalar store per cell
         self.n_anchor_pairs = n_anchor_pairs
         self.table_size = 1 << n_anchor_pairs
         self.confidence_form = confidence_form
@@ -351,6 +368,15 @@ class LightMultiHeadLUT(nn.Module):
             w = torch.rand(n_tables, output_dim, n_anchor_pairs, device=dev, generator=gen_w) - 0.5
             self.margin_W = nn.Parameter(w * (2.0 * initial_weights_noise))
 
+        # Codebook decode matrix M [codebook_out_dim, n_tables]. y = M · g, g = per-table
+        # coefficients. Init std 0.02 (small); with the scalar store also small (w_c ~
+        # initial_weights_noise), the arm starts well-behaved (y ≈ 0).
+        if self._codebook:
+            gen_m = (torch.Generator(device=dev).manual_seed(random_seed + 11)
+                     if random_seed is not None else None)
+            m = torch.randn(self.codebook_out_dim, n_tables, device=dev, generator=gen_m)
+            self.codebook_M = nn.Parameter(m * 0.02)
+
         # --- native CUDA bit-pack for the ADDRESS (opt-in, exact, train and eval) ---
         # FastMultiHeadLut uses lutorch_cuda's MSB-first kernel only at eval, and only
         # when its confidence gate is off -- the kernel returns just the packed index and
@@ -473,6 +499,12 @@ class LightMultiHeadLUT(nn.Module):
 
         score = _confidence_score(d, self.confidence_form,
                                   self.confidence_gain)                # [B, H, T]
+        if self._codebook:
+            # scalar coefficient g_t = s_t · w_{c_t} per (head, table); NO cross-table sum.
+            # Concatenate all H·T coefficients -> g ∈ R^{n_tables}, decode y = M · g.
+            w = flat[flat_idx].view(B, H * T)                          # addressed scalars [B, T_all]
+            g = (score.reshape(B, H * T) * w)                          # [B, n_tables]
+            return g @ self.codebook_M.t()                             # [B, codebook_out_dim]
         if self.read_top_n > 1:
             if self._gated or self._margin:
                 raise NotImplementedError("gated/margin cell_mode is only implemented for read_top_n=1")
@@ -618,7 +650,7 @@ class LightMultiHeadLUT(nn.Module):
         """
         if (self._native_msb_scored is None or not x_flat.is_cuda
                 or x_flat.dtype not in (torch.float32, torch.float64)
-                or self._gated or self._margin):   # gated/margin need x or margins -> torch path
+                or self._gated or self._margin or self._codebook):  # need x/margins/M -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,

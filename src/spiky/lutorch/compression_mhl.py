@@ -248,6 +248,9 @@ class CompressionMultiHeadLUT(nn.Module):
             self.light_single_global = False
             mh = self.has_compress and not self.joint_head_compression and n_heads > 1
             self.light_multi_head_input = mh
+            # Codebook read-out owns its decode matrix M (T -> output_dim) inside LightMHL and
+            # returns [N, output_dim] directly, so the wrapper's decompress is a no-op.
+            self._codebook = cell_mode == "codebook"
             if mh:
                 self.compress = nn.Linear(input_dim, n_heads * in_raw, device=device)
             else:
@@ -270,8 +273,12 @@ class CompressionMultiHeadLUT(nn.Module):
                 # default anchor-PAIR difference. pool_size defaults to eff_in.
                 anchor_mode=anchor_mode, pool_size=pool_size,
                 cell_mode=cell_mode, margin_signed=margin_signed,
+                # codebook decode M maps the T coefficients -> d_model (=output_dim).
+                codebook_out_dim=(output_dim if self._codebook else None),
             )
-            if mh:
+            if self._codebook:
+                self.decompress = nn.Identity()                # M lives in LightMHL
+            elif mh:
                 self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
             else:
                 self.decompress = (nn.Linear(out_raw, output_dim, device=device)
@@ -361,6 +368,9 @@ class CompressionMultiHeadLUT(nn.Module):
                 if self.z_norm is not None:
                     # normalises over the last axis, i.e. each head's own code, independently
                     z = self.z_norm(z)
+                if getattr(self, "_codebook", False):
+                    # LightMHL already applied the M decode: y is [N, output_dim] (=d_model).
+                    return self.lut_light(z).to(z.dtype)
                 y = self.lut_light(z).to(z.dtype)      # [N, n_heads, eff_out]
                 if self.inner_residual:
                     y = y + z

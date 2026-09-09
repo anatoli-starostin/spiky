@@ -204,6 +204,46 @@ def test_margin_readout_is_v_plus_W_times_signed_margins():
     assert not torch.allclose(m2(x), out)                  # |m| path differs from signed
 
 
+def test_codebook_readout_is_M_times_score_weighted_scalars():
+    """codebook: each cell stores a SCALAR w_c; per table g_t = s_t·w_{c_t} (NO cross-table
+    sum); y = M · g with M [d_model, n_tables]. Assert y equals that, from the module's own
+    tensors, and that the store is scalar-shaped."""
+    import torch
+    from spiky.lutorch.fast_multi_head_lut import _confidence_score
+    H, tph, nap, din, D = 2, 4, 6, 16, 10
+    nt, ts = H * tph, 1 << nap
+    m = LightMultiHeadLUT(
+        input_dim=din, n_tables=nt, output_dim=din, n_anchor_pairs=nap,
+        confidence_form="margin", random_seed=5, device=torch.device("cpu"),
+        n_heads=H, multi_head_input=True, cell_mode="codebook", codebook_out_dim=D)
+    assert m.cell_mode == "codebook" and m._codebook
+    assert tuple(m.tables.shape) == (nt, ts, 1)             # SCALAR store (r=1)
+    assert tuple(m.codebook_M.shape) == (D, nt)             # M [d_model, T]
+    B = 3
+    x = torch.randn(B, H, din)
+    out = m(x)
+    assert tuple(out.shape) == (B, D)                       # decoded to d_model, no head axis
+    # reference: signed margins -> address + score, scalar gather, g=s*w, y = g @ M^T
+    T = tph
+    ia = m.anchor_a.reshape(1, H, T * nap).expand(B, H, T * nap)
+    ib = m.anchor_b.reshape(1, H, T * nap).expand(B, H, T * nap)
+    d = (torch.gather(x, 2, ia) - torch.gather(x, 2, ib)).view(B, H, T, nap)
+    idx = m._pack_index(x.reshape(B, H * din), d).view(B, H, T)
+    score = _confidence_score(d, "margin", 1.0)             # [B,H,T]
+    flat = m.tables.reshape(nt * ts, 1)
+    gcell = (idx + m.table_offset.view(1, H, T)).reshape(-1)
+    w = flat[gcell].view(B, H, T)
+    g = (score * w).reshape(B, H * T)                       # [B, n_tables]
+    ref = g @ m.codebook_M.t()
+    assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
+    # non-multi-head codebook must be rejected (mh-only)
+    import pytest
+    with pytest.raises(NotImplementedError):
+        LightMultiHeadLUT(input_dim=din, n_tables=8, output_dim=din, n_anchor_pairs=nap,
+                          device=torch.device("cpu"), n_heads=1, multi_head_input=False,
+                          cell_mode="codebook", codebook_out_dim=D)
+
+
 def test_gated_forward_runs_and_grad():
     for mh in (True, False):
         m = _mk_gated("gated_affine", din=8, mh=mh)
