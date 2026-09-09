@@ -214,10 +214,33 @@ class MinimalBlock(nn.Module):
                     # (u+v⊙x) | 'gated_multiply' (v⊙x).
                     cell_mode=cfg.get('lut_cell_mode', 'constant'),
                     margin_signed=bool(cfg.get('lut_margin_signed', True)))
+        # --- gated hybrid FFN (diagnostic): dense GELU branch IN PARALLEL with the LUT ---
+        # branch above, combined by a learned per-layer convex gate g=sigmoid(theta). Reads
+        # off which layers prefer dense vs LUT. Off by default (hybrid_gate absent) so every
+        # existing config builds unchanged. Requires the LUT ffn (compression path), not dense.
+        self.hybrid = bool(cfg.get('hybrid_gate', False))
+        if self.hybrid:
+            if self.ffn_type == 'dense':
+                raise ValueError("hybrid_gate needs the LUT (compression) ffn as one branch; "
+                                 "set ffn_type='compression', not 'dense'.")
+            _acth = {'gelu': nn.GELU, 'relu': nn.ReLU}[cfg.get('dense_activation', 'gelu')]
+            self.mlp = nn.Sequential(nn.Linear(n_embd, 4 * n_embd, bias=False), _acth(),
+                                     nn.Linear(4 * n_embd, n_embd, bias=False))
+            self.gate_theta = nn.Parameter(torch.zeros(()))   # sigmoid(0)=0.5 at init
 
     def forward(self, x, cos, sin):
         x = x + self.attn(self.ln1(x), cos, sin)
         h = self.ln2(x)
+        if getattr(self, 'hybrid', False):
+            # o = g·FFN(h) + (1-g)·LUT(h), one shared normed input, convex per-layer gate.
+            B, T, C = h.shape
+            o_lut = self.ffn(h.reshape(B * T, C))
+            if o_lut.dim() == 3:
+                o_lut = o_lut.sum(dim=1)
+            o_lut = o_lut.reshape(B, T, C).to(h.dtype)
+            o_ffn = self.mlp(h)
+            g = torch.sigmoid(self.gate_theta)
+            return x + g * o_ffn + (1.0 - g) * o_lut
         if self.ffn_type == 'dense':
             return x + self.mlp(h)
         B, T, C = h.shape
@@ -267,6 +290,10 @@ class MinimalGPT(nn.Module):
                         nn.init.zeros_(block.ffn.decompress.bias)
                 if getattr(block, 'lin', None) is not None:
                     nn.init.zeros_(block.lin.weight)
+                # hybrid: zero the dense branch's last Linear too, so BOTH branches emit 0 at
+                # init and the block output is 0 (gate sits at 0.5) — a clean, well-behaved start.
+                if getattr(block, 'hybrid', False):
+                    nn.init.zeros_(block.mlp[-1].weight)
         if bool(cfg.get('tie_unembedder', False)):
             self.head.weight = self.tok_emb.weight
 
@@ -277,6 +304,22 @@ class MinimalGPT(nn.Module):
 
     def get_device(self):
         return self.tok_emb.weight.device
+
+    def hybrid_blocks(self):
+        return [b for b in self.blocks if getattr(b, 'hybrid', False)]
+
+    def hybrid_gate_penalty(self):
+        """Σ_l g_l  (g_l = sigmoid(theta_l)) over hybrid layers — the L1 FFN-sparsity term.
+        Differentiable; 0 (no grad) when no hybrid blocks. Trainer scales it by lambda."""
+        hb = self.hybrid_blocks()
+        if not hb:
+            return torch.zeros((), device=self.get_device())
+        return torch.stack([torch.sigmoid(b.gate_theta) for b in hb]).sum()
+
+    @torch.no_grad()
+    def hybrid_gates(self):
+        """Per-layer gate values g_l = sigmoid(theta_l) as floats (for logging)."""
+        return [float(torch.sigmoid(b.gate_theta).item()) for b in self.hybrid_blocks()]
 
     def forward(self, idx, targets=None, loss_reduction='mean'):
         x = self.tok_emb(idx)
