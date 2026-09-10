@@ -139,6 +139,21 @@ EVAL_EVERY = cfg['eval_every']
 # of EVAL_EVERY so it fires inside the existing eval branch and adds no new control flow.
 CKPT_EVERY = int(os.environ.get('CKPT_EVERY', 4000))
 LUT_TV_LAMBDA = float(cfg.get('lut_cell_smoothness', 0.0))   # Hamming-1 cell TV penalty (0=off)
+# Kohonen/SOM annealed topographic penalty (0=off). sigma is annealed from sigma0 to
+# sigma_final across training progress (step/n_steps), 'linear' or 'exp' decay.
+SOM_LAMBDA = float(cfg.get('lut_som_lambda', 0.0))
+SOM_SIG0 = float(cfg.get('lut_som_sigma0', 2.0))
+SOM_SIGF = float(cfg.get('lut_som_sigma_final', 0.5))
+SOM_ANNEAL = str(cfg.get('lut_som_anneal', 'linear'))
+
+
+def som_sigma(step):
+    p = min(1.0, max(0.0, step / N_STEPS))           # training progress
+    if SOM_ANNEAL == 'exp':
+        return SOM_SIG0 * (max(SOM_SIGF, 1e-6) / max(SOM_SIG0, 1e-6)) ** p
+    return SOM_SIG0 + (SOM_SIGF - SOM_SIG0) * p       # linear (default)
+
+
 EVAL = eval_config(cfg)   # fixed eval: bs48 x100 skip12 (NOT a function of DEVICE_BS)
 
 BASE_DIR = get_base_dir()
@@ -270,9 +285,19 @@ def tv_stat():
     return [f'{model.lut_tv_penalty().item():.8e}']
 
 
+# raw (pre-lambda) SOM topographic penalty at the CURRENT annealed sigma, + that sigma.
+@torch.no_grad()
+def som_stat(step):
+    if SOM_LAMBDA <= 0.0:
+        return ['0', f'{som_sigma(step):.6f}']
+    sig = som_sigma(step)
+    return [f'{model.lut_som_penalty(sig).item():.8e}', f'{sig:.6f}']
+
+
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
 csv_w = csv.writer(csv_f)
-csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TAU_COLS + ADD_COLS + ['lut_tv'])
+csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TAU_COLS + ADD_COLS
+               + ['lut_tv', 'lut_som', 'lut_som_sigma'])
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 
@@ -300,6 +325,9 @@ for step in range(1, N_STEPS + 1):
     # (byte-identical to the plain trainer). Extra backward accumulates grad into the tables.
     if LUT_TV_LAMBDA > 0.0:
         (LUT_TV_LAMBDA * model.lut_tv_penalty()).backward()
+    # SOM annealed topographic penalty (no-op at lambda=0). sigma from training progress.
+    if SOM_LAMBDA > 0.0:
+        (SOM_LAMBDA * model.lut_som_penalty(som_sigma(step))).backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
@@ -310,7 +338,8 @@ for step in range(1, N_STEPS + 1):
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + ln_stats() + tau_stats() + add_stats() + tv_stat())
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + ln_stats() + tau_stats() + add_stats()
+                       + tv_stat() + som_stat(step))
         csv_f.flush()
         if _NA:
             _s = model.hybrid_add_stats()
