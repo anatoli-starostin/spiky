@@ -13,6 +13,7 @@ Uses each run's results.json when present, else its latest eval step (marked in 
 """
 import csv
 import json
+import math
 import os
 import sys
 
@@ -24,7 +25,7 @@ from matplotlib.ticker import FuncFormatter, LogLocator          # noqa: E402
 OKABE_ITO = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9',
              '#F0E442', '#000000']
 # Sizes are ORDERED, so panel (a) uses one sequential hue light -> dark (Blues), not categories.
-SIZE_RAMP = ['#9ecae1', '#6baed6', '#3182bd', '#08519c', '#08306b']
+SIZE_RAMP = ['#9ecae1', '#4292c6', '#08519c', '#08306b']      # evenly stepped lightness
 INK, INK2, GRID = '#1f2328', '#57606a', '#d0d7de'
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -94,7 +95,7 @@ plt.rcParams.update({'font.size': 10, 'text.color': INK, 'axes.labelcolor': INK2
                      'xtick.color': INK2, 'ytick.color': INK2, 'axes.edgecolor': GRID})
 fig, (a1, a2) = plt.subplots(1, 2, figsize=(15, 5.6))
 
-ramp = SIZE_RAMP[-len(runs):] if len(runs) <= len(SIZE_RAMP) else SIZE_RAMP
+ramp = SIZE_RAMP[-len(runs):] if len(runs) <= len(SIZE_RAMP) else SIZE_RAMP[-1:] * len(runs)
 for r, col in zip(runs, ramp):
     a1.plot(layers, [r['fvu'][li] for li in layers], marker='o', color=col, lw=2, ms=7,
             markeredgecolor='white', markeredgewidth=1.5, label=label(r),
@@ -105,9 +106,9 @@ a1.set_xticks(layers)
 a1.set_xticklabels([f'L{li}' for li in layers])
 a1.set_xlabel('layer')
 a1.set_ylabel('held-out FVU')
-a1.set_ylim(bottom=0)
+a1.set_ylim(0, max(max(lin.values()), max(max(r['fvu'].values()) for r in runs)) * 1.3)
 a1.set_title('FVU by layer, one line per student size', loc='left', color=INK)
-a1.legend(frameon=False, fontsize=8.5, loc='upper left', bbox_to_anchor=(1.0, 1.0))
+a1.legend(frameon=False, fontsize=8.5, loc='upper right')   # headroom above the L2 peak
 a1.grid(axis='y', color=GRID, lw=0.8)
 a1.set_axisbelow(True)
 
@@ -116,16 +117,24 @@ for i, li in enumerate(layers):
     ys = [r['fvu'][li] for r in runs]
     a2.plot(xs, ys, marker='o', color=OKABE_ITO[i], lw=2, ms=7, markeredgecolor='white',
             markeredgewidth=1.5, label=f'L{li}')
-    a2.annotate(f'L{li}', (xs[-1], ys[-1]), xytext=(7, 0), textcoords='offset points',
-                va='center', color=INK2, fontsize=9)
 a2.set_xscale('log')
 a2.set_yscale('log')
 a2.set_xticks([r['params'] for r in runs])
 a2.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v / 1e6:.1f}M'))
 a2.xaxis.set_minor_formatter(FuncFormatter(lambda v, _: ''))
-a2.yaxis.set_major_locator(LogLocator(base=10, subs=(0.1, 0.15, 0.2, 0.3, 0.5, 0.7, 1.0)))
+a2.yaxis.set_major_locator(LogLocator(base=10, subs=(0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0)))
 a2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:g}'))
 a2.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ''))
+# Direct end labels, nudged apart where lines finish close together (L2 and L3 end ~3% apart,
+# which would otherwise print one label on top of the other).
+lo, hi = (math.log10(v) for v in a2.get_ylim())
+ends = sorted(((math.log10(runs[-1]['fvu'][li]) - lo) / (hi - lo), li) for li in layers)
+placed = []
+for frac, _ in ends:
+    placed.append(max(frac, placed[-1] + 0.045) if placed else frac)
+for (_, li), frac in zip(ends, placed):
+    a2.annotate(f'L{li}', (runs[-1]['params'], frac), xycoords=('data', 'axes fraction'),
+                xytext=(7, 0), textcoords='offset points', va='center', color=INK2, fontsize=9)
 a2.set_xlabel('student params per layer (log scale)')
 a2.set_ylabel('held-out FVU (log scale)')
 a2.set_title('Scaling curve per layer', loc='left', color=INK)

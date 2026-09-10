@@ -106,6 +106,52 @@ All 6 layers in one process: 0.141 s/step, 38 min, 4.6 GB GPU.
   A sweep configured natively short anneals and lands lower at the same step; the 4K-native
   capacity ladder (`run_ladder_heads.sh`) is the comparable short protocol.
 
+## Results: 4K-native capacity ladder over H (`runs/ladder4k_H{4,8,16}`)
+
+Only `lut_n_heads` changes; tph 128, nap 8 and inner 48→48 stay at exp_n_0238's values, and the
+architecture is the same for every layer within a point. Each point trains **4,000 steps with
+the cosine schedule spanning those 4K**. Data order, batch, eval cadence, held-out slab and
+linear baseline are identical to the 16K sweep. H was chosen as the knob because it is the only
+one that raises the output rank `H·inner_out` (192 → 384 → 768, capped at 384); tph, nap and
+inner_in add parameters but keep the rank-192 cap. **H=32 (8×, 51.5M) was skipped at Anatoly's
+request** (task 38fd48ea); it is not a size limit.
+
+| | H=4 | H=8 | H=16 |
+|---|---|---|---|
+| params / student | 6,439,488 (1×) | 12,878,592 (2×) | 25,756,800 (4×) |
+| output rank | 192 | 384 | 384 |
+| wall clock, peak GPU | 9.5 min, 3.2 GiB | 16.7 min, 5.5 GiB | 32.0 min, 6.7 GiB (2 chunks) |
+
+| layer | linear FVU | H=4 | H=8 | H=16 | H8 / H4 | H16 / H8 |
+|---|---|---|---|---|---|---|
+| L0 | 0.0818 | 0.1210 | **0.0220** | **0.0111** | 0.18 | 0.50 |
+| L1 | 0.4898 | 0.1966 | 0.1382 | 0.0970 | 0.70 | 0.70 |
+| L2 | 0.5757 | 0.3894 | 0.2889 | 0.2057 | 0.74 | 0.71 |
+| L3 | 0.4785 | 0.3712 | 0.2797 | 0.2060 | 0.75 | 0.74 |
+| L4 | 0.4831 | 0.3348 | 0.2505 | 0.1785 | 0.75 | 0.71 |
+| L5 | 0.3617 | 0.1601 | 0.1084 | 0.0762 | 0.68 | 0.70 |
+
+![capacity ladder](runs/ladder4k_heads.png)
+
+- **Ranking.** H=4 and H=8: L2 > L3 > L4 > L1 > L5 > L0, exactly the 16K order. H=16: L3 > L2 by
+  0.0003, a tie. But it is a trend, not noise: the L2−L3 gap goes +0.018 → +0.009 → −0.0003 across
+  the ladder, and within the H=16 run it falls steadily from +0.0036 at step 2,000. **The tiers
+  are invariant**: {L2, L3} > L4 > L1 > L5 > L0 at every size. Only the order inside the top pair
+  moves.
+- **Nothing saturates up to 4×.** From H=8 to H=16 every layer's FVU falls to 0.70–0.74× per
+  parameter doubling (L0 0.50×). L2 keeps improving (0.71×), and L0 and L5 improve at least as
+  fast in relative terms. In absolute FVU the hard middle layers gain the most (L2 −0.083 vs
+  L0 −0.011 from H=8 to H=16).
+- **L0 beats its linear fit from H=8 on**: 0.022 (3.7× below the linear 0.082), then 0.011. At H=4
+  it cannot, because its rank-192 floor is 0.0935. H=4 → H=8 is the step that lifts the output rank
+  to the full 384. There L0 improves 5.5× while the other layers improve 1.3–1.5×, so the rank cap
+  was L0's binding constraint.
+- **4K native vs the 16K schedule, at H=4.** The native 4K run lands below the 16K run's final FVU
+  on 4 layers (L2 0.389 vs 0.404, L5 0.160 vs 0.169), equal on L0 and slightly above on L3, with
+  the identical ranking. This confirms the schedule caveat above.
+- **Near the 4K budget's endpoint.** FVU moved by under 1% between steps 3,000 and 4,000 on L2 and
+  L4 at every size (L0 at H=16: −2.6%, i.e. 0.0003 absolute).
+
 ## Reuse for per-layer LUT hyperparameters (goal 2)
 
 `--student-overrides` takes a JSON list with **one dict per requested layer** (or a single
