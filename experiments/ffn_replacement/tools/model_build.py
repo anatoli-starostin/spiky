@@ -440,6 +440,16 @@ class MinimalGPT(nn.Module):
             return torch.zeros((), device=self.get_device())
         return torch.stack([m.cell_tv() for m in ms]).mean()   # avg over LUT layers/tables
 
+    def lut_som_penalty(self, sigma):
+        """Mean SOM/topographic cell-smoothness penalty over all LightMHL tables at the given
+        annealed Hamming radius `sigma`. Differentiable; 0 (no grad) with no LUT layers. The
+        trainer computes sigma from training progress and multiplies by cfg['lut_som_lambda']."""
+        from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
+        ms = [m for m in self.modules() if isinstance(m, LightMultiHeadLUT)]
+        if not ms:
+            return torch.zeros((), device=self.get_device())
+        return torch.stack([m.som_penalty(sigma) for m in ms]).mean()
+
     def hybrid_add_blocks(self):
         return [b for b in self.blocks if getattr(b, 'hybrid_add', False)]
 

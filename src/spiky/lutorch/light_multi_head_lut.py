@@ -491,6 +491,34 @@ class LightMultiHeadLUT(nn.Module):
         n_pairs = self.n_tables * nap * (1 << (nap - 1))        # total Hamming-1 pairs
         return tv / n_pairs
 
+    def som_penalty(self, sigma):
+        """Kohonen/SOM TOPOGRAPHIC smoothness: mean over cell pairs (c,c') of
+        h(d_H)·||v_c - v_c'||^2 with the neighbourhood kernel h(d_H)=exp(-d_H^2/(2 sigma^2)),
+        d_H the Hamming distance between the cells' addresses and `sigma` the CURRENT (annealed)
+        radius in Hamming units. The graded generalization of the radius-1 flat TV (cell_tv is
+        the sigma->0, radius-1 limit). Averaged over ordered pairs and tables. The constant
+        [C,C] pairwise-Hamming matrix is built once and cached (not a buffer -> stays out of the
+        state_dict); only the kernel (a function of sigma) and the per-table squared-diffs are
+        recomputed. Differentiable w.r.t. `tables`; called ONLY when lut_som_lambda>0."""
+        C = self.table_size
+        cache = getattr(self, "_ham_dist", None)
+        if cache is None or cache.shape[0] != C or cache.device != self.tables.device:
+            idx = torch.arange(C, device=self.tables.device)
+            xor = idx[:, None] ^ idx[None, :]
+            ham = torch.zeros(C, C, device=self.tables.device)
+            for b in range(self.n_anchor_pairs):
+                ham = ham + ((xor >> b) & 1).to(ham.dtype)
+            self._ham_dist = ham
+        ham = self._ham_dist
+        sig = max(float(sigma), 1e-6)
+        kernel = torch.exp(-(ham * ham) / (2.0 * sig * sig))    # [C,C], constant given sigma
+        t = self.tables                                         # [T, C, D]
+        G = t @ t.transpose(-1, -2)                             # [T,C,C] gram
+        sq = torch.diagonal(G, dim1=-2, dim2=-1)                # [T,C]
+        d2 = (sq.unsqueeze(-1) + sq.unsqueeze(-2) - 2 * G).clamp_min(0)   # ||v_c - v_c'||^2
+        pen = (kernel.unsqueeze(0) * d2).sum()
+        return pen / (self.n_tables * C * C)                    # mean over ordered pairs + tables
+
     def _forward_multi_head(self, x: torch.Tensor) -> torch.Tensor:
         """Block-diagonal variant: x [B, n_heads, input_dim] -> [B, n_heads, output_dim].
 
