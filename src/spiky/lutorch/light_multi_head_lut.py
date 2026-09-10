@@ -470,6 +470,27 @@ class LightMultiHeadLUT(nn.Module):
         U, V = bagged[..., :self.output_dim], bagged[..., self.output_dim:]
         return U + V * x_gate if self.cell_mode == "gated_affine" else V * x_gate
 
+    def cell_tv(self):
+        """Hamming-1 total-variation smoothness penalty on the cell value table.
+
+        The 2^nap cells of each table are the vertices of an nap-dim hypercube indexed by
+        their address bits; this returns the mean over all Hamming-1-adjacent cell pairs (and
+        over tables) of ||v_c - v_c'||^2 -- a graph-Laplacian/TV regularizer that makes
+        neighbouring codebook entries similar. Differentiable w.r.t. `tables`; called ONLY by
+        the trainer when lut_cell_smoothness>0, so it adds no graph nodes to the forward and
+        the default path stays byte-identical. Averaged over pairs+tables so the magnitude is
+        roughly independent of nap and n_tables. Uses whatever the cell stores (d_out vector
+        for constant cells, scalar for codebook, [u|v] for gated)."""
+        nap = self.n_anchor_pairs
+        D = self.tables.shape[-1]
+        t = self.tables.view(self.n_tables, *([2] * nap), D)   # [T, 2,2,..,2, D] hypercube view
+        tv = t.new_zeros(())
+        for ax in range(1, nap + 1):                            # one hypercube axis per bit
+            d = t.diff(dim=ax)                                  # size-1 diff across that bit
+            tv = tv + (d * d).sum()
+        n_pairs = self.n_tables * nap * (1 << (nap - 1))        # total Hamming-1 pairs
+        return tv / n_pairs
+
     def _forward_multi_head(self, x: torch.Tensor) -> torch.Tensor:
         """Block-diagonal variant: x [B, n_heads, input_dim] -> [B, n_heads, output_dim].
 

@@ -429,6 +429,17 @@ class MinimalGPT(nn.Module):
             'ratio_lut': [rv(b._ratio_lut) for b in hb],
         }
 
+    def lut_tv_penalty(self):
+        """Mean Hamming-1 cell-smoothness (TV) penalty over all LightMHL tables in the model.
+        Differentiable; 0 (no grad) when there are no LightMHL layers. The trainer multiplies
+        this by cfg['lut_cell_smoothness'] and adds it to the loss (only when that knob > 0, so
+        the default path is byte-identical)."""
+        from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
+        ms = [m for m in self.modules() if isinstance(m, LightMultiHeadLUT)]
+        if not ms:
+            return torch.zeros((), device=self.get_device())
+        return torch.stack([m.cell_tv() for m in ms]).mean()   # avg over LUT layers/tables
+
     def hybrid_add_blocks(self):
         return [b for b in self.blocks if getattr(b, 'hybrid_add', False)]
 
