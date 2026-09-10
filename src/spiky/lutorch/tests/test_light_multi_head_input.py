@@ -201,3 +201,19 @@ def test_exp_outputs_guard_still_holds_for_bounded_norm():
         FastMultiHeadLut(input_dim=8, n_heads=1, n_outputs=4, n_anchor_pairs=2,
                          forward_confidence=True, confidence_form="bounded_norm",
                          exp_outputs=True, use_bf16=False)
+
+
+def test_compression_light_multi_head_without_decompress_sums_heads():
+    """inner_out_dim=-1 on the light multi-head path: no decompress, per-head blocks SUMMED.
+
+    Same semantics as the Fast independent path. It used to build Linear(-n_heads, d) and crash.
+    """
+    d = 16
+    m = CompressionMultiHeadLUT(d, d, inner_in_dim=DIN, inner_out_dim=-1, nap=NAP, tph=T,
+                                n_heads=H, lut_impl="light", random_seed=SEED)
+    assert not m.has_decompress and isinstance(m.decompress, torch.nn.Identity)
+    assert m.lut_light.tables.shape == (H * T, 1 << NAP, d)
+    x = torch.randn(5, d)
+    y = m(x)
+    assert y.shape == (5, d)
+    torch.testing.assert_close(y, m.lut_light(m.compress(x).view(5, H, DIN)).sum(dim=1))

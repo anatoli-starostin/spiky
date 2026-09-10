@@ -152,6 +152,47 @@ request** (task 38fd48ea); it is not a size limit.
 - **Near the 4K budget's endpoint.** FVU moved by under 1% between steps 3,000 and 4,000 on L2 and
   L4 at every size (L0 at H=16: −2.6%, i.e. 0.0003 absolute).
 
+## Results: no output compression (`runs/doutfull4k_H8_tph32_nap7`)
+
+H=8, tph=32, nap=7, inner d_in=48, **inner d_out=−1**: no decompress. Each table row is a full
+384-d vector, and the 8 heads' outputs are summed. **12,730,752 params/student**: compress
+384→384 (147,840) plus tables 256 × 128 cells × 384 (12,582,912). Same protocol as the ladder,
+4,000 native steps. 8.5 min, peak 3.0 GiB, 2 chunks/step. This config needed a library fix:
+CompressionMHL's light multi-head path used to build `Linear(-8, 384)` for inner_out=−1; it now
+sums the heads, as the Fast path does.
+
+**Rank floor: zero.** The output is a sum of 384-d rows, so its rank is the full 384, and the
+teacher variance outside the top-384 PCs is 0.0000 on every layer. No layer is rank-limited.
+The same was already true at H=8 and H=16 of the ladder (decompress 384→384): only H=4 is
+rank-capped.
+
+| layer | linear | H=8 ladder (12.88M) | **d_out=full (12.73M)** | ladder trend at 12.73M | full / trend |
+|---|---|---|---|---|---|
+| L0 | 0.0818 | 0.0220 | **0.0324** | 0.0227 | 1.43 |
+| L1 | 0.4898 | 0.1382 | **0.1255** | 0.1390 | 0.90 |
+| L2 | 0.5757 | 0.2889 | **0.2572** | 0.2903 | 0.89 |
+| L3 | 0.4785 | 0.2797 | **0.2648** | 0.2810 | 0.94 |
+| L4 | 0.4831 | 0.2505 | **0.2369** | 0.2517 | 0.94 |
+| L5 | 0.3617 | 0.1084 | **0.1131** | 0.1092 | 1.04 |
+
+![ladder with the d_out=full point](runs/ladder4k_with_doutfull.png)
+
+- **Off the ladder trend, in both directions.** At equal params it is 6–11% *below* the trend on
+  L1–L4 and 43% *above* it on L0 (L5 +4%). Since the H=8 point was already full-rank, this is
+  not "rank vs capacity": it measures table **layout**, i.e. few wide rows (256 tables × 128 cells,
+  384-d, no learned output mixing) against many narrow ones (1,024 tables × 256 cells, 48-d, plus
+  a 384→384 decompress). The two differ in tph, nap, row width and decompress together, so which
+  of these helps is not separated.
+- **Rank was not the remaining error.** Across the ladder, H=4→8 (rank 192→384) and H=8→16 (no
+  rank change) shrink FVU by the same factor on L1–L5 (0.68–0.75× vs 0.70–0.74×). The rank-192
+  cap was binding only on L0 (0.18× vs 0.50×). What remains at H≥8 is table capacity and layout.
+- **Tiers hold**: {L2, L3} > L4 > L1 > L5 > L0. Inside the top pair L3 > L2 by 0.0075, stable from
+  step 2,000 (−0.0043) to 4,000, as at H=16.
+- **L0 still beats linear** (0.032 vs 0.082), but it is the one layer the wide-row layout hurts;
+  a near-linear map seems to prefer many fine cells over wide rows.
+- **Cheaper to train**: 0.131 s/step and 3.0 GiB against the H=8 ladder point's 0.259 s/step and
+  5.5 GiB at nearly the same param count.
+
 ## Reuse for per-layer LUT hyperparameters (goal 2)
 
 `--student-overrides` takes a JSON list with **one dict per requested layer** (or a single

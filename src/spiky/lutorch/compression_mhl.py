@@ -279,7 +279,11 @@ class CompressionMultiHeadLUT(nn.Module):
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL
             elif mh:
-                self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
+                # inner_out_dim = -1: no decompress, the per-head output_dim blocks are SUMMED
+                # (as on the Fast independent path). This used to build Linear(-n_heads, ...)
+                # and crash, so no existing config reaches the Identity branch.
+                self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
+                                   if self.has_decompress else nn.Identity())
             else:
                 self.decompress = (nn.Linear(out_raw, output_dim, device=device)
                                    if self.has_decompress else nn.Identity())
@@ -374,6 +378,8 @@ class CompressionMultiHeadLUT(nn.Module):
                 y = self.lut_light(z).to(z.dtype)      # [N, n_heads, eff_out]
                 if self.inner_residual:
                     y = y + z
+                if not self.has_decompress:
+                    return y.sum(dim=1)                # [N, output_dim]  heads summed, as Fast
                 return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
             # one shared code, one summed ensemble of n_heads*tph tables, one decompress
             z = self.compress(x)                       # [N, eff_in]  (Identity -> x)

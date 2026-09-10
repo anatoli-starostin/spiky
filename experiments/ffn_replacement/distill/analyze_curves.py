@@ -142,7 +142,9 @@ def curve_panel(ax, s_by_layer, ylabel, title):
     ax.set_xlabel('distillation step (log scale)')
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc='left', color=INK)
-    ax.legend(frameon=False, ncol=3, fontsize=9, loc='upper right')
+    # 'best' = least overlap with the lines; a fixed upper-right sat on L2-L4 when the whole
+    # curve lives in a narrow FVU band (e.g. the doutfull run, 0.03-0.3)
+    ax.legend(frameon=False, ncol=3, fontsize=9, loc='best')
     ax.grid(color=GRID, lw=0.8, which='major')
     ax.set_axisbelow(True)
     for sp in ('top', 'right'):
