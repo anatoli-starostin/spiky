@@ -1,6 +1,6 @@
 {
   "exp_name": "exp_n_0222_paralleladd_narrowFFN_lutH4_48k_seed1",
-  "_arch_note": "48k LONG run of the parallel-additive FFN+LUT arm (task 0c5f1f79) -- byte-identical ARCHITECTURE to exp_n_0221 (hybrid_add: o=FFN(h)+LUT(h), narrowed dense FFN dense_inner_dim=384, reduced LUT light/constant/margin H4 tph128 nap8 inner48/48 -> compress 384->192, decompress 192->384, no gate). ONLY change vs 0221: n_steps 16000->48000 (warmup 0.1*48000=4800, cosine to 0.1x floor). Schedule matches the 48k dense-floor exp_n_0216/0177 (which reached 1.115420) on lr 3e-4, warmup_fraction 0.1, wd 0.1, eval_every 500, total_batch 24576, seed 1, corrected fixed eval bs48x100 skip12 -- the ONLY differing field is device_batch_size (12 vs the dense floor 48), which is training-equivalent since total_batch_size is identical (grad_accum 4 vs 1). Full-length apples-to-apples vs the 1.115420 dense floor. FFN+LUT compute 442,368 MAC/token/layer vs full dense 1,179,648 (2.67x cheaper). TRITON_CACHE_DIR set.",
+  "_arch_note": "48k LONG run of the parallel-additive FFN+LUT arm (task 0c5f1f79) -- byte-identical ARCHITECTURE to exp_n_0221 (hybrid_add: o=FFN(h)+LUT(h), narrowed dense FFN dense_inner_dim=384, reduced LUT light/constant/margin H4 tph128 nap8 inner48/48 -> compress 384->192, decompress 192->384, no gate). ONLY change vs 0221: n_steps 16000->48000 (warmup 0.1*48000=4800, cosine to 0.1x floor). Schedule matches the 48k dense-floor exp_n_0216/0177 (which reached 1.115420) on lr 3e-4, warmup_fraction 0.1, wd 0.1, eval_every 500, total_batch 24576, seed 1, corrected fixed eval bs48x100 skip12 -- the ONLY differing field is device_batch_size (12 vs the dense floor 48), which is training-equivalent since total_batch_size is identical (grad_accum 4 vs 1). Full-length apples-to-apples vs the 1.115420 dense floor. FFN+LUT compute 442,368 MAC/token/layer vs full dense 1,179,648 (2.67x cheaper). TRITON_CACHE_DIR set. [device_batch bumped 12->48 (grad_accum 4->1) for GPU saturation; total_batch_size stays 24576 so optimizer math is identical; killed the early device_batch=12 run at step 1500 and relaunched under the same exp id.]",
   "gamma": 0,
   "ffn_type": "compression",
   "hybrid_add": true,
@@ -11,7 +11,7 @@
   "n_embd": 384,
   "n_head": 6,
   "seq_len": 512,
-  "device_batch_size": 12,
+  "device_batch_size": 48,
   "total_batch_size": 24576,
   "n_steps": 48000,
   "lr": 0.0003,
