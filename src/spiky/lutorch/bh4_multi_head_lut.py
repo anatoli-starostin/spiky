@@ -154,6 +154,9 @@ class BH4MultiHeadLUT(nn.Module):
                  confidence_gain: float = 1.0, initial_weights_noise: float = 1e-3,
                  random_seed=None, device=None):
         super().__init__()
+        if confidence_form == "learned_margin":
+            raise ValueError("confidence_form='learned_margin' owns learnable parameters and is "
+                             "implemented by LightMultiHeadLUT only, not BH4MultiHeadLUT")
         if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin",
                                    "sharp_margin"):   # sharp_margin: module-constant gamma here
             raise ValueError(

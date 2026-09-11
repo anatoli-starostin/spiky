@@ -185,6 +185,20 @@ TANH_MARGIN_A = 2.0
 #                        constructor, so each run's gamma lives in its config). exp-of-logs like margin.
 #                        Not in the native scored-eval kernel (torch fallback in LightMHL).
 SHARP_MARGIN_GAMMA = 1.75
+#   "learned_margin"   : score = exp(g) * (sum_j m_j) * (prod_j sigmoid(beta m_j)) ** gamma
+#                        with g, beta = exp(log_beta), gamma = exp(log_gamma) LEARNABLE scalars owned by
+#                        the module (LightMultiHeadLUT: three per layer). Nests the hand-picked forms:
+#                        margin == (g=0, beta=2, gamma=1); sharp_margin(gamma, gain c) == (log c, 2, gamma).
+#                        Computed as  (sum_j m_j) * exp(g + gamma * sum_j logsigmoid(beta m_j)):
+#                        the probability power lives in LOG space (never P ** gamma), while the linear
+#                        sum-of-margins factor stays OUTSIDE the exp -- the same log-space computation
+#                        without ever forming log(sum_j m_j), so all-zero margins give exactly 0 with
+#                        finite gradients and no clamp, and at (0, 2, 1) the op sequence is literally
+#                        margin's (bit-identical). s underflows only if g + gamma*logP < ~-103 (fp32);
+#                        logP >= NAP*log(0.5) for beta > 0, so that needs gamma ~ 18+ at NAP=8.
+#                        Autograd only: _confidence_score_and_dscore refuses it (it cannot return the
+#                        parameter gradients), so FastMultiHeadLut / BH4 do not accept it.
+LEARNED_MARGIN_INIT = (0.0, 2.0, 1.0)   # (g, beta, gamma) == margin
 # Everything uses the logsigmoid/softplus form so exp(2m) is never built.
 #
 # A separate `confidence_gain` constant multiplies whichever form is chosen. Scale and
@@ -197,15 +211,24 @@ SHARP_MARGIN_GAMMA = 1.75
 
 
 def _confidence_score(d, confidence_form: str, confidence_gain: float = 1.0,
-                      sharp_margin_gamma=None):
+                      sharp_margin_gamma=None, learned_params=None):
     """Smooth confidence gate from margins d [B, n_tables, NAP] -> score [B, n_tables].
 
     `confidence_gain` is a constant multiplier on the score (see the note above); 1.0 is
     the identity and leaves every code path numerically unchanged. `sharp_margin_gamma` is
     read only by "sharp_margin" (None -> SHARP_MARGIN_GAMMA); every other form ignores it.
+    `learned_params` = (g, log_beta, log_gamma) 0-dim tensors, read only by (and required
+    for) "learned_margin"; every other form ignores it.
     """
     m = d.abs()
-    if confidence_form == "sharp_margin":
+    if confidence_form == "learned_margin":
+        if learned_params is None:
+            raise ValueError("confidence_form='learned_margin' needs learned_params=(g, log_beta, "
+                             "log_gamma); LightMultiHeadLUT owns and passes them")
+        g, log_beta, log_gamma = learned_params
+        # (sum_j m_j) * exp(g + gamma * sum_j logsigmoid(beta m_j)) -- see the note above.
+        s = m.sum(dim=-1) * torch.exp(g + log_gamma.exp() * F.logsigmoid(log_beta.exp() * m).sum(dim=-1))
+    elif confidence_form == "sharp_margin":
         # (sum_j m_j) * (prod_j sigmoid(2 m_j))^gamma, the power taken in log space.
         gamma = SHARP_MARGIN_GAMMA if sharp_margin_gamma is None else sharp_margin_gamma
         s = m.sum(dim=-1) * torch.exp(gamma * F.logsigmoid(2.0 * m).sum(dim=-1))
@@ -230,7 +253,7 @@ def _confidence_score(d, confidence_form: str, confidence_gain: float = 1.0,
 
 
 def _confidence_score_and_dscore(d, confidence_form: str, confidence_gain: float = 1.0,
-                                 sharp_margin_gamma=None):
+                                 sharp_margin_gamma=None, learned_params=None):
     """Score and its derivative w.r.t. m_j = |d_j|, for the analytic backward.
 
     Returns (score [B, n_tables], dscore_dm [B, n_tables, NAP]).
@@ -247,6 +270,12 @@ def _confidence_score_and_dscore(d, confidence_form: str, confidence_gain: float
     exactly the same c -- no separate derivative rule is needed.
     (logsigmoid(2m) = -softplus(-2m); prob = exp(sum logsigmoid(2m)) is stable in (0,1].)
     """
+    if confidence_form == "learned_margin":
+        raise NotImplementedError(
+            "confidence_form='learned_margin' is autograd-only: this analytic path returns "
+            "dscore/dm but not the gradients of its learnable g / log_beta / log_gamma. It is "
+            "supported by LightMultiHeadLUT, whose training path differentiates _confidence_score "
+            "with autograd and never calls this function.")
     m = d.abs()
     sig_neg = torch.sigmoid(-2.0 * m)                     # [B, n_tables, NAP], in (0, 0.5]
     if confidence_form == "sharp_margin":
@@ -1417,6 +1446,10 @@ class FastMultiHeadLut(nn.Module):
         # When False, every code path below is byte-for-byte the current behavior
         # (forward AND backward) -- same discipline as exp_outputs.
         self.forward_confidence = bool(forward_confidence)
+        if confidence_form == "learned_margin":
+            raise ValueError(
+                "confidence_form='learned_margin' has learnable parameters and is autograd-only; "
+                "it is implemented by LightMultiHeadLUT, not FastMultiHeadLut's analytic backward")
         if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin",
                                    "sharp_margin"):
             raise ValueError(

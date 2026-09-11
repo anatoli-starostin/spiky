@@ -21,7 +21,7 @@ import statistics as st                                             # noqa: E402
 
 import torch                                                        # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT    # noqa: E402
-from spiky.lutorch.fast_multi_head_lut import _confidence_score     # noqa: E402
+from spiky.lutorch.fast_multi_head_lut import LEARNED_MARGIN_INIT, _confidence_score   # noqa: E402
 
 H, TPH, D, NAP = 4, 128, 48, 8   # paper geometry from table v3 (exp_g_0193); v2's numbers used H=8, TPH=64
 FORM = os.environ.get('PROBE_FORM', 'margin')   # confidence form under test; 'margin' reproduces table v3
@@ -76,7 +76,10 @@ def manual_y_n1(m, z, score_fn):
 
 def margin_score(d):
     """The score of the form under test (FORM; 'margin' unless PROBE_FORM is set)."""
-    return _confidence_score(d, FORM, 1.0, GAMMA if FORM == 'sharp_margin' else None)
+    learned = (tuple(torch.tensor(v, dtype=d.dtype) for v in
+                     (LEARNED_MARGIN_INIT[0], math.log(LEARNED_MARGIN_INIT[1]), math.log(LEARNED_MARGIN_INIT[2])))
+               if FORM == 'learned_margin' else None)                      # the module's init values
+    return _confidence_score(d, FORM, 1.0, GAMMA if FORM == 'sharp_margin' else None, learned)
 
 
 def min_score(d):

@@ -83,7 +83,9 @@ for run in RUNS:
 
     print('=' * 100)
     _l0 = model.blocks[0].ffn.lut_light
-    print(f'{run}  (form={_l0.confidence_form} gain={_l0.confidence_gain} gamma={_l0.sharp_margin_gamma}; '
+    print(f'{run}  (form={_l0.confidence_form} gain={_l0.confidence_gain} gamma={_l0.sharp_margin_gamma}'
+          + (f' learned per layer={[b.ffn.lut_light.learned_confidence_values() for b in model.blocks]}'
+             if _l0.confidence_form == 'learned_margin' else '') + '; '
           f'read_top_n={n}; missing={len(missing)} unexpected={len(unexpected)} keys; '
           f'{idx.numel():,} val tokens)')
     all_rel_h, all_rel_ffn, all_u = [], [], []
@@ -113,8 +115,7 @@ for run in RUNS:
             if n == 1:
                 j = int(torch.randint(NAP, (1,), generator=g))
                 dm[j] = 0.0
-                s0 = _confidence_score(dm.view(1, 1, NAP), lut.confidence_form, lut.confidence_gain,
-                                       lut.sharp_margin_gamma).item()
+                s0 = lut.confidence_score(dm.view(1, 1, NAP).to(lut.tables.dtype)).item()
                 cc = int(c[i, h, t])
                 delta = s0 * (W[h, t, cc ^ (1 << (NAP - 1 - j))] - W[h, t, cc])
             else:
@@ -122,8 +123,7 @@ for run in RUNS:
                 j1, j2 = int(order[0]), int(order[1])
                 mtie = dm[j1].abs().item()
                 dm[j2] = math.copysign(mtie, dm[j2].item())
-                s0 = _confidence_score(dm.view(1, 1, NAP), lut.confidence_form, lut.confidence_gain,
-                                       lut.sharp_margin_gamma).item()
+                s0 = lut.confidence_score(dm.view(1, 1, NAP).to(lut.tables.dtype)).item()
                 w1 = 1.0 / (1.0 + math.exp(2.0 * mtie / tau))
                 cc = int(c[i, h, t])
                 delta = s0 * w1 * (W[h, t, cc ^ (1 << (NAP - 1 - j2))] - W[h, t, cc ^ (1 << (NAP - 1 - j1))])

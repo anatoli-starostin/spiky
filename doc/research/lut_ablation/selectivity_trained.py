@@ -69,7 +69,7 @@ def run(rd):
         a = lut.anchor_a.view(1, H, T * NAP).expand(z.shape[0], H, T * NAP)
         b = lut.anchor_b.view(1, H, T * NAP).expand(z.shape[0], H, T * NAP)
         d = (torch.gather(z, 2, a) - torch.gather(z, 2, b)).view(z.shape[0], H, T, NAP).double()
-        s = _confidence_score(d, form, gain, gamma).reshape(-1)      # [tokens*H*T], grouped by (token, head)
+        s = lut.confidence_score(d).reshape(-1)       # the layer's own form/gain/gamma/learned params; [tokens*H*T]
         allS.append(s)
         st = stats(s.float(), T)
         print(f'   L{li:<7} {st["mean"]:>9.4f} {st["p25"]:>9.4f} {st["p75"]:>9.4f} {st["ratio"]:>9.2f} '

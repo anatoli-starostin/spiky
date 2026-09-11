@@ -31,6 +31,10 @@ from spiky.lutorch.lut_helpers import AnchorSamplingPolicy              # noqa: 
 
 DEFAULT_READ_TAU = 0.1
 
+# Initial (g, beta, gamma) of confidence_form='learned_margin', in the order LightMultiHeadLUT's
+# learned_margin_init takes them. All three are required exactly when that form is configured.
+_LM_INIT_KEYS = ('lut_learned_margin_g_init', 'lut_learned_margin_beta_init', 'lut_learned_margin_gamma_init')
+
 # delta_m measured on exp_g_0193 (the standard config: margin, no z_norm, nap8/tph128) over
 # 8,192 real val tokens by diag_margin_gap.py -- the per-layer median of m_(1), the smallest
 # of the nap anchor margins, which IS the cost gap the n=2 blend has to discriminate.
@@ -227,15 +231,31 @@ class MinimalBlock(nn.Module):
                     # sharp_margin and forbidden otherwise (checked below), so a run's gamma
                     # is always read from its own config.json, never a module default.
                     # Absent everywhere else -> None -> every existing config builds unchanged.
-                    sharp_margin_gamma=cfg.get('lut_sharp_margin_gamma'))
+                    sharp_margin_gamma=cfg.get('lut_sharp_margin_gamma'),
+                    # learned_margin's INITIAL (g, beta, gamma), one learnable triple per LightMHL
+                    # layer. All three keys are REQUIRED exactly when the form is learned_margin
+                    # (checked below), so the init a run starts from is read from its own
+                    # config.json. Absent everywhere else -> None -> existing configs unchanged.
+                    learned_margin_init=(tuple(float(cfg[k]) for k in _LM_INIT_KEYS)
+                                         if all(k in cfg for k in _LM_INIT_KEYS) else None))
                 if (cfg.get('lut_confidence_form') == 'sharp_margin') != ('lut_sharp_margin_gamma' in cfg):
                     raise ValueError("lut_sharp_margin_gamma must be set exactly when "
                                      "lut_confidence_form == 'sharp_margin'")
+                _lm_present = [k in cfg for k in _LM_INIT_KEYS]
+                if any(_lm_present) != all(_lm_present) or \
+                        (cfg.get('lut_confidence_form') == 'learned_margin') != all(_lm_present):
+                    raise ValueError(f"{', '.join(_LM_INIT_KEYS)} must ALL be set exactly when "
+                                     "lut_confidence_form == 'learned_margin'")
                 _lut = getattr(self.ffn, 'lut_light', None)
                 if _lut is not None and _lut.sharp_margin_gamma is not None:
                     # the value the module will actually use, logged per layer
                     print(f'[sharp_margin] layer {layer_idx}: gamma={_lut.sharp_margin_gamma!r} '
                           f'gain={_lut.confidence_gain!r}')
+                if _lut is not None and _lut.confidence_form == 'learned_margin':
+                    # the init the module actually starts from (read back off its parameters)
+                    _v = _lut.learned_confidence_values()
+                    print(f'[learned_margin] layer {layer_idx}: init g={_v["g"]!r} beta={_v["beta"]!r} '
+                          f'gamma={_v["gamma"]!r} (learnable) gain={_lut.confidence_gain!r}')
         # --- gated hybrid FFN (diagnostic): dense GELU branch IN PARALLEL with the LUT ---
         # branch above, combined by a learned per-layer convex gate g=sigmoid(theta). Reads
         # off which layers prefer dense vs LUT. Off by default (hybrid_gate absent) so every

@@ -24,8 +24,9 @@ log-sum-exp readout, no routed-V, no dual-stream, and a single shared input
 that). The layer is torch.compile-friendly: no data-dependent Python control
 flow on tensor values.
 """
-from typing import Optional
+from typing import Optional, Tuple
 
+import math
 import os
 
 import torch
@@ -35,7 +36,8 @@ import torch.nn as nn
 from .lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 # Reuse the EXACT score definition FastMultiHeadLut uses, so the two layers are
 # directly comparable in an ablation (same "bounded"/"margin" forms).
-from .fast_multi_head_lut import SHARP_MARGIN_GAMMA, _confidence_score, _get_native_lutorch_manager
+from .fast_multi_head_lut import (LEARNED_MARGIN_INIT, SHARP_MARGIN_GAMMA, _confidence_score,
+                                  _get_native_lutorch_manager)
 
 
 class LightMultiHeadLUT(nn.Module):
@@ -75,6 +77,14 @@ class LightMultiHeadLUT(nn.Module):
             SHARP_MARGIN_GAMMA). Stored on the module as ``sharp_margin_gamma`` and passed to
             every score call, so the value a run uses comes from its own config rather than a
             module global. Must be None for every other form.
+            "learned_margin" uses ``exp(g) * (sum_j |d_j|) * (prod_j sigmoid(beta|d_j|)) ** gamma``
+            with THREE LEARNABLE SCALARS PER MODULE (not per head, not per table), registered as
+            parameters ``confidence_g``, ``confidence_log_beta``, ``confidence_log_gamma``
+            (beta = exp(log_beta), gamma = exp(log_gamma) stay positive). At the default init
+            (0, 2, 1) it IS margin, bit for bit. Autograd only; torch path for no-grad eval;
+            requires confidence_gain == 1.0 (exp(g) is the gain).
+        learned_margin_init: initial (g, beta, gamma) for "learned_margin" (default None ->
+            LEARNED_MARGIN_INIT = (0, 2, 1) == margin). Must be None for every other form.
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -104,6 +114,7 @@ class LightMultiHeadLUT(nn.Module):
         confidence_form: str = "margin",
         confidence_gain: float = 1.0,
         sharp_margin_gamma: Optional[float] = None,
+        learned_margin_init: Optional[Tuple[float, float, float]] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
@@ -130,11 +141,18 @@ class LightMultiHeadLUT(nn.Module):
             raise ValueError("cell_mode must be 'constant', 'gated_affine', 'gated_multiply', "
                              f"'margin_readout' or 'codebook', got {cell_mode!r}")
         if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin",
-                                   "sharp_margin"):
+                                   "sharp_margin", "learned_margin"):
             raise ValueError(
                 "confidence_form must be 'bounded', 'margin', 'bounded_norm', 'min_margin', "
-                f"'tanh_margin' or 'sharp_margin', got {confidence_form!r}"
+                f"'tanh_margin', 'sharp_margin' or 'learned_margin', got {confidence_form!r}"
             )
+        if learned_margin_init is not None and confidence_form != "learned_margin":
+            raise ValueError(
+                f"learned_margin_init is only meaningful for confidence_form='learned_margin', got "
+                f"learned_margin_init={learned_margin_init!r} with confidence_form={confidence_form!r}")
+        if confidence_form == "learned_margin" and confidence_gain != 1.0:
+            raise ValueError("learned_margin carries its own learnable gain exp(g); confidence_gain must "
+                             f"be 1.0, got {confidence_gain!r}")
         if sharp_margin_gamma is not None and confidence_form != "sharp_margin":
             raise ValueError(
                 f"sharp_margin_gamma is only meaningful for confidence_form='sharp_margin', got "
@@ -205,6 +223,16 @@ class LightMultiHeadLUT(nn.Module):
             if not (0.0 < gamma < float("inf")):
                 raise ValueError(f"sharp_margin_gamma must be finite and > 0, got {sharp_margin_gamma!r}")
             self.sharp_margin_gamma = gamma
+        # learned_margin's initial (g, beta, gamma); the parameters are registered below, once
+        # the device is known. Validated here so a bad init fails before anything is built.
+        self._learned = confidence_form == "learned_margin"
+        if self._learned:
+            g0, beta0, gamma0 = (LEARNED_MARGIN_INIT if learned_margin_init is None
+                                 else tuple(float(v) for v in learned_margin_init))
+            if not (math.isfinite(g0) and 0.0 < beta0 < float("inf") and 0.0 < gamma0 < float("inf")):
+                raise ValueError("learned_margin_init must be finite (g, beta > 0, gamma > 0), got "
+                                 f"{learned_margin_init!r}")
+            self._learned_init = (g0, beta0, gamma0)
         self.multi_head_input = bool(multi_head_input)
         self.n_heads = n_heads if multi_head_input else 1
         self.tables_per_head = n_tables // self.n_heads
@@ -422,10 +450,10 @@ class LightMultiHeadLUT(nn.Module):
         self._native_msb = None
         self._native_msb_scored = None
         # Ids understood by the native scored-eval kernel are 0-2. "min_margin" (3),
-        # "tanh_margin" (4) and "sharp_margin" (5) are NOT implemented there: _fused_eval
-        # refuses them so no-grad eval takes the torch path.
-        self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2,
-                               "min_margin": 3, "tanh_margin": 4, "sharp_margin": 5}[confidence_form]
+        # "tanh_margin" (4), "sharp_margin" (5) and "learned_margin" (6) are NOT implemented there:
+        # _fused_eval refuses them so no-grad eval takes the torch path.
+        self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2, "min_margin": 3,
+                               "tanh_margin": 4, "sharp_margin": 5, "learned_margin": 6}[confidence_form]
         if self.anchor_mode == "pair":
             mgr = _get_native_lutorch_manager()
             if mgr is not None:
@@ -447,6 +475,17 @@ class LightMultiHeadLUT(nn.Module):
             self.log_tau = nn.Parameter(log_tau)
         else:
             self.register_buffer("log_tau", log_tau)
+
+        # --- learned_margin: three learnable scalars for the WHOLE module (one per layer) -----
+        # Registered only for this form, so every other form's parameters and state_dict keys are
+        # unchanged. Built from Python floats via math.log (no RNG consumed): exp(float32(log 2))
+        # is exactly 2.0 and exp(0) exactly 1.0, so at the default init the score is margin's,
+        # bit for bit. 0-dim, hence in the optimiser's no-decay group (ndim < 2 rule).
+        if self._learned:
+            g0, beta0, gamma0 = self._learned_init
+            self.confidence_g = nn.Parameter(torch.tensor(g0, device=dev))
+            self.confidence_log_beta = nn.Parameter(torch.tensor(math.log(beta0), device=dev))
+            self.confidence_log_gamma = nn.Parameter(torch.tensor(math.log(gamma0), device=dev))
 
         # --- torch.compile the forward for the blend path (default-ON, no config flag) ----
         # The n>1 blended read-out fans out into ~8-10 tiny elementwise kernels
@@ -471,6 +510,27 @@ class LightMultiHeadLUT(nn.Module):
         step on log_tau takes effect immediately and a frozen buffer stays exactly its init.
         """
         return self.log_tau.exp()
+
+    def learned_confidence_params(self):
+        """(g, log_beta, log_gamma) parameters for "learned_margin", else None."""
+        if not self._learned:
+            return None
+        return (self.confidence_g, self.confidence_log_beta, self.confidence_log_gamma)
+
+    @torch.no_grad()
+    def learned_confidence_values(self):
+        """Current {g, beta, gamma} as Python floats for "learned_margin", else None (read-only)."""
+        if not self._learned:
+            return None
+        return {"g": float(self.confidence_g.item()),
+                "beta": float(self.confidence_log_beta.exp().item()),
+                "gamma": float(self.confidence_log_gamma.exp().item())}
+
+    def confidence_score(self, d):
+        """This module's confidence score of margins d [..., NAP] -> [...], with its own form, gain,
+        sharp_margin gamma and learned parameters. The ONE place the forward computes the score."""
+        return _confidence_score(d, self.confidence_form, self.confidence_gain,
+                                 self.sharp_margin_gamma, self.learned_confidence_params())
 
     def _pack_index(self, x_flat, d):
         """Packed row index [B, n_tables], MSB-first. Never differentiable.
@@ -577,8 +637,7 @@ class LightMultiHeadLUT(nn.Module):
         flat = self.tables.reshape(H * T * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
 
-        score = _confidence_score(d, self.confidence_form, self.confidence_gain,
-                                  self.sharp_margin_gamma)             # [B, H, T]
+        score = self.confidence_score(d)                               # [B, H, T]
         if self._codebook:
             # scalar coefficient g_t = s_t · w_{c_t} per (head, table); NO cross-table sum.
             # Concatenate all H·T coefficients -> g ∈ R^{n_tables}, decode y = M · g.
@@ -731,7 +790,7 @@ class LightMultiHeadLUT(nn.Module):
         if (self._native_msb_scored is None or not x_flat.is_cuda
                 or x_flat.dtype not in (torch.float32, torch.float64)
                 or self._gated or self._margin or self._codebook   # need x/margins/M -> torch path
-                or self._score_form_id > 2):   # min/tanh/sharp_margin (3-5) not in the native kernel -> torch path
+                or self._score_form_id > 2):   # min/tanh/sharp/learned_margin (3-6) not in the native kernel -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
@@ -794,8 +853,7 @@ class LightMultiHeadLUT(nn.Module):
 
         # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
         # the output grad; at n>1 the blend weights add a second, directional one.
-        score = _confidence_score(d, self.confidence_form, self.confidence_gain,
-                                  self.sharp_margin_gamma)           # [B, n_tables]
+        score = self.confidence_score(d)                             # [B, n_tables]
 
         # Output grouping: output_heads==1 sums ALL n_tables into one [B, output_dim]
         # ensemble (unchanged); output_heads==G returns [B, G, output_dim] by summing G
@@ -825,4 +883,5 @@ class LightMultiHeadLUT(nn.Module):
                 f"output_dim={self.output_dim}, n_anchor_pairs={self.n_anchor_pairs}, "
                 f"table_size={self.table_size}, confidence_form={self.confidence_form!r}"
                 + (f", sharp_margin_gamma={self.sharp_margin_gamma!r}"
-                   if self.sharp_margin_gamma is not None else ""))
+                   if self.sharp_margin_gamma is not None else "")
+                + (f", learned={self.learned_confidence_values()!r}" if self._learned else ""))
