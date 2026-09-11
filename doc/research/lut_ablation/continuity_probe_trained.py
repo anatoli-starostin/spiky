@@ -15,6 +15,12 @@ would take if u_j crossed zero with the table's other margins as observed is, pe
 It is reported relative to ||y_h|| (this head's output at that token) and, pushed through the
 layer's decompress, relative to the whole FFN output ||decompress(y)|| at that token.
 Also reported: how close real tokens sit to a boundary (|u_j| quantiles).
+
+    python continuity_probe_trained.py [<run_dir> ...]     (default: the two runs above)
+
+The boundary score s_t|_{u_j=0} uses each layer's OWN confidence_form / confidence_gain /
+sharp_margin_gamma (identical to the original 'margin' call for margin runs), and read_top_n is
+read from each run's config.
 """
 import json
 import math
@@ -32,8 +38,8 @@ import distill_ffn as D                                               # noqa: E4
 from model_build import build_model                                   # noqa: E402
 from spiky.lutorch.fast_multi_head_lut import _confidence_score       # noqa: E402
 
-RUNS = {1: 'exp_g_0193_B16k_light_margin_tph128_noznorm_seed1',
-        2: 'exp_g_0194_B16k_light_margin_blend_n2_tau_auto_seed1'}
+RUNS = sys.argv[1:] or ['exp_g_0193_B16k_light_margin_tph128_noznorm_seed1',
+                        'exp_g_0194_B16k_light_margin_blend_n2_tau_auto_seed1']
 ROWS, SAMPLES_PER_LAYER = 8, 4000
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 g = torch.Generator().manual_seed(0)
@@ -52,11 +58,12 @@ def summ(xs):
 tok = D.RustBPETokenizer.from_directory(os.path.join(D.get_base_dir(), 'tokenizer'))
 vocab = tok.get_vocab_size()
 
-for n, run in RUNS.items():
+for run in RUNS:
     rd = os.path.join(FR, 'runs_corrected', run)
     if not os.path.isdir(rd):
         rd = os.path.join(FR, 'runs', run)
     cfg = json.load(open(os.path.join(rd, 'config.json')))
+    n = int(cfg.get('lut_read_top_n', 1))
     model = build_model(cfg, vocab, device=dev)
     sd = torch.load(os.path.join(rd, 'checkpoint.pt'), map_location=dev)
     missing, unexpected = model.load_state_dict(sd, strict=False)
@@ -75,7 +82,9 @@ for n, run in RUNS.items():
         h_.remove()
 
     print('=' * 100)
-    print(f'{run}  (read_top_n={n}; missing={len(missing)} unexpected={len(unexpected)} keys; '
+    _l0 = model.blocks[0].ffn.lut_light
+    print(f'{run}  (form={_l0.confidence_form} gain={_l0.confidence_gain} gamma={_l0.sharp_margin_gamma}; '
+          f'read_top_n={n}; missing={len(missing)} unexpected={len(unexpected)} keys; '
           f'{idx.numel():,} val tokens)')
     all_rel_h, all_rel_ffn, all_u = [], [], []
     for li, blk in enumerate(model.blocks):
@@ -104,7 +113,8 @@ for n, run in RUNS.items():
             if n == 1:
                 j = int(torch.randint(NAP, (1,), generator=g))
                 dm[j] = 0.0
-                s0 = _confidence_score(dm.view(1, 1, NAP), 'margin', lut.confidence_gain).item()
+                s0 = _confidence_score(dm.view(1, 1, NAP), lut.confidence_form, lut.confidence_gain,
+                                       lut.sharp_margin_gamma).item()
                 cc = int(c[i, h, t])
                 delta = s0 * (W[h, t, cc ^ (1 << (NAP - 1 - j))] - W[h, t, cc])
             else:
@@ -112,7 +122,8 @@ for n, run in RUNS.items():
                 j1, j2 = int(order[0]), int(order[1])
                 mtie = dm[j1].abs().item()
                 dm[j2] = math.copysign(mtie, dm[j2].item())
-                s0 = _confidence_score(dm.view(1, 1, NAP), 'margin', lut.confidence_gain).item()
+                s0 = _confidence_score(dm.view(1, 1, NAP), lut.confidence_form, lut.confidence_gain,
+                                       lut.sharp_margin_gamma).item()
                 w1 = 1.0 / (1.0 + math.exp(2.0 * mtie / tau))
                 cc = int(c[i, h, t])
                 delta = s0 * w1 * (W[h, t, cc ^ (1 << (NAP - 1 - j2))] - W[h, t, cc ^ (1 << (NAP - 1 - j1))])

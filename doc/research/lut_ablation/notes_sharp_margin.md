@@ -130,3 +130,93 @@ Preregistered reading, per arm, with the ±0.0035 bins above:
 The 0245/0243 pair is weighted most, and any disagreement between the arms is reported as such.
 For 0245 the partner bin is 1.1937–1.2007 and the margin bin 1.1694–1.1764. The gap to its partner
 is 0.0244 (≈ 7 noise units), so the intermediate range is wide.
+
+## Results
+
+Both runs: code 9c26b451, train.py byte-identical to exp_g_0193's, with LD_LIBRARY_PATH set.
+
+### Discontinuity, measured before the bpb was read
+
+`continuity_probe.py` at H4/tph128/nap8/d48, random-init tables, 300 draws: n=1 jump as a fraction
+of ‖y_h‖.
+
+`continuity_probe_trained.py` on each run's own checkpoint: 8 val rows, 4,000 samples per layer,
+boundary score from that run's own form, gain and γ.
+
+| run | jump at init: median (p10–p90) | jump trained: median (p10–p90) | 0.5^(8γ) | calibration bnd |
+|---|---|---|---|---|
+| exp_g_0193 margin | 4.11% | 3.45% (1.1–8.6%) | 3.9e-3 | 0.62 |
+| exp_g_0245 γ=1.75 | 1.68% (0.36–5.9%) | 1.66% (0.35–6.4%) | 6.1e-5 | 0.47 |
+| exp_g_0246 γ=3 | 0.299% (0.028–2.05%) | 0.43% (0.04–3.3%) | 6.0e-8 | 0.30 |
+| exp_g_0243 min_margin | 1.5e-9 (counterfactual) | 0 | — | 0 |
+| exp_g_0244 tanh_margin | 1.03e-9 | 0 | — | 0 |
+
+Both arms are genuinely discontinuous, at initialisation and after training: 6.6–7.4 decades above
+the ~6e-10 same-side control. γ=3's typical jump is 8–14× smaller than margin's, though its p90
+(3.3%) is of margin's median order. It is not a collapsed control, but a weaker discontinuity.
+
+### bpb
+
+In-run corrected eval, bs48×100 skip-12. Deltas are in units of the three noise figures on record:
+the vanilla two-seed range 0.00335, the budget-law residual sd 0.0035, and the 4K LUT three-seed sd
+0.009642 (a lower bound).
+
+| run | bpb | h | vs 0193 (1.172852) | vs 0243 (1.197236) | vs 0244 (1.186730) | vs 0195 (1.160637) |
+|---|---|---|---|---|---|---|
+| 0245 γ=1.75 | **1.167381** | 0.913 | −0.0055 (−1.6 / −1.6 / −0.57) | −0.0299 (−8.9 / −8.5 / −3.1) | −0.0193 (−5.8 / −5.5 / −2.0) | +0.0067 (+2.0 / +1.9 / +0.70) |
+| 0246 γ=3 | **1.182109** | 0.911 | +0.0093 (+2.8 / +2.6 / +0.96) | −0.0151 (−4.5 / −4.3 / −1.6) | −0.0046 (−1.4 / −1.3 / −0.48) | +0.0215 (+6.4 / +6.1 / +2.2) |
+
+**Preregistered bins:**
+* **0245:** OUTSIDE both references, below the margin bin. Position (bpb − margin)/(partner −
+  margin) = −0.22. Better than 0243 at 32/32 eval steps. Worse than 0193 at the first 11/32 steps;
+  its matched-step delta crosses zero near step 5,500–6,000 and ends at −0.0055.
+* **0246:** INTERMEDIATE, position 0.667, and 0.0011 short of the partner bin. Worse than 0193 and
+  better than 0244 at 32/32 steps.
+
+### Achieved selectivity on each run's own trained margins (`selectivity_trained.py`)
+
+| run | wCV overall | wCV L0 / L1–L5 | p75/p25 | frac<1e-3 (L0) | mean |
+|---|---|---|---|---|---|
+| 0245 γ=1.75 | 1.820 | 8.65 / 1.44–1.56 | 9.29 | 0.07% (0.4%) | 0.518 |
+| *0243 min_margin (target of 0245)* | 2.000 | 2.92 / 1.62–1.70 | 12.33 | 0.85% (3.1%) | 0.655 |
+| 0246 γ=3 | 4.200 | 9.70 / 2.67–3.64 | 22.53 | 4.61% (20.2%) | 0.433 |
+| *0244 tanh_margin (target of 0246)* | 1.872 | 6.46 / 1.35–2.04 | 59.96 | 10.55% (40.3%) | 0.722 |
+| *0193 margin* | 0.983 | 1.84 / 0.86–0.87 | 5.11 | 0 | 0.547 |
+
+**0245** held min_margin's level on overall CV and roughly on p75/p25. It has 12× fewer near-zero
+scores and 3× the L0 CV. **0246** drifted from its calibration (5.13 / 42.8 / 13.6% on 0193's
+margins): it ended *further* from tanh_margin on exactly the axes it was meant to match (p75/p25
+0.38×, near-zero fraction 0.44×) while overshooting CV 2.2×. It also started ~4× below margin's
+score scale; its gain ratio was 107 at init.
+
+### Reading
+
+Stated with one seed per arm and no LUT-seed replicates at this geometry.
+
+* **Primary pair (0245 vs 0243).** A discontinuous form at roughly min_margin's selectivity lands
+  *at or slightly below margin* (−0.0055, not resolved against the LUT figure) and 0.030 below
+  min_margin (3.1× even the conservative LUT figure). **min_margin's deficit is not explained by
+  its within-token selectivity.** Of the preregistered readings, the result sides with "continuity
+  costs performance". What 0243 and 0245 still differ in besides continuity: the min operator (a
+  single anchor carries the score and its gradient; non-smooth argmin switches), the gain (37.4 vs
+  3.9), and the residual profile gaps (near-zero fraction, L0 CV). The deficit belongs to
+  continuity *or* to min_margin's construction; this pair does not separate the two.
+* **Secondary arm (0246 vs 0244).** A discontinuous but much sharper gate (CV 4.2, 4.6% near-zero)
+  loses to margin by 0.0093 and recovers only a third of tanh_margin's deficit. **Sharp gating at
+  this level costs performance even without continuity.** The remaining 0.0046 is below every noise
+  figure's resolution, so it cannot be attributed to tanh_margin's continuity. The match is also
+  loose (own-margin profile off by 2–2.6× on every axis, 8× smaller jump, early scale deficit), so
+  this arm is weaker evidence.
+* **The arms do not tell one story.** 0245 shows that CV ≈ 1.8 (equal to tanh_margin's own 1.87)
+  costs nothing by itself. 0246 shows that a stronger gate costs even when discontinuous. This fits
+  a selectivity cost that is ~0 at min_margin's level and substantial at γ=3's, with min_margin's
+  deficit coming from something other than selectivity. tanh_margin's deficit is unresolved: it
+  could come from its bulk suppression (p75/p25 60, 10.6% near-zero, matched by neither arm), from
+  its continuity, or from both.
+* **Noise.** The ±0.0035 bins are built on vanilla / budget-law figures. Against the 4K LUT
+  lower bound (0.0096), only 0245 vs 0243 (3.1×), 0246 vs 0195 (2.2×) and 0245 vs 0244 (2.0×) reach
+  2 units. 0245 vs margin, and 0246 vs either reference, do not. Seed replicates of 0245 and 0243 are
+  the cheapest way to firm up the primary conclusion.
+
+Wall clock: 0.913 h and 0.911 h, matching the 0.88 h microbenchmark prediction. The sharp_margin
+form has no torch.prod. See `tanh_prod_slowness/README.md` for why exp_g_0244 took 1.721 h.
