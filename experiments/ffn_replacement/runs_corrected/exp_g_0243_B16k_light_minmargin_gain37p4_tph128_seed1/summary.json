@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_0243_B16k_light_minmargin_gain37p4_tph128_seed1",
+  "best_val_bpb": 1.1972363069930205,
+  "final_val_bpb": 1.1972363069930205,
+  "total_params": 67351680,
+  "training_time_hours": 0.955,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
