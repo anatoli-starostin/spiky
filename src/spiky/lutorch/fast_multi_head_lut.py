@@ -157,6 +157,12 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 #                        at ~0.054 and divides the table gradient by ~19x (measured, #112).
 #                        The geometric mean removes that compounding: ~0.69 at the same
 #                        margins, whatever NAP is.
+#   "min_margin"       : score = (min_j m_j) * prob    (>= 0)  -- margin with the sum over anchors
+#                        replaced by the minimum. It VANISHES (linearly) when any single margin
+#                        reaches 0, i.e. at every cell boundary, so a single-cell (n=1) read-out
+#                        becomes continuous. ~39x smaller than margin on real nap-8 margins, so it
+#                        needs confidence_gain ~37-39 to sit at margin's scale. Not implemented in
+#                        the native scored-eval kernel (LightMHL falls back to torch there).
 # Everything uses the logsigmoid/softplus form so exp(2m) is never built.
 #
 # A separate `confidence_gain` constant multiplies whichever form is chosen. Scale and
@@ -181,7 +187,13 @@ def _confidence_score(d, confidence_form: str, confidence_gain: float = 1.0):
         s = torch.exp(F.logsigmoid(2.0 * m).mean(dim=-1))
     else:
         prob = torch.exp(F.logsigmoid(2.0 * m).sum(dim=-1))  # prod_j sigmoid(2m_j), (0, 1]
-        s = m.sum(dim=-1) * prob if confidence_form == "margin" else prob   # margin/bounded
+        if confidence_form == "min_margin":
+            # margin with the sum over anchors replaced by the minimum: vanishes (linearly)
+            # when any single margin reaches 0, i.e. at every cell boundary. The gradient of
+            # .min(dim).values goes to the single index torch.min returns (the first minimum).
+            s = m.min(dim=-1).values * prob
+        else:
+            s = m.sum(dim=-1) * prob if confidence_form == "margin" else prob   # margin/bounded
     return s if confidence_gain == 1.0 else s * confidence_gain
 
 
@@ -211,6 +223,16 @@ def _confidence_score_and_dscore(d, confidence_form: str, confidence_gain: float
         if confidence_form == "margin":
             score = m.sum(dim=-1) * prob
             dscore_dm = prob.unsqueeze(-1) + 2.0 * score.unsqueeze(-1) * sig_neg
+        elif confidence_form == "min_margin":
+            # score = m_min * P, P = prod_j sigmoid(2 m_j):
+            #   dscore/dm_j = P * 1[j = j*] + m_min * dP/dm_j = P * onehot(j*) + 2*score*sigmoid(-2 m_j)
+            # Unlike margin's uniform P term, P lands on ONE anchor. j* is the index torch.min
+            # returns (its first minimum), so ties resolve exactly as autograd of
+            # _confidence_score's .min(dim).values does -- no gradient splitting.
+            mv, mi = m.min(dim=-1)
+            score = mv * prob
+            dscore_dm = (2.0 * score.unsqueeze(-1) * sig_neg).scatter_add(
+                -1, mi.unsqueeze(-1), prob.unsqueeze(-1))
         else:
             score = prob
             dscore_dm = 2.0 * score.unsqueeze(-1) * sig_neg
@@ -1207,7 +1229,9 @@ class FastMultiHeadLut(nn.Module):
             the existing directional surrogate. When False, behavior and
             numerics are bit-identical to without the flag. Not compatible with
             exp_outputs=True.
-        confidence_form: "bounded" (default), "margin" or "bounded_norm".
+        confidence_form: "bounded" (default), "margin", "bounded_norm" or "min_margin"
+            (min_margin = (min_j |d_j|) * prod_j sigmoid(2|d_j|); see the note above
+            _confidence_score).
             "bounded" uses score = prod_j sigmoid(2|d_j|) in (0, 1] (no
             output-scale blowup) -- but the product is over NAP factors, so it
             attenuates hard at large NAP (~0.054 at NAP=8, see #112).
@@ -1334,9 +1358,9 @@ class FastMultiHeadLut(nn.Module):
         # When False, every code path below is byte-for-byte the current behavior
         # (forward AND backward) -- same discipline as exp_outputs.
         self.forward_confidence = bool(forward_confidence)
-        if confidence_form not in ("bounded", "margin", "bounded_norm"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm' or 'min_margin', "
                 f"got {confidence_form!r}"
             )
         self.confidence_form = confidence_form

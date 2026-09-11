@@ -154,9 +154,9 @@ class BH4MultiHeadLUT(nn.Module):
                  confidence_gain: float = 1.0, initial_weights_noise: float = 1e-3,
                  random_seed=None, device=None):
         super().__init__()
-        if confidence_form not in ("bounded", "margin", "bounded_norm"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm' or 'min_margin', "
                 f"got {confidence_form!r}")
         self.input_dim, self.n_heads = input_dim, n_heads
         self.tables_per_head, self.n_anchor_pairs = tables_per_head, n_anchor_pairs

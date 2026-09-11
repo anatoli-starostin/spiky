@@ -60,7 +60,11 @@ class LightMultiHeadLUT(nn.Module):
             (== the exact LookupFFN score ``sum|d| / prod(1+e^{-2|d|})``);
             "bounded_norm" uses the geometric mean of the same sigmoids,
             ``prod_j sigmoid(2|d_j|) ** (1/NAP)`` -- same ordering as "bounded"
-            but without its NAP-dependent attenuation.
+            but without its NAP-dependent attenuation; "min_margin" uses
+            ``(min_j |d_j|) * prod_j sigmoid(2|d_j|)``, which vanishes at every cell
+            boundary (continuous n=1 read-out; needs confidence_gain ~37-39 to match
+            margin's scale; the native scored-eval kernel does not implement it, so
+            no-grad eval takes the torch path).
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -114,9 +118,9 @@ class LightMultiHeadLUT(nn.Module):
                              "codebook"):
             raise ValueError("cell_mode must be 'constant', 'gated_affine', 'gated_multiply', "
                              f"'margin_readout' or 'codebook', got {cell_mode!r}")
-        if confidence_form not in ("bounded", "margin", "bounded_norm"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin' or 'bounded_norm', "
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm' or 'min_margin', "
                 f"got {confidence_form!r}"
             )
         if not (1 <= n_anchor_pairs <= 15):
@@ -394,7 +398,10 @@ class LightMultiHeadLUT(nn.Module):
         # _pack_index and _fused_eval take the torch path over the single-index margins.
         self._native_msb = None
         self._native_msb_scored = None
-        self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2}[confidence_form]
+        # Ids understood by the native scored-eval kernel are 0-2. "min_margin" (3) is NOT
+        # implemented there: _fused_eval refuses it so no-grad eval takes the torch path.
+        self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2,
+                               "min_margin": 3}[confidence_form]
         if self.anchor_mode == "pair":
             mgr = _get_native_lutorch_manager()
             if mgr is not None:
@@ -699,7 +706,8 @@ class LightMultiHeadLUT(nn.Module):
         """
         if (self._native_msb_scored is None or not x_flat.is_cuda
                 or x_flat.dtype not in (torch.float32, torch.float64)
-                or self._gated or self._margin or self._codebook):  # need x/margins/M -> torch path
+                or self._gated or self._margin or self._codebook   # need x/margins/M -> torch path
+                or self._score_form_id > 2):   # min_margin (3) is not in the native kernel -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
