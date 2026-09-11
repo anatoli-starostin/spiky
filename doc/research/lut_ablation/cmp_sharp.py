@@ -16,7 +16,9 @@ RUNS = {
     '0195 n=2': 'exp_g_0195_B16k_light_margin_blend_n2_tau_learn0p5_seed1',
     '0245 sharp g1.75': 'exp_g_0245_B16k_light_sharpmargin_g1p75_gain3p9_tph128_seed1',
     '0246 sharp g3': 'exp_g_0246_B16k_light_sharpmargin_g3_gain25p4_tph128_seed1',
+    '0247 learned': 'exp_g_0247_B16k_light_learnedmargin_tph128_seed1',
 }
+LEARNED_REFS = ('0193 margin', '0245 sharp g1.75', '0244 tanh_margin', '0243 min_margin', '0195 n=2')
 PARTNER = {'0245 sharp g1.75': '0243 min_margin', '0246 sharp g3': '0244 tanh_margin'}
 NOISE = [('vanilla 2-seed range', 0.00335), ('budget-law resid sd', 0.0035), ('4K LUT 3-seed sd (lower bnd)', 0.009642)]
 BIN = 0.0035
@@ -72,6 +74,20 @@ for arm, partner in PARTNER.items():
         better_p = sum(curves[arm][s] < curves[partner][s] for s in shared)
         print(f'   matched steps: worse than margin at {worse_m}/{len(shared)}, better than partner at '
               f'{better_p}/{len(shared)}')
+
+sm = final('0247 learned')
+if sm:
+    b = sm['final_val_bpb']
+    print(f'0247 learned: final_val_bpb {b:.6f}  ({sm["training_time_hours"]} h, {sm["total_params"]:,} params)')
+    for k in LEARNED_REFS:
+        v = final(k)['final_val_bpb']
+        dd = b - v
+        print(f'   vs {k:<17} {v:.6f}: {dd:+.6f} = ' + ', '.join(f'{dd / u:+.2f} x {n}' for n, u in NOISE))
+    ref = curves['0193 margin']
+    shared = [s for s in sorted(curves['0247 learned']) if s in ref]
+    deltas = [curves['0247 learned'][s] - ref[s] for s in shared]
+    print(f'   matched steps vs 0193: worse at {sum(d > 0 for d in deltas)}/{len(shared)}; '
+          f'delta at 500 {deltas[0]:+.6f}, 4000 {deltas[shared.index(4000)]:+.6f}, 16000 {deltas[-1]:+.6f}')
 
 if '--png' in sys.argv:
     import matplotlib
