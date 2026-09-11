@@ -102,3 +102,31 @@ Per the brief ("if selectivity can't be matched without destroying discontinuity
 report"), PART 1 stopped here: no implementation and no training until the owner picks between
 γ≈1.75 (CV / min_margin-profile match, stable scale), γ≈3 (tanh p75/p25 + near-zero match, 2.7× CV,
 unstable scale), or both arms.
+
+## Decision: both arms, run sequentially (0245 first)
+
+* **exp_g_0245 — γ = 1.75, gain 3.9: the matched discontinuous control for exp_g_0243
+  (min_margin).** On exp_g_0193's trained margins γ=1.75 reproduces min_margin's *entire* selectivity
+  profile (wCV 1.90 vs 1.97, p75/p25 11.3 vs 12.2, frac<1e-3 0.6% vs 1.0%), so this pair differs in
+  essentially nothing but continuity. **This is the primary test.**
+* **exp_g_0246 — γ = 3.0, gain 25.4: the control for exp_g_0244 (tanh_margin) on the p75/p25 and
+  near-zero axes** (42.8 vs 60, 13.6% vs 10.6%), accepting within-token CV 5.1 vs 1.87.
+
+**Neither arm matches tanh_margin on all selectivity axes at once.** That is why both are run: with
+one arm, whichever statistic went unmatched would stay available as an escape hatch when
+interpreting the result. Together they bracket the target.
+
+Per-run γ: a config key `lut_sharp_margin_gamma`. model_build requires it for sharp_margin and
+passes it to `LightMultiHeadLUT(sharp_margin_gamma=…)`; each layer's γ and gain are printed to
+train.log. `SHARP_MARGIN_GAMMA` = 1.75 is only the module default. train.py stays byte-identical to
+exp_g_0193's.
+
+Preregistered reading, per arm, with the ±0.0035 bins above:
+* **Near exp_g_0193 (margin, 1.1729):** selectivity is not the cause; continuity costs performance.
+* **Near its continuous partner** (0245 vs exp_g_0243 1.1972; 0246 vs exp_g_0244 1.1867): continuity
+  is not the cause; sharp gating is simply worse.
+* **Intermediate:** both contribute.
+
+The 0245/0243 pair is weighted most, and any disagreement between the arms is reported as such.
+For 0245 the partner bin is 1.1937–1.2007 and the margin bin 1.1694–1.1764. The gap to its partner
+is 0.0244 (≈ 7 noise units), so the intermediate range is wide.
