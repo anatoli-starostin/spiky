@@ -1,0 +1,81 @@
+{
+  "exp_name": "exp_g_0247_B16k_light_learnedmargin_tph128_seed1",
+  "best_val_bpb": 1.1693440813202576,
+  "final_val_bpb": 1.1693440813202576,
+  "total_params": 67351698,
+  "training_time_hours": 0.939,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "learned_confidence": {
+    "form": "learned_margin",
+    "score": "exp(g) * sum|d| * prod sigmoid(beta |d|) ** gamma",
+    "init_per_layer": [
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      }
+    ],
+    "final_per_layer": [
+      {
+        "g": -0.2560313642024994,
+        "beta": 1.8006786108016968,
+        "gamma": 1.3556346893310547
+      },
+      {
+        "g": -0.25233548879623413,
+        "beta": 2.1016719341278076,
+        "gamma": 1.4675694704055786
+      },
+      {
+        "g": -0.17939689755439758,
+        "beta": 2.214041233062744,
+        "gamma": 1.580272912979126
+      },
+      {
+        "g": -0.1475449800491333,
+        "beta": 2.1320340633392334,
+        "gamma": 1.482254147529602
+      },
+      {
+        "g": -0.09437763690948486,
+        "beta": 2.073326349258423,
+        "gamma": 1.3830145597457886
+      },
+      {
+        "g": 0.005421021953225136,
+        "beta": 2.115386486053467,
+        "gamma": 1.0438228845596313
+      }
+    ]
+  }
+}
