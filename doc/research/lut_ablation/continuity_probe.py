@@ -1,6 +1,7 @@
 """Continuity probe for LightMultiHeadLUT (Gen 3) at cell boundaries. Eval only; nothing is trained.
 
-Paper config: H=8, tph=64, d_in=d_out=48, nap=8, confidence_form='margin', read_top_n=1 (and 2).
+Paper config (table v3): H=4, tph=128, d_in=d_out=48, nap=8, confidence_form='margin', read_top_n=1 (and 2).
+(Table v2's random-init numbers were measured with H=8, tph=64.)
 
 For a chosen (head h, table t, anchor pair j) we build an input with u_j = z[a_j] - z[b_j] = 0
 EXACTLY, then step u_j to -eps and +eps (eps = 1e-9, float64). The bit j of table t flips, so the
@@ -22,7 +23,7 @@ import torch                                                        # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT    # noqa: E402
 from spiky.lutorch.fast_multi_head_lut import _confidence_score     # noqa: E402
 
-H, TPH, D, NAP = 8, 64, 48, 8
+H, TPH, D, NAP = 4, 128, 48, 8   # paper geometry from table v3 (exp_g_0193); v2's numbers used H=8, TPH=64
 K = 1 << NAP
 EPS = 1e-9
 N_DRAWS = 300
@@ -138,7 +139,7 @@ for n in (1, 2):
     print(f'   cell index flips across u_j=0 in {flips_ok}/{N_DRAWS} draws; other (table,bit) flips caused by the step: {other_flips}')
     print('   ' + summary('score at u_j=0 / median score of all tables at that input', s0_over_med))
     print('   ' + summary('|| y_h(+eps) - y_h(-eps) ||  (absolute)', absj))
-    print('   ' + summary('|| jump || / || y_h ||  (head output, 64 tables summed)', rel_head))
+    print('   ' + summary(f'|| jump || / || y_h ||  (head output, {TPH} tables summed)', rel_head))
     print('   ' + summary('control: same-side step 2*eps, relative', ctrl))
     if n == 1:
         print('   ' + summary('one table:  || W[c+] - W[c-] || / || W[c-] ||', rel_table))

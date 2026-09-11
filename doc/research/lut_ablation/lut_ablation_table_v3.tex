@@ -1,0 +1,404 @@
+% LUT core-module ablation table, v3 (documentation only; no experiments were run to build it).
+% v2 stays alongside (lut_ablation_table_v2.{tex,pdf}); v1 is in git history.
+% Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lut_ablation_table_v3.tex
+\documentclass[10pt]{article}
+\usepackage[landscape,margin=0.55in]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array}
+\usepackage{xcolor}
+\usepackage[hang,flushmargin]{footmisc}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+
+\newcommand{\tbd}[1]{\textcolor{red!70!black}{\textbf{TBD}~--- #1}}
+% \code{...}: typewriter, with a line-break opportunity after every underscore (long class names)
+\newcommand{\code}[1]{{\renewcommand{\_}{\textunderscore\allowbreak}\texttt{#1}}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\note}[1]{\textsuperscript{\textbf{#1}}}
+\renewcommand{\arraystretch}{1.25}
+\setlength{\LTpre}{4pt}\setlength{\LTpost}{4pt}
+
+\title{LUT core-module ablation: three generations of lookup math\\[2pt]
+\large Comparison table, version 3}
+\date{2026-09-11}
+\author{}
+
+\begin{document}
+\maketitle
+\vspace{-2.5em}
+
+\section*{Protocol (fixed for the whole paper set)}
+\textbf{Geometry (the \code{exp\_g\_0193} geometry):} LUT transformer $E=384$, 6 layers, 6 attention heads; \code{CompressionMultiHeadLUT} with
+\textbf{$H=4$ heads, $tph=128$ tables per head}, $d_{in}=d_{out}=48$, \textbf{$n=8$ anchor pairs per table} (nap, $K=2^n=256$ cells).
+\textbf{Training and eval:} 16{,}000 steps, batch 48 rows $\times$ 512 tokens (device batch 12 $\times$ 4 gradient accumulation in the runs), untied embeddings,
+\code{random\_seed} 1 / \code{lut\_base\_seed} 1000, LUT tables without weight decay, corrected eval (\code{evaluate\_bpb\_fixed}: 48 rows $\times$ 100 steps with the leading 12 rows skipped).
+Target hardware nebius-h100.
+
+\textbf{Geometry change from v2 ($H=8$, $tph=64$).} $P=H\cdot tph=512$ is unchanged, so \textbf{every core-LUT FLOP/MAC expression and every number in Table B is identical
+under either geometry.} What the geometry does change is outside the core: the \code{compress}/\code{decompress} projections (384$\to$192$\to$384 instead of
+384$\to$384$\to$384, see the counting convention) and the output rank, which is capped at $H\cdot d_{out}=192$ at $H=4$.
+
+\textbf{Validation bpb.} Three cells are filled from runs at exactly this protocol: 2.1 (\code{exp\_n\_0121}), 3.1 (\code{exp\_g\_0193}) and 3.2 (\code{exp\_g\_0195});
+every other cell is TBD. Earlier numbers not measured on this protocol are not carried over: the Gen-2 results 1.2281 (\code{exp\_g\_0014}) and 1.2176
+(\code{exp\_n\_0044}) ran at $n=6$ with the old batch-coupled eval and tied embeddings, and \code{exp\_g\_0207}/\code{exp\_g\_0206} are $H=8$, $tph=64$, 48K-step runs.
+
+\textbf{Canonical $n=2$ read-out temperature (a stated choice, reversible): $\tau$ learnable, initialised 0.5 (\code{exp\_g\_0195}).}
+$\tau$ is a free hyperparameter of the $n=2$ read-out, not part of the LightMHL math: the blend weight $\sigma(-2|u_{j^\star}|/\tau)$ is defined for any $\tau$.
+The alternative \code{read\_tau='auto'} imports margin statistics measured on a \emph{different} run (\code{exp\_g\_0193}) and so ties row 3.2 to it.
+And the learnable setting is better by 0.0216 bpb.
+\emph{Sensitivity:} \code{exp\_g\_0194} (\code{read\_tau='auto'}, i.e. frozen at the measured per-layer $\Delta m$ 0.033--0.108) reaches 1.182259. The frozen measured
+$\Delta m$ is too sharp: \code{exp\_g\_0194} is +0.0094 \emph{worse} than $n=1$, while \code{exp\_g\_0195} is $-$0.0122 better. The learned $\tau$ ended at
+0.158 / 0.292 / 0.334 / 0.380 / 0.465 / 0.669 by layer, 4--6$\times$ above the measured $\Delta m$ and still drifting slightly at 16K.
+\emph{Caveat:} the \code{exp\_g\_0194}-vs-\code{exp\_g\_0195} comparison changes two things at once, the init value \emph{and} learnability, and cannot separate them:
+there is no frozen-0.5 run and no learnable-from-$\Delta m$ run. Host and code differences do not explain the gap: the same-seed cross-host pair
+\code{exp\_g\_0191} (gpustar) vs \code{exp\_n\_0192} (nebius), identical config, agrees to a median 1.5e-4 and at most 5.3e-4 at matched steps 4K--14K
+(21 shared eval steps; the max occurs at step 4,500). That is roughly two orders of magnitude below the 0.0216 $\tau$ gap, so it explains essentially none of it.
+
+\textbf{Seed spread: provenance of the figures on record.}
+\textbf{0.00335} is the gap between two \emph{vanilla dense} seeds at 16K (\code{exp\_n\_0135} seed 1 = 1.165147 vs \code{exp\_n\_0176} seed 2 = 1.161798).
+It is a two-point range, not a standard deviation, and it was \textbf{not} measured on an LUT or at this geometry.
+\code{SWEEP\_RESULTS.md}: the budget-law fit over ``19 CompressionMHL runs at 16k'' has residual sd $\le$\,0.0035, an upper bound on 16K seed noise.
+The 4K proxy has a three-seed sd of 0.009642 (identical S5 config), which is a \textbf{lower bound}, because \code{random\_seed} re-draws only 26.8\% of the parameters.
+The same-seed cross-host repro pair above agrees to a median 1.5e-4 (max 5.3e-4). There are \textbf{zero seed replicates at this geometry} (see the remaining-work section).
+
+\section*{Setup and notation}
+\textbf{Shared model.} LUT transformer, $E=384$, 6 layers, 6 attention heads. The FFN is
+\code{CompressionMultiHeadLUT} with $H=4$ heads, $tph=128$ tables per head, $d_{in}=d_{out}=48$:
+\code{compress} $E\to H d_{in}$, the \emph{core LUT} on $[T,H,d_{in}]\to[T,H,d_{out}]$, \code{decompress}
+$H d_{out}\to E$. Only the core LUT differs between rows. Per head $h$, the core reads $z_h\in\mathbb R^{d_{in}}$.
+
+\textbf{Per table} $t$ (of the $tph$ tables of head $h$): $n$ fixed anchor pairs $(a_j,b_j)\subset[0,d_{in})$,
+$u_j=z_h[a_j]-z_h[b_j]$, $m_j=|u_j|$, bits $\beta_j=[u_j>0]$, cell $c=\mathrm{pack}(\beta)\in[0,K)$,
+table $W_t\in\mathbb R^{K\times d_{out}}$. $c'=c^{(j^\star)}$ is $c$ with the bit of the least-confident pair
+$j^\star=\arg\min_j|u_j|$ flipped. The head output is $y_h=\sum_{t\in h}(\cdot)$.
+In the backward, $g=\partial L/\partial y_h$, $G_t(\ell)=\langle g,W_t[\ell]\rangle$, and any
+$\partial L/\partial u_j$ is scattered as $+$ to $z_h[a_j]$ and $-$ to $z_h[b_j]$. $\sigma$ is the logistic sigmoid.
+The cell index is integer-valued: no gradient ever flows through it (no straight-through estimator in any row).
+$P=H\cdot tph=512$ tables per token and $d=d_{out}$.
+
+\section*{Counting convention for FLOPs and MACs}
+\begin{itemize}\setlength\itemsep{1pt}
+\item \textbf{Scope:} the core LUT module only, \textbf{per token}, one layer. Multiply by $T$ for a sequence and by 6 for the
+  model. The \code{compress}/\code{decompress} projections are identical in every row and excluded: at $H=4$ (384$\to$192 and 192$\to$384) they add
+  $E\cdot Hd_{in}+Hd_{out}\cdot E=73{,}728+73{,}728=147{,}456$ MACs ($\approx$\,294,912 FLOPs) forward and about twice that backward per token per
+  layer (\code{exp\_n\_0121}'s \code{corrected\_score.json} lists \code{projection\_flops\_total: 147456}). That is \emph{more} than the forward of every core variant below:
+  294,912 FLOPs $>$ the 134,656 maximum core forward FLOPs, and 147,456 MACs $>$ the 49,152 maximum core forward MACs.
+\item \textbf{FLOP} = one scalar floating-point operation: $+,-,\times,\div$, a float comparison, $|\cdot|$, $\exp$, $\log\sigma$,
+  $\sigma$ each count 1. \textbf{MAC} = a multiply whose result is accumulated (weight $\times$ value, then added):
+  \textbf{1 MAC = 2 FLOPs}, and MACs are included in the FLOP column. A pure accumulate (adding a looked-up row) is 1 FLOP and not a MAC.
+\item \textbf{Not counted:} memory reads (table-row gathers, anchor gathers), integer work (bit packing, XOR, index offsets),
+  optimizer updates, and saving activations.
+\item \textbf{Forward} = inference cost (what an evaluated model executes). \textbf{Backward} = all \emph{additional}
+  arithmetic a training step needs, including training-only forward work (for example the alternative search in 1.1).
+\item Terms proportional to $d$, $K$ and $nK$ are exact. \textbf{Scalar per-table overheads} ($O(n)$ and constants) are
+  counted from the code but approximate to within a few operations per table, since autograd's internal breakdown varies.
+  $d_{in}$ does not enter the core cost: it only sets the anchor index range.
+\item In the Gen-2 and Gen-3 cost expressions, $k$ is the number of table cells whose rows enter the computation (for example $k=2$ for a two-cell blend).
+  Gen-1 expressions are written with their fixed two alternatives substituted. Temperature gradients ($O(1)$ per layer) are ignored. Gen-2 rows assume the confidence gate is \emph{off}, as in the Gen-2 runs.
+\end{itemize}
+
+\section*{Gen-3 confidence forms}
+LightMHL multiplies each addressed row by a score computed from the margins. The score is computed at its call site
+\code{light\_multi\_head\_lut.py:549--550}; it is consumed by \code{\_bagged\_sum} at \code{:565} for $n=1$, and by \code{\_blend\_bag} at \code{:557--561}
+(as $\text{score}\cdot w$, \code{:677}) for $n=2$. The function is \code{\_confidence\_score}, imported at \code{light\_multi\_head\_lut.py:38} and
+defined at \code{fast\_multi\_head\_lut.py:171--185}\footnote{\code{\_confidence\_score} is a shared helper used by FastMHL, LightMHL and BH4 (\code{bh4\_multi\_head\_lut.py:56, 213}).
+It lives in the fast module for historical reasons and is arguably misplaced there; a common module would be the natural home.}.
+Three forms exist ($g$ = \code{confidence\_gain}, default 1):
+\begin{center}\small
+\begin{tabular}{llll}
+\toprule
+form & score & score at a boundary / before\footnotemark & configs using it (of 55 Gen-3) \\
+\midrule
+\code{bounded} & $g\prod_j\sigma(2m_j)$ & 0.63 & 0 \\
+\code{bounded\_norm} & $g\big(\prod_j\sigma(2m_j)\big)^{1/n}$ (geometric mean) & 0.94 & 8 \\
+\code{margin} & $g\big(\sum_j m_j\big)\prod_j\sigma(2m_j)$ (LookupFFN kernel) & 0.56 & 47 (including every run cited here\footnotemark) \\
+\midrule
+\code{min\_margin} (\emph{proposed}, row 3.3) & $g\big(\min_j m_j\big)\prod_j\sigma(2m_j)$ & 0 & not implemented \\
+\bottomrule
+\end{tabular}
+\end{center}
+\addtocounter{footnote}{-1}\footnotetext{Median ratio of the score with one margin set to 0 to the score before, on random nap-8 margins.}
+\stepcounter{footnote}\footnotetext{\code{exp\_g\_0193}, \code{exp\_g\_0194}, \code{exp\_g\_0195}, \code{exp\_g\_0206}, \code{exp\_g\_0207}.}
+\textbf{None of the three existing forms vanishes at a cell boundary}, so all of them leave the $n=1$ forward discontinuous; only \code{min\_margin}
+reaches 0 there. For $n=1$ inference on CUDA without grad, the score is computed by a separate native kernel\footnote{\code{native/lutorch/lutorch.cu:241--247}, reached via
+\code{light\_multi\_head\_lut.py:700--707} (\code{\_fused\_eval}). $n=1$ eval and $n=1$ training therefore compute the score through different code, which agrees
+to $\approx$\,2e-7 in fp32. The bpb numbers come from the eval path. Gen~2 never uses this scored kernel.}.
+
+\section*{Table A --- forward and backward math}
+\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{8.8cm} >{\raggedright\arraybackslash}p{12.0cm}}
+\toprule
+\textbf{Variant} & \textbf{Forward pass (math)} & \textbf{Backward pass (math)} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variant} & \textbf{Forward pass (math)} & \textbf{Backward pass (math)} \\
+\midrule
+\endhead
+\midrule \multicolumn{3}{r}{\emph{continued on next page}} \\
+\endfoot
+\bottomrule
+\endlastfoot
+
+\multicolumn{3}{l}{\textbf{GEN 1 --- Spiking Manifesto basic model, rational uncertainty $U(u)=0.5/(1+|u|)$}\note{a}\ --- both rows use exactly two alternatives: $c$ and $c'$} \\[2pt]
+1.1 Hard forward, two-alternatives backward &
+$y_h=\sum_t W_t[c_t]$. \newline
+Training only: the alternative is selected by $j^\star=\arg\min_j|u_j|$. &
+Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=g$ (addressed row only). \newline
+Input (surrogate --- the derivative of 1.2's blend): $\dfrac{\partial L}{\partial u_{j^\star}}=-U'(u_{j^\star})\,\big(G_t(c_t)-G_t(c_t')\big)$,
+with $-U'(u)=\dfrac{0.5\,\sgn u}{(1+|u|)^2}$; $\partial L/\partial u_j=0$ for $j\neq j^\star$. \\[3pt]
+1.2 Soft forward, two-alternatives backward &
+$y_h=\sum_t\big[(1-U_t)\,W_t[c_t]+U_t\,W_t[c_t']\big]$, $U_t=U(u_{t,j^\star})$. \newline
+Continuous at $u_{j^\star}=0$ (both weights $\tfrac12$). Applied at eval too. &
+Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=(1-U_t)\,g$, $\partial L/\partial W_t[c_t']\mathrel{+}=U_t\,g$. \newline
+Input: $\partial L/\partial u_{j^\star}=-U'(u_{j^\star})\,\big(G_t(c_t)-G_t(c_t')\big)$ as in 1.1, which here is the \emph{exact} gradient of the blend with both cells held fixed. \\[4pt]
+\midrule
+\multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}\note{b}. Surrogate: $\rho_j=\dfrac{|u_j|}{T_s+|u_j|}$,
+$s_\ell=\sum_j\rho_j-2\!\!\sum_{j:\,\mathrm{bit}_j(\ell)\neq\beta_j}\!\!\rho_j$, $\pi_\ell=\mathrm{softmax}_\ell(s_\ell/T_{sel})$ (signs $\beta$ pinned; $T_s,T_{sel}$ are temperatures)} \\[2pt]
+2.1 Hard forward, all-alternatives backward (all $K$ cells) &
+$y_h=\sum_t W_t[c_t]$. \newline
+($c_t=\arg\max_\ell s_\ell$; no $K$-sized tensor is built.) &
+Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=g$. \newline
+Input via the $K$-cell surrogate $\hat y_t=\sum_\ell\pi_\ell W_t[\ell]$ (never used in the forward):
+$\dfrac{\partial L}{\partial u_j}=\dfrac{1}{T_{sel}}\sum_{\ell}\pi_\ell\big(G_t(\ell)-\bar G_t\big)\dfrac{\partial s_\ell}{\partial\rho_j}\cdot\dfrac{T_s\,\sgn u_j}{(T_s+|u_j|)^2}$,
+$\bar G_t=\sum_\ell\pi_\ell G_t(\ell)$, $\partial s_\ell/\partial\rho_j=\pm1$ (agree/disagree with $\beta_j$). All $n$ pairs get gradient; reads all $K$ rows. \\[3pt]
+2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
+$y_h=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, \newline
+$w_t=\sigma(-\Delta_t/T_{sel})$, $\Delta_t=2\rho_{t,j^\star}$ \newline
+(the exact 2-way softmax of $s$ over $\{c,c'\}$). Applied at eval too. &
+Weights: $(1-w_t)\,g$ into $W_t[c_t]$ and $w_t\,g$ into $W_t[c_t']$. \newline
+Input: the $K$-cell surrogate of 2.1 (not the gradient of the forward that actually ran). \\[3pt]
+2.3 Hard forward, 2-alternatives backward &
+$y_h=\sum_t W_t[c_t]$ &
+\tbd{not implemented; open decision.} \code{FastMultiHeadLut} raises \code{ValueError} for \code{backward\_topk>0} unless
+\code{forward\_mode='hybrid\_smooth'} (\code{fast\_multi\_head\_lut.py:1305}). \\[3pt]
+2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
+As 2.2. &
+Weights: as 2.2. \newline
+Input (\code{backward\_topk=1}): the exact gradient of the 2-cell blend with cells fixed. Only $j^\star$ gets gradient:
+$\dfrac{\partial L}{\partial u_{j^\star}}=-\dfrac{w_t(1-w_t)}{T_{sel}}\big(G_t(c_t')-G_t(c_t)\big)\dfrac{2T_s\,\sgn u_{j^\star}}{(T_s+|u_{j^\star}|)^2}$. \\[4pt]
+\midrule
+\multicolumn{3}{l}{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired)}. Score $s_t$ per the confidence-form table above; the cell index uses detached $u$\note{c}} \\[2pt]
+3.1 Soft forward $n{=}1$, margin confidence, single-alternative backward &
+$y_h=\sum_t s_t\,W_t[c_t]$, $s_t=\big(\sum_j|u_{t,j}|\big)\prod_j\sigma(2|u_{t,j}|)$. \newline
+\textbf{Piecewise-continuous:} the margin score stays positive at a sign flip, so $y$ jumps by $s_t\big(W_t[c']-W_t[c]\big)$;
+a min-margin score would make it continuous (row 3.3)\note{d}. &
+Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=s_t\,g$. \newline
+Input (only through the score): $\dfrac{\partial L}{\partial u_j}=G_t(c_t)\Big(\prod_i\sigma(2|u_i|)+2s_t\,\sigma(-2|u_j|)\Big)\sgn u_j$ for all $j$. \newline
+$\partial L/\partial W_t[c']$ is \textbf{exactly zero} (verified by autograd), and perturbing $W_t[c']$ leaves the input gradient unchanged:
+neither forward nor backward carries any signal about the neighbouring cell. At $n=2$ both do. \\[3pt]
+3.2 Soft forward $n{=}2$, margin confidence, two-alternatives backward &
+$y_h=\sum_t s_t\big[\omega_0W_t[c_t]+\omega_1W_t[c_t']\big]$, \newline
+$\omega_1=\sigma(-2|u_{j^\star}|/\tau)$, $\omega_0=1-\omega_1$, $\tau=e^{\log\tau}$ (learnable, initialised 0.5; see Protocol). \newline
+Continuous at bit flips (the two cells swap roles at weights $\tfrac12$), but it retains a smaller discontinuity where the two smallest margins
+swap and the second cell changes: about $8\times$ smaller than 3.1's jump on trained weights\note{d}. &
+Weights: $s_t\omega_0\,g$ and $s_t\omega_1\,g$ into the two read cells. \newline
+Input: $\dfrac{\partial L}{\partial u_j}=(\omega_0G_0+\omega_1G_1)\dfrac{\partial s_t}{\partial|u_j|}\sgn u_j+[j=j^\star]\,s_t\tfrac{2}{\tau}\omega_0\omega_1(G_0-G_1)\sgn u_j$,
+with $G_0=G_t(c_t)$, $G_1=G_t(c_t')$. \newline
+$\partial L/\partial\log\tau=\sum_t s_t\omega_0\omega_1(G_1-G_0)\,2|u_{j^\star}|/\tau$. \\[3pt]
+3.3 Soft forward $n{=}1$, min-margin confidence, single-alternative backward (\emph{proposed}) &
+$y_h=\sum_t \tilde s_t\,W_t[c_t]$, $\tilde s_t=g\,\big(\min_j|u_{t,j}|\big)\,P_t$, $P_t=\prod_j\sigma(2|u_{t,j}|)$, $g\approx38$ (scale-matched to margin\note{e}). \newline
+At a boundary ($|u_i|\to0$, $i$ becomes the argmin): $\tilde s_t=\tfrac g2 C_i|u_i|+O(u_i^2)$, $C_i=\prod_{j\neq i}\sigma(2|u_j|)$, i.e. it vanishes linearly.
+So $y$ is \textbf{continuous everywhere} ($C^0$, Lipschitz, piecewise smooth) but \textbf{not differentiable} at a boundary:
+the one-sided slopes are $-\tfrac g2C_iW_t[c]$ and $+\tfrac g2C_iW_t[c']$. It also has kinks where the argmin switches. &
+Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=\tilde s_t\,g$. \newline
+Input (only through the score): $\dfrac{\partial L}{\partial u_j}=G_t(c_t)\big(g\,P_t\,[j=j^\star]+2\tilde s_t\,\sigma(-2|u_j|)\big)\sgn u_j$, i.e. the $gP$ term goes to the argmin anchor only.
+Ties use the first-index convention of \code{torch.min} (not \code{amin}, whose even split breaks the parity between Fast's analytic backward and Light's autograd). \newline
+\tbd{not yet implemented.} Row 3.4 ($n=2$ + min-margin) is \textbf{deferred}: $n=2$ is already continuous at bit flips and min-margin does not remove its
+argmin-switch jump, so it would not test continuity. Run it only if 3.3 beats 3.1. \\
+\end{longtable}
+\normalsize
+\noindent\textbf{Notes to Table A.}
+\begin{itemize}\setlength\itemsep{0pt}\footnotesize
+\item[\note{a}] Other uncertainty functions may be tried later. The code also offers \code{UncertaintyMode.INVERSE\_QUADRATIC}, $0.5/(1+u^2)$; see also the prior-evidence appendix on confidence forms.
+\item[\note{b}] \textbf{Config trap (Gen 2 only):} \code{backward\_topk} counts cells \emph{beyond} the addressed one. Our ``2 alternatives'' is
+  \code{backward\_topk=1}; \code{backward\_topk=2} would mean 3 cells. ``All alternatives'' is all $K=2^n$ cells (\code{backward\_topk=0}, a full softmax surrogate),
+  not the $n$ single-bit flips (that would be \code{backward\_topk=n}). \code{backward\_topk} never changes the weight gradient.
+\item[\note{c}] A hard-forward Gen-3 variant still needs to be designed: nothing in the code trains LightMHL with a hard forward.
+\item[\note{d}] \textbf{Measured} (\code{continuity\_probe.py}, \code{continuity\_probe\_trained.py}). Two independent halves:
+  \textbf{(i) Random init, float64, 300 draws --- re-measured at the v3 geometry $H=4$, $tph=128$}; the previous-geometry v2 values at $H=8$, $tph=64$ are in brackets.
+  \textbf{3.1:} at the boundary the score is a median $0.514\times$ the typical table score (p10 0.19, p90 1.27) [0.50$\times$], never 0.
+  The jump is a median 4.11\% of $\|y_h\|$ (p90 9.55\%, max 33.8\%) [median 5.4\%, p90 14\%], against 4.59e-10 for a same-size step with no flip [4.6e-10],
+  so it remains about eight orders of magnitude above the float floor: the discontinuity stands, just smaller.
+  The shrink (median ratio 0.76, p90 ratio 0.68) is close to the $\approx1/\sqrt2=0.707$ expected because each head now sums twice as many tables: the expected effect, not an anomaly.
+  \textbf{3.2:} the bit-flip jump is 6.6e-10, i.e. continuous; the argmin-switch jump is a median 1.08\% (p90 3.1\%) [median 1.85\%].
+  The min-margin counterfactual gives 1.5e-9 [1.6e-9]. $\partial L/\partial W_t[c']$ at $n=1$ is exactly zero, with zero change in the input gradient.
+  The native fp32 kernel agrees with torch to a median 2.0e-7 (max 3.5e-7) and shows the same jump (median 3.98\%, slightly below the float64 torch figure because fp32 uses $\varepsilon=10^{-4}$).
+  \textbf{(ii) Trained --- unchanged, and already at $H=4$, $tph=128$} (\code{exp\_g\_0193}/\code{exp\_g\_0194}, real val tokens):
+  \textbf{3.1:} median 3.5\% of the head output and 0.9\% of the FFN output after \code{decompress}; about 1.2\% of real margins lie within $10^{-2}$ of zero.
+  \textbf{3.2:} the argmin-switch jump is a median 0.44\% of the head output and 0.11\% of the FFN output, about $8\times$ smaller.
+\item[\note{e}] The gain matches \code{margin}'s mean on the same margins; the ratio is stable through training (38.9 at init, 36.3 after 4K steps,
+  37.4 on \code{exp\_g\_0193}). These were already measured on $H=4$ runs (\code{exp\_g\_0193} and the \code{sweep\_s05} cache), so the note is unchanged under the v3 geometry.
+  \textbf{Confound:} \code{min\_margin} changes continuity \emph{and} selectivity together (within-token CV 1.7--2.0 vs 0.87--0.98 for
+  \code{margin}; 10--27\% of (token, table) scores below $10^{-3}$), so a single 3.3-vs-3.1 arm cannot separate the two effects. Details: \code{notes\_min\_margin.md}.
+\end{itemize}
+
+\newpage
+\section*{Table B --- cost and results}
+Per token, one layer, core LUT only. Concrete values at the v3 geometry $H=4$, $tph=128$, $d_{in}=d_{out}=48$, $n=8$ ($K=256$), $P=512$, $d=d_{out}$;
+every expression depends only on $P$, $n$ and $d$, so the numbers are identical at $H=8$, $tph=64$. Validation bpb on the protocol above.
+\footnotesize
+\setlength{\tabcolsep}{3pt}% seven columns: narrower gutters keep the table inside the text block
+\begin{longtable}{>{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.3cm} >{\raggedright\arraybackslash}p{6.0cm}}
+\toprule
+\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Implementation (class used)} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Implementation (class used)} \\
+\midrule
+\endhead
+\midrule \multicolumn{7}{r}{\emph{continued on next page}} \\
+\endfoot
+\bottomrule
+\endlastfoot
+1.1 &
+$P(2n+d)$ \newline $=\mathbf{32{,}768}$ &
+$P(5d+2n+9)$ \newline $=\mathbf{135{,}680}$ &
+$0$ &
+$P\cdot2d$ \newline $=\mathbf{49{,}152}$ &
+\tbd{not yet implemented} in the FFN harness. &
+\code{spiky.lutorch.multi\_head\_lut.MultiHeadLut} (\code{smooth\_mode=False}, \code{n\_alternatives=1}, \code{uncertainty\_mode=INVERSE\_L1}); also \code{lut\_fused.LUTLayer.LUTLayerBasic}. \textbf{Not wired into} \code{CompressionMultiHeadLUT}. \\
+1.2 &
+$P(4d+4n+4)$ \newline $=\mathbf{116{,}736}$ &
+$P(8d+9)$ \newline $=\mathbf{201{,}216}$ &
+$P\cdot2d$ \newline $=\mathbf{49{,}152}$ &
+$P\cdot4d$ \newline $=\mathbf{98{,}304}$ &
+\tbd{not yet implemented} in the FFN harness. &
+\code{MultiHeadLut} (\code{smooth\_mode=True}, \code{n\_alternatives=1}). Not wired into \code{CompressionMultiHeadLUT}. \\
+\midrule
+2.1 &
+$P(2n+d)$ \newline $=\mathbf{32{,}768}$ &
+$P(2Kd+4nK+9K+11n+d)$ \newline $=\mathbf{18{,}026{,}496}$\note{f} &
+$0$ &
+$P(Kd+2nK)$ \newline $=\mathbf{8{,}388{,}608}$ &
+\textbf{1.180622} \newline (\code{exp\_n\_0121\_ffnsw\_nap8\_tph128\_16k})\note{h} &
+\code{CompressionMultiHeadLUT(lut\_impl='fast')} $\to$ \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=0)}; keys \code{lut\_forward\_mode}, \code{lut\_backward\_topk}. \\
+2.2 &
+$P(2kd+4n+5)$ \newline $=\mathbf{117{,}248}$ &
+$P(2Kd+4nK+9K+11n+2kd)$ \newline $=\mathbf{18{,}100{,}224}$\note{f} &
+$P\,kd$ \newline $=\mathbf{49{,}152}$ &
+$P(Kd+2nK+kd)$ \newline $=\mathbf{8{,}437{,}760}$ &
+\tbd{not yet run} &
+\code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=0)}. \\
+2.3 &
+$P(2n+d)=32{,}768$ &
+n/a &
+$0$ &
+n/a &
+\tbd{not implemented; open decision} &
+Would be \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=1)}, which the code rejects. \\
+2.4 &
+$P(2kd+4n+5)$ \newline $=\mathbf{117{,}248}$ &
+$P(4kd+9n+15)$ \newline $=\mathbf{241{,}152}$ &
+$P\,kd$ \newline $=\mathbf{49{,}152}$ &
+$P\,2kd$ \newline $=\mathbf{98{,}304}$ &
+\tbd{not yet run} &
+\code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)} (note b). \\
+\midrule
+3.1 &
+$P(2kd+7n)$ \newline $=\mathbf{77{,}824}$ &
+$P(4kd+8n)$ \newline $=\mathbf{131{,}072}$ &
+$P\,kd$ \newline $=\mathbf{24{,}576}$ &
+$P\,2kd$ \newline $=\mathbf{49{,}152}$ &
+\textbf{1.172852} \newline (\code{exp\_g\_0193}, in-run corrected eval)\note{i} &
+\code{CompressionMultiHeadLUT(lut\_impl='light')} $\to$ \code{LightMultiHeadLUT(confidence\_form='margin', read\_top\_n=1)}. \\
+3.2 &
+$P(2kd+8n+7)$ \newline $=\mathbf{134{,}656}$ &
+$P(4kd+8n+11)$ \newline $=\mathbf{235{,}008}$ &
+$P\,kd$ \newline $=\mathbf{49{,}152}$ &
+$P\,2kd$ \newline $=\mathbf{98{,}304}$ &
+\textbf{1.160637} \newline (\code{exp\_g\_0195}, $\tau$ learnable, init 0.5; sensitivity: \code{exp\_g\_0194} 1.182259, see Protocol) &
+\code{LightMultiHeadLUT(confidence\_form='margin', read\_top\_n=2, read\_tau=0.5, learnable)}. \\
+3.3 &
+as 3.1 \newline $=\mathbf{77{,}824}$\note{g} &
+as 3.1 \newline $=\mathbf{131{,}072}$\note{g} &
+$\mathbf{24{,}576}$ &
+$\mathbf{49{,}152}$ &
+\tbd{not yet implemented; open decision} &
+Would be \code{LightMultiHeadLUT(confidence\_form='min\_margin', confidence\_gain}$\approx$\code{38, read\_top\_n=1)}; touchpoints in \code{notes\_min\_margin.md}. \\
+\end{longtable}
+\normalsize
+\noindent\textbf{Notes to Table B.}
+\begin{itemize}\setlength\itemsep{0pt}\footnotesize
+\item[\note{f}] Dominated by $2Kd$: the all-alternatives backward reads all $K$ rows of every table. Memory: at $n=8$ it holds several
+  \code{[tokens, 512, 256]} fp32 buffers, about 12.9\,GiB each at 24,576 tokens, so batch 48 needs micro-batching or gradient accumulation.
+\item[\note{g}] Listed as identical to 3.1. A minimum over $n$ margins costs the same $n-1$ operations as a sum over $n$. In the backward the $gP$ term lands on one anchor instead
+  of $n$, which saves $P(n-1)=3{,}584$ FLOPs, but that is smaller than the stated scalar-overhead tolerance, so it is not claimed as a difference.
+\item[\note{h}] This value comes from a \textbf{re-score of the saved run under the corrected eval} (0 missing keys), not from an in-run eval; the original batch-coupled number was 1.191455.
+  The run has \code{lut\_learnable\_temps: true} (+12 parameters vs \code{exp\_g\_0193}), and \code{lut\_backward\_topk} is absent, i.e. 0 = all $2^n$ cells.
+\item[\note{i}] \code{exp\_g\_0193}'s \code{lut\_learnable\_temps}, \code{lut\_forward\_mode} and \code{lut\_forward\_confidence} keys are inert on LightMHL.
+\end{itemize}
+
+\section*{Open decisions}
+\begin{enumerate}\setlength\itemsep{1pt}
+\item \textbf{Row 2.3} (hard forward, 2-alternatives backward) is rejected by \code{FastMultiHeadLut} (\code{ValueError} unless \code{forward\_mode='hybrid\_smooth'}).
+  Either patch the code to make it legal, or drop the row.
+\item \textbf{Row 3.3} (min-margin): implement it now, or keep it planned but not run. The spec, scale analysis and touchpoints are in \code{notes\_min\_margin.md}.
+\item Rows 1.1/1.2 cannot run at all until Gen 1 is wired into \code{CompressionMultiHeadLUT}: \code{MultiHeadLut} takes a shared \code{[B, input\_dim]} input rather than
+  the per-head \code{[T,H,d\_in]} layout (for example via \code{anchor\_candidates} restricting each head's anchors; see the remaining-work section for the shape).
+\end{enumerate}
+
+\section*{Where the code disagrees with the original brief}
+\begin{enumerate}\setlength\itemsep{1pt}
+\item \textbf{Gen 1 is not wired into the experiment harness.} \code{CompressionMultiHeadLUT} accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:184}),
+  and no \code{model\_build.py} key reaches \code{MultiHeadLut}.
+\item \textbf{In 1.1 the input gradient is a surrogate.} It is the derivative of 1.2's soft blend, while the weights update only the addressed row.
+\item \textbf{The paper's status report writes $u(\delta)=0.5/(T+|\delta|)$} with a per-LUT temperature. The code's $U(u)=0.5/(1+|u|)$ has none
+  (\code{l\_projection.py:96}, \code{lutorch.cu:797}).
+\item \textbf{2.3 cannot be built} (see Open decisions).
+\item \textbf{Gen-2 alternative counting:} see note b. The off-by-one in \code{backward\_topk} is a live trap when writing Gen-2 configs.
+\item \textbf{Gen 2's hybrid\_smooth weights are $w=\sigma(-2\rho_{j^\star}/T_{sel})$}, a temperature-controlled rational soft-sign, not Gen 1's $U(u)$. It does match ``two-alternatives forward''.
+\item \textbf{3.1 ``soft forward $n{=}1$'' reads one hard cell scaled by a smooth score.} It is piecewise-continuous with measured jumps (note d), not continuous.
+\item \textbf{The margin confidence function is LookupFFN's kernel} $(\sum_j|u_j|)\prod_j\sigma(2|u_j|)$, not $\min_j|u_j|$. The factor 2 is fixed.
+\item \textbf{Minor:} \code{exp\_g\_0193} (3.1) sets \code{lut\_learnable\_temps}, \code{lut\_forward\_mode} and \code{lut\_forward\_confidence}, all of which are inert on LightMHL.
+\end{enumerate}
+
+\section*{Remaining work}
+\begin{itemize}\setlength\itemsep{1pt}
+\item \textbf{Free / already done:} 2.1 (\code{exp\_n\_0121}), 3.1 (\code{exp\_g\_0193}), 3.2 (\code{exp\_g\_0195}).
+\item \textbf{To conduct:} 2.2 (hybrid\_smooth forward, all-cells backward) and 2.4 (hybrid\_smooth forward, 2-cell backward). Neither exists yet: every hybrid\_smooth run on record is
+  $n=6$ with tied embeddings on the old eval (\code{exp\_n\_0044} $H8/tph64$, \code{exp\_g\_0009} $H8/tph32$, \code{exp\_g\_0010} $H16/tph32$, \code{exp\_g\_0011} $H8/tph256$), and the only
+  \code{backward\_topk>0} run, \code{exp\_n\_0188}, is $H4/tph128$ but $n=7$ with a \code{bounded\_norm} gate on.
+\item \textbf{To implement and run:} 1.1, 1.2, 3.3, plus 2.3 if \code{FastMultiHeadLut} is patched to allow a hard forward with \code{backward\_topk>0}.
+\item \textbf{Condition for the new Gen-2 runs:} fork \code{exp\_n\_0121} verbatim (learnable temperatures, seed 1, 16K, batch 48 via device batch 12 $\times$ 4 accumulation, fixed-eval trainer),
+  changing \emph{only} \code{lut\_forward\_mode} / \code{lut\_backward\_topk}, so that 2.1/2.2/2.4 differ in nothing else.
+\item \textbf{Gen-1 wiring:} \code{MultiHeadLut} with \code{anchor\_candidates} of shape [$tph=128$, $H=4$, $d_{in}=48$] over a 192-dim compressed code, instead of [64, 8, 48] over 384.
+\item \textbf{Seeds:} there are \textbf{zero seed replicates at this geometry} (every run is \code{random\_seed} 1 / \code{lut\_base\_seed} 1000). One extra seed of \code{exp\_g\_0193}
+  ($\approx$\,0.9\,h) would give the paper a real LUT seed spread.
+\item \textbf{Reference anchors} (vanilla dense FFN, corrected eval): 1.1651 / 1.1618 at 16K (two seeds), 1.1154 at 48K.
+\end{itemize}
+
+\newpage
+\section*{Appendix --- prior evidence on confidence forms}
+Summarised from \code{experiments/ffn\_replacement/runs\_corrected/LOOKUPFFN\_LINE.md} and \code{diag\_confidence\_forms.py}, which measure 6,291,456 real nap-8 margin vectors
+(\code{dump\_margins.py}, model \code{sweep\_s05\_dout48\_H4\_tph256\_c256\_din32} at init). This partly answers note a's ``other uncertainty functions''.
+The regenerated cache reproduces the published numbers exactly (\code{min\_margin\_scale.py}).
+
+\textbf{Scale and within-token selectivity at init.} The within-token spread is the part of the score that actually reweights the table ensemble;
+the across-token part only rescales a token's whole FFN output.
+\begin{center}\small
+\begin{tabular}{lrrrl}
+\toprule
+form & mean & p75/p25 & within-token CV & reading \\
+\midrule
+\code{bounded} & 0.0542 & 2.06 & 0.54 & 18.4$\times$ forward attenuation at $n=8$ \\
+\code{margin} & 0.2286 & 3.04 & 0.87 & self-normalises in training (0.94 after 4K steps) \\
+\code{bounded\_norm} & 0.6838 & 1.09 & 0.061 & nearly constant per token, so the linear \code{decompress} absorbs it \\
+\code{min\_margin} (proposed) & 0.0059 & 7.32 & 1.78 & 39$\times$ below \code{margin}; needs $g\approx38$ (note e) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{4K-step confidence-gate arms} vs the gate-off baseline S5 at \textbf{1.434572}:
+\code{bounded} unmatched +0.225 (stopped at 3,200 steps, widening); \code{bounded} $\times$\,12.61 +0.0004; \code{bounded\_norm} +0.0066 (inside the 4K proxy's three-seed sd of 0.0096,
+which is a \textbf{lower bound} because \code{random\_seed} re-draws only 26.8\% of the parameters);
+\code{bounded\_norm} on the Light implementation +0.0431; \code{margin} $\times$\,2.99 $-$0.0021.
+\textbf{Correction to how these gains are usually quoted:} the $\times$\,12.61 and $\times$\,2.99 arms were scale-matched to \textbf{\code{bounded\_norm}'s mean 0.6838}, not to gate-off's 1.0.
+So scale, not the form, broke \code{bounded}, and \code{margin} was the only gate to land below the baseline.
+
+\textbf{16K, LightMHL:} the clean pair \code{exp\_g\_0189} (\code{bounded\_norm}) $\to$ \code{exp\_g\_0193} (\code{margin}) differs in nothing but the form and moves bpb by
+\textbf{$-$0.0346} (10.3$\times$ the 0.00335 vanilla two-seed range at 16K, which is not an LUT seed spread; see Protocol). This is why \code{margin} became the standard.
+\end{document}
