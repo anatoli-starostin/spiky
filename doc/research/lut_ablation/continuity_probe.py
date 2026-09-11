@@ -25,15 +25,19 @@ from spiky.lutorch.fast_multi_head_lut import _confidence_score     # noqa: E402
 
 H, TPH, D, NAP = 4, 128, 48, 8   # paper geometry from table v3 (exp_g_0193); v2's numbers used H=8, TPH=64
 FORM = os.environ.get('PROBE_FORM', 'margin')   # confidence form under test; 'margin' reproduces table v3
+# sharp_margin's exponent; only read when PROBE_FORM=sharp_margin (None -> SHARP_MARGIN_GAMMA)
+GAMMA = float(os.environ['PROBE_GAMMA']) if 'PROBE_GAMMA' in os.environ else None
 K = 1 << NAP
 EPS = 1e-9
 N_DRAWS = 300
 g = torch.Generator().manual_seed(0)
+print(f'PROBE_FORM={FORM}  PROBE_GAMMA={GAMMA}')
 
 
 def build(n, device='cpu', dtype=torch.float64, seed=1000):
     m = LightMultiHeadLUT(input_dim=D, n_tables=H * TPH, output_dim=D, n_anchor_pairs=NAP,
                           confidence_form=FORM, random_seed=seed, n_heads=H,
+                          sharp_margin_gamma=GAMMA if FORM == 'sharp_margin' else None,
                           multi_head_input=True, read_top_n=n, read_tau=0.5, device=device)
     m._compile_enabled = False
     return m.to(dtype)
@@ -72,7 +76,7 @@ def manual_y_n1(m, z, score_fn):
 
 def margin_score(d):
     """The score of the form under test (FORM; 'margin' unless PROBE_FORM is set)."""
-    return _confidence_score(d, FORM, 1.0)
+    return _confidence_score(d, FORM, 1.0, GAMMA if FORM == 'sharp_margin' else None)
 
 
 def min_score(d):

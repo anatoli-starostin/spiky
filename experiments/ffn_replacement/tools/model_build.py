@@ -222,7 +222,20 @@ class MinimalBlock(nn.Module):
                     # Lookup-gated cell: 'constant' (default, unchanged) | 'gated_affine'
                     # (u+v⊙x) | 'gated_multiply' (v⊙x).
                     cell_mode=cfg.get('lut_cell_mode', 'constant'),
-                    margin_signed=bool(cfg.get('lut_margin_signed', True)))
+                    margin_signed=bool(cfg.get('lut_margin_signed', True)),
+                    # sharp_margin's exponent gamma (light path). REQUIRED when the form is
+                    # sharp_margin and forbidden otherwise (checked below), so a run's gamma
+                    # is always read from its own config.json, never a module default.
+                    # Absent everywhere else -> None -> every existing config builds unchanged.
+                    sharp_margin_gamma=cfg.get('lut_sharp_margin_gamma'))
+                if (cfg.get('lut_confidence_form') == 'sharp_margin') != ('lut_sharp_margin_gamma' in cfg):
+                    raise ValueError("lut_sharp_margin_gamma must be set exactly when "
+                                     "lut_confidence_form == 'sharp_margin'")
+                _lut = getattr(self.ffn, 'lut_light', None)
+                if _lut is not None and _lut.sharp_margin_gamma is not None:
+                    # the value the module will actually use, logged per layer
+                    print(f'[sharp_margin] layer {layer_idx}: gamma={_lut.sharp_margin_gamma!r} '
+                          f'gain={_lut.confidence_gain!r}')
         # --- gated hybrid FFN (diagnostic): dense GELU branch IN PARALLEL with the LUT ---
         # branch above, combined by a learned per-layer convex gate g=sigmoid(theta). Reads
         # off which layers prefer dense vs LUT. Off by default (hybrid_gate absent) so every

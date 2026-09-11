@@ -128,6 +128,8 @@ class CompressionMultiHeadLUT(nn.Module):
         # stop being a default. Inert for a fast layer with forward_confidence off.
         confidence_form: str = "margin",
         confidence_gain: float = 1.0,
+        # sharp_margin's exponent; light path only (None -> SHARP_MARGIN_GAMMA there).
+        sharp_margin_gamma: Optional[float] = None,
         z_norm: bool = False,
         bh4_block: int = 4,
         bh4_factors: int = 4,
@@ -183,6 +185,10 @@ class CompressionMultiHeadLUT(nn.Module):
         self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
         if lut_impl not in ("fast", "light", "bh4"):
             raise ValueError(f"lut_impl must be 'fast', 'light' or 'bh4', got {lut_impl!r}")
+        if sharp_margin_gamma is not None and lut_impl != "light":
+            # fast/bh4 use the module constant; refuse rather than silently ignore a gamma
+            raise ValueError("sharp_margin_gamma is only plumbed through the light path, got "
+                             f"lut_impl={lut_impl!r}")
 
         if lut_impl == "bh4":
             # BH4 replaces compress AND the anchor-pair addressing: a structured
@@ -234,6 +240,7 @@ class CompressionMultiHeadLUT(nn.Module):
                     input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                     n_anchor_pairs=nap, confidence_form=confidence_form,
                     confidence_gain=confidence_gain, random_seed=random_seed,
+                    sharp_margin_gamma=sharp_margin_gamma,
                     initial_weights_noise=initial_weights_noise, device=device,
                     n_heads=1, multi_head_input=False,
                     anchor_sampling_policy=anchor_sampling_policy,
@@ -259,7 +266,7 @@ class CompressionMultiHeadLUT(nn.Module):
             self.lut_light = LightMultiHeadLUT(
                 input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                 n_anchor_pairs=nap, confidence_form=confidence_form,
-                confidence_gain=confidence_gain,
+                confidence_gain=confidence_gain, sharp_margin_gamma=sharp_margin_gamma,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
                 device=device, n_heads=n_heads, multi_head_input=mh,
                 anchor_sampling_policy=anchor_sampling_policy,

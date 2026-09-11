@@ -58,8 +58,10 @@ def run(rd):
     for h in hooks:
         h.remove()
     form, gain = cfg.get('lut_confidence_form', 'margin'), float(cfg.get('lut_confidence_gain', 1.0))
+    gamma = cfg.get('lut_sharp_margin_gamma')                       # sharp_margin only, else None
     print('=' * 110)
-    print(f'{os.path.basename(rd)}: form={form} gain={gain} | missing keys {len(miss)} {sorted(set(k.split(".")[-1] for k in miss))}')
+    print(f'{os.path.basename(rd)}: form={form} gain={gain}' + (f' gamma={gamma}' if gamma is not None else '')
+          + f' | missing keys {len(miss)} {sorted(set(k.split(".")[-1] for k in miss))}')
     print(f'   {"layer":<8} {"mean":>9} {"p25":>9} {"p75":>9} {"p75/p25":>9} {"CV":>7} {"within-tok CV":>14} {"frac<1e-3":>10}')
     allS = []
     for li, (lut, z) in enumerate(got):
@@ -67,7 +69,7 @@ def run(rd):
         a = lut.anchor_a.view(1, H, T * NAP).expand(z.shape[0], H, T * NAP)
         b = lut.anchor_b.view(1, H, T * NAP).expand(z.shape[0], H, T * NAP)
         d = (torch.gather(z, 2, a) - torch.gather(z, 2, b)).view(z.shape[0], H, T, NAP).double()
-        s = _confidence_score(d, form, gain).reshape(-1)             # [tokens*H*T], grouped by (token, head)
+        s = _confidence_score(d, form, gain, gamma).reshape(-1)      # [tokens*H*T], grouped by (token, head)
         allS.append(s)
         st = stats(s.float(), T)
         print(f'   L{li:<7} {st["mean"]:>9.4f} {st["p25"]:>9.4f} {st["p75"]:>9.4f} {st["ratio"]:>9.2f} '

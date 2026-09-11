@@ -35,7 +35,7 @@ import torch.nn as nn
 from .lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 # Reuse the EXACT score definition FastMultiHeadLut uses, so the two layers are
 # directly comparable in an ablation (same "bounded"/"margin" forms).
-from .fast_multi_head_lut import _confidence_score, _get_native_lutorch_manager
+from .fast_multi_head_lut import SHARP_MARGIN_GAMMA, _confidence_score, _get_native_lutorch_manager
 
 
 class LightMultiHeadLUT(nn.Module):
@@ -67,7 +67,14 @@ class LightMultiHeadLUT(nn.Module):
             no-grad eval takes the torch path); "tanh_margin" uses
             ``(sum_j |d_j|) * prod_j tanh(a |d_j|)`` (a = TANH_MARGIN_A = 2.0), which also
             vanishes at every boundary but keeps all NAP margins and roughly margin's scale
-            (torch path for no-grad eval as well).
+            (torch path for no-grad eval as well); "sharp_margin" uses
+            ``(sum_j |d_j|) * (prod_j sigmoid(2|d_j|)) ** gamma``, which does NOT vanish at a
+            boundary (discontinuous, like margin) but is far more selective across tables --
+            the selectivity-matched discontinuous control (torch path for no-grad eval).
+        sharp_margin_gamma: the exponent gamma of "sharp_margin" (default None ->
+            SHARP_MARGIN_GAMMA). Stored on the module as ``sharp_margin_gamma`` and passed to
+            every score call, so the value a run uses comes from its own config rather than a
+            module global. Must be None for every other form.
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -96,6 +103,7 @@ class LightMultiHeadLUT(nn.Module):
         # rebuilds differently.
         confidence_form: str = "margin",
         confidence_gain: float = 1.0,
+        sharp_margin_gamma: Optional[float] = None,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
@@ -121,11 +129,16 @@ class LightMultiHeadLUT(nn.Module):
                              "codebook"):
             raise ValueError("cell_mode must be 'constant', 'gated_affine', 'gated_multiply', "
                              f"'margin_readout' or 'codebook', got {cell_mode!r}")
-        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin",
+                                   "sharp_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin', 'bounded_norm', 'min_margin' or "
-                f"'tanh_margin', got {confidence_form!r}"
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm', 'min_margin', "
+                f"'tanh_margin' or 'sharp_margin', got {confidence_form!r}"
             )
+        if sharp_margin_gamma is not None and confidence_form != "sharp_margin":
+            raise ValueError(
+                f"sharp_margin_gamma is only meaningful for confidence_form='sharp_margin', got "
+                f"sharp_margin_gamma={sharp_margin_gamma!r} with confidence_form={confidence_form!r}")
         if not (1 <= n_anchor_pairs <= 15):
             raise ValueError(
                 f"n_anchor_pairs must be in [1, 15] (2^NAP rows per table), got {n_anchor_pairs}"
@@ -185,6 +198,13 @@ class LightMultiHeadLUT(nn.Module):
             raise ValueError(
                 f"confidence_gain must be > 0, got {confidence_gain!r}")
         self.confidence_gain = float(confidence_gain)
+        # None for every form but sharp_margin, whose score calls then ignore it.
+        self.sharp_margin_gamma = None
+        if confidence_form == "sharp_margin":
+            gamma = SHARP_MARGIN_GAMMA if sharp_margin_gamma is None else float(sharp_margin_gamma)
+            if not (0.0 < gamma < float("inf")):
+                raise ValueError(f"sharp_margin_gamma must be finite and > 0, got {sharp_margin_gamma!r}")
+            self.sharp_margin_gamma = gamma
         self.multi_head_input = bool(multi_head_input)
         self.n_heads = n_heads if multi_head_input else 1
         self.tables_per_head = n_tables // self.n_heads
@@ -401,10 +421,11 @@ class LightMultiHeadLUT(nn.Module):
         # _pack_index and _fused_eval take the torch path over the single-index margins.
         self._native_msb = None
         self._native_msb_scored = None
-        # Ids understood by the native scored-eval kernel are 0-2. "min_margin" (3) is NOT
-        # implemented there: _fused_eval refuses it so no-grad eval takes the torch path.
+        # Ids understood by the native scored-eval kernel are 0-2. "min_margin" (3),
+        # "tanh_margin" (4) and "sharp_margin" (5) are NOT implemented there: _fused_eval
+        # refuses them so no-grad eval takes the torch path.
         self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2,
-                               "min_margin": 3, "tanh_margin": 4}[confidence_form]
+                               "min_margin": 3, "tanh_margin": 4, "sharp_margin": 5}[confidence_form]
         if self.anchor_mode == "pair":
             mgr = _get_native_lutorch_manager()
             if mgr is not None:
@@ -556,8 +577,8 @@ class LightMultiHeadLUT(nn.Module):
         flat = self.tables.reshape(H * T * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
 
-        score = _confidence_score(d, self.confidence_form,
-                                  self.confidence_gain)                # [B, H, T]
+        score = _confidence_score(d, self.confidence_form, self.confidence_gain,
+                                  self.sharp_margin_gamma)             # [B, H, T]
         if self._codebook:
             # scalar coefficient g_t = s_t · w_{c_t} per (head, table); NO cross-table sum.
             # Concatenate all H·T coefficients -> g ∈ R^{n_tables}, decode y = M · g.
@@ -710,7 +731,7 @@ class LightMultiHeadLUT(nn.Module):
         if (self._native_msb_scored is None or not x_flat.is_cuda
                 or x_flat.dtype not in (torch.float32, torch.float64)
                 or self._gated or self._margin or self._codebook   # need x/margins/M -> torch path
-                or self._score_form_id > 2):   # min_margin (3) is not in the native kernel -> torch path
+                or self._score_form_id > 2):   # min/tanh/sharp_margin (3-5) not in the native kernel -> torch path
             return None
         index, score = self._native_msb_scored(
             x_flat, self.native_anchor_a, self.native_anchor_b, 0.0,
@@ -773,8 +794,8 @@ class LightMultiHeadLUT(nn.Module):
 
         # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
         # the output grad; at n>1 the blend weights add a second, directional one.
-        score = _confidence_score(d, self.confidence_form,
-                                  self.confidence_gain)              # [B, n_tables]
+        score = _confidence_score(d, self.confidence_form, self.confidence_gain,
+                                  self.sharp_margin_gamma)           # [B, n_tables]
 
         # Output grouping: output_heads==1 sums ALL n_tables into one [B, output_dim]
         # ensemble (unchanged); output_heads==G returns [B, G, output_dim] by summing G
@@ -802,4 +823,6 @@ class LightMultiHeadLUT(nn.Module):
     def extra_repr(self) -> str:
         return (f"input_dim={self.input_dim}, n_tables={self.n_tables}, "
                 f"output_dim={self.output_dim}, n_anchor_pairs={self.n_anchor_pairs}, "
-                f"table_size={self.table_size}, confidence_form={self.confidence_form!r}")
+                f"table_size={self.table_size}, confidence_form={self.confidence_form!r}"
+                + (f", sharp_margin_gamma={self.sharp_margin_gamma!r}"
+                   if self.sharp_margin_gamma is not None else ""))
