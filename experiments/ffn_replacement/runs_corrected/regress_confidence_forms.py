@@ -20,7 +20,7 @@ from spiky.lutorch.fast_multi_head_lut import (                                 
     FastMultiHeadLut, _confidence_score, _confidence_score_and_dscore)
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT                   # noqa: E402
 
-FORMS = ('bounded', 'bounded_norm', 'margin')
+FORMS = ('bounded', 'bounded_norm', 'margin', 'min_margin')
 OUT = '/tmp/regress_confidence_forms_{}.pt'
 
 
@@ -38,7 +38,7 @@ def capture(tag):
                 out[f'score_and_dscore.ds/{form}/{gain}/{dt}'] = ds
 
     for n in (1, 2):
-        for form in ('margin', 'bounded_norm'):
+        for form in ('margin', 'bounded_norm', 'min_margin'):
             m = LightMultiHeadLUT(input_dim=48, n_tables=4 * 32, output_dim=48, n_anchor_pairs=8,
                                   confidence_form=form, random_seed=1000, n_heads=4,
                                   multi_head_input=True, read_top_n=n, read_tau=0.5)

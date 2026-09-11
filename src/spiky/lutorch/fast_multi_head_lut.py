@@ -163,6 +163,17 @@ def _soft_lut_fwd_body(x, weights, anchor_a_long, anchor_b_long, powers,
 #                        becomes continuous. ~39x smaller than margin on real nap-8 margins, so it
 #                        needs confidence_gain ~37-39 to sit at margin's scale. Not implemented in
 #                        the native scored-eval kernel (LightMHL falls back to torch there).
+#   "tanh_margin"      : score = (sum_j m_j) * prod_j tanh(a m_j),  a = TANH_MARGIN_A
+#                        "margin" does NOT vanish at a cell boundary: sigmoid(0) = 0.5, so its
+#                        product becomes 0.5^NAP there, not 0. tanh(0) = 0, so tanh_margin vanishes
+#                        whenever ANY single margin reaches 0 (the continuity property) while still
+#                        using all NAP margins -- unlike min_margin, which uses only one and is
+#                        non-smooth where the argmin switches. tanh(a m) = 2*sigmoid(2 a m) - 1 =
+#                        P(bit correct) - P(bit wrong): the advantage rather than the probability.
+#                        At a = 2 it is within ~1.3-2.6x of margin's scale on real nap-8 margins
+#                        (doc/research/lut_ablation/tanh_margin_scale.py), so it needs no gain
+#                        retuning. Not in the native scored-eval kernel (torch fallback in LightMHL).
+TANH_MARGIN_A = 2.0
 # Everything uses the logsigmoid/softplus form so exp(2m) is never built.
 #
 # A separate `confidence_gain` constant multiplies whichever form is chosen. Scale and
@@ -181,7 +192,11 @@ def _confidence_score(d, confidence_form: str, confidence_gain: float = 1.0):
     the identity and leaves every code path numerically unchanged.
     """
     m = d.abs()
-    if confidence_form == "bounded_norm":
+    if confidence_form == "tanh_margin":
+        # (sum_j m_j) * prod_j tanh(a m_j), a = TANH_MARGIN_A. A plain product, NOT exp-of-logs:
+        # tanh(0) = 0 must give exactly 0, and torch.prod's backward handles zero factors.
+        s = m.sum(dim=-1) * torch.tanh(TANH_MARGIN_A * m).prod(dim=-1)
+    elif confidence_form == "bounded_norm":
         # geometric mean of the per-anchor sigmoids: prob ** (1/NAP). Computed as
         # exp(mean logsigmoid(2m)) so exp(2m) is never built, exactly as the other forms.
         s = torch.exp(F.logsigmoid(2.0 * m).mean(dim=-1))
@@ -215,7 +230,21 @@ def _confidence_score_and_dscore(d, confidence_form: str, confidence_gain: float
     """
     m = d.abs()
     sig_neg = torch.sigmoid(-2.0 * m)                     # [B, n_tables, NAP], in (0, 0.5]
-    if confidence_form == "bounded_norm":
+    if confidence_form == "tanh_margin":
+        # score = S * Q,  S = sum_k m_k,  Q = prod_k t_k,  t_k = tanh(a m_k):
+        #   dscore/dm_j = Q + S * a * (1 - t_j^2) * prod_{k != j} t_k
+        # The naive exclusive product Q / t_j is 0/0 at m_j = 0 (exactly where the score
+        # vanishes). It is built here from prefix x suffix cumulative products instead: no
+        # division anywhere, exact and finite for any number of zero margins.
+        t = torch.tanh(TANH_MARGIN_A * m)
+        ones = torch.ones_like(t[..., :1])
+        prefix = torch.cumprod(torch.cat([ones, t[..., :-1]], dim=-1), dim=-1)
+        suffix = torch.cumprod(torch.cat([ones, t.flip(-1)[..., :-1]], dim=-1), dim=-1).flip(-1)
+        S = m.sum(dim=-1)
+        Q = t.prod(dim=-1)
+        score = S * Q                                      # same ops as _confidence_score
+        dscore_dm = Q.unsqueeze(-1) + S.unsqueeze(-1) * TANH_MARGIN_A * (1.0 - t * t) * (prefix * suffix)
+    elif confidence_form == "bounded_norm":
         score = torch.exp(F.logsigmoid(2.0 * m).mean(dim=-1))          # [B, n_tables]
         dscore_dm = (2.0 / m.shape[-1]) * score.unsqueeze(-1) * sig_neg
     else:
@@ -1229,9 +1258,10 @@ class FastMultiHeadLut(nn.Module):
             the existing directional surrogate. When False, behavior and
             numerics are bit-identical to without the flag. Not compatible with
             exp_outputs=True.
-        confidence_form: "bounded" (default), "margin", "bounded_norm" or "min_margin"
-            (min_margin = (min_j |d_j|) * prod_j sigmoid(2|d_j|); see the note above
-            _confidence_score).
+        confidence_form: "bounded" (default), "margin", "bounded_norm", "min_margin" or
+            "tanh_margin" (min_margin = (min_j |d_j|) * prod_j sigmoid(2|d_j|);
+            tanh_margin = (sum_j |d_j|) * prod_j tanh(TANH_MARGIN_A |d_j|); see the note
+            above _confidence_score).
             "bounded" uses score = prod_j sigmoid(2|d_j|) in (0, 1] (no
             output-scale blowup) -- but the product is over NAP factors, so it
             attenuates hard at large NAP (~0.054 at NAP=8, see #112).
@@ -1358,9 +1388,9 @@ class FastMultiHeadLut(nn.Module):
         # When False, every code path below is byte-for-byte the current behavior
         # (forward AND backward) -- same discipline as exp_outputs.
         self.forward_confidence = bool(forward_confidence)
-        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin', 'bounded_norm' or 'min_margin', "
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm', 'min_margin' or 'tanh_margin', "
                 f"got {confidence_form!r}"
             )
         self.confidence_form = confidence_form

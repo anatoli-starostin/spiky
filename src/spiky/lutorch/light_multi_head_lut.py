@@ -64,7 +64,10 @@ class LightMultiHeadLUT(nn.Module):
             ``(min_j |d_j|) * prod_j sigmoid(2|d_j|)``, which vanishes at every cell
             boundary (continuous n=1 read-out; needs confidence_gain ~37-39 to match
             margin's scale; the native scored-eval kernel does not implement it, so
-            no-grad eval takes the torch path).
+            no-grad eval takes the torch path); "tanh_margin" uses
+            ``(sum_j |d_j|) * prod_j tanh(a |d_j|)`` (a = TANH_MARGIN_A = 2.0), which also
+            vanishes at every boundary but keeps all NAP margins and roughly margin's scale
+            (torch path for no-grad eval as well).
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -118,10 +121,10 @@ class LightMultiHeadLUT(nn.Module):
                              "codebook"):
             raise ValueError("cell_mode must be 'constant', 'gated_affine', 'gated_multiply', "
                              f"'margin_readout' or 'codebook', got {cell_mode!r}")
-        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin"):
+        if confidence_form not in ("bounded", "margin", "bounded_norm", "min_margin", "tanh_margin"):
             raise ValueError(
-                "confidence_form must be 'bounded', 'margin', 'bounded_norm' or 'min_margin', "
-                f"got {confidence_form!r}"
+                "confidence_form must be 'bounded', 'margin', 'bounded_norm', 'min_margin' or "
+                f"'tanh_margin', got {confidence_form!r}"
             )
         if not (1 <= n_anchor_pairs <= 15):
             raise ValueError(
@@ -401,7 +404,7 @@ class LightMultiHeadLUT(nn.Module):
         # Ids understood by the native scored-eval kernel are 0-2. "min_margin" (3) is NOT
         # implemented there: _fused_eval refuses it so no-grad eval takes the torch path.
         self._score_form_id = {"bounded_norm": 0, "bounded": 1, "margin": 2,
-                               "min_margin": 3}[confidence_form]
+                               "min_margin": 3, "tanh_margin": 4}[confidence_form]
         if self.anchor_mode == "pair":
             mgr = _get_native_lutorch_manager()
             if mgr is not None:
