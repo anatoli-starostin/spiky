@@ -67,12 +67,18 @@ def publish(argv):
     base, entity = _env()
     import wandb
     api = wandb.Api(timeout=60)
+    viewer = (gql(api, '{ viewer { username name } }', {}) or {}).get('viewer') or {}
+    if viewer.get('username'):                       # the UI records the author in the spec; do the same
+        spec['authors'] = [{'name': viewer.get('name') or '', 'username': viewer['username']}]
     found = find_glossary_reports(api, entity, project)
-    view = {'displayName': REPORT_TITLE, 'description': description, 'spec': json.dumps(spec)}
+    # type "runs" = a PUBLISHED report, listed in the project's Reports tab. "runs/draft" is an unpublished draft
+    # (what the UI's "Create report" makes first) and a draft with parentId is an edit-in-progress of a published
+    # report; neither is what we want. Set it explicitly on create AND update.
+    view = {'displayName': REPORT_TITLE, 'description': description, 'spec': json.dumps(spec), 'type': 'runs'}
     if found:
         view['id'] = found[0]['id']
     else:
-        view.update(entityName=entity, projectName=project, name='metric-glossary', type='runs')
+        view.update(entityName=entity, projectName=project, name='metric-glossary')
     res = gql(api, _UPSERT_VIEW, {'i': view})['upsertView']
     v = res['view']
     url = report_url(base, entity, project, v)
@@ -82,7 +88,37 @@ def publish(argv):
               f'{[f["id"] for f in found[1:]]} untouched -- delete the extras in the UI')
     p = gql(api, _UPSERT_MODEL, {'i': {'entityName': entity, 'name': project, 'description': readme(url)}})['upsertModel']
     print(f'project {p["project"]["name"]} description set ({len(p["project"]["description"])} chars)')
+    ok, why = listed_in_reports_tab(api, entity, project, v['id'], title=REPORT_TITLE)
+    if not ok:
+        bar = '!' * 100
+        print(f'{bar}\nWARNING: report {v["id"]} is NOT listed in the {project} Reports tab: {why}.\n'
+              f'It still opens at {url}, but nobody will find it by navigation. Fix before relying on it.\n{bar}')
+        return 2
+    print(f'verified: listed in the {project} Reports tab ({why})')
     return 0
+
+
+# The project Reports tab's own query (operation ReportTable in the web UI): published reports are
+# allViews(viewType: "runs"), drafts allViews(viewType: "runs/draft"); a published report's pending edits are its children.
+_REPORT_TABLE = ('query($e: String, $p: String!, $t: String){ project(name: $p, entityName: $e){ '
+                 'reportDrafts: allViews(viewType: "runs/draft", first: 1000, displayNameContains: $t){ edges { node { id type parentId } } } '
+                 'reports: allViews(viewType: "runs", first: 100, displayNameContains: $t){ edges { node { id type parentId displayName } } } } }')
+
+
+def listed_in_reports_tab(api, entity, project, view_id, title=None):
+    """(ok, reason): is `view_id` among the PUBLISHED reports the project's Reports tab lists? `title` narrows the
+    listing server-side (displayNameContains); None reads it unfiltered (first 100 published, 1000 drafts)."""
+    data = gql(api, _REPORT_TABLE, {'e': entity, 'p': project, 't': title}) or {}
+    proj = data.get('project') or {}
+    pub = {e['node']['id']: e['node'] for e in (proj.get('reports') or {}).get('edges', [])}
+    drafts = {e['node']['id']: e['node'] for e in (proj.get('reportDrafts') or {}).get('edges', [])}
+    if view_id in pub and pub[view_id]['type'] == 'runs' and not pub[view_id]['parentId']:
+        extra = [d for d in drafts.values() if not d['parentId']]
+        where = f'titled {title!r}' if title else 'in the project'
+        return True, 'published' + (f'; note: {len(extra)} unpublished draft(s) {where} also exist' if extra else '')
+    if view_id in drafts:
+        return False, f'it is only a draft (type {drafts[view_id]["type"]}, parentId {drafts[view_id]["parentId"]})'
+    return False, 'absent from both the published and the draft listing'
 
 
 def audit(argv):
