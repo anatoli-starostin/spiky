@@ -1,0 +1,31 @@
+# agent-cage network egress allowlist  (opt-in, default-deny)
+#
+# This file names the endpoints that `sbox --net-allow <NAME> -- <argv>` is
+# permitted to reach. It is the SINGLE source of truth for two things:
+#   1. sbox         — builds a default-DENY nftables ruleset that allows egress
+#                     ONLY to the resolved IP:port(s) of <NAME>.
+#   2. cage_policy  — greenlights `sbox --net-allow <NAME> ...` WITHOUT a human
+#                     prompt ONLY when <NAME> is an uncommented key here.
+#
+# SECURITY MODEL (fail-closed): an endpoint becomes frictionless ONLY by being
+# added to THIS file, which lives where the cage mounts read-only and is edited
+# via a human-reviewed PR (same trust model as gh_issue.py / cage_policy.py).
+# A <NAME> not present here, or a raw host:port, is NOT greenlit — it gates and
+# asks a human. Default `sbox` (no --net-allow) has NO network, unchanged.
+#
+# FORMAT (one entry per line):
+#   NAME    host:port  [host:port ...]      # optional comment
+# - NAME is a symbolic key ([A-Za-z0-9_-]); it is what you pass to --net-allow.
+# - Each host is resolved to its IP(s) at launch and pinned into the ruleset
+#   (see the DNS-rotation caveat in SKILL.md). Port is required.
+# - Lines starting with '#' (and blank lines) are ignored.
+#
+# Keep DEPLOYMENT-SPECIFIC endpoints OUT of this committed file — put your real
+# hosts in a private, per-host copy (or point AGENT_CAGE_NET_ALLOWLIST at it).
+# The entries below are COMMENTED EXAMPLES only; uncomment/edit per deployment.
+#
+# --- examples (commented; no real endpoints are shipped) ---
+#
+# WANDB   <your-wandb-host>:<port>          # self-hosted W&B server (e.g. wandb-local)
+# PYPI    pypi.org:443  files.pythonhosted.org:443   # pip installs
+# HF      huggingface.co:443  cdn-lfs.huggingface.co:443

@@ -40,6 +40,7 @@ gated in the first place.
 | `sbox` | `~/.local/bin/sbox` (on `PATH`) | the bubblewrap cage wrapper |
 | `cage_policy.py` | `~/.claude/hooks/cage_policy.py` | the classifier: `classify(tool, input) -> ungated \| green \| gated` |
 | `gh_issue.py` | `~/work/gh-issue/gh_issue.py` | an optional scoped-safe helper (a green-listed GitHub-issue tool) |
+| `net_allowlist.txt` | `~/.claude/skills/agent-cage/net_allowlist.txt` (read-only in cage) | opt-in egress allowlist: `NAME → host:port` for `sbox --net-allow` (both `sbox` and `cage_policy` read it) |
 
 `cage_policy.py` is imported by the slack-facade skill's `permission_gate.py` — deploy the
 two together; the gate can't run without the classifier.
@@ -79,6 +80,42 @@ script.py` (a single clean segment); for a short snippet use `sbox python3 -c '�
 body single-quoted. Any `<`/`>`/`|`/`&&`/`$()`/heredoc you actually need must live *inside*
 `sbox bash -c '…'`, never at the outer level.
 
+### Opt-in network egress (`--net-allow`, default-deny)
+
+By default `sbox` has **no network**. When a caged job legitimately needs to reach one
+endpoint (e.g. push metrics to a self-hosted wandb server) *without* a per-call approval and
+*without* opening general network, use the opt-in allowlist mode:
+
+```sh
+sbox --net-allow WANDB -- python train.py     # egress ONLY to WANDB's endpoint(s)
+```
+
+- **`NAME` is a symbolic key** in `net_allowlist.txt` (default
+  `~/.claude/skills/agent-cage/net_allowlist.txt`, override `AGENT_CAGE_NET_ALLOWLIST`),
+  mapping `NAME → host:port [host:port …]`. The shipped file has **commented placeholders
+  only** — real endpoints are per-deployment and stay out of the repo.
+- **Enforcement = pasta + nftables (Option A).** Instead of `--unshare-net`, the cage gets a
+  fresh net namespace with userspace egress via **pasta**, and a **default-DROP** nftables
+  `output` chain that permits only: loopback, established/related, DNS to the configured
+  resolver, and the **resolved IP:port(s)** of `NAME`. Everything else is dropped *below* the
+  process, so switching language / hiding intent can't bypass it — same property as the
+  no-network default.
+- **Fail-closed & no self-grant.** `cage_policy` greenlights `sbox --net-allow NAME -- …`
+  **only** when `NAME` is a committed key in the allowlist; an unknown `NAME`, a raw
+  `host:port`, or a missing file → the call **gates** (asks a human). Adding/approving an
+  endpoint is therefore a **human-reviewed edit** to a file the cage mounts read-only — never
+  a runtime agent decision. Bare `sbox` is unchanged (green, no network).
+- **Limitations (know these):**
+  - *IP:port, not URL* — HTTPS is filtered at host:port granularity; the ruleset can't
+    distinguish paths, and can't distinguish name-based vhosts that **share an IP**.
+  - *DNS-rotation caveat* — hostnames are resolved to IP(s) **at launch** and pinned; if the
+    endpoint's DNS rotates to a new IP during the run, later connections to the new IP are
+    dropped (re-launch to re-pin). DNS egress to the resolver is allowed so resolution works.
+  - *IPv4* — the generated ruleset is IPv4; IPv6 endpoints/resolvers are skipped.
+  - Requires `pasta` and `nft` present (both ship on recent Debian/Ubuntu; `sbox` errors
+    clearly if missing). The pasta+nft egress path is best verified live against a reachable
+    allowlisted endpoint on the target host.
+
 ### Standing `sbox` up on a new host
 
 1. `sudo apt-get install -y bubblewrap socat`
@@ -111,6 +148,9 @@ tool_input)` returns:
   `NotebookRead`, `TodoRead/Write`, `BashOutput`, …). Let Claude Code's own layer handle it.
 - **`green`** — safe, auto-allow silently. Green covers:
   - a single **clean `sbox <argv>`** with **no shell operators**;
+  - `sbox --net-allow NAME -- <argv>` **only** when `NAME` is a committed key in
+    `net_allowlist.txt` (fail-closed opt-in egress — see the `--net-allow` section); an
+    unknown/absent `NAME` or a raw `host:port` gates, so the agent can't self-grant network;
   - **scoped-safe git** (`status`/`diff`/`log`/`add`/`commit`/`branch`/`checkout`/`stash`,
     and `pull`/`fetch`/`push` to a *configured named remote*) — but **NOT** explicit URLs,
     `ext::`, `-c`, `config` writes, `--upload-pack`/`--exec` (exfil / RCE / prompt-injection

@@ -62,6 +62,33 @@ def _in_green(path):
         return False
     return any(rp == b or rp.startswith(b + os.sep) for b in _WRITABLE)
 
+# ── opt-in network-egress allowlist (for `sbox --net-allow NAME`) ────────────
+# `sbox --net-allow NAME -- <argv>` gets default-deny egress to only NAME's
+# endpoints (enforced in sbox via pasta + nftables). The CLASSIFIER greenlights
+# that invocation WITHOUT a human prompt ONLY when NAME is a committed key in
+# this file — so an endpoint becomes frictionless only by a human-reviewed edit
+# to a file the cage mounts read-only, never by an agent self-granting network.
+# Fail-CLOSED: an unknown NAME, a raw host:port, or an unreadable/missing file
+# yields no names -> the invocation gates and asks a human. Same trust model as
+# the gh_issue.py helper (a vetted capability, added out-of-band). Override the
+# path with AGENT_CAGE_NET_ALLOWLIST (must stay read-only in the cage).
+_NET_ALLOWLIST = os.path.expanduser(
+    os.environ.get("AGENT_CAGE_NET_ALLOWLIST", "~/.claude/skills/agent-cage/net_allowlist.txt"))
+
+def _net_allow_names():
+    """Set of NAME keys from the committed net allowlist (uncommented first fields)."""
+    names = set()
+    try:
+        with open(_NET_ALLOWLIST) as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                names.add(s.split()[0])
+    except Exception:
+        pass
+    return names
+
 # ── read-only safe-prefix allowlist ─────────────────────────────────────────
 # Every top-level segment of the shell line must match one of these to auto-allow.
 SAFE_BASH_PATTERNS = [
@@ -241,11 +268,28 @@ def _escape_ops(s):
 # ── the sbox cage tier ──────────────────────────────────────────────────────
 def is_safe_sbox(command, segs):
     """A single, simple `sbox <argv>`. (_escape_ops is checked separately by the
-    caller, so redirects / substitution / background are already excluded.)"""
+    caller, so redirects / substitution / background are already excluded.)
+
+    Bare `sbox <argv>` (no network) stays green, unchanged. The network-granting
+    form `sbox --net-allow NAME -- <argv>` is green ONLY when NAME is a committed
+    key in the net allowlist (fail-closed) — otherwise it gates, so an agent can
+    never self-grant egress. `--net-allow` is meaningful only as sbox's OWN first
+    argument (that's all the wrapper parses); appearing later, it is just an
+    argument to the caged program and carries no network -> a bare green run."""
     if segs is None or len(segs) != 1:
         return False
     seg = segs[0]
-    return len(seg) >= 2 and seg[0] == "sbox"
+    if len(seg) < 2 or seg[0] != "sbox":
+        return False
+    if seg[1] == "--net-allow":
+        # sanctioned shape: sbox --net-allow NAME -- <cmd...>  (indices 0..4+)
+        if len(seg) < 5 or seg[3] != "--":
+            return False
+        name = seg[2]
+        if not name or name.startswith("-"):
+            return False
+        return name in _net_allow_names()
+    return True
 
 
 # ── the scoped-safe git tier ────────────────────────────────────────────────

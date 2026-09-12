@@ -1,34 +1,124 @@
 #!/bin/sh
-# sbox CMD [args...] — run CMD inside the ML green-zone cage:
-#   * whole system READ-ONLY, except ~/projects and /tmp (writable)
+# sbox [--net-allow NAME --] CMD [args...] — run CMD inside the ML green-zone cage:
+#   * whole system READ-ONLY, except ~/projects, /tmp, ~/.cache (writable)
 #   * GPU passed through (/dev/nvidia*), so CUDA works
-#   * NO network (empty net namespace)
+#   * NO network by default (empty net namespace)
 #   * ~/.ssh masked so caged code can't even read keys
 # Chain caged work with:  sbox bash -c 'cd repo && python train.py && ./eval.sh'
 # (the whole pipeline runs inside the cage; the outer command has no operators).
+#
+# OPT-IN NETWORK (default-deny egress allowlist):
+#   sbox --net-allow NAME -- CMD [args...]
+# gives the cage egress ONLY to the endpoint(s) mapped to NAME in the allowlist
+# file (default ~/.claude/skills/agent-cage/net_allowlist.txt; override with
+# AGENT_CAGE_NET_ALLOWLIST). Everything else is dropped. Enforcement = pasta
+# (userspace egress in a fresh net namespace) + a default-DENY nftables ruleset
+# permitting only the resolved IP:port(s) of NAME (+ DNS to the resolver).
+# Limitations (see SKILL.md): IP:port granularity (not URL); hostnames are
+# resolved and PINNED to IPs at launch (DNS-rotation caveat); IPv4.
 set -eu
-if [ "$#" -eq 0 ]; then echo "usage: sbox CMD [args...]" >&2; exit 2; fi
+
+ALLOWLIST="${AGENT_CAGE_NET_ALLOWLIST:-$HOME/.claude/skills/agent-cage/net_allowlist.txt}"
+
+usage() { echo "usage: sbox [--net-allow NAME --] CMD [args...]" >&2; exit 2; }
+[ "$#" -eq 0 ] && usage
 command -v bwrap >/dev/null 2>&1 || { echo "sbox: bubblewrap (bwrap) not installed" >&2; exit 127; }
 
-# Assemble GPU device binds only for nodes that exist on this host.
+# ── optional '--net-allow NAME --' prefix ────────────────────────────────────
+NET_NAME=""
+if [ "$1" = "--net-allow" ]; then
+  [ "$#" -ge 4 ] || { echo "sbox: --net-allow needs: --net-allow NAME -- CMD ..." >&2; exit 2; }
+  NET_NAME="$2"
+  [ "$3" = "--" ] || { echo "sbox: expected '--' after '--net-allow NAME'" >&2; exit 2; }
+  case "$NET_NAME" in ''|*[!A-Za-z0-9_-]*) echo "sbox: invalid --net-allow name '$NET_NAME'" >&2; exit 2 ;; esac
+  shift 3   # "$@" is now the command argv
+fi
+
+# ── GPU device binds (only nodes that exist) ─────────────────────────────────
 gpu=""
 for d in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset /dev/dri; do
   [ -e "$d" ] && gpu="$gpu --dev-bind $d $d"
 done
 
-# shellcheck disable=SC2086
 mkdir -p "$HOME/.cache" 2>/dev/null || true
 
+# ── default mode: NO network (unchanged from the original wrapper) ────────────
+if [ -z "$NET_NAME" ]; then
+  # shellcheck disable=SC2086
+  exec bwrap \
+    --ro-bind / / \
+    --bind "$HOME/projects" "$HOME/projects" \
+    --bind /tmp /tmp \
+    --bind "$HOME/.cache" "$HOME/.cache" \
+    --proc /proc \
+    --dev /dev \
+    $gpu \
+    --tmpfs "$HOME/.ssh" \
+    --unshare-net \
+    --die-with-parent \
+    -- "$@"
+fi
+
+# ── --net-allow mode: default-deny egress to only NAME's endpoints ────────────
+command -v pasta >/dev/null 2>&1 || { echo "sbox: pasta not installed (needed for --net-allow)" >&2; exit 127; }
+command -v nft   >/dev/null 2>&1 || { echo "sbox: nft not installed (needed for --net-allow)" >&2; exit 127; }
+
+# Look up NAME's endpoints (uncommented line whose first field == NAME). A
+# comment line "# NAME ..." has first field "#", so it never matches a bare NAME.
+endpoints=$(awk -v n="$NET_NAME" '$1==n {for (i=2;i<=NF;i++) printf "%s ", $i; exit}' "$ALLOWLIST" 2>/dev/null || true)
+[ -n "$endpoints" ] || { echo "sbox: --net-allow name '$NET_NAME' not found in $ALLOWLIST" >&2; exit 3; }
+
+# Resolve each host:port to IPv4(s) and pin them into the ruleset.
+accept_rules=""
+for ep in $endpoints; do
+  host=${ep%:*}; port=${ep##*:}
+  case "$port" in ''|*[!0-9]*) echo "sbox: bad endpoint '$ep' (need host:port)" >&2; exit 3 ;; esac
+  ips=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u)
+  [ -n "$ips" ] || { echo "sbox: cannot resolve '$host'" >&2; exit 3; }
+  for ip in $ips; do
+    accept_rules="${accept_rules}    ip daddr ${ip} tcp dport ${port} accept
+"
+  done
+done
+
+# Allow DNS to the configured IPv4 resolver(s) so name resolution works in-cage.
+dns_rules=""
+for r in $(awk '/^[[:space:]]*nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null | sort -u); do
+  case "$r" in *:*) continue ;; esac   # skip IPv6 resolvers (ruleset is IPv4)
+  dns_rules="${dns_rules}    ip daddr ${r} udp dport 53 accept
+    ip daddr ${r} tcp dport 53 accept
+"
+done
+
+RULES=$(mktemp /tmp/agent-cage-nft.XXXXXX)
+cat > "$RULES" <<NFT
+# default-DENY egress; only loopback, established, DNS-to-resolver, and the
+# pinned allowlisted IP:port(s) for '$NET_NAME' are permitted.
+table inet cage_egress {
+  chain output {
+    type filter hook output priority 0; policy drop;
+    meta oif lo accept
+    ct state established,related accept
+${dns_rules}${accept_rules}  }
+}
+NFT
+
+# pasta sets up userspace egress in a fresh net namespace and runs the target in
+# it; bwrap --share-net reuses that namespace (instead of --unshare-net); the
+# inner shell loads the nft filter (needs CAP_NET_ADMIN in the userns) and then
+# exec's the command. $1 = rules file, $2.. = command argv.
 # shellcheck disable=SC2086
-exec bwrap \
-  --ro-bind / / \
-  --bind "$HOME/projects" "$HOME/projects" \
-  --bind /tmp /tmp \
-  --bind "$HOME/.cache" "$HOME/.cache" \
-  --proc /proc \
-  --dev /dev \
-  $gpu \
-  --tmpfs "$HOME/.ssh" \
-  --unshare-net \
-  --die-with-parent \
-  -- "$@"
+exec pasta --config-net -q -- \
+  bwrap \
+    --ro-bind / / \
+    --bind "$HOME/projects" "$HOME/projects" \
+    --bind /tmp /tmp \
+    --bind "$HOME/.cache" "$HOME/.cache" \
+    --proc /proc \
+    --dev /dev \
+    $gpu \
+    --tmpfs "$HOME/.ssh" \
+    --share-net \
+    --cap-add CAP_NET_ADMIN \
+    --die-with-parent \
+    -- sh -c 'nft -f "$1" && shift && exec "$@"' sbox-net "$RULES" "$@"
