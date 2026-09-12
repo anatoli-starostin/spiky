@@ -61,6 +61,7 @@ run = wandb.init(
     job_type="train",                     # train | eval | sweep
     name="exp006_nap6_tph256",            # concise, unique run name
     tags=["hyperplane_ffn", "lut", sha],  # flexible labels (branch, machine, ...)
+    notes=notes_markdown,                 # what the run tests + links to its code (section 5)
     config=dict(branch="<git-branch>", commit=sha, host="<this-host>",
                 lr=lr, batch=batch, seq_len=seq_len, n_tables=tph, bits=nap,
                 d_model=n_embd, depth=depth),  # the reproducibility record
@@ -78,6 +79,64 @@ wandb.finish()   # always finish (or use `with wandb.init(...) as run:`)
 - Log a consistent `step=`; make `val_bpb` (our headline metric) one of the
   scalars so runs are directly comparable.
 
+### In this repo: `spiky.util.wandb_integration`
+
+Trainers here should not hand-roll the above: the shared package on `main`,
+`src/spiky/util/wandb_integration/`, does it with the conventions of sections 4–5 built in.
+
+- `tracker.py` — `Tracker`: optional, never-fatal logging from a training loop.
+- `workspace.py` — publish / verify / audit the metric-glossary panel (section 5):
+  `python -m spiky.util.wandb_integration.workspace publish|verify|audit --glossary FILE_OR_MODULE [--project P] [--shared TITLE]`.
+- `backfill.py` — upload a finished run from its `metrics.csv` + `config.json` (`backfill_run`), and
+  notes-only edits of runs already on the server (`update_notes`).
+- `glossary.py` — the protocol an injected glossary implements; `tests/` — CPU tests, no server.
+
+**No install step.** It imports from an existing editable install (`pip install -e .`): the editable
+finder maps `spiky.util` and resolves its immediate children, so no `setup.py` entry and no reinstall
+are needed. Like the rest of `src/spiky`, it has no `__init__.py`. `wandb` itself is not in
+`requirements.txt`; without it the tracker switches itself off.
+
+```python
+from spiky.util.wandb_integration.tracker import Tracker
+
+tracker = Tracker.start(cfg, exp_dir, project="Spiky", group="<family>",  # default WANDB_PROJECT / WANDB_RUN_GROUP
+                        tags=["<static tag>"],
+                        extra_tags=lambda cfg: [f"form:{cfg['form']}"],      # more tags from the config
+                        extra_eval_metrics=lambda model: {},                 # merged into eval rows that pass a model
+                        glossary=metric_glossary,                            # optional; protocol below
+                        config_extra={"total_params": n_params},
+                        config_renames={"old_key": "old_key_legacy"})
+tracker.train_step(step, {"train/loss": loss, "train/lr": lr})  # logged at step 1 and every log_every (10)
+tracker.eval_step(step, {"val_bpb": bpb}, model)                 # + extra_eval_metrics(model)
+tracker.finish(summary)                                          # after the local record is written
+```
+
+- **Everything project-specific is injected:** project, entity and group (defaults `WANDB_PROJECT`,
+  `WANDB_ENTITY`, `WANDB_RUN_GROUP`), tags, the logged keys (rows are plain dicts; the tracker adds only
+  `time/sec_per_step`), per-eval model metrics, config renames and extras, and the glossary. With
+  `WANDB_BASE_URL` unset or no project, the tracker is off.
+- **It never stalls or breaks training:** rows go onto a bounded queue that a background thread logs (a
+  full queue drops rows, counted, and never waits); a 2 s probe of the server before `wandb.init` falls
+  back to offline (`wandb sync` later); every network path has capped retries; `finish()` gives up after
+  a deadline (60 s plus a grace period); any tracker error disables it with one printed line.
+- **Glossary protocol** (`glossary.py`; a plain module works): `PANEL_TITLE`, optional `SOURCE`,
+  `undocumented(keys)`, `glossary_hash()`, `table_rows()` (`[key, description, unit]` rows),
+  `panel_markdown()` (content only — no sha, no timestamp — so verify compares exactly) and
+  `stale(seen_keys)` for audit. Optional for the tracker (drift check, artifact, notes pointer); required
+  for publish / verify / audit.
+- **Worked example — how a project wires it up:** `experiments/ffn_replacement/tools/` on
+  `research/ffn_replacement_fix`. `wandb_tracking.py` is a thin shim: it pre-binds project and group,
+  the LUT tags, `learned_confidence_by_layer` as `extra_eval_metrics`, `metric_glossary` and an
+  `eval_steps` rename, and keeps the old positional calls (`train_step(step, loss, ema, lr, grad_norm)`,
+  `eval_step(step, bpb, ema, extra, model)`) so frozen run folders run unchanged; if the package cannot be
+  imported it is a no-op. `wandb_glossary.py` and `wandb_backfill.py` are thin wrappers holding the
+  project's data; `metric_glossary.py` is the content. When the package API changes, change the shim —
+  never a frozen run folder.
+- **Why `wandb_integration`, never `wandb`:** pytest's default import mode (prepend) puts
+  `src/spiky/util` itself at `sys.path[0]` when it collects `util/test_utils.py`. A `util/wandb/` package
+  with an `__init__.py` would then shadow the real library for the whole session (`import wandb` gets the
+  folder); without one it happens to work, until someone adds it.
+
 ## 4. Organization conventions (the important part)
 
 Everything goes into **one project**, and you slice it with the run fields:
@@ -90,6 +149,7 @@ Everything goes into **one project**, and you slice it with the run fields:
 | `name`     | concise **unique** run name               | `"exp006_nap6_tph256"`, `"vanilla_baseline"` |
 | `tags`     | flexible cross-cutting labels             | git branch, short commit, machine, dataset, key knob |
 | `config`   | the **reproducibility record**            | branch, commit sha, host, all hyperparams |
+| `notes`    | **what the run tests and where its code is** (markdown) | 2–4 sentences; links to the run folder at the launch commit and at the branch head; folder + host; a pointer to the metric glossary |
 
 Rules of thumb:
 
@@ -103,9 +163,129 @@ Rules of thumb:
   [experiment-methodology.md](experiment-methodology.md)); tag the run with that
   branch and the host so cross-machine runs of the same family stay legible.
 - **`name` is human-facing and unique** — the exp id plus a short variant tag.
-- Optionally set `run.notes` (or `wandb.init(notes=...)`) to a one-line hypothesis.
+- **`notes` say what the run is.** Markdown, shown in the run's Overview tab (see section 5).
+- **Every logged key has a glossary entry** (section 5). A metric's name is not its definition.
 
-## 5. Viewing and comparing
+## 5. Describing runs and metrics
+
+**Run notes.** `wandb.init(notes=...)` (or `run.notes = ...` after init) renders as full
+markdown in the run's Overview tab — headings, bold/italic, code, lists, tables,
+clickable links — and several thousand characters are fine. Put in it:
+
+- the run name, then 2–4 sentences on what the run tests;
+- a link to the run folder on GitHub **at the full launch commit**
+  (`https://github.com/<owner>/<repo>/tree/<sha>/<run folder>`), flagged when the working
+  tree was dirty or the folder was not yet committed at that sha (the link would 404);
+- a link to the same folder at the branch head (where the artefacts land later);
+- the folder path and host, and a pointer to the metric glossary;
+- the longer design note, if any, below a rule.
+
+Derive the GitHub URL from `git remote get-url origin` (an ssh host alias such as
+`git@github-<alias>:<owner>/<repo>.git` maps to `https://github.com/<owner>/<repo>`), and the
+server URL and entity from the environment — never hard-code either.
+
+**Metric glossary.** Keep one dict in code next to the tracker: logged key (or a per-layer
+pattern such as `ln2_norm_L{i}`) → unit, a full description **written from the code that
+computes it** (reduction, which tokens count, cadence, running mean vs instantaneous, the
+exact eval protocol, normalisation), and a one-sentence short form. Surface it where people
+look — the charts:
+
+- an **"About these metrics" Markdown Panel in its own pinned section at the top of a workspace
+  view**, generated from the short forms (grouped train / eval / per layer / summary) plus a few
+  config gotchas. One copy, full sentences, scrollable. Publish it into a **shared saved view**
+  (e.g. "<Project> — described", opened at `?nw=<id>`), not only into the personal workspace:
+  saved views are not auto-saved, the personal workspace is, and an open tab wipes it (section 6).
+  Write it idempotently (fixed section and panel ids, replaced in place), re-read the spec
+  afterwards, and fail loudly if it is not there;
+- a per-run **glossary artifact** with the full descriptions (a `wandb.Table` of key |
+  description | unit, logged with `log_artifact` only); identical content dedups to one version;
+- a pointer to both in every run's notes.
+
+Make drift detectable, never fatal: the tracker flags a logged key with no entry (one
+printed line, a tag, a summary field listing the keys); a read-only audit lists undocumented
+keys on the server and stale entries; a CPU unit test checks every `metrics.csv` column and
+every key the tracker emits. The mechanics are generic and live in `spiky.util.wandb_integration`
+(section 3: the drift check and the artifact in `tracker.py`, publish / verify / audit in
+`workspace.py`); the glossary content and its content tests stay with the project — e.g.
+`metric_glossary.py` and `test_metric_glossary.py` in `experiments/ffn_replacement/tools/` on
+`research/ffn_replacement_fix`.
+
+Tried and rejected: a separate glossary **report** (too far from the charts) and **panel legend
+templates** (see the gotchas — they cannot hold a description next to long run names).
+
+## 6. Gotchas (self-hosted server)
+
+**Workspaces**
+
+- **Workspace state is per user.** Opening a project creates (on the first visit) a personal
+  workspace for that user: a view of type `"project-view"` named `nw-nwuser<username>-w`
+  ("<User>'s workspace"). Other users get their own and never see yours; shared *saved views*
+  ("Save as new view") are a separate thing. Anything written into a workspace spec — panels,
+  sections, legends — is visible only to that user.
+- **A stale open tab silently overwrites programmatic workspace writes.** The web client saves
+  the whole spec it holds (last write wins): a tab that loaded the workspace before your API
+  write drops the change on its next UI action, with no error. Check the view's `updatedAt`
+  before writing (recent = probably an open tab), re-read after writing, and verify again later.
+  The client saves aggressively — even a panel-search query typed into the box is persisted.
+  This happened for real: a panel written into a personal workspace was gone eight minutes later,
+  removed by the user's own tab.
+- **Saved views are NOT auto-saved — publish there.** A shared saved view is a `"project-view"`
+  named `nw-<id>-v` (create it with `upsertView`: `name`, `displayName`, `type: "project-view"`,
+  `spec`), opened at `<server>/<entity>/<project>?nw=<id>`. After a UI change the client only says
+  "Changes are not auto-saved … Save view", so an open tab cannot silently drop an API write; only
+  an explicit *Save view* from a stale tab can. Seed it from the user's personal workspace spec and
+  later replace only your own section.
+- **Where things live in the spec:** `section.panelBankConfig.sections[]` (auto sections have
+  `isPanelsAuto: true` and no explicit panels); per-metric panel settings in
+  `section.panelBankConfig.panelConfigOverrides["<metric key>"].config`. **An override REPLACES
+  the auto panel's config**: it must carry `metrics: ["<key>"]` (the UI also writes `groupBy`,
+  `legendFields`), or the panel renders "Select a metric to visualize in this line chart".
+- **A Markdown Panel** is `{"viewType": "Markdown Panel", "config": {"value": "<markdown>"}}` in an
+  explicit section (`isPanelsAuto: false`). In workspaces a panel's `layout` is ignored — the
+  section's `flowConfig` (`columnsPerPage`, `rowsPerPage`, `boxHeight`) sizes it; `pinned: true`
+  keeps the section ahead of unpinned ones. Write via `upsertView(input: {id, spec})`.
+- **Panel legend templates are no place for descriptions.** Syntax: literal prose is kept;
+  `${run:displayName}`, `${metricName}`, `${config:<key>}`, `${summary:<key>}`; the `[[ ... ]]`
+  part (`${x}`, `${y}`, …) shows only on hover. But each run is **one legend line, and the whole
+  line is middle-truncated** to the panel width — about 50 characters *including the run name*
+  in a default panel, so with long run names nothing of a description survives; the prose
+  **repeats on every run's line**; the **hover tooltip shows less, not more** (it truncates
+  harder); single-run charts show no legend at all. Chart titles are one truncated line too.
+
+**Runs, metrics, reports**
+
+- **`define_metric` has no description.** Its parameters are `step_metric`, `step_sync`,
+  `hidden`, `summary`, `goal`, `overwrite`; passing `description=` raises `TypeError`.
+- **No panel or section descriptions** in the workspace UI. Sections are auto-named by
+  key prefix (`train/…`, `time/…`); unprefixed keys land in "Charts".
+- **Don't log a `wandb.Table` into run history.** On some self-hosted versions the
+  auto-created workspace "Tables" panel errors ("Oops, something went wrong"). Put the table
+  in an artifact via `log_artifact` only; it renders under Artifacts → the artifact → Files.
+- **A mid-run disconnect loses rows server-side.** In an online run, rows logged after the
+  connection to the server drops are lost on the server, while the trainer's local `metrics.csv`
+  stays complete. Treat the local file as the record, and backfill from it if the server copy matters.
+- **Auto git capture renders as commands, not links.** The run Overview shows
+  `git clone <remote>` and `git checkout -b <run> <sha>`, with an ssh host alias shown verbatim.
+  Overriding `settings.git_remote_url` records the remote but **drops the commit**. Put
+  clickable links in the notes instead. Runs uploaded after the fact record the
+  uploader's HEAD, not the run's commit — say so in their notes.
+- **Editing notes after the fact.** The public `Run.update()` re-sends config, tags and
+  summary. For a notes-only edit use GraphQL `upsertBucket(input: {id, notes})` with the run's
+  storage id; everything else stays untouched. The public `wandb.Api()` caches `Run` objects,
+  so verify with a fresh query.
+- **Reports, if you use them.** Without `wandb-workspaces` a report can be created with raw
+  GraphQL `upsertView` (`type: "runs"`, a JSON `spec`), found by title and updated by `id`.
+  `type` decides listing: `"runs"` = published (project Reports tab, Home), `"runs/draft"` = a
+  private draft, a draft with `parentId` = an unsaved edit; the profile page's Reports card
+  shows only *showcased* reports. Deleting a report leaves dead links wherever it was linked.
+- **The client may be newer than the server's advertised maximum**
+  (`serverInfo.cliVersionInfo.max_cli_version`). It can work, but check this first when
+  something fails oddly after a client upgrade.
+- **Host inside a network namespace.** A sandbox that gives the process its own network
+  namespace can change `socket.gethostname()` (e.g. add a prefix), which splits host tags
+  between sandboxed and plain runs; normalise the name before logging it.
+
+## 7. Viewing and comparing
 
 - Open `<WANDB_BASE_URL>/<YOUR_ENTITY>/<project>` and use the **group** selector to
   collapse families; the runs **table** + **parallel-coordinates**/scatter panels
@@ -113,10 +293,13 @@ Rules of thumb:
 - If a run seems "missing", check you're logged into the browser as `<YOUR_ENTITY>`
   and looking at the right project (a run's project is set by `project=`).
 
-## 6. Do / don't
+## 8. Do / don't
 
 - **Do** keep the API key out of the repo (it lives only in `~/.netrc`); use one
-  project; always `wandb.finish()`; log `val_bpb`.
+  project; always `wandb.finish()`; log `val_bpb`; write run notes; add a glossary entry
+  in the same change that starts logging a new key.
+- **Do** log from trainers through `spiky.util.wandb_integration` (section 3) rather than a raw
+  `wandb.init`, so the conventions and the never-fatal behaviour come with it.
 - **Don't** hardcode the key, create per-experiment projects, or point runs at
   `wandb.ai` (always set `WANDB_BASE_URL`).
 - Prefer resuming a crashed run with its id (`wandb.init(id=..., resume="allow")`)
