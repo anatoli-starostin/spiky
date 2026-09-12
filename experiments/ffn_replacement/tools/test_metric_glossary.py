@@ -1,11 +1,14 @@
-"""CPU-only, no server: the metric glossary covers everything we log, and the tracker's glossary / notes helpers
-behave (drift check never fatal, links built from the git remote, legacy config renamed).
+"""CPU-only, no server: the metric glossary covers everything we log, the workspace panel is built and placed
+correctly (idempotent, other sections untouched), and the tracker's glossary / notes helpers behave (drift check
+never fatal, links built from the git remote, legacy config renamed).
 
     python -m pytest experiments/ffn_replacement/tools/test_metric_glossary.py -q
 """
+import copy
 import csv
 import glob
 import os
+import re
 import sys
 
 import pytest
@@ -13,6 +16,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import metric_glossary as MG                                                     # noqa: E402
+import wandb_glossary as WG                                                        # noqa: E402
 import wandb_tracking as WT                                                        # noqa: E402
 
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
@@ -70,6 +74,9 @@ def test_every_entry_is_complete():
         assert v['section'] in MG.SECTIONS, k
         assert v['unit'], k
         assert len(v['desc']) > 40, k
+        assert 10 < len(v['short']) <= 240 and '\n' not in v['short'], k      # one legend-sized sentence
+        assert len(v['short']) < len(v['desc']) or len(v['desc']) < 120, k
+    assert set(MG.GOTCHAS) <= set(MG.CONFIG_NOTES)
     assert MG.stale(set(_metrics_csv_headers()) | set(WT.TRAIN_KEYS) | set(WT.EVAL_KEYS) | set(WT.SUMMARY_KEYS)
                     | {'lm_g_L0', 'lm_beta_L0', 'lm_gamma_L0'}) == []
 
@@ -77,17 +84,79 @@ def test_every_entry_is_complete():
 def test_hash_is_stable_and_content_sensitive(monkeypatch):
     h = MG.glossary_hash()
     assert h == MG.glossary_hash() and len(h) == 12
-    monkeypatch.setitem(MG.METRICS['val_bpb'], 'unit', 'changed')
+    monkeypatch.setitem(MG.METRICS['val_bpb'], 'short', 'changed')
     assert MG.glossary_hash() != h
 
 
-def test_report_and_table_list_every_entry():
-    md = MG.report_markdown('tools/metric_glossary.py', 'abc1234')
-    for k in list(MG.METRICS) + list(MG.CONFIG_NOTES):
-        assert f'`{k}`' in md, k
+def test_panel_markdown_lists_every_logged_key_grouped():
+    md = MG.panel_markdown('tools/metric_glossary.py', 'abc1234')
+    assert md.startswith(f'### {MG.PANEL_TITLE}')
+    for k, v in MG.METRICS.items():
+        if v['section'] in MG.PANEL_SECTIONS:
+            assert f'| `{k}` |' in md, k
+    assert '| `step` |' not in md                                          # metrics.csv-only, not a wandb key
+    titles = [md.index(f'**{t}**') for t in MG.PANEL_SECTIONS.values()]
+    assert titles == sorted(titles)
+    assert md.index('**Config gotchas**') > titles[-1]
+    for k in MG.GOTCHAS:
+        assert f'- `{k}`:' in md
+    for line in md.splitlines():                                          # escaping never breaks the table:
+        if line.startswith('| `'):
+            assert len(re.split(r'(?<!\\)\|', line)) == 5, line               # '' key unit sentence '': no stray pipes
+    assert len(md) < 12000
+
+
+def test_table_rows_still_cover_everything():
     rows = MG.table_rows()
     assert len(rows) == len(MG.METRICS) + len(MG.CONFIG_NOTES)
     assert all(len(r) == 3 for r in rows)
+
+
+def _spec(extra_sections=()):
+    return {'section': {'panelBankConfig': {
+        'sections': [{'__id__': 'a1', 'name': 'Charts', 'isPanelsAuto': True, 'panels': []},
+                     {'__id__': 'b2', 'name': 'train', 'isPanelsAuto': True, 'panels': []}] + list(extra_sections)
+        + [{'__id__': 'h3', 'name': 'Hidden Panels', 'isPanelsAuto': False, 'panels': []}],
+        'panelConfigOverrides': {'val_bpb': {'config': {'metrics': ['val_bpb'], 'legendTemplate': 'x'}}},
+        'settings': {'searchQuery': ''}}, 'runSets': [{'id': 'r'}]}}
+
+
+def test_apply_section_is_first_idempotent_and_leaves_the_rest_alone():
+    before = _spec()
+    sec = WG.glossary_section('# v1')
+    once = WG.apply_section(before, sec)
+    twice = WG.apply_section(once, WG.glossary_section('# v2'))
+    for spec, text in ((once, '# v1'), (twice, '# v2')):
+        secs = spec['section']['panelBankConfig']['sections']
+        assert secs[0]['__id__'] == WG.SECTION_ID and secs[0]['isPanelsAuto'] is False and secs[0]['pinned'] is True
+        assert [s['__id__'] for s in secs[1:]] == ['a1', 'b2', 'h3']          # others untouched, in order
+        assert sum(s['name'] == MG.PANEL_TITLE for s in secs) == 1
+        assert secs[0]['panels'][0]['viewType'] == 'Markdown Panel' and secs[0]['panels'][0]['config']['value'] == text
+        assert spec['section']['panelBankConfig']['panelConfigOverrides'] == before['section']['panelBankConfig']['panelConfigOverrides']
+        assert spec['section']['runSets'] == before['section']['runSets']
+    assert before == _spec()                                                  # input not mutated
+
+
+def test_apply_section_replaces_a_renamed_or_moved_copy():
+    moved = copy.deepcopy(WG.glossary_section('# old'))
+    moved['__id__'] = 'regenerated-by-the-ui'                                 # matched by name too
+    spec = WG.apply_section(_spec([moved]), WG.glossary_section('# new'))
+    names = [s['name'] for s in spec['section']['panelBankConfig']['sections']]
+    assert names == [MG.PANEL_TITLE, 'Charts', 'train', 'Hidden Panels']
+
+
+def test_section_state():
+    md = '# current'
+    assert WG.section_state(_spec(), md) == (False, 'the section is absent')
+    ok, why = WG.section_state(WG.apply_section(_spec(), WG.glossary_section(md)), md)
+    assert ok and why == 'present, first, current'
+    assert not WG.section_state(WG.apply_section(_spec(), WG.glossary_section('# old')), md)[0]
+    late = _spec([WG.glossary_section(md)])
+    assert WG.section_state(late, md) == (False, 'the section is at position 2, not first')
+    dup = WG.apply_section(_spec(), WG.glossary_section(md))
+    dup['section']['panelBankConfig']['sections'].append(WG.glossary_section(md))
+    assert WG.section_state(dup, md)[1] == '2 copies of the section'
+    assert WG.section_state({}, md)[0] is False
 
 
 class _FakeRun:
@@ -185,16 +254,18 @@ def test_run_notes_links_and_flags():
     info = dict(web='https://github.com/o/r', sha=sha, branch='research/x', dirty=True,
                 rel='experiments/f/runs/exp_1', committed=False)
     cfg = {'_arch_note': 'What it tests. Why. How it differs. The fourth. The fifth is not in the summary. *star* x_y'}
-    md = WT.run_notes(cfg, exp_name='exp_1', info=info, host='gpustar',
-                      report_url='http://h/e/p/reports/Metric-glossary--X', artifact_url='http://h/art',
-                      artifact_label='metric_glossary:glossary-abc')
+    ws = WT.workspace_url('http://h/', 'e', 'p')
+    assert ws == 'http://h/e/p/workspace' and WT.workspace_url('', 'e', 'p') is None
+    md = WT.run_notes(cfg, exp_name='exp_1', info=info, host='gpustar', workspace_url=ws,
+                      artifact_url='http://h/art', artifact_label='metric_glossary:glossary-abc')
     head, _, tail = md.partition('\n---\n')
     assert head.startswith('**exp\\_1**')
     assert f'(https://github.com/o/r/tree/{sha}/experiments/f/runs/exp_1)' in head
     assert '(https://github.com/o/r/tree/research/x/experiments/f/runs/exp_1)' in head
     assert 'dirty' in head and 'not committed at launch' in head
     assert '`experiments/f/runs/exp_1` on `gpustar`' in head
-    assert '[Metric glossary report](http://h/e/p/reports/Metric-glossary--X)' in head
+    assert '"About these metrics" at the top of the [project workspace](http://h/e/p/workspace)' in head
+    assert '/reports/' not in md
     assert '[metric\\_glossary:glossary-abc](http://h/art)' in head
     assert 'fifth' not in head and 'The fifth' in tail
     assert '\\*star\\* x\\_y' in tail                              # _arch_note rendered literally
@@ -202,7 +273,7 @@ def test_run_notes_links_and_flags():
 
 def test_run_notes_without_git():
     md = WT.run_notes({'description': 'D.'}, exp_name='e', info=dict(), host='h')
-    assert md.startswith('**e**') and 'github' not in md and '---' not in md
+    assert md.startswith('**e**') and 'github' not in md and '---' not in md and 'Metric glossary' not in md
 
 
 def test_git_launch_info_on_this_checkout():

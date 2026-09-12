@@ -15,9 +15,9 @@ The run's corrected-eval summary goes to run.summary. Refuses runs whose metrics
 --notes-only rewrites ONLY the notes of runs that are already on the server, with the tracker's markdown notes
 (description + links; tools/metric_glossary.py for what the keys mean). It sends one upsertBucket(id, notes) per
 run: no config, tags, summary or history is re-sent, nothing is re-logged and no artifact is attached (finished
-runs link to the glossary report instead). Backfilled runs (tag "backfilled") link to their artefacts commit and
-say that wandb's Git state shows the HEAD at backfill time; live runs link to their launch commit.
---dry-run prints the notes and writes nothing.
+runs point to the "About these metrics" workspace panel instead). Backfilled runs (tag "backfilled") link to their
+artefacts commit and say that wandb's Git state shows the HEAD at backfill time; live runs link to their launch
+commit. --dry-run prints the notes and writes nothing.
 """
 import csv
 import json
@@ -27,8 +27,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RC = os.path.join(os.path.dirname(HERE), 'runs_corrected')
 sys.path.insert(0, HERE)
-from wandb_tracking import (GROUP, PROJECT, _git, github_web_url, glossary_report_link, gql,  # noqa: E402
-                            normalise_host, run_notes, wandb_config, with_committed_flag)
+from wandb_tracking import (GROUP, PROJECT, _git, github_web_url, gql, normalise_host, run_notes,  # noqa: E402
+                            wandb_config, with_committed_flag, workspace_url)
 
 BRANCH = 'research/ffn_replacement_fix'
 # where each backfilled run actually trained (from its run record); default: this repo's usual box
@@ -45,7 +45,7 @@ _SET_NOTES = 'mutation($id: String!, $notes: String){ upsertBucket(input: {id: $
 _GET_NOTES = 'query($e: String!, $p: String!, $r: String!){ project(entityName: $e, name: $p){ run(name: $r){ notes } } }'
 
 
-def notes_for(name, cfg, *, commit, branch, host, backfilled, dirty, shown_git_commit, report, report_label):
+def notes_for(name, cfg, *, commit, branch, host, backfilled, dirty, shown_git_commit, workspace):
     """Markdown notes for a run already recorded in runs_corrected/<name>."""
     root = _git(['rev-parse', '--show-toplevel'], HERE)
     sha = _git(['rev-parse', '--verify', '--quiet', f'{commit}^{{commit}}'], root) if commit else 'unknown'
@@ -61,7 +61,7 @@ def notes_for(name, cfg, *, commit, branch, host, backfilled, dirty, shown_git_c
             extra.append(f"- ⚠ wandb's **Git state** on this run shows `{shown_git_commit[:8]}`, the repository HEAD "
                          f"when the backfill ran, not this run's commit. Its artefacts commit is `{sha[:8]}` (linked "
                          f'above).')
-    return run_notes(cfg, exp_name=name, info=info, host=host, report_url=report, report_label=report_label,
+    return run_notes(cfg, exp_name=name, info=info, host=host, workspace_url=workspace,
                      description=DESCRIPTION_OVERRIDE.get(name),
                      code_label='Code + artefacts (artefacts commit)' if backfilled else 'Code at launch',
                      extra_lines=extra)
@@ -80,8 +80,7 @@ def notes_only(names, dry):
     base, entity = _env(require_entity=True)
     import wandb
     api = wandb.Api(timeout=60)
-    report, report_label = glossary_report_link(base, entity, PROJECT)
-    print(f'glossary link: {report_label} -> {report}')
+    ws = workspace_url(base, entity, PROJECT)
     for name in names:
         cfg = json.load(open(os.path.join(RC, name, 'config.json')))
         r = api.run(f'{entity}/{PROJECT}/{name}')
@@ -89,14 +88,14 @@ def notes_only(names, dry):
         notes = notes_for(name, cfg, commit=conf.get('commit'), branch=conf.get('branch'),
                           host=normalise_host(conf.get('host')), backfilled=backfilled,
                           dirty=None if backfilled else conf.get('commit_dirty'),
-                          shown_git_commit=((r.metadata or {}).get('git') or {}).get('commit'),
-                          report=report, report_label=report_label)
+                          shown_git_commit=((r.metadata or {}).get('git') or {}).get('commit'), workspace=ws)
         if dry:
             print(f'===== {name} ({"backfilled" if backfilled else "live"})\n{notes}\n')
             continue
         gql(api, _SET_NOTES, {'id': r.storage_id, 'notes': notes})
         back = gql(api, _GET_NOTES, {'e': entity, 'p': PROJECT, 'r': name})['project']['run']['notes']
-        print(f'notes set on {name}: {len(notes)} chars, read back identical: {back == notes}')
+        print(f'notes set on {name}: {len(notes)} chars, read back identical: {back == notes}, '
+              f'report link present: {"/reports/" in back}')
 
 
 def main():
@@ -114,8 +113,7 @@ def main():
     base, entity = _env()
     import wandb
     repo = os.path.dirname(os.path.dirname(HERE))
-    report, report_label = (glossary_report_link(base, entity, PROJECT, online=mode == 'online')
-                            if entity else (None, None))
+    ws = workspace_url(base, entity, PROJECT)
     for name in args:
         rd = os.path.join(RC, name)
         cfg = json.load(open(os.path.join(rd, 'config.json')))
@@ -139,7 +137,7 @@ def main():
         if cfg.get('lut_learned_margin_freeze_g'):
             tags.append('learned_margin_freeze_g')
         notes = notes_for(name, cfg, commit=commit, branch=BRANCH, host=host, backfilled=True, dirty=None,
-                          shown_git_commit=_git(['rev-parse', 'HEAD'], repo), report=report, report_label=report_label)
+                          shown_git_commit=_git(['rev-parse', 'HEAD'], repo), workspace=ws)
         run = wandb.init(project=PROJECT, entity=entity, group=GROUP, job_type='train',
                          name=name, id=name, resume='allow', tags=tags, config=config, mode=mode,
                          dir=os.environ.get('WANDB_DIR', os.path.expanduser('~/.cache/wandb')), notes=notes,

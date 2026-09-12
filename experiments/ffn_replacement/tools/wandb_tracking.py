@@ -42,8 +42,9 @@ removed, so runs launched through `sbox --net tailnet` share the machine's name.
 
 DESCRIPTIONS (tools/metric_glossary.py holds what every key measures):
   * notes = run_notes(): bold exp_name, the config `description` (else the opening sentences of _arch_note),
-    links to the run folder on GitHub at the launch commit and at the branch head, the folder and host, the
-    "Metric glossary" report and this run's glossary artifact, then the full _arch_note.
+    links to the run folder on GitHub at the launch commit and at the branch head, the folder and host, a pointer
+    to the "About these metrics" panel at the top of the project workspace and this run's glossary artifact, then
+    the full _arch_note.
   * a `metric_glossary` artifact (Table key | description | unit, alias glossary-<hash>) via log_artifact ONLY,
     never into run history (a Table in history renders as a broken panel on the self-hosted server).
     Identical glossaries dedup to one artifact version.
@@ -84,9 +85,7 @@ SUMMARY_KEYS = ('exp_name', 'best_val_bpb', 'final_val_bpb', 'total_params', 'tr
                 'glossary/undocumented')
 UNDOC_TAG = 'glossary:undocumented'
 UNDOC_SUMMARY = 'glossary/undocumented'
-REPORT_TITLE = 'Metric glossary'
 GLOSSARY_ARTIFACT, GLOSSARY_ARTIFACT_TYPE = 'metric_glossary', 'glossary'
-LOOKUP_TIMEOUT = 15
 NOTES_CONFIG_KEYS = ('_arch_note', 'description')               # go into the notes, not the config
 
 
@@ -231,8 +230,13 @@ def description_text(cfg, override=None, max_chars=500):
     return text
 
 
-def run_notes(cfg, *, exp_name, info, host, report_url=None, report_label='Metric glossary report',
-              artifact_url=None, artifact_label=None, description=None, code_label='Code at launch', extra_lines=()):
+def workspace_url(base, entity, project):
+    """The project workspace, where the "About these metrics" panel sits at the top (None without base/entity)."""
+    return f'{base.rstrip("/")}/{entity}/{project}/workspace' if base and entity and project else None
+
+
+def run_notes(cfg, *, exp_name, info, host, workspace_url=None, artifact_url=None, artifact_label=None,
+              description=None, code_label='Code at launch', extra_lines=()):
     """Markdown notes for a run (rendered in the run's Overview tab)."""
     lines = [f'**{md_escape(exp_name)}**', '', md_escape(description_text(cfg, description)), '']
     web, sha, rel, branch = info.get('web'), info.get('sha'), info.get('rel'), info.get('branch')
@@ -252,8 +256,8 @@ def run_notes(cfg, *, exp_name, info, host, report_url=None, report_label='Metri
     if rel:
         lines.append(f'- **Run folder:** `{rel}` on `{host}`')
     glossary = []
-    if report_url:
-        glossary.append(f'[{report_label}]({report_url})')
+    if workspace_url:
+        glossary.append(f'"About these metrics" at the top of the [project workspace]({workspace_url})')
     if artifact_label:                                   # wandb renders no link whose text is `code`: plain text
         glossary.append(f'artifact [{md_escape(artifact_label)}]({artifact_url})' if artifact_url
                         else f'artifact `{artifact_label}`')
@@ -275,47 +279,9 @@ def wandb_config(cfg, **extra):
     return config
 
 
-_VIEWS_QUERY = ('query($e: String!, $p: String!, $t: String){ project(entityName: $e, name: $p){ '
-                'allViews(viewType: "runs", displayNameContains: $t, first: 100){ edges { node { id name displayName type } } } } }')
-
-
 def gql(api, query, variables, timeout=None):
     """Raw GraphQL through the public API's wandb-core connection (wandb >= 0.28; no public helper exists)."""
     return api._service_api.execute_graphql(query, variables, timeout=timeout)
-
-
-def find_glossary_reports(api, entity, project, timeout=None):
-    data = gql(api, _VIEWS_QUERY, {'e': entity, 'p': project, 't': REPORT_TITLE}, timeout=timeout) or {}
-    edges = (((data.get('project') or {}).get('allViews') or {}).get('edges')) or []
-    return [e['node'] for e in edges if e['node'].get('displayName') == REPORT_TITLE and e['node'].get('type') == 'runs']
-
-
-def report_url(base, entity, project, view):
-    slug = re.sub(r'[^A-Za-z0-9]+', '-', view['displayName']).strip('-')
-    return f'{base}/{entity}/{project}/reports/{slug}--{view["id"]}'
-
-
-def glossary_report_link(base, entity, project, online=True, timeout=LOOKUP_TIMEOUT):
-    """(url, label) of the "Metric glossary" report, looked up under a hard deadline; the project's report list if
-    it cannot be found (offline, not published yet, lookup failed). Never raises."""
-    fallback = (f'{base}/{entity}/{project}/reportlist', 'reports list (Metric glossary)')
-    if not online:
-        return fallback
-    box = {}
-
-    def look():
-        try:
-            import wandb
-            found = find_glossary_reports(wandb.Api(timeout=timeout), entity, project, timeout=timeout)
-            if found:
-                box['url'] = report_url(base, entity, project, found[0])
-        except Exception as e:
-            box['err'] = e
-
-    th = threading.Thread(target=look, name='wandb-glossary-lookup', daemon=True)
-    th.start()
-    th.join(timeout + 5)
-    return (box['url'], 'Metric glossary report') if 'url' in box else fallback
 
 
 def log_glossary_artifact(run, wandb):
@@ -414,9 +380,8 @@ class Tracker:
         except Exception as e:
             print(f'[wandb] glossary artifact not logged: {type(e).__name__}: {e}', flush=True)
         try:
-            rep, rep_label = (glossary_report_link(base, entity, project, online=self.mode == 'online')
-                              if base and entity else (None, None))
-            run.notes = run_notes(cfg, exp_name=name, info=info, host=host, report_url=rep, report_label=rep_label,
+            run.notes = run_notes(cfg, exp_name=name, info=info, host=host,
+                                  workspace_url=workspace_url(base, entity, project),
                                   artifact_url=art_url, artifact_label=label and f'{GLOSSARY_ARTIFACT}:{label}')
         except Exception as e:
             print(f'[wandb] markdown notes not set ({type(e).__name__}: {e}); notes stay the _arch_note', flush=True)
