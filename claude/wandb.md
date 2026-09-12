@@ -97,13 +97,21 @@ are needed. Like the rest of `src/spiky`, it has no `__init__.py`. `wandb` itsel
 `requirements.txt`; without it the tracker switches itself off.
 
 ```python
+from spiky.util.wandb_integration.glossary import DictGlossary
 from spiky.util.wandb_integration.tracker import Tracker
+
+GLOSSARY = DictGlossary({                                                  # what every logged key measures
+    "train/loss":    dict(unit="nats/token", section="train", desc="Cross-entropy of the step, ...", short="Step CE."),
+    "val_bpb":       dict(unit="bits/byte", section="eval", desc="Bits per byte on the validation window, ..."),
+    "ln2_norm_L{i}": dict(unit="L2 norm", section="per layer", desc="L2 norm of block i's ln2 gain."),  # {i}: any layer
+}, sections={"train": "Training", "eval": "Evaluation", "per layer": "Per layer"}, source="<path of this file>")
 
 tracker = Tracker.start(cfg, exp_dir, project="Spiky", group="<family>",  # default WANDB_PROJECT / WANDB_RUN_GROUP
                         tags=["<static tag>"],
                         extra_tags=lambda cfg: [f"form:{cfg['form']}"],      # more tags from the config
                         extra_eval_metrics=lambda model: {},                 # merged into eval rows that pass a model
-                        glossary=metric_glossary,                            # optional; protocol below
+                        glossary=GLOSSARY,                                   # optional: drift check + artifact
+                        glossary_panel="<Project> — described",              # optional: link the published panel
                         config_extra={"total_params": n_params},
                         config_renames={"old_key": "old_key_legacy"})
 tracker.train_step(step, {"train/loss": loss, "train/lr": lr})  # logged at step 1 and every log_every (10)
@@ -119,11 +127,37 @@ tracker.finish(summary)                                          # after the loc
   full queue drops rows, counted, and never waits); a 2 s probe of the server before `wandb.init` falls
   back to offline (`wandb sync` later); every network path has capped retries; `finish()` gives up after
   a deadline (60 s plus a grace period); any tracker error disables it with one printed line.
-- **Glossary protocol** (`glossary.py`; a plain module works): `PANEL_TITLE`, optional `SOURCE`,
-  `undocumented(keys)`, `glossary_hash()`, `table_rows()` (`[key, description, unit]` rows),
-  `panel_markdown()` (content only — no sha, no timestamp — so verify compares exactly) and
-  `stale(seen_keys)` for audit. Optional for the tracker (drift check, artifact, notes pointer); required
-  for publish / verify / audit.
+- **Glossaries — `DictGlossary` by default.** Data per key: `unit` and `desc` (the full definition,
+  written from the code), optional `short` (the one-line panel form, default `desc`) and `section`; a key
+  containing `{i}` documents that key for any layer index. Optional `sections` sets the panel's order and
+  headings (sections left out are still documented and in the artifact, just not on the panel), and `notes`
+  adds a bullet list at the bottom of the panel. It provides the whole protocol. **Escape hatch:** any object —
+  a plain module works — with `PANEL_TITLE`, optional `SOURCE`, `undocumented(keys)`, `glossary_hash()`,
+  `table_rows()` (`[key, description, unit]` rows), `panel_markdown()` (content only — no sha, no timestamp —
+  so verify compares exactly) and `stale(seen_keys)`, for what data cannot express (the research glossary's
+  two-tier config notes, for one). A glossary is optional for the tracker (drift check, per-run artifact) and
+  required for publish / verify / audit; `--glossary FILE_OR_MODULE[:NAME]` takes a module's `GLOSSARY` by
+  default.
+- **The notes' link to the published panel is explicit:** `glossary_panel=` the title of the shared saved view
+  it was published into (`publish --shared TITLE`), or `tracker.PERSONAL_WORKSPACE`; the default `None` adds no
+  link. A glossary's `PANEL_TITLE` only names the section publish writes, so a publishable glossary never points
+  runs at a panel by itself. With a glossary, the notes always link the run's own glossary artifact.
+- **Optional means optional — the import guard.** Once the package is imported nothing in it raises:
+  `Tracker.start` never raises and returns an inactive tracker when tracking is off, and `NullTracker` is the
+  same do-nothing surface for code that starts no run (DDP ranks other than 0, dry runs, tests). What no code in
+  the package can cover is the package itself failing to import (absent — e.g. an editable install pointing at
+  an older checkout — or broken). That guard is the consumer's, with a fallback built from builtins
+  (`tracker.IMPORT_GUARD`); anything that imports the package — a `DictGlossary` module too — goes inside it:
+
+  ```python
+  try:
+      from spiky.util.wandb_integration.tracker import Tracker
+      from my_glossary import GLOSSARY  # a DictGlossary imports this package too: keep it inside the guard
+      tracker = Tracker.start(cfg, exp_dir, project=PROJECT, group=GROUP, glossary=GLOSSARY)
+  except Exception as e:  # the package itself could not be imported: Tracker.start never raises
+      print(f'[wandb] off: {type(e).__name__}: {e} -- training continues')
+      tracker = type('NoTracker', (), {'active': False, '__getattr__': lambda self, name: lambda *a, **k: None})()
+  ```
 - **Worked example — how a project wires it up:** `experiments/ffn_replacement/tools/` on
   `research/ffn_replacement_fix`. `wandb_tracking.py` is a thin shim: it pre-binds project and group,
   the LUT tags, `learned_confidence_by_layer` as `extra_eval_metrics`, `metric_glossary` and an
@@ -184,8 +218,8 @@ Derive the GitHub URL from `git remote get-url origin` (an ssh host alias such a
 `git@github-<alias>:<owner>/<repo>.git` maps to `https://github.com/<owner>/<repo>`), and the
 server URL and entity from the environment — never hard-code either.
 
-**Metric glossary.** Keep one dict in code next to the tracker: logged key (or a per-layer
-pattern such as `ln2_norm_L{i}`) → unit, a full description **written from the code that
+**Metric glossary.** Keep one dict in code next to the tracker — a `DictGlossary` (section 3): logged key
+(or a per-layer pattern such as `ln2_norm_L{i}`) → unit, a full description **written from the code that
 computes it** (reduction, which tokens count, cadence, running mean vs instantaneous, the
 exact eval protocol, normalisation), and a one-sentence short form. Surface it where people
 look — the charts:
@@ -199,7 +233,8 @@ look — the charts:
   afterwards, and fail loudly if it is not there;
 - a per-run **glossary artifact** with the full descriptions (a `wandb.Table` of key |
   description | unit, logged with `log_artifact` only); identical content dedups to one version;
-- a pointer to both in every run's notes.
+- in every run's notes, a pointer to its glossary artifact, and — when the tracker is told where the panel was
+  published (`glossary_panel`, section 3) — a link to that panel.
 
 Make drift detectable, never fatal: the tracker flags a logged key with no entry (one
 printed line, a tag, a summary field listing the keys); a read-only audit lists undocumented

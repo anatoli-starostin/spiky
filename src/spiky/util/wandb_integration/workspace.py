@@ -43,7 +43,7 @@ import re
 import sys
 
 from spiky.util.wandb_integration import glossary as G
-from spiky.util.wandb_integration.tracker import gql
+from spiky.util.wandb_integration.tracker import gql, shared_nw_id, shared_view_name  # noqa: F401 (names re-exported)
 
 SECTION_ID, PANEL_ID = 'metric-glossary-section', 'metric-glossary-panel'
 # One full-width column; tall enough to show a few tables without scrolling the page (the panel scrolls inside).
@@ -95,18 +95,6 @@ def section_state(spec, markdown, title):
     if values[0] != markdown:
         return False, 'the panel text differs from the current glossary (stale or edited)'
     return True, 'present, first, current'
-
-
-def shared_nw_id(title):
-    """The named-workspace id of a shared saved view: the title lower-cased, letters and digits only."""
-    nwid = re.sub(r'[^a-z0-9]', '', (title or '').lower())
-    if not nwid:
-        raise ValueError(f'cannot derive a view id from {title!r}')
-    return nwid[:40]
-
-
-def shared_view_name(title):
-    return f'nw-{shared_nw_id(title)}-v'
 
 
 def readme(url, glossary, project, shared_title=None, intro=None):

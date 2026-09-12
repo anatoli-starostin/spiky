@@ -171,7 +171,8 @@ def test_start_wires_the_injected_project_group_tags_config_metrics_and_glossary
     assert aliases == ['latest', f'glossary-{glossary.glossary_hash()}']
     assert art.files['glossary'].data == glossary.table_rows() and art.metadata['source'] == glossary.SOURCE
     assert 'Tests a thing.' in run.notes
-    assert '"About these metrics" at the top of the [project workspace](http://wandb.invalid:8080/ent/Throwaway/workspace)' in run.notes
+    assert f'artifact [metric\\_glossary:glossary-{glossary.glossary_hash()}]' in run.notes
+    assert 'at the top of the' not in run.notes                  # no panel link unless glossary_panel asks for one
     t.eval_step(2, {'val/loss': 1.0}, model=object())
     t.finish({'final_loss': 1.0})
     assert run.logged == [(2, {'val/loss': 1.0, 'norm_L0': 1.0})] and run.summary == {'final_loss': 1.0}
