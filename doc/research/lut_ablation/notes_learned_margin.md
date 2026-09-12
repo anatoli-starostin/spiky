@@ -211,3 +211,148 @@ Stated with one seed and no LUT replicates, and not overclaimed.
 * The hand-picked 1.75 was in the right direction but above what gradient descent settled on.
 * β is not meaningfully learned. The one learnable constant that measurably changed the score is γ.
 * Parameters were still drifting at 16K (β everywhere, γ in L1–L4), so these are not converged values.
+
+---
+
+# Frozen-gain fork — exp_g_0248
+
+**Question.** Was 0247's learnable per-layer log-gain g doing real work, decoupling scale from γ's
+shape, or bookkeeping? The fork holds g at exactly 0 (a buffer) while β and γ stay learnable. If γ
+lands on the same profile, g is dropped.
+
+## Pre-flight (code trace, before any GPU time)
+
+The n=1 read-out has **no threshold on the confidence score**:
+
+* **Address bits** come from margins, never from the score: `d.detach() > 0` in torch, and
+  `delta > cmp_eps` with cmp_eps = 0.0 in both native kernels.
+* **The score** is consumed only as `F.embedding_bag` `per_sample_weights` (`_bagged_sum`).
+* **The cell** passes through unchanged: `_apply_cell` returns the bag as-is (constant cells; no
+  margin read-out, codebook, blend or gate).
+* **CompressionMHL** (light, multi-head): compress → lut_light → decompress Linear.
+* **Block:** `x + ffn(ln2(x))`, with no gate and `lin` None (config gamma 0).
+* **The scored CUDA kernel** only multiplies by the gain, and refuses form id 6.
+
+A global rescale of the score is therefore exactly absorbable by decompress. That makes it
+representationally free, but not free under the optimiser: decompress is weight-decayed at 0.1,
+the tables and the learned scalars are not, and Adam and gradient clipping both see the scale.
+
+## Downstream-compensation check on 0247
+
+`downstream_compensation_0247.py`. Note: this check had not been run before; it was run for this
+task.
+
+At 4K, 8K, 12K and 16K, 0247 vs 0193:
+
+* Decompress weights grew where g went negative, with corr(−g, log decompress ratio) = +0.86 over
+  24 layer×checkpoint points.
+* FFN output RMS stayed within ±4% of 0193's in every layer, while exp(g) fell to 0.77.
+* The weights did not simply invert exp(g). At 16K, decompress × tables ratios were
+  1.17/1.09/1.12/1.11/1.09, against exp(−g) = 1.29/1.29/1.20/1.16/1.10.
+
+**Correction from 0248** (`scale_compare_0248.py`). 0248's decompress norms equal 0247's (ratio
+0.987–0.999). The decompress growth of 0247 over 0193 therefore came from the (β, γ) change, not
+from g. The correlation with −g above is not evidence that decompress compensated g.
+
+## Implementation and verification
+
+Code 56929153.
+
+* `LightMultiHeadLUT(learned_margin_freeze_g=True)` registers `confidence_g` as a buffer: same
+  state_dict key, same score op sequence, no gradient, in no optimiser group. The config key is
+  `lut_learned_margin_freeze_g`.
+* **Tests:** 329 passed on CUDA.
+* **Regression:** before (unchanged source) vs after, 127/127 torch.equal, covering bounded,
+  bounded_norm, margin, min_margin, tanh_margin, sharp_margin and learned_margin (at moved
+  parameters, with its parameter gradients).
+* **Init:** on 0193's trained checkpoint, 0248 == 0193 == 0247 torch.equal on every score, every
+  block output and the loss (max discrepancy 0).
+* **Fresh init:** bit-identical to 0193 on all shared tensors; 67,351,692 params (+12).
+* **Optimiser:** the 12 β/γ scalars are in weight_decay 0; g is in no group.
+* **Training steps:** after 5 real AdamW steps g is still exactly 0.0, β and γ gradients are
+  nonzero in every layer, and there is no prod/cumprod.
+* **Fork:** config differs from 0247's only in `lut_learned_margin_freeze_g: true`; train.py is
+  byte-identical to 0247's.
+
+## Results (one seed; no LUT-seed replicates at this geometry)
+
+**corrected_val_bpb 1.169328**, 0.946 h. Commit c22458a9.
+
+| vs | bpb | Δ | vanilla 2-seed range 0.00335 | 4K LUT sd 0.009642 (lower bound) |
+|---|---|---|---|---|
+| exp_g_0247 (g learnable) | 1.169344 | −0.000016 | −0.005 | −0.002 |
+| exp_g_0193 margin | 1.172852 | −0.003524 | −1.05 | −0.37 |
+| exp_g_0245 sharp γ1.75 | 1.167381 | +0.001948 | +0.58 | +0.20 |
+| exp_g_0195 n=2 | 1.160637 | +0.008691 | +2.59 | +0.90 |
+
+The 0248 and 0247 curves coincide: |Δ| ≤ 0.0022 at every eval, ≤ 0.0007 after step 2,000, and 0248
+is worse at 19 of 32 steps.
+
+**γ (the deciding measurement)** is unchanged:
+
+| layer | L0 | L1 | L2 | L3 | L4 | L5 |
+|---|---|---|---|---|---|---|
+| γ 0248 | 1.372 | 1.482 | 1.595 | 1.491 | 1.378 | 1.042 |
+| γ 0247 | 1.356 | 1.468 | 1.580 | 1.482 | 1.383 | 1.044 |
+| Δ | +0.016 | +0.014 | +0.015 | +0.008 | −0.005 | −0.001 |
+| drift 14K→16K, 0248 | −0.000 | +0.015 | +0.018 | +0.013 | +0.011 | +0.005 |
+
+* The trajectories correlate at +1.000 with 0247's in every layer.
+* γ crosses 1.1 at the same eval step as in 0247.
+* The late drift is identical to 0247's (+0.001/+0.015/+0.018/+0.014/+0.011/+0.005), so γ is still
+  not converged in L1–L4.
+* The humped depth profile is reproduced.
+
+**β** follows 0247's trajectory shape (corr 0.91–1.00), 0.02–0.06 lower in L0–L4: 1.755 2.046 2.173
+2.101 2.056 2.120. It is still rising at 16K (+0.012 to +0.024 per 2K). It remains shape-irrelevant:
+holding β = 2 and refitting γ reproduces each layer's learned score to 0.008–0.029 log-RMS. L0 is
+again near-degenerate in (β, γ), corr +0.87 and condition number 25.
+
+**Where the removed gain went** (`scale_decomposition_0248.py`). Exact per-layer decomposition of
+log E[s] (0248) − log E[s] (0247, gain included), on 4 real val rows; the terms sum with residual 0:
+
+| layer | total | = −g47 | + β | + γ | + margins | median \|m\| 47 → 48 |
+|---|---|---|---|---|---|---|
+| L0 | +0.006 | +0.256 | −0.056 | −0.045 | −0.148 | 0.332 → 0.318 |
+| L1 | +0.022 | +0.252 | −0.061 | −0.025 | −0.144 | 0.621 → 0.595 |
+| L2 | +0.004 | +0.179 | −0.044 | −0.023 | −0.109 | 0.662 → 0.641 |
+| L3 | +0.041 | +0.148 | −0.032 | −0.013 | −0.061 | 0.678 → 0.665 |
+| L4 | +0.009 | +0.094 | −0.017 | +0.007 | −0.076 | 0.719 → 0.700 |
+| L5 | −0.001 | −0.005 | +0.004 | +0.002 | −0.001 | 0.690 → 0.690 |
+
+0248 reached 0247's score scale without g, with the removed gain re-absorbed as follows:
+
+* **Mostly upstream,** by 2–4% smaller margins: 41–81% of −g in L0–L4.
+* **Then β:** 18–24% in L0–L3 — its lower values carry scale, not shape.
+* **γ least:** 18%, 10%, 13% and 9% in L0–L3, and −8% in L4.
+
+The **predicted failure mode — γ's gradient carrying the scale, pulling γ toward 1 — did not
+occur.** γ took the smallest share, and in the direction of *higher* γ, not toward 1.
+
+Downstream, decompress ratio 0248/0247 is 0.987–0.999 and FFN output RMS ratio 0.95–1.04.
+
+**Selectivity** on its own margins is the same as 0247's: wCV 1.206 (L0 3.00, L1–L5 0.87–1.28),
+p75/p25 8.09, frac<1e-3 0.01% (L0 0.08%), mean 0.485. 0247 had 1.200 / 8.09 / 0.02% / 0.479;
+margin had 0.983 / 5.11 / 0 / 0.547.
+
+**Continuity: still discontinuous.** Trained-weights boundary jump median 2.22% of ‖y_h‖ (per layer
+1.87–2.88%; 0247 2.19%, margin 3.45%). 0.5^(8γ) by layer: 5.0e-4, 2.7e-4, 1.4e-4, 2.6e-4, 4.8e-4,
+3.1e-3.
+
+## Verdict
+
+**Drop g; report two parameters (β, γ) per layer.** Without g:
+
+* the γ profile is the same (max |Δγ| 0.016, trajectories identical);
+* bpb is identical (Δ −0.000016);
+* selectivity and continuity are identical;
+* the scale g carried was re-absorbed mostly upstream, not by γ.
+
+Two caveats:
+
+* **β is weakly informative.** It moves little, is shape-irrelevant (a β=2 refit matches within
+  0.03 log-RMS), and absorbed ~20% of the removed scale. Its individual value should not be
+  interpreted. A one-parameter γ form with β fixed at 2 is suggested by the score-shape analysis,
+  but has not been run.
+* **The evidence is limited.** One seed, no replicates. The equality of 0248 and 0247 in bpb shows
+  that g bought nothing measurable here; it cannot rule out a small effect below the noise floor.

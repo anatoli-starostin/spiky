@@ -1,6 +1,6 @@
 """Post-run analysis of exp_g_0247 (learned_margin). Read-only; CPU.
 
-    python analyze_learned_margin.py [--png out.png]
+    python analyze_learned_margin.py [<run_dir name, default exp_g_0247>] [--png out.png]
 
 1. TRAJECTORIES of g, beta, gamma per layer from metrics.csv (logged at every eval): table at selected
    steps, final values, and drift over the last 2,000 steps (still moving at 16K?).
@@ -30,7 +30,10 @@ import torch
 import torch.nn.functional as F
 
 FR = os.path.expanduser('~/projects/spiky/experiments/ffn_replacement')
-RD = os.path.join(FR, 'runs_corrected', 'exp_g_0247_B16k_light_learnedmargin_tph128_seed1')
+_ARGS = [a for i, a in enumerate(sys.argv[1:], 1) if not a.startswith('--') and sys.argv[i - 1] != '--png']
+RD = os.path.join(FR, 'runs_corrected', _ARGS[0] if _ARGS else 'exp_g_0247_B16k_light_learnedmargin_tph128_seed1')
+RUN = os.path.basename(RD)[:10]
+print(f'run: {os.path.basename(RD)}')
 sys.path.insert(0, os.path.join(FR, 'tools'))
 sys.path.insert(0, os.path.join(FR, 'distill'))
 N_LAYERS = 6
@@ -141,7 +144,7 @@ if '--png' in sys.argv:
         ax.axhline(init, color='0.5', ls='--', lw=1, label=f'init {init:g}')
         if k == 'gamma':
             ax.axhline(1.75, color='tab:red', ls=':', lw=1, label='sharp_margin 1.75')
-        ax.set(xlabel='step', title=f'learned {k} per layer (exp_g_0247)')
+        ax.set(xlabel='step', title=f'learned {k} per layer ({RUN})')
         ax.grid(True, alpha=.3)
         ax.legend(fontsize=7)
     plt.tight_layout()
