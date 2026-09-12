@@ -160,6 +160,15 @@ def test_section_state():
     assert WG.section_state({}, md)[0] is False
 
 
+def test_shared_view_names():
+    assert WG.shared_nw_id('Spiky — described') == 'spikydescribed'
+    assert WG.shared_view_name('Spiky — described') == 'nw-spikydescribed-v'
+    assert WG.shared_view_name('Scratch 2') == 'nw-scratch2-v'
+    with pytest.raises(ValueError):
+        WG.shared_nw_id('— —')
+    assert WG.readme('http://h/e/p?nw=x', 'T').count('http://h/e/p?nw=x') == 1
+
+
 class _FakeRun:
     def __init__(self):
         self._tags, self.summary, self.logged = ('a',), {}, []
