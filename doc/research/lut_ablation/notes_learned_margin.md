@@ -356,3 +356,85 @@ Two caveats:
   but has not been run.
 * **The evidence is limited.** One seed, no replicates. The equality of 0248 and 0247 in bpb shows
   that g bought nothing measurable here; it cannot rule out a small effect below the noise floor.
+
+# exp_g_0249 — 0248 + Hamming-1 cell TV, weight 10
+
+Fork of exp_g_0248 (learned_margin, g frozen) with `lut_cell_smoothness: 10.0`:
+`(10 · model.lut_tv_penalty()).backward()` once per optimiser step, after the micro-batch backwards
+and before clipping. The tables still get no weight decay. Code and config: 991ca119. Analysis:
+`cmp_sharp.py`, `compare_tv_0248_0249.py`, `continuity_probe_trained.py`, `selectivity_trained.py`,
+`analyze_learned_margin.py`, `norms_0248_0249.py`.
+
+## bpb
+
+**1.163698** (0.992 h; final = best).
+
+| vs | bpb | Δ | × vanilla 2-seed range | × 4K LUT 3-seed sd |
+|---|---|---|---|---|
+| 0248 frozen-g | 1.169328 | −0.005630 | −1.68 | −0.58 |
+| 0247 learned | 1.169344 | −0.005646 | −1.69 | −0.59 |
+| 0193 margin | 1.172852 | −0.009154 | −2.73 | −0.95 |
+| 0195 n=2 blend | 1.160637 | +0.003061 | +0.91 | +0.32 |
+
+The gain arrives late. Matched-step Δ vs 0248: +0.0009 at 8K (slightly worse), −0.0010 at 10K,
+−0.0035 at 12K, −0.0051 at 14K, −0.0056 at 15K and 16K. The gap stopped widening in the last 1K.
+Both runs are still improving at 16K at a similar rate (last 2K: −0.00474 for 0249, −0.00423 for
+0248). One seed: the Δ is 1.7× the vanilla seed range but 0.6× the conservative LUT sd.
+
+## TV penalty and cell differences
+
+`lut_tv` (mean over layers) in 0249:
+
+* 7.6e-5 at step 500 (the tables start at zero),
+* a peak of 6.3e-3 around 6–8K,
+* 4.84e-3 at 16K, 24% below the peak.
+
+0248, which had no TV term, measured on its checkpoints: 2.37e-2 at 4K, 4.72e-2 at 8K, 5.64e-2 at
+12K, 5.84e-2 at 16K. 0249 ends 12× lower. Per layer, the trained Hamming-1 mean ‖v_c − v_c'‖² is
+0.033× 0248's in L0 and 0.070–0.101× in L1–L5.
+
+**Most of that came from shrinking the tables, not from making neighbours agree.** The cell norm
+fell almost as much: table L2 norm is 0.22× (L0) to 0.35× (L5) of 0248's. The scale-free ratio
+mean ‖v_c − v_c'‖² / mean ‖v_c‖², which is 2.0 for independent random cells, moved only from
+1.74–1.95 to 1.34–1.57. The shrink was not undone downstream: decompress weight norm is ×0.99–1.08
+and compress ×1.03–1.13, while the confidence score's mean rose from 0.485 to 0.892.
+
+## Boundary jump — fell about 20%, still discontinuous
+
+Median jump / ‖y_h‖ on own weights (`continuity_probe_trained.py`, 4,096 val tokens):
+
+| layer | L0 | L1 | L2 | L3 | L4 | L5 | all |
+|---|---|---|---|---|---|---|---|
+| 0248 | 2.88% | 1.95% | 1.87% | 2.09% | 2.16% | 2.44% | 2.22% |
+| **0249** | **1.31%** | **1.59%** | **1.71%** | **1.79%** | **1.97%** | **2.20%** | **1.78%** |
+
+L0 more than halves; L1–L5 fall 9–18%. Relative to the whole FFN output the median is 0.485% vs
+0.577%. Tokens sit about as close to boundaries as before (|u_j| < 1e-2: 0.89% vs 0.98%). The
+overall 1.78% is between margin (3.45%) and sharp_margin γ1.75 (1.66%).
+
+## β / γ
+
+**γ is lower in every layer**, by 0.11–0.17: 1.259, 1.352, 1.478, 1.322, 1.242, 0.909. L5 is now
+below 1. γ has converged: 14K→16K drift is −0.015 to +0.009 (0248: +0.000 to +0.018).
+
+**β is higher**, by 0.08–0.16: 1.847, 2.177, 2.336, 2.180, 2.182, 2.226. It is still rising
+(+0.020 to +0.038 per 2K, as in 0248). β stays shape-irrelevant: holding β = 2 and refitting γ
+reproduces each layer's score to 0.017–0.054 log-RMS. L0 is again near-degenerate in (β, γ),
+corr +0.81 and condition number 20.
+
+## Selectivity — back toward margin
+
+| run | wCV overall | wCV L0 / L1–L5 | p75/p25 | frac<1e-3 (L0) | mean |
+|---|---|---|---|---|---|
+| **0249 TV10** | **1.044** | 2.52 / 0.75–1.13 | 7.05 | 0.00% (0.02%) | 0.892 |
+| 0248 frozen-g | 1.206 | 3.00 / 0.87–1.28 | 8.09 | 0.01% (0.08%) | 0.485 |
+| 0193 margin | 0.983 | 1.84 / 0.86–0.87 | 5.11 | 0 | 0.547 |
+
+## Reading
+
+bpb and continuity both moved the way TV was meant to move them: −0.0056 bpb and a 20% smaller
+boundary jump. Selectivity and γ relaxed toward margin at the same time. Two cautions:
+
+* **The TV number overstates the smoothing.** It was reached mostly by shrinking the tables, so the
+  cells are only modestly more alike relative to their own scale.
+* **The bpb gain is not established.** It is one seed and inside the conservative noise band.
