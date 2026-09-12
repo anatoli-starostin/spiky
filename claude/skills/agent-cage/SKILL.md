@@ -79,6 +79,38 @@ script.py` (a single clean segment); for a short snippet use `sbox python3 -c '�
 body single-quoted. Any `<`/`>`/`|`/`&&`/`$()`/heredoc you actually need must live *inside*
 `sbox bash -c '…'`, never at the outer level.
 
+### Opt-in tailnet network (`--net tailnet`, default-deny)
+
+By default `sbox` has **no network**. When a caged job legitimately needs the fleet's
+trusted infra — a self-hosted wandb server, the NAS, another fleet host — use the one opt-in
+mode:
+
+```sh
+sbox --net tailnet -- python train.py     # egress to the tailnet only
+```
+
+- **Allows only the tailscale network**: egress to CIDR `100.64.0.0/10` (the tailscale CGNAT
+  range) plus DNS to the configured resolver; **everything else is dropped** (no public
+  internet — e.g. PyPI is not reachable). One coarse rule, no endpoint list to maintain, no
+  hostname resolution/pinning.
+- **Enforcement = pasta + nftables.** Instead of `--unshare-net`, the cage gets a fresh net
+  namespace with userspace egress via **pasta**, and a **default-DROP** nftables `output`
+  chain permitting only loopback, established/related, DNS-to-resolver, and
+  `ip daddr 100.64.0.0/10`. Enforcement is *below* the process. Bare `sbox` is unchanged.
+  (CIDR overridable via `AGENT_CAGE_TAILNET_CIDR`.)
+- **Why coarse is OK here:** the tailnet is trusted infrastructure; scoping to it is a much
+  smaller security surface than general network, while covering the real need. It is
+  deliberately **not** per-endpoint — any tailnet host is reachable in this mode, not just
+  wandb.
+- **Classifier rule (fail-closed):** `cage_policy` greenlights exactly
+  `sbox --net tailnet -- <cmd>`. Any other value after `--net` (unknown mode, raw
+  `host:port`, malformed) → **gated** (asks a human). Bare `sbox` stays green; operators /
+  chaining / redirects still gate even with the prefix.
+- **Limitations:** IPv4 only; reaches *any* tailnet host (not URL/host-scoped); requires
+  `pasta` + `nft` (sbox errors clearly if absent). The pasta+nft egress path is best
+  **verified live** against a reachable tailnet endpoint on the target host before relying on
+  it.
+
 ### Standing `sbox` up on a new host
 
 1. `sudo apt-get install -y bubblewrap socat`
@@ -111,6 +143,8 @@ tool_input)` returns:
   `NotebookRead`, `TodoRead/Write`, `BashOutput`, …). Let Claude Code's own layer handle it.
 - **`green`** — safe, auto-allow silently. Green covers:
   - a single **clean `sbox <argv>`** with **no shell operators**;
+  - `sbox --net tailnet -- <argv>` — the one opt-in network mode (tailnet-scoped egress; see
+    the `--net tailnet` section). Any other value after `--net` gates (fail-closed);
   - **scoped-safe git** (`status`/`diff`/`log`/`add`/`commit`/`branch`/`checkout`/`stash`,
     and `pull`/`fetch`/`push` to a *configured named remote*) — but **NOT** explicit URLs,
     `ext::`, `-c`, `config` writes, `--upload-pack`/`--exec` (exfil / RCE / prompt-injection

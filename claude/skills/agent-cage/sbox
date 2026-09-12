@@ -1,34 +1,109 @@
 #!/bin/sh
-# sbox CMD [args...] — run CMD inside the ML green-zone cage:
-#   * whole system READ-ONLY, except ~/projects and /tmp (writable)
+# sbox [--net tailnet --] CMD [args...] — run CMD inside the ML green-zone cage:
+#   * whole system READ-ONLY, except ~/projects, /tmp, ~/.cache (writable)
 #   * GPU passed through (/dev/nvidia*), so CUDA works
-#   * NO network (empty net namespace)
+#   * NO network by default (empty net namespace)
 #   * ~/.ssh masked so caged code can't even read keys
 # Chain caged work with:  sbox bash -c 'cd repo && python train.py && ./eval.sh'
 # (the whole pipeline runs inside the cage; the outer command has no operators).
+#
+# OPT-IN TAILNET NETWORK:
+#   sbox --net tailnet -- CMD [args...]
+# gives the cage egress to the TAILSCALE network only (CIDR 100.64.0.0/10) plus
+# DNS to the configured resolver; everything else is dropped. The fleet's trusted
+# infra (self-hosted wandb, the NAS, other fleet hosts) all live on the tailnet,
+# so this one coarse rule covers the real need with no endpoint list to maintain
+# and no hostname resolution. It does NOT reach the public internet (e.g. PyPI).
+# Enforcement = pasta (userspace egress in a fresh net namespace) + a default-DROP
+# nftables ruleset. See SKILL.md for the security model and limitations.
 set -eu
-if [ "$#" -eq 0 ]; then echo "usage: sbox CMD [args...]" >&2; exit 2; fi
+
+# The tailscale CGNAT range (public, fixed). Overridable for a differently-scoped
+# tailnet, but the default is the standard 100.64.0.0/10.
+TAILNET_CIDR="${AGENT_CAGE_TAILNET_CIDR:-100.64.0.0/10}"
+
+usage() { echo "usage: sbox [--net tailnet --] CMD [args...]" >&2; exit 2; }
+[ "$#" -eq 0 ] && usage
 command -v bwrap >/dev/null 2>&1 || { echo "sbox: bubblewrap (bwrap) not installed" >&2; exit 127; }
 
-# Assemble GPU device binds only for nodes that exist on this host.
+# ── optional '--net tailnet --' prefix ───────────────────────────────────────
+NET_MODE=""
+if [ "$1" = "--net" ]; then
+  [ "$#" -ge 4 ] || { echo "sbox: --net needs: --net tailnet -- CMD ..." >&2; exit 2; }
+  [ "$2" = "tailnet" ] || { echo "sbox: unknown --net mode '$2' (only 'tailnet')" >&2; exit 2; }
+  [ "$3" = "--" ] || { echo "sbox: expected '--' after '--net tailnet'" >&2; exit 2; }
+  NET_MODE="tailnet"
+  shift 3   # "$@" is now the command argv
+fi
+
+# ── GPU device binds (only nodes that exist) ─────────────────────────────────
 gpu=""
 for d in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset /dev/dri; do
   [ -e "$d" ] && gpu="$gpu --dev-bind $d $d"
 done
 
-# shellcheck disable=SC2086
 mkdir -p "$HOME/.cache" 2>/dev/null || true
 
+# ── default mode: NO network (unchanged from the original wrapper) ────────────
+if [ -z "$NET_MODE" ]; then
+  # shellcheck disable=SC2086
+  exec bwrap \
+    --ro-bind / / \
+    --bind "$HOME/projects" "$HOME/projects" \
+    --bind /tmp /tmp \
+    --bind "$HOME/.cache" "$HOME/.cache" \
+    --proc /proc \
+    --dev /dev \
+    $gpu \
+    --tmpfs "$HOME/.ssh" \
+    --unshare-net \
+    --die-with-parent \
+    -- "$@"
+fi
+
+# ── --net tailnet mode: egress to the tailscale CIDR + DNS only ──────────────
+command -v pasta >/dev/null 2>&1 || { echo "sbox: pasta not installed (needed for --net tailnet)" >&2; exit 127; }
+command -v nft   >/dev/null 2>&1 || { echo "sbox: nft not installed (needed for --net tailnet)" >&2; exit 127; }
+
+# Allow DNS to the configured IPv4 resolver(s) so name resolution works in-cage.
+dns_rules=""
+for r in $(awk '/^[[:space:]]*nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null | sort -u); do
+  case "$r" in *:*) continue ;; esac   # skip IPv6 resolvers (ruleset is IPv4)
+  dns_rules="${dns_rules}    ip daddr ${r} udp dport 53 accept
+    ip daddr ${r} tcp dport 53 accept
+"
+done
+
+RULES=$(mktemp /tmp/agent-cage-nft.XXXXXX)
+cat > "$RULES" <<NFT
+# default-DENY egress; only loopback, established, DNS-to-resolver, and the
+# tailscale CIDR ($TAILNET_CIDR) are permitted.
+table inet cage_egress {
+  chain output {
+    type filter hook output priority 0; policy drop;
+    meta oif lo accept
+    ct state established,related accept
+${dns_rules}    ip daddr ${TAILNET_CIDR} accept
+  }
+}
+NFT
+
+# pasta sets up userspace egress in a fresh net namespace and runs the target in
+# it; bwrap --share-net reuses that namespace (instead of --unshare-net); the
+# inner shell loads the nft filter (needs CAP_NET_ADMIN in the userns) then
+# exec's the command. $1 = rules file, $2.. = command argv.
 # shellcheck disable=SC2086
-exec bwrap \
-  --ro-bind / / \
-  --bind "$HOME/projects" "$HOME/projects" \
-  --bind /tmp /tmp \
-  --bind "$HOME/.cache" "$HOME/.cache" \
-  --proc /proc \
-  --dev /dev \
-  $gpu \
-  --tmpfs "$HOME/.ssh" \
-  --unshare-net \
-  --die-with-parent \
-  -- "$@"
+exec pasta --config-net -q -- \
+  bwrap \
+    --ro-bind / / \
+    --bind "$HOME/projects" "$HOME/projects" \
+    --bind /tmp /tmp \
+    --bind "$HOME/.cache" "$HOME/.cache" \
+    --proc /proc \
+    --dev /dev \
+    $gpu \
+    --tmpfs "$HOME/.ssh" \
+    --share-net \
+    --cap-add CAP_NET_ADMIN \
+    --die-with-parent \
+    -- sh -c 'nft -f "$1" && shift && exec "$@"' sbox-net "$RULES" "$@"
