@@ -6,7 +6,9 @@ Surfaced as:
   * an "About these metrics" markdown panel pinned at the top of the project workspace, built from the short forms
     -- wandb_glossary.py publish
   * a per-run `metric_glossary` artifact with the full descriptions -- Tracker.start (log_artifact only)
-  * a pointer in every run's notes -- wandb_tracking.run_notes
+  * a pointer in every run's notes -- spiky.util.wandb_integration.tracker.run_notes, via wandb_tracking.py
+This module is the glossary object wandb_tracking.py / wandb_glossary.py pass to spiky.util.wandb_integration (it
+implements that package's glossary protocol).
 
 Drift is detectable, never fatal: the tracker flags a logged key with no entry (tag glossary:undocumented,
 summary glossary/undocumented), `wandb_glossary.py audit` lists undocumented and stale entries, and
@@ -253,9 +255,10 @@ def _cell(s):
 
 
 PANEL_TITLE = 'About these metrics'
+SOURCE = 'experiments/ffn_replacement/tools/metric_glossary.py'   # the glossary protocol's optional SOURCE
 
 
-def panel_markdown(source_path):
+def panel_markdown(source_path=SOURCE):
     """The workspace panel: one short sentence per logged key, grouped, then the config gotchas. Deliberately no
     commit sha in it: the text must depend on the glossary content only, so `verify` stays exact across commits."""
     out = [f'### {PANEL_TITLE}', '',

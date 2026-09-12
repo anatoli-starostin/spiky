@@ -1,36 +1,33 @@
-"""Backfill finished ffn_replacement runs into wandb from their committed artefacts (metrics.csv,
-config.json, summary.json). Clearly marked: tag "backfilled", config backfilled=True, notes say so.
+"""Backfill finished ffn_replacement runs into wandb from their committed artefacts (metrics.csv, config.json,
+summary.json). Clearly marked: tag "backfilled", config backfilled=True, notes say so. A thin wrapper over
+spiky.util.wandb_integration.backfill holding this project's data.
 
     WANDB_BASE_URL=... [WANDB_ENTITY=...] python wandb_backfill.py <run_dir_name> ... [--mode offline|online]
     WANDB_BASE_URL=... WANDB_ENTITY=... python wandb_backfill.py --notes-only [--dry-run] <run_dir_name> ...
 
-Same organisation as the live tracker (wandb_tracking.py / claude/wandb.md): project Spiky, group
-ffn_replacement, job_type train, name = id = exp_name, tags + config with branch / commit / host.
-commit = the commit that recorded the run's artefacts (git log on its metrics.csv); host from the run's
-record where the run did not run on this machine. Logged per eval row at step = the row's step: val_bpb,
-train_loss (ema) and every other metrics.csv column (ln norms, learned-confidence per-layer
-lm_g / lm_beta / lm_gamma, tau). Step timing was never written to metrics.csv, so it is not backfilled.
-The run's corrected-eval summary goes to run.summary. Refuses runs whose metrics.csv is incomplete.
+Same organisation as the live tracker (wandb_tracking.py): project Spiky, group ffn_replacement, job_type train,
+name = id = the run folder, tags + config with branch / commit / host and the LUT tags. commit = the commit that
+recorded the run's artefacts (git log on its metrics.csv); host from HOST_OVERRIDE where the run did not train on
+gpustar. Logged per eval row (rows with val_bpb) at step = the row's step: val_bpb, train_loss (ema) and every
+other metrics.csv column. Step timing was never written to metrics.csv, so it is not backfilled. The run's summary
+keys go to run.summary. Refuses runs whose metrics.csv is incomplete (complete()).
 
---notes-only rewrites ONLY the notes of runs that are already on the server, with the tracker's markdown notes
-(description + links; tools/metric_glossary.py for what the keys mean). It sends one upsertBucket(id, notes) per
-run: no config, tags, summary or history is re-sent, nothing is re-logged and no artifact is attached (finished
-runs point to the "About these metrics" workspace panel instead). Backfilled runs (tag "backfilled") link to their
-artefacts commit and say that wandb's Git state shows the HEAD at backfill time; live runs link to their launch
-commit. --dry-run prints the notes and writes nothing.
+--notes-only rewrites ONLY the notes of runs already on the server (one upsertBucket per run; nothing else re-sent).
+--dry-run prints the notes and writes nothing.
 """
-import csv
 import json
 import os
 import sys
 
+import metric_glossary as MG
+from spiky.util.wandb_integration import backfill as B
+from wandb_tracking import CONFIG_RENAMES, GROUP, PROJECT, batch_config, lut_tags
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 RC = os.path.join(os.path.dirname(HERE), 'runs_corrected')
-sys.path.insert(0, HERE)
-from wandb_tracking import (GROUP, PROJECT, _git, github_web_url, gql, normalise_host, run_notes,  # noqa: E402
-                            wandb_config, with_committed_flag, workspace_url)
-
 BRANCH = 'research/ffn_replacement_fix'
+DEFAULT_HOST = 'gpustar'
+SUMMARY_KEYS = ('final_val_bpb', 'best_val_bpb', 'training_time_hours', 'total_params')
 # where each backfilled run actually trained (from its run record); default: this repo's usual box
 HOST_OVERRIDE = {'exp_g_0195_B16k_light_margin_blend_n2_tau_learn0p5_seed1': 'nebius-h100'}
 LINE = {'exp_g_0193_B16k_light_margin_tph128_noznorm_seed1': 'baseline_margin',
@@ -41,65 +38,42 @@ DESCRIPTION_OVERRIDE = {
         'Top-2 blended read-out (lut_read_top_n 2) with a learnable per-layer blend temperature tau, initialised '
         'flat at 0.5; otherwise exp_g_0193 (margin, no z_norm). Trained on nebius-h100.'),
 }
-_SET_NOTES = 'mutation($id: String!, $notes: String){ upsertBucket(input: {id: $id, notes: $notes}){ bucket { id } } }'
-_GET_NOTES = 'query($e: String!, $p: String!, $r: String!){ project(entityName: $e, name: $p){ run(name: $r){ notes } } }'
 
 
-def notes_for(name, cfg, *, commit, branch, host, backfilled, dirty, shown_git_commit, workspace):
-    """Markdown notes for a run already recorded in runs_corrected/<name>."""
-    root = _git(['rev-parse', '--show-toplevel'], HERE)
-    sha = _git(['rev-parse', '--verify', '--quiet', f'{commit}^{{commit}}'], root) if commit else 'unknown'
-    sha = None if sha in ('', 'unknown') else sha
-    info = with_committed_flag(dict(root=root, sha=sha, branch=branch, dirty=dirty,
-                                    rel=os.path.relpath(os.path.join(RC, name), root),
-                                    web=github_web_url(_git(['remote', 'get-url', 'origin'], root))))
-    extra = []
-    if backfilled:
-        extra.append('- **Backfilled** from the committed metrics.csv / summary.json after the run: no train/\\*, '
-                     'time/\\* or system series, and train\\_loss is sampled at eval steps only.')
-        if shown_git_commit and sha and shown_git_commit != sha:
-            extra.append(f"- ⚠ wandb's **Git state** on this run shows `{shown_git_commit[:8]}`, the repository HEAD "
-                         f"when the backfill ran, not this run's commit. Its artefacts commit is `{sha[:8]}` (linked "
-                         f'above).')
-    return run_notes(cfg, exp_name=name, info=info, host=host, workspace_url=workspace,
-                     description=DESCRIPTION_OVERRIDE.get(name),
-                     code_label='Code + artefacts (artefacts commit)' if backfilled else 'Code at launch',
-                     extra_lines=extra)
+def complete(rows, cfg):
+    """A finished run: an eval row every eval_every steps, the last one at n_steps."""
+    steps, n = [s for s, _ in rows], int(cfg['n_steps'])
+    ok = bool(steps) and steps[-1] == n and len(steps) == n // int(cfg['eval_every'])
+    return ok, f'{len(steps)} eval rows, last {steps[-1] if steps else None}'
 
 
-def _env(require_entity=False):
-    base, entity = (os.environ.get('WANDB_BASE_URL') or '').rstrip('/'), os.environ.get('WANDB_ENTITY')
-    if not base:
-        sys.exit('WANDB_BASE_URL must be set (never backfill to wandb.ai)')
-    if require_entity and not entity:
-        sys.exit('WANDB_ENTITY must be set for --notes-only')
-    return base, entity
+def backfill(names, mode):
+    for name in names:
+        rd = os.path.join(RC, name)
+        cfg = json.load(open(os.path.join(rd, 'config.json')))
+        summ = json.load(open(os.path.join(rd, 'summary.json')))
+        ga = cfg['total_batch_size'] // (cfg['device_batch_size'] * cfg['seq_len'])
+        B.backfill_run(rd, project=PROJECT, entity=os.environ.get('WANDB_ENTITY'), group=GROUP, branch=BRANCH,
+                       host=HOST_OVERRIDE.get(name, DEFAULT_HOST), name=name,
+                       tags=lut_tags(cfg) + [f"line:{LINE.get(name, 'confidence_form')}"],
+                       config_extra=batch_config(cfg, ga, summ.get('total_params')), config_renames=CONFIG_RENAMES,
+                       summary_keys=SUMMARY_KEYS, require_col='val_bpb', is_complete=complete, mode=mode,
+                       description=DESCRIPTION_OVERRIDE.get(name), panel_title=MG.PANEL_TITLE)
 
 
 def notes_only(names, dry):
-    base, entity = _env(require_entity=True)
+    if not os.environ.get('WANDB_BASE_URL') or not os.environ.get('WANDB_ENTITY'):
+        sys.exit('WANDB_BASE_URL and WANDB_ENTITY must be set for --notes-only (never write to wandb.ai)')
     import wandb
     api = wandb.Api(timeout=60)
-    ws = workspace_url(base, entity, PROJECT)
-    for name in names:
-        cfg = json.load(open(os.path.join(RC, name, 'config.json')))
-        r = api.run(f'{entity}/{PROJECT}/{name}')
-        conf, backfilled = r.config, 'backfilled' in (r.tags or [])
-        notes = notes_for(name, cfg, commit=conf.get('commit'), branch=conf.get('branch'),
-                          host=normalise_host(conf.get('host')), backfilled=backfilled,
-                          dirty=None if backfilled else conf.get('commit_dirty'),
-                          shown_git_commit=((r.metadata or {}).get('git') or {}).get('commit'), workspace=ws)
-        if dry:
-            print(f'===== {name} ({"backfilled" if backfilled else "live"})\n{notes}\n')
-            continue
-        gql(api, _SET_NOTES, {'id': r.storage_id, 'notes': notes})
-        back = gql(api, _GET_NOTES, {'e': entity, 'p': PROJECT, 'r': name})['project']['run']['notes']
-        print(f'notes set on {name}: {len(notes)} chars, read back identical: {back == notes}, '
-              f'report link present: {"/reports/" in back}')
+    B.update_notes(api, os.environ['WANDB_ENTITY'], PROJECT, {n: os.path.join(RC, n) for n in names},
+                   descriptions=DESCRIPTION_OVERRIDE, panel_title=MG.PANEL_TITLE, dry_run=dry)
 
 
 def main():
     argv = sys.argv[1:]
+    if not os.environ.get('WANDB_BASE_URL'):
+        sys.exit('WANDB_BASE_URL must be set (never backfill to wandb.ai)')
     if '--notes-only' in argv:
         return notes_only([a for a in argv if not a.startswith('--')], '--dry-run' in argv)
     mode = 'offline'
@@ -109,53 +83,7 @@ def main():
         argv = argv[:i] + argv[i + 2:]
     if mode not in ('online', 'offline'):
         sys.exit(f'--mode must be online or offline, got {mode!r}')
-    args = [a for a in argv if not a.startswith('--')]
-    base, entity = _env()
-    import wandb
-    repo = os.path.dirname(os.path.dirname(HERE))
-    ws = workspace_url(base, entity, PROJECT)
-    for name in args:
-        rd = os.path.join(RC, name)
-        cfg = json.load(open(os.path.join(rd, 'config.json')))
-        summ = json.load(open(os.path.join(rd, 'summary.json')))
-        rows = list(csv.DictReader(open(os.path.join(rd, 'metrics.csv'))))
-        steps = [int(r['step']) for r in rows if r.get('val_bpb')]
-        n = int(cfg['n_steps'])
-        if not steps or steps[-1] != n or len(steps) != n // int(cfg['eval_every']):
-            print(f'SKIP {name}: metrics.csv incomplete ({len(steps)} eval rows, last {steps[-1] if steps else None})')
-            continue
-        commit = _git(['log', '-1', '--format=%h', '--', os.path.join(rd, 'metrics.csv')], repo)
-        host = normalise_host(HOST_OVERRIDE.get(name, 'gpustar'))
-        form = cfg.get('lut_confidence_form', 'margin')
-        dbs, ga = cfg['device_batch_size'], cfg['total_batch_size'] // (cfg['device_batch_size'] * cfg['seq_len'])
-        config = wandb_config(cfg, branch=BRANCH, commit=commit, commit_kind='artefacts commit',
-                              host=host, backfilled=True, backfill_source='metrics.csv + summary.json',
-                              grad_accum=ga, batch_rows_per_step=dbs * ga, tokens_per_step=dbs * ga * cfg['seq_len'],
-                              total_params=summ.get('total_params'))
-        tags = ['backfilled', GROUP, BRANCH, commit, host, f'form:{form}',
-                f"line:{LINE.get(name, 'confidence_form')}"]
-        if cfg.get('lut_learned_margin_freeze_g'):
-            tags.append('learned_margin_freeze_g')
-        notes = notes_for(name, cfg, commit=commit, branch=BRANCH, host=host, backfilled=True, dirty=None,
-                          shown_git_commit=_git(['rev-parse', 'HEAD'], repo), workspace=ws)
-        run = wandb.init(project=PROJECT, entity=entity, group=GROUP, job_type='train',
-                         name=name, id=name, resume='allow', tags=tags, config=config, mode=mode,
-                         dir=os.environ.get('WANDB_DIR', os.path.expanduser('~/.cache/wandb')), notes=notes,
-                         settings=wandb.Settings(init_timeout=60, console='off', x_disable_stats=True))
-        for r in rows:
-            if not r.get('val_bpb'):
-                continue
-            row = {'val_bpb': float(r['val_bpb']), 'train_loss': float(r['train_loss'])}
-            for k, v in r.items():
-                if k not in ('step', 'val_bpb', 'train_loss') and v not in (None, ''):
-                    row[k] = float(v)
-            run.log(row, step=int(r['step']))
-        for k in ('final_val_bpb', 'best_val_bpb', 'training_time_hours', 'total_params'):
-            if k in summ:
-                run.summary[k] = summ[k]
-        d = os.path.dirname(run.dir)
-        wandb.finish()
-        print(f'backfilled {name}: {len(steps)} eval rows, commit {commit}, host {host}, mode {mode} -> {d}')
+    backfill([a for a in argv if not a.startswith('--')], mode)
 
 
 if __name__ == '__main__':
