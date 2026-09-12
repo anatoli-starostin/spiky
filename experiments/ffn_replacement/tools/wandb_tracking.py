@@ -17,10 +17,10 @@ GUARANTEES -- the tracker can never cost a run:
   * No secrets: authentication comes from ~/.netrc (`wandb login`); the server URL and entity come
     from the environment (WANDB_BASE_URL, WANDB_ENTITY) -- deployment values stay out of the repo.
 
-MODE. WANDB_MODE if set; otherwise ONLINE when a 2 s TCP connect to the WANDB_BASE_URL host succeeds,
-else OFFLINE. Inside the sbox cage (no network) that means offline: the run is written under
-$WANDB_DIR (default ~/.cache/wandb) and uploaded later, outside the cage, with `wandb sync <dir>`
-(the path is printed at start and at finish).
+MODE. OFFLINE BY DEFAULT: the run is written under $WANDB_DIR (default ~/.cache/wandb) and uploaded
+afterwards with `wandb sync <dir>` (the path is printed at start and at finish) -- from the host, or
+from the cage with `sbox --net tailnet -- wandb sync <dir>` (tailnet-only egress; bare `sbox` has no
+network). Online only when WANDB_MODE=online is set AND a 2 s TCP probe of the server succeeds.
 
 ORGANISATION (claude/wandb.md section 4): project "Spiky"; group = the experiments/<family>/ folder,
 "ffn_replacement"; job_type "train"; name and id = exp_name (unique per run folder, so a crashed
