@@ -147,6 +147,11 @@ files, so histories from parallel hosts merge cleanly with essentially no confli
   different folders, so rebases are clean; this just keeps history linear and avoids
   needless merge commits.
 - **Never push `main` directly.** `main` changes only through a reviewed pull request.
+- **Every run describes its experiment AND every metric it logs, in its W&B notes.** One
+  markdown blob, written at run start: what the run tests, its code at the launch commit, and a
+  legend of every logged key (what it measures, from the code that computes it, with its unit).
+  A new metric gets its legend entry in the same change that starts logging it. See
+  [wandb.md](wandb.md) section 5.
 - **Checkpoints never go in git** — they are too large and are gitignored. Reproduce any
   result from its `config.json`, not from a saved checkpoint. (This is why every run must
   commit a complete, self-contained `config.json`.)
