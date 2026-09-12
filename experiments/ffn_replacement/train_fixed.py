@@ -192,10 +192,12 @@ for step in range(1, N_STEPS + 1):
         loss = model(x, y)
         (loss / grad_accum).backward()
         accum_loss += loss.item() / grad_accum
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    # clip_grad_norm_ returns the global gradient norm BEFORE clipping; it was discarded before. Keeping the
+    # return value changes nothing in the step -- it is only handed to the tracker (train/grad_norm).
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
-    tracker.train_step(step, accum_loss, ema, lr_scale * LR)
+    tracker.train_step(step, accum_loss, ema, lr_scale * LR, grad_norm=grad_norm)
     if step % 100 == 0 or step == 1:
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')
     if step % EVAL_EVERY == 0 or step == N_STEPS:
