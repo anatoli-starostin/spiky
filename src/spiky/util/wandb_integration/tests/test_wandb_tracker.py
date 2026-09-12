@@ -1,5 +1,6 @@
-"""Tracker: the loop never waits on or breaks because of wandb, the drift check is never fatal, project / group / tags /
-metrics / glossary are injected, and the notes / config helpers behave. CPU only, no server (a fake wandb module).
+"""Tracker: the loop never waits on or breaks because of wandb; one notes blob carries the description and the metric
+legend; every logged key is checked against the legend in-process (at first log and at finish), loudly and never
+fatally, also when tracking is off; project / group / tags / metrics are injected. CPU only, no server (a fake wandb).
 
     python -m pytest src/spiky/util/wandb_integration/tests -q
 """
@@ -24,27 +25,64 @@ def _online_env(monkeypatch):
     monkeypatch.setenv('WANDB_MODE', 'offline')                                # no server probe
 
 
-def test_drift_check_flags_unknown_keys_once(capsys, fakes, glossary):
+def test_an_undescribed_key_is_reported_at_its_first_log_once(capsys, fakes, glossary):
     run = fakes.Run()
     t = T.Tracker(run, wandb=None, mode='offline', glossary=glossary)
-    t.train_step(1, {'train/loss': 3.0})
-    t.eval_step(500, {'val/loss': 1.2, 'norm_L0': 1.0, 'brand_new': 2.0})
-    t.eval_step(1000, {'val/loss': 1.1, 'norm_L0': 1.0, 'brand_new': 2.0, 'other_new': 1.0})
+    t.train_step(1, {'train/loss': 3.0, 'brand_new': 1.0})
+    assert 'UNDESCRIBED METRIC: brand_new' in capsys.readouterr().out          # surfaces at step 1, not at the end
+    t.eval_step(500, {'val/loss': 1.2, 'norm_L0': 1.0, 'brand_new': 2.0, 'other_new': 1.0})
+    t.eval_step(1000, {'val/loss': 1.1, 'brand_new': 2.0, 'other_new': 1.0})
     _drain(t)
-    assert T.UNDOC_TAG in run.tags and run.tags.count(T.UNDOC_TAG) == 1
-    assert run.summary[T.UNDOC_SUMMARY] == 'brand_new, other_new'
     out = capsys.readouterr().out
-    assert out.count('brand_new') == 1 and out.count('other_new') == 1
-    assert len(run.logged) == 3
+    assert 'brand_new' not in out and out.count('other_new') == 1
+    assert t.undocumented == ['brand_new', 'other_new'] and len(run.logged) == 3
+    assert run.tags == ('a',) and run.summary == {} and run.artifacts == []   # no drift tag, no summary key, no artifact
 
 
-def test_drift_check_is_never_fatal(fakes, glossary):
-    run = fakes.BrokenTagsRun()
-    t = T.Tracker(run, wandb=None, mode='offline', glossary=glossary)
-    t.eval_step(500, {'val/loss': 1.2, 'brand_new': 2.0})
-    t.eval_step(1000, {'val/loss': 1.1})
+def test_finish_prints_a_loud_banner_listing_every_undescribed_key(capsys, fakes, fake_wandb, glossary):
+    run = fakes.Run(dir='/tmp/x')
+    t = T.Tracker(run, wandb=fake_wandb, mode='offline', glossary=glossary)
+    t.train_step(1, {'train/loss': 3.0, 'mystery/a': 1.0})
+    t.finish({'final_loss': 1.0, 'mystery_summary': 2.0})
+    out = capsys.readouterr().out
+    assert '!' * 100 in out and 'UNDESCRIBED METRICS in this run (2): mystery/a, mystery_summary' in out
+    assert run.summary == {'final_loss': 1.0, 'mystery_summary': 2.0} and fake_wandb.finished == 1   # still uploaded
+
+
+def test_the_legend_check_runs_when_tracking_is_off(capsys, fake_wandb, glossary):
+    t = T.Tracker.start({}, '/tmp', project='P', glossary=glossary)            # WANDB_BASE_URL unset -> OFF
+    assert not t.active and t.reason == 'no WANDB_BASE_URL'
+    for s in range(1, 12):
+        t.train_step(s, {'train/loss': 1.0, 'not_described': 1.0})
+    t.eval_step(10, {'val/loss': 1.0})
+    t.finish({'final_loss': 1.0})
+    out = capsys.readouterr().out
+    assert out.count('UNDESCRIBED METRIC: not_described') == 1 and 'UNDESCRIBED METRICS in this run (1)' in out
+    assert fake_wandb.runs == []
+
+
+def test_without_a_glossary_every_key_but_wandbs_own_is_undescribed(capsys, fakes):
+    run = fakes.Run()
+    t = T.Tracker(run, wandb=None, mode='offline')
+    t.log({'loss': 1.0, '_step': 1, 'system/gpu.0.gpu': 3.0}, 1)
     _drain(t)
-    assert t.run is run and len(run.logged) == 2                  # still logging, not disabled
+    assert t.undocumented == ['loss'] and len(run.logged) == 1
+
+
+def test_the_legend_check_is_never_fatal(capsys, fakes):
+    class Broken:
+        def undocumented(self, keys):
+            raise RuntimeError('glossary bug')
+
+        def legend_markdown(self):
+            return ''
+
+    run = fakes.Run()
+    t = T.Tracker(run, wandb=None, mode='offline', glossary=Broken())
+    t.eval_step(1, {'val/loss': 1.0})
+    t.eval_step(2, {'val/loss': 0.9})
+    _drain(t)
+    assert t.active and len(run.logged) == 2 and 'legend check skipped' in capsys.readouterr().out
 
 
 def test_documented_rows_raise_no_flag_and_extra_eval_metrics_merge(capsys, fakes, glossary):
@@ -58,20 +96,11 @@ def test_documented_rows_raise_no_flag_and_extra_eval_metrics_merge(capsys, fake
     t.train_step(10, {'train/loss': 3.0})
     t.eval_step(500, {'val/loss': 1.2}, model='M')
     t.eval_step(600, {'val/loss': 1.1})                           # no model: no extra metrics
+    t.finish()
     _drain(t)
-    assert T.UNDOC_TAG not in run.tags and T.UNDOC_SUMMARY not in run.summary
-    assert 'glossary' not in capsys.readouterr().out
+    assert t.undocumented == [] and 'UNDESCRIBED' not in capsys.readouterr().out
     assert run.logged[1] == (500, {'val/loss': 1.2, 'norm_L0': 1.0, 'norm_L1': 2.0})
     assert run.logged[2] == (600, {'val/loss': 1.1}) and seen == ['M']
-
-
-def test_without_a_glossary_there_is_no_drift_check(capsys, fakes):
-    run = fakes.Run()
-    t = T.Tracker(run, wandb=None, mode='offline')
-    t.eval_step(1, {'anything/at_all': 1.0})
-    _drain(t)
-    assert run.logged == [(1, {'anything/at_all': 1.0})] and T.UNDOC_TAG not in run.tags
-    assert capsys.readouterr().out == ''
 
 
 def test_train_step_throttles_converts_and_times(fakes):
@@ -146,8 +175,8 @@ def test_start_is_off_without_server_project_or_when_disabled(monkeypatch, fake_
     assert fake_wandb.runs == []
 
 
-def test_start_wires_the_injected_project_group_tags_config_metrics_and_glossary(monkeypatch, capsys, fake_wandb,
-                                                                                 glossary, tmp_path):
+def test_start_writes_one_notes_blob_with_the_legend_and_no_artifact(monkeypatch, capsys, fake_wandb, glossary,
+                                                                      tmp_path):
     _online_env(monkeypatch)
     monkeypatch.setenv('WANDB_ENTITY', 'ent')
     monkeypatch.setenv('WANDB_RUN_GROUP', 'family')
@@ -167,16 +196,14 @@ def test_start_wires_the_injected_project_group_tags_config_metrics_and_glossary
     assert c['legacy_ignored'] == 10 and 'legacy' not in c and c['total_params'] == 123 and c['lr'] == 3e-4
     assert 'description' not in c and '_arch_note' not in c and {'branch', 'commit', 'commit_dirty', 'host'} <= set(c)
     assert kw['settings']['console'] == 'off' and kw['settings']['finish_timeout'] == T.FINISH_TIMEOUT
-    art, aliases = run.artifacts[0]
-    assert aliases == ['latest', f'glossary-{glossary.glossary_hash()}']
-    assert art.files['glossary'].data == glossary.table_rows() and art.metadata['source'] == glossary.SOURCE
-    assert 'Tests a thing.' in run.notes
-    assert f'artifact [metric\\_glossary:glossary-{glossary.glossary_hash()}]' in run.notes
-    assert 'at the top of the' not in run.notes                  # no panel link unless glossary_panel asks for one
+    notes = run.notes
+    assert notes.index('Tests a thing.') < notes.index(glossary.legend_markdown().rstrip('\n')) < notes.index('Long note.')
+    assert '| `val/loss` | Validation loss. [nats/tok] |' in notes and T.NO_LEGEND_LINE not in notes
+    assert run.artifacts == [] and not hasattr(T, 'log_glossary_artifact')
     t.eval_step(2, {'val/loss': 1.0}, model=object())
     t.finish({'final_loss': 1.0})
     assert run.logged == [(2, {'val/loss': 1.0, 'norm_L0': 1.0})] and run.summary == {'final_loss': 1.0}
-    assert fake_wandb.finished == 1 and 'undocumented' not in capsys.readouterr().out
+    assert fake_wandb.finished == 1 and 'UNDESCRIBED' not in capsys.readouterr().out
 
 
 def test_start_survives_a_failing_extra_tags_and_an_incomplete_glossary(monkeypatch, capsys, fake_wandb, tmp_path):
@@ -188,8 +215,8 @@ def test_start_survives_a_failing_extra_tags_and_an_incomplete_glossary(monkeypa
     t = T.Tracker.start({}, str(tmp_path), project='P', extra_tags=bad_tags, glossary=object())
     out = capsys.readouterr().out
     assert t.active and 'extra_tags failed' in out
-    assert 'glossary ignored: it lacks undocumented, glossary_hash, table_rows' in out
-    assert t.glossary is None and fake_wandb.runs[0].artifacts == [] and 'Metric glossary' not in fake_wandb.runs[0].notes
+    assert 'glossary ignored: it lacks undocumented, legend_markdown' in out and 'no glossary given' in out
+    assert t.glossary is None and T.NO_LEGEND_LINE in fake_wandb.runs[0].notes
     t.finish()
 
 
@@ -219,31 +246,27 @@ def test_description_text():
     assert T.description_text({}) == ''
 
 
-def test_run_notes_links_and_flags():
+def test_run_notes_links_flags_and_legend():
     sha = 'a' * 40
     info = dict(web='https://github.com/o/r', sha=sha, branch='research/x', dirty=True,
                 rel='experiments/f/runs/exp_1', committed=False)
     cfg = {'_arch_note': 'What it tests. Why. How it differs. The fourth. The fifth is not in the summary. *star* x_y'}
-    ws = T.workspace_url('http://h/', 'e', 'p')
-    assert ws == 'http://h/e/p/workspace' and T.workspace_url('', 'e', 'p') is None
-    md = T.run_notes(cfg, exp_name='exp_1', info=info, host='gpustar', workspace_url=ws, panel_title='About these metrics',
-                     artifact_url='http://h/art', artifact_label='metric_glossary:glossary-abc')
+    legend = '### Metrics\n\n| key | what it measures [unit] |\n|---|---|\n| `loss` | The loss. [nats/tok] |\n'
+    md = T.run_notes(cfg, exp_name='exp_1', info=info, host='gpustar', legend=legend)
     head, _, tail = md.partition('\n---\n')
     assert head.startswith('**exp\\_1**')
     assert f'(https://github.com/o/r/tree/{sha}/experiments/f/runs/exp_1)' in head
     assert '(https://github.com/o/r/tree/research/x/experiments/f/runs/exp_1)' in head
     assert 'dirty' in head and 'not committed at launch' in head
     assert '`experiments/f/runs/exp_1` on `gpustar`' in head
-    assert '"About these metrics" at the top of the [project workspace](http://h/e/p/workspace)' in head
-    assert '[metric\\_glossary:glossary-abc](http://h/art)' in head
-    assert 'fifth' not in head and 'The fifth' in tail
-    assert '\\*star\\* x\\_y' in tail                              # _arch_note rendered literally
-    assert 'project workspace' not in T.run_notes(cfg, exp_name='e', info=info, host='h', workspace_url=ws)
+    assert tail.lstrip('\n').startswith('### Metrics') and 'fifth' not in head and 'The fifth' in md
+    assert md.index('| `loss` |') < md.index('**Architecture note**') and '\\*star\\* x\\_y' in md
+    assert 'workspace' not in md and 'artifact' not in md
 
 
-def test_run_notes_without_git():
+def test_run_notes_without_git_or_legend():
     md = T.run_notes({'description': 'D.'}, exp_name='e', info=dict(), host='h')
-    assert md.startswith('**e**') and 'github' not in md and '---' not in md and 'Metric glossary' not in md
+    assert md.startswith('**e**') and 'github' not in md and '---' not in md and md.endswith(T.NO_LEGEND_LINE)
 
 
 def test_git_launch_info_on_this_checkout():

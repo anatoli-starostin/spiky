@@ -1,7 +1,5 @@
-"""Stubs for the wandb_integration tests: a stub glossary implementing the protocol in glossary.py, fake wandb runs and
-a fake `wandb` module. CPU only: no server, no real wandb calls, no project content."""
-import hashlib
-import json
+"""Stubs for the wandb_integration tests: a stub glossary (undocumented + legend_markdown), fake wandb runs and a fake
+`wandb` module. CPU only: no server, no real wandb calls, no project content."""
 import os
 import re
 import sys
@@ -13,14 +11,13 @@ import pytest
 
 
 class StubGlossary:
-    PANEL_TITLE = 'About these metrics'
     SOURCE = 'tests/conftest.py'
     METRICS = {                                                              # key -> (unit, description)
-        'train/loss': ('nats', 'Training loss of the step.'),
+        'train/loss': ('nats/tok', 'Training loss of the step.'),
         'time/sec_per_step': ('s', 'Wall seconds per step.'),
-        'val/loss': ('nats', 'Validation loss.'),
+        'val/loss': ('nats/tok', 'Validation loss.'),
         'norm_L{i}': ('L2', 'Weight norm of layer i.'),
-        'final_loss': ('nats', 'val/loss at the last eval.'),
+        'final_loss': ('nats/tok', 'val/loss at the last eval.'),
     }
 
     def _entry(self, key):
@@ -34,20 +31,9 @@ class StubGlossary:
     def undocumented(self, keys):
         return sorted({k for k in keys if not (k.startswith('_') or k.startswith('system/') or self._entry(k))})
 
-    def stale(self, seen_keys):
-        hit = {self._entry(k) for k in seen_keys}
-        return sorted(k for k in self.METRICS if k not in hit)
-
-    def glossary_hash(self):
-        return hashlib.sha256(json.dumps(self.METRICS, sort_keys=True).encode()).hexdigest()[:12]
-
-    def table_rows(self):
-        return [[k, d, u] for k, (u, d) in sorted(self.METRICS.items())]
-
-    def panel_markdown(self):
-        rows = ''.join(f'| `{k}` | {u} | {d} |\n' for k, (u, d) in sorted(self.METRICS.items()))
-        return (f'### {self.PANEL_TITLE}\n\n| key | unit | what it measures |\n|---|---|---|\n{rows}\n'
-                f'glossary `{self.glossary_hash()}`\n')
+    def legend_markdown(self):
+        rows = ''.join(f'| `{k}` | {d} [{u}] |\n' for k, (u, d) in sorted(self.METRICS.items()))
+        return f'### Metrics\n\n| key | what it measures [unit] |\n|---|---|\n{rows}'
 
 
 class FakeRun:
@@ -70,18 +56,8 @@ class FakeRun:
     def log(self, row, step=None):
         self.logged.append((step, dict(row)))
 
-    def log_artifact(self, art, aliases=()):
+    def log_artifact(self, art, aliases=()):                                # must never be called any more
         self.artifacts.append((art, list(aliases)))
-
-
-class BrokenTagsRun(FakeRun):
-    @property
-    def tags(self):
-        return ()
-
-    @tags.setter
-    def tags(self, v):
-        raise RuntimeError('server said no')
 
 
 class BlockingRun(FakeRun):
@@ -97,17 +73,6 @@ class BlockingRun(FakeRun):
 
 
 class FakeWandb(types.ModuleType):
-    class Table:
-        def __init__(self, columns, data):
-            self.columns, self.data = columns, data
-
-    class Artifact:
-        def __init__(self, name, type, description='', metadata=None):
-            self.name, self.type, self.description, self.metadata, self.files = name, type, description, metadata, {}
-
-        def add(self, obj, name):
-            self.files[name] = obj
-
     def __init__(self):
         super().__init__('wandb')
         self.runs, self.finished, self.finish_delay = [], 0, 0.0
@@ -132,7 +97,7 @@ def glossary():
 
 @pytest.fixture
 def fakes():
-    return types.SimpleNamespace(Run=FakeRun, BrokenTagsRun=BrokenTagsRun, BlockingRun=BlockingRun)
+    return types.SimpleNamespace(Run=FakeRun, BlockingRun=BlockingRun)
 
 
 @pytest.fixture
