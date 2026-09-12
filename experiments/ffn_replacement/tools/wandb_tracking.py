@@ -4,23 +4,32 @@
     tracker = Tracker.start(cfg, EXP_DIR, grad_accum=..., total_params=...)   # after the model is built
     tracker.train_step(step, loss, ema, lr)          # once per optimiser step (logged every LOG_EVERY)
     tracker.eval_step(step, bpb, ema, extra, model)  # at each eval, after metrics.csv is written
-    tracker.finish(summary)                          # at the end
+    tracker.finish(summary)                          # at the end, after summary/checkpoint are written
 
-GUARANTEES -- the tracker can never cost a run:
-  * OFF unless WANDB_BASE_URL is set (so a run can never silently go to wandb.ai), unless
-    WANDB_MODE=disabled, and unless `import wandb` works.
-  * Every wandb call is wrapped; the first exception disables the tracker for the rest of the run
-    with ONE warning line. Nothing is raised into the training loop; metrics.csv is written by the
-    trainer exactly as before, whatever happens here.
-  * It reads Python floats the trainer already has and, at evals, the learned confidence scalars via
-    their read-only accessor. It never touches torch's RNG, the model, the optimiser or the data.
-  * No secrets: authentication comes from ~/.netrc (`wandb login`); the server URL and entity come
-    from the environment (WANDB_BASE_URL, WANDB_ENTITY) -- deployment values stay out of the repo.
+MODE -- ONLINE BY DEFAULT when the server is reachable:
+  * WANDB_BASE_URL unset -> tracker OFF (a run can never silently go to wandb.ai); WANDB_MODE=disabled -> OFF.
+  * WANDB_MODE=offline   -> offline: written under $WANDB_DIR (default ~/.cache/wandb), uploaded later with
+                            `wandb sync <dir>` (from the host, or `sbox --net tailnet -- wandb sync <dir>`).
+  * otherwise            -> a 2 s TCP probe of the server: reachable -> ONLINE (live curves); unreachable ->
+                            OFFLINE with one line saying so. A dead server costs ~2 s at start, never a hang
+                            (a wandb.init against an unreachable server was measured to block for >11 min).
+                            Bare `sbox` has no network, so runs launched there go offline automatically;
+                            launch with `sbox --net tailnet -- ...` to log live.
 
-MODE. OFFLINE BY DEFAULT: the run is written under $WANDB_DIR (default ~/.cache/wandb) and uploaded
-afterwards with `wandb sync <dir>` (the path is printed at start and at finish) -- from the host, or
-from the cage with `sbox --net tailnet -- wandb sync <dir>` (tailnet-only egress; bare `sbox` has no
-network). Online only when WANDB_MODE=online is set AND a 2 s TCP probe of the server succeeds.
+GUARDS -- the tracker can never stall or break training:
+  * The training loop never calls wandb. train_step/eval_step put a row on a bounded in-memory queue and
+    return; a background thread does run.log(). If wandb stops accepting rows the queue fills and further
+    rows are DROPPED (counted, reported at finish) -- the loop never waits.
+  * Every wandb network path has capped retries/timeouts (BOUNDS), and finish() has a hard deadline
+    (FINISH_TIMEOUT, default 60 s, env WANDB_TRACKER_FINISH_TIMEOUT): past it the tracker gives up on the
+    upload, kills its own wandb-core helper processes and returns, so the process exits. The trainer calls
+    finish() only after metrics.csv, summary.json and checkpoint.pt are written; the run's local record
+    stays on disk for a later `wandb sync`.
+  * Any tracker error disables the tracker for the rest of the run with ONE line. Nothing is raised into
+    the training loop; metrics.csv is written by the trainer exactly as without the tracker.
+  * It reads floats the trainer already has and, at evals, the learned confidence scalars via their
+    read-only accessor: no RNG, no graph, no optimiser or data interaction.
+  * No secrets: auth from ~/.netrc (`wandb login`); server URL / entity from WANDB_BASE_URL / WANDB_ENTITY.
 
 ORGANISATION (claude/wandb.md section 4): project "Spiky"; group = the experiments/<family>/ folder,
 "ffn_replacement"; job_type "train"; name and id = exp_name (unique per run folder, so a crashed
@@ -28,14 +37,25 @@ run resumes instead of duplicating); tags = family, branch, short commit, host, 
 config = branch, commit, host + the full config.json + derived batch sizes.
 """
 import os
+import queue
+import signal
 import socket
 import subprocess
+import threading
 import time
 from urllib.parse import urlparse
 
 PROJECT = 'Spiky'
 GROUP = 'ffn_replacement'
 LOG_EVERY = 10
+LOG_QUEUE_MAX = 4096
+FINISH_TIMEOUT = float(os.environ.get('WANDB_TRACKER_FINISH_TIMEOUT', '60'))
+BOUNDS = dict(init_timeout=60, x_graphql_retry_max=5, x_graphql_timeout_seconds=20,
+              x_graphql_retry_wait_min_seconds=2, x_graphql_retry_wait_max_seconds=10,
+              x_file_stream_retry_max=15, x_file_stream_timeout_seconds=30,
+              x_file_stream_retry_wait_min_seconds=2, x_file_stream_retry_wait_max_seconds=20,
+              x_file_transfer_retry_max=5, x_file_transfer_timeout_seconds=60,
+              finish_timeout=FINISH_TIMEOUT, finish_timeout_raises=False)
 
 
 def _git(args, cwd):
@@ -66,6 +86,28 @@ def _writable_dir(path):
         return False
 
 
+def _kill_own_wandb_helpers():
+    """SIGKILL the wandb-core / wandb-xpu processes descended from THIS process (never anyone else's)."""
+    me, killed = os.getpid(), []
+    for pid in (int(x) for x in os.listdir('/proc') if x.isdigit()):
+        try:
+            exe = os.path.basename(open(f'/proc/{pid}/cmdline', 'rb').read().split(b'\0')[0].decode(errors='ignore'))
+            if not exe.startswith(('wandb-core', 'wandb-xpu')):
+                continue
+            p = pid
+            for _ in range(8):
+                p = int(open(f'/proc/{p}/stat').read().rsplit(')', 1)[1].split()[1])
+                if p == me:
+                    os.kill(pid, signal.SIGKILL)
+                    killed.append(pid)
+                    break
+                if p <= 1:
+                    break
+        except (OSError, ValueError):
+            continue
+    return killed
+
+
 def learned_confidence_by_layer(model):
     """{'lm_g_L0': .., 'lm_beta_L0': .., 'lm_gamma_L0': .., ...} for learned_margin layers, else {}."""
     out, i = {}, 0
@@ -81,18 +123,46 @@ def learned_confidence_by_layer(model):
 
 
 class Tracker:
-    def __init__(self, run=None, wandb=None, reason=''):
-        self.run, self._wandb, self.reason = run, wandb, reason
+    def __init__(self, run=None, wandb=None, reason='', mode=None):
+        self.run, self._wandb, self.reason, self.mode = run, wandb, reason, mode
         self._t_last, self._s_last = time.time(), 0
+        self._q, self._th, self.dropped = None, None, 0
+        if run is not None:
+            self._q = queue.Queue(maxsize=LOG_QUEUE_MAX)
+            self._th = threading.Thread(target=self._worker, name='wandb-log', daemon=True)
+            self._th.start()
 
     @property
     def active(self):
         return self.run is not None
 
     def _fail(self, where, exc):
-        print(f'[wandb] disabled after an error in {where}: {type(exc).__name__}: {exc} '
-              f'-- training continues, metrics.csv unaffected', flush=True)
+        if self.run is not None:
+            print(f'[wandb] disabled after an error in {where}: {type(exc).__name__}: {exc} '
+                  f'-- training continues, metrics.csv unaffected', flush=True)
         self.run = None
+
+    def _worker(self):
+        """The only place rows reach wandb. Runs off the training thread; exits on the None sentinel."""
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            run = self.run
+            if run is None:
+                continue                                          # disabled: just drain
+            try:
+                run.log(item[0], step=item[1])
+            except Exception as e:
+                self._fail('log', e)
+
+    def _enqueue(self, row, step):
+        if self.run is None or self._q is None:
+            return
+        try:
+            self._q.put_nowait((row, step))
+        except queue.Full:
+            self.dropped += 1                                      # never wait on the tracker
 
     @classmethod
     def start(cls, cfg, exp_dir, grad_accum=None, total_params=None, job_type='train', extra_tags=()):
@@ -119,16 +189,12 @@ class Tracker:
                     os.environ[var] = os.path.join(root, sub)
             run_dir = os.environ.get('WANDB_DIR', root)
             os.makedirs(run_dir, exist_ok=True)
-            # OFFLINE BY DEFAULT. A forced-online wandb.init against an unreachable server was measured
-            # to hang the trainer (>10 min, despite init_timeout) -- so online is used only when it is
-            # explicitly requested AND the server answers a 2 s probe right now. Offline never touches
-            # the network: sync afterwards with `wandb sync`. (An online run whose network drops
-            # mid-run can still block in finish(); by then metrics.csv/summary/checkpoint are written.)
-            if mode == 'online' and not _reachable(base):
-                print(f'[wandb] WANDB_MODE=online requested but {base} is unreachable -> offline', flush=True)
-                mode = 'offline'
-            elif mode != 'online':
-                mode = 'offline'
+            if mode != 'offline':
+                if _reachable(base):
+                    mode = 'online'
+                else:
+                    print(f'[wandb] {base} unreachable (2 s probe) -> offline', flush=True)
+                    mode = 'offline'
             repo = os.path.dirname(os.path.abspath(__file__))           # this checkout, wherever the run dir is
             branch = _git(['rev-parse', '--abbrev-ref', 'HEAD'], repo)
             commit = _git(['rev-parse', '--short', 'HEAD'], repo)
@@ -147,11 +213,11 @@ class Tracker:
             run = wandb.init(project=PROJECT, entity=os.environ.get('WANDB_ENTITY'), group=GROUP, job_type=job_type,
                              name=name, id=name, resume='allow', tags=[t for t in tags if t and t != 'unknown'],
                              notes=(cfg.get('_arch_note') or '')[:2000] or None, config=config, dir=run_dir,
-                             mode=mode, settings=wandb.Settings(init_timeout=60, console='off'))
+                             mode=mode, settings=wandb.Settings(console='off', **BOUNDS))
             print(f'[wandb] {mode}: run {name} -> {run.dir}'
                   + ('  (sync later: wandb sync ' + os.path.dirname(run.dir) + ')' if mode == 'offline' else ''),
                   flush=True)
-            return cls(run, wandb)
+            return cls(run, wandb, mode=mode)
         except Exception as e:
             print(f'[wandb] off: init failed: {type(e).__name__}: {e} -- training continues', flush=True)
             return cls(reason='init failed')
@@ -159,14 +225,10 @@ class Tracker:
     def train_step(self, step, loss, ema, lr):
         if self.run is None or not (step % LOG_EVERY == 0 or step == 1):
             return
-        try:
-            now = time.time()
-            dt = (now - self._t_last) / max(step - self._s_last, 1)
-            self._t_last, self._s_last = now, step
-            self.run.log({'train/loss': loss, 'train/loss_ema': ema, 'train/lr': lr, 'time/sec_per_step': dt},
-                         step=step)
-        except Exception as e:
-            self._fail('train_step', e)
+        now = time.time()
+        dt = (now - self._t_last) / max(step - self._s_last, 1)
+        self._t_last, self._s_last = now, step
+        self._enqueue({'train/loss': loss, 'train/loss_ema': ema, 'train/lr': lr, 'time/sec_per_step': dt}, step)
 
     def eval_step(self, step, bpb, ema, extra=None, model=None):
         if self.run is None:
@@ -176,22 +238,50 @@ class Tracker:
             row.update(extra or {})
             if model is not None:
                 row.update(learned_confidence_by_layer(model))
-            self.run.log(row, step=step)
         except Exception as e:
             self._fail('eval_step', e)
+            return
+        self._enqueue(row, step)
 
     def finish(self, summary=None):
-        if self.run is None:
+        run = self.run
+        if run is None:
             return
         try:
-            for k, v in (summary or {}).items():
-                if isinstance(v, (int, float, str, bool)) or v is None:
-                    self.run.summary[k] = v
-            d = os.path.dirname(self.run.dir)
-            offline = self.run.settings.mode == 'offline' if hasattr(self.run, 'settings') else False
-            self._wandb.finish()
-            print(f'[wandb] finished' + (f' (offline; sync with: wandb sync {d})' if offline else ''), flush=True)
-        except Exception as e:
-            self._fail('finish', e)
-        finally:
-            self.run = None
+            d = os.path.dirname(run.dir)
+        except Exception:
+            d = '?'
+        done, errs, t0 = threading.Event(), [], time.time()
+
+        def _finish():
+            try:
+                try:
+                    self._q.put(None, timeout=5)                   # let queued rows go out (bounded)
+                except queue.Full:
+                    pass
+                self._th.join(timeout=20)
+                for k, v in (summary or {}).items():
+                    if isinstance(v, (int, float, str, bool)) or v is None:
+                        run.summary[k] = v
+                self._wandb.finish()                              # bounded by BOUNDS['finish_timeout']
+            except Exception as e:
+                errs.append(e)
+            finally:
+                done.set()
+
+        threading.Thread(target=_finish, name='wandb-finish', daemon=True).start()
+        deadline = FINISH_TIMEOUT + 45
+        extra = f'; {self.dropped} log rows dropped' if self.dropped else ''
+        if not done.wait(deadline):
+            killed = _kill_own_wandb_helpers()
+            print(f'[wandb] finish() gave up after {deadline:.0f}s (killed wandb helpers {killed}){extra}; '
+                  f'local record intact: wandb sync {d}', flush=True)
+        elif errs:
+            print(f'[wandb] finish() error: {type(errs[0]).__name__}: {errs[0]}{extra}; local record: {d}', flush=True)
+        elif self.mode == 'online' and time.time() - t0 >= FINISH_TIMEOUT - 1:
+            print(f'[wandb] finish() hit its {FINISH_TIMEOUT:.0f}s timeout -- upload likely incomplete{extra}; '
+                  f'local record intact: wandb sync {d}', flush=True)
+        else:
+            print(f'[wandb] finished in {time.time() - t0:.1f}s{extra}'
+                  + (f' (offline; sync with: wandb sync {d})' if self.mode == 'offline' else ''), flush=True)
+        self.run = None
