@@ -18,9 +18,11 @@ RUNS = {
     '0246 sharp g3': 'exp_g_0246_B16k_light_sharpmargin_g3_gain25p4_tph128_seed1',
     '0247 learned': 'exp_g_0247_B16k_light_learnedmargin_tph128_seed1',
     '0248 frozen-g': 'exp_g_0248_B16k_light_learnedmargin_frozeng_tph128_seed1',
+    '0249 frozen-g TV10': 'exp_g_0249_B16k_light_learnedmargin_frozeng_tv10_tph128_seed1',
 }
 LEARNED_REFS = ('0193 margin', '0245 sharp g1.75', '0244 tanh_margin', '0243 min_margin', '0195 n=2')
-LEARNED_RUNS = {'0247 learned': LEARNED_REFS, '0248 frozen-g': ('0247 learned',) + LEARNED_REFS}
+LEARNED_RUNS = {'0247 learned': LEARNED_REFS, '0248 frozen-g': ('0247 learned',) + LEARNED_REFS,
+                '0249 frozen-g TV10': ('0248 frozen-g', '0247 learned', '0193 margin')}
 PARTNER = {'0245 sharp g1.75': '0243 min_margin', '0246 sharp g3': '0244 tanh_margin'}
 NOISE = [('vanilla 2-seed range', 0.00335), ('budget-law resid sd', 0.0035), ('4K LUT 3-seed sd (lower bnd)', 0.009642)]
 BIN = 0.0035
