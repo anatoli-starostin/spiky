@@ -86,7 +86,8 @@ Trainers here should not hand-roll the above: the shared package on `main`,
 
 - `tracker.py` — `Tracker`: optional, never-fatal logging from a training loop.
 - `workspace.py` — publish / verify / audit the metric-glossary panel (section 5):
-  `python -m spiky.util.wandb_integration.workspace publish|verify|audit --glossary FILE_OR_MODULE [--project P] [--shared TITLE]`.
+  `python -m spiky.util.wandb_integration.workspace publish|verify|audit --glossary FILE_OR_MODULE [--project P] [--shared TITLE]`,
+  plus `publish --no-readme` (leave the project description alone) and `audit --group NAME` (audit one family).
 - `backfill.py` — upload a finished run from its `metrics.csv` + `config.json` (`backfill_run`), and
   notes-only edits of runs already on the server (`update_notes`).
 - `glossary.py` — the protocol an injected glossary implements; `tests/` — CPU tests, no server.
@@ -238,7 +239,10 @@ look — the charts:
 
 Make drift detectable, never fatal: the tracker flags a logged key with no entry (one
 printed line, a tag, a summary field listing the keys); a read-only audit lists undocumented
-keys on the server and stale entries; a CPU unit test checks every `metrics.csv` column and
+keys on the server and stale entries — scoped to one family with `audit --group NAME`, because in a project with
+several glossaries an unscoped audit flags the other families' keys and accepts any key that merely shares a name (it
+prints its scope, so an unscoped run is visibly unscoped; the tracker's drift key `glossary/undocumented` is never
+reported stale); a CPU unit test checks every `metrics.csv` column and
 every key the tracker emits. The mechanics are generic and live in `spiky.util.wandb_integration`
 (section 3: the drift check and the artifact in `tracker.py`, publish / verify / audit in
 `workspace.py`); the glossary content and its content tests stay with the project — e.g.

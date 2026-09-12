@@ -2,7 +2,8 @@
 
     WANDB_BASE_URL=... WANDB_ENTITY=... python -m spiky.util.wandb_integration.workspace publish --glossary G [--project P] [--shared TITLE | --user NAME] [--dry-run] [--if-idle MIN]
     WANDB_BASE_URL=... WANDB_ENTITY=... python -m spiky.util.wandb_integration.workspace verify  --glossary G [--project P] [--shared TITLE | --user NAME]
-    WANDB_BASE_URL=... WANDB_ENTITY=... python -m spiky.util.wandb_integration.workspace audit   --glossary G [--project P] [--csv-glob PATTERN]
+    WANDB_BASE_URL=... WANDB_ENTITY=... python -m spiky.util.wandb_integration.workspace audit   --glossary G [--project P] [--group NAME] [--csv-glob PATTERN]
+    (publish also takes --no-readme: leave the project description alone)
 
 G is a .py file or an importable module name; --project defaults to WANDB_PROJECT. A project wrapper calls
 main(argv, glossary=..., project=..., readme_intro=..., audit_csvs=..., audit_extra_keys=...) instead, so its users
@@ -43,7 +44,8 @@ import re
 import sys
 
 from spiky.util.wandb_integration import glossary as G
-from spiky.util.wandb_integration.tracker import gql, shared_nw_id, shared_view_name  # noqa: F401 (names re-exported)
+from spiky.util.wandb_integration.tracker import (UNDOC_SUMMARY, gql, shared_nw_id,  # noqa: F401 (names re-exported)
+                                                  shared_view_name)
 
 SECTION_ID, PANEL_ID = 'metric-glossary-section', 'metric-glossary-panel'
 # One full-width column; tall enough to show a few tables without scrolling the page (the panel scrolls inside).
@@ -110,6 +112,9 @@ def readme(url, glossary, project, shared_title=None, intro=None):
     lines.append("- Each run's **notes** (Overview tab) say what the run tests and link to its code on GitHub at the launch "
                  'commit and its run folder.')
     return '\n'.join(lines) + '\n'
+
+
+readme_text = readme           # publish() takes a readme= flag, which shadows the function name inside it
 
 
 def csv_header_keys(paths):
@@ -181,7 +186,10 @@ def _target(shared_title, api, base, entity, project, user):
     return view, f'{base}/{entity}/{project}?nw={shared_nw_id(shared_title)}', f'shared saved view {shared_title!r} ({name})'
 
 
-def publish(glossary, project, *, shared_title=None, user=None, if_idle=None, dry_run=False, readme_intro=None):
+def publish(glossary, project, *, shared_title=None, user=None, if_idle=None, dry_run=False, readme_intro=None,
+            readme=True):
+    """Write the glossary section into the target view (see the module docstring). readme=False (`--no-readme`) leaves
+    the project description alone -- e.g. when a second glossary is published into a project that already has one."""
     G.require(glossary, G.PUBLISH_NEEDS, 'publish')
     title, md = glossary.PANEL_TITLE, glossary.panel_markdown()
     if dry_run:
@@ -229,9 +237,12 @@ def publish(glossary, project, *, shared_title=None, user=None, if_idle=None, dr
     print(f'section {"replaced" if had else "created"} in {what}: {len(md)} chars, glossary {glossary.glossary_hash()}; '
           f'other sections unchanged and in order: {others_before == others_after}; '
           f'panelConfigOverrides unchanged: {same_overrides}')
-    description = readme(url, glossary, project, shared_title, readme_intro)
-    p = gql(api, _UPSERT_MODEL, {'i': {'entityName': entity, 'name': project, 'description': description}})['upsertModel']
-    print(f'project {p["project"]["name"]} description set ({len(p["project"]["description"])} chars)')
+    if readme:
+        description = readme_text(url, glossary, project, shared_title, readme_intro)
+        p = gql(api, _UPSERT_MODEL, {'i': {'entityName': entity, 'name': project, 'description': description}})['upsertModel']
+        print(f'project {p["project"]["name"]} description set ({len(p["project"]["description"])} chars)')
+    else:
+        print(f'project {project} description left unchanged (--no-readme)')
     if not ok or others_before != others_after:
         bar = '!' * 100
         print(f'{bar}\nWARNING: after the write the glossary section is NOT right in {what}: {why}'
@@ -257,34 +268,49 @@ def verify(glossary, project, *, shared_title=None, user=None):
     return 0 if ok else 2
 
 
-def audit(glossary, project, *, csv_paths=(), extra_keys=None):
-    """extra_keys: {label: iterable of keys} that must be documented even before any run has logged them."""
+def audit(glossary, project, *, csv_paths=(), extra_keys=None, group=None):
+    """Undocumented and stale glossary entries. Returns 1 when anything is undocumented.
+
+    group       only runs of this W&B group count (the family the glossary describes). None reads EVERY run in the
+                project and says so: with several glossaries in one project an unscoped audit is not authoritative --
+                it flags other families' keys and accepts any key that merely shares a name.
+    csv_paths   local metrics files whose headers must be documented (scope them the same way, e.g. a family's glob).
+    extra_keys  {label: iterable of keys} that must be documented even before any run has logged them.
+    The tracker's drift key (glossary/undocumented) counts as always emitted: it only appears in a run's summary when
+    drift happened, so a glossary that documents it is never told it is stale."""
     G.require(glossary, G.AUDIT_NEEDS, 'audit')
     base, entity = _env()
     import wandb
     api = wandb.Api(timeout=60)
-    server = {}
-    for r in api.runs(f'{entity}/{project}', per_page=100):
+    server, n_runs = {}, 0
+    for r in api.runs(f'{entity}/{project}', filters={'group': group} if group else None, per_page=100):
+        n_runs += 1
         for k in r.summary_metrics.keys():
             server.setdefault(k, r.name)
+    if group:
+        print(f'scope: {project}, group {group!r} ({n_runs} runs)')
+    else:
+        print(f'scope: {project}, ALL {n_runs} runs -- UNSCOPED: keys of every group count; pass --group to audit one family')
     csv_keys = csv_header_keys(csv_paths)
     extra = {label: {k: label for k in keys} for label, keys in (extra_keys or {}).items()}
     bad = 0
-    for label, keys in [('server runs', server), ('metrics CSV headers', csv_keys)] + list(extra.items()):
+    runs_label = f'server runs in group {group!r}' if group else 'server runs (all groups)'
+    for label, keys in [(runs_label, server), ('metrics CSV headers', csv_keys)] + list(extra.items()):
         und = glossary.undocumented(keys)
         bad += len(und)
         print(f'{label}: {len(keys)} keys, {len(und)} undocumented'
               + ''.join(f'\n   {k}  (e.g. {keys[k]})' for k in und))
     emitted = set().union(*[set(v) for v in extra.values()]) if extra else set()
+    emitted.add(UNDOC_SUMMARY)                                   # the drift key: present only when drift happened
     stale_all = glossary.stale(set(server) | set(csv_keys) | emitted)
-    print(f'stale entries (match nothing seen anywhere): {stale_all or "none"}')
+    print(f'stale entries (match nothing seen in scope): {stale_all or "none"}')
     not_in_data = [k for k in glossary.stale(set(server) | set(csv_keys)) if k not in stale_all]
-    print(f'documented, in the extra key lists, not yet in any run\'s data: {not_in_data or "none"}')
+    print(f'documented, in the extra key lists or the drift key, not yet in any run\'s data: {not_in_data or "none"}')
     print(f'glossary {glossary.glossary_hash()}')
     return 1 if bad else 0
 
 
-def main(argv, glossary=None, project=None, readme_intro=None, audit_csvs=(), audit_extra_keys=None):
+def main(argv, glossary=None, project=None, readme_intro=None, audit_csvs=(), audit_extra_keys=None, audit_group=None):
     """The command line (see the module docstring). Wrappers pass their defaults; flags on argv still win."""
     cmd, rest = (argv[0], argv[1:]) if argv else ('', [])
     if cmd not in ('publish', 'verify', 'audit'):
@@ -301,12 +327,12 @@ def main(argv, glossary=None, project=None, readme_intro=None, audit_csvs=(), au
     shared, user = _arg(rest, '--shared', None), _arg(rest, '--user', None)
     if cmd == 'publish':
         return publish(glossary, project, shared_title=shared, user=user, if_idle=_arg(rest, '--if-idle', None),
-                       dry_run='--dry-run' in rest, readme_intro=readme_intro)
+                       dry_run='--dry-run' in rest, readme_intro=readme_intro, readme='--no-readme' not in rest)
     if cmd == 'verify':
         return verify(glossary, project, shared_title=shared, user=user)
     pattern = _arg(rest, '--csv-glob', None)
     return audit(glossary, project, csv_paths=sorted(glob.glob(pattern)) if pattern else audit_csvs,
-                 extra_keys=audit_extra_keys)
+                 extra_keys=audit_extra_keys, group=_arg(rest, '--group', None) or audit_group)
 
 
 if __name__ == '__main__':
