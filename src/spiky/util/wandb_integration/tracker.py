@@ -2,7 +2,8 @@
 
     from spiky.util.wandb_integration.tracker import Tracker
     tracker = Tracker.start(cfg, exp_dir, project=..., group=..., glossary=None,          # after the model is built
-                            extra_tags=None, extra_eval_metrics=None, config_extra=None, config_renames=None)
+                            extra_tags=None, extra_eval_metrics=None, config_extra=None, config_renames=None,
+                            glossary_panel=None)
     tracker.train_step(step, {'train/loss': loss, 'train/lr': lr})   # once per optimiser step (logged every log_every)
     tracker.eval_step(step, {'val/loss': val}, model)                 # at each eval, after the local record is written
     tracker.finish(summary)                                           # at the end, after summary/checkpoint are written
@@ -13,7 +14,11 @@ WHAT IS INJECTED -- the tracker holds no project knowledge:
   * which keys are logged: the caller's row dicts. The tracker adds only TIMING_KEY (time/sec_per_step) to train rows.
   * tags: `tags` plus extra_tags(cfg) -> iterable. Per-eval metrics read off the model: extra_eval_metrics(model) -> dict.
   * config: the run config minus NOTES_CONFIG_KEYS, with config_renames {old: new} applied, plus config_extra.
-  * glossary (optional): see glossary.py. It drives the drift check, the per-run glossary artifact and the notes pointer.
+  * glossary (optional): a glossary.DictGlossary, or any object with the protocol in glossary.py. It drives the drift
+    check and the per-run glossary artifact.
+  * glossary_panel (optional, explicit): where the project's glossary panel is published, for a link in the notes --
+    the title of the shared saved view (as `workspace publish --shared TITLE`), or PERSONAL_WORKSPACE. None: no link.
+    It is independent of the glossary: a publishable glossary adds no link unless this says where the panel is.
 
 MODE -- ONLINE BY DEFAULT when the server is reachable:
   * WANDB_BASE_URL unset -> tracker OFF (a run can never silently go to wandb.ai); WANDB_MODE=disabled -> OFF.
@@ -43,6 +48,15 @@ GUARDS -- the tracker can never stall or break training:
   * KNOWN LIMIT: rows logged while the server is unreachable in the middle of an ONLINE run can be missing
     server-side after it comes back; the trainer's local metrics file stays complete.
 
+OPTIONAL MEANS OPTIONAL -- what this package can and cannot guarantee:
+  * Once imported, nothing here raises into the loop: Tracker.start never raises and returns an inactive tracker
+    (active False, every call a no-op) when tracking is off for any reason, wandb missing included.
+  * NullTracker is the same do-nothing surface for code paths that deliberately start no run (DDP ranks other than 0,
+    dry runs, tests).
+  * What NO code in this package can cover is the package itself failing to import (absent -- e.g. an editable
+    install pointing at a checkout that predates it -- or broken): nothing of it runs then. That guard belongs to the
+    consumer, and its fallback must be built from builtins. IMPORT_GUARD below is the pattern, as one block.
+
 ORGANISATION (claude/wandb.md section 4): name and id = cfg exp_name, else the run folder name (unique per run folder,
 so a crashed run resumes instead of duplicating); tags = group, branch, short commit, host + injected tags;
 config = the run config (minus NOTES_CONFIG_KEYS, which go into the notes) + branch, commit, commit_dirty, host
@@ -52,8 +66,8 @@ name. branch / commit describe the checkout that holds the run folder (else the 
 DESCRIPTIONS:
   * notes = run_notes(): bold exp_name, the config `description` (else the opening sentences of _arch_note),
     links to the run folder on GitHub at the launch commit and at the branch head (from `git remote get-url origin`),
-    the folder and host, with a glossary: a pointer to its panel at the top of the project workspace and to this
-    run's glossary artifact, then the full _arch_note.
+    the folder and host; with a glossary, a pointer to this run's glossary artifact; with glossary_panel, a link to the
+    published panel (the shared saved view, or the personal workspace); then the full _arch_note.
   * with a glossary: a `metric_glossary` artifact (Table key | description | unit, alias glossary-<hash>) via
     log_artifact ONLY, never into run history (a Table in history renders as a broken panel on the self-hosted
     server). Identical glossaries dedup to one artifact version.
@@ -232,9 +246,52 @@ def workspace_url(base, entity, project):
     return f'{base.rstrip("/")}/{entity}/{project}/workspace' if base and entity and project else None
 
 
+class _PersonalWorkspace:
+    def __repr__(self):
+        return 'PERSONAL_WORKSPACE'
+
+
+# glossary_panel value: the panel was published into each user's personal workspace (`publish` without --shared)
+PERSONAL_WORKSPACE = _PersonalWorkspace()
+
+
+def shared_nw_id(title):
+    """The named-workspace id of a shared saved view: the title lower-cased, letters and digits only."""
+    nwid = re.sub(r'[^a-z0-9]', '', (title or '').lower())
+    if not nwid:
+        raise ValueError(f'cannot derive a view id from {title!r}')
+    return nwid[:40]
+
+
+def shared_view_name(title):
+    return f'nw-{shared_nw_id(title)}-v'
+
+
+def saved_view_url(base, entity, project, title):
+    """The shared saved view titled `title`, opened at <server>/<entity>/<project>?nw=<id> (None without base/entity/
+    project)."""
+    return f'{base.rstrip("/")}/{entity}/{project}?nw={shared_nw_id(title)}' if base and entity and project else None
+
+
+def panel_link(base, entity, project, glossary_panel):
+    """(url, link text) of the published glossary panel, for the run notes, or (None, None).
+    glossary_panel: None -> no link; PERSONAL_WORKSPACE -> the project workspace; a string -> the shared saved view
+    with that title (as `workspace publish --shared TITLE`). ValueError for anything else."""
+    if glossary_panel is None:
+        return None, None
+    if glossary_panel is PERSONAL_WORKSPACE:
+        url = workspace_url(base, entity, project)
+        return (url, 'project workspace') if url else (None, None)
+    if isinstance(glossary_panel, str) and glossary_panel.strip():
+        url = saved_view_url(base, entity, project, glossary_panel)
+        return (url, f'saved view "{md_escape(glossary_panel)}"') if url else (None, None)
+    raise ValueError(f'glossary_panel must be None, PERSONAL_WORKSPACE or a saved view title, got {glossary_panel!r}')
+
+
 def run_notes(cfg, *, exp_name, info, host, workspace_url=None, panel_title=None, artifact_url=None,
-              artifact_label=None, description=None, code_label='Code at launch', extra_lines=()):
-    """Markdown notes for a run (rendered in the run's Overview tab)."""
+              artifact_label=None, description=None, code_label='Code at launch', extra_lines=(), panel_where=None):
+    """Markdown notes for a run (rendered in the run's Overview tab). workspace_url + panel_title (+ panel_where, the
+    link text, default "project workspace") make the glossary-panel link; see panel_link."""
     lines = [f'**{md_escape(exp_name)}**', '', md_escape(description_text(cfg, description)), '']
     web, sha, rel, branch = info.get('web'), info.get('sha'), info.get('rel'), info.get('branch')
     flags = []
@@ -254,7 +311,7 @@ def run_notes(cfg, *, exp_name, info, host, workspace_url=None, panel_title=None
         lines.append(f'- **Run folder:** `{rel}` on `{host}`')
     glossary = []
     if workspace_url and panel_title:
-        glossary.append(f'"{panel_title}" at the top of the [project workspace]({workspace_url})')
+        glossary.append(f'"{panel_title}" at the top of the [{panel_where or "project workspace"}]({workspace_url})')
     if artifact_label:                                   # wandb renders no link whose text is `code`: plain text
         glossary.append(f'artifact [{md_escape(artifact_label)}]({artifact_url})' if artifact_url
                         else f'artifact `{artifact_label}`')
@@ -368,7 +425,7 @@ class Tracker:
         except queue.Full:
             self.dropped += 1                                      # never wait on the tracker
 
-    def _describe(self, cfg, name, info, host, project, entity):
+    def _describe(self, cfg, name, info, host, project, entity, glossary_panel=None):
         """Glossary artifact + markdown notes, after init. Best-effort: a failure prints one line."""
         run, wandb, g = self.run, self._wandb, self.glossary
         base = (os.environ.get('WANDB_BASE_URL') or '').rstrip('/')
@@ -383,9 +440,14 @@ class Tracker:
             except Exception as e:
                 print(f'[wandb] glossary artifact not logged: {type(e).__name__}: {e}', flush=True)
         try:
-            run.notes = run_notes(cfg, exp_name=name, info=info, host=host,
-                                  workspace_url=workspace_url(base, entity, project) if g is not None else None,
-                                  panel_title=getattr(g, 'PANEL_TITLE', None),
+            panel_url, where = panel_link(base, entity, project, glossary_panel)
+        except Exception as e:
+            print(f'[wandb] glossary_panel ignored ({type(e).__name__}: {e}); no panel link in the notes', flush=True)
+            panel_url = where = None
+        try:
+            run.notes = run_notes(cfg, exp_name=name, info=info, host=host, workspace_url=panel_url,
+                                  panel_title=(getattr(g, 'PANEL_TITLE', None) or G.DEFAULT_TITLE) if panel_url else None,
+                                  panel_where=where,
                                   artifact_url=art_url, artifact_label=label and f'{GLOSSARY_ARTIFACT}:{label}')
         except Exception as e:
             print(f'[wandb] markdown notes not set ({type(e).__name__}: {e}); notes stay the _arch_note', flush=True)
@@ -393,7 +455,7 @@ class Tracker:
     @classmethod
     def start(cls, cfg, exp_dir, *, project=None, entity=None, group=None, job_type='train', name=None, tags=(),
               extra_tags=None, extra_eval_metrics=None, glossary=None, config_extra=None, config_renames=None,
-              code_dir=None, log_every=LOG_EVERY, timing_key=TIMING_KEY):
+              code_dir=None, log_every=LOG_EVERY, timing_key=TIMING_KEY, glossary_panel=None):
         """Start a run, or return an inactive tracker (with one line saying why). Never raises.
 
         project / entity / group   default WANDB_PROJECT / WANDB_ENTITY / WANDB_RUN_GROUP; no project -> OFF
@@ -401,7 +463,9 @@ class Tracker:
         tags                       static tags, after group / branch / commit / host
         extra_tags(cfg)            optional callable -> more tags (a failure prints one line; the run starts without them)
         extra_eval_metrics(model)  optional callable -> {key: number}, merged into eval rows that pass a model
-        glossary                   optional, see glossary.py
+        glossary                   optional: a glossary.DictGlossary or any object with the protocol in glossary.py
+        glossary_panel             optional, explicit: the shared saved view's title, or PERSONAL_WORKSPACE, where the
+                                   glossary panel is published -> a link in the notes. None (default): no link.
         config_extra / renames     merged into / renamed in the config (see wandb_config)
         code_dir                   the checkout that describes the code (see code_root)
         """
@@ -471,7 +535,7 @@ class Tracker:
             print(f'[wandb] off: init failed: {type(e).__name__}: {e} -- training continues', flush=True)
             return cls(reason='init failed')
         try:
-            tracker._describe(cfg, name, git_launch_info(exp_dir, code_dir), host, project, entity)
+            tracker._describe(cfg, name, git_launch_info(exp_dir, code_dir), host, project, entity, glossary_panel)
         except Exception as e:
             print(f'[wandb] run description skipped: {type(e).__name__}: {e}', flush=True)
         return tracker
@@ -565,3 +629,42 @@ class Tracker:
             print(f'[wandb] finished in {time.time() - t0:.1f}s{extra}'
                   + (f' (offline; sync with: wandb sync {d})' if self.mode == 'offline' else ''), flush=True)
         self.run = None
+
+
+class NullTracker:
+    """Tracks nothing: Tracker's public surface (active, mode, reason, dropped, undocumented, train_step, eval_step,
+    log, finish), every call a no-op. For code paths that deliberately start no run -- DDP ranks other than 0, dry
+    runs, tests. A consumer that can import this package never needs it for safety (Tracker.start never raises and
+    returns an inactive tracker when tracking is off); for this package failing to import, see IMPORT_GUARD."""
+    active, mode, dropped = False, None, 0
+
+    def __init__(self, reason='not started'):
+        self.reason, self.undocumented = reason, []
+
+    def train_step(self, step, row=None):
+        pass
+
+    def eval_step(self, step, row=None, model=None):
+        pass
+
+    def log(self, row, step=None):
+        pass
+
+    def finish(self, summary=None):
+        pass
+
+
+# The consumer-side guard for the one failure no code in this package can absorb: this package failing to import
+# (absent -- e.g. an editable install pointing at a checkout that predates it -- or broken). Tracker.start never raises,
+# so in practice only an import reaches the except branch; the fallback is built from builtins because nothing of this
+# package is importable there. It supports .active and calls (every method call is a no-op), nothing else. Anything
+# that itself imports this package -- a DictGlossary module included -- must be imported inside the try as well.
+IMPORT_GUARD = '''\
+try:
+    from spiky.util.wandb_integration.tracker import Tracker
+    from my_glossary import GLOSSARY  # a DictGlossary imports this package too: keep it inside the guard
+    tracker = Tracker.start(cfg, exp_dir, project=PROJECT, group=GROUP, glossary=GLOSSARY)
+except Exception as e:  # the package itself could not be imported: Tracker.start never raises
+    print(f'[wandb] off: {type(e).__name__}: {e} -- training continues')
+    tracker = type('NoTracker', (), {'active': False, '__getattr__': lambda self, name: lambda *a, **k: None})()
+'''
