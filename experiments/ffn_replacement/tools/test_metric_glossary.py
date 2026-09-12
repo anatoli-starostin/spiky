@@ -89,8 +89,9 @@ def test_hash_is_stable_and_content_sensitive(monkeypatch):
 
 
 def test_panel_markdown_lists_every_logged_key_grouped():
-    md = MG.panel_markdown('tools/metric_glossary.py', 'abc1234')
+    md = MG.panel_markdown('tools/metric_glossary.py')
     assert md.startswith(f'### {MG.PANEL_TITLE}')
+    assert md == MG.panel_markdown('tools/metric_glossary.py')                 # content-only: verify is exact across commits
     for k, v in MG.METRICS.items():
         if v['section'] in MG.PANEL_SECTIONS:
             assert f'| `{k}` |' in md, k

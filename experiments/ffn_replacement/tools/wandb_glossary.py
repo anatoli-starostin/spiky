@@ -119,8 +119,7 @@ def _age_minutes(ts):
 
 
 def _markdown():
-    commit = _git(['rev-parse', '--short', 'HEAD'], HERE)
-    return MG.panel_markdown(SOURCE, None if commit == 'unknown' else commit)
+    return MG.panel_markdown(SOURCE)
 
 
 def _load(argv):

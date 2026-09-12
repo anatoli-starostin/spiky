@@ -255,11 +255,11 @@ def _cell(s):
 PANEL_TITLE = 'About these metrics'
 
 
-def panel_markdown(source_path, commit=None):
-    """The workspace panel: one short sentence per logged key, grouped, then the config gotchas."""
-    ref = f'`{source_path}`' + (f' @ `{commit}`' if commit else '')
+def panel_markdown(source_path):
+    """The workspace panel: one short sentence per logged key, grouped, then the config gotchas. Deliberately no
+    commit sha in it: the text must depend on the glossary content only, so `verify` stays exact across commits."""
     out = [f'### {PANEL_TITLE}', '',
-           f'One line per logged key, generated from {ref} (glossary `{glossary_hash()}`). Full definitions: that file, '
+           f'One line per logged key, generated from `{source_path}` (glossary `{glossary_hash()}`). Full definitions: that file, '
            "or the run's `metric_glossary` artifact (Artifacts tab).", '']
     for sec, title in PANEL_SECTIONS.items():
         items = sorted((k, v) for k, v in METRICS.items() if v['section'] == sec)
