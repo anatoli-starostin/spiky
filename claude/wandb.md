@@ -132,11 +132,13 @@ computes it** (reduction, which tokens count, cadence, running mean vs instantan
 exact eval protocol, normalisation), and a one-sentence short form. Surface it where people
 look — the charts:
 
-- an **"About these metrics" Markdown Panel in its own pinned section at the top of the project
-  workspace**, generated from the short forms (grouped train / eval / per layer / summary) plus
-  a few config gotchas. One copy, full sentences, scrollable. Write it idempotently (fixed
-  section and panel ids, replaced in place), re-read the spec afterwards, and fail loudly if it
-  is not there — and see the workspace gotchas in section 6 before relying on it;
+- an **"About these metrics" Markdown Panel in its own pinned section at the top of a workspace
+  view**, generated from the short forms (grouped train / eval / per layer / summary) plus a few
+  config gotchas. One copy, full sentences, scrollable. Publish it into a **shared saved view**
+  (e.g. "<Project> — described", opened at `?nw=<id>`), not only into the personal workspace:
+  saved views are not auto-saved, the personal workspace is, and an open tab wipes it (section 6).
+  Write it idempotently (fixed section and panel ids, replaced in place), re-read the spec
+  afterwards, and fail loudly if it is not there;
 - a per-run **glossary artifact** with the full descriptions (a `wandb.Table` of key |
   description | unit, logged with `log_artifact` only); identical content dedups to one version;
 - a pointer to both in every run's notes.
@@ -165,6 +167,14 @@ templates** (see the gotchas — they cannot hold a description next to long run
   write drops the change on its next UI action, with no error. Check the view's `updatedAt`
   before writing (recent = probably an open tab), re-read after writing, and verify again later.
   The client saves aggressively — even a panel-search query typed into the box is persisted.
+  This happened for real: a panel written into a personal workspace was gone eight minutes later,
+  removed by the user's own tab.
+- **Saved views are NOT auto-saved — publish there.** A shared saved view is a `"project-view"`
+  named `nw-<id>-v` (create it with `upsertView`: `name`, `displayName`, `type: "project-view"`,
+  `spec`), opened at `<server>/<entity>/<project>?nw=<id>`. After a UI change the client only says
+  "Changes are not auto-saved … Save view", so an open tab cannot silently drop an API write; only
+  an explicit *Save view* from a stale tab can. Seed it from the user's personal workspace spec and
+  later replace only your own section.
 - **Where things live in the spec:** `section.panelBankConfig.sections[]` (auto sections have
   `isPanelsAuto: true` and no explicit panels); per-metric panel settings in
   `section.panelBankConfig.panelConfigOverrides["<metric key>"].config`. **An override REPLACES
