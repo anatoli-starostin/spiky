@@ -1,7 +1,7 @@
-"""CPU-only, no server: the Spiky metric glossary (metric_glossary.py) covers everything we log -- every metrics.csv
-header in the repo and the keys wandb_tracking.py emits -- and its entries, hash, panel text and artifact rows are
-well-formed. The generic tracker / workspace / backfill tests live with the package in
-src/spiky/util/wandb_integration/tests.
+"""CPU-only, no server: the Spiky metric legend (metric_glossary.py) covers everything we log -- every metrics.csv
+header in the repo and the keys wandb_tracking.py emits -- its entries are well-formed, and legend_markdown(), which the
+tracker writes into every run's notes, lists every logged key. The generic tracker / backfill tests live with the
+package in src/spiky/util/wandb_integration/tests.
 
     python -m pytest experiments/ffn_replacement/tools/test_metric_glossary.py -q
 """
@@ -32,7 +32,7 @@ def test_every_metrics_csv_header_in_the_repo_is_documented():
     headers = _metrics_csv_headers()
     assert headers, 'no metrics.csv found in the repo'
     missing = {h: p for h, p in headers.items() if MG.entry_key(h) is None}
-    assert not missing, f'metrics.csv columns with no glossary entry (add them to metric_glossary.py): {missing}'
+    assert not missing, f'metrics.csv columns with no legend entry (add them to metric_glossary.py): {missing}'
 
 
 class _Mod:
@@ -47,9 +47,13 @@ class _Model:
         return [object(), _Mod(), _Mod()]
 
 
+def _tracker_keys():
+    return (list(WT.TRAIN_KEYS) + list(WT.EVAL_KEYS) + list(WT.SUMMARY_KEYS)
+            + list(WT.learned_confidence_by_layer(_Model())))
+
+
 def test_tracker_fixed_keys_are_documented():
-    keys = list(WT.TRAIN_KEYS) + list(WT.EVAL_KEYS) + list(WT.SUMMARY_KEYS)
-    keys += list(WT.learned_confidence_by_layer(_Model()))
+    keys = _tracker_keys()
     assert 'lm_gamma_L1' in keys
     assert not [k for k in keys if MG.entry_key(k) is None]
 
@@ -66,44 +70,43 @@ def test_patterns_match_layer_indices_only():
 
 def test_every_entry_is_complete():
     for k, v in MG.METRICS.items():
+        assert set(v) == {'section', 'unit', 'desc'}, k
         assert v['section'] in MG.SECTIONS, k
-        assert v['unit'], k
+        assert v['unit'] and len(v['unit']) <= 12, k                 # short: printed in brackets after the description
         assert len(v['desc']) > 40, k
-        assert 10 < len(v['short']) <= 240 and '\n' not in v['short'], k      # one legend-sized sentence
-        assert len(v['short']) < len(v['desc']) or len(v['desc']) < 120, k
-    assert set(MG.GOTCHAS) <= set(MG.CONFIG_NOTES)
-    assert MG.stale(set(_metrics_csv_headers()) | set(WT.TRAIN_KEYS) | set(WT.EVAL_KEYS) | set(WT.SUMMARY_KEYS)
-                    | {'lm_g_L0', 'lm_beta_L0', 'lm_gamma_L0'}) == []
+    assert set(MG.LEGEND_SECTIONS) <= set(MG.SECTIONS)
 
 
-def test_hash_is_stable_and_content_sensitive(monkeypatch):
-    h = MG.glossary_hash()
-    assert h == MG.glossary_hash() and len(h) == 12
-    monkeypatch.setitem(MG.METRICS['val_bpb'], 'short', 'changed')
-    assert MG.glossary_hash() != h
+def test_no_entry_is_stale():
+    seen = set(_metrics_csv_headers()) | set(_tracker_keys())
+    hit = {MG.entry_key(k) for k in seen}
+    assert sorted(k for k in MG.METRICS if k not in hit) == []
 
 
-def test_panel_markdown_lists_every_logged_key_grouped():
-    md = MG.panel_markdown('tools/metric_glossary.py')
-    assert md.startswith(f'### {MG.PANEL_TITLE}')
-    assert md == MG.panel_markdown('tools/metric_glossary.py')                 # content-only: verify is exact across commits
-    assert MG.panel_markdown() == MG.panel_markdown(MG.SOURCE)                  # the default the package's publish uses
+def test_legend_lists_every_logged_key_grouped():
+    md = MG.legend_markdown('tools/metric_glossary.py')
+    assert md.startswith(f'### {MG.LEGEND_TITLE}\n')
+    assert md == MG.legend_markdown('tools/metric_glossary.py')                 # content only: identical across commits
+    assert MG.legend_markdown() == MG.legend_markdown(MG.SOURCE)                 # what the tracker writes
     for k, v in MG.METRICS.items():
-        if v['section'] in MG.PANEL_SECTIONS:
+        if v['section'] in MG.LEGEND_SECTIONS:
             assert f'| `{k}` |' in md, k
-    assert '| `step` |' not in md                                          # metrics.csv-only, not a wandb key
-    titles = [md.index(f'**{t}**') for t in MG.PANEL_SECTIONS.values()]
+    assert '| `step` |' not in md                                           # metrics.csv-only, not a wandb key
+    titles = [md.index(f'**{t}**') for t in MG.LEGEND_SECTIONS.values()]
     assert titles == sorted(titles)
-    assert md.index('**Config gotchas**') > titles[-1]
-    for k in MG.GOTCHAS:
+    assert md.index(f'**{MG.CONFIG_NOTES_TITLE}**') > titles[-1]
+    for k in MG.CONFIG_NOTES:
         assert f'- `{k}`:' in md
-    for line in md.splitlines():                                          # escaping never breaks the table:
+    for line in md.splitlines():                                           # escaping never breaks the table:
         if line.startswith('| `'):
-            assert len(re.split(r'(?<!\\)\|', line)) == 5, line               # '' key unit sentence '': no stray pipes
-    assert len(md) < 12000
+            assert len(re.split(r'(?<!\\)\|', line)) == 4, line                # '' key description [unit] '': no stray pipes
+    for gone in ('About these metrics', 'Artifacts tab', 'wandb_glossary', 'publish', '/workspace'):
+        assert gone not in md, gone
 
 
-def test_table_rows_still_cover_everything():
-    rows = MG.table_rows()
-    assert len(rows) == len(MG.METRICS) + len(MG.CONFIG_NOTES)
-    assert all(len(r) == 3 for r in rows)
+def test_the_package_takes_this_module_as_the_run_legend():
+    from spiky.util.wandb_integration import glossary as G
+    from spiky.util.wandb_integration import tracker as T
+    assert G.missing(MG) == []
+    notes = T.run_notes({'description': 'D.'}, exp_name='e', info={}, host='h', legend=MG.legend_markdown())
+    assert MG.legend_markdown().rstrip('\n') in notes and T.NO_LEGEND_LINE not in notes

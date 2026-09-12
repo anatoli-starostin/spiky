@@ -12,8 +12,11 @@ gpustar. Logged per eval row (rows with val_bpb) at step = the row's step: val_b
 other metrics.csv column. Step timing was never written to metrics.csv, so it is not backfilled. The run's summary
 keys go to run.summary. Refuses runs whose metrics.csv is incomplete (complete()).
 
---notes-only rewrites ONLY the notes of runs already on the server (one upsertBucket per run; nothing else re-sent).
---dry-run prints the notes and writes nothing.
+Backfilled runs get the same notes as live runs: one markdown blob with the description, the links and
+metric_glossary.py's legend of every metric.
+
+--notes-only rewrites ONLY the notes of runs already on the server, legend included (one upsertBucket per run; nothing
+else re-sent). --dry-run prints the notes and writes nothing.
 """
 import json
 import os
@@ -58,7 +61,7 @@ def backfill(names, mode):
                        tags=lut_tags(cfg) + [f"line:{LINE.get(name, 'confidence_form')}"],
                        config_extra=batch_config(cfg, ga, summ.get('total_params')), config_renames=CONFIG_RENAMES,
                        summary_keys=SUMMARY_KEYS, require_col='val_bpb', is_complete=complete, mode=mode,
-                       description=DESCRIPTION_OVERRIDE.get(name), panel_title=MG.PANEL_TITLE)
+                       description=DESCRIPTION_OVERRIDE.get(name), glossary=MG)
 
 
 def notes_only(names, dry):
@@ -67,7 +70,7 @@ def notes_only(names, dry):
     import wandb
     api = wandb.Api(timeout=60)
     B.update_notes(api, os.environ['WANDB_ENTITY'], PROJECT, {n: os.path.join(RC, n) for n in names},
-                   descriptions=DESCRIPTION_OVERRIDE, panel_title=MG.PANEL_TITLE, dry_run=dry)
+                   descriptions=DESCRIPTION_OVERRIDE, glossary=MG, dry_run=dry)
 
 
 def main():

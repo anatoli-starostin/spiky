@@ -17,8 +17,8 @@ This file only binds this project onto the package:
   * the old positional rows -> the package's dict rows (train/loss, train/loss_ema, train/lr, train/grad_norm;
     val_bpb, train_loss + extra).
 Everything else -- online when the server answers a 2 s probe, else offline; the bounded queue that keeps wandb off
-the training thread; the finish() deadline; the notes, glossary artifact and drift check -- is the package's: see
-its docstring.
+the training thread; the finish() deadline; the notes (one markdown blob: description, links to the run folder,
+metric_glossary's legend) and the undescribed-key warning -- is the package's: see its docstring.
 
 OPTIONAL, NEVER FATAL: if the package cannot be imported (a checkout from before it was merged, or these tools used
 without the spiky install), Tracker is a no-op that says so in one line and training runs exactly as without it.
@@ -39,11 +39,10 @@ GROUP = 'ffn_replacement'
 LOG_EVERY = 10
 CONFIG_RENAMES = {'eval_steps': 'eval_steps_legacy_ignored'}
 
-# the keys this layer emits (test_metric_glossary.py checks each has a glossary entry; wandb_glossary.py audits them)
+# the keys this layer emits (test_metric_glossary.py checks each is described in metric_glossary.py)
 TRAIN_KEYS = ('train/loss', 'train/loss_ema', 'train/lr', 'time/sec_per_step', 'train/grad_norm')
 EVAL_KEYS = ('val_bpb', 'train_loss')
-SUMMARY_KEYS = ('exp_name', 'best_val_bpb', 'final_val_bpb', 'total_params', 'training_time_hours',
-                'glossary/undocumented')
+SUMMARY_KEYS = ('exp_name', 'best_val_bpb', 'final_val_bpb', 'total_params', 'training_time_hours')
 
 
 def learned_confidence_by_layer(model):
