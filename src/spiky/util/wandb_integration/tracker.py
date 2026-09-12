@@ -1,7 +1,7 @@
 """Optional, NON-FATAL wandb tracking for training loops (conventions: claude/wandb.md).
 
     from spiky.util.wandb_integration.tracker import Tracker
-    tracker = Tracker.start(cfg, exp_dir, project=..., group=..., glossary=None,          # after the model is built
+    tracker = Tracker.start(cfg, exp_dir, project=..., group=..., glossary=GLOSSARY,       # after the model is built
                             extra_tags=None, extra_eval_metrics=None, config_extra=None, config_renames=None)
     tracker.train_step(step, {'train/loss': loss, 'train/lr': lr})   # once per optimiser step (logged every log_every)
     tracker.eval_step(step, {'val/loss': val}, model)                 # at each eval, after the local record is written
@@ -13,7 +13,20 @@ WHAT IS INJECTED -- the tracker holds no project knowledge:
   * which keys are logged: the caller's row dicts. The tracker adds only TIMING_KEY (time/sec_per_step) to train rows.
   * tags: `tags` plus extra_tags(cfg) -> iterable. Per-eval metrics read off the model: extra_eval_metrics(model) -> dict.
   * config: the run config minus NOTES_CONFIG_KEYS, with config_renames {old: new} applied, plus config_extra.
-  * glossary (optional): see glossary.py. It drives the drift check, the per-run glossary artifact and the notes pointer.
+  * glossary: a glossary.DictGlossary (or any object with undocumented() and legend_markdown()) describing every metric
+    the run logs. Required by the rule; a run without one is loudly reported (see ENFORCEMENT).
+
+NOTES -- one markdown blob, written at run start (binding rule, claude/wandb.md section 5): bold exp_name, the config
+`description` (else the opening sentences of _arch_note), the run folder on GitHub at the launch commit and at the
+branch head (from `git remote get-url origin`), folder and host, then the full metric legend (glossary
+legend_markdown()), then the full _arch_note. Nothing else describes the run: no panels, views or artifacts.
+
+ENFORCEMENT -- in-process, no API calls, never fatal:
+  * every row's keys are checked against the legend the first time they appear -- at the first logged step, on the
+    training thread, also when tracking is OFF -- and each undescribed key is printed once, right away;
+  * finish() prints a loud banner listing every undescribed key the run logged (summary keys included), and
+    tracker.undocumented holds them. It warns, it never fails: a finished training run is never thrown away for a
+    missing description, and nothing here raises into the loop.
 
 MODE -- ONLINE BY DEFAULT when the server is reachable:
   * WANDB_BASE_URL unset -> tracker OFF (a run can never silently go to wandb.ai); WANDB_MODE=disabled -> OFF.
@@ -37,28 +50,26 @@ GUARDS -- the tracker can never stall or break training:
     `wandb sync`.
   * Any tracker error disables the tracker for the rest of the run with ONE line. Nothing is raised into
     the training loop; the trainer's own metrics file is written exactly as without the tracker.
-  * The descriptions work below is best-effort on top of that: a failure prints one line and leaves the run
-    exactly as it was initialised.
+  * The notes are best-effort on top of that: a failure prints one line and leaves the run as it was initialised.
   * No secrets: auth from ~/.netrc (`wandb login`); server URL / entity from WANDB_BASE_URL / WANDB_ENTITY.
   * KNOWN LIMIT: rows logged while the server is unreachable in the middle of an ONLINE run can be missing
     server-side after it comes back; the trainer's local metrics file stays complete.
+
+OPTIONAL MEANS OPTIONAL -- what this package can and cannot guarantee:
+  * Once imported, nothing here raises into the loop: Tracker.start never raises and returns an inactive tracker
+    (active False, every call a no-op apart from the legend check) when tracking is off for any reason, wandb
+    missing included.
+  * NullTracker is a do-nothing surface for code paths that deliberately start no run (DDP ranks other than 0, dry
+    runs, tests).
+  * What NO code in this package can cover is the package itself failing to import (absent -- e.g. an editable
+    install pointing at a checkout that predates it -- or broken): nothing of it runs then. That guard belongs to the
+    consumer, and its fallback must be built from builtins. IMPORT_GUARD below is the pattern, as one block.
 
 ORGANISATION (claude/wandb.md section 4): name and id = cfg exp_name, else the run folder name (unique per run folder,
 so a crashed run resumes instead of duplicating); tags = group, branch, short commit, host + injected tags;
 config = the run config (minus NOTES_CONFIG_KEYS, which go into the notes) + branch, commit, commit_dirty, host
 + config_extra. host has a 'pasta-' prefix removed, so runs launched through `sbox --net tailnet` share the machine's
 name. branch / commit describe the checkout that holds the run folder (else the working directory's; code_dir overrides).
-
-DESCRIPTIONS:
-  * notes = run_notes(): bold exp_name, the config `description` (else the opening sentences of _arch_note),
-    links to the run folder on GitHub at the launch commit and at the branch head (from `git remote get-url origin`),
-    the folder and host, with a glossary: a pointer to its panel at the top of the project workspace and to this
-    run's glossary artifact, then the full _arch_note.
-  * with a glossary: a `metric_glossary` artifact (Table key | description | unit, alias glossary-<hash>) via
-    log_artifact ONLY, never into run history (a Table in history renders as a broken panel on the self-hosted
-    server). Identical glossaries dedup to one artifact version.
-  * with a glossary, the drift check: the first time a logged key has no glossary entry, one line is printed, the
-    run gets the tag glossary:undocumented and summary glossary/undocumented lists the keys. Never fatal.
 """
 import os
 import queue
@@ -84,10 +95,8 @@ BOUNDS = dict(init_timeout=60, x_graphql_retry_max=5, x_graphql_timeout_seconds=
               x_file_transfer_retry_max=5, x_file_transfer_timeout_seconds=60,
               finish_timeout=FINISH_TIMEOUT, finish_timeout_raises=False)
 
-UNDOC_TAG = 'glossary:undocumented'
-UNDOC_SUMMARY = 'glossary/undocumented'
-GLOSSARY_ARTIFACT, GLOSSARY_ARTIFACT_TYPE = 'metric_glossary', 'glossary'
 NOTES_CONFIG_KEYS = ('_arch_note', 'description')               # go into the notes, not the config
+NO_LEGEND_LINE = '- **Metric legend:** none was given for this run, so its logged keys are undescribed.'
 
 
 def _git(args, cwd):
@@ -227,14 +236,10 @@ def description_text(cfg, override=None, max_chars=500):
     return text
 
 
-def workspace_url(base, entity, project):
-    """The project workspace, where a published glossary panel sits at the top (None without base/entity/project)."""
-    return f'{base.rstrip("/")}/{entity}/{project}/workspace' if base and entity and project else None
-
-
-def run_notes(cfg, *, exp_name, info, host, workspace_url=None, panel_title=None, artifact_url=None,
-              artifact_label=None, description=None, code_label='Code at launch', extra_lines=()):
-    """Markdown notes for a run (rendered in the run's Overview tab)."""
+def run_notes(cfg, *, exp_name, info, host, legend=None, description=None, code_label='Code at launch',
+              extra_lines=()):
+    """The run's notes: ONE markdown blob -- what the run tests, where its code is, and (legend) what every metric it
+    logs means. Rendered in the run's Overview tab."""
     lines = [f'**{md_escape(exp_name)}**', '', md_escape(description_text(cfg, description)), '']
     web, sha, rel, branch = info.get('web'), info.get('sha'), info.get('rel'), info.get('branch')
     flags = []
@@ -252,15 +257,11 @@ def run_notes(cfg, *, exp_name, info, host, workspace_url=None, panel_title=None
         lines.append(f'- **Artefacts (branch head):** [{md_escape(branch)}]({web}/tree/{branch}/{rel})')
     if rel:
         lines.append(f'- **Run folder:** `{rel}` on `{host}`')
-    glossary = []
-    if workspace_url and panel_title:
-        glossary.append(f'"{panel_title}" at the top of the [project workspace]({workspace_url})')
-    if artifact_label:                                   # wandb renders no link whose text is `code`: plain text
-        glossary.append(f'artifact [{md_escape(artifact_label)}]({artifact_url})' if artifact_url
-                        else f'artifact `{artifact_label}`')
-    if glossary:
-        lines.append('- **Metric glossary:** ' + ' · '.join(glossary))
     lines += list(extra_lines)
+    if legend:
+        lines += ['', '---', '', legend.rstrip('\n')]
+    else:
+        lines.append(NO_LEGEND_LINE)
     note = (cfg.get('_arch_note') or '').strip()
     if note:
         lines += ['', '---', '', '**Architecture note** (config `_arch_note`):', '', md_escape(note)]
@@ -281,20 +282,6 @@ def wandb_config(cfg, extra=None, renames=None):
 def gql(api, query, variables, timeout=None):
     """Raw GraphQL through the public API's wandb-core connection (wandb >= 0.28; no public helper exists)."""
     return api._service_api.execute_graphql(query, variables, timeout=timeout)
-
-
-def log_glossary_artifact(run, wandb, glossary):
-    """log_artifact ONLY (never run.log): Table key | description | unit, aliases latest + glossary-<hash>."""
-    h = glossary.glossary_hash()
-    source = getattr(glossary, 'SOURCE', None)
-    table = wandb.Table(columns=['key', 'description', 'unit'], data=glossary.table_rows())
-    art = wandb.Artifact(GLOSSARY_ARTIFACT, type=GLOSSARY_ARTIFACT_TYPE,
-                         description=f'Metric glossary {h}: what every logged key measures'
-                                     + (f' ({source}).' if source else '.'),
-                         metadata={'glossary_hash': h, 'source': source})
-    art.add(table, 'glossary')
-    run.log_artifact(art, aliases=['latest', f'glossary-{h}'])
-    return f'glossary-{h}'
 
 
 class Tracker:
@@ -321,26 +308,33 @@ class Tracker:
                   f'-- training continues, local metrics unaffected', flush=True)
         self.run = None
 
-    def _check_keys(self, keys):
-        """Glossary drift check, never fatal: logged keys with no entry -> one line, tag, summary list."""
-        new = [k for k in keys if k not in self._seen]
-        if not new or self.glossary is None:
-            return
-        self._seen.update(new)
-        bad = self.glossary.undocumented(new)
-        if not bad:
-            return
-        self.undocumented.extend(bad)
-        where = getattr(self.glossary, 'SOURCE', None) or 'the glossary'
-        print(f'[wandb] glossary: no entry for {", ".join(bad)} -- add to {where} (run tagged {UNDOC_TAG})', flush=True)
-        run = self.run
+    def _note_keys(self, keys):
+        """The legend check, on the calling thread, never fatal: each key the legend does not describe is printed the
+        first time it is logged (tracking on or off) and kept in self.undocumented for finish()."""
         try:
-            if run is not None:
-                if UNDOC_TAG not in tuple(run.tags or ()):
-                    run.tags = tuple(run.tags or ()) + (UNDOC_TAG,)
-                run.summary[UNDOC_SUMMARY] = ', '.join(sorted(self.undocumented))
+            new = [k for k in keys if k not in self._seen]
+            if not new:
+                return
+            self._seen.update(new)
+            g = self.glossary
+            bad = g.undocumented(new) if g is not None else sorted(k for k in new if not G.is_wandb_key(k))
+            if not bad:
+                return
+            self.undocumented.extend(bad)
+            where = (getattr(g, 'SOURCE', None) or 'the glossary') if g is not None else 'a glossary (none given)'
+            print(f'[wandb] UNDESCRIBED METRIC: {", ".join(bad)} -- logged but not in this run\'s legend; describe it in '
+                  f'{where}. finish() lists every such key.', flush=True)
         except Exception as e:
-            print(f'[wandb] glossary drift check could not tag the run: {type(e).__name__}: {e}', flush=True)
+            print(f'[wandb] legend check skipped: {type(e).__name__}: {e}', flush=True)
+
+    def _report_undescribed(self):
+        if not self.undocumented:
+            return
+        bar = '!' * 100
+        print(f'{bar}\n[wandb] UNDESCRIBED METRICS in this run ({len(self.undocumented)}): '
+              f'{", ".join(sorted(self.undocumented))}\n'
+              f'They were logged but are not described in the run\'s notes legend. Rule (claude/wandb.md section 5): every '
+              f'run describes every metric it logs -- add them to the glossary.\n{bar}', flush=True)
 
     def _worker(self):
         """The only place rows reach wandb. Runs off the training thread; exits on the None sentinel."""
@@ -351,10 +345,6 @@ class Tracker:
             run = self.run
             if run is None:
                 continue                                          # disabled: just drain
-            try:
-                self._check_keys(item[0].keys())
-            except Exception:
-                pass
             try:
                 run.log(item[0], step=item[1])
             except Exception as e:
@@ -368,25 +358,17 @@ class Tracker:
         except queue.Full:
             self.dropped += 1                                      # never wait on the tracker
 
-    def _describe(self, cfg, name, info, host, project, entity):
-        """Glossary artifact + markdown notes, after init. Best-effort: a failure prints one line."""
-        run, wandb, g = self.run, self._wandb, self.glossary
-        base = (os.environ.get('WANDB_BASE_URL') or '').rstrip('/')
-        entity = entity or getattr(run, 'entity', None)
-        project = getattr(run, 'project', None) or project
-        label = art_url = None
+    def _describe(self, cfg, name, info, host):
+        """The notes blob, after init. Best-effort: a failure prints one line."""
+        run, g = self.run, self.glossary
+        legend = None
         if g is not None:
             try:
-                label = log_glossary_artifact(run, wandb, g)
-                if base and entity:
-                    art_url = f'{base}/{entity}/{project}/artifacts/{GLOSSARY_ARTIFACT_TYPE}/{GLOSSARY_ARTIFACT}/{label}'
+                legend = g.legend_markdown()
             except Exception as e:
-                print(f'[wandb] glossary artifact not logged: {type(e).__name__}: {e}', flush=True)
+                print(f'[wandb] legend not rendered: {type(e).__name__}: {e}', flush=True)
         try:
-            run.notes = run_notes(cfg, exp_name=name, info=info, host=host,
-                                  workspace_url=workspace_url(base, entity, project) if g is not None else None,
-                                  panel_title=getattr(g, 'PANEL_TITLE', None),
-                                  artifact_url=art_url, artifact_label=label and f'{GLOSSARY_ARTIFACT}:{label}')
+            run.notes = run_notes(cfg, exp_name=name, info=info, host=host, legend=legend)
         except Exception as e:
             print(f'[wandb] markdown notes not set ({type(e).__name__}: {e}); notes stay the _arch_note', flush=True)
 
@@ -401,32 +383,36 @@ class Tracker:
         tags                       static tags, after group / branch / commit / host
         extra_tags(cfg)            optional callable -> more tags (a failure prints one line; the run starts without them)
         extra_eval_metrics(model)  optional callable -> {key: number}, merged into eval rows that pass a model
-        glossary                   optional, see glossary.py
+        glossary                   describes every metric the run logs (glossary.py); its legend goes into the notes,
+                                   and logged keys are checked against it even when tracking is off
         config_extra / renames     merged into / renamed in the config (see wandb_config)
         code_dir                   the checkout that describes the code (see code_root)
         """
+        if glossary is not None and G.missing(glossary):
+            print(f'[wandb] glossary ignored: it lacks {", ".join(G.missing(glossary))}', flush=True)
+            glossary = None
+        if glossary is None:
+            print('[wandb] no glossary given: every metric this run logs will be reported as undescribed', flush=True)
+        off = dict(glossary=glossary, log_every=log_every, timing_key=timing_key)
         base = os.environ.get('WANDB_BASE_URL')
         mode = os.environ.get('WANDB_MODE')
         if not base:
             print('[wandb] off: WANDB_BASE_URL not set', flush=True)
-            return cls(reason='no WANDB_BASE_URL')
+            return cls(reason='no WANDB_BASE_URL', **off)
         if mode == 'disabled':
             print('[wandb] off: WANDB_MODE=disabled', flush=True)
-            return cls(reason='disabled')
+            return cls(reason='disabled', **off)
         project = project or os.environ.get('WANDB_PROJECT')
         if not project:
             print('[wandb] off: no project (pass project= or set WANDB_PROJECT)', flush=True)
-            return cls(reason='no project')
+            return cls(reason='no project', **off)
         entity = entity or os.environ.get('WANDB_ENTITY')
         group = group or os.environ.get('WANDB_RUN_GROUP')
-        if glossary is not None and G.missing(glossary, G.TRACKER_NEEDS):
-            print(f'[wandb] glossary ignored: it lacks {", ".join(G.missing(glossary, G.TRACKER_NEEDS))}', flush=True)
-            glossary = None
         try:
             import wandb
         except Exception as e:                                   # pragma: no cover
             print(f'[wandb] off: import failed ({type(e).__name__})', flush=True)
-            return cls(reason='import failed')
+            return cls(reason='import failed', **off)
         try:
             root = os.path.expanduser('~/.cache/wandb')
             # inside the cage the default ~/.config and ~/.local are read-only: keep wandb's own
@@ -469,9 +455,9 @@ class Tracker:
                           log_every=log_every, timing_key=timing_key)
         except Exception as e:
             print(f'[wandb] off: init failed: {type(e).__name__}: {e} -- training continues', flush=True)
-            return cls(reason='init failed')
+            return cls(reason='init failed', **off)
         try:
-            tracker._describe(cfg, name, git_launch_info(exp_dir, code_dir), host, project, entity)
+            tracker._describe(cfg, name, git_launch_info(exp_dir, code_dir), host)
         except Exception as e:
             print(f'[wandb] run description skipped: {type(e).__name__}: {e}', flush=True)
         return tracker
@@ -480,8 +466,11 @@ class Tracker:
         """Call once per optimiser step; rows are logged at step 1 and every log_every-th step, other calls return at
         once. Values that are not plain numbers (e.g. a 0-d tensor) are converted with float() on logged steps only --
         one device sync per logged step; a value that cannot be converted is left out. Adds timing_key: wall seconds
-        per step since the previous logged row."""
-        if self.run is None or not (step % self.log_every == 0 or step == 1):
+        per step since the previous logged row. The legend check runs on logged steps even when tracking is off."""
+        if not (step % self.log_every == 0 or step == 1):
+            return
+        self._note_keys(list(row or {}) + ([self.timing_key] if self.timing_key else []))
+        if self.run is None:
             return
         now = time.time()
         dt = (now - self._t_last) / max(step - self._s_last, 1)
@@ -502,6 +491,7 @@ class Tracker:
     def eval_step(self, step, row=None, model=None):
         """Log `row` at `step`, plus extra_eval_metrics(model) when a model is passed."""
         if self.run is None:
+            self._note_keys(list(row or {}))
             return
         try:
             out = dict(row or {})
@@ -510,15 +500,20 @@ class Tracker:
         except Exception as e:
             self._fail('eval_step', e)
             return
+        self._note_keys(list(out))
         self._enqueue(out, step)
 
     def log(self, row, step):
         """Log any row at `step`, unthrottled (never blocks)."""
+        self._note_keys(list(row or {}))
         if self.run is None:
             return
         self._enqueue(dict(row), step)
 
     def finish(self, summary=None):
+        scalars = {k: v for k, v in (summary or {}).items() if isinstance(v, (int, float, str, bool)) or v is None}
+        self._note_keys(list(scalars))
+        self._report_undescribed()
         run = self.run
         if run is None:
             return
@@ -535,12 +530,6 @@ class Tracker:
                 except queue.Full:
                     pass
                 self._th.join(timeout=20)
-                scalars = {k: v for k, v in (summary or {}).items()
-                           if isinstance(v, (int, float, str, bool)) or v is None}
-                try:
-                    self._check_keys(scalars.keys())
-                except Exception:
-                    pass
                 for k, v in scalars.items():
                     run.summary[k] = v
                 self._wandb.finish()                              # bounded by BOUNDS['finish_timeout']
@@ -565,3 +554,42 @@ class Tracker:
             print(f'[wandb] finished in {time.time() - t0:.1f}s{extra}'
                   + (f' (offline; sync with: wandb sync {d})' if self.mode == 'offline' else ''), flush=True)
         self.run = None
+
+
+class NullTracker:
+    """Tracks nothing: Tracker's public surface (active, mode, reason, dropped, undocumented, train_step, eval_step,
+    log, finish), every call a no-op. For code paths that deliberately start no run -- DDP ranks other than 0, dry
+    runs, tests. A consumer that can import this package never needs it for safety (Tracker.start never raises and
+    returns an inactive tracker when tracking is off); for this package failing to import, see IMPORT_GUARD."""
+    active, mode, dropped = False, None, 0
+
+    def __init__(self, reason='not started'):
+        self.reason, self.undocumented = reason, []
+
+    def train_step(self, step, row=None):
+        pass
+
+    def eval_step(self, step, row=None, model=None):
+        pass
+
+    def log(self, row, step=None):
+        pass
+
+    def finish(self, summary=None):
+        pass
+
+
+# The consumer-side guard for the one failure no code in this package can absorb: this package failing to import
+# (absent -- e.g. an editable install pointing at a checkout that predates it -- or broken). Tracker.start never raises,
+# so in practice only an import reaches the except branch; the fallback is built from builtins because nothing of this
+# package is importable there. It supports .active and calls (every method call is a no-op), nothing else. Anything
+# that itself imports this package -- a DictGlossary module included -- must be imported inside the try as well.
+IMPORT_GUARD = '''\
+try:
+    from spiky.util.wandb_integration.tracker import Tracker
+    from my_glossary import GLOSSARY  # a DictGlossary imports this package too: keep it inside the guard
+    tracker = Tracker.start(cfg, exp_dir, project=PROJECT, group=GROUP, glossary=GLOSSARY)
+except Exception as e:  # the package itself could not be imported: Tracker.start never raises
+    print(f'[wandb] off: {type(e).__name__}: {e} -- training continues')
+    tracker = type('NoTracker', (), {'active': False, '__getattr__': lambda self, name: lambda *a, **k: None})()
+'''
