@@ -133,6 +133,14 @@ tokens_per_step = DEVICE_BS * SEQ_LEN
 grad_accum = max(1, TOTAL_BS // tokens_per_step)
 print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | effective batch: {grad_accum * tokens_per_step:,} tokens')
 
+# --- optional wandb tracking (tools/wandb_tracking.py; conventions: claude/wandb.md on main) ----
+# OFF unless WANDB_BASE_URL is set; never fatal (any wandb error disables it with one warning);
+# offline automatically when the server is unreachable (e.g. inside the sbox cage), synced later.
+# It only reads floats this loop already has plus read-only parameter values at evals: no RNG,
+# no graph, no optimiser or data interaction -- metrics.csv and the training math are unchanged.
+from wandb_tracking import Tracker
+tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params)
+
 
 # --- per-layer LayerNorm health, logged alongside the val curve -------------------------
 # Why: exp_n_0184's layer-0 ln2 gain was found collapsed to ~0 (mean 0.000000, norm 0.00386)
@@ -187,6 +195,7 @@ for step in range(1, N_STEPS + 1):
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
+    tracker.train_step(step, accum_loss, ema, lr_scale * LR)
     if step % 100 == 0 or step == 1:
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')
     if step % EVAL_EVERY == 0 or step == N_STEPS:
@@ -194,7 +203,9 @@ for step in range(1, N_STEPS + 1):
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + ln_stats()); csv_f.flush()
+        _ln = ln_stats()
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln); csv_f.flush()
+        tracker.eval_step(step, bpb, ema, dict(zip(LN_COLS, map(float, _ln))), model)
 
 csv_f.close()
 elapsed = time.time() - t0
@@ -226,3 +237,4 @@ with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
 torch.save(model.state_dict(), os.path.join(EXP_DIR, 'checkpoint.pt'))
 print('\n=== DONE ==='); print(json.dumps(summary, indent=2))
+tracker.finish(summary)
