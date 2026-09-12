@@ -91,7 +91,7 @@ Everything goes into **one project**, and you slice it with the run fields:
 | `name`     | concise **unique** run name               | `"exp006_nap6_tph256"`, `"vanilla_baseline"` |
 | `tags`     | flexible cross-cutting labels             | git branch, short commit, machine, dataset, key knob |
 | `config`   | the **reproducibility record**            | branch, commit sha, host, all hyperparams |
-| `notes`    | **what the run tests and where its code is** (markdown) | 2–4 sentences; links to the run folder at the launch commit and at the branch head; folder + host; the metric glossary |
+| `notes`    | **what the run tests and where its code is** (markdown) | 2–4 sentences; links to the run folder at the launch commit and at the branch head; folder + host; a pointer to the metric glossary |
 
 Rules of thumb:
 
@@ -119,7 +119,7 @@ clickable links — and several thousand characters are fine. Put in it:
   (`https://github.com/<owner>/<repo>/tree/<sha>/<run folder>`), flagged when the working
   tree was dirty or the folder was not yet committed at that sha (the link would 404);
 - a link to the same folder at the branch head (where the artefacts land later);
-- the folder path and host, and a link to the metric glossary;
+- the folder path and host, and a pointer to the metric glossary;
 - the longer design note, if any, below a rule.
 
 Derive the GitHub URL from `git remote get-url origin` (an ssh host alias such as
@@ -127,51 +127,67 @@ Derive the GitHub URL from `git remote get-url origin` (an ssh host alias such a
 server URL and entity from the environment — never hard-code either.
 
 **Metric glossary.** Keep one dict in code next to the tracker: logged key (or a per-layer
-pattern such as `ln2_norm_L{i}`) → unit + a description **written from the code that
-computes it** — reduction, which tokens count, cadence, running mean vs instantaneous,
-the exact eval protocol, normalisation. Surface it three ways:
+pattern such as `ln2_norm_L{i}`) → unit, a full description **written from the code that
+computes it** (reduction, which tokens count, cadence, running mean vs instantaneous, the
+exact eval protocol, normalisation), and a one-sentence short form. Surface it where people
+look — the charts:
 
-- a project **report titled "Metric glossary"** generated from the dict (and a short project
-  README, the project description, linking it);
-- a per-run **glossary artifact** (a `wandb.Table` of key | description | unit, logged with
-  `log_artifact` only — see the gotchas); identical content dedups to one artifact version,
-  so versions track glossary revisions;
-- a link to both in every run's notes.
+- an **"About these metrics" Markdown Panel in its own pinned section at the top of the project
+  workspace**, generated from the short forms (grouped train / eval / per layer / summary) plus
+  a few config gotchas. One copy, full sentences, scrollable. Write it idempotently (fixed
+  section and panel ids, replaced in place), re-read the spec afterwards, and fail loudly if it
+  is not there — and see the workspace gotchas in section 6 before relying on it;
+- a per-run **glossary artifact** with the full descriptions (a `wandb.Table` of key |
+  description | unit, logged with `log_artifact` only); identical content dedups to one version;
+- a pointer to both in every run's notes.
 
 Make drift detectable, never fatal: the tracker flags a logged key with no entry (one
 printed line, a tag, a summary field listing the keys); a read-only audit lists undocumented
 keys on the server and stale entries; a CPU unit test checks every `metrics.csv` column and
 every key the tracker emits. First implementation: `experiments/ffn_replacement/tools/`
-(`metric_glossary.py`, `wandb_glossary.py`, `wandb_tracking.py`) on
+(`metric_glossary.py`, `wandb_glossary.py` publish / verify / audit, `wandb_tracking.py`) on
 `research/ffn_replacement_fix`.
+
+Tried and rejected: a separate glossary **report** (too far from the charts) and **panel legend
+templates** (see the gotchas — they cannot hold a description next to long run names).
 
 ## 6. Gotchas (self-hosted server)
 
+**Workspaces**
+
+- **Workspace state is per user.** Opening a project creates (on the first visit) a personal
+  workspace for that user: a view of type `"project-view"` named `nw-nwuser<username>-w`
+  ("<User>'s workspace"). Other users get their own and never see yours; shared *saved views*
+  ("Save as new view") are a separate thing. Anything written into a workspace spec — panels,
+  sections, legends — is visible only to that user.
+- **A stale open tab silently overwrites programmatic workspace writes.** The web client saves
+  the whole spec it holds (last write wins): a tab that loaded the workspace before your API
+  write drops the change on its next UI action, with no error. Check the view's `updatedAt`
+  before writing (recent = probably an open tab), re-read after writing, and verify again later.
+  The client saves aggressively — even a panel-search query typed into the box is persisted.
+- **Where things live in the spec:** `section.panelBankConfig.sections[]` (auto sections have
+  `isPanelsAuto: true` and no explicit panels); per-metric panel settings in
+  `section.panelBankConfig.panelConfigOverrides["<metric key>"].config`. **An override REPLACES
+  the auto panel's config**: it must carry `metrics: ["<key>"]` (the UI also writes `groupBy`,
+  `legendFields`), or the panel renders "Select a metric to visualize in this line chart".
+- **A Markdown Panel** is `{"viewType": "Markdown Panel", "config": {"value": "<markdown>"}}` in an
+  explicit section (`isPanelsAuto: false`). In workspaces a panel's `layout` is ignored — the
+  section's `flowConfig` (`columnsPerPage`, `rowsPerPage`, `boxHeight`) sizes it; `pinned: true`
+  keeps the section ahead of unpinned ones. Write via `upsertView(input: {id, spec})`.
+- **Panel legend templates are no place for descriptions.** Syntax: literal prose is kept;
+  `${run:displayName}`, `${metricName}`, `${config:<key>}`, `${summary:<key>}`; the `[[ ... ]]`
+  part (`${x}`, `${y}`, …) shows only on hover. But each run is **one legend line, and the whole
+  line is middle-truncated** to the panel width — about 50 characters *including the run name*
+  in a default panel, so with long run names nothing of a description survives; the prose
+  **repeats on every run's line**; the **hover tooltip shows less, not more** (it truncates
+  harder); single-run charts show no legend at all. Chart titles are one truncated line too.
+
+**Runs, metrics, reports**
+
 - **`define_metric` has no description.** Its parameters are `step_metric`, `step_sync`,
   `hidden`, `summary`, `goal`, `overwrite`; passing `description=` raises `TypeError`.
-  Metric descriptions have to live elsewhere (section 5).
 - **No panel or section descriptions** in the workspace UI. Sections are auto-named by
   key prefix (`train/…`, `time/…`); unprefixed keys land in "Charts".
-- **Reports without `wandb-workspaces`.** The Python reports API needs
-  `pip install wandb[workspaces]`. Without it, create a report with raw GraphQL
-  `upsertView` (`type: "runs"`, a JSON `spec` whose blocks include a `markdown-block`), find
-  it again by title (`project.allViews(viewType: "runs")`) and update it by `id`, so
-  re-publishing never duplicates. Report URL: `<server>/<entity>/<project>/reports/<Title-slug>--<viewId>`.
-  The project description (the README on the project Overview) is set with
-  `upsertModel(input: {entityName, name, description})`, which changes no other project field.
-- **A report's `type` decides where it is listed** (nothing else does — displayName, name, spec
-  shape and `createdUsing` do not):
-  - `type: "runs"` = **published**: listed in the project's **Reports** tab (left sidebar →
-    Reports, `<server>/<entity>/<project>/reportlist`) and in the Home page's Reports list.
-  - `type: "runs/draft"` = a **private draft**: shown only to its author, under "Your private
-    drafts". The UI's *Create report* starts here; *Publish to project* flips the same view to `"runs"`.
-  - a `"runs/draft"` view with `parentId` = an unsaved edit of a published report ("Draft edit in
-    progress" on that report's row).
-  - The **profile page's Reports card shows only showcased reports** (`showcasedAt` set), so a
-    published report does not appear there — look in the project's Reports tab.
-
-  So set `type: "runs"` explicitly, and after publishing verify with the Reports tab's own query
-  (`project.allViews(viewType: "runs")`) that the view is listed, failing loudly if not.
 - **Don't log a `wandb.Table` into run history.** On some self-hosted versions the
   auto-created workspace "Tables" panel errors ("Oops, something went wrong"). Put the table
   in an artifact via `log_artifact` only; it renders under Artifacts → the artifact → Files.
@@ -184,6 +200,11 @@ every key the tracker emits. First implementation: `experiments/ffn_replacement/
   summary. For a notes-only edit use GraphQL `upsertBucket(input: {id, notes})` with the run's
   storage id; everything else stays untouched. The public `wandb.Api()` caches `Run` objects,
   so verify with a fresh query.
+- **Reports, if you use them.** Without `wandb-workspaces` a report can be created with raw
+  GraphQL `upsertView` (`type: "runs"`, a JSON `spec`), found by title and updated by `id`.
+  `type` decides listing: `"runs"` = published (project Reports tab, Home), `"runs/draft"` = a
+  private draft, a draft with `parentId` = an unsaved edit; the profile page's Reports card
+  shows only *showcased* reports. Deleting a report leaves dead links wherever it was linked.
 - **The client may be newer than the server's advertised maximum**
   (`serverInfo.cliVersionInfo.max_cli_version`). It can work, but check this first when
   something fails oddly after a client upgrade.
