@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RC = os.path.join(os.path.dirname(HERE), 'runs_corrected')
 BRANCH = 'research/ffn_replacement_fix'
 DEFAULT_HOST = 'gpustar'
-SUMMARY_KEYS = ('final_val_bpb', 'best_val_bpb', 'training_time_hours', 'total_params')
+BACKFILL_SUMMARY_KEYS = ('final_val_bpb', 'best_val_bpb', 'training_time_hours', 'total_params')  # summary.json -> run.summary
 # where each backfilled run actually trained (from its run record); default: this repo's usual box
 HOST_OVERRIDE = {'exp_g_0195_B16k_light_margin_blend_n2_tau_learn0p5_seed1': 'nebius-h100'}
 LINE = {'exp_g_0193_B16k_light_margin_tph128_noznorm_seed1': 'baseline_margin',
@@ -60,13 +60,13 @@ def backfill(names, mode):
                        host=HOST_OVERRIDE.get(name, DEFAULT_HOST), name=name,
                        tags=lut_tags(cfg) + [f"line:{LINE.get(name, 'confidence_form')}"],
                        config_extra=batch_config(cfg, ga, summ.get('total_params')), config_renames=CONFIG_RENAMES,
-                       summary_keys=SUMMARY_KEYS, require_col='val_bpb', is_complete=complete, mode=mode,
+                       summary_keys=BACKFILL_SUMMARY_KEYS, require_col='val_bpb', is_complete=complete, mode=mode,
                        description=DESCRIPTION_OVERRIDE.get(name), glossary=MG)
 
 
 def notes_only(names, dry):
-    if not os.environ.get('WANDB_BASE_URL') or not os.environ.get('WANDB_ENTITY'):
-        sys.exit('WANDB_BASE_URL and WANDB_ENTITY must be set for --notes-only (never write to wandb.ai)')
+    if not os.environ.get('WANDB_ENTITY'):                       # WANDB_BASE_URL is checked in main()
+        sys.exit('WANDB_ENTITY must be set for --notes-only')
     import wandb
     api = wandb.Api(timeout=60)
     B.update_notes(api, os.environ['WANDB_ENTITY'], PROJECT, {n: os.path.join(RC, n) for n in names},

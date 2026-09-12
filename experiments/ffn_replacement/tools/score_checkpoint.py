@@ -28,7 +28,7 @@ from nanochat.common import get_base_dir
 from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 
 from model_build import build_model
-from fixed_eval import evaluate_bpb_fixed, eval_config, EVAL_BATCH_SIZE, EVAL_STEPS, EVAL_SKIP_ROWS
+from fixed_eval import evaluate_bpb_fixed, eval_config
 
 
 def main():

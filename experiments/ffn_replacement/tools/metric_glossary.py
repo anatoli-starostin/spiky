@@ -164,11 +164,6 @@ def entry_key(key):
     return None
 
 
-def lookup(key):
-    k = entry_key(key)
-    return None if k is None else METRICS[k]
-
-
 def is_documented(key):
     """wandb's own keys (leading underscore, system/*) are not ours to document."""
     return key.startswith('_') or key.startswith('system/') or entry_key(key) is not None

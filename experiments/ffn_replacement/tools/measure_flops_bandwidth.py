@@ -21,7 +21,7 @@ MinimalGPT + CompressionMultiHeadLUT (no shared-src edits). Weight VALUES don't 
 FLOP/byte counts (shape-derived), but we load the checkpoint when present to honor
 "measure the actual model".
 """
-import argparse, json, os, sys, math, re
+import argparse, json, os, sys, re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,7 +30,6 @@ NANOCHAT_ROOT = os.environ.get('NANOCHAT_ROOT', os.path.expanduser('~/projects/n
 if NANOCHAT_ROOT not in sys.path:
     sys.path.insert(0, NANOCHAT_ROOT)
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
-from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 
 # ----------------------------- model (stock MinimalGPT) -----------------------------
 
