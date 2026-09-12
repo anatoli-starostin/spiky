@@ -159,6 +159,19 @@ every key the tracker emits. First implementation: `experiments/ffn_replacement/
   re-publishing never duplicates. Report URL: `<server>/<entity>/<project>/reports/<Title-slug>--<viewId>`.
   The project description (the README on the project Overview) is set with
   `upsertModel(input: {entityName, name, description})`, which changes no other project field.
+- **A report's `type` decides where it is listed** (nothing else does — displayName, name, spec
+  shape and `createdUsing` do not):
+  - `type: "runs"` = **published**: listed in the project's **Reports** tab (left sidebar →
+    Reports, `<server>/<entity>/<project>/reportlist`) and in the Home page's Reports list.
+  - `type: "runs/draft"` = a **private draft**: shown only to its author, under "Your private
+    drafts". The UI's *Create report* starts here; *Publish to project* flips the same view to `"runs"`.
+  - a `"runs/draft"` view with `parentId` = an unsaved edit of a published report ("Draft edit in
+    progress" on that report's row).
+  - The **profile page's Reports card shows only showcased reports** (`showcasedAt` set), so a
+    published report does not appear there — look in the project's Reports tab.
+
+  So set `type: "runs"` explicitly, and after publishing verify with the Reports tab's own query
+  (`project.allViews(viewType: "runs")`) that the view is listed, failing loudly if not.
 - **Don't log a `wandb.Table` into run history.** On some self-hosted versions the
   auto-created workspace "Tables" panel errors ("Oops, something went wrong"). Put the table
   in an artifact via `log_artifact` only; it renders under Artifacts → the artifact → Files.
