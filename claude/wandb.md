@@ -79,6 +79,64 @@ wandb.finish()   # always finish (or use `with wandb.init(...) as run:`)
 - Log a consistent `step=`; make `val_bpb` (our headline metric) one of the
   scalars so runs are directly comparable.
 
+### In this repo: `spiky.util.wandb_integration`
+
+Trainers here should not hand-roll the above: the shared package on `main`,
+`src/spiky/util/wandb_integration/`, does it with the conventions of sections 4–5 built in.
+
+- `tracker.py` — `Tracker`: optional, never-fatal logging from a training loop.
+- `workspace.py` — publish / verify / audit the metric-glossary panel (section 5):
+  `python -m spiky.util.wandb_integration.workspace publish|verify|audit --glossary FILE_OR_MODULE [--project P] [--shared TITLE]`.
+- `backfill.py` — upload a finished run from its `metrics.csv` + `config.json` (`backfill_run`), and
+  notes-only edits of runs already on the server (`update_notes`).
+- `glossary.py` — the protocol an injected glossary implements; `tests/` — CPU tests, no server.
+
+**No install step.** It imports from an existing editable install (`pip install -e .`): the editable
+finder maps `spiky.util` and resolves its immediate children, so no `setup.py` entry and no reinstall
+are needed. Like the rest of `src/spiky`, it has no `__init__.py`. `wandb` itself is not in
+`requirements.txt`; without it the tracker switches itself off.
+
+```python
+from spiky.util.wandb_integration.tracker import Tracker
+
+tracker = Tracker.start(cfg, exp_dir, project="Spiky", group="<family>",  # default WANDB_PROJECT / WANDB_RUN_GROUP
+                        tags=["<static tag>"],
+                        extra_tags=lambda cfg: [f"form:{cfg['form']}"],      # more tags from the config
+                        extra_eval_metrics=lambda model: {},                 # merged into eval rows that pass a model
+                        glossary=metric_glossary,                            # optional; protocol below
+                        config_extra={"total_params": n_params},
+                        config_renames={"old_key": "old_key_legacy"})
+tracker.train_step(step, {"train/loss": loss, "train/lr": lr})  # logged at step 1 and every log_every (10)
+tracker.eval_step(step, {"val_bpb": bpb}, model)                 # + extra_eval_metrics(model)
+tracker.finish(summary)                                          # after the local record is written
+```
+
+- **Everything project-specific is injected:** project, entity and group (defaults `WANDB_PROJECT`,
+  `WANDB_ENTITY`, `WANDB_RUN_GROUP`), tags, the logged keys (rows are plain dicts; the tracker adds only
+  `time/sec_per_step`), per-eval model metrics, config renames and extras, and the glossary. With
+  `WANDB_BASE_URL` unset or no project, the tracker is off.
+- **It never stalls or breaks training:** rows go onto a bounded queue that a background thread logs (a
+  full queue drops rows, counted, and never waits); a 2 s probe of the server before `wandb.init` falls
+  back to offline (`wandb sync` later); every network path has capped retries; `finish()` gives up after
+  a deadline (60 s plus a grace period); any tracker error disables it with one printed line.
+- **Glossary protocol** (`glossary.py`; a plain module works): `PANEL_TITLE`, optional `SOURCE`,
+  `undocumented(keys)`, `glossary_hash()`, `table_rows()` (`[key, description, unit]` rows),
+  `panel_markdown()` (content only — no sha, no timestamp — so verify compares exactly) and
+  `stale(seen_keys)` for audit. Optional for the tracker (drift check, artifact, notes pointer); required
+  for publish / verify / audit.
+- **Worked example — how a project wires it up:** `experiments/ffn_replacement/tools/` on
+  `research/ffn_replacement_fix`. `wandb_tracking.py` is a thin shim: it pre-binds project and group,
+  the LUT tags, `learned_confidence_by_layer` as `extra_eval_metrics`, `metric_glossary` and an
+  `eval_steps` rename, and keeps the old positional calls (`train_step(step, loss, ema, lr, grad_norm)`,
+  `eval_step(step, bpb, ema, extra, model)`) so frozen run folders run unchanged; if the package cannot be
+  imported it is a no-op. `wandb_glossary.py` and `wandb_backfill.py` are thin wrappers holding the
+  project's data; `metric_glossary.py` is the content. When the package API changes, change the shim —
+  never a frozen run folder.
+- **Why `wandb_integration`, never `wandb`:** pytest's default import mode (prepend) puts
+  `src/spiky/util` itself at `sys.path[0]` when it collects `util/test_utils.py`. A `util/wandb/` package
+  with an `__init__.py` would then shadow the real library for the whole session (`import wandb` gets the
+  folder); without one it happens to work, until someone adds it.
+
 ## 4. Organization conventions (the important part)
 
 Everything goes into **one project**, and you slice it with the run fields:
@@ -146,8 +204,10 @@ look — the charts:
 Make drift detectable, never fatal: the tracker flags a logged key with no entry (one
 printed line, a tag, a summary field listing the keys); a read-only audit lists undocumented
 keys on the server and stale entries; a CPU unit test checks every `metrics.csv` column and
-every key the tracker emits. First implementation: `experiments/ffn_replacement/tools/`
-(`metric_glossary.py`, `wandb_glossary.py` publish / verify / audit, `wandb_tracking.py`) on
+every key the tracker emits. The mechanics are generic and live in `spiky.util.wandb_integration`
+(section 3: the drift check and the artifact in `tracker.py`, publish / verify / audit in
+`workspace.py`); the glossary content and its content tests stay with the project — e.g.
+`metric_glossary.py` and `test_metric_glossary.py` in `experiments/ffn_replacement/tools/` on
 `research/ffn_replacement_fix`.
 
 Tried and rejected: a separate glossary **report** (too far from the charts) and **panel legend
@@ -201,6 +261,9 @@ templates** (see the gotchas — they cannot hold a description next to long run
 - **Don't log a `wandb.Table` into run history.** On some self-hosted versions the
   auto-created workspace "Tables" panel errors ("Oops, something went wrong"). Put the table
   in an artifact via `log_artifact` only; it renders under Artifacts → the artifact → Files.
+- **A mid-run disconnect loses rows server-side.** In an online run, rows logged after the
+  connection to the server drops are lost on the server, while the trainer's local `metrics.csv`
+  stays complete. Treat the local file as the record, and backfill from it if the server copy matters.
 - **Auto git capture renders as commands, not links.** The run Overview shows
   `git clone <remote>` and `git checkout -b <run> <sha>`, with an ssh host alias shown verbatim.
   Overriding `settings.git_remote_url` records the remote but **drops the commit**. Put
@@ -235,6 +298,8 @@ templates** (see the gotchas — they cannot hold a description next to long run
 - **Do** keep the API key out of the repo (it lives only in `~/.netrc`); use one
   project; always `wandb.finish()`; log `val_bpb`; write run notes; add a glossary entry
   in the same change that starts logging a new key.
+- **Do** log from trainers through `spiky.util.wandb_integration` (section 3) rather than a raw
+  `wandb.init`, so the conventions and the never-fatal behaviour come with it.
 - **Don't** hardcode the key, create per-experiment projects, or point runs at
   `wandb.ai` (always set `WANDB_BASE_URL`).
 - Prefer resuming a crashed run with its id (`wandb.init(id=..., resume="allow")`)
