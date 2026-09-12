@@ -4,13 +4,16 @@
     python regress_confidence_forms.py capture after    # after adding a form
     python regress_confidence_forms.py compare          # every tensor must be torch.equal
 
-Covers the pre-existing forms (bounded, bounded_norm, margin, min_margin, tanh_margin, sharp_margin):
+Covers the pre-existing forms (bounded, bounded_norm, margin, min_margin, tanh_margin, sharp_margin,
+learned_margin -- the latter at MOVED parameters (0.3, 2.5, 1.4), score only: its analytic sibling
+refuses it by design; LightMHL entries include the learned-parameter gradients):
   * _confidence_score and _confidence_score_and_dscore, fp32 and fp64, gain 1.0 and 2.5
   * LightMultiHeadLUT forward + backward (CPU fp64), read_top_n 1 and 2, margin and bounded_norm
   * LightMultiHeadLUT no-grad CUDA eval (the native fused scored kernel), margin, n=1
   * FastMultiHeadLut hard forward with the confidence gate (margin), forward + backward
 Everything is rebuilt from fixed seeds, so the before/after runs construct identical modules.
 """
+import math
 import os
 import sys
 
@@ -20,7 +23,8 @@ from spiky.lutorch.fast_multi_head_lut import (                                 
     FastMultiHeadLut, _confidence_score, _confidence_score_and_dscore)
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT                   # noqa: E402
 
-FORMS = ('bounded', 'bounded_norm', 'margin', 'min_margin', 'tanh_margin', 'sharp_margin')
+FORMS = ('bounded', 'bounded_norm', 'margin', 'min_margin', 'tanh_margin', 'sharp_margin', 'learned_margin')
+LEARNED = (0.3, 2.5, 1.4)                  # (g, beta, gamma) for learned_margin, deliberately off-init
 OUT = '/tmp/regress_confidence_forms_{}.pt'
 
 
@@ -31,17 +35,22 @@ def capture(tag):
     for dt in (torch.float32, torch.float64):
         d = base.to(dt)
         for form in FORMS:
+            lp = (tuple(torch.tensor(v, dtype=dt) for v in (LEARNED[0], math.log(LEARNED[1]), math.log(LEARNED[2])))
+                  if form == 'learned_margin' else None)
             for gain in (1.0, 2.5):
-                out[f'score/{form}/{gain}/{dt}'] = _confidence_score(d, form, gain)
+                out[f'score/{form}/{gain}/{dt}'] = _confidence_score(d, form, gain, None, lp)
+                if form == 'learned_margin':
+                    continue                  # autograd-only form: the analytic sibling refuses it
                 s, ds = _confidence_score_and_dscore(d, form, gain)
                 out[f'score_and_dscore.s/{form}/{gain}/{dt}'] = s
                 out[f'score_and_dscore.ds/{form}/{gain}/{dt}'] = ds
 
     for n in (1, 2):
-        for form in ('margin', 'bounded_norm', 'min_margin', 'tanh_margin', 'sharp_margin'):
+        for form in ('margin', 'bounded_norm', 'min_margin', 'tanh_margin', 'sharp_margin', 'learned_margin'):
+            extra = {'learned_margin_init': LEARNED} if form == 'learned_margin' else {}
             m = LightMultiHeadLUT(input_dim=48, n_tables=4 * 32, output_dim=48, n_anchor_pairs=8,
                                   confidence_form=form, random_seed=1000, n_heads=4,
-                                  multi_head_input=True, read_top_n=n, read_tau=0.5)
+                                  multi_head_input=True, read_top_n=n, read_tau=0.5, **extra)
             m._compile_enabled = False
             m = m.double()
             gz = torch.Generator().manual_seed(7)
@@ -52,6 +61,9 @@ def capture(tag):
             out[f'light/{form}/n{n}/y'] = y.detach()
             out[f'light/{form}/n{n}/zgrad'] = z.grad.detach()
             out[f'light/{form}/n{n}/tablegrad'] = m.tables.grad.detach()
+            if form == 'learned_margin':
+                for pn in ('confidence_g', 'confidence_log_beta', 'confidence_log_gamma'):
+                    out[f'light/{form}/n{n}/{pn}.grad'] = getattr(m, pn).grad.detach()
             if n == 2:
                 out[f'light/{form}/n{n}/taugrad'] = (m.log_tau.grad.detach()
                                                      if m.log_tau.grad is not None else torch.zeros(()))

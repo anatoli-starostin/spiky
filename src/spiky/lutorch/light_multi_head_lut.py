@@ -85,6 +85,9 @@ class LightMultiHeadLUT(nn.Module):
             requires confidence_gain == 1.0 (exp(g) is the gain).
         learned_margin_init: initial (g, beta, gamma) for "learned_margin" (default None ->
             LEARNED_MARGIN_INIT = (0, 2, 1) == margin). Must be None for every other form.
+        learned_margin_freeze_g: "learned_margin" only (default False). True holds the log-gain g
+            FIXED at its init (a buffer named ``confidence_g``, same state_dict key, no gradient),
+            leaving beta and gamma learnable: the two-parameter score (exp_g_0248).
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -115,6 +118,7 @@ class LightMultiHeadLUT(nn.Module):
         confidence_gain: float = 1.0,
         sharp_margin_gamma: Optional[float] = None,
         learned_margin_init: Optional[Tuple[float, float, float]] = None,
+        learned_margin_freeze_g: bool = False,
         anchor_sampling_policy: Optional[AnchorSamplingPolicy] = None,
         random_seed: Optional[int] = None,
         initial_weights_noise: float = 0.001,
@@ -150,6 +154,9 @@ class LightMultiHeadLUT(nn.Module):
             raise ValueError(
                 f"learned_margin_init is only meaningful for confidence_form='learned_margin', got "
                 f"learned_margin_init={learned_margin_init!r} with confidence_form={confidence_form!r}")
+        if learned_margin_freeze_g and confidence_form != "learned_margin":
+            raise ValueError("learned_margin_freeze_g is only meaningful for confidence_form='learned_margin', "
+                             f"got confidence_form={confidence_form!r}")
         if confidence_form == "learned_margin" and confidence_gain != 1.0:
             raise ValueError("learned_margin carries its own learnable gain exp(g); confidence_gain must "
                              f"be 1.0, got {confidence_gain!r}")
@@ -226,6 +233,7 @@ class LightMultiHeadLUT(nn.Module):
         # learned_margin's initial (g, beta, gamma); the parameters are registered below, once
         # the device is known. Validated here so a bad init fails before anything is built.
         self._learned = confidence_form == "learned_margin"
+        self.learned_margin_freeze_g = bool(learned_margin_freeze_g)
         if self._learned:
             g0, beta0, gamma0 = (LEARNED_MARGIN_INIT if learned_margin_init is None
                                  else tuple(float(v) for v in learned_margin_init))
@@ -483,7 +491,12 @@ class LightMultiHeadLUT(nn.Module):
         # bit for bit. 0-dim, hence in the optimiser's no-decay group (ndim < 2 rule).
         if self._learned:
             g0, beta0, gamma0 = self._learned_init
-            self.confidence_g = nn.Parameter(torch.tensor(g0, device=dev))
+            if self.learned_margin_freeze_g:
+                # frozen gain: a buffer under the same name, so checkpoints interchange with the
+                # learnable variant and the score's op sequence is unchanged; never optimised.
+                self.register_buffer("confidence_g", torch.tensor(g0, device=dev))
+            else:
+                self.confidence_g = nn.Parameter(torch.tensor(g0, device=dev))
             self.confidence_log_beta = nn.Parameter(torch.tensor(math.log(beta0), device=dev))
             self.confidence_log_gamma = nn.Parameter(torch.tensor(math.log(gamma0), device=dev))
 
@@ -884,4 +897,5 @@ class LightMultiHeadLUT(nn.Module):
                 f"table_size={self.table_size}, confidence_form={self.confidence_form!r}"
                 + (f", sharp_margin_gamma={self.sharp_margin_gamma!r}"
                    if self.sharp_margin_gamma is not None else "")
-                + (f", learned={self.learned_confidence_values()!r}" if self._learned else ""))
+                + (f", learned={self.learned_confidence_values()!r}" if self._learned else "")
+                + (", g frozen" if self._learned and self.learned_margin_freeze_g else ""))

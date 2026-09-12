@@ -237,7 +237,13 @@ class MinimalBlock(nn.Module):
                     # (checked below), so the init a run starts from is read from its own
                     # config.json. Absent everywhere else -> None -> existing configs unchanged.
                     learned_margin_init=(tuple(float(cfg[k]) for k in _LM_INIT_KEYS)
-                                         if all(k in cfg for k in _LM_INIT_KEYS) else None))
+                                         if all(k in cfg for k in _LM_INIT_KEYS) else None),
+                    # learned_margin with g held FIXED at its init (exp_g_0248). Optional, default
+                    # off; absent everywhere else -> every existing config builds unchanged.
+                    learned_margin_freeze_g=bool(cfg.get('lut_learned_margin_freeze_g', False)))
+                if 'lut_learned_margin_freeze_g' in cfg and cfg.get('lut_confidence_form') != 'learned_margin':
+                    raise ValueError("lut_learned_margin_freeze_g is only valid with "
+                                     "lut_confidence_form == 'learned_margin'")
                 if (cfg.get('lut_confidence_form') == 'sharp_margin') != ('lut_sharp_margin_gamma' in cfg):
                     raise ValueError("lut_sharp_margin_gamma must be set exactly when "
                                      "lut_confidence_form == 'sharp_margin'")
@@ -255,7 +261,9 @@ class MinimalBlock(nn.Module):
                     # the init the module actually starts from (read back off its parameters)
                     _v = _lut.learned_confidence_values()
                     print(f'[learned_margin] layer {layer_idx}: init g={_v["g"]!r} beta={_v["beta"]!r} '
-                          f'gamma={_v["gamma"]!r} (learnable) gain={_lut.confidence_gain!r}')
+                          f'gamma={_v["gamma"]!r} '
+                          + ('(g FROZEN; beta, gamma learnable)' if _lut.learned_margin_freeze_g
+                             else '(learnable)') + f' gain={_lut.confidence_gain!r}')
         # --- gated hybrid FFN (diagnostic): dense GELU branch IN PARALLEL with the LUT ---
         # branch above, combined by a learned per-layer convex gate g=sigmoid(theta). Reads
         # off which layers prefer dense vs LUT. Off by default (hybrid_gate absent) so every

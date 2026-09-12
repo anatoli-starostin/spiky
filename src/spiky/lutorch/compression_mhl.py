@@ -132,6 +132,8 @@ class CompressionMultiHeadLUT(nn.Module):
         sharp_margin_gamma: Optional[float] = None,
         # learned_margin's INITIAL (g, beta, gamma); light path only (None -> LEARNED_MARGIN_INIT).
         learned_margin_init: Optional[tuple] = None,
+        # learned_margin with the log-gain g frozen at its init (light path only).
+        learned_margin_freeze_g: bool = False,
         z_norm: bool = False,
         bh4_block: int = 4,
         bh4_factors: int = 4,
@@ -191,7 +193,8 @@ class CompressionMultiHeadLUT(nn.Module):
             # fast/bh4 use the module constant; refuse rather than silently ignore a gamma
             raise ValueError("sharp_margin_gamma is only plumbed through the light path, got "
                              f"lut_impl={lut_impl!r}")
-        if (learned_margin_init is not None or confidence_form == "learned_margin") and lut_impl != "light":
+        if (learned_margin_init is not None or learned_margin_freeze_g
+                or confidence_form == "learned_margin") and lut_impl != "light":
             raise ValueError("learned_margin (and learned_margin_init) exists only on the light path, "
                              f"got lut_impl={lut_impl!r}")
 
@@ -246,6 +249,7 @@ class CompressionMultiHeadLUT(nn.Module):
                     n_anchor_pairs=nap, confidence_form=confidence_form,
                     confidence_gain=confidence_gain, random_seed=random_seed,
                     sharp_margin_gamma=sharp_margin_gamma, learned_margin_init=learned_margin_init,
+                    learned_margin_freeze_g=learned_margin_freeze_g,
                     initial_weights_noise=initial_weights_noise, device=device,
                     n_heads=1, multi_head_input=False,
                     anchor_sampling_policy=anchor_sampling_policy,
@@ -272,7 +276,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                 n_anchor_pairs=nap, confidence_form=confidence_form,
                 confidence_gain=confidence_gain, sharp_margin_gamma=sharp_margin_gamma,
-                learned_margin_init=learned_margin_init,
+                learned_margin_init=learned_margin_init, learned_margin_freeze_g=learned_margin_freeze_g,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise,
                 device=device, n_heads=n_heads, multi_head_input=mh,
                 anchor_sampling_policy=anchor_sampling_policy,
