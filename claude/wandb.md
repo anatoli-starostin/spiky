@@ -1,44 +1,53 @@
 # Experiment tracking with wandb (self-hosted)
 
-How to log spiky experiments to our **self-hosted Weights & Biases** and keep
-runs organized across many branches, machines, and experiment families. This is
-tooling/operational guidance; the science lives in the other `claude/` docs.
+How to log spiky experiments to a **self-hosted Weights & Biases** server and
+keep runs organized across many branches, machines, and experiment families.
+This is tooling/operational guidance; the science lives in the other `claude/`
+docs.
 
-> **Never commit secrets.** The wandb API key is a password. It is *not* in this
-> repo and must never be — this doc explains how to obtain it, never its value.
+> **Deployment-specific values stay OUT of this repo.** Your actual server URL,
+> entity/account name, host names, and (above all) your API key are per-deployment
+> and per-host — keep them in your own private/per-host notes, not here (consistent
+> with the `claude/README.md` rule that this folder is kept free of machine- and
+> account-specific details). Below, `<...>` and `$WANDB_BASE_URL` are placeholders
+> you fill in for your own deployment.
+
+> **Never commit secrets.** The wandb API key is a password. It must never be in
+> this repo — this doc explains how to obtain it, never its value.
 
 ## 1. The server
 
-- Self-hosted **wandb-local** runs on **nucstar** (the always-on box) and is
-  viewable in a browser at **http://nucstar:8080** over the tailnet.
-- There is a **single entity** (account/namespace): **`astarostin`**. All runs
-  and projects live under it, so everyone shares one view.
-- It is a private deployment on our tailnet — reachable from gpustar and
-  nebius-h100 (and any tailnet host), not from the public internet.
+- Run a **self-hosted W&B server** (the `wandb/local` container) somewhere always-on
+  and reach it in a browser at your server URL, e.g. `http://<your-wandb-host>:<port>`.
+  Export that as `WANDB_BASE_URL` so clients target it instead of wandb.ai.
+- Pick a **single entity** (account/namespace), `<YOUR_ENTITY>`, so everyone shares
+  one view of runs and projects.
+- Keep it private to your network (e.g. a tailnet/VPN) rather than the public
+  internet.
 
-## 2. One-time client setup on a GPU box (gpustar / nebius-h100)
+## 2. One-time client setup on a training host
 
-Do this once per machine, in the environment your training runs in:
+Do this once per machine (GPU box), in the environment your training runs in:
 
 ```sh
-pip install wandb                              # into the experiment's env
-export WANDB_BASE_URL=http://nucstar:8080      # point the client at our server
-wandb login --host http://nucstar:8080 <YOUR_API_KEY>
+pip install wandb                                  # into the experiment's env
+export WANDB_BASE_URL=<your-wandb-server-url>       # e.g. http://<your-wandb-host>:<port>
+wandb login --host "$WANDB_BASE_URL" <YOUR_API_KEY>
 ```
 
-- **Get `<YOUR_API_KEY>` from the browser**: open http://nucstar:8080/authorize
-  while logged in as `astarostin` and copy the key. Treat it like a password:
+- **Get `<YOUR_API_KEY>` from the browser**: open `<WANDB_BASE_URL>/authorize`
+  while logged in as `<YOUR_ENTITY>` and copy the key. Treat it like a password:
   never hardcode it, never commit it, never paste it into code or config. After
   `wandb login` it is stored in `~/.netrc` and used automatically.
-- **Gotcha — key must be a positional arg.** On the client version we tested
-  (wandb 0.30.0), setting only `WANDB_API_KEY` gave "No API key configured"; pass
-  the key as the positional argument to `wandb login` as shown above.
-- **Gotcha — on nucstar itself use `127.0.0.1`, not `localhost`.** `localhost`
-  resolves to IPv6 `::1` while the server's port is forwarded on IPv4 only, so
-  local calls on nucstar should use `http://127.0.0.1:8080`. Remote tailnet
-  clients (gpustar, nebius) use the `nucstar` name normally.
-- Keep `export WANDB_BASE_URL=http://nucstar:8080` in the run environment (e.g.
-  your launch script) so every run targets our server rather than wandb.ai.
+- **Gotcha — pass the key as a positional arg** to `wandb login` (as above). On
+  some client versions, setting only the `WANDB_API_KEY` env var was not enough
+  ("No API key configured"); the positional form is reliable.
+- **Gotcha — `localhost` vs IPv4 on the server host.** If your server host
+  resolves `localhost` to IPv6 (`::1`) but the server only forwards IPv4, use
+  `http://127.0.0.1:<port>` when talking to it *from the server box itself*.
+  Remote clients using the host's name/IP are unaffected.
+- Keep `export WANDB_BASE_URL=...` in the run environment (e.g. your launch
+  script) so every run targets your server rather than wandb.ai.
 
 ## 3. Minimal integration in a train.py
 
@@ -47,12 +56,12 @@ import wandb, subprocess
 
 sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
 run = wandb.init(
-    project="Spiky",                      # ONE project for everything (see below)
+    project="Spiky",                      # your project name (one project for all — see below)
     group="hyperplane_ffn",               # experiment family / folder
     job_type="train",                     # train | eval | sweep
     name="exp006_nap6_tph256",            # concise, unique run name
     tags=["hyperplane_ffn", "lut", sha],  # flexible labels (branch, machine, ...)
-    config=dict(branch="docs/wandb-guidelines", commit=sha, host="gpustar",
+    config=dict(branch="<git-branch>", commit=sha, host="<this-host>",
                 lr=lr, batch=batch, seq_len=seq_len, n_tables=tph, bits=nap,
                 d_model=n_embd, depth=depth),  # the reproducibility record
 )
@@ -75,7 +84,7 @@ Everything goes into **one project**, and you slice it with the run fields:
 
 | field      | use it for                                | examples                                  |
 |------------|-------------------------------------------|-------------------------------------------|
-| `project`  | **always `"Spiky"`** — one project for all | `"Spiky"`                                 |
+| `project`  | **one project for all runs**              | `"Spiky"` (your project name)             |
 | `group`    | experiment **family / folder**            | `"hyperplane_ffn"`, `"lutgpt"`, `"walker2d"` |
 | `job_type` | the kind of run                           | `"train"`, `"eval"`, `"sweep"`            |
 | `name`     | concise **unique** run name               | `"exp006_nap6_tph256"`, `"vanilla_baseline"` |
@@ -98,22 +107,21 @@ Rules of thumb:
 
 ## 5. Viewing and comparing
 
-- Open **http://nucstar:8080/astarostin/Spiky** and use the **group** selector to
+- Open `<WANDB_BASE_URL>/<YOUR_ENTITY>/<project>` and use the **group** selector to
   collapse families; the runs **table** + **parallel-coordinates**/scatter panels
   compare hyperparams vs. metrics; **filter by `tags`** (branch, machine).
-- If a run seems "missing", check you're logged into the browser as `astarostin`
-  and looking at project **Spiky** (a run's project is set by `project=`).
-- On nucstar itself, use `http://127.0.0.1:8080` (IPv6/IPv4 note in §2).
+- If a run seems "missing", check you're logged into the browser as `<YOUR_ENTITY>`
+  and looking at the right project (a run's project is set by `project=`).
 
 ## 6. Do / don't
 
 - **Do** keep the API key out of the repo (it lives only in `~/.netrc`); use one
-  project `"Spiky"`; always `wandb.finish()`; log `val_bpb`.
+  project; always `wandb.finish()`; log `val_bpb`.
 - **Don't** hardcode the key, create per-experiment projects, or point runs at
   `wandb.ai` (always set `WANDB_BASE_URL`).
 - Prefer resuming a crashed run with its id (`wandb.init(id=..., resume="allow")`)
   over creating a duplicate.
 
-Related: nucstar also has a TensorBoard viewer as a lighter-weight alternative;
-wandb is the primary shared dashboard because it aggregates many runs/branches
-into one comparable project.
+Related: a TensorBoard viewer is a lighter-weight alternative; wandb is the
+primary shared dashboard because it aggregates many runs/branches into one
+comparable project.
