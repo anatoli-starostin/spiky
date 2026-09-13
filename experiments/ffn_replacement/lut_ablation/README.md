@@ -77,7 +77,11 @@ The architecture is held fixed: E=384, 6 layers, 16K steps, device_batch 12 × g
 **W&B config.** The W&B run config is `config.json`, less the notes keys and plus the tracker's extras. So every config spells out the keys that tell rows apart, including where the value is the default: `lut_impl`, `lut_forward_mode` / `lut_backward_topk` (Gen 2), `lut_light_forward_mode` / `lut_read_top_n` (Gen 3), `lut_gen1_smooth` / `lut_gen1_weights_init` (Gen 1), `lut_cell_smoothness`, `random_seed`, `lut_base_seed`. No row depends on an absent key. Writing the defaults out is build-neutral: 22/22 state_dicts are torch.equal to those built from the implicit configs.
 - `eval_every` is 500 in all 22. The last eval is step 16,000 and produces `final_val_bpb`.
 - The Light configs still carry the Fast-only `lut_forward_mode: hard` from their parents. It does nothing on the light path; `lut_light_forward_mode` sets Light's forward.
-- Launch-time: the tracker is OFF unless `WANDB_BASE_URL` is set, and the entity comes from `WANDB_ENTITY`. Both must be in the launch environment.
+- **Launch: source `~/.wandb_env` in the trainer's own environment first**, or the tracker is OFF and the run trains with no W&B record.
+  - The tracker needs `WANDB_BASE_URL`, and the entity comes from `WANDB_ENTITY`. Each host needs these two exports in `~/.wandb_env`, mode 600 and outside the repo; the key stays in `~/.netrc`. If the file is missing on a host, create it before launching.
+  - **gpustar:** source it inside the cage command, e.g. `sbox --net tailnet -- bash -c '. ~/.wandb_env && python -u <folder>/train.py'`. With `--net tailnet` the run logs online. Plain `sbox` has no network, so the run logs offline and needs a later `wandb sync`.
+  - **nebius:** `. ~/.wandb_env` in the launching shell.
+  - Check the trainer's `[wandb]` start-up line: it says online, offline or off. `off: WANDB_BASE_URL not set` means the file was not sourced.
 
 The code these runs need is all on the branch:
 - #121 (c327aebe): FastMHL hard + `backward_topk`;
