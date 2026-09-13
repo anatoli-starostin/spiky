@@ -76,7 +76,7 @@ The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ a
 $y=\sum_tW_t[c_t]$, as 1.1(a). &
 With $b_j(\ell)=+1$ if the bit of $\ell$ for pair $j$ is 1, else $-1$, and the squashed margin $\hat m_j=u_j/(T_s+|u_j|)\in(-1,1)$: $s_\ell=\sum_jb_j(\ell)\,\hat m_j$ scores how well row $\ell$'s bit pattern agrees with the actual signs of the margins (small margins count little either way).
 All $K$ rows of each table are read, softmax-weighted within that table: $\sum_t\sum_{\ell<K}\mathrm{softmax}_\ell(s_\ell/T_{sel})\,W_t[\ell]$.
-$T_s,T_{sel}$: per-layer scalars, learned in \code{exp\_n\_0121}.
+$T_s,T_{sel}$: per-layer scalars, learned when \code{lut\_learnable\_temps} is set.
 Globally $C^1$ in the input; never uses the address, whose row is the one with the largest weight. \\[3pt]
 2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
 $y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
