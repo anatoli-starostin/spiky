@@ -49,6 +49,7 @@ from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
 from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
+from spiky.lutorch.l_projection import LProjection   # Gen-1 (MultiHeadLut) table store
 
 from model_build import build_model                       # shared config-driven model
 from fixed_eval import evaluate_bpb_fixed, eval_config    # THE fixed eval set
@@ -65,6 +66,12 @@ DEVICE_BS, TOTAL_BS, N_STEPS = cfg['device_batch_size'], cfg['total_batch_size']
 LR, WD, WARMUP_FRAC = cfg['lr'], cfg['weight_decay'], cfg['lr_warmup_fraction']
 EVAL_EVERY = cfg['eval_every']
 EVAL = eval_config(cfg)   # fixed eval: bs48 x100 skip12 (NOT a function of DEVICE_BS)
+# --- Hamming-1 cell TV regularisation (exp_g_0249's formulation) -----------------------------------------
+# (lut_cell_smoothness * model.lut_tv_penalty()).backward() once per optimiser step, after the micro-batch
+# backwards and BEFORE clip_grad_norm_. 0 / absent = off: the step is then exactly this trainer's without TV.
+# build_model refuses a positive value on a model whose LUT tables the penalty cannot reach (e.g. bh4, dense).
+# NOT 'gamma' (the learned_margin confidence exponent).
+LUT_TV_LAMBDA = float(cfg.get('lut_cell_smoothness', 0.0))
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -94,8 +101,11 @@ def setup_optimizer(model, lr, weight_decay, tables_no_decay=False):
     # are exempt -- the asymmetry that confounded every Light-vs-Fast comparison until
     # exp_g_0189. Its bh4.blocks are deliberately NOT exempt: they replace compress,
     # which has always been decayed.
-    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT)
-              if tables_no_decay else (FastMultiHeadLut,))
+    # Gen-1 (MultiHeadLut) tables live in its LProjection child and are exempt in BOTH branches, as Fast's
+    # tables are: they are the Gen-1 counterpart of Fast's tables. No existing model contains an LProjection,
+    # so every existing grouping is unchanged.
+    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT, LProjection)
+              if tables_no_decay else (FastMultiHeadLut, LProjection))
     lut_ids = {id(p) for m in model.modules() if isinstance(m, exempt)
                for p in m.parameters(recurse=False)}
     decay, nodecay = [], []
@@ -123,6 +133,10 @@ model = build_model(cfg, VOCAB_SIZE, device=DEVICE)
 total_params = sum(p.numel() for p in model.parameters())
 print(f"MinimalGPT depth={cfg['depth']} dim={cfg['n_embd']} heads={cfg['n_head']} seq={SEQ_LEN} "
       f"| ffn={cfg.get('ffn_type')} tie={bool(cfg.get('tie_unembedder', False))} | params={total_params:,}")
+TV_MODULES = model.lut_tv_modules()
+if LUT_TV_LAMBDA > 0.0:
+    print(f'[tv] lut_cell_smoothness={LUT_TV_LAMBDA:g}: penalty over {len(TV_MODULES)} LUT modules '
+          f'({", ".join(sorted({type(m).__name__ for m in TV_MODULES}))}), applied once per step before clipping')
 
 if os.environ.get('SMOKE'):
     print('SMOKE OK'); sys.exit(0)
@@ -141,7 +155,8 @@ print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | eff
 import wandb_tracking
 wandb_tracking.GROUP = 'lut_ablation'   # W&B group for every run in lut_ablation/ (shim default: 'ffn_replacement')
 from wandb_tracking import Tracker
-tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params)
+tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params,
+                        extra_tags=[f'tv:{LUT_TV_LAMBDA:g}'])
 
 
 # --- per-layer LayerNorm health, logged alongside the val curve -------------------------
@@ -169,8 +184,18 @@ def ln_stats():
     return [f'{v:.6f}' for v in out]
 
 
+# Cell TV at every eval, per LUT layer and their mean (read-only; no RNG, no optimiser interaction), for any
+# model with tables lut_tv_penalty covers -- Light or Fast. No columns at all on a model without such tables.
+TV_COLS = (['lut_tv'] + [f'lut_tv_L{i}' for i in range(len(model.lut_tv_by_layer()))]) if TV_MODULES else []
+
+
+def tv_stats():
+    per = model.lut_tv_by_layer()
+    return ([f'{sum(per) / len(per):.8e}'] + [f'{v:.8e}' for v in per]) if TV_COLS else []
+
+
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
-csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS)
+csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TV_COLS)
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 
@@ -194,6 +219,8 @@ for step in range(1, N_STEPS + 1):
         loss = model(x, y)
         (loss / grad_accum).backward()
         accum_loss += loss.item() / grad_accum
+    if LUT_TV_LAMBDA > 0.0:
+        (LUT_TV_LAMBDA * model.lut_tv_penalty()).backward()
     # clip_grad_norm_ returns the global gradient norm BEFORE clipping; it was discarded before. Keeping the
     # return value changes nothing in the step -- it is only handed to the tracker (train/grad_norm).
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -207,9 +234,10 @@ for step in range(1, N_STEPS + 1):
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
-        _ln = ln_stats()
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln); csv_f.flush()
-        tracker.eval_step(step, bpb, ema, dict(zip(LN_COLS, map(float, _ln))), model)
+        _ln, _tv = ln_stats(), tv_stats()
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln + _tv); csv_f.flush()
+        tracker.eval_step(step, bpb, ema, {**dict(zip(LN_COLS, map(float, _ln))),
+                                           **dict(zip(TV_COLS, map(float, _tv)))}, model)
 
 csv_f.close()
 elapsed = time.time() - t0

@@ -49,7 +49,6 @@ from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
 from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
-from spiky.lutorch.l_projection import LProjection   # Gen-1 (MultiHeadLut) table store
 
 from model_build import build_model                       # shared config-driven model
 from fixed_eval import evaluate_bpb_fixed, eval_config    # THE fixed eval set
@@ -65,13 +64,16 @@ SEQ_LEN = cfg['seq_len']
 DEVICE_BS, TOTAL_BS, N_STEPS = cfg['device_batch_size'], cfg['total_batch_size'], cfg['n_steps']
 LR, WD, WARMUP_FRAC = cfg['lr'], cfg['weight_decay'], cfg['lr_warmup_fraction']
 EVAL_EVERY = cfg['eval_every']
-EVAL = eval_config(cfg)   # fixed eval: bs48 x100 skip12 (NOT a function of DEVICE_BS)
-# --- Hamming-1 cell TV regularisation (exp_g_0249's formulation) -----------------------------------------
-# (lut_cell_smoothness * model.lut_tv_penalty()).backward() once per optimiser step, after the micro-batch
-# backwards and BEFORE clip_grad_norm_. 0 / absent = off: the step is then exactly this trainer's without TV.
-# build_model refuses a positive value on a model whose LUT tables the penalty cannot reach (e.g. bh4, dense).
-# NOT 'gamma' (the learned_margin confidence exponent).
+# Crash insurance for this run only -- see the [CKPT] block in the training loop. A multiple
+# of EVAL_EVERY so it fires inside the existing eval branch and adds no new control flow.
+CKPT_EVERY = int(os.environ.get('CKPT_EVERY', 4000))
+
+# --- Hamming-1 cell TV regularisation (exp_n_0232-0242 formulation) --------------------------
+# (lut_cell_smoothness * model.lut_tv_penalty()).backward() once per optimiser step, after the
+# micro-batch backwards and BEFORE clip_grad_norm_. 0 = off (then this trainer's math is exactly
+# exp_g_0248's). NOT 'gamma': that name is the learned_margin confidence exponent.
 LUT_TV_LAMBDA = float(cfg.get('lut_cell_smoothness', 0.0))
+EVAL = eval_config(cfg)   # fixed eval: bs48 x100 skip12 (NOT a function of DEVICE_BS)
 
 BASE_DIR = get_base_dir()
 TOKENIZER_DIR = os.path.join(BASE_DIR, 'tokenizer')
@@ -101,11 +103,8 @@ def setup_optimizer(model, lr, weight_decay, tables_no_decay=False):
     # are exempt -- the asymmetry that confounded every Light-vs-Fast comparison until
     # exp_g_0189. Its bh4.blocks are deliberately NOT exempt: they replace compress,
     # which has always been decayed.
-    # Gen-1 (MultiHeadLut) tables live in its LProjection child and are exempt in BOTH branches, as Fast's
-    # tables are: they are the Gen-1 counterpart of Fast's tables. No existing model contains an LProjection,
-    # so every existing grouping is unchanged.
-    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT, LProjection)
-              if tables_no_decay else (FastMultiHeadLut, LProjection))
+    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT)
+              if tables_no_decay else (FastMultiHeadLut,))
     lut_ids = {id(p) for m in model.modules() if isinstance(m, exempt)
                for p in m.parameters(recurse=False)}
     decay, nodecay = [], []
@@ -133,10 +132,6 @@ model = build_model(cfg, VOCAB_SIZE, device=DEVICE)
 total_params = sum(p.numel() for p in model.parameters())
 print(f"MinimalGPT depth={cfg['depth']} dim={cfg['n_embd']} heads={cfg['n_head']} seq={SEQ_LEN} "
       f"| ffn={cfg.get('ffn_type')} tie={bool(cfg.get('tie_unembedder', False))} | params={total_params:,}")
-TV_MODULES = model.lut_tv_modules()
-if LUT_TV_LAMBDA > 0.0:
-    print(f'[tv] lut_cell_smoothness={LUT_TV_LAMBDA:g}: penalty over {len(TV_MODULES)} LUT modules '
-          f'({", ".join(sorted({type(m).__name__ for m in TV_MODULES}))}), applied once per step before clipping')
 
 if os.environ.get('SMOKE'):
     print('SMOKE OK'); sys.exit(0)
@@ -146,17 +141,6 @@ optimizer = setup_optimizer(model, lr=LR, weight_decay=WD,
 tokens_per_step = DEVICE_BS * SEQ_LEN
 grad_accum = max(1, TOTAL_BS // tokens_per_step)
 print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | effective batch: {grad_accum * tokens_per_step:,} tokens')
-
-# --- optional wandb tracking (tools/wandb_tracking.py; conventions: claude/wandb.md on main) ----
-# OFF unless WANDB_BASE_URL is set; never fatal (any wandb error disables it with one warning);
-# offline automatically when the server is unreachable (e.g. inside the sbox cage), synced later.
-# It only reads floats this loop already has plus read-only parameter values at evals: no RNG,
-# no graph, no optimiser or data interaction -- metrics.csv and the training math are unchanged.
-import wandb_tracking
-wandb_tracking.GROUP = 'lut_ablation'   # W&B group for every run in lut_ablation/ (shim default: 'ffn_replacement')
-from wandb_tracking import Tracker
-tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params,
-                        extra_tags=[f'tv:{LUT_TV_LAMBDA:g}'])
 
 
 # --- per-layer LayerNorm health, logged alongside the val curve -------------------------
@@ -184,18 +168,48 @@ def ln_stats():
     return [f'{v:.6f}' for v in out]
 
 
-# Cell TV at every eval, per LUT layer and their mean (read-only; no RNG, no optimiser interaction), for any
-# model with tables lut_tv_penalty covers -- Light or Fast. No columns at all on a model without such tables.
-TV_COLS = (['lut_tv'] + [f'lut_tv_L{i}' for i in range(len(model.lut_tv_by_layer()))]) if TV_MODULES else []
+# --- learned confidence parameters (confidence_form='learned_margin') -------------------
+# Per-layer g, beta, gamma logged at every eval, so their TRAJECTORIES are recoverable and
+# plottable -- this run exists to find where a learnable score shape migrates from an init of
+# exactly margin (g=0, beta=2, gamma=1). Same pattern as exp_g_0195's tau columns: read-only off
+# the modules (g, exp(log_beta), exp(log_gamma)); no RNG, no graph, no optimiser interaction;
+# strictly additive columns after the existing ones, so readers of an older metrics.csv still
+# work. The only cost is a few .item() syncs per eval.
+from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT as _LMHL
+_LEARNED = [m for m in model.modules()
+            if isinstance(m, _LMHL) and m.confidence_form == 'learned_margin']
+LM_COLS = [f'{k}_L{i}' for k in ('lm_g', 'lm_beta', 'lm_gamma') for i in range(len(_LEARNED))]
+LM_INIT = [m.learned_confidence_values() for m in _LEARNED]
 
 
+@torch.no_grad()
+def lm_stats():
+    vals = [m.learned_confidence_values() for m in _LEARNED]
+    return [f'{v[k]:.8f}' for k in ('g', 'beta', 'gamma') for v in vals]
+
+
+# TV penalty at every eval (read-only; no RNG, no optimiser interaction): mean over layers + per layer.
+TV_COLS = ['lut_tv'] + [f'lut_tv_L{i}' for i in range(len(model.blocks))]
+
+
+@torch.no_grad()
 def tv_stats():
-    per = model.lut_tv_by_layer()
-    return ([f'{sum(per) / len(per):.8e}'] + [f'{v:.8e}' for v in per]) if TV_COLS else []
+    per = [b.ffn.lut_light.cell_tv().item() for b in model.blocks]
+    return [f'{sum(per) / len(per):.8e}'] + [f'{v:.8e}' for v in per]
+
+
+# --- optional wandb tracking (tools/wandb_tracking.py; conventions: claude/wandb.md on main) ----
+# OFF unless WANDB_BASE_URL is set; online when the server is reachable, offline otherwise; never fatal
+# and never blocks the loop. Reads floats this loop already has: no RNG, no optimiser or data interaction.
+import wandb_tracking
+wandb_tracking.GROUP = 'lut_ablation'   # W&B group for every run in lut_ablation/ (shim default: 'ffn_replacement')
+from wandb_tracking import Tracker
+tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params,
+                        extra_tags=[f'tv:{LUT_TV_LAMBDA:g}'])
 
 
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
-csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TV_COLS)
+csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + LM_COLS + TV_COLS)
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 
@@ -221,12 +235,10 @@ for step in range(1, N_STEPS + 1):
         accum_loss += loss.item() / grad_accum
     if LUT_TV_LAMBDA > 0.0:
         (LUT_TV_LAMBDA * model.lut_tv_penalty()).backward()
-    # clip_grad_norm_ returns the global gradient norm BEFORE clipping; it was discarded before. Keeping the
-    # return value changes nothing in the step -- it is only handed to the tracker (train/grad_norm).
-    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     ema = accum_loss if ema is None else 0.99 * ema + 0.01 * accum_loss
-    tracker.train_step(step, accum_loss, ema, lr_scale * LR, grad_norm=grad_norm)
+    tracker.train_step(step, accum_loss, ema, lr_scale * LR)
     if step % 100 == 0 or step == 1:
         print(f'step {step:6d} | loss={ema:.4f} | lr={lr_scale * LR:.2e}')
     if step % EVAL_EVERY == 0 or step == N_STEPS:
@@ -235,9 +247,25 @@ for step in range(1, N_STEPS + 1):
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
         _ln, _tv = ln_stats(), tv_stats()
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln + _tv); csv_f.flush()
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln + lm_stats() + _tv); csv_f.flush()
         tracker.eval_step(step, bpb, ema, {**dict(zip(LN_COLS, map(float, _ln))),
                                            **dict(zip(TV_COLS, map(float, _tv)))}, model)
+        # --- periodic checkpoint (this run only; NOT in the shared trainer template) -----
+        # exp_g_0191 died at 15,100/16,000 on this box (Xid 8 / cudaErrorLaunchTimeout from
+        # the RC watchdog -- the 5090 also drives the desktop) and the stock trainer writes
+        # checkpoint.pt only AFTER the final step, so that run left nothing to score. This
+        # saves a step-tagged copy every CKPT_EVERY steps.
+        #
+        # It CANNOT change the training math or the eval. torch.save reads the state_dict;
+        # it consumes no RNG, builds no graph, and never touches the optimiser, the data
+        # loader or evaluate_bpb_fixed. Placed after the csv flush so a crash mid-save
+        # still leaves metrics.csv consistent with the last completed checkpoint. The only
+        # measurable cost is wall clock: 3 saves x ~270 MB x ~2 s is ~0.2% of a 1-hour run,
+        # which inflates summary.json's training_time_hours by that much and nothing else.
+        if step % CKPT_EVERY == 0 and step != N_STEPS:
+            _p = os.path.join(EXP_DIR, f'checkpoint_step{step}.pt')
+            torch.save(model.state_dict(), _p)
+            print(f'[CKPT] step {step}: wrote {os.path.basename(_p)}')
 
 csv_f.close()
 elapsed = time.time() - t0
@@ -251,20 +279,12 @@ summary = {'exp_name': cfg['exp_name'], 'best_val_bpb': best_bpb,
            'total_params': total_params, 'training_time_hours': round(elapsed / 3600, 3),
            'eval_protocol': {'eval_batch_size': EVAL['eval_batch_size'], 'eval_steps': EVAL['eval_steps'],
                              'skip_rows': EVAL['skip_rows'], 'batch_size_independent': True}}
-# Record the RESOLVED per-layer blend temperatures whenever the top-n read-out is on, so a
-# run whose config says lut_read_tau="auto" still says on the record exactly what it used.
-# Purely additive to summary.json; touches nothing in the model, the optimiser or the eval.
-if int(cfg.get('lut_read_top_n', 1)) > 1:
-    from model_build import resolved_read_taus
-    summary['blend_read_out'] = {
-        'read_top_n': int(cfg['lut_read_top_n']),
-        'read_tau_config': cfg.get('lut_read_tau', 0.1),
-        'read_tau_resolved_per_layer': resolved_read_taus(cfg),
-        'read_tau_learnable': bool(cfg.get('lut_read_tau_learnable', False)),
-        'read_tau_final_per_layer': [
-            float(m.read_tau.item()) for m in model.modules()
-            if type(m).__name__ == 'LightMultiHeadLUT'],
-    }
+# Learned confidence parameters, init and final per layer (additive; read-only).
+if _LEARNED:
+    summary['learned_confidence'] = {
+        'form': 'learned_margin', 'score': 'exp(g) * sum|d| * prod sigmoid(beta |d|) ** gamma',
+        'init_per_layer': LM_INIT,
+        'final_per_layer': [m.learned_confidence_values() for m in _LEARNED]}
 with open(os.path.join(EXP_DIR, 'summary.json'), 'w') as f:
     json.dump(summary, f, indent=2)
 torch.save(model.state_dict(), os.path.join(EXP_DIR, 'checkpoint.pt'))

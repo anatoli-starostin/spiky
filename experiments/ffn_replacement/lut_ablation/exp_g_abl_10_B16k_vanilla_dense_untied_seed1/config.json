@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp_n_abl_10_B16k_vanilla_dense_untied_seed1",
+  "exp_name": "exp_g_abl_10_B16k_vanilla_dense_untied_seed1",
   "ffn_type": "dense",
   "tie_unembedder": false,
   "depth": 6,
