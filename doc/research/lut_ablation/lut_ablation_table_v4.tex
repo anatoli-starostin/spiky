@@ -200,13 +200,6 @@ As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
   (2.0 for independent random cells) moved only from 1.74--1.95 to 1.34--1.57 across layers.
 \end{itemize}
 
-\section*{Where the code differs from the original brief}
-\begin{itemize}\setlength\itemsep{0pt}
-\item 1.1's input gradient is a surrogate (the derivative of 1.2's blend); its weights update only the addressed row.
-\item The status report's $u(\delta)=0.5/(T+|\delta|)$ has a temperature; the code's $0.5/(1+|u|)$ has none (\code{l\_projection.py:96}, \code{lutorch.cu:797}).
-\item Gen 2's hybrid\_smooth weight $\sigma(-2\rho_{j^\star}/T_{sel})$ is a temperature-controlled soft-sign, not Gen 1's $U(u)$.
-\end{itemize}
-
 \section*{Remaining work}
 \begin{itemize}\setlength\itemsep{0pt}
 \item \textbf{Run 2.2, 2.3 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
