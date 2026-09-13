@@ -42,6 +42,8 @@ import torch.nn as nn
 from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
+from spiky.lutorch.lut_helpers import UncertaintyMode
+from spiky.lutorch.multi_head_lut import MultiHeadLut
 
 
 def _resolve_inner(inner_dim, inner_in_dim, inner_out_dim):
@@ -88,6 +90,9 @@ class CompressionMultiHeadLUT(nn.Module):
         light_forward_mode: LightMultiHeadLUT forward_mode, "scored" (default) or "hard"
             (ablation rows 3.3 / 3.4); light lut_impl only. Deliberately NOT forward_mode, which
             is a FastMHL option and is set to "hard" in every existing light-path config.
+        gen1_smooth / gen1_n_alternatives: lut_impl="gen1" (MultiHeadLut, ablation rows 1.1 / 1.2) --
+            hard read (False) or the 2-cell U(u) = 0.5/(1+|u|) blend (True), with n_alternatives (default 1)
+            flipped cells; independent per-head path only.
         weight_dtype: FastMHL table storage dtype (default fp32).
         use_bf16: FastMHL bf16-autocast flag (default False — these experiments run fp32).
         initial_weights_noise: FastMHL near-zero table init (default 1e-3).
@@ -149,6 +154,8 @@ class CompressionMultiHeadLUT(nn.Module):
         cell_mode: str = "constant",
         margin_signed: bool = True,
         light_forward_mode: str = "scored",
+        gen1_smooth: bool = False,
+        gen1_n_alternatives: int = 1,
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -191,8 +198,11 @@ class CompressionMultiHeadLUT(nn.Module):
         # on. Default OFF, so existing configs are byte-identical.
         self.z_norm_enabled = bool(z_norm)
         self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
-        if lut_impl not in ("fast", "light", "bh4"):
-            raise ValueError(f"lut_impl must be 'fast', 'light' or 'bh4', got {lut_impl!r}")
+        if lut_impl not in ("fast", "light", "bh4", "gen1"):
+            raise ValueError(f"lut_impl must be 'fast', 'light', 'bh4' or 'gen1', got {lut_impl!r}")
+        if (gen1_smooth or gen1_n_alternatives != 1) and lut_impl != "gen1":
+            raise ValueError("gen1_smooth / gen1_n_alternatives are MultiHeadLut (lut_impl='gen1') options, got "
+                             f"lut_impl={lut_impl!r}")
         if light_forward_mode != "scored" and lut_impl != "light":
             raise ValueError("light_forward_mode is a LightMultiHeadLUT option (lut_impl='light'), got "
                              f"light_forward_mode={light_forward_mode!r} with lut_impl={lut_impl!r}")
@@ -204,6 +214,30 @@ class CompressionMultiHeadLUT(nn.Module):
                 or confidence_form == "learned_margin") and lut_impl != "light":
             raise ValueError("learned_margin (and learned_margin_init) exists only on the light path, "
                              f"got lut_impl={lut_impl!r}")
+
+        if lut_impl == "gen1":
+            # Gen 1 (ablation rows 1.1 / 1.2): the Spiking Manifesto basic model, MultiHeadLut (AnchorPairsLookup
+            # + LProjection), wired like the Fast INDEPENDENT path: per-head compress input_dim -> n_heads*eff_in,
+            # each head's tables route only on its own [h*eff_in, (h+1)*eff_in) slice (anchor_candidates), per-head
+            # output blocks, decompress n_heads*eff_out -> output_dim. Hard read (gen1_smooth=False) or the 2-cell
+            # U(u) = 0.5/(1+|u|) blend (gen1_smooth=True); no temperature, no confidence score.
+            if self.joint_head_compression or not self.has_compress or not self.has_decompress:
+                raise ValueError("lut_impl='gen1' is wired for the independent per-head path with compress and "
+                                 "decompress only (joint_head_compression=False, inner_in_dim and "
+                                 "inner_out_dim > 0)")
+            if forward_confidence or z_norm or inner_residual:
+                raise ValueError("lut_impl='gen1' has no confidence score, z_norm or inner_residual option")
+            self.compress = nn.Linear(input_dim, n_heads * in_raw, device=device)
+            cand = (torch.arange(n_heads * eff_in, device=device).view(1, n_heads, eff_in)
+                    .expand(tph, n_heads, eff_in).contiguous())       # [tph, n_heads, eff_in]: head h's slice
+            self.lut_gen1 = MultiHeadLut(
+                input_dim=n_heads * eff_in, n_heads=n_heads, n_outputs=eff_out, n_anchor_pairs=nap,
+                tables_per_head=tph, anchor_candidates=cand, n_alternatives=gen1_n_alternatives,
+                smooth_mode=bool(gen1_smooth), uncertainty_mode=UncertaintyMode.INVERSE_L1,
+                random_seed=random_seed, initial_weights_noise=initial_weights_noise, device=device,
+            )
+            self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
+            return
 
         if lut_impl == "bh4":
             # BH4 replaces compress AND the anchor-pair addressing: a structured
@@ -378,6 +412,12 @@ class CompressionMultiHeadLUT(nn.Module):
             raise ValueError(
                 f"x shape must be [N, {self.input_dim}], got {tuple(x.shape)}"
             )
+        if self.lut_impl == "gen1":
+            N = x.shape[0]
+            z = self.compress(x)                       # [N, n_heads*eff_in]; head h owns slice h
+            y = self.lut_gen1(z).to(z.dtype)           # [N, n_heads, eff_out]
+            return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
+
         if self.lut_impl == "bh4":
             # No compress: BH4 reads x directly and its coordinate signs ARE the address.
             N = x.shape[0]

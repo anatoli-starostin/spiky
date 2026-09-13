@@ -49,6 +49,7 @@ from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
 from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
+from spiky.lutorch.l_projection import LProjection   # Gen-1 (MultiHeadLut) table store
 
 from model_build import build_model                       # shared config-driven model
 from fixed_eval import evaluate_bpb_fixed, eval_config    # THE fixed eval set
@@ -100,8 +101,11 @@ def setup_optimizer(model, lr, weight_decay, tables_no_decay=False):
     # are exempt -- the asymmetry that confounded every Light-vs-Fast comparison until
     # exp_g_0189. Its bh4.blocks are deliberately NOT exempt: they replace compress,
     # which has always been decayed.
-    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT)
-              if tables_no_decay else (FastMultiHeadLut,))
+    # Gen-1 (MultiHeadLut) tables live in its LProjection child and are exempt in BOTH branches, as Fast's
+    # tables are: they are the Gen-1 counterpart of Fast's tables. No existing model contains an LProjection,
+    # so every existing grouping is unchanged.
+    exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT, LProjection)
+              if tables_no_decay else (FastMultiHeadLut, LProjection))
     lut_ids = {id(p) for m in model.modules() if isinstance(m, exempt)
                for p in m.parameters(recurse=False)}
     decay, nodecay = [], []

@@ -231,6 +231,9 @@ class MinimalBlock(nn.Module):
                     # (ablation rows 3.3 / 3.4). Its own key: lut_forward_mode is a FastMHL key and reads
                     # 'hard' in every existing light config, so reusing it would flip all of them.
                     light_forward_mode=cfg.get('lut_light_forward_mode', 'scored'),
+                    # Gen 1 (lut_impl='gen1', ablation rows 1.1 / 1.2): MultiHeadLut hard read or the U(u) blend.
+                    gen1_smooth=bool(cfg.get('lut_gen1_smooth', False)),
+                    gen1_n_alternatives=int(cfg.get('lut_gen1_n_alternatives', 1)),
                     # sharp_margin's exponent gamma (light path). REQUIRED when the form is
                     # sharp_margin and forbidden otherwise (checked below), so a run's gamma
                     # is always read from its own config.json, never a module default.
@@ -245,6 +248,10 @@ class MinimalBlock(nn.Module):
                     # learned_margin with g held FIXED at its init (exp_g_0248). Optional, default
                     # off; absent everywhere else -> every existing config builds unchanged.
                     learned_margin_freeze_g=bool(cfg.get('lut_learned_margin_freeze_g', False)))
+                if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives'))
+                        and cfg.get('lut_impl', 'fast') != 'gen1'):
+                    raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives are only valid with "
+                                     "lut_impl == 'gen1'")
                 if 'lut_learned_margin_freeze_g' in cfg and cfg.get('lut_confidence_form') != 'learned_margin':
                     raise ValueError("lut_learned_margin_freeze_g is only valid with "
                                      "lut_confidence_form == 'learned_margin'")
@@ -476,12 +483,14 @@ class MinimalGPT(nn.Module):
 
     def lut_tv_modules(self):
         """The LUT modules the Hamming-1 cell TV penalty covers, in module order: LightMultiHeadLUT
-        (Gen 3) and FastMultiHeadLut (Gen 2). Both store [n_tables, 2^nap, d] tables whose row index
-        is the MSB-packed sign address, so the same cell_tv applies. Not covered: BH4MultiHeadLUT
-        (coordinate-sign addressing) and Gen-1 MultiHeadLut (not wired into the FFN slot)."""
+        (Gen 3), FastMultiHeadLut (Gen 2) and MultiHeadLut (Gen 1). All three store [n_tables, 2^nap, d]
+        tables whose row index is the packed sign address (MSB-first for Light/Fast, LSB-first for Gen 1;
+        the Hamming-1 row pairs are the same set either way), so the same cell_tv applies. Not covered:
+        BH4MultiHeadLUT (coordinate-sign addressing)."""
         from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
         from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
-        return [m for m in self.modules() if isinstance(m, (LightMultiHeadLUT, FastMultiHeadLut))]
+        from spiky.lutorch.multi_head_lut import MultiHeadLut
+        return [m for m in self.modules() if isinstance(m, (LightMultiHeadLUT, FastMultiHeadLut, MultiHeadLut))]
 
     def lut_tv_penalty(self):
         """Mean Hamming-1 cell-smoothness (TV) penalty over the tables of lut_tv_modules().
@@ -559,8 +568,8 @@ def _check_cell_smoothness(cfg, model):
         raise ValueError(
             f'lut_cell_smoothness={lam:g} requested, but the Hamming-1 TV penalty cannot reach this '
             f'model\'s tables: covered LUT modules={len(covered)}, LUT FFNs without covered tables='
-            f'{len(uncovered)} of {len(ffns)} (lut_impl {kinds}). lut_tv_penalty covers LightMultiHeadLUT '
-            f'and FastMultiHeadLut only; refusing to train with a silently zero or partial penalty.')
+            f'{len(uncovered)} of {len(ffns)} (lut_impl {kinds}). lut_tv_penalty covers LightMultiHeadLUT, '
+            f'FastMultiHeadLut and MultiHeadLut only; refusing to train with a silently zero or partial penalty.')
 
 
 def build_model(cfg, vocab_size, device='cuda'):

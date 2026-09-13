@@ -213,6 +213,31 @@ class MultiHeadLut(nn.Module):
         
         return output
 
+    def cell_tv(self):
+        """Hamming-1 total-variation smoothness penalty on the Gen-1 cell tables (projection.weights): the same
+        quantity as FastMultiHeadLut.cell_tv / LightMultiHeadLUT.cell_tv -- the mean over all Hamming-1-adjacent
+        cell pairs and over tables of ||W[t, c] - W[t, c']||^2, summed over the output dimension, divided by
+        n_tables * nap * 2^(nap-1).
+
+        Adjacency: AnchorPairsLookup packs the address LSB-first (margin j <-> 2^j) and every read path indexes
+        weights[t, address] (hard) or blends it with weights[t, address ^ 2^j*] (smooth), so the rows at Hamming
+        distance 1 from c are exactly c ^ 2^b, which the hypercube diff enumerates (the bit order does not change
+        that set). n_buckets == 1 only: with buckets the row is address * n_buckets + bucket, and the bucket index
+        is not an address bit."""
+        if self.n_buckets != 1:
+            raise NotImplementedError(f"cell_tv is defined for n_buckets == 1 only, got n_buckets={self.n_buckets}")
+        nap = self.n_anchor_pairs
+        n_tables, K, D = self.projection.weights.shape
+        if K != (1 << nap):
+            raise RuntimeError(f"cell_tv expects 2^NAP={1 << nap} rows per table, got {K}")
+        t = self.projection.weights.view(n_tables, *([2] * nap), D)   # [T, 2,2,..,2, D] hypercube view
+        tv = t.new_zeros(())
+        for ax in range(1, nap + 1):                                  # one hypercube axis per bit
+            d = t.diff(dim=ax)                                        # size-1 diff across that bit
+            tv = tv + (d * d).sum()
+        n_pairs = n_tables * nap * (1 << (nap - 1))                  # total Hamming-1 pairs
+        return tv / n_pairs
+
 
 @dataclass(frozen=True)
 class UnfoldConfiguration:
