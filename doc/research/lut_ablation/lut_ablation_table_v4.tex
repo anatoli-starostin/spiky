@@ -5,7 +5,7 @@
 \usepackage{lmodern}
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb}
-\usepackage{booktabs,longtable,array}
+\usepackage{booktabs,longtable,array,colortbl}
 \usepackage{xcolor}
 \usepackage[hang,flushmargin]{footmisc}
 \usepackage{hyperref}
@@ -49,54 +49,59 @@
 Per variant, (a) is the function computed on the forward pass and (b) the function whose gradient training uses: the weights always receive the gradient of (a),
 while the input, the temperatures and the learned per-layer scalars receive the gradient of (b) with the table weights held constant.
 \footnotesize
-\begin{longtable}{>{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{10.2cm} >{\raggedright\arraybackslash}p{10.6cm}}
-\toprule
+\arrayrulecolor{black!45}\setlength{\extrarowheight}{1.5pt}%
+\newcommand{\spanab}[1]{\multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr 20.8cm+2\tabcolsep+\arrayrulewidth\relax}|}{#1}}%
+\newcommand{\genrow}[1]{\multicolumn{3}{|l|}{#1}}%
+\begin{longtable}{|>{\raggedright\arraybackslash}p{2.9cm}|>{\raggedright\arraybackslash}p{10.2cm}|>{\raggedright\arraybackslash}p{10.6cm}|}
+\hline
 \textbf{Variant} & \textbf{(a) Forward: the function computed} & \textbf{(b) Backward: the function whose gradient is used} \\
-\midrule
+\hline
 \endfirsthead
-\toprule
+\hline
 \textbf{Variant} & \textbf{(a) Forward: the function computed} & \textbf{(b) Backward: the function whose gradient is used} \\
-\midrule
+\hline
 \endhead
-\midrule \multicolumn{3}{r}{\emph{continued on next page}} \\
+\multicolumn{3}{r}{\emph{continued on next page}} \\
 \endfoot
-\bottomrule
+\hline
 \endlastfoot
 
-\multicolumn{3}{l}{\textbf{GEN 1 --- Spiking Manifesto basic model}} \\[2pt]
+\genrow{\textbf{GEN 1 --- Spiking Manifesto basic model}} \\ \hline
 1.1 Hard forward, two-alternatives backward &
 $y=\sum_tW_t[c_t]$, summed over tables $t$: each of table $t$'s $n$ anchor pairs gives a signed margin $u_j=z[a_j]-z[b_j]$; the $n$ signs $[u_j>0]$ are the bits of the binary index $c_t\in\{0,\dots,2^n-1\}$ of the row read from $W_t\in\mathbb R^{K\times d}$, $K=2^n$. &
 The 2-cell blend $\sum_t\big[(1-U_t)W_t[c_t]+U_tW_t[c_t']\big]$, $U_t=U(u_{j^\star})$, $U(u)=0.5/(1+|u|)$, with the least-confident pair $j^\star=\arg\min_j|u_j|$ and $c'$ ($c$ with bit $j^\star$ flipped) held fixed.
-The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ across a bit flip and jumps only where $j^\star$ switches. \\[3pt]
+The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ across a bit flip and jumps only where $j^\star$ switches. \\[2pt] \hline
 1.2 Soft forward, two-alternatives backward &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} the blend of 1.1(b), applied at eval too.} \\[4pt]
-\midrule
-\multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}} \\[2pt]
+\spanab{\textbf{(a) = (b):} the blend of 1.1(b), applied at eval too.} \\[2pt] \hline
+\genrow{\textbf{GEN 2 --- FastMHL math}} \\ \hline
 2.1 Hard forward, all-alternatives backward (all $K$ cells) &
 $y=\sum_tW_t[c_t]$, as 1.1(a). &
 With $b_j(\ell)=+1$ if the bit of $\ell$ for pair $j$ is 1, else $-1$, and the squashed margin $\hat m_j=u_j/(T_s+|u_j|)\in(-1,1)$: $s_\ell=\sum_jb_j(\ell)\,\hat m_j$ scores how well row $\ell$'s bit pattern agrees with the actual signs of the margins (small margins count little either way).
 All $K$ rows of each table are read, softmax-weighted within that table: $\sum_t\sum_{\ell<K}\mathrm{softmax}_\ell(s_\ell/T_{sel})\,W_t[\ell]$.
-$T_s,T_{sel}$: per-layer scalars, learned when \code{lut\_learnable\_temps} is set.
-Globally $C^1$ in the input; never uses the address, whose row is the one with the largest weight. \\[3pt]
+$T_s,T_{sel}$: per-layer learned scalars.
+Globally $C^1$ in the input; never uses the address, whose row is the one with the largest weight. \\[2pt] \hline
 2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
 Reads two cells, the addressed $c_t$ and the alternative $c_t'$ ($c_t$ with the bit of the least-confident pair $j^\star=\arg\min_j|u_j|$ flipped), blended by a weight set by that pair's margin:
 $y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})\in(0,\tfrac12]$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
-The same softmax-weighted read of all $K$ rows as 2.1(b), with the same $T_s,T_{sel}$ parameters as (a). \\[3pt]
+The same softmax-weighted read of all $K$ rows as 2.1(b), with the same $T_s,T_{sel}$ parameters as (a). \\[2pt] \hline
 2.3 Hard forward, 2-alternatives backward &
-$y=\sum_t W_t[c_t]$ &
-\tbd{not implemented; open decision.} \code{FastMultiHeadLut} raises \code{ValueError} for \code{backward\_topk>0} unless \code{forward\_mode='hybrid\_smooth'}. \\[3pt]
+The hard read of 1.1(a). &
+Would be: the softmax of 2.1(b) restricted to the two cells $c_t$ and $c_t'$ (as in 2.2(a)), which is exactly 2.2(a)'s 2-cell blend.
+\tbd{not implemented; open decision.} \code{FastMultiHeadLut} refuses this combination when it is built: \code{backward\_topk>0} raises \code{ValueError} unless \code{forward\_mode='hybrid\_smooth'}. Patch the code or drop the row. \\[2pt] \hline
 2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} the 2-cell blend of 2.2(a) (\code{backward\_topk=1}: it counts cells beyond the addressed one, so 2 alternatives is 1, not 2).} \\[4pt]
-\midrule
-\multicolumn{3}{l}{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\[2pt]
+\spanab{\textbf{(a) = (b):} the 2-cell blend of 2.2(a). The backward keeps only 2 of the $K$ rows, the addressed $c_t$ and its least-confident neighbour $c_t'$, which are exactly the two cells the forward reads,
+so the restricted softmax equals the forward weight $w_t$ and forward and backward coincide; unlike 2.2, the input gradient reaches only pair $j^\star$.
+Configured as \code{backward\_topk=1}: it counts neighbours beyond the addressed cell, so 2 alternatives is 1, not 2.} \\[2pt] \hline
+\genrow{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\ \hline
 3.1 Learned margin score, per-layer $(g,\beta,\gamma)$ &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$;
-one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y\|$).} \\[3pt]
+\spanab{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$;
+one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y\|$).} \\[2pt] \hline
 \textbf{3.2 The Gen-3 form:} learned margin score, per-layer $(\beta,\gamma)$ &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} 3.1 with $g$ fixed at 0, $s_t=S_tP_t^{\gamma}$ (jump 2.22\%).} \\[3pt]
+\spanab{\textbf{(a) = (b):} 3.1 with $g$ fixed at 0, $s_t=S_tP_t^{\gamma}$ (jump 2.22\%).} \\[2pt] \hline
 3.3 $=$ 3.2 $+$ Hamming-1 cell TV, $\lambda=10$ &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} 3.2 (jump 1.78\%); training adds $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, over cell pairs differing in one bit, to the loss.} \\
+\spanab{\textbf{(a) = (b):} 3.2 (jump 1.78\%); training adds $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, over cell pairs differing in one bit, to the loss.} \\[2pt]
 \end{longtable}
+\arrayrulecolor{black}\setlength{\extrarowheight}{0pt}
 \normalsize
 
 \section*{Table B --- cost and results}
