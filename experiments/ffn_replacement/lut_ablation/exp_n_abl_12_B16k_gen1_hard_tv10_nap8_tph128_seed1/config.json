@@ -1,6 +1,6 @@
 {
   "exp_name": "exp_n_abl_12_B16k_gen1_hard_tv10_nap8_tph128_seed1",
-  "_arch_note": "LUT ABLATION ROW 1.1 +TV. As abl_11. +TV: lut_cell_smoothness 10.0, (10 * lut_tv_penalty()).backward() once per step before clipping. Trainer: current train_fixed.py (corrected fixed eval, lut_cell_smoothness switch, W&B shim).",
+  "_arch_note": "LUT ABLATION ROW 1.1 +TV. As abl_11. +TV: lut_cell_smoothness 10.0, (10 * lut_tv_penalty()).backward() once per step before clipping. Trainer: current train_fixed.py (corrected fixed eval, lut_cell_smoothness switch, W&B shim). Tables: lut_gen1_weights_init uniform = the Fast/Light rule, Uniform[-noise, +noise] per head from Generator(seed + h + 1), so table init is not a confound between generations.",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,
@@ -35,5 +35,6 @@
   "lut_impl": "gen1",
   "lut_gen1_smooth": false,
   "lut_gen1_n_alternatives": 1,
+  "lut_gen1_weights_init": "uniform",
   "lut_cell_smoothness": 10.0
 }

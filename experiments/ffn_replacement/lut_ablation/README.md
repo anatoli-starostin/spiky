@@ -48,7 +48,7 @@ This directory holds **22 folders**: the 21 cells plus **abl_06**, a seed replic
 
 The architecture is held fixed: E=384, 6 layers, 16K steps, device_batch 12 × grad_accum 4 (V: 48 × 1, as its parent), clip 1.0, CompressionMultiHeadLUT FFN H=4 × tph 128, n=8, d_in = d_out = 48.
 - **+TV** always adds `lut_cell_smoothness: 10.0`.
-- **Gen 1** (abl_11–14): `exp_n_0121` + `lut_impl: gen1`, `lut_gen1_smooth: false` (1.1) / `true` (1.2), `lut_gen1_n_alternatives: 1`.
+- **Gen 1** (abl_11–14): `exp_n_0121` + `lut_impl: gen1`, `lut_gen1_smooth: false` (1.1) / `true` (1.2), `lut_gen1_n_alternatives: 1`, `lut_gen1_weights_init: uniform` (tables drawn exactly as Fast's and Light's).
 - **Gen 2**, all from `exp_n_0121`:
   - 2.1 (abl_07 / 15): no flag;
   - 2.2 (abl_01 / 16): `lut_forward_mode: hybrid_smooth`, `lut_backward_topk: 0`;
@@ -98,7 +98,7 @@ Expect close to the published value. A gap around the vanilla 16K two-seed sprea
 ## Verified for all 22, without a training step
 
 - `config.json` builds, and the **built** model holds the row's module:
-  - Gen 1: 6 × `MultiHeadLut` (smooth as the row, n_alternatives 1, INVERSE_L1);
+  - Gen 1: 6 × `MultiHeadLut` (smooth as the row, n_alternatives 1, INVERSE_L1, `weights_init='uniform'`, every table torch.equal to the per-head Uniform rule);
   - Gen 2: 6 × `FastMultiHeadLut` with the row's `forward_mode` / `backward_topk`;
   - Gen 3: 6 × `LightMultiHeadLUT` with the row's `forward_mode` (scored / hard) and `read_top_n`, τ 0.5 learnable at n=2;
   - V: 0 LUT modules and 6 dense FFNs.
@@ -111,7 +111,7 @@ Expect close to the published value. A gap around the vanilla 16K two-seed sprea
 
 - **LightMHL hard forward key.** It is switched by its own key `lut_light_forward_mode`, not `lut_forward_mode`. The latter is a FastMHL key that reads `hard` in every existing light config, so reusing it would have flipped all of them.
 - **Gen-1 wiring.** Gen 1 is wired only on the independent per-head path. Each head's tables draw anchors from its own compressed slice, mirroring Fast's `multi_head_input`.
-- **Gen-1 table init.** Gen-1 tables are initialised N(0, 1e-3²), not Uniform(±1e-3), as in `MultiHeadLut`'s own code. Its TV penalty at init is therefore 9.60e-05, against 3.20e-05 for Fast/Light (a variance ratio of exactly 3). λ = 10 has the same meaning; the starting value differs.
+- **Gen-1 table init — resolved (Anatoli overruled the N(0, 1e-3²) default).** abl_11–14 set `lut_gen1_weights_init: uniform`, which applies the Fast/Light table rule to `MultiHeadLut`: head h draws Uniform[−noise, +noise] from `Generator(seed + h + 1)`. The layer-0 tables are torch.equal to Fast's and Light's at the same seed. Std is 5.77e-04 and TV at init is 3.20e-05 in all three generations. `MultiHeadLut`'s own default is unchanged, and so is every config without the key: 179/179 committed configs build identical state_dicts and optimiser groups.
 - **Names.** Kept at 61 characters or fewer: abl_16/18 say `hsmooth`, and abl_22 drops `tph128`.
 - **τ logging.** The Gen-3 trainer does not log τ per eval; abl_04/05/21/22 keep the final per-layer `log_tau` in `checkpoint.pt` only.
 - **abl_06.** Kept as a prepared extra (3.1 seed 2), outside the 21.

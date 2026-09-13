@@ -1,6 +1,6 @@
 {
   "exp_name": "exp_n_abl_13_B16k_gen1_smooth_nap8_tph128_seed1",
-  "_arch_note": "LUT ABLATION ROW 1.2 (Gen 1: the U(u) 2-cell blend in forward and backward). exp_n_0121's config with lut_impl fast -> gen1 (MultiHeadLut, smooth on, n_alternatives 1, INVERSE_L1). Trainer: current train_fixed.py (corrected fixed eval, lut_cell_smoothness switch, W&B shim).",
+  "_arch_note": "LUT ABLATION ROW 1.2 (Gen 1: the U(u) 2-cell blend in forward and backward). exp_n_0121's config with lut_impl fast -> gen1 (MultiHeadLut, smooth on, n_alternatives 1, INVERSE_L1). Trainer: current train_fixed.py (corrected fixed eval, lut_cell_smoothness switch, W&B shim). Tables: lut_gen1_weights_init uniform = the Fast/Light rule, Uniform[-noise, +noise] per head from Generator(seed + h + 1), so table init is not a confound between generations.",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,
@@ -34,5 +34,6 @@
   "_sweep_tag": "nap8-tph128",
   "lut_impl": "gen1",
   "lut_gen1_smooth": true,
-  "lut_gen1_n_alternatives": 1
+  "lut_gen1_n_alternatives": 1,
+  "lut_gen1_weights_init": "uniform"
 }
