@@ -79,8 +79,9 @@ All $K$ rows of each table are read, softmax-weighted within that table: $\sum_t
 $T_s,T_{sel}$: per-layer scalars, learned when \code{lut\_learnable\_temps} is set.
 Globally $C^1$ in the input; never uses the address, whose row is the one with the largest weight. \\[3pt]
 2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
-$y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
-The same softmax-weighted read of all $K$ rows as 2.1(b). \\[3pt]
+Reads two cells, the addressed $c_t$ and the alternative $c_t'$ ($c_t$ with the bit of the least-confident pair $j^\star=\arg\min_j|u_j|$ flipped), blended by a weight set by that pair's margin:
+$y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})\in(0,\tfrac12]$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
+The same softmax-weighted read of all $K$ rows as 2.1(b), with the same $T_s,T_{sel}$ parameters as (a). \\[3pt]
 2.3 Hard forward, 2-alternatives backward &
 $y=\sum_t W_t[c_t]$ &
 \tbd{not implemented; open decision.} \code{FastMultiHeadLut} raises \code{ValueError} for \code{backward\_topk>0} unless \code{forward\_mode='hybrid\_smooth'}. \\[3pt]
