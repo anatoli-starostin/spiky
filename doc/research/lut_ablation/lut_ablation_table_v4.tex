@@ -89,8 +89,7 @@ Would be: the softmax of 2.1(b) restricted to the two cells $c_t$ and $c_t'$ (as
 \tbd{not implemented; open decision.} \code{FastMultiHeadLut} refuses this combination when it is built: \code{backward\_topk>0} raises \code{ValueError} unless \code{forward\_mode='hybrid\_smooth'}. Patch the code or drop the row. \\[2pt] \hline
 2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
 \spanab{\textbf{(a) = (b):} the 2-cell blend of 2.2(a). The backward keeps only 2 of the $K$ rows, the addressed $c_t$ and its least-confident neighbour $c_t'$, which are exactly the two cells the forward reads,
-so the restricted softmax equals the forward weight $w_t$ and forward and backward coincide; unlike 2.2, the input gradient reaches only pair $j^\star$.
-Configured as \code{backward\_topk=1}: it counts neighbours beyond the addressed cell, so 2 alternatives is 1, not 2.} \\[2pt] \hline
+so the restricted softmax equals the forward weight $w_t$ and forward and backward coincide; unlike 2.2, the input gradient reaches only pair $j^\star$.} \\[2pt] \hline
 \genrow{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\ \hline
 \textbf{3.1 The Gen-3 form:} learned margin score, one cell, per-layer $(\beta,\gamma)$ &
 \spanab{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=S_tP_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$;
