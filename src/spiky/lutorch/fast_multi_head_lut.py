@@ -563,7 +563,8 @@ def _soft_lut_bwd_body_topk(grad_pt, x, weights, anchor_a_long, anchor_b_long,
                             bit_matrix, powers, index, T_soft, T_sel,
                             topk_n_alt: int,
                             accum_dtype: torch.dtype,
-                            compute_weight_grad: bool = False):
+                            compute_weight_grad: bool = False,
+                            confidence_score=None):
     """Sparse-Hamming ("soft_topk") x / temperature backward — TRUE sparse-row.
 
     The surrogate softmax runs over ONLY the R = 1 + topk_n_alt kept rows:
@@ -585,7 +586,11 @@ def _soft_lut_bwd_body_topk(grad_pt, x, weights, anchor_a_long, anchor_b_long,
 
     Weight grad: hybrid_smooth passes compute_weight_grad=False and supplies its
     own 2-row grad via `_hybrid_smooth_weight_grad`, so this returns None there;
-    with compute_weight_grad=True it is a 1-row scatter at the chosen row.
+    with compute_weight_grad=True (the hard forward) it is a 1-row scatter at the
+    chosen row, scaled by `confidence_score` when the forward gated the row with
+    it -- exactly as `_soft_lut_bwd_body` does. Accumulated with index_add only:
+    there is no sparse-S + bmm route, so bf16 weight storage is not supported on
+    that path (FastMultiHeadLut refuses bf16/fp16 storage for hard + backward_topk > 0).
     """
     B, n_tables_, n_outputs = grad_pt.shape
     n_tables, NAP = anchor_a_long.shape
@@ -643,9 +648,13 @@ def _soft_lut_bwd_body_topk(grad_pt, x, weights, anchor_a_long, anchor_b_long,
     grad_log_T_soft = -(d_d * d).sum()
 
     if compute_weight_grad:
+        # Under the confidence gate the forward row is score*W, so the chosen-row weight
+        # grad carries the score factor; the surrogate above stays on the unscaled grad_pt.
+        grad_pt_w = (grad_pt if confidence_score is None
+                     else grad_pt * confidence_score.unsqueeze(-1))
         flat_idx = (index + flat_offset.view(1, -1)).reshape(-1)
         grad_w_flat = torch.zeros(n_tables * K, n_outputs, dtype=accum_dtype, device=weights.device)
-        grad_w_flat.index_add_(0, flat_idx, grad_pt.reshape(-1, n_outputs).to(accum_dtype))
+        grad_w_flat.index_add_(0, flat_idx, grad_pt_w.reshape(-1, n_outputs).to(accum_dtype))
         grad_weights = grad_w_flat.view(n_tables, K, n_outputs)
     else:
         grad_weights = None
@@ -760,7 +769,7 @@ class _FastMHLutSoft(torch.autograd.Function):
                 anchor_a_long, anchor_b_long, bit_matrix, powers,
                 n_heads, tph, table_dim, use_bf16,
                 forward_confidence=False, confidence_form="bounded",
-                confidence_gain=1.0):
+                confidence_gain=1.0, backward_topk=0):
         autocast_ctx = (torch.amp.autocast("cuda", dtype=torch.bfloat16)
                         if use_bf16 and x.is_cuda
                         else torch.amp.autocast("cpu", enabled=False))
@@ -792,6 +801,7 @@ class _FastMHLutSoft(torch.autograd.Function):
         ctx.forward_confidence = forward_confidence
         ctx.confidence_form = confidence_form
         ctx.confidence_gain = confidence_gain
+        ctx.backward_topk = int(backward_topk)
         return out
 
     @staticmethod
@@ -832,18 +842,32 @@ class _FastMHLutSoft(torch.autograd.Function):
         # ties on all measured shapes — see scratch benches in this repo).
         wgrad_via_bmm = weights.dtype != torch.float32
         with autocast_ctx:
-            grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
-                grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
-                index, T_soft, T_sel, weights.dtype,
-                wgrad_via_bmm=wgrad_via_bmm,
-                confidence_score=confidence_score,
-            )
+            if ctx.backward_topk > 0:
+                # Sparse-Hamming ("soft_topk") surrogate for the x / temperature grads:
+                # the softmax runs over only {chosen row} + its backward_topk least-|d|
+                # 1-bit-flip neighbours, renormalised over that kept set. The weight grad
+                # is still the hard forward's 1-row scatter, score-scaled under the gate.
+                # fp32 / float64 weight storage only (no sparse-S + bmm route;
+                # FastMultiHeadLut checks it), so wgrad_via_bmm is not used here.
+                grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body_topk(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    powers, index, T_soft, T_sel, ctx.backward_topk,
+                    weights.dtype, compute_weight_grad=True,
+                    confidence_score=confidence_score,
+                )
+            else:
+                grad_x, grad_w, grad_log_Ts, grad_log_Tx = _soft_lut_bwd_body(
+                    grad_pt, x, weights, anchor_a_long, anchor_b_long, bit_matrix,
+                    index, T_soft, T_sel, weights.dtype,
+                    wgrad_via_bmm=wgrad_via_bmm,
+                    confidence_score=confidence_score,
+                )
         if grad_x_add is not None:
             grad_x = grad_x + grad_x_add
-        # 15 forward inputs -> 15 grad returns.
+        # 16 forward inputs -> 16 grad returns (last is backward_topk, an int).
         return (grad_x, grad_w, grad_log_Ts, grad_log_Tx,
                 None, None, None, None, None, None, None, None,
-                None, None, None)
+                None, None, None, None)
 
 
 # =============================================================================
@@ -1301,12 +1325,17 @@ class FastMultiHeadLut(nn.Module):
             at runtime (e.g. soft -> hard finetune) by setting
             `module.forward_mode = "hard"`.
         backward_topk: 0 (default) uses the full-K soft surrogate for the
-            x / temperature gradients. When > 0 (hybrid_smooth only), selects
-            the sparse-Hamming ("soft_topk") backward: the surrogate softmax is
-            masked to {chosen row} + its `backward_topk` least-|d| 1-bit-flip
-            neighbours, so those gradients flow only through the kept cells
-            (backward_topk >= NAP = the full Hamming-1 ball). The 2-row weight
-            gradient is unchanged.
+            x / temperature gradients. When > 0, selects the sparse-Hamming
+            ("soft_topk") backward: the surrogate softmax is restricted to
+            {chosen row} + its `backward_topk` least-|d| 1-bit-flip neighbours
+            and renormalised over that kept set, so those gradients flow only
+            through the kept cells (backward_topk >= NAP = the full Hamming-1
+            ball). The weight gradient is unchanged: the 2 blended rows for
+            hybrid_smooth, the chosen row for hard. hard + backward_topk > 0
+            needs fp32 (or float64) weight storage (the sparse body has no bf16
+            weight-grad route). Read at call time, so a hybrid_smooth module
+            built with backward_topk > 0 and flipped to forward_mode="hard"
+            trains with the sparse backward, not the full-K one.
         forward_confidence: opt-in LookupFFN-style score gate (default False).
             Each gathered row is scaled by a smooth per-(token, table) scalar
             derived from the routing-margin magnitudes |d| (the hard sign
@@ -1408,16 +1437,19 @@ class FastMultiHeadLut(nn.Module):
         # backward_topk > 0 selects the sparse-Hamming ("soft_topk") x/temperature
         # backward: the surrogate softmax runs over only {chosen row} + its
         # backward_topk least-|d| 1-bit-flip neighbours (0 = full-K soft, the
-        # historical default). Only implemented for the hybrid_smooth backward.
+        # historical default). Both forward modes: hybrid_smooth keeps its 2-row weight
+        # grad, hard keeps its 1-row weight grad.
         self.backward_topk = int(backward_topk)
         if self.backward_topk < 0 or self.backward_topk > n_anchor_pairs:
             raise ValueError(
                 f"backward_topk must be in [0, NAP={n_anchor_pairs}], got {backward_topk!r}"
             )
-        if self.backward_topk > 0 and forward_mode != "hybrid_smooth":
+        if (self.backward_topk > 0 and forward_mode == "hard"
+                and weight_dtype not in (torch.float32, torch.float64)):
             raise ValueError(
-                "backward_topk > 0 (sparse-Hamming backward) is only implemented for "
-                f"forward_mode='hybrid_smooth', got forward_mode={forward_mode!r}"
+                "forward_mode='hard' with backward_topk > 0 needs fp32 (or float64) weight "
+                "storage: the sparse-Hamming backward has no bf16 weight-grad route, got "
+                f"weight_dtype={weight_dtype!r}"
             )
 
         self.input_dim = input_dim
@@ -1780,10 +1812,18 @@ class FastMultiHeadLut(nn.Module):
             if compute_in_bf16:
                 out = out.to(self.weights.dtype)
             return out
+        if self.backward_topk > 0 and self.weights.dtype not in (torch.float32, torch.float64):
+            # Also reached by a runtime flip hybrid_smooth -> hard, which __init__ cannot see.
+            raise ValueError(
+                "forward_mode='hard' with backward_topk > 0 needs fp32 (or float64) weight "
+                "storage: the sparse-Hamming backward has no bf16 weight-grad route, got "
+                f"{self.weights.dtype}"
+            )
         return _FastMHLutSoft.apply(
             x, self.weights, self.log_soft_score_temp, self.log_select_temp,
             self.soft_anchor_a_long, self.soft_anchor_b_long,
             self.soft_bit_matrix, self.soft_powers,
             self.n_heads, self.tables_per_head, self.table_dim, self.use_bf16,
             self.forward_confidence, self.confidence_form, self.confidence_gain,
+            self.backward_topk,
         )
