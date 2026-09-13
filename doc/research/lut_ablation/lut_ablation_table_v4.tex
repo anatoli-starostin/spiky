@@ -85,8 +85,8 @@ $y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T
 The same softmax-weighted read of all $K$ rows as 2.1(b), with the same $T_s,T_{sel}$ parameters as (a). \\[2pt] \hline
 2.3 Hard forward, 2-alternatives backward &
 The hard read of 1.1(a). &
-Would be: the softmax of 2.1(b) restricted to the two cells $c_t$ and $c_t'$ (as in 2.2(a)), which is exactly 2.2(a)'s 2-cell blend.
-\tbd{not implemented; open decision.} \code{FastMultiHeadLut} refuses this combination when it is built: \code{backward\_topk>0} raises \code{ValueError} unless \code{forward\_mode='hybrid\_smooth'}. Patch the code or drop the row. \\[2pt] \hline
+The softmax of 2.1(b) restricted to the two cells $c_t$ and $c_t'$ ($c_t$ with the bit of the least-confident pair $j^\star=\arg\min_j|u_j|$ flipped) and renormalised over that pair.
+The weight on $c_t'$ is $\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid: exactly 2.2(a)'s $w_t$, so this is 2.2(a)'s 2-cell blend. \\[2pt] \hline
 2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
 \spanab{\textbf{(a) = (b):} the 2-cell blend of 2.2(a). The backward keeps only 2 of the $K$ rows, the addressed $c_t$ and its least-confident neighbour $c_t'$, which are exactly the two cells the forward reads,
 so the restricted softmax equals the forward weight $w_t$ and forward and backward coincide; unlike 2.2, the input gradient reaches only pair $j^\star$.} \\[2pt] \hline
@@ -149,12 +149,12 @@ $P(Kd+2nK+kd)$ $=\mathbf{8{,}437{,}760}$ &
 \tbd{not yet run} &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=0)}. \\
 2.3 &
-$P(2n+d)=32{,}768$ &
-n/a &
+$P(2n+d)=\mathbf{32{,}768}$ &
+$P(2kd+4nk+9k+12n+d-1)$ $=\mathbf{213{,}504}$, $k=2$ cells &
 $0$ &
-n/a &
-\tbd{not implemented; open decision} &
-Would be \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=1)}, which the code rejects. \\
+$P(kd+2nk)=\mathbf{65{,}536}$ &
+\tbd{not yet run} &
+\code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=1)}; \code{backward\_topk} counts the cells kept besides $c_t$. \\
 2.4 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$ &
 $P(4kd+9n+15)=\mathbf{241{,}152}$ &
@@ -216,12 +216,12 @@ As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 
 \section*{Remaining work}
 \begin{itemize}\setlength\itemsep{0pt}
-\item \textbf{Run 2.2 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
+\item \textbf{Run 2.2, 2.3 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
   \code{exp\_n\_0188} is $n=7$ with a gate on).
 \item \textbf{Run 3.2:} fork \code{exp\_g\_0248}, adding \code{lut\_read\_top\_n: 2}, \code{lut\_read\_tau: 0.5}, \code{lut\_read\_tau\_learnable: true}. No learned-score $n=2$ run exists;
   \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form.
 \item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
-  \textbf{Open decision, 2.3:} patch \code{FastMultiHeadLut} (\code{fast\_multi\_head\_lut.py:1417}) or drop the row. A hard-forward Gen-3 variant has not been designed.
+  A hard-forward Gen-3 variant has not been designed.
 \item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h) would give a real LUT seed spread.
   Reference: vanilla dense FFN 1.1651 / 1.1618 at 16K (two seeds), 1.1154 at 48K.
 \end{itemize}
