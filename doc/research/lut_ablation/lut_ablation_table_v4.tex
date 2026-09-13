@@ -93,7 +93,7 @@ so the restricted softmax equals the forward weight $w_t$ and forward and backwa
 \genrow{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\ \hline
 \textbf{3.1 The Gen-3 form:} learned margin score, one cell, per-layer $(\beta,\gamma)$ &
 \spanab{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=S_tP_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$;
-$\beta,\gamma$ learned per layer from $(2,1)$, where $s_t$ is LookupFFN's margin score. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.22\% of $\|y\|$).} \\[2pt] \hline
+$\beta,\gamma$ learned per layer from $(2,1)$, where $s_t$ is LookupFFN's margin score. Discontinuous at cell boundaries, since $\sigma(0)>0$.} \\[2pt] \hline
 3.2 The Gen-3 form, two alternatives, per-layer $(\beta,\gamma,\tau)$ &
 \spanab{\textbf{(a) = (b):} each table reads two cells, $y=\sum_t s_t\big[(1-v_t)W_t[c_t]+v_tW_t[c_t']\big]$, with $s_t$ as in 3.1 over all $n$ margins and $c_t'$ the cell $c_t$ with the bit of the smallest margin $j^\star=\arg\min_jm_j$ flipped ($c_t,c_t',j^\star$ held fixed).
 $v_t$ is a softmax over the two cells with logits $0$ and $-2m_{j^\star}/\tau$ (flipping bit $j$ lowers $\langle u,b\rangle$ by $2m_j$), i.e.\ $v_t=\sigma(-2m_{j^\star}/\tau)\in(0,\tfrac12]$; $\tau$ learned per layer from $0.5$.
