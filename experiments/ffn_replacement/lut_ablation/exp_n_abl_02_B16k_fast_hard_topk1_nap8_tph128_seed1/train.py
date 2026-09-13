@@ -138,6 +138,8 @@ print(f'Tokens/micro-batch: {tokens_per_step:,} | grad_accum: {grad_accum} | eff
 # offline automatically when the server is unreachable (e.g. inside the sbox cage), synced later.
 # It only reads floats this loop already has plus read-only parameter values at evals: no RNG,
 # no graph, no optimiser or data interaction -- metrics.csv and the training math are unchanged.
+import wandb_tracking
+wandb_tracking.GROUP = 'lut_ablation'   # W&B group for every run in lut_ablation/ (shim default: 'ffn_replacement')
 from wandb_tracking import Tracker
 tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params)
 

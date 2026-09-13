@@ -201,6 +201,8 @@ def tv_stats():
 # --- optional wandb tracking (tools/wandb_tracking.py; conventions: claude/wandb.md on main) ----
 # OFF unless WANDB_BASE_URL is set; online when the server is reachable, offline otherwise; never fatal
 # and never blocks the loop. Reads floats this loop already has: no RNG, no optimiser or data interaction.
+import wandb_tracking
+wandb_tracking.GROUP = 'lut_ablation'   # W&B group for every run in lut_ablation/ (shim default: 'ffn_replacement')
 from wandb_tracking import Tracker
 tracker = Tracker.start(cfg, EXP_DIR, grad_accum=grad_accum, total_params=total_params,
                         extra_tags=[f'tv:{LUT_TV_LAMBDA:g}'])
