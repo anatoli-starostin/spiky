@@ -40,8 +40,7 @@
 \item Core LUT only, per token, one layer. The \code{compress}/\code{decompress} projections are identical in every row and excluded (147,456 MACs forward).
 \item \textbf{FLOP} = one scalar float operation ($+,-,\times,\div$, a comparison, $|\cdot|$, $\exp$, $\log\sigma$, $\sigma$). \textbf{MAC} = a multiply accumulated into a sum; 1 MAC = 2 FLOPs,
   included in the FLOP column. Memory reads and integer work are not counted.
-\item \textbf{Forward} = inference. \textbf{Backward} = all additional training arithmetic, including per-table gradients of per-layer scalars and training-only regularisers
-  (amortised over the 24,576 tokens of a step).
+\item \textbf{Forward} = inference. \textbf{Backward} = all additional training arithmetic, including per-table gradients of per-layer scalars.
 \end{itemize}
 
 \newpage
@@ -93,13 +92,13 @@ Would be: the softmax of 2.1(b) restricted to the two cells $c_t$ and $c_t'$ (as
 so the restricted softmax equals the forward weight $w_t$ and forward and backward coincide; unlike 2.2, the input gradient reaches only pair $j^\star$.
 Configured as \code{backward\_topk=1}: it counts neighbours beyond the addressed cell, so 2 alternatives is 1, not 2.} \\[2pt] \hline
 \genrow{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\ \hline
-3.1 Learned margin score, per-layer $(g,\beta,\gamma)$ &
-\spanab{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$;
-one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y\|$).} \\[2pt] \hline
-\textbf{3.2 The Gen-3 form:} learned margin score, per-layer $(\beta,\gamma)$ &
-\spanab{\textbf{(a) = (b):} 3.1 with $g$ fixed at 0, $s_t=S_tP_t^{\gamma}$ (jump 2.22\%).} \\[2pt] \hline
-3.3 $=$ 3.2 $+$ Hamming-1 cell TV, $\lambda=10$ &
-\spanab{\textbf{(a) = (b):} 3.2 (jump 1.78\%); training adds $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, over cell pairs differing in one bit, to the loss.} \\[2pt]
+\textbf{3.1 The Gen-3 form:} learned margin score, one cell, per-layer $(\beta,\gamma)$ &
+\spanab{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=S_tP_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$;
+$\beta,\gamma$ learned per layer from $(2,1)$, where $s_t$ is LookupFFN's margin score. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.22\% of $\|y\|$).} \\[2pt] \hline
+3.2 The Gen-3 form, two alternatives, per-layer $(\beta,\gamma,\tau)$ &
+\spanab{\textbf{(a) = (b):} each table reads two cells, $y=\sum_t s_t\big[(1-v_t)W_t[c_t]+v_tW_t[c_t']\big]$, with $s_t$ as in 3.1 over all $n$ margins and $c_t'$ the cell $c_t$ with the bit of the smallest margin $j^\star=\arg\min_jm_j$ flipped ($c_t,c_t',j^\star$ held fixed).
+$v_t$ is a softmax over the two cells with logits $0$ and $-2m_{j^\star}/\tau$ (flipping bit $j$ lowers $\langle u,b\rangle$ by $2m_j$), i.e.\ $v_t=\sigma(-2m_{j^\star}/\tau)\in(0,\tfrac12]$; $\tau$ learned per layer from $0.5$.
+The input gradient reaches all $n$ margins through $s_t$ and $m_{j^\star}$ alone through $v_t$. Continuous across a bit flip ($v_t=\tfrac12$ there); jumps where $j^\star$ switches.} \\[2pt]
 \end{longtable}
 \arrayrulecolor{black}\setlength{\extrarowheight}{0pt}
 \normalsize
@@ -165,47 +164,48 @@ $P\,2kd=\mathbf{98{,}304}$ &
 \tbd{not yet run} &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)}. \\
 \midrule
-3.1 &
+\textbf{3.1} &
 $P(2kd+7n+2)=\mathbf{78{,}848}$, $k=1$\note{g} &
-$P(4kd+10n+10)=\mathbf{144{,}384}$\note{g} &
+$P(4kd+10n+8)=\mathbf{143{,}360}$\note{g} &
 $P\,kd=\mathbf{24{,}576}$ &
 $P\,2kd=\mathbf{49{,}152}$ &
-\textbf{1.169344} (\code{exp\_g\_0247}) &
-\code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1))}. \\
-\textbf{3.2} &
-$P(2kd+7n+2)=\mathbf{78{,}848}$ &
-$P(4kd+10n+8)=\mathbf{143{,}360}$\note{g} &
-$\mathbf{24{,}576}$ &
-$\mathbf{49{,}152}$ &
 \textbf{1.169328} (\code{exp\_g\_0248}) &
-As 3.1 with \code{learned\_margin\_freeze\_g=True}. \\
-3.3 &
-$\mathbf{78{,}848}$ (as 3.2) &
-$\mathbf{149{,}504}$ (3.2 $+$ TV)\note{h} &
-$\mathbf{24{,}576}$ &
-$\mathbf{51{,}200}$\note{h} &
-\textbf{1.163698} (\code{exp\_g\_0249}) &
-As 3.2, plus \code{(10 * model.lut\_tv\_penalty()).backward()} per step (\code{lut\_cell\_smoothness: 10.0}). \\
+\code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1), learned\_margin\_freeze\_g=True)}. \\
+3.2 &
+$P(2kd+8n+9)=\mathbf{135{,}680}$, $k=2$\note{g} &
+$P(4kd+10n+23)=\mathbf{249{,}344}$\note{g} &
+$P\,kd=\mathbf{49{,}152}$ &
+$P\,2kd=\mathbf{98{,}304}$ &
+\tbd{not yet run} &
+As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 \end{longtable}
 \normalsize
 \noindent\textbf{Notes to Table B.}
 \begin{itemize}\setlength\itemsep{0pt}\footnotesize
 \item[\note{e}] Dominated by $2Kd$: every table's $K$ rows are read; several \code{[tokens, 512, 256]} fp32 buffers of about 12.9\,GiB at 24,576 tokens.
 \item[\note{f}] Re-score of the saved run under the corrected eval (0 missing keys); its in-run batch-coupled number was 1.191455.
-\item[\note{g}] Per table, forward: $n$ comparisons, $n$ differences, $n$ absolute values, $n$ products $\beta m_j$, $n$ $\log\sigma$, the two sums, $\times\gamma$, $+g$, $\exp$ and the final product ($7n+2$), plus the scaled row ($2kd$).
-  Backward: the row terms ($4kd$), the input term ($8n+3$) and the per-table accumulation of the parameter gradients ($\partial g$ 2, $\partial\log\gamma$ 3, $\partial\log\beta$ $2n+2$); 3.2 drops $\partial g$.
+\item[\note{g}] Per table, forward: $n$ comparisons, $n$ differences, $n$ absolute values, $n$ products $\beta m_j$, $n$ $\log\sigma$, the two sums, $\times\gamma$, $+g$ (still executed, $g=0$), $\exp$ and the final product ($7n+2$), plus the scaled rows ($2kd$);
+  3.2 adds the argmin ($n-1$), the logit $-2m_{j^\star}/\tau$ (2), the two-way softmax (4) and $s_t$ times the two weights (2).
+  Backward: the row terms ($4kd$), the input term ($8n+3$) and the per-table accumulation of the parameter gradients ($\partial\log\gamma$ 3, $\partial\log\beta$ $2n+2$);
+  3.2 adds $\partial s_t$ from two rows (3), $\partial v_t$ (2), the softmax backward (5), $\partial m_{j^\star}$ (3) and $\partial\log\tau$ (2).
   The parameter gradients are scalar multiplies, so they add no MACs.
-\item[\note{h}] Training only, once per step: $P\,n\,2^{n-1}=524{,}288$ cell pairs per layer, $3d$ FLOPs and $d$ MACs per pair in each direction (150,994,944 FLOPs, 50,331,648 MACs per layer per step),
-  i.e. $+6{,}144$ FLOPs and $+2{,}048$ MACs per token over 24,576 tokens. Inference cost is 3.2's.
 \end{itemize}
 
 \section*{The Gen-3 form}
 \begin{itemize}\setlength\itemsep{1pt}
-\item \textbf{Learned margin score with per-layer trainable $\beta$ and $\gamma$ (3.2). Drop $g$:} freezing it leaves bpb ($-$0.000016 vs 3.1) and the $\gamma$ profile (max $|\Delta\gamma|$ 0.016) unchanged.
+\item \textbf{Learned margin score with per-layer trainable $\beta$ and $\gamma$ (3.1).} $g$ is frozen at 0: a run that also learned $g$ (\code{exp\_g\_0247}, 1.169344) differed by 0.000016 bpb and by at most 0.016 in any layer's $\gamma$, so the gain was dropped.
   Trained $\gamma$ 1.04--1.60, highest mid-depth; $\beta$ 1.76--2.17 and nearly irrelevant to the score's shape. Both were still drifting at 16K.
-\item \textbf{Cell TV (3.3): $-$0.0056 vs 3.2, a mild regularisation benefit}. \textbf{The mechanism is mostly table shrinkage, not smoothing:}
-  table L2 norms fell to 0.22--0.35$\times$ of 3.2's, while the scale-free ratio $\overline{\|W[c]-W[c']\|^2}/\overline{\|W[c]\|^2}$ (2.0 for independent random cells)
-  moved only from 1.74--1.95 to 1.34--1.57 across layers.
+\end{itemize}
+
+\section*{Cell TV regularisation (outside Table A)}
+\begin{itemize}\setlength\itemsep{1pt}
+\item \textbf{Penalty:} $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, squared L2 over the cell pairs $(c,c')$ that differ in one bit; its gradient is added once per step, before gradient clipping.
+  Training only: $+6{,}144$ FLOPs and $+2{,}048$ MACs per token per layer (amortised over 24,576 tokens); inference unchanged.
+\item \textbf{Orthogonal to the LUT math:} it acts on the tables alone, so it combines with every variant of all three generations, which doubles the number of runs.
+  The current penalty (\code{lut\_tv\_penalty}) covers \code{LightMultiHeadLUT} tables only; Gen 1 and Gen 2 need it wired in.
+\item \textbf{One data point:} \code{exp\_g\_0249} = 3.1 $+$ TV, $\lambda=10$: \textbf{1.163698}, $-$0.0056 vs \code{exp\_g\_0248}, a mild regularisation benefit.
+  The mechanism is mostly table shrinkage, not smoothing: table L2 norms fell to 0.22--0.35$\times$ of \code{exp\_g\_0248}'s, while the scale-free ratio $\operatorname{mean}\|W[c]-W[c']\|^2/\operatorname{mean}\|W[c]\|^2$
+  (2.0 for independent random cells) moved only from 1.74--1.95 to 1.34--1.57 across layers.
 \end{itemize}
 
 \section*{Where the code differs from the original brief}
@@ -219,6 +219,8 @@ As 3.2, plus \code{(10 * model.lut\_tv\_penalty()).backward()} per step (\code{l
 \begin{itemize}\setlength\itemsep{0pt}
 \item \textbf{Run 2.2 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
   \code{exp\_n\_0188} is $n=7$ with a gate on).
+\item \textbf{Run 3.2:} fork \code{exp\_g\_0248}, adding \code{lut\_read\_top\_n: 2}, \code{lut\_read\_tau: 0.5}, \code{lut\_read\_tau\_learnable: true}. No learned-score $n=2$ run exists;
+  \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form.
 \item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
   \textbf{Open decision, 2.3:} patch \code{FastMultiHeadLut} (\code{fast\_multi\_head\_lut.py:1417}) or drop the row. A hard-forward Gen-3 variant has not been designed.
 \item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h) would give a real LUT seed spread.
