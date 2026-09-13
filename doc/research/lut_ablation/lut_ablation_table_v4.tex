@@ -97,7 +97,15 @@ $\beta,\gamma$ learned per layer from $(2,1)$, where $s_t$ is LookupFFN's margin
 3.2 The Gen-3 form, two alternatives, per-layer $(\beta,\gamma,\tau)$ &
 \spanab{\textbf{(a) = (b):} each table reads two cells, $y=\sum_t s_t\big[(1-v_t)W_t[c_t]+v_tW_t[c_t']\big]$, with $s_t$ as in 3.1 over all $n$ margins and $c_t'$ the cell $c_t$ with the bit of the smallest margin $j^\star=\arg\min_jm_j$ flipped ($c_t,c_t',j^\star$ held fixed).
 $v_t$ is a softmax over the two cells with logits $0$ and $-2m_{j^\star}/\tau$ (flipping bit $j$ lowers $\langle u,b\rangle$ by $2m_j$), i.e.\ $v_t=\sigma(-2m_{j^\star}/\tau)\in(0,\tfrac12]$; $\tau$ learned per layer from $0.5$.
-The input gradient reaches all $n$ margins through $s_t$ and $m_{j^\star}$ alone through $v_t$. Continuous across a bit flip ($v_t=\tfrac12$ there); jumps where $j^\star$ switches.} \\[2pt]
+The input gradient reaches all $n$ margins through $s_t$ and $m_{j^\star}$ alone through $v_t$. Continuous across a bit flip ($v_t=\tfrac12$ there); jumps where $j^\star$ switches.} \\[2pt] \hline
+3.3 Hard forward, 3.1 backward (one cell) &
+The hard read of 1.1(a): $y=\sum_tW_t[c_t]$, not scaled by a score; nothing else is computed at eval. &
+3.1's $\sum_t s_tW_t[c_t]$, $s_t=S_tP_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, $\sigma$ the logistic sigmoid, $\beta,\gamma$ learned per layer.
+The input, $\beta$ and $\gamma$ get its gradient; the weights get (a)'s unscaled gradient at $W_t[c_t]$. \\[2pt] \hline
+3.4 Hard forward, 3.2 backward (two alternatives) &
+The hard read of 1.1(a), as 3.3(a). &
+3.2's $\sum_t s_t\big[(1-v_t)W_t[c_t]+v_tW_t[c_t']\big]$, $s_t$ as in 3.3(b), $c_t'$ the cell $c_t$ with the bit of the smallest margin $j^\star=\arg\min_jm_j$ flipped, $v_t=\sigma(-2m_{j^\star}/\tau)$, $\tau$ learned per layer.
+The input, $\beta$, $\gamma$ and $\tau$ get its gradient; the weights get (a)'s unscaled gradient at $W_t[c_t]$ only. \\[2pt]
 \end{longtable}
 \arrayrulecolor{black}\setlength{\extrarowheight}{0pt}
 \normalsize
@@ -177,6 +185,20 @@ $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
 \tbd{not yet run} &
 As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
+3.3 &
+$P(2n+d)=\mathbf{32{,}768}$ &
+$P(3d+15n+9)=\mathbf{139{,}776}$\note{b} &
+$0$ &
+$P\,d=\mathbf{24{,}576}$ &
+\tbd{not yet implemented} &
+\code{LightMultiHeadLUT} has no hard forward (every path returns the $s_t$-scaled read); would be 3.1's config plus one. \\
+3.4 &
+$P(2n+d)=\mathbf{32{,}768}$ &
+$P(5d+16n+29)=\mathbf{203{,}264}$\note{b} &
+$0$ &
+$P\,2d=\mathbf{49{,}152}$ &
+\tbd{not yet implemented} &
+As 3.3, with 3.2's config. \\
 \end{longtable}
 \normalsize
 \noindent\textbf{Notes to Table B.}
@@ -187,6 +209,8 @@ As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
   Backward: the row terms ($4kd$), the input term ($8n+3$) and the per-table accumulation of the parameter gradients ($\partial\log\gamma$ 3, $\partial\log\beta$ $2n+2$);
   3.2 adds $\partial s_t$ from two rows (3), $\partial v_t$ (2), the softmax backward (5), $\partial m_{j^\star}$ (3) and $\partial\log\tau$ (2).
   The parameter gradients are scalar multiplies, so they add no MACs.
+  3.3, 3.4: the forward is the hard read, so the score ($5n+1$, all of 3.1's forward but the comparisons and differences) and, for 3.4, the argmin, logit and softmax ($n+5$) are training-only and join 3.1's / 3.2's backward,
+  which swaps each row's score-scaled weight update ($2d$, $d$ MACs) for one plain update at $c_t$ ($d$): $3d+15n+9$ and $5d+16n+29$.
 \end{itemize}
 
 \section*{Cell TV regularisation (outside Table A)}
@@ -207,7 +231,8 @@ As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 \item \textbf{Run 3.2:} fork \code{exp\_g\_0248}, adding \code{lut\_read\_top\_n: 2}, \code{lut\_read\_tau: 0.5}, \code{lut\_read\_tau\_learnable: true}. No learned-score $n=2$ run exists;
   \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form.
 \item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
-  A hard-forward Gen-3 variant has not been designed.
+\item \textbf{Implement 3.3, 3.4:} give \code{LightMultiHeadLUT} a hard forward (today every path, the native eval kernel included, returns the $s_t$-scaled read): the plain read plus $f-\mathrm{sg}(f)$,
+  $f$ being 3.1's or 3.2's read with the table weights held constant and $\mathrm{sg}$ the stop-gradient; plumb it through \code{CompressionMultiHeadLUT} and \code{model\_build}.
 \item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h) would give a real LUT seed spread.
   Reference: vanilla dense FFN 1.1651 / 1.1618 at 16K (two seeds), 1.1154 at 48K.
 \end{itemize}
