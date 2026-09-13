@@ -113,17 +113,17 @@ The input, $\beta$, $\gamma$ and $\tau$ get its gradient; the weights get (a)'s 
 \section*{Table B --- cost and results}
 Per token, one layer, core LUT only; $P=512$, $n=8$, $K=256$, $d=48$.
 \footnotesize
-\setlength{\tabcolsep}{3pt}% seven columns: narrower gutters keep the table inside the text block
-\begin{longtable}{>{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.3cm} >{\raggedright\arraybackslash}p{6.0cm}}
+\setlength{\tabcolsep}{3pt}% eight columns: narrower gutters keep the table inside the text block
+\begin{longtable}{>{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{4.9cm}}
 \toprule
-\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Implementation (class used)} \\
+\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Validation bpb, $+$TV ($\lambda=10$)} & \textbf{Implementation (class used)} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Implementation (class used)} \\
+\textbf{Variant} & \textbf{Forward FLOPs} & \textbf{Backward FLOPs} & \textbf{Forward MACs} & \textbf{Backward MACs} & \textbf{Validation bpb} & \textbf{Validation bpb, $+$TV ($\lambda=10$)} & \textbf{Implementation (class used)} \\
 \midrule
 \endhead
-\midrule \multicolumn{7}{r}{\emph{continued on next page}} \\
+\midrule \multicolumn{8}{r}{\emph{continued on next page}} \\
 \endfoot
 \bottomrule
 \endlastfoot
@@ -133,12 +133,14 @@ $P(5d+2n+9)=\mathbf{135{,}680}$ &
 $0$ &
 $P\cdot2d=\mathbf{49{,}152}$ &
 \tbd{not yet implemented} &
+\tbd{not yet implemented} &
 \code{MultiHeadLut(smooth\_mode=False, n\_alternatives=1, uncertainty\_mode=INVERSE\_L1)}; not wired into \code{CompressionMultiHeadLUT}. \\
 1.2 &
 $P(4d+4n+4)=\mathbf{116{,}736}$ &
 $P(8d+9)=\mathbf{201{,}216}$ &
 $P\cdot2d=\mathbf{49{,}152}$ &
 $P\cdot4d=\mathbf{98{,}304}$ &
+\tbd{not yet implemented} &
 \tbd{not yet implemented} &
 \code{MultiHeadLut(smooth\_mode=True, n\_alternatives=1)}; not wired in. \\
 \midrule
@@ -148,6 +150,7 @@ $P(2Kd+4nK+9K+11n+d)$ $=\mathbf{18{,}026{,}496}$\note{a} &
 $0$ &
 $P(Kd+2nK)$ $=\mathbf{8{,}388{,}608}$ &
 \textbf{1.180622} (\code{exp\_n\_0121}) &
+\tbd{TV not wired for Gen 2} &
 \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=0)}. \\
 2.2 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$, $k=2$ cells read &
@@ -155,6 +158,7 @@ $P(2Kd+4nK+9K+11n+2kd)$ $=\mathbf{18{,}100{,}224}$\note{a} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P(Kd+2nK+kd)$ $=\mathbf{8{,}437{,}760}$ &
 \tbd{not yet run} &
+\tbd{TV not wired for Gen 2} &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=0)}. \\
 2.3 &
 $P(2n+d)=\mathbf{32{,}768}$ &
@@ -162,6 +166,7 @@ $P(2kd+4nk+9k+12n+d-1)$ $=\mathbf{213{,}504}$, $k=2$ cells &
 $0$ &
 $P(kd+2nk)=\mathbf{65{,}536}$ &
 \tbd{not yet run} &
+\tbd{TV not wired for Gen 2} &
 \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=1)}; \code{backward\_topk} counts the cells kept besides $c_t$. \\
 2.4 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$ &
@@ -169,6 +174,7 @@ $P(4kd+9n+15)=\mathbf{241{,}152}$ &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
 \tbd{not yet run} &
+\tbd{TV not wired for Gen 2} &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)}. \\
 \midrule
 \textbf{3.1} &
@@ -177,12 +183,14 @@ $P(4kd+10n+8)=\mathbf{143{,}360}$\note{b} &
 $P\,kd=\mathbf{24{,}576}$ &
 $P\,2kd=\mathbf{49{,}152}$ &
 \textbf{1.169328} (\code{exp\_g\_0248}) &
-\code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1), learned\_margin\_freeze\_g=True)}. \\
+\textbf{1.163698} (\code{exp\_g\_0249}) &
+\code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1), learned\_margin\_freeze\_g=True)}, with $g$ the log-gain, held at 0. \\
 3.2 &
 $P(2kd+8n+8)=\mathbf{135{,}168}$, $k=2$\note{b} &
 $P(4kd+10n+23)=\mathbf{249{,}344}$\note{b} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
+\tbd{not yet run} &
 \tbd{not yet run} &
 As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 3.3 &
@@ -191,6 +199,7 @@ $P(3d+15n+9)=\mathbf{139{,}776}$\note{b} &
 $0$ &
 $P\,d=\mathbf{24{,}576}$ &
 \tbd{not yet implemented} &
+\tbd{not yet implemented} &
 \code{LightMultiHeadLUT} has no hard forward (every path returns the $s_t$-scaled read); would be 3.1's config plus one. \\
 3.4 &
 $P(2n+d)=\mathbf{32{,}768}$ &
@@ -198,10 +207,12 @@ $P(5d+16n+29)=\mathbf{203{,}264}$\note{b} &
 $0$ &
 $P\,2d=\mathbf{49{,}152}$ &
 \tbd{not yet implemented} &
+\tbd{not yet implemented} &
 As 3.3, with 3.2's config. \\
 \end{longtable}
 \normalsize
-\noindent\textbf{Notes to Table B.}
+\begingroup\makeatletter\@beginparpenalty=\@M\makeatother% keep the heading with its first note
+\noindent\textbf{Notes to Table B.}\par\nopagebreak
 \begin{itemize}\setlength\itemsep{0pt}\footnotesize
 \item[\note{a}] Dominated by $2Kd$: every table's $K$ rows are read; several \code{[tokens, 512, 256]} fp32 buffers of about 12.9\,GiB at 24,576 tokens.
 \item[\note{b}] Per table, forward: $n$ comparisons, $n$ differences, $n$ absolute values, $n$ products $\beta m_j$, $n$ $\log\sigma$, the two sums, $\times\gamma$, $\exp$ and the final product ($7n+1$), plus the scaled rows ($2kd$);
@@ -212,13 +223,14 @@ As 3.3, with 3.2's config. \\
   3.3, 3.4: the forward is the hard read, so the score ($5n+1$, all of 3.1's forward but the comparisons and differences) and, for 3.4, the argmin, logit and softmax ($n+5$) are training-only and join 3.1's / 3.2's backward,
   which swaps each row's score-scaled weight update ($2d$, $d$ MACs) for one plain update at $c_t$ ($d$): $3d+15n+9$ and $5d+16n+29$.
 \end{itemize}
+\endgroup
 
-\section*{Cell TV regularisation (outside Table A)}
+\section*{Cell TV regularisation (Table B's $+$TV column)}
 \begin{itemize}\setlength\itemsep{1pt}
-\item \textbf{Penalty:} $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, squared L2 over the cell pairs $(c,c')$ that differ in one bit; its gradient is added once per step, before gradient clipping.
+\item \textbf{Penalty:} $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, squared L2 over the cell pairs $(c,c')$ that differ in one bit, $\lambda=10$; its gradient is added once per step, before gradient clipping.
   Training only: $+6{,}144$ FLOPs and $+2{,}048$ MACs per token per layer (amortised over 24,576 tokens); inference unchanged.
-\item \textbf{Orthogonal to the LUT math:} it acts on the tables alone, so it combines with every variant of all three generations, which doubles the number of runs.
-  The current penalty (\code{lut\_tv\_penalty}) covers \code{LightMultiHeadLUT} tables only; Gen 1 and Gen 2 need it wired in.
+\item \textbf{Runnable for Gen 3 only:} the trainer's penalty (\code{lut\_tv\_penalty}) collects \code{LightMultiHeadLUT} tables only and is a constant zero on Gen 1 and Gen 2 models,
+  so their $+$TV cells need it extended to \code{FastMultiHeadLut} and \code{MultiHeadLut} tables first.
 \end{itemize}
 
 \section*{Remaining work}
@@ -226,7 +238,8 @@ As 3.3, with 3.2's config. \\
 \item \textbf{Run 2.2, 2.3 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
   \code{exp\_n\_0188} is $n=7$ with a gate on).
 \item \textbf{Run 3.2:} fork \code{exp\_g\_0248}, adding \code{lut\_read\_top\_n: 2}, \code{lut\_read\_tau: 0.5}, \code{lut\_read\_tau\_learnable: true}. No learned-score $n=2$ run exists;
-  \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form.
+  \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form. Its $+$TV twin adds \code{lut\_cell\_smoothness: 10}.
+\item \textbf{Wire TV into Gen 1 and Gen 2:} extend \code{lut\_tv\_penalty} beyond \code{LightMultiHeadLUT}; until then their $+$TV cells cannot be run.
 \item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
 \item \textbf{Implement 3.3, 3.4:} give \code{LightMultiHeadLUT} a hard forward (today every path, the native eval kernel included, returns the $s_t$-scaled read): the plain read plus $f-\mathrm{sg}(f)$,
   $f$ being 3.1's or 3.2's read with the table weights held constant and $\mathrm{sg}$ the stop-gradient; plumb it through \code{CompressionMultiHeadLUT} and \code{model\_build}.
