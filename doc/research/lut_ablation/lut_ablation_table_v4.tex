@@ -114,6 +114,7 @@ The input, $\beta$, $\gamma$ and $\tau$ get its gradient; the weights get (a)'s 
 
 \section*{Table B --- cost and results}
 Per token, one layer, core LUT only (row V: the whole dense FFN); $P=512$, $n=8$, $K=256$, $d=48$, $E=384$.
+\code{abl\_NN} names a cell's prepared run folder in \code{experiments/ffn\_replacement/lut\_ablation}.
 \footnotesize
 \setlength{\tabcolsep}{3pt}% eight columns: narrower gutters keep the table inside the text block
 \begin{longtable}{>{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{4.9cm}}
@@ -134,7 +135,7 @@ $2\cdot2E\cdot4E=\mathbf{2{,}359{,}296}$ $+$ 1,536 GELUs &
 $2\cdot4E\cdot4E+4E=\mathbf{4{,}720{,}128}$ $+$ 1,536 GELU$'$ &
 $2E\cdot4E$ $=\mathbf{1{,}179{,}648}$ &
 $4E\cdot4E=\mathbf{2{,}359{,}296}$ &
-\textbf{1.165147} (\code{exp\_n\_0135}); seed 2: 1.161798 (\code{exp\_n\_0176}) &
+\textbf{1.165147} (\code{exp\_n\_0135}); seed 2: 1.161798 (\code{exp\_n\_0176}); rerun \code{abl\_10} &
 n/a: no LUT tables &
 Dense FFN (\code{ffn\_type='dense'}): \code{Linear(384, 1536, bias=False)}, GELU, \code{Linear(1536, 384, bias=False)}. \\
 \midrule
@@ -143,49 +144,49 @@ $P(2n+d)=\mathbf{32{,}768}$ &
 $P(5d+2n+9)=\mathbf{135{,}680}$ &
 $0$ &
 $P\cdot2d=\mathbf{49{,}152}$ &
-\tbd{not yet implemented} &
-\tbd{not yet implemented} &
-\code{MultiHeadLut(smooth\_mode=False, n\_alternatives=1, uncertainty\_mode=INVERSE\_L1)}; not wired into \code{CompressionMultiHeadLUT}. \\
+\tbd{not yet run} (\code{abl\_11}) &
+\tbd{not yet run} (\code{abl\_12}) &
+\code{CompressionMultiHeadLUT(lut\_impl='gen1')}: \code{MultiHeadLut(smooth\_mode=False, n\_alternatives=1, uncertainty\_mode=INVERSE\_L1)}, each head's anchors in its own slice. \\
 1.2 &
 $P(4d+4n+4)=\mathbf{116{,}736}$ &
 $P(8d+9)=\mathbf{201{,}216}$ &
 $P\cdot2d=\mathbf{49{,}152}$ &
 $P\cdot4d=\mathbf{98{,}304}$ &
-\tbd{not yet implemented} &
-\tbd{not yet implemented} &
-\code{MultiHeadLut(smooth\_mode=True, n\_alternatives=1)}; not wired in. \\
+\tbd{not yet run} (\code{abl\_13}) &
+\tbd{not yet run} (\code{abl\_14}) &
+As 1.1 with \code{smooth\_mode=True}. \\
 \midrule
 2.1 &
 $P(2n+d)=\mathbf{32{,}768}$ &
 $P(2Kd+4nK+9K+11n+d)$ $=\mathbf{18{,}026{,}496}$\note{a} &
 $0$ &
 $P(Kd+2nK)$ $=\mathbf{8{,}388{,}608}$ &
-\textbf{1.180622} (\code{exp\_n\_0121}) &
-\tbd{not yet run} &
+\textbf{1.180622} (\code{exp\_n\_0121}); rerun \code{abl\_07} &
+\tbd{not yet run} (\code{abl\_15}) &
 \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=0)}. \\
 2.2 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$, $k=2$ cells read &
 $P(2Kd+4nK+9K+11n+2kd)$ $=\mathbf{18{,}100{,}224}$\note{a} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P(Kd+2nK+kd)$ $=\mathbf{8{,}437{,}760}$ &
-\tbd{not yet run} &
-\tbd{not yet run} &
+\tbd{not yet run} (\code{abl\_01}) &
+\tbd{not yet run} (\code{abl\_16}) &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=0)}. \\
 2.3 &
 $P(2n+d)=\mathbf{32{,}768}$ &
 $P(2kd+4nk+9k+12n+d-1)$ $=\mathbf{213{,}504}$, $k=2$ cells &
 $0$ &
 $P(kd+2nk)=\mathbf{65{,}536}$ &
-\tbd{not yet run} &
-\tbd{not yet run} &
+\tbd{not yet run} (\code{abl\_02}) &
+\tbd{not yet run} (\code{abl\_17}) &
 \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=1)}; \code{backward\_topk} counts the cells kept besides $c_t$. \\
 2.4 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$ &
 $P(4kd+9n+15)=\mathbf{241{,}152}$ &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
-\tbd{not yet run} &
-\tbd{not yet run} &
+\tbd{not yet run} (\code{abl\_03}) &
+\tbd{not yet run} (\code{abl\_18}) &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)}. \\
 \midrule
 \textbf{3.1} &
@@ -193,33 +194,33 @@ $P(2kd+7n+1)=\mathbf{78{,}336}$, $k=1$\note{b} &
 $P(4kd+10n+8)=\mathbf{143{,}360}$\note{b} &
 $P\,kd=\mathbf{24{,}576}$ &
 $P\,2kd=\mathbf{49{,}152}$ &
-\textbf{1.169328} (\code{exp\_g\_0248}) &
-\textbf{1.163698} (\code{exp\_g\_0249}) &
+\textbf{1.169328} (\code{exp\_g\_0248}); rerun \code{abl\_08} &
+\textbf{1.163698} (\code{exp\_g\_0249}); rerun \code{abl\_09} &
 \code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1), learned\_margin\_freeze\_g=True)}, with $g$ the log-gain, held at 0. \\
 3.2 &
 $P(2kd+8n+8)=\mathbf{135{,}168}$, $k=2$\note{b} &
 $P(4kd+10n+23)=\mathbf{249{,}344}$\note{b} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
-\tbd{not yet run} &
-\tbd{not yet run} &
+\tbd{not yet run} (\code{abl\_04}) &
+\tbd{not yet run} (\code{abl\_05}) &
 As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 3.3 &
 $P(2n+d)=\mathbf{32{,}768}$ &
 $P(3d+15n+9)=\mathbf{139{,}776}$\note{b} &
 $0$ &
 $P\,d=\mathbf{24{,}576}$ &
-\tbd{not yet implemented} &
-\tbd{not yet implemented} &
-\code{LightMultiHeadLUT} has no hard forward (every path returns the $s_t$-scaled read); would be 3.1's config plus one. \\
+\tbd{not yet run} (\code{abl\_19}) &
+\tbd{not yet run} (\code{abl\_20}) &
+As 3.1 with \code{forward\_mode='hard'}. \\
 3.4 &
 $P(2n+d)=\mathbf{32{,}768}$ &
 $P(5d+16n+29)=\mathbf{203{,}264}$\note{b} &
 $0$ &
 $P\,2d=\mathbf{49{,}152}$ &
-\tbd{not yet implemented} &
-\tbd{not yet implemented} &
-As 3.3, with 3.2's config. \\
+\tbd{not yet run} (\code{abl\_21}) &
+\tbd{not yet run} (\code{abl\_22}) &
+As 3.2 with \code{forward\_mode='hard'}. \\
 \end{longtable}
 \normalsize
 \begingroup\makeatletter\@beginparpenalty=\@M\makeatother% keep the heading with its first note
@@ -240,21 +241,15 @@ As 3.3, with 3.2's config. \\
 \begin{itemize}\setlength\itemsep{1pt}
 \item \textbf{Penalty:} $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$, squared L2 over the cell pairs $(c,c')$ that differ in one bit, $\lambda=10$; its gradient is added once per step, before gradient clipping.
   Training only: $+6{,}144$ FLOPs and $+2{,}048$ MACs per token per layer (amortised over 24,576 tokens); inference unchanged.
-\item \textbf{Runnable for Gen 2 and Gen 3:} the trainer's penalty (\code{lut\_tv\_penalty}) covers \code{LightMultiHeadLUT} and \code{FastMultiHeadLut} tables, and \code{build\_model} refuses $\lambda>0$ on a model whose tables it cannot reach.
-  Gen 1's \code{MultiHeadLut} tables are not covered yet, so 1.1 and 1.2 $+$TV need that alongside their wiring.
+\item \textbf{All three generations:} the trainer's penalty (\code{lut\_tv\_penalty}) covers \code{MultiHeadLut}, \code{FastMultiHeadLut} and \code{LightMultiHeadLUT} tables, whose Hamming-1 cell pairs were checked through each module's read path,
+  and \code{build\_model} refuses $\lambda>0$ on a model whose tables it cannot reach.
 \end{itemize}
 
 \section*{Remaining work}
 \begin{itemize}\setlength\itemsep{0pt}
-\item \textbf{Run 2.2, 2.3 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
-  \code{exp\_n\_0188} is $n=7$ with a gate on). 2.1--2.4 $+$TV are the same forks with \code{lut\_cell\_smoothness: 10}, on the TV-capable \code{train\_fixed.py}.
-\item \textbf{Run 3.2:} fork \code{exp\_g\_0248}, adding \code{lut\_read\_top\_n: 2}, \code{lut\_read\_tau: 0.5}, \code{lut\_read\_tau\_learnable: true}. No learned-score $n=2$ run exists;
-  \code{exp\_g\_0195} is $n=2$ with the plain margin score, not this form. Its $+$TV twin adds \code{lut\_cell\_smoothness: 10}.
-\item \textbf{TV for Gen 1:} extend \code{lut\_tv\_penalty} to \code{MultiHeadLut} tables when Gen 1 is wired in; until then 1.1 and 1.2 $+$TV cannot be run.
-\item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
-\item \textbf{Implement 3.3, 3.4:} give \code{LightMultiHeadLUT} a hard forward (today every path, the native eval kernel included, returns the $s_t$-scaled read): the plain read plus $f-\mathrm{sg}(f)$,
-  $f$ being 3.1's or 3.2's read with the table weights held constant and $\mathrm{sg}$ the stop-gradient; plumb it through \code{CompressionMultiHeadLUT} and \code{model\_build}.
-\item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h) would give a real LUT seed spread.
+\item \textbf{Run the 21:} every cell above (20 LUT cells and V) is prepared, one folder each, in \code{experiments/ffn\_replacement/lut\_ablation}, whose README gives host and trainer; none is run yet.
+  2.1, 3.1, 3.1 $+$TV and V are reruns of their published runs, to put the whole table on one set of trainers.
+\item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h), prepared as \code{abl\_06}, would give a real LUT seed spread.
   Reference: vanilla dense FFN 1.1651 / 1.1618 at 16K (two seeds), 1.1154 at 48K.
 \end{itemize}
 \end{document}
