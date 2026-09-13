@@ -219,9 +219,6 @@ As 3.3, with 3.2's config. \\
   Training only: $+6{,}144$ FLOPs and $+2{,}048$ MACs per token per layer (amortised over 24,576 tokens); inference unchanged.
 \item \textbf{Orthogonal to the LUT math:} it acts on the tables alone, so it combines with every variant of all three generations, which doubles the number of runs.
   The current penalty (\code{lut\_tv\_penalty}) covers \code{LightMultiHeadLUT} tables only; Gen 1 and Gen 2 need it wired in.
-\item \textbf{One data point:} \code{exp\_g\_0249} = 3.1 $+$ TV, $\lambda=10$: \textbf{1.163698}, $-$0.0056 vs \code{exp\_g\_0248}, a mild regularisation benefit.
-  The mechanism is mostly table shrinkage, not smoothing: table L2 norms fell to 0.22--0.35$\times$ of \code{exp\_g\_0248}'s, while the scale-free ratio $\operatorname{mean}\|W[c]-W[c']\|^2/\operatorname{mean}\|W[c]\|^2$
-  (2.0 for independent random cells) moved only from 1.74--1.95 to 1.34--1.57 across layers.
 \end{itemize}
 
 \section*{Remaining work}
