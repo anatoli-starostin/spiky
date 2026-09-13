@@ -88,6 +88,13 @@ class LightMultiHeadLUT(nn.Module):
         learned_margin_freeze_g: "learned_margin" only (default False). True holds the log-gain g
             FIXED at its init (a buffer named ``confidence_g``, same state_dict key, no gradient),
             leaving beta and gamma learnable: the two-parameter score (exp_g_0248).
+        forward_mode: "scored" (default; every existing path, unchanged) or "hard" (ablation rows
+            3.3 / 3.4). "hard" returns the plain read sum_t W_t[c_t] with no score, in train and
+            eval; at eval nothing else is computed (no score, no native scored kernel). In training
+            the output is plain + (f - sg(f)), f being the scored read (n=1 bag or n>1 blend) on
+            DETACHED tables: zero in value, so the tables get only the plain read's unscaled 1-row
+            gradient while x, the confidence scalars and tau get f's gradient. cell_mode "constant"
+            only.
         anchor_sampling_policy: defaults to CANONICAL_FULL_COVERAGE (as Fast).
         random_seed: seed for anchor sampling and table init.
         initial_weights_noise: tables ~ Uniform[-noise, +noise] (matches Fast's
@@ -135,8 +142,15 @@ class LightMultiHeadLUT(nn.Module):
         cell_mode: str = "constant",
         margin_signed: bool = True,
         codebook_out_dim: Optional[int] = None,
+        forward_mode: str = "scored",
     ):
         super().__init__()
+        if forward_mode not in ("scored", "hard"):
+            raise ValueError(f"forward_mode must be 'scored' or 'hard', got {forward_mode!r}")
+        if forward_mode == "hard" and cell_mode != "constant":
+            raise ValueError("forward_mode='hard' reads a plain table row; it is implemented for "
+                             f"cell_mode='constant' only, got cell_mode={cell_mode!r}")
+        self.forward_mode = forward_mode
         if anchor_mode not in ("pair", "single"):
             raise ValueError(
                 f"anchor_mode must be 'pair' or 'single', got {anchor_mode!r}")
@@ -650,6 +664,9 @@ class LightMultiHeadLUT(nn.Module):
         flat = self.tables.reshape(H * T * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
 
+        if self.forward_mode == "hard":
+            return self._hard_read(d, index, flat, flat_idx, self.table_offset.view(1, H, T),
+                                   B * H, T).view(B, H, self.output_dim)
         score = self.confidence_score(d)                               # [B, H, T]
         if self._codebook:
             # scalar coefficient g_t = s_t · w_{c_t} per (head, table); NO cross-table sum.
@@ -783,6 +800,27 @@ class LightMultiHeadLUT(nn.Module):
         return F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum",
                                per_sample_weights=psw)
 
+    def _hard_read(self, d, index, flat, flat_idx, offset, n_bags: int, bag: int):
+        """forward_mode="hard": the plain read sum_t W_t[c_t], no score (ablation rows 3.3 / 3.4).
+
+        Eval (no grad): only the plain bag; the confidence score is never computed.
+        Training: plain + (f - sg(f)), f = the scored read on DETACHED tables -- the score-weighted
+        bag at n=1, the top-n blend at n>1, both through the unchanged scored helpers. The extra
+        term is exactly zero in value, so the output IS the hard read; the tables receive only the
+        plain read's gradient (one row, unscaled) and x, the confidence scalars and tau receive f's
+        gradient: weights follow (a), everything else follows (b). Plain autograd, no Function."""
+        offsets = torch.arange(n_bags, device=flat.device, dtype=torch.long) * bag
+        plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum")
+        if not torch.is_grad_enabled():
+            return plain
+        score = self.confidence_score(d)
+        flat_d = flat.detach()
+        if self.read_top_n > 1:
+            f = self._blend_bag(d, index, offset, flat_d, score, n_bags, bag)
+        else:
+            f = self._bagged_sum(flat_d, flat_idx, score, n_bags, bag)
+        return plain + (f - f.detach())
+
     def _fused_eval(self, x_flat):
         """Eval-only fast path: address AND score from one native pass, then the bag.
 
@@ -833,7 +871,7 @@ class LightMultiHeadLUT(nn.Module):
         # materialises the margins, and the blend needs them to choose and weight the
         # neighbours. So it is unavailable at read_top_n > 1, by construction rather than
         # by oversight.
-        if not torch.is_grad_enabled() and self.read_top_n == 1:
+        if not torch.is_grad_enabled() and self.read_top_n == 1 and self.forward_mode == "scored":
             B = x.shape[0]
             x_flat = x.reshape(B, -1)
             if x_flat.shape[1] == (self.n_heads * self.input_dim if self.multi_head_input
@@ -863,6 +901,12 @@ class LightMultiHeadLUT(nn.Module):
         # Gather one row per table. Grad flows to `tables` at the selected rows only.
         flat = self.tables.reshape(self.n_tables * self.table_size, self._tbl_out)
         flat_idx = (index + self.table_offset.view(1, -1)).reshape(-1)
+
+        if self.forward_mode == "hard":
+            G = self.output_heads
+            out = self._hard_read(d, index, flat, flat_idx, self.table_offset.view(1, -1),
+                                  B * G, self.n_tables // G)
+            return out.view(B, G, self.output_dim) if G > 1 else out
 
         # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
         # the output grad; at n>1 the blend weights add a second, directional one.
@@ -898,4 +942,5 @@ class LightMultiHeadLUT(nn.Module):
                 + (f", sharp_margin_gamma={self.sharp_margin_gamma!r}"
                    if self.sharp_margin_gamma is not None else "")
                 + (f", learned={self.learned_confidence_values()!r}" if self._learned else "")
-                + (", g frozen" if self._learned and self.learned_margin_freeze_g else ""))
+                + (", g frozen" if self._learned and self.learned_margin_freeze_g else "")
+                + (", forward_mode='hard'" if self.forward_mode == "hard" else ""))

@@ -85,6 +85,9 @@ class CompressionMultiHeadLUT(nn.Module):
         backward_topk: 0 (default, full-K soft surrogate) or >0 for the
             sparse-Hamming ("soft_topk") backward; passed to FastMHL (fast
             lut_impl only; ignored on the light path).
+        light_forward_mode: LightMultiHeadLUT forward_mode, "scored" (default) or "hard"
+            (ablation rows 3.3 / 3.4); light lut_impl only. Deliberately NOT forward_mode, which
+            is a FastMHL option and is set to "hard" in every existing light-path config.
         weight_dtype: FastMHL table storage dtype (default fp32).
         use_bf16: FastMHL bf16-autocast flag (default False — these experiments run fp32).
         initial_weights_noise: FastMHL near-zero table init (default 1e-3).
@@ -145,6 +148,7 @@ class CompressionMultiHeadLUT(nn.Module):
         anchor_unique_partition: bool = False,
         cell_mode: str = "constant",
         margin_signed: bool = True,
+        light_forward_mode: str = "scored",
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -189,6 +193,9 @@ class CompressionMultiHeadLUT(nn.Module):
         self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
         if lut_impl not in ("fast", "light", "bh4"):
             raise ValueError(f"lut_impl must be 'fast', 'light' or 'bh4', got {lut_impl!r}")
+        if light_forward_mode != "scored" and lut_impl != "light":
+            raise ValueError("light_forward_mode is a LightMultiHeadLUT option (lut_impl='light'), got "
+                             f"light_forward_mode={light_forward_mode!r} with lut_impl={lut_impl!r}")
         if sharp_margin_gamma is not None and lut_impl != "light":
             # fast/bh4 use the module constant; refuse rather than silently ignore a gamma
             raise ValueError("sharp_margin_gamma is only plumbed through the light path, got "
@@ -257,6 +264,7 @@ class CompressionMultiHeadLUT(nn.Module):
                     read_tau_learnable=read_tau_learnable,
                     anchor_mode="single", pool_size=pool_size, output_heads=n_heads,
                     anchor_unique_partition=anchor_unique_partition, cell_mode=cell_mode,
+                    forward_mode=light_forward_mode,
                 )
                 self.decompress = (nn.Linear(n_heads * out_raw, output_dim, device=device)
                                    if self.has_decompress else nn.Identity())
@@ -292,6 +300,8 @@ class CompressionMultiHeadLUT(nn.Module):
                 cell_mode=cell_mode, margin_signed=margin_signed,
                 # codebook decode M maps the T coefficients -> d_model (=output_dim).
                 codebook_out_dim=(output_dim if self._codebook else None),
+                # "scored" (default) or "hard" (plain read + zero-valued scored-gradient term).
+                forward_mode=light_forward_mode,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL

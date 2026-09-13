@@ -227,6 +227,10 @@ class MinimalBlock(nn.Module):
                     # (u+v⊙x) | 'gated_multiply' (v⊙x).
                     cell_mode=cfg.get('lut_cell_mode', 'constant'),
                     margin_signed=bool(cfg.get('lut_margin_signed', True)),
+                    # LightMultiHeadLUT forward: 'scored' (default, every existing light run) or 'hard'
+                    # (ablation rows 3.3 / 3.4). Its own key: lut_forward_mode is a FastMHL key and reads
+                    # 'hard' in every existing light config, so reusing it would flip all of them.
+                    light_forward_mode=cfg.get('lut_light_forward_mode', 'scored'),
                     # sharp_margin's exponent gamma (light path). REQUIRED when the form is
                     # sharp_margin and forbidden otherwise (checked below), so a run's gamma
                     # is always read from its own config.json, never a module default.
