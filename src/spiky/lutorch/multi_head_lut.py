@@ -34,9 +34,13 @@ class MultiHeadLut(nn.Module):
         n_alternatives: Number of alternative lookup indices per table (default: 1)
         smooth_mode: If True, use smooth interpolation in LProjection (default: False)
         device: Device to place buffers on
-        initial_weights_noise: Std of zero-mean Gaussian added to projection weights at init (default: 0.0).
+        initial_weights_noise: Init scale sigma of the projection weights (default: 0.001); see weights_init.
+        weights_init: "normal" (default): weights ~ N(0, sigma^2), one draw from Generator(random_seed).
+                      "uniform": the FastMultiHeadLut / LightMultiHeadLUT table rule -- head h draws its
+                      [tables_per_head, entries, n_outputs] block ~ Uniform[-sigma, +sigma] from
+                      Generator(random_seed + h + 1), heads concatenated in this module's head-major table order.
     """
-    
+
     def __init__(
         self,
         input_dim: int,
@@ -56,6 +60,7 @@ class MultiHeadLut(nn.Module):
         initial_weights_noise: float = 0.001,
         table_dropout: float = 0.0,
         dropout: float = 0.0,
+        weights_init: str = "normal",
     ):
         super().__init__()
         
@@ -120,7 +125,23 @@ class MultiHeadLut(nn.Module):
             device=device,
             uncertainty_mode=uncertainty_mode,
         )
-        if initial_weights_noise != 0.0:
+        if weights_init not in ("normal", "uniform"):
+            raise ValueError(f"weights_init must be 'normal' or 'uniform', got {weights_init!r}")
+        self.weights_init = weights_init
+        if weights_init == "uniform":
+            # FastMultiHeadLut / LightMultiHeadLUT multi_head_input table rule, same seeds and draw order per head:
+            # head h ~ Uniform[-noise, +noise] from Generator(random_seed + h + 1). Tables are head-major here
+            # (anchor_candidates permuted to [n_heads, tables_per_head]; forward views [B, n_heads, tph, n_outputs]),
+            # so concatenating the per-head blocks puts each at the same table index as theirs.
+            dev = device or torch.device("cpu")
+            blocks = []
+            for h in range(n_heads):
+                g_h = None if random_seed is None else torch.Generator(device=dev).manual_seed(random_seed + h + 1)
+                blocks.append(torch.rand(tables_per_head, n_entries_per_table, n_outputs, device=dev, generator=g_h)
+                              - 0.5)
+            with torch.no_grad():
+                self.projection.weights.copy_(torch.cat(blocks, dim=0) * (2.0 * initial_weights_noise))
+        elif initial_weights_noise != 0.0:
             dev = device or torch.device("cpu")
             with torch.no_grad():
                 rng_kwargs: dict = {"device": dev}

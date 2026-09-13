@@ -234,6 +234,9 @@ class MinimalBlock(nn.Module):
                     # Gen 1 (lut_impl='gen1', ablation rows 1.1 / 1.2): MultiHeadLut hard read or the U(u) blend.
                     gen1_smooth=bool(cfg.get('lut_gen1_smooth', False)),
                     gen1_n_alternatives=int(cfg.get('lut_gen1_n_alternatives', 1)),
+                    # Gen-1 table init: 'normal' (default, MultiHeadLut's own N(0, noise^2), so a config without the
+                    # key builds unchanged) or 'uniform' (Fast/Light's Uniform[-noise, +noise] per-head rule).
+                    gen1_weights_init=cfg.get('lut_gen1_weights_init', 'normal'),
                     # sharp_margin's exponent gamma (light path). REQUIRED when the form is
                     # sharp_margin and forbidden otherwise (checked below), so a run's gamma
                     # is always read from its own config.json, never a module default.
@@ -248,10 +251,10 @@ class MinimalBlock(nn.Module):
                     # learned_margin with g held FIXED at its init (exp_g_0248). Optional, default
                     # off; absent everywhere else -> every existing config builds unchanged.
                     learned_margin_freeze_g=bool(cfg.get('lut_learned_margin_freeze_g', False)))
-                if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives'))
+                if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives', 'lut_gen1_weights_init'))
                         and cfg.get('lut_impl', 'fast') != 'gen1'):
-                    raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives are only valid with "
-                                     "lut_impl == 'gen1'")
+                    raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives / lut_gen1_weights_init are only valid "
+                                     "with lut_impl == 'gen1'")
                 if 'lut_learned_margin_freeze_g' in cfg and cfg.get('lut_confidence_form') != 'learned_margin':
                     raise ValueError("lut_learned_margin_freeze_g is only valid with "
                                      "lut_confidence_form == 'learned_margin'")

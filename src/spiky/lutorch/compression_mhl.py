@@ -93,6 +93,9 @@ class CompressionMultiHeadLUT(nn.Module):
         gen1_smooth / gen1_n_alternatives: lut_impl="gen1" (MultiHeadLut, ablation rows 1.1 / 1.2) --
             hard read (False) or the 2-cell U(u) = 0.5/(1+|u|) blend (True), with n_alternatives (default 1)
             flipped cells; independent per-head path only.
+        gen1_weights_init: MultiHeadLut table init, "normal" (default, MultiHeadLut's own N(0, noise^2)) or "uniform"
+            (the Fast/Light table rule: Uniform[-noise, +noise], head h from Generator(random_seed + h + 1); the
+            ablation rows use it so table init is not a confound between generations); lut_impl="gen1" only.
         weight_dtype: FastMHL table storage dtype (default fp32).
         use_bf16: FastMHL bf16-autocast flag (default False — these experiments run fp32).
         initial_weights_noise: FastMHL near-zero table init (default 1e-3).
@@ -156,6 +159,7 @@ class CompressionMultiHeadLUT(nn.Module):
         light_forward_mode: str = "scored",
         gen1_smooth: bool = False,
         gen1_n_alternatives: int = 1,
+        gen1_weights_init: str = "normal",
     ):
         super().__init__()
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
@@ -200,9 +204,9 @@ class CompressionMultiHeadLUT(nn.Module):
         self.z_norm = nn.LayerNorm(eff_in, device=device) if z_norm else None
         if lut_impl not in ("fast", "light", "bh4", "gen1"):
             raise ValueError(f"lut_impl must be 'fast', 'light', 'bh4' or 'gen1', got {lut_impl!r}")
-        if (gen1_smooth or gen1_n_alternatives != 1) and lut_impl != "gen1":
-            raise ValueError("gen1_smooth / gen1_n_alternatives are MultiHeadLut (lut_impl='gen1') options, got "
-                             f"lut_impl={lut_impl!r}")
+        if (gen1_smooth or gen1_n_alternatives != 1 or gen1_weights_init != "normal") and lut_impl != "gen1":
+            raise ValueError("gen1_smooth / gen1_n_alternatives / gen1_weights_init are MultiHeadLut (lut_impl='gen1') "
+                             f"options, got lut_impl={lut_impl!r}")
         if light_forward_mode != "scored" and lut_impl != "light":
             raise ValueError("light_forward_mode is a LightMultiHeadLUT option (lut_impl='light'), got "
                              f"light_forward_mode={light_forward_mode!r} with lut_impl={lut_impl!r}")
@@ -235,6 +239,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 tables_per_head=tph, anchor_candidates=cand, n_alternatives=gen1_n_alternatives,
                 smooth_mode=bool(gen1_smooth), uncertainty_mode=UncertaintyMode.INVERSE_L1,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise, device=device,
+                weights_init=gen1_weights_init,
             )
             self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
             return

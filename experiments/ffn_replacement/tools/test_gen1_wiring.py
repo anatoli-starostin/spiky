@@ -99,6 +99,39 @@ def _setup_optimizer_from(path):
     return ns["setup_optimizer"]
 
 
+def _non_gen1(impl):
+    c = {k: v for k, v in _cfg().items() if not k.startswith("lut_gen1_")}
+    c["lut_impl"] = impl
+    return c
+
+
+def test_gen1_default_init_is_multiheadlut_normal():
+    m = build_model(_cfg(), 64, device="cpu")
+    for i, b in enumerate(m.blocks):
+        w = b.ffn.lut_gen1.projection.weights
+        ref = torch.randn(w.shape, generator=torch.Generator().manual_seed(1000 + i)) * 1e-3
+        assert torch.equal(w.detach(), ref)
+
+
+def test_gen1_uniform_init_equals_fast_and_light_tables():
+    g = build_model(_cfg(lut_gen1_weights_init="uniform"), 64, device="cpu")
+    f = build_model(_non_gen1("fast"), 64, device="cpu")
+    li = build_model(_non_gen1("light"), 64, device="cpu")
+    for bg, bf, bl in zip(g.blocks, f.blocks, li.blocks):
+        w = bg.ffn.lut_gen1.projection.weights.detach()
+        assert torch.equal(w, bf.ffn.lut_batched.weights.detach())
+        assert torch.equal(w, bl.ffn.lut_light.tables.detach())
+        assert float(w.abs().max()) <= 1e-3
+        torch.testing.assert_close(bg.ffn.lut_gen1.cell_tv(), bf.ffn.lut_batched.cell_tv())
+
+
+def test_gen1_weights_init_key_guards():
+    with pytest.raises(ValueError, match="gen1"):
+        build_model({**_non_gen1("fast"), "lut_gen1_weights_init": "uniform"}, 64, device="cpu")
+    with pytest.raises(ValueError, match="weights_init"):
+        build_model(_cfg(lut_gen1_weights_init="xavier"), 64, device="cpu")
+
+
 @pytest.mark.parametrize("tables_no_decay", [False, True])
 def test_train_fixed_exempts_gen1_tables_from_weight_decay(tables_no_decay):
     setup = _setup_optimizer_from(os.path.join(_TOOLS, "..", "train_fixed.py"))
