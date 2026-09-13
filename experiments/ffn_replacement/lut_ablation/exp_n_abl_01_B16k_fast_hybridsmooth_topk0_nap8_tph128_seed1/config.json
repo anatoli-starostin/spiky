@@ -15,7 +15,7 @@
   "lr": 0.0003,
   "weight_decay": 0.1,
   "lr_warmup_fraction": 0.1,
-  "eval_every": 200,
+  "eval_every": 500,
   "eval_steps": 10,
   "random_seed": 1,
   "compute_dtype": "bf16",
@@ -32,5 +32,7 @@
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
   "_sweep_tag": "nap8-tph128",
-  "lut_backward_topk": 0
+  "lut_backward_topk": 0,
+  "lut_cell_smoothness": 0.0,
+  "lut_impl": "fast"
 }

@@ -74,6 +74,11 @@ The architecture is held fixed: E=384, 6 layers, 16K steps, device_batch 12 × g
 - Every `train.py` has, immediately before `from wandb_tracking import Tracker`:
   `import wandb_tracking` / `wandb_tracking.GROUP = 'lut_ablation'`. The shim passes its GROUP constant as an explicit `group=`, so neither a config key nor `WANDB_RUN_GROUP` can set it.
 
+**W&B config.** The W&B run config is `config.json`, less the notes keys and plus the tracker's extras. So every config spells out the keys that tell rows apart, including where the value is the default: `lut_impl`, `lut_forward_mode` / `lut_backward_topk` (Gen 2), `lut_light_forward_mode` / `lut_read_top_n` (Gen 3), `lut_gen1_smooth` / `lut_gen1_weights_init` (Gen 1), `lut_cell_smoothness`, `random_seed`, `lut_base_seed`. No row depends on an absent key. Writing the defaults out is build-neutral: 22/22 state_dicts are torch.equal to those built from the implicit configs.
+- `eval_every` is 500 in all 22. The last eval is step 16,000 and produces `final_val_bpb`.
+- The Light configs still carry the Fast-only `lut_forward_mode: hard` from their parents. It does nothing on the light path; `lut_light_forward_mode` sets Light's forward.
+- Launch-time: the tracker is OFF unless `WANDB_BASE_URL` is set, and the entity comes from `WANDB_ENTITY`. Both must be in the launch environment.
+
 The code these runs need is all on the branch:
 - #121 (c327aebe): FastMHL hard + `backward_topk`;
 - 985c7707: TV for Gen 2 and the build-time guard;
@@ -82,7 +87,7 @@ The code these runs need is all on the branch:
 
 ## Reproductions (V, 2.1, 3.1, 3.1 +TV)
 
-Config and seeds are identical to the parent. Initial weights are torch.equal to the parent trainer's on every tensor:
+Config and seeds are identical to the parent, apart from two build-neutral changes: `eval_every` 500, and explicit values for the row-identity keys, which the parent left at their defaults (see "W&B config" below). Initial weights are torch.equal to the parent trainer's on every tensor:
 - abl_10 vs `exp_n_0135`: 52 tensors;
 - abl_07 vs `exp_n_0121`: 112;
 - abl_08 vs `exp_g_0248` and abl_09 vs `exp_g_0249`: 130 each.

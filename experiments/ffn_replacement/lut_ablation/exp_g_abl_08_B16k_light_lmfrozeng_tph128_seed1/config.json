@@ -40,5 +40,8 @@
   "lut_learned_margin_g_init": 0.0,
   "lut_learned_margin_beta_init": 2.0,
   "lut_learned_margin_gamma_init": 1.0,
-  "lut_learned_margin_freeze_g": true
+  "lut_learned_margin_freeze_g": true,
+  "lut_cell_smoothness": 0.0,
+  "lut_light_forward_mode": "scored",
+  "lut_read_top_n": 1
 }

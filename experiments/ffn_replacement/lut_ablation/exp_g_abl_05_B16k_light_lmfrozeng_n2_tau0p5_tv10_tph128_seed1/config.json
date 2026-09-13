@@ -44,5 +44,6 @@
   "lut_read_top_n": 2,
   "lut_read_tau": 0.5,
   "lut_read_tau_learnable": true,
-  "lut_cell_smoothness": 10.0
+  "lut_cell_smoothness": 10.0,
+  "lut_light_forward_mode": "scored"
 }
