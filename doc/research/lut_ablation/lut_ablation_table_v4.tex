@@ -136,14 +136,14 @@ $P\cdot4d=\mathbf{98{,}304}$ &
 \midrule
 2.1 &
 $P(2n+d)=\mathbf{32{,}768}$ &
-$P(2Kd+4nK+9K+11n+d)$ $=\mathbf{18{,}026{,}496}$\note{e} &
+$P(2Kd+4nK+9K+11n+d)$ $=\mathbf{18{,}026{,}496}$\note{a} &
 $0$ &
 $P(Kd+2nK)$ $=\mathbf{8{,}388{,}608}$ &
-\textbf{1.180622} (\code{exp\_n\_0121})\note{f} &
+\textbf{1.180622} (\code{exp\_n\_0121}) &
 \code{FastMultiHeadLut(forward\_mode='hard', backward\_topk=0)}. \\
 2.2 &
 $P(2kd+4n+5)=\mathbf{117{,}248}$, $k=2$ cells read &
-$P(2Kd+4nK+9K+11n+2kd)$ $=\mathbf{18{,}100{,}224}$\note{e} &
+$P(2Kd+4nK+9K+11n+2kd)$ $=\mathbf{18{,}100{,}224}$\note{a} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P(Kd+2nK+kd)$ $=\mathbf{8{,}437{,}760}$ &
 \tbd{not yet run} &
@@ -164,15 +164,15 @@ $P\,2kd=\mathbf{98{,}304}$ &
 \code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)}. \\
 \midrule
 \textbf{3.1} &
-$P(2kd+7n+2)=\mathbf{78{,}848}$, $k=1$\note{g} &
-$P(4kd+10n+8)=\mathbf{143{,}360}$\note{g} &
+$P(2kd+7n+1)=\mathbf{78{,}336}$, $k=1$\note{b} &
+$P(4kd+10n+8)=\mathbf{143{,}360}$\note{b} &
 $P\,kd=\mathbf{24{,}576}$ &
 $P\,2kd=\mathbf{49{,}152}$ &
 \textbf{1.169328} (\code{exp\_g\_0248}) &
 \code{LightMultiHeadLUT(confidence\_form='learned\_margin', learned\_margin\_init=(0, 2, 1), learned\_margin\_freeze\_g=True)}. \\
 3.2 &
-$P(2kd+8n+9)=\mathbf{135{,}680}$, $k=2$\note{g} &
-$P(4kd+10n+23)=\mathbf{249{,}344}$\note{g} &
+$P(2kd+8n+8)=\mathbf{135{,}168}$, $k=2$\note{b} &
+$P(4kd+10n+23)=\mathbf{249{,}344}$\note{b} &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
 \tbd{not yet run} &
@@ -181,19 +181,12 @@ As 3.1 with \code{read\_top\_n=2, read\_tau=0.5, read\_tau\_learnable=True}. \\
 \normalsize
 \noindent\textbf{Notes to Table B.}
 \begin{itemize}\setlength\itemsep{0pt}\footnotesize
-\item[\note{e}] Dominated by $2Kd$: every table's $K$ rows are read; several \code{[tokens, 512, 256]} fp32 buffers of about 12.9\,GiB at 24,576 tokens.
-\item[\note{f}] Re-score of the saved run under the corrected eval (0 missing keys); its in-run batch-coupled number was 1.191455.
-\item[\note{g}] Per table, forward: $n$ comparisons, $n$ differences, $n$ absolute values, $n$ products $\beta m_j$, $n$ $\log\sigma$, the two sums, $\times\gamma$, $+g$ (still executed, $g=0$), $\exp$ and the final product ($7n+2$), plus the scaled rows ($2kd$);
+\item[\note{a}] Dominated by $2Kd$: every table's $K$ rows are read; several \code{[tokens, 512, 256]} fp32 buffers of about 12.9\,GiB at 24,576 tokens.
+\item[\note{b}] Per table, forward: $n$ comparisons, $n$ differences, $n$ absolute values, $n$ products $\beta m_j$, $n$ $\log\sigma$, the two sums, $\times\gamma$, $\exp$ and the final product ($7n+1$), plus the scaled rows ($2kd$);
   3.2 adds the argmin ($n-1$), the logit $-2m_{j^\star}/\tau$ (2), the two-way softmax (4) and $s_t$ times the two weights (2).
   Backward: the row terms ($4kd$), the input term ($8n+3$) and the per-table accumulation of the parameter gradients ($\partial\log\gamma$ 3, $\partial\log\beta$ $2n+2$);
   3.2 adds $\partial s_t$ from two rows (3), $\partial v_t$ (2), the softmax backward (5), $\partial m_{j^\star}$ (3) and $\partial\log\tau$ (2).
   The parameter gradients are scalar multiplies, so they add no MACs.
-\end{itemize}
-
-\section*{The Gen-3 form}
-\begin{itemize}\setlength\itemsep{1pt}
-\item \textbf{Learned margin score with per-layer trainable $\beta$ and $\gamma$ (3.1).} $g$ is frozen at 0: a run that also learned $g$ (\code{exp\_g\_0247}, 1.169344) differed by 0.000016 bpb and by at most 0.016 in any layer's $\gamma$, so the gain was dropped.
-  Trained $\gamma$ 1.04--1.60, highest mid-depth; $\beta$ 1.76--2.17 and nearly irrelevant to the score's shape. Both were still drifting at 16K.
 \end{itemize}
 
 \section*{Cell TV regularisation (outside Table A)}
