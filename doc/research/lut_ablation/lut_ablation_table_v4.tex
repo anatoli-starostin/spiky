@@ -66,19 +66,19 @@ The only LUT seed-noise figure on record is a 4K three-seed sd of 0.009642, a \e
 \bottomrule
 \endlastfoot
 
-\multicolumn{3}{l}{\textbf{GEN 1 --- Spiking Manifesto basic model}\note{a}} \\[2pt]
+\multicolumn{3}{l}{\textbf{GEN 1 --- Spiking Manifesto basic model}} \\[2pt]
 1.1 Hard forward, two-alternatives backward &
-$y_h=\sum_{t\in h}W_t[c_t]$: head $h$ sums, over its tables $t$, the row of $W_t\in\mathbb R^{K\times d}$ at cell $c_t$, the bits $[u_j>0]$ of the $n$ margins $u_j=z_h[a_j]-z_h[b_j]$. &
+$y_h=\sum_{t\in h}W_t[c_t]$ over the tables $t$ of head $h$: each of table $t$'s $n$ anchor pairs gives a signed margin $u_j=z_h[a_j]-z_h[b_j]$; the $n$ signs $[u_j>0]$ are the bits of the binary index $c_t\in\{0,\dots,2^n-1\}$ of the row read from $W_t\in\mathbb R^{K\times d}$, $K=2^n$. &
 Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=g$, $g=\partial L/\partial y_h$. \newline
-Input (surrogate: the derivative of 1.2's blend), least-confident pair $j^\star=\arg\min_j|u_j|$ only: $\partial L/\partial u_{j^\star}=-U'(u_{j^\star})\big(G_t(c_t)-G_t(c_t')\big)$, \newline
-with $U(u)=0.5/(1+|u|)$, $-U'(u)=0.5\,\sgn u/(1+|u|)^2$, $G_t(\ell)=\langle g,W_t[\ell]\rangle$, and $c'$ = $c$ with bit $j^\star$ flipped. \\[3pt]
+Input (surrogate: the derivative of 1.2's blend), least-confident pair $j^\star=\arg\min_j|u_j|$ only: $\partial L/\partial u_{j^\star}=U'(u_{j^\star})\big(G_t(c_t')-G_t(c_t)\big)$, \newline
+with $U(u)=0.5/(1+|u|)$, $U'(u)=-0.5\,\sgn u/(1+|u|)^2$, $G_t(\ell)=\langle g,W_t[\ell]\rangle$, and $c'$ = $c$ with bit $j^\star$ flipped. \\[3pt]
 1.2 Soft forward, two-alternatives backward &
 $y_h=\sum_t\big[(1-U_t)W_t[c_t]+U_tW_t[c_t']\big]$, $U_t=U(u_{t,j^\star})$; continuous, applied at eval too. &
 Weights: $(1-U_t)\,g$ into $W_t[c_t]$, $U_t\,g$ into $W_t[c_t']$. Input: as 1.1, here the exact gradient of the blend with both cells fixed. \\[4pt]
 \midrule
-\multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}\note{b}} \\[2pt]
+\multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}} \\[2pt]
 2.1 Hard forward, all-alternatives backward (all $K$ cells) &
-$y_h=\sum_t W_t[c_t]$, $c_t=\arg\max_\ell s_\ell$, cell score $s_\ell=\sum_j\pm\rho_j$ ($+$ where bit $j$ of $\ell$ equals $[u_j>0]$), $\rho_j=|u_j|/(T_s+|u_j|)$. &
+$y_h=\sum_t W_t[c_t]$, $c_t=\arg\max_\ell s_\ell$, cell score $s_\ell=\sum_j\pm\rho_j$ ($+$ where bit $j$ of cell index $\ell$ matches the sign of $u_j$), $\rho_j=|u_j|/(T_s+|u_j|)$. &
 Weights: $\partial L/\partial W_t[c_t]\mathrel{+}=g$. \newline
 Input, via the surrogate $\sum_\ell\pi_\ell W_t[\ell]$, $\pi_\ell=\mathrm{softmax}_\ell(s_\ell/T_{sel})$ (not used in the forward; reads all $K$ rows; $T_s,T_{sel}$ temperatures): \newline
 $\partial L/\partial u_j=\sum_\ell\pi_\ell\big(G_t(\ell)-\bar G_t\big)(\partial s_\ell/\partial\rho_j)\,T_s\sgn u_j/\big(T_{sel}(T_s+|u_j|)^2\big)$, with $\bar G_t=\sum_\ell\pi_\ell G_t(\ell)$ and $\partial s_\ell/\partial\rho_j=\pm1$. \\[3pt]
@@ -91,31 +91,24 @@ $y_h=\sum_t W_t[c_t]$ &
 2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
 As 2.2. &
 Weights: as 2.2. \newline
-Input (\code{backward\_topk=1}), the exact gradient of the 2-cell blend, $j^\star$ only: \newline
+Input (\code{backward\_topk=1}: it counts cells beyond the addressed one, so 2 alternatives is 1, not 2), the exact gradient of the 2-cell blend, $j^\star$ only: \newline
 $\partial L/\partial u_{j^\star}=-w_t(1-w_t)\big(G_t(c_t')-G_t(c_t)\big)\,2T_s\sgn u_{j^\star}/\big(T_{sel}(T_s+|u_{j^\star}|)^2\big)$. \\[4pt]
 \midrule
-\multicolumn{3}{l}{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}\note{c}} \\[2pt]
+\multicolumn{3}{l}{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\[2pt]
 3.1 Learned margin score, per-layer $(g,\beta,\gamma)$ &
 $y_h=\sum_t s_tW_t[c_t]$, $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$; computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$.
-One $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$; the cell index uses detached $u$. Discontinuous at cell boundaries, since $\sigma(0)>0$\note{d}. &
+One $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$; the cell index uses detached $u$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y_h\|$). &
 Weights: $s_t\,g$. Input: $\partial L/\partial u_j=G_t(c_t)\big(e^{g}P_t^{\gamma}+\gamma\beta\,s_t\,\sigma(-\beta m_j)\big)\sgn u_j$. \newline
 Per layer: $\partial L/\partial g=\sum_tG_t(c_t)s_t$, $\partial L/\partial\log\beta=\sum_tG_t(c_t)s_t\gamma\sum_j\beta m_j\sigma(-\beta m_j)$, $\partial L/\partial\log\gamma=\sum_tG_t(c_t)s_t\gamma\log P_t$. \\[3pt]
 \textbf{3.2 The Gen-3 form:} learned margin score, per-layer $(\beta,\gamma)$ &
-As 3.1 with $g$ fixed at 0: $s_t=S_tP_t^{\gamma}$. &
+As 3.1 with $g$ fixed at 0: $s_t=S_tP_t^{\gamma}$ (jump 2.22\%). &
 As 3.1 without $\partial L/\partial g$. \\[3pt]
 3.3 $=$ 3.2 $+$ Hamming-1 cell TV, $\lambda=10$ &
-Identical to 3.2 (the penalty is training-only). &
+Identical to 3.2; the penalty is training-only (jump 1.78\%). &
 As 3.2, plus once per step the gradient of $\lambda\cdot\frac16\sum_{\text{layers}}\frac{1}{P\,n\,2^{n-1}}\sum_t\sum_{(c,c')}\|W_t[c]-W_t[c']\|^2$ over cell pairs differing in one bit:
 $\partial L/\partial W_t[c]\mathrel{+}=\frac{2\lambda}{6\,P\,n\,2^{n-1}}\sum_{c'\sim c}\big(W_t[c]-W_t[c']\big)$ for every cell. \\
 \end{longtable}
 \normalsize
-\noindent\textbf{Notes to Table A.}
-\begin{itemize}\setlength\itemsep{0pt}\footnotesize
-\item[\note{a}] The code also offers \code{UncertaintyMode.INVERSE\_QUADRATIC}, $0.5/(1+u^2)$.
-\item[\note{b}] \textbf{Config trap:} \code{backward\_topk} counts cells \emph{beyond} the addressed one. ``2 alternatives'' is \code{backward\_topk=1}, not 2; ``all alternatives'' is \code{backward\_topk=0}.
-\item[\note{c}] A hard-forward Gen-3 variant has not been designed.
-\item[\note{d}] Measured boundary jump, median share of $\|y_h\|$ on trained weights: 3.1 2.19\%; 3.2 2.22\%; 3.3 1.78\%.
-\end{itemize}
 
 \section*{Table B --- cost and results}
 Per token, one layer, core LUT only; $P=512$, $n=8$, $K=256$, $d=48$. Validation bpb: \textbf{one seed per row}.
@@ -176,7 +169,7 @@ $P(4kd+9n+15)=\mathbf{241{,}152}$ &
 $P\,kd=\mathbf{49{,}152}$ &
 $P\,2kd=\mathbf{98{,}304}$ &
 \tbd{not yet run} &
-\code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)} (note b). \\
+\code{FastMultiHeadLut(forward\_mode='hybrid\_smooth', backward\_topk=1)}. \\
 \midrule
 3.1 &
 $P(2kd+7n+2)=\mathbf{78{,}848}$, $k=1$\note{g} &
@@ -233,7 +226,7 @@ As 3.2, plus \code{(10 * model.lut\_tv\_penalty()).backward()} per step (\code{l
 \item \textbf{Run 2.2 and 2.4:} fork \code{exp\_n\_0121} verbatim, changing only \code{lut\_forward\_mode} / \code{lut\_backward\_topk}. No matching run exists (earlier hybrid\_smooth runs are $n=6$, tied, old eval;
   \code{exp\_n\_0188} is $n=7$ with a gate on).
 \item \textbf{Implement 1.1, 1.2:} wire Gen 1 into \code{CompressionMultiHeadLUT}, which accepts only \code{lut\_impl} $\in\{$\code{fast}, \code{light}, \code{bh4}$\}$ (\code{compression\_mhl.py:190}), as \code{MultiHeadLut} with \code{anchor\_candidates} [128, 4, 48].
-  \textbf{Open decision, 2.3:} patch \code{FastMultiHeadLut} (\code{fast\_multi\_head\_lut.py:1417}) or drop the row.
+  \textbf{Open decision, 2.3:} patch \code{FastMultiHeadLut} (\code{fast\_multi\_head\_lut.py:1417}) or drop the row. A hard-forward Gen-3 variant has not been designed.
 \item \textbf{Seeds:} zero replicates at this geometry; one extra seed of \code{exp\_g\_0248} ($\approx$\,0.95\,h) would give a real LUT seed spread.
   Reference: vanilla dense FFN 1.1651 / 1.1618 at 16K (two seeds), 1.1154 at 48K.
 \end{itemize}
