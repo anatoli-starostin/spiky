@@ -1,5 +1,5 @@
 {
-  "exp_name": "exp_n_0252_B16k_fast_hybridsmooth_topk1_nap8_tph128_seed1",
+  "exp_name": "exp_n_abl_03_B16k_fast_hybridsmooth_topk1_nap8_tph128_seed1",
   "_arch_note": "LUT ABLATION ROW 2.4 (Gen 2: hybrid_smooth two-cell forward, 2-cell backward). exp_n_0121 fork; config changes: lut_forward_mode hard -> hybrid_smooth, lut_backward_topk 0 -> 1 (added). Trainer: train_fixed.py (corrected fixed eval + optional non-fatal wandb tracker); exp_n_0121's own corrected trainer has no tracker. Same model_build, LR schedule, optimiser grouping and seeds. Reference: exp_n_0121 1.180622 (corrected re-score).",
   "gamma": 0,
   "ffn_type": "compression",

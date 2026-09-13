@@ -1,6 +1,6 @@
 {
-  "exp_name": "exp_g_0253_B16k_light_learnedmargin_frozeng_n2_tau0p5learn_tph128_seed1",
-  "_arch_note": "LUT ABLATION ROW 3.2 (Gen 3: learned margin score, g frozen, two alternatives). exp_g_0248 fork; config changes: + lut_read_top_n 2, + lut_read_tau 0.5, + lut_read_tau_learnable true. lut_read_tau 0.5 / lut_read_tau_learnable true are taken from exp_g_0195 and are NOT confirmed by Anatoli. Trainer: exp_g_0249's train.py (exp_g_0248's trainer + the lut_cell_smoothness switch, off at 0 so the math is exp_g_0248's + read-only lut_tv columns + the optional non-fatal wandb tracker). Reference: exp_g_0248 1.169328 (n=1); exp_g_0195 1.160637 is n=2 with the plain margin score.",
+  "exp_name": "exp_g_abl_04_B16k_light_lmfrozeng_n2_tau0p5_tph128_seed1",
+  "_arch_note": "LUT ABLATION ROW 3.2 (Gen 3: learned margin score, g frozen, two alternatives). exp_g_0248 fork; config changes: + lut_read_top_n 2, + lut_read_tau 0.5, + lut_read_tau_learnable true. tau is a deliberate choice: 0.5 at initialisation, learnable per layer. lut_read_tau is tau itself (LightMultiHeadLUT stores log_tau = ln 0.5 and reads tau = exp(log_tau)); checked at build: every layer tau = 0.500000000. Trainer: exp_g_0249's train.py (exp_g_0248's trainer + the lut_cell_smoothness switch, off at 0 so the math is exp_g_0248's + read-only lut_tv columns + the optional non-fatal wandb tracker). Reference: exp_g_0248 1.169328 (n=1); exp_g_0195 1.160637 is n=2 with the plain margin score.",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,

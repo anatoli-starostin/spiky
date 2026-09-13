@@ -1,6 +1,6 @@
 {
-  "exp_name": "exp_n_0251_B16k_fast_hard_topk1_nap8_tph128_seed1",
-  "_arch_note": "LUT ABLATION ROW 2.3 (Gen 2: hard forward, 2-cell restricted-softmax backward). exp_n_0121 fork; config changes: lut_backward_topk 0 -> 1 (added; lut_forward_mode stays hard). Needs FastMultiHeadLut with PR #121 (hard + backward_topk > 0, merged c327aebe). Trainer: train_fixed.py (corrected fixed eval + optional non-fatal wandb tracker); exp_n_0121's own corrected trainer has no tracker. Same model_build, LR schedule, optimiser grouping and seeds. Reference: exp_n_0121 1.180622 (corrected re-score).",
+  "exp_name": "exp_n_abl_01_B16k_fast_hybridsmooth_topk0_nap8_tph128_seed1",
+  "_arch_note": "LUT ABLATION ROW 2.2 (Gen 2: hybrid_smooth two-cell forward, full-K soft backward). exp_n_0121 fork; config changes: lut_forward_mode hard -> hybrid_smooth, lut_backward_topk 0 (explicit; equals the default). Trainer: train_fixed.py (corrected fixed eval + optional non-fatal wandb tracker); exp_n_0121's own corrected trainer has no tracker. Same model_build, LR schedule, optimiser grouping and seeds. Reference: exp_n_0121 1.180622 (corrected re-score).",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,
@@ -26,11 +26,11 @@
   "lut_tables_per_head": 128,
   "lut_n_heads": 4,
   "lut_joint_head_compression": false,
-  "lut_forward_mode": "hard",
+  "lut_forward_mode": "hybrid_smooth",
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,
   "lut_base_seed": 1000,
   "lut_learnable_temps": true,
   "_sweep_tag": "nap8-tph128",
-  "lut_backward_topk": 1
+  "lut_backward_topk": 0
 }

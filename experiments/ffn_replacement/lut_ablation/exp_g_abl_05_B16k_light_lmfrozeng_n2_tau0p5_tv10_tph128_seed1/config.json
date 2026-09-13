@@ -1,6 +1,6 @@
 {
-  "exp_name": "exp_g_0255_B16k_light_learnedmargin_frozeng_tph128_seed2",
-  "_arch_note": "SEED REPLICATE of exp_g_0248 (row 3.1). config changes: random_seed 1 -> 2 (data order, init) and lut_base_seed 1000 -> 2000 (per-layer LUT anchors/tables seeds 2000..2005, disjoint from 1000..1005). Trainer: exp_g_0249's train.py (exp_g_0248's trainer + the lut_cell_smoothness switch, off at 0 so the math is exp_g_0248's + read-only lut_tv columns + the optional non-fatal wandb tracker). Reference: exp_g_0248 1.169328.",
+  "exp_name": "exp_g_abl_05_B16k_light_lmfrozeng_n2_tau0p5_tv10_tph128_seed1",
+  "_arch_note": "LUT ABLATION ROW 3.2 +TV (Table B's +TV column). Row 3.2's config (exp_g_0248 fork + lut_read_top_n 2, lut_read_tau 0.5, lut_read_tau_learnable true) + lut_cell_smoothness 10.0, the exp_g_0249 penalty. tau is a deliberate choice: 0.5 at initialisation, learnable per layer. lut_read_tau is tau itself (LightMultiHeadLUT stores log_tau = ln 0.5 and reads tau = exp(log_tau)); checked at build: every layer tau = 0.500000000. Trainer: exp_g_0249's train.py (exp_g_0248's trainer + the lut_cell_smoothness switch, off at 0 so the math is exp_g_0248's + read-only lut_tv columns + the optional non-fatal wandb tracker). Reference: exp_g_0249 1.163698 (3.1 +TV).",
   "gamma": 0,
   "ffn_type": "compression",
   "tie_unembedder": false,
@@ -17,7 +17,7 @@
   "lr_warmup_fraction": 0.1,
   "eval_every": 500,
   "eval_steps": 10,
-  "random_seed": 2,
+  "random_seed": 1,
   "compute_dtype": "bf16",
   "tokenizer_vocab_size": 32768,
   "lut_inner_in_dim": 48,
@@ -29,7 +29,7 @@
   "lut_forward_mode": "hard",
   "lut_use_bf16": false,
   "lut_init_weights_noise": 0.001,
-  "lut_base_seed": 2000,
+  "lut_base_seed": 1000,
   "lut_learnable_temps": true,
   "_sweep_tag": "lookupffn-tier1-margin-on-light",
   "lut_impl": "light",
@@ -40,5 +40,9 @@
   "lut_learned_margin_g_init": 0.0,
   "lut_learned_margin_beta_init": 2.0,
   "lut_learned_margin_gamma_init": 1.0,
-  "lut_learned_margin_freeze_g": true
+  "lut_learned_margin_freeze_g": true,
+  "lut_read_top_n": 2,
+  "lut_read_tau": 0.5,
+  "lut_read_tau_learnable": true,
+  "lut_cell_smoothness": 10.0
 }
