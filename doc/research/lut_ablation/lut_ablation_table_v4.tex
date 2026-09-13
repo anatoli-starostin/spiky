@@ -79,9 +79,10 @@ The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ a
 \multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}} \\[2pt]
 2.1 Hard forward, all-alternatives backward (all $K$ cells) &
 $y=\sum_tW_t[c_t]$, as 1.1(a). &
-Every one of the $K$ rows of each table is read, weighted by a softmax, within that table, of how well the row's bit pattern agrees with the signs of the margins, sharpened by the temperature $T_{sel}$:
-$\sum_t\sum_{\ell<K}\mathrm{softmax}_\ell(s_\ell/T_{sel})\,W_t[\ell]$, with agreement score $s_\ell=\sum_j\pm u_j/(T_s+|u_j|)$ ($+$ where bit $j$ of $\ell$ is 1, $-$ where it is 0), i.e.\ $+|u_j|/(T_s+|u_j|)$ for each bit that matches the sign of $u_j$ and $-$ for each that does not;
-$T_s,T_{sel}$ are per-layer scalars, learned in \code{exp\_n\_0121}. Globally $C^1$ in the input; it never uses the address, whose row is simply the one with the largest weight. \\[3pt]
+With $b_j(\ell)=+1$ if the bit of $\ell$ for pair $j$ is 1, else $-1$, and the squashed margin $\hat m_j=u_j/(T_s+|u_j|)\in(-1,1)$: $s_\ell=\sum_jb_j(\ell)\,\hat m_j$.
+Every row of each table is read, weighted by a softmax over that table's $K$ rows: $\sum_t\sum_{\ell<K}\mathrm{softmax}_\ell(s_\ell/T_{sel})\,W_t[\ell]$.
+A row scores highest when its bits agree with the margins' signs; small margins count little either way. $T_s,T_{sel}$: per-layer scalars, learned in \code{exp\_n\_0121}.
+Globally $C^1$ in the input; it never uses the address, whose row is simply the one with the largest weight. \\[3pt]
 2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
 $y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
 The same softmax-weighted read of all $K$ rows as 2.1(b). \\[3pt]
