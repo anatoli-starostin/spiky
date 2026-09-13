@@ -70,7 +70,7 @@ while the input, the temperatures and the learned per-layer scalars receive the 
 
 \multicolumn{3}{l}{\textbf{GEN 1 --- Spiking Manifesto basic model}} \\[2pt]
 1.1 Hard forward, two-alternatives backward &
-$y_h=\sum_{t\in h}W_t[c_t]$ over the tables $t$ of head $h$: each of table $t$'s $n$ anchor pairs gives a signed margin $u_j=z_h[a_j]-z_h[b_j]$; the $n$ signs $[u_j>0]$ are the bits of the binary index $c_t\in\{0,\dots,2^n-1\}$ of the row read from $W_t\in\mathbb R^{K\times d}$, $K=2^n$. &
+$y=\sum_tW_t[c_t]$, summed over tables $t$: each of table $t$'s $n$ anchor pairs gives a signed margin $u_j=z[a_j]-z[b_j]$; the $n$ signs $[u_j>0]$ are the bits of the binary index $c_t\in\{0,\dots,2^n-1\}$ of the row read from $W_t\in\mathbb R^{K\times d}$, $K=2^n$. &
 The 2-cell blend $\sum_t\big[(1-U_t)W_t[c_t]+U_tW_t[c_t']\big]$, $U_t=U(u_{j^\star})$, $U(u)=0.5/(1+|u|)$, with the least-confident pair $j^\star=\arg\min_j|u_j|$ and $c'$ ($c$ with bit $j^\star$ flipped) held fixed.
 The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ across a bit flip and jumps only where $j^\star$ switches. \\[3pt]
 1.2 Soft forward, two-alternatives backward &
@@ -78,22 +78,22 @@ The pairing with (a) is exact as a stop-gradient composite; the blend is $C^1$ a
 \midrule
 \multicolumn{3}{l}{\textbf{GEN 2 --- FastMHL math}} \\[2pt]
 2.1 Hard forward, all-alternatives backward (all $K$ cells) &
-$y_h=\sum_tW_t[c_t]$, as 1.1(a). &
+$y=\sum_tW_t[c_t]$, as 1.1(a). &
 The $K$-cell softmax sum $\sum_t\sum_{\ell<K}\mathrm{softmax}_\ell(s_\ell/T_{sel})\,W_t[\ell]$, $s_\ell=\sum_j\pm u_j/(T_s+|u_j|)$ ($+$ where bit $j$ of $\ell$ is 1), temperatures $T_s,T_{sel}$.
 A globally $C^1$ function of the input, independent of the address; it reads all $K$ rows. \\[3pt]
 2.2 Hybrid\_smooth two-alternatives forward, all-alternatives backward &
-$y_h=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
+$y=\sum_t\big[(1-w_t)W_t[c_t]+w_tW_t[c_t']\big]$, $w_t=\sigma(-2\rho_{j^\star}/T_{sel})$, $\rho_j=|u_j|/(T_s+|u_j|)$, $\sigma$ the logistic sigmoid; applied at eval too. &
 The $K$-cell softmax sum of 2.1(b). \\[3pt]
 2.3 Hard forward, 2-alternatives backward &
-$y_h=\sum_t W_t[c_t]$ &
+$y=\sum_t W_t[c_t]$ &
 \tbd{not implemented; open decision.} \code{FastMultiHeadLut} raises \code{ValueError} for \code{backward\_topk>0} unless \code{forward\_mode='hybrid\_smooth'}. \\[3pt]
 2.4 Hybrid\_smooth two-alternatives forward, 2-alternatives backward &
 \multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} the 2-cell blend of 2.2(a) (\code{backward\_topk=1}: it counts cells beyond the addressed one, so 2 alternatives is 1, not 2).} \\[4pt]
 \midrule
 \multicolumn{3}{l}{\textbf{GEN 3 --- LightMHL math (LookupFFN-inspired): learned margin score}} \\[2pt]
 3.1 Learned margin score, per-layer $(g,\beta,\gamma)$ &
-\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} $y_h=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$;
-one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y_h\|$).} \\[3pt]
+\multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} $y=\sum_t s_tW_t[c_t]$ with the address $c_t$ held fixed; $s_t=e^{g}\,S_t\,P_t^{\gamma}$, $S_t=\sum_jm_j$, $P_t=\prod_j\sigma(\beta m_j)$, $m_j=|u_j|$, computed as $S_t\exp\!\big(g+\gamma\sum_j\log\sigma(\beta m_j)\big)$;
+one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuous at cell boundaries, since $\sigma(0)>0$ (trained jump: median 2.19\% of $\|y\|$).} \\[3pt]
 \textbf{3.2 The Gen-3 form:} learned margin score, per-layer $(\beta,\gamma)$ &
 \multicolumn{2}{p{\dimexpr 20.8cm+2\tabcolsep\relax}}{\textbf{(a) = (b):} 3.1 with $g$ fixed at 0, $s_t=S_tP_t^{\gamma}$ (jump 2.22\%).} \\[3pt]
 3.3 $=$ 3.2 $+$ Hamming-1 cell TV, $\lambda=10$ &
