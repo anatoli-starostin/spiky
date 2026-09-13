@@ -86,7 +86,8 @@ METRICS = {
         'gamma = exp(confidence_log_gamma) of learned_margin LUT layer i (init 1.0). Unrelated to the top-level '
         'config key gamma.')),
     'lut_tv_L{i}': dict(section='eval, per layer', unit='sq. dist', desc=(
-        "Hamming-1 cell total variation of block i's LightMultiHeadLUT tables (LightMultiHeadLUT.cell_tv). The "
+        "Hamming-1 cell total variation of block i's LUT tables (LightMultiHeadLUT.cell_tv or FastMultiHeadLut.cell_tv, "
+        "the same quantity; averaged over the block's covered LUT modules via model.lut_tv_by_layer()). The "
         '2^nap cells of each table are the corners of an nap-cube; for each of the nap axes take the squared '
         "difference ||v_c - v_c'||^2 between the two cells across that axis, SUMMED over the D value dimensions "
         '(not averaged per dimension), add them all up, and divide by n_tables x nap x 2^(nap-1) -- the number of '

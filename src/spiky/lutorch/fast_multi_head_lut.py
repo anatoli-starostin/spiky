@@ -1703,6 +1703,30 @@ class FastMultiHeadLut(nn.Module):
         """The positive temperature tau used by the `exp_outputs` log-sum-exp readout."""
         return F.softplus(self.exp_outputs_tau_raw).clamp_min(self.exp_outputs_tau_floor)
 
+    def cell_tv(self):
+        """Hamming-1 total-variation smoothness penalty on the cell tables: the same quantity as
+        LightMultiHeadLUT.cell_tv -- the mean over all Hamming-1-adjacent cell pairs and over tables
+        of ||W[t, c] - W[t, c']||^2, summed over the output dimension.
+
+        Adjacency: row c of weights[t] is the cell whose MSB-first packed sign bits (soft_powers)
+        equal c -- the row every forward path reads, in both the shared-input and the block-diagonal
+        (multi_head_input) layout -- so the rows at Hamming distance 1 from c are exactly c ^ 2^b.
+        Viewing the K = 2^NAP rows as a [2]*NAP hypercube, a size-1 diff along each axis enumerates
+        each such pair once (which axis carries which bit does not change the set of pairs).
+        Differentiable w.r.t. `weights`; called only by the trainer when lut_cell_smoothness > 0, so
+        it adds nothing to the forward."""
+        nap = self.n_anchor_pairs
+        n_tables, K, D = self.weights.shape
+        if K != (1 << nap):
+            raise RuntimeError(f"cell_tv expects 2^NAP={1 << nap} rows per table, got {K}")
+        t = self.weights.view(n_tables, *([2] * nap), D)     # [T, 2,2,..,2, D] hypercube view
+        tv = t.new_zeros(())
+        for ax in range(1, nap + 1):                          # one hypercube axis per bit
+            d = t.diff(dim=ax)                                # size-1 diff across that bit
+            tv = tv + (d * d).sum()
+        n_pairs = n_tables * nap * (1 << (nap - 1))          # total Hamming-1 pairs
+        return tv / n_pairs
+
     def _hard_eval_native(self, x: torch.Tensor,
                           weights_compute: torch.Tensor) -> torch.Tensor:
         """Hard-mode eval via the MSB-first lutorch_cuda bit-pack kernel.

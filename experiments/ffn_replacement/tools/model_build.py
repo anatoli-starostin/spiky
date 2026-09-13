@@ -470,16 +470,37 @@ class MinimalGPT(nn.Module):
             'ratio_lut': [rv(b._ratio_lut) for b in hb],
         }
 
-    def lut_tv_penalty(self):
-        """Mean Hamming-1 cell-smoothness (TV) penalty over all LightMHL tables in the model.
-        Differentiable; 0 (no grad) when there are no LightMHL layers. The trainer multiplies
-        this by cfg['lut_cell_smoothness'] and adds it to the loss (only when that knob > 0, so
-        the default path is byte-identical)."""
+    def lut_tv_modules(self):
+        """The LUT modules the Hamming-1 cell TV penalty covers, in module order: LightMultiHeadLUT
+        (Gen 3) and FastMultiHeadLut (Gen 2). Both store [n_tables, 2^nap, d] tables whose row index
+        is the MSB-packed sign address, so the same cell_tv applies. Not covered: BH4MultiHeadLUT
+        (coordinate-sign addressing) and Gen-1 MultiHeadLut (not wired into the FFN slot)."""
         from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
-        ms = [m for m in self.modules() if isinstance(m, LightMultiHeadLUT)]
+        from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
+        return [m for m in self.modules() if isinstance(m, (LightMultiHeadLUT, FastMultiHeadLut))]
+
+    def lut_tv_penalty(self):
+        """Mean Hamming-1 cell-smoothness (TV) penalty over the tables of lut_tv_modules().
+        Differentiable; 0 (no grad) when there are none. The trainer multiplies this by
+        cfg['lut_cell_smoothness'] and backpropagates it once per optimiser step before clipping
+        (only when that knob > 0, so the default path is byte-identical). build_model refuses
+        lut_cell_smoothness > 0 on a model whose LUT tables this does not cover."""
+        ms = self.lut_tv_modules()
         if not ms:
             return torch.zeros((), device=self.get_device())
         return torch.stack([m.cell_tv() for m in ms]).mean()   # avg over LUT layers/tables
+
+    @torch.no_grad()
+    def lut_tv_by_layer(self):
+        """Per-block cell TV as floats, for logging: the mean cell_tv of each block's covered LUT
+        modules, skipping blocks that have none. Read-only (no graph, no RNG)."""
+        covered = {id(m) for m in self.lut_tv_modules()}
+        out = []
+        for b in self.blocks:
+            ms = [m for m in b.modules() if id(m) in covered]
+            if ms:
+                out.append(float(torch.stack([m.cell_tv() for m in ms]).mean()))
+        return out
 
     def lut_som_penalty(self, sigma):
         """Mean SOM/topographic cell-smoothness penalty over all LightMHL tables at the given
@@ -514,6 +535,34 @@ class MinimalGPT(nn.Module):
         return logits
 
 
+def _check_cell_smoothness(cfg, model):
+    """Refuse, at build time, a lut_cell_smoothness the penalty cannot deliver.
+
+    lut_tv_penalty() is silently 0 on a model with no covered LUT tables, and would silently skip
+    any LUT FFN whose tables it does not cover (bh4). A run asking for TV must not train like that,
+    so build_model raises instead. It checks what the MODEL supports; it cannot see whether the
+    trainer actually applies the penalty (a trainer must read lut_cell_smoothness itself)."""
+    lam = float(cfg.get('lut_cell_smoothness', 0.0) or 0.0)
+    if lam < 0.0:
+        raise ValueError(f'lut_cell_smoothness must be >= 0, got {lam!r}')
+    if lam == 0.0:
+        return
+    covered = {id(m) for m in model.lut_tv_modules()}
+    ffns = [m for m in model.modules() if isinstance(m, CompressionMultiHeadLUT)]
+    uncovered = [i for i, f in enumerate(ffns) if not any(id(x) in covered for x in f.modules())]
+    if not covered or uncovered:
+        kinds = sorted({getattr(f, 'lut_impl', type(f).__name__) for f in ffns}) or ['no LUT FFN']
+        raise ValueError(
+            f'lut_cell_smoothness={lam:g} requested, but the Hamming-1 TV penalty cannot reach this '
+            f'model\'s tables: covered LUT modules={len(covered)}, LUT FFNs without covered tables='
+            f'{len(uncovered)} of {len(ffns)} (lut_impl {kinds}). lut_tv_penalty covers LightMultiHeadLUT '
+            f'and FastMultiHeadLut only; refusing to train with a silently zero or partial penalty.')
+
+
 def build_model(cfg, vocab_size, device='cuda'):
-    """Build a MinimalGPT from a run's config dict and move it to `device`."""
-    return MinimalGPT(vocab_size, cfg).to(device)
+    """Build a MinimalGPT from a run's config dict and move it to `device`.
+
+    Raises when lut_cell_smoothness > 0 cannot be applied to the built model's LUT tables."""
+    model = MinimalGPT(vocab_size, cfg)
+    _check_cell_smoothness(cfg, model)
+    return model.to(device)
