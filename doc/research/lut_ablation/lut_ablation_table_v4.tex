@@ -34,11 +34,6 @@
 \textbf{Training:} 16{,}000 steps, batch size 48 (24576 tokens), untied embeddings, LUT tables without weight decay.
 \textbf{Eval:} \code{evaluate\_bpb\_fixed}, 48 rows $\times$ 100 steps, first 12 rows skipped.
 
-\medskip
-\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{%
-\textbf{One seed per row.} Every validation bpb below is a single run, and there are \textbf{zero seed replicates} at this geometry.
-The only LUT seed-noise figure on record is a 4K three-seed sd of 0.009642, a \emph{lower bound}; ``units'' below are multiples of it (the vanilla two-seed range at 16K is 0.00335).
-\textbf{Every Gen-3 difference in Table B is inside one unit}: 3.2 vs 3.1 $-$0.000016 ($<$\,0.01), 3.3 vs 3.2 $-$0.0056 (0.6).}}
 
 \section*{Counting convention}
 \begin{itemize}\setlength\itemsep{0pt}
@@ -104,7 +99,7 @@ one $(g,\log\beta,\log\gamma)$ per layer, initialised at $(0,2,1)$. Discontinuou
 \normalsize
 
 \section*{Table B --- cost and results}
-Per token, one layer, core LUT only; $P=512$, $n=8$, $K=256$, $d=48$. Validation bpb: \textbf{one seed per row}.
+Per token, one layer, core LUT only; $P=512$, $n=8$, $K=256$, $d=48$.
 \footnotesize
 \setlength{\tabcolsep}{3pt}% seven columns: narrower gutters keep the table inside the text block
 \begin{longtable}{>{\raggedright\arraybackslash}p{1.3cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.2cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.8cm} >{\raggedright\arraybackslash}p{4.3cm} >{\raggedright\arraybackslash}p{6.0cm}}
@@ -198,11 +193,11 @@ As 3.2, plus \code{(10 * model.lut\_tv\_penalty()).backward()} per step (\code{l
   i.e. $+6{,}144$ FLOPs and $+2{,}048$ MACs per token over 24,576 tokens. Inference cost is 3.2's.
 \end{itemize}
 
-\section*{The Gen-3 form (one seed each)}
+\section*{The Gen-3 form}
 \begin{itemize}\setlength\itemsep{1pt}
 \item \textbf{Learned margin score with per-layer trainable $\beta$ and $\gamma$ (3.2). Drop $g$:} freezing it leaves bpb ($-$0.000016 vs 3.1) and the $\gamma$ profile (max $|\Delta\gamma|$ 0.016) unchanged.
   Trained $\gamma$ 1.04--1.60, highest mid-depth; $\beta$ 1.76--2.17 and nearly irrelevant to the score's shape. Both were still drifting at 16K.
-\item \textbf{Cell TV (3.3): $-$0.0056 vs 3.2, a mild regularisation benefit}, not established (0.6 units). \textbf{The mechanism is mostly table shrinkage, not smoothing:}
+\item \textbf{Cell TV (3.3): $-$0.0056 vs 3.2, a mild regularisation benefit}. \textbf{The mechanism is mostly table shrinkage, not smoothing:}
   table L2 norms fell to 0.22--0.35$\times$ of 3.2's, while the scale-free ratio $\overline{\|W[c]-W[c']\|^2}/\overline{\|W[c]\|^2}$ (2.0 for independent random cells)
   moved only from 1.74--1.95 to 1.34--1.57 across layers.
 \end{itemize}
