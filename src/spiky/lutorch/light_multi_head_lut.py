@@ -814,6 +814,17 @@ class LightMultiHeadLUT(nn.Module):
         if not torch.is_grad_enabled():
             return plain
         score = self.confidence_score(d)
+        # DIVERGENCE FIX (ablation rows 3.3/3.4): the STE below injects grad(f) into x, the
+        # confidence scalars and tau. With an unbounded score (learned_margin's Sum_j|d_j|
+        # factor, which grows with activation magnitude) that gradient scaled with |d| and had
+        # NO corrective loss signal -- the score is absent from the forward value `plain` -- so
+        # once LR reached peak it ran away (bigger activations -> bigger score -> bigger input
+        # gradient -> bigger activations). Rescale the score by a DETACHED per-token(-per-head)
+        # mean over the tables that reduce into each bag, so the injected gradient is O(1) and
+        # cannot scale with |d|; the RELATIVE per-table confidence (the useful signal for the
+        # confidence scalars and x) is preserved. VALUE-PRESERVING: this changes only `f`, which
+        # cancels in `plain + (f - f.detach())`, so the forward output stays exactly `plain`.
+        score = score / (score.detach().mean(dim=-1, keepdim=True) + 1e-6)
         flat_d = flat.detach()
         if self.read_top_n > 1:
             f = self._blend_bag(d, index, offset, flat_d, score, n_bags, bag)
