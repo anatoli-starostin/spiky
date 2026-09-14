@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_abl_15_B16k_fast_hard_topk0_tv10_nap8_tph128_seed1",
+  "best_val_bpb": 1.174661075500054,
+  "final_val_bpb": 1.174661075500054,
+  "total_params": 67351692,
+  "training_time_hours": 1.864,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
