@@ -1,0 +1,336 @@
+Loading tokenizer from /home/<user>/.cache/nanochat/tokenizer
+FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_batch_size=12)
+[learned_margin] layer 0: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 1: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 2: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 3: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 4: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 5: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=compression tie=False | params=67,351,698
+Tokens/micro-batch: 6,144 | grad_accum: 4 | effective batch: 24,576 tokens
+wandb: [wandb.login()] Loaded credentials for http://<WANDB_HOST> from /home/<user>/.netrc.
+wandb: Currently logged in as: <WANDB_ENTITY> to http://<WANDB_HOST>. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /home/<user>/.cache/wandb/wandb/run-20260914_075131-exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1
+wandb: ⭐️ View project at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: 🚀 View run at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1
+[wandb] online: run exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1 -> /home/<user>/.cache/wandb/wandb/run-20260914_075131-exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1/files
+/home/<user>/projects/spiky/.venv/lib/python3.12/site-packages/torch/_dynamo/variables/functions.py:2431: UserWarning: Dynamo does not know how to trace the builtin `lutorch_cuda.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.anchor_pairs_lookup_eval_forward_msb.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+step      1 | loss=10.4804 | lr=1.87e-07
+step    100 | loss=10.1234 | lr=1.87e-05
+step    200 | loss=9.3918 | lr=3.75e-05
+step    300 | loss=8.4734 | lr=5.62e-05
+step    400 | loss=7.7419 | lr=7.50e-05
+step    500 | loss=7.2377 | lr=9.37e-05
+[VAL] step 500: bpb=2.0774
+step    600 | loss=6.8758 | lr=1.12e-04
+step    700 | loss=6.6529 | lr=1.31e-04
+step    800 | loss=6.5517 | lr=1.50e-04
+step    900 | loss=6.4630 | lr=1.69e-04
+step   1000 | loss=6.4944 | lr=1.87e-04
+[VAL] step 1000: bpb=2.2603
+step   1100 | loss=7.7424 | lr=2.06e-04
+step   1200 | loss=7.7234 | lr=2.25e-04
+step   1300 | loss=7.6043 | lr=2.44e-04
+step   1400 | loss=7.6252 | lr=2.62e-04
+step   1500 | loss=7.4994 | lr=2.81e-04
+[VAL] step 1500: bpb=2.2510
+step   1600 | loss=7.4253 | lr=3.00e-04
+step   1700 | loss=7.5515 | lr=3.00e-04
+step   1800 | loss=9.8005 | lr=3.00e-04
+step   1900 | loss=8.9607 | lr=3.00e-04
+step   2000 | loss=9.8882 | lr=2.99e-04
+[VAL] step 2000: bpb=3.3488
+step   2100 | loss=11.3595 | lr=2.99e-04
+step   2200 | loss=12.1017 | lr=2.99e-04
+step   2300 | loss=11.6990 | lr=2.98e-04
+step   2400 | loss=11.3357 | lr=2.98e-04
+step   2500 | loss=10.4709 | lr=2.97e-04
+[VAL] step 2500: bpb=3.1548
+step   2600 | loss=9.3074 | lr=2.97e-04
+step   2700 | loss=8.5315 | lr=2.96e-04
+step   2800 | loss=8.5065 | lr=2.95e-04
+step   2900 | loss=8.9946 | lr=2.95e-04
+step   3000 | loss=9.6377 | lr=2.94e-04
+[VAL] step 3000: bpb=2.9050
+step   3100 | loss=10.3814 | lr=2.93e-04
+step   3200 | loss=10.8404 | lr=2.92e-04
+step   3300 | loss=11.0073 | lr=2.91e-04
+step   3400 | loss=11.0859 | lr=2.90e-04
+step   3500 | loss=11.6314 | lr=2.89e-04
+[VAL] step 3500: bpb=3.9114
+step   3600 | loss=12.3349 | lr=2.87e-04
+step   3700 | loss=11.6046 | lr=2.86e-04
+step   3800 | loss=12.8644 | lr=2.85e-04
+step   3900 | loss=14.1462 | lr=2.83e-04
+step   4000 | loss=14.3716 | lr=2.82e-04
+[VAL] step 4000: bpb=4.2160
+[CKPT] step 4000: wrote checkpoint_step4000.pt
+step   4100 | loss=13.6107 | lr=2.80e-04
+step   4200 | loss=13.4129 | lr=2.79e-04
+step   4300 | loss=14.1310 | lr=2.77e-04
+step   4400 | loss=14.4137 | lr=2.76e-04
+step   4500 | loss=14.2780 | lr=2.74e-04
+[VAL] step 4500: bpb=4.3904
+step   4600 | loss=14.2353 | lr=2.72e-04
+step   4700 | loss=14.2412 | lr=2.70e-04
+step   4800 | loss=14.1100 | lr=2.68e-04
+step   4900 | loss=13.2663 | lr=2.66e-04
+step   5000 | loss=12.7448 | lr=2.65e-04
+[VAL] step 5000: bpb=3.8229
+step   5100 | loss=11.8654 | lr=2.63e-04
+step   5200 | loss=11.1577 | lr=2.60e-04
+step   5300 | loss=11.0941 | lr=2.58e-04
+step   5400 | loss=11.2035 | lr=2.56e-04
+step   5500 | loss=11.1123 | lr=2.54e-04
+[VAL] step 5500: bpb=3.3723
+step   5600 | loss=11.1009 | lr=2.52e-04
+step   5700 | loss=12.0902 | lr=2.49e-04
+step   5800 | loss=12.4785 | lr=2.47e-04
+step   5900 | loss=12.6346 | lr=2.45e-04
+step   6000 | loss=12.0091 | lr=2.42e-04
+[VAL] step 6000: bpb=3.5694
+step   6100 | loss=11.7842 | lr=2.40e-04
+step   6200 | loss=12.0123 | lr=2.38e-04
+step   6300 | loss=12.2938 | lr=2.35e-04
+step   6400 | loss=12.5666 | lr=2.32e-04
+step   6500 | loss=11.7485 | lr=2.30e-04
+[VAL] step 6500: bpb=3.2645
+step   6600 | loss=10.9785 | lr=2.27e-04
+step   6700 | loss=11.0993 | lr=2.25e-04
+step   6800 | loss=11.0148 | lr=2.22e-04
+step   6900 | loss=11.1930 | lr=2.19e-04
+step   7000 | loss=12.6751 | lr=2.17e-04
+[VAL] step 7000: bpb=3.9735
+step   7100 | loss=12.5973 | lr=2.14e-04
+step   7200 | loss=12.4622 | lr=2.11e-04
+step   7300 | loss=12.2195 | lr=2.08e-04
+step   7400 | loss=12.0094 | lr=2.06e-04
+step   7500 | loss=11.5226 | lr=2.03e-04
+[VAL] step 7500: bpb=3.4216
+step   7600 | loss=11.1958 | lr=2.00e-04
+step   7700 | loss=11.1449 | lr=1.97e-04
+step   7800 | loss=11.3954 | lr=1.94e-04
+step   7900 | loss=11.4679 | lr=1.91e-04
+step   8000 | loss=11.3613 | lr=1.88e-04
+[VAL] step 8000: bpb=3.4480
+[CKPT] step 8000: wrote checkpoint_step8000.pt
+step   8100 | loss=11.3036 | lr=1.86e-04
+step   8200 | loss=10.9142 | lr=1.83e-04
+step   8300 | loss=11.0594 | lr=1.80e-04
+step   8400 | loss=11.3177 | lr=1.77e-04
+step   8500 | loss=11.5321 | lr=1.74e-04
+[VAL] step 8500: bpb=3.5778
+step   8600 | loss=11.6991 | lr=1.71e-04
+step   8700 | loss=12.0129 | lr=1.68e-04
+step   8800 | loss=11.8736 | lr=1.65e-04
+step   8900 | loss=11.7647 | lr=1.62e-04
+step   9000 | loss=11.6468 | lr=1.59e-04
+[VAL] step 9000: bpb=3.5311
+step   9100 | loss=11.2758 | lr=1.56e-04
+step   9200 | loss=11.1477 | lr=1.53e-04
+step   9300 | loss=11.0122 | lr=1.50e-04
+step   9400 | loss=10.9911 | lr=1.47e-04
+step   9500 | loss=10.9798 | lr=1.44e-04
+[VAL] step 9500: bpb=3.3114
+step   9600 | loss=10.8055 | lr=1.42e-04
+step   9700 | loss=10.6877 | lr=1.39e-04
+step   9800 | loss=10.4682 | lr=1.36e-04
+step   9900 | loss=10.3208 | lr=1.33e-04
+step  10000 | loss=11.1136 | lr=1.30e-04
+[VAL] step 10000: bpb=3.4558
+step  10100 | loss=11.7306 | lr=1.27e-04
+step  10200 | loss=11.7828 | lr=1.24e-04
+step  10300 | loss=11.5735 | lr=1.22e-04
+step  10400 | loss=11.6831 | lr=1.19e-04
+step  10500 | loss=11.6516 | lr=1.16e-04
+[VAL] step 10500: bpb=3.5557
+step  10600 | loss=11.6337 | lr=1.13e-04
+step  10700 | loss=11.6732 | lr=1.11e-04
+step  10800 | loss=11.7081 | lr=1.08e-04
+step  10900 | loss=11.7132 | lr=1.05e-04
+step  11000 | loss=11.8214 | lr=1.03e-04
+[VAL] step 11000: bpb=3.5962
+step  11100 | loss=11.8441 | lr=1.00e-04
+step  11200 | loss=11.9128 | lr=9.75e-05
+step  11300 | loss=11.9656 | lr=9.50e-05
+step  11400 | loss=12.0210 | lr=9.25e-05
+step  11500 | loss=11.8830 | lr=9.00e-05
+[VAL] step 11500: bpb=3.6226
+step  11600 | loss=11.6121 | lr=8.76e-05
+step  11700 | loss=11.1273 | lr=8.52e-05
+step  11800 | loss=10.5264 | lr=8.28e-05
+step  11900 | loss=9.7786 | lr=8.05e-05
+step  12000 | loss=9.2998 | lr=7.82e-05
+[VAL] step 12000: bpb=2.9812
+[CKPT] step 12000: wrote checkpoint_step12000.pt
+step  12100 | loss=9.1942 | lr=7.60e-05
+step  12200 | loss=9.0434 | lr=7.38e-05
+step  12300 | loss=9.1489 | lr=7.16e-05
+step  12400 | loss=9.1927 | lr=6.95e-05
+step  12500 | loss=9.2851 | lr=6.75e-05
+[VAL] step 12500: bpb=2.8616
+step  12600 | loss=9.4260 | lr=6.55e-05
+step  12700 | loss=9.5848 | lr=6.35e-05
+step  12800 | loss=9.5652 | lr=6.16e-05
+step  12900 | loss=9.5937 | lr=5.97e-05
+step  13000 | loss=9.6998 | lr=5.79e-05
+[VAL] step 13000: bpb=2.9690
+step  13100 | loss=9.7037 | lr=5.61e-05
+step  13200 | loss=9.6965 | lr=5.44e-05
+step  13300 | loss=9.7116 | lr=5.28e-05
+step  13400 | loss=9.7252 | lr=5.11e-05
+step  13500 | loss=9.7419 | lr=4.96e-05
+[VAL] step 13500: bpb=2.9896
+step  13600 | loss=9.7629 | lr=4.81e-05
+step  13700 | loss=9.7688 | lr=4.66e-05
+step  13800 | loss=9.7758 | lr=4.53e-05
+step  13900 | loss=9.7706 | lr=4.39e-05
+step  14000 | loss=9.7838 | lr=4.26e-05
+[VAL] step 14000: bpb=2.9925
+step  14100 | loss=9.7746 | lr=4.14e-05
+step  14200 | loss=9.7660 | lr=4.03e-05
+step  14300 | loss=9.7537 | lr=3.92e-05
+step  14400 | loss=9.7711 | lr=3.81e-05
+step  14500 | loss=9.7636 | lr=3.72e-05
+[VAL] step 14500: bpb=2.9822
+step  14600 | loss=9.7562 | lr=3.62e-05
+step  14700 | loss=9.7592 | lr=3.54e-05
+step  14800 | loss=9.7564 | lr=3.46e-05
+step  14900 | loss=9.7466 | lr=3.39e-05
+step  15000 | loss=9.7416 | lr=3.32e-05
+[VAL] step 15000: bpb=2.9801
+step  15100 | loss=9.7400 | lr=3.26e-05
+step  15200 | loss=9.7349 | lr=3.21e-05
+step  15300 | loss=9.7240 | lr=3.16e-05
+step  15400 | loss=9.7232 | lr=3.12e-05
+step  15500 | loss=9.7027 | lr=3.08e-05
+[VAL] step 15500: bpb=2.9525
+step  15600 | loss=9.6638 | lr=3.05e-05
+step  15700 | loss=9.6900 | lr=3.03e-05
+step  15800 | loss=10.1253 | lr=3.01e-05
+step  15900 | loss=10.7064 | lr=3.00e-05
+step  16000 | loss=11.0156 | lr=3.00e-05
+[VAL] step 16000: bpb=3.2216
+
+=== DONE ===
+{
+  "exp_name": "exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1",
+  "best_val_bpb": 2.0774319027449217,
+  "final_val_bpb": 3.221583868697081,
+  "total_params": 67351698,
+  "training_time_hours": 1.168,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "learned_confidence": {
+    "form": "learned_margin",
+    "score": "exp(g) * sum|d| * prod sigmoid(beta |d|) ** gamma",
+    "init_per_layer": [
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      }
+    ],
+    "final_per_layer": [
+      {
+        "g": 0.0,
+        "beta": 2.2153992652893066,
+        "gamma": 0.9199482798576355
+      },
+      {
+        "g": 0.0,
+        "beta": 2.5998470783233643,
+        "gamma": 0.8093085885047913
+      },
+      {
+        "g": 0.0,
+        "beta": 3.0441219806671143,
+        "gamma": 0.7717065811157227
+      },
+      {
+        "g": 0.0,
+        "beta": 3.7744672298431396,
+        "gamma": 0.5761833190917969
+      },
+      {
+        "g": 0.0,
+        "beta": 3.2409279346466064,
+        "gamma": 0.6714672446250916
+      },
+      {
+        "g": 0.0,
+        "beta": 2.765540838241577,
+        "gamma": 0.7824902534484863
+      }
+    ]
+  }
+}
+wandb: updating run metadata
+wandb: uploading wandb-summary.json; uploading config.yaml
+wandb: 
+wandb: Run history:
+wandb: lm_beta_L0 ▁▂▃▄▃▅▄▄▅▅▅▆▇▇▇▇▇▇▇▇▇▇▇█████████
+wandb: lm_beta_L1 ▁▁▁▂▂▂▂▃▂▃▃▃▄▄▄▄▅▅▅▅▅▅▆▆▇▇▇▇▇███
+wandb: lm_beta_L2 ▁▁▁▁▂▂▃▃▃▃▃▃▃▄▄▄▅▅▅▆▆▆▇▇████████
+wandb: lm_beta_L3 ▁▁▁▁▂▂▂▃▃▃▃▄▄▅▅▅▆▆▆▆▇▇▇▇████████
+wandb: lm_beta_L4 ▁▁▁▂▂▃▃▄▄▅▅▅▆▆▆▇▇▇▇▇▇▇▇█████████
+wandb: lm_beta_L5 ▁▂▂▃▄▄▅▅▆▆▇▇▇▇▇▇▇▇▇▇▇▇▇█████████
+wandb:    lm_g_L0 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:    lm_g_L1 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:    lm_g_L2 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:    lm_g_L3 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:        +39 ...
+wandb: 
+wandb: Run summary:
+wandb:  best_val_bpb 2.07743
+wandb:      exp_name exp_n_abl_22_B16k_li...
+wandb: final_val_bpb 3.22158
+wandb:    lm_beta_L0 2.2154
+wandb:    lm_beta_L1 2.59985
+wandb:    lm_beta_L2 3.04412
+wandb:    lm_beta_L3 3.77447
+wandb:    lm_beta_L4 3.24093
+wandb:    lm_beta_L5 2.76554
+wandb:       lm_g_L0 0
+wandb:           +44 ...
+wandb: 
+wandb: 🚀 View run exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1 at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1
+wandb: ⭐️ View project at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /home/<user>/.cache/wandb/wandb/run-20260914_075131-exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1/logs
+[wandb] finished in 0.9s
