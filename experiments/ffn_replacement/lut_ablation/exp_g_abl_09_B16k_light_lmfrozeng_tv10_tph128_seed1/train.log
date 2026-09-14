@@ -8,8 +8,8 @@ FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_bat
 [learned_margin] layer 5: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
 MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=compression tie=False | params=67,351,692
 Tokens/micro-batch: 6,144 | grad_accum: 4 | effective batch: 24,576 tokens
-wandb: [wandb.login()] Loaded credentials for <wandb-server> from ~/.netrc.
-wandb: Currently logged in as: <entity> to <wandb-server>. Use `wandb login --relogin` to force relogin
+wandb: [wandb.login()] Loaded credentials for http://<WANDB_HOST> from ~/.netrc.
+wandb: Currently logged in as: <WANDB_ENTITY> to http://<WANDB_HOST>. Use `wandb login --relogin` to force relogin
 [wandb] off: init failed: CommError: run exp_g_abl_09_B16k_light_lmfrozeng_tv10_tph128_seed1 was previously created and deleted; try a new run id -- training continues
 step      1 | loss=10.4804 | lr=1.87e-07
 step    100 | loss=10.1251 | lr=1.87e-05

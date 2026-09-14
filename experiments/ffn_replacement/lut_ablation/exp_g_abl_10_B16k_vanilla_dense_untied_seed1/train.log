@@ -2,14 +2,14 @@ Loading tokenizer from ~/.cache/nanochat/tokenizer
 FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_batch_size=48)
 MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=dense tie=False | params=35,792,640
 Tokens/micro-batch: 24,576 | grad_accum: 1 | effective batch: 24,576 tokens
-wandb: [wandb.login()] Loaded credentials for <wandb-server> from ~/.netrc.
-wandb: Currently logged in as: <entity> to <wandb-server>. Use `wandb login --relogin` to force relogin
+wandb: [wandb.login()] Loaded credentials for http://<WANDB_HOST> from ~/.netrc.
+wandb: Currently logged in as: <WANDB_ENTITY> to http://<WANDB_HOST>. Use `wandb login --relogin` to force relogin
 wandb: Tracking run with wandb version 0.28.0
 wandb: Run data is saved locally in ~/.cache/wandb/wandb/run-20260913_210340-exp_g_abl_10_B16k_vanilla_dense_untied_seed1
 wandb: Run `wandb offline` to turn off syncing.
 wandb: Syncing run exp_g_abl_10_B16k_vanilla_dense_untied_seed1
-wandb: ⭐️ View project at <wandb-server>/<entity>/Spiky
-wandb: 🚀 View run at <wandb-server>/<entity>/Spiky/runs/exp_g_abl_10_B16k_vanilla_dense_untied_seed1
+wandb: ⭐️ View project at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: 🚀 View run at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_g_abl_10_B16k_vanilla_dense_untied_seed1
 [wandb] online: run exp_g_abl_10_B16k_vanilla_dense_untied_seed1 -> ~/.cache/wandb/wandb/run-20260913_210340-exp_g_abl_10_B16k_vanilla_dense_untied_seed1/files
 step      1 | loss=10.4698 | lr=1.87e-07
 step    100 | loss=9.9587 | lr=1.87e-05
@@ -247,8 +247,8 @@ wandb:   ln1_norm_L5 24.014
 wandb:   ln2_mean_L0 0.94949
 wandb:           +20 ...
 wandb: 
-wandb: 🚀 View run exp_g_abl_10_B16k_vanilla_dense_untied_seed1 at: <wandb-server>/<entity>/Spiky/runs/exp_g_abl_10_B16k_vanilla_dense_untied_seed1
-wandb: ⭐️ View project at: <wandb-server>/<entity>/Spiky
+wandb: 🚀 View run exp_g_abl_10_B16k_vanilla_dense_untied_seed1 at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_g_abl_10_B16k_vanilla_dense_untied_seed1
+wandb: ⭐️ View project at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
 wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
 wandb: Find logs at: ~/.cache/wandb/wandb/run-20260913_210340-exp_g_abl_10_B16k_vanilla_dense_untied_seed1/logs
 [wandb] finished in 1.1s
