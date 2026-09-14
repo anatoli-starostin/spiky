@@ -1,0 +1,257 @@
+Loading tokenizer from /home/<user>/.cache/nanochat/tokenizer
+FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_batch_size=12)
+MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=compression tie=False | params=67,351,680
+[tv] lut_cell_smoothness=10: penalty over 6 LUT modules (MultiHeadLut), applied once per step before clipping
+Tokens/micro-batch: 6,144 | grad_accum: 4 | effective batch: 24,576 tokens
+wandb: [wandb.login()] Loaded credentials for http://<WANDB_HOST> from /home/<user>/.netrc.
+wandb: Currently logged in as: <WANDB_ENTITY> to http://<WANDB_HOST>. Use `wandb login --relogin` to force relogin
+wandb: setting up run exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /home/<user>/.cache/wandb/wandb/run-20260914_004108-exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1
+wandb: ⭐️ View project at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: 🚀 View run at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1
+[wandb] online: run exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1 -> /home/<user>/.cache/wandb/wandb/run-20260914_004108-exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1/files
+step      1 | loss=10.4804 | lr=1.87e-07
+step    100 | loss=10.1235 | lr=1.87e-05
+step    200 | loss=9.3875 | lr=3.75e-05
+step    300 | loss=8.4340 | lr=5.62e-05
+step    400 | loss=7.6234 | lr=7.50e-05
+step    500 | loss=7.0527 | lr=9.37e-05
+[VAL] step 500: bpb=2.0096
+step    600 | loss=6.6474 | lr=1.12e-04
+step    700 | loss=6.3718 | lr=1.31e-04
+step    800 | loss=6.1861 | lr=1.50e-04
+step    900 | loss=6.0199 | lr=1.69e-04
+step   1000 | loss=5.8891 | lr=1.87e-04
+[VAL] step 1000: bpb=1.7627
+step   1100 | loss=5.7668 | lr=2.06e-04
+step   1200 | loss=5.6549 | lr=2.25e-04
+step   1300 | loss=5.5539 | lr=2.44e-04
+step   1400 | loss=5.4607 | lr=2.62e-04
+step   1500 | loss=5.3750 | lr=2.81e-04
+[VAL] step 1500: bpb=1.6178
+step   1600 | loss=5.3112 | lr=3.00e-04
+step   1700 | loss=5.2326 | lr=3.00e-04
+step   1800 | loss=5.1622 | lr=3.00e-04
+step   1900 | loss=5.0944 | lr=3.00e-04
+step   2000 | loss=5.0432 | lr=2.99e-04
+[VAL] step 2000: bpb=1.5286
+step   2100 | loss=4.9909 | lr=2.99e-04
+step   2200 | loss=4.9497 | lr=2.99e-04
+step   2300 | loss=4.9124 | lr=2.98e-04
+step   2400 | loss=4.8745 | lr=2.98e-04
+step   2500 | loss=4.8356 | lr=2.97e-04
+[VAL] step 2500: bpb=1.4699
+step   2600 | loss=4.7969 | lr=2.97e-04
+step   2700 | loss=4.7697 | lr=2.96e-04
+step   2800 | loss=4.7342 | lr=2.95e-04
+step   2900 | loss=4.7004 | lr=2.95e-04
+step   3000 | loss=4.6758 | lr=2.94e-04
+[VAL] step 3000: bpb=1.4207
+step   3100 | loss=4.6528 | lr=2.93e-04
+step   3200 | loss=4.6202 | lr=2.92e-04
+step   3300 | loss=4.5786 | lr=2.91e-04
+step   3400 | loss=4.5526 | lr=2.90e-04
+step   3500 | loss=4.5191 | lr=2.89e-04
+[VAL] step 3500: bpb=1.3770
+step   3600 | loss=4.4938 | lr=2.87e-04
+step   3700 | loss=4.4738 | lr=2.86e-04
+step   3800 | loss=4.4663 | lr=2.85e-04
+step   3900 | loss=4.4462 | lr=2.83e-04
+step   4000 | loss=4.4245 | lr=2.82e-04
+[VAL] step 4000: bpb=1.3475
+step   4100 | loss=4.4009 | lr=2.80e-04
+step   4200 | loss=4.3818 | lr=2.79e-04
+step   4300 | loss=4.3641 | lr=2.77e-04
+step   4400 | loss=4.3508 | lr=2.76e-04
+step   4500 | loss=4.3408 | lr=2.74e-04
+[VAL] step 4500: bpb=1.3256
+step   4600 | loss=4.3323 | lr=2.72e-04
+step   4700 | loss=4.3162 | lr=2.70e-04
+step   4800 | loss=4.3026 | lr=2.68e-04
+step   4900 | loss=4.2871 | lr=2.66e-04
+step   5000 | loss=4.2873 | lr=2.65e-04
+[VAL] step 5000: bpb=1.3064
+step   5100 | loss=4.2714 | lr=2.63e-04
+step   5200 | loss=4.2742 | lr=2.60e-04
+step   5300 | loss=4.2765 | lr=2.58e-04
+step   5400 | loss=4.2727 | lr=2.56e-04
+step   5500 | loss=4.2475 | lr=2.54e-04
+[VAL] step 5500: bpb=1.2924
+step   5600 | loss=4.2271 | lr=2.52e-04
+step   5700 | loss=4.2117 | lr=2.49e-04
+step   5800 | loss=4.1997 | lr=2.47e-04
+step   5900 | loss=4.1895 | lr=2.45e-04
+step   6000 | loss=4.1858 | lr=2.42e-04
+[VAL] step 6000: bpb=1.2788
+step   6100 | loss=4.1780 | lr=2.40e-04
+step   6200 | loss=4.1723 | lr=2.38e-04
+step   6300 | loss=4.1596 | lr=2.35e-04
+step   6400 | loss=4.1525 | lr=2.32e-04
+step   6500 | loss=4.1523 | lr=2.30e-04
+[VAL] step 6500: bpb=1.2691
+step   6600 | loss=4.1386 | lr=2.27e-04
+step   6700 | loss=4.1340 | lr=2.25e-04
+step   6800 | loss=4.1373 | lr=2.22e-04
+step   6900 | loss=4.1224 | lr=2.19e-04
+step   7000 | loss=4.1072 | lr=2.17e-04
+[VAL] step 7000: bpb=1.2592
+step   7100 | loss=4.0899 | lr=2.14e-04
+step   7200 | loss=4.0827 | lr=2.11e-04
+step   7300 | loss=4.0852 | lr=2.08e-04
+step   7400 | loss=4.0851 | lr=2.06e-04
+step   7500 | loss=4.0780 | lr=2.03e-04
+[VAL] step 7500: bpb=1.2495
+step   7600 | loss=4.0679 | lr=2.00e-04
+step   7700 | loss=4.0521 | lr=1.97e-04
+step   7800 | loss=4.0502 | lr=1.94e-04
+step   7900 | loss=4.0480 | lr=1.91e-04
+step   8000 | loss=4.0416 | lr=1.88e-04
+[VAL] step 8000: bpb=1.2428
+step   8100 | loss=4.0346 | lr=1.86e-04
+step   8200 | loss=4.0374 | lr=1.83e-04
+step   8300 | loss=4.0388 | lr=1.80e-04
+step   8400 | loss=4.0236 | lr=1.77e-04
+step   8500 | loss=4.0118 | lr=1.74e-04
+[VAL] step 8500: bpb=1.2355
+step   8600 | loss=4.0091 | lr=1.71e-04
+step   8700 | loss=4.0004 | lr=1.68e-04
+step   8800 | loss=3.9973 | lr=1.65e-04
+step   8900 | loss=3.9976 | lr=1.62e-04
+step   9000 | loss=4.0018 | lr=1.59e-04
+[VAL] step 9000: bpb=1.2282
+step   9100 | loss=3.9877 | lr=1.56e-04
+step   9200 | loss=3.9858 | lr=1.53e-04
+step   9300 | loss=3.9730 | lr=1.50e-04
+step   9400 | loss=3.9687 | lr=1.47e-04
+step   9500 | loss=3.9619 | lr=1.44e-04
+[VAL] step 9500: bpb=1.2224
+step   9600 | loss=3.9636 | lr=1.42e-04
+step   9700 | loss=3.9617 | lr=1.39e-04
+step   9800 | loss=3.9667 | lr=1.36e-04
+step   9900 | loss=3.9524 | lr=1.33e-04
+step  10000 | loss=3.9454 | lr=1.30e-04
+[VAL] step 10000: bpb=1.2167
+step  10100 | loss=3.9421 | lr=1.27e-04
+step  10200 | loss=3.9406 | lr=1.24e-04
+step  10300 | loss=3.9318 | lr=1.22e-04
+step  10400 | loss=3.9523 | lr=1.19e-04
+step  10500 | loss=3.9523 | lr=1.16e-04
+[VAL] step 10500: bpb=1.2108
+step  10600 | loss=3.9550 | lr=1.13e-04
+step  10700 | loss=3.9211 | lr=1.11e-04
+step  10800 | loss=3.9191 | lr=1.08e-04
+step  10900 | loss=3.9108 | lr=1.05e-04
+step  11000 | loss=3.8929 | lr=1.03e-04
+[VAL] step 11000: bpb=1.2068
+step  11100 | loss=3.8964 | lr=1.00e-04
+step  11200 | loss=3.8968 | lr=9.75e-05
+step  11300 | loss=3.8941 | lr=9.50e-05
+step  11400 | loss=3.8949 | lr=9.25e-05
+step  11500 | loss=3.8788 | lr=9.00e-05
+[VAL] step 11500: bpb=1.2022
+step  11600 | loss=3.8788 | lr=8.76e-05
+step  11700 | loss=3.8830 | lr=8.52e-05
+step  11800 | loss=3.8759 | lr=8.28e-05
+step  11900 | loss=3.8764 | lr=8.05e-05
+step  12000 | loss=3.8696 | lr=7.82e-05
+[VAL] step 12000: bpb=1.1980
+step  12100 | loss=3.8651 | lr=7.60e-05
+step  12200 | loss=3.8516 | lr=7.38e-05
+step  12300 | loss=3.8427 | lr=7.16e-05
+step  12400 | loss=3.8428 | lr=6.95e-05
+step  12500 | loss=3.8430 | lr=6.75e-05
+[VAL] step 12500: bpb=1.1945
+step  12600 | loss=3.8393 | lr=6.55e-05
+step  12700 | loss=3.8391 | lr=6.35e-05
+step  12800 | loss=3.8303 | lr=6.16e-05
+step  12900 | loss=3.8207 | lr=5.97e-05
+step  13000 | loss=3.8260 | lr=5.79e-05
+[VAL] step 13000: bpb=1.1915
+step  13100 | loss=3.8160 | lr=5.61e-05
+step  13200 | loss=3.8154 | lr=5.44e-05
+step  13300 | loss=3.8148 | lr=5.28e-05
+step  13400 | loss=3.8193 | lr=5.11e-05
+step  13500 | loss=3.8190 | lr=4.96e-05
+[VAL] step 13500: bpb=1.1887
+step  13600 | loss=3.8092 | lr=4.81e-05
+step  13700 | loss=3.7993 | lr=4.66e-05
+step  13800 | loss=3.7986 | lr=4.53e-05
+step  13900 | loss=3.7941 | lr=4.39e-05
+step  14000 | loss=3.7963 | lr=4.26e-05
+[VAL] step 14000: bpb=1.1866
+step  14100 | loss=3.7963 | lr=4.14e-05
+step  14200 | loss=3.8000 | lr=4.03e-05
+step  14300 | loss=3.7948 | lr=3.92e-05
+step  14400 | loss=3.7884 | lr=3.81e-05
+step  14500 | loss=3.7782 | lr=3.72e-05
+[VAL] step 14500: bpb=1.1848
+step  14600 | loss=3.7753 | lr=3.62e-05
+step  14700 | loss=3.7690 | lr=3.54e-05
+step  14800 | loss=3.7763 | lr=3.46e-05
+step  14900 | loss=3.7795 | lr=3.39e-05
+step  15000 | loss=3.7809 | lr=3.32e-05
+[VAL] step 15000: bpb=1.1832
+step  15100 | loss=3.7703 | lr=3.26e-05
+step  15200 | loss=3.7662 | lr=3.21e-05
+step  15300 | loss=3.7676 | lr=3.16e-05
+step  15400 | loss=3.7742 | lr=3.12e-05
+step  15500 | loss=3.7672 | lr=3.08e-05
+[VAL] step 15500: bpb=1.1821
+step  15600 | loss=3.7971 | lr=3.05e-05
+step  15700 | loss=3.7904 | lr=3.03e-05
+step  15800 | loss=3.7829 | lr=3.01e-05
+step  15900 | loss=3.7591 | lr=3.00e-05
+step  16000 | loss=3.7605 | lr=3.00e-05
+[VAL] step 16000: bpb=1.1816
+
+=== DONE ===
+{
+  "exp_name": "exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1",
+  "best_val_bpb": 1.1816438479165872,
+  "final_val_bpb": 1.1816438479165872,
+  "total_params": 67351680,
+  "training_time_hours": 1.18,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
+wandb: updating run metadata
+wandb: uploading wandb-summary.json; uploading config.yaml
+wandb: 
+wandb: Run history:
+wandb: ln1_norm_L0 ███▇▇▆▅▅▄▄▃▃▃▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: ln1_norm_L1 █████▇▇▇▆▆▅▅▄▄▄▃▃▃▂▂▂▂▂▂▁▁▁▁▁▁▁▁
+wandb: ln1_norm_L2 ███▇▆▆▅▄▃▃▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: ln1_norm_L3 ███▇▇▆▅▅▄▄▃▃▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: ln1_norm_L4 ▇██▇▆▅▄▃▃▂▂▂▁▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▂▂
+wandb: ln1_norm_L5 ▁▁▁▂▂▃▄▅▅▅▆▆▆▇▇▇▇▇▇▇▇███████████
+wandb: ln2_mean_L0 ▁▂▃▃▄▄▄▄▄▄▄▅▅▅▅▅▅▅▅▆▆▆▆▇▇▇▇▇████
+wandb: ln2_mean_L1 ▁▁▁▂▂▃▃▃▄▄▄▄▅▅▅▆▆▆▆▇▇▇▇▇▇▇██████
+wandb: ln2_mean_L2 ▁▁▁▂▂▂▃▃▄▄▄▅▅▅▅▆▆▆▆▇▇▇▇▇▇███████
+wandb: ln2_mean_L3 ▁▁▁▂▂▃▃▃▄▄▄▅▅▅▆▆▆▆▆▇▇▇▇▇▇███████
+wandb:         +22 ...
+wandb: 
+wandb: Run summary:
+wandb:  best_val_bpb 1.18164
+wandb:      exp_name exp_n_abl_14_B16k_ge...
+wandb: final_val_bpb 1.18164
+wandb:   ln1_norm_L0 14.42008
+wandb:   ln1_norm_L1 18.717
+wandb:   ln1_norm_L2 18.16542
+wandb:   ln1_norm_L3 18.28387
+wandb:   ln1_norm_L4 19.30139
+wandb:   ln1_norm_L5 22.79943
+wandb:   ln2_mean_L0 1.03276
+wandb:           +27 ...
+wandb: 
+wandb: 🚀 View run exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1 at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1
+wandb: ⭐️ View project at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /home/<user>/.cache/wandb/wandb/run-20260914_004108-exp_n_abl_14_B16k_gen1_smooth_tv10_nap8_tph128_seed1/logs
+[wandb] finished in 0.7s
