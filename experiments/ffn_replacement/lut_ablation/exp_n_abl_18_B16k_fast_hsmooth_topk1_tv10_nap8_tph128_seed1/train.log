@@ -3,14 +3,14 @@ FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_bat
 MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=compression tie=False | params=67,351,692
 [tv] lut_cell_smoothness=10: penalty over 6 LUT modules (FastMultiHeadLut), applied once per step before clipping
 Tokens/micro-batch: 6,144 | grad_accum: 4 | effective batch: 24,576 tokens
-wandb: [wandb.login()] Loaded credentials for http://nucstar:8080 from /home/nebius-h100/.netrc.
-wandb: Currently logged in as: astarostin to http://nucstar:8080. Use `wandb login --relogin` to force relogin
+wandb: [wandb.login()] Loaded credentials for http://<WANDB_HOST> from /home/nebius-h100/.netrc.
+wandb: Currently logged in as: <WANDB_ENTITY> to http://<WANDB_HOST>. Use `wandb login --relogin` to force relogin
 wandb: Tracking run with wandb version 0.30.0
 wandb: Run data is saved locally in /home/nebius-h100/.cache/wandb/wandb/run-20260914_034643-exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
 wandb: Run `wandb offline` to turn off syncing.
 wandb: Syncing run exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
-wandb: ⭐️ View project at http://nucstar:8080/astarostin/Spiky
-wandb: 🚀 View run at http://nucstar:8080/astarostin/Spiky/runs/exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
+wandb: ⭐️ View project at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
+wandb: 🚀 View run at http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
 [wandb] online: run exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1 -> /home/nebius-h100/.cache/wandb/wandb/run-20260914_034643-exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1/files
 step      1 | loss=10.4804 | lr=1.87e-07
 step    100 | loss=10.1235 | lr=1.87e-05
@@ -249,8 +249,8 @@ wandb:   ln1_norm_L5 22.1241
 wandb:   ln2_mean_L0 1.00622
 wandb:           +27 ...
 wandb: 
-wandb: 🚀 View run exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1 at: http://nucstar:8080/astarostin/Spiky/runs/exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
-wandb: ⭐️ View project at: http://nucstar:8080/astarostin/Spiky
+wandb: 🚀 View run exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1 at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky/runs/exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1
+wandb: ⭐️ View project at: http://<WANDB_HOST>/<WANDB_ENTITY>/Spiky
 wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
 wandb: Find logs at: /home/nebius-h100/.cache/wandb/wandb/run-20260914_034643-exp_n_abl_18_B16k_fast_hsmooth_topk1_tv10_nap8_tph128_seed1/logs
 [wandb] finished in 0.8s
