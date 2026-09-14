@@ -33,8 +33,18 @@ This directory holds **22 folders**: the 21 cells plus **abl_06**, a seed replic
 | 3.1 +TV | `exp_g_abl_09_B16k_light_lmfrozeng_tv10_tph128_seed1` | gpustar | exp_g_0249 lineage | prepared (rerun of `exp_g_0249`) | ≈ 1.163698 |
 | 3.2 | `exp_g_abl_04_B16k_light_lmfrozeng_n2_tau0p5_tph128_seed1` | gpustar | exp_g_0249 lineage | prepared | — |
 | 3.2 +TV | `exp_g_abl_05_B16k_light_lmfrozeng_n2_tau0p5_tv10_tph128_seed1` | gpustar | exp_g_0249 lineage | prepared | — |
-| 3.3 | `exp_g_abl_19_B16k_light_lmfrozeng_hard_tph128_seed1` | gpustar | exp_g_0249 lineage | prepared | — |
-| 3.3 +TV | `exp_g_abl_20_B16k_light_lmfrozeng_hard_tv10_tph128_seed1` | gpustar | exp_g_0249 lineage | prepared | — |
+| 3.3 | `exp_g_abl_19_B16k_light_lmfrozeng_hard_tph128_seed1` | gpustar | exp_g_0249 lineage | ran 2026-09-14: **DIVERGED** (final 3.0159), superseded by `…_seed1_fix` | — |
+| 3.3 +TV | `exp_g_abl_20_B16k_light_lmfrozeng_hard_tv10_tph128_seed1` | gpustar | exp_g_0249 lineage | ran 2026-09-14: **DIVERGED** (final 3.0262), superseded by `…_seed1_fix` | — |
+| 3.3 (rerun) | `exp_g_abl_19_B16k_light_lmfrozeng_hard_tph128_seed1_fix` | gpustar | exp_g_0249 lineage | prepared, runs on code ≥ b5b0f2c3 | — |
+| 3.3 +TV (rerun) | `exp_g_abl_20_B16k_light_lmfrozeng_hard_tv10_tph128_seed1_fix` | gpustar | exp_g_0249 lineage | prepared, runs on code ≥ b5b0f2c3 | — |
+
+**3.3 superseded runs.**
+- The original 3.3 pair (abl_19 / abl_20) learned to ~step 1000 and then diverged between steps 1000 and 2000. Train loss rose above its initial value, and both stayed near chance (~3.0 bpb) to step 16000.
+- Cause: LightMultiHeadLUT `_hard_read`'s straight-through gradient scaled with the unbounded learned-margin score, and nothing in the forward value corrected it.
+- Their artefacts stay committed as evidence of the bug.
+- `b5b0f2c3` (nebius) rescales the surrogate's score by its detached per-token mean. The forward value is unchanged (the plain hard read); only the input / β / γ / τ gradients are bounded.
+- The `_fix` folders are byte-identical copies of the originals apart from `exp_name`, so they run the same config on the fixed code.
+- The same fix applies to row 3.4 (abl_21 / abl_22).
 | 3.4 | `exp_n_abl_21_B16k_light_lmfrozeng_hard_n2_tau0p5_tph128_seed1` | nebius | exp_g_0249 lineage | prepared | — |
 | 3.4 +TV | `exp_n_abl_22_B16k_light_lmfrozeng_hard_n2_tau0p5_tv10_seed1` | nebius | exp_g_0249 lineage | prepared | — |
 | (extra) 3.1 seed 2 | `exp_g_abl_06_B16k_light_lmfrozeng_tph128_seed2` | gpustar | exp_g_0249 lineage | prepared, outside the 21 | — (a new sample) |
