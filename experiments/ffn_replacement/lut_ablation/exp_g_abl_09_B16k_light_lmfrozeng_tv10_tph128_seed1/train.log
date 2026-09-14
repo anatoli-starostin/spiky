@@ -1,0 +1,297 @@
+Loading tokenizer from ~/.cache/nanochat/tokenizer
+FIXED EVAL: bs48 x 100 steps, skip 12 rows (val window independent of device_batch_size=12)
+[learned_margin] layer 0: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 1: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 2: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 3: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 4: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+[learned_margin] layer 5: init g=0.0 beta=2.0 gamma=1.0 (g FROZEN; beta, gamma learnable) gain=1.0
+MinimalGPT depth=6 dim=384 heads=6 seq=512 | ffn=compression tie=False | params=67,351,692
+Tokens/micro-batch: 6,144 | grad_accum: 4 | effective batch: 24,576 tokens
+wandb: [wandb.login()] Loaded credentials for <wandb-server> from ~/.netrc.
+wandb: Currently logged in as: <entity> to <wandb-server>. Use `wandb login --relogin` to force relogin
+[wandb] off: init failed: CommError: run exp_g_abl_09_B16k_light_lmfrozeng_tv10_tph128_seed1 was previously created and deleted; try a new run id -- training continues
+step      1 | loss=10.4804 | lr=1.87e-07
+step    100 | loss=10.1251 | lr=1.87e-05
+step    200 | loss=9.3960 | lr=3.75e-05
+2026-09-13 23:22:58,053 - urllib3.connectionpool - [33m[1mWARNING[0m - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<HTTPSConnection(host='o151352.ingest.sentry.io', port=443) at 0x7832967f4890>, 'Connection to o151352.ingest.sentry.io timed out. (connect timeout=30)')': /api/4504800232407040/envelope/
+step    300 | loss=8.4630 | lr=5.62e-05
+step    400 | loss=7.6739 | lr=7.50e-05
+step    500 | loss=7.1156 | lr=9.37e-05
+[VAL] step 500: bpb=2.0320
+2026-09-13 23:23:58,107 - urllib3.connectionpool - [33m[1mWARNING[0m - Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<HTTPSConnection(host='o151352.ingest.sentry.io', port=443) at 0x7832967f4ef0>, 'Connection to o151352.ingest.sentry.io timed out. (connect timeout=30)')': /api/4504800232407040/envelope/
+step    600 | loss=6.7081 | lr=1.12e-04
+step    700 | loss=6.4212 | lr=1.31e-04
+step    800 | loss=6.2247 | lr=1.50e-04
+2026-09-13 23:24:58,182 - urllib3.connectionpool - [33m[1mWARNING[0m - Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectTimeoutError(<HTTPSConnection(host='o151352.ingest.sentry.io', port=443) at 0x78329678bce0>, 'Connection to o151352.ingest.sentry.io timed out. (connect timeout=30)')': /api/4504800232407040/envelope/
+step    900 | loss=6.0508 | lr=1.69e-04
+step   1000 | loss=5.9130 | lr=1.87e-04
+[VAL] step 1000: bpb=1.7654
+step   1100 | loss=5.7840 | lr=2.06e-04
+step   1200 | loss=5.6666 | lr=2.25e-04
+step   1300 | loss=5.5588 | lr=2.44e-04
+step   1400 | loss=5.4606 | lr=2.62e-04
+step   1500 | loss=5.3691 | lr=2.81e-04
+[VAL] step 1500: bpb=1.6141
+step   1600 | loss=5.2977 | lr=3.00e-04
+step   1700 | loss=5.2120 | lr=3.00e-04
+step   1800 | loss=5.1365 | lr=3.00e-04
+step   1900 | loss=5.0635 | lr=3.00e-04
+step   2000 | loss=5.0056 | lr=2.99e-04
+[VAL] step 2000: bpb=1.5153
+step   2100 | loss=4.9481 | lr=2.99e-04
+step   2200 | loss=4.9015 | lr=2.99e-04
+step   2300 | loss=4.8590 | lr=2.98e-04
+step   2400 | loss=4.8138 | lr=2.98e-04
+step   2500 | loss=4.7642 | lr=2.97e-04
+[VAL] step 2500: bpb=1.4452
+step   2600 | loss=4.7167 | lr=2.97e-04
+step   2700 | loss=4.6790 | lr=2.96e-04
+step   2800 | loss=4.6346 | lr=2.95e-04
+step   2900 | loss=4.5941 | lr=2.95e-04
+step   3000 | loss=4.5651 | lr=2.94e-04
+[VAL] step 3000: bpb=1.3872
+step   3100 | loss=4.5454 | lr=2.93e-04
+step   3200 | loss=4.5141 | lr=2.92e-04
+step   3300 | loss=4.4760 | lr=2.91e-04
+step   3400 | loss=4.4540 | lr=2.90e-04
+step   3500 | loss=4.4243 | lr=2.89e-04
+[VAL] step 3500: bpb=1.3497
+step   3600 | loss=4.4015 | lr=2.87e-04
+step   3700 | loss=4.3847 | lr=2.86e-04
+step   3800 | loss=4.3794 | lr=2.85e-04
+step   3900 | loss=4.3614 | lr=2.83e-04
+step   4000 | loss=4.3407 | lr=2.82e-04
+[VAL] step 4000: bpb=1.3215
+[CKPT] step 4000: wrote checkpoint_step4000.pt
+step   4100 | loss=4.3187 | lr=2.80e-04
+step   4200 | loss=4.3010 | lr=2.79e-04
+step   4300 | loss=4.2855 | lr=2.77e-04
+step   4400 | loss=4.2731 | lr=2.76e-04
+step   4500 | loss=4.2628 | lr=2.74e-04
+[VAL] step 4500: bpb=1.3011
+step   4600 | loss=4.2561 | lr=2.72e-04
+step   4700 | loss=4.2403 | lr=2.70e-04
+step   4800 | loss=4.2280 | lr=2.68e-04
+step   4900 | loss=4.2143 | lr=2.66e-04
+step   5000 | loss=4.2139 | lr=2.65e-04
+[VAL] step 5000: bpb=1.2845
+step   5100 | loss=4.1983 | lr=2.63e-04
+step   5200 | loss=4.2014 | lr=2.60e-04
+step   5300 | loss=4.2048 | lr=2.58e-04
+step   5400 | loss=4.2008 | lr=2.56e-04
+step   5500 | loss=4.1769 | lr=2.54e-04
+[VAL] step 5500: bpb=1.2701
+step   5600 | loss=4.1573 | lr=2.52e-04
+step   5700 | loss=4.1419 | lr=2.49e-04
+step   5800 | loss=4.1301 | lr=2.47e-04
+step   5900 | loss=4.1203 | lr=2.45e-04
+step   6000 | loss=4.1167 | lr=2.42e-04
+[VAL] step 6000: bpb=1.2583
+step   6100 | loss=4.1084 | lr=2.40e-04
+step   6200 | loss=4.1038 | lr=2.38e-04
+step   6300 | loss=4.0916 | lr=2.35e-04
+step   6400 | loss=4.0855 | lr=2.32e-04
+step   6500 | loss=4.0855 | lr=2.30e-04
+[VAL] step 6500: bpb=1.2480
+step   6600 | loss=4.0718 | lr=2.27e-04
+step   6700 | loss=4.0678 | lr=2.25e-04
+step   6800 | loss=4.0714 | lr=2.22e-04
+step   6900 | loss=4.0575 | lr=2.19e-04
+step   7000 | loss=4.0416 | lr=2.17e-04
+[VAL] step 7000: bpb=1.2390
+step   7100 | loss=4.0244 | lr=2.14e-04
+step   7200 | loss=4.0176 | lr=2.11e-04
+step   7300 | loss=4.0214 | lr=2.08e-04
+step   7400 | loss=4.0213 | lr=2.06e-04
+step   7500 | loss=4.0134 | lr=2.03e-04
+[VAL] step 7500: bpb=1.2303
+step   7600 | loss=4.0038 | lr=2.00e-04
+step   7700 | loss=3.9878 | lr=1.97e-04
+step   7800 | loss=3.9862 | lr=1.94e-04
+step   7900 | loss=3.9838 | lr=1.91e-04
+step   8000 | loss=3.9778 | lr=1.88e-04
+[VAL] step 8000: bpb=1.2230
+[CKPT] step 8000: wrote checkpoint_step8000.pt
+step   8100 | loss=3.9708 | lr=1.86e-04
+step   8200 | loss=3.9735 | lr=1.83e-04
+step   8300 | loss=3.9752 | lr=1.80e-04
+step   8400 | loss=3.9601 | lr=1.77e-04
+step   8500 | loss=3.9477 | lr=1.74e-04
+[VAL] step 8500: bpb=1.2158
+step   8600 | loss=3.9447 | lr=1.71e-04
+step   8700 | loss=3.9369 | lr=1.68e-04
+step   8800 | loss=3.9336 | lr=1.65e-04
+step   8900 | loss=3.9340 | lr=1.62e-04
+step   9000 | loss=3.9384 | lr=1.59e-04
+[VAL] step 9000: bpb=1.2097
+step   9100 | loss=3.9237 | lr=1.56e-04
+step   9200 | loss=3.9215 | lr=1.53e-04
+step   9300 | loss=3.9085 | lr=1.50e-04
+step   9400 | loss=3.9051 | lr=1.47e-04
+step   9500 | loss=3.8984 | lr=1.44e-04
+[VAL] step 9500: bpb=1.2036
+step   9600 | loss=3.9003 | lr=1.42e-04
+step   9700 | loss=3.8976 | lr=1.39e-04
+step   9800 | loss=3.9028 | lr=1.36e-04
+step   9900 | loss=3.8877 | lr=1.33e-04
+step  10000 | loss=3.8818 | lr=1.30e-04
+[VAL] step 10000: bpb=1.1979
+step  10100 | loss=3.8783 | lr=1.27e-04
+step  10200 | loss=3.8762 | lr=1.24e-04
+step  10300 | loss=3.8678 | lr=1.22e-04
+step  10400 | loss=3.8883 | lr=1.19e-04
+step  10500 | loss=3.8882 | lr=1.16e-04
+[VAL] step 10500: bpb=1.1930
+step  10600 | loss=3.8906 | lr=1.13e-04
+step  10700 | loss=3.8572 | lr=1.11e-04
+step  10800 | loss=3.8547 | lr=1.08e-04
+step  10900 | loss=3.8471 | lr=1.05e-04
+step  11000 | loss=3.8285 | lr=1.03e-04
+[VAL] step 11000: bpb=1.1881
+step  11100 | loss=3.8318 | lr=1.00e-04
+step  11200 | loss=3.8323 | lr=9.75e-05
+step  11300 | loss=3.8301 | lr=9.50e-05
+step  11400 | loss=3.8307 | lr=9.25e-05
+step  11500 | loss=3.8142 | lr=9.00e-05
+[VAL] step 11500: bpb=1.1840
+step  11600 | loss=3.8151 | lr=8.76e-05
+step  11700 | loss=3.8192 | lr=8.52e-05
+step  11800 | loss=3.8117 | lr=8.28e-05
+step  11900 | loss=3.8117 | lr=8.05e-05
+step  12000 | loss=3.8049 | lr=7.82e-05
+[VAL] step 12000: bpb=1.1801
+[CKPT] step 12000: wrote checkpoint_step12000.pt
+step  12100 | loss=3.8009 | lr=7.60e-05
+step  12200 | loss=3.7871 | lr=7.38e-05
+step  12300 | loss=3.7785 | lr=7.16e-05
+step  12400 | loss=3.7772 | lr=6.95e-05
+step  12500 | loss=3.7790 | lr=6.75e-05
+[VAL] step 12500: bpb=1.1768
+step  12600 | loss=3.7741 | lr=6.55e-05
+step  12700 | loss=3.7741 | lr=6.35e-05
+step  12800 | loss=3.7652 | lr=6.16e-05
+step  12900 | loss=3.7550 | lr=5.97e-05
+step  13000 | loss=3.7600 | lr=5.79e-05
+[VAL] step 13000: bpb=1.1739
+step  13100 | loss=3.7500 | lr=5.61e-05
+step  13200 | loss=3.7501 | lr=5.44e-05
+step  13300 | loss=3.7489 | lr=5.28e-05
+step  13400 | loss=3.7529 | lr=5.11e-05
+step  13500 | loss=3.7535 | lr=4.96e-05
+[VAL] step 13500: bpb=1.1710
+step  13600 | loss=3.7431 | lr=4.81e-05
+step  13700 | loss=3.7324 | lr=4.66e-05
+step  13800 | loss=3.7309 | lr=4.53e-05
+step  13900 | loss=3.7269 | lr=4.39e-05
+step  14000 | loss=3.7291 | lr=4.26e-05
+[VAL] step 14000: bpb=1.1687
+step  14100 | loss=3.7285 | lr=4.14e-05
+step  14200 | loss=3.7325 | lr=4.03e-05
+step  14300 | loss=3.7264 | lr=3.92e-05
+step  14400 | loss=3.7198 | lr=3.81e-05
+step  14500 | loss=3.7098 | lr=3.72e-05
+[VAL] step 14500: bpb=1.1669
+step  14600 | loss=3.7072 | lr=3.62e-05
+step  14700 | loss=3.7004 | lr=3.54e-05
+step  14800 | loss=3.7070 | lr=3.46e-05
+step  14900 | loss=3.7098 | lr=3.39e-05
+step  15000 | loss=3.7110 | lr=3.32e-05
+[VAL] step 15000: bpb=1.1656
+step  15100 | loss=3.6999 | lr=3.26e-05
+step  15200 | loss=3.6965 | lr=3.21e-05
+step  15300 | loss=3.6971 | lr=3.16e-05
+step  15400 | loss=3.7034 | lr=3.12e-05
+step  15500 | loss=3.6971 | lr=3.08e-05
+[VAL] step 15500: bpb=1.1643
+step  15600 | loss=3.7271 | lr=3.05e-05
+step  15700 | loss=3.7197 | lr=3.03e-05
+step  15800 | loss=3.7122 | lr=3.01e-05
+step  15900 | loss=3.6879 | lr=3.00e-05
+step  16000 | loss=3.6889 | lr=3.00e-05
+[VAL] step 16000: bpb=1.1638
+
+=== DONE ===
+{
+  "exp_name": "exp_g_abl_09_B16k_light_lmfrozeng_tv10_tph128_seed1",
+  "best_val_bpb": 1.1638488876081592,
+  "final_val_bpb": 1.1638488876081592,
+  "total_params": 67351692,
+  "training_time_hours": 0.96,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "learned_confidence": {
+    "form": "learned_margin",
+    "score": "exp(g) * sum|d| * prod sigmoid(beta |d|) ** gamma",
+    "init_per_layer": [
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      },
+      {
+        "g": 0.0,
+        "beta": 2.0,
+        "gamma": 1.0
+      }
+    ],
+    "final_per_layer": [
+      {
+        "g": 0.0,
+        "beta": 1.8384535312652588,
+        "gamma": 1.2568143606185913
+      },
+      {
+        "g": 0.0,
+        "beta": 2.1794204711914062,
+        "gamma": 1.3573956489562988
+      },
+      {
+        "g": 0.0,
+        "beta": 2.3083443641662598,
+        "gamma": 1.4586870670318604
+      },
+      {
+        "g": 0.0,
+        "beta": 2.171205997467041,
+        "gamma": 1.307332158088684
+      },
+      {
+        "g": 0.0,
+        "beta": 2.2069263458251953,
+        "gamma": 1.2498297691345215
+      },
+      {
+        "g": 0.0,
+        "beta": 2.2222440242767334,
+        "gamma": 0.9108701348304749
+      }
+    ]
+  }
+}
+[1;34mwandb[0m: 
+[1;34mwandb[0m: Find logs at: [1;35m../../../../../../.cache/wandb/wandb/run-20260913_232157-exp_g_abl_09_B16k_light_lmfrozeng_tv10_tph128_seed1/logs[0m

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_abl_10_B16k_vanilla_dense_untied_seed1",
+  "best_val_bpb": 1.165147644788535,
+  "final_val_bpb": 1.165147644788535,
+  "total_params": 35792640,
+  "training_time_hours": 0.494,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
