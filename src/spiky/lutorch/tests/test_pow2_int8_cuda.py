@@ -7,10 +7,10 @@ Gates:
             skipped tables, dropped second cells, k' at -3 and at the clamp 4, q at 0 and at the Q = 3 boundary, and
             saturated -128 / 127 rows; every block size and both load styles
   headroom  the worst case (all rows -128 or 127, every shift 10, 2T rows) stays exact in int32
-  fused     the one-launch regime computes the same c1 / c2 / q as compiled torch and k' except at float boundaries
-            (counted and bounded); its read equals the cells read on its own integers
-  artefact  QuantisedLightFFN "cells" is bit-identical to the compiled torch path; with the extension unavailable
-            ("auto") the artefact silently keeps the torch path; CPU inputs never touch the kernel
+  fused     the one-launch regime computes exactly the cells regime's integers (one definition, p2::table_scalars) and
+            the same read; the full fused coverage matrix and drift gates are in test_pow2_scalar_op.py
+  artefact  QuantisedLightFFN "cells" and "fused" ("auto"'s default) are bit-identical to the compiled "off" path; with
+            the extension unavailable the artefact silently keeps the torch path; CPU inputs never touch the kernel
 
 The kernel builds only on compute capability 12.x (RTX 5090); elsewhere these tests skip, except the fallback ones.
 """
@@ -105,8 +105,8 @@ def test_int32_headroom_worst_case():
 
 @needs_kernel
 def test_fused_regime_integers_and_read():
-    """Fused: c1, c2 and q equal compiled torch everywhere; k' may differ only on float boundaries (bounded); the read on
-    its own integers equals the cells read on those integers."""
+    """Fused computes the integers in the kernel with the same p2::table_scalars the op runs for the cells regime, so its
+    integers and its read equal the cells regime's exactly (drift gates: test_pow2_scalar_op.py)."""
     torch.manual_seed(0)
     ffn = CompressionMultiHeadLUT(input_dim=384, output_dim=384, inner_in_dim=48, inner_out_dim=48, nap=8, tph=128, n_heads=4,
                                   lut_impl="light", confidence_form="learned_margin", learned_margin_freeze_g=True,
@@ -120,11 +120,9 @@ def test_fused_regime_integers_and_read():
     z = torch.nn.functional.linear(x, art.compress_weight, art.compress_bias).view(2048, 4, 48)
     cells_k = torch.empty_like(cells_t)
     acc_f = K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 8, 48, -3, 4, 3, cells_out=cells_k)
-    assert torch.equal(cells_k[..., :2], cells_t[..., :2])                             # addresses always equal
-    diff = (cells_k[..., 2] != cells_t[..., 2])
-    assert int(diff.sum()) <= max(1, cells_t[..., 2].numel() // 100_000)               # boundary k' flips only, bounded
-    acc_c = K.read_cells(kc["tables"], cells_k, 8, 48, -3, 4, 3)
-    assert torch.equal(acc_f, acc_c)                                                   # same integers -> same read
+    assert torch.equal(cells_k, cells_t)                                               # one definition: exact
+    acc_c = K.read_cells(kc["tables"], cells_t, 8, 48, -3, 4, 3)
+    assert torch.equal(acc_f, acc_c)
 
 
 @needs_kernel
@@ -143,10 +141,19 @@ def test_artefact_cells_kernel_bit_identical_to_compiled_torch_path():
     for bn in K.BLOCK_NS:
         art.kernel_block_n = bn
         assert torch.equal(art(x), ref), bn
+    art.kernel = "fused"
+    for bn in K.BLOCK_NS:
+        art.kernel_block_n = bn
+        assert torch.equal(art(x), ref), bn
     art.kernel = "auto"
-    assert x.shape[0] < art.kernel_min_tokens and art.kernel_regime(x) is None      # small calls: compiled torch path
-    art.kernel_min_tokens = 500
-    assert art.kernel_regime(x) == "cells" and torch.equal(art(x), ref)
+    assert art.kernel_min_tokens == 1 and art.kernel_regime(x[:1]) == "fused"          # default: fused at every size
+    small = art(x[:3])
+    art.kernel = "off"
+    ref_small = art(x[:3])                     # same batch: compress/decompress matmuls are batch-size dependent in cuBLAS
+    art.kernel = "auto"
+    assert torch.equal(art(x), ref) and torch.equal(small, ref_small)
+    art.kernel_min_tokens = 1000
+    assert art.kernel_regime(x) is None and torch.equal(art(x), ref)                  # below the threshold: torch path
     art.kernel = "bogus"
     with pytest.raises(ValueError):
         art(x)
@@ -162,14 +169,19 @@ def test_fallback_when_extension_unavailable(monkeypatch):
                                   device=torch.device(dev), quant_mode="p2_int8", initial_weights_noise=0.3)
     art = ffn.export_quantised()
     x = torch.randn(50, 64, device=dev)
-    art.kernel = "off"
-    ref = art(x)
+    from spiky.lutorch import pow2_scalar_op
     monkeypatch.setattr(K, "load", lambda: None)
-    for mode in ("auto", "cells", "fused"):
-        art.kernel = mode
-        assert art.kernel_regime(x) is None
-        assert torch.equal(art(x), ref)
-    assert K.available()[0] is False
+    pow2_scalar_op.set_enabled(False)                                   # an absent extension never registers the op
+    try:
+        art.kernel = "off"
+        ref = art(x)
+        for mode in ("auto", "cells", "fused"):
+            art.kernel = mode
+            assert art.kernel_regime(x) is None
+            assert torch.equal(art(x), ref)
+        assert K.available()[0] is False
+    finally:
+        pow2_scalar_op.set_enabled(True)
 
 
 def test_disable_env_and_cpu_inputs(monkeypatch):

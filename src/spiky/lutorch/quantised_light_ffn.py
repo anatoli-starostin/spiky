@@ -12,12 +12,13 @@ Contents, all buffers:
   decompress_weight / _bias         decompress with column h * D + c multiplied by 2^(e[h, c] - 6)
                                     (the per-(head, channel) weight scale and the fixed-point unit, folded)
 and a `meta` dict (preset constants incl. the explicit table width `bits` and weight `offset`, and geometry). Forward: compress, anchor margins and address, the per-table integers
-from pow2_read.blend_exponents, the int32 shift-add pow2_read.int_blend_read, then the folded decompress.
+(pow2_scalar_op: the spiky_lutorch::p2_scalars CUDA op when available, else pow2_read.blend_exponents), the int32
+shift-add pow2_read.int_blend_read, then the folded decompress.
 
-On an RTX 5090 (compute capability 12.x) with the pow2_int8_cuda extension built, `kernel="auto"` (default) runs the int32
-accumulation in one hand-written CUDA launch ("cells": torch computes the per-table integers, bit-identical output);
-`kernel="fused"` also moves the per-table integers into the kernel (one launch, not bit-exact, see pow2_int8_cuda);
-`kernel="off"`, CPU inputs, or an unavailable extension keep the torch path above.
+On an RTX 5090 (compute capability 12.x) with the pow2_int8_cuda extension built, `kernel="auto"` (default) runs "fused":
+the per-table integers (the same p2::table_scalars definition as the op) and the int32 accumulation in one hand-written
+CUDA launch. `kernel="cells"` takes the integers from the op and runs only the accumulation in the kernel. All regimes are
+bit-identical. `kernel="off"`, CPU inputs, or an unavailable extension keep the torch path above.
 
 File format (to_file / from_file): torch.save of {"format": FORMAT, "version": VERSION, "meta": ..., "buffers": ...}.
 """
@@ -28,6 +29,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from . import pow2_read
+from . import pow2_scalar_op
 
 FORMAT = "spiky.lutorch.QuantisedLightFFN"
 VERSION = 1
@@ -50,17 +52,19 @@ class QuantisedLightFFN(nn.Module):
         self.requires_grad_(False)
         self._compiled = None
         self._compile_enabled = os.environ.get("LUT_DISABLE_COMPILE") != "1"
-        # Fused CUDA kernel (pow2_int8_cuda): "auto" uses the exact "cells" regime when the extension is available on this
-        # device and otherwise the compiled torch path; "cells" / "fused" request a regime (still falling back when the
-        # extension is absent); "off" never uses it. SPIKY_P2_KERNEL sets the default.
+        # Fused CUDA kernel (pow2_int8_cuda): "auto" uses the "fused" regime when the extension is available on this device
+        # and otherwise the compiled torch path; "cells" / "fused" request a regime (still falling back when the extension
+        # is absent); "off" never uses it. All regimes take the same integers (pow2_scalar_op) and are bit-identical.
+        # SPIKY_P2_KERNEL sets the default.
         self.kernel = os.environ.get("SPIKY_P2_KERNEL", "auto")
-        # "auto" uses the "cells" kernel only from this many tokens per call: below it the kernel's extra launch costs more
-        # than it saves (measured on the 5090, abl_45 geometry: cells loses at N = 256 / 512, wins from N = 1024 up).
-        self.kernel_min_tokens = 1024
+        # "auto" uses the kernel from this many tokens per call. 1: with the integers computed by one shared definition,
+        # "fused" is the fastest regime at every N measured on the 5090 (abl_45 geometry, N = 1 ... 24576).
+        self.kernel_min_tokens = 1
         self.kernel_block_n = 64
         self.kernel_load16 = True
         self._compiled_cells = None
         self._kcache = None
+        pow2_scalar_op.ensure_registered()          # eager: build/register the CUDA op before any compiled forward
 
     @classmethod
     @torch.no_grad()
@@ -114,7 +118,7 @@ class QuantisedLightFFN(nn.Module):
         if pow2_int8_cuda.load() is None:
             return None                                                     # silent fallback to the compiled path
         if self.kernel == "auto":
-            return "cells" if x.shape[0] >= self.kernel_min_tokens else None
+            return "fused" if x.shape[0] >= self.kernel_min_tokens else None
         return self.kernel
 
     def _kernel_cache(self, device):
@@ -124,12 +128,13 @@ class QuantisedLightFFN(nn.Module):
                 device=device, tables=pow2_int8_cuda.stride_tables(self.tables.to(device), self.meta["output_dim"]),
                 anchor_a=self.anchor_a.to(device=device, dtype=torch.int32).contiguous(),
                 anchor_b=self.anchor_b.to(device=device, dtype=torch.int32).contiguous(),
-                scalars=pow2_int8_cuda.fused_scalars(self.tau, self.g, self.beta, self.gamma))
+                scalars=tuple(t.to(device=device, dtype=torch.float32).reshape(1).contiguous()
+                              for t in (self.tau, self.g, self.beta, self.gamma)))
         return self._kcache
 
     def _cells_impl(self, x: torch.Tensor):
-        """The torch half of the "cells" regime: the same ops as _forward_impl up to the per-table integers, packed."""
-        from . import pow2_int8_cuda
+        """The torch half of the "cells" regime: compress, margins, address, then the per-table integers packed as cells
+        (from the spiky_lutorch::p2_scalars op when available -- the fused kernel's own definition)."""
         mt = self.meta
         H, T, NAP, Din = mt["n_heads"], mt["tables_per_head"], mt["n_anchor_pairs"], mt["input_dim"]
         N = x.shape[0]
@@ -138,11 +143,9 @@ class QuantisedLightFFN(nn.Module):
         idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(N, H, T * NAP)
         d = (torch.gather(z, 2, idx_a) - torch.gather(z, 2, idx_b)).view(N, H, T, NAP)
         index = ((d > 0).to(torch.int64) * self.powers.view(1, 1, 1, -1)).sum(dim=-1)
-        m, mv, idx = pow2_read.blend_candidates(d, index, self.powers)
         cast = lambda t: t.to(x.dtype)                                          # noqa: E731
-        q, k, skip, drop = pow2_read.blend_exponents(m, mv, cast(self.tau), cast(self.g), cast(self.beta),
-                                                     cast(self.gamma), self.cfg)
-        return pow2_int8_cuda.pack_cells(idx, q, k, skip, drop)
+        return pow2_scalar_op.table_cells(d, index, self.powers, cast(self.tau), cast(self.g), cast(self.beta),
+                                          cast(self.gamma), self.cfg)
 
     def _forward_kernel(self, x: torch.Tensor, regime: str) -> torch.Tensor:
         from . import pow2_int8_cuda as K
@@ -176,10 +179,9 @@ class QuantisedLightFFN(nn.Module):
         idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(N, H, T * NAP)
         d = (torch.gather(z, 2, idx_a) - torch.gather(z, 2, idx_b)).view(N, H, T, NAP)
         index = ((d > 0).to(torch.int64) * self.powers.view(1, 1, 1, -1)).sum(dim=-1)
-        m, mv, idx = pow2_read.blend_candidates(d, index, self.powers)
         cast = lambda t: t.to(x.dtype)                                          # noqa: E731
-        q, k, skip, drop = pow2_read.blend_exponents(m, mv, cast(self.tau), cast(self.g), cast(self.beta),
-                                                     cast(self.gamma), self.cfg)
+        idx, q, k, skip, drop = pow2_scalar_op.table_integers(d, index, self.powers, cast(self.tau), cast(self.g),
+                                                              cast(self.beta), cast(self.gamma), self.cfg)
         acc = pow2_read.int_blend_read(self.tables, self.cfg["bits"], D, idx + self.table_offset.view(1, H, T, 1),
                                        q, k, skip, drop, chunk_bags)
         y = acc.to(x.dtype).reshape(N, H * D)

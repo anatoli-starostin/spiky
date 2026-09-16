@@ -8,11 +8,10 @@ second cells are excluded; the accumulators are converted to float once. Two reg
   "cells"  the per-table integers (c1, c2, shifts) come from torch -- pow2_read.blend_exponents, compiled -- packed into a
            uint8 [N, H, T, 3] array; the kernel stages and accumulates. Bit-identical to pow2_read.int8_blend_read by
            construction (the same integers, integer arithmetic).
-  "fused"  the kernel also computes the per-table integers from the compressed code (address, least-certain bit, log2 s,
-           q, c_q, k', window, drop), so the whole read is one launch. NOT bit-exact: torch.compile's float32 reduction
-           order over the anchor pairs cannot be reproduced, so a table within an ulp of a k' rounding boundary may take
-           the other k' (abl_45: 11 of 75.5M tables, bpb 1.1591491 vs 1.1591503). Opt-in; `cells_out` exposes the
-           kernel's integers for tests.
+  "fused"  the kernel also computes the per-table integers from the compressed code, calling p2::table_scalars
+           (csrc/pow2_scalars.cuh) inline -- the same function the spiky_lutorch::p2_scalars op (pow2_scalar_op) runs for
+           the training forward and the cells regime, so fused == cells == training by construction. One launch for the
+           whole read. `cells_out` exposes the kernel's integers for tests.
 
 Cell width D is a runtime parameter. The kernel reads rows with a STRIDE = ceil(D / 16) * 16 bytes (the vector load width):
 `stride_tables` pads the stored int8 rows with zero bytes up to it -- nothing at D = 48, at most 15 bytes per row otherwise.
@@ -123,27 +122,19 @@ def read_cells(tables_stride: torch.Tensor, cells: torch.Tensor, n_anchor_pairs:
     N, H, T, _ = cells.shape
     e = torch.empty(0, device=tables_stride.device)
     return ext.read(e, e, e, cells.contiguous(), tables_stride, N, H, T, n_anchor_pairs, 1 << n_anchor_pairs, 0, D,
-                    lo, hi, Q, 0.0, 0.0, 0.0, 0.0, [0.0] * 8, block_n, False, load16)
+                    lo, hi, Q, e, e, e, e, block_n, False, load16)
 
 
 def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tensor, tables_stride: torch.Tensor,
-               scalars: dict, n_anchor_pairs: int, D: int, lo: int, hi: int, Q: int, block_n: int = DEFAULT_BLOCK_N,
+               scalars, n_anchor_pairs: int, D: int, lo: int, hi: int, Q: int, block_n: int = DEFAULT_BLOCK_N,
                load16: bool = True, cells_out: torch.Tensor = None) -> torch.Tensor:
     """The int32 accumulators (as float32, units of 2^-6) [N, H, D], per-table integers computed in the kernel.
-    z [N, H, din] fp32; anchors int32 [H, T, NAP] (column indices inside the head)."""
+    z [N, H, din] fp32; anchors int32 [H, T, NAP] (column indices inside the head); scalars = (tau, g, beta, gamma) as
+    one-element fp32 CUDA tensors -- the same values the op receives."""
     ext = _check(tables_stride, D)
     N, H, din = z.shape
     T = anchor_a32.shape[1]
     e = torch.empty(0, device=tables_stride.device, dtype=torch.uint8) if cells_out is None else cells_out
     return ext.read(z.contiguous(), anchor_a32, anchor_b32, e, tables_stride, N, H, T, n_anchor_pairs,
-                    1 << n_anchor_pairs, din, D, lo, hi, Q, scalars["inv"], scalars["g"], scalars["beta"],
-                    scalars["gamma"], scalars["ctab"], block_n, True, load16)
-
-
-@torch.no_grad()
-def fused_scalars(tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor) -> dict:
-    """The float32 constants the fused regime needs, computed with torch's own float32 ops so they equal pow2_read's."""
-    tau32 = tau.detach().to(torch.float32)
-    inv = 2.0 / (tau32 * pow2_read.LN2)                                    # exactly as in pow2_read.q_exponent
-    ctab = pow2_read.c_q(torch.arange(8, dtype=torch.float32, device=tau32.device))
-    return dict(inv=float(inv), g=float(g), beta=float(beta), gamma=float(gamma), ctab=[float(v) for v in ctab])
+                    1 << n_anchor_pairs, din, D, lo, hi, Q, *[t.reshape(1).contiguous() for t in scalars], block_n,
+                    True, load16)
