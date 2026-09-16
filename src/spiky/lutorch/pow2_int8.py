@@ -10,7 +10,10 @@ csrc/pow2_int8_read.cu provides
                 accumulation -- each cell's int8 row loaded 16 bytes at a time (int4 vector loads), every byte
                 sign-extended to int32 in registers, shifted by k' + 6 or k' + 6 - q and added into int32 accumulators that
                 stay in registers across the table loop; skipped tables and dropped second cells excluded; the
-                accumulators converted to float once. `cells_out` exposes the kernel's integers for tests.
+                accumulators converted to float once. The next table's first row is loaded ahead while the current
+                table is accumulated, and discarded cells are masked rather than branched over. A bf16 code is
+                converted on load and the accumulators written as bf16 (see read_fused). `cells_out` exposes the
+                kernel's integers for tests.
   * scalars     the forward of the spiky_lutorch::p2_scalars custom op (below): p2::table_scalars for every
                 table, used by the training forward -- so training and inference take their integers from one function.
   * read_cells  the same accumulation on integers supplied by the caller (packed by pack_cells). A REFERENCE for tests:
@@ -140,9 +143,12 @@ def read_cells(tables_stride: torch.Tensor, cells: torch.Tensor, n_anchor_pairs:
 def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tensor, tables_stride: torch.Tensor,
                scalars, n_anchor_pairs: int, D: int, lo: int, hi: int, Q: int, block_n: int = DEFAULT_BLOCK_N,
                load16: bool = True, cells_out: torch.Tensor = None) -> torch.Tensor:
-    """The int32 accumulators (as float32, units of 2^-6) [N, H, D], per-table integers computed in the kernel.
-    z [N, H, din] fp32; anchors int32 [H, T, NAP] (column indices inside the head); scalars = (tau, g, beta, gamma) as
-    one-element fp32 CUDA tensors -- the same values the op receives."""
+    """The int32 accumulators (units of 2^-6) [N, H, D], per-table integers computed in the kernel.
+    z [N, H, din] fp32 or bf16; anchors int32 [H, T, NAP] (column indices inside the head); scalars = (tau, g, beta, gamma) as
+    one-element fp32 CUDA tensors -- the same values the op receives.
+    The output dtype follows z: fp32 z -> float32 accumulators. A bf16 z is converted to fp32 on load inside the kernel (exact),
+    every integer is computed and accumulated exactly as for that fp32 code, and the accumulators are written as bf16 with the
+    rounding of torch's fp32 -> bf16 cast -- so no cast launches are needed around a bf16 compress / decompress."""
     ext = _check(tables_stride, D)
     N, H, din = z.shape
     T = anchor_a32.shape[1]

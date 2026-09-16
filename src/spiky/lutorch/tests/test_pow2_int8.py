@@ -17,6 +17,11 @@ Gates:
             their inputs ever diverge
   fused     read_fused == read_cells == pow2_read.int8_blend_read on the op's integers, across D = 48 / 40 / 52 / 8 / 128,
             every block size, both load styles, garbage stride padding
+  bf16      read_fused on a bf16 code (converted on load, accumulators written as bf16) == read_fused on the same code cast to
+            fp32, followed by torch's fp32 -> bf16 cast: identical integers and bit-identical output, D = 48 and 40 (a partial
+            output unit), every block size, both load styles
+  discards  a discarded cell's unused address bytes never matter: read_cells with garbage in them (also >= K, which the
+            row-ahead and branchless loads mask into the table) is bit-identical to the same cells with those bytes zeroed
   train=int the quant_mode training forward equals the integer read (LightMultiHeadLUT.forward_int) BIT FOR BIT on CUDA fp32,
             and the exported artefact's fused kernel equals its torch read bit for bit
   backward  the op's recompute backward gives BIT-IDENTICAL parameter gradients to the torch expression evaluated on the
@@ -147,6 +152,52 @@ def test_fused_integers_and_read_equal_the_reference():
     acc_f = K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 8, 48, -3, 4, 3, cells_out=cells_k)
     assert torch.equal(cells_k, cells_ref)
     assert torch.equal(acc_f, K.read_cells(kc["tables"], cells_ref, 8, 48, -3, 4, 3))
+
+
+@needs_kernel
+@pytest.mark.parametrize("din,nap,tph", [(48, 8, 128), (40, 7, 64)])
+def test_read_fused_on_a_bf16_code_equals_the_fp32_read_cast_to_bf16(din, nap, tph):
+    """A bf16 code is converted exactly on load, so every integer is unchanged; the accumulators are written as bf16 with the
+    same rounding as torch's fp32 -> bf16 cast of the fp32 read."""
+    art = _artefact(din=din, nap=nap, tph=tph, seed=11)
+    n = 1537
+    x = torch.randn(n, 384, device="cuda", generator=torch.Generator(device="cuda").manual_seed(3))
+    kc = art._kernel_cache(x.device)
+    z16 = torch.nn.functional.linear(x.to(torch.bfloat16), art.compress_weight.to(torch.bfloat16),
+                                     art.compress_bias.to(torch.bfloat16)).view(n, 4, din).contiguous()
+    for bn in K.BLOCK_NS:
+        for l16 in (True, False):
+            c16 = torch.empty(n, 4, tph, 3, dtype=torch.uint8, device="cuda")
+            c32 = torch.empty_like(c16)
+            out16 = K.read_fused(z16, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], nap, din, -3, 4, 3,
+                                 block_n=bn, load16=l16, cells_out=c16)
+            out32 = K.read_fused(z16.float().contiguous(), kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], nap, din,
+                                 -3, 4, 3, block_n=bn, load16=l16, cells_out=c32)
+            assert out16.dtype == torch.bfloat16 and out32.dtype == torch.float32
+            assert torch.equal(c16, c32), (bn, l16)
+            assert torch.equal(out16, out32.to(torch.bfloat16)), (bn, l16)
+
+
+@needs_kernel
+def test_discarded_cells_unused_address_bytes_never_matter():
+    N, H, T, nap, D = 211, 4, 32, 4, 48
+    tables, idx, offs, q, k, skip, drop = _random_case(N, H, T, nap, D, seed=21)
+    cells = K.pack_cells(idx, q, k, skip, drop)
+    sh = cells[..., 2]
+    first_off, second_off = (sh & 15) == K.DISCARD, (sh >> 4) == K.DISCARD
+    assert first_off.any() and second_off.any()
+    zeroed, garbage = cells.clone(), cells.clone()
+    g = torch.Generator(device="cuda").manual_seed(4)
+    junk = torch.randint(0, 256, cells[..., 0].shape, device="cuda", generator=g).to(torch.uint8)
+    for r, off in ((0, first_off), (1, second_off)):
+        zeroed[..., r] = torch.where(off, torch.zeros_like(junk), cells[..., r])
+        garbage[..., r] = torch.where(off, junk, cells[..., r])
+    assert (garbage[..., :2] >= (1 << nap)).any()                       # addresses outside the table: must be masked
+    for bn in K.BLOCK_NS:
+        for l16 in (True, False):
+            ref = K.read_cells(tables, zeroed, nap, D, -3, 4, 3, block_n=bn, load16=l16)
+            assert torch.equal(K.read_cells(tables, garbage, nap, D, -3, 4, 3, block_n=bn, load16=l16), ref), (bn, l16)
+            assert torch.equal(K.read_cells(tables, cells, nap, D, -3, 4, 3, block_n=bn, load16=l16), ref), (bn, l16)
 
 
 @needs_kernel
