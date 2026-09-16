@@ -160,8 +160,15 @@ class CompressionMultiHeadLUT(nn.Module):
         gen1_smooth: bool = False,
         gen1_n_alternatives: int = 1,
         gen1_weights_init: str = "normal",
+        # Power-of-two quantised read (light path only; None == unchanged). See LightMultiHeadLUT / pow2_read.py.
+        quant_mode: Optional[str] = None,
+        quant_overrides: Optional[dict] = None,
     ):
         super().__init__()
+        if quant_mode is not None and lut_impl != "light":
+            raise ValueError(f"quant_mode exists only on the light path, got lut_impl={lut_impl!r}")
+        if quant_overrides and quant_mode is None:
+            raise ValueError("quant_overrides given without quant_mode")
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
         eff_in = input_dim if in_raw == -1 else in_raw
         eff_out = output_dim if out_raw == -1 else out_raw
@@ -280,6 +287,8 @@ class CompressionMultiHeadLUT(nn.Module):
             #     block, decompress n_heads*eff_out -> 384. Projections match Fast exactly.
             #   joint / no compress: one shared code, one summed ensemble, one decompress.
             if anchor_mode == "single":
+                if quant_mode is not None:
+                    raise ValueError("quant_mode is not implemented for anchor_mode='single'")
                 # SHARED GLOBAL addressing pool + per-head output (asymmetric variant).
                 # ONE compress d_model -> eff_in gives the shared pool z; ALL n_heads*tph
                 # tables draw GLOBAL single-index addresses over the full eff_in pool (no
@@ -341,6 +350,8 @@ class CompressionMultiHeadLUT(nn.Module):
                 codebook_out_dim=(output_dim if self._codebook else None),
                 # "scored" (default) or "hard" (plain read + zero-valued scored-gradient term).
                 forward_mode=light_forward_mode,
+                # power-of-two quantised read; LightMultiHeadLUT refuses every layout it is not implemented for
+                quant_mode=quant_mode, quant_overrides=quant_overrides,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL
@@ -485,6 +496,29 @@ class CompressionMultiHeadLUT(nn.Module):
             # reshape == the old torch.cat(per-head parts, dim=-1)
             return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
         return y.sum(dim=1)                                     # [N, eff_out]
+
+    @torch.no_grad()
+    def export_quantised(self):
+        """A NEW frozen inference module (QuantisedLightFFN) for a quant_mode light layer: packed int-b tables, the per-
+        (head, channel) scales 2^e and the fixed-point unit 2^-6 folded into a copy of decompress, and snapshots of compress,
+        the anchors and the score / blend scalars. The training module is not modified.
+
+        The fold is exact only when nothing sits between the table sum and decompress (note Section 1), so that is checked
+        here and anything else is refused. (quant_mode itself already guarantees the light, per-head, pair-anchor, constant-
+        cell layout with a Linear compress: the constructors refuse every other one.)"""
+        from .quantised_light_ffn import QuantisedLightFFN
+        bad = []
+        if getattr(getattr(self, "lut_light", None), "_quant", None) is None:
+            bad.append("the layer has no quant_mode")
+        if self.z_norm is not None:
+            bad.append("z_norm (sits between compress and the lookup; not part of the note's read)")
+        if self.inner_residual:
+            bad.append("inner_residual (a skip between the table sum and decompress breaks the fold)")
+        if not self.has_decompress or not isinstance(self.decompress, nn.Linear):
+            bad.append("no Linear decompress to fold the scales into")
+        if bad:
+            raise ValueError("export_quantised() refuses: " + "; ".join(bad))
+        return QuantisedLightFFN.from_training(self)
 
     @staticmethod
     def param_count(input_dim: int, output_dim: int, inner_dim: Optional[int] = None,

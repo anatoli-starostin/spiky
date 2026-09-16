@@ -3,14 +3,18 @@
 Forward: the plain hard read sum_t W_t[c_t], no score. Training output is `W[c] + f - sg(f)` with f the scored read
 (3.1's / 3.2's function) computed on DETACHED tables: zero in value, so the output is exactly the hard read, while the
 input, beta/gamma and tau receive f's gradient and the tables receive only the hard read's (unscaled, 1 row).
+Since b5b0f2c3 (the Gen-3 hard-mode divergence fix) f scores with the BOUNDED score s / (sg(mean_bag s) + 1e-6), the
+mean taken over the tables that reduce into each bag, so the injected gradient cannot grow with |d|. The references
+below are therefore the scored module with that per-bag mean frozen at the evaluation point (== its detach).
 
 Coverage:
   (i)   forward value == a plain-torch hard read, exactly, in train and in eval, both input layouts, n=1 and n=2;
   (ii)  eval (no_grad) never computes the confidence score and never uses the native SCORED kernel;
-  (iii) input / confidence-scalar / tau gradients == the scored module's (same state); the table gradient == the
-        autograd gradient of the plain hard read (unscaled, one row per table);
-  (iv)  float64: torch.autograd.gradcheck of the tables, and central differences of the scored function (index
-        fixed) for the input gradient;
+  (iii) input / confidence-scalar / tau gradients == the bounded-score scored module's (same state), and differ from
+        the unbounded scored module's; the table gradient == the autograd gradient of the plain hard read (unscaled,
+        one row per table);
+  (iv)  float64: torch.autograd.gradcheck of the tables, and central differences of the bounded-score scored function
+        (index and per-bag mean fixed) for the input gradient;
   (v)   guards (unknown mode; non-constant cell modes) and default/state_dict compatibility.
 """
 import pytest
@@ -63,6 +67,17 @@ def _plain(m, x, W=None):
     return rows.sum(1)
 
 
+def _bound_score_at(soft, x):
+    """Make `soft` score like the hard forward's surrogate (b5b0f2c3): s / (mean_bag s + 1e-6), the per-bag mean over the
+    tables (last axis of the score) frozen at x -- the constant the hard path's detach sees, so gradients at x agree and
+    central differences around x measure the same function."""
+    score = soft.confidence_score
+    with torch.no_grad():
+        mean0 = score(_margins(soft, x)).mean(dim=-1, keepdim=True) + 1e-6
+    soft.confidence_score = lambda d: score(d) / mean0
+    return soft
+
+
 def _grads(m, x, g):
     x = x.clone().requires_grad_(True)
     m.zero_grad(set_to_none=True)
@@ -108,13 +123,17 @@ def test_eval_path_is_unscored(device, mhi, n):
 
 @pytest.mark.parametrize("mhi,n,form", CASES)
 def test_input_and_scalar_grads_equal_scored_path_and_table_grad_is_plain(mhi, n, form):
-    hard, soft = _make("hard", mhi, n, form), _make("scored", mhi, n, form)
+    hard, soft, unbounded = _make("hard", mhi, n, form), _make("scored", mhi, n, form), _make("scored", mhi, n, form)
     soft.load_state_dict(hard.state_dict())
+    unbounded.load_state_dict(hard.state_dict())
     x = _x(hard)
+    _bound_score_at(soft, x)
     g = torch.randn(hard(x).shape, generator=torch.Generator().manual_seed(1), dtype=torch.float64)
     hx, hp = _grads(hard, x, g)
     sx, sp = _grads(soft, x, g)
+    ux, _ = _grads(unbounded, x, g)
     torch.testing.assert_close(hx, sx)
+    assert not torch.allclose(hx, ux)                              # the bound is really in the hard backward
     for k in hp:
         if k == "tables":
             continue
@@ -131,9 +150,11 @@ def test_gradcheck_float64(mhi, n):
     x = _x(m)
     W0 = m.tables.detach().clone().requires_grad_(True)
     assert torch.autograd.gradcheck(lambda W: torch.func.functional_call(m, {"tables": W}, (x,)), (W0,))
-    # input gradient == central differences of the scored function (tables constant, index fixed for small eps)
+    # input gradient == central differences of the bounded-score scored function (tables constant, index and per-bag
+    # mean fixed for small eps)
     soft = _make("scored", mhi, n, "learned_margin")
     soft.load_state_dict(m.state_dict())
+    _bound_score_at(soft, x)
     g = torch.randn(m(x).shape, generator=torch.Generator().manual_seed(2), dtype=torch.float64)
     hx, _ = _grads(m, x, g)
     eps, num = 1e-6, torch.zeros_like(x)
