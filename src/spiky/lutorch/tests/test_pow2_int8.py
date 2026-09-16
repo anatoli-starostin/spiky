@@ -31,7 +31,8 @@ Gates:
   fallback  op disabled / extension absent -> the torch definition, which still trains (finite, matching gradients, loss
             decreases)
 
-The kernel builds only on compute capability 12.x (RTX 5090); elsewhere these tests skip, except the fallback ones.
+The kernel builds only on an architecture in pow2_int8.VALIDATED_ARCHES; elsewhere these tests skip, except the fallback
+ones. This file IS the validation matrix: an architecture is trusted only once it passes here on that hardware.
 """
 import math
 import os

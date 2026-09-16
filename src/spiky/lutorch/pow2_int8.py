@@ -25,13 +25,16 @@ Cell width D is a runtime parameter. The kernel reads rows with a STRIDE = ceil(
 The padding lanes are ALSO predicated off inside the kernel (masked at accumulate time), so the result does not depend on
 the padding bytes; the tests fill them with garbage to prove it.
 
-Built lazily with torch.utils.cpp_extension on first use, only on compute capability 12.x (RTX 5090, sm_120: it is written
-for that device's block / warp / shared-memory model). Everything else -- no CUDA, another architecture, no nvcc, a failed
-build, SPIKY_P2_CUDA_DISABLE=1 -- makes `load()` return None and callers use the torch implementation (pow2_read).
+Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
+in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel's test matrix (tests/
+test_pow2_int8.py) has passed. Nothing in the kernel is architecture-specific; the allowlist records validation, not a
+hardware requirement, and an architecture joins it once that matrix is green on it. Everything else -- no CUDA, an
+architecture not on the list, no nvcc, a failed build, SPIKY_P2_CUDA_DISABLE=1 -- makes `load()` return None and callers use
+the torch implementation (pow2_read).
 
 CUSTOM OP -- the per-table integers of the power-of-two read, from ONE forward implementation for training and eval.
 
-With the CUDA extension available (compute capability 12.x) and CUDA fp32 margins, the integers come from the
+With the CUDA extension available (a validated architecture) and CUDA fp32 margins, the integers come from the
 registered custom op `spiky_lutorch::p2_scalars`, whose forward is p2::table_scalars (csrc/pow2_scalars.cuh) -- the same
 function the inference kernel calls inline:
 
@@ -59,6 +62,11 @@ DEFAULT_BLOCK_N = 64
 LOAD_WIDTH = 16
 DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_scalars.cuh)
 _CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
+# Compute capabilities the kernel is enabled on -- only those whose test matrix has passed on real hardware:
+#   (12, 0) sm_120  RTX 5090 (Blackwell), validated on gpustar
+#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: tests/test_pow2_int8.py must be green there
+#                   before its results are trusted (see the lut_ablation exp_n_abl_47 package's validation gate)
+VALIDATED_ARCHES = ((12, 0), (9, 0))
 
 _ext = None
 _error = None
@@ -75,13 +83,14 @@ def load():
         _error = "disabled by SPIKY_P2_CUDA_DISABLE=1"
         return None
     try:
-        if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 12:
-            _error = "no compute-capability-12.x CUDA device"
+        cap = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
+        if cap not in VALIDATED_ARCHES:
+            _error = f"device compute capability {cap} is not in VALIDATED_ARCHES {VALIDATED_ARCHES}"
             return None
         from torch.utils.cpp_extension import load as _load
         _ext = _load(name="spiky_lutorch_pow2_int8_read", sources=[os.path.join(_CSRC, "pow2_int8_read.cu")],
                      extra_cuda_cflags=["-O3", "-std=c++20", "--fmad=false"], extra_cflags=["-O3", "-std=c++20"],
-                     verbose=False)
+                     verbose=False)                          # cpp_extension targets the visible device's architecture
     except Exception as e:                                   # no nvcc, compile error, ...: fall back silently
         _ext = None
         msg = str(e).strip()
