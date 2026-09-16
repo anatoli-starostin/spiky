@@ -35,7 +35,7 @@ import torch.nn as nn
 
 from .lut_helpers import AnchorSamplingPolicy, get_balanced_anchor_pairs
 from . import pow2_read
-from . import pow2_scalar_op
+from . import pow2_int8
 # Reuse the EXACT score definition FastMultiHeadLut uses, so the two layers are
 # directly comparable in an ablation (same "bounded"/"margin" forms).
 from .fast_multi_head_lut import (LEARNED_MARGIN_INIT, SHARP_MARGIN_GAMMA, _confidence_score,
@@ -174,7 +174,7 @@ class LightMultiHeadLUT(nn.Module):
                 bad.append(f"output_heads={output_heads} (needs 1)")
             if bad:
                 raise ValueError(f"quant_mode={quant_mode!r} is not implemented for: " + "; ".join(bad))
-            pow2_scalar_op.ensure_registered()      # eager: build/register the CUDA op before any compiled forward
+            pow2_int8.ensure_registered()           # eager: build/register the CUDA op before any compiled forward
         if forward_mode not in ("scored", "hard"):
             raise ValueError(f"forward_mode must be 'scored' or 'hard', got {forward_mode!r}")
         if forward_mode == "hard" and cell_mode != "constant":
@@ -691,7 +691,7 @@ class LightMultiHeadLUT(nn.Module):
 
         if self._quant is not None:
             # with the op, the cell addresses come from it: no separate index pass (and no pybind call inside compile)
-            index = (None if pow2_scalar_op.op_available(d)
+            index = (None if pow2_int8.op_available(d)
                      else self._pack_index(x.reshape(B, H * self.input_dim), d).view(B, H, T))
             return self._quant_read(d, index).view(B, H, self.output_dim)
 
@@ -739,12 +739,12 @@ class LightMultiHeadLUT(nn.Module):
         and int-b tables. Value: sum_t 2^k' (W_hat[c1] + 2^-q W_hat[c2]) with W_hat = int * 2^e[h, c]; gradients as in the
         ablation prototype (pow2_read.ste_blend_weights / ste_tables). d [B, H, T, NAP], index [B, H, T]
         (None when the op is used: it returns the cell addresses).
-        The per-table integers and cell weights come from pow2_scalar_op.cell_weights: the spiky_lutorch::p2_scalars op
+        The per-table integers and cell weights come from pow2_int8.cell_weights: the spiky_lutorch::p2_scalars op
         (the CUDA definition shared with every eval path) when available, else the torch definition in pow2_read."""
         cfg = self._quant
         B, H, T = d.shape[:3]
         tau, g, beta, gamma = self._quant_scalars()
-        psw, idx = pow2_scalar_op.cell_weights(d, index, self.powers, tau, g, beta, gamma, cfg)   # [B, H, T, 2] each
+        psw, idx = pow2_int8.cell_weights(d, index, self.powers, tau, g, beta, gamma, cfg)   # [B, H, T, 2] each
         W = pow2_read.ste_tables(self.tables, self.n_heads, cfg["bits"], cfg["offset"])
         flat_q = W.reshape(-1, self._tbl_out)
         flat_idx = (idx + self.table_offset.view(1, H, T, 1)).reshape(-1)
@@ -767,7 +767,7 @@ class LightMultiHeadLUT(nn.Module):
     def forward_int(self, x: torch.Tensor) -> torch.Tensor:
         """quant_mode integer eval read: x [B, H, input_dim] -> float [B, H, output_dim] via the int32 shift-add of note
         Section 6 over packed int-b rows. The per-table integers come from the SAME definition as the training forward
-        (pow2_scalar_op: the CUDA op when available, else pow2_read), so the value equals it by construction."""
+        (pow2_int8: the CUDA op when available, else pow2_read), so the value equals it by construction."""
         if self._quant is None:
             raise RuntimeError("forward_int() needs quant_mode")
         B, H, T, NAP = x.shape[0], self.n_heads, self.tables_per_head, self.n_anchor_pairs
@@ -777,7 +777,7 @@ class LightMultiHeadLUT(nn.Module):
         index = ((d > 0).to(torch.int64) * self.powers.view(1, 1, 1, -1)).sum(dim=-1)
         e, packed = self.quantised_tables()
         tau, g, beta, gamma = self._quant_scalars()
-        idx, q, k, skip, drop = pow2_scalar_op.table_integers(d, index, self.powers, tau, g, beta, gamma, self._quant)
+        idx, q, k, skip, drop = pow2_int8.table_integers(d, index, self.powers, tau, g, beta, gamma, self._quant)
         flat_idx = idx + self.table_offset.view(1, H, T, 1)
         acc = pow2_read.int_blend_read(packed, self._quant["bits"], self.output_dim, flat_idx, q, k, skip, drop)
         return acc.to(x.dtype) * torch.pow(2.0, e.to(x.dtype) - pow2_read.FIXED_POINT_SHIFT)       # units 2^-6 -> float

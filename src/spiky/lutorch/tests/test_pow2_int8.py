@@ -1,6 +1,17 @@
-"""spiky_lutorch::p2_scalars (pow2_scalar_op.py): ONE forward definition of the per-table integers for training and eval.
+"""spiky/lutorch/pow2_int8.py: the CUDA extension for the int8 power-of-two read (csrc/pow2_int8_read.cu) and the
+spiky_lutorch::p2_scalars custom op -- ONE forward definition of the per-table integers for training and eval.
 
 Gates:
+  cells     the kernel's int32 accumulation on supplied integers (read_cells, the reference) is BIT-EXACT against
+            pow2_read.int8_blend_read (eager and torch.compile) and against an explicit per-cell (row << shift) sum -- for
+            cell widths D = 48, 40, 52, 8, 128 (16-aligned, stride-padded, smaller than one load, several units), with
+            garbage in the padding bytes, skipped tables, dropped second cells, k' at -3 and at the clamp 4, q at 0 and at the
+            Q = 3 boundary, and saturated -128 / 127 rows; every block size and both load styles
+  headroom  the worst case (all rows -128 or 127, every shift 10, 2T rows) stays exact in int32
+  fused     read_fused's in-kernel integers equal the reference integers and its read equals read_cells on them (the full
+            fused coverage matrix and the drift gates are below)
+  artefact  QuantisedLightFFN's CUDA forward (the fused kernel) is bit-identical to its torch read, at every block size and
+            for small batches; without the extension, or for CPU inputs, it silently uses the torch read
   drift     the op's integers == the inference kernel's integers (both call p2::table_scalars, csrc/pow2_scalars.cuh), on
             random margins and on margins placed at the q / k' rounding boundaries -- fails if the two CUDA call sites or
             their inputs ever diverge
@@ -14,28 +25,181 @@ Gates:
   compile   no graph break over the op in the compiled training forward
   fallback  op disabled / extension absent -> the torch definition, which still trains (finite, matching gradients, loss
             decreases)
+
+The kernel builds only on compute capability 12.x (RTX 5090); elsewhere these tests skip, except the fallback ones.
 """
 import math
+import os
 
 import pytest
 import torch
 
-from spiky.lutorch import pow2_int8_cuda as K
+from spiky.lutorch import pow2_int8 as K
 from spiky.lutorch import pow2_read as P
-from spiky.lutorch import pow2_scalar_op as OP
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
 
-HAVE_OP = OP.ensure_registered()
-needs_op = pytest.mark.skipif(not HAVE_OP, reason="spiky_lutorch::p2_scalars needs the CUDA extension (compute capability 12.x)")
+HAVE_KERNEL = K.ensure_registered()             # the extension loads and the op is registered (one and the same condition)
+needs_kernel = pytest.mark.skipif(not HAVE_KERNEL, reason=f"pow2 int8 CUDA kernel unavailable: {K.available()[1]}")
 
 
 @pytest.fixture(autouse=True)
 def _op_enabled():
-    OP.set_enabled(True)
+    K.set_enabled(True)
     yield
-    OP.set_enabled(True)
+    K.set_enabled(True)
 
 
+def _random_case(N, H, T, nap, D, seed, dev="cuda"):
+    g = torch.Generator(device=dev).manual_seed(seed)
+    Kc = 1 << nap
+    tables = torch.randint(-128, 128, (H * T * Kc, D), device=dev, generator=g).to(torch.int8)
+    tables[0] = -128                                                    # saturated rows, read by table 0 below
+    tables[1] = 127
+    idx = torch.randint(0, Kc, (N, H, T, 2), device=dev, generator=g)
+    idx[:, 0, 0] = torch.tensor([0, 1], device=dev)
+    q = torch.randint(0, 9, (N, H, T), device=dev, generator=g).float()
+    k = torch.randint(-3, 5, (N, H, T), device=dev, generator=g).float()
+    q[:, :, 1], q[:, :, 2] = 0, 3                                       # q at 0 and at the Q = 3 boundary (second cell kept)
+    q[:, :, 3] = 4                                                      # first q that drops the second cell
+    k[:, :, 4], k[:, :, 5] = -3, 4                                      # both window ends
+    skip = torch.rand(N, H, T, device=dev, generator=g) < 0.15
+    skip[:, :, 1:6] = False
+    drop = q > 3
+    offs = (torch.arange(H * T, device=dev) * Kc).view(1, H, T, 1)
+    return tables, idx, offs, q, k, skip, drop
+
+
+@needs_kernel
+@pytest.mark.parametrize("D", [48, 40, 52, 8, 128])
+def test_cells_bit_exact_against_pr1_paths(D):
+    N, H, T, nap = 67, 4, 32, 6
+    tables, idx, offs, q, k, skip, drop = _random_case(N, H, T, nap, D, seed=D)
+    assert skip.any() and drop.any() and (k == -3).any() and (k == 4).any() and (q == 3).any() and (q == 0).any()
+    group = P.shift_groups(q, k, skip, drop)
+    ref_eager = P.int8_blend_read(tables, D, idx + offs, group, chunk_bags=7)
+    ref_comp = torch.compile(P.int8_accumulate, dynamic=True)(tables, idx + offs, group)
+    rows = tables[idx + offs].to(torch.int64)                          # explicit per-cell (row << shift) sum
+    w = torch.where(group < P.N_SHIFTS, torch.pow(2, group.clamp(max=62)), torch.zeros_like(group))
+    explicit = (rows * w.unsqueeze(-1)).sum(dim=(2, 3))
+    assert torch.equal(ref_eager, ref_comp) and torch.equal(ref_eager.to(torch.int64), explicit)
+    ts = K.stride_tables(tables, D)
+    if ts.shape[1] != D:
+        ts = ts.clone()
+        ts[:, D:] = 127                                                 # garbage padding: must be masked by the kernel
+    cells = K.pack_cells(idx, q, k, skip, drop)
+    for bn in K.BLOCK_NS:
+        if bn * K.row_stride(D) // 16 > 1024:
+            continue
+        for load16 in (True, False):
+            out = K.read_cells(ts, cells, nap, D, -3, 4, 3, block_n=bn, load16=load16)
+            assert out.dtype == torch.float32 and out.shape == (N, H, D)
+            assert torch.equal(out.to(torch.int64), explicit), (bn, load16)
+            assert torch.equal(out, ref_eager.to(torch.float32)), (bn, load16)
+
+
+def test_row_stride_and_padding():
+    assert [K.row_stride(D) for D in (1, 8, 16, 17, 40, 48, 52, 64, 128)] == [16, 16, 16, 32, 48, 48, 64, 64, 128]
+    t = torch.randint(-128, 128, (5, 40)).to(torch.int8)
+    s = K.stride_tables(t, 40)
+    assert s.shape == (5, 48) and torch.equal(s[:, :40], t) and torch.all(s[:, 40:] == 0)   # zero padding at pack time
+    t48 = torch.randint(-128, 128, (5, 48)).to(torch.int8)
+    assert K.stride_tables(t48, 48).data_ptr() == t48.data_ptr()                              # no copy when aligned
+    with pytest.raises(ValueError):
+        K.stride_tables(t.float(), 40)
+
+
+@needs_kernel
+def test_int32_headroom_worst_case():
+    """Every read cell at the largest shift (k' = 4, q = 0 -> 10) and every row saturated: |acc| = 2T * 128 << 10."""
+    N, H, T, nap, D = 3, 2, 128, 8, 48
+    Kc = 1 << nap
+    for fill in (-128, 127):
+        tables = torch.full((H * T * Kc, D), fill, dtype=torch.int8, device="cuda")
+        idx = torch.zeros(N, H, T, 2, dtype=torch.long, device="cuda")
+        q = torch.zeros(N, H, T, device="cuda")
+        k = torch.full((N, H, T), 4.0, device="cuda")
+        skip = torch.zeros(N, H, T, dtype=torch.bool, device="cuda")
+        out = K.read_cells(tables, K.pack_cells(idx, q, k, skip, q > 3), nap, D, -3, 4, 3)
+        expect = 2 * T * fill * (1 << 10)
+        assert abs(expect) <= 2 ** 25 < 2 ** 31
+        assert torch.all(out == float(expect))
+
+
+def _artefact(dev="cuda", din=48, nap=8, tph=128, seed=5, E=384):
+    torch.manual_seed(0)
+    ffn = CompressionMultiHeadLUT(input_dim=E, output_dim=E, inner_in_dim=din, inner_out_dim=din, nap=nap, tph=tph, n_heads=4,
+                                  lut_impl="light", confidence_form="learned_margin", learned_margin_freeze_g=True,
+                                  read_top_n=2, read_tau=0.5, read_tau_learnable=True, random_seed=seed,
+                                  device=torch.device(dev), quant_mode="p2_int8", initial_weights_noise=0.3)
+    return ffn.export_quantised()
+
+
+@needs_kernel
+def test_fused_integers_and_read_equal_the_reference():
+    """read_fused computes the integers in the kernel with p2::table_scalars; they equal the reference integers (the
+    p2_scalars op, the same function) and its read equals read_cells on them."""
+    art = _artefact()
+    x = torch.randn(2048, 384, device="cuda", generator=torch.Generator(device="cuda").manual_seed(1))
+    cells_ref = art._reference_cells(x)
+    kc = art._kernel_cache(x.device)
+    z = torch.nn.functional.linear(x, art.compress_weight, art.compress_bias).view(2048, 4, 48)
+    cells_k = torch.empty_like(cells_ref)
+    acc_f = K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 8, 48, -3, 4, 3, cells_out=cells_k)
+    assert torch.equal(cells_k, cells_ref)
+    assert torch.equal(acc_f, K.read_cells(kc["tables"], cells_ref, 8, 48, -3, 4, 3))
+
+
+@needs_kernel
+def test_artefact_cuda_forward_is_the_fused_kernel_and_equals_the_torch_read():
+    art = _artefact(din=40, nap=7, tph=64, seed=9)
+    x = torch.randn(777, 384, device="cuda", generator=torch.Generator(device="cuda").manual_seed(2))
+    assert art._uses_kernel(x)
+    ref = art._forward_torch(x)
+    assert torch.equal(art(x), ref)
+    kc = art._kernel_cache(x.device)
+    z = torch.nn.functional.linear(x, art.compress_weight, art.compress_bias).view(777, 4, 40)
+    for bn in K.BLOCK_NS:
+        for l16 in (True, False):
+            acc = K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 7, 40, -3, 4, 3,
+                               block_n=bn, load16=l16)
+            out = torch.nn.functional.linear(acc.reshape(777, 160), art.decompress_weight, art.decompress_bias)
+            assert torch.equal(out, ref), (bn, l16)
+    for n in (1, 3):                           # small calls too (same batch: cuBLAS matmuls are batch-size dependent)
+        assert torch.equal(art(x[:n]), art._forward_torch(x[:n])), n
+
+
+def test_fallback_when_extension_unavailable(monkeypatch):
+    """No extension (simulated): the artefact silently uses the torch read; outputs unchanged."""
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    art = _artefact(dev, din=16, nap=5, tph=8, seed=3, E=64)
+    x = torch.randn(50, 64, device=dev)
+    ref = art(x)
+    monkeypatch.setattr(K, "load", lambda: None)
+    K.set_enabled(False)                                   # an absent extension never registers the op
+    try:
+        assert not art._uses_kernel(x) and K.available()[0] is False
+        assert torch.equal(art(x), art._forward_torch(x))
+        torch.testing.assert_close(art(x), ref, rtol=0, atol=1e-5)      # torch integers: ulp-level boundary flips at most
+    finally:
+        K.set_enabled(True)
+
+
+def test_disable_env_and_cpu_inputs(monkeypatch):
+    monkeypatch.setenv("SPIKY_P2_CUDA_DISABLE", "1")
+    saved = (K._ext, K._error, K._tried)
+    try:
+        K._reset_for_tests()
+        assert K.load() is None and "SPIKY_P2_CUDA_DISABLE" in K.available()[1]
+    finally:
+        K._ext, K._error, K._tried = saved
+    art = _artefact("cpu", din=16, nap=5, tph=8, seed=3, E=64)
+    x = torch.randn(20, 64)
+    assert not art._uses_kernel(x)                                      # CPU input: never the kernel
+    assert torch.equal(art(x), art._forward_torch(x))
+
+
+# ======================================================================================================================
+# the spiky_lutorch::p2_scalars op
 def _ffn(dev="cuda", seed=5, tau=0.5, noise=0.3, H=4, tph=128, nap=8, din=48, **kw):
     torch.manual_seed(seed)
     ffn = CompressionMultiHeadLUT(input_dim=384, output_dim=384, inner_in_dim=din, inner_out_dim=din, nap=nap, tph=tph,
@@ -54,7 +218,7 @@ def _margins(lut, z):
 
 
 # ------------------------------------------------------------------ drift ------------------------------------------------
-@needs_op
+@needs_kernel
 @pytest.mark.parametrize("scale", [0.05, 1.0, 20.0])
 def test_op_integers_equal_fused_kernel_integers(scale):
     ffn = _ffn(noise=0.3)
@@ -72,7 +236,7 @@ def test_op_integers_equal_fused_kernel_integers(scale):
     assert ((sh & 15) == 15).any() or scale > 1                          # the case mix includes skipped tables
 
 
-@needs_op
+@needs_kernel
 def test_op_integers_equal_fused_kernel_on_rounding_boundaries():
     """Margins whose smallest value sits exactly on a q threshold, and scores whose log2 lands on k' + 1/2."""
     ffn = _ffn()
@@ -100,7 +264,7 @@ def test_op_integers_equal_fused_kernel_on_rounding_boundaries():
     assert torch.equal(cells_op, cells_k)
 
 
-@needs_op
+@needs_kernel
 @pytest.mark.parametrize("D", [48, 40, 52, 8, 128])
 def test_fused_bit_exact_vs_cells_and_int8_blend_read_coverage_matrix(D):
     """Fused (integers in-kernel) == op integers, and its read == cells read == pow2_read.int8_blend_read on those integers,
@@ -118,7 +282,7 @@ def test_fused_bit_exact_vs_cells_and_int8_blend_read_coverage_matrix(D):
     Hi = torch.arange(H, device="cuda").view(1, H, 1)
     d = (z[Bi, Hi, aa.view(1, H, -1)] - z[Bi, Hi, ab.view(1, H, -1)]).view(N, H, T, nap)
     psw, cells, kq = torch.ops.spiky_lutorch.p2_scalars(d, *sc, -3, 4, 3)
-    q, k, skip, drop = OP._integers_from(cells, kq, 3)
+    q, k, skip, drop = K._integers_from(cells, kq, 3)
     assert skip.any() and drop.any() and (~skip & ~drop).any()
     offs = (torch.arange(H * T, device="cuda") * (1 << nap)).view(1, H, T, 1)
     ref = P.int8_blend_read(tables, D, cells[..., :2].long() + offs, P.shift_groups(q, k, skip, drop)).to(torch.float32)
@@ -139,7 +303,7 @@ def test_fused_bit_exact_vs_cells_and_int8_blend_read_coverage_matrix(D):
 
 
 # ------------------------------------------------------------------ train == int ----------------------------------------
-@needs_op
+@needs_kernel
 def test_training_forward_equals_integer_read_bit_for_bit():
     ffn = _ffn(tau=0.05)
     lut = ffn.lut_light
@@ -155,7 +319,7 @@ def test_training_forward_equals_integer_read_bit_for_bit():
 
 
 # ------------------------------------------------------------------ backward --------------------------------------------
-@needs_op
+@needs_kernel
 def test_recompute_backward_bit_identical_to_torch_expression_on_same_integers():
     ffn = _ffn(tau=0.05)
     lut = ffn.lut_light
@@ -172,8 +336,8 @@ def test_recompute_backward_bit_identical_to_torch_expression_on_same_integers()
         else:
             with torch.no_grad():
                 _, cells, kq = torch.ops.spiky_lutorch.p2_scalars(d.detach(), tau.detach(), g, beta.detach(), gamma.detach(), -3, 4, 3)
-            q, k, skip, drop = OP._integers_from(cells, kq, 3)
-            psw = OP.ste_cell_weights(d, tau, g, beta, gamma, q, k, skip, drop)
+            q, k, skip, drop = K._integers_from(cells, kq, 3)
+            psw = K.ste_cell_weights(d, tau, g, beta, gamma, q, k, skip, drop)
         (psw * w).sum().backward()
         return psw.detach(), {n: p.grad.clone() for n, p in lut.named_parameters() if p.grad is not None}, z.grad.clone()
 
@@ -206,7 +370,7 @@ def test_gradcheck_of_the_backward_expression_with_forced_boundary_integers():
     def e_of(d_, tau_, beta_, gamma_):
         m = d_.abs()
         x = 2.0 * m.min(dim=-1, keepdim=True).values / tau_
-        return OP.score_from_margins(m, g, beta_, gamma_).unsqueeze(-1) * torch.cat([torch.sigmoid(x), torch.sigmoid(-x)], -1)
+        return K.score_from_margins(m, g, beta_, gamma_).unsqueeze(-1) * torch.cat([torch.sigmoid(x), torch.sigmoid(-x)], -1)
 
     theta = (d, tau, beta, gamma)
     with torch.no_grad():
@@ -217,14 +381,14 @@ def test_gradcheck_of_the_backward_expression_with_forced_boundary_integers():
 
     assert torch.autograd.gradcheck(surrogate, theta, eps=1e-6, atol=1e-7)
     wt = torch.randn(2, 1, T, 2, dtype=torch.float64)
-    g_ste = torch.autograd.grad((OP.ste_cell_weights(d, tau, g, beta, gamma, q, k, skip, drop) * wt).sum(), theta)
+    g_ste = torch.autograd.grad((K.ste_cell_weights(d, tau, g, beta, gamma, q, k, skip, drop) * wt).sum(), theta)
     g_sur = torch.autograd.grad((surrogate(*theta) * wt).sum(), theta)
     for a, b in zip(g_ste, g_sur):
         torch.testing.assert_close(a, b, rtol=1e-12, atol=0)
     assert d.abs().min() > 1e-3                                         # |d| stays differentiable at the sample
 
 
-@needs_op
+@needs_kernel
 def test_skipped_tables_and_dropped_second_cells_keep_gradient_through_the_op():
     ffn = _ffn(tau=0.05)
     lut = ffn.lut_light
@@ -244,7 +408,7 @@ def test_skipped_tables_and_dropped_second_cells_keep_gradient_through_the_op():
 
 
 # ------------------------------------------------------------------ compile ---------------------------------------------
-@needs_op
+@needs_kernel
 def test_no_graph_break_over_the_op():
     ffn = _ffn()
     lut = ffn.lut_light
@@ -261,13 +425,13 @@ def test_no_graph_break_over_the_op():
 # ------------------------------------------------------------------ fallback --------------------------------------------
 @pytest.mark.parametrize("dev", ["cpu"] + (["cuda"] if torch.cuda.is_available() else []))
 def test_torch_fallback_trains(dev):
-    OP.set_enabled(False)
+    K.set_enabled(False)
     ffn = CompressionMultiHeadLUT(input_dim=64, output_dim=64, inner_in_dim=16, inner_out_dim=16, nap=5, tph=16, n_heads=4,
                                   lut_impl="light", confidence_form="learned_margin", learned_margin_freeze_g=True,
                                   read_top_n=2, read_tau=0.3, read_tau_learnable=True, random_seed=2,
                                   device=torch.device(dev), quant_mode="p2_int8", initial_weights_noise=0.1)
     ffn.lut_light._compile_enabled = False
-    assert not OP.op_available(torch.zeros(1, device=dev))
+    assert not K.op_available(torch.zeros(1, device=dev))
     g = torch.Generator(device=dev).manual_seed(0)
     x = torch.randn(256, 64, device=dev, generator=g)
     target = torch.randn(256, 64, device=dev, generator=g) * 0.1

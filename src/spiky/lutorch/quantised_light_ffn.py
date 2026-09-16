@@ -16,11 +16,11 @@ and a `meta` dict (preset constants incl. the explicit table width `bits` and we
 Forward: compress, anchor margins and cell addresses, the per-table integers (c1, c2, q, k', skip, drop), the int32 shift-add
 over the int8 rows (note Section 6), then the folded decompress. Two implementations of that one read, bit-identical:
 
-  * CUDA fp32 input with the pow2_int8_cuda extension available (RTX 5090): the fused kernel -- the per-table integers
+  * CUDA fp32 input with the pow2_int8 extension available (RTX 5090): the fused kernel -- the per-table integers
     (p2::table_scalars, the same function the training forward's spiky_lutorch::p2_scalars op runs) and the int8
     accumulation in ONE launch. Always used when available.
   * otherwise (CPU, another GPU, no extension, SPIKY_P2_CUDA_DISABLE=1): the torch read, _forward_torch -- the integers from
-    pow2_scalar_op.table_integers and pow2_read.int_blend_read, compiled on CUDA.
+    pow2_int8.table_integers and pow2_read.int_blend_read, compiled on CUDA.
 
 File format (to_file / from_file): torch.save of {"format": FORMAT, "version": VERSION, "meta": ..., "buffers": ...}.
 """
@@ -30,9 +30,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from . import pow2_int8_cuda
+from . import pow2_int8
 from . import pow2_read
-from . import pow2_scalar_op
 
 FORMAT = "spiky.lutorch.QuantisedLightFFN"
 VERSION = 1
@@ -56,7 +55,7 @@ class QuantisedLightFFN(nn.Module):
         self._compiled = None
         self._compile_enabled = os.environ.get("LUT_DISABLE_COMPILE") != "1"
         self._kcache = None
-        pow2_scalar_op.ensure_registered()          # eager: build/register the CUDA op before any compiled forward
+        pow2_int8.ensure_registered()               # eager: build/register the CUDA op before any compiled forward
 
     @classmethod
     @torch.no_grad()
@@ -88,14 +87,14 @@ class QuantisedLightFFN(nn.Module):
             return self._forward_torch(x)
 
     def _uses_kernel(self, x: torch.Tensor) -> bool:
-        return x.is_cuda and x.dtype == torch.float32 and pow2_int8_cuda.load() is not None
+        return x.is_cuda and x.dtype == torch.float32 and pow2_int8.load() is not None
 
     # ------------------------------------------------------------------ fused CUDA kernel -------------------------------
     def _kernel_cache(self, device):
         """The kernel's view of the artefact on `device`: stride-padded int8 rows, int32 anchors, one-element fp32 scalars."""
         if self._kcache is None or self._kcache["device"] != device:
             self._kcache = dict(
-                device=device, tables=pow2_int8_cuda.stride_tables(self.tables.to(device), self.meta["output_dim"]),
+                device=device, tables=pow2_int8.stride_tables(self.tables.to(device), self.meta["output_dim"]),
                 anchor_a=self.anchor_a.to(device=device, dtype=torch.int32).contiguous(),
                 anchor_b=self.anchor_b.to(device=device, dtype=torch.int32).contiguous(),
                 scalars=tuple(t.to(device=device, dtype=torch.float32).reshape(1).contiguous()
@@ -108,8 +107,8 @@ class QuantisedLightFFN(nn.Module):
         N = x.shape[0]
         kc = self._kernel_cache(x.device)
         z = F.linear(x, self.compress_weight, self.compress_bias).view(N, H, Din)
-        acc = pow2_int8_cuda.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], NAP, D,
-                                        self.cfg["lo"], self.cfg["hi"], self.cfg["Q"])
+        acc = pow2_int8.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], NAP, D,
+                                   self.cfg["lo"], self.cfg["hi"], self.cfg["Q"])
         return F.linear(acc.reshape(N, H * D), self.decompress_weight, self.decompress_bias)
 
     # ------------------------------------------------------------------ torch read ------------------------------------
@@ -141,18 +140,17 @@ class QuantisedLightFFN(nn.Module):
         H, T, D = mt["n_heads"], mt["tables_per_head"], mt["output_dim"]
         N = x.shape[0]
         d, index = self._margins(x)
-        idx, q, k, skip, drop = pow2_scalar_op.table_integers(d, index, self.powers, *self._scalars(x.dtype), self.cfg)
+        idx, q, k, skip, drop = pow2_int8.table_integers(d, index, self.powers, *self._scalars(x.dtype), self.cfg)
         acc = pow2_read.int_blend_read(self.tables, self.cfg["bits"], D, idx + self.table_offset.view(1, H, T, 1),
                                        q, k, skip, drop, chunk_bags)
         y = acc.to(x.dtype).reshape(N, H * D)
         return F.linear(y, self.decompress_weight.to(x.dtype), self.decompress_bias.to(x.dtype))
 
     def _reference_cells(self, x: torch.Tensor) -> torch.Tensor:
-        """TEST ORACLE: the packed per-table integers uint8 [N, H, T, 3] for pow2_int8_cuda.read_cells, computed outside the
+        """TEST ORACLE: the packed per-table integers uint8 [N, H, T, 3] for pow2_int8.read_cells, computed outside the
         fused kernel (by the p2_scalars op when available, else pow2_read)."""
         d, index = self._margins(x)
-        return pow2_int8_cuda.pack_cells(*pow2_scalar_op.table_integers(d, index, self.powers, *self._scalars(x.dtype),
-                                                                        self.cfg))
+        return pow2_int8.pack_cells(*pow2_int8.table_integers(d, index, self.powers, *self._scalars(x.dtype), self.cfg))
 
     def to_file(self, path: str) -> None:
         torch.save({"format": FORMAT, "version": VERSION, "meta": self.meta,
