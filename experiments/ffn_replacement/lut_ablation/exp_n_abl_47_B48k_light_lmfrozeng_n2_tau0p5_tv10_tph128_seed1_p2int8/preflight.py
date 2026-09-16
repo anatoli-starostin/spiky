@@ -5,7 +5,7 @@
 Checks, each printed PASS / FAIL:
   1. spiky checkout at the pinned commit, library tree unmodified, this folder inside it at the expected place
   2. nanochat checkout at its pinned commit
-  3. data dir holds EXACTLY the 5 shards of data_manifest.json with matching sha256; tokenizer files match
+  3. data dir holds EXACTLY the 5 pinned ClimbMix shards with matching sha256; both tokenizer files match their sha256
   4. exactly one CUDA device visible; lutorch_cuda imports
   5. config.json == the documented config (abl_05 row 3.2 +TV with n_steps 48000 and lut_quant_mode p2_int8)
   6. model builds (SMOKE=1 train.py), the quantised path is ACTIVE on all 6 layers, and WHICH implementation serves it:
@@ -14,7 +14,7 @@ Checks, each printed PASS / FAIL:
      cross-checked against kernel_gate.json (validate_kernel.py): kernel serving without a PASS gate is a FAIL
      (set SPIKY_P2_CUDA_DISABLE=1); a PASS gate with the fallback serving is a FAIL unless SPIKY_P2_CUDA_DISABLE=1 was set
      on purpose. The implementation line is also written to preflight_implementation.txt for the run record.
-  7. W&B: WANDB_BASE_URL is wandb.ai cloud, ~/.wandb_env is not in effect, the ~/.netrc key authenticates (key never printed)
+  7. W&B: WANDB_BASE_URL is wandb.ai cloud (run.env is authoritative), the ~/.netrc key authenticates (key never printed)
 """
 import hashlib
 import json
@@ -25,6 +25,19 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 PIN_SPIKY = "4ad02234900413fa7555e4c4048de80fae4346f5"
 PIN_NANOCHAT = "da32e1d657b62cc1110f20f86fbc301d6189726e"
+# The exact data and tokenizer of the gpustar runs. nanochat lists $NANOCHAT_BASE_DIR/base_data_climbmix/*.parquet sorted:
+# all but the LAST are train (looped), the LAST is val -- so the dir must hold exactly these five files.
+SHARDS = {
+    "shard_00000.parquet": "054ddbd98abf30d773c54de578fc9d579bafeb6c14e04e97bd36aa90e825bf9b",
+    "shard_00001.parquet": "d4cfe1de19f4fd976022a9047458655968bc5583582ec5fa714801ec2be2c93c",
+    "shard_00002.parquet": "5e80d7596d53be648d841ea5811082747281c39f6851e10dd90375a84bc509a7",
+    "shard_00003.parquet": "b349c85d4b993d98e2328833ecfd3734692e0395a592d89858bae34a4ba73c59",
+    "shard_06542.parquet": "769fe59d108dfd2cfa186c63173b83fbfb90a7adb3519519ba6eaa6ca9889f94",   # val
+}
+TOKENIZER = {                                           # $NANOCHAT_BASE_DIR/tokenizer/ -- must be byte-identical
+    "tokenizer.pkl": "61d7b5aa42e1047d7134cac0f9f3b1fc56286d9ba7c9e5fea43de6471d9afe3f",
+    "token_bytes.pt": "b8374a902944f329a03dbd61ab459010d6195979e979864535f9aedec42bcc85",
+}
 fails = []
 
 
@@ -68,23 +81,22 @@ if nanochat:
     check("nanochat at pinned commit", head == PIN_NANOCHAT, f"HEAD={head}, want {PIN_NANOCHAT}")
 
 # 3. data
-man = json.load(open(os.path.join(HERE, "data_manifest.json")))
 if base:
     ddir = os.path.join(base, "base_data_climbmix")
     have = sorted(f for f in os.listdir(ddir) if f.endswith(".parquet")) if os.path.isdir(ddir) else []
-    check("data dir holds exactly the manifest shards", have == sorted(man["shards"]), f"have {have}")
-    for fn, meta in man["shards"].items():
+    check("data dir holds exactly the 5 pinned shards", have == sorted(SHARDS), f"have {have}")
+    for fn, want in SHARDS.items():
         p = os.path.join(ddir, fn)
         if os.path.exists(p):
             h = hashlib.sha256()
             with open(p, "rb") as f:
                 for chunk in iter(lambda: f.read(1 << 24), b""):
                     h.update(chunk)
-            check(f"sha256 {fn}", h.hexdigest() == meta["sha256"])
-    for fn, meta in man["tokenizer"].items():
+            check(f"sha256 {fn}", h.hexdigest() == want)
+    for fn, want in TOKENIZER.items():
         p = os.path.join(base, "tokenizer", fn)
-        ok = os.path.exists(p) and hashlib.sha256(open(p, "rb").read()).hexdigest() == meta["sha256"]
-        check(f"tokenizer {fn}", ok)
+        ok = os.path.exists(p) and hashlib.sha256(open(p, "rb").read()).hexdigest() == want
+        check(f"tokenizer {fn} sha256", ok, "" if ok else f"missing or different at {p} -- it must be byte-identical to the gpustar runs' tokenizer: ask Anatoli for both files")
 
 # 4. GPU
 try:
@@ -145,7 +157,7 @@ if spiky and nanochat and base:
 
 # 7. W&B
 check("WANDB_BASE_URL is wandb.ai cloud", os.environ.get("WANDB_BASE_URL") == "https://api.wandb.ai",
-      "" if os.environ.get("WANDB_BASE_URL") == "https://api.wandb.ai" else "set WANDB_BASE_URL=https://api.wandb.ai in run.env; do NOT source ~/.wandb_env")
+      "" if os.environ.get("WANDB_BASE_URL") == "https://api.wandb.ai" else "set WANDB_BASE_URL=https://api.wandb.ai in run.env")
 check("WANDB_MODE not disabled/offline", os.environ.get("WANDB_MODE", "") not in ("disabled", "offline"))
 try:                                                   # own process with a hard timeout: never hangs the preflight
     r = subprocess.run([sys.executable, "-c", "import wandb; v = wandb.Api(timeout=20).viewer; print('WANDB_ENTITY_OK', bool(v.entity))"],
