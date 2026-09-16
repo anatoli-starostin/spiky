@@ -14,6 +14,11 @@ Contents, all buffers:
 and a `meta` dict (preset constants incl. the explicit table width `bits` and weight `offset`, and geometry). Forward: compress, anchor margins and address, the per-table integers
 from pow2_read.blend_exponents, the int32 shift-add pow2_read.int_blend_read, then the folded decompress.
 
+On an RTX 5090 (compute capability 12.x) with the pow2_int8_cuda extension built, `kernel="auto"` (default) runs the int32
+accumulation in one hand-written CUDA launch ("cells": torch computes the per-table integers, bit-identical output);
+`kernel="fused"` also moves the per-table integers into the kernel (one launch, not bit-exact, see pow2_int8_cuda);
+`kernel="off"`, CPU inputs, or an unavailable extension keep the torch path above.
+
 File format (to_file / from_file): torch.save of {"format": FORMAT, "version": VERSION, "meta": ..., "buffers": ...}.
 """
 import os
@@ -45,6 +50,14 @@ class QuantisedLightFFN(nn.Module):
         self.requires_grad_(False)
         self._compiled = None
         self._compile_enabled = os.environ.get("LUT_DISABLE_COMPILE") != "1"
+        # Fused CUDA kernel (pow2_int8_cuda): "auto" uses the exact "cells" regime when the extension is available on this
+        # device and otherwise the compiled torch path; "cells" / "fused" request a regime (still falling back when the
+        # extension is absent); "off" never uses it. SPIKY_P2_KERNEL sets the default.
+        self.kernel = os.environ.get("SPIKY_P2_KERNEL", "auto")
+        self.kernel_block_n = 64
+        self.kernel_load16 = True
+        self._compiled_cells = None
+        self._kcache = None
 
     @classmethod
     @torch.no_grad()
@@ -74,6 +87,9 @@ class QuantisedLightFFN(nn.Module):
         if x.dim() != 2 or x.shape[1] != self.meta["model_dim"]:
             raise ValueError(f"x must be [N, {self.meta['model_dim']}], got {tuple(x.shape)}")
         with torch.no_grad():
+            regime = self.kernel_regime(x)
+            if regime is not None:
+                return self._forward_kernel(x, regime)
             if x.is_cuda and self._compile_enabled:
                 if self._compiled is None:
                     try:
@@ -83,6 +99,68 @@ class QuantisedLightFFN(nn.Module):
                         return self._forward_impl(x, 4096)
                 return self._compiled(x, None)
             return self._forward_impl(x, 4096)
+
+    # ------------------------------------------------------------------ fused CUDA kernel -------------------------------
+    def kernel_regime(self, x: torch.Tensor):
+        """"cells", "fused" or None (use the torch path) for this input."""
+        if self.kernel not in ("auto", "cells", "fused", "off"):
+            raise ValueError(f"kernel must be 'auto', 'cells', 'fused' or 'off', got {self.kernel!r}")
+        if self.kernel == "off" or not x.is_cuda or x.dtype != torch.float32:
+            return None
+        from . import pow2_int8_cuda
+        if pow2_int8_cuda.load() is None:
+            return None                                                     # silent fallback to the compiled path
+        return "cells" if self.kernel == "auto" else self.kernel
+
+    def _kernel_cache(self, device):
+        from . import pow2_int8_cuda
+        if self._kcache is None or self._kcache["device"] != device:
+            self._kcache = dict(
+                device=device, tables=pow2_int8_cuda.stride_tables(self.tables.to(device), self.meta["output_dim"]),
+                anchor_a=self.anchor_a.to(device=device, dtype=torch.int32).contiguous(),
+                anchor_b=self.anchor_b.to(device=device, dtype=torch.int32).contiguous(),
+                scalars=pow2_int8_cuda.fused_scalars(self.tau, self.g, self.beta, self.gamma))
+        return self._kcache
+
+    def _cells_impl(self, x: torch.Tensor):
+        """The torch half of the "cells" regime: the same ops as _forward_impl up to the per-table integers, packed."""
+        from . import pow2_int8_cuda
+        mt = self.meta
+        H, T, NAP, Din = mt["n_heads"], mt["tables_per_head"], mt["n_anchor_pairs"], mt["input_dim"]
+        N = x.shape[0]
+        z = F.linear(x, self.compress_weight.to(x.dtype), self.compress_bias.to(x.dtype)).view(N, H, Din)
+        idx_a = self.anchor_a.reshape(1, H, T * NAP).expand(N, H, T * NAP)
+        idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(N, H, T * NAP)
+        d = (torch.gather(z, 2, idx_a) - torch.gather(z, 2, idx_b)).view(N, H, T, NAP)
+        index = ((d > 0).to(torch.int64) * self.powers.view(1, 1, 1, -1)).sum(dim=-1)
+        m, mv, idx = pow2_read.blend_candidates(d, index, self.powers)
+        cast = lambda t: t.to(x.dtype)                                          # noqa: E731
+        q, k, skip, drop = pow2_read.blend_exponents(m, mv, cast(self.tau), cast(self.g), cast(self.beta),
+                                                     cast(self.gamma), self.cfg)
+        return pow2_int8_cuda.pack_cells(idx, q, k, skip, drop)
+
+    def _forward_kernel(self, x: torch.Tensor, regime: str) -> torch.Tensor:
+        from . import pow2_int8_cuda as K
+        mt = self.meta
+        H, NAP, Din, D = mt["n_heads"], mt["n_anchor_pairs"], mt["input_dim"], mt["output_dim"]
+        N = x.shape[0]
+        kc = self._kernel_cache(x.device)
+        if regime == "cells":
+            if self._compile_enabled:
+                if self._compiled_cells is None:
+                    self._compiled_cells = torch.compile(self._cells_impl, dynamic=True)
+                cells = self._compiled_cells(x)
+            else:
+                cells = self._cells_impl(x)
+            acc = K.read_cells(kc["tables"], cells, NAP, D, self.cfg["lo"], self.cfg["hi"], self.cfg["Q"],
+                               self.kernel_block_n, self.kernel_load16)
+        elif regime == "fused":
+            z = F.linear(x, self.compress_weight, self.compress_bias).view(N, H, Din)
+            acc = K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], NAP, D, self.cfg["lo"],
+                               self.cfg["hi"], self.cfg["Q"], self.kernel_block_n, self.kernel_load16)
+        else:
+            raise ValueError(f"unknown kernel regime {regime!r}")
+        return F.linear(acc.reshape(N, H * D), self.decompress_weight, self.decompress_bias)
 
     def _forward_impl(self, x: torch.Tensor, chunk_bags):
         mt = self.meta

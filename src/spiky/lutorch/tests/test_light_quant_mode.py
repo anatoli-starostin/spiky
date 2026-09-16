@@ -470,6 +470,7 @@ def test_int8_accumulation_chunked_equals_single_and_explicit_shift_add(dev):
 def test_compiled_artefact_matches_eager_artefact():
     ffn = _ffn("p2_int8", "cuda", dtype=torch.float32, seed=31)
     art = ffn.export_quantised()
+    art.kernel = "off"                                                  # this gate is the torch path, not the CUDA kernel
     x = torch.randn(300, 32, device="cuda", generator=torch.Generator(device="cuda").manual_seed(3))
     art._compile_enabled = False
     eager = art(x)
