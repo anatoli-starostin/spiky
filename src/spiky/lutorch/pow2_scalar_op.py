@@ -18,6 +18,7 @@ second cells.
 Without the extension (CPU, other GPUs, no nvcc, SPIKY_P2_CUDA_DISABLE=1) everything falls back to the torch implementation in
 pow2_read (the PR 1 path), for training and eval alike.
 """
+import os
 from typing import Tuple
 
 import torch
@@ -47,6 +48,7 @@ def ste_cell_weights(d: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: 
 # ------------------------------------------------------------------ the custom op --------------------------------------
 _registered = False
 _enabled = False        # True once the op is registered; set_enabled(False) forces the torch path (tests, A/B timing)
+_BACKWARD = os.environ.get("SPIKY_P2_BACKWARD", "recompute")   # "analytic": STAGE B experimental CUDA backward
 
 
 def _ext():
@@ -80,8 +82,27 @@ def _register():
         ctx.save_for_backward(d, tau, g, beta, gamma, cells, kq)
         ctx.Q = Q
 
+    @torch.library.custom_op(OP_NAME + "_backward", mutates_args=(), device_types="cuda")
+    def p2_scalars_backward(d: torch.Tensor, grad_psw: torch.Tensor, kq: torch.Tensor, tau: torch.Tensor, g: torch.Tensor,
+                            beta: torch.Tensor, gamma: torch.Tensor
+                            ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return tuple(_ext().scalars_backward(d, grad_psw, kq, tau.reshape(1), g.reshape(1), beta.reshape(1),
+                                             gamma.reshape(1), 0))
+
+    @p2_scalars_backward.register_fake
+    def _(d, grad_psw, kq, tau, g, beta, gamma):
+        lead = d.shape[:-1]
+        return (torch.empty_like(d), d.new_empty(lead), d.new_empty(lead), d.new_empty(lead), torch.empty_like(d))
+
     def backward(ctx, grad_psw, _grad_cells, _grad_kq):
         d, tau, g, beta, gamma, cells, kq = ctx.saved_tensors
+        if _BACKWARD == "analytic":                                   # STAGE B (experimental)
+            gd, gtau, gg, ggamma, gbeta = torch.ops.spiky_lutorch.p2_scalars_backward(
+                d, grad_psw.contiguous(), kq, tau, g, beta, gamma)
+            need = ctx.needs_input_grad
+            return (gd if need[0] else None, gtau.sum().reshape(tau.shape) if need[1] else None,
+                    gg.sum().reshape(g.shape) if need[2] else None, gbeta.sum().reshape(beta.shape) if need[3] else None,
+                    ggamma.sum().reshape(gamma.shape) if need[4] else None, None, None, None)
         q, k, skip, drop = _integers_from(cells, kq, ctx.Q)
         leaves = [x.detach().requires_grad_(nd) for x, nd in zip((d, tau, g, beta, gamma), ctx.needs_input_grad[:5])]
         with torch.enable_grad():

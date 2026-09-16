@@ -333,6 +333,103 @@ std::vector<torch::Tensor> p2_scalars(const torch::Tensor& Dm, const torch::Tens
   return {psw, cells, kq};
 }
 
+// ============================================================================================================================
+// STAGE B (experimental): analytic backward of spiky_lutorch::p2_scalars. For each table, with the forward integers (kc, q)
+// fixed, the gradient of the straight-through weights w_i = v_i + (e_i - sg e_i) b_i / max(sg e_i, 1e-30), e = s (sig(x),
+// sig(-x)), x = 2 mv / tau, s = S exp(g + gamma L), S = sum m, L = sum logsigmoid(beta m), m = |d|. The arithmetic mirrors
+// torch's eager CUDA autograd of pow2_read.ste_blend_weights (pairwise 8-element sums, sigmoid_backward a (1 - b) b,
+// log_sigmoid_backward g z / (1 + z), first-index min), so the per-element gradient can be compared bit for bit.
+// Outputs: GD [.., nap] (grad of d), per-table GTAU, GG, GGAMMA [..], per-element GBETA [.., nap]; the caller sums the
+// scalar contributions with torch.sum. ACC selects the order in which the three contributions to dL/dm meet at the argmin
+// anchor (0: (S + beta) + min, 1: (S + min) + beta, 2: (beta + min) + S).
+namespace {
+__host__ __device__ inline float sum8(const float* v, int n) {
+  if (n == 8) return ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
+  float a = 0.f;
+  for (int p = 0; p < n; ++p) a = a + v[p];
+  return a;
+}
+
+__global__ __launch_bounds__(SCALAR_TB) void p2_scalar_bwd_kernel(
+    const float* __restrict__ Dm, const float* __restrict__ GP, const int8_t* __restrict__ KQ, float* __restrict__ GD,
+    float* __restrict__ GTAU, float* __restrict__ GG, float* __restrict__ GGAMMA, float* __restrict__ GBETA, int64_t BT,
+    int nap, int acc, const float* __restrict__ TAU, const float* __restrict__ G, const float* __restrict__ BETA,
+    const float* __restrict__ GAMMA) {
+  const float tau = *TAU, g = *G, beta = *BETA, gamma = *GAMMA;
+  const int64_t bt = (int64_t)blockIdx.x * SCALAR_TB + threadIdx.x;
+  if (bt >= BT) return;
+  const float* d = Dm + bt * nap;
+  float m[8], ls[8], bm[8];
+  int mj = 0;
+  for (int p = 0; p < nap; ++p) {
+    m[p] = std::fabs(d[p]);
+    bm[p] = beta * m[p];
+    ls[p] = std::fmin(0.f, bm[p]) - std::log1p(std::exp(-std::fabs(bm[p])));
+    if (m[p] < m[mj]) mj = p;
+  }
+  const float mv = m[mj];
+  const float S = sum8(m, nap), L = sum8(ls, nap);
+  const float E = std::exp(g + gamma * L);
+  const float s = S * E;
+  const float mv2 = 2.0f * mv;
+  const float x = mv2 / tau;
+  const float sx = 1.0f / (1.0f + std::exp(-x)), snx = 1.0f / (1.0f + std::exp(x));
+  const float e1 = s * sx, e2 = s * snx;
+  const int kc = KQ[bt * 2], q = KQ[bt * 2 + 1];
+  const float b1 = std::ldexp(1.0f, kc), b2 = std::ldexp(1.0f, kc - q);
+  const float r1 = b1 / std::fmax(e1, 1e-30f), r2 = b2 / std::fmax(e2, 1e-30f);
+  const float ge1 = GP[bt * 2] * r1, ge2 = GP[bt * 2 + 1] * r2;
+  const float gs = ge1 * sx + ge2 * snx;
+  const float gsx = ge1 * s, gsnx = ge2 * s;
+  const float gx = gsx * (1.0f - sx) * sx + -(gsnx * (1.0f - snx) * snx);
+  const float gmv2 = gx / tau;
+  GTAU[bt] = -gx * ((mv2 / tau) / tau);                             // torch div_tensor_other_backward
+  const float gmv = gmv2 * 2.0f;
+  const float gS = gs * E, gE = gs * S;
+  const float gA = gE * E;
+  GG[bt] = gA;
+  GGAMMA[bt] = gA * L;
+  const float gL = gA * gamma;
+  for (int p = 0; p < nap; ++p) {
+    const float z = std::exp(-std::fabs(bm[p]));
+    const float gbm = gL * (z / (1.0f + z));
+    GBETA[bt * nap + p] = gbm * m[p];
+    const float tb = gbm * beta;
+    float gm;
+    if (p != mj) gm = gS + tb;
+    else if (acc == 0) gm = (gS + tb) + gmv;
+    else if (acc == 1) gm = (gS + gmv) + tb;
+    else gm = (tb + gmv) + gS;
+    const float sg = d[p] > 0.f ? 1.0f : (d[p] < 0.f ? -1.0f : 0.f);
+    GD[bt * nap + p] = gm * sg;
+  }
+}
+}  // namespace
+
+std::vector<torch::Tensor> p2_scalars_backward(const torch::Tensor& Dm, const torch::Tensor& GPSW, const torch::Tensor& KQ,
+                                               const torch::Tensor& TAU, const torch::Tensor& G, const torch::Tensor& BETA,
+                                               const torch::Tensor& GAMMA, int64_t acc) {
+  const auto D = Dm.contiguous(), GP = GPSW.contiguous(), kq = KQ.contiguous();
+  const int64_t nap = D.size(-1);
+  TORCH_CHECK(nap >= 1 && nap <= NAP_MAX, "nap must be in [1, 8]");
+  const int64_t BT = D.numel() / nap;
+  auto lead = D.sizes().vec();
+  lead.pop_back();
+  auto gd = torch::empty_like(D), gbeta = torch::empty_like(D);
+  auto gtau = torch::empty(lead, D.options()), gg = torch::empty(lead, D.options()), ggamma = torch::empty(lead, D.options());
+  if (BT > 0) {
+    const auto tau = TAU.contiguous(), g = G.contiguous(), beta = BETA.contiguous(), gamma = GAMMA.contiguous();
+    auto stream = at::cuda::getCurrentCUDAStream();
+    dim3 grid((unsigned)((BT + SCALAR_TB - 1) / SCALAR_TB));
+    p2_scalar_bwd_kernel<<<grid, SCALAR_TB, 0, stream>>>(
+        D.data_ptr<float>(), GP.data_ptr<float>(), kq.data_ptr<int8_t>(), gd.data_ptr<float>(), gtau.data_ptr<float>(),
+        gg.data_ptr<float>(), ggamma.data_ptr<float>(), gbeta.data_ptr<float>(), BT, (int)nap, (int)acc,
+        tau.data_ptr<float>(), g.data_ptr<float>(), beta.data_ptr<float>(), gamma.data_ptr<float>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
+  return {gd, gtau, gg, ggamma, gbeta};
+}
+
 std::map<std::string, int64_t> shared_bytes(int64_t T, int64_t nap, int64_t din, int64_t block_n, bool fused) {
   const size_t cells_bytes = (size_t)T * block_n * 3;
   const size_t smem = cells_bytes + (4 - cells_bytes % 4) % 4 +
@@ -348,4 +445,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("read", &p2_read, "fused int8 power-of-two LUT read (cells or fused-prologue regime), generic cell width D");
   m.def("shared_bytes", &shared_bytes, "dynamic shared memory per block for a configuration");
   m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the spiky_lutorch::p2_scalars op");
+  m.def("scalars_backward", &p2_scalars_backward, "STAGE B (experimental): analytic backward of spiky_lutorch::p2_scalars");
 }
