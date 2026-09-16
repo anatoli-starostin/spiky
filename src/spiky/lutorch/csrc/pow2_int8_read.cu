@@ -12,9 +12,9 @@
 //
 // Two regimes, one template (PROLOGUE):
 //
-//   PROLOGUE = false  ("cells")  -- the per-table integers come from torch (pow2_read.blend_exponents, compiled), packed
-//        as CELLS[N, H, T, 3] = (c1, c2, shifts) with shifts = sh1 | sh2 << 4. The kernel stages them into shared and
-//        accumulates. The integers are torch's own, so the output is bit-identical to pow2_read.int8_blend_read.
+//   PROLOGUE = false  ("cells")  -- the per-table integers come from the caller (the spiky_lutorch::p2_scalars op, or
+//        pow2_read without the op), packed as CELLS[N, H, T, 3] = (c1, c2, shifts) with shifts = sh1 | sh2 << 4. The
+//        kernel stages them into shared and accumulates: bit-identical to pow2_read.int8_blend_read on those integers.
 //
 //   PROLOGUE = true   ("fused")  -- the kernel also computes the per-table integers itself from the compressed code Z, in
 //        the same launch, by calling p2::table_scalars (csrc/pow2_scalars.cuh). That is the same function the
