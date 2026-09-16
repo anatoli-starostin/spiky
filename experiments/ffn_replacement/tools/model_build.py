@@ -250,7 +250,11 @@ class MinimalBlock(nn.Module):
                                          if all(k in cfg for k in _LM_INIT_KEYS) else None),
                     # learned_margin with g held FIXED at its init (exp_g_0248). Optional, default
                     # off; absent everywhere else -> every existing config builds unchanged.
-                    learned_margin_freeze_g=bool(cfg.get('lut_learned_margin_freeze_g', False)))
+                    learned_margin_freeze_g=bool(cfg.get('lut_learned_margin_freeze_g', False)),
+                    # Power-of-two quantised read (light path): None (default, absent everywhere -> every existing config
+                    # builds unchanged) | 'p2_int8'; lut_quant_overrides may set Q / L / kmax only.
+                    quant_mode=cfg.get('lut_quant_mode'),
+                    quant_overrides=cfg.get('lut_quant_overrides'))
                 if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives', 'lut_gen1_weights_init'))
                         and cfg.get('lut_impl', 'fast') != 'gen1'):
                     raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives / lut_gen1_weights_init are only valid "
