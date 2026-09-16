@@ -54,6 +54,9 @@ class QuantisedLightFFN(nn.Module):
         # device and otherwise the compiled torch path; "cells" / "fused" request a regime (still falling back when the
         # extension is absent); "off" never uses it. SPIKY_P2_KERNEL sets the default.
         self.kernel = os.environ.get("SPIKY_P2_KERNEL", "auto")
+        # "auto" uses the "cells" kernel only from this many tokens per call: below it the kernel's extra launch costs more
+        # than it saves (measured on the 5090, abl_45 geometry: cells loses at N = 256 / 512, wins from N = 1024 up).
+        self.kernel_min_tokens = 1024
         self.kernel_block_n = 64
         self.kernel_load16 = True
         self._compiled_cells = None
@@ -110,7 +113,9 @@ class QuantisedLightFFN(nn.Module):
         from . import pow2_int8_cuda
         if pow2_int8_cuda.load() is None:
             return None                                                     # silent fallback to the compiled path
-        return "cells" if self.kernel == "auto" else self.kernel
+        if self.kernel == "auto":
+            return "cells" if x.shape[0] >= self.kernel_min_tokens else None
+        return self.kernel
 
     def _kernel_cache(self, device):
         from . import pow2_int8_cuda

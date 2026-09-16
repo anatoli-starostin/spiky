@@ -144,6 +144,8 @@ def test_artefact_cells_kernel_bit_identical_to_compiled_torch_path():
         art.kernel_block_n = bn
         assert torch.equal(art(x), ref), bn
     art.kernel = "auto"
+    assert x.shape[0] < art.kernel_min_tokens and art.kernel_regime(x) is None      # small calls: compiled torch path
+    art.kernel_min_tokens = 500
     assert art.kernel_regime(x) == "cells" and torch.equal(art(x), ref)
     art.kernel = "bogus"
     with pytest.raises(ValueError):
