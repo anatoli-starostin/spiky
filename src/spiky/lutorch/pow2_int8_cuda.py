@@ -40,17 +40,6 @@ _error = None
 _tried = False
 
 
-def supported_device(device=None) -> bool:
-    """True iff a CUDA device with compute capability 12.x (sm_120) is present."""
-    if not torch.cuda.is_available():
-        return False
-    try:
-        major, _ = torch.cuda.get_device_capability(device)
-    except Exception:
-        return False
-    return major == 12
-
-
 def load():
     """Build / load the extension once. Returns the module or None (never raises)."""
     global _ext, _error, _tried
@@ -60,10 +49,10 @@ def load():
     if os.environ.get("SPIKY_P2_CUDA_DISABLE") == "1":
         _error = "disabled by SPIKY_P2_CUDA_DISABLE=1"
         return None
-    if not supported_device():
-        _error = "no compute-capability-12.x CUDA device"
-        return None
     try:
+        if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 12:
+            _error = "no compute-capability-12.x CUDA device"
+            return None
         from torch.utils.cpp_extension import load as _load
         _ext = _load(name="spiky_lutorch_pow2_int8_read", sources=[os.path.join(_CSRC, "pow2_int8_read.cu")],
                      extra_cuda_cflags=["-O3", "-std=c++20", "--fmad=false"], extra_cflags=["-O3", "-std=c++20"],
@@ -137,5 +126,4 @@ def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tens
     T = anchor_a32.shape[1]
     e = torch.empty(0, device=tables_stride.device, dtype=torch.uint8) if cells_out is None else cells_out
     return ext.read(z.contiguous(), anchor_a32, anchor_b32, e, tables_stride, N, H, T, n_anchor_pairs,
-                    1 << n_anchor_pairs, din, D, lo, hi, Q, *[t.reshape(1).contiguous() for t in scalars], block_n,
-                    True, load16)
+                    1 << n_anchor_pairs, din, D, lo, hi, Q, *scalars, block_n, True, load16)

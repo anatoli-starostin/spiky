@@ -504,28 +504,18 @@ class CompressionMultiHeadLUT(nn.Module):
         the anchors and the score / blend scalars. The training module is not modified.
 
         The fold is exact only when nothing sits between the table sum and decompress (note Section 1), so that is checked
-        here and anything else is refused."""
+        here and anything else is refused. (quant_mode itself already guarantees the light, per-head, pair-anchor, constant-
+        cell layout with a Linear compress: the constructors refuse every other one.)"""
         from .quantised_light_ffn import QuantisedLightFFN
         bad = []
-        if self.lut_impl != "light":
-            bad.append(f"lut_impl={self.lut_impl!r}")
-        lut = getattr(self, "lut_light", None)
-        if lut is None or getattr(lut, "_quant", None) is None:
-            bad.append("the light LUT has no quant_mode")
-        if not getattr(self, "light_multi_head_input", False):
-            bad.append("not the per-head (multi_head_input) light layout")
-        if getattr(self, "light_single_global", False):
-            bad.append("anchor_mode='single' shared pool")
+        if getattr(getattr(self, "lut_light", None), "_quant", None) is None:
+            bad.append("the layer has no quant_mode")
         if self.z_norm is not None:
             bad.append("z_norm (sits between compress and the lookup; not part of the note's read)")
         if self.inner_residual:
             bad.append("inner_residual (a skip between the table sum and decompress breaks the fold)")
         if not self.has_decompress or not isinstance(self.decompress, nn.Linear):
             bad.append("no Linear decompress to fold the scales into")
-        if not isinstance(self.compress, nn.Linear):
-            bad.append("no Linear compress")
-        if getattr(self, "_codebook", False):
-            bad.append("codebook cell_mode")
         if bad:
             raise ValueError("export_quantised() refuses: " + "; ".join(bad))
         return QuantisedLightFFN.from_training(self)

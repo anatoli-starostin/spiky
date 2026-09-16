@@ -105,10 +105,8 @@ def blend_candidates(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor)
     least certain bit."""
     m = d.abs()
     mv, mj = m.min(dim=-1, keepdim=True)
-    bits = (d.detach() > 0).to(torch.int64)
-    pw = powers[mj]
-    bsel = torch.gather(bits, -1, mj)
-    idx = torch.cat([index.unsqueeze(-1), index.unsqueeze(-1) + pw * (1 - 2 * bsel)], dim=-1)
+    bsel = (torch.gather(d, -1, mj) > 0).to(torch.int64)
+    idx = torch.cat([index.unsqueeze(-1), index.unsqueeze(-1) + powers[mj] * (1 - 2 * bsel)], dim=-1)
     return m, mv, idx
 
 
@@ -117,9 +115,8 @@ def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: tor
                     gamma: torch.Tensor, cfg: dict):
     """The note's per-table integers. m [..., NAP], mv [..., 1]. Returns float tensors of integers q, k [...] (k already
     clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read)."""
-    m, mv = m.detach(), mv.detach()
-    q = q_exponent(mv.squeeze(-1), tau.detach())
-    kr = round_half_up(log2_score(m, g.detach(), beta.detach(), gamma.detach()) - c_q(q))
+    q = q_exponent(mv.squeeze(-1), tau)
+    kr = round_half_up(log2_score(m, g, beta, gamma) - c_q(q))
     skip = kr < cfg["lo"]
     k = torch.clamp(kr, cfg["lo"], cfg["hi"])
     drop = q > cfg["Q"]
@@ -147,7 +144,7 @@ def head_chan_exponents(W: torch.Tensor, n_heads: int, bits: int, offset: int) -
     """e[h, c] = ceil(log2 max |W over head h's tables and cells, channel c|) - (bits - 1) + offset  (note eq. 7).
     W [n_heads * T, K, D] head-major. Returns a float tensor of integers [n_heads, D]."""
     D = W.shape[-1]
-    A = W.detach().abs().reshape(n_heads, -1, D).amax(dim=1)
+    A = W.abs().reshape(n_heads, -1, D).amax(dim=1)
     return torch.ceil(torch.log2(A.clamp_min(1e-30))) - (bits - 1) + offset
 
 
@@ -160,7 +157,7 @@ def _scale(e: torch.Tensor, n_tables: int, dtype) -> torch.Tensor:
 def quantise_tables(W: torch.Tensor, e: torch.Tensor, bits: int) -> torch.Tensor:
     """W_hat = clamp(round(W / 2^e), -2^(b-1), 2^(b-1) - 1)  (note eq. 8), integers in W's float dtype, [n_tables, K, D]."""
     lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
-    return torch.clamp(round_half_up(W.detach() / _scale(e, W.shape[0], W.dtype)), lo, hi)
+    return torch.clamp(round_half_up(W / _scale(e, W.shape[0], W.dtype)), lo, hi)
 
 
 def ste_tables(W: torch.Tensor, n_heads: int, bits: int, offset: int) -> torch.Tensor:
@@ -191,17 +188,11 @@ def pack_int8_rows(Wint: torch.Tensor) -> torch.Tensor:
 # ------------------------------------------------------------------ eval: integer shift-add read ------------------------
 def shift_groups(q: torch.Tensor, k: torch.Tensor, skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
     """Per cell read [..., 2]: the left shift k' + 6 (first cell) and k' + 6 - q (second cell), or the discard group
-    N_SHIFTS for a cell that is not read. Width-independent; shared by every integer reader. The range [0, 10] of every read
-    shift is guaranteed by resolve_quant_config (window inside [-3, 4], Q <= 3); check_shift_groups asserts it (tests)."""
+    N_SHIFTS for a cell that is not read. The range [0, 10] of every read shift is guaranteed by resolve_quant_config
+    (window inside [-3, 4], Q <= 3)."""
     sh = torch.stack([k + FIXED_POINT_SHIFT, k + FIXED_POINT_SHIFT - q], dim=-1)
     keep = torch.stack([~skip, ~(skip | drop)], dim=-1)
     return torch.where(keep, sh, torch.full_like(sh, float(N_SHIFTS))).to(torch.int64)
-
-
-def check_shift_groups(group: torch.Tensor) -> None:
-    """Raise if a read cell's shift left [0, 10] (i.e. the window or Q escaped the note's range). Not on the hot path."""
-    if bool(((group < 0) | (group > N_SHIFTS)).any()):
-        raise ValueError("a read cell has a shift outside [0, 10]; the window or Q is outside the note's range")
 
 
 @torch.no_grad()
@@ -245,8 +236,3 @@ def int8_blend_read(packed: torch.Tensor, D: int, flat_idx: torch.Tensor, group:
         return int8_accumulate(packed, flat_idx, group)
     step = max(1, chunk_bags // flat_idx.shape[1])
     return torch.cat([int8_accumulate(packed, flat_idx[i:i + step], group[i:i + step]) for i in range(0, N, step)])
-
-
-def int_read_to_float(acc: torch.Tensor, e: torch.Tensor, dtype=torch.float32) -> torch.Tensor:
-    """acc [N, H, D] int32 in units of 2^-6 -> y_h[c] = acc * 2^(e[h, c] - 6), float."""
-    return acc.to(dtype) * torch.pow(2.0, e.to(dtype) - FIXED_POINT_SHIFT).unsqueeze(0)

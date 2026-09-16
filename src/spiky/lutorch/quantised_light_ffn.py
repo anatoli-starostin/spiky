@@ -64,19 +64,18 @@ class QuantisedLightFFN(nn.Module):
         lut = ffn.lut_light
         cfg = lut._quant
         H, T, D, NAP = lut.n_heads, lut.tables_per_head, lut.output_dim, lut.n_anchor_pairs
-        e, packed, bits = lut.quantised_tables()
+        e, packed = lut.quantised_tables()
         tau, g, beta, gamma = lut._quant_scalars()
-        W_dec = ffn.decompress.weight.detach().clone()                          # [E, H * D]
+        W_dec = ffn.decompress.weight                                           # [E, H * D]
         fold = torch.pow(2.0, e.to(W_dec.dtype) - pow2_read.FIXED_POINT_SHIFT).reshape(1, H * D)
         meta = dict(cfg, n_heads=H, tables_per_head=T, output_dim=D, input_dim=lut.input_dim, n_anchor_pairs=NAP,
                     table_size=lut.table_size, model_dim=ffn.input_dim, format=FORMAT, version=VERSION)
         buffers = dict(
-            compress_weight=ffn.compress.weight.detach().clone(), compress_bias=ffn.compress.bias.detach().clone(),
-            anchor_a=lut.anchor_a.detach().clone(), anchor_b=lut.anchor_b.detach().clone(),
-            powers=lut.powers.detach().clone(), table_offset=lut.table_offset.detach().clone(),
-            tables=packed.clone(),
-            tau=tau.detach().clone(), g=g.detach().clone(), beta=beta.detach().clone(), gamma=gamma.detach().clone(),
-            decompress_weight=W_dec * fold, decompress_bias=ffn.decompress.bias.detach().clone())
+            compress_weight=ffn.compress.weight.clone(), compress_bias=ffn.compress.bias.clone(),
+            anchor_a=lut.anchor_a.clone(), anchor_b=lut.anchor_b.clone(),
+            powers=lut.powers.clone(), table_offset=lut.table_offset.clone(), tables=packed,
+            tau=tau.clone(), g=g.clone(), beta=beta.clone(), gamma=gamma.clone(),
+            decompress_weight=W_dec * fold, decompress_bias=ffn.decompress.bias.clone())
         return cls(meta, buffers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -116,14 +115,10 @@ class QuantisedLightFFN(nn.Module):
     # ------------------------------------------------------------------ torch read ------------------------------------
     def _forward_torch(self, x: torch.Tensor) -> torch.Tensor:
         """The torch read: compiled on CUDA (one generated kernel over the int8 bytes); eager with the bags chunked elsewhere,
-        with LUT_DISABLE_COMPILE=1, or if compilation fails."""
+        or with LUT_DISABLE_COMPILE=1."""
         if x.is_cuda and self._compile_enabled:
             if self._compiled is None:
-                try:
-                    self._compiled = torch.compile(self._forward_impl, dynamic=True)
-                except Exception:
-                    self._compile_enabled = False
-                    return self._forward_impl(x, 4096)
+                self._compiled = torch.compile(self._forward_impl, dynamic=True)
             return self._compiled(x, None)
         return self._forward_impl(x, 4096)
 
@@ -156,7 +151,8 @@ class QuantisedLightFFN(nn.Module):
         """TEST ORACLE: the packed per-table integers uint8 [N, H, T, 3] for pow2_int8_cuda.read_cells, computed outside the
         fused kernel (by the p2_scalars op when available, else pow2_read)."""
         d, index = self._margins(x)
-        return pow2_scalar_op.table_cells(d, index, self.powers, *self._scalars(x.dtype), self.cfg)
+        return pow2_int8_cuda.pack_cells(*pow2_scalar_op.table_integers(d, index, self.powers, *self._scalars(x.dtype),
+                                                                        self.cfg))
 
     def to_file(self, path: str) -> None:
         torch.save({"format": FORMAT, "version": VERSION, "meta": self.meta,

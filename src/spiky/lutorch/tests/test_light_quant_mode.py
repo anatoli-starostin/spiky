@@ -455,15 +455,13 @@ def test_int8_accumulation_chunked_equals_single_and_explicit_shift_add(dev):
     skip = (torch.rand(N, H, T, generator=g) < 0.2).to(dev)
     drop = q > 3
     group = P.shift_groups(q, k, skip, drop)
-    P.check_shift_groups(group)
+    assert bool(((group >= 0) & (group <= P.N_SHIFTS)).all())
     one = P.int8_blend_read(packed, D, fi, group, chunk_bags=None)
     chunked = P.int8_blend_read(packed, D, fi, group, chunk_bags=7)
     rows = packed[fi].to(torch.int64)                                  # [N, H, T, 2, D]
     w = torch.where(group < P.N_SHIFTS, torch.pow(2, group.clamp(max=62)), torch.zeros_like(group))
     explicit = (rows * w.unsqueeze(-1)).sum(dim=(2, 3))
     assert torch.equal(one, chunked) and torch.equal(one.to(torch.int64), explicit)
-    with pytest.raises(ValueError):
-        P.check_shift_groups(torch.full((1, 1, 1, 2), -1, dtype=torch.long, device=dev))
 
 
 @pytest.mark.skipif(not CUDA, reason="CUDA required")

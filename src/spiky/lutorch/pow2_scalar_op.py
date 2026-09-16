@@ -5,7 +5,7 @@ registered custom op `spiky_lutorch::p2_scalars`, whose forward is p2::table_sca
 function the inference kernel calls inline:
 
   * LightMultiHeadLUT quant_mode training forward      -> cell_weights (the op, differentiable)
-  * LightMultiHeadLUT.forward_int, the test references -> table_integers / table_cells (the op, no grad)
+  * LightMultiHeadLUT.forward_int, QuantisedLightFFN's torch read -> table_integers (the op, no grad)
   * QuantisedLightFFN on CUDA                          -> pow2_int8_cuda.read_fused, calling the same function in-kernel
 
 so the training forward, forward_int and the exported artefact take identical integers by construction.
@@ -22,9 +22,9 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 
+from . import pow2_int8_cuda
 from . import pow2_read
 
-OP_NAME = "spiky_lutorch::p2_scalars"
 DISCARD = 15                                 # shift code of a cell that is not read (csrc/pow2_scalars.cuh)
 
 
@@ -48,25 +48,20 @@ _registered = False
 _enabled = False        # True once the op is registered; set_enabled(False) forces the torch definition (tests)
 
 
-def _ext():
-    from . import pow2_int8_cuda
-    return pow2_int8_cuda.load()
-
-
-def _register():
-    """Register spiky_lutorch::p2_scalars (once), only when the extension is available."""
+def ensure_registered() -> bool:
+    """Build / load the extension and register spiky_lutorch::p2_scalars, once and eagerly (call before any torch.compile'd
+    forward). False when the extension is unavailable (pow2_int8_cuda.load never raises)."""
     global _registered
     if _registered:
         return True
-    if _ext() is None:
+    ext = pow2_int8_cuda.load()
+    if ext is None:
         return False
 
-    @torch.library.custom_op(OP_NAME, mutates_args=(), device_types="cuda")
+    @torch.library.custom_op("spiky_lutorch::p2_scalars", mutates_args=(), device_types="cuda")
     def p2_scalars(d: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor,
                    lo: int, hi: int, Q: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        psw, cells, kq = _ext().scalars(d, tau.reshape(1), g.reshape(1), beta.reshape(1), gamma.reshape(1),
-                                                       lo, hi, Q)
-        return psw, cells, kq
+        return tuple(ext.scalars(d, tau.reshape(1), g.reshape(1), beta.reshape(1), gamma.reshape(1), lo, hi, Q))
 
     @p2_scalars.register_fake
     def _(d, tau, g, beta, gamma, lo, hi, Q):
@@ -85,8 +80,7 @@ def _register():
         leaves = [x.detach().requires_grad_(nd) for x, nd in zip((d, tau, g, beta, gamma), ctx.needs_input_grad[:5])]
         with torch.enable_grad():
             psw = ste_cell_weights(*leaves, q, k, skip, drop)
-            wanted = [x for x in leaves if x.requires_grad]
-            grads = iter(torch.autograd.grad(psw, wanted, grad_psw, allow_unused=True) if wanted else ())
+            grads = iter(torch.autograd.grad(psw, [x for x in leaves if x.requires_grad], grad_psw, allow_unused=True))
         out = [next(grads) if x.requires_grad else None for x in leaves]
         return (*out, None, None, None)
 
@@ -109,14 +103,6 @@ def set_enabled(flag: bool) -> None:
     """Use the op (True, the default once registered) or force the torch definition (False) for every consumer."""
     global _enabled
     _enabled = bool(flag) and _registered
-
-
-def ensure_registered() -> bool:
-    """Build / load the extension and register the op, eagerly (call before any torch.compile'd forward). Never raises."""
-    try:
-        return _register()
-    except Exception:
-        return False
 
 
 def op_available(d: torch.Tensor) -> bool:
@@ -144,13 +130,3 @@ def table_integers(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor, t
         return (cells[..., :2].to(torch.int64), *_integers_from(cells, kq, cfg["Q"]))
     m, mv, idx = pow2_read.blend_candidates(d, index, powers)
     return (idx, *pow2_read.blend_exponents(m, mv, tau, g, beta, gamma, cfg))
-
-
-@torch.no_grad()
-def table_cells(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor, tau, g, beta, gamma, cfg: dict) -> torch.Tensor:
-    """Eval, cells regime: uint8 [..., 3] (c1, c2, sh1 | sh2 << 4) for the CUDA accumulation."""
-    if op_available(d):
-        return torch.ops.spiky_lutorch.p2_scalars(d, tau, g, beta, gamma, cfg["lo"], cfg["hi"], cfg["Q"])[1]
-    from . import pow2_int8_cuda
-    m, mv, idx = pow2_read.blend_candidates(d, index, powers)
-    return pow2_int8_cuda.pack_cells(idx, *pow2_read.blend_exponents(m, mv, tau, g, beta, gamma, cfg))

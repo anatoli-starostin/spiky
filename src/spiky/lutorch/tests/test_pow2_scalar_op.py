@@ -63,7 +63,7 @@ def test_op_integers_equal_fused_kernel_integers(scale):
     z = torch.randn(3000, 4, 48, device="cuda", generator=torch.Generator(device="cuda").manual_seed(7)) * scale
     tau, g, beta, gamma = lut._quant_scalars()
     with torch.no_grad():
-        cells_op = OP.table_cells(_margins(lut, z), None, lut.powers, tau, g, beta, gamma, lut._quant)
+        cells_op = torch.ops.spiky_lutorch.p2_scalars(_margins(lut, z), tau, g, beta, gamma, -3, 4, 3)[1]
         kc = art._kernel_cache(z.device)
         cells_k = torch.empty_like(cells_op)
         K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 8, 48, -3, 4, 3, cells_out=cells_k)
@@ -93,7 +93,7 @@ def test_op_integers_equal_fused_kernel_on_rounding_boundaries():
             h, j = n % 4, (n * 7) % a0.shape[1]
             z[n, h, a0[h, j]] = z[n, h, b0[h, j]] + t
         d = _margins(lut, z)
-        cells_op = OP.table_cells(d, None, lut.powers, tau, g, beta, gamma, lut._quant)
+        cells_op = torch.ops.spiky_lutorch.p2_scalars(d, tau, g, beta, gamma, -3, 4, 3)[1]
         kc = art._kernel_cache(z.device)
         cells_k = torch.empty_like(cells_op)
         K.read_fused(z, kc["anchor_a"], kc["anchor_b"], kc["tables"], kc["scalars"], 8, 48, -3, 4, 3, cells_out=cells_k)
