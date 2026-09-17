@@ -30,15 +30,20 @@
 // parameter covering D in (16 (UPR - 1), 16 UPR].
 //
 // Memory placement (per block of BLOCK_N tokens and one head):
-//   shared, phase 0 : the block's z rows and the head's anchors (read_fused), or its cells (read_cells)
+//   shared, phase 0 : the block's z rows (fp32, or the bf16 pairs of a bf16 code, converted at use) and the head's anchors as
+//                     one byte each (read_fused), or its cells (read_cells) -- 32 kB per block at BLOCK_N 64, T 128, din 48 on
+//                     the bf16 path (three blocks in the 100 kB of shared per multiprocessor), 38 kB on the fp32 path
 //   shared, phase 1 : cells[t * BLOCK_N + lt] = (c1, c2, shifts)                      (read_fused computes them here)
 //   registers        : the float scalars (tau, g, beta, gamma, read once from their one-element tensors); in phase 2 the 16 int32
-//                     accumulators of the thread's unit and the current 16-byte row load
-//   global           : int8 rows (one 16-byte int4 load per unit per cell; LOAD16=false: four char4 loads), float output
+//                     accumulators of the thread's unit, the current table's two 16-byte row loads and the next table's
+//                     first-row load (row-ahead)
+//   global           : int8 rows (one 16-byte int4 load per unit per cell; LOAD16=false: four char4 loads), output (float, or
+//                     bf16 when the code is bf16)
 
 #include <torch/extension.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 
 #include <cmath>
 
@@ -49,11 +54,11 @@ constexpr int NAP_MAX = 8;      // c1 / c2 fit a byte
 constexpr int UPR_MAX = 8;      // D <= 128
 using p2::DISCARD;
 
-template <int BLOCK_N, int UPR, bool PROLOGUE, bool LOAD16>
+template <int BLOCK_N, int UPR, bool PROLOGUE, bool LOAD16, bool B16>
 __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
-    const float* __restrict__ Z, const int* __restrict__ Aa, const int* __restrict__ Ab,
+    const void* __restrict__ Zv, const int* __restrict__ Aa, const int* __restrict__ Ab,
     const uint8_t* __restrict__ CELLS, uint8_t* __restrict__ CELLS_OUT, const int8_t* __restrict__ W,
-    float* __restrict__ OUT,
+    void* __restrict__ OUTv,
     int N, int H, int T, int nap, int K, int din, int D, int stride, int lo, int hi, int Q,
     const float* __restrict__ TAU, const float* __restrict__ G, const float* __restrict__ BETA,
     const float* __restrict__ GAMMA) {
@@ -61,21 +66,35 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
   extern __shared__ char smem[];
   uint8_t* csh = reinterpret_cast<uint8_t*>(smem);                     // cells [T * BLOCK_N * 3]
   const size_t cells_bytes = (size_t)T * BLOCK_N * 3;
-  float* zsh = reinterpret_cast<float*>(csh + cells_bytes + (4 - cells_bytes % 4) % 4);
-  int* ash = reinterpret_cast<int*>(zsh + BLOCK_N * din);
-  int* bsh = ash + T * nap;
+  // shared after the cells: the block's code (fp32, or bf16 pairs on the bf16 path), then the head's anchors as uint8
+  const size_t zoff = cells_bytes + (4 - cells_bytes % 4) % 4;
+  const int dh = din / 2;
+  float* zsh = reinterpret_cast<float*>(csh + zoff);
+  __nv_bfloat162* zsh2 = reinterpret_cast<__nv_bfloat162*>(csh + zoff);
+  const size_t zbytes = (size_t)BLOCK_N * din * (B16 ? 2 : 4);
+  uint8_t* ash = csh + zoff + zbytes;
+  uint8_t* bsh = ash + T * nap;
 
   const int h = blockIdx.y, n0 = blockIdx.x * BLOCK_N, t0 = h * T;
 
   // ---- phase 0: stage the block's inputs into shared
   if constexpr (PROLOGUE) {
-    for (int u = threadIdx.x; u < BLOCK_N * din; u += NT) {
-      const int lt = u / din, c = u % din, gt = n0 + lt;
-      zsh[u] = (gt < N) ? Z[((size_t)gt * H + h) * din + c] : 0.f;
+    if constexpr (B16) {                                             // bf16 code: staged as bf16, converted at use (exact)
+      const __nv_bfloat162* Z2 = reinterpret_cast<const __nv_bfloat162*>(Zv);
+      for (int u = threadIdx.x; u < BLOCK_N * dh; u += NT) {
+        const int lt = u / dh, pr = u % dh, gt = n0 + lt;
+        if (gt < N) zsh2[lt * dh + pr] = Z2[((size_t)gt * H + h) * dh + pr];
+      }
+    } else {
+      const float* Z = reinterpret_cast<const float*>(Zv);
+      for (int u = threadIdx.x; u < BLOCK_N * din; u += NT) {
+        const int lt = u / din, c = u % din, gt = n0 + lt;
+        zsh[u] = (gt < N) ? Z[((size_t)gt * H + h) * din + c] : 0.f;
+      }
     }
-    for (int u = threadIdx.x; u < T * nap; u += NT) {
-      ash[u] = Aa[(size_t)t0 * nap + u];
-      bsh[u] = Ab[(size_t)t0 * nap + u];
+    for (int u = threadIdx.x; u < T * nap; u += NT) {                // column indices < din <= 256: one byte each
+      ash[u] = (uint8_t)Aa[(size_t)t0 * nap + u];
+      bsh[u] = (uint8_t)Ab[(size_t)t0 * nap + u];
     }
   } else {
     for (int u = threadIdx.x; u < BLOCK_N * T; u += NT) {
@@ -103,11 +122,20 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
         csh[dst + 2] = DISCARD | (DISCARD << 4);
         continue;
       }
-      const float* zr = zsh + lt * din;
-      const int* ap = ash + t * nap;
-      const int* bp = bsh + t * nap;
+      const uint8_t* ap = ash + t * nap;
+      const uint8_t* bp = bsh + t * nap;
       float dd[8];
-      for (int p = 0; p < nap; ++p) dd[p] = zr[ap[p]] - zr[bp[p]];
+      if constexpr (B16) {
+        const __nv_bfloat162* zr2 = zsh2 + lt * dh;
+        for (int p = 0; p < nap; ++p) {
+          const float2 fa = __bfloat1622float2(zr2[ap[p] >> 1]);
+          const float2 fb = __bfloat1622float2(zr2[bp[p] >> 1]);
+          dd[p] = ((ap[p] & 1) ? fa.y : fa.x) - ((bp[p] & 1) ? fb.y : fb.x);
+        }
+      } else {
+        const float* zr = zsh + lt * din;
+        for (int p = 0; p < nap; ++p) dd[p] = zr[ap[p]] - zr[bp[p]];
+      }
       const p2::TableScalars r = p2::table_scalars(dd, nap, tau, g, beta, gamma, lo, hi, Q);
       csh[dst] = r.c1;
       csh[dst + 1] = r.c2;
@@ -135,6 +163,37 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
 
   const size_t pitch = (size_t)K * stride;
   const size_t base = (size_t)t0 * pitch;
+  if constexpr (LOAD16) {
+    // Row-ahead: the next table's first-cell load is issued while the current table is accumulated (the staged cells make
+    // its address known), so it is in flight rather than started on demand. The ahead address is masked into the table so a
+    // discarded cell's unused byte (read_cells takes caller-supplied cells) can never address outside W; every cell that is
+    // actually read is < K, so the mask never changes a value that is accumulated.
+    const size_t kmask = (size_t)K - 1;
+    int4 cur = *reinterpret_cast<const int4*>(W + base + ((size_t)csh[(size_t)ltok * 3] & kmask) * stride + (size_t)lane0);
+    for (int t = 0; t < T; ++t) {
+      const uint8_t* cell = csh + ((size_t)t * BLOCK_N + ltok) * 3;
+      const int sh1 = cell[2] & 15, sh2 = cell[2] >> 4;
+      const size_t tb = base + (size_t)t * pitch;
+      int4 nxt = cur;
+      if (t + 1 < T)
+        nxt = *reinterpret_cast<const int4*>(W + tb + pitch + ((size_t)cell[(size_t)BLOCK_N * 3] & kmask) * stride + (size_t)lane0);
+      // Branchless: both rows are loaded for every table and a discarded cell is masked to 0 instead of skipped, so the
+      // data-dependent skip / drop pattern never diverges the lanes (the second address is masked into the table, as above).
+      for (int r = 0; r < 2; ++r) {
+        const int sh = (r == 0) ? sh1 : sh2;
+        const int m = (sh == DISCARD) ? 0 : -1;
+        const int s = sh & 15;
+        const int4 v = (r == 0) ? cur : *reinterpret_cast<const int4*>(W + tb + ((size_t)cell[1] & kmask) * stride + (size_t)lane0);
+        const unsigned w4[4] = {(unsigned)v.x, (unsigned)v.y, (unsigned)v.z, (unsigned)v.w};
+#pragma unroll
+        for (int j = 0; j < 16; ++j) {
+          const int lane = (j < nl) ? (int)(int8_t)(uint8_t)(w4[j >> 2] >> (8 * (j & 3))) : 0;
+          acc[j] += (lane & m) << s;
+        }
+      }
+      cur = nxt;
+    }
+  } else
   for (int t = 0; t < T; ++t) {
     const uint8_t* cell = csh + ((size_t)t * BLOCK_N + ltok) * 3;
     const int sh1 = cell[2] & 15, sh2 = cell[2] >> 4;
@@ -143,15 +202,7 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
       const int sh = (r == 0) ? sh1 : sh2;
       if (sh == DISCARD) continue;
       const int8_t* row = W + tb + (size_t)cell[r] * stride + (size_t)lane0;
-      if constexpr (LOAD16) {
-        const int4 v = *reinterpret_cast<const int4*>(row);          // one 16-byte load into a register
-        const unsigned w4[4] = {(unsigned)v.x, (unsigned)v.y, (unsigned)v.z, (unsigned)v.w};
-#pragma unroll
-        for (int j = 0; j < 16; ++j) {                               // sign-extend in registers, shift, add
-          const int lane = (j < nl) ? (int)(int8_t)(uint8_t)(w4[j >> 2] >> (8 * (j & 3))) : 0;
-          acc[j] += lane << sh;
-        }
-      } else {
+      {
         const char4* c4 = reinterpret_cast<const char4*>(row); // four 4-byte loads
 #pragma unroll
         for (int j = 0; j < 4; ++j) {
@@ -166,20 +217,33 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
     }
   }
   const size_t ob = ((size_t)tok * H + h) * D + (size_t)lane0;
-  if (nl == 16 && D % 16 == 0) {                                     // output row 16-byte aligned: vector writes
-    float4* const o4 = reinterpret_cast<float4*>(OUT + ob);
+  if constexpr (B16) {                                               // accumulators written as bf16: int32 -> float -> bf16
+    __nv_bfloat16* const O16 = reinterpret_cast<__nv_bfloat16*>(OUTv);  // (round-to-nearest-even, as torch's fp32 -> bf16 cast)
+    if (nl == 16) {
+      __nv_bfloat162* const o2 = reinterpret_cast<__nv_bfloat162*>(O16 + ob);
 #pragma unroll
-    for (int j = 0; j < 4; ++j)
-      o4[j] = make_float4((float)acc[4 * j], (float)acc[4 * j + 1], (float)acc[4 * j + 2], (float)acc[4 * j + 3]);
+      for (int j = 0; j < 8; ++j) o2[j] = __float22bfloat162_rn(make_float2((float)acc[2 * j], (float)acc[2 * j + 1]));
+    } else {
+      for (int j = 0; j < nl; ++j) O16[ob + j] = __float2bfloat16((float)acc[j]);
+    }
   } else {
-    for (int j = 0; j < nl; ++j) OUT[ob + j] = (float)acc[j];
+    float* const OUT = reinterpret_cast<float*>(OUTv);
+    if (nl == 16 && D % 16 == 0) {                                   // output row 16-byte aligned: vector writes
+      float4* const o4 = reinterpret_cast<float4*>(OUT + ob);
+#pragma unroll
+      for (int j = 0; j < 4; ++j)
+        o4[j] = make_float4((float)acc[4 * j], (float)acc[4 * j + 1], (float)acc[4 * j + 2], (float)acc[4 * j + 3]);
+    } else {
+      for (int j = 0; j < nl; ++j) OUT[ob + j] = (float)acc[j];
+    }
   }
 }
 }  // namespace
 
-// Z [N, H, din] fp32 (read_fused) or empty; Aa, Ab [H, T, nap] int32 local column indices (read_fused) or empty; CELLS
+// Z [N, H, din] fp32 or bf16 (read_fused) or empty; Aa, Ab [H, T, nap] int32 local column indices (read_fused) or empty; CELLS
 // [N, H, T, 3] uint8 (read_cells input; read_fused: optional output) or empty; W [H * T * K, stride] int8 with stride = ceil(D / 16) * 16.
-// Returns float32 [N, H, D] = the int32 accumulators, converted once.
+// Returns [N, H, D] = the int32 accumulators, converted once: float32, or bf16 when Z is bf16 (Z converted to fp32 on load,
+// every integer unchanged; int32 -> float -> bf16 round-to-nearest-even, the rounding of torch's fp32 -> bf16 cast).
 torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const torch::Tensor& Ab, const torch::Tensor& CELLS,
                       const torch::Tensor& W, int64_t N, int64_t H, int64_t T, int64_t nap, int64_t K, int64_t din,
                       int64_t D, int64_t lo, int64_t hi, int64_t Q, const torch::Tensor& TAU, const torch::Tensor& G,
@@ -192,9 +256,12 @@ torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const tor
               "W must be contiguous int8 CUDA [H*T*K, ceil(D/16)*16]");
   TORCH_CHECK(nap >= 1 && nap <= NAP_MAX && K == (1 << nap), "nap must be in [1, 8] with K = 2^nap");
   TORCH_CHECK(lo >= -3 && hi <= 4 && lo <= hi && Q >= 0 && Q <= 3, "window must lie in [-3, 4] and Q in [0, 3]");
+  const bool b16 = fused && Z.defined() && Z.scalar_type() == torch::kBFloat16;
   if (fused) {
-    TORCH_CHECK(Z.is_cuda() && Z.scalar_type() == torch::kFloat32 && Z.is_contiguous() && Z.dim() == 3 &&
-                    Z.size(0) == N && Z.size(1) == H && Z.size(2) == din, "Z must be contiguous fp32 CUDA [N, H, din]");
+    TORCH_CHECK(Z.is_cuda() && (Z.scalar_type() == torch::kFloat32 || b16) && Z.is_contiguous() && Z.dim() == 3 &&
+                    Z.size(0) == N && Z.size(1) == H && Z.size(2) == din, "Z must be contiguous fp32 or bf16 CUDA [N, H, din]");
+    TORCH_CHECK(!b16 || din % 2 == 0, "a bf16 Z needs an even din");
+    TORCH_CHECK(din <= 256, "anchor column indices are staged as one byte: din must be <= 256");
     TORCH_CHECK(Aa.is_cuda() && Ab.is_cuda() && Aa.scalar_type() == torch::kInt32 && Ab.scalar_type() == torch::kInt32 &&
                     Aa.is_contiguous() && Ab.is_contiguous() && Aa.numel() == H * T * nap && Ab.numel() == H * T * nap,
                 "anchors must be contiguous int32 CUDA [H, T, nap]");
@@ -203,17 +270,17 @@ torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const tor
     TORCH_CHECK(CELLS.is_cuda() && CELLS.scalar_type() == torch::kUInt8 && CELLS.is_contiguous() &&
                     CELLS.numel() == N * H * T * 3, "CELLS must be contiguous uint8 CUDA [N, H, T, 3]");
   }
-  auto out = torch::empty({N, H, D}, W.options().dtype(torch::kFloat32));
+  auto out = torch::empty({N, H, D}, W.options().dtype(b16 ? torch::kBFloat16 : torch::kFloat32));
   if (N == 0) return out;
   auto stream = at::cuda::getCurrentCUDAStream();
-  const float* zp = fused ? Z.data_ptr<float>() : nullptr;
+  const void* zp = fused ? Z.data_ptr() : nullptr;
   const int* ap = fused ? Aa.data_ptr<int>() : nullptr;
   const int* bp = fused ? Ab.data_ptr<int>() : nullptr;
   const uint8_t* cp = fused ? nullptr : CELLS.data_ptr<uint8_t>();
   // read_fused: a CELLS tensor, when given, is an OUTPUT receiving the kernel's own per-table integers (tests)
   uint8_t* cop = (fused && CELLS.defined() && CELLS.numel() > 0) ? CELLS.data_ptr<uint8_t>() : nullptr;
   const int8_t* wp = W.data_ptr<int8_t>();
-  float* op = out.data_ptr<float>();
+  void* op = out.data_ptr();
   const float* taup = nullptr;
   const float* gp = nullptr;
   const float* betap = nullptr;
@@ -229,17 +296,22 @@ torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const tor
   }
   const size_t cells_bytes = (size_t)T * block_n * 3;
   const size_t smem = cells_bytes + (4 - cells_bytes % 4) % 4 +
-                      (fused ? (size_t)block_n * din * sizeof(float) + (size_t)2 * T * nap * sizeof(int) : 0);
+                      (fused ? (size_t)block_n * din * (b16 ? 2 : 4) + (size_t)2 * T * nap : 0);
 
-#define LF(BN, U, PRO, L16)                                                                                        \
+#define LFB(BN, U, PRO, L16, B)                                                                                    \
   do {                                                                                                             \
     constexpr int NTH = (BN) * (U);                                                                                \
     if (NTH > 1024) TORCH_CHECK(false, "block_n * units per row exceeds 1024 threads; use a smaller block_n");     \
-    cudaFuncSetAttribute(p2_int8_kernel<BN, U, PRO, L16>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); \
+    cudaFuncSetAttribute(p2_int8_kernel<BN, U, PRO, L16, B>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); \
     dim3 grid((unsigned)((N + (BN) - 1) / (BN)), (unsigned)H);                                                     \
-    p2_int8_kernel<BN, U, PRO, L16><<<grid, NTH, smem, stream>>>(                                                  \
+    p2_int8_kernel<BN, U, PRO, L16, B><<<grid, NTH, smem, stream>>>(                                               \
         zp, ap, bp, cp, cop, wp, op, (int)N, (int)H, (int)T, (int)nap, (int)K, (int)din, (int)D, (int)stride, (int)lo,  \
         (int)hi, (int)Q, taup, gp, betap, gammap);                          \
+  } while (0)
+#define LF(BN, U, PRO, L16)                                                  \
+  do {                                                                       \
+    if (b16) LFB(BN, U, PRO, L16, true);                                     \
+    else LFB(BN, U, PRO, L16, false);                                        \
   } while (0)
 #define PICKU(BN, U)                                                     \
   do {                                                                   \
@@ -333,10 +405,10 @@ std::vector<torch::Tensor> p2_scalars(const torch::Tensor& Dm, const torch::Tens
   return {psw, cells, kq};
 }
 
-std::map<std::string, int64_t> shared_bytes(int64_t T, int64_t nap, int64_t din, int64_t block_n, bool fused) {
+std::map<std::string, int64_t> shared_bytes(int64_t T, int64_t nap, int64_t din, int64_t block_n, bool fused, bool b16) {
   const size_t cells_bytes = (size_t)T * block_n * 3;
   const size_t smem = cells_bytes + (4 - cells_bytes % 4) % 4 +
-                      (fused ? (size_t)block_n * din * sizeof(float) + (size_t)2 * T * nap * sizeof(int) : 0);
+                      (fused ? (size_t)block_n * din * (b16 ? 2 : 4) + (size_t)2 * T * nap : 0);
   int dev = 0, maxsm = 0, reserved = 0;
   cudaGetDevice(&dev);
   cudaDeviceGetAttribute(&maxsm, cudaDevAttrMaxSharedMemoryPerBlock, dev);
