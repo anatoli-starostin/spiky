@@ -147,6 +147,7 @@ class LightMultiHeadLUT(nn.Module):
         forward_mode: str = "scored",
         quant_mode: Optional[str] = None,
         quant_overrides: Optional[dict] = None,
+        head_dropout_rate: float = 0.0,
     ):
         super().__init__()
         # --- power-of-two quantised read (opt-in; None == every existing path, unchanged) ----
@@ -154,6 +155,15 @@ class LightMultiHeadLUT(nn.Module):
         # power-of-two cell weights and int8 tables, and readable as an int32 shift-add (pow2_read.py). Only int8 exists;
         # int4 is a deferred preset. Implemented for exactly the configuration the note describes; the rest is refused.
         self._quant = pow2_read.resolve_quant_config(quant_mode, quant_overrides)
+        # Head-level LUT-table dropout (opt-in; 0.0 == every existing path, byte-identical). During
+        # TRAINING, each table's contribution to the plain hard-read bag is independently kept with
+        # prob (1-rate) and the survivors are scaled by 1/(1-rate) (standard inverted dropout), so the
+        # expected read is unchanged and eval needs no rescale. Eval / no-grad: no dropout, no rescale.
+        self.head_dropout_rate = float(head_dropout_rate)
+        if not 0.0 <= self.head_dropout_rate < 1.0:
+            raise ValueError(f"head_dropout_rate must be in [0, 1), got {self.head_dropout_rate}")
+        if self.head_dropout_rate and forward_mode != "hard":
+            raise NotImplementedError("head_dropout_rate is currently implemented only for forward_mode='hard'")
         if self._quant is not None:
             bad = []
             if confidence_form != "learned_margin":
@@ -900,7 +910,14 @@ class LightMultiHeadLUT(nn.Module):
         plain read's gradient (one row, unscaled) and x, the confidence scalars and tau receive f's
         gradient: weights follow (a), everything else follows (b). Plain autograd, no Function."""
         offsets = torch.arange(n_bags, device=flat.device, dtype=torch.long) * bag
-        plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum")
+        if self.training and self.head_dropout_rate > 0.0 and torch.is_grad_enabled():
+            # head-level table dropout: keep each (sample, head, table) row with prob (1-rate),
+            # scale survivors by 1/(1-rate) (inverted dropout). Training-only; eval reads all tables.
+            keep_prob = 1.0 - self.head_dropout_rate
+            w = (torch.rand(flat_idx.shape[0], device=flat.device) < keep_prob).to(flat.dtype) / keep_prob
+            plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum", per_sample_weights=w)
+        else:
+            plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum")
         if not torch.is_grad_enabled():
             return plain
         score = self.confidence_score(d)

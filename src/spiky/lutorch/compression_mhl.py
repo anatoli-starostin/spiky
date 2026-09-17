@@ -163,6 +163,8 @@ class CompressionMultiHeadLUT(nn.Module):
         # Power-of-two quantised read (light path only; None == unchanged). See LightMultiHeadLUT / pow2_read.py.
         quant_mode: Optional[str] = None,
         quant_overrides: Optional[dict] = None,
+        # Head-level LUT-table dropout (light hard-read path only; 0.0 == unchanged). See LightMultiHeadLUT.
+        head_dropout_rate: float = 0.0,
     ):
         super().__init__()
         if quant_mode is not None and lut_impl != "light":
@@ -352,6 +354,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 forward_mode=light_forward_mode,
                 # power-of-two quantised read; LightMultiHeadLUT refuses every layout it is not implemented for
                 quant_mode=quant_mode, quant_overrides=quant_overrides,
+                head_dropout_rate=head_dropout_rate,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL
