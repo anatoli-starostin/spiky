@@ -28,7 +28,7 @@ def _make(rate, dtype=torch.float64):
         confidence_form="learned_margin", learned_margin_init=(0.0, 2.0, 1.0),
         learned_margin_freeze_g=True, random_seed=0, initial_weights_noise=0.5,
         device=torch.device("cpu"), n_heads=H, multi_head_input=False,
-        read_top_n=2, read_tau=0.5, read_tau_learnable=True, forward_mode="hard",
+        read_top_n=2, read_tau=0.5, read_tau_learnable=True, forward_mode="scored",
         head_dropout_rate=rate).to(dtype)
     m._compile_enabled = False
     return m
@@ -98,12 +98,12 @@ def test_default_off_and_validation():
     m = LightMultiHeadLUT(
         input_dim=IN, n_tables=H * TPH, output_dim=OUT, n_anchor_pairs=NAP,
         confidence_form="learned_margin", learned_margin_init=(0.0, 2.0, 1.0),
-        learned_margin_freeze_g=True, random_seed=0, n_heads=H, forward_mode="hard")
+        learned_margin_freeze_g=True, random_seed=0, n_heads=H, forward_mode="scored")
     assert m.head_dropout_rate == 0.0
     with pytest.raises(ValueError):
         _make(1.0)
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError):  # only forward_mode='scored' is supported
         LightMultiHeadLUT(input_dim=IN, n_tables=H * TPH, output_dim=OUT, n_anchor_pairs=NAP,
                           confidence_form="learned_margin", learned_margin_init=(0.0, 2.0, 1.0),
                           learned_margin_freeze_g=True, random_seed=0, n_heads=H,
-                          forward_mode="scored", head_dropout_rate=0.2)
+                          forward_mode="hard", head_dropout_rate=0.2)

@@ -156,14 +156,15 @@ class LightMultiHeadLUT(nn.Module):
         # int4 is a deferred preset. Implemented for exactly the configuration the note describes; the rest is refused.
         self._quant = pow2_read.resolve_quant_config(quant_mode, quant_overrides)
         # Head-level LUT-table dropout (opt-in; 0.0 == every existing path, byte-identical). During
-        # TRAINING, each table's contribution to the plain hard-read bag is independently kept with
-        # prob (1-rate) and the survivors are scaled by 1/(1-rate) (standard inverted dropout), so the
-        # expected read is unchanged and eval needs no rescale. Eval / no-grad: no dropout, no rescale.
+        # TRAINING each table is independently KEPT with prob (1-rate) and survivors are scaled by
+        # 1/(1-rate) (standard inverted dropout), applied to the per-table confidence SCORE -- which
+        # gates that table's WHOLE contribution (score_t * sum_i w_i row_i), so zeroing score_t drops
+        # the whole table. Eval / no-grad: no dropout, no rescale.
         self.head_dropout_rate = float(head_dropout_rate)
         if not 0.0 <= self.head_dropout_rate < 1.0:
             raise ValueError(f"head_dropout_rate must be in [0, 1), got {self.head_dropout_rate}")
-        if self.head_dropout_rate and forward_mode != "hard":
-            raise NotImplementedError("head_dropout_rate is currently implemented only for forward_mode='hard'")
+        if self.head_dropout_rate and forward_mode != "scored":
+            raise NotImplementedError("head_dropout_rate is currently implemented only for forward_mode='scored'")
         if self._quant is not None:
             bad = []
             if confidence_form != "learned_margin":
@@ -714,6 +715,7 @@ class LightMultiHeadLUT(nn.Module):
             return self._hard_read(d, index, flat, flat_idx, self.table_offset.view(1, H, T),
                                    B * H, T).view(B, H, self.output_dim)
         score = self.confidence_score(d)                               # [B, H, T]
+        score = self._head_drop_score(score)                           # head-level table dropout (train only; no-op at rate 0)
         if self._codebook:
             # scalar coefficient g_t = s_t · w_{c_t} per (head, table); NO cross-table sum.
             # Concatenate all H·T coefficients -> g ∈ R^{n_tables}, decode y = M · g.
@@ -791,6 +793,20 @@ class LightMultiHeadLUT(nn.Module):
         flat_idx = idx + self.table_offset.view(1, H, T, 1)
         acc = pow2_read.int_blend_read(packed, self._quant["bits"], self.output_dim, flat_idx, q, k, skip, drop)
         return acc.to(x.dtype) * torch.pow(2.0, e.to(x.dtype) - pow2_read.FIXED_POINT_SHIFT)       # units 2^-6 -> float
+
+    def _head_drop_score(self, score):
+        """Head-level LUT-table dropout on the per-table confidence score (TRAINING only).
+
+        Standard inverted dropout at WHOLE-TABLE granularity: one independent Bernoulli per table
+        (score's last axis), keep with prob (1-rate), scale survivors by 1/(1-rate). Because `score`
+        gates a table's ENTIRE contribution (score_t * sum_i w_i row_i; the blend weights normalise
+        inside), multiplying score_t by 0 removes the whole table and by 1/(1-rate) rescales the
+        survivors so the expected read is unchanged. No-op at eval / no-grad and when rate == 0."""
+        if not (self.training and self.head_dropout_rate > 0.0 and torch.is_grad_enabled()):
+            return score
+        keep_prob = 1.0 - self.head_dropout_rate
+        keep = (torch.rand_like(score) < keep_prob).to(score.dtype) / keep_prob
+        return score * keep
 
     def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
         """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.
@@ -910,14 +926,7 @@ class LightMultiHeadLUT(nn.Module):
         plain read's gradient (one row, unscaled) and x, the confidence scalars and tau receive f's
         gradient: weights follow (a), everything else follows (b). Plain autograd, no Function."""
         offsets = torch.arange(n_bags, device=flat.device, dtype=torch.long) * bag
-        if self.training and self.head_dropout_rate > 0.0 and torch.is_grad_enabled():
-            # head-level table dropout: keep each (sample, head, table) row with prob (1-rate),
-            # scale survivors by 1/(1-rate) (inverted dropout). Training-only; eval reads all tables.
-            keep_prob = 1.0 - self.head_dropout_rate
-            w = (torch.rand(flat_idx.shape[0], device=flat.device) < keep_prob).to(flat.dtype) / keep_prob
-            plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum", per_sample_weights=w)
-        else:
-            plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum")
+        plain = F.embedding_bag(flat_idx, flat, offsets=offsets, mode="sum")
         if not torch.is_grad_enabled():
             return plain
         score = self.confidence_score(d)
@@ -1029,6 +1038,7 @@ class LightMultiHeadLUT(nn.Module):
         # Differentiable confidence gate. At read_top_n=1 this is the ONLY path from x to
         # the output grad; at n>1 the blend weights add a second, directional one.
         score = self.confidence_score(d)                             # [B, n_tables]
+        score = self._head_drop_score(score)                         # head-level table dropout (train only; no-op at rate 0)
 
         # Output grouping: output_heads==1 sums ALL n_tables into one [B, output_dim]
         # ensemble (unchanged); output_heads==G returns [B, G, output_dim] by summing G
