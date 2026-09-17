@@ -1,0 +1,45 @@
+{
+ "time": "2026-09-16 23:39:22",
+ "spiky_head": "686e5c4468f64fcf97c383a7a63bb20a2774b59a",
+ "device": "NVIDIA H100 80GB HBM3",
+ "capability": [
+  9,
+  0
+ ],
+ "validated_arches": [
+  [
+   12,
+   0
+  ],
+  [
+   9,
+   0
+  ]
+ ],
+ "build": {
+  "ok": true,
+  "message": "pow2 int8 CUDA kernel ready",
+  "seconds": 0.1
+ },
+ "tests": {
+  "passed": 65,
+  "failed": [],
+  "skipped": [],
+  "pytest_tail": [
+   ".................................................................        [100%]",
+   "=============================== warnings summary ===============================",
+   "../spiky/.venv/lib/python3.12/site-packages/torch/jit/_script.py:365: 14 warnings",
+   "  /home/astarostin/projects/spiky/.venv/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.",
+   "    warnings.warn(",
+   "",
+   "src/spiky/lutorch/tests/test_pow2_int8.py::test_torch_fallback_trains[cpu]",
+   "  /home/astarostin/projects/ffn_fix_wt/src/spiky/lutorch/tests/test_pow2_int8.py:447: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.",
+   "  Consider using tensor.detach() first. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:822.)",
+   "    losses.append(float(loss))",
+   "",
+   "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+   "65 passed, 15 warnings in 17.89s"
+  ]
+ },
+ "verdict": "PASS"
+}
