@@ -8,7 +8,8 @@ Asserts:
   (d) addressing and score are LightMultiHeadLUT's, bit for bit (same anchors, same address, same score);
   (e) hard mode: the forward value is the one-hot argmax read (== reading export_indices()), and its gradient
       is exactly the soft path's (straight-through); the soft path converges to the hard one as tau -> 0;
-  (f) global vs per-head temperature shapes, annealing scale, and the refusals;
+  (f) global vs per-head temperature shapes and the refusals;
+  (h) small-std menu init (output near zero) and weight decay: the trainers' rule decays the menu only;
   (g) CompressionMultiHeadLUT / model_build integration: output is zero at init with a zero decompress,
       inner_out_dim=-1 works, and an existing config builds unchanged.
 """
@@ -16,8 +17,9 @@ import pytest
 import torch
 
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
-from spiky.lutorch.matrix_menu_multi_head_lut import (MatrixMenuMultiHeadLUT, MENU_IMPLS,
-                                                      menu_tau_anneal_scale)
+import math
+
+from spiky.lutorch.matrix_menu_multi_head_lut import MatrixMenuMultiHeadLUT, MENU_IMPLS, MENU_INIT_STD
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
 
 NAP, TPH, H, DIN, DOUT, M, B = 4, 6, 3, 8, 5, 7, 40
@@ -27,6 +29,7 @@ D64 = torch.float64
 def _make(mh=True, dtype=D64, **kw):
     kw.setdefault("menu_size", M)
     kw.setdefault("menu_logit_noise", 1.0)          # committed-ish cells, so the test is not trivially uniform
+    kw.setdefault("menu_init_scale", 0.3)           # O(1) menu so value/grad comparisons are not all ~0
     n_heads = H if mh else 1
     return MatrixMenuMultiHeadLUT(
         input_dim=DIN, n_tables=n_heads * TPH, output_dim=DOUT, n_anchor_pairs=NAP,
@@ -148,23 +151,22 @@ def test_low_temperature_limit():
     m = _make(True, menu_forward="soft")
     x = _x(True)
     with torch.no_grad():
-        m.set_menu_tau_scale(1e-6)
+        m.menu_log_tau.fill_(math.log(1e-6))
         y_soft = m(x)
         m.menu_forward = "hard"
         y_hard = m(x)
     torch.testing.assert_close(y_soft, y_hard, rtol=1e-8, atol=1e-10)
 
 
-def test_temperature_granularity_and_anneal():
+def test_temperature_granularity():
     assert _make(True).menu_log_tau.shape == (H,)
     mg = _make(True, menu_tau_granularity="global")
     assert mg.menu_log_tau.shape == (1,) and mg.menu_tau.shape == (H,)
     mf = _make(True, menu_tau_learnable=False)
     assert "menu_log_tau" not in dict(mf.named_parameters()) and "menu_log_tau" in dict(mf.named_buffers())
     m = _make(True, menu_tau_init=0.5)
-    m.set_menu_tau_scale(0.1)
-    torch.testing.assert_close(m.menu_tau, torch.full((H,), 0.05, dtype=D64))
-    assert menu_tau_anneal_scale(0, 100) == 1.0 and abs(menu_tau_anneal_scale(100, 100) - 0.05) < 1e-12
+    torch.testing.assert_close(m.menu_tau, torch.full((H,), 0.5, dtype=D64))
+    assert not any("tau_scale" in k for k in m.state_dict())    # annealing machinery removed
 
 
 def test_refusals():
@@ -179,9 +181,25 @@ def test_init_near_uniform_and_seeded():
     assert torch.equal(a.menu, b.menu) and torch.equal(a.menu_logits, b.menu_logits)
     P = a.menu_probs()
     assert (P.max(-1).values * M).max() < 1.1          # near-uniform: no cell starts committed
-    o = _make(True, menu_init="orthogonal", menu_size=2)
+    o = _make(True, menu_init="orthogonal", menu_size=2, menu_init_scale=1 / math.sqrt(DIN))
     W = o.menu[0, 0]                                    # [DIN, DOUT], DIN > DOUT -> orthonormal columns
     torch.testing.assert_close(W.T @ W, torch.eye(DOUT, dtype=D64), rtol=1e-5, atol=1e-5)   # built in fp32
+
+
+def test_default_menu_init_is_small():
+    for init in ("normal", "orthogonal"):
+        m = MatrixMenuMultiHeadLUT(input_dim=48, n_tables=4 * 16, output_dim=48, n_anchor_pairs=NAP,
+                                   random_seed=3, n_heads=4, multi_head_input=True, menu_size=16, menu_init=init)
+        assert abs(m.menu.std().item() / MENU_INIT_STD - 1) < 0.05, init
+
+
+def test_weight_decay_grouping():
+    # the trainers' rule (train.py / distill_ffn.setup_optimizer): with tables_no_decay, every parameter a
+    # LightMultiHeadLUT instance owns DIRECTLY is exempt; otherwise ndim < 2 is exempt.
+    m = _make(True)
+    exempt = {id(p) for mod in m.modules() if isinstance(mod, LightMultiHeadLUT) for p in mod.parameters(recurse=False)}
+    decayed = {n for n, p in m.named_parameters() if not (id(p) in exempt or p.ndim < 2)}
+    assert decayed == {"menu_bank.weight"}
 
 
 @pytest.mark.parametrize("out_dim", [4, -1])

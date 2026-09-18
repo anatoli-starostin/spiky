@@ -31,8 +31,8 @@ HARD / SOFT. ``menu_forward="soft"`` uses the softmax in train and eval. ``menu_
 inference-faithful mode: the forward value uses the one-hot argmax of each cell's logits, and in training
 the softmax's gradient is injected with the codebase's straight-through convention
 ``hard + (soft - sg(soft))`` (the same zero-valued-term idiom LightMultiHeadLUT's forward_mode="hard" uses),
-so the forward IS the index read and the logits / tau still learn. The temperature can be annealed from
-outside (``set_menu_tau_scale``) to close the soft/hard gap during training rather than meeting it at eval.
+so the forward IS the index read and the logits / tau still learn -- which is what closes the soft/hard gap
+(no temperature annealing).
 
 INFERENCE ARTEFACT. ``export_indices()`` returns the menu plus ONE index per cell (argmax), i.e. what a
 deployed layer stores: ceil(log2 M) bits per cell instead of d_out floats.
@@ -51,10 +51,19 @@ from .light_multi_head_lut import LightMultiHeadLUT
 MENU_IMPLS = ("mix", "expand", "outer")
 
 
-def menu_tau_anneal_scale(step: int, n_steps: int, start: float = 1.0, end: float = 0.05) -> float:
-    """Geometric annealing schedule for ``set_menu_tau_scale``: ``start`` at step 0 -> ``end`` at n_steps."""
-    frac = min(max(step / max(n_steps, 1), 0.0), 1.0)
-    return float(start * (end / start) ** frac)
+# Default element std of the menu matrices. Chosen so the layer starts near zero like LightMultiHeadLUT's
+# Uniform[-1e-3, 1e-3] tables: at H8/tph128/nap8/d48 on real compressed codes the pre-decompress rms is
+# ~1e-3 (Light: ~1.9e-3), vs 1.45 with the norm-preserving 1/sqrt(d_in).
+MENU_INIT_STD = 1e-4
+
+
+class _MenuBank(nn.Module):
+    """Holds the menu as `weight`. A child module (not a direct parameter of the LUT) so the trainers'
+    tables_no_decay rule -- which exempts only a LUT module's own parameters -- leaves it weight-decayed."""
+
+    def __init__(self, weight):
+        super().__init__()
+        self.weight = nn.Parameter(weight)
 
 
 class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
@@ -71,9 +80,10 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         menu_tau_learnable: learn log-tau (default True). False stores it as a buffer (same state_dict key).
         menu_forward: "soft" (default) or "hard" (one-hot argmax forward; straight-through softmax gradient
             in training; argmax at eval).
-        menu_init: "normal" (default: N(0, menu_init_scale^2), scale defaulting to 1/sqrt(d_in), i.e. each
-            W[h, m] roughly norm-preserving) or "orthogonal" (each W[h, m] a scaled (semi-)orthogonal matrix).
-        menu_init_scale: overrides the init scale (normal: std; orthogonal: gain).
+        menu_init: "normal" (default: N(0, std^2)) or "orthogonal" (each W[h, m] a (semi-)orthogonal matrix
+            scaled to the same element std). Either way std = MENU_INIT_STD (1e-4) unless overridden: SMALL, so
+            the layer output starts near zero; orthogonal keeps only the direction structure at that scale.
+        menu_init_scale: overrides the element std (both inits).
         menu_logit_noise: cell logits ~ N(0, noise^2) (default 0.01): near-uniform, so no cell starts
             committed, with just enough noise to break the symmetry between cells.
         menu_impl: "mix" (default), "expand" or "outer" -- three exact implementations of the menu
@@ -156,13 +166,17 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         logits = torch.randn(n_tables, self.table_size, M, device=dev, generator=g_l) * float(menu_logit_noise)
         self.menu_logits = nn.Parameter(logits)
 
-        # Per-head menu [H, M, d_in, d_out].
+        # Per-head menu [H, M, d_in, d_out], SMALL at init (element std MENU_INIT_STD unless overridden) so the
+        # layer's output starts near zero, like Light's near-zero tables -- which matters most with
+        # inner_out_dim=-1, where there is no zeroed decompress behind it.
         g_w = torch.Generator(device=dev).manual_seed(random_seed + 202) if random_seed is not None else None
+        std = MENU_INIT_STD if menu_init_scale is None else float(menu_init_scale)
         if menu_init == "normal":
-            std = (1.0 / math.sqrt(input_dim)) if menu_init_scale is None else float(menu_init_scale)
             W = torch.randn(H, M, input_dim, output_dim, device=dev, generator=g_w) * std
         else:
-            gain = 1.0 if menu_init_scale is None else float(menu_init_scale)
+            # (semi-)orthogonal with its gain chosen so the ELEMENT std equals `std` too: a [d_in, d_out] matrix
+            # with orthonormal columns (or rows) has element std 1/sqrt(max(d_in, d_out)).
+            gain = std * math.sqrt(max(input_dim, output_dim))
             W = torch.empty(H, M, input_dim, output_dim, device=dev)
             for h in range(H):
                 for m in range(M):
@@ -172,7 +186,10 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
                         if s is not None:
                             torch.manual_seed(s)
                         nn.init.orthogonal_(W[h, m], gain=gain)
-        self.menu = nn.Parameter(W)
+        # The menu lives in a child module so it is weight-decayed like an ordinary weight: every trainer's
+        # tables_no_decay rule exempts `m.parameters(recurse=False)` of LightMultiHeadLUT instances, which
+        # still covers menu_logits (and menu_log_tau is 1-D, no-decay by the ndim rule), but not this child.
+        self.menu_bank = _MenuBank(W)
 
         # Temperature, stored as log-tau (positivity for free; multiplicative steps). A learnable Parameter
         # or a buffer under the same key, as LightMultiHeadLUT does for its read tau.
@@ -182,23 +199,18 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
             self.menu_log_tau = nn.Parameter(log_tau)
         else:
             self.register_buffer("menu_log_tau", log_tau)
-        # External annealing multiplier on tau (set by the trainer via set_menu_tau_scale; 1.0 = off).
-        # A buffer, so it is checkpointed with the run and never optimised.
-        self.register_buffer("menu_tau_scale", torch.ones((), device=dev))
+
+    @property
+    def menu(self):
+        """The per-head menu [H, M, d_in, d_out] (stored as menu_bank.weight)."""
+        return self.menu_bank.weight
 
     # ------------------------------------------------------------------ temperature ---------------------------------
     @property
     def menu_tau(self):
-        """Effective per-head temperature [H] (global granularity broadcasts one value to every head)."""
-        tau = self.menu_log_tau.exp() * self.menu_tau_scale
+        """Per-head temperature [H] (global granularity broadcasts one value to every head)."""
+        tau = self.menu_log_tau.exp()
         return tau.expand(self.n_heads) if tau.numel() == 1 else tau
-
-    @torch.no_grad()
-    def set_menu_tau_scale(self, scale: float):
-        """Annealing hook: effective tau = exp(menu_log_tau) * scale. See menu_tau_anneal_scale()."""
-        if not (scale > 0):
-            raise ValueError(f"tau scale must be > 0, got {scale!r}")
-        self.menu_tau_scale.fill_(float(scale))
 
     # ------------------------------------------------------------------ cell distributions --------------------------
     def menu_probs(self, hard: Optional[bool] = None):
