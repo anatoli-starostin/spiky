@@ -38,7 +38,7 @@ _LM_INIT_KEYS = ('lut_learned_margin_g_init', 'lut_learned_margin_beta_init', 'l
 # lut_cell_mode='matrix_menu' keys -> MatrixMenuMultiHeadLUT kwargs (the 'lut_' prefix stripped).
 _MENU_KEYS = ('lut_menu_size', 'lut_menu_tau_init', 'lut_menu_tau_granularity', 'lut_menu_tau_learnable',
               'lut_menu_forward', 'lut_menu_init', 'lut_menu_init_scale', 'lut_menu_logit_noise',
-              'lut_menu_impl')
+              'lut_menu_impl', 'lut_menu_rank')
 
 
 def _menu_config(cfg):

@@ -58,12 +58,17 @@ MENU_INIT_STD = 1e-4
 
 
 class _MenuBank(nn.Module):
-    """Holds the menu as `weight`. A child module (not a direct parameter of the LUT) so the trainers'
+    """Holds the menu: `weight` [H, M, d_in, d_out] (dense), or the factors `A` [H, M, r, d_out] and
+    `B` [H, M, d_in, r] (menu_rank=r). A child module (not a direct parameter of the LUT) so the trainers'
     tables_no_decay rule -- which exempts only a LUT module's own parameters -- leaves it weight-decayed."""
 
-    def __init__(self, weight):
+    def __init__(self, weight, B=None):
         super().__init__()
-        self.weight = nn.Parameter(weight)
+        if B is None:
+            self.weight = nn.Parameter(weight)
+        else:
+            self.A = nn.Parameter(weight)
+            self.B = nn.Parameter(B)
 
 
 class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
@@ -111,6 +116,7 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         menu_init_scale: Optional[float] = None,
         menu_logit_noise: float = 0.01,
         menu_impl: str = "mix",
+        menu_rank: Optional[int] = None,
         cell_mode: str = "matrix_menu",
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
@@ -143,6 +149,10 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
             raise ValueError(f"menu_init must be 'normal' or 'orthogonal', got {menu_init!r}")
         if menu_impl not in MENU_IMPLS:
             raise ValueError(f"menu_impl must be one of {MENU_IMPLS}, got {menu_impl!r}")
+        if menu_rank is not None and menu_rank < 1:
+            raise ValueError(f"menu_rank must be >= 1 (or None for dense matrices), got {menu_rank}")
+        if menu_rank is not None and menu_init != "normal":
+            raise ValueError("menu_rank (factored atoms) supports menu_init='normal' only")
 
         # Build the plain Light layer: anchors, powers, table_offset, the native address kernel, the score
         # parameters and head dropout come out bit-identical to a LightMultiHeadLUT with the same arguments
@@ -171,7 +181,17 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         # inner_out_dim=-1, where there is no zeroed decompress behind it.
         g_w = torch.Generator(device=dev).manual_seed(random_seed + 202) if random_seed is not None else None
         std = MENU_INIT_STD if menu_init_scale is None else float(menu_init_scale)
-        if menu_init == "normal":
+        self.menu_rank = None if menu_rank is None else int(menu_rank)
+        if self.menu_rank is not None:
+            # FACTORED atoms W[h,m] = B[h,m] @ A[h,m], B [d_in, r], A [r, d_out], applied as A(B x) and never formed.
+            # Per token and head: M*r*(d_in + d_out) mults instead of M*d_in*d_out. B ~ N(0, 1/d_in) (a norm-
+            # preserving projection), A scaled so the PRODUCT has the same element std as the dense init:
+            # var(W_ij) = r * var(B) * var(A) = std^2.
+            r = self.menu_rank
+            B = torch.randn(H, M, input_dim, r, device=dev, generator=g_w) / math.sqrt(input_dim)
+            A = torch.randn(H, M, r, output_dim, device=dev, generator=g_w) * (std * math.sqrt(input_dim / r))
+            self.menu_bank = _MenuBank(A, B)
+        elif menu_init == "normal":
             W = torch.randn(H, M, input_dim, output_dim, device=dev, generator=g_w) * std
         else:
             # (semi-)orthogonal with its gain chosen so the ELEMENT std equals `std` too: a [d_in, d_out] matrix
@@ -189,7 +209,8 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         # The menu lives in a child module so it is weight-decayed like an ordinary weight: every trainer's
         # tables_no_decay rule exempts `m.parameters(recurse=False)` of LightMultiHeadLUT instances, which
         # still covers menu_logits (and menu_log_tau is 1-D, no-decay by the ndim rule), but not this child.
-        self.menu_bank = _MenuBank(W)
+        if self.menu_rank is None:
+            self.menu_bank = _MenuBank(W)
 
         # Temperature, stored as log-tau (positivity for free; multiplicative steps). A learnable Parameter
         # or a buffer under the same key, as LightMultiHeadLUT does for its read tau.
@@ -202,8 +223,11 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
 
     @property
     def menu(self):
-        """The per-head menu [H, M, d_in, d_out] (stored as menu_bank.weight)."""
-        return self.menu_bank.weight
+        """The per-head menu [H, M, d_in, d_out] (stored as menu_bank.weight; with menu_rank, the product B @ A,
+        formed on demand -- the forward never forms it)."""
+        if self.menu_rank is None:
+            return self.menu_bank.weight
+        return self.menu_bank.B @ self.menu_bank.A
 
     # ------------------------------------------------------------------ temperature ---------------------------------
     @property
@@ -241,6 +265,15 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
                   [1,d_in] @ [d_in,d_out] matmuls.
         """
         H, M = self.n_heads, self.menu_size
+        if self.menu_rank is not None:
+            # factored atoms: y = sum_m a_m A_m (B_m x). Two GEMMs per head, [N, H, M*r] intermediate.
+            r = self.menu_rank
+            A, B = self.menu_bank.A.to(x.dtype), self.menu_bank.B.to(x.dtype)
+            di, do, N = B.shape[2], A.shape[3], x.shape[0]
+            u = torch.bmm(x.permute(1, 0, 2), B.permute(0, 2, 1, 3).reshape(H, di, M * r))      # [H, N, M*r]
+            u = u.view(H, N, M, r) * a.to(x.dtype).permute(1, 0, 2).unsqueeze(-1)             # weight by a
+            y = torch.bmm(u.reshape(H, N, M * r), A.reshape(H, M * r, do))                    # [H, N, do]
+            return y.permute(1, 0, 2)
         W = self.menu.to(x.dtype)
         di, do = W.shape[-2], W.shape[-1]
         N = x.shape[0]
@@ -323,9 +356,15 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         "bits_per_cell": ceil(log2 M)}. A hard-mode forward is exactly the read of these."""
         idx = self.menu_logits.argmax(dim=-1)
         dtype = torch.uint8 if self.menu_size <= 256 else torch.int16
-        return {"menu": self.menu.detach().clone(), "index": idx.to(dtype),
-                "bits_per_cell": max(1, math.ceil(math.log2(self.menu_size)))}
+        art = {"index": idx.to(dtype), "bits_per_cell": max(1, math.ceil(math.log2(self.menu_size)))}
+        if self.menu_rank is None:
+            art["menu"] = self.menu.detach().clone()
+        else:                                   # store the factors (M*r*(d_in+d_out) per head), not the product
+            art["menu_A"] = self.menu_bank.A.detach().clone()
+            art["menu_B"] = self.menu_bank.B.detach().clone()
+        return art
 
     def extra_repr(self) -> str:
         return (super().extra_repr() + f", menu_size={self.menu_size}, menu_forward={self.menu_forward!r}, "
-                f"menu_tau_granularity={self.menu_tau_granularity!r}, menu_impl={self.menu_impl!r}")
+                f"menu_tau_granularity={self.menu_tau_granularity!r}, menu_impl={self.menu_impl!r}"
+                + (f", menu_rank={self.menu_rank}" if self.menu_rank is not None else ""))
