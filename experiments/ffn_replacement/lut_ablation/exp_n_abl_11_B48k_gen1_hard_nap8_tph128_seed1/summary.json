@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_abl_11_B48k_gen1_hard_nap8_tph128_seed1_rerun",
+  "best_val_bpb": 1.1650560457302057,
+  "final_val_bpb": 1.1653662078895142,
+  "total_params": 67351680,
+  "training_time_hours": 3.233,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
