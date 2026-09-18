@@ -1,0 +1,7 @@
+# (critical path, 285cb426) per-cell bias, H8 M64 hard/STE, default eps, 4K, same protocol as ladder4k_H8.
+menu4k_H8_tph8_cellbias|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 8, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true}
+menu4k_H8_tph32_cellbias|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 32, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true}
+# P2 x P3b: M (the quality lever, free in hard-read MACs) combined with low tph (the MAC lever). Dense H8 d48, hard, 4K.
+# hard-read inference MACs/FFN: tph4 0.31, tph2 0.28 (Light 0.29); storage ~18.9 MB fp32 menu + indices.
+menu4k_H8_tph4_M256|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 4, "lut_cell_mode": "matrix_menu", "lut_menu_size": 256, "lut_menu_forward": "hard"}
+menu4k_H8_tph2_M256|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 2, "lut_cell_mode": "matrix_menu", "lut_menu_size": 256, "lut_menu_forward": "hard"}

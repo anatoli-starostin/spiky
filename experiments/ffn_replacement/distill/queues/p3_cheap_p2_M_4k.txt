@@ -1,0 +1,13 @@
+# P3 cheap-inference menu configs + P2 M ceiling, 4K, H8 tph16 hard, default eps (P1 showed the eps fix changes
+# addressing but not final FVU). MACs/FFN in the comment (D=384, FFN = 2*384*1536).
+# rank-1 atoms: width-M gated FFN with LUT gates.  0.25 + M*r*96*8/1179648
+menu4k_H8_tph16_r1_M64|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_menu_rank": 1}
+menu4k_H8_tph16_r1_M256|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 256, "lut_menu_forward": "hard", "lut_menu_rank": 1}
+menu4k_H8_tph16_r4_M64|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_menu_rank": 4}
+menu4k_H8_tph16_r8_M64|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_menu_rank": 8}
+# shrink H*d below D: H8 d24 (compress 384->192): 0.125 + M*24*24*8/1179648
+menu4k_H8d24_tph16_M32|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_inner_in_dim": 24, "lut_inner_out_dim": 24, "lut_cell_mode": "matrix_menu", "lut_menu_size": 32, "lut_menu_forward": "hard"}
+menu4k_H8d24_tph16_M64|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_inner_in_dim": 24, "lut_inner_out_dim": 24, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}
+# P2 expressivity ceiling (dense, expensive): M 128 / 256
+menu4k_H8_tph16_M128|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 128, "lut_menu_forward": "hard"}
+menu4k_H8_tph16_M256|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 256, "lut_menu_forward": "hard"}

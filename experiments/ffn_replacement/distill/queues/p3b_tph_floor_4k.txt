@@ -1,0 +1,6 @@
+# P3b: how low can tph go? With a HARD read each head applies <= tph distinct menu matrices per token, so inference
+# MACs/FFN = 0.25 (compress+decompress) + tph*H*d_in*d_out/FFN (sparse gather-and-apply), NOT 0.25 + M/64.
+# tph4 -> 0.31, tph2 -> 0.28, tph1 -> 0.27 (Light H8/tph128 is 0.29). Dense M64, H8 d48, hard, default eps.
+menu4k_H8_tph4|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 4, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}
+menu4k_H8_tph2|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 2, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}
+menu4k_H8_tph1|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 1, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}

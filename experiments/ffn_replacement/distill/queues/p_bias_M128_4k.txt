@@ -1,0 +1,2 @@
+# per-cell bias + M128 at tph16 (proposed in 285cb426): are the M and bias gains additive? 4K, H8, hard, default eps.
+menu4k_H8_tph16_M128_cellbias|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 128, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true}
