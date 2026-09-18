@@ -94,6 +94,34 @@ def test_tables_get_gradient_under_dropout():
     assert g is not None and torch.isfinite(g).all() and float(g.abs().sum()) > 0.0
 
 
+def _make_quant(rate, dtype=torch.float64):
+    """quant_mode='p2_int8' layer (input_dim==output_dim for the quant read); torch fallback on CPU."""
+    m = LightMultiHeadLUT(
+        input_dim=12, n_tables=H * TPH, output_dim=12, n_anchor_pairs=8,
+        confidence_form="learned_margin", learned_margin_init=(0.0, 2.0, 1.0),
+        learned_margin_freeze_g=True, random_seed=0, initial_weights_noise=0.5,
+        device=torch.device("cpu"), n_heads=H, multi_head_input=True,
+        read_top_n=2, read_tau=0.5, read_tau_learnable=True, forward_mode="scored",
+        quant_mode="p2_int8", head_dropout_rate=rate).to(dtype)
+    m._compile_enabled = False
+    return m
+
+
+def test_quant_path_head_dropout():
+    """Head dropout must also apply on the QUANTISED read (which returns before the float score-gate)."""
+    x = torch.randn(B, H, 12, generator=torch.Generator().manual_seed(1), dtype=torch.float64)
+    m0, md = _make_quant(0.0), _make_quant(0.2)
+    m0.eval(); md.eval()
+    with torch.no_grad():
+        ev0, evd = m0(x), md(x)
+    assert torch.allclose(evd, ev0, atol=1e-12, rtol=0)          # rate>0 eval == rate0 eval (no dropout at eval)
+    m0.train()
+    assert torch.allclose(m0(x.clone().requires_grad_(True)), ev0, atol=1e-12, rtol=0)  # rate0 train==eval (off by default)
+    md.train()
+    torch.manual_seed(3)
+    assert not torch.allclose(md(x.clone().requires_grad_(True)), evd, atol=1e-9)        # dropout active in training
+
+
 def test_default_off_and_validation():
     m = LightMultiHeadLUT(
         input_dim=IN, n_tables=H * TPH, output_dim=OUT, n_anchor_pairs=NAP,

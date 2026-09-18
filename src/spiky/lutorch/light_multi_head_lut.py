@@ -757,6 +757,13 @@ class LightMultiHeadLUT(nn.Module):
         B, H, T = d.shape[:3]
         tau, g, beta, gamma = self._quant_scalars()
         psw, idx = pow2_int8.cell_weights(d, index, self.powers, tau, g, beta, gamma, cfg)   # [B, H, T, 2] each
+        if self.training and self.head_dropout_rate > 0.0 and torch.is_grad_enabled():
+            # head-level WHOLE-TABLE dropout on the quantised read: one Bernoulli per (sample, head, table),
+            # keep prob (1-rate), survivors scaled by 1/(1-rate) (inverted). Broadcast over the 2 cells so a
+            # dropped table contributes nothing (both cells zeroed). Train+grad only; eval reads all tables.
+            keep_prob = 1.0 - self.head_dropout_rate
+            keep = (torch.rand(B, H, T, 1, device=d.device) < keep_prob).to(psw.dtype) / keep_prob
+            psw = psw * keep
         W = pow2_read.ste_tables(self.tables, self.n_heads, cfg["bits"], cfg["offset"])
         flat_q = W.reshape(-1, self._tbl_out)
         flat_idx = (idx + self.table_offset.view(1, H, T, 1)).reshape(-1)
