@@ -42,6 +42,7 @@ import torch.nn as nn
 from spiky.lutorch.bh4_multi_head_lut import BH4MultiHeadLUT
 from spiky.lutorch.fast_multi_head_lut import FastMultiHeadLut
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT
+from spiky.lutorch.matrix_menu_multi_head_lut import MatrixMenuMultiHeadLUT
 from spiky.lutorch.lut_helpers import UncertaintyMode
 from spiky.lutorch.multi_head_lut import MultiHeadLut
 
@@ -165,8 +166,14 @@ class CompressionMultiHeadLUT(nn.Module):
         quant_overrides: Optional[dict] = None,
         # Head-level LUT-table dropout (light hard-read path only; 0.0 == unchanged). See LightMultiHeadLUT.
         head_dropout_rate: float = 0.0,
+        # cell_mode="matrix_menu" only: MatrixMenuMultiHeadLUT's menu_* kwargs (menu_size, menu_tau_init, ...).
+        menu_config: Optional[dict] = None,
     ):
         super().__init__()
+        if menu_config and cell_mode != "matrix_menu":
+            raise ValueError(f"menu_config is only valid with cell_mode='matrix_menu', got {cell_mode!r}")
+        if cell_mode == "matrix_menu" and lut_impl != "light":
+            raise ValueError(f"cell_mode='matrix_menu' exists only on the light path, got lut_impl={lut_impl!r}")
         if quant_mode is not None and lut_impl != "light":
             raise ValueError(f"quant_mode exists only on the light path, got lut_impl={lut_impl!r}")
         if quant_overrides and quant_mode is None:
@@ -291,6 +298,9 @@ class CompressionMultiHeadLUT(nn.Module):
             if anchor_mode == "single":
                 if quant_mode is not None:
                     raise ValueError("quant_mode is not implemented for anchor_mode='single'")
+                if cell_mode == "matrix_menu":
+                    raise ValueError("cell_mode='matrix_menu' is not implemented for the shared-global "
+                                     "anchor_mode='single' layout")
                 # SHARED GLOBAL addressing pool + per-head output (asymmetric variant).
                 # ONE compress d_model -> eff_in gives the shared pool z; ALL n_heads*tph
                 # tables draw GLOBAL single-index addresses over the full eff_in pool (no
@@ -330,7 +340,13 @@ class CompressionMultiHeadLUT(nn.Module):
             else:
                 self.compress = (nn.Linear(input_dim, in_raw, device=device)
                                  if self.has_compress else nn.Identity())
-            self.lut_light = LightMultiHeadLUT(
+            # cell_mode="matrix_menu": the cell selects a matrix from a per-head menu instead of storing a
+            # vector (MatrixMenuMultiHeadLUT, a LightMultiHeadLUT subclass with the same addressing and score).
+            # Every other cell_mode builds the unchanged LightMultiHeadLUT.
+            _menu = cell_mode == "matrix_menu"
+            _light_cls = MatrixMenuMultiHeadLUT if _menu else LightMultiHeadLUT
+            _menu_kw = dict(menu_config or {}) if _menu else {}
+            self.lut_light = _light_cls(
                 input_dim=eff_in, n_tables=n_heads * tph, output_dim=eff_out,
                 n_anchor_pairs=nap, confidence_form=confidence_form,
                 confidence_gain=confidence_gain, sharp_margin_gamma=sharp_margin_gamma,
@@ -355,6 +371,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 # power-of-two quantised read; LightMultiHeadLUT refuses every layout it is not implemented for
                 quant_mode=quant_mode, quant_overrides=quant_overrides,
                 head_dropout_rate=head_dropout_rate,
+                **_menu_kw,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL

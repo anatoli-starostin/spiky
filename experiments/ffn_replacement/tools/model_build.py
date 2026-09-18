@@ -35,6 +35,25 @@ DEFAULT_READ_TAU = 0.1
 # learned_margin_init takes them. All three are required exactly when that form is configured.
 _LM_INIT_KEYS = ('lut_learned_margin_g_init', 'lut_learned_margin_beta_init', 'lut_learned_margin_gamma_init')
 
+# lut_cell_mode='matrix_menu' keys -> MatrixMenuMultiHeadLUT kwargs (the 'lut_' prefix stripped).
+_MENU_KEYS = ('lut_menu_size', 'lut_menu_tau_init', 'lut_menu_tau_granularity', 'lut_menu_tau_learnable',
+              'lut_menu_forward', 'lut_menu_init', 'lut_menu_init_scale', 'lut_menu_logit_noise',
+              'lut_menu_impl')
+
+
+def _menu_config(cfg):
+    """MatrixMenuMultiHeadLUT kwargs from lut_menu_* keys, or None. The keys are refused unless
+    lut_cell_mode == 'matrix_menu', so a stray key cannot be silently ignored."""
+    present = {k[len('lut_'):]: cfg[k] for k in _MENU_KEYS if k in cfg}
+    unknown = [k for k in cfg if k.startswith('lut_menu_') and k not in _MENU_KEYS]
+    if unknown:
+        raise ValueError(f"unknown lut_menu_* keys: {unknown}")
+    if cfg.get('lut_cell_mode', 'constant') != 'matrix_menu':
+        if present:
+            raise ValueError(f"lut_menu_* keys {sorted(present)} are only valid with lut_cell_mode='matrix_menu'")
+        return None
+    return present
+
 # delta_m measured on exp_g_0193 (the standard config: margin, no z_norm, nap8/tph128) over
 # 8,192 real val tokens by diag_margin_gap.py -- the per-layer median of m_(1), the smallest
 # of the nap anchor margins, which IS the cost gap the n=2 blend has to discriminate.
@@ -261,7 +280,10 @@ class MinimalBlock(nn.Module):
                     quant_mode=cfg.get('lut_quant_mode'),
                     quant_overrides=cfg.get('lut_quant_overrides'),
                     # Head-level LUT-table dropout (light hard-read path): 0.0 (default, absent -> unchanged).
-                    head_dropout_rate=float(cfg.get('lut_head_dropout_rate', 0.0)))
+                    head_dropout_rate=float(cfg.get('lut_head_dropout_rate', 0.0)),
+                    # lut_cell_mode='matrix_menu' (MatrixMenuMultiHeadLUT): its lut_menu_* keys, prefix stripped.
+                    # Absent everywhere else -> None -> every existing config builds unchanged.
+                    menu_config=_menu_config(cfg))
                 if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives', 'lut_gen1_weights_init'))
                         and cfg.get('lut_impl', 'fast') != 'gen1'):
                     raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives / lut_gen1_weights_init are only valid "
