@@ -1,0 +1,5 @@
+# 4K frontier work while the 16K decision is pending.
+# storage-matched Light control for the M256+bias candidate (~25 MB): Light H8 tph64 (25.2 MB fp32 tables).
+light4k_H8_tph64|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 64}
+# does M keep paying? M512 + bias at tph16 (MACs unchanged 0.505x FFN; menu 37.7 MB).
+menu4k_H8_tph16_M512_cellbias|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 512, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true}

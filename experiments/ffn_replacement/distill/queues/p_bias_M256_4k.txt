@@ -1,0 +1,2 @@
+# per-cell bias + M256 at tph16: bias gain additive at M128 (-0.0022); does it hold at the best M? 4K, H8, hard.
+menu4k_H8_tph16_M256_cellbias|--steps 4000|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 256, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true}
