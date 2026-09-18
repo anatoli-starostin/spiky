@@ -1,0 +1,5 @@
+# P1: addressing fix at 4K, H8 tph16 M64 hard (best-mean low-tph sweep point), all 6 layers, same protocol as ladder4k_H8.
+menu4k_H8_tph16_eps1e-16|--steps 4000 --menu-eps 1e-16|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}
+menu4k_H8_tph16_eps1e-16_lr10|--steps 4000 --menu-eps 1e-16 --menu-lr-mult 10|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard"}
+# noise floor: the UNFIXED menu tph16 point again with a different seed (torch seed AND lut_base_seed changed)
+menu4k_H8_tph16_seed2|--steps 4000 --seed 2|{"lut_n_heads": 8, "lut_tables_per_head": 16, "lut_cell_mode": "matrix_menu", "lut_menu_size": 64, "lut_menu_forward": "hard", "lut_base_seed": 2000}

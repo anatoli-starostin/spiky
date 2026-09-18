@@ -129,20 +129,34 @@ def build_student(student_cfg, n_embd, n_head, layer_idx, device):
     return ffn.to(device)
 
 
-def setup_optimizer(module, lr, weight_decay, tables_no_decay):
-    """Exactly train_fixed.py's grouping (tables exempt by class when tables_no_decay)."""
+def setup_optimizer(module, lr, weight_decay, tables_no_decay, menu_eps=None, menu_lr_mult=1.0):
+    """Exactly train_fixed.py's grouping (tables exempt by class when tables_no_decay).
+
+    menu_eps / menu_lr_mult (MatrixMenuMultiHeadLUT only; both default off -> the two groups above, unchanged):
+    move `menu_logits` and `menu_log_tau` into a THIRD no-decay group with their own Adam eps and lr multiplier.
+    Their gradients start ~1e-12 (the logit gradient is scaled by the small menu and the zero-init decompress),
+    far below eps=1e-8, which freezes Adam's update for them; a smaller eps restores normal-sized steps."""
     exempt = ((FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT)
               if tables_no_decay else (FastMultiHeadLut,))
     lut_ids = {id(p) for m in module.modules() if isinstance(m, exempt)
                for p in m.parameters(recurse=False)}
-    decay, nodecay = [], []
+    split_menu = menu_eps is not None or menu_lr_mult != 1.0
+    menu_ids = ({id(p) for n, p in module.named_parameters() if n.endswith(('menu_logits', 'menu_log_tau'))}
+                if split_menu else set())
+    decay, nodecay, menu = [], [], []
     for p in module.parameters():
         if not p.requires_grad:
             continue
+        if id(p) in menu_ids:
+            menu.append(p)
+            continue
         (nodecay if (id(p) in lut_ids or p.ndim < 2) else decay).append(p)
-    opt = torch.optim.AdamW([
-        dict(params=decay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
-        dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0)])
+    groups = [dict(params=decay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=weight_decay),
+              dict(params=nodecay, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0)]
+    if menu:
+        groups.append(dict(params=menu, lr=lr * menu_lr_mult, betas=(0.9, 0.95),
+                           eps=1e-8 if menu_eps is None else menu_eps, weight_decay=0.0))
+    opt = torch.optim.AdamW(groups)
     for g in opt.param_groups:
         g['initial_lr'] = g['lr']
     return opt
@@ -261,6 +275,14 @@ def main():
                          "= fewest that keep LightMHL kernels under 2^31 elements")
     ap.add_argument('--max-steps-smoke', type=int, default=0,
                     help='if >0, stop after this many steps (timing / smoke only)')
+    ap.add_argument('--menu-eps', type=float, default=None,
+                    help='matrix-menu students: Adam eps for a separate menu_logits/menu_log_tau group '
+                         '(default: no separate group, eps 1e-8 like everything else)')
+    ap.add_argument('--menu-lr-mult', type=float, default=1.0,
+                    help='matrix-menu students: lr multiplier for that group (default 1.0 = no separate group)')
+    ap.add_argument('--save-students', action='store_true',
+                    help='save each final student state_dict to <out>/student_L<i>.pt (gitignored); '
+                         'off by default -> nothing written, unchanged behaviour')
     a = ap.parse_args()
 
     out = a.out if os.path.isabs(a.out) else os.path.join(HERE, a.out)
@@ -287,7 +309,8 @@ def main():
     for li in layers:
         students[li] = build_student(per_layer_cfg[li], C, NH, li, dev)
         opts[li] = setup_optimizer(students[li], a.lr, a.weight_decay,
-                                   bool(per_layer_cfg[li].get('lut_tables_no_decay', False)))
+                                   bool(per_layer_cfg[li].get('lut_tables_no_decay', False)),
+                                   menu_eps=a.menu_eps, menu_lr_mult=a.menu_lr_mult)
     nparam = {li: sum(p.numel() for p in s.parameters()) for li, s in students.items()}
 
     # ---- fixed held-out val slab + train slab for the linear baseline -----------------------
@@ -316,6 +339,8 @@ def main():
         'teacher': os.path.relpath(a.teacher, FR), 'teacher_cfg_name': tcfg.get('exp_name'),
         'student_config': os.path.relpath(a.student_config, FR),
         'student_overrides': ov, 'layers': layers, 'steps': a.steps,
+        **({'menu_eps': a.menu_eps, 'menu_lr_mult': a.menu_lr_mult}
+           if (a.menu_eps is not None or a.menu_lr_mult != 1.0) else {}),
         'batch_rows': a.batch_rows, 'tokens_per_step': a.batch_rows * T, 'lr': a.lr,
         'weight_decay': a.weight_decay, 'warmup_frac': a.warmup_frac,
         'cell_smoothness': a.cell_smoothness, 'eval_rows': a.eval_rows,
@@ -405,6 +430,9 @@ def main():
                   for li in layers},
     }
     json.dump(results, open(os.path.join(out, 'results.json'), 'w'), indent=2)
+    if a.save_students:
+        for li in layers:
+            torch.save(students[li].state_dict(), os.path.join(out, f'student_L{li}.pt'))
     print('\nFINAL (held-out val slab)')
     print(f'{"layer":>5} {"MSE":>11} {"rel err":>9} {"FVU":>8} {"linear FVU":>11} {"LUT/linear":>11}')
     for li in layers:
