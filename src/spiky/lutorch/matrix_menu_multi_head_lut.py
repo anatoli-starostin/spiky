@@ -95,6 +95,9 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
             application, differing only in speed/memory (see ``_apply_menu``). "mix" was fastest and
             leanest at N=24576, H=8, d=48, M=64 on the RTX 5090 (fwd+bwd 53.0 ms / 5.8 GiB peak vs
             expand 53.4 ms / 6.9 GiB and outer 61.7 ms / 9.2 GiB; LightMultiHeadLUT 42.7 ms / 3.5 GiB).
+        menu_rank: None (dense atoms, default) or r: factored atoms W_m = B_m A_m, applied as A_m(B_m x).
+        menu_per_cell_bias: add Light-style per-cell bias vectors `menu_bias` [n_tables, 2^NAP, d_out], zero-init,
+            read by the same score-weighted bag: y = sum_m a_m x W_m + sum_t s_t b[t, c_t]. Default False.
 
     Supported layout: read_top_n == 1, forward_mode "scored", no quant_mode, output_heads == 1, anchor_mode
     "pair" or "single", multi_head_input True (per-head menus) or False (one head). Everything else is refused.
@@ -117,6 +120,7 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         menu_logit_noise: float = 0.01,
         menu_impl: str = "mix",
         menu_rank: Optional[int] = None,
+        menu_per_cell_bias: bool = False,
         cell_mode: str = "matrix_menu",
         random_seed: Optional[int] = None,
         device: Optional[torch.device] = None,
@@ -221,6 +225,15 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         else:
             self.register_buffer("menu_log_tau", log_tau)
 
+        # Per-cell bias (opt-in): y = sum_m a_m x @ W_m + sum_t s_t b[t, c_t] -- Light's vector cells added to the
+        # menu output, read by the SAME score-weighted bag. Zero-init, so the layer starts exactly where the plain
+        # menu does (small, also with inner_out_dim=-1). A DIRECT parameter of this LUT module: under the trainers'
+        # tables_no_decay rule it is exempt from weight decay, exactly like Light's `tables`. None when off, so the
+        # default build (parameters, RNG draws, forward) is byte-identical to the module without the option.
+        self.menu_per_cell_bias = bool(menu_per_cell_bias)
+        self.menu_bias = (nn.Parameter(torch.zeros(n_tables, self.table_size, output_dim, device=dev))
+                          if self.menu_per_cell_bias else None)
+
     @property
     def menu(self):
         """The per-head menu [H, M, d_in, d_out] (stored as menu_bank.weight; with menu_rank, the product B @ A,
@@ -312,8 +325,13 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         d = x[:, self.anchor_c] if self.anchor_mode == "single" else x[:, self.anchor_a] - x[:, self.anchor_b]
         return d.view(B, 1, self.n_tables, self.n_anchor_pairs), x, x.unsqueeze(1)
 
-    def menu_weights(self, x):
-        """a [N, H, M]: the confidence-weighted menu distribution summed over each head's tables."""
+    def _menu_reads(self, x):
+        """(a [N, H, M], bias [N, H, d_out] or None): the score-weighted table reads, one embedding_bag.
+
+        a is the confidence-weighted menu distribution summed over each head's tables. With per-cell bias, a
+        SECOND bag over the bias rows with the SAME addresses, scores (and head-dropout mask) gives
+        sum_t s_t b[t, c_t]. A separate bag rather than concatenated rows keeps the menu read -- values AND
+        gradients -- bit-identical to the module without the option (a zero bias adds exactly 0.0)."""
         B, H, T = x.shape[0], self.n_heads, self.tables_per_head
         d, x_flat, _ = self._margins(x)
         index = self._pack_index(x_flat, d.view(B, H * T, -1) if not self.multi_head_input else d)
@@ -322,13 +340,24 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         P = self.menu_probs()                                                    # [n_tables, 2^NAP, M]
         flat = P.reshape(self.n_tables * self.table_size, self.menu_size)
         flat_idx = (index + self.table_offset.view(1, H, T)).reshape(-1)
-        return self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self.menu_size)
+        a = self._bagged_sum(flat, flat_idx, score, B * H, T).view(B, H, self.menu_size)
+        if self.menu_bias is None:
+            return a, None
+        fb = self.menu_bias.reshape(self.n_tables * self.table_size, self.output_dim)
+        return a, self._bagged_sum(fb, flat_idx, score, B * H, T).view(B, H, self.output_dim)
+
+    def menu_weights(self, x):
+        """a [N, H, M]: the confidence-weighted menu distribution summed over each head's tables."""
+        return self._menu_reads(x)[0]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x [B, H, d_in] (multi_head_input) or [B, d_in] -> [B, H, d_out] or [B, d_out], as Light."""
-        a = self.menu_weights(x)
+        """x [B, H, d_in] (multi_head_input) or [B, d_in] -> [B, H, d_out] or [B, d_out], as Light.
+        y = sum_m a_m x @ W_m  (+ sum_t s_t b[t, c_t] with menu_per_cell_bias)."""
+        a, bias = self._menu_reads(x)
         xh = x if self.multi_head_input else x.unsqueeze(1)
         y = self._apply_menu(a, xh)
+        if bias is not None:
+            y = y + bias.to(y.dtype)
         return y if self.multi_head_input else y.squeeze(1)
 
     # ------------------------------------------------------------------ regularisers / export ------------------------
@@ -358,7 +387,8 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         H, T, M = self.n_heads, self.tables_per_head, self.menu_size
         di, do = self.input_dim, self.output_dim
         atom = di * do if self.menu_rank is None else self.menu_rank * (di + do)
-        return {"sparse_hard": H * min(T, M) * atom, "dense_mix": H * M * atom}
+        bias = H * T * do if self.menu_bias is not None else 0          # score-weighted per-cell bias read
+        return {"sparse_hard": H * min(T, M) * atom + bias, "dense_mix": H * M * atom + bias}
 
     @torch.no_grad()
     def export_indices(self):
@@ -372,6 +402,8 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
         else:                                   # store the factors (M*r*(d_in+d_out) per head), not the product
             art["menu_A"] = self.menu_bank.A.detach().clone()
             art["menu_B"] = self.menu_bank.B.detach().clone()
+        if self.menu_bias is not None:          # per-cell bias vectors, read with the same address and score
+            art["cell_bias"] = self.menu_bias.detach().clone()
         return art
 
     def extra_repr(self) -> str:

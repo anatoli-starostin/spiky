@@ -58,6 +58,8 @@ def _naive(m, x):
             p = P[h * T + t][index[:, h, t]]                                                # [B, M]
             Wc = torch.einsum("bm,mio->bio", p, m.menu[h])                                  # [B, di, do]
             yh = yh + score[:, h, t, None] * torch.einsum("bi,bio->bo", xh[:, h], Wc)
+            if m.menu_bias is not None:                                                     # per-cell bias
+                yh = yh + score[:, h, t, None] * m.menu_bias[h * T + t][index[:, h, t]]
         out.append(yh)
     y = torch.stack(out, 1)
     return y if mh else y.squeeze(1)
@@ -303,3 +305,71 @@ def test_hard_forward_equals_sparse_per_table_apply(rank):
     macs = m.inference_macs_per_token()
     atom = DIN * DOUT if rank is None else rank * (DIN + DOUT)
     assert macs["sparse_hard"] == H * min(TPH, M) * atom and macs["dense_mix"] == H * M * atom
+
+
+# ---------------------------------------------------------------- per-cell bias (y = sum_m a_m x W_m + sum_t s_t b) --
+def _with_random_bias(m, seed=7):
+    with torch.no_grad():
+        m.menu_bias.copy_(torch.randn(m.menu_bias.shape, generator=torch.Generator().manual_seed(seed), dtype=D64))
+    return m
+
+
+@pytest.mark.parametrize("mh", [True, False])
+@pytest.mark.parametrize("impl", MENU_IMPLS)
+@pytest.mark.parametrize("hard", [False, True])
+def test_cell_bias_collapsed_equals_naive(mh, impl, hard):
+    m = _with_random_bias(_make(mh, menu_impl=impl, menu_forward="hard" if hard else "soft", menu_per_cell_bias=True))
+    x1 = _x(mh).requires_grad_(True)
+    x2 = x1.detach().clone().requires_grad_(True)
+    y1, y2 = m(x1), _naive(m, x2)
+    torch.testing.assert_close(y1, y2, rtol=1e-10, atol=1e-12)
+    g = torch.randn_like(y1)
+    ps = [m.menu_bank.weight, m.menu_logits, m.menu_log_tau, m.menu_bias]
+    for a, b in zip(torch.autograd.grad(y1, [x1] + ps, g), torch.autograd.grad(y2, [x2] + ps, g)):
+        torch.testing.assert_close(a, b, rtol=1e-9, atol=1e-11)
+
+
+@pytest.mark.parametrize("rank", [None, 2])
+def test_cell_bias_zero_is_bit_identical_to_no_bias(rank):
+    for mh in (True, False):
+        for mode in ("soft", "hard"):
+            off = _make(mh, menu_forward=mode, menu_rank=rank)
+            on = _make(mh, menu_forward=mode, menu_rank=rank, menu_per_cell_bias=True)
+            sd_on = {k: v for k, v in on.state_dict().items() if k != "menu_bias"}
+            assert list(off.state_dict()) == list(sd_on)
+            for k, v in off.state_dict().items():
+                assert torch.equal(v, sd_on[k]), k
+            x = _x(mh)
+            assert torch.equal(off(x), on(x))
+            xo, xn = x.clone().requires_grad_(True), x.clone().requires_grad_(True)
+            go = torch.autograd.grad(off(xo).square().sum(), [xo, off.menu_logits])
+            gn = torch.autograd.grad(on(xn).square().sum(), [xn, on.menu_logits])
+            for a, b in zip(go, gn):
+                assert torch.equal(a, b)
+
+
+def test_cell_bias_rank_hard_decay_export_macs():
+    m = _with_random_bias(_make(True, menu_rank=2, menu_forward="hard", menu_per_cell_bias=True))
+    x = _x(True)
+    torch.testing.assert_close(m(x), _naive(m, x), rtol=1e-10, atol=1e-12)
+    g = torch.autograd.grad(m(x.clone().requires_grad_(True)).sum(), m.menu_bias)[0]
+    assert g.abs().sum() > 0
+    exempt = {id(p) for mod in m.modules() if isinstance(mod, LightMultiHeadLUT) for p in mod.parameters(recurse=False)}
+    assert id(m.menu_bias) in exempt                                  # no weight decay, like Light's tables
+    decayed = {n for n, p in m.named_parameters() if not (id(p) in exempt or p.ndim < 2)}
+    assert decayed == {"menu_bank.A", "menu_bank.B"}
+    assert "cell_bias" in m.export_indices()
+    macs = m.inference_macs_per_token()
+    assert macs["sparse_hard"] == H * min(TPH, M) * 2 * (DIN + DOUT) + H * TPH * DOUT
+
+
+@pytest.mark.parametrize("out_dim", [4, -1])
+def test_cell_bias_integration_starts_small(out_dim):
+    c = CompressionMultiHeadLUT(24, 24, inner_in_dim=DIN, inner_out_dim=out_dim, nap=NAP, tph=TPH, n_heads=H,
+                                lut_impl="light", cell_mode="matrix_menu", random_seed=5,
+                                menu_config=dict(menu_size=M, menu_per_cell_bias=True)).double()
+    assert c.lut_light.menu_bias.shape == (H * TPH, 2 ** NAP, 4 if out_dim != -1 else 24)
+    assert c.lut_light.menu_bias.abs().max() == 0                     # zero-init
+    x = torch.randn(B, 24, dtype=D64, generator=torch.Generator().manual_seed(2))
+    if out_dim == -1:
+        assert c(x).abs().max() < 1e-2                                # small at init without decompress too
