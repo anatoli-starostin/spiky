@@ -159,6 +159,11 @@ class MinimalBlock(nn.Module):
             self.mlp = nn.Sequential(
                 nn.Linear(n_embd, hid, bias=False), _act(),
                 nn.Linear(hid, n_embd, bias=False))
+            # Optional post-FFN dropout: standard inverted dropout on the FFN output before the
+            # residual add, applied FUNCTIONALLY in forward (train only; F.dropout is a no-op at
+            # eval / when p==0). Kept out of self.mlp so weight-init loops still see only Linears.
+            # dense_ffn_dropout=0.0 default -> byte-identical to every existing dense run.
+            self.dense_ffn_dropout = float(cfg.get('dense_ffn_dropout', 0.0))
         else:
             self.lin = nn.Linear(n_embd, n_embd, bias=True) if gamma == 1 else None
             fwd = cfg.get('lut_forward_mode', 'hard')
@@ -385,7 +390,10 @@ class MinimalBlock(nn.Module):
             g = torch.sigmoid(self.gate_theta)
             return x + g * o_ffn + (1.0 - g) * o_lut
         if self.ffn_type == 'dense':
-            return x + self.mlp(h)
+            o = self.mlp(h)
+            if self.dense_ffn_dropout > 0.0:
+                o = F.dropout(o, p=self.dense_ffn_dropout, training=self.training)   # standard inverted dropout; no-op at eval
+            return x + o
         B, T, C = h.shape
         o = self.ffn(h.reshape(B * T, C))
         if o.dim() == 3:                 # raw FastMHL returns [N, n_heads, C]; sum heads
