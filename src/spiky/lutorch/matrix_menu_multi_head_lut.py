@@ -350,6 +350,16 @@ class MatrixMenuMultiHeadLUT(LightMultiHeadLUT):
     def forward_int(self, x):
         raise NotImplementedError("forward_int is a quant_mode path; the matrix menu has no quantised read")
 
+    def inference_macs_per_token(self):
+        """Multiply-accumulates per token of the HARD (argmax) read, by implementation. With one argmax menu item
+        per table, head h applies at most tables_per_head distinct atoms, so a sparse gather-and-apply read costs
+        H * min(T, M) * (atom cost); the dense mix used in training costs H * M * (atom cost). Excludes the
+        address/score work (NAP comparisons and one scalar score per table) and any compress/decompress."""
+        H, T, M = self.n_heads, self.tables_per_head, self.menu_size
+        di, do = self.input_dim, self.output_dim
+        atom = di * do if self.menu_rank is None else self.menu_rank * (di + do)
+        return {"sparse_hard": H * min(T, M) * atom, "dense_mix": H * M * atom}
+
     @torch.no_grad()
     def export_indices(self):
         """The inference artefact: {"menu": [H, M, d_in, d_out], "index": [n_tables, 2^NAP] (argmax),

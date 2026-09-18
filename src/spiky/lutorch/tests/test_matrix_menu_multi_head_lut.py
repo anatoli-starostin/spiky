@@ -277,3 +277,29 @@ def test_rank_params_init_decay_and_export():
         _make(True, menu_rank=0)
     with pytest.raises(ValueError):
         _make(True, menu_rank=2, menu_init="orthogonal")
+
+
+# ---------------------------------------------------------------- sparse hard read (the inference cost claim) ------
+@pytest.mark.parametrize("rank", [None, 2])
+def test_hard_forward_equals_sparse_per_table_apply(rank):
+    """In hard mode each (token, head, table) applies exactly ONE argmax atom, so the layer equals
+    sum_t score_t * x_h @ W[h, argmax(logits[t, c_t])] -- tph atom applications per head, which is what
+    inference_macs_per_token()[sparse_hard] counts."""
+    m = _make(True, menu_forward="hard", menu_rank=rank)
+    x = _x(True)
+    with torch.no_grad():
+        y = m(x)
+        d, x_flat, _ = m._margins(x)
+        c = ((d > 0).to(torch.int64) * m.powers.view(1, 1, 1, -1)).sum(-1)                  # [B, H, T]
+        s = m.confidence_score(d)                                                           # [B, H, T]
+        item = m.menu_logits.argmax(-1).view(H, TPH, -1)                                    # [H, T, K]
+        W = m.menu                                                                          # [H, M, di, do]
+        ref = torch.zeros(B, H, DOUT, dtype=D64)
+        for h in range(H):
+            for t in range(TPH):
+                sel = item[h, t][c[:, h, t]]                                                # [B] atom per token
+                ref[:, h] += s[:, h, t, None] * torch.einsum("bi,bio->bo", x[:, h], W[h][sel])
+    torch.testing.assert_close(y, ref, rtol=1e-10, atol=1e-12)
+    macs = m.inference_macs_per_token()
+    atom = DIN * DOUT if rank is None else rank * (DIN + DOUT)
+    assert macs["sparse_hard"] == H * min(TPH, M) * atom and macs["dense_mix"] == H * M * atom
