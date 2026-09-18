@@ -227,3 +227,53 @@ def test_compression_mhl_refuses_menu_config_elsewhere():
     with pytest.raises(ValueError):
         CompressionMultiHeadLUT(24, 24, inner_in_dim=DIN, inner_out_dim=4, nap=NAP, tph=TPH, n_heads=H,
                                 lut_impl="fast", cell_mode="matrix_menu")
+
+
+# ---------------------------------------------------------------- menu_rank (factored atoms W = B @ A) ----------
+@pytest.mark.parametrize("mh", [True, False])
+@pytest.mark.parametrize("hard", [False, True])
+@pytest.mark.parametrize("rank", [1, 3])
+def test_rank_collapsed_equals_naive(mh, hard, rank):
+    m = _make(mh, menu_rank=rank, menu_forward="hard" if hard else "soft")
+    x1 = _x(mh).requires_grad_(True)
+    x2 = x1.detach().clone().requires_grad_(True)
+    y1, y2 = m(x1), _naive(m, x2)                       # _naive uses m.menu = B @ A, formed explicitly
+    torch.testing.assert_close(y1, y2, rtol=1e-10, atol=1e-12)
+    g = torch.randn_like(y1)
+    ps = [m.menu_bank.A, m.menu_bank.B, m.menu_logits, m.menu_log_tau]
+    for a, b in zip(torch.autograd.grad(y1, [x1] + ps, g), torch.autograd.grad(y2, [x2] + ps, g)):
+        torch.testing.assert_close(a, b, rtol=1e-9, atol=1e-11)
+
+
+@pytest.mark.parametrize("mh", [True, False])
+def test_rank_full_recovers_dense(mh):
+    """r = min(d_in, d_out) spans every matrix: copying B @ A into a dense menu gives the same layer exactly."""
+    r = min(DIN, DOUT)
+    fac = _make(mh, menu_rank=r)
+    dense = _make(mh)
+    with torch.no_grad():
+        dense.menu_bank.weight.copy_(fac.menu)
+        dense.menu_logits.copy_(fac.menu_logits)
+    for mode in ("soft", "hard"):
+        fac.menu_forward = dense.menu_forward = mode
+        x = _x(mh)
+        torch.testing.assert_close(fac(x), dense(x), rtol=1e-10, atol=1e-12)
+
+
+def test_rank_params_init_decay_and_export():
+    r = 2
+    m = _make(True, menu_rank=r, menu_init_scale=None)
+    assert m.menu_bank.A.shape == (H, M, r, DOUT) and m.menu_bank.B.shape == (H, M, DIN, r)
+    assert "weight" not in dict(m.menu_bank.named_parameters())
+    big = MatrixMenuMultiHeadLUT(input_dim=48, n_tables=4 * 16, output_dim=48, n_anchor_pairs=NAP, random_seed=3,
+                                 n_heads=4, multi_head_input=True, menu_size=32, menu_rank=4)
+    assert abs(big.menu.std().item() / MENU_INIT_STD - 1) < 0.05          # product starts as small as dense
+    exempt = {id(p) for mod in m.modules() if isinstance(mod, LightMultiHeadLUT) for p in mod.parameters(recurse=False)}
+    decayed = {n for n, p in m.named_parameters() if not (id(p) in exempt or p.ndim < 2)}
+    assert decayed == {"menu_bank.A", "menu_bank.B"}
+    art = m.export_indices()
+    assert set(art) == {"index", "bits_per_cell", "menu_A", "menu_B"}
+    with pytest.raises(ValueError):
+        _make(True, menu_rank=0)
+    with pytest.raises(ValueError):
+        _make(True, menu_rank=2, menu_init="orthogonal")
