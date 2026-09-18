@@ -249,6 +249,10 @@ class CompressionMultiHeadLUT(nn.Module):
                 smooth_mode=bool(gen1_smooth), uncertainty_mode=UncertaintyMode.INVERSE_L1,
                 random_seed=random_seed, initial_weights_noise=initial_weights_noise, device=device,
                 weights_init=gen1_weights_init,
+                # Whole-table head dropout (gen1 has no confidence score, so the LightMHL score-mask has no
+                # analogue): MultiHeadLut.table_dropout drops whole tables on the per-table LProjection output
+                # with an inverted Bernoulli mask (survivors / (1-p)), train-only, off at eval. 0.0 == unchanged.
+                table_dropout=head_dropout_rate,
             )
             self.decompress = nn.Linear(n_heads * out_raw, output_dim, device=device)
             return
