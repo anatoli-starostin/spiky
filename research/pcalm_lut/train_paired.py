@@ -210,6 +210,7 @@ def main():
                batch=a.batch, lr=a.lr, alpha=a.alpha, rho0=a.rho, rho_max=a.rho_max, mu=a.mu, seed=a.seed,
                dataset=a.dataset, a_i=model.ai, read_tau_init=0.5, nap=8, table_size=256, read_top_n=2,
                table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
+               align_layer_order='numeric',   # absent -> that run's align/f_tables_L{i} are lexicographic
                _arch_note='PC / PC-ALM over paired forward+backward LightMHL stacks (DERIVATION_v2.md). '
                           'Arm A: symmetric energy, both f and g get gradient from E. Arm B: forward maps as '
                           'constraints with multipliers lam, g outside L_rho (warm start + reconstruction R, '
@@ -296,7 +297,13 @@ def main():
                 # forward path), so they have no reference gradient: alignment is defined for f only, and
                 # g's coverage is reported by align/g_grad_frac instead.
                 fk = [k for k in al if (k.startswith('f_lut') or k.startswith('f_out')) and k.endswith('tables')]
-                for i, k in enumerate(sorted(fk)):
+                # sort NUMERICALLY, with the readout last. Plain sorted() is lexicographic, which orders
+                # f_lut.10 before f_lut.2 and silently scrambles the depth axis of this metric (runs
+                # without cfg['align_layer_order'] == 'numeric' were logged that way; analyze_sweep.py
+                # remaps them).
+                def _depth(k):
+                    return (1, 0) if k.startswith('f_out') else (0, int(k.split('.')[1]))
+                for i, k in enumerate(sorted(fk, key=_depth)):
                     row[f'align/f_tables_L{i}'] = al[k]
             with torch.no_grad():
                 pred = model(xte[:2000]).argmax(-1)

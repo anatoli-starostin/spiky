@@ -41,6 +41,27 @@ def per_layer(row, prefix, nl):
     return [row[f'{prefix}{i}'] for i in range(nl) if f'{prefix}{i}' in row]
 
 
+def lex_to_numeric(n_slots):
+    """Index permutation for runs logged before align_layer_order == 'numeric'.
+
+    align/f_tables_L{i} was filled from sorted(parameter names), which is LEXICOGRAPHIC: f_lut.0,
+    f_lut.1, f_lut.10, f_lut.11, ..., f_lut.2, ..., f_lut.9, f_out. So slot i holds the cosine of a
+    different layer than i. n_slots counts the interior blocks PLUS the readout (depth-2+1 = depth-1,
+    not depth). Returns perm with perm[d] = the slot holding depth d, readout last."""
+    inner = n_slots - 1                              # f_lut.0 .. f_lut.{inner-1}, then f_out
+    order = sorted(range(inner), key=str)            # the layer index sitting in each slot
+    slot_of = {lay: s for s, lay in enumerate(order)}
+    return [slot_of[d] for d in range(inner)] + [n_slots - 1]
+
+
+def align_by_depth(row, nl, numeric):
+    """The per-layer alignment row, in true depth order regardless of how the run logged it."""
+    v = per_layer(row, 'align/f_tables_L', nl)
+    if numeric or len(v) < 3:
+        return v
+    return [v[s] for s in lex_to_numeric(len(v))]
+
+
 def fmt(v, w=7, p=4):
     return f'{v:>{w}.{p}f}' if isinstance(v, float) and not math.isnan(v) else f'{"n/a":>{w}}'
 
@@ -68,7 +89,9 @@ def headline(runs):
             continue
         sd = st.stdev(accs) if len(accs) > 1 else 0.0
         print(f'{label:10s} {len(accs):>5d} {st.mean(accs):>13.4f} +-{sd:.4f} '
-              f'{st.mean(losses):>11.4f} {st.mean(sps):>8.3f} {st.mean(walls) / 60:>7.1f}m')
+              f'{st.mean(losses):>10.4f} {st.mean(objs):>10.4f} {st.mean(sps):>8.3f} '
+              f'{st.mean(walls) / 60:>7.1f}m')
+        print(f'{"":10s} {"":>5s} {"per seed:":>20s} ' + '  '.join(f'{v:.4f}' for v in accs))
 
 
 def chase1(runs, Ts):
@@ -84,16 +107,19 @@ def chase1(runs, Ts):
             rows = [r for r in h if 'align/f_tables_L0' in r]
             if not rows:
                 continue
-            print(f'\n  {label} seed {s} (T={d["cfg"]["T"]})')
-            print(f'   {"step":>6s} {"mean":>7s} {"min":>7s} {"argmin":>6s} {"#neg":>5s}   per-layer')
+            numeric = d['cfg'].get('align_layer_order') == 'numeric'
+            print(f'\n  {label} seed {s} (T={d["cfg"]["T"]})'
+                  + ('' if numeric else '  [logged lexicographically; remapped to depth order]'))
+            print(f'   {"step":>6s} {"mean":>7s} {"min":>7s} {"argmin":>6s} {"#neg":>5s}   '
+                  'per-layer, input -> readout')
             picks = [rows[0], rows[len(rows) // 4], rows[len(rows) // 2], rows[-1]]
             for r in picks:
-                v = per_layer(r, 'align/f_tables_L', nl)
+                v = align_by_depth(r, nl, numeric)
                 mn = min(v)
                 print(f'   {r["step"]:>6d} {st.mean(v):>7.3f} {mn:>7.3f} {v.index(mn):>6d} '
                       f'{sum(1 for x in v if x < 0):>5d}   '
                       + ' '.join(f'{x:+.2f}' for x in v))
-            neg = [sum(1 for x in per_layer(r, 'align/f_tables_L', nl) if x < 0) for r in rows]
+            neg = [sum(1 for x in align_by_depth(r, nl, numeric) if x < 0) for r in rows]
             print(f'   layers with cos<0: first probe {neg[0]}, max {max(neg)}, last {neg[-1]}, '
                   f'mean over training {st.mean(neg):.2f} of {nl}')
     if Ts:
@@ -106,11 +132,12 @@ def chase1(runs, Ts):
                 if not d:
                     continue
                 h, nl = d['hist'], d['cfg']['depth']
+                numeric = d['cfg'].get('align_layer_order') == 'numeric'
                 rows = [r for r in h if 'align/f_tables_L0' in r]
                 if not rows:
                     continue
-                v = per_layer(rows[-1], 'align/f_tables_L', nl)
-                neg = [sum(1 for x in per_layer(r, 'align/f_tables_L', nl) if x < 0) for r in rows]
+                v = align_by_depth(rows[-1], nl, numeric)
+                neg = [sum(1 for x in align_by_depth(r, nl, numeric) if x < 0) for r in rows]
                 print(f'   {label:10s} {T:>4d} {st.mean(v):>16.3f} {min(v):>15.3f} '
                       f'{sum(1 for x in v if x < 0):>12d} {st.mean(neg):>12.2f} '
                       f'{last(h, "eval/test_acc"):>9.4f}')
