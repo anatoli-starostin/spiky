@@ -61,7 +61,7 @@ def read_structure(lut, z, a_scale):
     return (idx + offs).reshape(z.shape[0], -1), coef.reshape(z.shape[0], -1)   # [B, 2T] each
 
 
-def lut_lstsq(flat_idx, coef, target, n_cells, iters=400, tol=1e-10):
+def lut_lstsq(flat_idx, coef, target, n_cells, iters=400, tol=1e-10, ridge=0.0):
     """min_V ||target - A V||^2 with A given by (flat_idx, coef); CG on the normal equations.
 
     A V     : out[b, d] = sum_k coef[b, k] * V[flat_idx[b, k], d]
@@ -79,13 +79,27 @@ def lut_lstsq(flat_idx, coef, target, n_cells, iters=400, tol=1e-10):
         g.index_add_(0, flat_idx.reshape(-1), (coef.reshape(-1, 1) * u.repeat_interleave(K, 0)))
         return g
 
+    # Tikhonov ridge, scaled to the system: even with B > n_cells the design matrix is rank-deficient in
+    # practice -- rarely addressed cells contribute near-zero columns -- and unregularised CG amplifies
+    # those directions until the tables blow up. lam is expressed as a fraction of the MEAN diagonal of
+    # A^T A (which is exactly the per-cell sum of squared coefficients), so it is scale-free.
+    lam = 0.0
+    if ridge > 0:
+        diag = torch.zeros(n_cells, device=dev, dtype=dt)
+        diag.index_add_(0, flat_idx.reshape(-1), coef.reshape(-1) ** 2)
+        lam = ridge * float(diag.mean())
+
+    def normal_op(V):
+        out = Atu(Av(V))
+        return out + lam * V if lam > 0 else out
+
     V = torch.zeros(n_cells, D, device=dev, dtype=dt)
     r = Atu(target)                       # residual of the normal equations at V = 0
     p = r.clone()
     rs = float((r * r).sum())
     rs0 = rs
     for _ in range(iters):
-        Ap = Atu(Av(p))
+        Ap = normal_op(p)
         denom = float((p * Ap).sum())
         if denom <= 0:
             break
