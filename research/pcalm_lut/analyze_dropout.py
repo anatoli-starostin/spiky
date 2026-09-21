@@ -76,11 +76,11 @@ def main():
             if not ds:
                 print(f'{LABEL[v]:18s} {p:>5} {L:>3d}   (missing)')
                 continue
-            a, sd, n = agg(ds, acc)
+            am, sd, n = agg(ds, acc)
             print(f'{LABEL[v]:18s} {p:>5} {L:>3d} {n:>2d} '
                   f'{agg(ds, lambda d: tail(d["hist"], "eval/train_loss_full"))[0]:>11.4f} '
                   f'{agg(ds, lambda d: tail(d["hist"], "eval/train_acc"))[0]:>10.4f} '
-                  f'{a:>9.4f} {sd:>6.4f} '
+                  f'{am:>9.4f} {sd:>6.4f} '
                   f'{agg(ds, lambda d: tail(d["hist"], "eval/gap"))[0]:>7.4f} '
                   f'{agg(ds, lambda d: tail(d["hist"], "margin/m_min_p50_mean"))[0]:>11.4f} '
                   f'{agg(ds, tau_last)[0]:>9.4f} '
