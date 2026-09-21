@@ -201,8 +201,12 @@ def stability_ok(eta_h, sigma_max, rho, alpha):
     return eta_h * sigma_max ** 2 * (2 * rho + alpha) < 4.0
 
 
-def run_epochs(model, loader, mode, *, epochs=1, lr=1e-3, device='cuda', log_every=100, **step_kw):
-    """Train with Adam; returns a history of (step, loss) and the wall clock."""
+def run_epochs(model, loader, mode, *, epochs=1, lr=1e-3, device='cuda', log_every=100, max_steps=None,
+               **step_kw):
+    """Train with Adam; returns a history of (step, loss, wall time) and the total wall clock.
+
+    `max_steps` truncates the budget (a fraction of an epoch) while keeping the batch order identical, so a
+    truncated run is a strict prefix of the full one."""
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     hist, step, t0 = [], 0, time.time()
     for _ in range(epochs):
@@ -212,4 +216,6 @@ def run_epochs(model, loader, mode, *, epochs=1, lr=1e-3, device='cuda', log_eve
             step += 1
             if step % log_every == 0 or step == 1:
                 hist.append({'step': step, 'loss': loss, 'time': time.time() - t0, **stats})
+            if max_steps and step >= max_steps:
+                return hist, time.time() - t0
     return hist, time.time() - t0
