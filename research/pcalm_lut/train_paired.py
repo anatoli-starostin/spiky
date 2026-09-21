@@ -68,7 +68,7 @@ def eta_h_rule(sigma, rho, alpha):
     return 2.0 / max(sigma ** 2 * (2 * rho + alpha), 1e-12)
 
 
-def inner_loop(model, x, y, arm, *, T, eta_h, alpha, rho, collect=False):
+def inner_loop(model, x, y, arm, *, T, eta_h, alpha, rho, collect=False, trust=0.0):
     """Relaxation. Returns (hs, lam, stats). Arm A uses energy_A (no multipliers); arm B uses energy_B."""
     if arm == 'pcalmB':
         hs = [h.detach().clone().requires_grad_(True) for h in model.init_states_warm(x, y)]
@@ -88,7 +88,16 @@ def inner_loop(model, x, y, arm, *, T, eta_h, alpha, rho, collect=False):
         g = torch.autograd.grad(e, hs)
         with torch.no_grad():
             for h, gi in zip(hs, g):
-                h -= eta_h * gi
+                step = -eta_h * gi
+                if trust > 0:
+                    # TRUST REGION: no state may move further than `trust` times its own norm in one
+                    # inner step. Per SAMPLE rather than per whole tensor, so a few large-residual rows
+                    # cannot shrink the step for the rest of the batch; the radius is relative, so it is
+                    # scale-free as h grows or shrinks over training.
+                    n = step.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+                    lim = trust * h.norm(dim=-1, keepdim=True)
+                    step = step * torch.clamp(lim / n, max=1.0)
+                h += step
             if arm == 'pcalmB' and alpha:
                 for li, ri in zip(lam, rf):
                     li += alpha * ri.detach()
@@ -114,7 +123,7 @@ def inner_loop(model, x, y, arm, *, T, eta_h, alpha, rho, collect=False):
     return hs, lam, stats
 
 
-def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0):
+def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0, trust=0.0):
     """Populate .grad for one arm on one batch (no optimiser step). Returns (loss_value, stats)."""
     model.zero_grad(set_to_none=True)
     if arm == 'bp':
@@ -129,13 +138,15 @@ def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0):
         loss.backward()
         keep = {n: p.grad.detach().clone() for n, p in model.named_parameters()
                 if n.startswith('f_out') and p.grad is not None}
-        val, stats = arm_grads(model, x, y, 'pcA', T=T, eta_h=eta_h, alpha=alpha, rho=rho, mu=mu)
+        val, stats = arm_grads(model, x, y, 'pcA', T=T, eta_h=eta_h, alpha=alpha, rho=rho, mu=mu,
+                               trust=trust)
         for n, p in model.named_parameters():
             if n in keep:
                 p.grad = keep[n]
         stats['bp_loss'] = float(loss.detach())
         return val, stats
-    hs, lam, stats = inner_loop(model, x, y, arm, T=T, eta_h=eta_h, alpha=alpha, rho=rho, collect=True)
+    hs, lam, stats = inner_loop(model, x, y, arm, T=T, eta_h=eta_h, alpha=alpha, rho=rho,
+                                collect=True, trust=trust)
     if arm == 'pcA':
         e, rf, rb = model.energy_A(x, y, hs)
     else:
@@ -285,6 +296,9 @@ def main():
                     help='pinned: the target is clamped as the top state, contributing one more forward '
                          'residual and NO separate data term. data: input-only clamping with the data term '
                          '(the mode every run before 2026-09-21 used).')
+    ap.add_argument('--trust-radius', type=float, default=0.0,
+                    help='per-inner-step trust region: a state may move at most this fraction of its own '
+                         'norm per relaxation step (per sample). 0 disables it.')
     ap.add_argument('--train-eval', action='store_true',
                     help='also evaluate on a fixed 2000-row TRAIN subset, for the train/test gap')
     ap.add_argument('--dataset', default='fashion')
@@ -315,6 +329,7 @@ def main():
                table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
                align_layer_order='numeric',   # absent -> that run's align/f_tables_L{i} are lexicographic
                optimizer=a.optimizer,
+               trust_radius=a.trust_radius,
                clamp=a.clamp,
                _arch_note='PC / PC-ALM over paired forward+backward LightMHL stacks (DERIVATION_v2.md). '
                           'Arm A: symmetric energy, both f and g get gradient from E. Arm B: forward maps as '
@@ -349,7 +364,8 @@ def main():
         # steps or between the energy's prediction and its vjp (test_dropout_mask_stable.py asserts it).
         model.resample_dropout(x.shape[0])
         fp = dropout_fingerprint(model) if (a.table_dropout or a.residual_dropout) else None
-        loss, stats = arm_grads(model, x, y, a.arm, T=T, eta_h=eta_h, alpha=a.alpha, rho=rho, mu=a.mu)
+        loss, stats = arm_grads(model, x, y, a.arm, T=T, eta_h=eta_h, alpha=a.alpha, rho=rho,
+                                mu=a.mu, trust=a.trust_radius)
         if fp is not None and dropout_fingerprint(model) != fp:
             raise RuntimeError(f'step {step}: a dropout mask changed during the update -- the mask must '
                                f'be pinned for all {T} inner steps and the vjp')

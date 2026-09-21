@@ -175,7 +175,7 @@ class ResidualMLP(LayerChain):
         return self.aL * F.linear(self.act(h), self.WL)
 
 
-def constraint_sigma_max(model, x, iters=30, eps=1e-3):
+def constraint_sigma_max(model, x, y=None, iters=30, eps=1e-3):
     """sigma_max of the constraint operator A = dr/dh at the current point, by power iteration on A^T A.
 
     The paper sets eta_h = 1 / sigma_max(A)^2 per (N, L) and dataset (App. F); this reproduces that estimate
@@ -190,14 +190,14 @@ def constraint_sigma_max(model, x, iters=30, eps=1e-3):
     v = [vi / n for vi in v]
     sigma = 0.0
     with torch.no_grad():
-        r0 = model.residuals(x, hs)
+        r0 = model.residuals(x, hs, y)
     for _ in range(iters):
         with torch.no_grad():                                       # A v by finite differences
             hp = [h + eps * vi for h, vi in zip(hs, v)]
-            rp = model.residuals(x, hp)
+            rp = model.residuals(x, hp, y)
             Av = [(a - b) / eps for a, b in zip(rp, r0)]
         hg = [h.detach().clone().requires_grad_(True) for h in hs]  # A^T (A v) by one backward
-        r = model.residuals(x, hg)
+        r = model.residuals(x, hg, y)
         AtAv = torch.autograd.grad(r, hg, grad_outputs=Av)
         n = math.sqrt(sum(float(t.pow(2).sum()) for t in AtAv))
         if n == 0:

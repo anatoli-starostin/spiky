@@ -66,7 +66,7 @@ def main():
         opt = torch.optim.Adam(model.parameters(), lr=a.lr)
         loader = TensorLoader(xtr, ytr, batch_size=a.batch, seed=a.seed)
         px, py = xtr[:a.batch], ytr[:a.batch]
-        sigma = constraint_sigma_max(model, px)
+        sigma = constraint_sigma_max(model, px, py)
         eta_h = 1.0 / max(sigma ** 2, 1e-12)
         rows, it, step = [], iter(loader), 0
         print(f'\n=== {mode}  depth {a.depth} width {a.width} T {a.T} clamp {a.clamp} '
