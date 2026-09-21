@@ -1,0 +1,5 @@
+# matched-MAC Light for the tph8 menu line (0.378x FFN): Light H10 d48 tph128 = 0.3125 (compress/decompress 384<->480)
+# + bag 10*128*48 (0.052) = 0.365x FFN; tables 10*128*256*48 floats = 62.9 MB fp32.
+light4k_H10_tph128|--steps 4000|{"lut_n_heads": 10, "lut_tables_per_head": 128}
+# seed-2 replicate of the tph8 M512 + bias point.
+menu4k_H8_tph8_M512_cellbias_seed2|--steps 4000 --seed 2|{"lut_n_heads": 8, "lut_tables_per_head": 8, "lut_cell_mode": "matrix_menu", "lut_menu_size": 512, "lut_menu_forward": "hard", "lut_menu_per_cell_bias": true, "lut_base_seed": 2000}

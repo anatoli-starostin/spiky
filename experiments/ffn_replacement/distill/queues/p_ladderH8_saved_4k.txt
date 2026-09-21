@@ -1,0 +1,3 @@
+# Re-run of ladder4k_H8 (Light H8 tph128, identical protocol) WITH saved students, so the canonical Light
+# reference can be swap-evaluated (swap_eval.py). Should reproduce ladder4k_H8's FVU (same seed/data).
+ladder4k_H8_saved|--steps 4000|{"lut_n_heads": 8}
