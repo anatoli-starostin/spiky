@@ -30,7 +30,7 @@ run () {
   fi
 }
 
-for L in 2 4 8; do
+for L in 3 4 8; do
   T=$((2 * L))
   run "depth-L$L-bp-adam1e-3"  --depth $L --arm bp     --optimizer adam --lr 1e-3
   for lr in 1e-2 3e-2; do
