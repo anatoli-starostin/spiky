@@ -131,17 +131,27 @@ class PairedLUTStack(nn.Module):
         return self.ai * self.g_out(yhat)
 
     # ---- states, residuals, energies ----------------------------------------------------------------------
-    @torch.no_grad()
     def init_states(self, x):
-        hs = [self.h1(x)]
-        for i in range(self.n_hidden - 1):
-            hs.append(self.layer(i, hs[-1]))
-        return hs
+        """The feedforward states, detached.
 
-    @torch.no_grad()
+        Runs under enable_grad (and detaches) rather than no_grad so that the PINNED dropout masks apply
+        here too: both dropout variants are gated on grad being enabled, so a no_grad initialisation
+        would start the relaxation from the FULL network while the residuals inside the loop use the
+        dropped one -- r^f would be large at t=0 purely from that mismatch, and the update would not
+        correspond to any single sub-network. With no dropout this is bit-for-bit the old behaviour."""
+        with torch.enable_grad():
+            hs = [self.h1(x)]
+            for i in range(self.n_hidden - 1):
+                hs.append(self.layer(i, hs[-1]))
+        return [h.detach() for h in hs]
+
+    @torch.enable_grad()
     def init_states_warm(self, x, y, blend=0.5):
         """Arm B warm start: forward pass, then a downward sweep h_{i-1} <- g_i(h_i) seeded from the TARGET,
-        blended with the forward states (blend = 1 -> pure downward, 0 -> pure forward)."""
+        blended with the forward states (blend = 1 -> pure downward, 0 -> pure forward).
+
+        enable_grad + detach for the same reason as init_states: g's pinned dropout masks must apply to
+        the warm start as well, or the update mixes two different sub-networks."""
         fwd = self.init_states(x)
         down = [None] * len(fwd)
         down[-1] = self.back_readout(y)
@@ -149,7 +159,7 @@ class PairedLUTStack(nn.Module):
             down[i] = self.back_layer(i, down[i + 1])
         out = [(1 - blend) * a + blend * b for a, b in zip(fwd, down)]
         out[0] = fwd[0]                                 # h_1 is determined by the clamped input
-        return out
+        return [h.detach() for h in out]
 
     def residuals_f(self, x, hs):
         r = [hs[0] - self.h1(x)]

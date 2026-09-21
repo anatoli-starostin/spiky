@@ -129,6 +129,43 @@ def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0):
     return float(e.detach() / x.shape[0]), stats
 
 
+def dropout_fingerprint(model):
+    """Identity + content of every pinned dropout mask, so a resample can be DETECTED, not assumed away."""
+    fp = [(id(l._head_drop_mask), None if l._head_drop_mask is None else float(l._head_drop_mask.sum()))
+          for l in model.luts()]
+    for masks in (model._rmask_f, model._rmask_g):
+        if masks is not None:
+            fp += [(id(m), float(m.sum())) for m in masks]
+    return fp
+
+
+def assert_dropout_pinned(model, x, y, arm, *, T, eta_h, alpha, rho):
+    """Fail LOUDLY at run start if dropout is not actually pinned for the whole update.
+
+    Checks, in order: every LUT has a mask after resample_dropout; two forwards inside one update are
+    bit-identical; and a full inner loop + weight-gradient pass leaves every mask untouched (this is the
+    one that matters -- it is what 'held fixed across all T relaxation steps, identical between the f
+    prediction and its vjp, and g's too' actually means)."""
+    model.resample_dropout(x.shape[0])
+    missing = [i for i, l in enumerate(model.luts()) if l._head_drop_mask is None]
+    if model.table_dropout > 0 and missing:
+        raise RuntimeError(f'table dropout {model.table_dropout} requested but {len(missing)} LUTs have '
+                           f'no pinned mask (indices {missing[:5]}...)')
+    if model.residual_dropout > 0 and model._rmask_f is None:
+        raise RuntimeError('residual dropout requested but no residual masks were pinned')
+    a, b = model(x), model(x)
+    if not torch.equal(a, b):
+        raise RuntimeError('two forwards inside one update differ: the dropout mask is NOT pinned')
+    before = dropout_fingerprint(model)
+    arm_grads(model, x, y, arm, T=T, eta_h=eta_h, alpha=alpha, rho=rho)
+    model.zero_grad(set_to_none=True)
+    if dropout_fingerprint(model) != before:
+        raise RuntimeError('a dropout mask changed during the inner loop / backward pass: the energy is '
+                           'non-stationary and the vjp differentiates a different network')
+    print(f'[dropout] pin verified: table p={model.table_dropout}, residual p={model.residual_dropout}, '
+          f'{len(model.luts())} LUT masks held across T={T} inner steps and the vjp', flush=True)
+
+
 def cos(a, b):
     a, b = a.flatten().double(), b.flatten().double()
     n = a.norm() * b.norm()
@@ -226,6 +263,9 @@ def main():
              (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA' else eta_h_rule(sigma, rho, a.alpha)))
     print(f'{name} | dev {dev} | sigma_max {sigma:.4f} eta_h {eta_h:.4e} | T {T} | stability '
           f'{eta_h * sigma ** 2 * (2 * rho + a.alpha) if a.arm != "bp" else 0:.3f} < 4', flush=True)
+    if a.table_dropout > 0 or a.residual_dropout > 0:
+        assert_dropout_pinned(model, probe_x, probe_y, a.arm, T=T,
+                              eta_h=(0.0 if a.arm == 'bp' else eta_h), alpha=a.alpha, rho=rho)
     hist, step, t0 = [], 0, time.time()
     it = iter(loader)
     while step < a.steps:
@@ -239,7 +279,11 @@ def main():
         # ONE dropout mask for the whole update -- for the PC arms it must not move across the T inner
         # steps or between the energy's prediction and its vjp (test_dropout_mask_stable.py asserts it).
         model.resample_dropout(x.shape[0])
+        fp = dropout_fingerprint(model) if (a.table_dropout or a.residual_dropout) else None
         loss, stats = arm_grads(model, x, y, a.arm, T=T, eta_h=eta_h, alpha=a.alpha, rho=rho, mu=a.mu)
+        if fp is not None and dropout_fingerprint(model) != fp:
+            raise RuntimeError(f'step {step}: a dropout mask changed during the update -- the mask must '
+                               f'be pinned for all {T} inner steps and the vjp')
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         model.zero_grad(set_to_none=True)
