@@ -162,6 +162,9 @@ class LightMultiHeadLUT(nn.Module):
         # the whole table. Eval / no-grad: no dropout, no rescale.
         self.head_dropout_rate = float(head_dropout_rate)
         self._head_drop_mask = None        # None -> resample per call; see resample_head_drop_mask
+        self._frozen_blend_idx = None      # diagnostics only; see freeze_blend_cells
+        self._capture_blend_idx = False
+        self._path_ablation = None         # diagnostics only; see set_path_ablation
         if not 0.0 <= self.head_dropout_rate < 1.0:
             raise ValueError(f"head_dropout_rate must be in [0, 1), got {self.head_dropout_rate}")
         if self.head_dropout_rate and forward_mode != "scored":
@@ -858,6 +861,30 @@ class LightMultiHeadLUT(nn.Module):
         """Back to resampling the table-dropout mask on every forward call (the default)."""
         self._head_drop_mask = None
 
+    # ---- read-path diagnostics (read_top_n > 1). Default-off; nothing below changes a normal run. ----
+    def freeze_blend_cells(self, on=True, capture=False):
+        """Hold the cells this layer reads fixed, so the relaxation cannot do ADDRESS SEARCH.
+
+        capture=True records the cells chosen on the NEXT forward and freezes those; on=False releases.
+        The continuous gates (confidence score, blend weights) keep their gradients either way, so this
+        isolates "which row is read" from "how strongly it is read"."""
+        if capture:
+            self._capture_blend_idx = True
+            self._frozen_blend_idx = None
+        elif not on:
+            self._capture_blend_idx = False
+            self._frozen_blend_idx = None
+
+    def set_path_ablation(self, mode=None):
+        """Which differentiable path into the layer INPUT stays alive, for gradient attribution.
+
+        None (default) both; 'score_only' detaches the blend weights, leaving the confidence-score path
+        s_t; 'routing_only' detaches the score, leaving the neighbour-blend path w_0/w_1. The two
+        compose multiplicatively inside the read, so detaching one leaves the other's gradient exact."""
+        if mode not in (None, 'score_only', 'routing_only'):
+            raise ValueError(f'unknown path ablation {mode!r}')
+        self._path_ablation = mode
+
     def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
         """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.
 
@@ -958,6 +985,18 @@ class LightMultiHeadLUT(nn.Module):
         logits = torch.cat([torch.zeros_like(m[..., :1]),
                             -2.0 * mv / self.read_tau], dim=-1)         # [..., n]
         w = torch.softmax(logits, dim=-1)                               # [..., n]
+
+        # --- diagnostics (all default-off; see freeze_blend_cells / set_path_ablation) -------------
+        if self._capture_blend_idx:
+            self._frozen_blend_idx = idx.detach()
+            self._capture_blend_idx = False
+        elif self._frozen_blend_idx is not None and self._frozen_blend_idx.shape == idx.shape:
+            idx = self._frozen_blend_idx            # no address search: the cells read are held fixed
+        if self._path_ablation == 'score_only':
+            w = w.detach()                          # kill the routing (blend-weight) gradient path
+        elif self._path_ablation == 'routing_only':
+            score = score.detach()                  # kill the confidence-score gradient path
+        # -------------------------------------------------------------------------------------------
 
         flat_idx = (idx + offset.unsqueeze(-1)).reshape(-1)             # [.. * n]
         psw = (score.unsqueeze(-1) * w).reshape(-1).to(flat.dtype)
