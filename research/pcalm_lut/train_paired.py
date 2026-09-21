@@ -193,10 +193,12 @@ def cos(a, b):
 
 
 def _group(name):
-    """Which gradient-RMS bucket a parameter belongs to: readout vs interior, and which kind of weight."""
+    """Which gradient-RMS bucket a parameter belongs to: readout vs interior vs the backward stack g,
+    and which kind of weight."""
     if name.startswith('g_'):
-        return None
-    where = 'readout' if name.startswith('f_out') else 'interior'
+        where = 'backward'
+    else:
+        where = 'readout' if name.startswith('f_out') else 'interior'
     if name.endswith('tables'):
         kind = 'tables'
     elif 'log_tau' in name or 'read_tau' in name:
@@ -261,6 +263,10 @@ def main():
     ap.add_argument('--steps', type=int, default=2000)
     ap.add_argument('--batch', type=int, default=128)
     ap.add_argument('--lr', type=float, default=1e-3)
+    ap.add_argument('--optimizer', default='adam', choices=['adam', 'sgd'],
+                    help='sgd is plain SGD: momentum 0, no weight decay. It applies to the WEIGHTS only '
+                         '-- the dual ascent on lambda keeps its own alpha rule and the inner relaxation '
+                         'keeps the derived eta_h.')
     ap.add_argument('--alpha', type=float, default=1.0)
     ap.add_argument('--rho', type=float, default=1.0)
     ap.add_argument('--rho-max', type=float, default=32.0)
@@ -298,7 +304,8 @@ def main():
     model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed,
                            table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
                            clamp_mode=a.clamp)
-    opt = torch.optim.Adam(model.parameters(), lr=a.lr)
+    opt = (torch.optim.Adam(model.parameters(), lr=a.lr) if a.optimizer == 'adam'
+           else torch.optim.SGD(model.parameters(), lr=a.lr, momentum=0.0, weight_decay=0.0))
     loader = TensorLoader(xtr, ytr, batch_size=a.batch, seed=a.seed)
     probe_x, probe_y = xtr[:a.batch], ytr[:a.batch]
     name = a.name or f'{a.arm}-L{a.depth}-T{T}-s{a.seed}'
@@ -307,6 +314,7 @@ def main():
                dataset=a.dataset, a_i=model.ai, read_tau_init=0.5, nap=8, table_size=256, read_top_n=2,
                table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
                align_layer_order='numeric',   # absent -> that run's align/f_tables_L{i} are lexicographic
+               optimizer=a.optimizer,
                clamp=a.clamp,
                _arch_note='PC / PC-ALM over paired forward+backward LightMHL stacks (DERIVATION_v2.md). '
                           'Arm A: symmetric energy, both f and g get gradient from E. Arm B: forward maps as '
@@ -346,7 +354,15 @@ def main():
             raise RuntimeError(f'step {step}: a dropout mask changed during the update -- the mask must '
                                f'be pinned for all {T} inner steps and the vjp')
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # the update ACTUALLY applied, per bucket -- under Adam this is ~lr regardless of gradient scale,
+        # under SGD it is lr * grad, which is the whole point of the comparison. Snapshotted at the probe
+        # cadence rather than every step: the parameter clone is ~60 MB here.
+        probing = (step % a.probe_every == 0 or step == 1)
+        pnames = [n for n, _ in model.named_parameters()]
+        prev = [p.detach().clone() for p in model.parameters()] if probing else None
         opt.step()
+        upd = (_grad_rms(pnames, [p.detach() - q for p, q in zip(model.parameters(), prev)])
+               if probing else None)
         model.zero_grad(set_to_none=True)
         dt = time.time() - ts
         row = {'train/loss': loss, 'train/s_per_step': dt, 'train/rho': rho, 'train/eta_h': eta_h,
@@ -374,6 +390,9 @@ def main():
             sigma = sigma_max_A(model, probe_x, probe_y, inner_arm)
             eta_h = (a.eta_frac / max(sigma ** 2, 1e-12) if inner_arm == 'pcA'
                      else eta_h_rule(sigma, rho, a.alpha))
+        if upd is not None:
+            for k, v in upd.items():
+                row[f'update/{k}_rms'] = v
         if step % a.probe_every == 0 or step == 1:
             model.clear_dropout()          # every diagnostic measures the FULL network, not a dropout sample
             with torch.no_grad():

@@ -19,7 +19,8 @@ def arm_param_grads(model, x, y, mode, *, T, eta_h, alpha=1.0, rho=1.0, loss_fn=
         return [p.grad.detach().clone() if p.grad is not None else None for p in model.parameters()], None, None
     alpha = 0.0 if mode == 'pc' else alpha
     hs = [h.detach().clone().requires_grad_(True) for h in model.init_states(x)]
-    lam = [torch.zeros_like(h) for h in hs]
+    with torch.no_grad():                       # one multiplier per CONSTRAINT (pinned adds the top one)
+        lam = [torch.zeros_like(r) for r in model.residuals(x, hs, y)]
     for _ in range(T):
         e, r = model.energy(x, y, hs, lam, rho, loss_fn)
         g = torch.autograd.grad(e, hs)

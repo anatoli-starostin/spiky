@@ -17,7 +17,7 @@ from spiky.util.wandb_integration.tracker import Tracker  # noqa: E402
 GROUP = 'pcalm-lut-paired'
 PROJECT = os.environ.get('WANDB_PROJECT', 'Spiky')
 
-GLOSSARY = DictGlossary({
+_METRICS = {
     'train/loss': dict(unit='sq.err/sample', section='train',
                        desc='The arm objective on the batch: 1/2||yhat-y||^2 per sample for BP; the relaxed '
                             'energy E (arm A) or L_rho (arm B) per sample for the PC arms.'),
@@ -94,11 +94,46 @@ GLOSSARY = DictGlossary({
                               desc='Fraction of backward-LUT (g) parameter tensors receiving a nonzero '
                                    'gradient this step. g has no BP reference gradient at all -- it is not on '
                                    'the forward path -- so coverage replaces cosine for g.'),
+    'out/readout_rms': dict(unit='-', section='magnitude',
+                            desc='RMS of what the readout actually emits on the probe batch.'),
+    'out/target_rms': dict(unit='-', section='magnitude',
+                           desc='RMS of the one-hot target, 1/sqrt(C): the scale the readout has to reach.'),
+    'out/readout_over_target': dict(unit='ratio', section='magnitude',
+                                    desc='out/readout_rms divided by out/target_rms. Near 0 means the '
+                                         'readout is emitting nothing whatever its gradient direction is.'),
     'wall_s': dict(unit='s', section='summary', desc='Total wall clock of the run (summary).'),
     'final_loss': dict(unit='sq.err/sample', section='summary', desc='train/loss at the last step (summary).'),
     'test_acc': dict(unit='fraction', section='summary', desc='eval/test_acc at the last probe (summary).'),
-}, sections={'train': 'Training', 'eval': 'Evaluation', 'addresses': 'Address search', 'summary': 'Summary',
-             'collapse': 'Collapse / identity diagnostics',
+}
+
+# Gradient / applied-update magnitude by bucket. The buckets are enumerated rather than patterned because
+# the glossary only expands {i} into an integer, and these keys carry names.
+_WHERE = {'readout': 'the readout LUT', 'interior': 'the interior forward LUTs',
+          'backward': 'the backward stack g', 'input': 'the input linear map'}
+_KIND = {'tables': 'table entries', 'log_tau': 'the learnable read temperature',
+         'anchors': 'the anchor indices', 'W1': 'the weight matrix', 'other': 'the remaining parameters'}
+for _w, _wd in _WHERE.items():
+    for _k, _kd in _KIND.items():
+        _b = f'{_w}_{_k}'
+        _METRICS[f'grad/{_b}_rms'] = dict(
+            unit='-', section='magnitude',
+            desc=f'RMS of the ARM\'s weight gradient over {_kd} of {_wd}, on the probe batch.')
+        _METRICS[f'grad/{_b}_rms_bp'] = dict(
+            unit='-', section='magnitude',
+            desc=f'RMS of BACKPROP\'s gradient over the same parameters at the same weights.')
+        _METRICS[f'grad/{_b}_ratio'] = dict(
+            unit='ratio', section='magnitude',
+            desc=f'grad/{_b}_rms divided by grad/{_b}_rms_bp: how much harder than backprop this arm '
+                 f'drives {_kd} of {_wd}.')
+        _METRICS[f'update/{_b}_rms'] = dict(
+            unit='-', section='magnitude',
+            desc=f'RMS of the parameter change the optimiser ACTUALLY applied to {_kd} of {_wd} '
+                 f'(~lr under Adam whatever the gradient scale; lr*grad under plain SGD).')
+
+GLOSSARY = DictGlossary(
+   _METRICS,
+   sections={'train': 'Training', 'eval': 'Evaluation', 'addresses': 'Address search', 'summary': 'Summary',
+             'collapse': 'Collapse / identity diagnostics', 'magnitude': 'Gradient and update magnitude',
              'margins': 'Margin distribution (conditioning)', 'tau': 'Blend temperature',
              'alignment': 'Gradient alignment to BP'},
    source='research/pcalm_lut/wandb_setup.py')

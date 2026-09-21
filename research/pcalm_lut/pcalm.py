@@ -62,11 +62,20 @@ class LayerChain(nn.Module):
             hs.append(self.layer(i, hs[-1]))
         return hs
 
-    def residuals(self, x, hs):
-        """r_i = h_i - f_i(h_{i-1}) for i = 1..L-1 (r_1 uses the clamped input)."""
+    clamp_mode = 'data'        # 'data': input clamped, target enters as the loss term (the paper's setting)
+                               # 'pinned': the target is clamped as the top state h_L and contributes one
+                               #           more residual; the loss term is then dropped (no double count)
+
+    def residuals(self, x, hs, y=None):
+        """r_i = h_i - f_i(h_{i-1}) for i = 1..L-1 (r_1 uses the clamped input), plus, under pinned
+        clamping, the top residual r_L = y - readout(h_{L-1})."""
         r = [hs[0] - self.h1(x)]
         for i in range(self.n_hidden - 1):
             r.append(hs[i + 1] - self.layer(i, hs[i]))
+        if self.clamp_mode == 'pinned':
+            if y is None:
+                raise ValueError('clamp_mode="pinned" needs the target: the top state IS y')
+            r.append(y - self.readout(hs[-1]))
         return r
 
     def energy(self, x, y, hs, lam, rho, loss_fn):
@@ -74,8 +83,9 @@ class LayerChain(nn.Module):
         sample in B in parallel"), so the primal gradient and the dual step lam += alpha r must be in the same
         per-sample units. (Averaging the energy but not the dual step mis-scales their relative rates by |B|
         and turns the primal-dual iteration into a limit cycle.) The LEARNING step divides by |B|."""
-        r = self.residuals(x, hs)
-        e = loss_fn(self.readout(hs[-1]), y) * x.shape[0]
+        r = self.residuals(x, hs, y)
+        # under pinned clamping the output error IS the last residual, so the loss term would count it twice
+        e = 0.0 if self.clamp_mode == 'pinned' else loss_fn(self.readout(hs[-1]), y) * x.shape[0]
         for ri, li in zip(r, lam):
             if li is not None:
                 e = e + (li * ri).sum()
@@ -103,7 +113,8 @@ def train_step(model, x, y, opt, mode, *, T=None, eta_h=0.1, alpha=1.0, rho=1.0,
         raise ValueError(f'unknown mode {mode!r}')
     alpha = 0.0 if mode == 'pc' else alpha
     hs = [h.detach().clone().requires_grad_(True) for h in model.init_states(x)]
-    lam = [torch.zeros_like(h) for h in hs]
+    with torch.no_grad():        # one multiplier per CONSTRAINT: pinned clamping adds the top residual
+        lam = [torch.zeros_like(r) for r in model.residuals(x, hs, y)]
     T = T or 2 * (model.n_hidden + 1)
     for t in range(T - 1):
         e, r = model.energy(x, y, hs, lam, rho, loss_fn)
