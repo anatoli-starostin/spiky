@@ -32,7 +32,7 @@ def _residuals(model, x, y, hs, arm):
     carries one extra member, the top residual y - readout(h_{L-1}), which changes A and hence sigma_max: the
     step size must be re-measured, not carried over."""
     rf = model.residuals_f(x, hs, y)
-    if arm != 'pcA':
+    if arm not in ('pcA', 'hybrid'):
         return rf
     top = y if model.top_pinned() else model.readout(hs[-1])
     return rf + model.residuals_b(hs, top)
@@ -121,6 +121,20 @@ def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0):
         loss = 0.5 * (model(x) - y).pow(2).sum() / x.shape[0]
         loss.backward()
         return float(loss.detach()), {}
+    if arm == 'hybrid':
+        # diagnostic control: the READOUT is trained by backprop, everything else by PC (arm A). If this
+        # trains normally the fault is in the readout's gradient path under PC; if it still flatlines the
+        # fault is that the relaxed states h_{L-1} carry no usable signal for the readout to read.
+        loss = 0.5 * (model(x) - y).pow(2).sum() / x.shape[0]
+        loss.backward()
+        keep = {n: p.grad.detach().clone() for n, p in model.named_parameters()
+                if n.startswith('f_out') and p.grad is not None}
+        val, stats = arm_grads(model, x, y, 'pcA', T=T, eta_h=eta_h, alpha=alpha, rho=rho, mu=mu)
+        for n, p in model.named_parameters():
+            if n in keep:
+                p.grad = keep[n]
+        stats['bp_loss'] = float(loss.detach())
+        return val, stats
     hs, lam, stats = inner_loop(model, x, y, arm, T=T, eta_h=eta_h, alpha=alpha, rho=rho, collect=True)
     if arm == 'pcA':
         e, rf, rb = model.energy_A(x, y, hs)
@@ -178,8 +192,40 @@ def cos(a, b):
     return float(torch.dot(a, b) / n) if n > 0 else float('nan')
 
 
+def _group(name):
+    """Which gradient-RMS bucket a parameter belongs to: readout vs interior, and which kind of weight."""
+    if name.startswith('g_'):
+        return None
+    where = 'readout' if name.startswith('f_out') else 'interior'
+    if name.endswith('tables'):
+        kind = 'tables'
+    elif 'log_tau' in name or 'read_tau' in name:
+        kind = 'log_tau'
+    elif 'anchor' in name:
+        kind = 'anchors'
+    elif name == 'W1':
+        where, kind = 'input', 'W1'
+    else:
+        kind = 'other'
+    return f'{where}_{kind}'
+
+
+def _grad_rms(names, grads):
+    """RMS of the gradient per bucket, pooled over the parameters in it (sum of squares / total numel)."""
+    acc = {}
+    for n, g in zip(names, grads):
+        k = _group(n)
+        if k is None or g is None:
+            continue
+        s, c = acc.get(k, (0.0, 0))
+        acc[k] = (s + float(g.pow(2).sum()), c + g.numel())
+    return {k: math.sqrt(s / c) if c else float('nan') for k, (s, c) in acc.items()}
+
+
 def alignment_vs_bp(model, x, y, arm, *, T, eta_h, alpha, rho):
-    """Per-parameter cosine to BP's gradient on the same weights/batch, plus the dead-layer count."""
+    """Per-parameter cosine to BP's gradient on the same weights/batch, the dead-layer count, and the
+    gradient RMS per bucket for BOTH the arm and BP -- the BP pass happens here anyway, so the
+    arm/BP magnitude ratio at matched steps is free."""
     names = [n for n, _ in model.named_parameters()]
     arm_grads(model, x, y, 'bp', T=T, eta_h=eta_h, alpha=alpha, rho=rho)
     ref = [p.grad.detach().clone() if p.grad is not None else None for p in model.parameters()]
@@ -198,14 +244,16 @@ def alignment_vs_bp(model, x, y, arm, *, T, eta_h, alpha, rho):
             rows[n] = 0.0
         else:
             rows[n] = cos(a, b)
+    rms = {'arm': _grad_rms(names, got), 'bp': _grad_rms(names, ref)}
     model.zero_grad(set_to_none=True)
-    return rows, dead, (g_live / g_tot if g_tot else float('nan'))
+    return rows, dead, (g_live / g_tot if g_tot else float('nan')), rms
 
 
 # ---------------------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--arm', default='bp', choices=['bp', 'pcA', 'pcalmB'])
+    ap.add_argument('--arm', default='bp', choices=['bp', 'pcA', 'pcalmB', 'hybrid'],
+                    help="hybrid: readout by BP, interior by PC-A (a diagnostic control)")
     ap.add_argument('--depth', type=int, default=16)
     ap.add_argument('--width', type=int, default=32)
     ap.add_argument('--tables', type=int, default=16)
@@ -270,9 +318,10 @@ def main():
     tracker = make_tracker(cfg, out_dir, name=name, tags=tags)
 
     rho, prev_rnorm = a.rho, None
-    sigma = sigma_max_A(model, probe_x, probe_y, a.arm) if a.arm != 'bp' else float('nan')
+    inner_arm = 'pcA' if a.arm == 'hybrid' else a.arm
+    sigma = sigma_max_A(model, probe_x, probe_y, inner_arm) if a.arm != 'bp' else float('nan')
     eta_h = (float('nan') if a.arm == 'bp' else
-             (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA' else eta_h_rule(sigma, rho, a.alpha)))
+             (a.eta_frac / max(sigma ** 2, 1e-12) if inner_arm == 'pcA' else eta_h_rule(sigma, rho, a.alpha)))
     print(f'{name} | dev {dev} | sigma_max {sigma:.4f} eta_h {eta_h:.4e} | T {T} | stability '
           f'{eta_h * sigma ** 2 * (2 * rho + a.alpha) if a.arm != "bp" else 0:.3f} < 4', flush=True)
     if a.table_dropout > 0 or a.residual_dropout > 0:
@@ -322,8 +371,8 @@ def main():
                 eta_h = eta_h_rule(sigma, rho, a.alpha)
             prev_rnorm = rn
         if a.arm != 'bp' and step % a.sigma_every == 0:
-            sigma = sigma_max_A(model, probe_x, probe_y, a.arm)
-            eta_h = (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA'
+            sigma = sigma_max_A(model, probe_x, probe_y, inner_arm)
+            eta_h = (a.eta_frac / max(sigma ** 2, 1e-12) if inner_arm == 'pcA'
                      else eta_h_rule(sigma, rho, a.alpha))
         if step % a.probe_every == 0 or step == 1:
             model.clear_dropout()          # every diagnostic measures the FULL network, not a dropout sample
@@ -351,9 +400,30 @@ def main():
                 row[f'tau/f_L{i}'] = v
             for i, v in enumerate(taus['g']):
                 row[f'tau/g_L{i}'] = v
+            # scale of what the readout emits, against the scale it has to reach. A one-hot target has
+            # RMS 1/sqrt(C); if the readout's output RMS sits far below that, the layer is emitting
+            # nothing whatever its gradient DIRECTION is.
+            with torch.no_grad():
+                out = model(probe_x)
+                row['out/readout_rms'] = float(out.pow(2).mean().sqrt())
+                row['out/target_rms'] = float(probe_y.pow(2).mean().sqrt())
+                row['out/readout_over_target'] = row['out/readout_rms'] / max(row['out/target_rms'], 1e-12)
+            if a.arm == 'bp':
+                # BP is the denominator of the magnitude comparison, so it logs the same buckets
+                pnames = [n for n, _ in model.named_parameters()]
+                arm_grads(model, probe_x, probe_y, 'bp', T=T, eta_h=0.0, alpha=a.alpha, rho=rho)
+                for k, v in _grad_rms(pnames, [p.grad for p in model.parameters()]).items():
+                    row[f'grad/{k}_rms'] = v
+                model.zero_grad(set_to_none=True)
             if a.arm != 'bp':
-                al, dead, gfrac = alignment_vs_bp(model, probe_x, probe_y, a.arm, T=T, eta_h=eta_h,
-                                                  alpha=a.alpha, rho=rho)
+                al, dead, gfrac, rms = alignment_vs_bp(model, probe_x, probe_y, a.arm, T=T, eta_h=eta_h,
+                                                       alpha=a.alpha, rho=rho)
+                for k, v in rms['arm'].items():
+                    row[f'grad/{k}_rms'] = v
+                for k, v in rms['bp'].items():
+                    row[f'grad/{k}_rms_bp'] = v
+                    if v > 0:
+                        row[f'grad/{k}_ratio'] = rms['arm'].get(k, float('nan')) / v
                 tabs = [v for k, v in al.items() if k.startswith('f_lut') or k.startswith('f_out')]
                 gtabs = [v for k, v in al.items() if k.startswith('g_lut') or k.startswith('g_out')]
                 row['align/f_mean'] = sum(tabs) / max(len(tabs), 1)
