@@ -43,6 +43,14 @@ GLOSSARY = DictGlossary({
                                   desc='1 if the inner-loop energy was non-increasing at every inner step.'),
     'eval/test_acc': dict(unit='fraction', section='eval',
                           desc='Top-1 accuracy on the first 2,000 test images.'),
+    'eval/train_acc': dict(unit='fraction', section='eval',
+                           desc='Top-1 accuracy on a FIXED 2,000-row train subset (--train-eval only), so '
+                                'that train-minus-test is a generalisation gap and not minibatch noise.'),
+    'eval/gap': dict(unit='fraction', section='eval',
+                     desc='eval/train_acc - eval/test_acc: the generalisation gap (--train-eval only).'),
+    'eval/train_loss_full': dict(unit='sq.err/sample', section='eval',
+                                 desc='1/2||yhat-y||^2 per sample on the same fixed 2,000-row train subset, '
+                                      'measured with dropout OFF (--train-eval only).'),
     'flips/mean': dict(unit='fraction', section='addresses',
                        desc='Mean over layers of the fraction of (sample, table) address slots whose selected '
                             'cell differs from the forward-pass cell after the inner loop.'),

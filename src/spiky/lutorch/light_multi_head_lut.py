@@ -161,6 +161,7 @@ class LightMultiHeadLUT(nn.Module):
         # gates that table's WHOLE contribution (score_t * sum_i w_i row_i), so zeroing score_t drops
         # the whole table. Eval / no-grad: no dropout, no rescale.
         self.head_dropout_rate = float(head_dropout_rate)
+        self._head_drop_mask = None        # None -> resample per call; see resample_head_drop_mask
         if not 0.0 <= self.head_dropout_rate < 1.0:
             raise ValueError(f"head_dropout_rate must be in [0, 1), got {self.head_dropout_rate}")
         if self.head_dropout_rate and forward_mode != "scored":
@@ -761,8 +762,12 @@ class LightMultiHeadLUT(nn.Module):
             # head-level WHOLE-TABLE dropout on the quantised read: one Bernoulli per (sample, head, table),
             # keep prob (1-rate), survivors scaled by 1/(1-rate) (inverted). Broadcast over the 2 cells so a
             # dropped table contributes nothing (both cells zeroed). Train+grad only; eval reads all tables.
-            keep_prob = 1.0 - self.head_dropout_rate
-            keep = (torch.rand(B, H, T, 1, device=d.device) < keep_prob).to(psw.dtype) / keep_prob
+            pinned = self._head_drop_mask
+            if pinned is not None:                       # see resample_head_drop_mask
+                keep = pinned.reshape(pinned.shape[0], H, T, 1).to(psw.dtype)
+            else:
+                keep_prob = 1.0 - self.head_dropout_rate
+                keep = (torch.rand(B, H, T, 1, device=d.device) < keep_prob).to(psw.dtype) / keep_prob
             psw = psw * keep
         W = pow2_read.ste_tables(self.tables, self.n_heads, cfg["bits"], cfg["offset"])
         flat_q = W.reshape(-1, self._tbl_out)
@@ -808,12 +813,50 @@ class LightMultiHeadLUT(nn.Module):
         (score's last axis), keep with prob (1-rate), scale survivors by 1/(1-rate). Because `score`
         gates a table's ENTIRE contribution (score_t * sum_i w_i row_i; the blend weights normalise
         inside), multiplying score_t by 0 removes the whole table and by 1/(1-rate) rescales the
-        survivors so the expected read is unchanged. No-op at eval / no-grad and when rate == 0."""
+        survivors so the expected read is unchanged. No-op at eval / no-grad and when rate == 0.
+
+        The mask is resampled on every call UNLESS one was pinned with `resample_head_drop_mask`,
+        in which case that mask is reused until the next call to it (see that method for why)."""
         if not (self.training and self.head_dropout_rate > 0.0 and torch.is_grad_enabled()):
             return score
+        keep = self._head_drop_mask
+        if keep is not None:
+            if keep.shape != score.shape:
+                raise RuntimeError(
+                    f"pinned head-dropout mask has shape {tuple(keep.shape)} but the score is "
+                    f"{tuple(score.shape)}: resample_head_drop_mask() must be called with the batch "
+                    f"size actually being forwarded (or cleared for a differently sized probe)")
+            return score * keep
         keep_prob = 1.0 - self.head_dropout_rate
         keep = (torch.rand_like(score) < keep_prob).to(score.dtype) / keep_prob
         return score * keep
+
+    def resample_head_drop_mask(self, batch_size, *, device=None, dtype=None):
+        """Pin ONE table-dropout mask, to be reused by every forward until this is called again.
+
+        Iterative-inference trainers (predictive coding, PC-ALM) run T inner forward passes over the
+        same batch inside a single weight update, and take a vjp through them. A mask resampled per
+        call makes the energy non-stationary -- the relaxation would chase a moving target, and the
+        vjp would be taken through a different network than the prediction it is differentiating.
+        Pinning the mask makes the whole update see one fixed sub-ensemble of tables, which is what
+        dropout means for an iterative solver. Standard per-call resampling is unchanged and remains
+        the default (mask None); call `clear_head_drop_mask()` to go back to it."""
+        shape = ((batch_size, self.n_heads, self.tables_per_head) if self.multi_head_input
+                 else (batch_size, self.n_tables))
+        keep_prob = 1.0 - self.head_dropout_rate
+        if keep_prob >= 1.0:
+            self._head_drop_mask = None
+            return None
+        dev = device if device is not None else self.tables.device
+        dt = dtype if dtype is not None else self.tables.dtype
+        # a FRESH tensor, not an in-place refill: the previous mask may still be held by an autograd
+        # graph, and rewriting it in place would trip the version counter on a later backward.
+        self._head_drop_mask = torch.empty(shape, device=dev, dtype=dt).bernoulli_(keep_prob) / keep_prob
+        return self._head_drop_mask
+
+    def clear_head_drop_mask(self):
+        """Back to resampling the table-dropout mask on every forward call (the default)."""
+        self._head_drop_mask = None
 
     def _bagged_sum(self, flat, flat_idx, score, n_bags: int, bag_size: int):
         """sum_t score[.., t] * flat[flat_idx[.., t]], fused via F.embedding_bag.

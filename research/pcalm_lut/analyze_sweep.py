@@ -47,16 +47,20 @@ def fmt(v, w=7, p=4):
 
 def headline(runs):
     print('\n== HEADLINE (2000 steps, Fashion-MNIST, L=16 N=64 32 tables 256 cells, T=2L=32)')
-    print(f'{"arm":10s} {"seeds":>5s} {"test acc mean+-sd":>20s} {"final loss":>11s} '
+    print('   "data loss" is the cross-entropy at the states the arm actually fits (train/loss_at_h);')
+    print('   "objective" is what the arm descends -- for the PC arms that is the energy, which contains')
+    print('   the constraint terms too and is NOT comparable across arms.  acc and data loss are.')
+    print(f'{"arm":10s} {"seeds":>5s} {"test acc mean+-sd":>20s} {"data loss":>10s} {"objective":>10s} '
           f'{"s/step":>8s} {"wall":>8s}')
     for arm, label in ARMS:
-        accs, losses, sps, walls = [], [], [], []
+        accs, losses, objs, sps, walls = [], [], [], [], []
         for s in (0, 1, 2):
             d = runs.get((arm, s, 32))
             if not d:
                 continue
             accs.append(last(d['hist'], 'eval/test_acc'))
-            losses.append(last(d['hist'], 'train/loss'))
+            objs.append(last(d['hist'], 'train/loss'))
+            losses.append(last(d['hist'], 'train/loss_at_h', last(d['hist'], 'train/loss')))
             sps.append(st.median([v for _, v in series(d['hist'], 'train/s_per_step')]))
             walls.append(d['summary']['wall_s'])
         if not accs:

@@ -179,6 +179,13 @@ def main():
     ap.add_argument('--eta-frac', type=float, default=0.5,
                     help='arm A only: eta_h = eta_frac / sigma_max^2 (the bound is < 1/sigma^2 for E = ||r||^2, whose Hessian is 2 A^T A)')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--table-dropout', type=float, default=0.0,
+                    help="LightMHL's own head_dropout_rate: whole tables dropped from the n_tables sum "
+                         '(one Bernoulli per sample per table on the confidence score, survivors x 1/(1-p))')
+    ap.add_argument('--residual-dropout', type=float, default=0.0,
+                    help="standard dropout on each block's LUT output, before the a_i scaling")
+    ap.add_argument('--train-eval', action='store_true',
+                    help='also evaluate on a fixed 2000-row TRAIN subset, for the train/test gap')
     ap.add_argument('--dataset', default='fashion')
     ap.add_argument('--sigma-every', type=int, default=100, help='re-measure sigma_max every N steps')
     ap.add_argument('--probe-every', type=int, default=50, help='alignment / margins / flips cadence')
@@ -193,7 +200,8 @@ def main():
 
     xtr, ytr = load(a.dataset, train=True, device=dev)
     xte, yte = load(a.dataset, train=False, device=dev)
-    model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed)
+    model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed,
+                           table_dropout=a.table_dropout, residual_dropout=a.residual_dropout)
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     loader = TensorLoader(xtr, ytr, batch_size=a.batch, seed=a.seed)
     probe_x, probe_y = xtr[:a.batch], ytr[:a.batch]
@@ -201,6 +209,7 @@ def main():
     cfg = dict(exp_name=name, arm=a.arm, depth=a.depth, width=a.width, n_tables=a.tables, T=T, steps=a.steps,
                batch=a.batch, lr=a.lr, alpha=a.alpha, rho0=a.rho, rho_max=a.rho_max, mu=a.mu, seed=a.seed,
                dataset=a.dataset, a_i=model.ai, read_tau_init=0.5, nap=8, table_size=256, read_top_n=2,
+               table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
                _arch_note='PC / PC-ALM over paired forward+backward LightMHL stacks (DERIVATION_v2.md). '
                           'Arm A: symmetric energy, both f and g get gradient from E. Arm B: forward maps as '
                           'constraints with multipliers lam, g outside L_rho (warm start + reconstruction R, '
@@ -226,6 +235,9 @@ def main():
             x, y = next(it)
         step += 1
         ts = time.time()
+        # ONE dropout mask for the whole update -- for the PC arms it must not move across the T inner
+        # steps or between the energy's prediction and its vjp (test_dropout_mask_stable.py asserts it).
+        model.resample_dropout(x.shape[0])
         loss, stats = arm_grads(model, x, y, a.arm, T=T, eta_h=eta_h, alpha=a.alpha, rho=rho, mu=a.mu)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -257,6 +269,7 @@ def main():
             eta_h = (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA'
                      else eta_h_rule(sigma, rho, a.alpha))
         if step % a.probe_every == 0 or step == 1:
+            model.clear_dropout()          # every diagnostic measures the FULL network, not a dropout sample
             with torch.no_grad():
                 ms = model.margin_stats(model.init_states(probe_x))
                 taus = model.log_taus()
@@ -288,6 +301,13 @@ def main():
             with torch.no_grad():
                 pred = model(xte[:2000]).argmax(-1)
                 row['eval/test_acc'] = float((pred == yte[:2000].argmax(-1)).float().mean())
+                if a.train_eval:
+                    # a FIXED train subset, the same 2000 rows every probe, so train-minus-test is a
+                    # generalisation gap and not minibatch noise (needed for the dropout study)
+                    ptr = model(xtr[:2000]).argmax(-1)
+                    row['eval/train_acc'] = float((ptr == ytr[:2000].argmax(-1)).float().mean())
+                    row['eval/gap'] = row['eval/train_acc'] - row['eval/test_acc']
+                    row['eval/train_loss_full'] = float(0.5 * (model(xtr[:2000]) - ytr[:2000]).pow(2).sum(-1).mean())
             print(f'  step {step:5d} obj {loss:.4f} data {row.get("train/loss_at_h", loss):.4f} '
                   f'acc {row["eval/test_acc"]:.4f} '
                   f'{"| flips %.4f " % row.get("flips/mean", float("nan")) if stats else ""}'

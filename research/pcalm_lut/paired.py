@@ -36,39 +36,83 @@ LUT_KW = dict(n_anchor_pairs=8, read_top_n=2, read_tau=0.5, read_tau_learnable=T
               multi_head_input=False, initial_weights_noise=1e-3)
 
 
-def make_lut(in_dim, out_dim, n_tables, seed, device):
+def make_lut(in_dim, out_dim, n_tables, seed, device, head_dropout_rate=0.0):
     return LightMultiHeadLUT(input_dim=in_dim, n_tables=n_tables, output_dim=out_dim,
-                             random_seed=seed, device=torch.device(device), **LUT_KW)
+                             random_seed=seed, device=torch.device(device),
+                             head_dropout_rate=head_dropout_rate, **LUT_KW)
 
 
 class PairedLUTStack(nn.Module):
     """f (input linear + residual LUT blocks + LUT readout) and the mirrored, independent g."""
 
-    def __init__(self, in_dim=784, n_classes=10, width=32, depth=16, n_tables=16, device='cuda', seed=0):
+    def __init__(self, in_dim=784, n_classes=10, width=32, depth=16, n_tables=16, device='cuda', seed=0,
+                 table_dropout=0.0, residual_dropout=0.0):
         super().__init__()
         assert depth >= 3
         self.in_dim, self.n_classes, self.width, self.depth = in_dim, n_classes, width, depth
         self.n_hidden = depth - 1                      # free states h_1..h_{L-1}
+        self.table_dropout, self.residual_dropout = float(table_dropout), float(residual_dropout)
+        self._rmask_f, self._rmask_g = None, None      # residual-stream masks, one per interior block
         g = torch.Generator(device='cpu').manual_seed(seed)
         self.W1 = nn.Parameter(torch.randn(width, in_dim, generator=g))
         self.a1 = 1.0 / math.sqrt(in_dim)
         self.ai = 1.0 / math.sqrt(depth * width)       # = b_i
+        p = self.table_dropout
         # forward: interior blocks f_2..f_{L-1} (indices 0..depth-3), readout f_L
-        self.f_lut = nn.ModuleList([make_lut(width, width, n_tables, seed + 1000 * (i + 1), device)
+        self.f_lut = nn.ModuleList([make_lut(width, width, n_tables, seed + 1000 * (i + 1), device, p)
                                     for i in range(depth - 2)])
-        self.f_out = make_lut(width, n_classes, n_tables, seed + 999, device)
+        self.f_out = make_lut(width, n_classes, n_tables, seed + 999, device, p)
         # backward: g_i: h_i -> h_{i-1} for the same interior levels, and g_L: C -> N
-        self.g_lut = nn.ModuleList([make_lut(width, width, n_tables, seed + 2000 * (i + 1) + 7, device)
+        self.g_lut = nn.ModuleList([make_lut(width, width, n_tables, seed + 2000 * (i + 1) + 7, device, p)
                                     for i in range(depth - 2)])
-        self.g_out = make_lut(n_classes, width, n_tables, seed + 4242, device)
+        self.g_out = make_lut(n_classes, width, n_tables, seed + 4242, device, p)
         self.to(device)
+
+    # ---- dropout: ONE mask per weight update, held fixed across the whole inner loop ----------------------
+    def luts(self):
+        return list(self.f_lut) + [self.f_out] + list(self.g_lut) + [self.g_out]
+
+    def resample_dropout(self, batch_size):
+        """Sample every dropout mask ONCE, for the update about to be taken.
+
+        Both variants are pinned for the whole update, which is what the PC arms need: the inner loop
+        runs T forward passes over the same batch and takes a vjp through them, so a mask resampled
+        per call would make the energy non-stationary and differentiate a different network than the
+        one that made the prediction. Call this at the top of each optimiser step, once."""
+        for lut in self.luts():
+            lut.resample_head_drop_mask(batch_size)
+        if self.residual_dropout > 0.0:
+            keep = 1.0 - self.residual_dropout
+            dev, dt = self.W1.device, self.W1.dtype
+            n = self.n_hidden - 1
+            self._rmask_f = [torch.empty(batch_size, self.width, device=dev, dtype=dt).bernoulli_(keep) / keep
+                             for _ in range(n)]
+            self._rmask_g = [torch.empty(batch_size, self.width, device=dev, dtype=dt).bernoulli_(keep) / keep
+                             for _ in range(n)]
+
+    def clear_dropout(self):
+        """Drop every pinned mask (back to the library default of per-call resampling)."""
+        for lut in self.luts():
+            lut.clear_head_drop_mask()
+        self._rmask_f, self._rmask_g = None, None
+
+    def _rdrop(self, i, u, masks):
+        """Inverted dropout on a block's LUT output, BEFORE the a_i scaling. Train + grad only, like the
+        table variant, so every no_grad diagnostic and the test-set forward see the full network."""
+        if (self.residual_dropout <= 0.0 or masks is None or not self.training
+                or not torch.is_grad_enabled()):
+            return u
+        m = masks[i]
+        if m.shape[0] != u.shape[0]:
+            raise RuntimeError(f'pinned residual mask is for batch {m.shape[0]}, forward is {u.shape[0]}')
+        return u * m
 
     # ---- forward maps -------------------------------------------------------------------------------------
     def h1(self, x):
         return self.a1 * F.linear(x, self.W1)
 
     def layer(self, i, h):                              # f_{i+2}: h_{i+1} -> h_{i+2}, i = 0..depth-3
-        return h + self.ai * self.f_lut[i](h)
+        return h + self.ai * self._rdrop(i, self.f_lut[i](h), self._rmask_f)
 
     def readout(self, h):
         return self.ai * self.f_out(h)
@@ -81,7 +125,7 @@ class PairedLUTStack(nn.Module):
 
     # ---- backward maps ------------------------------------------------------------------------------------
     def back_layer(self, i, h):                         # g_{i+2}: h_{i+2} -> h_{i+1}
-        return h + self.ai * self.g_lut[i](h)
+        return h + self.ai * self._rdrop(i, self.g_lut[i](h), self._rmask_g)
 
     def back_readout(self, yhat):                       # g_L: yhat -> h_{L-1}
         return self.ai * self.g_out(yhat)
