@@ -25,32 +25,35 @@ from wandb_setup import make_tracker  # noqa: E402
 
 
 # ---------------------------------------------------------------------------------------------------------
-def _residuals(model, x, hs, arm):
+def _residuals(model, x, y, hs, arm):
     """The residual family that the arm's energy actually penalises. Arm A's energy contains BOTH the forward
     and the backward residuals (DERIVATION_v2 section 2), so its constraint operator -- and therefore the step
-    size -- must cover both; arm B constrains only the forward maps."""
-    rf = model.residuals_f(x, hs)
+    size -- must cover both; arm B constrains only the forward maps. Under pinned clamping the forward family
+    carries one extra member, the top residual y - readout(h_{L-1}), which changes A and hence sigma_max: the
+    step size must be re-measured, not carried over."""
+    rf = model.residuals_f(x, hs, y)
     if arm != 'pcA':
         return rf
-    return rf + model.residuals_b(hs, model.readout(hs[-1]))
+    top = y if model.top_pinned() else model.readout(hs[-1])
+    return rf + model.residuals_b(hs, top)
 
 
-def sigma_max_A(model, x, arm, iters=25, eps=1e-3):
+def sigma_max_A(model, x, y, arm, iters=25, eps=1e-3):
     """sigma_max of A = d r / d h by power iteration; A v by finite differences (eps well under the median
     smallest margin ~0.15, so the probe stays inside one cell), A^T u by one backward. DERIVATION_v2 section 4."""
     hs = [h.detach().clone() for h in model.init_states(x)]
     with torch.no_grad():
-        r0 = _residuals(model, x, hs, arm)
+        r0 = _residuals(model, x, y, hs, arm)
     v = [torch.randn_like(h) for h in hs]
     n = math.sqrt(sum(float(t.pow(2).sum()) for t in v))
     v = [t / n for t in v]
     sigma = 0.0
     for _ in range(iters):
         with torch.no_grad():
-            rp = _residuals(model, x, [h + eps * vi for h, vi in zip(hs, v)], arm)
+            rp = _residuals(model, x, y, [h + eps * vi for h, vi in zip(hs, v)], arm)
             Av = [(a - b) / eps for a, b in zip(rp, r0)]
         hg = [h.detach().clone().requires_grad_(True) for h in hs]
-        r = _residuals(model, x, hg, arm)
+        r = _residuals(model, x, y, hg, arm)
         AtAv = torch.autograd.grad(r, hg, grad_outputs=Av)
         n = math.sqrt(sum(float(t.pow(2).sum()) for t in AtAv))
         if n == 0:
@@ -71,7 +74,10 @@ def inner_loop(model, x, y, arm, *, T, eta_h, alpha, rho, collect=False):
         hs = [h.detach().clone().requires_grad_(True) for h in model.init_states_warm(x, y)]
     else:
         hs = [h.detach().clone().requires_grad_(True) for h in model.init_states(x)]
-    lam = [torch.zeros_like(h) for h in hs]
+    # one multiplier per CONSTRAINT, not per state: under pinned clamping the forward family has one more
+    # member (the top residual) than there are free states.
+    with torch.no_grad():
+        lam = [torch.zeros_like(r) for r in model.residuals_f(x, hs, y)]
     a0 = model.addresses(hs) if collect else None
     trace = []
     for t in range(T):
@@ -122,7 +128,7 @@ def arm_grads(model, x, y, arm, *, T, eta_h, alpha, rho, mu=1.0):
         e, rf, rb = model.energy_B(x, y, hs, lam, rho)
     (e / x.shape[0]).backward()
     if arm == 'pcalmB':
-        model.recon_R(x, mu=mu).div(x.shape[0]).backward()          # g's own objective, f detached inside
+        model.recon_R(x, y, mu=mu).div(x.shape[0]).backward()          # g's own objective, f detached inside
     with torch.no_grad():
         stats['resid_rms'] = float(torch.stack([ri.pow(2).mean() for ri in rf]).mean().sqrt())
         stats['loss_at_h'] = float(0.5 * (model.readout(hs[-1]) - y).pow(2).sum() / x.shape[0])
@@ -221,6 +227,10 @@ def main():
                          '(one Bernoulli per sample per table on the confidence score, survivors x 1/(1-p))')
     ap.add_argument('--residual-dropout', type=float, default=0.0,
                     help="standard dropout on each block's LUT output, before the a_i scaling")
+    ap.add_argument('--clamp', default='pinned', choices=['pinned', 'data'],
+                    help='pinned: the target is clamped as the top state, contributing one more forward '
+                         'residual and NO separate data term. data: input-only clamping with the data term '
+                         '(the mode every run before 2026-09-21 used).')
     ap.add_argument('--train-eval', action='store_true',
                     help='also evaluate on a fixed 2000-row TRAIN subset, for the train/test gap')
     ap.add_argument('--dataset', default='fashion')
@@ -238,7 +248,8 @@ def main():
     xtr, ytr = load(a.dataset, train=True, device=dev)
     xte, yte = load(a.dataset, train=False, device=dev)
     model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed,
-                           table_dropout=a.table_dropout, residual_dropout=a.residual_dropout)
+                           table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
+                           clamp_mode=a.clamp)
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     loader = TensorLoader(xtr, ytr, batch_size=a.batch, seed=a.seed)
     probe_x, probe_y = xtr[:a.batch], ytr[:a.batch]
@@ -248,6 +259,7 @@ def main():
                dataset=a.dataset, a_i=model.ai, read_tau_init=0.5, nap=8, table_size=256, read_top_n=2,
                table_dropout=a.table_dropout, residual_dropout=a.residual_dropout,
                align_layer_order='numeric',   # absent -> that run's align/f_tables_L{i} are lexicographic
+               clamp=a.clamp,
                _arch_note='PC / PC-ALM over paired forward+backward LightMHL stacks (DERIVATION_v2.md). '
                           'Arm A: symmetric energy, both f and g get gradient from E. Arm B: forward maps as '
                           'constraints with multipliers lam, g outside L_rho (warm start + reconstruction R, '
@@ -258,7 +270,7 @@ def main():
     tracker = make_tracker(cfg, out_dir, name=name, tags=tags)
 
     rho, prev_rnorm = a.rho, None
-    sigma = sigma_max_A(model, probe_x, a.arm) if a.arm != 'bp' else float('nan')
+    sigma = sigma_max_A(model, probe_x, probe_y, a.arm) if a.arm != 'bp' else float('nan')
     eta_h = (float('nan') if a.arm == 'bp' else
              (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA' else eta_h_rule(sigma, rho, a.alpha)))
     print(f'{name} | dev {dev} | sigma_max {sigma:.4f} eta_h {eta_h:.4e} | T {T} | stability '
@@ -310,14 +322,25 @@ def main():
                 eta_h = eta_h_rule(sigma, rho, a.alpha)
             prev_rnorm = rn
         if a.arm != 'bp' and step % a.sigma_every == 0:
-            sigma = sigma_max_A(model, probe_x, a.arm)
+            sigma = sigma_max_A(model, probe_x, probe_y, a.arm)
             eta_h = (a.eta_frac / max(sigma ** 2, 1e-12) if a.arm == 'pcA'
                      else eta_h_rule(sigma, rho, a.alpha))
         if step % a.probe_every == 0 or step == 1:
             model.clear_dropout()          # every diagnostic measures the FULL network, not a dropout sample
             with torch.no_grad():
-                ms = model.margin_stats(model.init_states(probe_x))
+                pstates = model.init_states(probe_x)
+                ms = model.margin_stats(pstates)
                 taus = model.log_taus()
+                tn = model.table_norms()
+                br = model.branch_ratios(pstates)
+            # collapse diagnostics: arm A's trivial solution is tables -> 0 with every block the identity,
+            # which shows up as a monotone decay of both of these.
+            for i, v in enumerate(tn):
+                row[f'norm/f_tables_L{i}'] = v
+            row['norm/f_tables_mean'] = sum(tn) / len(tn)
+            for i, v in enumerate(br):
+                row[f'ident/branch_ratio_L{i}'] = v
+            row['ident/branch_ratio_mean'] = sum(br) / len(br)
             for i, m in enumerate(ms):
                 row[f'margin/m_min_p50_L{i}'] = m['m_min_q'][1]
                 row[f'margin/m_min_p10_L{i}'] = m['m_min_q'][0]

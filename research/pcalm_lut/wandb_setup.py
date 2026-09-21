@@ -51,6 +51,18 @@ GLOSSARY = DictGlossary({
     'eval/train_loss_full': dict(unit='sq.err/sample', section='eval',
                                  desc='1/2||yhat-y||^2 per sample on the same fixed 2,000-row train subset, '
                                       'measured with dropout OFF (--train-eval only).'),
+    'norm/f_tables_L{i}': dict(unit='-', section='collapse',
+                               desc='RMS table entry of forward LUT i. Arm A has a trivial solution -- every '
+                                    'block the identity, all tables zero -- whose signature is a monotone '
+                                    'decay of this toward zero.'),
+    'norm/f_tables_mean': dict(unit='-', section='collapse',
+                               desc='Mean over forward LUTs of the RMS table entry.'),
+    'ident/branch_ratio_L{i}': dict(unit='ratio', section='collapse',
+                                    desc='||a_i LUT_i(h_i)|| / ||h_i|| for interior block i: how far the '
+                                         'block moves the residual stream. A block that has collapsed to '
+                                         'the identity map reports ~0.'),
+    'ident/branch_ratio_mean': dict(unit='ratio', section='collapse',
+                                    desc='Mean over interior blocks of the residual-branch ratio.'),
     'flips/mean': dict(unit='fraction', section='addresses',
                        desc='Mean over layers of the fraction of (sample, table) address slots whose selected '
                             'cell differs from the forward-pass cell after the inner loop.'),
@@ -86,6 +98,7 @@ GLOSSARY = DictGlossary({
     'final_loss': dict(unit='sq.err/sample', section='summary', desc='train/loss at the last step (summary).'),
     'test_acc': dict(unit='fraction', section='summary', desc='eval/test_acc at the last probe (summary).'),
 }, sections={'train': 'Training', 'eval': 'Evaluation', 'addresses': 'Address search', 'summary': 'Summary',
+             'collapse': 'Collapse / identity diagnostics',
              'margins': 'Margin distribution (conditioning)', 'tau': 'Blend temperature',
              'alignment': 'Gradient alignment to BP'},
    source='research/pcalm_lut/wandb_setup.py')

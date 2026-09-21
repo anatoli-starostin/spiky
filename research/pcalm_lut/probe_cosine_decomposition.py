@@ -55,7 +55,7 @@ def grads_of(model, scalar):
 def parts_at(model, x, y, hs):
     """The three energy parts of arm A evaluated at the given states, each as a scalar with graph."""
     yhat = model.readout(hs[-1])
-    rf = model.residuals_f(x, hs)
+    rf = model.residuals_f(x, hs, y)
     rb = model.residuals_b(hs, yhat)
     data = 0.5 * (yhat - y).pow(2).sum()
     fwd = sum(ri.pow(2).sum() for ri in rf)
@@ -98,14 +98,17 @@ def main():
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     torch.manual_seed(a.seed)
     xtr, ytr = load('fashion', train=True, device=dev)
-    model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed)
+    # clamp_mode='data' explicitly: this probe explains the runs that were made under input-only clamping,
+    # so it must keep that energy even though 'pinned' is now the default.
+    model = PairedLUTStack(xtr.shape[1], 10, a.width, a.depth, n_tables=a.tables, device=dev, seed=a.seed,
+                           clamp_mode='data')
     loader = TensorLoader(xtr, ytr, batch_size=a.batch, seed=a.seed)
     x, y = next(iter(loader))
 
     if a.train_steps:
         from train_paired import arm_grads
         opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        sg = sigma_max_A(model, x, 'pcA')
+        sg = sigma_max_A(model, x, y, 'pcA')
         it = iter(loader)
         for s in range(a.train_steps):
             try:
@@ -131,7 +134,7 @@ def main():
                                 {k: grads_of(model, v) for k, v in parts_at(model, x, y, hs0).items()}, names)
 
     # --- at the RELAXED states arm A actually uses
-    sigma = sigma_max_A(model, x, 'pcA')
+    sigma = sigma_max_A(model, x, y, 'pcA')
     eta_h = a.eta_frac / max(sigma ** 2, 1e-12)
     hs, _, _ = inner_loop(model, x, y, 'pcA', T=a.T, eta_h=eta_h, alpha=1.0, rho=1.0)
     hs = [h.detach().clone().requires_grad_(True) for h in hs]

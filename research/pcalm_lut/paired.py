@@ -46,9 +46,12 @@ class PairedLUTStack(nn.Module):
     """f (input linear + residual LUT blocks + LUT readout) and the mirrored, independent g."""
 
     def __init__(self, in_dim=784, n_classes=10, width=32, depth=16, n_tables=16, device='cuda', seed=0,
-                 table_dropout=0.0, residual_dropout=0.0):
+                 table_dropout=0.0, residual_dropout=0.0, clamp_mode='pinned'):
         super().__init__()
         assert depth >= 3
+        if clamp_mode not in ('pinned', 'data'):
+            raise ValueError(f'clamp_mode must be "pinned" or "data", got {clamp_mode!r}')
+        self.clamp_mode = clamp_mode
         self.in_dim, self.n_classes, self.width, self.depth = in_dim, n_classes, width, depth
         self.n_hidden = depth - 1                      # free states h_1..h_{L-1}
         self.table_dropout, self.residual_dropout = float(table_dropout), float(residual_dropout)
@@ -161,24 +164,45 @@ class PairedLUTStack(nn.Module):
         out[0] = fwd[0]                                 # h_1 is determined by the clamped input
         return [h.detach() for h in out]
 
-    def residuals_f(self, x, hs):
+    # ---- clamping -----------------------------------------------------------------------------------------
+    # 'data'   : only the input is clamped. The target enters as a separate data term 1/2||yhat - y||^2 and
+    #            the top of the network, yhat = readout(h_{L-1}), is free to be whatever the states make it.
+    # 'pinned' : the TARGET is clamped too. The output node is treated as one more state h_L, held at y for
+    #            the whole relaxation, so it contributes one more forward residual r^f_L = y - readout(h_{L-1})
+    #            on exactly the same footing as every other layer, and the separate data term is REMOVED
+    #            (keeping it would count the target twice). The backward residual at the readout level then
+    #            also feeds back from the pinned target rather than from the free prediction.
+    # Two consequences worth stating: the output error is weighted 1.0 in pinned mode rather than 0.5, since
+    # it is now an ordinary residual; and under arm B it becomes a CONSTRAINT with its own multiplier, so the
+    # multiplier grows until the output error is met instead of trading against a fixed-weight loss.
+
+    def top_pinned(self):
+        return self.clamp_mode == 'pinned'
+
+    def residuals_f(self, x, hs, y=None):
         r = [hs[0] - self.h1(x)]
         for i in range(self.n_hidden - 1):
             r.append(hs[i + 1] - self.layer(i, hs[i]))
+        if self.top_pinned():
+            if y is None:
+                raise ValueError('clamp_mode="pinned" needs the target: the top state IS y')
+            r.append(y - self.readout(hs[-1]))
         return r
 
-    def residuals_b(self, hs, yhat):
-        """r^b_i = h_{i-1} - g_i(h_i) for the interior levels, plus the readout level h_{L-1} - g_L(yhat)."""
+    def residuals_b(self, hs, top):
+        """r^b_i = h_{i-1} - g_i(h_i) for the interior levels, plus the readout level h_{L-1} - g_L(top),
+        where top is the pinned target y (pinned mode) or the free prediction yhat (data mode)."""
         r = [hs[i] - self.back_layer(i, hs[i + 1]) for i in range(self.n_hidden - 1)]
-        r.append(hs[-1] - self.back_readout(yhat))
+        r.append(hs[-1] - self.back_readout(top))
         return r
 
     def energy_A(self, x, y, hs):
-        """E = 1/2||yhat - y||^2 + sum_i ||r^f_i||^2 + sum_i ||r^b_i||^2, summed over the batch."""
-        yhat = self.readout(hs[-1])
-        rf = self.residuals_f(x, hs)
-        rb = self.residuals_b(hs, yhat)
-        e = 0.5 * (yhat - y).pow(2).sum()
+        """E = sum_i ||r^f_i||^2 + sum_i ||r^b_i||^2 (+ 1/2||yhat - y||^2 in 'data' mode), batch-summed."""
+        pinned = self.top_pinned()
+        rf = self.residuals_f(x, hs, y)
+        top = y if pinned else self.readout(hs[-1])
+        rb = self.residuals_b(hs, top)
+        e = (y - top).pow(2).sum() * 0.0 if pinned else 0.5 * (top - y).pow(2).sum()
         for ri in rf:
             e = e + ri.pow(2).sum()
         for ri in rb:
@@ -186,27 +210,50 @@ class PairedLUTStack(nn.Module):
         return e, rf, rb
 
     def energy_B(self, x, y, hs, lam, rho):
-        """L_rho = 1/2||yhat - y||^2 + sum_i [ lam_i . r^f_i + (rho/2)||r^f_i||^2 ], summed over the batch."""
-        yhat = self.readout(hs[-1])
-        rf = self.residuals_f(x, hs)
-        e = 0.5 * (yhat - y).pow(2).sum()
+        """L_rho = sum_i [ lam_i . r^f_i + (rho/2)||r^f_i||^2 ] (+ 1/2||yhat - y||^2 in 'data' mode).
+
+        In pinned mode the output error is the LAST constraint r^f_L, with its own multiplier, and there is
+        no separate objective: the primal problem is the feasibility system and the multipliers carry the
+        error signal -- which is what target-clamped predictive coding is."""
+        pinned = self.top_pinned()
+        rf = self.residuals_f(x, hs, y)
+        e = 0.0 if pinned else 0.5 * (self.readout(hs[-1]) - y).pow(2).sum()
         for ri, li in zip(rf, lam):
             e = e + (li * ri).sum() + 0.5 * rho * ri.pow(2).sum()
         return e, rf, None
 
-    def recon_R(self, x, mu=1.0):
+    def recon_R(self, x, y=None, mu=1.0):
         """R = mu sum_i ||h_{i-1} - g_i(f_i(h_{i-1}))||^2 on the FEEDFORWARD states, f detached (arm B only).
 
-        Includes the readout level: h_{L-1} - g_L(yhat). Gradient flows only into g (and, through the loss
-        value, nothing else)."""
+        Includes the readout level: h_{L-1} - g_L(top), top being the pinned target or the free prediction.
+        Gradient flows only into g."""
         with torch.no_grad():
             hs = self.init_states(x)
-            yhat = self.readout(hs[-1])
+            top = y if self.top_pinned() else self.readout(hs[-1])
         r = 0.0
         for i in range(self.n_hidden - 1):
             r = r + (hs[i] - self.back_layer(i, hs[i + 1])).pow(2).sum()
-        r = r + (hs[-1] - self.back_readout(yhat)).pow(2).sum()
+        r = r + (hs[-1] - self.back_readout(top)).pow(2).sum()
         return mu * r
+
+    # ---- collapse / identity diagnostics ------------------------------------------------------------------
+    @torch.no_grad()
+    def table_norms(self):
+        """RMS entry of each forward LUT's table. The collapse solution of arm A (h_i = h_{i-1}, tables -> 0)
+        shows up here as a monotone decay toward zero."""
+        luts = list(self.f_lut) + [self.f_out]
+        return [float(l.tables.pow(2).mean().sqrt()) for l in luts]
+
+    @torch.no_grad()
+    def branch_ratios(self, hs):
+        """||a_i LUT_i(h_i)|| / ||h_i|| per interior block: how much the block moves the residual stream.
+        A block that has become the identity map reports ~0."""
+        out = []
+        for i in range(self.n_hidden - 1):
+            h = hs[i]
+            u = self.ai * self.f_lut[i](h)
+            out.append(float(u.norm() / max(float(h.norm()), 1e-12)))
+        return out
 
     # ---- diagnostics --------------------------------------------------------------------------------------
     @torch.no_grad()
