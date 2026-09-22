@@ -47,7 +47,7 @@ class Autoencoder(nn.Module):
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
                  seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none',
-                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1):
+                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1, inner_in=-1):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
         self.residual = residual
@@ -80,7 +80,7 @@ class Autoencoder(nn.Module):
                                    random_seed=seed + 100 * (i + 1), device=torch.device(device),
                                    **LUT_KW)
                  if lut_impl == 'light' else
-                 CompressionMHL(input_dim=width, output_dim=width, inner_in_dim=-1,
+                 CompressionMHL(input_dim=width, output_dim=width, inner_in_dim=inner_in,
                                 inner_out_dim=inner_out,
                                 nap=LUT_KW['n_anchor_pairs'], tph=n_tables, n_heads=1, lut_impl='light',
                                 random_seed=seed + 100 * (i + 1), device=torch.device(device),
@@ -211,16 +211,32 @@ def lut_stats(model, x):
     if model.kind != 'lut':
         return {}, None
     h = model.enc(x)
-    mm, taus, addr = [], [], []
+    mm, taus, addr, ssum, nin, nout = [], [], [], [], [], []
     for i in range(model.n_blocks):
-        lut = inner_lut(model.blocks[i])
-        d = h[:, lut.anchor_a] - h[:, lut.anchor_b]
+        blk = model.blocks[i]
+        lut = inner_lut(blk)
+        # what the LUT actually reads: CompressionMHL's compress runs before the anchors are taken, and
+        # the pre-norm (when on) before that, so the margins below must be measured on the SAME tensor
+        # the layer addresses with, not on the block input.
+        z = h
+        if model.block_norm == 'layernorm' and model.norm_position == 'pre':
+            z = model.lns[i](z)
+        if hasattr(blk, 'compress'):
+            z = blk.compress(z)
+        d = z[:, lut.anchor_a] - z[:, lut.anchor_b]
         mm.append(float(d.abs().min(-1).values.median()))
         taus.append(float(lut.read_tau))
+        # summed confidence score across tables -- the quantity that grows with ||h|| under
+        # confidence_form='margin', i.e. the direct read on the amplification we diagnosed. Taken from
+        # the layer's own confidence_score() so it cannot drift from the forward's definition.
+        ssum.append(float(lut.confidence_score(d).sum(-1).mean()))
         addr.append(((d > 0).to(torch.int64) * lut.powers.view(1, 1, -1)).sum(-1))
+        nin.append(float(h.norm(dim=-1).mean()))
         h = model.block(i, h)
+        nout.append(float(h.norm(dim=-1).mean()))
     return {'m_min_mean': sum(mm) / len(mm), 'tau_mean': sum(taus) / len(taus),
-            'm_min': mm, 'tau': taus}, addr
+            'score_sum_mean': sum(ssum) / len(ssum), 'm_min': mm, 'tau': taus,
+            'score_sum': ssum, 'norm_in': nin, 'norm_out': nout}, addr
 
 
 @torch.no_grad()
@@ -296,6 +312,10 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--inner-in', type=int, default=-1,
+                    help="CompressionMHL's inner_in_dim. -1 is the no-compress sentinel (the LUT reads "
+                         'the block input directly); a positive value builds a learned '
+                         'Linear(width -> inner_in) before the LUT, with no nonlinearity between them.')
     ap.add_argument('--inner-out', type=int, default=-1,
                     help="CompressionMHL's inner_out_dim. -1 is the no-decompress sentinel (the LUT "
                          'emits the full width and decompress is Identity); a positive value adds a '
@@ -315,7 +335,7 @@ def main():
     model = Autoencoder(xtr.shape[1], a.width, a.depth_L, a.kind, a.tables, dev, a.seed,
                         hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm,
                         block_norm=a.block_norm, lut_impl=a.lut_impl, norm_position=a.norm_position,
-                        n_blocks=a.n_blocks, inner_out=a.inner_out)
+                        n_blocks=a.n_blocks, inner_out=a.inner_out, inner_in=a.inner_in)
     init_trace = None
     if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
@@ -359,6 +379,11 @@ def main():
             for bi, bv in enumerate(br):
                 row[f'branch/ratio_b{bi}'] = bv
             row.update({f'lut/{k}': v for k, v in s.items() if not isinstance(v, list)})
+            # per-block series too, flattened one key per block, so the ledger can show where in the
+            # stack a norm or a score is growing rather than only its average over blocks
+            for k, v in s.items():
+                if isinstance(v, list):
+                    row.update({f'lut/{k}_b{bi}': bv for bi, bv in enumerate(v)})
             prev_addr = addr
             hist.append(row)
             print(f'  step {step:>4d}  train {row["eval/train_mse"]:.5f}  test {row["eval/test_mse"]:.5f}'

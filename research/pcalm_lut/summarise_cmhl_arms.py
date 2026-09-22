@@ -11,10 +11,14 @@ import os
 S = 0.3081
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, 'runs_ae')
-ARMS = [('cmhl-L2-w128-tph128-dout-1-prenorm-noresid', 'dout=-1  no residual (the spec)'),
-        ('cmhl-L2-w128-tph128-dout-1-prenorm-resid', 'dout=-1  residual'),
-        ('cmhl-L2-w128-tph128-dout128-prenorm-noresid', 'dout=128 no residual'),
-        ('cmhl-L2-w128-tph128-dout128-prenorm-resid', 'dout=128 residual')]
+ARMS = [('cmhl-L2-w128-tph128-din128-dout-1-prenorm-noresid', 'din=128 dout=-1  no resid  SPEC'),
+        ('cmhl-L2-w128-tph128-din128-dout-1-prenorm-resid', 'din=128 dout=-1  residual'),
+        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-noresid', 'din=128 dout=128 no resid  extra'),
+        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-resid', 'din=128 dout=128 residual  extra'),
+        ('cmhl-L2-w128-tph128-dout-1-prenorm-noresid', 'din=-1  dout=-1  no resid  (prior)'),
+        ('cmhl-L2-w128-tph128-dout-1-prenorm-resid', 'din=-1  dout=-1  residual   (prior)'),
+        ('cmhl-L2-w128-tph128-dout128-prenorm-noresid', 'din=-1  dout=128 no resid  (prior)'),
+        ('cmhl-L2-w128-tph128-dout128-prenorm-resid', 'din=-1  dout=128 residual   (prior)')]
 FLOOR = ('linear 784-128-784 (6.125x floor)', 0.06877)
 
 
@@ -35,9 +39,15 @@ def main():
         print(line(lab, s['test_mse'], s['train_mse'],
                    100 * (s['test_mse'] - s['train_mse']) / s['train_mse'],
                    s['branch_last'], s['still_improving_pct'], s['params']))
-        print(f'{"":<34}block gain first->last {s["branch_first"]:.3f} -> {s["branch_last"]:.3f}, '
-              f'tau {s["tau_last"]:.3f}, smallest margin {s["m_min_last"]:.3f}, '
-              f'flips {s["flips_last"]:.3f}')
+        nb = s['n_blocks']
+        per = lambda k, f='.1f': '/'.join(  # noqa: E731
+            format(h[f'lut/{k}_b{b}'], f) for b in range(nb) if f'lut/{k}_b{b}' in h)
+        sc = per('score_sum')
+        extra = (f', score sum {sc}, |in| {per("norm_in")} -> |out| {per("norm_out")}' if sc
+                 else ', score sum / per-block norms not logged (probe added after this run)')
+        print(f'{"":<34}gain {s["branch_first"]:.3f} -> {s["branch_last"]:.3f}, tau {s["tau_last"]:.3f}, '
+              f'm_min {s["m_min_first"]:.3f} -> {s["m_min_last"]:.3f}, '
+              f'flips {s["flips_last"]:.3f}{extra}')
     print(line(*FLOOR))
 
 

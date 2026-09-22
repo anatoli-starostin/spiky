@@ -1,10 +1,18 @@
 arm                                test std  MSE[0,1]  PSNR dB    train    gap  branch    %/75   params
-dout=-1  no residual (the spec)     0.11611  0.011021    19.58  0.10935   6.2%   0.707    2.60    8.59M
-                                  block gain first->last 0.767 -> 0.707, tau 0.465, smallest margin 0.461, flips 0.149
-dout=-1  residual                   0.07145  0.006783    21.69  0.07089   0.8%   0.028    0.51    8.59M
-                                  block gain first->last 0.011 -> 0.028, tau 0.779, smallest margin 0.184, flips 0.063
-dout=128 no residual                0.12521  0.011885    19.25  0.11941   4.9%   0.578    1.18    8.62M
-                                  block gain first->last 0.311 -> 0.578, tau 0.452, smallest margin 0.422, flips 0.154
-dout=128 residual                   0.07163  0.006799    21.68  0.07106   0.8%   0.025    0.15    8.62M
-                                  block gain first->last 0.010 -> 0.025, tau 0.763, smallest margin 0.182, flips 0.049
+din=128 dout=-1  no resid  SPEC     0.12702  0.012057    19.19  0.11894   6.8%   1.091    0.53    8.62M
+                                  gain 1.478 -> 1.091, tau 0.485, m_min 0.109 -> 0.144, flips 0.210, score sum 396.4/138.0, |in| 24.9/48.2 -> |out| 48.2/13.2
+din=128 dout=-1  residual           0.07098  0.006738    21.72  0.07051   0.7%   0.016    0.60    8.62M
+                                  gain 0.003 -> 0.016, tau 0.565, m_min 0.085 -> 0.083, flips 0.097, score sum 70.1/69.4, |in| 14.7/14.8 -> |out| 14.8/14.8
+din=128 dout=128 no resid  extra    0.13373  0.012694    18.96  0.12761   4.8%   0.609    1.66    8.66M
+                                  gain 0.432 -> 0.609, tau 0.417, m_min 0.102 -> 0.122, flips 0.211, score sum 178.1/190.4, |in| 32.3/22.2 -> |out| 22.2/11.8
+din=128 dout=128 residual  extra    0.07127  0.006766    21.70  0.07081   0.7%   0.020    0.49    8.66M
+                                  gain 0.006 -> 0.020, tau 0.565, m_min 0.088 -> 0.097, flips 0.084, score sum 103.6/107.4, |in| 14.5/14.5 -> |out| 14.5/14.5
+din=-1  dout=-1  no resid  (prior)  0.11611  0.011021    19.58  0.10935   6.2%   0.707    2.60    8.59M
+                                  gain 0.767 -> 0.707, tau 0.465, m_min 0.059 -> 0.461, flips 0.149, score sum / per-block norms not logged (probe added after this run)
+din=-1  dout=-1  residual   (prior)  0.07145  0.006783    21.69  0.07089   0.8%   0.028    0.51    8.59M
+                                  gain 0.011 -> 0.028, tau 0.779, m_min 0.089 -> 0.184, flips 0.063, score sum / per-block norms not logged (probe added after this run)
+din=-1  dout=128 no resid  (prior)  0.12521  0.011885    19.25  0.11941   4.9%   0.578    1.18    8.62M
+                                  gain 0.311 -> 0.578, tau 0.452, m_min 0.064 -> 0.422, flips 0.154, score sum / per-block norms not logged (probe added after this run)
+din=-1  dout=128 residual   (prior)  0.07163  0.006799    21.68  0.07106   0.8%   0.025    0.15    8.62M
+                                  gain 0.010 -> 0.025, tau 0.763, m_min 0.089 -> 0.182, flips 0.049, score sum / per-block norms not logged (probe added after this run)
 linear 784-128-784 (6.125x floor)   0.06877  0.006528    21.85
