@@ -7,6 +7,9 @@
    after switching back and forth.
 4. evaluate() measures the eval-mode model even when called mid-training, and leaves the module in the
    mode it found it in. This is the one that would silently corrupt the logged curves if wrong.
+5. p = 0 keeps the ORIGINAL state_dict key layout, so checkpoints written before the knob existed still
+   load. An nn.Dropout carries no parameters, but putting one inside the FFN's Sequential renumbers the
+   second Linear -- which is exactly how this broke the first time.
 
 Run directly (not under pytest, per the branch convention for these files):
     python test_dropout_active_and_off.py
@@ -72,7 +75,14 @@ def main():
     if not restored:
         fails.append('evaluate() did not restore train mode')
 
-    print('FAIL: ' + '; '.join(fails) if fails else 'all four checks pass')
+    k0, k2 = set(m0.state_dict()), set(m.state_dict())
+    legacy = {'enc.0.ffn.0.weight', 'enc.0.ffn.2.weight', 'dec.3.ffn.2.bias'}
+    print(f'5. p=0 keeps the pre-dropout key layout: {legacy <= k0}; p=0.2 has its own '
+          f'({"enc.0.ffn.3.weight" in k2}); same number of tensors: {len(k0) == len(k2)}')
+    if not legacy <= k0:
+        fails.append('p=0 state_dict keys moved -- older checkpoints will not load')
+
+    print('FAIL: ' + '; '.join(fails) if fails else 'all five checks pass')
     return 1 if fails else 0
 
 

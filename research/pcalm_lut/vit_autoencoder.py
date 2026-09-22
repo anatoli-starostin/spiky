@@ -106,9 +106,17 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
+        # The p=0 branch keeps the ORIGINAL three-module Sequential. An nn.Dropout has no parameters, but
+        # inserting one shifts the second Linear from index 2 to index 3 and so renames its state_dict
+        # keys -- which silently breaks every checkpoint written before this knob existed. Branching here
+        # keeps p=0 checkpoints loadable; a p>0 run has its own key layout, and the figure scripts rebuild
+        # from each run's own recorded cfg, so the two never meet.
+        mlp = ([nn.Linear(d_model, ffn_mult * d_model), nn.GELU(), nn.Linear(ffn_mult * d_model, d_model)]
+               if dropout == 0 else
+               [nn.Linear(d_model, ffn_mult * d_model), nn.GELU(), nn.Dropout(dropout),
+                nn.Linear(ffn_mult * d_model, d_model)])
         self.ffn = (LutFFN(d_model, n_tables, device, seed) if ffn_kind == 'lut'
-                    else nn.Sequential(nn.Linear(d_model, ffn_mult * d_model), nn.GELU(),
-                                       nn.Dropout(dropout), nn.Linear(ffn_mult * d_model, d_model)))
+                    else nn.Sequential(*mlp))
         self.drop1, self.drop2 = nn.Dropout(dropout), nn.Dropout(dropout)
 
     def forward(self, x):
