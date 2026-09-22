@@ -243,3 +243,6 @@ doc/**/*.aux
 doc/**/*.log
 doc/**/*.out
 doc/**/*.toc
+
+# autoencoder model checkpoints: hundreds of MB, regenerable from the run config
+research/pcalm_lut/runs_*/**/model.pt
