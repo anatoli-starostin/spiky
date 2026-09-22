@@ -1,0 +1,59 @@
+arm                       test std  MSE[0,1]    PSNR    train    gap  vs floor  vs base
+HPC deep supervision       0.09102  0.008640   20.63  0.08125  12.0%    +32.4%   -37.6%
+baseline (same seed)       0.14576  0.013837   18.59  0.11997  21.5%   +112.0%    +0.0%
+linear 784-128-784         0.06877  0.006528   21.85
+
+PER-LEVEL training MSE (each against the residual its predecessors left)
+level          500      1000      2000      3000      5000      7000      9000     10000
+0          0.16530   0.13163   0.10771   0.09362   0.08545   0.09087   0.08183   0.08734
+1          0.16539   0.13690   0.10973   0.09467   0.08536   0.09042   0.08115   0.08642
+2          0.17846   0.13261   0.10803   0.09346   0.08619   0.09041   0.08132   0.08642
+3          0.16853   0.13488   0.10887   0.09422   0.08624   0.09089   0.08127   0.08682
+
+### HPC deep supervision
+participation ratio (max 256)             b0        b1        b2        b3
+  at step 10000                         20.3      15.0       1.1       1.0
+usage entropy, nats (max 5.545)           b0        b1        b2        b3
+  at step 10000                        3.463     2.985     0.125     0.008
+dead-row fraction (batch 512)             b0        b1        b2        b3
+  at step 10000                        0.712     0.752     0.991     0.996
+share of the most-used row                b0        b1        b2        b3
+  at step 10000                        0.145     0.259     0.962     0.997
+mean table row norm                       b0        b1        b2        b3
+  at step 10000                        0.917     0.504     0.073     0.057
+||mean row|| / mean ||row||               b0        b1        b2        b3
+  at step 10000                        0.093     0.242     0.316     0.257
+participation ratio over training        500      1000      2000      3000      5000      7000      9000     10000
+  block 0                               20.1      18.7      19.5      19.7      19.8      20.3      20.3      20.3
+  block 1                               10.3       7.0       7.1       7.2       8.3      12.0      14.3      15.0
+  block 2                                1.3       1.1       1.1       1.2       1.1       1.1       1.1       1.1
+  block 3                                1.0       1.0       1.0       1.0       1.0       1.0       1.0       1.0
+gradient norms                           500      1000      2000      3000      5000      7000      9000     10000
+  encoder                             0.0180    0.0211    0.0118    0.0120    0.0121    0.0071    0.0062    0.0061
+  block-0 compress                    0.0137    0.0157    0.0111    0.0121    0.0137    0.0088    0.0094    0.0095
+  decoder                             0.0217    0.0156    0.0123    0.0099    0.0058    0.0049    0.0043    0.0044
+  tables b0                           0.0139    0.0121    0.0088    0.0082    0.0061    0.0043    0.0035    0.0037
+
+### baseline (same seed)
+participation ratio (max 256)             b0        b1        b2        b3
+  at step 10000                         18.8      19.4      24.4      34.7
+usage entropy, nats (max 5.545)           b0        b1        b2        b3
+  at step 10000                        3.308     3.438     3.624     3.981
+dead-row fraction (batch 512)             b0        b1        b2        b3
+  at step 10000                        0.760     0.719     0.684     0.604
+share of the most-used row                b0        b1        b2        b3
+  at step 10000                        0.149     0.157     0.136     0.099
+mean table row norm                       b0        b1        b2        b3
+  at step 10000                        0.546     0.573     0.755     1.143
+||mean row|| / mean ||row||               b0        b1        b2        b3
+  at step 10000                        0.109     0.085     0.071     0.091
+participation ratio over training        500      1000      2000      3000      5000      7000      9000     10000
+  block 0                               12.2      13.5      14.5      14.6      16.2      16.9      18.4      18.8
+  block 1                               14.5      14.4      14.3      14.1      15.7      16.5      19.4      19.4
+  block 2                               15.1      15.3      16.1      16.9      19.5      20.6      24.3      24.4
+  block 3                               17.7      20.7      23.8      26.6      29.7      31.3      34.5      34.7
+gradient norms                           500      1000      2000      3000      5000      7000      9000     10000
+  encoder                             0.0694    0.0336    0.0324    0.0251    0.0301    0.0195    0.0290    0.0314
+  block-0 compress                    0.0609    0.0360    0.0349    0.0268    0.0347    0.0281    0.0409    0.0448
+  decoder                             0.0457    0.0431    0.0370    0.0333    0.0317    0.0286    0.0299    0.0306
+  tables b0                           0.0420    0.0271    0.0191    0.0143    0.0124    0.0098    0.0111    0.0105

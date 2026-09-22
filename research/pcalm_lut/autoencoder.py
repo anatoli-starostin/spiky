@@ -34,6 +34,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.expanduser('~/projects/spiky/src'))
 from data import TensorLoader, load  # noqa: E402
 from spiky.lutorch.compression_mhl import CompressionMHL  # noqa: E402
+from lut_utilisation import flatten as _flatten_util  # noqa: E402
+from lut_utilisation import grad_norms, lut_utilisation  # noqa: E402
 from readout_norms import flatten as _flatten_norms  # noqa: E402
 from readout_norms import readout_norms  # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT  # noqa: E402
@@ -52,7 +54,8 @@ class Autoencoder(nn.Module):
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
                  seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none',
-                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1, inner_in=-1, final_norm=False):
+                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1, inner_in=-1, final_norm=False,
+                 deep_supervision='none'):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
         self.residual = residual
@@ -119,6 +122,14 @@ class Autoencoder(nn.Module):
         # Linear and broke every pre-existing checkpoint. A test below asserts the state_dict keys are
         # identical with the flag off.
         self.final_ln = nn.LayerNorm(width) if final_norm else None
+        # 'hpc' adds NO modules -- every level decodes through the shared final_ln + dec -- so the
+        # state_dict is identical whether it is on or off. That is the point: the previous flag that
+        # inserted a module renamed parameters and broke checkpoints.
+        self.deep_supervision = deep_supervision
+        if deep_supervision == 'hpc' and not final_norm:
+            raise ValueError("deep_supervision='hpc' needs --final-norm: the shared head IS "
+                             'final_ln + dec, and without the norm the per-level losses are scored '
+                             'on scales that differ by ~6x across blocks')
         self.to(device)
 
     def encode_depth(self, h, upto):
@@ -198,7 +209,32 @@ class Autoencoder(nn.Module):
                       f'(x{scale:.3f}), stream RMS after {rms(h):.4f}', flush=True)
         return trace
 
+    def decode(self, h):
+        """The shared readout head: the final norm (when on) then the output Linear.
+
+        Hierarchical predictive coding decodes EVERY tap through this same head rather than through
+        per-level heads. Reapplying the norm per tap is load-bearing: the readout norm spans about 6x
+        across blocks 0..3, so without it the per-level losses would be scored on wildly different
+        scales and the deeper levels would dominate for a reason that has nothing to do with what they
+        predict.
+        """
+        return self.dec(self.final_ln(h) if self.final_ln is not None else h)
+
+    def levels(self, x):
+        """Per-level predictions, one per block, all through the shared head. The forward stream stays
+        ATTACHED between blocks -- no detach -- so this is end-to-end training plus a local signal."""
+        h = self.enc(x)
+        preds = []
+        for i in range(self.n_blocks):
+            h = self.block(i, h)
+            preds.append(self.decode(h))
+        return preds
+
     def forward(self, x):
+        if self.deep_supervision == 'hpc':
+            # the reconstruction IS the sum of the level predictions, so every MSE reported anywhere
+            # (including evaluate()) measures the same object the loss is built from
+            return sum(self.levels(x))
         h = self.enc(x)
         for i in range(self.n_blocks):
             h = self.block(i, h)
@@ -350,6 +386,15 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--deep-supervision', default='none', choices=['none', 'hpc'],
+                    help="'hpc': hierarchical predictive coding. Every block's readout is decoded "
+                         'through the SHARED final_ln + dec; level 0 is scored against x and level i>0 '
+                         'against the residual the earlier levels left, with the accumulated prediction '
+                         'DETACHED so each target is a constant. The reconstruction is the sum of the '
+                         'level predictions. Adds no parameters.')
+    ap.add_argument('--lut-utilisation', action='store_true',
+                    help='log per-table participation ratio, entropy, dead-entry fraction, row norms '
+                         'and gradient norms at the encoder / block-0 compress / tables. Off by default.')
     ap.add_argument('--readout-norms', action='store_true',
                     help='log per-sample norm statistics (mean/median/max/std/min) at every tap point '
                          'inside each block, at the probe cadence. Off by default.')
@@ -388,7 +433,7 @@ def main():
                         hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm,
                         block_norm=a.block_norm, lut_impl=a.lut_impl, norm_position=a.norm_position,
                         n_blocks=a.n_blocks, inner_out=a.inner_out, inner_in=a.inner_in,
-                        final_norm=a.final_norm)
+                        final_norm=a.final_norm, deep_supervision=a.deep_supervision)
     init_trace = None
     if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
@@ -435,7 +480,23 @@ def main():
         if a.augment:
             bx = augment(bx, 28, a.aug_pad)
         opt.zero_grad(set_to_none=True)
-        loss = (model(bx) - bx).pow(2).mean()          # MSE, mean over pixels AND batch
+        if a.deep_supervision == 'hpc':
+            # level 0 predicts x; level i>0 predicts what the levels before it left over. The running
+            # accumulator is DETACHED when forming each target, so a level's target is a constant and
+            # the gradient of level i does not flow back through levels < i by way of their targets --
+            # only through the shared forward stream, which is deliberately left attached.
+            preds = model.levels(bx)
+            acc = torch.zeros_like(bx)
+            per_level, recon = [], torch.zeros_like(bx)
+            for pr in preds:
+                per_level.append((pr - (bx - acc)).pow(2).mean())
+                acc = acc + pr.detach()
+                recon = recon + pr
+            loss = torch.stack(per_level).mean()       # MEAN over levels, equal weights
+            level_losses = [float(v.detach()) for v in per_level]
+        else:
+            loss = (model(bx) - bx).pow(2).mean()      # MSE, mean over pixels AND batch
+            level_losses = None
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -455,6 +516,13 @@ def main():
             for k, v in s.items():
                 if isinstance(v, list):
                     row.update({f'lut/{k}_b{bi}': bv for bi, bv in enumerate(v)})
+            if level_losses is not None:
+                row.update({f'hpc/level{li}': lv for li, lv in enumerate(level_losses)})
+            if a.lut_utilisation and model.kind == 'lut':
+                # codebook utilisation and table geometry; grads are read BEFORE opt.step() clears
+                # nothing but are still the ones this step produced
+                row.update(_flatten_util(lut_utilisation(model, xtr[:512])))
+                row.update(grad_norms(model))
             if a.readout_norms and model.kind == 'lut':
                 # every tap point inside each block, so growth can be attributed to a stage rather
                 # than inferred from the two endpoints
