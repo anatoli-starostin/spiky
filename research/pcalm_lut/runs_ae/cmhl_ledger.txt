@@ -1,0 +1,10 @@
+arm                                test std  MSE[0,1]  PSNR dB    train    gap  branch    %/75   params
+dout=-1  no residual (the spec)     0.11611  0.011021    19.58  0.10935   6.2%   0.707    2.60    8.59M
+                                  block gain first->last 0.767 -> 0.707, tau 0.465, smallest margin 0.461, flips 0.149
+dout=-1  residual                   0.07145  0.006783    21.69  0.07089   0.8%   0.028    0.51    8.59M
+                                  block gain first->last 0.011 -> 0.028, tau 0.779, smallest margin 0.184, flips 0.063
+dout=128 no residual                0.12521  0.011885    19.25  0.11941   4.9%   0.578    1.18    8.62M
+                                  block gain first->last 0.311 -> 0.578, tau 0.452, smallest margin 0.422, flips 0.154
+dout=128 residual                   0.07163  0.006799    21.68  0.07106   0.8%   0.025    0.15    8.62M
+                                  block gain first->last 0.010 -> 0.025, tau 0.763, smallest margin 0.182, flips 0.049
+linear 784-128-784 (6.125x floor)   0.06877  0.006528    21.85

@@ -33,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.expanduser('~/projects/spiky/src'))
 from data import TensorLoader, load  # noqa: E402
+from spiky.lutorch.compression_mhl import CompressionMHL  # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT  # noqa: E402
 
 PIX_STD = 0.3081            # the loader's divisor; MSE_pixel = MSE_standardised * PIX_STD^2
@@ -45,14 +46,18 @@ class Autoencoder(nn.Module):
     """Linear in, 2L residual blocks of the chosen kind, linear out."""
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
-                 seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none'):
+                 seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none',
+                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
         self.residual = residual
         # block_norm supersedes gain_norm; gain_norm=True is kept as the old spelling of 'gain'
         self.block_norm = 'gain' if gain_norm else block_norm
         self.gain_norm = self.block_norm == 'gain'
-        self.n_blocks = 2 * depth_L
+        self.norm_position = norm_position
+        # n_blocks=0 keeps the original 2*depth_L convention (L counted as an ENCODING depth); an
+        # explicit count is for specs that write "[block] x L" and mean L blocks total.
+        self.n_blocks = n_blocks if n_blocks else 2 * depth_L
         torch.manual_seed(seed)
         self.enc = nn.Linear(in_dim, width)
         self.dec = nn.Linear(width, in_dim)
@@ -63,9 +68,25 @@ class Autoencoder(nn.Module):
         # (see calibrate_init).
         self.ai = 1.0 / math.sqrt(max(self.n_blocks, 1) * width) if residual else 1.0
         if kind == 'lut':
+            # lut_impl='compression' wraps the same light LUT in CompressionMHL.
+            # inner_out = -1 is the "no decompress" sentinel: eff_out becomes output_dim, the LUT emits
+            # the full width itself and decompress is an Identity. inner_out = width keeps a real
+            # Linear(width -> width) decompress after a LUT that emits `width`.
+            # EITHER WAY THE BLOCK EMITS `width`. The sentinel does not change the block's output
+            # dimension, so blocks stack homogeneously, the final decoder stays width -> in_dim, the
+            # compression ratio is untouched, and a residual is well defined in both.
             self.blocks = nn.ModuleList([
-                LightMultiHeadLUT(input_dim=width, n_tables=n_tables, output_dim=width,
-                                  random_seed=seed + 100 * (i + 1), device=torch.device(device), **LUT_KW)
+                (LightMultiHeadLUT(input_dim=width, n_tables=n_tables, output_dim=width,
+                                   random_seed=seed + 100 * (i + 1), device=torch.device(device),
+                                   **LUT_KW)
+                 if lut_impl == 'light' else
+                 CompressionMHL(input_dim=width, output_dim=width, inner_in_dim=-1,
+                                inner_out_dim=inner_out,
+                                nap=LUT_KW['n_anchor_pairs'], tph=n_tables, n_heads=1, lut_impl='light',
+                                random_seed=seed + 100 * (i + 1), device=torch.device(device),
+                                **{k: v for k, v in LUT_KW.items()
+                                   if k not in ('n_anchor_pairs', 'multi_head_input', 'forward_mode')},
+                                light_forward_mode=LUT_KW['forward_mode']))
                 for i in range(self.n_blocks)])
         elif kind == 'mlp':
             g = torch.Generator(device='cpu').manual_seed(seed)
@@ -108,6 +129,13 @@ class Autoencoder(nn.Module):
     def block(self, i, h):
         if self.kind == 'linear' or self.n_blocks == 0:
             return h
+        # PRE-norm normalises the block's INPUT and leaves its output free. For a margin-score LUT,
+        # whose per-table score is proportional to ||h||, that is the weaker of the two placements:
+        # it bounds what the block reads, not what it emits, so the LAST block's output still reaches
+        # the decoder unnormalised. Post-norm (the default) is what the divergence fix used.
+        if self.block_norm == 'layernorm' and self.norm_position == 'pre':
+            u = self.ai * self.raw_block(i, self.lns[i](h))
+            return h + u if self.residual else u
         u = self.ai * self.raw_block(i, h)
         if self.block_norm == 'layernorm':
             return self.lns[i](h + u) if self.residual else self.lns[i](u)
@@ -126,7 +154,7 @@ class Autoencoder(nn.Module):
     def out_params(self, i):
         """The parameters whose scale sets a block's output magnitude, for calibration."""
         if self.kind == 'lut':
-            return [self.blocks[i].tables]
+            return [inner_lut(self.blocks[i]).tables]
         if self.kind == 'mlp':
             if getattr(self, 'hidden', 0):
                 return [self.blocks[i][2].weight]
@@ -168,6 +196,15 @@ class Autoencoder(nn.Module):
 
 
 # ------------------------------------------------------------------------------- diagnostics --------
+def inner_lut(block):
+    """The LightMultiHeadLUT itself, whether the block is one directly or a CompressionMHL wrapping one.
+
+    CompressionMHL keeps it as `lut_light`, so every probe that reaches into anchors, tau or tables has
+    to go through here rather than assume the block IS the LUT.
+    """
+    return getattr(block, 'lut_light', block)
+
+
 @torch.no_grad()
 def lut_stats(model, x):
     """Per-block smallest-margin median, learned tau, and the addresses (for a flip rate)."""
@@ -176,7 +213,7 @@ def lut_stats(model, x):
     h = model.enc(x)
     mm, taus, addr = [], [], []
     for i in range(model.n_blocks):
-        lut = model.blocks[i]
+        lut = inner_lut(model.blocks[i])
         d = h[:, lut.anchor_a] - h[:, lut.anchor_b]
         mm.append(float(d.abs().min(-1).values.median()))
         taus.append(float(lut.read_tau))
@@ -250,6 +287,19 @@ def main():
                     help='hold each block gain at 1 by matching its output RMS to its input RMS, per '
                          'sample. Parameter-free; intended for the non-residual stack, which otherwise '
                          'has nothing anchoring its scale.')
+    ap.add_argument('--lut-impl', default='light', choices=['light', 'compression'],
+                    help="'compression' builds the block as CompressionMHL wrapping the same light "
+                         'LUT, with both inner dims at the -1 no-projection sentinel')
+    ap.add_argument('--norm-position', default='post', choices=['post', 'pre'],
+                    help='where --block-norm layernorm sits. post (default) normalises the block '
+                         "OUTPUT, which is what the margin score's unbounded output needed; pre "
+                         'normalises its input and leaves the last block output free')
+    ap.add_argument('--n-blocks', type=int, default=0,
+                    help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--inner-out', type=int, default=-1,
+                    help="CompressionMHL's inner_out_dim. -1 is the no-decompress sentinel (the LUT "
+                         'emits the full width and decompress is Identity); a positive value adds a '
+                         'real Linear decompress. The BLOCK OUTPUT WIDTH is the same either way.')
     ap.add_argument('--steps', type=int, default=500)
     ap.add_argument('--batch', type=int, default=128)
     ap.add_argument('--optimizer', default='adam', choices=['adam', 'sgd'])
@@ -264,7 +314,8 @@ def main():
     xte, _ = load('fashion', train=False, device=dev)
     model = Autoencoder(xtr.shape[1], a.width, a.depth_L, a.kind, a.tables, dev, a.seed,
                         hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm,
-                        block_norm=a.block_norm)
+                        block_norm=a.block_norm, lut_impl=a.lut_impl, norm_position=a.norm_position,
+                        n_blocks=a.n_blocks, inner_out=a.inner_out)
     init_trace = None
     if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
