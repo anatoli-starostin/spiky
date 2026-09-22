@@ -34,6 +34,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.expanduser('~/projects/spiky/src'))
 from data import TensorLoader, load  # noqa: E402
 from spiky.lutorch.compression_mhl import CompressionMHL  # noqa: E402
+from readout_norms import flatten as _flatten_norms  # noqa: E402
+from readout_norms import readout_norms  # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT  # noqa: E402
 # The SAME augmentation object the ViT line uses -- imported, not reimplemented, so the two lines
 # cannot drift apart. vit_autoencoder.py is left untouched.
@@ -348,6 +350,9 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--readout-norms', action='store_true',
+                    help='log per-sample norm statistics (mean/median/max/std/min) at every tap point '
+                         'inside each block, at the probe cadence. Off by default.')
     ap.add_argument('--table-wd', type=float, default=0.0,
                     help='DECOUPLED (AdamW) weight decay applied to the LUT table values ONLY; every '
                          'other parameter keeps wd=0. 0 leaves the optimiser exactly as before.')
@@ -450,6 +455,10 @@ def main():
             for k, v in s.items():
                 if isinstance(v, list):
                     row.update({f'lut/{k}_b{bi}': bv for bi, bv in enumerate(v)})
+            if a.readout_norms and model.kind == 'lut':
+                # every tap point inside each block, so growth can be attributed to a stage rather
+                # than inferred from the two endpoints
+                row.update(_flatten_norms(readout_norms(model, xtr[:512])))
             prev_addr = addr
             hist.append(row)
             print(f'  step {step:>4d}  train {row["eval/train_mse"]:.5f}  test {row["eval/test_mse"]:.5f}'
