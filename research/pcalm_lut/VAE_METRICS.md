@@ -53,23 +53,56 @@ Fashion-MNIST number that looks most citable (−228.70 nats) is a number about 
 **No Fashion-MNIST in VampPrior, NVAE or IWAE.** Fashion-MNIST is simply not a standard benchmark in the
 likelihood-based VAE line; MNIST and Omniglot are. Exemplar VAE is the exception that makes the table.
 
-### The closest thing to our measurement, and why it still does not help
+### The closest paper, read properly — and it is NOT the experiment it first looks like
 
-*Stochastic Bottleneck: Rateless Auto-Encoder for Flexible Dimensionality Reduction* (arXiv:2005.02870)
-is the only paper found that reports **reconstruction MSE against latent dimension** on MNIST, with a
-PCA baseline — exactly our experimental shape. Its Table 1, MSE in **decibels**:
+*Stochastic Bottleneck: Rateless Auto-Encoder for Flexible Dimensionality Reduction* (arXiv:2005.02870,
+Koike-Akino & Wang) is the only paper found reporting reconstruction MSE against latent dimension on
+MNIST-family data. On a first reading it looks like our experiment. It is not, and the difference is
+the whole point of the paper.
 
-| latent dim | 4 | 14 | 24 | 34 | 44 | 54 | 64 |
+Their goal is a **rateless** autoencoder: ONE model, trained at M=64, that can be truncated to any
+L ≤ 64 at inference without retraining. The mechanism is **TailDrop**, a non-uniform dropout that drops
+a consecutive run of tail units, with the number dropped following a power CDF Pr(D < τM) = τ^β
+(β = 0.67 for MNIST, 2.1 for CIFAR-10). Head units are almost never dropped and tail units usually are,
+which forces a PCA-like importance ordering onto the latent coordinates.
+
+Table 1 in full — both columns, because the second column alone is misleading:
+
+| latent dim L | 4 | 14 | 24 | 34 | 44 | 54 | 64 |
 |---|---|---|---|---|---|---|---|
-| RL-AE MSE (dB) | 5.16 | −0.05 | −3.00 | −4.35 | −5.00 | −5.26 | −5.19 |
+| **Conv. AE** MSE (dB) | 8.18 | 6.91 | 5.03 | 3.01 | 0.56 | −2.33 | **−5.81** |
+| **Prop. AE** (rateless) MSE (dB) | 5.16 | −0.05 | −3.00 | −4.35 | −5.00 | **−5.26** | −5.19 |
 
-MLP with 1024 hidden units, Adam lr 1e-3, batch 100. It notes "the linear PCA dimensionality reduction
-performs surprisingly well" — the same observation our linear baselines force on us.
+Caption: "MSE, SSIM, and SVM classification accuracy of SAE and RL-AE, optimized under MSE measure at
+dimensionality of M=64 for MNIST datasets". MLP, three fully-connected layers, ReLU, 1024 hidden units
+for MNIST; Adam lr 1e-3, batch 100, max 500 epochs with early stopping (patience 20); standard
+normalisation, no binarisation; loss is MSE (or negative SSIM in the SSIM-optimised arm).
 
-**But the paper does not state what its dB is referenced to.** −5.19 dB is 0.30 of *something*; without
-knowing whether that is per-pixel MSE in [0,1], normalised MSE against signal power, or a per-image sum,
-it cannot be converted. So even the one structurally matching paper is not numerically comparable. It is
-useful for its *shape* — the curve flattens hard past dim ~44 and even inverts at 64 — not its level.
+**This is a truncation-robustness table, not a capacity table.** Both columns are ONE model trained at
+M=64, evaluated at truncated L. The conventional AE collapses when truncated (−5.81 → +8.18) because
+nothing ordered its latent coordinates; the rateless one degrades gracefully. At the dimension both were
+actually trained for, the conventional AE is **better** (−5.81 vs −5.19) — TailDrop costs 0.6 dB at full
+width to buy graceful degradation everywhere below it.
+
+So the non-monotonic dip (−5.26 at L=54, −5.19 at L=64) **says nothing about latent capacity ceasing to
+help**. It is a property of the rateless arm, whose tail units are trained under heavy dropout. The
+paper does not discuss the inversion at all — no explanation appears in the text.
+
+**The dB reference is undefined.** No formula, no reference signal power, nothing in the caption or
+surrounding text: the loss is given only as "distortion (e.g., MSE)". −5.19 dB is 0.30 of *something*.
+Not convertible, so not numerically comparable to us.
+
+**On PCA, the paper says the opposite of what a short quote suggests.** In full: "It should be noted
+that the linear PCA dimensionality reduction performs surprisingly well, competitive to the proposed
+nonlinear AE for CIFAR-10 datasets in Fig. 3(b). Because MNIST images are nearly binary bitmaps whose
+statistics are far from the Gaussian distribution, PCA did not work well as shown in Fig. 3(a)." The
+"surprisingly well" is about **CIFAR-10**; for MNIST they report PCA doing *badly*. That is contrary to
+what we observe on Fashion-MNIST, where our linear baselines are strong — though note their MNIST claim
+rests on MNIST being nearly binary, which Fashion-MNIST is markedly less so.
+
+PCA numbers appear **only in figures** (Figs. 3 and 4), never in a table, so there are no per-dimension
+PCA values to quote. Fashion-MNIST appears only in the supplementary experiments — MSE curves in
+Fig. 8(a) and reconstruction snapshots in Fig. 9 — again with **no numerical table**.
 
 ## 3. Our numbers on every scale that is well defined
 
