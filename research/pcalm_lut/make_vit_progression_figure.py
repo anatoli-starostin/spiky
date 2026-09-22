@@ -42,9 +42,9 @@ def build(name, dev, weights='model.pt'):
     else:
         m = ViTAutoencoder(s['n_tokens'], s['patch_dim'], c['d_model'], c['n_heads'], c['enc_layers'],
                            c['dec_layers'], c['latent'], c['latent_tokens'], c['ffn_mult'], c['ffn'],
-                           c['tables'], dev, c['seed'])
+                           c['tables'], dev, c['seed'], c.get('dropout', 0.0))
     m.load_state_dict(torch.load(os.path.join(R, name, weights), map_location=dev))
-    m.eval()
+    m.eval()   # dropout off for every reconstruction, whatever the run was trained with
     return make_eval(m, c['arch'], 28, c['patch']), d
 
 

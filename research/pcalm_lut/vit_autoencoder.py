@@ -92,39 +92,48 @@ class LutFFN(nn.Module):
 
 
 class Block(nn.Module):
-    """Pre-LN: LN -> MHSA -> residual, LN -> FFN -> residual."""
+    """Pre-LN: LN -> MHSA -> residual, LN -> FFN -> residual.
 
-    def __init__(self, d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed):
+    DROPOUT, when p > 0, sits in the three conventional places for a pre-LN transformer: on the attention
+    weights (inside MultiheadAttention), on each sub-block's output just before it joins the residual
+    stream (drop1, drop2), and inside the MLP after the GELU. Nothing is dropped on the residual branch
+    itself, on the embeddings, or on the readout. p = 0 builds nn.Dropout(0)/attention dropout 0, which
+    are exact identities, so every pre-existing run is bit-unchanged.
+    """
+
+    def __init__(self, d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed, dropout=0.0):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
         self.ffn = (LutFFN(d_model, n_tables, device, seed) if ffn_kind == 'lut'
                     else nn.Sequential(nn.Linear(d_model, ffn_mult * d_model), nn.GELU(),
-                                       nn.Linear(ffn_mult * d_model, d_model)))
+                                       nn.Dropout(dropout), nn.Linear(ffn_mult * d_model, d_model)))
+        self.drop1, self.drop2 = nn.Dropout(dropout), nn.Dropout(dropout)
 
     def forward(self, x):
         h = self.ln1(x)
-        x = x + self.attn(h, h, h, need_weights=False)[0]
-        return x + self.ffn(self.ln2(x))
+        x = x + self.drop1(self.attn(h, h, h, need_weights=False)[0])
+        return x + self.drop2(self.ffn(self.ln2(x)))
 
 
 class CrossAttn(nn.Module):
     """Pre-LN cross-attention: queries attend to a memory sequence."""
 
-    def __init__(self, d_model, n_heads):
+    def __init__(self, d_model, n_heads, dropout=0.0):
         super().__init__()
         self.lnq, self.lnk = nn.LayerNorm(d_model), nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, q, mem):
-        return q + self.attn(self.lnq(q), self.lnk(mem), self.lnk(mem), need_weights=False)[0]
+        return q + self.drop(self.attn(self.lnq(q), self.lnk(mem), self.lnk(mem), need_weights=False)[0])
 
 
 class ViTAutoencoder(nn.Module):
     def __init__(self, n_tokens=196, patch_dim=1, d_model=64, n_heads=4, enc_layers=2, dec_layers=2,
                  latent=64, latent_tokens=1, ffn_mult=4, ffn_kind='mlp', n_tables=64, device='cuda',
-                 seed=0):
+                 seed=0, dropout=0.0):
         super().__init__()
         torch.manual_seed(seed)
         self.n_tokens, self.latent, self.latent_tokens = n_tokens, latent, latent_tokens
@@ -137,7 +146,8 @@ class ViTAutoencoder(nn.Module):
         # from", the decoder's say "where this query is asking about", and sharing one tensor makes the
         # two roles fight. The original run shared them; that is now the non-default path.
         self.pos_dec = nn.Parameter(torch.randn(1, n_tokens, d_model) * 0.02)
-        mk = lambda i: Block(d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed + 17 * i)  # noqa: E731
+        mk = lambda i: Block(d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed + 17 * i,  # noqa: E731
+                             dropout)
         self.enc = nn.ModuleList([mk(i) for i in range(enc_layers)])
         self.dec = nn.ModuleList([mk(100 + i) for i in range(dec_layers)])
         if latent_tokens == 1:
@@ -145,8 +155,8 @@ class ViTAutoencoder(nn.Module):
             self.from_latent = nn.Linear(latent, d_model)
         else:
             self.lat_q = nn.Parameter(torch.randn(1, latent_tokens, d_model) * 0.02)
-            self.enc_cross = CrossAttn(d_model, n_heads)
-            self.dec_cross = CrossAttn(d_model, n_heads)
+            self.enc_cross = CrossAttn(d_model, n_heads, dropout)
+            self.dec_cross = CrossAttn(d_model, n_heads, dropout)
             self.to_latent = nn.Linear(d_model, self.lat_dim)
             self.from_latent = nn.Linear(self.lat_dim, d_model)
         self.ln_out = nn.LayerNorm(d_model)
@@ -188,13 +198,24 @@ def make_eval(model, arch, side, patch):
     return lambda b: unpatchify(model(patchify(b, side, patch)), side, patch)
 
 
-def evaluate(fwd, x, bs=4096):
+def evaluate(fwd, x, bs=4096, model=None):
+    """Reconstruction MSE over x, ALWAYS with the model in eval mode.
+
+    Passing the model matters as soon as --dropout is on: a probe run in train mode would measure a
+    randomly-thinned network, so the reported curve would be noisier and biased upward relative to the
+    model one actually keeps. Train mode is restored afterwards, so this is invisible to the loop.
+    """
+    was_training = model.training if model is not None else False
+    if model is not None:
+        model.eval()
     tot, n = 0.0, 0
     with torch.no_grad():
         for i in range(0, x.shape[0], bs):
             b = x[i:i + bs]
             tot += float((fwd(b) - b).pow(2).sum())
             n += b.numel()
+    if was_training:
+        model.train()
     return tot / n
 
 
@@ -228,6 +249,10 @@ def main():
     ap.add_argument('--warmup', type=int, default=0, help='linear warmup steps; 0 = none (the original)')
     ap.add_argument('--sched', default='none', choices=['none', 'cosine'])
     ap.add_argument('--wd', type=float, default=0.0, help='>0 switches Adam to AdamW')
+    ap.add_argument('--dropout', type=float, default=0.0,
+                    help='dropout p inside every transformer block: attention weights, each sub-block '
+                         'output before the residual add, and inside the MLP after the GELU. Also the '
+                         'two cross-attention modules. 0 = off, exactly the previous behaviour.')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--probe-every', type=int, default=25)
     ap.add_argument('--ckpt-every', type=int, default=0,
@@ -251,7 +276,8 @@ def main():
 
     model = (LinearAE(n_pix, a.latent, dev, a.seed) if a.arch == 'linear'
              else ViTAutoencoder(n_tok, patch_dim, a.d_model, a.n_heads, a.enc_layers, a.dec_layers,
-                                 a.latent, a.latent_tokens, a.ffn_mult, a.ffn, a.tables, dev, a.seed))
+                                 a.latent, a.latent_tokens, a.ffn_mult, a.ffn, a.tables, dev, a.seed,
+                                 a.dropout))
     opt = (torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd) if a.wd > 0
            else torch.optim.Adam(model.parameters(), lr=a.lr))
     fwd = make_eval(model, a.arch, side, a.patch)
@@ -289,7 +315,7 @@ def main():
         if step % a.probe_every == 0 or step == 1:
             row = {'step': step, 'train/mse_batch': float(loss.detach()), 'train/s_per_step': dt,
                    'train/lr': opt.param_groups[0]['lr'],
-                   'eval/train_mse': evaluate(fwd, xtr[:10000]), 'eval/test_mse': evaluate(fwd, xte)}
+                   'eval/train_mse': evaluate(fwd, xtr[:10000], model=model), 'eval/test_mse': evaluate(fwd, xte, model=model)}
             hist.append(row)
             if step == 1 or step % (a.probe_every * 20) == 0 or step == a.steps:
                 print(f'  step {step:>5d}  train {row["eval/train_mse"]:.5f}  '
@@ -303,7 +329,7 @@ def main():
             # from one run. Each carries the eval it was taken at, so the figure never has to re-measure.
             torch.save(model.state_dict(), os.path.join(out_dir, f'model_s{step}.pt'))
             ck = {'step': step, 'file': f'model_s{step}.pt',
-                  'train_mse': evaluate(fwd, xtr[:10000]), 'test_mse': evaluate(fwd, xte)}
+                  'train_mse': evaluate(fwd, xtr[:10000], model=model), 'test_mse': evaluate(fwd, xte, model=model)}
             ckpts.append(ck)
             print(f'  ckpt {step:>6d}  train {ck["train_mse"]:.5f}  test {ck["test_mse"]:.5f}', flush=True)
 
@@ -314,7 +340,7 @@ def main():
     summary = {'wall_s': time.time() - t0, 'params': nparam, 'n_blocks': a.enc_layers + a.dec_layers,
                'n_tokens': n_tok, 'patch_dim': patch_dim, 'side': side, 'n_pixels': n_pix,
                'compression': n_pix / a.latent,
-               'train_mse': evaluate(fwd, xtr[:10000]), 'test_mse': evaluate(fwd, xte),
+               'train_mse': evaluate(fwd, xtr[:10000], model=model), 'test_mse': evaluate(fwd, xte, model=model),
                'mean_baseline_train': mean_tr, 'mean_baseline_test': mean_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
                'improve_pct_300': 100.0 * (st.mean(prev) - st.mean(tail)) / max(st.mean(prev), 1e-12),

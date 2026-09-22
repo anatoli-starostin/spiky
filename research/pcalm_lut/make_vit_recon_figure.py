@@ -42,7 +42,8 @@ def build(name, dev):
     else:
         m = ViTAutoencoder(d['summary']['n_tokens'], d['summary']['patch_dim'], c['d_model'],
                            c['n_heads'], c['enc_layers'], c['dec_layers'], c['latent'],
-                           c['latent_tokens'], c['ffn_mult'], c['ffn'], c['tables'], dev, c['seed'])
+                           c['latent_tokens'], c['ffn_mult'], c['ffn'], c['tables'], dev, c['seed'],
+                           c.get('dropout', 0.0))
     m.load_state_dict(torch.load(os.path.join(R, name, 'model.pt'), map_location=dev))
     m.eval()
     return m, make_eval(m, c['arch'], 28, c['patch']), d['summary']['test_mse']
