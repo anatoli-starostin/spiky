@@ -310,6 +310,10 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     json.dump({'cfg': dict(vars(a), exp_name=name), 'hist': hist, 'summary': summary},
               open(os.path.join(out_dir, 'run.json'), 'w'), indent=1)
+    # the weights, so reconstructions can be rendered later without retraining. autoencoder.py has always
+    # done this; this file did not, which is why the runs before this commit have no checkpoint. These are
+    # small (the largest arm is 1.8M params) but .gitignore still keeps *.pt out of the repo.
+    torch.save(model.state_dict(), os.path.join(out_dir, 'model.pt'))
     print(f'{name} done: {summary["wall_s"]:.1f}s, train {summary["train_mse"]:.5f}, '
           f'test {summary["test_mse"]:.5f} (mean {mean_te:.5f}, ratio '
           f'{summary["test_mse"]/mean_te:.3f}), improving {summary["improve_pct_300"]:.2f}%/300')
