@@ -58,7 +58,10 @@ def grid(rows, x, title, path):
         p = None if r is None else (r - x).pow(2).mean(-1)
         for j in range(10):
             a = ax[i][j]
-            a.imshow(img(x[j] if r is None else r[j]), cmap='gray', vmin=0, vmax=1)
+            # nearest-neighbour on purpose: these are 28x28 images drawn much larger, and any smoothing
+            # would invent detail the decoder did not produce
+            a.imshow(img(x[j] if r is None else r[j]), cmap='gray', vmin=0, vmax=1,
+                     interpolation='nearest')
             a.set_xticks([])
             a.set_yticks([])
             for s in a.spines.values():
@@ -71,7 +74,7 @@ def grid(rows, x, title, path):
                   ' '.join(f'{float(v):.3f}' for v in p))
     fig.suptitle(title, fontsize=10.5)
     fig.tight_layout(rect=(0, 0, 1, 1 - 0.36 / (1.42 * n + 0.9)))
-    fig.savefig(path, dpi=160)
+    fig.savefig(path, dpi=220)
     plt.close(fig)
     print('wrote', path, '\n')
 
