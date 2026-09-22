@@ -1,29 +1,33 @@
 """ViT autoencoder on 14x14 Fashion-MNIST, plain backprop, MSE reconstruction.
 
-A new experiment file; autoencoder.py is untouched. One pixel is one token (196 tokens, patch size 1,
-scalar per token), embedded to d_model with learned positional embeddings, through pre-LN transformer
-blocks, a mean-pooled 64-dim bottleneck, and back.
+autoencoder.py is untouched; this is the transformer line. Defaults reproduce the first (500-step)
+result exactly -- patch 1, one pooled global latent, no warmup, no weight decay -- so the earlier runs
+stay reproducible, and every addition below is opt-in behind a flag.
 
-    embed 1 -> d          + learned pos emb [196, d]
-    encoder x N           LN -> MHSA -> residual,  LN -> FFN -> residual
-    bottleneck            mean-pool over tokens -> d -> 64 -> d -> broadcast -> re-add pos emb
+    embed patch -> d      + learned positional embeddings
+    encoder x N           pre-LN: LN -> MHSA -> residual,  LN -> FFN -> residual
+    bottleneck            see --latent-tokens
     decoder x N           same block
-    readout d -> 1        -> 196 -> 14x14
+    readout d -> patch    per token, shared weights
 
-UNITS AND DOWNSAMPLING. data.py returns pixels already standardised as (x/255 - 0.1307)/0.3081 (the
-branch's hard-coded constants, kept for comparability and flagged because they set the MSE scale, and
-they are MNIST's applied to Fashion-MNIST). The 2x2 average pool is applied AFTER that normalisation.
-For an affine normalisation this is identical to pooling first and then normalising with the same
-constants -- mean((x-m)/s) = (mean(x)-m)/s -- so the choice is free; it is stated because consistency
-between train and test is not, and both go through the identical path here.
+BOTTLENECK SHAPES (--latent-tokens):
+  1  the original: mean-pool over tokens -> Linear d -> latent -> Linear back -> ONE vector broadcast to
+     every position, plus the positional embedding. The decoder's only per-position information is the
+     positional embedding.
+  N  N latent tokens of latent/N dims each, formed by learned queries cross-attending to the encoded
+     tokens; the decoder cross-attends positional queries to those N latent tokens instead of receiving
+     a single broadcast vector. Same total latent budget.
 
-THE 14x14 NUMBERS ARE NOT COMPARABLE WITH THE 784-DIM ONES. A 64-dim bottleneck out of 196 inputs is a
-3.06x compression where the old one was 12.25x, so this file re-runs its own linear and mean baselines.
+UNITS. data.py standardises as (x/255 - 0.1307)/0.3081 (the branch's hard-coded constants, MNIST's
+applied to Fashion-MNIST, kept for comparability -- they set the MSE scale). The 2x2 average pool to
+14x14 is applied after that; for an affine normalisation this is identical to pooling first, and train
+and test take the same path.
+
+The 14x14 numbers are NOT comparable with the 784-dim ones: 196 -> 64 is 3.06x compression where the
+old line was 12.25x, so this file re-runs its own linear and per-pixel-mean baselines.
 
 The FFN sub-block is pluggable behind --ffn {mlp,lut}; mlp is the default and the lut seam is wired but
 not exercised here.
-
-Usage: python3 vit_autoencoder.py --arch vit --enc-layers 2 --dec-layers 2
 """
 import argparse
 import json
@@ -50,14 +54,32 @@ LUT_KW = dict(n_anchor_pairs=8, read_top_n=2, read_tau=0.5, read_tau_learnable=T
 
 
 def downsample(x, side=28, factor=2):
-    """28x28 -> 14x14 by 2x2 average pooling, on the already-normalised tensor."""
     b = x.shape[0]
     return F.avg_pool2d(x.view(b, 1, side, side), factor).reshape(b, -1)
 
 
+def patchify(x, side=14, patch=1):
+    """[B, side*side] -> [B, n_tokens, patch*patch]. patch=1 is one pixel per token."""
+    b = x.shape[0]
+    if patch == 1:
+        return x.unsqueeze(-1)
+    g = side // patch
+    return (x.view(b, 1, side, side)
+             .unfold(2, patch, patch).unfold(3, patch, patch)
+             .reshape(b, g * g, patch * patch))
+
+
+def unpatchify(t, side=14, patch=1):
+    """[B, n_tokens, patch*patch] -> [B, side*side]."""
+    b = t.shape[0]
+    if patch == 1:
+        return t.squeeze(-1)
+    g = side // patch
+    return (t.view(b, g, g, patch, patch).permute(0, 1, 3, 2, 4).reshape(b, side * side))
+
+
 class LutFFN(nn.Module):
-    """The LUT seam: a LightMHL standing in for the FFN, applied per token exactly as the
-    ffn_replacement work does (tokens folded into the batch, d_model in and out). Wired, not run."""
+    """The LUT seam: LightMHL standing in for the FFN, per token, as the ffn_replacement work does."""
 
     def __init__(self, d_model, n_tables, device, seed):
         super().__init__()
@@ -70,18 +92,16 @@ class LutFFN(nn.Module):
 
 
 class Block(nn.Module):
-    """Pre-LN transformer block: LN -> MHSA -> residual, LN -> FFN -> residual."""
+    """Pre-LN: LN -> MHSA -> residual, LN -> FFN -> residual."""
 
     def __init__(self, d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
-        if ffn_kind == 'lut':
-            self.ffn = LutFFN(d_model, n_tables, device, seed)
-        else:
-            self.ffn = nn.Sequential(nn.Linear(d_model, ffn_mult * d_model), nn.GELU(),
-                                     nn.Linear(ffn_mult * d_model, d_model))
+        self.ffn = (LutFFN(d_model, n_tables, device, seed) if ffn_kind == 'lut'
+                    else nn.Sequential(nn.Linear(d_model, ffn_mult * d_model), nn.GELU(),
+                                       nn.Linear(ffn_mult * d_model, d_model)))
 
     def forward(self, x):
         h = self.ln1(x)
@@ -89,37 +109,68 @@ class Block(nn.Module):
         return x + self.ffn(self.ln2(x))
 
 
+class CrossAttn(nn.Module):
+    """Pre-LN cross-attention: queries attend to a memory sequence."""
+
+    def __init__(self, d_model, n_heads):
+        super().__init__()
+        self.lnq, self.lnk = nn.LayerNorm(d_model), nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+
+    def forward(self, q, mem):
+        return q + self.attn(self.lnq(q), self.lnk(mem), self.lnk(mem), need_weights=False)[0]
+
+
 class ViTAutoencoder(nn.Module):
-    def __init__(self, n_tokens=196, d_model=64, n_heads=4, enc_layers=2, dec_layers=2, latent=64,
-                 ffn_mult=4, ffn_kind='mlp', n_tables=64, device='cuda', seed=0):
+    def __init__(self, n_tokens=196, patch_dim=1, d_model=64, n_heads=4, enc_layers=2, dec_layers=2,
+                 latent=64, latent_tokens=1, ffn_mult=4, ffn_kind='mlp', n_tables=64, device='cuda',
+                 seed=0):
         super().__init__()
         torch.manual_seed(seed)
-        self.n_tokens, self.latent = n_tokens, latent
-        self.embed = nn.Linear(1, d_model)
-        self.pos = nn.Parameter(torch.randn(1, n_tokens, d_model) * 0.02)
+        self.n_tokens, self.latent, self.latent_tokens = n_tokens, latent, latent_tokens
+        if latent % latent_tokens:
+            raise ValueError(f'latent {latent} must divide by latent_tokens {latent_tokens}')
+        self.lat_dim = latent // latent_tokens
+        self.embed = nn.Linear(patch_dim, d_model)
+        self.pos_enc = nn.Parameter(torch.randn(1, n_tokens, d_model) * 0.02)
+        # a SEPARATE decoder positional embedding: the encoder's positions say "where this pixel came
+        # from", the decoder's say "where this query is asking about", and sharing one tensor makes the
+        # two roles fight. The original run shared them; that is now the non-default path.
+        self.pos_dec = nn.Parameter(torch.randn(1, n_tokens, d_model) * 0.02)
         mk = lambda i: Block(d_model, n_heads, ffn_mult, ffn_kind, n_tables, device, seed + 17 * i)  # noqa: E731
         self.enc = nn.ModuleList([mk(i) for i in range(enc_layers)])
         self.dec = nn.ModuleList([mk(100 + i) for i in range(dec_layers)])
-        self.to_latent = nn.Linear(d_model, latent)
-        self.from_latent = nn.Linear(latent, d_model)
+        if latent_tokens == 1:
+            self.to_latent = nn.Linear(d_model, latent)
+            self.from_latent = nn.Linear(latent, d_model)
+        else:
+            self.lat_q = nn.Parameter(torch.randn(1, latent_tokens, d_model) * 0.02)
+            self.enc_cross = CrossAttn(d_model, n_heads)
+            self.dec_cross = CrossAttn(d_model, n_heads)
+            self.to_latent = nn.Linear(d_model, self.lat_dim)
+            self.from_latent = nn.Linear(self.lat_dim, d_model)
         self.ln_out = nn.LayerNorm(d_model)
-        self.readout = nn.Linear(d_model, 1)
+        self.readout = nn.Linear(d_model, patch_dim)
         self.to(device)
 
-    def forward(self, x):                                  # x [B, n_tokens]
-        h = self.embed(x.unsqueeze(-1)) + self.pos
+    def forward(self, x):                                  # x [B, n_tokens, patch_dim]
+        h = self.embed(x) + self.pos_enc
         for b in self.enc:
             h = b(h)
-        z = self.to_latent(h.mean(1))                      # bottleneck: pool over tokens
-        h = self.from_latent(z).unsqueeze(1).expand(-1, self.n_tokens, -1) + self.pos
+        if self.latent_tokens == 1:
+            z = self.to_latent(h.mean(1))                                        # [B, latent]
+            h = self.from_latent(z).unsqueeze(1).expand(-1, self.n_tokens, -1) + self.pos_dec
+        else:
+            lat = self.enc_cross(self.lat_q.expand(h.shape[0], -1, -1), h)       # [B, K, d]
+            z = self.to_latent(lat)                                              # [B, K, lat_dim]
+            mem = self.from_latent(z)                                            # [B, K, d]
+            h = self.dec_cross(self.pos_dec.expand(h.shape[0], -1, -1), mem)     # [B, T, d]
         for b in self.dec:
             h = b(h)
-        return self.readout(self.ln_out(h)).squeeze(-1)
+        return self.readout(self.ln_out(h))
 
 
 class LinearAE(nn.Module):
-    """The reference at this resolution: 196 -> 64 -> 196."""
-
     def __init__(self, n_in=196, latent=64, device='cuda', seed=0):
         super().__init__()
         torch.manual_seed(seed)
@@ -130,58 +181,82 @@ class LinearAE(nn.Module):
         return self.dec(self.enc(x))
 
 
-def evaluate(model, x, bs=4096):
+def make_eval(model, arch, side, patch):
+    """One callable mapping flat pixels to flat reconstruction, whatever the arch."""
+    if arch == 'linear':
+        return lambda b: model(b)
+    return lambda b: unpatchify(model(patchify(b, side, patch)), side, patch)
+
+
+def evaluate(fwd, x, bs=4096):
     tot, n = 0.0, 0
     with torch.no_grad():
         for i in range(0, x.shape[0], bs):
             b = x[i:i + bs]
-            tot += float((model(b) - b).pow(2).sum())
+            tot += float((fwd(b) - b).pow(2).sum())
             n += b.numel()
     return tot / n
+
+
+def lr_at(step, total, base, warmup, sched):
+    if warmup and step <= warmup:
+        return base * step / max(warmup, 1)
+    if sched == 'cosine':
+        t = (step - warmup) / max(total - warmup, 1)
+        return base * 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+    return base
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--arch', default='vit', choices=['vit', 'linear'])
-    ap.add_argument('--ffn', default='mlp', choices=['mlp', 'lut'],
-                    help='FFN sub-block. lut is wired to LightMHL but is not the arm being run here.')
+    ap.add_argument('--ffn', default='mlp', choices=['mlp', 'lut'])
+    ap.add_argument('--patch', type=int, default=1, help='1 -> 196 tokens of 1 dim; 2 -> 49 tokens of 4')
     ap.add_argument('--enc-layers', type=int, default=2)
     ap.add_argument('--dec-layers', type=int, default=2)
     ap.add_argument('--d-model', type=int, default=64)
     ap.add_argument('--n-heads', type=int, default=4)
     ap.add_argument('--ffn-mult', type=int, default=4)
-    ap.add_argument('--latent', type=int, default=64)
+    ap.add_argument('--latent', type=int, default=64, help='TOTAL latent budget in dims')
+    ap.add_argument('--latent-tokens', type=int, default=1,
+                    help='1 = pooled global vector broadcast back; K>1 = K latent tokens of latent/K '
+                         'dims, formed by learned queries and decoded by cross-attention')
     ap.add_argument('--tables', type=int, default=64)
-    ap.add_argument('--steps', type=int, default=500)          # matches autoencoder.py
-    ap.add_argument('--batch', type=int, default=128)          # matches autoencoder.py
-    ap.add_argument('--lr', type=float, default=1e-3)          # matches autoencoder.py
+    ap.add_argument('--steps', type=int, default=500)
+    ap.add_argument('--batch', type=int, default=128)
+    ap.add_argument('--lr', type=float, default=1e-3)
+    ap.add_argument('--warmup', type=int, default=0, help='linear warmup steps; 0 = none (the original)')
+    ap.add_argument('--sched', default='none', choices=['none', 'cosine'])
+    ap.add_argument('--wd', type=float, default=0.0, help='>0 switches Adam to AdamW')
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--probe-every', type=int, default=25)     # matches autoencoder.py
-    ap.add_argument('--out-dir', default='runs_vit_ae')
+    ap.add_argument('--probe-every', type=int, default=25)
+    ap.add_argument('--out-dir', default='runs_vit')
     ap.add_argument('--name', default=None)
     a = ap.parse_args()
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+    side = 14
     xtr = downsample(load('fashion', train=True, device=dev)[0])
     xte = downsample(load('fashion', train=False, device=dev)[0])
-    n_tok = xtr.shape[1]
+    n_pix = xtr.shape[1]
+    n_tok, patch_dim = (n_pix // (a.patch ** 2), a.patch ** 2)
 
-    model = (LinearAE(n_tok, a.latent, dev, a.seed) if a.arch == 'linear'
-             else ViTAutoencoder(n_tok, a.d_model, a.n_heads, a.enc_layers, a.dec_layers, a.latent,
-                                 a.ffn_mult, a.ffn, a.tables, dev, a.seed))
-    opt = torch.optim.Adam(model.parameters(), lr=a.lr)
+    model = (LinearAE(n_pix, a.latent, dev, a.seed) if a.arch == 'linear'
+             else ViTAutoencoder(n_tok, patch_dim, a.d_model, a.n_heads, a.enc_layers, a.dec_layers,
+                                 a.latent, a.latent_tokens, a.ffn_mult, a.ffn, a.tables, dev, a.seed))
+    opt = (torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd) if a.wd > 0
+           else torch.optim.Adam(model.parameters(), lr=a.lr))
+    fwd = make_eval(model, a.arch, side, a.patch)
     loader = TensorLoader(xtr, xtr, batch_size=a.batch, seed=a.seed)
-    name = a.name or (f'{a.arch}-{a.ffn}-e{a.enc_layers}d{a.dec_layers}' if a.arch == 'vit'
-                      else f'linear-{n_tok}-{a.latent}')
+    name = a.name or f'{a.arch}-{a.ffn}-p{a.patch}-k{a.latent_tokens}-d{a.d_model}'
     nparam = sum(p.numel() for p in model.parameters())
-    print(f'{name} | {a.arch} ffn={a.ffn} tokens={n_tok} d_model={a.d_model} heads={a.n_heads} '
-          f'enc={a.enc_layers} dec={a.dec_layers} latent={a.latent} | Adam lr {a.lr} batch {a.batch} | '
-          f'{nparam/1e6:.3f}M params', flush=True)
+    print(f'{name} | {a.arch} patch {a.patch} -> {n_tok} tokens x {patch_dim} | d_model {a.d_model} '
+          f'heads {a.n_heads} enc {a.enc_layers} dec {a.dec_layers} | latent {a.latent} in '
+          f'{a.latent_tokens} token(s) | {"AdamW wd %.3g" % a.wd if a.wd > 0 else "Adam"} lr {a.lr} '
+          f'warmup {a.warmup} sched {a.sched} | {nparam/1e6:.3f}M params', flush=True)
 
     with torch.no_grad():
         mu = xtr.mean(0, keepdim=True)
-        mean_tr = float((xtr - mu).pow(2).mean())
-        mean_te = float((xte - mu).pow(2).mean())
-    print(f'  per-pixel mean baseline at {n_tok} px: train {mean_tr:.4f}, test {mean_te:.4f}', flush=True)
+        mean_tr, mean_te = float((xtr - mu).pow(2).mean()), float((xte - mu).pow(2).mean())
 
     hist, it, t0 = [], iter(loader), time.time()
     for step in range(1, a.steps + 1):
@@ -190,39 +265,46 @@ def main():
         except StopIteration:
             it = iter(loader)
             bx, _ = next(it)
+        for g in opt.param_groups:
+            g['lr'] = lr_at(step, a.steps, a.lr, a.warmup, a.sched)
         ts = time.time()
         opt.zero_grad(set_to_none=True)
-        loss = (model(bx) - bx).pow(2).mean()
+        loss = (fwd(bx) - bx).pow(2).mean()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         dt = time.time() - ts
         if step % a.probe_every == 0 or step == 1:
             row = {'step': step, 'train/mse_batch': float(loss.detach()), 'train/s_per_step': dt,
-                   'eval/train_mse': evaluate(model, xtr[:10000]), 'eval/test_mse': evaluate(model, xte)}
+                   'train/lr': opt.param_groups[0]['lr'],
+                   'eval/train_mse': evaluate(fwd, xtr[:10000]), 'eval/test_mse': evaluate(fwd, xte)}
             hist.append(row)
-            print(f'  step {step:>4d}  train {row["eval/train_mse"]:.5f}  test {row["eval/test_mse"]:.5f}'
-                  f'  {dt*1e3:.1f} ms/step', flush=True)
+            if step == 1 or step % (a.probe_every * 20) == 0 or step == a.steps:
+                print(f'  step {step:>5d}  train {row["eval/train_mse"]:.5f}  '
+                      f'test {row["eval/test_mse"]:.5f}  lr {row["train/lr"]:.2e}  '
+                      f'{dt*1e3:.1f} ms/step', flush=True)
             if not math.isfinite(row['eval/train_mse']):
                 print('  DIVERGED (non-finite) -- stopping', flush=True)
                 break
 
-    tail = [r['eval/test_mse'] for r in hist[-3:]]
-    prev = [r['eval/test_mse'] for r in hist[-6:-3]] or tail
+    # improvement over the last 300 steps, at the probe cadence
+    w = max(300 // a.probe_every, 1)
+    tail = [r['eval/test_mse'] for r in hist[-w:]]
+    prev = [r['eval/test_mse'] for r in hist[-2 * w:-w]] or tail
     summary = {'wall_s': time.time() - t0, 'params': nparam, 'n_blocks': a.enc_layers + a.dec_layers,
-               'n_tokens': n_tok, 'train_mse': evaluate(model, xtr[:10000]), 'test_mse': evaluate(model, xte),
+               'n_tokens': n_tok, 'patch_dim': patch_dim,
+               'train_mse': evaluate(fwd, xtr[:10000]), 'test_mse': evaluate(fwd, xte),
                'mean_baseline_train': mean_tr, 'mean_baseline_test': mean_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
-               'still_improving_pct': 100.0 * (st.mean(prev) - st.mean(tail)) / max(st.mean(prev), 1e-12),
-               'improve_window_steps': 3 * a.probe_every, 'steps_done': hist[-1]['step'],
-               'pix_std': PIX_STD}
+               'improve_pct_300': 100.0 * (st.mean(prev) - st.mean(tail)) / max(st.mean(prev), 1e-12),
+               'improve_window_steps': 300, 'steps_done': hist[-1]['step'], 'pix_std': PIX_STD}
     out_dir = os.path.join(HERE, a.out_dir, name)
     os.makedirs(out_dir, exist_ok=True)
     json.dump({'cfg': dict(vars(a), exp_name=name), 'hist': hist, 'summary': summary},
               open(os.path.join(out_dir, 'run.json'), 'w'), indent=1)
     print(f'{name} done: {summary["wall_s"]:.1f}s, train {summary["train_mse"]:.5f}, '
-          f'test {summary["test_mse"]:.5f} (mean baseline {mean_te:.5f}), '
-          f'still improving {summary["still_improving_pct"]:.2f}%/{3*a.probe_every} steps')
+          f'test {summary["test_mse"]:.5f} (mean {mean_te:.5f}, ratio '
+          f'{summary["test_mse"]/mean_te:.3f}), improving {summary["improve_pct_300"]:.2f}%/300')
 
 
 if __name__ == '__main__':
