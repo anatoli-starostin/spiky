@@ -45,15 +45,21 @@ class Autoencoder(nn.Module):
     """Linear in, 2L residual blocks of the chosen kind, linear out."""
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
-                 seed=0, hidden=0):
+                 seed=0, hidden=0, residual=True, gain_norm=False):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
+        self.residual = residual
+        self.gain_norm = gain_norm
         self.n_blocks = 2 * depth_L
         torch.manual_seed(seed)
         self.enc = nn.Linear(in_dim, width)
         self.dec = nn.Linear(width, in_dim)
-        # the branch's residual scaling, with the block count in place of the layer count
-        self.ai = 1.0 / math.sqrt(max(self.n_blocks, 1) * width)
+        # a_i = 1/sqrt(2L*width) is a RESIDUAL-BRANCH init: deliberately small because it scales a
+        # correction added to a stream that already carries the signal. In non-residual mode the block IS
+        # the signal path, so that factor would attenuate by ~16x per block and the run would measure
+        # nothing but decay. Non-residual therefore drops it entirely and calibrates the init instead
+        # (see calibrate_init).
+        self.ai = 1.0 / math.sqrt(max(self.n_blocks, 1) * width) if residual else 1.0
         if kind == 'lut':
             self.blocks = nn.ModuleList([
                 LightMultiHeadLUT(input_dim=width, n_tables=n_tables, output_dim=width,
@@ -82,14 +88,68 @@ class Autoencoder(nn.Module):
             h = self.block(i, h)
         return h
 
-    def block(self, i, h):
+    def raw_block(self, i, h):
+        """The block's own output, before any skip or scaling."""
         if self.kind == 'lut':
-            return h + self.ai * self.blocks[i](h)
+            return self.blocks[i](h)
         if self.kind == 'mlp':
             if getattr(self, 'hidden', 0):
-                return h + self.ai * self.blocks[i](h)
-            return h + self.ai * F.linear(torch.tanh(h), self.blocks[i])
-        return h
+                return self.blocks[i](h)
+            return F.linear(torch.tanh(h), self.blocks[i])
+        return torch.zeros_like(h)
+
+    def block(self, i, h):
+        if self.kind == 'linear' or self.n_blocks == 0:
+            return h
+        u = self.ai * self.raw_block(i, h)
+        if self.gain_norm:
+            # Hold each block's GAIN at 1 by rescaling its output to its input's RMS, per sample. A plain
+            # sequential stack has nothing anchoring its scale: the calibrated init sets gain 1 at step 0,
+            # training moves it, and the drift compounds over 2L blocks until the run explodes (measured:
+            # gain reaches 6.6 and MSE 4e4 by step 300 at lr 1e-3). This is the smallest intervention
+            # that removes that failure -- zero parameters, and unlike a LayerNorm it matches the input's
+            # own scale rather than a fixed one, so per-sample brightness is not destroyed.
+            scale = h.pow(2).mean(-1, keepdim=True).sqrt() / u.pow(2).mean(-1, keepdim=True).sqrt().clamp_min(1e-9)
+            u = u * scale
+        return h + u if self.residual else u
+
+    @torch.no_grad()
+    def out_params(self, i):
+        """The parameters whose scale sets a block's output magnitude, for calibration."""
+        if self.kind == 'lut':
+            return [self.blocks[i].tables]
+        if self.kind == 'mlp':
+            if getattr(self, 'hidden', 0):
+                return [self.blocks[i][2].weight]
+            return [self.blocks[i]]
+        return []
+
+    @torch.no_grad()
+    def calibrate_init(self, x, verbose=True):
+        """Layer-sequential unit-variance init for the NON-RESIDUAL stack.
+
+        A LightMHL block at its default init emits almost nothing (table entries start at ~1e-3), so
+        without a skip the signal would die at the first block; a dense block with N(0,1) weights would
+        explode by sqrt(fan_in). Rather than hand-pick an analytic constant per block kind, each block is
+        forwarded on one real batch and its output-side parameters are rescaled so the block preserves
+        the RMS of its input. That is the same rule for every arm, which is what makes the comparison
+        between them fair, and it is reported rather than assumed."""
+        h = self.enc(x)
+        rms = lambda t: float(t.pow(2).mean().sqrt())            # noqa: E731
+        trace = [('enc', rms(h))]
+        for i in range(self.n_blocks):
+            target = rms(h)
+            u = self.raw_block(i, h)
+            got = rms(u)
+            scale = target / max(got, 1e-12)
+            for p_ in self.out_params(i):
+                p_.mul_(scale)
+            h = self.block(i, h)
+            trace.append((f'block{i}', rms(h)))
+            if verbose:
+                print(f'    calibrate block {i}: out RMS {got:.4e} -> target {target:.4e} '
+                      f'(x{scale:.3f}), stream RMS after {rms(h):.4f}', flush=True)
+        return trace
 
     def forward(self, x):
         h = self.enc(x)
@@ -119,17 +179,24 @@ def lut_stats(model, x):
 
 @torch.no_grad()
 def branch_ratios(model, x):
-    """||a_i * block_i(h)|| / ||h|| per block: how far the stack has departed from the linear
-    autoencoder it starts as. Near zero means the residual blocks are still doing nothing and the model
-    is the linear bottleneck plus a perturbation, whatever its parameter count says. Works for every
-    block kind; the linear control has no blocks and reports nothing."""
+    """Per block, the quantity that means something for that stack's topology.
+
+    RESIDUAL mode: ||a_i block(h)|| / ||h||, the size of the update against the stream it is added to --
+    how far the model has departed from the linear autoencoder that its identity path gives it for free.
+
+    NON-RESIDUAL mode: ||block(h)|| / ||h||, the block's GAIN. There is no identity path to depart from,
+    so departure is not defined; what matters instead is whether the stack preserves the signal. A gain
+    far from 1 compounding over 2L blocks is how a plain sequential stack explodes or collapses, and
+    that is what this then measures.
+    """
     if model.n_blocks == 0 or model.kind == 'linear':
         return []
     h = model.enc(x)
     out = []
     for i in range(model.n_blocks):
         nh = model.block(i, h)
-        out.append(float((nh - h).norm() / max(float(h.norm()), 1e-12)))
+        num = (nh - h) if model.residual else nh
+        out.append(float(num.norm() / max(float(h.norm()), 1e-12)))
         h = nh
     return out
 
@@ -163,6 +230,13 @@ def main():
     ap.add_argument('--hidden', type=int, default=0,
                     help='mlp only: widening block width -> hidden -> width, for a parameter-matched '
                          'control. 0 keeps the plain width x width block.')
+    ap.add_argument('--no-residual', action='store_true',
+                    help='plain sequential stack h = block(h). Drops the residual a_i scaling and '
+                         'calibrates each block to preserve its input RMS instead.')
+    ap.add_argument('--gain-norm', action='store_true',
+                    help='hold each block gain at 1 by matching its output RMS to its input RMS, per '
+                         'sample. Parameter-free; intended for the non-residual stack, which otherwise '
+                         'has nothing anchoring its scale.')
     ap.add_argument('--steps', type=int, default=500)
     ap.add_argument('--batch', type=int, default=128)
     ap.add_argument('--optimizer', default='adam', choices=['adam', 'sgd'])
@@ -176,7 +250,11 @@ def main():
     xtr, _ = load('fashion', train=True, device=dev)
     xte, _ = load('fashion', train=False, device=dev)
     model = Autoencoder(xtr.shape[1], a.width, a.depth_L, a.kind, a.tables, dev, a.seed,
-                        hidden=a.hidden)
+                        hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm)
+    init_trace = None
+    if a.no_residual and model.n_blocks:
+        print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
+        init_trace = model.calibrate_init(xtr[:512])
     opt = (torch.optim.Adam(model.parameters(), lr=a.lr) if a.optimizer == 'adam'
            else torch.optim.SGD(model.parameters(), lr=a.lr, momentum=0.0))
     loader = TensorLoader(xtr, xtr, batch_size=a.batch, seed=a.seed)      # targets are the inputs
@@ -227,6 +305,8 @@ def main():
     tail = [r['eval/test_mse'] for r in hist[-3:]]
     prev = [r['eval/test_mse'] for r in hist[-6:-3]] or tail
     summary = {'wall_s': time.time() - t0, 'params': nparam, 'n_blocks': nblk,
+               'residual': not a.no_residual, 'a_i': model.ai, 'gain_norm': a.gain_norm,
+               'init_rms_trace': init_trace,
                'train_mse': evaluate(model, xtr[:10000]), 'test_mse': evaluate(model, xte),
                'mean_baseline_train': mean_mse_tr, 'mean_baseline_test': mean_mse_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
