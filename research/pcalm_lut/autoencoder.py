@@ -45,11 +45,13 @@ class Autoencoder(nn.Module):
     """Linear in, 2L residual blocks of the chosen kind, linear out."""
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
-                 seed=0, hidden=0, residual=True, gain_norm=False):
+                 seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none'):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
         self.residual = residual
-        self.gain_norm = gain_norm
+        # block_norm supersedes gain_norm; gain_norm=True is kept as the old spelling of 'gain'
+        self.block_norm = 'gain' if gain_norm else block_norm
+        self.gain_norm = self.block_norm == 'gain'
         self.n_blocks = 2 * depth_L
         torch.manual_seed(seed)
         self.enc = nn.Linear(in_dim, width)
@@ -81,6 +83,11 @@ class Autoencoder(nn.Module):
             self.blocks = nn.ModuleList([])          # the PCA-equivalent control: bottleneck only
         else:
             raise ValueError(kind)
+        # LayerNorm is applied to the BLOCK OUTPUT rather than pre-block: the failure being fixed is
+        # an unbounded output (the margin score scales with ||h||), so normalising what comes OUT is
+        # what removes it. A pre-block norm would fix the input scale but leave the output free to grow.
+        self.lns = (nn.ModuleList([nn.LayerNorm(width) for _ in range(self.n_blocks)])
+                    if self.block_norm == 'layernorm' and self.n_blocks else None)
         self.to(device)
 
     def encode_depth(self, h, upto):
@@ -102,6 +109,8 @@ class Autoencoder(nn.Module):
         if self.kind == 'linear' or self.n_blocks == 0:
             return h
         u = self.ai * self.raw_block(i, h)
+        if self.block_norm == 'layernorm':
+            return self.lns[i](h + u) if self.residual else self.lns[i](u)
         if self.gain_norm:
             # Hold each block's GAIN at 1 by rescaling its output to its input's RMS, per sample. A plain
             # sequential stack has nothing anchoring its scale: the calibrated init sets gain 1 at step 0,
@@ -233,6 +242,10 @@ def main():
     ap.add_argument('--no-residual', action='store_true',
                     help='plain sequential stack h = block(h). Drops the residual a_i scaling and '
                          'calibrates each block to preserve its input RMS instead.')
+    ap.add_argument('--block-norm', default='none', choices=['none', 'gain', 'layernorm'],
+                    help="none: nothing anchors the block scale. gain: parameter-free per-sample RMS "
+                         "rescale of the block output to its input's RMS. layernorm: nn.LayerNorm with "
+                         "learnable affine on the block output.")
     ap.add_argument('--gain-norm', action='store_true',
                     help='hold each block gain at 1 by matching its output RMS to its input RMS, per '
                          'sample. Parameter-free; intended for the non-residual stack, which otherwise '
@@ -250,9 +263,10 @@ def main():
     xtr, _ = load('fashion', train=True, device=dev)
     xte, _ = load('fashion', train=False, device=dev)
     model = Autoencoder(xtr.shape[1], a.width, a.depth_L, a.kind, a.tables, dev, a.seed,
-                        hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm)
+                        hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm,
+                        block_norm=a.block_norm)
     init_trace = None
-    if a.no_residual and model.n_blocks:
+    if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
         init_trace = model.calibrate_init(xtr[:512])
     opt = (torch.optim.Adam(model.parameters(), lr=a.lr) if a.optimizer == 'adam'
@@ -306,6 +320,7 @@ def main():
     prev = [r['eval/test_mse'] for r in hist[-6:-3]] or tail
     summary = {'wall_s': time.time() - t0, 'params': nparam, 'n_blocks': nblk,
                'residual': not a.no_residual, 'a_i': model.ai, 'gain_norm': a.gain_norm,
+               'block_norm': model.block_norm,
                'init_rms_trace': init_trace,
                'train_mse': evaluate(model, xtr[:10000]), 'test_mse': evaluate(model, xte),
                'mean_baseline_train': mean_mse_tr, 'mean_baseline_test': mean_mse_te,
