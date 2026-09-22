@@ -230,13 +230,19 @@ def main():
     ap.add_argument('--wd', type=float, default=0.0, help='>0 switches Adam to AdamW')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--probe-every', type=int, default=25)
+    ap.add_argument('--no-downsample', action='store_true',
+                    help='train on the full 28x28 source images instead of average-pooling them to '
+                         '14x14. Default is OFF, i.e. the 14x14 behaviour every existing run used.')
     ap.add_argument('--out-dir', default='runs_vit')
     ap.add_argument('--name', default=None)
     a = ap.parse_args()
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-    side = 14
-    xtr = downsample(load('fashion', train=True, device=dev)[0])
-    xte = downsample(load('fashion', train=False, device=dev)[0])
+    # the raw Fashion-MNIST tensors are 28x28 (verified: ds.data.shape = (60000, 28, 28)); data.py only
+    # flattens and standardises them, so the 14x14 in every previous run came from the average pool here
+    side = 28 if a.no_downsample else 14
+    raw_tr, raw_te = load('fashion', train=True, device=dev)[0], load('fashion', train=False, device=dev)[0]
+    xtr = raw_tr if a.no_downsample else downsample(raw_tr)
+    xte = raw_te if a.no_downsample else downsample(raw_te)
     n_pix = xtr.shape[1]
     n_tok, patch_dim = (n_pix // (a.patch ** 2), a.patch ** 2)
 
@@ -249,7 +255,8 @@ def main():
     loader = TensorLoader(xtr, xtr, batch_size=a.batch, seed=a.seed)
     name = a.name or f'{a.arch}-{a.ffn}-p{a.patch}-k{a.latent_tokens}-d{a.d_model}'
     nparam = sum(p.numel() for p in model.parameters())
-    print(f'{name} | {a.arch} patch {a.patch} -> {n_tok} tokens x {patch_dim} | d_model {a.d_model} '
+    print(f'{name} | {a.arch} {side}x{side} ({n_pix} px, {n_pix/a.latent:.2f}x compression) '
+          f'patch {a.patch} -> {n_tok} tokens x {patch_dim} | d_model {a.d_model} '
           f'heads {a.n_heads} enc {a.enc_layers} dec {a.dec_layers} | latent {a.latent} in '
           f'{a.latent_tokens} token(s) | {"AdamW wd %.3g" % a.wd if a.wd > 0 else "Adam"} lr {a.lr} '
           f'warmup {a.warmup} sched {a.sched} | {nparam/1e6:.3f}M params', flush=True)
@@ -292,7 +299,8 @@ def main():
     tail = [r['eval/test_mse'] for r in hist[-w:]]
     prev = [r['eval/test_mse'] for r in hist[-2 * w:-w]] or tail
     summary = {'wall_s': time.time() - t0, 'params': nparam, 'n_blocks': a.enc_layers + a.dec_layers,
-               'n_tokens': n_tok, 'patch_dim': patch_dim,
+               'n_tokens': n_tok, 'patch_dim': patch_dim, 'side': side, 'n_pixels': n_pix,
+               'compression': n_pix / a.latent,
                'train_mse': evaluate(fwd, xtr[:10000]), 'test_mse': evaluate(fwd, xte),
                'mean_baseline_train': mean_tr, 'mean_baseline_test': mean_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
