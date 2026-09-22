@@ -218,6 +218,18 @@ def inner_lut(block):
     return getattr(block, 'lut_light', block)
 
 
+def table_param_ids(model):
+    """ids of the LUT table value tensors -- the parameters a table-only weight decay should touch.
+
+    Resolved by IDENTITY via inner_lut(block).tables, never by matching on parameter names: a name
+    match would be one rename away from silently decaying the wrong tensor, and getting this partition
+    wrong invalidates the experiment rather than failing it.
+    """
+    if model.kind != 'lut':
+        return set()
+    return {id(inner_lut(b).tables) for b in model.blocks}
+
+
 @torch.no_grad()
 def lut_stats(model, x):
     """Per-block smallest-margin median, learned tau, and the addresses (for a flip rate)."""
@@ -336,6 +348,9 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--table-wd', type=float, default=0.0,
+                    help='DECOUPLED (AdamW) weight decay applied to the LUT table values ONLY; every '
+                         'other parameter keeps wd=0. 0 leaves the optimiser exactly as before.')
     ap.add_argument('--augment', action='store_true',
                     help='TRAIN-ONLY random horizontal flip (p=0.5) and random translation of up to '
                          '--aug-pad px, using vit_autoencoder.augment so the two lines share one '
@@ -373,8 +388,22 @@ def main():
     if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)
         init_trace = model.calibrate_init(xtr[:512])
-    opt = (torch.optim.Adam(model.parameters(), lr=a.lr) if a.optimizer == 'adam'
-           else torch.optim.SGD(model.parameters(), lr=a.lr, momentum=0.0))
+    if a.table_wd > 0:
+        # DECOUPLED weight decay (AdamW), applied to the LUT table values ONLY. AdamW subtracts
+        # lr*wd*theta outside the gradient, so the decay is not divided by Adam's second-moment
+        # normaliser -- coupled L2 through Adam would be rescaled per parameter and would not mean
+        # "decay the weights". Group membership is by tensor IDENTITY (table_param_ids), not by name.
+        tids = table_param_ids(model)
+        ga = [p for p in model.parameters() if id(p) in tids]
+        gb = [p for p in model.parameters() if id(p) not in tids]
+        opt = torch.optim.AdamW([{'params': ga, 'weight_decay': a.table_wd},
+                                 {'params': gb, 'weight_decay': 0.0}], lr=a.lr)
+        print(f'  decoupled table-only weight decay {a.table_wd:g}: '
+              f'{len(ga)} decayed tensors ({sum(p.numel() for p in ga):,} params), '
+              f'{len(gb)} undecayed ({sum(p.numel() for p in gb):,})', flush=True)
+    else:
+        opt = (torch.optim.Adam(model.parameters(), lr=a.lr) if a.optimizer == 'adam'
+               else torch.optim.SGD(model.parameters(), lr=a.lr, momentum=0.0))
     loader = TensorLoader(xtr, xtr, batch_size=a.batch, seed=a.seed)      # targets are the inputs
     name = a.name or f'{a.kind}-L{a.depth_L}-{a.optimizer}{a.lr}'
     nblk = model.n_blocks
