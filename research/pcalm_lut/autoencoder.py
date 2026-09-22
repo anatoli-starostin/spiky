@@ -35,6 +35,9 @@ sys.path.insert(0, os.path.expanduser('~/projects/spiky/src'))
 from data import TensorLoader, load  # noqa: E402
 from spiky.lutorch.compression_mhl import CompressionMHL  # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT  # noqa: E402
+# The SAME augmentation object the ViT line uses -- imported, not reimplemented, so the two lines
+# cannot drift apart. vit_autoencoder.py is left untouched.
+from vit_autoencoder import augment  # noqa: E402
 
 PIX_STD = 0.3081            # the loader's divisor; MSE_pixel = MSE_standardised * PIX_STD^2
 LUT_KW = dict(n_anchor_pairs=8, read_top_n=2, read_tau=0.5, read_tau_learnable=True,
@@ -282,13 +285,24 @@ def flip_rate(prev, cur):
 
 
 def evaluate(model, x, bs=4096):
-    """Mean-squared error per PIXEL, averaged over pixels and samples, in standardised units."""
+    """Mean-squared error per PIXEL, averaged over pixels and samples, in standardised units.
+
+    ALWAYS in eval mode, and always on the tensor as given -- augmentation is applied in the training
+    loop and never here, so the held-out number is un-augmented by construction. At the settings this
+    file uses nothing in the stack is mode-dependent (no dropout, and LayerNorm is identical in both),
+    so this changes no existing result; it is here so that adding a mode-dependent module later cannot
+    silently corrupt the curve, which is exactly what happened on the ViT line.
+    """
+    was_training = model.training
+    model.eval()
     tot, n = 0.0, 0
     with torch.no_grad():
         for i in range(0, x.shape[0], bs):
             b = x[i:i + bs]
             tot += float((model(b) - b).pow(2).sum())
             n += b.numel()
+    if was_training:
+        model.train()
     return tot / n
 
 
@@ -322,6 +336,11 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--augment', action='store_true',
+                    help='TRAIN-ONLY random horizontal flip (p=0.5) and random translation of up to '
+                         '--aug-pad px, using vit_autoencoder.augment so the two lines share one '
+                         'implementation. The augmented image is BOTH input and target. Off by default.')
+    ap.add_argument('--aug-pad', type=int, default=2, help='translation range in px, +/- this many')
     ap.add_argument('--final-norm', action='store_true',
                     help='one more LayerNorm between the last block and the output Linear. Default OFF '
                          'and, when off, no module is registered, so parameter names are unchanged.')
@@ -377,6 +396,10 @@ def main():
             it = iter(loader)
             bx, _ = next(it)
         ts = time.time()
+        # the augmented image is the TARGET as well as the input: an autoencoder reconstructs what it
+        # was fed. Train stream only -- evaluate() never sees this.
+        if a.augment:
+            bx = augment(bx, 28, a.aug_pad)
         opt.zero_grad(set_to_none=True)
         loss = (model(bx) - bx).pow(2).mean()          # MSE, mean over pixels AND batch
         loss.backward()
