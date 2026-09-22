@@ -47,7 +47,7 @@ class Autoencoder(nn.Module):
 
     def __init__(self, in_dim=784, width=64, depth_L=2, kind='lut', n_tables=64, device='cuda',
                  seed=0, hidden=0, residual=True, gain_norm=False, block_norm='none',
-                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1, inner_in=-1):
+                 lut_impl='light', norm_position='post', n_blocks=0, inner_out=-1, inner_in=-1, final_norm=False):
         super().__init__()
         self.kind, self.width, self.depth_L = kind, width, depth_L
         self.residual = residual
@@ -109,6 +109,11 @@ class Autoencoder(nn.Module):
         # what removes it. A pre-block norm would fix the input scale but leave the output free to grow.
         self.lns = (nn.ModuleList([nn.LayerNorm(width) for _ in range(self.n_blocks)])
                     if self.block_norm == 'layernorm' and self.n_blocks else None)
+        # Assigned None when off, so NO submodule is registered and no parameter name changes. That is
+        # deliberate: inserting a module into an existing container is what renamed the FFN's second
+        # Linear and broke every pre-existing checkpoint. A test below asserts the state_dict keys are
+        # identical with the flag off.
+        self.final_ln = nn.LayerNorm(width) if final_norm else None
         self.to(device)
 
     def encode_depth(self, h, upto):
@@ -192,6 +197,11 @@ class Autoencoder(nn.Module):
         h = self.enc(x)
         for i in range(self.n_blocks):
             h = self.block(i, h)
+        # One more norm between the last block and the output Linear. With pre-block norms the last
+        # block's output is the ONE tensor in the stack that nothing normalises before it leaves, which
+        # is where the margin score's unbounded output would escape; this closes that gap.
+        if self.final_ln is not None:
+            h = self.final_ln(h)
         return self.dec(h)
 
 
@@ -312,6 +322,9 @@ def main():
                          'normalises its input and leaves the last block output free')
     ap.add_argument('--n-blocks', type=int, default=0,
                     help='explicit block count; 0 keeps the 2*depth_L convention')
+    ap.add_argument('--final-norm', action='store_true',
+                    help='one more LayerNorm between the last block and the output Linear. Default OFF '
+                         'and, when off, no module is registered, so parameter names are unchanged.')
     ap.add_argument('--inner-in', type=int, default=-1,
                     help="CompressionMHL's inner_in_dim. -1 is the no-compress sentinel (the LUT reads "
                          'the block input directly); a positive value builds a learned '
@@ -335,7 +348,8 @@ def main():
     model = Autoencoder(xtr.shape[1], a.width, a.depth_L, a.kind, a.tables, dev, a.seed,
                         hidden=a.hidden, residual=not a.no_residual, gain_norm=a.gain_norm,
                         block_norm=a.block_norm, lut_impl=a.lut_impl, norm_position=a.norm_position,
-                        n_blocks=a.n_blocks, inner_out=a.inner_out, inner_in=a.inner_in)
+                        n_blocks=a.n_blocks, inner_out=a.inner_out, inner_in=a.inner_in,
+                        final_norm=a.final_norm)
     init_trace = None
     if a.no_residual and model.n_blocks and model.block_norm != 'layernorm':
         print('  non-residual: dropping a_i (now 1.0) and calibrating the init', flush=True)

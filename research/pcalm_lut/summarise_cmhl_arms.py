@@ -1,8 +1,11 @@
-"""Compact ledger for the CompressionMHL autoencoder arms, on every scale the project uses.
+"""The CompressionMHL autoencoder ledger: every arm, on every scale the project uses.
 
-Standardised MSE is what the loss minimises; [0,1] pixel MSE and PSNR are what the comparison set and
-the image-quality literature use. PSNR here is unclamped, matching the training objective -- see
-convert_mse_scales.py for why the clamped and unclamped numbers differ for a linear decoder.
+Standardised MSE is what the loss minimises; [0,1] pixel MSE and PSNR are what the comparison set uses.
+PSNR is unclamped, matching the objective. Per-block diagnostics come from the 25-step probe and are
+shown at the LAST probe: gain = ||block out|| / ||block in||, the summed confidence score across tables
+(the quantity that grows with ||h|| under confidence_form='margin'), the median smallest margin, and tau.
+Margins and scores are measured on the tensor the LUT actually addresses -- after the pre-norm and after
+the compress projection -- not on the block input.
 """
 import json
 import math
@@ -11,44 +14,56 @@ import os
 S = 0.3081
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, 'runs_ae')
-ARMS = [('cmhl-L2-w128-tph128-din128-dout-1-prenorm-noresid', 'din=128 dout=-1  no resid  SPEC'),
-        ('cmhl-L2-w128-tph128-din128-dout-1-prenorm-resid', 'din=128 dout=-1  residual'),
-        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-noresid', 'din=128 dout=128 no resid  extra'),
-        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-resid', 'din=128 dout=128 residual  extra'),
-        ('cmhl-L2-w128-tph128-dout-1-prenorm-noresid', 'din=-1  dout=-1  no resid  (prior)'),
-        ('cmhl-L2-w128-tph128-dout-1-prenorm-resid', 'din=-1  dout=-1  residual   (prior)'),
-        ('cmhl-L2-w128-tph128-dout128-prenorm-noresid', 'din=-1  dout=128 no resid  (prior)'),
-        ('cmhl-L2-w128-tph128-dout128-prenorm-resid', 'din=-1  dout=128 residual   (prior)')]
-FLOOR = ('linear 784-128-784 (6.125x floor)', 0.06877)
+#        directory                                                 label            L  din  dout res fn
+ARMS = [('cmhl-L4-w128-tph128-din128-dout-1-prenorm-finalnorm-noresid', 'L4 SPEC no resid', 4, 128, -1, 'no', 'yes'),
+        ('cmhl-L4-w128-tph128-din128-dout-1-prenorm-finalnorm-resid', 'L4 residual', 4, 128, -1, 'yes', 'yes'),
+        ('cmhl-L2-w128-tph128-din128-dout-1-prenorm-noresid', 'L2 no resid', 2, 128, -1, 'no', 'no'),
+        ('cmhl-L2-w128-tph128-din128-dout-1-prenorm-resid', 'L2 residual', 2, 128, -1, 'yes', 'no'),
+        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-noresid', 'L2 no resid', 2, 128, 128, 'no', 'no'),
+        ('cmhl-L2-w128-tph128-din128-dout128-prenorm-resid', 'L2 residual', 2, 128, 128, 'yes', 'no'),
+        ('cmhl-L2-w128-tph128-dout-1-prenorm-noresid', 'L2 no resid', 2, -1, -1, 'no', 'no'),
+        ('cmhl-L2-w128-tph128-dout-1-prenorm-resid', 'L2 residual', 2, -1, -1, 'yes', 'no'),
+        ('cmhl-L2-w128-tph128-dout128-prenorm-noresid', 'L2 no resid', 2, -1, 128, 'no', 'no'),
+        ('cmhl-L2-w128-tph128-dout128-prenorm-resid', 'L2 residual', 2, -1, 128, 'yes', 'no')]
+FLOOR = 0.06877
 
-
-def line(label, test, train=None, gap=None, branch=None, impr=None, params=None):
-    m01 = test * S * S
-    s = (f'{label:<34}{test:>9.5f}{m01:>10.6f}{10 * math.log10(1 / m01):>9.2f}')
-    if train is not None:
-        s += f'{train:>9.5f}{gap:>6.1f}%{branch:>8.3f}{impr:>8.2f}{params / 1e6:>8.2f}M'
-    return s
+HDR = (f'{"arm":<18}{"L":>2}{"din":>5}{"dout":>5}{"res":>5}{"fnorm":>6}{"test std":>10}'
+       f'{"MSE[0,1]":>10}{"PSNR":>7}{"gap":>7}{"gain":>7}{"%/75":>7}{"params":>9}')
 
 
 def main():
-    print(f'{"arm":<34}{"test std":>9}{"MSE[0,1]":>10}{"PSNR dB":>9}{"train":>9}{"gap":>7}'
-          f'{"branch":>8}{"%/75":>8}{"params":>9}')
-    for d, lab in ARMS:
-        j = json.load(open(os.path.join(R, d, 'run.json')))
+    print(HDR)
+    print('-' * len(HDR))
+    for d, lab, L, din, dout, res, fn in ARMS:
+        p = os.path.join(R, d, 'run.json')
+        if not os.path.exists(p):
+            print(f'{lab:<18}{L:>2}{din:>5}{dout:>5}{res:>5}{fn:>6}   (not run)')
+            continue
+        j = json.load(open(p))
         s, h = j['summary'], j['hist'][-1]
-        print(line(lab, s['test_mse'], s['train_mse'],
-                   100 * (s['test_mse'] - s['train_mse']) / s['train_mse'],
-                   s['branch_last'], s['still_improving_pct'], s['params']))
+        m01 = s['test_mse'] * S * S
+        print(f'{lab:<18}{L:>2}{din:>5}{dout:>5}{res:>5}{fn:>6}{s["test_mse"]:>10.5f}{m01:>10.6f}'
+              f'{10 * math.log10(1 / m01):>7.2f}'
+              f'{100 * (s["test_mse"] - s["train_mse"]) / s["train_mse"]:>6.1f}%'
+              f'{s["branch_last"]:>7.3f}{s["still_improving_pct"]:>7.2f}{s["params"] / 1e6:>8.2f}M')
         nb = s['n_blocks']
-        per = lambda k, f='.1f': '/'.join(  # noqa: E731
-            format(h[f'lut/{k}_b{b}'], f) for b in range(nb) if f'lut/{k}_b{b}' in h)
-        sc = per('score_sum')
-        extra = (f', score sum {sc}, |in| {per("norm_in")} -> |out| {per("norm_out")}' if sc
-                 else ', score sum / per-block norms not logged (probe added after this run)')
-        print(f'{"":<34}gain {s["branch_first"]:.3f} -> {s["branch_last"]:.3f}, tau {s["tau_last"]:.3f}, '
-              f'm_min {s["m_min_first"]:.3f} -> {s["m_min_last"]:.3f}, '
-              f'flips {s["flips_last"]:.3f}{extra}')
-    print(line(*FLOOR))
+
+        def per(k, f='7.3f'):
+            ks = [f'lut/{k}_b{b}' for b in range(nb)]
+            return ' '.join(format(h[x], f) for x in ks) if all(x in h for x in ks) else None
+
+        g = ' '.join(f'{h[f"branch/ratio_b{b}"]:7.3f}' for b in range(nb))
+        print(f'{"":<18}per-block gain  {g}')
+        for key, fmt, name in [('norm_in', '7.2f', '|in|  '), ('norm_out', '7.2f', '|out| '),
+                               ('score_sum', '7.1f', 'score '), ('m_min', '7.3f', 'm_min '),
+                               ('tau', '7.3f', 'tau   ')]:
+            v = per(key, fmt)
+            if v:
+                print(f'{"":<18}per-block {name}{v}')
+    m01 = FLOOR * S * S
+    print('-' * len(HDR))
+    print(f'{"linear 784-128-784":<18}{"":>2}{"":>5}{"":>5}{"":>5}{"":>6}{FLOOR:>10.5f}{m01:>10.6f}'
+          f'{10 * math.log10(1 / m01):>7.2f}{"":>7}{"":>7}{"":>7}{0.202:>8.2f}M')
 
 
 if __name__ == '__main__':
