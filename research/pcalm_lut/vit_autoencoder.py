@@ -230,6 +230,9 @@ def main():
     ap.add_argument('--wd', type=float, default=0.0, help='>0 switches Adam to AdamW')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--probe-every', type=int, default=25)
+    ap.add_argument('--ckpt-every', type=int, default=0,
+                    help='also save model_s<step>.pt every N steps, each kept separately, so a long run '
+                         'can be rendered at several points along training. 0 = only the final model.pt.')
     ap.add_argument('--no-downsample', action='store_true',
                     help='train on the full 28x28 source images instead of average-pooling them to '
                          '14x14. Default is OFF, i.e. the 14x14 behaviour every existing run used.')
@@ -260,12 +263,14 @@ def main():
           f'heads {a.n_heads} enc {a.enc_layers} dec {a.dec_layers} | latent {a.latent} in '
           f'{a.latent_tokens} token(s) | {"AdamW wd %.3g" % a.wd if a.wd > 0 else "Adam"} lr {a.lr} '
           f'warmup {a.warmup} sched {a.sched} | {nparam/1e6:.3f}M params', flush=True)
+    out_dir = os.path.join(HERE, a.out_dir, name)
+    os.makedirs(out_dir, exist_ok=True)
 
     with torch.no_grad():
         mu = xtr.mean(0, keepdim=True)
         mean_tr, mean_te = float((xtr - mu).pow(2).mean()), float((xte - mu).pow(2).mean())
 
-    hist, it, t0 = [], iter(loader), time.time()
+    hist, ckpts, it, t0 = [], [], iter(loader), time.time()
     for step in range(1, a.steps + 1):
         try:
             bx, _ = next(it)
@@ -293,6 +298,14 @@ def main():
             if not math.isfinite(row['eval/train_mse']):
                 print('  DIVERGED (non-finite) -- stopping', flush=True)
                 break
+        if a.ckpt_every and step % a.ckpt_every == 0:
+            # a separate file per checkpoint, so a whole training trajectory can be reconstructed later
+            # from one run. Each carries the eval it was taken at, so the figure never has to re-measure.
+            torch.save(model.state_dict(), os.path.join(out_dir, f'model_s{step}.pt'))
+            ck = {'step': step, 'file': f'model_s{step}.pt',
+                  'train_mse': evaluate(fwd, xtr[:10000]), 'test_mse': evaluate(fwd, xte)}
+            ckpts.append(ck)
+            print(f'  ckpt {step:>6d}  train {ck["train_mse"]:.5f}  test {ck["test_mse"]:.5f}', flush=True)
 
     # improvement over the last 300 steps, at the probe cadence
     w = max(300 // a.probe_every, 1)
@@ -305,9 +318,8 @@ def main():
                'mean_baseline_train': mean_tr, 'mean_baseline_test': mean_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
                'improve_pct_300': 100.0 * (st.mean(prev) - st.mean(tail)) / max(st.mean(prev), 1e-12),
-               'improve_window_steps': 300, 'steps_done': hist[-1]['step'], 'pix_std': PIX_STD}
-    out_dir = os.path.join(HERE, a.out_dir, name)
-    os.makedirs(out_dir, exist_ok=True)
+               'improve_window_steps': 300, 'steps_done': hist[-1]['step'], 'pix_std': PIX_STD,
+               'checkpoints': ckpts}
     json.dump({'cfg': dict(vars(a), exp_name=name), 'hist': hist, 'summary': summary},
               open(os.path.join(out_dir, 'run.json'), 'w'), indent=1)
     # the weights, so reconstructions can be rendered later without retraining. autoencoder.py has always
