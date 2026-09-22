@@ -392,6 +392,9 @@ def main():
                          'against the residual the earlier levels left, with the accumulated prediction '
                          'DETACHED so each target is a constant. The reconstruction is the sum of the '
                          'level predictions. Adds no parameters.')
+    ap.add_argument('--ckpt-every', type=int, default=0,
+                    help='also save model_s<step>.pt every N steps, each kept separately. 0 = only '
+                         'the final model.pt, i.e. exactly the previous behaviour.')
     ap.add_argument('--lut-utilisation', action='store_true',
                     help='log per-table participation ratio, entropy, dead-entry fraction, row norms '
                          'and gradient norms at the encoder / block-0 compress / tables. Off by default.')
@@ -467,6 +470,8 @@ def main():
         mean_mse_tr = float((xtr - mu).pow(2).mean())
         mean_mse_te = float((xte - mu).pow(2).mean())
 
+    out_dir = os.path.join(HERE, a.out_dir, name)
+    os.makedirs(out_dir, exist_ok=True)
     hist, it, prev_addr, t0 = [], iter(loader), None, time.time()
     for step in range(1, a.steps + 1):
         try:
@@ -501,6 +506,8 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         dt = time.time() - ts
+        if a.ckpt_every and step % a.ckpt_every == 0:
+            torch.save(model.state_dict(), os.path.join(out_dir, f'model_s{step}.pt'))
         if step % a.probe_every == 0 or step == 1:
             s, addr = lut_stats(model, xtr[:512])
             br = branch_ratios(model, xtr[:512])
@@ -551,8 +558,6 @@ def main():
                'tau_last': s.get('tau_mean', float('nan')),
                'flips_last': hist[-1]['flips/mean'], 'pix_std': PIX_STD,
                'branch_first': hist[0]['branch/ratio_mean'], 'branch_last': hist[-1]['branch/ratio_mean']}
-    out_dir = os.path.join(HERE, a.out_dir, name)
-    os.makedirs(out_dir, exist_ok=True)
     json.dump({'cfg': dict(vars(a), exp_name=name), 'hist': hist, 'summary': summary},
               open(os.path.join(out_dir, 'run.json'), 'w'), indent=1)
     torch.save(model.state_dict(), os.path.join(out_dir, 'model.pt'))
