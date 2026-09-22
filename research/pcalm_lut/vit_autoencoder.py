@@ -48,6 +48,10 @@ from data import TensorLoader, load  # noqa: E402
 from spiky.lutorch.light_multi_head_lut import LightMultiHeadLUT  # noqa: E402
 
 PIX_STD = 0.3081
+PIX_MEAN = 0.1307
+# black background in standardised units: data.py maps a 0 pixel to (0 - 0.1307)/0.3081. Shifting an
+# image has to pad with THIS, not with 0, or every shift smears a grey border into the picture.
+PAD_VALUE = (0.0 - PIX_MEAN) / PIX_STD
 LUT_KW = dict(n_anchor_pairs=8, read_top_n=2, read_tau=0.5, read_tau_learnable=True,
               confidence_form='margin', cell_mode='constant', forward_mode='scored',
               multi_head_input=False, initial_weights_noise=1e-3, head_dropout_rate=0.0)
@@ -56,6 +60,32 @@ LUT_KW = dict(n_anchor_pairs=8, read_top_n=2, read_tau=0.5, read_tau_learnable=T
 def downsample(x, side=28, factor=2):
     b = x.shape[0]
     return F.avg_pool2d(x.view(b, 1, side, side), factor).reshape(b, -1)
+
+
+def augment(x, side, pad=2, flip_p=0.5, generator=None):
+    """Random horizontal flip + random translation, on a flat standardised batch. TRAIN ONLY.
+
+    Fashion-MNIST-appropriate and nothing else: garments in this dataset are roughly mirror-symmetric
+    left-to-right, so a horizontal flip produces a plausible image. No vertical flip (a shoe is not
+    upside down), no rotation, no intensity jitter.
+
+    The translation pads by `pad` px with the background value and takes a random `side`x`side` window,
+    i.e. a shift uniform on [-pad, +pad] in each axis.
+
+    Returns ONE tensor. The caller uses it as both input and target -- an autoencoder reconstructs what
+    it was fed, so the target must be the augmented image, not the original.
+    """
+    b = x.shape[0]
+    img = x.view(b, 1, side, side)
+    flip = torch.rand(b, device=x.device, generator=generator) < flip_p
+    img = torch.where(flip.view(b, 1, 1, 1), img.flip(-1), img)
+    if pad:
+        p = F.pad(img, (pad, pad, pad, pad), value=PAD_VALUE)
+        dy, dx = (torch.randint(0, 2 * pad + 1, (2, b), device=x.device, generator=generator))
+        ar = torch.arange(side, device=x.device)
+        iy, ix = dy[:, None] + ar, dx[:, None] + ar                      # [B, side] each
+        img = p[torch.arange(b, device=x.device)[:, None, None], 0, iy[:, :, None], ix[:, None, :]]
+    return img.reshape(b, side * side)
 
 
 def patchify(x, side=14, patch=1):
@@ -261,6 +291,11 @@ def main():
                     help='dropout p inside every transformer block: attention weights, each sub-block '
                          'output before the residual add, and inside the MLP after the GELU. Also the '
                          'two cross-attention modules. 0 = off, exactly the previous behaviour.')
+    ap.add_argument('--augment', action='store_true',
+                    help='TRAIN-ONLY random horizontal flip (p=0.5) and random translation of up to '
+                         '--aug-pad px. The augmented image is BOTH the input and the reconstruction '
+                         'target. Off by default, so every existing run is unchanged.')
+    ap.add_argument('--aug-pad', type=int, default=2, help='translation range in px, +/- this many')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--probe-every', type=int, default=25)
     ap.add_argument('--ckpt-every', type=int, default=0,
@@ -296,7 +331,9 @@ def main():
           f'patch {a.patch} -> {n_tok} tokens x {patch_dim} | d_model {a.d_model} '
           f'heads {a.n_heads} enc {a.enc_layers} dec {a.dec_layers} | latent {a.latent} in '
           f'{a.latent_tokens} token(s) | {"AdamW wd %.3g" % a.wd if a.wd > 0 else "Adam"} lr {a.lr} '
-          f'warmup {a.warmup} sched {a.sched} | {nparam/1e6:.3f}M params', flush=True)
+          f'warmup {a.warmup} sched {a.sched} dropout {a.dropout} | '
+          f'{"augment flip0.5+shift%d" % a.aug_pad if a.augment else "no augment"} | '
+          f'{nparam/1e6:.3f}M params', flush=True)
     out_dir = os.path.join(HERE, a.out_dir, name)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -314,6 +351,10 @@ def main():
         for g in opt.param_groups:
             g['lr'] = lr_at(step, a.steps, a.lr, a.warmup, a.sched)
         ts = time.time()
+        # the augmented image is the target as well as the input: an autoencoder reconstructs what it
+        # was fed. Nothing downstream of here sees the clean batch, and the eval path never calls this.
+        if a.augment:
+            bx = augment(bx, side, a.aug_pad)
         opt.zero_grad(set_to_none=True)
         loss = (fwd(bx) - bx).pow(2).mean()
         loss.backward()
