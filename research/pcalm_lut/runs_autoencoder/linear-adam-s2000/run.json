@@ -1,0 +1,228 @@
+{
+ "cfg": {
+  "kind": "linear",
+  "depth_L": 2,
+  "width": 64,
+  "tables": 64,
+  "hidden": 0,
+  "steps": 2000,
+  "batch": 128,
+  "optimizer": "adam",
+  "lr": 0.001,
+  "seed": 0,
+  "probe_every": 100,
+  "out_dir": "runs_autoencoder",
+  "name": "linear-adam-s2000",
+  "exp_name": "linear-adam-s2000"
+ },
+ "hist": [
+  {
+   "step": 1,
+   "train/mse_batch": 1.7710297107696533,
+   "train/s_per_step": 0.15294766426086426,
+   "eval/train_mse": 1.6131792410714285,
+   "eval/test_mse": 1.601996556122449,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 100,
+   "train/mse_batch": 0.3201417624950409,
+   "train/s_per_step": 0.00039958953857421875,
+   "eval/train_mse": 0.31149872448979593,
+   "eval/test_mse": 0.3101962213010204,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 200,
+   "train/mse_batch": 0.24124287068843842,
+   "train/s_per_step": 0.00041294097900390625,
+   "eval/train_mse": 0.23880336415816328,
+   "eval/test_mse": 0.23813136160714285,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 300,
+   "train/mse_batch": 0.20903708040714264,
+   "train/s_per_step": 0.00041031837463378906,
+   "eval/train_mse": 0.2041704799107143,
+   "eval/test_mse": 0.2041106425382653,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 400,
+   "train/mse_batch": 0.1924048215150833,
+   "train/s_per_step": 0.0004394054412841797,
+   "eval/train_mse": 0.18167568757971939,
+   "eval/test_mse": 0.18160083306760205,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 500,
+   "train/mse_batch": 0.1634676158428192,
+   "train/s_per_step": 0.0006895065307617188,
+   "eval/train_mse": 0.16574150390625,
+   "eval/test_mse": 0.1659175382653061,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 600,
+   "train/mse_batch": 0.15969912707805634,
+   "train/s_per_step": 0.0005528926849365234,
+   "eval/train_mse": 0.15462208625637755,
+   "eval/test_mse": 0.15479733737244897,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 700,
+   "train/mse_batch": 0.14628645777702332,
+   "train/s_per_step": 0.0003781318664550781,
+   "eval/train_mse": 0.14609564333545919,
+   "eval/test_mse": 0.1462970065369898,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 800,
+   "train/mse_batch": 0.15734010934829712,
+   "train/s_per_step": 0.0007779598236083984,
+   "eval/train_mse": 0.1396495436065051,
+   "eval/test_mse": 0.1398709661989796,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 900,
+   "train/mse_batch": 0.12579452991485596,
+   "train/s_per_step": 0.00037860870361328125,
+   "eval/train_mse": 0.13440006776147959,
+   "eval/test_mse": 0.1346525988520408,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1000,
+   "train/mse_batch": 0.13051487505435944,
+   "train/s_per_step": 0.0007383823394775391,
+   "eval/train_mse": 0.13033024752869898,
+   "eval/test_mse": 0.13052830835459184,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1100,
+   "train/mse_batch": 0.12571777403354645,
+   "train/s_per_step": 0.00039577484130859375,
+   "eval/train_mse": 0.12709048748405613,
+   "eval/test_mse": 0.12733493702168366,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1200,
+   "train/mse_batch": 0.12556132674217224,
+   "train/s_per_step": 0.0007007122039794922,
+   "eval/train_mse": 0.12416055683992347,
+   "eval/test_mse": 0.12440667450573979,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1300,
+   "train/mse_batch": 0.12238360196352005,
+   "train/s_per_step": 0.0005702972412109375,
+   "eval/train_mse": 0.12232622568558674,
+   "eval/test_mse": 0.12257465720663266,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1400,
+   "train/mse_batch": 0.12586112320423126,
+   "train/s_per_step": 0.0006873607635498047,
+   "eval/train_mse": 0.11996966477997449,
+   "eval/test_mse": 0.12023475765306123,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1500,
+   "train/mse_batch": 0.12275312095880508,
+   "train/s_per_step": 0.0006885528564453125,
+   "eval/train_mse": 0.11847914540816326,
+   "eval/test_mse": 0.11871666135204081,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1600,
+   "train/mse_batch": 0.12466422468423843,
+   "train/s_per_step": 0.000682830810546875,
+   "eval/train_mse": 0.11708510243941327,
+   "eval/test_mse": 0.1173062161192602,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1700,
+   "train/mse_batch": 0.1178475022315979,
+   "train/s_per_step": 0.0006022453308105469,
+   "eval/train_mse": 0.11600321269132653,
+   "eval/test_mse": 0.11626173469387754,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1800,
+   "train/mse_batch": 0.12049495428800583,
+   "train/s_per_step": 0.0007252693176269531,
+   "eval/train_mse": 0.11757409717793367,
+   "eval/test_mse": 0.1177163066007653,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 1900,
+   "train/mse_batch": 0.1235165074467659,
+   "train/s_per_step": 0.000698089599609375,
+   "eval/train_mse": 0.11444055723852041,
+   "eval/test_mse": 0.11470762117346939,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  },
+  {
+   "step": 2000,
+   "train/mse_batch": 0.11764395982027054,
+   "train/s_per_step": 0.0007810592651367188,
+   "eval/train_mse": 0.11377140864158164,
+   "eval/test_mse": 0.11399122289540817,
+   "flips/mean": NaN,
+   "branch/ratio_mean": 0.0
+  }
+ ],
+ "summary": {
+  "wall_s": 1.367255449295044,
+  "params": 101200,
+  "n_blocks": 4,
+  "train_mse": 0.11377140864158164,
+  "test_mse": 0.11399122289540817,
+  "mean_baseline_train": 0.9166183471679688,
+  "mean_baseline_test": 0.9127278923988342,
+  "s_per_step": 0.000682830810546875,
+  "still_improving_pct": 1.6661135039255288,
+  "improve_window_steps": 300,
+  "m_min_first": NaN,
+  "m_min_last": NaN,
+  "tau_last": NaN,
+  "flips_last": NaN,
+  "pix_std": 0.3081,
+  "branch_first": 0.0,
+  "branch_last": 0.0
+ }
+}

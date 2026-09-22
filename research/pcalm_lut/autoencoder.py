@@ -118,6 +118,23 @@ def lut_stats(model, x):
 
 
 @torch.no_grad()
+def branch_ratios(model, x):
+    """||a_i * block_i(h)|| / ||h|| per block: how far the stack has departed from the linear
+    autoencoder it starts as. Near zero means the residual blocks are still doing nothing and the model
+    is the linear bottleneck plus a perturbation, whatever its parameter count says. Works for every
+    block kind; the linear control has no blocks and reports nothing."""
+    if model.n_blocks == 0 or model.kind == 'linear':
+        return []
+    h = model.enc(x)
+    out = []
+    for i in range(model.n_blocks):
+        nh = model.block(i, h)
+        out.append(float((nh - h).norm() / max(float(h.norm()), 1e-12)))
+        h = nh
+    return out
+
+
+@torch.no_grad()
 def flip_rate(prev, cur):
     """Fraction of (sample, table) address slots that changed since the previous probe."""
     if prev is None or cur is None:
@@ -191,15 +208,20 @@ def main():
         dt = time.time() - ts
         if step % a.probe_every == 0 or step == 1:
             s, addr = lut_stats(model, xtr[:512])
+            br = branch_ratios(model, xtr[:512])
             row = {'step': step, 'train/mse_batch': float(loss.detach()), 'train/s_per_step': dt,
                    'eval/train_mse': evaluate(model, xtr[:10000]), 'eval/test_mse': evaluate(model, xte),
-                   'flips/mean': flip_rate(prev_addr, addr)}
+                   'flips/mean': flip_rate(prev_addr, addr),
+                   'branch/ratio_mean': (sum(br) / len(br)) if br else 0.0}
+            for bi, bv in enumerate(br):
+                row[f'branch/ratio_b{bi}'] = bv
             row.update({f'lut/{k}': v for k, v in s.items() if not isinstance(v, list)})
             prev_addr = addr
             hist.append(row)
             print(f'  step {step:>4d}  train {row["eval/train_mse"]:.5f}  test {row["eval/test_mse"]:.5f}'
                   f'  m_min {s.get("m_min_mean", float("nan")):.4f}  tau {s.get("tau_mean", float("nan")):.4f}'
-                  f'  flips {row["flips/mean"]:.4f}  {dt*1e3:.1f} ms/step', flush=True)
+                  f'  flips {row["flips/mean"]:.4f}  branch {row["branch/ratio_mean"]:.4f}'
+                  f'  {dt*1e3:.1f} ms/step', flush=True)
 
     s, _ = lut_stats(model, xtr[:512])
     tail = [r['eval/test_mse'] for r in hist[-3:]]
@@ -209,10 +231,12 @@ def main():
                'mean_baseline_train': mean_mse_tr, 'mean_baseline_test': mean_mse_te,
                's_per_step': st.median([r['train/s_per_step'] for r in hist]),
                'still_improving_pct': 100.0 * (st.mean(prev) - st.mean(tail)) / max(st.mean(prev), 1e-12),
+               'improve_window_steps': 3 * a.probe_every,
                'm_min_first': hist[0].get('lut/m_min_mean', float('nan')),
                'm_min_last': s.get('m_min_mean', float('nan')),
                'tau_last': s.get('tau_mean', float('nan')),
-               'flips_last': hist[-1]['flips/mean'], 'pix_std': PIX_STD}
+               'flips_last': hist[-1]['flips/mean'], 'pix_std': PIX_STD,
+               'branch_first': hist[0]['branch/ratio_mean'], 'branch_last': hist[-1]['branch/ratio_mean']}
     out_dir = os.path.join(HERE, a.out_dir, name)
     os.makedirs(out_dir, exist_ok=True)
     json.dump({'cfg': dict(vars(a), exp_name=name), 'hist': hist, 'summary': summary},
