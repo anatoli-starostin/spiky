@@ -26,32 +26,52 @@ from model_build import RotaryEmbedding, apply_rope          # tested RoPE (same
 from spiky.lutorch.compression_mhl import CompressionMultiHeadLUT
 
 
-def _make_lut(n_embd, cfg, seed, *, input_multi_head, inner_in_dim):
-    """A CompressionMultiHeadLUT sized E -> E with the shared light-path config.
+def _lut_cfg(cfg, role, key, default=None):
+    """Per-LUT hyperparameter with independent config groups: `lut_<role>_<key>` (role in
+    {'outproj','ffn'}) overrides the shared `lut_<key>`, which in turn falls back to `default`.
+    The out_proj LUT and the FFN LUT thus have SEPARATE, INDEPENDENT hyperparameter sets; a config
+    that sets only the shared keys keeps both LUTs identical (byte-identical to the pre-split build).
+    Applies to: n_heads, inner_in_dim, inner_out_dim, tables_per_head, n_anchor_pairs, read_top_n,
+    confidence_form, light_forward_mode, head_dropout_rate."""
+    return cfg.get(f'lut_{role}_{key}', cfg.get(f'lut_{key}', default))
+
+
+def _make_lut(n_embd, cfg, role, seed, *, input_multi_head, inner_in_dim, n_heads):
+    """A CompressionMultiHeadLUT sized E -> E, hyperparameters resolved for `role` ('outproj'|'ffn').
 
     input_multi_head=True  (out_proj): inner_in_dim=-1 (no compress); each head routes its own
-                                       E//n_heads slice of the pre-split attention output.
-    input_multi_head=False (ffn):      inner_in_dim=D (compress E -> n_heads*D).
+                                       E//n_heads slice of the pre-split attention output. n_heads is
+                                       PINNED to the attention head count H (the slices must line up).
+    input_multi_head=False (ffn):      inner_in_dim=D (compress E -> n_heads*D); n_heads is free.
 
-    Regularisers (config-toggleable, default OFF, same wiring as the FFN-replacement runs):
-      * LUT table dropout: cfg['lut_head_dropout_rate'] (default 0.0) -> LightMHL whole-table
-        Bernoulli dropout on the per-table confidence score (keep 1-p, survivors /(1-p), train-only,
-        off at eval). Reaches BOTH the out_proj LUT and the FFN LUT.
-      * TV (Hamming-1 cell smoothness): cfg['lut_cell_smoothness'] (default 0.0) is applied by the
-        trainer as lambda * model.lut_tv_penalty() over every LightMHL table (see lut_tv_* below).
+    Regularisers (config-toggleable, default OFF, per-LUT via the lut_<role>_* override): LUT table
+    dropout lut[_<role>]_head_dropout_rate -> LightMHL whole-table Bernoulli score-mask (train-only,
+    off at eval); TV via cfg['lut_cell_smoothness'] applied by the trainer over every LightMHL table.
     """
+    conf = _lut_cfg(cfg, role, 'confidence_form', 'margin')
+    # learned_margin needs its (g, beta, gamma) init, in LightMHL's order (shared keys, as in abl_04/09).
+    lm_init = None
+    if conf == 'learned_margin':
+        lm_init = (float(cfg.get('lut_learned_margin_g_init', 0.0)),
+                   float(cfg.get('lut_learned_margin_beta_init', 2.0)),
+                   float(cfg.get('lut_learned_margin_gamma_init', 1.0)))
     return CompressionMultiHeadLUT(
         input_dim=n_embd, output_dim=n_embd,
-        inner_in_dim=inner_in_dim, inner_out_dim=int(cfg['lut_inner_out_dim']),
-        nap=int(cfg['lut_n_anchor_pairs']), tph=int(cfg['lut_tables_per_head']),
-        n_heads=int(cfg['lut_n_heads']), lut_impl='light',
+        inner_in_dim=inner_in_dim, inner_out_dim=int(_lut_cfg(cfg, role, 'inner_out_dim')),
+        nap=int(_lut_cfg(cfg, role, 'n_anchor_pairs')), tph=int(_lut_cfg(cfg, role, 'tables_per_head')),
+        n_heads=n_heads, lut_impl='light',
         forward_confidence=True,
-        confidence_form=cfg.get('lut_confidence_form', 'margin'),
-        light_forward_mode=cfg.get('lut_light_forward_mode', 'scored'),
-        read_top_n=int(cfg.get('lut_read_top_n', 2)),       # "2 alternatives"
+        confidence_form=conf,
+        confidence_gain=float(cfg.get('lut_confidence_gain', 1.0)),
+        learned_margin_init=lm_init,
+        learned_margin_freeze_g=bool(_lut_cfg(cfg, role, 'learned_margin_freeze_g', False)),
+        light_forward_mode=_lut_cfg(cfg, role, 'light_forward_mode', 'scored'),
+        read_top_n=int(_lut_cfg(cfg, role, 'read_top_n', 2)),       # "2 alternatives"
+        read_tau=float(_lut_cfg(cfg, role, 'read_tau', 0.1)),
+        read_tau_learnable=bool(_lut_cfg(cfg, role, 'read_tau_learnable', False)),
         z_norm=False,
         input_multi_head=input_multi_head,
-        head_dropout_rate=float(cfg.get('lut_head_dropout_rate', 0.0)),   # LUT table dropout (off by default)
+        head_dropout_rate=float(_lut_cfg(cfg, role, 'head_dropout_rate', 0.0)),  # LUT table dropout (off by default)
         random_seed=seed,
     )
 
@@ -89,12 +109,17 @@ class OutProjLUTBlock(nn.Module):
         base = int(cfg.get('lut_base_seed', 1000))
         self.ln1 = nn.LayerNorm(n_embd)   # pre-attention norm (covers attention -> out_proj LUT)
         self.attn = AttentionNoProj(n_embd, n_head)
-        self.out_proj_lut = _make_lut(n_embd, cfg, seed=base + 2 * layer_idx,
-                                      input_multi_head=True, inner_in_dim=-1)
-        # ffn replacement: LayerNorm then the LUT (compress E -> H*D).
+        # out_proj LUT: its n_heads is PINNED to the attention head count H (input_multi_head splits
+        # the E-dim attention output into H equal per-head slices). Its params come from the
+        # lut_outproj_* / shared keys, INDEPENDENT of the FFN LUT.
+        self.out_proj_lut = _make_lut(n_embd, cfg, 'outproj', seed=base + 2 * layer_idx,
+                                      input_multi_head=True, inner_in_dim=-1, n_heads=n_head)
+        # ffn LUT: LayerNorm then compress E -> n_heads*inner_in. n_heads is free (lut_ffn_n_heads).
         self.ln2 = nn.LayerNorm(n_embd)   # pre-FFN norm
-        self.ffn_lut = _make_lut(n_embd, cfg, seed=base + 2 * layer_idx + 1,
-                                 input_multi_head=False, inner_in_dim=int(cfg['lut_inner_in_dim']))
+        self.ffn_lut = _make_lut(n_embd, cfg, 'ffn', seed=base + 2 * layer_idx + 1,
+                                 input_multi_head=False,
+                                 inner_in_dim=int(_lut_cfg(cfg, 'ffn', 'inner_in_dim')),
+                                 n_heads=int(_lut_cfg(cfg, 'ffn', 'n_heads')))
 
     def forward(self, x, cos, sin):
         B, T, C = x.size()
