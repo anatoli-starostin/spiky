@@ -165,6 +165,11 @@ class CompressionMultiHeadLUT(nn.Module):
         quant_overrides: Optional[dict] = None,
         # Head-level LUT-table dropout (light hard-read path only; 0.0 == unchanged). See LightMultiHeadLUT.
         head_dropout_rate: float = 0.0,
+        # Pre-split multi-head input with NO compress: the input is already [N, n_heads*eff_in]
+        # (e.g. the head-separated attention output used as an out_proj replacement). Each head
+        # routes its own eff_in = input_dim // n_heads slice; compress is Identity. light path only.
+        # Default False == byte-identical to every existing config.
+        input_multi_head: bool = False,
     ):
         super().__init__()
         if quant_mode is not None and lut_impl != "light":
@@ -172,7 +177,21 @@ class CompressionMultiHeadLUT(nn.Module):
         if quant_overrides and quant_mode is None:
             raise ValueError("quant_overrides given without quant_mode")
         in_raw, out_raw = _resolve_inner(inner_dim, inner_in_dim, inner_out_dim)
-        eff_in = input_dim if in_raw == -1 else in_raw
+        # input_multi_head: pre-split input, no compress -> each head owns input_dim//n_heads dims.
+        if input_multi_head:
+            if lut_impl != "light":
+                raise ValueError(f"input_multi_head is a light-path option, got lut_impl={lut_impl!r}")
+            if in_raw != -1:
+                raise ValueError("input_multi_head means NO compress; pass inner_in_dim=-1 (got "
+                                 f"inner_in_dim={in_raw})")
+            if n_heads < 2 or joint_head_compression:
+                raise ValueError("input_multi_head needs n_heads>1 and joint_head_compression=False")
+            if input_dim % n_heads != 0:
+                raise ValueError(f"input_multi_head needs input_dim ({input_dim}) divisible by "
+                                 f"n_heads ({n_heads})")
+            if anchor_mode == "single":
+                raise ValueError("input_multi_head is incompatible with anchor_mode='single'")
+        eff_in = (input_dim // n_heads) if (input_multi_head and in_raw == -1) else (input_dim if in_raw == -1 else in_raw)
         eff_out = output_dim if out_raw == -1 else out_raw
         if eff_in < 1 or eff_out < 1:
             raise ValueError(f"effective inner dims must be >= 1 (or -1); got "
@@ -198,6 +217,7 @@ class CompressionMultiHeadLUT(nn.Module):
         self.n_heads = n_heads
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
+        self.input_multi_head = bool(input_multi_head)
         self.lut_impl = lut_impl
         self.forward_confidence = bool(forward_confidence)
         self.confidence_form = confidence_form
@@ -324,13 +344,16 @@ class CompressionMultiHeadLUT(nn.Module):
                                    if self.has_decompress else nn.Identity())
                 return
             self.light_single_global = False
-            mh = self.has_compress and not self.joint_head_compression and n_heads > 1
+            # input_multi_head forces per-head routing with NO compress (input pre-split into heads).
+            mh = (self.has_compress or self.input_multi_head) and not self.joint_head_compression and n_heads > 1
             self.light_multi_head_input = mh
             # Codebook read-out owns its decode matrix M (T -> output_dim) inside LightMHL and
             # returns [N, output_dim] directly, so the wrapper's decompress is a no-op.
             self._codebook = cell_mode == "codebook"
-            if mh:
+            if mh and self.has_compress:
                 self.compress = nn.Linear(input_dim, n_heads * in_raw, device=device)
+            elif self.input_multi_head:
+                self.compress = nn.Identity()          # input already [N, n_heads*eff_in]
             else:
                 self.compress = (nn.Linear(input_dim, in_raw, device=device)
                                  if self.has_compress else nn.Identity())
@@ -457,8 +480,10 @@ class CompressionMultiHeadLUT(nn.Module):
                 y = self.lut_light(z).to(z.dtype)          # [N, n_heads, eff_out]
                 return self.decompress(y.reshape(N, self.n_heads * self.eff_out))
             if self.light_multi_head_input:
-                # per-head slice in, per-head block out — same shapes as the Fast path
-                z = self.compress(x).view(N, self.n_heads, self.inner_in_dim)
+                # per-head slice in, per-head block out — same shapes as the Fast path.
+                # eff_in == inner_in_dim when has_compress; with input_multi_head (no compress,
+                # compress==Identity) eff_in = input_dim//n_heads and x is already [N, n_heads*eff_in].
+                z = self.compress(x).view(N, self.n_heads, self.eff_in)
                 if self.z_norm is not None:
                     # normalises over the last axis, i.e. each head's own code, independently
                     z = self.z_norm(z)
