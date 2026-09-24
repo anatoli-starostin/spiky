@@ -18,6 +18,8 @@ MinimalGPT's forward interface exactly: forward(idx, targets=None, loss_reductio
 the cross-entropy loss (per-token when loss_reduction='none', as tools/fixed_eval expects), or the
 logits when targets is None.
 """
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -141,13 +143,24 @@ class MinimalGPTOutProj(nn.Module):
         self.ln_f = nn.LayerNorm(n_embd)
         self.head = nn.Linear(n_embd, vocab_size, bias=False)          # UNTIED unembedder
         self.apply(self._init_weights)
-        # Zero every LUT decompress at init so each sub-block emits 0 -> block is identity at the
-        # start and the residual stream is clean (same idea as MinimalGPT zeroing attn.proj / the
-        # FFN decompress). The LUT tables train up from there.
+        # Decompress (output-projection) init per sub-block:
+        #  * out_proj LUT: SMALL NON-ZERO so the attention signal propagates through the out_proj LUT
+        #    from step 1 (muting it at init starved attention). GPT-style residual/output-projection
+        #    scaling std = 0.02 / sqrt(2 * n_layer) keeps the residual variance controlled and the
+        #    init loss near ln(vocab).
+        #  * FFN LUT: keep decompress.weight zeroed (FFN sub-block starts muted, trains up).
+        #  * BOTH: zero the decompress BIAS -- the default nn.Linear bias (uniform ±1/sqrt(fan_in))
+        #    would otherwise add a token-INDEPENDENT constant down the residual stream at init (cf. the
+        #    bh4-path bias-zeroing note in model_build.py). Zeroing it gives a clean start.
+        resid_std = 0.02 / math.sqrt(2 * n_layer)
         for block in self.blocks:
+            if hasattr(block.out_proj_lut.decompress, 'weight'):
+                nn.init.normal_(block.out_proj_lut.decompress.weight, std=resid_std)
+            if hasattr(block.ffn_lut.decompress, 'weight'):
+                nn.init.zeros_(block.ffn_lut.decompress.weight)
             for lut in (block.out_proj_lut, block.ffn_lut):
-                if getattr(lut, 'has_decompress', False) and hasattr(lut.decompress, 'weight'):
-                    nn.init.zeros_(lut.decompress.weight)
+                if getattr(lut.decompress, 'bias', None) is not None:
+                    nn.init.zeros_(lut.decompress.bias)
         # Deliberately NOT weight-tied: self.head stays independent of self.tok_emb.
 
     @staticmethod
