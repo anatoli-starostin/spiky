@@ -14,6 +14,12 @@ nothing about the Slack units. Hence this shared list.
 Each unit is a session-tied Monitor: it lives and dies with the Claude session (the
 body). That IS the pairing -- when the session or the host goes down, the whole
 agent, face included, goes with it.
+
+A Monitor ALSO dies on its own after roughly 30 minutes -- the harness caps it there
+even when persistent=true is requested. That is not a failure, but it does mean each
+unit must be re-armed when its expiry notice arrives; see the STANDING RULE in
+arm_instruction(). These hooks only fire on a prompt or a session start, so they
+cannot close that gap by themselves.
 """
 import os
 import subprocess
@@ -65,11 +71,32 @@ def arm_instruction():
     lines = [
         "Some paired agent processes are NOT running. As your FIRST actions this "
         "session, BEFORE replying to the user, arm each MISSING one below with the "
-        "Monitor tool (persistent=true, timeout_ms=3600000). They are session-tied, so "
-        "they pair with this session (the body) — when it ends, they end. Arm ALL of "
-        "them, not just the first: skipping any leaves the owner unable to reach this "
-        "machine on that channel."
+        "Monitor tool, passing persistent=true and timeout_ms=3600000. Keep sending "
+        "BOTH of those fields: the Monitor schema still lists them as required, so a "
+        "call that omits either one fails validation and the unit never arms. But do "
+        "NOT expect them to mean what they used to. The harness now caps every watch "
+        "at roughly 30 minutes of wall clock, so persistent=true no longer buys "
+        "'until the session ends' and timeout_ms=3600000 no longer buys the 60 "
+        "minutes it names. Plan on each watch expiring after about 30 minutes and "
+        "needing to be re-armed — see the STANDING RULE at the end of this message. "
+        "These units are ALSO session-tied: when this session ends, they end. Arm ALL "
+        "of them, not just the first: skipping any leaves the owner unable to reach "
+        "this machine on that channel."
     ]
     for i, (label, cmd) in enumerate(gaps, 1):
         lines.append(f'{i}. {label}: Monitor command "{cmd}"')
+    lines.append(
+        "STANDING RULE - RE-ARM ON EXPIRY. The harness caps a Monitor at about 30 "
+        "minutes of wall clock even when persistent=true is requested, and it sends "
+        "you an expiry notice when one ends. The moment an expiry notice arrives for "
+        "any unit listed above, re-arm THAT unit immediately with the identical "
+        "Monitor call shown next to it - on your own initiative, without waiting for "
+        "a prompt from the owner and without asking permission. Re-arm only the unit "
+        "that expired; leave the others alone. An expired unit is DEAF: only a live "
+        "Monitor delivers its output to you, so a still-running process is NOT "
+        "evidence that the unit is armed. Never substitute cron, a background shell, "
+        "or any other external scheduler for the Monitor call - those can start the "
+        "process but cannot deliver its events to you, and they make the unit look "
+        "alive to the pgrep check above, silently masking the outage."
+    )
     return "\n".join(lines)
