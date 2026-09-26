@@ -73,8 +73,18 @@ class Sim:
     # ---- control ----
     def set_actor(self, name):
         if name in self.registry:
+            # Build FIRST, commit after. Constructing an actor can raise (a missing/corrupt .npz, an
+            # optional dependency the server image doesn't carry -- spiking_lut_quantised imports torch,
+            # everything else here is deliberately pure-numpy). An exception propagates out of the
+            # websocket message handler and drops the socket, which from the viewer's side looks like the
+            # whole demo dying on a dropdown change. Log it and keep the current actor walking instead.
+            try:
+                actor = self.registry[name](self.env.action_space)
+            except Exception as e:
+                print(f"[server] actor build failed for {name!r}: {e}", flush=True)
+                return
             self.actor_name = name
-            self.actor = self.registry[name](self.env.action_space)
+            self.actor = actor
 
     def set_mode(self, mode):
         self.mode = "train" if mode == "train" else "test"
