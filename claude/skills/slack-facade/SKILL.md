@@ -45,7 +45,8 @@ cord). This file is the deployment recipe and file map.
 consciousness/
   app.py           # THE consciousness — Agent SDK, Slack Socket Mode, the face.
   body_bridge.py   # task queue + the body's CLI/watch loop (the body's "ears").
-  progress.py      # reusable Slack progress-bar brick (post-once / update-in-place).
+  progress.py      # reusable Slack progress-bar brick (post-once / update-in-place)
+                   # + `notify`: one-shot unprompted messages on the same rails.
   manifest.yaml    # Slack app definition (one app == one bot user).
   audit.py         # per-host wiring check; run it after deploy, expect all ✓.
 hooks/             # -> deploy to ~/.claude/hooks/ on the BODY's host
@@ -112,6 +113,41 @@ progress.progress_done(h, ok=True, final_text="val_bpb 1.201")  # ALWAYS call (o
 `python3 progress.py update "$h" --step 8000 --total 16000 --stats "eta ~6m"` and
 `python3 progress.py done "$h" --text "val_bpb 1.201"` (add `--fail` on failure). Renders
 🟩⬜ emoji squares by default, or `██░░` blocks with `style="unicode"` / `--style unicode`.
+
+## Unprompted notifications (`progress.notify`)
+
+The body usually speaks only when spoken to: a delegated task's result goes back through
+`body_bridge.py done <id>`, which needs a task that already exists. `notify` is the way to
+**start** a conversation — a one-shot message the agent sends on its own initiative, for
+something the owner would want to know now (a long job finished, a disk filling, a box that
+came back up).
+
+It rides the progress rails rather than adding a second rendezvous and a second reaper: a
+notification is just a progress record that is **born terminal** (`kind="notify"`,
+`state="done"`), so `_reap_one` posts it exactly once, never edits it, and the janitor reaps
+it on the usual TTL. It renders as plain text — no bar, no percentage.
+
+The same green-zone property applies, and it is the point: the caller writes one file in
+`~/.cache/slack_facade/progress/` with **no network and no approval**, and the face does the
+Slack I/O. An agent can therefore notify its owner without costing them an approval tap.
+
+```python
+import progress
+progress.notify("disk 92% full on /", title="nucstar", channel=OWNER_DM)  # new top-level DM
+progress.notify("sweep finished — 3 regressions", task=TASK_ID)           # in that task's thread
+```
+**Or from bash:** `python3 progress.py notify --channel "$OWNER_DM" --title nucstar --text "..."`
+
+Target it with `--task` (posts in that BODY_TASK's thread) or `--channel`. **Omit
+`--thread-ts` to post a NEW top-level message** — that is what actually pushes to the owner's
+phone; a threaded reply is much quieter. Either `--task` or `--channel` is required, since a
+notification with no destination is a silent no-op.
+
+Worth knowing when this seems not to work: Slack decides separately whether a delivered
+message *notifies*. A successful post (`ok: true` with a real `ts`) only proves delivery.
+Mobile push is additionally subject to the owner's per-conversation settings, their
+"notify my mobile when inactive" delay, and whether the Slack app is foregrounded on the
+phone at the time — none of which the API can see or override.
 
 ## Setup recipe (one bot)
 
