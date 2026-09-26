@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp05_ppo-truncbootstrap-retnorm-kl",
+  "description": "PPO stabilization step 4 (WINNER) - cosine 3e-4->3e-5 + log_std floor + exact truncation bootstrap + return normalization + KL early-stop guard, entropy 0. Collapse eliminated (0/3) and peak reclaimed; final approx best (gap ~33).",
+  "algo": "ppo",
+  "arch": "mlp",
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 142605,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench7"
+}

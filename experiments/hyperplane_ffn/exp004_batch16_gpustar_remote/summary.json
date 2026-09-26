@@ -1,7 +1,0 @@
-{
-  "exp_name": "exp004_batch16_gpustar_remote",
-  "best_val_bpb": 1.2970478429167775,
-  "final_val_bpb": 1.2970478429167775,
-  "total_params": 35792640,
-  "training_time_hours": 0.158
-}

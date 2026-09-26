@@ -1,0 +1,7 @@
+{
+  "exp_name": "exp_n_0152_long48k_tiny_H4d48_nap7_tph64",
+  "best_val_bpb": 1.1596219387166697,
+  "final_val_bpb": 1.1596219387166697,
+  "total_params": 39040140,
+  "training_time_hours": 2.591
+}

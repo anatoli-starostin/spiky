@@ -1,0 +1,26 @@
+{
+  "exp_name": "exp05_ppo-truncbootstrap-retnorm-kl",
+  "algo": "ppo",
+  "n_seeds": 3,
+  "ppo_best_mean": 5985.3,
+  "ppo_best_std": 423.9,
+  "ppo_final_mean": 5952.1,
+  "ppo_final_std": 415.9,
+  "params": 142605,
+  "throughput_env_per_s_mean": 164705,
+  "training_time_hours_mean": 0.34,
+  "per_seed": {
+    "0": {
+      "best": 5399.9,
+      "final": 5392.0
+    },
+    "1": {
+      "best": 6389.9,
+      "final": 6387.5
+    },
+    "2": {
+      "best": 6166.1,
+      "final": 6076.8
+    }
+  }
+}

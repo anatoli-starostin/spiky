@@ -104,8 +104,18 @@ class Sim:
 
     def set_actor(self, name):
         if name in self.registry:
+            # Build FIRST, commit after. Constructing an actor can raise (a missing/corrupt .npz, an
+            # optional dependency the server image doesn't carry -- spiking_lut_quantised imports torch,
+            # everything else here is deliberately pure-numpy). An exception propagates out of the
+            # websocket message handler and drops the socket, which from the viewer's side looks like the
+            # whole demo dying on a dropdown change. Log it and keep the current actor walking instead.
+            try:
+                actor = self.registry[name](self.env.action_space)
+            except Exception as e:
+                print(f"[server] actor build failed for {name!r}: {e}", flush=True)
+                return
             self.actor_name = name
-            self.actor = self.registry[name](self.env.action_space)
+            self.actor = actor
             self._zero_settle = ZERO_SETTLE if name == "zero" else 0   # a (re)selected zero topples, then idles
             self._spike_meta_sent = False; self._net_topo_sent = False  # re-send layout/topology for the new actor
             self.touch()
@@ -118,7 +128,14 @@ class Sim:
         (the stepper keeps running the current actor) and swaps in the new actor once it's built."""
         if name in self.registry:
             loop = asyncio.get_event_loop()
-            actor = await loop.run_in_executor(None, self.registry[name], self.env.action_space)
+            # Same contract as set_actor: a build that raises must not escape into the websocket
+            # handler. It matters more here -- this path exists precisely for the heavy actors, which
+            # are the ones most likely to fail (torch import, big .npz load).
+            try:
+                actor = await loop.run_in_executor(None, self.registry[name], self.env.action_space)
+            except Exception as e:
+                print(f"[server] actor build failed for {name!r}: {e}", flush=True)
+                return
             self.actor_name = name
             self.actor = actor
             self._zero_settle = ZERO_SETTLE if name == "zero" else 0

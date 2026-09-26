@@ -1,7 +1,0 @@
-{
-  "exp_name": "exp001_untied_vanilla_baseline",
-  "best_val_bpb": 1.2014431444010467,
-  "final_val_bpb": 1.2014431444010467,
-  "total_params": 35792640,
-  "training_time_hours": 0.474
-}

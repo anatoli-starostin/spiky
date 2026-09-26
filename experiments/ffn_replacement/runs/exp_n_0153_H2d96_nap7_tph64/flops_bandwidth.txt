@@ -1,0 +1,43 @@
+==============================================================================
+FLOPs + memory-bandwidth profile — exp_n_0153_H2d96_nap7_tph64
+==============================================================================
+config: depth=6 n_embd=384 n_head=6 (head_dim=64) seq_len=512 vocab=32768 tie_unembed=False
+FFN: LUT  n_heads(H)=2 inner_in=96 inner_out=96 tables_per_head(tph)=64 nap=7 -> cells/table=2^7=128  forward_mode=hard path=per-head-loop
+total params: 39,040,152   checkpoint_loaded=False   dtype for bytes: bf16 (2 B)
+
+--- FLOPs ground-truth (FlopCounterMode) vs analytic matmul estimate ---
+prefill FlopCounter total (1x512): 17.415G FLOPs  -> 34.013M/token
+prefill analytic matmul/token     : 38.732M  (proj 8.847M + unembed 25.166M + attn_full 4.719M)
+  reconcile: counter vs analytic gap = -13.87%  (matches => counter trustworthy)
+  note: FlopCounter does NOT discount the causal mask; physically-causal attn is ~half
+        (2.364M attn => 36.377M/token real compute)
+decode FlopCounter proj (1x1)     : 34.013M/token (SDPA~0 at T=1); + analytic decode-attn 4.719M => 38.732M/token
+decode analytic matmul/token      : 38.732M
+
+--- LUT routing arithmetic missed by the counter (hand-counted, per token, whole model) ---
+anchor diffs+sign+bitpack: 7*64*4*2*6 + embag sum 64*96*2*6
+  = 95,232 ops/token  vs prefill matmul 34.013M => 0.280% (negligible; counter total trustworthy)
+
+==============================================================================
+RESULTS TABLE  (per token)
+==============================================================================
+scope / regime             FLOPs/tok   bytes/tok       dense        LUT     act/KV   AI(F/B)
+--------------------------------------------------------------------------------------------
+whole-model  decode          38.732M     38.910M     34.041M   147.456K     4.722M      1.00
+whole-model  prefill         34.013M    106.445K     67.252K    36.864K     2.328K    319.54
+block-only   decode           1.865M      1.933M      1.776M   147.456K     9.216K      0.96
+block-only   prefill          1.865M     41.870K      3.470K    36.864K     1.536K     44.54
+--------------------------------------------------------------------------------------------
+
+--- key byte facts ---
+LUT selected-rows/token/layer = H*tph*eff_out*2 = 2*64*96*2 = 24,576 B (eff_out=96)
+LUT full table/layer          = H*tph*cells*eff_out*2 = 3,145,728 B (selected = 1/128 = 0.78% of full)
+dense weights (all layers)    = 8,874,240 B ; tied unembed = 25,165,824 B
+KV-cache read/token (decode)  = 2*6*512*384*2 = 4,718,592 B
+
+--- reading ---
+decode is memory-bound: low AI (weights + unembed re-read every token dominate; LUT rows tiny).
+prefill is compute-bound: high AI (weights amortized over the sequence).
+The LUT selected-rows sparsity makes LUT byte traffic ~2 orders below the dense weight reads.
+Assumptions: decode re-reads every weight per token (batch1, no reuse); prefill reads each
+weight once and reuses across T tokens; act/KV terms marked approx (dense/LUT terms are exact).

@@ -1,0 +1,22 @@
+{
+  "exp_name": "exp_n_0157_long144k_vanilla",
+  "ffn_type": "dense",
+  "tie_unembedder": false,
+  "depth": 6,
+  "n_embd": 384,
+  "n_head": 6,
+  "seq_len": 512,
+  "device_batch_size": 48,
+  "total_batch_size": 24576,
+  "n_steps": 144000,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "lr_warmup_fraction": 0.1,
+  "eval_every": 200,
+  "eval_steps": 10,
+  "random_seed": 1,
+  "compute_dtype": "bf16",
+  "tokenizer_vocab_size": 32768,
+  "_untied_note": "UNTIED vanilla dense-FFN baseline: exp073_tied_vanilla_baseline_16k with tie_unembedder true->false, nothing else. Vanilla 4x MLP FFN (Linear 384->1536 + GELU + Linear 1536->384) x6, n_embd 384, depth 6, seq 512, vocab 32768, n_steps 16000, lr 3e-4, warmup_frac 0.1, device_batch 48/grad_accum 1 (effective batch 24,576), same LR schedule/optimizer as the grid. Untied adds a separate unembedder head (+vocab*n_embd = +12,582,912 params -> ~35.79M total). Purpose: the apples-to-apples UNTIED vanilla anchor for the untied FFN-LUT grid (exp073 tied = 1.19665; untied expected ~similar per researcher, tied-vs-untied within noise for vanilla dense FFN). Queued to launch after exp_n_0134 frees the GPU.",
+  "_sweep_tag": "long144k-vanilla"
+}

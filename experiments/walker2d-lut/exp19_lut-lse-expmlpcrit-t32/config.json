@@ -1,0 +1,32 @@
+{
+  "exp_name": "exp19_lut-lse-expmlpcrit-t32",
+  "description": "exp17's sum-scaled log-sum-exp actor + the exp10 MLP critic with ONLY its final linear readout replaced by the matching sum-scaled log-sum-exp over the 256 penultimate per-unit contributions w_i*h_i. Critic backbone (obs -> [256,256] Tanh, orthogonal gain 1.0) is bit-identical to exp10's.",
+  "algo": "ppo",
+  "arch": "fastlut_lse_sum_expmlpcrit",
+  "tables_per_head": 32,
+  "envs": 8192,
+  "rollout": 32,
+  "updates": 768,
+  "lr_schedule": "cosine",
+  "lr_min": 3e-05,
+  "logstd_min": -1.897,
+  "ent_coef": 0.0,
+  "target_kl": 0.02,
+  "norm_returns": true,
+  "params": 82953,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "source_bench": "bench12/t32",
+  "control": "exp17_lut-anchor-pair-t32-logsumexp (identical but for the critic's readout)",
+  "critic_readout": "T * tau_c * log((1/T) * sum_i exp(w_i*h_i / tau_c)) + b, T = 256 penultimate units",
+  "actor_readout": "T * tau_a * log((1/T) * sum_t exp(w_t / tau_a)), T = 32 tables",
+  "tau_actor_init": 0.05,
+  "tau_critic_init": 0.25,
+  "tau_critic_init_rationale": "measured on real normalised observations: at tau_c=0.25 the value function stays 97.6% shape-correlated with exp17's plain-linear head while the exponential remains measurably live; tau_c >= 1 is inert (corr 0.999, all 256 units uniform) and would be a null result by construction; tau_c <= 0.05 starts a substantially different value function (corr 0.38).",
+  "critic_numerics": "log(mean(exp(d))) computed as log1p(mean(expm1(d))) on mean-centred d, not logsumexp(d)-log(T): the latter subtracts two ~log(256)=5.55 values and loses the result to fp32 cancellation when tau >> spread(u) (0.061 error at tau=500). The tau->inf limit now lands on the plain linear head to 1.2e-4.",
+  "exp_clamp": 60.0,
+  "host": "gpustar (RTX 5090)"
+}

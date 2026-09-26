@@ -64,6 +64,17 @@ installed skill. Two consequences to remember: (1) *publishing* a skill to this 
 anywhere; do the copy per host (and per replica). (2) The installed copies are **snapshots that
 drift** from the repo as the SKILL is edited — re-copy after changes to keep a host current.
 
+## Experiment tracking
+
+- **[wandb.md](wandb.md)** — how to log experiments to a self-hosted wandb
+  server: one-time client setup on a training host (`pip install wandb`, set
+  `WANDB_BASE_URL`, `wandb login`), a minimal `train.py` integration snippet, and
+  the run-organization conventions (one project, `group=` per experiment family,
+  `job_type`, `tags`, and logging branch+commit into `config`). Deployment
+  specifics (server URL, entity, hosts) are placeholders — keep your real values
+  in private per-host notes; secrets are never committed (the doc explains how to
+  get the API key, never its value).
+
 ## Scope and boundaries
 
 - **The scientific record and the working method.** thesis / journey / archive are the

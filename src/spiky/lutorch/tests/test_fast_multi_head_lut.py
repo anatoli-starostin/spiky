@@ -19,6 +19,10 @@ Covers:
     that the surrogate is the analytical gradient of.
   - hybrid_smooth collapses to hard mode when all |d| are large
     (u = sigma(-Delta/T_sel) ~ 0).
+  - exp_outputs=True: the train forward is bit-identical to the eval forward,
+    input gradients reach the anchored dims and a differentiable module
+    upstream, and the per-table weight gradient carries the log-sum-exp
+    softmax mass rather than the sum path's uniform broadcast.
 """
 from typing import Optional
 
@@ -445,3 +449,133 @@ def test_train_step_no_nan(forward_mode, weight_dtype):
         opt.step()
     for n, p in m.named_parameters():
         assert torch.isfinite(p).all(), f"non-finite values in {n} after training"
+
+
+# =============================================================================
+# exp_outputs=True: log-sum-exp readout + surrogate input gradient
+# =============================================================================
+
+_EXP_OUTPUTS_KW = dict(
+    input_dim=16, n_heads=2, n_outputs=4, n_anchor_pairs=4, tables_per_head=8,
+    forward_mode="hard", weight_dtype=torch.float32, use_bf16=False,
+    learnable_temps=False, random_seed=0, exp_outputs=True,
+    exp_outputs_tau_init=0.1,
+)
+
+
+def _make_exp(scale: str = "mean", **overrides) -> FastMultiHeadLut:
+    kw = dict(_EXP_OUTPUTS_KW)
+    kw.update(overrides)
+    return FastMultiHeadLut(device=_device(), exp_outputs_scale=scale, **kw)
+
+
+@_cuda
+@pytest.mark.parametrize("scale", ["mean", "sum"])
+def test_exp_outputs_train_forward_bit_identical_to_eval(scale):
+    """Adding the surrogate backward must not perturb a single output bit.
+
+    The training path goes through an autograd Function and the eval path
+    through the plain readout; both must return exactly the same tensor,
+    because the row selection and the log-sum-exp are the same expression.
+    """
+    m = _make_exp(scale)
+    x = torch.randn(64, 16, device=_device(), dtype=torch.float32)
+    y_train = m(x)
+    with torch.no_grad():
+        y_eval = m(x)
+    assert torch.equal(y_train.detach(), y_eval), (
+        "exp_outputs train forward diverged from the eval forward "
+        f"(max |diff| = {(y_train.detach() - y_eval).abs().max().item():.3e})"
+    )
+
+
+@_cuda
+@pytest.mark.parametrize("scale", ["mean", "sum"])
+def test_exp_outputs_input_grads_reach_an_upstream_module(scale):
+    """The LUT must be attachable on top of something differentiable.
+
+    The forward selects rows with a hard `(d > 0)` compare, so autograd alone
+    gives `x` no gradient at all -- and silently, since the output still
+    requires grad through the weights. The soft surrogate is what makes an
+    upstream encoder trainable.
+    """
+    m = _make_exp(scale)
+    upstream = torch.nn.Linear(16, 16).to(_device())
+    z = torch.randn(64, 16, device=_device(), dtype=torch.float32)
+    x = upstream(z)
+    x.retain_grad()
+    m(x).sum().backward()
+
+    assert x.grad is not None, "no gradient reached the LUT input"
+    assert torch.isfinite(x.grad).all()
+    anchors = torch.unique(torch.cat([m.soft_anchor_a_long.flatten(),
+                                      m.soft_anchor_b_long.flatten()]))
+    assert (x.grad[:, anchors] != 0).all(), (
+        "some anchored input dims received a zero gradient"
+    )
+    assert upstream.weight.grad is not None and upstream.weight.grad.abs().sum() > 0, (
+        "the upstream module received no gradient -- it would never train"
+    )
+
+
+@_cuda
+@pytest.mark.parametrize("scale", ["mean", "sum"])
+def test_exp_outputs_weight_grad_carries_lse_softmax_mass(scale):
+    """The per-table gradient must be softmax-weighted, not uniformly broadcast.
+
+    With `grad_out = 1` everywhere, dL/dw_sel[b, h, t, o] = c * softmax_t(...),
+    so summing over the tables axis gives exactly `c` per (b, h, o): 1 in the
+    "mean" scale and `tables_per_head` in the "sum" scale. A uniform broadcast
+    -- the derivative of the sum reduction, which is what the standard mode's
+    backward caller builds -- would give `tables_per_head` and
+    `tables_per_head**2` instead, so this distinguishes the two.
+    """
+    m = _make_exp(scale)
+    B = 32
+    x = torch.randn(B, 16, device=_device(), dtype=torch.float32)
+    m(x).sum().backward()
+
+    c = m.tables_per_head if scale == "sum" else 1.0
+    expected = B * m.n_heads * m.n_outputs * c
+    total = m.weights.grad.sum().item()
+    assert abs(total - expected) <= 1e-3 * expected, (
+        f"per-table weight-gradient mass is {total:.6g}, expected {expected:.6g} "
+        f"(a uniform broadcast would give {expected * m.tables_per_head:.6g})"
+    )
+    assert m.exp_outputs_tau_raw.grad is not None
+    assert torch.isfinite(m.exp_outputs_tau_raw.grad).all()
+
+
+@_cuda
+@pytest.mark.parametrize("scale", ["mean", "sum"])
+def test_exp_outputs_learnable_temps_receive_gradients(scale):
+    """T_soft and T_sel only enter through the surrogate, so they only get
+    gradients once the surrogate backward exists."""
+    m = _make_exp(scale, learnable_temps=True)
+    x = torch.randn(16, 16, device=_device(), dtype=torch.float32)
+    m(x).sum().backward()
+    assert m.log_soft_score_temp.grad is not None
+    assert m.log_select_temp.grad is not None
+    assert torch.isfinite(m.log_soft_score_temp.grad).all()
+    assert torch.isfinite(m.log_select_temp.grad).all()
+
+
+@_cuda
+@pytest.mark.parametrize("scale", ["mean", "sum"])
+def test_exp_outputs_train_step_moves_an_upstream_module(scale):
+    """End to end: a few SGD steps leave everything finite and the upstream
+    encoder's weights actually change."""
+    m = _make_exp(scale)
+    upstream = torch.nn.Linear(16, 16).to(_device())
+    opt = torch.optim.SGD(list(m.parameters()) + list(upstream.parameters()), lr=1e-2)
+    before = upstream.weight.detach().clone()
+    for _ in range(5):
+        opt.zero_grad(set_to_none=True)
+        z = torch.randn(32, 16, device=_device(), dtype=torch.float32)
+        m(upstream(z)).float().pow(2).mean().backward()
+        opt.step()
+    for n, p in list(m.named_parameters()) + list(upstream.named_parameters()):
+        assert torch.isfinite(p).all(), f"non-finite values in {n} after training"
+    assert not torch.equal(before, upstream.weight.detach()), (
+        "the upstream module did not move -- input gradients are not flowing"
+    )

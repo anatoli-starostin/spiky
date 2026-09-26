@@ -1,0 +1,67 @@
+{
+  "conditions": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "batch": 48,
+    "seq": 512,
+    "tokens": 24576,
+    "iters": 50,
+    "rounds": 15,
+    "warmup": 20,
+    "clocks": "345 MHz, 1980 MHz, 4 MiB, 0 %",
+    "dtype": "routed: bf16 compress/decompress + fp32 fused routing+gather (bit-exact); vanilla: bf16",
+    "timing": "CUDA events, median, steady-state (warmed, clock boosted/unlocked), no_grad"
+  },
+  "vanilla": {
+    "up": 0.053106560707092285,
+    "gelu": 0.05676095962524414,
+    "down": 0.042512001991271975,
+    "slot_eager": 0.15291647911071776,
+    "slot_compile": 0.15683648109436035
+  },
+  "routed": {
+    "0126": {
+      "nap": 7,
+      "tph": 64,
+      "compress": 0.012464640140533447,
+      "fused_route_gather": 0.14161215782165526,
+      "decompress": 0.014823039770126343,
+      "slot": 0.16889983773231504,
+      "vs_vanilla": 1.1084155873229635,
+      "route_standalone": 0.06193920135498047,
+      "gather_standalone": 0.11262592315673828,
+      "slot_eager_fp32": 0.808590087890625,
+      "slot_compile_fp32": 0.8087104034423828,
+      "graph_breaks": 6
+    },
+    "0127": {
+      "nap": 7,
+      "tph": 128,
+      "compress": 0.012672640085220337,
+      "fused_route_gather": 0.25321407318115235,
+      "decompress": 0.013359359502792358,
+      "slot": 0.2792460727691651,
+      "vs_vanilla": 1.832569550757156,
+      "route_standalone": 0.11138751983642578,
+      "gather_standalone": 0.22600255966186522,
+      "slot_eager_fp32": 1.4924269104003907,
+      "slot_compile_fp32": 1.490882568359375,
+      "graph_breaks": 6
+    },
+    "0128": {
+      "nap": 8,
+      "tph": 64,
+      "compress": 0.013033599853515624,
+      "fused_route_gather": 0.14904640197753907,
+      "decompress": 0.013519359827041626,
+      "slot": 0.17559936165809634,
+      "vs_vanilla": 1.1523816256962398,
+      "route_standalone": 0.11434240341186523,
+      "gather_standalone": 0.1206112003326416,
+      "slot_eager_fp32": 0.9493580627441406,
+      "slot_compile_fp32": 0.9496044921875,
+      "graph_breaks": 6
+    }
+  }
+}

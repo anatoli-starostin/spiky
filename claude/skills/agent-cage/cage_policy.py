@@ -241,11 +241,24 @@ def _escape_ops(s):
 # ── the sbox cage tier ──────────────────────────────────────────────────────
 def is_safe_sbox(command, segs):
     """A single, simple `sbox <argv>`. (_escape_ops is checked separately by the
-    caller, so redirects / substitution / background are already excluded.)"""
+    caller, so redirects / substitution / background are already excluded.)
+
+    Bare `sbox <argv>` (no network) is green, unchanged. The one opt-in network
+    form `sbox --net tailnet -- <argv>` is also green — a single fixed, well-
+    understood mode (egress to the tailscale CIDR + DNS only, enforced in sbox).
+    Anything else after `--net` (an unknown mode, a raw host:port, a malformed
+    shape) is NOT auto-green -> it gates (fail-closed). `--net` is meaningful only
+    as sbox's OWN first argument (that is all the wrapper parses); appearing later
+    it is just an argument to the caged program and carries no network."""
     if segs is None or len(segs) != 1:
         return False
     seg = segs[0]
-    return len(seg) >= 2 and seg[0] == "sbox"
+    if len(seg) < 2 or seg[0] != "sbox":
+        return False
+    if seg[1] == "--net":
+        # sanctioned shape: sbox --net tailnet -- <cmd...>  (indices 0..4+)
+        return len(seg) >= 5 and seg[2] == "tailnet" and seg[3] == "--"
+    return True
 
 
 # ── the scoped-safe git tier ────────────────────────────────────────────────

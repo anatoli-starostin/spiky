@@ -1,0 +1,16 @@
+{
+  "source_experiment": "exp19_lut-lse-expmlpcrit-t32",
+  "arch": "fastlut_lse_sum_expmlpcrit",
+  "seed": 2,
+  "final_ep_ret": 5966.329682365827,
+  "obs_dim": 17,
+  "act_dim": 6,
+  "tables_per_head": 32,
+  "n_anchor_pairs": 6,
+  "tau_actor": 0.08646934041199146,
+  "readout": "T * tau * log((1/T) * sum_t exp(w_t / tau))  over T=32 tables",
+  "obs_normalisation": "x = (obs - obs_mean) / sqrt(obs_var + 1e-8)  (stats in the npz)",
+  "action_postprocess": "clip(mean, -1, 1)  \u2014 training used env action.clamp(-1,1), NOT tanh",
+  "numpy_torch_parity_max_abs": 1.9772232554560176e-06,
+  "note": "Actor only. The critic (exp19's exponential value head) is not needed at inference."
+}
