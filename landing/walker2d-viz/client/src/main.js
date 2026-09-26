@@ -202,12 +202,20 @@ let fromQ = null, toQ = null, interpStart = 0, interpDur = 1000 / 30
 let emaInterval = 1000 / 30, lastMsg = 0, prevStep = -1
 const curQ = new Array(9).fill(0)                    // reused each frame (no per-frame allocation)
 
-function pushState(qpos, step) {
+function pushState(qpos, step, sps) {
   const now = performance.now()
-  if (lastMsg) emaInterval += ((now - lastMsg) - emaInterval) * 0.2   // smoothed inter-arrival interval
+  const nominal = 1000 / Math.max(1, sps || 30)      // the stream's real inter-frame interval at this sps
+  const gap = lastMsg ? now - lastMsg : nominal
+  // A gap far larger than the stream cadence means the server was SILENT (paused, or auto-stopped to the
+  // zero idle) and has just resumed. Do NOT fold that idle gap into the smoothed interval: it would blow up
+  // interpDur and play the next move in extreme slow motion (a 3-min idle -> ~36 s lerp). Reset to the
+  // nominal cadence and snap the pose instead, so resume is immediate and smooth.
+  const resumed = gap > Math.max(1200, nominal * 4)
+  if (resumed) emaInterval = nominal
+  else if (lastMsg) emaInterval += (gap - emaInterval) * 0.2   // smoothed inter-arrival interval
   lastMsg = now
-  // On an episode reset the pose jumps discontinuously (root x snaps back) — snap instead of sliding.
-  const reset = prevStep >= 0 && (step <= prevStep || (toQ && Math.abs(qpos[0] - toQ[0]) > 0.4))
+  // On an episode reset OR a resume-from-idle the pose jumps discontinuously — snap instead of sliding.
+  const reset = resumed || (prevStep >= 0 && (step <= prevStep || (toQ && Math.abs(qpos[0] - toQ[0]) > 0.4)))
   prevStep = step
   fromQ = reset ? qpos.slice() : curQ.slice()        // start from where we're currently drawn -> no snapping
   toQ = qpos
@@ -244,34 +252,272 @@ addEventListener('resize', resize); resize()
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id)
 const conn = $('conn')
-let ws = null, mode = 'test', paused = false
+let ws = null, paused = false, serverFull = false
+// Remembered user intent, re-applied after a (re)connect so a dropped socket doesn't silently strand
+// the session on the server's default actor with unresponsive controls.
+let lastActor = null, lastPaused = false, lastNoReset = false, lastShowSpikes = false, lastShowNetwork = false
+let sockId = 0
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
+// ---- live spike raster (spiking-LUT actor only) ----
+let spikeMeta = null
+const spikeCanvas = $('spikeCanvas'), sctx = spikeCanvas ? spikeCanvas.getContext('2d') : null
+function setupSpikeInfo() {
+  if (spikeMeta) $('spikeInfo').textContent = `${spikeMeta.n_rows} neurons · ${spikeMeta.n_ticks} ticks/inference`
+}
+function bandColorFor(row) {
+  if (spikeMeta) for (const b of spikeMeta.bands) if (row >= b.start && row < b.end) return b.color
+  return '#8ab0d0'
+}
+// `a` = flat (row uint16, tick uint16) pairs for one act(). Redraw the whole raster each frame.
+function drawSpikes(a) {
+  if (!sctx || !spikeMeta) return
+  const W = spikeCanvas.width, H = spikeCanvas.height
+  const PADL = 92, PADR = 8, PADT = 6, PADB = 6
+  const pw = W - PADL - PADR, ph = H - PADT - PADB
+  const nt = spikeMeta.n_ticks
+  sctx.clearRect(0, 0, W, H)
+  sctx.textAlign = 'right'; sctx.textBaseline = 'middle'; sctx.font = '10px sans-serif'
+  // Per-band vertical allocation. Every semantic band gets a readable FLOOR, then the remaining
+  // height is shared by row count with the densest band(s) CAPPED at `min(rows, CAP)` — so no single
+  // band dominates and ALL bands stay legible. Sharing height purely by raw row count let the two
+  // 272-row bands (memory + rails) dominate (~226px each) while the lookup band (S2 cells, capped)
+  // got ~77px and the 6 output rows only ~5px. With the floor+cap the memory band no longer dominates
+  // and the lookup + output bands get real space. Rows stay linear within each band.
+  const bands = spikeMeta.bands
+  const FLOOR = 16, CAP = 300                                   // px floor per band; row cap for dense bands
+  const eff = bands.map(b => Math.min(b.end - b.start, CAP))
+  const effSum = eff.reduce((s, v) => s + v, 0)
+  const K = Math.max(0, ph - FLOOR * bands.length) / Math.max(1, effSum)   // px per capped row
+  const top = {}, rh = {}
+  let y = PADT
+  bands.forEach((b, i) => {
+    const n = b.end - b.start
+    const h = FLOOR + K * eff[i]
+    top[b.name] = y; rh[b.name] = n ? h / n : 0
+    y += h
+  })
+  for (const b of bands) {                                      // stage bands: faint tint + label
+    const y0 = top[b.name], y1 = top[b.name] + (b.end - b.start) * rh[b.name]
+    sctx.fillStyle = b.color + '22'
+    sctx.fillRect(PADL, y0, pw, Math.max(1, y1 - y0))
+    sctx.fillStyle = '#b9c6d6'
+    sctx.fillText(b.name, PADL - 6, (y0 + y1) / 2)
+  }
+  for (let i = 0; i < a.length; i += 2) {                       // one dot per fired neuron at its tick
+    const row = a[i], tick = a[i + 1]
+    let bt = null
+    for (const b of bands) if (row >= b.start && row < b.end) { bt = b; break }
+    if (!bt) continue
+    const yy = top[bt.name] + (row - bt.start) * rh[bt.name]
+    const dh = Math.max(1, Math.min(2.4, rh[bt.name]))          // dot height <= its row height (no overspill)
+    sctx.fillStyle = bt.color
+    sctx.fillRect(PADL + (tick / nt) * pw, yy, 2.2, dh)
+  }
+}
+
+// ---- live NETWORK-GRAPH view (spiking-LUT actor only) — coexists with the raster ----
+// Nodes are laid out in stage columns (inputs → S1 rails → S1 mem → S1 tie → S2 cells → S3 outputs).
+// Static synapses are pre-rendered once to an offscreen canvas; a self-clocked loop sweeps a virtual
+// tick 0..n_ticks and animates a dot along each synapse whose source fired (dot travels over the delay),
+// so spikes visibly cascade left→right — the same idea, on the same tick axis, as the raster.
+let netMeta = null, netEdges = null, netSrcIdx = null, netFire = null, netPos = null, netBg = null
+let netSimT = 0, netLastTs = 0, netRunning = false, netRAF = 0
+const netCanvas = $('netCanvas'), nctx = netCanvas ? netCanvas.getContext('2d') : null
+const NET_TPS = 105, NET_END_PAD = 45, NET_FLASH = 5     // ticks/sec sweep, end pause, flash half-width
+
+function netSetInfo() {
+  if (netMeta) $('netInfo').textContent = `${netMeta.n_nodes} neurons · ${netMeta.n_edges} synapses · ${netMeta.n_ticks} ticks`
+}
+function netLayout() {
+  if (!netMeta || !netCanvas) return
+  const W = netCanvas.width, H = netCanvas.height, padL = 22, padR = 22, padT = 22, padB = 8
+  const bands = netMeta.bands, nb = bands.length, N = netMeta.n_nodes
+  const x = new Float32Array(N), y = new Float32Array(N)
+  for (let b = 0; b < nb; b++) {
+    const band = bands[b], size = band.end - band.start
+    const cx = padL + (nb === 1 ? 0.5 : b / (nb - 1)) * (W - padL - padR)
+    for (let r = band.start; r < band.end; r++) {
+      x[r] = cx
+      y[r] = padT + ((r - band.start) / Math.max(1, size - 1)) * (H - padT - padB)
+    }
+  }
+  netPos = { x, y }
+  netDrawBackground()
+}
+function netDrawBackground() {
+  if (!netEdges || !netPos || !netCanvas) return
+  const W = netCanvas.width, H = netCanvas.height
+  netBg = document.createElement('canvas'); netBg.width = W; netBg.height = H
+  const g = netBg.getContext('2d'); g.lineWidth = 0.5
+  const { src, tgt, exc } = netEdges, n = src.length, { x, y } = netPos
+  for (const isExc of [1, 0]) {                            // two batched passes (one strokeStyle each)
+    g.strokeStyle = isExc ? 'rgba(255,107,107,0.05)' : 'rgba(91,157,255,0.13)'
+    g.beginPath()
+    for (let i = 0; i < n; i++) {
+      if (exc[i] !== isExc) continue
+      g.moveTo(x[src[i]], y[src[i]]); g.lineTo(x[tgt[i]], y[tgt[i]])
+    }
+    g.stroke()
+  }
+  g.fillStyle = '#9fb0c3'; g.font = '9px sans-serif'; g.textAlign = 'center'
+  for (const b of netMeta.bands) g.fillText(b.name.replace(/^S\d /, ''), x[b.start], 12)
+}
+function onTopology(body) {                                // body = flat uint16 (src,tgt,delay,exc) quads
+  if (!netMeta) return
+  const n = (body.length / 4) | 0, N = netMeta.n_nodes
+  const src = new Uint16Array(n), tgt = new Uint16Array(n), dly = new Uint16Array(n), exc = new Uint8Array(n)
+  for (let i = 0; i < n; i++) { src[i] = body[i*4]; tgt[i] = body[i*4+1]; dly[i] = body[i*4+2]; exc[i] = body[i*4+3] }
+  netEdges = { src, tgt, dly, exc }
+  netSrcIdx = Array.from({ length: N }, () => [])
+  for (let i = 0; i < n; i++) netSrcIdx[src[i]].push(i)
+  netFire = new Int16Array(N).fill(-1)
+  netLayout()
+}
+function netSetSpikes(a) {                                 // a = (row,tick) pairs; store firing tick per neuron
+  if (!netFire) return
+  netFire.fill(-1)
+  for (let i = 0; i < a.length; i += 2) netFire[a[i]] = a[i + 1]
+}
+function netLoop(ts) {
+  if (!netRunning) return
+  netRAF = requestAnimationFrame(netLoop)
+  if (!nctx || !netBg || !netPos || !netEdges || !netMeta) return
+  const dt = netLastTs ? (ts - netLastTs) / 1000 : 0; netLastTs = ts
+  netSimT += dt * NET_TPS
+  if (netSimT > netMeta.n_ticks + NET_END_PAD) netSimT = 0
+  const t = netSimT, W = netCanvas.width, H = netCanvas.height
+  nctx.clearRect(0, 0, W, H); nctx.drawImage(netBg, 0, 0)
+  const { x, y } = netPos, { src, tgt, dly, exc } = netEdges
+  for (let r = 0; r < netFire.length; r++) {               // travelling spike dots on firing sources' edges
+    const ft = netFire[r]; if (ft < 0) continue
+    const ed = netSrcIdx[r]; if (!ed.length) continue
+    for (let j = 0; j < ed.length; j++) {
+      const i = ed[j], span = Math.max(dly[i], 4)
+      if (t < ft || t > ft + span) continue
+      const fr = (t - ft) / span, ax = x[src[i]], ay = y[src[i]]
+      nctx.fillStyle = exc[i] ? '#ff8a8a' : '#7fb3ff'
+      nctx.fillRect(ax + (x[tgt[i]] - ax) * fr - 1, ay + (y[tgt[i]] - ay) * fr - 1, 2.4, 2.4)
+    }
+  }
+  for (let r = 0; r < netFire.length; r++) {               // flash nodes at their firing tick
+    const ft = netFire[r]; if (ft < 0 || Math.abs(t - ft) > NET_FLASH) continue
+    nctx.fillStyle = '#ffe08a'; nctx.fillRect(x[r] - 1.5, y[r] - 1.5, 3, 3)
+  }
+  nctx.fillStyle = '#9fb0c3'; nctx.font = '10px sans-serif'; nctx.textAlign = 'right'
+  nctx.fillText('tick ' + Math.min(Math.floor(t), netMeta.n_ticks), W - 6, H - 4)
+}
+function netStart() { if (!netRunning) { netRunning = true; netLastTs = 0; netRAF = requestAnimationFrame(netLoop) } }
+function netStop() { netRunning = false; if (netRAF) cancelAnimationFrame(netRAF); netRAF = 0 }
+
+// ---- per-actor spiking-view adaptation ----
+// The spike raster + network graph only make sense for actors that expose read_spikes (the server
+// advertises which via the `spiking` list in its `actors` message + a `spiking` flag in `state`).
+// On actor-switch we (a) clear both canvases + drop stale layout state so no frozen frame lingers,
+// and (b) show/hide the spike+network controls & panels for the selected actor.
+let spikingActors = null            // Set of actor names with the spike/network view; null until the server tells us
+let curVizActor = null              // last actor we applied the viz UI for (avoid redundant work on every state msg)
+function activeIsSpiking(name) { return !spikingActors || spikingActors.has(name) }   // unknown -> assume yes (don't hide)
+function resetVizCanvases() {
+  spikeMeta = null; netMeta = null; netEdges = null; netSrcIdx = null; netFire = null; netPos = null; netBg = null
+  if (sctx) sctx.clearRect(0, 0, spikeCanvas.width, spikeCanvas.height)
+  if (nctx) nctx.clearRect(0, 0, netCanvas.width, netCanvas.height)
+}
+function applyActorViz(name) {
+  if (name == null || name === curVizActor) return
+  curVizActor = name
+  resetVizCanvases()                                   // kill any frozen frame from the previous actor
+  const spk = activeIsSpiking(name)
+  for (const id of ['showspikes', 'shownetwork']) {    // hide the toggles' rows when not applicable
+    const cb = $(id); if (!cb) continue
+    const row = cb.closest ? cb.closest('.row') : null
+    if (row) row.style.display = spk ? 'flex' : 'none'
+  }
+  const note = $('vizNote'); if (note) note.style.display = spk ? 'none' : 'flex'
+  if (!spk) {                                          // non-spiking: hide both panels, stop the net animation
+    $('spikePanel').style.display = 'none'
+    $('networkPanel').style.display = 'none'
+    netStop()
+  } else {                                             // spiking: restore panels per the user's checkbox state
+    $('spikePanel').style.display = $('showspikes').checked ? 'block' : 'none'
+    $('networkPanel').style.display = $('shownetwork').checked ? 'block' : 'none'
+    if ($('shownetwork').checked) netStart()
+  }
+}
+
+const overlay = $('overlay'), overlayMsg = $('overlayMsg')
+function showOverlay(msg) { if (overlayMsg) overlayMsg.textContent = msg; if (overlay) overlay.style.display = 'flex' }
+function hideOverlay() { if (overlay) overlay.style.display = 'none' }
+
 function connect(url) {
   if (ws) { try { ws.close() } catch {} }
+  serverFull = false; hideOverlay()
   conn.textContent = 'connecting…'; conn.className = ''
-  ws = new WebSocket(url)
-  ws.onopen = () => { conn.textContent = 'connected'; conn.className = 'ok' }
-  ws.onclose = () => { conn.textContent = 'disconnected'; conn.className = 'bad'; setTimeout(() => connect(url), 1500) }
-  ws.onerror = () => { conn.textContent = 'error'; conn.className = 'bad' }
-  ws.onmessage = (ev) => {
+  // Bind every handler to THIS socket object (sk), and gate side-effects on `ws === sk` so a stale
+  // socket (e.g. one that keeps delivering frames after a reconnect) can never drive the render or
+  // schedule reconnects while the buttons' send() targets a different, current `ws`. Fixes the
+  // "robot keeps walking but buttons dead" two-socket class of bug.
+  const sk = new WebSocket(url); sk._id = ++sockId; ws = sk
+  sk.binaryType = 'arraybuffer'                            // spike frames arrive as binary (ArrayBuffer)
+  sk.onopen = () => { if (ws !== sk) return; conn.textContent = 'connected'; conn.className = 'ok'; hideOverlay() }
+  sk.onclose = (e) => {
+    if (ws !== sk) return                                  // a stale socket closing must NOT touch UI or reconnect
+    conn.textContent = serverFull ? 'server full' : 'reconnecting…'; conn.className = 'bad'
+    // When the server told us it's at capacity, do NOT auto-reconnect (no tight retry loop) — the
+    // overlay's Retry button lets the visitor try again on their own terms. Otherwise reconnect.
+    if (!serverFull) setTimeout(() => connect(url), 1500)
+  }
+  sk.onerror = () => { if (ws !== sk) return; conn.textContent = 'error'; conn.className = 'bad' }
+  sk.onmessage = (ev) => {
+    if (ws !== sk) return                                  // ignore frames from a superseded socket
+    if (typeof ev.data !== 'string') {                     // binary frame: uint16 kind tag, then body
+      const arr = new Uint16Array(ev.data), body = arr.subarray(1)
+      if (arr[0] === 2) onTopology(body)                   // kind 2 = network topology (once)
+      else { if (lastShowSpikes) drawSpikes(body); if (lastShowNetwork) netSetSpikes(body) }  // kind 1 = spikes
+      return
+    }
     const m = JSON.parse(ev.data)
+    if (m.type === 'server_full') {                    // at capacity: friendly banner, stop reconnecting
+      serverFull = true
+      showOverlay(m.message || 'The demo server is at capacity, please come back later.')
+      return
+    }
+    if (m.type === 'spike_meta') { spikeMeta = m; setupSpikeInfo(); return }   // raster layout (once)
+    if (m.type === 'network_meta') { netMeta = m; netSetInfo(); return }       // graph layout (before topology)
+    if (m.type === 'actor_changed') {                  // server auto-switched the model (auto-stop -> zero)
+      const sel = $('actor')                           // reflect it in the selector so the user sees "zero".
+      if (sel && m.actor) sel.value = m.actor          // programmatic set does NOT fire onchange -> not a user interaction
+      $('actorName').textContent = m.actor
+      applyActorViz(m.actor)                           // adapt the spike/network view to the (server-)switched actor
+      return
+    }
     if (m.type === 'actors') {
       const sel = $('actor'); sel.innerHTML = ''
       for (const name of m.actors) {
         const o = document.createElement('option'); o.value = o.textContent = name; sel.appendChild(o)
       }
+      if (Array.isArray(m.spiking)) spikingActors = new Set(m.spiking)   // which actors have the spike/network view
       if (m.active) sel.value = m.active
+      // Restore the user's chosen actor + toggles after a (re)connect (the fresh session starts on the
+      // server default). No-op on the first connect (lastActor is null).
+      if (lastActor && m.actors.includes(lastActor) && lastActor !== m.active) {
+        sel.value = lastActor
+        send({ cmd: 'actor', name: lastActor })
+      }
+      if (lastPaused) send({ cmd: 'pause', value: true })
+      if (lastNoReset) send({ cmd: 'no_reset', value: true })
+      if (lastShowSpikes) send({ cmd: 'show_spikes', value: true })
+      if (lastShowNetwork) send({ cmd: 'show_network', value: true })
+      curVizActor = null; applyActorViz(sel.value)         // set up the spike/network UI for the active actor
     } else if (m.type === 'state') {
-      pushState(m.qpos, m.step)                       // update interpolation target (no geometry rebuild)
+      pushState(m.qpos, m.step, m.sps)                // update interpolation target (no geometry rebuild)
       $('env').textContent = m.env
       $('step').textContent = m.step
       $('reward').textContent = (+m.reward).toFixed(2)
       $('ret').textContent = (+m.return).toFixed(1)
       $('actorName').textContent = m.actor
-      mode = m.mode; $('modeBtn').textContent = 'Mode: ' + mode
-      $('modeBtn').classList.toggle('active', mode === 'train')
+      applyActorViz(m.actor)                         // no-op unless the active actor changed (guards on curVizActor)
       paused = !!m.paused                            // reflect server pause state
       $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
       $('pauseBtn').classList.toggle('active', paused)
@@ -283,11 +529,11 @@ function connect(url) {
 $('restart').onclick = () => send({ cmd: 'restart' })
 $('pauseBtn').onclick = () => {
   paused = !paused                                  // optimistic toggle; server echoes it back in state
+  lastPaused = paused
   send({ cmd: 'pause', value: paused })
   $('pauseBtn').textContent = paused ? 'Resume' : 'Pause'
   $('pauseBtn').classList.toggle('active', paused)
 }
-$('modeBtn').onclick = () => { mode = (mode === 'test' ? 'train' : 'test'); send({ cmd: 'mode', mode }) }
 $('renderBtn').onclick = () => {                          // live switch between accurate MJCF and approximate render
   renderMode = renderMode === 'accurate' ? 'approx' : 'accurate'
   applyRenderVisibility()
@@ -305,9 +551,22 @@ function setFold(collapsed) {
 $('foldBtn').onclick = () => setFold(!ui.classList.contains('collapsed'))
 setFold(innerWidth < 620)                                 // default: collapsed on narrow/mobile, expanded on wide
 $('speed').oninput = (e) => { $('speedVal').textContent = e.target.value + '/s'; send({ cmd: 'speed', sps: +e.target.value }) }
-$('actor').onchange = (e) => send({ cmd: 'actor', name: e.target.value })
-$('noreset').onchange = (e) => send({ cmd: 'no_reset', value: e.target.checked })
+$('actor').onchange = (e) => { lastActor = e.target.value; send({ cmd: 'actor', name: e.target.value }); applyActorViz(e.target.value) }
+$('noreset').onchange = (e) => { lastNoReset = e.target.checked; send({ cmd: 'no_reset', value: e.target.checked }) }
+$('showspikes').onchange = (e) => {
+  lastShowSpikes = e.target.checked
+  send({ cmd: 'show_spikes', value: e.target.checked })
+  $('spikePanel').style.display = e.target.checked ? 'block' : 'none'
+  if (!e.target.checked && sctx) sctx.clearRect(0, 0, spikeCanvas.width, spikeCanvas.height)
+}
+$('shownetwork').onchange = (e) => {
+  lastShowNetwork = e.target.checked
+  send({ cmd: 'show_network', value: e.target.checked })
+  $('networkPanel').style.display = e.target.checked ? 'block' : 'none'
+  if (e.target.checked) netStart(); else netStop()
+}
 $('srv').onchange = (e) => connect(e.target.value.trim())
+$('overlayRetry').onclick = () => connect($('srv').value.trim())   // manual retry from the overload banner
 
 // WebSocket URL resolution order:
 //   1. window.WALKER2D_WS from config.js (set to wss://your-domain for a GitHub Pages build), else

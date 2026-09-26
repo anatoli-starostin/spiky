@@ -1,0 +1,18 @@
+{
+ "source_experiment": "exp05_ppo-truncbootstrap-retnorm-kl",
+ "variant": "deploy_matched (--obs-clip-vel 10.0 --solver-iters 100 --ls-iters 50)",
+ "arch": "mlp",
+ "seed": 1,
+ "final_ep_ret": 5000.707910750507,
+ "obs_dim": 17,
+ "act_dim": 6,
+ "hidden": [
+  256,
+  256
+ ],
+ "activation": "tanh",
+ "readout": "linear; action = clip(mean, -1, 1) \u2014 training used env action.clamp(-1,1), NOT tanh",
+ "obs_normalisation": "x = (obs - obs_mean) / sqrt(obs_var + 1e-8)  (stats in the npz)",
+ "numpy_torch_parity_max_abs": 2.6420187215769886e-06,
+ "note": "Actor only. The critic plays no part at inference."
+}
