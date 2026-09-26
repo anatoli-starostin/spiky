@@ -7,7 +7,13 @@
 # Caddy obtains a Let's Encrypt cert for $DOMAIN automatically and proxies wss://$DOMAIN -> ws://server:8765.
 services:
   server:
-    build: ./server
+    # Build context is the REPO ROOT (three levels up), not ./server: the "Spiking LUT"
+    # actor needs the spiky_cuda native extension (native/spiky) and the spiky package
+    # (src/spiky), both outside server/. A repo-root .dockerignore allow-lists exactly
+    # what is sent to the daemon, so the big experiment dirs are NOT shipped.
+    build:
+      context: ../..
+      dockerfile: landing/walker2d-viz/server/Dockerfile
     environment:
       HOST: "0.0.0.0"
       PORT: "8765"
