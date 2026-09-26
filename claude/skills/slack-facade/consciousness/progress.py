@@ -90,7 +90,16 @@ def render_bar(pct, style: str = "emoji", width: int = 10) -> str:
 
 
 def render_message(rec: dict) -> str:
-    """The full Slack message for a record: a heading line + the bar + stats."""
+    """The full Slack message for a record: a heading line + the bar + stats.
+
+    A `kind="notify"` record is the exception: it is a one-shot message, so it
+    renders as plain text with no bar and no percentage."""
+    if rec.get("kind") == "notify":
+        title = (rec.get("label") or "").strip()
+        body = (rec.get("final_text") or rec.get("stats") or "").strip()
+        if title and body:
+            return f"*{title}*\n{body}"
+        return body or title or "(empty notification)"
     state = rec.get("state", "active")
     pct = rec.get("pct", 0)
     if state == "done":
@@ -138,6 +147,31 @@ def _read(path: Path):
 # =============================================================================
 # Body-side API (called by the experiment / agent; stdlib only, cage-safe)
 # =============================================================================
+
+def notify(text: str, *, title: str = None, task: str = None, channel: str = None,
+           thread_ts: str = None) -> str:
+    """Post a ONE-SHOT message into Slack, unprompted. Returns its handle.
+
+    Same rails as the bars: one green-zone record, no network and no approval on
+    the caller's side; the face (which holds the token) does the Slack I/O within
+    a reaper tick. Born terminal (state="done") so _reap_one posts it exactly once
+    and never edits it, and the janitor reaps the record after the usual TTL.
+
+    Target it with `task` (posts in that BODY_TASK's thread) or an explicit
+    `channel`; pass `thread_ts` to reply in a thread, omit it to post a NEW
+    top-level message — which is what actually pushes to the owner's phone.
+    """
+    handle = uuid.uuid4().hex[:8]
+    now = time.time()
+    _atomic_write(_rec_path(handle), {
+        "handle": handle, "kind": "notify",
+        "task": task, "channel": channel, "thread_ts": thread_ts,
+        "label": (title or "").strip(), "stats": "", "final_text": text,
+        "style": "emoji", "width": 10, "pct": 100.0,
+        "state": "done", "rev": 0, "created": now, "updated": now,
+    })
+    return handle
+
 
 def progress_start(label: str, *, task: str = None, channel: str = None,
                    thread_ts: str = None, style: str = "emoji", width: int = 10,
@@ -303,6 +337,11 @@ def main() -> None:
     s.add_argument("handle")
     s.add_argument("--fail", action="store_true"); s.add_argument("--text", default="")
 
+    s = sub.add_parser("notify", help="post a one-shot message (no bar)")
+    s.add_argument("--text", required=True)
+    s.add_argument("--title", default=None)
+    s.add_argument("--task"); s.add_argument("--channel"); s.add_argument("--thread-ts", dest="thread_ts")
+
     a = p.parse_args()
     if a.cmd == "start":
         print(progress_start(a.label, task=a.task, channel=a.channel, thread_ts=a.thread_ts,
@@ -311,6 +350,10 @@ def main() -> None:
         progress_update(a.handle, pct=a.pct, stats=a.stats, step=a.step, total=a.total)
     elif a.cmd == "done":
         progress_done(a.handle, ok=not a.fail, final_text=a.text)
+    elif a.cmd == "notify":
+        if not (a.task or a.channel):
+            sys.exit("notify needs --task or --channel (nowhere to post otherwise)")
+        print(notify(a.text, title=a.title, task=a.task, channel=a.channel, thread_ts=a.thread_ts))
 
 
 if __name__ == "__main__":
