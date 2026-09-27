@@ -1,0 +1,189 @@
+kernel                              regs  spill st  spill ld   smem B  stack
+_ZN3cub17_V_300304_SM_12006detail11EmptyKernelIvEEvv     4         0         0        0      0
+cs_v0<K=1,M=128>                      40         0         0      640      0
+cs_v0<K=1,M=192>                      40         0         0      960      0
+cs_v0<K=1,M=64>                      125         0         0      320      0
+cs_v0<K=16,M=48>                      40         0         0      240      0
+cs_v0<K=16,M=96>                      40         0         0      480      0
+cs_v0<K=2,M=128>                      40         0         0      640      0
+cs_v0<K=2,M=64>                       40         0         0      320      0
+cs_v0<K=2,M=96>                       40         0         0      480      0
+cs_v0<K=4,M=128>                      40         0         0      640      0
+cs_v0<K=4,M=32>                       40         0         0      160      0
+cs_v0<K=4,M=48>                       40         0         0      240      0
+cs_v0<K=4,M=64>                       40         0         0      320      0
+cs_v0<K=4,M=96>                       40         0         0      480      0
+cs_v0<K=8,M=32>                       40         0         0      160      0
+cs_v0<K=8,M=48>                       40         0         0      240      0
+cs_v0<K=8,M=96>                       40         0         0      480      0
+cs_v0_diag<K=16,M=96,MODE=0>          40         0         0      480      0
+cs_v0_diag<K=16,M=96,MODE=1>          40         0         0      480      0
+cs_v0_diag<K=4,M=48,MODE=0>           40         0         0      240      0
+cs_v0_diag<K=4,M=48,MODE=1>           32         0         0      240      0
+cs_v1<K=16,M=1,TB=4,CLU=1>            40         0         0       84      0
+cs_v1<K=16,M=16,TB=4,CLU=1>           40         0         0     1344      0
+cs_v1<K=16,M=2,TB=4,CLU=1>            40         0         0      168      0
+cs_v1<K=16,M=2,TB=4,CLU=4>            42         0         0      168      0
+cs_v1<K=16,M=2,TB=4,CLU=8>            42         0         0      168      0
+cs_v1<K=16,M=32,TB=2,CLU=1>           40         0         0     2368      0
+cs_v1<K=16,M=32,TB=4,CLU=1>           40         0         0     2688      0
+cs_v1<K=16,M=32,TB=4,CLU=8>           43         0         0     2688      0
+cs_v1<K=16,M=4,TB=2,CLU=1>            38         0         0      296      0
+cs_v1<K=16,M=4,TB=4,CLU=1>            40         0         0      336      0
+cs_v1<K=16,M=4,TB=4,CLU=8>            43         0         0      336      0
+cs_v1<K=16,M=8,TB=4,CLU=1>            40         0         0      672      0
+cs_v1<K=32,M=1,TB=2,CLU=1>            52         0         0      140      0
+cs_v1<K=32,M=1,TB=4,CLU=1>            52         0         0      148      0
+cs_v1<K=32,M=1,TB=4,CLU=2>            54         0         0      148      0
+cs_v1<K=32,M=1,TB=4,CLU=4>            54         0         0      148      0
+cs_v1<K=32,M=1,TB=4,CLU=8>            54         0         0      148      0
+cs_v1<K=32,M=16,TB=2,CLU=1>           56         0         0     2208      0
+cs_v1<K=32,M=16,TB=4,CLU=1>           56         0         0     2368      0
+cs_v1<K=32,M=16,TB=4,CLU=4>           57         0         0     2368      0
+cs_v1<K=32,M=16,TB=4,CLU=8>           57         0         0     2368      0
+cs_v1<K=32,M=2,TB=1,CLU=1>            54         0         0      268      0
+cs_v1<K=32,M=2,TB=4,CLU=1>            54         0         0      296      0
+cs_v1<K=32,M=32,TB=1,CLU=1>           48         0         0     4256      0
+cs_v1<K=32,M=32,TB=4,CLU=1>           56         0         0     4736      0
+cs_v1<K=32,M=8,TB=4,CLU=1>            56         0         0     1184      0
+cs_v1<K=64,M=1,TB=1,CLU=1>            78         0         0      264      0
+cs_v1<K=64,M=1,TB=2,CLU=1>            84         0         0      268      0
+cs_v1<K=64,M=16,TB=2,CLU=1>           82         0         0     4256      0
+cs_v1<K=64,M=32,TB=2,CLU=1>           80         0         0     8512      0
+cs_v1<K=64,M=8,TB=2,CLU=1>            88         0         0     2128      0
+cs_v1<K=8,M=1,TB=4,CLU=1>             42         0         0       52      0
+cs_v1<K=8,M=16,TB=4,CLU=1>            33         0         0      832      0
+cs_v1<K=8,M=2,TB=4,CLU=1>             33         0         0      104      0
+cs_v1<K=8,M=32,TB=4,CLU=1>            33         0         0     1664      0
+cs_v1<K=8,M=4,TB=2,CLU=1>             32         0         0      168      0
+cs_v1<K=8,M=4,TB=4,CLU=1>             33         0         0      208      0
+cs_v1<K=8,M=8,TB=4,CLU=1>             33         0         0      416      0
+cs_v1_diag<K=16,M=32,TB=4,MODE=0>     40         0         0     2688      0
+cs_v1_diag<K=16,M=32,TB=4,MODE=1>     38         0         0     2688      0
+cs_v1_diag<K=16,M=32,TB=4,MODE=2>     36         0         0      640      0
+cs_v1_diag<K=32,M=32,TB=4,MODE=0>     56         0         0     4736      0
+cs_v1_diag<K=32,M=32,TB=4,MODE=1>     54         0         0     4736      0
+cs_v1_diag<K=32,M=32,TB=4,MODE=2>     64         0         0      640      0
+cs_v1_diag<K=64,M=32,TB=2,MODE=0>     80         0         0     8512      0
+cs_v1_diag<K=64,M=32,TB=2,MODE=1>     80         0         0     8512      0
+cs_v1_diag<K=64,M=32,TB=2,MODE=2>     40         0         0      320      0
+cs_v2<K=128,M=16,TB=4,TRANS=0>        64       372      4992    33088    344
+cs_v2<K=128,M=16,TB=4,TRANS=1>        64       372      4992    33088    344
+cs_v2<K=128,M=32,TB=1,TRANS=0>       162         0         0    16544      0
+cs_v2<K=128,M=32,TB=1,TRANS=1>       162         0         0    16544      0
+cs_v2<K=128,M=32,TB=2,TRANS=0>       128        72      2304    33088     72
+cs_v2<K=128,M=32,TB=2,TRANS=1>       128        72      2304    33088     72
+cs_v2<K=16,M=32,TB=2,TRANS=0>         40         0         0     4416      0
+cs_v2<K=16,M=32,TB=2,TRANS=1>         40         0         0     4416      0
+cs_v2<K=16,M=32,TB=4,TRANS=0>         54         0         0     8832      0
+cs_v2<K=16,M=32,TB=4,TRANS=1>         54         0         0     8832      0
+cs_v2<K=32,M=16,TB=4,TRANS=0>         64         0         0     8512      0
+cs_v2<K=32,M=16,TB=4,TRANS=1>         64         0         0     8512      0
+cs_v2<K=32,M=32,TB=2,TRANS=0>         62         0         0     8512      0
+cs_v2<K=32,M=32,TB=2,TRANS=1>         62         0         0     8512      0
+cs_v2<K=32,M=32,TB=4,TRANS=0>         64         0         0    17024      0
+cs_v2<K=32,M=32,TB=4,TRANS=1>         64         0         0    17024      0
+cs_v2<K=64,M=16,TB=4,TRANS=0>         64       116       896    16704     88
+cs_v2<K=64,M=16,TB=4,TRANS=1>         64       116       896    16704     88
+cs_v2<K=64,M=32,TB=1,TRANS=0>         88         0         0     8352      0
+cs_v2<K=64,M=32,TB=1,TRANS=1>         88         0         0     8352      0
+cs_v2<K=64,M=32,TB=2,TRANS=0>         97         0         0    16704      0
+cs_v2<K=64,M=32,TB=2,TRANS=1>         97         0         0    16704      0
+cs_v2<K=64,M=32,TB=4,TRANS=0>         64       116      1728    33408     88
+cs_v2<K=64,M=32,TB=4,TRANS=1>         64       116      1728    33408     88
+cs_v3<K=16,M=16,G=32,TRANS=0>        255      5728     13232     2560   1208
+cs_v3<K=16,M=16,G=32,TRANS=1>        255      5728     13232     2560   1208
+cs_v3<K=16,M=32,G=32,TRANS=0>        255      5728     13232     5120   1208
+cs_v3<K=16,M=32,G=32,TRANS=1>        255      5728     13232     5120   1208
+cs_v3<K=16,M=32,G=8,TRANS=0>         160         0         0     1280      0
+cs_v3<K=16,M=32,G=8,TRANS=1>         160         0         0     1280      0
+cs_v3<K=32,M=32,G=1,TRANS=0>          54         0         0      160      0
+cs_v3<K=32,M=32,G=1,TRANS=1>          48         0         0      160      0
+cs_v3<K=32,M=32,G=4,TRANS=0>         176         0         0      640      0
+cs_v3<K=32,M=32,G=4,TRANS=1>         176         0         0      640      0
+cs_v3<K=32,M=32,G=8,TRANS=0>         255       784      2288     1280    216
+cs_v3<K=32,M=32,G=8,TRANS=1>         255       784      2288     1280    216
+cs_v3<K=4,M=32,G=128,TRANS=0>        255      4468      7632    20480   1256
+cs_v3<K=4,M=32,G=128,TRANS=1>        255      4468      7632    20480   1256
+cs_v3<K=4,M=32,G=64,TRANS=0>         255      6344      6548    10240    240
+cs_v3<K=4,M=32,G=64,TRANS=1>         255      6344      6548    10240    240
+cs_v3<K=64,M=32,G=8,TRANS=0>         255      5448     23192     1280   1464
+cs_v3<K=64,M=32,G=8,TRANS=1>         255      5448     23192     1280   1464
+cs_v3<K=8,M=32,G=16,TRANS=0>         152         0         0     2560      0
+cs_v3<K=8,M=32,G=16,TRANS=1>         152         0         0     2560      0
+cs_v3<K=8,M=32,G=32,TRANS=0>         255      1416      1976     5120    128
+cs_v3<K=8,M=32,G=32,TRANS=1>         255      1416      1976     5120    128
+cs_v3<K=8,M=32,G=64,TRANS=0>         255      6072     13464    10240   1280
+cs_v3<K=8,M=32,G=64,TRANS=1>         255      6072     13464    10240   1280
+gather                                44         0         0        0      0
+
+117 entry functions; 24 with spills
+
+block-residency implied by the register file (65,536 registers per SM):
+  cs_v0<K=1,M=128>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=1,M=192>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=1,M=64>                    256 threads x 125 regs =  32000  -> 2 block(s)/SM
+  cs_v0<K=16,M=48>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=16,M=96>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=2,M=128>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=2,M=64>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=2,M=96>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=4,M=128>                   256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=4,M=32>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=4,M=48>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=4,M=64>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=4,M=96>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=8,M=32>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=8,M=48>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0<K=8,M=96>                    256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0_diag<K=16,M=96,MODE=0>       256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0_diag<K=16,M=96,MODE=1>       256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0_diag<K=4,M=48,MODE=0>        256 threads x  40 regs =  10240  -> 6 block(s)/SM
+  cs_v0_diag<K=4,M=48,MODE=1>        256 threads x  32 regs =   8192  -> 8 block(s)/SM
+  cs_v1<K=16,M=1,TB=4,CLU=1>        1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=16,M=16,TB=4,CLU=1>       1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=16,M=2,TB=4,CLU=1>        1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=16,M=2,TB=4,CLU=4>        1024 threads x  42 regs =  43008  -> 1 block(s)/SM
+  cs_v1<K=16,M=2,TB=4,CLU=8>        1024 threads x  42 regs =  43008  -> 1 block(s)/SM
+  cs_v1<K=16,M=32,TB=2,CLU=1>        512 threads x  40 regs =  20480  -> 3 block(s)/SM
+  cs_v1<K=16,M=32,TB=4,CLU=1>       1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=16,M=32,TB=4,CLU=8>       1024 threads x  43 regs =  44032  -> 1 block(s)/SM
+  cs_v1<K=16,M=4,TB=2,CLU=1>         512 threads x  38 regs =  19456  -> 3 block(s)/SM
+  cs_v1<K=16,M=4,TB=4,CLU=1>        1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=16,M=4,TB=4,CLU=8>        1024 threads x  43 regs =  44032  -> 1 block(s)/SM
+  cs_v1<K=16,M=8,TB=4,CLU=1>        1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=32,M=1,TB=2,CLU=1>         512 threads x  52 regs =  26624  -> 2 block(s)/SM
+  cs_v1<K=32,M=1,TB=4,CLU=1>        1024 threads x  52 regs =  53248  -> 1 block(s)/SM
+  cs_v1<K=32,M=1,TB=4,CLU=2>        1024 threads x  54 regs =  55296  -> 1 block(s)/SM
+  cs_v1<K=32,M=1,TB=4,CLU=4>        1024 threads x  54 regs =  55296  -> 1 block(s)/SM
+  cs_v1<K=32,M=1,TB=4,CLU=8>        1024 threads x  54 regs =  55296  -> 1 block(s)/SM
+  cs_v1<K=32,M=16,TB=2,CLU=1>        512 threads x  56 regs =  28672  -> 2 block(s)/SM
+  cs_v1<K=32,M=16,TB=4,CLU=1>       1024 threads x  56 regs =  57344  -> 1 block(s)/SM
+  cs_v1<K=32,M=16,TB=4,CLU=4>       1024 threads x  57 regs =  58368  -> 1 block(s)/SM
+  cs_v1<K=32,M=16,TB=4,CLU=8>       1024 threads x  57 regs =  58368  -> 1 block(s)/SM
+  cs_v1<K=32,M=2,TB=1,CLU=1>         256 threads x  54 regs =  13824  -> 4 block(s)/SM
+  cs_v1<K=32,M=2,TB=4,CLU=1>        1024 threads x  54 regs =  55296  -> 1 block(s)/SM
+  cs_v1<K=32,M=32,TB=1,CLU=1>        256 threads x  48 regs =  12288  -> 5 block(s)/SM
+  cs_v1<K=32,M=32,TB=4,CLU=1>       1024 threads x  56 regs =  57344  -> 1 block(s)/SM
+  cs_v1<K=32,M=8,TB=4,CLU=1>        1024 threads x  56 regs =  57344  -> 1 block(s)/SM
+  cs_v1<K=64,M=1,TB=1,CLU=1>         256 threads x  78 regs =  19968  -> 3 block(s)/SM
+  cs_v1<K=64,M=1,TB=2,CLU=1>         512 threads x  84 regs =  43008  -> 1 block(s)/SM
+  cs_v1<K=64,M=16,TB=2,CLU=1>        512 threads x  82 regs =  41984  -> 1 block(s)/SM
+  cs_v1<K=64,M=32,TB=2,CLU=1>        512 threads x  80 regs =  40960  -> 1 block(s)/SM
+  cs_v1<K=64,M=8,TB=2,CLU=1>         512 threads x  88 regs =  45056  -> 1 block(s)/SM
+  cs_v1<K=8,M=1,TB=4,CLU=1>         1024 threads x  42 regs =  43008  -> 1 block(s)/SM
+  cs_v1<K=8,M=16,TB=4,CLU=1>        1024 threads x  33 regs =  33792  -> 1 block(s)/SM
+  cs_v1<K=8,M=2,TB=4,CLU=1>         1024 threads x  33 regs =  33792  -> 1 block(s)/SM
+  cs_v1<K=8,M=32,TB=4,CLU=1>        1024 threads x  33 regs =  33792  -> 1 block(s)/SM
+  cs_v1<K=8,M=4,TB=2,CLU=1>          512 threads x  32 regs =  16384  -> 4 block(s)/SM
+  cs_v1<K=8,M=4,TB=4,CLU=1>         1024 threads x  33 regs =  33792  -> 1 block(s)/SM
+  cs_v1<K=8,M=8,TB=4,CLU=1>         1024 threads x  33 regs =  33792  -> 1 block(s)/SM
+  cs_v1_diag<K=16,M=32,TB=4,MODE=0>  1024 threads x  40 regs =  40960  -> 1 block(s)/SM
+  cs_v1_diag<K=16,M=32,TB=4,MODE=1>  1024 threads x  38 regs =  38912  -> 1 block(s)/SM
+  cs_v1_diag<K=16,M=32,TB=4,MODE=2>  1024 threads x  36 regs =  36864  -> 1 block(s)/SM
+  cs_v1_diag<K=32,M=32,TB=4,MODE=0>  1024 threads x  56 regs =  57344  -> 1 block(s)/SM
+  cs_v1_diag<K=32,M=32,TB=4,MODE=1>  1024 threads x  54 regs =  55296  -> 1 block(s)/SM
+  cs_v1_diag<K=32,M=32,TB=4,MODE=2>  1024 threads x  64 regs =  65536  -> 1 block(s)/SM
+  cs_v1_diag<K=64,M=32,TB=2,MODE=0>   512 threads x  80 regs =  40960  -> 1 block(s)/SM
+  cs_v1_diag<K=64,M=32,TB=2,MODE=1>   512 threads x  80 regs =  40960  -> 1 block(s)/SM
+  cs_v1_diag<K=64,M=32,TB=2,MODE=2>   512 threads x  40 regs =  20480  -> 3 block(s)/SM

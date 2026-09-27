@@ -1,0 +1,162 @@
+{
+ "run": "exp_n_0196_light_margin_znorm_nap8_tph256_seed1",
+ "layer": "blocks.0.ffn.lut_light",
+ "B": 24576,
+ "R": 256,
+ "tables_per_head": 256,
+ "n_heads": 4,
+ "heads": [
+  {
+   "head": 0,
+   "pr_mean": 154.81292724609375,
+   "pr_min": 101.22998046875,
+   "pr_max": 196.2548370361328,
+   "entropy_mean": 5.278722763061523,
+   "dead_frac": 0.000335693359375,
+   "top1_share": 0.023757776245474815,
+   "edge_share": 0.009616851806640625
+  },
+  {
+   "head": 1,
+   "pr_mean": 171.81640625,
+   "pr_min": 96.9757308959961,
+   "pr_max": 213.2218017578125,
+   "entropy_mean": 5.322705268859863,
+   "dead_frac": 0.000335693359375,
+   "top1_share": 0.01809724047780037,
+   "edge_share": 0.010038375854492188
+  },
+  {
+   "head": 2,
+   "pr_mean": 162.8382568359375,
+   "pr_min": 107.64081573486328,
+   "pr_max": 212.4916229248047,
+   "entropy_mean": 5.304502487182617,
+   "dead_frac": 0.0003204345703125,
+   "top1_share": 0.02430645562708378,
+   "edge_share": 0.009369691833853722
+  },
+  {
+   "head": 3,
+   "pr_mean": 164.65127563476562,
+   "pr_min": 95.1500244140625,
+   "pr_max": 207.8662109375,
+   "entropy_mean": 5.312323570251465,
+   "dead_frac": 0.00103759765625,
+   "top1_share": 0.02349742315709591,
+   "edge_share": 0.009652137756347656
+  }
+ ],
+ "alignment": {
+  "argmax_distinct": 153,
+  "argmax_mode_row": 164,
+  "argmax_mode_count": 5,
+  "argmax_row0": 3,
+  "argmax_rowlast": 0,
+  "mean_pairwise_cosine": 0.6039511561393738,
+  "cosine_vs_uniform": 0.7762225270271301
+ },
+ "dedup": [
+  {
+   "G": 1,
+   "empirical_dedup": 1.0,
+   "birthday_dedup": 1.0,
+   "ratio": 1.0,
+   "atomic_groups_per_token": 256.0,
+   "reduction_vs_G1": 1.0
+  },
+  {
+   "G": 2,
+   "empirical_dedup": 1.00210632547507,
+   "birthday_dedup": 1.0019569471624266,
+   "ratio": 1.0001490865581264,
+   "atomic_groups_per_token": 255.4619140625,
+   "reduction_vs_G1": 1.00210632547507
+  },
+  {
+   "G": 4,
+   "empirical_dedup": 1.006169960830824,
+   "birthday_dedup": 1.0058784857535832,
+   "ratio": 1.0002897716586736,
+   "atomic_groups_per_token": 254.43017578125,
+   "reduction_vs_G1": 1.006169960830824
+  },
+  {
+   "G": 8,
+   "empirical_dedup": 1.014680758379783,
+   "birthday_dedup": 1.013752139181434,
+   "ratio": 1.0009160219371758,
+   "atomic_groups_per_token": 252.29610188802084,
+   "reduction_vs_G1": 1.014680758379783
+  },
+  {
+   "G": 16,
+   "empirical_dedup": 1.0313713507083833,
+   "birthday_dedup": 1.0296217379058006,
+   "ratio": 1.0016992772570452,
+   "atomic_groups_per_token": 248.21321614583334,
+   "reduction_vs_G1": 1.0313713507083833
+  },
+  {
+   "G": 32,
+   "empirical_dedup": 1.0664554816347673,
+   "birthday_dedup": 1.0618498930988243,
+   "ratio": 1.0043373254222425,
+   "atomic_groups_per_token": 240.04752604166666,
+   "reduction_vs_G1": 1.0664554816347676
+  },
+  {
+   "G": 64,
+   "empirical_dedup": 1.137211598753731,
+   "birthday_dedup": 1.1282586842309141,
+   "ratio": 1.0079351611894924,
+   "atomic_groups_per_token": 225.11201985677084,
+   "reduction_vs_G1": 1.137211598753731
+  },
+  {
+   "G": 128,
+   "empirical_dedup": 1.2873697939580058,
+   "birthday_dedup": 1.2688329326731074,
+   "ratio": 1.0146093790660413,
+   "atomic_groups_per_token": 198.85506184895834,
+   "reduction_vs_G1": 1.2873697939580058
+  },
+  {
+   "G": 256,
+   "empirical_dedup": 1.614610977788967,
+   "birthday_dedup": 1.5801776320793377,
+   "ratio": 1.0217908069387862,
+   "atomic_groups_per_token": 158.5521240234375,
+   "reduction_vs_G1": 1.614610977788967
+  }
+ ],
+ "tiles": [
+  {
+   "tile": 128,
+   "distinct_mean": 75.68229675292969,
+   "frac_of_tile": 0.5912679433822632,
+   "frac_of_R": 0.2956339716911316,
+   "min": 34.0,
+   "max": 100.0,
+   "read_reduction_vs_TS": 1.6912806034088135
+  },
+  {
+   "tile": 256,
+   "distinct_mean": 114.69991302490234,
+   "frac_of_tile": 0.4480465352535248,
+   "frac_of_R": 0.4480465352535248,
+   "min": 62.0,
+   "max": 151.0,
+   "read_reduction_vs_TS": 2.2319109439849854
+  },
+  {
+   "tile": 512,
+   "distinct_mean": 158.905029296875,
+   "frac_of_tile": 0.310361385345459,
+   "frac_of_R": 0.620722770690918,
+   "min": 93.0,
+   "max": 202.0,
+   "read_reduction_vs_TS": 3.222050428390503
+  }
+ ]
+}

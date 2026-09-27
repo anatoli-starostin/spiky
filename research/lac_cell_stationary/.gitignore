@@ -1,0 +1,5 @@
+# Regenerable by extract_real.py from the checkpoint; 151 MB, not worth versioning.
+artifacts/real_layer.pt
+# Raw nvcc -Xptxas -v build logs; the parsed table (artifacts/ptxas_table.txt) is kept.
+build_ptxas*.log
+__pycache__/

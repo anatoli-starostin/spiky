@@ -1,0 +1,585 @@
+clocks before: 315 MHz, 405 MHz, 26.62 W
+
+========================================================================================================
+shape B  c=real
+========================================================================================================
+
+-- sweep at B=1024 (NT=256 R=256 N=1024); a config over 60 ms/launch is reported from one launch --
+   gather tsplit=1                       0.0569 ms   rel=6.6e-07
+   gather tsplit=2                       0.0594 ms   rel=4.1e-07
+   gather tsplit=4                       0.0572 ms   rel=2.5e-07
+   gather tsplit=8                       0.0590 ms   rel=2.1e-07
+   gather tsplit=16                      0.0658 ms   rel=1.9e-07
+   gather tsplit=32                      0.0838 ms   rel=3.3e-07
+   gather tsplit=64                      0.1186 ms   rel=3.3e-07
+   cs_v0 K=1 M=192                      16.5064 ms   rel=6.6e-07
+   cs_v0 K=1 M=128                      14.2507 ms   rel=7.4e-07
+   cs_v0 K=1 M=64                       21.7801 ms   rel=6.6e-07
+   cs_v0 K=2 M=96                        7.3469 ms   rel=7.0e-07
+   cs_v0 K=2 M=64                        7.2680 ms   rel=7.4e-07
+   cs_v0 K=4 M=48                        4.5215 ms   rel=7.4e-07
+   cs_v0 K=4 M=64                        4.5029 ms   rel=8.3e-07
+   cs_v0 K=4 M=32                        4.5458 ms   rel=6.6e-07
+   cs_v0 K=4 M=96                        4.5093 ms   rel=7.4e-07
+   cs_v0 K=4 M=128                       4.5143 ms   rel=6.6e-07
+   cs_v0 K=8 M=32                        3.9561 ms   rel=6.8e-07
+   cs_v0 K=8 M=48                        3.9534 ms   rel=7.0e-07
+   cs_v0 K=8 M=96                        3.9465 ms   rel=6.8e-07
+   cs_v0 K=2 M=128                       7.2768 ms   rel=6.2e-07
+   cs_v0 K=16 M=48                       3.7217 ms   rel=7.4e-07
+   cs_v0 K=16 M=96                       3.7105 ms   rel=6.2e-07
+   cs_v1 K=8 M=4 TB=4 CLU=1             13.4204 ms   rel=4.1e-07
+   cs_v1 K=16 M=2 TB=4 CLU=1            15.0769 ms   rel=3.7e-07
+   cs_v1 K=32 M=1 TB=4 CLU=1            19.6457 ms   rel=3.3e-07
+   cs_v1 K=32 M=1 TB=4 CLU=8           227.8883 ms   rel=2.1e-07   (1 launch)
+   cs_v1 K=8 M=32 TB=4 CLU=1             6.0300 ms   rel=3.3e-07
+   cs_v1 K=16 M=32 TB=4 CLU=1            5.0819 ms   rel=3.3e-07
+   cs_v1 K=32 M=32 TB=4 CLU=1            5.1998 ms   rel=3.7e-07
+   cs_v1 K=32 M=16 TB=4 CLU=1            5.7497 ms   rel=4.1e-07
+   cs_v1 K=64 M=32 TB=2 CLU=1           10.6853 ms   rel=6.6e-07
+   cs_v1 K=32 M=32 TB=1 CLU=1            8.0209 ms   rel=6.6e-07
+   cs_v1 K=16 M=32 TB=2 CLU=1            4.7869 ms   rel=4.5e-07
+   cs_v1 K=32 M=16 TB=4 CLU=4           66.0063 ms   rel=2.5e-07   (1 launch)
+   cs_v1 K=32 M=16 TB=4 CLU=8          171.3297 ms   rel=1.7e-07   (1 launch)
+   cs_v1 K=16 M=32 TB=4 CLU=8          158.8637 ms   rel=1.9e-07   (1 launch)
+   cs_v2 K=16 M=32 TB=4 trans=0          1.4067 ms   rel=3.3e-07
+   cs_v2 K=16 M=32 TB=4 trans=1          1.4067 ms   rel=3.3e-07
+   cs_v2 K=32 M=32 TB=4 trans=0          1.0526 ms   rel=3.7e-07
+   cs_v2 K=32 M=32 TB=4 trans=1          1.0547 ms   rel=3.3e-07
+   cs_v2 K=64 M=32 TB=4 trans=0          1.6196 ms   rel=4.1e-07
+   cs_v2 K=64 M=32 TB=4 trans=1          1.6138 ms   rel=3.3e-07
+   cs_v2 K=32 M=32 TB=2 trans=0          0.9541 ms   rel=5.8e-07
+   cs_v2 K=32 M=32 TB=2 trans=1          0.9535 ms   rel=5.8e-07
+   cs_v2 K=64 M=32 TB=2 trans=0          1.0383 ms   rel=4.1e-07
+   cs_v2 K=64 M=32 TB=2 trans=1          1.0445 ms   rel=4.1e-07
+   cs_v2 K=128 M=32 TB=2 trans=0         1.2577 ms   rel=4.1e-07
+   cs_v2 K=128 M=32 TB=2 trans=1         1.2574 ms   rel=5.0e-07
+   cs_v2 K=64 M=16 TB=4 trans=0          1.8410 ms   rel=2.9e-07
+   cs_v2 K=64 M=16 TB=4 trans=1          1.8349 ms   rel=3.3e-07
+   cs_v2 K=128 M=16 TB=4 trans=0         3.1148 ms   rel=5.0e-07
+   cs_v2 K=128 M=16 TB=4 trans=1         3.1080 ms   rel=3.3e-07
+   cs_v2 K=128 M=32 TB=1 trans=0         1.1980 ms   rel=7.4e-07
+   cs_v2 K=128 M=32 TB=1 trans=1         1.1979 ms   rel=7.4e-07
+   cs_v2 K=64 M=32 TB=1 trans=0          0.9665 ms   rel=6.6e-07
+   cs_v2 K=64 M=32 TB=1 trans=1          0.9663 ms   rel=6.6e-07
+   cs_v2 K=32 M=16 TB=4 trans=0          1.2061 ms   rel=3.3e-07
+   cs_v2 K=32 M=16 TB=4 trans=1          1.2080 ms   rel=3.3e-07
+   cs_v2 K=16 M=32 TB=2 trans=0          1.5998 ms   rel=5.0e-07
+   cs_v2 K=16 M=32 TB=2 trans=1          1.1978 ms   rel=5.0e-07
+   cs_v3 K=32 M=32 G=1 trans=0           1.0197 ms   rel=6.6e-07
+   cs_v3 K=32 M=32 G=1 trans=1           1.0176 ms   rel=7.4e-07
+   cs_v3 K=32 M=32 G=4 trans=0           2.5394 ms   rel=8.3e-07
+   cs_v3 K=32 M=32 G=4 trans=1           2.5374 ms   rel=6.2e-07
+   cs_v3 K=32 M=32 G=8 trans=0           4.2015 ms   rel=6.6e-07
+   cs_v3 K=32 M=32 G=8 trans=1           4.1981 ms   rel=6.6e-07
+   cs_v3 K=64 M=32 G=8 trans=0           5.2930 ms   rel=6.2e-07
+   cs_v3 K=64 M=32 G=8 trans=1           5.2344 ms   rel=6.6e-07
+   cs_v3 K=16 M=32 G=8 trans=0           4.0139 ms   rel=6.6e-07
+   cs_v3 K=16 M=32 G=8 trans=1           4.0261 ms   rel=6.2e-07
+   cs_v3 K=16 M=32 G=32 trans=0         14.5422 ms   rel=7.4e-07
+   cs_v3 K=16 M=32 G=32 trans=1         14.5256 ms   rel=6.2e-07
+   cs_v3 K=8 M=32 G=32 trans=0          13.3601 ms   rel=6.2e-07
+   cs_v3 K=8 M=32 G=32 trans=1          13.4707 ms   rel=6.6e-07
+   cs_v3 K=8 M=32 G=64 trans=0          19.5134 ms   rel=6.2e-07
+   cs_v3 K=8 M=32 G=64 trans=1          19.5797 ms   rel=7.4e-07
+   cs_v3 K=4 M=32 G=128 trans=0         21.4073 ms   rel=5.0e-07
+   cs_v3 K=4 M=32 G=128 trans=1         21.2926 ms   rel=5.8e-07
+   cs_v3 K=4 M=32 G=64 trans=0          44.2680 ms   rel=5.8e-07
+   cs_v3 K=4 M=32 G=64 trans=1          46.9640 ms   rel=5.8e-07
+   cs_v3 K=8 M=32 G=16 trans=0           8.3619 ms   rel=6.6e-07
+   cs_v3 K=8 M=32 G=16 trans=1           8.6358 ms   rel=6.6e-07
+   cs_v3 K=16 M=16 G=32 trans=0         14.5839 ms   rel=6.6e-07
+   cs_v3 K=16 M=16 G=32 trans=1         14.4893 ms   rel=6.2e-07
+   --- sorted ---
+   gather tsplit=1                       0.0569 ms
+   gather tsplit=4                       0.0572 ms
+   gather tsplit=8                       0.0590 ms
+   gather tsplit=2                       0.0594 ms
+   gather tsplit=16                      0.0658 ms
+   gather tsplit=32                      0.0838 ms
+   gather tsplit=64                      0.1186 ms
+   cs_v2 K=32 M=32 TB=2 trans=1          0.9535 ms
+   cs_v2 K=32 M=32 TB=2 trans=0          0.9541 ms
+   cs_v2 K=64 M=32 TB=1 trans=1          0.9663 ms
+   cs_v2 K=64 M=32 TB=1 trans=0          0.9665 ms
+   cs_v3 K=32 M=32 G=1 trans=1           1.0176 ms
+   cs_v3 K=32 M=32 G=1 trans=0           1.0197 ms
+   cs_v2 K=64 M=32 TB=2 trans=0          1.0383 ms
+   cs_v2 K=64 M=32 TB=2 trans=1          1.0445 ms
+   cs_v2 K=32 M=32 TB=4 trans=0          1.0526 ms
+   cs_v2 K=32 M=32 TB=4 trans=1          1.0547 ms
+   cs_v2 K=16 M=32 TB=2 trans=1          1.1978 ms
+   cs_v2 K=128 M=32 TB=1 trans=1         1.1979 ms
+   cs_v2 K=128 M=32 TB=1 trans=0         1.1980 ms
+   cs_v2 K=32 M=16 TB=4 trans=0          1.2061 ms
+   cs_v2 K=32 M=16 TB=4 trans=1          1.2080 ms
+   cs_v2 K=128 M=32 TB=2 trans=1         1.2574 ms
+   cs_v2 K=128 M=32 TB=2 trans=0         1.2577 ms
+   cs_v2 K=16 M=32 TB=4 trans=0          1.4067 ms
+   cs_v2 K=16 M=32 TB=4 trans=1          1.4067 ms
+   cs_v2 K=16 M=32 TB=2 trans=0          1.5998 ms
+   cs_v2 K=64 M=32 TB=4 trans=1          1.6138 ms
+   cs_v2 K=64 M=32 TB=4 trans=0          1.6196 ms
+   cs_v2 K=64 M=16 TB=4 trans=1          1.8349 ms
+   cs_v2 K=64 M=16 TB=4 trans=0          1.8410 ms
+   cs_v3 K=32 M=32 G=4 trans=1           2.5374 ms
+   cs_v3 K=32 M=32 G=4 trans=0           2.5394 ms
+   cs_v2 K=128 M=16 TB=4 trans=1         3.1080 ms
+   cs_v2 K=128 M=16 TB=4 trans=0         3.1148 ms
+   cs_v0 K=16 M=96                       3.7105 ms
+   cs_v0 K=16 M=48                       3.7217 ms
+   cs_v0 K=8 M=96                        3.9465 ms
+   cs_v0 K=8 M=48                        3.9534 ms
+   cs_v0 K=8 M=32                        3.9561 ms
+   cs_v3 K=16 M=32 G=8 trans=0           4.0139 ms
+   cs_v3 K=16 M=32 G=8 trans=1           4.0261 ms
+   cs_v3 K=32 M=32 G=8 trans=1           4.1981 ms
+   cs_v3 K=32 M=32 G=8 trans=0           4.2015 ms
+   cs_v0 K=4 M=64                        4.5029 ms
+   cs_v0 K=4 M=96                        4.5093 ms
+   cs_v0 K=4 M=128                       4.5143 ms
+   cs_v0 K=4 M=48                        4.5215 ms
+   cs_v0 K=4 M=32                        4.5458 ms
+   cs_v1 K=16 M=32 TB=2 CLU=1            4.7869 ms
+   cs_v1 K=16 M=32 TB=4 CLU=1            5.0819 ms
+   cs_v1 K=32 M=32 TB=4 CLU=1            5.1998 ms
+   cs_v3 K=64 M=32 G=8 trans=1           5.2344 ms
+   cs_v3 K=64 M=32 G=8 trans=0           5.2930 ms
+   cs_v1 K=32 M=16 TB=4 CLU=1            5.7497 ms
+   cs_v1 K=8 M=32 TB=4 CLU=1             6.0300 ms
+   cs_v0 K=2 M=64                        7.2680 ms
+   cs_v0 K=2 M=128                       7.2768 ms
+   cs_v0 K=2 M=96                        7.3469 ms
+   cs_v1 K=32 M=32 TB=1 CLU=1            8.0209 ms
+   cs_v3 K=8 M=32 G=16 trans=0           8.3619 ms
+   cs_v3 K=8 M=32 G=16 trans=1           8.6358 ms
+   cs_v1 K=64 M=32 TB=2 CLU=1           10.6853 ms
+   cs_v3 K=8 M=32 G=32 trans=0          13.3601 ms
+   cs_v1 K=8 M=4 TB=4 CLU=1             13.4204 ms
+   cs_v3 K=8 M=32 G=32 trans=1          13.4707 ms
+   cs_v0 K=1 M=128                      14.2507 ms
+   cs_v3 K=16 M=16 G=32 trans=1         14.4893 ms
+   cs_v3 K=16 M=32 G=32 trans=1         14.5256 ms
+   cs_v3 K=16 M=32 G=32 trans=0         14.5422 ms
+   cs_v3 K=16 M=16 G=32 trans=0         14.5839 ms
+   cs_v1 K=16 M=2 TB=4 CLU=1            15.0769 ms
+   cs_v0 K=1 M=192                      16.5064 ms
+   cs_v3 K=8 M=32 G=64 trans=0          19.5134 ms
+   cs_v3 K=8 M=32 G=64 trans=1          19.5797 ms
+   cs_v1 K=32 M=1 TB=4 CLU=1            19.6457 ms
+   cs_v3 K=4 M=32 G=128 trans=1         21.2926 ms
+   cs_v3 K=4 M=32 G=128 trans=0         21.4073 ms
+   cs_v0 K=1 M=64                       21.7801 ms
+   cs_v3 K=4 M=32 G=64 trans=0          44.2680 ms
+   cs_v3 K=4 M=32 G=64 trans=1          46.9640 ms
+   cs_v1 K=32 M=16 TB=4 CLU=4           66.0063 ms
+   cs_v1 K=16 M=32 TB=4 CLU=8          158.8637 ms
+   cs_v1 K=32 M=16 TB=4 CLU=8          171.3297 ms
+   cs_v1 K=32 M=1 TB=4 CLU=8           227.8883 ms
+
+-- sweep at B=24576 (NT=256 R=256 N=1024); a config over 300 ms/launch is reported from one launch --
+   gather tsplit=1                       1.2216 ms   rel=7.6e-07
+   gather tsplit=2                       1.3555 ms   rel=4.9e-07
+   gather tsplit=4                       1.4665 ms   rel=3.0e-07
+   gather tsplit=8                       1.7083 ms   rel=2.3e-07
+   gather tsplit=16                      2.3362 ms   rel=2.3e-07
+   gather tsplit=32                      4.3426 ms   rel=3.0e-07
+   gather tsplit=64                      7.7076 ms   rel=3.8e-07
+   cs_v0 K=1 M=192                     371.6779 ms   rel=7.6e-07   (1 launch)
+   cs_v0 K=1 M=128                     358.4505 ms   rel=7.6e-07   (1 launch)
+   cs_v0 K=1 M=64                      543.4080 ms   rel=7.6e-07   (1 launch)
+   cs_v0 K=2 M=96                      181.0416 ms   rel=7.6e-07
+   cs_v0 K=2 M=64                      185.9383 ms   rel=8.0e-07
+   cs_v0 K=4 M=48                      109.2284 ms   rel=8.0e-07
+   cs_v0 K=4 M=64                      112.1808 ms   rel=8.4e-07
+   cs_v0 K=4 M=32                      107.2257 ms   rel=8.0e-07
+   cs_v0 K=4 M=96                      107.7332 ms   rel=7.6e-07
+   cs_v0 K=4 M=128                     107.4686 ms   rel=7.6e-07
+   cs_v0 K=8 M=32                      132.7104 ms   rel=9.1e-07
+   cs_v0 K=8 M=48                      131.3943 ms   rel=7.6e-07
+   cs_v0 K=8 M=96                      135.0356 ms   rel=8.8e-07
+   cs_v0 K=2 M=128                     185.6127 ms   rel=7.6e-07
+   cs_v0 K=16 M=48                     118.6761 ms   rel=8.0e-07
+   cs_v0 K=16 M=96                     121.9272 ms   rel=8.0e-07
+   cs_v1 K=8 M=4 TB=4 CLU=1            349.9049 ms   rel=3.8e-07   (1 launch)
+   cs_v1 K=16 M=2 TB=4 CLU=1           378.3924 ms   rel=4.6e-07   (1 launch)
+   cs_v1 K=32 M=1 TB=4 CLU=1           512.4513 ms   rel=3.8e-07   (1 launch)
+   cs_v1 K=32 M=1 TB=4 CLU=8          5646.6881 ms   rel=2.3e-07   (1 launch)
+   cs_v1 K=8 M=32 TB=4 CLU=1           145.4144 ms   rel=5.3e-07
+   cs_v1 K=16 M=32 TB=4 CLU=1          121.2172 ms   rel=3.8e-07
+   cs_v1 K=32 M=32 TB=4 CLU=1          131.2200 ms   rel=4.6e-07
+   cs_v1 K=32 M=16 TB=4 CLU=1          143.0690 ms   rel=4.6e-07
+   cs_v1 K=64 M=32 TB=2 CLU=1          258.0020 ms   rel=5.3e-07
+   cs_v1 K=32 M=32 TB=1 CLU=1          193.1344 ms   rel=7.6e-07
+   cs_v1 K=16 M=32 TB=2 CLU=1          118.1533 ms   rel=5.3e-07
+   cs_v1 K=32 M=16 TB=4 CLU=4         1632.5287 ms   rel=2.3e-07   (1 launch)
+   cs_v1 K=32 M=16 TB=4 CLU=8         4175.4488 ms   rel=2.3e-07   (1 launch)
+   cs_v1 K=16 M=32 TB=4 CLU=8         3830.1981 ms   rel=2.3e-07   (1 launch)
+   cs_v2 K=16 M=32 TB=4 trans=0         32.9946 ms   rel=4.6e-07
+   cs_v2 K=16 M=32 TB=4 trans=1         33.0052 ms   rel=4.6e-07
+   cs_v2 K=32 M=32 TB=4 trans=0         25.2884 ms   rel=4.6e-07
+   cs_v2 K=32 M=32 TB=4 trans=1         24.3422 ms   rel=4.6e-07
+   cs_v2 K=64 M=32 TB=4 trans=0         37.8691 ms   rel=4.6e-07
+   cs_v2 K=64 M=32 TB=4 trans=1         39.8296 ms   rel=3.8e-07
+   cs_v2 K=32 M=32 TB=2 trans=0         23.7950 ms   rel=5.3e-07
+   cs_v2 K=32 M=32 TB=2 trans=1         22.6746 ms   rel=5.3e-07
+   cs_v2 K=64 M=32 TB=2 trans=0         25.5212 ms   rel=5.3e-07
+   cs_v2 K=64 M=32 TB=2 trans=1         24.3545 ms   rel=5.3e-07
+   cs_v2 K=128 M=32 TB=2 trans=0        29.9594 ms   rel=5.7e-07
+   cs_v2 K=128 M=32 TB=2 trans=1        29.8520 ms   rel=5.3e-07
+   cs_v2 K=64 M=16 TB=4 trans=0         44.2869 ms   rel=3.8e-07
+   cs_v2 K=64 M=16 TB=4 trans=1         45.3411 ms   rel=3.8e-07
+   cs_v2 K=128 M=16 TB=4 trans=0        77.7970 ms   rel=4.6e-07
+   cs_v2 K=128 M=16 TB=4 trans=1        75.1224 ms   rel=4.6e-07
+   cs_v2 K=128 M=32 TB=1 trans=0        30.0584 ms   rel=8.4e-07
+   cs_v2 K=128 M=32 TB=1 trans=1        27.7605 ms   rel=8.8e-07
+   cs_v2 K=64 M=32 TB=1 trans=0         22.5296 ms   rel=7.6e-07
+   cs_v2 K=64 M=32 TB=1 trans=1         24.1714 ms   rel=8.8e-07
+   cs_v2 K=32 M=16 TB=4 trans=0         29.6092 ms   rel=3.8e-07
+   cs_v2 K=32 M=16 TB=4 trans=1         31.9045 ms   rel=4.6e-07
+   cs_v2 K=16 M=32 TB=2 trans=0         39.8132 ms   rel=5.3e-07
+   cs_v2 K=16 M=32 TB=2 trans=1         28.9929 ms   rel=6.1e-07
+   cs_v3 K=32 M=32 G=1 trans=0          24.3757 ms   rel=9.5e-07
+   cs_v3 K=32 M=32 G=1 trans=1          24.2209 ms   rel=8.4e-07
+   cs_v3 K=32 M=32 G=4 trans=0          61.4548 ms   rel=8.4e-07
+   cs_v3 K=32 M=32 G=4 trans=1          62.8892 ms   rel=8.0e-07
+   cs_v3 K=32 M=32 G=8 trans=0         103.6643 ms   rel=6.9e-07
+   cs_v3 K=32 M=32 G=8 trans=1         108.4884 ms   rel=8.4e-07
+   cs_v3 K=64 M=32 G=8 trans=0         129.2381 ms   rel=8.0e-07
+   cs_v3 K=64 M=32 G=8 trans=1         128.7710 ms   rel=8.4e-07
+   cs_v3 K=16 M=32 G=8 trans=0          98.8393 ms   rel=8.0e-07
+   cs_v3 K=16 M=32 G=8 trans=1          97.0018 ms   rel=8.4e-07
+   cs_v3 K=16 M=32 G=32 trans=0        370.1885 ms   rel=8.4e-07   (1 launch)
+   cs_v3 K=16 M=32 G=32 trans=1        348.0541 ms   rel=7.6e-07   (1 launch)
+   cs_v3 K=8 M=32 G=32 trans=0         324.8460 ms   rel=8.4e-07   (1 launch)
+   cs_v3 K=8 M=32 G=32 trans=1         334.2208 ms   rel=7.6e-07   (1 launch)
+   cs_v3 K=8 M=32 G=64 trans=0         471.0953 ms   rel=6.9e-07   (1 launch)
+   cs_v3 K=8 M=32 G=64 trans=1         475.5806 ms   rel=6.9e-07   (1 launch)
+   cs_v3 K=4 M=32 G=128 trans=0        513.0656 ms   rel=6.9e-07   (1 launch)
+   cs_v3 K=4 M=32 G=128 trans=1        543.6656 ms   rel=7.6e-07   (1 launch)
+   cs_v3 K=4 M=32 G=64 trans=0        1110.4902 ms   rel=7.6e-07   (1 launch)
+   cs_v3 K=4 M=32 G=64 trans=1        1128.5915 ms   rel=7.6e-07   (1 launch)
+   cs_v3 K=8 M=32 G=16 trans=0         203.6144 ms   rel=6.9e-07
+   cs_v3 K=8 M=32 G=16 trans=1         200.7488 ms   rel=9.1e-07
+   cs_v3 K=16 M=16 G=32 trans=0        383.5005 ms   rel=8.4e-07   (1 launch)
+   cs_v3 K=16 M=16 G=32 trans=1        346.0683 ms   rel=8.4e-07   (1 launch)
+   --- sorted ---
+   gather tsplit=1                       1.2216 ms
+   gather tsplit=2                       1.3555 ms
+   gather tsplit=4                       1.4665 ms
+   gather tsplit=8                       1.7083 ms
+   gather tsplit=16                      2.3362 ms
+   gather tsplit=32                      4.3426 ms
+   gather tsplit=64                      7.7076 ms
+   cs_v2 K=64 M=32 TB=1 trans=0         22.5296 ms
+   cs_v2 K=32 M=32 TB=2 trans=1         22.6746 ms
+   cs_v2 K=32 M=32 TB=2 trans=0         23.7950 ms
+   cs_v2 K=64 M=32 TB=1 trans=1         24.1714 ms
+   cs_v3 K=32 M=32 G=1 trans=1          24.2209 ms
+   cs_v2 K=32 M=32 TB=4 trans=1         24.3422 ms
+   cs_v2 K=64 M=32 TB=2 trans=1         24.3545 ms
+   cs_v3 K=32 M=32 G=1 trans=0          24.3757 ms
+   cs_v2 K=32 M=32 TB=4 trans=0         25.2884 ms
+   cs_v2 K=64 M=32 TB=2 trans=0         25.5212 ms
+   cs_v2 K=128 M=32 TB=1 trans=1        27.7605 ms
+   cs_v2 K=16 M=32 TB=2 trans=1         28.9929 ms
+   cs_v2 K=32 M=16 TB=4 trans=0         29.6092 ms
+   cs_v2 K=128 M=32 TB=2 trans=1        29.8520 ms
+   cs_v2 K=128 M=32 TB=2 trans=0        29.9594 ms
+   cs_v2 K=128 M=32 TB=1 trans=0        30.0584 ms
+   cs_v2 K=32 M=16 TB=4 trans=1         31.9045 ms
+   cs_v2 K=16 M=32 TB=4 trans=0         32.9946 ms
+   cs_v2 K=16 M=32 TB=4 trans=1         33.0052 ms
+   cs_v2 K=64 M=32 TB=4 trans=0         37.8691 ms
+   cs_v2 K=16 M=32 TB=2 trans=0         39.8132 ms
+   cs_v2 K=64 M=32 TB=4 trans=1         39.8296 ms
+   cs_v2 K=64 M=16 TB=4 trans=0         44.2869 ms
+   cs_v2 K=64 M=16 TB=4 trans=1         45.3411 ms
+   cs_v3 K=32 M=32 G=4 trans=0          61.4548 ms
+   cs_v3 K=32 M=32 G=4 trans=1          62.8892 ms
+   cs_v2 K=128 M=16 TB=4 trans=1        75.1224 ms
+   cs_v2 K=128 M=16 TB=4 trans=0        77.7970 ms
+   cs_v3 K=16 M=32 G=8 trans=1          97.0018 ms
+   cs_v3 K=16 M=32 G=8 trans=0          98.8393 ms
+   cs_v3 K=32 M=32 G=8 trans=0         103.6643 ms
+   cs_v0 K=4 M=32                      107.2257 ms
+   cs_v0 K=4 M=128                     107.4686 ms
+   cs_v0 K=4 M=96                      107.7332 ms
+   cs_v3 K=32 M=32 G=8 trans=1         108.4884 ms
+   cs_v0 K=4 M=48                      109.2284 ms
+   cs_v0 K=4 M=64                      112.1808 ms
+   cs_v1 K=16 M=32 TB=2 CLU=1          118.1533 ms
+   cs_v0 K=16 M=48                     118.6761 ms
+   cs_v1 K=16 M=32 TB=4 CLU=1          121.2172 ms
+   cs_v0 K=16 M=96                     121.9272 ms
+   cs_v3 K=64 M=32 G=8 trans=1         128.7710 ms
+   cs_v3 K=64 M=32 G=8 trans=0         129.2381 ms
+   cs_v1 K=32 M=32 TB=4 CLU=1          131.2200 ms
+   cs_v0 K=8 M=48                      131.3943 ms
+   cs_v0 K=8 M=32                      132.7104 ms
+   cs_v0 K=8 M=96                      135.0356 ms
+   cs_v1 K=32 M=16 TB=4 CLU=1          143.0690 ms
+   cs_v1 K=8 M=32 TB=4 CLU=1           145.4144 ms
+   cs_v0 K=2 M=96                      181.0416 ms
+   cs_v0 K=2 M=128                     185.6127 ms
+   cs_v0 K=2 M=64                      185.9383 ms
+   cs_v1 K=32 M=32 TB=1 CLU=1          193.1344 ms
+   cs_v3 K=8 M=32 G=16 trans=1         200.7488 ms
+   cs_v3 K=8 M=32 G=16 trans=0         203.6144 ms
+   cs_v1 K=64 M=32 TB=2 CLU=1          258.0020 ms
+   cs_v3 K=8 M=32 G=32 trans=0         324.8460 ms
+   cs_v3 K=8 M=32 G=32 trans=1         334.2208 ms
+   cs_v3 K=16 M=16 G=32 trans=1        346.0683 ms
+   cs_v3 K=16 M=32 G=32 trans=1        348.0541 ms
+   cs_v1 K=8 M=4 TB=4 CLU=1            349.9049 ms
+   cs_v0 K=1 M=128                     358.4505 ms
+   cs_v3 K=16 M=32 G=32 trans=0        370.1885 ms
+   cs_v0 K=1 M=192                     371.6779 ms
+   cs_v1 K=16 M=2 TB=4 CLU=1           378.3924 ms
+   cs_v3 K=16 M=16 G=32 trans=0        383.5005 ms
+   cs_v3 K=8 M=32 G=64 trans=0         471.0953 ms
+   cs_v3 K=8 M=32 G=64 trans=1         475.5806 ms
+   cs_v1 K=32 M=1 TB=4 CLU=1           512.4513 ms
+   cs_v3 K=4 M=32 G=128 trans=0        513.0656 ms
+   cs_v0 K=1 M=64                      543.4080 ms
+   cs_v3 K=4 M=32 G=128 trans=1        543.6656 ms
+   cs_v3 K=4 M=32 G=64 trans=0        1110.4902 ms
+   cs_v3 K=4 M=32 G=64 trans=1        1128.5915 ms
+   cs_v1 K=32 M=16 TB=4 CLU=4         1632.5287 ms
+   cs_v1 K=16 M=32 TB=4 CLU=8         3830.1981 ms
+   cs_v1 K=32 M=16 TB=4 CLU=8         4175.4488 ms
+   cs_v1 K=32 M=1 TB=4 CLU=8          5646.6881 ms
+
+-- ladder (per-family winner from the B=24576 sweep for B>=256, from B=1024 below) --
+      B kernel                              median ms      min      max   it    tokens/s  atomic scalars  cmp/add  x gather
+      1 gather tsplit=1                        0.0194   0.0174   0.0217   50   5.165e+04       0.000e+00     0.00    1.0000
+      1 cs_v0 K=16 M=96                        0.1837   0.1831   0.1853   50   5.444e+03       2.621e+05    16.00    0.1054
+      1 cs_v1 K=16 M=32 TB=2 CLU=1             0.0913   0.0906   0.0923   50   1.095e+04       1.311e+05    16.00    0.2119
+      1 cs_v2 K=32 M=32 TB=2 trans=1           0.0591   0.0572   0.0618   50   1.692e+04       1.311e+05     8.00    0.3276
+      1 cs_v3 K=32 M=32 G=1 trans=1            0.0501   0.0483   0.0513   50   1.997e+04       2.621e+05     8.00    0.3867
+      8 gather tsplit=1                        0.0277   0.0269   0.0300   50   2.885e+05       0.000e+00     0.00    1.0000
+      8 cs_v0 K=16 M=96                        0.1903   0.1887   0.1927   50   4.204e+04       2.097e+06    16.00    0.1457
+      8 cs_v1 K=16 M=32 TB=2 CLU=1             0.1159   0.1155   0.1175   50   6.901e+04       1.049e+06    16.00    0.2392
+      8 cs_v2 K=32 M=32 TB=2 trans=1           0.0623   0.0604   0.0629   50   1.284e+05       1.049e+06     8.00    0.4452
+      8 cs_v3 K=32 M=32 G=1 trans=1            0.0532   0.0521   0.0556   50   1.504e+05       2.097e+06     8.00    0.5212
+     64 gather tsplit=1                        0.0277   0.0269   0.0301   50   2.307e+06       0.000e+00     0.00    1.0000
+     64 cs_v0 K=16 M=96                        0.3145   0.3130   0.3243   50   2.035e+05       1.678e+07    16.00    0.0882
+     64 cs_v1 K=16 M=32 TB=2 CLU=1             0.3375   0.3349   0.3393   50   1.896e+05       8.389e+06    16.00    0.0822
+     64 cs_v2 K=32 M=32 TB=2 trans=1           0.0977   0.0972   0.0992   50   6.549e+05       8.389e+06     8.00    0.2839
+     64 cs_v3 K=32 M=32 G=1 trans=1            0.0936   0.0932   0.0956   50   6.836e+05       1.678e+07     8.00    0.2964
+    256 gather tsplit=1                        0.0278   0.0267   0.0299   50   9.206e+06       0.000e+00     0.00    1.0000
+    256 cs_v0 K=4 M=32                         1.2165   1.2134   1.2205   50   2.104e+05       6.711e+07    64.00    0.0229
+    256 cs_v1 K=16 M=32 TB=2 CLU=1             1.2257   1.2239   1.2298   50   2.089e+05       3.355e+07    16.00    0.0227
+    256 cs_v2 K=64 M=32 TB=1 trans=0           0.2723   0.2712   0.2754   50   9.402e+05       6.711e+07     4.00    0.1021
+    256 cs_v3 K=32 M=32 G=1 trans=1            0.2720   0.2703   0.2741   50   9.413e+05       6.711e+07     8.00    0.1022
+   1024 gather tsplit=1                        0.0564   0.0556   0.0604   50   1.815e+07       0.000e+00     0.00    1.0000
+   1024 cs_v0 K=4 M=32                         4.5490   4.5464   4.5526   50   2.251e+05       2.684e+08    64.00    0.0124
+   1024 cs_v1 K=16 M=32 TB=2 CLU=1             4.7868   4.7815  27.3465   50   2.139e+05       1.342e+08    16.00    0.0118
+   1024 cs_v2 K=64 M=32 TB=1 trans=0           0.9664   0.9653   0.9686   50   1.060e+06       2.684e+08     4.00    0.0584
+   1024 cs_v3 K=32 M=32 G=1 trans=1            1.0070   1.0025   1.0097   50   1.017e+06       2.684e+08     8.00    0.0560
+   4096 gather tsplit=1                        0.1916   0.1904   0.1957   50   2.138e+07       0.000e+00     0.00    1.0000
+   4096 cs_v0 K=4 M=32                        17.8485  17.7964  17.8523   50   2.295e+05       1.074e+09    64.00    0.0107
+   4096 cs_v1 K=16 M=32 TB=2 CLU=1            19.0233  19.0174  51.8315   50   2.153e+05       5.369e+08    16.00    0.0101
+   4096 cs_v2 K=64 M=32 TB=1 trans=0           3.7680   3.7652   3.7721   50   1.087e+06       1.074e+09     4.00    0.0508
+   4096 cs_v3 K=32 M=32 G=1 trans=1            3.9761   3.9636   3.9889   50   1.030e+06       1.074e+09     8.00    0.0482
+  24576 gather tsplit=1                        1.2908   1.2857   1.2995   50   1.904e+07       0.000e+00     0.00    1.0000
+  24576 cs_v0 K=4 M=32                       108.8377 108.1640 110.4626   50   2.258e+05       6.442e+09    64.00    0.0119
+  24576 cs_v1 K=16 M=32 TB=2 CLU=1           115.2146 114.4918 116.7295   50   2.133e+05       3.221e+09    16.00    0.0112
+  24576 cs_v2 K=64 M=32 TB=1 trans=0          22.5247  22.5140  23.5679   50   1.091e+06       6.442e+09     4.00    0.0573
+  24576 cs_v3 K=32 M=32 G=1 trans=1           24.3058  23.6228  25.7796   50   1.011e+06       6.442e+09     8.00    0.0531
+
+========================================================================================================
+shape B  c=1
+========================================================================================================
+
+-- sweep at B=1024 (NT=256 R=256 N=1024); a config over 60 ms/launch is reported from one launch --
+   gather tsplit=1                       0.0830 ms   rel=0.0e+00
+   gather tsplit=2                       0.0651 ms   rel=0.0e+00
+   gather tsplit=4                       0.0605 ms   rel=0.0e+00
+   gather tsplit=8                       0.0614 ms   rel=0.0e+00
+   gather tsplit=16                      0.0687 ms   rel=0.0e+00
+   gather tsplit=32                      0.0819 ms   rel=0.0e+00
+   gather tsplit=64                      0.1180 ms   rel=0.0e+00
+   cs_v0 K=1 M=192                      16.2179 ms   rel=0.0e+00
+   cs_v0 K=1 M=128                      13.8795 ms   rel=0.0e+00
+   cs_v0 K=1 M=64                       21.4235 ms   rel=0.0e+00
+   cs_v0 K=2 M=96                        7.6713 ms   rel=0.0e+00
+   cs_v0 K=2 M=64                        7.4326 ms   rel=0.0e+00
+   cs_v0 K=4 M=48                        4.3548 ms   rel=0.0e+00
+   cs_v0 K=4 M=64                        4.1117 ms   rel=0.0e+00
+   cs_v0 K=4 M=32                        4.2628 ms   rel=0.0e+00
+   cs_v0 K=4 M=96                        4.2096 ms   rel=0.0e+00
+   cs_v0 K=4 M=128                       4.1763 ms   rel=0.0e+00
+   cs_v0 K=8 M=32                        3.6505 ms   rel=0.0e+00
+   cs_v0 K=8 M=48                        4.7582 ms   rel=0.0e+00
+   cs_v0 K=8 M=96                        3.6655 ms   rel=0.0e+00
+   cs_v0 K=2 M=128                       6.9796 ms   rel=0.0e+00
+   cs_v0 K=16 M=48                       3.6088 ms   rel=0.0e+00
+   cs_v0 K=16 M=96                       3.5605 ms   rel=0.0e+00
+   cs_v1 K=8 M=4 TB=4 CLU=1             13.3640 ms   rel=0.0e+00
+   cs_v1 K=16 M=2 TB=4 CLU=1            15.0441 ms   rel=0.0e+00
+   cs_v1 K=32 M=1 TB=4 CLU=1            19.5503 ms   rel=0.0e+00
+   cs_v1 K=32 M=1 TB=4 CLU=8           228.4545 ms   rel=0.0e+00   (1 launch)
+   cs_v1 K=8 M=32 TB=4 CLU=1             6.0093 ms   rel=0.0e+00
+   cs_v1 K=16 M=32 TB=4 CLU=1            5.0737 ms   rel=0.0e+00
+   cs_v1 K=32 M=32 TB=4 CLU=1            5.1955 ms   rel=0.0e+00
+   cs_v1 K=32 M=16 TB=4 CLU=1            5.7452 ms   rel=0.0e+00
+   cs_v1 K=64 M=32 TB=2 CLU=1           10.6932 ms   rel=0.0e+00
+   cs_v1 K=32 M=32 TB=1 CLU=1            8.0052 ms   rel=0.0e+00
+   cs_v1 K=16 M=32 TB=2 CLU=1            4.7727 ms   rel=0.0e+00
+   cs_v1 K=32 M=16 TB=4 CLU=4           66.0213 ms   rel=0.0e+00   (1 launch)
+   cs_v1 K=32 M=16 TB=4 CLU=8          170.4796 ms   rel=0.0e+00   (1 launch)
+   cs_v1 K=16 M=32 TB=4 CLU=8          159.6909 ms   rel=0.0e+00   (1 launch)
+   cs_v2 K=16 M=32 TB=4 trans=0          1.3959 ms   rel=0.0e+00
+   cs_v2 K=16 M=32 TB=4 trans=1          1.3964 ms   rel=0.0e+00
+   cs_v2 K=32 M=32 TB=4 trans=0          1.0467 ms   rel=0.0e+00
+   cs_v2 K=32 M=32 TB=4 trans=1          1.0484 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=4 trans=0          1.5910 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=4 trans=1          1.5903 ms   rel=0.0e+00
+   cs_v2 K=32 M=32 TB=2 trans=0          0.9479 ms   rel=0.0e+00
+   cs_v2 K=32 M=32 TB=2 trans=1          0.9462 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=2 trans=0          1.0327 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=2 trans=1          1.0390 ms   rel=0.0e+00
+   cs_v2 K=128 M=32 TB=2 trans=0         1.2100 ms   rel=0.0e+00
+   cs_v2 K=128 M=32 TB=2 trans=1         1.2091 ms   rel=0.0e+00
+   cs_v2 K=64 M=16 TB=4 trans=0          1.7804 ms   rel=0.0e+00
+   cs_v2 K=64 M=16 TB=4 trans=1          1.7743 ms   rel=0.0e+00
+   cs_v2 K=128 M=16 TB=4 trans=0         3.0930 ms   rel=0.0e+00
+   cs_v2 K=128 M=16 TB=4 trans=1         3.0898 ms   rel=0.0e+00
+   cs_v2 K=128 M=32 TB=1 trans=0         1.1896 ms   rel=0.0e+00
+   cs_v2 K=128 M=32 TB=1 trans=1         1.1896 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=1 trans=0          0.9584 ms   rel=0.0e+00
+   cs_v2 K=64 M=32 TB=1 trans=1          0.9607 ms   rel=0.0e+00
+   cs_v2 K=32 M=16 TB=4 trans=0          1.2061 ms   rel=0.0e+00
+   cs_v2 K=32 M=16 TB=4 trans=1          1.2061 ms   rel=0.0e+00
+   cs_v2 K=16 M=32 TB=2 trans=0          1.5870 ms   rel=0.0e+00
+   cs_v2 K=16 M=32 TB=2 trans=1          1.1611 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=1 trans=0           0.9769 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=1 trans=1           0.9726 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=4 trans=0           2.5328 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=4 trans=1           2.5302 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=8 trans=0           4.1328 ms   rel=0.0e+00
+   cs_v3 K=32 M=32 G=8 trans=1           4.1235 ms   rel=0.0e+00
+   cs_v3 K=64 M=32 G=8 trans=0           5.2732 ms   rel=0.0e+00
+   cs_v3 K=64 M=32 G=8 trans=1           5.3148 ms   rel=0.0e+00
+   cs_v3 K=16 M=32 G=8 trans=0           3.9647 ms   rel=0.0e+00
+   cs_v3 K=16 M=32 G=8 trans=1           3.9771 ms   rel=0.0e+00
+   cs_v3 K=16 M=32 G=32 trans=0         14.5196 ms   rel=0.0e+00
+   cs_v3 K=16 M=32 G=32 trans=1         14.4816 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=32 trans=0          13.1191 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=32 trans=1          13.0849 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=64 trans=0          19.4579 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=64 trans=1          19.4883 ms   rel=0.0e+00
+   cs_v3 K=4 M=32 G=128 trans=0         21.4326 ms   rel=0.0e+00
+   cs_v3 K=4 M=32 G=128 trans=1         21.2993 ms   rel=0.0e+00
+   cs_v3 K=4 M=32 G=64 trans=0          43.7621 ms   rel=0.0e+00
+   cs_v3 K=4 M=32 G=64 trans=1          43.7147 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=16 trans=0           8.3688 ms   rel=0.0e+00
+   cs_v3 K=8 M=32 G=16 trans=1           8.3117 ms   rel=0.0e+00
+   cs_v3 K=16 M=16 G=32 trans=0         14.5074 ms   rel=0.0e+00
+   cs_v3 K=16 M=16 G=32 trans=1         14.4575 ms   rel=0.0e+00
+   --- sorted ---
+   gather tsplit=4                       0.0605 ms
+   gather tsplit=8                       0.0614 ms
+   gather tsplit=2                       0.0651 ms
+   gather tsplit=16                      0.0687 ms
+   gather tsplit=32                      0.0819 ms
+   gather tsplit=1                       0.0830 ms
+   gather tsplit=64                      0.1180 ms
+   cs_v2 K=32 M=32 TB=2 trans=1          0.9462 ms
+   cs_v2 K=32 M=32 TB=2 trans=0          0.9479 ms
+   cs_v2 K=64 M=32 TB=1 trans=0          0.9584 ms
+   cs_v2 K=64 M=32 TB=1 trans=1          0.9607 ms
+   cs_v3 K=32 M=32 G=1 trans=1           0.9726 ms
+   cs_v3 K=32 M=32 G=1 trans=0           0.9769 ms
+   cs_v2 K=64 M=32 TB=2 trans=0          1.0327 ms
+   cs_v2 K=64 M=32 TB=2 trans=1          1.0390 ms
+   cs_v2 K=32 M=32 TB=4 trans=0          1.0467 ms
+   cs_v2 K=32 M=32 TB=4 trans=1          1.0484 ms
+   cs_v2 K=16 M=32 TB=2 trans=1          1.1611 ms
+   cs_v2 K=128 M=32 TB=1 trans=1         1.1896 ms
+   cs_v2 K=128 M=32 TB=1 trans=0         1.1896 ms
+   cs_v2 K=32 M=16 TB=4 trans=1          1.2061 ms
+   cs_v2 K=32 M=16 TB=4 trans=0          1.2061 ms
+   cs_v2 K=128 M=32 TB=2 trans=1         1.2091 ms
+   cs_v2 K=128 M=32 TB=2 trans=0         1.2100 ms
+   cs_v2 K=16 M=32 TB=4 trans=0          1.3959 ms
+   cs_v2 K=16 M=32 TB=4 trans=1          1.3964 ms
+   cs_v2 K=16 M=32 TB=2 trans=0          1.5870 ms
+   cs_v2 K=64 M=32 TB=4 trans=1          1.5903 ms
+   cs_v2 K=64 M=32 TB=4 trans=0          1.5910 ms
+   cs_v2 K=64 M=16 TB=4 trans=1          1.7743 ms
+   cs_v2 K=64 M=16 TB=4 trans=0          1.7804 ms
+   cs_v3 K=32 M=32 G=4 trans=1           2.5302 ms
+   cs_v3 K=32 M=32 G=4 trans=0           2.5328 ms
+   cs_v2 K=128 M=16 TB=4 trans=1         3.0898 ms
+   cs_v2 K=128 M=16 TB=4 trans=0         3.0930 ms
+   cs_v0 K=16 M=96                       3.5605 ms
+   cs_v0 K=16 M=48                       3.6088 ms
+   cs_v0 K=8 M=32                        3.6505 ms
+   cs_v0 K=8 M=96                        3.6655 ms
+   cs_v3 K=16 M=32 G=8 trans=0           3.9647 ms
+   cs_v3 K=16 M=32 G=8 trans=1           3.9771 ms
+   cs_v0 K=4 M=64                        4.1117 ms
+   cs_v3 K=32 M=32 G=8 trans=1           4.1235 ms
+   cs_v3 K=32 M=32 G=8 trans=0           4.1328 ms
+   cs_v0 K=4 M=128                       4.1763 ms
+   cs_v0 K=4 M=96                        4.2096 ms
+   cs_v0 K=4 M=32                        4.2628 ms
+   cs_v0 K=4 M=48                        4.3548 ms
+   cs_v0 K=8 M=48                        4.7582 ms
+   cs_v1 K=16 M=32 TB=2 CLU=1            4.7727 ms
+   cs_v1 K=16 M=32 TB=4 CLU=1            5.0737 ms
+   cs_v1 K=32 M=32 TB=4 CLU=1            5.1955 ms
+   cs_v3 K=64 M=32 G=8 trans=0           5.2732 ms
+   cs_v3 K=64 M=32 G=8 trans=1           5.3148 ms
+   cs_v1 K=32 M=16 TB=4 CLU=1            5.7452 ms
+   cs_v1 K=8 M=32 TB=4 CLU=1             6.0093 ms
+   cs_v0 K=2 M=128                       6.9796 ms
+   cs_v0 K=2 M=64                        7.4326 ms
+   cs_v0 K=2 M=96                        7.6713 ms
+   cs_v1 K=32 M=32 TB=1 CLU=1            8.0052 ms
+   cs_v3 K=8 M=32 G=16 trans=1           8.3117 ms
+   cs_v3 K=8 M=32 G=16 trans=0           8.3688 ms
+   cs_v1 K=64 M=32 TB=2 CLU=1           10.6932 ms
+   cs_v3 K=8 M=32 G=32 trans=1          13.0849 ms
+   cs_v3 K=8 M=32 G=32 trans=0          13.1191 ms
+   cs_v1 K=8 M=4 TB=4 CLU=1             13.3640 ms
+   cs_v0 K=1 M=128                      13.8795 ms
+   cs_v3 K=16 M=16 G=32 trans=1         14.4575 ms
+   cs_v3 K=16 M=32 G=32 trans=1         14.4816 ms
+   cs_v3 K=16 M=16 G=32 trans=0         14.5074 ms
+   cs_v3 K=16 M=32 G=32 trans=0         14.5196 ms
+   cs_v1 K=16 M=2 TB=4 CLU=1            15.0441 ms
+   cs_v0 K=1 M=192                      16.2179 ms
+   cs_v3 K=8 M=32 G=64 trans=0          19.4579 ms
+   cs_v3 K=8 M=32 G=64 trans=1          19.4883 ms
+   cs_v1 K=32 M=1 TB=4 CLU=1            19.5503 ms
+   cs_v3 K=4 M=32 G=128 trans=1         21.2993 ms
+   cs_v0 K=1 M=64                       21.4235 ms
+   cs_v3 K=4 M=32 G=128 trans=0         21.4326 ms
+   cs_v3 K=4 M=32 G=64 trans=1          43.7147 ms
+   cs_v3 K=4 M=32 G=64 trans=0          43.7621 ms
+   cs_v1 K=32 M=16 TB=4 CLU=4           66.0213 ms
+   cs_v1 K=16 M=32 TB=4 CLU=8          159.6909 ms
+   cs_v1 K=32 M=16 TB=4 CLU=8          170.4796 ms
+   cs_v1 K=32 M=1 TB=4 CLU=8           228.4545 ms
+
+-- sweep at B=24576 (NT=256 R=256 N=1024); a config over 300 ms/launch is reported from one launch --
+   gather tsplit=1                       1.5589 ms   rel=0.0e+00
+   gather tsplit=2                       1.3290 ms   rel=0.0e+00
+   gather tsplit=4                       1.4094 ms   rel=0.0e+00
+   gather tsplit=8                       1.5874 ms   rel=0.0e+00
+   gather tsplit=16                      2.0786 ms   rel=0.0e+00
+   gather tsplit=32                      3.7940 ms   rel=0.0e+00
+   gather tsplit=64                      7.1448 ms   rel=0.0e+00
+   cs_v0 K=1 M=192                     337.3971 ms   rel=0.0e+00   (1 launch)
+   cs_v0 K=1 M=128                     333.9260 ms   rel=0.0e+00   (1 launch)
+   cs_v0 K=1 M=64                      508.6691 ms   rel=0.0e+00   (1 launch)
+   cs_v0 K=2 M=96                      176.8860 ms   rel=0.0e+00
+   cs_v0 K=2 M=64                      167.9265 ms   rel=0.0e+00
+   cs_v0 K=4 M=48                       99.2583 ms   rel=0.0e+00
+   cs_v0 K=4 M=64                       98.4709 ms   rel=0.0e+00
+   cs_v0 K=4 M=32                      100.7063 ms   rel=0.0e+00
+   cs_v0 K=4 M=96                      101.6504 ms   rel=0.0e+00
+   cs_v0 K=4 M=128                      98.3494 ms   rel=0.0e+00
