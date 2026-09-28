@@ -150,6 +150,8 @@ class LightMultiHeadLUT(nn.Module):
         head_dropout_rate: float = 0.0,
         trainable_anchors: bool = False,
         anchor_tau_init: float = 1.0,
+        anchor_init: str = "warm",
+        anchor_init_scale: float = 8.0,
     ):
         super().__init__()
         # --- power-of-two quantised read (opt-in; None == every existing path, unchanged) ----
@@ -174,6 +176,12 @@ class LightMultiHeadLUT(nn.Module):
         # stitched STE-style, temperature anchor_log_tau learnable. Inference: a plain gather using the
         # baked argmax/argmin index buffers (anchor_a/anchor_b) -- NO logits/softmax/einsum.
         self.trainable_anchors = bool(trainable_anchors)
+        # anchor_init: "warm" seeds anchor_logits so argmax/argmin reproduce the fixed-path BALANCED
+        # pairs (=> step-0 hard forward is byte-identical to the fixed baseline; STE only refines);
+        # "random" is the plain N(0, 0.02^2) init. anchor_init_scale is the +/-C magnitude scattered
+        # on the warm 'a'/'b' coords. Only consulted when trainable_anchors is on.
+        self.anchor_init = str(anchor_init)
+        self.anchor_init_scale = float(anchor_init_scale)
         if self.trainable_anchors:
             if not multi_head_input:
                 raise NotImplementedError("trainable_anchors currently requires multi_head_input=True")
@@ -181,6 +189,8 @@ class LightMultiHeadLUT(nn.Module):
                 raise NotImplementedError("trainable_anchors is implemented for anchor_mode='pair' only")
             if self._quant is not None:
                 raise NotImplementedError("trainable_anchors is not compatible with the quantised read")
+            if self.anchor_init not in ("warm", "random"):
+                raise ValueError(f"anchor_init must be 'warm' or 'random', got {self.anchor_init!r}")
         if self._quant is not None:
             bad = []
             if confidence_form != "learned_margin":
@@ -447,7 +457,29 @@ class LightMultiHeadLUT(nn.Module):
                 # argmin), the SAME representation the fixed path uses, so the eval gather path is reused.
                 g = None if random_seed is None else torch.Generator(device=dev).manual_seed((random_seed or 0) + 991)
                 logits = 0.02 * torch.randn(self.n_heads, self.tables_per_head, n_anchor_pairs, input_dim,
-                                            device=dev, generator=g)
+                                            device=dev, generator=g)                  # [H, tph, NAP, eff_in]
+                if self.anchor_init == "warm":
+                    # Seed the logits so argmax/argmin reproduce the fixed-path BALANCED pairs
+                    # head-for-head (same get_balanced_anchor_pairs draw, per-head seed random_seed+h).
+                    # Scatter +C on the 'a' coord and -C on the 'b' coord (C = anchor_init_scale >> the
+                    # 0.02 noise), so argmax == a and argmin == b exactly -> step-0 margins
+                    # d = x[a]-x[b] equal the fixed baseline's, and (given identical tables/seed) the
+                    # whole model is byte-identical to abl_05 at step 0; STE only refines from there.
+                    a_list, b_list = [], []
+                    for h in range(self.n_heads):
+                        seed_h = None if random_seed is None else random_seed + h
+                        a_h, b_h = get_balanced_anchor_pairs(
+                            n_tables=self.tables_per_head, n_anchor_pairs=n_anchor_pairs,
+                            input_dim=input_dim, device=dev, random_seed=seed_h,
+                            policy=policy, n_heads=1,
+                        )
+                        a_list.append(a_h)
+                        b_list.append(b_h)
+                    a_idx = torch.stack(a_list).to(torch.int64)          # [H, tph, NAP]
+                    b_idx = torch.stack(b_list).to(torch.int64)
+                    C = self.anchor_init_scale
+                    logits.scatter_(-1, a_idx.unsqueeze(-1), C)
+                    logits.scatter_(-1, b_idx.unsqueeze(-1), -C)
                 self.anchor_logits = torch.nn.Parameter(logits)          # [H, tph, NAP, eff_in]
                 self.anchor_log_tau = torch.nn.Parameter(
                     torch.tensor(float(math.log(max(anchor_tau_init, 1e-6))), device=dev))
@@ -455,6 +487,9 @@ class LightMultiHeadLUT(nn.Module):
                 anchor_b = logits.argmin(dim=-1).contiguous()
                 self.register_buffer("anchor_a", anchor_a)
                 self.register_buffer("anchor_b", anchor_b)
+                # Snapshot the INITIAL baked pairs so anchor_movement() can measure drift from init.
+                self.register_buffer("anchor_a_init", anchor_a.clone())
+                self.register_buffer("anchor_b_init", anchor_b.clone())
             else:
                 a_list, b_list = [], []
                 for h in range(self.n_heads):
@@ -649,6 +684,18 @@ class LightMultiHeadLUT(nn.Module):
         if drop_logits:
             del self.anchor_logits; self.anchor_logits = None
             del self.anchor_log_tau; self.anchor_log_tau = None
+
+    @torch.no_grad()
+    def anchor_movement(self):
+        """Fraction of (head, table, pair) slots whose CURRENT baked anchor_a OR anchor_b differs
+        from the INITIAL baked pair (snapshot at construction). Measures how far the learned anchors
+        have drifted from their (warm/random) init. Returns 0.0 when not in trainable mode / no snapshot."""
+        if not self.trainable_anchors or getattr(self, "anchor_a_init", None) is None:
+            return 0.0
+        if getattr(self, "anchor_logits", None) is not None:
+            self._refresh_anchor_idx()
+        moved = (self.anchor_a != self.anchor_a_init) | (self.anchor_b != self.anchor_b_init)
+        return float(moved.float().mean().item())
 
     def _trainable_margins(self, x):
         """STE margins for trainable anchors. x: [B, H, eff_in] -> d: [B, H, tph, NAP].

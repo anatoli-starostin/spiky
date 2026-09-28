@@ -264,7 +264,9 @@ class MinimalBlock(nn.Module):
                     head_dropout_rate=float(cfg.get('lut_head_dropout_rate', 0.0)),
                     # Trainable anchor pairs (light multi-head path): False (default, absent -> unchanged).
                     trainable_anchors=bool(cfg.get('lut_trainable_anchors', False)),
-                    anchor_tau_init=float(cfg.get('lut_anchor_tau_init', 1.0)))
+                    anchor_tau_init=float(cfg.get('lut_anchor_tau_init', 1.0)),
+                    anchor_init=str(cfg.get('lut_anchor_init', 'warm')),
+                    anchor_init_scale=float(cfg.get('lut_anchor_init_scale', 8.0)))
                 if (any(k in cfg for k in ('lut_gen1_smooth', 'lut_gen1_n_alternatives', 'lut_gen1_weights_init'))
                         and cfg.get('lut_impl', 'fast') != 'gen1'):
                     raise ValueError("lut_gen1_smooth / lut_gen1_n_alternatives / lut_gen1_weights_init are only valid "
