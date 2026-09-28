@@ -1,0 +1,354 @@
+{
+ "fits": [
+  [
+   8,
+   64,
+   256
+  ],
+  [
+   8,
+   32,
+   256
+  ],
+  [
+   16,
+   32,
+   512
+  ],
+  [
+   32,
+   16,
+   512
+  ],
+  [
+   32,
+   16,
+   256
+  ],
+  [
+   16,
+   32,
+   256
+  ],
+  [
+   8,
+   16,
+   256
+  ],
+  [
+   16,
+   16,
+   256
+  ],
+  [
+   16,
+   16,
+   512
+  ],
+  [
+   32,
+   8,
+   512
+  ],
+  [
+   8,
+   16,
+   1024
+  ],
+  [
+   4,
+   32,
+   256
+  ],
+  [
+   4,
+   32,
+   512
+  ],
+  [
+   16,
+   8,
+   512
+  ],
+  [
+   32,
+   4,
+   512
+  ],
+  [
+   2,
+   64,
+   256
+  ],
+  [
+   4,
+   64,
+   256
+  ],
+  [
+   2,
+   128,
+   192
+  ]
+ ],
+ "over": [
+  [
+   8,
+   96,
+   256
+  ],
+  [
+   32,
+   24,
+   1024
+  ],
+  [
+   16,
+   48,
+   512
+  ],
+  [
+   8,
+   64,
+   512
+  ],
+  [
+   1,
+   128,
+   256
+  ]
+ ],
+ "budgets": {
+  "8_96_256": {
+   "G": 8,
+   "L": 96,
+   "Bt": 256,
+   "acc_bytes": 98304,
+   "cells_bytes": 6144,
+   "smem_bytes": 104448,
+   "fits_smem": false,
+   "table_regs": 192
+  },
+  "32_24_1024": {
+   "G": 32,
+   "L": 24,
+   "Bt": 1024,
+   "acc_bytes": 98304,
+   "cells_bytes": 98304,
+   "smem_bytes": 196608,
+   "fits_smem": false,
+   "table_regs": 192
+  },
+  "16_48_512": {
+   "G": 16,
+   "L": 48,
+   "Bt": 512,
+   "acc_bytes": 98304,
+   "cells_bytes": 24576,
+   "smem_bytes": 122880,
+   "fits_smem": false,
+   "table_regs": 192
+  },
+  "8_64_256": {
+   "G": 8,
+   "L": 64,
+   "Bt": 256,
+   "acc_bytes": 65536,
+   "cells_bytes": 6144,
+   "smem_bytes": 71680,
+   "fits_smem": true,
+   "table_regs": 128
+  },
+  "8_32_256": {
+   "G": 8,
+   "L": 32,
+   "Bt": 256,
+   "acc_bytes": 32768,
+   "cells_bytes": 6144,
+   "smem_bytes": 38912,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "16_32_512": {
+   "G": 16,
+   "L": 32,
+   "Bt": 512,
+   "acc_bytes": 65536,
+   "cells_bytes": 24576,
+   "smem_bytes": 90112,
+   "fits_smem": true,
+   "table_regs": 128
+  },
+  "32_16_512": {
+   "G": 32,
+   "L": 16,
+   "Bt": 512,
+   "acc_bytes": 32768,
+   "cells_bytes": 49152,
+   "smem_bytes": 81920,
+   "fits_smem": true,
+   "table_regs": 128
+  },
+  "32_16_256": {
+   "G": 32,
+   "L": 16,
+   "Bt": 256,
+   "acc_bytes": 16384,
+   "cells_bytes": 24576,
+   "smem_bytes": 40960,
+   "fits_smem": true,
+   "table_regs": 128
+  },
+  "8_64_512": {
+   "G": 8,
+   "L": 64,
+   "Bt": 512,
+   "acc_bytes": 131072,
+   "cells_bytes": 12288,
+   "smem_bytes": 143360,
+   "fits_smem": false,
+   "table_regs": 128
+  },
+  "16_32_256": {
+   "G": 16,
+   "L": 32,
+   "Bt": 256,
+   "acc_bytes": 32768,
+   "cells_bytes": 12288,
+   "smem_bytes": 45056,
+   "fits_smem": true,
+   "table_regs": 128
+  },
+  "8_16_256": {
+   "G": 8,
+   "L": 16,
+   "Bt": 256,
+   "acc_bytes": 16384,
+   "cells_bytes": 6144,
+   "smem_bytes": 22528,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "16_16_256": {
+   "G": 16,
+   "L": 16,
+   "Bt": 256,
+   "acc_bytes": 16384,
+   "cells_bytes": 12288,
+   "smem_bytes": 28672,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "16_16_512": {
+   "G": 16,
+   "L": 16,
+   "Bt": 512,
+   "acc_bytes": 32768,
+   "cells_bytes": 24576,
+   "smem_bytes": 57344,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "32_8_512": {
+   "G": 32,
+   "L": 8,
+   "Bt": 512,
+   "acc_bytes": 16384,
+   "cells_bytes": 49152,
+   "smem_bytes": 65536,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "8_16_1024": {
+   "G": 8,
+   "L": 16,
+   "Bt": 1024,
+   "acc_bytes": 65536,
+   "cells_bytes": 24576,
+   "smem_bytes": 90112,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "4_32_256": {
+   "G": 4,
+   "L": 32,
+   "Bt": 256,
+   "acc_bytes": 32768,
+   "cells_bytes": 3072,
+   "smem_bytes": 35840,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "4_32_512": {
+   "G": 4,
+   "L": 32,
+   "Bt": 512,
+   "acc_bytes": 65536,
+   "cells_bytes": 6144,
+   "smem_bytes": 71680,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "16_8_512": {
+   "G": 16,
+   "L": 8,
+   "Bt": 512,
+   "acc_bytes": 16384,
+   "cells_bytes": 24576,
+   "smem_bytes": 40960,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "32_4_512": {
+   "G": 32,
+   "L": 4,
+   "Bt": 512,
+   "acc_bytes": 8192,
+   "cells_bytes": 49152,
+   "smem_bytes": 57344,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "2_64_256": {
+   "G": 2,
+   "L": 64,
+   "Bt": 256,
+   "acc_bytes": 65536,
+   "cells_bytes": 1536,
+   "smem_bytes": 67072,
+   "fits_smem": true,
+   "table_regs": 32
+  },
+  "4_64_256": {
+   "G": 4,
+   "L": 64,
+   "Bt": 256,
+   "acc_bytes": 65536,
+   "cells_bytes": 3072,
+   "smem_bytes": 68608,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "2_128_192": {
+   "G": 2,
+   "L": 128,
+   "Bt": 192,
+   "acc_bytes": 98304,
+   "cells_bytes": 1152,
+   "smem_bytes": 99456,
+   "fits_smem": true,
+   "table_regs": 64
+  },
+  "1_128_256": {
+   "G": 1,
+   "L": 128,
+   "Bt": 256,
+   "acc_bytes": 131072,
+   "cells_bytes": 768,
+   "smem_bytes": 131840,
+   "fits_smem": false,
+   "table_regs": 32
+  }
+ },
+ "ptxas": {}
+}
