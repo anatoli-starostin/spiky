@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0241_pureLUT0193_TVlam10_L5dense_48k_seed1",
+  "best_val_bpb": 1.1232118963667472,
+  "final_val_bpb": 1.1234303345031176,
+  "total_params": 62091840,
+  "training_time_hours": 2.777,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

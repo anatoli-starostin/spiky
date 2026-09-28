@@ -1,0 +1,10 @@
+{
+  "exp_name": "exp_g_0215_B48k_light_codebook_H8_tph48_nap8_seed1",
+  "status": "STOPPED_EARLY (SIGTERM at operator request, task 8ae723f0)",
+  "stopped_at_step": 17000,
+  "n_steps_planned": 48000,
+  "final_val_bpb": 1.216638,
+  "best_val_bpb": 1.216638,
+  "best_step": 17000,
+  "note": "codebook (scalar store + shared decode M) plateaued FAR above the vector-store arms; at step 17000 val_bpb=1.216638 vs matched-step 0207 constant ~1.186 / 0213 gated_affine ~1.178, ~10-13 sigma worse and closing only ~0.0007/1k steps -> not competitive; stopped to reclaim the H100 for exp_n_0216. Checkpoints kept: checkpoint_step12000.pt, checkpoint_step16000.pt, checkpoint_step4000.pt, checkpoint_step8000.pt"
+}

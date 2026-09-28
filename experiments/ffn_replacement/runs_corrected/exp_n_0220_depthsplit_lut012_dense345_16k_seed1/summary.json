@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0220_depthsplit_lut012_dense345_16k_seed1",
+  "best_val_bpb": 1.1605138321256359,
+  "final_val_bpb": 1.1605138321256359,
+  "total_params": 52015107,
+  "training_time_hours": 1.582,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

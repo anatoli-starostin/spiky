@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0224_interleaved_lut024_dense135_16k_seed1",
+  "best_val_bpb": 1.164454591067534,
+  "final_val_bpb": 1.164454591067534,
+  "total_params": 52015107,
+  "training_time_hours": 0.764,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_vanilla48k_dense_ffndrop20_seed1",
+  "best_val_bpb": 1.1182580493404362,
+  "final_val_bpb": 1.1189189871569478,
+  "total_params": 35792640,
+  "training_time_hours": 1.745,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

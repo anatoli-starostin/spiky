@@ -1,0 +1,40 @@
+{
+  "exp_name": "exp_o_outproj_lut_B16k_light_lmfrozeng_n2_tau0p5_tph128_seed1",
+  "best_val_bpb": 1.1864586093331844,
+  "final_val_bpb": 1.1864586093331844,
+  "total_params": 105102756,
+  "training_time_hours": 1.683,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "blend_read_out": {
+    "read_top_n": 2,
+    "read_tau_config": 0.5,
+    "read_tau_resolved_per_layer": [
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5,
+      0.5
+    ],
+    "read_tau_learnable": true,
+    "read_tau_final_per_layer": [
+      0.29780298471450806,
+      0.3538971543312073,
+      0.23846250772476196,
+      0.280382364988327,
+      0.2933894991874695,
+      0.22068984806537628,
+      0.23742422461509705,
+      0.2698476016521454,
+      0.29252204298973083,
+      0.3365309238433838,
+      0.30454081296920776,
+      0.4148072302341461
+    ]
+  }
+}

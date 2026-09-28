@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0234_pureLUT0193_TVlamC_16k_seed1",
+  "best_val_bpb": 1.1663791710093183,
+  "final_val_bpb": 1.1663791710093183,
+  "total_params": 67351680,
+  "training_time_hours": 0.996,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

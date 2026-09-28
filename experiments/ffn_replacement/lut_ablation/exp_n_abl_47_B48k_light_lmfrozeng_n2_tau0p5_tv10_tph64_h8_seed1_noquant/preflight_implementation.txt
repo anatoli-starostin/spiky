@@ -1,0 +1,1 @@
+IMPLEMENTATION SERVING: FLOAT (unquantised LUT read) -- lut_quant_mode=None; the p2_int8 int8 kernel is NOT used by this run

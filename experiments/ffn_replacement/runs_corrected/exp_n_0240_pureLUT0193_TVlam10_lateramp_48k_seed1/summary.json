@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0240_pureLUT0193_TVlam10_lateramp_48k_seed1",
+  "best_val_bpb": 1.1355267836807545,
+  "final_val_bpb": 1.135778837296921,
+  "total_params": 67351680,
+  "training_time_hours": 3.036,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

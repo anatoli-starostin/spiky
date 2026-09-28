@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0231_pureLUT0193_lam0_16k_seed1",
+  "best_val_bpb": 1.1729029484173343,
+  "final_val_bpb": 1.1729029484173343,
+  "total_params": 67351680,
+  "training_time_hours": 0.958,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

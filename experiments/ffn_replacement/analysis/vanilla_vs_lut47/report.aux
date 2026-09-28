@@ -1,0 +1,27 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Attention patterns}{1}{section.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Per-(layer, head) mean attention entropy (bits): vanilla, LUT, and their difference. Blue in the diff = the LUT sharpens that head.}}{2}{figure.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Example attention heatmap (layer 2, head 0) on the shared batch.}}{2}{figure.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Embeddings}{2}{section.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Singular-value spectra (log) of the token embedding and the untied unembedder, with effective rank. The unembedder is far lower-rank than the token embedding and is essentially the same for both models.}}{3}{figure.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Per-token L2-norm distributions for the token embedding and unembedder.}}{3}{figure.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}FFN vs LUT internals --- the biggest differences}{3}{section.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Left: per-layer FFN residual-update norm (the LUT writes far less than the MLP). Right: effective rank of the FFN update --- the LUT's early layers are strikingly low-rank.}}{4}{figure.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Per-layer FFN activation sparsity (fraction near zero): the LUT read is sparser early.}}{4}{figure.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Single-sentence trace}{4}{section.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces FFN residual-update norm across layers on the final token of ``The capital of France is''.}}{5}{figure.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Per-head LightMHL FFN characterization (LUT47, H8/tph64)}{5}{section.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Per-(layer,head): output effective rank (left; note the near-dead heads at L0/L5 and the uniform middle) and distinct (table,cell) selections used (right; near-saturated $\sim $16k/16{,}384 everywhere = dense codebook usage).}}{6}{figure.8}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Per-(layer,head): mean output norm (left; grows with depth) and discreteness --- fraction of output variance explained by one table's cell identity (right; low, i.e. the read is a dense sum of many selections).}}{6}{figure.9}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Representative per-head output singular-value spectra (L0/L2/L5, head 0).}}{7}{figure.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Why the early residual write collapses to rank $\sim $5--7}{7}{subsection.5.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Per-layer normalized singular-value spectra: joint 384-d head-read code (left), the 384-d FFN write (middle), and the decompress weight $W_{\text  {dec}}$ (right). The code and write spectra drop off a cliff at L0/L1 (low rank) and are full at L2--4; $W_{\text  {dec}}$ is near-full-rank at all layers.}}{8}{figure.11}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Left: joint-code effective rank, write effective rank, and $W_{\text  {dec}}$ stable rank per layer --- the write tracks the JOINT CODE, not $W_{\text  {dec}}$. Right: cross-head read $|\!\cos \!|$ heatmaps at the collapsed L0 vs the rich L3 --- both low and similar ($\sim $0.12 off-diagonal), i.e. the collapse is not pairwise head correlation.}}{8}{figure.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Per-table structure: is the early low rank baked into the tables?}{8}{subsection.5.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces Per-(layer,head): mean per-table value-matrix rank (left; high, $\sim $42--45 everywhere) and within-head cross-table subspace overlap (right; moderate, $\sim $0.24--0.34 --- tables are not redundant).}}{9}{figure.13}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces Static union-of-tables span ($\sim $46--48 at all layers) vs the realized per-head output rank on real tokens ($\cap $-shaped 27$\to $46$\to $38). The large L0/L1/L5 gap = the low rank is data-driven, not a table property.}}{9}{figure.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Overall}{10}{section.6}\protected@file@percent }
+\gdef \@abspage@last{10}

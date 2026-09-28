@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_g_abl_09_B48k_light_lmfrozeng_tv10_tph128_seed1_headdrop20",
+  "best_val_bpb": 1.1199825609433596,
+  "final_val_bpb": 1.1199825609433596,
+  "total_params": 67351692,
+  "training_time_hours": 3.253,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

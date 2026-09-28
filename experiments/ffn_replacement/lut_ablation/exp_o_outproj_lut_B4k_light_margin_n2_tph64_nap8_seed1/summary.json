@@ -1,0 +1,40 @@
+{
+  "exp_name": "exp_o_outproj_lut_B4k_light_margin_n2_tph64_nap8_seed1",
+  "best_val_bpb": 1.4146558568361254,
+  "final_val_bpb": 1.4146558568361254,
+  "total_params": 105988608,
+  "training_time_hours": 0.387,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  },
+  "blend_read_out": {
+    "read_top_n": 2,
+    "read_tau_config": 0.1,
+    "read_tau_resolved_per_layer": [
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1
+    ],
+    "read_tau_learnable": false,
+    "read_tau_final_per_layer": [
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612
+    ]
+  }
+}

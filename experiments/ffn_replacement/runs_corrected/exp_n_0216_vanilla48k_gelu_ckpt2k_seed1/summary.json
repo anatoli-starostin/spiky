@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0216_vanilla48k_gelu_ckpt2k_seed1",
+  "best_val_bpb": 1.115094320336725,
+  "final_val_bpb": 1.1154201030721467,
+  "total_params": 35792640,
+  "training_time_hours": 2.252,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}

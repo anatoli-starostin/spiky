@@ -1,0 +1,13 @@
+{
+  "exp_name": "exp_n_0221_paralleladd_narrowFFN_lutH4_16k_seed1",
+  "best_val_bpb": 1.1573628495120334,
+  "final_val_bpb": 1.1573628495120334,
+  "total_params": 69121158,
+  "training_time_hours": 1.472,
+  "eval_protocol": {
+    "eval_batch_size": 48,
+    "eval_steps": 100,
+    "skip_rows": 12,
+    "batch_size_independent": true
+  }
+}
