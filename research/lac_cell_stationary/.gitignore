@@ -3,3 +3,5 @@ artifacts/real_layer.pt
 # Raw nvcc -Xptxas -v build logs; the parsed table (artifacts/ptxas_table.txt) is kept.
 build_ptxas*.log
 __pycache__/
+# Regenerable by extract_margins.py from the checkpoint; 4.8 MB of real activations.
+artifacts/real_margins.pt
