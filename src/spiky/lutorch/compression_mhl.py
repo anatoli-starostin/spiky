@@ -224,6 +224,14 @@ class CompressionMultiHeadLUT(nn.Module):
         self.inner_residual = bool(inner_residual)
         self.joint_head_compression = bool(joint_head_compression)
         self.input_multi_head = bool(input_multi_head)
+        # No-compress multi-head: inner_in_dim == -1 with n_heads>1 on the light path means each
+        # head reads the WHOLE input_dim embedding (broadcast) and owns its own anchors -> the
+        # anchors index the raw embedding directly (anchor_logits [..., input_dim]). This is the
+        # light-path analogue of the fast path's shared-input multi-head (see the module docstring's
+        # INIT-SEEDING CAVEAT). Distinct from input_multi_head, which SPLITS the input per head.
+        self.no_compress_multi_head = (
+            lut_impl == "light" and in_raw == -1 and not input_multi_head
+            and n_heads > 1 and not joint_head_compression)
         self.lut_impl = lut_impl
         self.forward_confidence = bool(forward_confidence)
         self.confidence_form = confidence_form
@@ -350,16 +358,18 @@ class CompressionMultiHeadLUT(nn.Module):
                                    if self.has_decompress else nn.Identity())
                 return
             self.light_single_global = False
-            # input_multi_head forces per-head routing with NO compress (input pre-split into heads).
-            mh = (self.has_compress or self.input_multi_head) and not self.joint_head_compression and n_heads > 1
+            # per-head routing: a real compress split per head, input_multi_head's pre-split input,
+            # or no-compress (inner_in_dim=-1) where every head reads the whole embedding (broadcast).
+            mh = ((self.has_compress or self.input_multi_head or self.no_compress_multi_head)
+                  and not self.joint_head_compression and n_heads > 1)
             self.light_multi_head_input = mh
             # Codebook read-out owns its decode matrix M (T -> output_dim) inside LightMHL and
             # returns [N, output_dim] directly, so the wrapper's decompress is a no-op.
             self._codebook = cell_mode == "codebook"
             if mh and self.has_compress:
                 self.compress = nn.Linear(input_dim, n_heads * in_raw, device=device)
-            elif self.input_multi_head:
-                self.compress = nn.Identity()          # input already [N, n_heads*eff_in]
+            elif self.input_multi_head or self.no_compress_multi_head:
+                self.compress = nn.Identity()          # input already split, or read whole (broadcast in forward)
             else:
                 self.compress = (nn.Linear(input_dim, in_raw, device=device)
                                  if self.has_compress else nn.Identity())
@@ -492,7 +502,12 @@ class CompressionMultiHeadLUT(nn.Module):
                 # per-head slice in, per-head block out — same shapes as the Fast path.
                 # eff_in == inner_in_dim when has_compress; with input_multi_head (no compress,
                 # compress==Identity) eff_in = input_dim//n_heads and x is already [N, n_heads*eff_in].
-                z = self.compress(x).view(N, self.n_heads, self.eff_in)
+                if self.no_compress_multi_head:
+                    # every head reads the WHOLE input_dim embedding (eff_in == input_dim);
+                    # broadcast, not split, so each head's anchors index all input_dim coords.
+                    z = x.unsqueeze(1).expand(N, self.n_heads, self.eff_in)
+                else:
+                    z = self.compress(x).view(N, self.n_heads, self.eff_in)
                 if self.z_norm is not None:
                     # normalises over the last axis, i.e. each head's own code, independently
                     z = self.z_norm(z)
