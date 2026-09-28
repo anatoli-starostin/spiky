@@ -148,6 +148,8 @@ class LightMultiHeadLUT(nn.Module):
         quant_mode: Optional[str] = None,
         quant_overrides: Optional[dict] = None,
         head_dropout_rate: float = 0.0,
+        trainable_anchors: bool = False,
+        anchor_tau_init: float = 1.0,
     ):
         super().__init__()
         # --- power-of-two quantised read (opt-in; None == every existing path, unchanged) ----
@@ -165,6 +167,20 @@ class LightMultiHeadLUT(nn.Module):
             raise ValueError(f"head_dropout_rate must be in [0, 1), got {self.head_dropout_rate}")
         if self.head_dropout_rate and forward_mode != "scored":
             raise NotImplementedError("head_dropout_rate is currently implemented only for forward_mode='scored'")
+        # --- trainable anchor pairs (opt-in; False == every existing path, byte-identical) --------
+        # Instead of fixed anchor_a/anchor_b index buffers, learn a logit matrix over each head's
+        # eff_in coords per (head, table, pair); the pair is the argmax(+1)/argmin(-1) of that row.
+        # Train: hard forward (argmax/argmin gather) + soft backward (softmax(L/tau)-softmax(-L/tau))
+        # stitched STE-style, temperature anchor_log_tau learnable. Inference: a plain gather using the
+        # baked argmax/argmin index buffers (anchor_a/anchor_b) -- NO logits/softmax/einsum.
+        self.trainable_anchors = bool(trainable_anchors)
+        if self.trainable_anchors:
+            if not multi_head_input:
+                raise NotImplementedError("trainable_anchors currently requires multi_head_input=True")
+            if anchor_mode != "pair":
+                raise NotImplementedError("trainable_anchors is implemented for anchor_mode='pair' only")
+            if self._quant is not None:
+                raise NotImplementedError("trainable_anchors is not compatible with the quantised read")
         if self._quant is not None:
             bad = []
             if confidence_form != "learned_margin":
@@ -425,20 +441,35 @@ class LightMultiHeadLUT(nn.Module):
             # head draws from a fresh generator seeded (random_seed + h) -- the SAME
             # convention FastMultiHeadLut uses for multi_head_input=True, so the two
             # layers are initialisation-comparable head for head.
-            a_list, b_list = [], []
-            for h in range(self.n_heads):
-                seed_h = None if random_seed is None else random_seed + h
-                a_h, b_h = get_balanced_anchor_pairs(
-                    n_tables=self.tables_per_head, n_anchor_pairs=n_anchor_pairs,
-                    input_dim=input_dim, device=dev, random_seed=seed_h,
-                    policy=policy, n_heads=1,
-                )
-                a_list.append(a_h)
-                b_list.append(b_h)
-            anchor_a = torch.stack(a_list)      # [n_heads, tables_per_head, NAP]
-            anchor_b = torch.stack(b_list)
-            self.register_buffer("anchor_a", anchor_a.contiguous())
-            self.register_buffer("anchor_b", anchor_b.contiguous())
+            if self.trainable_anchors:
+                # Learn a logit per (head, table, pair) over the head's eff_in coords. The pair is the
+                # argmax(+1)/argmin(-1) of that row. anchor_a/anchor_b are BAKED index buffers (argmax/
+                # argmin), the SAME representation the fixed path uses, so the eval gather path is reused.
+                g = None if random_seed is None else torch.Generator(device=dev).manual_seed((random_seed or 0) + 991)
+                logits = 0.02 * torch.randn(self.n_heads, self.tables_per_head, n_anchor_pairs, input_dim,
+                                            device=dev, generator=g)
+                self.anchor_logits = torch.nn.Parameter(logits)          # [H, tph, NAP, eff_in]
+                self.anchor_log_tau = torch.nn.Parameter(
+                    torch.tensor(float(math.log(max(anchor_tau_init, 1e-6))), device=dev))
+                anchor_a = logits.argmax(dim=-1).contiguous()            # [H, tph, NAP] baked indices
+                anchor_b = logits.argmin(dim=-1).contiguous()
+                self.register_buffer("anchor_a", anchor_a)
+                self.register_buffer("anchor_b", anchor_b)
+            else:
+                a_list, b_list = [], []
+                for h in range(self.n_heads):
+                    seed_h = None if random_seed is None else random_seed + h
+                    a_h, b_h = get_balanced_anchor_pairs(
+                        n_tables=self.tables_per_head, n_anchor_pairs=n_anchor_pairs,
+                        input_dim=input_dim, device=dev, random_seed=seed_h,
+                        policy=policy, n_heads=1,
+                    )
+                    a_list.append(a_h)
+                    b_list.append(b_h)
+                anchor_a = torch.stack(a_list)      # [n_heads, tables_per_head, NAP]
+                anchor_b = torch.stack(b_list)
+                self.register_buffer("anchor_a", anchor_a.contiguous())
+                self.register_buffer("anchor_b", anchor_b.contiguous())
         else:
             # Same anchor-pair geometry as FastMultiHeadLut with n_heads=1 (all tables
             # form one summed head), so the routing margins are drawn identically.
@@ -600,6 +631,37 @@ class LightMultiHeadLUT(nn.Module):
         return _confidence_score(d, self.confidence_form, self.confidence_gain,
                                  self.sharp_margin_gamma, self.learned_confidence_params())
 
+    @torch.no_grad()
+    def _refresh_anchor_idx(self):
+        """Re-bake the argmax(+1)/argmin(-1) index buffers from the current anchor_logits.
+        Called each training forward so eval / state_dict always carry current indices."""
+        self.anchor_a.copy_(self.anchor_logits.argmax(dim=-1))
+        self.anchor_b.copy_(self.anchor_logits.argmin(dim=-1))
+
+    @torch.no_grad()
+    def bake_anchors(self, drop_logits: bool = False):
+        """Freeze the learned pairs into the index buffers (argmax/argmin). With drop_logits=True the
+        logits/temperature are removed so an exported eval model runs the pure gather path with no
+        logits/softmax/einsum. state_dict always round-trips the anchor_a/anchor_b index buffers."""
+        if not self.trainable_anchors:
+            return
+        self._refresh_anchor_idx()
+        if drop_logits:
+            del self.anchor_logits; self.anchor_logits = None
+            del self.anchor_log_tau; self.anchor_log_tau = None
+
+    def _trainable_margins(self, x):
+        """STE margins for trainable anchors. x: [B, H, eff_in] -> d: [B, H, tph, NAP].
+        Forward value == hard argmax/argmin pair difference; gradient flows to anchor_logits and
+        anchor_log_tau via the soft selection, and to x via the hard selection (sel_ste == hard fwd)."""
+        L = self.anchor_logits                                    # [H, tph, NAP, eff_in]
+        E = L.shape[-1]
+        hard = (torch.nn.functional.one_hot(L.argmax(-1), E) - torch.nn.functional.one_hot(L.argmin(-1), E)).to(L.dtype)
+        tau = self.anchor_log_tau.exp().clamp_min(1e-4)
+        soft = torch.softmax(L / tau, dim=-1) - torch.softmax(-L / tau, dim=-1)
+        sel = soft + (hard - soft).detach()                       # STE: value=hard, grad=soft
+        return torch.einsum("bhe,htne->bhtn", x, sel)             # [B, H, tph, NAP]
+
     def _pack_index(self, x_flat, d):
         """Packed row index [B, n_tables], MSB-first. Never differentiable.
 
@@ -608,6 +670,10 @@ class LightMultiHeadLUT(nn.Module):
         produce the identical integer address -- a test asserts equality -- so this is a
         speed choice, never a numerics one.
         """
+        if self.trainable_anchors:
+            # dynamic anchors -> the native kernel's fixed native_anchor_* are stale; pack from d.
+            shape = (1, 1, 1, -1) if d.dim() == 4 else (1, 1, -1)
+            return ((d.detach() > 0).to(torch.int64) * self.powers.view(*shape)).sum(dim=-1)
         if (self._native_msb is not None and x_flat.is_cuda
                 and x_flat.dtype in (torch.float32, torch.float64)):
             return self._native_msb(x_flat, self.native_anchor_a, self.native_anchor_b,
@@ -695,7 +761,13 @@ class LightMultiHeadLUT(nn.Module):
         if self.anchor_mode == "single":
             idx_c = self.anchor_c.reshape(1, H, T * NAP).expand(B, H, T * NAP)
             d = torch.gather(x, 2, idx_c).view(B, H, T, NAP)          # single-coordinate value
+        elif self.trainable_anchors and self.training and torch.is_grad_enabled() \
+                and getattr(self, "anchor_logits", None) is not None:
+            # TRAIN: hard forward + soft backward (STE); refresh the baked indices for eval/export.
+            self._refresh_anchor_idx()
+            d = self._trainable_margins(x)                           # [B, H, T, NAP]
         else:
+            # EVAL / fixed / baked: plain two-element gather using the (baked) index buffers.
             idx_a = self.anchor_a.reshape(1, H, T * NAP).expand(B, H, T * NAP)
             idx_b = self.anchor_b.reshape(1, H, T * NAP).expand(B, H, T * NAP)
             d = (torch.gather(x, 2, idx_a) - torch.gather(x, 2, idx_b)).view(B, H, T, NAP)
@@ -1005,7 +1077,8 @@ class LightMultiHeadLUT(nn.Module):
         # materialises the margins, and the blend needs them to choose and weight the
         # neighbours. So it is unavailable at read_top_n > 1, by construction rather than
         # by oversight.
-        if not torch.is_grad_enabled() and self.read_top_n == 1 and self.forward_mode == "scored":
+        if not torch.is_grad_enabled() and self.read_top_n == 1 and self.forward_mode == "scored" \
+                and not self.trainable_anchors:
             B = x.shape[0]
             x_flat = x.reshape(B, -1)
             if x_flat.shape[1] == (self.n_heads * self.input_dim if self.multi_head_input

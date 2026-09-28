@@ -170,6 +170,8 @@ class CompressionMultiHeadLUT(nn.Module):
         # routes its own eff_in = input_dim // n_heads slice; compress is Identity. light path only.
         # Default False == byte-identical to every existing config.
         input_multi_head: bool = False,
+        trainable_anchors: bool = False,
+        anchor_tau_init: float = 1.0,
     ):
         super().__init__()
         if quant_mode is not None and lut_impl != "light":
@@ -382,6 +384,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 # power-of-two quantised read; LightMultiHeadLUT refuses every layout it is not implemented for
                 quant_mode=quant_mode, quant_overrides=quant_overrides,
                 head_dropout_rate=head_dropout_rate,
+                trainable_anchors=trainable_anchors, anchor_tau_init=anchor_tau_init,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL
