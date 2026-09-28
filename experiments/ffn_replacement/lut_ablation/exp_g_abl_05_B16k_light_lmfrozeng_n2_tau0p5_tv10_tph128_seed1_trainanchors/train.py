@@ -194,8 +194,35 @@ def tv_stats():
     return ([f'{sum(per) / len(per):.8e}'] + [f'{v:.8e}' for v in per]) if TV_COLS else []
 
 
+# Trainable-anchor selection temperature tau = exp(anchor_log_tau), per LUT layer + mean, at every eval.
+# Empty on any model without trainable anchors (byte-identical logging otherwise).
+_ANCHOR_LUTS = [getattr(getattr(b, 'ffn', None), 'lut_light', None) for b in model.blocks]
+_ANCHOR_LUTS = [m for m in _ANCHOR_LUTS
+                if m is not None and getattr(m, 'trainable_anchors', False)
+                and getattr(m, 'anchor_log_tau', None) is not None]
+ANCHOR_COLS = (['anchor_tau_mean'] + [f'anchor_tau_L{i}' for i in range(len(_ANCHOR_LUTS))]) if _ANCHOR_LUTS else []
+# fraction of (head,table,pair) slots whose baked pair drifted from the warm-start init, per layer + mean
+MOVE_COLS = (['anchor_move_mean'] + [f'anchor_move_L{i}' for i in range(len(_ANCHOR_LUTS))]) if _ANCHOR_LUTS else []
+
+
+@torch.no_grad()
+def anchor_stats():
+    if not ANCHOR_COLS:
+        return []
+    taus = [float(m.anchor_log_tau.exp().item()) for m in _ANCHOR_LUTS]
+    return [f'{sum(taus) / len(taus):.6f}'] + [f'{t:.6f}' for t in taus]
+
+
+@torch.no_grad()
+def move_stats():
+    if not MOVE_COLS:
+        return []
+    mvs = [float(m.anchor_movement()) for m in _ANCHOR_LUTS]
+    return [f'{sum(mvs) / len(mvs):.6f}'] + [f'{v:.6f}' for v in mvs]
+
+
 csv_f = open(os.path.join(EXP_DIR, 'metrics.csv'), 'w', newline='')
-csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TV_COLS)
+csv_w = csv.writer(csv_f); csv_w.writerow(['step', 'train_loss', 'val_bpb'] + LN_COLS + TV_COLS + ANCHOR_COLS + MOVE_COLS)
 train_losses_logged, val_bpbs, val_steps = [], [], []
 ema, best_bpb, t0 = None, float('inf'), time.time()
 
@@ -234,10 +261,12 @@ for step in range(1, N_STEPS + 1):
         best_bpb = min(best_bpb, bpb)
         print(f'[VAL] step {step}: bpb={bpb:.4f}')
         train_losses_logged.append(ema); val_bpbs.append(bpb); val_steps.append(step)
-        _ln, _tv = ln_stats(), tv_stats()
-        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln + _tv); csv_f.flush()
+        _ln, _tv, _an, _mv = ln_stats(), tv_stats(), anchor_stats(), move_stats()
+        csv_w.writerow([step, f'{ema:.6f}', f'{bpb:.6f}'] + _ln + _tv + _an + _mv); csv_f.flush()
         tracker.eval_step(step, bpb, ema, {**dict(zip(LN_COLS, map(float, _ln))),
-                                           **dict(zip(TV_COLS, map(float, _tv)))}, model)
+                                           **dict(zip(TV_COLS, map(float, _tv))),
+                                           **dict(zip(ANCHOR_COLS, map(float, _an))),
+                                           **dict(zip(MOVE_COLS, map(float, _mv)))}, model)
 
 csv_f.close()
 elapsed = time.time() - t0

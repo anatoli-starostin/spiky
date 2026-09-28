@@ -47,5 +47,7 @@
   "lut_cell_smoothness": 10.0,
   "lut_light_forward_mode": "scored",
   "lut_trainable_anchors": true,
-  "lut_anchor_tau_init": 0.5
+  "lut_anchor_tau_init": 0.5,
+  "lut_anchor_init": "warm",
+  "lut_anchor_init_scale": 8.0
 }
