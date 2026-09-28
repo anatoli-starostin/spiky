@@ -1,0 +1,90 @@
+{
+ "config": {
+  "input_dim": 1024,
+  "n_tables": 256,
+  "output_dim": 1024,
+  "n_anchor_pairs": 8,
+  "n_heads": 1,
+  "multi_head_input": false,
+  "read_top_n": 1,
+  "confidence_form": "margin",
+  "forward_mode": "scored",
+  "initial_weights_noise": 0.001,
+  "random_seed": 1234
+ },
+ "flush_mib": 512,
+ "table_bytes": 268435456,
+ "dtype": "torch.float32",
+ "rows": [
+  {
+   "B": 1,
+   "total_hot": 0.07254400104284286,
+   "index_hot": 0.007551999995484948,
+   "gather_hot": 0.06444799900054932,
+   "total_cold": 0.10755199939012527,
+   "index_cold": 0.006144000217318535,
+   "gather_cold": 0.10444799810647964,
+   "read_bytes": 1048576
+  },
+  {
+   "B": 8,
+   "total_hot": 0.07459200173616409,
+   "index_hot": 0.0074720000848174095,
+   "gather_hot": 0.06958400085568428,
+   "total_cold": 0.10751999914646149,
+   "index_cold": 0.006144000217318535,
+   "gather_cold": 0.10444799810647964,
+   "read_bytes": 8388608
+  },
+  {
+   "B": 64,
+   "total_hot": 0.07596799731254578,
+   "index_hot": 0.007647999795153737,
+   "gather_hot": 0.06865600124001503,
+   "total_cold": 0.11980800330638885,
+   "index_cold": 0.006111999973654747,
+   "gather_cold": 0.11875200271606445,
+   "read_bytes": 67108864
+  },
+  {
+   "B": 256,
+   "total_hot": 0.2051199972629547,
+   "index_hot": 0.007584000006318092,
+   "gather_hot": 0.1974560022354126,
+   "total_cold": 0.22835199534893036,
+   "index_cold": 0.0081599997356534,
+   "gather_cold": 0.2252800017595291,
+   "read_bytes": 268435456
+  },
+  {
+   "B": 1024,
+   "total_hot": 0.7755999863147736,
+   "index_hot": 0.011839999817311764,
+   "gather_hot": 0.7665760219097137,
+   "total_cold": 0.7956479787826538,
+   "index_cold": 0.01228800043463707,
+   "gather_cold": 0.7915680110454559,
+   "read_bytes": 1073741824
+  },
+  {
+   "B": 4096,
+   "total_hot": 3.060431957244873,
+   "index_hot": 0.027775999158620834,
+   "gather_hot": 3.0318400859832764,
+   "total_cold": 3.0709760189056396,
+   "index_cold": 0.028656000271439552,
+   "gather_cold": 3.056607961654663,
+   "read_bytes": 4294967296
+  },
+  {
+   "B": 24576,
+   "total_hot": 18.806079864501953,
+   "index_hot": 0.1379999965429306,
+   "gather_hot": 18.125807762145996,
+   "total_cold": 18.26302433013916,
+   "index_cold": 0.13927999883890152,
+   "gather_cold": 18.788864135742188,
+   "read_bytes": 25769803776
+  }
+ ]
+}

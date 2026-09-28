@@ -1,0 +1,121 @@
+{
+ "base_config": {
+  "n_tables": 256,
+  "n_anchor_pairs": 8,
+  "n_heads": 1,
+  "multi_head_input": true,
+  "read_top_n": 2,
+  "confidence_form": "learned_margin",
+  "learned_margin_freeze_g": true,
+  "forward_mode": "scored",
+  "quant_mode": "p2_int8",
+  "initial_weights_noise": 0.001,
+  "random_seed": 1234
+ },
+ "arm_a": {
+  "dim": 48,
+  "rows": [
+   {
+    "B": 1,
+    "read_bytes": 24576,
+    "total_hot": 0.0729919970035553,
+    "gather_hot": 0.08399999886751175,
+    "total_cold": 0.12086399644613266,
+    "gather_cold": 0.13312000036239624
+   },
+   {
+    "B": 8,
+    "read_bytes": 196608,
+    "total_hot": 0.08179199695587158,
+    "gather_hot": 0.08747200295329094,
+    "total_cold": 0.13926400244235992,
+    "gather_cold": 0.1454080045223236
+   },
+   {
+    "B": 64,
+    "read_bytes": 1572864,
+    "total_hot": 0.13867200165987015,
+    "gather_hot": 0.0974079966545105,
+    "total_cold": 0.20070399343967438,
+    "gather_cold": 0.15769599378108978
+   },
+   {
+    "B": 256,
+    "read_bytes": 6291456,
+    "total_hot": 0.14107199758291245,
+    "gather_hot": 0.09825600311160088,
+    "total_cold": 0.19865599274635315,
+    "gather_cold": 0.15564799308776855
+   },
+   {
+    "B": 1024,
+    "read_bytes": 25165824,
+    "total_hot": 0.1425120010972023,
+    "gather_hot": 0.09975999966263771,
+    "total_cold": 0.19251200556755066,
+    "gather_cold": 0.1515520066022873
+   },
+   {
+    "B": 4096,
+    "read_bytes": 100663296,
+    "total_hot": 0.14265600591897964,
+    "gather_hot": 0.1003199964761734,
+    "total_cold": 0.1884479969739914,
+    "gather_cold": 0.1515199989080429
+   },
+   {
+    "B": 24576,
+    "read_bytes": 603979776,
+    "total_hot": 0.4118080139160156,
+    "gather_hot": 0.23771200329065323,
+    "total_cold": 0.47308799624443054,
+    "gather_cold": 0.27241599559783936
+   }
+  ],
+  "table_bytes": 3145728,
+  "per_token_bytes": 24576,
+  "numeric": {
+   "max_abs": 0.0,
+   "max_rel_vs_ymax": 0.0,
+   "y_absmax": 0.16254854202270508,
+   "y_absmean": 0.021449550986289978
+  }
+ },
+ "arm_b": {
+  "dim": 1024,
+  "rows": [
+   {
+    "B": 1,
+    "read_bytes": 524288,
+    "gather_hot": 0.09460799768567085,
+    "gather_cold": 0.038943998515605927
+   },
+   {
+    "B": 8,
+    "read_bytes": 4194304,
+    "gather_hot": 0.10255999863147736,
+    "gather_cold": 0.06755200028419495
+   },
+   {
+    "B": 64,
+    "read_bytes": 33554432,
+    "gather_hot": 0.6961600184440613,
+    "gather_cold": 0.6758400201797485
+   },
+   {
+    "B": 256,
+    "read_bytes": 134217728,
+    "gather_hot": 2.8011839389801025,
+    "gather_cold": 2.796560049057007
+   },
+   {
+    "B": 1024,
+    "read_bytes": 536870912,
+    "gather_hot": 11.247600078582764,
+    "gather_cold": 11.103760242462158
+   }
+  ],
+  "table_bytes": 67108864,
+  "per_token_bytes": 524288
+ }
+}

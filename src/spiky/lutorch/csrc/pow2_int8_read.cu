@@ -44,6 +44,8 @@
 #include <c10/cuda/CUDAStream.h>
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
+#include <c10/cuda/CUDAException.h>
+#include <vector>
 
 #include <cmath>
 
@@ -51,7 +53,13 @@
 
 namespace {
 constexpr int NAP_MAX = 8;      // c1 / c2 fit a byte
-constexpr int UPR_MAX = 8;      // D <= 128
+// UPR = units per row = ceil(D / 16), and a block is BLOCK_N * UPR threads, so the 1024-thread limit couples the two:
+// wide rows need a small BLOCK_N. The instantiated matrix is deliberately sparse (see the PICK ladders below):
+//   block_n 32 / 64 / 128 -> UPR 1..8   (D <= 128), the original set, unchanged
+//   block_n 16            -> UPR 1..8 and 16 / 32 / 64  (D = 256 / 512 / 1024), added for the wide-row gather study
+// Nothing else is instantiated; an unsupported (block_n, UPR) pair is refused with a message rather than silently
+// running a narrower kernel, which would leave the tail of the row unwritten.
+constexpr int UPR_MAX = 64;     // D <= 1024, at block_n 16
 using p2::DISCARD;
 
 template <int BLOCK_N, int UPR, bool PROLOGUE, bool LOAD16, bool B16>
@@ -244,6 +252,34 @@ __global__ __launch_bounds__(BLOCK_N * UPR) void p2_int8_kernel(
 // [N, H, T, 3] uint8 (read_cells input; read_fused: optional output) or empty; W [H * T * K, stride] int8 with stride = ceil(D / 16) * 16.
 // Returns [N, H, D] = the int32 accumulators, converted once: float32, or bf16 when Z is bf16 (Z converted to fp32 on load,
 // every integer unchanged; int32 -> float -> bf16 round-to-nearest-even, the rounding of torch's fp32 -> bf16 cast).
+// Read-only occupancy / attribute query for one instantiation. Launches nothing and changes no
+// behaviour; it exists so the underfill study can report cudaOccupancyMaxActiveBlocksPerMultiprocessor
+// and cudaFuncGetAttributes for the exact kernel that runs, instead of inferring them from ptxas.
+// Returns {blocks_per_sm, numRegs, sharedSizeBytes, localSizeBytes, maxThreadsPerBlock}.
+std::vector<int64_t> p2_occupancy(int64_t block_n, int64_t upr, bool fused, bool load16, bool b16,
+                                  int64_t dyn_smem) {
+  const void* fn = nullptr;
+#define OCC(BN, U, PRO, L16, B) \
+  if (block_n == BN && upr == U && fused == PRO && load16 == L16 && b16 == B) \
+    fn = (const void*)p2_int8_kernel<BN, U, PRO, L16, B>; else
+#define OCC_L(BN, U) OCC(BN, U, false, false, false) OCC(BN, U, false, true, false) \
+                     OCC(BN, U, true, false, false) OCC(BN, U, true, true, false)
+  OCC_L(16, 64) OCC_L(16, 32) OCC_L(16, 16) OCC_L(16, 8) OCC_L(16, 4) OCC_L(16, 3)
+  OCC_L(32, 8) OCC_L(32, 4) OCC_L(32, 3) OCC_L(64, 8) OCC_L(64, 4) OCC_L(64, 3)
+  OCC_L(128, 8) OCC_L(128, 4) OCC_L(128, 3)
+  { TORCH_CHECK(false, "p2_occupancy: no instantiation for block_n=", block_n, " upr=", upr,
+                " fused=", fused, " load16=", load16, " b16=", b16); }
+#undef OCC_L
+#undef OCC
+  cudaFuncAttributes a{};
+  C10_CUDA_CHECK(cudaFuncGetAttributes(&a, fn));
+  int blocks = 0;
+  C10_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks, fn, (int)(block_n * upr), (size_t)dyn_smem));
+  return {blocks, a.numRegs, (int64_t)a.sharedSizeBytes, (int64_t)a.localSizeBytes,
+          a.maxThreadsPerBlock};
+}
+
 torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const torch::Tensor& Ab, const torch::Tensor& CELLS,
                       const torch::Tensor& W, int64_t N, int64_t H, int64_t T, int64_t nap, int64_t K, int64_t din,
                       int64_t D, int64_t lo, int64_t hi, int64_t Q, const torch::Tensor& TAU, const torch::Tensor& G,
@@ -320,25 +356,35 @@ torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const tor
     else if (load16) LF(BN, U, false, true);                             \
     else LF(BN, U, false, false);                                        \
   } while (0)
+#define PICK_CASE(BN, U) case U: PICKU(BN, U); break;
+  // The narrow ladder, unchanged in what it instantiates. `default` now REFUSES instead of falling through to UPR 8:
+  // with UPR_MAX raised, a upr of 9..63 reaching `PICKU(BN, 8)` would write only the first 128 lanes of each row and
+  // leave the rest of the output untouched, silently.
 #define PICK(BN)                                                         \
   do {                                                                   \
     switch ((int)upr) {                                                  \
-      case 1: PICKU(BN, 1); break;                                       \
-      case 2: PICKU(BN, 2); break;                                       \
-      case 3: PICKU(BN, 3); break;                                       \
-      case 4: PICKU(BN, 4); break;                                       \
-      case 5: PICKU(BN, 5); break;                                       \
-      case 6: PICKU(BN, 6); break;                                       \
-      case 7: PICKU(BN, 7); break;                                       \
-      default: PICKU(BN, 8); break;                                      \
+      PICK_CASE(BN, 1) PICK_CASE(BN, 2) PICK_CASE(BN, 3) PICK_CASE(BN, 4) \
+      PICK_CASE(BN, 5) PICK_CASE(BN, 6) PICK_CASE(BN, 7) PICK_CASE(BN, 8) \
+      default:                                                           \
+        TORCH_CHECK(false, "no instantiation for block_n=", (int)(BN), " with units-per-row=", (int)upr, \
+                    " (D=", (int)D, "); rows wider than 128 need block_n=16");                           \
+    }                                                                    \
+  } while (0)
+  // The wide ladder: only block_n 16 uses it, so 16 * 64 = 1024 threads is the widest block this file can produce.
+#define PICKW(BN)                                                        \
+  do {                                                                   \
+    switch ((int)upr) {                                                  \
+      PICK_CASE(BN, 16) PICK_CASE(BN, 32) PICK_CASE(BN, 64)              \
+      default: PICK(BN); break;                                          \
     }                                                                    \
   } while (0)
 
   switch ((int)block_n) {
+    case 16: PICKW(16); break;
     case 32: PICK(32); break;
     case 64: PICK(64); break;
     case 128: PICK(128); break;
-    default: TORCH_CHECK(false, "block_n must be 32, 64 or 128");
+    default: TORCH_CHECK(false, "block_n must be 16, 32, 64 or 128");
   }
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out;
@@ -420,4 +466,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("read", &p2_read, "int8 power-of-two LUT read, generic cell width D: fused (integers in-kernel) or on supplied cells (reference)");
   m.def("shared_bytes", &shared_bytes, "dynamic shared memory per block for a configuration");
   m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the spiky_lutorch::p2_scalars op");
+  m.def("occupancy", &p2_occupancy, "read-only: {blocks_per_sm, regs, smem, local, maxThreads} for one instantiation");
 }
