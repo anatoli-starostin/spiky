@@ -152,6 +152,8 @@ class LightMultiHeadLUT(nn.Module):
         anchor_tau_init: float = 1.0,
         anchor_init: str = "warm",
         anchor_init_scale: float = 8.0,
+        soft_read: bool = False,
+        tau_addr: float = 0.25,
     ):
         super().__init__()
         # --- power-of-two quantised read (opt-in; None == every existing path, unchanged) ----
@@ -191,6 +193,21 @@ class LightMultiHeadLUT(nn.Module):
                 raise NotImplementedError("trainable_anchors is not compatible with the quantised read")
             if self.anchor_init not in ("warm", "random"):
                 raise ValueError(f"anchor_init must be 'warm' or 'random', got {self.anchor_init!r}")
+        # STE soft READ (opt-in; only meaningful with trainable_anchors). The HARD forward is unchanged
+        # (argmax/sign address, so the value stays bit-identical); a differentiable soft read
+        # read_soft = sum_c P(c) V[c] over the 2^NAP cells -- with per-comparison soft bit
+        # p_k = sigmoid(d_k / tau_addr) and P(c) the factorized product -- is stitched STE-style
+        # (out = out_soft + (out_hard - out_soft).detach()) so gradient reaches d -> anchor_logits.
+        # The current code detaches the address, so without this the anchors get ~no gradient.
+        self.soft_read = bool(soft_read)
+        self.tau_addr = float(tau_addr)
+        if self.soft_read:
+            if not self.trainable_anchors:
+                raise NotImplementedError("soft_read is only implemented for trainable_anchors=True")
+            if cell_mode != "constant" or codebook_out_dim is not None:
+                raise NotImplementedError("soft_read is implemented for constant cells (no gated/codebook)")
+            if self.tau_addr <= 0.0:
+                raise ValueError(f"tau_addr must be > 0, got {self.tau_addr}")
         if self._quant is not None:
             bad = []
             if confidence_form != "learned_margin":
@@ -709,6 +726,32 @@ class LightMultiHeadLUT(nn.Module):
         sel = soft + (hard - soft).detach()                       # STE: value=hard, grad=soft
         return torch.einsum("bhe,htne->bhtn", x, sel)             # [B, H, tph, NAP]
 
+    def _soft_active(self):
+        """True when the differentiable soft READ should be stitched in (train + grad + logits live)."""
+        return (self.soft_read and self.trainable_anchors and self.training
+                and torch.is_grad_enabled() and getattr(self, "anchor_logits", None) is not None)
+
+    def _soft_read_stitch(self, out_hard, d, score, B, H, T):
+        """STE soft read: out = out_soft + (out_hard - out_soft).detach().
+
+        out_hard [B,H,D] is the existing hard/blended read (value preserved, so the forward stays
+        bit-identical). out_soft = sum_t score_t * read_soft_t, read_soft_t = sum_c P(c) V[t,c] over
+        the 2^NAP cells, with soft bit p_k = sigmoid(d_k / tau_addr) and P(c) the factorized product
+        P(c) = prod_k p_k^{c_k}(1-p_k)^{1-c_k}, built by the multilinear outer product (pair 0 is the
+        MSB, matching `powers`). Gradient flows out_soft -> P -> d -> anchor_logits; the detached term
+        contributes none. As tau_addr -> 0, read_soft -> V[argmax cell] (the hard address)."""
+        NAP = self.n_anchor_pairs
+        p = torch.sigmoid(d / self.tau_addr)                      # [B,H,T,NAP] = P(bit_k = 1)
+        probs = torch.stack([1.0 - p, p], dim=-1)                 # [B,H,T,NAP,2] -> [P(0), P(1)]
+        Pc = probs[..., 0, :]                                     # pair 0 (MSB): [B,H,T,2]
+        for k in range(1, NAP):
+            Pc = (Pc.unsqueeze(-1) * probs[..., k, :].unsqueeze(-2)).reshape(*Pc.shape[:-1], -1)
+        # Pc: [B,H,T,C], row-major with pair 0 most significant (matches the packed address)
+        V = self.tables.view(H, T, self.table_size, self._tbl_out)            # [H,T,C,D]
+        read_soft = torch.einsum("bhtc,htcd->bhtd", Pc.to(V.dtype), V)        # [B,H,T,D]
+        out_soft = torch.einsum("bht,bhtd->bhd", score.to(V.dtype), read_soft)   # [B,H,D]
+        return out_soft + (out_hard - out_soft).detach()
+
     def _pack_index(self, x_flat, d):
         """Packed row index [B, n_tables], MSB-first. Never differentiable.
 
@@ -844,8 +887,11 @@ class LightMultiHeadLUT(nn.Module):
         if self.read_top_n > 1:
             if self._gated or self._margin:
                 raise NotImplementedError("gated/margin cell_mode is only implemented for read_top_n=1")
-            return self._blend_bag(d, index, self.table_offset.view(1, H, T), flat,
-                                   score, B * H, T).view(B, H, self.output_dim)
+            out = self._blend_bag(d, index, self.table_offset.view(1, H, T), flat,
+                                  score, B * H, T).view(B, H, self.output_dim)
+            if self._soft_active():
+                out = self._soft_read_stitch(out, d, score, B, H, T)     # differentiable soft read (value unchanged)
+            return out
         # One bag per (sample, head), summing that head's T tables -> [B, H, _tbl_out];
         # _apply_cell returns it as-is (constant) or forms U + V ⊙ x_head (gated), where
         # x_head is this head's input slice (dim input_dim == output_dim).
@@ -857,6 +903,8 @@ class LightMultiHeadLUT(nn.Module):
             W = self.margin_W.reshape(H, T, self.output_dim, self.n_anchor_pairs)
             Wm = torch.einsum('htdn,bhtn->bhtd', W, m)                    # W_t · m_t per table
             out = out + torch.einsum('bht,bhtd->bhd', score, Wm)         # score-weighted head sum
+        if self._soft_active():                                          # constant cells only (guarded in init)
+            out = self._soft_read_stitch(out, d, score, B, H, T)
         return out
 
     # ------------------------------------------------------------------ quant_mode (pow2_read) --------------------------

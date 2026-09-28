@@ -174,6 +174,8 @@ class CompressionMultiHeadLUT(nn.Module):
         anchor_tau_init: float = 1.0,
         anchor_init: str = "warm",
         anchor_init_scale: float = 8.0,
+        soft_read: bool = False,
+        tau_addr: float = 0.25,
     ):
         super().__init__()
         if quant_mode is not None and lut_impl != "light":
@@ -388,6 +390,7 @@ class CompressionMultiHeadLUT(nn.Module):
                 head_dropout_rate=head_dropout_rate,
                 trainable_anchors=trainable_anchors, anchor_tau_init=anchor_tau_init,
                 anchor_init=anchor_init, anchor_init_scale=anchor_init_scale,
+                soft_read=soft_read, tau_addr=tau_addr,
             )
             if self._codebook:
                 self.decompress = nn.Identity()                # M lives in LightMHL
