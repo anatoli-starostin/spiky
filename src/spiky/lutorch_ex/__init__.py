@@ -11,7 +11,6 @@ imports from the old ``spiky.lutorch``. The pieces:
 from .cartridges import (
     ManifestoHardLUT,
     rational_uncertainty,
-    rational_uncertainty_quadratic,
 )
 from .lut_base import MultiHeadLUT
 from .lut_spec import LUTSpec
@@ -24,5 +23,4 @@ __all__ = [
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",
-    "rational_uncertainty_quadratic",
 ]
