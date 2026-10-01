@@ -44,14 +44,17 @@ from .uncertainty import rational_uncertainty
 class ManifestoHardLUT(ManifestoLUT):
     """Gen-1 reference cartridge (hard variant 1.1); see module docstring for the math."""
 
+    def _needs_alt(self) -> bool:
+        # Eval needs only the hard cell c_t (the alternative affects the surrogate gradient
+        # only), so the base takes its single-read shortcut; training needs both cells.
+        return self.training
+
     def _combine(
-        self, y_hard: torch.Tensor, y_alt: torch.Tensor, u_star: torch.Tensor
+        self, y_hard: torch.Tensor, y_alt: torch.Tensor, u_abs_star: torch.Tensor
     ) -> torch.Tensor:
-        if not self.training:
-            return y_hard  # hard read, exactly
-        # Straight-through composite: value == y_hard, but the input sees the blend's
-        # gradient via U(u_star). g is detached so the weight table learns on the hard
-        # cell only (the alternative gets no weight gradient).
+        # Called in training only (eval uses the base's single-read shortcut). Straight-through
+        # composite: value == y_hard, but the input sees the blend's gradient via U(|u*|). g is
+        # detached so the weight table learns on the hard cell only (c_t' gets no weight grad).
         g = (y_hard - y_alt).detach()
-        u_term = (-rational_uncertainty(u_star)).unsqueeze(-1) * g
+        u_term = (-rational_uncertainty(u_abs_star)).unsqueeze(-1) * g
         return y_hard + (u_term - u_term.detach())

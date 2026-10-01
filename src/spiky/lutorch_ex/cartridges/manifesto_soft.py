@@ -41,8 +41,9 @@ class ManifestoSoftLUT(ManifestoLUT):
     """Soft-forward cartridge (gen-1 variant 1.2); see module docstring for the math."""
 
     def _combine(
-        self, y_hard: torch.Tensor, y_alt: torch.Tensor, u_star: torch.Tensor
+        self, y_hard: torch.Tensor, y_alt: torch.Tensor, u_abs_star: torch.Tensor
     ) -> torch.Tensor:
-        # The (1 - U)/U two-cell blend, used as both value and gradient (train and eval).
-        u = rational_uncertainty(u_star).unsqueeze(-1)  # [B, G, tph, 1]
-        return (1.0 - u) * y_hard + u * y_alt
+        # (1 - U)*y_hard + U*y_alt, written as y_hard + U*(y_alt - y_hard) to save a temporary.
+        # Used as both value and gradient (train and eval).
+        u = rational_uncertainty(u_abs_star).unsqueeze(-1)  # [B, G, tph, 1]
+        return y_hard + u * (y_alt - y_hard)

@@ -37,7 +37,9 @@ def test_soft_forward_matches_blend_reference(h_in, h_out):
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=3, nap=4, d_in=6, d_out=4)
     cart = ManifestoSoftLUT(spec, seed=10, weight_init_std=1.0).eval()
     x = torch.randn(5, spec.h_in, spec.d_in)
-    assert torch.allclose(cart(x), _soft_reference(cart, x), atol=1e-6)
+    # atol 1e-5: the impl uses y_hard + U*(y_alt - y_hard); the reference uses the algebraically
+    # equal (1-U)*y_hard + U*y_alt, so they differ only by floating-point rearrangement.
+    assert torch.allclose(cart(x), _soft_reference(cart, x), atol=1e-5)
 
 
 def test_soft_value_same_train_and_eval():
