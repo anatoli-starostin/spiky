@@ -1,19 +1,22 @@
-"""ProjectionMHL — a compress -> cartridge -> decompress bottleneck.
+"""ProjectionMHL - a compress -> cartridge -> decompress bottleneck.
 
 Wraps any cartridge (a :class:`~spiky.lutorch_ex.lut_base.MultiHeadLUT`) in a dense
 linear ``compress`` / ``decompress`` pair so the (cheap, discrete) lookup runs in a
 narrow per-head space while the module presents a plain ``d_model -> d_model`` map::
 
-    z   = compress(x)       # [B, d_model] -> per-head [B, H, d_in]
-    y   = cartridge(z)      # [B, H, d_in] -> [B, H, d_out]   (opaque)
-    out = decompress(y)     # [B, H*d_out] -> [B, d_model]
+    z   = compress(x)       # [B, d_model] -> per-head [B, h_in, d_in]
+    y   = cartridge(z)      # [B, h_in, d_in] -> [B, h_out, d_out]   (opaque)
+    out = decompress(y)     # [B, h_out*d_out] -> [B, d_model]
+
+Either projection may be switched off (``compress=False`` / ``decompress=False``), in
+which case that side is an identity and the corresponding width must already match
+``d_model``. Switching **both** off is forbidden - the wrapper would then do nothing.
 
 The wrapper treats the cartridge as an **opaque box** reached only through the shape
-contract — it never inspects the cartridge's internals or its concrete class. The one
-thing a cartridge may need to tell the wrapper (a quantised cartridge that emits
-integer-valued cells and wants a per-output-channel scale folded into the decompress
-matrix) is advertised as a *capability*, the :class:`SupportsDecompressBake` protocol,
-rather than detected by ``isinstance`` on a concrete class.
+contract. The one thing a cartridge may tell the wrapper (a quantised cartridge wanting a
+per-output-channel scale folded into decompress) is advertised as a *capability*, the
+:class:`SupportsDecompressBake` protocol, not detected by ``isinstance`` on a concrete
+class.
 """
 from __future__ import annotations
 
@@ -30,14 +33,10 @@ from .lut_base import MultiHeadLUT
 class SupportsDecompressBake(Protocol):
     """Capability: a cartridge that wants a per-output-channel scale baked into decompress.
 
-    A quantised cartridge reads integer-valued cells and carries the real scale
-    separately; folding that scale into the decompress weight columns lets the read stay
-    pure-integer while the dequantisation happens for free inside the existing matmul.
-
-    Implementers return a 1-D tensor of length ``spec.out_features`` (= ``H * d_out``,
-    one entry per flattened cartridge output channel), or ``None`` to opt out at this
-    step. Cartridges without this need (e.g. :class:`ManifestoHardLUT`) simply do not
-    implement the method, so ``isinstance(cart, SupportsDecompressBake)`` is ``False``.
+    Implementers return a 1-D tensor of length ``spec.out_features`` (= ``h_out * d_out``),
+    or ``None`` to opt out. Cartridges without this need (e.g. :class:`ManifestoHardLUT`)
+    simply do not implement the method, so ``isinstance(cart, SupportsDecompressBake)`` is
+    ``False``.
     """
 
     def decompress_scale(self) -> Optional[torch.Tensor]:
@@ -52,17 +51,40 @@ class ProjectionMHL(nn.Module):
         cartridge: MultiHeadLUT,
         d_model: int,
         *,
+        compress: bool = True,
+        decompress: bool = True,
         bias: bool = True,
         device: Optional[torch.device] = None,
     ):
         super().__init__()
+        if not compress and not decompress:
+            raise ValueError(
+                "ProjectionMHL requires at least one of compress/decompress; switching "
+                "both off (both -1) leaves the wrapper with nothing to do."
+            )
         self.cartridge = cartridge
         self.d_model = d_model
+        self.has_compress = bool(compress)
+        self.has_decompress = bool(decompress)
         spec = cartridge.spec
-        # compress: d_model -> flattened per-head input; decompress: flattened per-head
-        # output -> d_model. The cartridge sees [B, H, d_in] and returns [B, H, d_out].
-        self.compress = nn.Linear(d_model, spec.in_features, bias=bias, device=device)
-        self.decompress = nn.Linear(spec.out_features, d_model, bias=bias, device=device)
+
+        if compress:
+            self.compress = nn.Linear(d_model, spec.in_features, bias=bias, device=device)
+        else:
+            if spec.in_features != d_model:
+                raise ValueError(
+                    f"compress=False requires h_in*d_in == d_model, got {spec.in_features} != {d_model}"
+                )
+            self.compress = nn.Identity()
+
+        if decompress:
+            self.decompress = nn.Linear(spec.out_features, d_model, bias=bias, device=device)
+        else:
+            if spec.out_features != d_model:
+                raise ValueError(
+                    f"decompress=False requires h_out*d_out == d_model, got {spec.out_features} != {d_model}"
+                )
+            self.decompress = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 2 or x.shape[1] != self.d_model:
@@ -70,23 +92,26 @@ class ProjectionMHL(nn.Module):
         spec = self.cartridge.spec
         B = x.shape[0]
 
-        z = self.compress(x).reshape(B, spec.n_heads, spec.d_in)  # [B, H, d_in]
-        y = self.cartridge(z)                                     # [B, H, d_out]
-        y = y.reshape(B, spec.out_features)                       # [B, H*d_out]
+        z = self.compress(x).reshape(B, spec.h_in, spec.d_in)  # [B, h_in, d_in]
+        y = self.cartridge(z)                                  # [B, h_out, d_out]
+        y = y.reshape(B, spec.out_features)                    # [B, h_out*d_out]
 
-        # Capability check — advertised, not an isinstance-on-concrete-class probe.
+        # Capability check - advertised, not an isinstance-on-concrete-class probe.
+        scale = None
         if isinstance(self.cartridge, SupportsDecompressBake):
             scale = self.cartridge.decompress_scale()
-            if scale is not None:
-                if scale.shape != (spec.out_features,):
-                    raise ValueError(
-                        f"decompress_scale() must be 1-D of length out_features="
-                        f"{spec.out_features}, got shape {tuple(scale.shape)}"
-                    )
-                # Fold the per-output-channel scale into the decompress matrix: scaling
-                # column k of W is exactly scaling cartridge output channel k before the
-                # matmul, with no extra op on the activation path.
-                weight = self.decompress.weight * scale.reshape(1, -1)
-                return F.linear(y, weight, self.decompress.bias)
+            if scale is not None and scale.shape != (spec.out_features,):
+                raise ValueError(
+                    f"decompress_scale() must be 1-D of length out_features="
+                    f"{spec.out_features}, got shape {tuple(scale.shape)}"
+                )
 
+        if self.has_decompress and scale is not None:
+            # Fold the per-output-channel scale into the decompress matrix: scaling column
+            # k of W is exactly scaling cartridge output channel k, with no extra op.
+            weight = self.decompress.weight * scale.reshape(1, -1)
+            return F.linear(y, weight, self.decompress.bias)
+        if scale is not None:
+            # No decompress matrix to fold into -> apply the scale directly.
+            y = y * scale.reshape(1, -1)
         return self.decompress(y)

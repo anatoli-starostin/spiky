@@ -1,48 +1,46 @@
 """ManifestoHardLUT — the gen-1 reference cartridge.
 
 "Hard forward, two-alternative soft backward with a rational uncertainty function."
-This is the greenfield re-implementation of the original
-``spiky.lutorch.multi_head_lut.MultiHeadLut`` (variant 1.1 in the LUT-ablation table),
-built to the cartridge contract with zero imports from the old ``lutorch``.
+Greenfield re-implementation of the original ``spiky.lutorch.multi_head_lut.MultiHeadLut``
+(variant 1.1 in the LUT-ablation table), built to the cartridge contract with zero
+imports from the old ``lutorch``.
 
-The math
-========
-Per head ``h`` and table ``t`` (there are ``H`` heads, ``tph`` tables each):
+Head routing (the shape-contract invariant)
+===========================================
+There are ``G = max(h_in, h_out)`` table groups, each with ``tph`` tables. Group ``g``
+reads input head ``g % h_in`` (so a shared input when ``h_in == 1``) and writes output
+head ``g % h_out`` (so a single shared output when ``h_out == 1``, into which *all* groups
+are summed). This one mapping covers the three allowed patterns:
+    h_in==h_out==H : group h reads x[:,h,:], writes y[:,h,:]
+    h_in==1,h_out==H : every group reads x[:,0,:], group g writes y[:,g,:]
+    h_in==H,h_out==1 : group g reads x[:,g,:], ALL groups sum into y[:,0,:]
+
+The gen-1 math (unchanged by the routing)
+=========================================
+Per group ``g`` and table ``t``:
 
 Addressing (sign-bit lookup).
-    The table owns ``nap`` anchor pairs ``(a_j, b_j)`` of coordinates in its head's
-    ``d_in`` input slice. Each pair yields a signed margin ``u_j = z[a_j] - z[b_j]``.
-    The ``nap`` sign bits ``[u_j > eps]`` form, **LSB-first** (pair ``j`` carries weight
-    ``2**j``), the integer address ``c_t`` into the table's weight rows
-    ``W_t in R^{K x d_out}`` with ``K = 2**nap``.
+    The table owns ``nap`` fixed anchor pairs ``(a_j, b_j)`` of coordinates in its
+    ``d_in``-wide input vector; margins ``u_j = z[a_j] - z[b_j]``; the ``nap`` sign bits
+    ``[u_j > eps]`` form, **LSB-first** (pair ``j`` carries ``2**j``), the integer address
+    ``c_t`` into the table's ``K = 2**nap`` rows ``W_t in R^{K x d_out}``.
 
 Hard forward.
-    ``y = sum_t W_t[c_t]`` — a pure sign-addressed lookup, one row per table, summed
-    over the head's ``tph`` tables. No score, no blend at eval.
+    ``y_group = sum_t W_t[c_t]`` — one row per table, summed over the group's ``tph``
+    tables. No score, no blend at eval.
 
 Two-alternative soft backward.
     The forward **value** is exactly the hard read, but gradients flow as if the output
-    were the two-cell blend
+    were ``y~ = sum_t [ (1 - U_t) W_t[c_t] + U_t W_t[c_t'] ]``, where ``c_t' = c_t`` with
+    the single bit of the **least-confident** pair flipped (``j* = argmin_j |u_j|``) and
+    ``U_t = 0.5 / (1 + |u_{j*}|)`` (rational uncertainty: ``U(0)=0.5``, ``U->0`` as
+    ``|u|->inf``, in ``(0, 0.5]``). ``c_t, c_t', j*`` are stop-gradient; the surrogate is
+    C^1 across a bit flip and only jumps when ``j*`` switches pairs.
 
-        y~ = sum_t [ (1 - U_t) * W_t[c_t] + U_t * W_t[c_t'] ]
-
-    where ``c_t' = c_t`` with the single bit of the **least-confident** pair flipped
-    (``j* = argmin_j |u_j|``), and ``U_t = U(u_{j*}) = 0.5 / (1 + |u_{j*}|)`` is the
-    rational uncertainty (``uncertainty.rational_uncertainty``). ``c_t``, ``c_t'`` and
-    ``j*`` are stop-gradient (the address is a non-differentiable argmax/sign), so only
-    the margin ``u_{j*}`` (hence the input ``z``) sees a gradient. The surrogate is C^1
-    across a bit flip (at ``u=0`` the two cells carry equal weight ``0.5`` and the hard
-    and alt cells simply swap), and only jumps when ``j*`` switches to a different pair.
-
-Fidelity note (see the PR description / report).
-    In this hard-forward reference the **weight-table** gradient is the *hard* one: only
-    the addressed cell ``c_t`` receives gradient (coefficient 1); the alternative
-    ``c_t'`` receives none. The uncertainty blend ``y~`` shapes the **input/addressing**
-    gradient only — exactly as the original gen-1 ``smooth_mode=False`` path does (the
-    original scatters the weight gradient to the hard cell and routes the blend through
-    its anchor-pair backward). Letting ``y~`` drive the weight gradient too (splitting it
-    ``(1-U)`` / ``U`` across the two cells) *and* the forward value is the original's
-    ``smooth_mode=True`` variant (1.2), which this cartridge does not implement.
+Fidelity note.
+    As in the original ``smooth_mode=False`` path, the **weight-table** gradient is hard:
+    only the addressed cell ``c_t`` receives gradient (coeff 1); the alternative ``c_t'``
+    gets none. The uncertainty blend ``y~`` shapes the **input/addressing** gradient only.
 """
 from __future__ import annotations
 
@@ -57,7 +55,7 @@ from .uncertainty import rational_uncertainty
 
 
 class ManifestoHardLUT(MultiHeadLUT):
-    """Gen-1 reference cartridge (see module docstring for the math)."""
+    """Gen-1 reference cartridge (see module docstring for the math and head routing)."""
 
     def __init__(
         self,
@@ -70,8 +68,8 @@ class ManifestoHardLUT(MultiHeadLUT):
         **unused,
     ):
         super().__init__(spec)
-        H, tph, nap, d_in, d_out = (
-            spec.n_heads, spec.tph, spec.nap, spec.d_in, spec.d_out,
+        G, tph, nap, d_in, d_out = (
+            spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
         if d_in < 2:
             raise ValueError(f"ManifestoHardLUT needs d_in >= 2 to form anchor pairs, got {d_in}")
@@ -79,77 +77,87 @@ class ManifestoHardLUT(MultiHeadLUT):
 
         gen = torch.Generator().manual_seed(seed)
 
-        # Fixed anchor pairs per (head, table): nap distinct (a != b) coordinate pairs,
-        # drawn once at init and frozen as buffers (the gen-1 philosophy: the partition
-        # geometry is fixed, only the cell contents learn).
-        a = torch.empty(H, tph, nap, dtype=torch.long)
-        b = torch.empty(H, tph, nap, dtype=torch.long)
-        for h in range(H):
+        # Fixed anchor pairs per (group, table): nap distinct (a != b) coordinate pairs,
+        # drawn once at init and frozen (gen-1: the partition geometry is fixed, cells learn).
+        a = torch.empty(G, tph, nap, dtype=torch.long)
+        b = torch.empty(G, tph, nap, dtype=torch.long)
+        for g in range(G):
             for t in range(tph):
                 for j in range(nap):
                     aj = int(torch.randint(d_in, (1,), generator=gen).item())
                     bj = int(torch.randint(d_in, (1,), generator=gen).item())
                     while bj == aj:
                         bj = int(torch.randint(d_in, (1,), generator=gen).item())
-                    a[h, t, j], b[h, t, j] = aj, bj
+                    a[g, t, j], b[g, t, j] = aj, bj
         self.register_buffer("anchor_a", a)
         self.register_buffer("anchor_b", b)
         # LSB-first bit weights: pair j -> 2**j.
         self.register_buffer("powers", (1 << torch.arange(nap, dtype=torch.long)))
 
-        # Learnable cell tables: W[h, t, c, :], c in [0, K).
-        w = torch.randn(H, tph, spec.n_cells, d_out, generator=gen) * weight_init_std
+        # Group -> input/output head maps (the routing invariant).
+        self.register_buffer("in_head", torch.arange(G, dtype=torch.long) % spec.h_in)
+        self.register_buffer("out_head", torch.arange(G, dtype=torch.long) % spec.h_out)
+
+        # Learnable cell tables: W[g, t, c, :], c in [0, K).
+        w = torch.randn(G, tph, spec.n_cells, d_out, generator=gen) * weight_init_std
         self.weights = nn.Parameter(w)
 
         if device is not None:
             self.to(device)
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
-        """Gather cell rows ``W[h, t, idx[b,h,t]]`` -> ``[B, H, tph, d_out]``."""
+        """Gather cell rows ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``."""
         B = idx.shape[0]
-        H, tph, d_out, K = (
-            self.spec.n_heads, self.spec.tph, self.spec.d_out, self.spec.n_cells,
+        G, tph, d_out, K = (
+            self.spec.n_groups, self.spec.tph, self.spec.d_out, self.spec.n_cells,
         )
-        idx_e = idx.unsqueeze(-1).unsqueeze(-1).expand(B, H, tph, 1, d_out)
-        w_e = self.weights.unsqueeze(0).expand(B, H, tph, K, d_out)
+        idx_e = idx.unsqueeze(-1).unsqueeze(-1).expand(B, G, tph, 1, d_out)
+        w_e = self.weights.unsqueeze(0).expand(B, G, tph, K, d_out)
         return w_e.gather(3, idx_e).squeeze(3)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        H, tph, nap, d_in = (
-            self.spec.n_heads, self.spec.tph, self.spec.nap, self.spec.d_in,
+        self._check_input(x)  # [B, h_in, d_in]
+        spec = self.spec
+        G, tph, nap, d_in, d_out = (
+            spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
-        z, was_flat = self._as_per_head(x)  # [B, H, d_in]
-        B = z.shape[0]
+        B = x.shape[0]
 
-        # Margins u_j = z[a_j] - z[b_j] for every (head, table, pair) -> [B, H, tph, nap].
-        idx_a = self.anchor_a.reshape(1, H, tph * nap).expand(B, H, tph * nap)
-        idx_b = self.anchor_b.reshape(1, H, tph * nap).expand(B, H, tph * nap)
-        z_a = z.gather(2, idx_a).reshape(B, H, tph, nap)
-        z_b = z.gather(2, idx_b).reshape(B, H, tph, nap)
+        # Route each group to its input head: z[b, g, :] = x[b, g % h_in, :]  -> [B, G, d_in].
+        z = x[:, self.in_head, :]
+
+        # Margins u_j = z[a_j] - z[b_j] for every (group, table, pair) -> [B, G, tph, nap].
+        idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
+        z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
         u = z_a - z_b
 
-        # Sign bits -> LSB-first address c_t. Comparison is non-differentiable (stop-grad).
+        # Sign bits -> LSB-first address c_t (non-differentiable, stop-grad).
         bits = (u > self.cmp_eps).to(torch.long)
-        c = (bits * self.powers).sum(dim=-1)  # [B, H, tph]
+        c = (bits * self.powers).sum(dim=-1)  # [B, G, tph]
 
-        # Least-confident pair j* and its signed margin; alternative address is c with
-        # that single bit flipped. j*, c, c_alt are all stop-gradient (integer/argmax).
-        j_star = u.abs().argmin(dim=-1)                       # [B, H, tph]
-        u_star = u.gather(-1, j_star.unsqueeze(-1)).squeeze(-1)  # [B, H, tph] (differentiable)
-        c_alt = c ^ self.powers[j_star]                       # flip bit j* -> [B, H, tph]
+        # Least-confident pair j* and its signed margin; alternative = c with that bit flipped.
+        j_star = u.abs().argmin(dim=-1)                          # [B, G, tph]
+        u_star = u.gather(-1, j_star.unsqueeze(-1)).squeeze(-1)  # [B, G, tph] (differentiable)
+        c_alt = c ^ self.powers[j_star]                          # [B, G, tph]
 
-        y_hard = self._read(c)  # [B, H, tph, d_out] — value and (hard) weight gradient
+        y_hard = self._read(c)  # [B, G, tph, d_out] — value and (hard) weight gradient
 
         if self.training:
             y_alt = self._read(c_alt)
-            # Straight-through composite: value == y_hard exactly, but x sees the blend's
-            # gradient via U(u_star). g is detached so the weight table learns on the hard
-            # cell only (the alternative gets no weight gradient — gen-1 hard-forward).
-            g = (y_hard - y_alt).detach()                     # [B, H, tph, d_out]
+            # Straight-through composite: value == y_hard, but x sees the blend's gradient
+            # via U(u_star). g detached -> weight table learns on the hard cell only.
+            g = (y_hard - y_alt).detach()
             u_term = (-rational_uncertainty(u_star)).unsqueeze(-1) * g
             per_table = y_hard + (u_term - u_term.detach())
         else:
             per_table = y_hard
 
-        head_out = per_table.sum(dim=2)  # sum over tph -> [B, H, d_out]
-        return self._restore_rank(head_out, was_flat)
+        grp_out = per_table.sum(dim=2)  # sum over tph -> [B, G, d_out]
+
+        # Scatter groups to output heads: y[:, g % h_out, :] += grp_out[:, g, :]. When
+        # h_out == 1 every group sums into head 0 (fan-in); otherwise it is a bijection.
+        y = x.new_zeros(B, spec.h_out, d_out)
+        y.index_add_(1, self.out_head, grp_out)
+        return y
