@@ -49,6 +49,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from ..anchors import canonical_full_coverage_pairs
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
 from .uncertainty import rational_uncertainty
@@ -75,20 +76,10 @@ class ManifestoHardLUT(MultiHeadLUT):
             raise ValueError(f"ManifestoHardLUT needs d_in >= 2 to form anchor pairs, got {d_in}")
         self.cmp_eps = float(cmp_eps)
 
-        gen = torch.Generator().manual_seed(seed)
-
-        # Fixed anchor pairs per (group, table): nap distinct (a != b) coordinate pairs,
-        # drawn once at init and frozen (gen-1: the partition geometry is fixed, cells learn).
-        a = torch.empty(G, tph, nap, dtype=torch.long)
-        b = torch.empty(G, tph, nap, dtype=torch.long)
-        for g in range(G):
-            for t in range(tph):
-                for j in range(nap):
-                    aj = int(torch.randint(d_in, (1,), generator=gen).item())
-                    bj = int(torch.randint(d_in, (1,), generator=gen).item())
-                    while bj == aj:
-                        bj = int(torch.randint(d_in, (1,), generator=gen).item())
-                    a[g, t, j], b[g, t, j] = aj, bj
+        # Fixed anchor pairs per (group, table), drawn once at init and frozen (gen-1: the
+        # partition geometry is fixed, only the cells learn). Canonical full-coverage policy:
+        # distinct canonical (a < b) pairs per table, covering the whole C(d_in, 2) pool.
+        a, b = canonical_full_coverage_pairs(d_in, G, tph, nap, seed=seed)
         self.register_buffer("anchor_a", a)
         self.register_buffer("anchor_b", b)
         # LSB-first bit weights: pair j -> 2**j.
@@ -99,7 +90,8 @@ class ManifestoHardLUT(MultiHeadLUT):
         self.register_buffer("out_head", torch.arange(G, dtype=torch.long) % spec.h_out)
 
         # Learnable cell tables: W[g, t, c, :], c in [0, K).
-        w = torch.randn(G, tph, spec.n_cells, d_out, generator=gen) * weight_init_std
+        wgen = torch.Generator().manual_seed(seed)
+        w = torch.randn(G, tph, spec.n_cells, d_out, generator=wgen) * weight_init_std
         self.weights = nn.Parameter(w)
 
         if device is not None:
