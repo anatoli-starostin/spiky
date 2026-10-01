@@ -22,7 +22,7 @@ Per group ``g`` and table ``t``:
 Addressing (sign-bit lookup).
     The table owns ``nap`` fixed anchor pairs ``(a_j, b_j)`` of coordinates in its
     ``d_in``-wide input vector; margins ``u_j = z[a_j] - z[b_j]``; the ``nap`` sign bits
-    ``[u_j > eps]`` form, **LSB-first** (pair ``j`` carries ``2**j``), the integer address
+    ``[u_j > eps]`` form, **MSB-first** (pair ``0`` is the high bit, ``2**(nap-1)``), the integer address
     ``c_t`` into the table's ``K = 2**nap`` rows ``W_t in R^{K x d_out}``.
 
 Hard forward.
@@ -49,6 +49,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
@@ -82,8 +83,8 @@ class ManifestoHardLUT(MultiHeadLUT):
         a, b = canonical_full_coverage_pairs(d_in, G, tph, nap, seed=seed)
         self.register_buffer("anchor_a", a)
         self.register_buffer("anchor_b", b)
-        # LSB-first bit weights: pair j -> 2**j.
-        self.register_buffer("powers", (1 << torch.arange(nap, dtype=torch.long)))
+        # MSB-first bit weights: pair 0 -> high bit 2**(nap-1) (gen-1 Fast/Light/BH4/Hyperplane).
+        self.register_buffer("powers", msb_first_powers(nap))
 
         # Group -> input/output head maps (the routing invariant).
         self.register_buffer("in_head", torch.arange(G, dtype=torch.long) % spec.h_in)
@@ -125,7 +126,7 @@ class ManifestoHardLUT(MultiHeadLUT):
         z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
         u = z_a - z_b
 
-        # Sign bits -> LSB-first address c_t (non-differentiable, stop-grad).
+        # Sign bits -> MSB-first address c_t (non-differentiable, stop-grad).
         bits = (u > self.cmp_eps).to(torch.long)
         c = (bits * self.powers).sum(dim=-1)  # [B, G, tph]
 

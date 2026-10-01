@@ -20,7 +20,7 @@ def _reference_hard(cart: ManifestoHardLUT, x: torch.Tensor) -> torch.Tensor:
                     a = int(cart.anchor_a[g, t, j])
                     bb = int(cart.anchor_b[g, t, j])
                     if (z[a] - z[bb]).item() > cart.cmp_eps:
-                        c += (1 << j)  # LSB-first
+                        c += (1 << (spec.nap - 1 - j))  # MSB-first (pair 0 = high bit)
                 acc = acc + cart.weights[g, t, c]
             out[b, g % spec.h_out] = out[b, g % spec.h_out] + acc  # sum groups per out head
     return out
@@ -69,7 +69,7 @@ def test_weight_gradient_is_hard_only():
         for j in range(spec.nap):
             a = int(cart.anchor_a[0, 0, j]); bb = int(cart.anchor_b[0, 0, j])
             if (x[b, 0, a] - x[b, 0, bb]).item() > cart.cmp_eps:
-                c += (1 << j)
+                c += (1 << (spec.nap - 1 - j))  # MSB-first (pair 0 = high bit)
         hit.add(c)
     grad_per_cell = cart.weights.grad[0, 0].abs().sum(dim=-1)
     for c in range(spec.n_cells):
