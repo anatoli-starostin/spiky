@@ -33,7 +33,7 @@ import os
 
 import torch
 
-from ._fused_ops import _acc_dtype
+from ._fused_ops import _acc_dtype, fused_hard_read
 
 _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
@@ -217,10 +217,12 @@ class NativeHard(torch.autograd.Function):
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
         tif = _table_indices(B, nt, z.device)
-        # Hard value: sum_t W[c_t]. lutorch_cuda has no nonsmooth forward, so gather+sum here
-        # (fp32-accumulated for bf16/fp16, cast back to the weight dtype).
-        val = (W[tif.reshape(B, nt), li].reshape(B, G, tph, d_out)
-               .sum(2, dtype=_acc_dtype(W.dtype)).to(weights.dtype))
+        # Hard value: sum_t W[c_t]. lutorch_cuda has no nonsmooth forward, so fuse the per-table
+        # gather + tph-sum with embedding_bag (fp32-accumulated for bf16/fp16, cast back to the
+        # weight dtype) instead of the eager W[tif,li].sum(2), which materialized the full
+        # [B,G,tph,d_out] cell tensor (~2.4 GB at the champion batch). Numerically identical; the
+        # saved tensors / backward are unchanged.
+        val = fused_hard_read(weights, c).to(weights.dtype)
         batch_off = (torch.arange(B, device=z.device).repeat_interleave(nt) * (G * d_in)).contiguous()
         ctx.save_for_backward(W, li, lai, lad, tif,
                               a_glob.reshape(B, nt, 1), b_glob.reshape(B, nt, 1), batch_off,
