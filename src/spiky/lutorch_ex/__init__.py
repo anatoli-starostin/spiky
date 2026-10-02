@@ -10,6 +10,8 @@ imports from the old ``spiky.lutorch``. The pieces:
 * :class:`ProjectionMHL` — a compress/decompress bottleneck around any cartridge.
 """
 from .cartridges import (
+    FusedManifestoHardLUT,
+    FusedManifestoSoftLUT,
     ManifestoHardLUT,
     ManifestoLUT,
     ManifestoSoftLUT,
@@ -25,6 +27,8 @@ __all__ = [
     "ManifestoLUT",
     "ManifestoHardLUT",
     "ManifestoSoftLUT",
+    "FusedManifestoHardLUT",
+    "FusedManifestoSoftLUT",
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",

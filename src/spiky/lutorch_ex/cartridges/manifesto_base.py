@@ -154,37 +154,40 @@ class ManifestoLUT(MultiHeadLUT):
             return self._compiled(x)
         return self._forward_impl(x)
 
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+    def _addresses(self, x: torch.Tensor):
+        """Shared addressing: input routing + per-table sign-bit address and its neighbour.
+
+        Returns ``(z, u, c, j_star, u_abs_star, c_alt)``:
+          z          [B, G, d_in]      per-group input slice (x routed by in_head),
+          u          [B, G, tph, nap]  signed anchor-pair margins u_j = z[a_j] - z[b_j],
+          c          [B, G, tph]       MSB-first sign-bit address,
+          j_star     [B, G, tph]       least-confident pair (argmin|u_j|),
+          u_abs_star [B, G, tph]       |u_{j*}|,
+          c_alt      [B, G, tph]       c with the j* bit flipped.
+        Used by both the pure forward and the fused cartridges.
+        """
         self._check_input(x)  # [B, h_in, d_in]
-        spec = self.spec
-        G, tph, nap = spec.n_groups, spec.tph, spec.nap
+        G, tph, nap = self.spec.n_groups, self.spec.tph, self.spec.nap
         B = x.shape[0]
-
-        # Route each group to its input head: z[b, g, :] = x[b, g % h_in, :]  -> [B, G, d_in].
-        z = x[:, self.in_head, :]
-
-        # Margins u_j = z[a_j] - z[b_j] for every (group, table, pair) -> [B, G, tph, nap].
+        z = x[:, self.in_head, :]  # route each group to its input head -> [B, G, d_in]
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
         z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
         u = z_a - z_b
+        c = ((u > self.cmp_eps).to(torch.long) * self.powers).sum(dim=-1)  # MSB-first, stop-grad
+        u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
+        c_alt = c ^ self.powers[j_star]
+        return z, u, c, j_star, u_abs_star, c_alt
 
-        # Sign bits -> MSB-first address c_t (non-differentiable, stop-grad).
-        bits = (u > self.cmp_eps).to(torch.long)
-        c = (bits * self.powers).sum(dim=-1)  # [B, G, tph]
-
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         if self._needs_alt():
-            # |u_{j*}| and j* in ONE reduction (the sign is never used); neighbour = c with
-            # that bit flipped; both cells read in ONE fused gather.
-            u_abs_star, j_star = u.abs().min(dim=-1)          # [B, G, tph] each
-            c_alt = c ^ self.powers[j_star]
+            # Both cells read in ONE fused gather; combine per the cartridge.
             y_hard, y_alt = self._read_pair(c, c_alt)
             per_table = self._combine(y_hard, y_alt, u_abs_star)   # [B, G, tph, d_out]
         else:
-            # Eval shortcut (hard cartridge): only the addressed cell matters — one gather,
-            # no alternative, no uncertainty.
+            # Eval shortcut (hard cartridge): only the addressed cell matters — one gather.
             per_table = self._read(c)
-
         grp_out = per_table.sum(dim=2)  # sum over tph -> [B, G, d_out]
         return self._route(grp_out, x)
