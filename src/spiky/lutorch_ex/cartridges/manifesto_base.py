@@ -35,6 +35,7 @@ from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
+from ._fused_ops import _global_cells
 
 # Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
@@ -87,26 +88,21 @@ class ManifestoLUT(MultiHeadLUT):
         self._compiled = None
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
-        """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``."""
-        B = idx.shape[0]
-        G, tph, d_out, K = (
-            self.spec.n_groups, self.spec.tph, self.spec.d_out, self.spec.n_cells,
-        )
-        idx_e = idx.unsqueeze(-1).unsqueeze(-1).expand(B, G, tph, 1, d_out)
-        w_e = self.weights.unsqueeze(0).expand(B, G, tph, K, d_out)
-        return w_e.gather(3, idx_e).squeeze(3)
+        """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
+
+        Flat advanced-index gather into the reshaped weight table: the backward scatters the
+        gradient into grad_W of shape [G*tph*K, d_out] (small), with NO [B,G,tph,K,d_out]
+        intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
+        """
+        G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        return W2[_global_cells(idx, G, tph, K)]              # [B, G, tph, d_out]
 
     def _read_pair(self, c: torch.Tensor, c_alt: torch.Tensor):
-        """Gather BOTH cells in one kernel: returns ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]``."""
-        B = c.shape[0]
-        G, tph, d_out, K = (
-            self.spec.n_groups, self.spec.tph, self.spec.d_out, self.spec.n_cells,
-        )
-        pair = torch.stack((c, c_alt), dim=-1)                 # [B, G, tph, 2]
-        idx_e = pair.unsqueeze(-1).expand(B, G, tph, 2, d_out)
-        w_e = self.weights.unsqueeze(0).expand(B, G, tph, K, d_out)
-        both = w_e.gather(3, idx_e)                            # [B, G, tph, 2, d_out]
-        return both[..., 0, :], both[..., 1, :]
+        """Return ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]`` — two flat gathers, same as _read."""
+        G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
     def _needs_alt(self) -> bool:
         """Whether the alternative cell ``c_t'`` (and the uncertainty) is needed this call.
@@ -154,37 +150,40 @@ class ManifestoLUT(MultiHeadLUT):
             return self._compiled(x)
         return self._forward_impl(x)
 
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+    def _addresses(self, x: torch.Tensor):
+        """Shared addressing: input routing + per-table sign-bit address and its neighbour.
+
+        Returns ``(z, u, c, j_star, u_abs_star, c_alt)``:
+          z          [B, G, d_in]      per-group input slice (x routed by in_head),
+          u          [B, G, tph, nap]  signed anchor-pair margins u_j = z[a_j] - z[b_j],
+          c          [B, G, tph]       MSB-first sign-bit address,
+          j_star     [B, G, tph]       least-confident pair (argmin|u_j|),
+          u_abs_star [B, G, tph]       |u_{j*}|,
+          c_alt      [B, G, tph]       c with the j* bit flipped.
+        Used by both the pure forward and the fused cartridges.
+        """
         self._check_input(x)  # [B, h_in, d_in]
-        spec = self.spec
-        G, tph, nap = spec.n_groups, spec.tph, spec.nap
+        G, tph, nap = self.spec.n_groups, self.spec.tph, self.spec.nap
         B = x.shape[0]
-
-        # Route each group to its input head: z[b, g, :] = x[b, g % h_in, :]  -> [B, G, d_in].
-        z = x[:, self.in_head, :]
-
-        # Margins u_j = z[a_j] - z[b_j] for every (group, table, pair) -> [B, G, tph, nap].
+        z = x[:, self.in_head, :]  # route each group to its input head -> [B, G, d_in]
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
         z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
         u = z_a - z_b
+        c = ((u > self.cmp_eps).to(torch.long) * self.powers).sum(dim=-1)  # MSB-first, stop-grad
+        u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
+        c_alt = c ^ self.powers[j_star]
+        return z, u, c, j_star, u_abs_star, c_alt
 
-        # Sign bits -> MSB-first address c_t (non-differentiable, stop-grad).
-        bits = (u > self.cmp_eps).to(torch.long)
-        c = (bits * self.powers).sum(dim=-1)  # [B, G, tph]
-
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         if self._needs_alt():
-            # |u_{j*}| and j* in ONE reduction (the sign is never used); neighbour = c with
-            # that bit flipped; both cells read in ONE fused gather.
-            u_abs_star, j_star = u.abs().min(dim=-1)          # [B, G, tph] each
-            c_alt = c ^ self.powers[j_star]
+            # Both cells read in ONE fused gather; combine per the cartridge.
             y_hard, y_alt = self._read_pair(c, c_alt)
             per_table = self._combine(y_hard, y_alt, u_abs_star)   # [B, G, tph, d_out]
         else:
-            # Eval shortcut (hard cartridge): only the addressed cell matters — one gather,
-            # no alternative, no uncertainty.
+            # Eval shortcut (hard cartridge): only the addressed cell matters — one gather.
             per_table = self._read(c)
-
         grp_out = per_table.sum(dim=2)  # sum over tph -> [B, G, d_out]
         return self._route(grp_out, x)
