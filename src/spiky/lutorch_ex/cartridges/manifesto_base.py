@@ -39,11 +39,13 @@ from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs, canonical_full_coverage_singles
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
-from ._fused_ops import _acc_dtype, _global_cells
+from ._fused_ops import _global_cells
 
 # Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
+
+_LOW_PRECISION = (torch.bfloat16, torch.float16)
 
 
 class ManifestoLUT(MultiHeadLUT):
@@ -52,6 +54,15 @@ class ManifestoLUT(MultiHeadLUT):
     Abstract: subclasses supply :meth:`_combine` to turn the two addressed cells
     (``y_hard`` = ``W[c_t]``, ``y_alt`` = ``W[c_t']``) and the deciding margin ``u_star``
     into the per-table output.
+
+    Dtype contract: this base (the pure cartridges' path) carries **no mixed-precision
+    handling** — it reads, reduces, and routes in the weight/input dtype, and supports only
+    float32/float64. Handed bf16/fp16 params or inputs it **raises** (see :meth:`forward`)
+    rather than run lossy low-precision math. Low precision (fp32 addressing + fp32-accumulated
+    reads) is a fused-cartridge feature
+    (:class:`~spiky.lutorch_ex.cartridges.fused_manifesto_hard.FusedManifestoHardLUT` /
+    :class:`~spiky.lutorch_ex.cartridges.fused_manifesto_soft.FusedManifestoSoftLUT`), which
+    override :meth:`_supports_low_precision`.
     """
 
     def __init__(
@@ -103,35 +114,24 @@ class ManifestoLUT(MultiHeadLUT):
         # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
         self._compiled = None
 
-    def _w2(self) -> torch.Tensor:
-        """The weight table reshaped to ``[G*tph*K, d_out]`` for gathering.
-
-        In low precision (bf16/fp16) with grad enabled we upcast to fp32 first, so the gather's
-        backward accumulates the per-cell weight gradient (an index_add over the batch) in fp32
-        rather than in the low-precision storage dtype — otherwise summing many batch terms in
-        bf16 is catastrophically lossy. Eval (no grad) keeps the bf16 table and lets the fp32
-        reduction in ``_forward_impl`` do the accumulation, so inference stays memory-light. A
-        no-op for fp32 weights.
-        """
-        W = self.weights
-        if torch.is_grad_enabled() and W.dtype in (torch.bfloat16, torch.float16):
-            W = W.float()
-        return W.reshape(self.spec.n_groups * self.spec.tph * self.spec.n_cells, self.spec.d_out)
-
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
 
         Flat advanced-index gather into the reshaped weight table: the backward scatters the
         gradient into grad_W of shape [G*tph*K, d_out] (small), with NO [B,G,tph,K,d_out]
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
+
+        Operates in the weight dtype as-is — this pure path carries no mixed-precision handling
+        (bf16/fp16 support lives in the fused cartridges). See the class docstring.
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
-        return self._w2()[_global_cells(idx, G, tph, K)]      # [B, G, tph, d_out]
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        return W2[_global_cells(idx, G, tph, K)]              # [B, G, tph, d_out]
 
     def _read_pair(self, c: torch.Tensor, c_alt: torch.Tensor):
         """Return ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]`` — two flat gathers, same as _read."""
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
-        W2 = self._w2()
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
         return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
     def _needs_alt(self) -> bool:
@@ -143,22 +143,15 @@ class ManifestoLUT(MultiHeadLUT):
         return True
 
     def _route(self, grp_out: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant.
-
-        ``grp_out`` is the fp32-accumulated per-group output; the fan-in sum over groups stays
-        in fp32, and the result is cast to the input dtype (bf16/fp16/fp32) on the way out, so
-        every reduction accumulates in fp32 and only the final output carries the low precision.
-        """
+        """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant."""
         spec = self.spec
         if spec.h_out == spec.n_groups:
-            out = grp_out                                     # bijection (per-head / fan-out): no scatter
-        elif spec.h_out == 1:
-            out = grp_out.sum(dim=1, keepdim=True)            # fan-in: fp32 sum over groups
-        else:
-            # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
-            y = grp_out.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
-            out = y.index_add_(1, self.out_head, grp_out)
-        return out.to(x.dtype)
+            return grp_out                                    # bijection (per-head / fan-out): no scatter
+        if spec.h_out == 1:
+            return grp_out.sum(dim=1, keepdim=True)           # fan-in: plain sum over groups
+        # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
+        y = grp_out.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
+        return y.index_add_(1, self.out_head, grp_out)
 
     @abstractmethod
     def _combine(
@@ -176,7 +169,23 @@ class ManifestoLUT(MultiHeadLUT):
         """
         raise NotImplementedError
 
+    def _supports_low_precision(self) -> bool:
+        """Whether this cartridge supports bf16/fp16 params/inputs. False on the pure base
+        (see the class docstring); the fused cartridges override it to True."""
+        return False
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Low precision (bf16/fp16) is a fused-cartridge feature; the pure cartridges reject it
+        # with a clear error rather than silently running lossy bf16 math.
+        if not self._supports_low_precision() and (
+            x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
+        ):
+            raise TypeError(
+                f"{type(self).__name__} does not support low precision: got input dtype "
+                f"{x.dtype} and weight dtype {self.weights.dtype}. bf16/fp16 is supported only by "
+                "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT); keep this "
+                "cartridge (and ProjectionMHL wrapping it) in float32/float64."
+            )
         # Compile ONLY the EVAL forward on CUDA (built lazily on first such call, per instance).
         # torch.compile helps the eval/inference path, but hurts the train+backward step at the
         # training batch (memory-bound there — eager is fastest), so training forward and its
@@ -202,11 +211,7 @@ class ManifestoLUT(MultiHeadLUT):
         self._check_input(x)  # [B, h_in, d_in]
         G, tph, nap = self.spec.n_groups, self.spec.tph, self.spec.nap
         B = x.shape[0]
-        # Addressing runs in fp32 for bf16/fp16 inputs: the margins, their argmin j*, and the
-        # packed cell index are discrete decisions that a lossy bf16 subtraction z[a]-z[b] could
-        # flip near a decision boundary. Cheap (nap comparisons per table). fp32 and fp64 keep
-        # their own precision (never downcast fp64), so the fp64 equivalence tests stay exact.
-        z = x[:, self.in_head, :].to(_acc_dtype(x.dtype))  # route each group to its input head -> [B, G, d_in]
+        z = x[:, self.in_head, :]  # route each group to its input head -> [B, G, d_in]
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
         if self.single:
@@ -230,5 +235,5 @@ class ManifestoLUT(MultiHeadLUT):
         else:
             # Eval shortcut (hard cartridge): only the addressed cell matters — one gather.
             per_table = self._read(c)
-        grp_out = per_table.sum(dim=2, dtype=_acc_dtype(per_table.dtype))  # fp32-accum for bf16/fp16; [B, G, d_out]
+        grp_out = per_table.sum(dim=2)  # sum over tph -> [B, G, d_out]
         return self._route(grp_out, x)

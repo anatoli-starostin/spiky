@@ -18,11 +18,16 @@ from ._native_ops import NativeSoft, native_available
 from .manifesto_base import ManifestoLUT
 from .uncertainty import rational_uncertainty
 
+_LOW_PREC = (torch.bfloat16, torch.float16)
+
 
 class FusedManifestoSoftLUT(ManifestoLUT):
     def __init__(self, spec, *, backend: str = "auto", **kw):
         super().__init__(spec, **kw)
         self.backend = backend
+
+    def _supports_low_precision(self) -> bool:
+        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
 
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
@@ -61,15 +66,20 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         return "tier1" if x.is_cuda else "pure"
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        # bf16/fp16 support lives here (not in the pure base). fp32 addressing; fp32-accumulated
+        # reads; output cast back to the input dtype once at the end.
+        low = x.dtype in _LOW_PREC
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         be = self._pick(x) if self.backend == "auto" else self.backend
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":
             # Single mode reuses the native smooth forward + weight-grad; input grad to a only.
+            # Grad target z passed in the input dtype (bf16) -> input grad stays bf16, one cast.
             ag, bg, us = self._star_global(z, u, j_star)
-            grp_out = NativeSoft.apply(self.weights, z, c, c_alt, us, ag, bg, self.single)
+            zc = x[:, self.in_head, :] if low else z
+            grp_out = NativeSoft.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single)
         else:  # tier1
             U = rational_uncertainty(u_abs_star)
             grp_out = fused_blend_read(self.weights, c, c_alt, U)
-        return self._route(grp_out, x)
+        return self._route(grp_out, x).to(x.dtype)

@@ -19,11 +19,16 @@ from ._fused_ops import FusedHardSTE, _acc_dtype
 from ._native_ops import NativeHard, native_available
 from .manifesto_base import ManifestoLUT
 
+_LOW_PREC = (torch.bfloat16, torch.float16)
+
 
 class FusedManifestoHardLUT(ManifestoLUT):
     def __init__(self, spec, *, backend: str = "auto", **kw):
         super().__init__(spec, **kw)
         self.backend = backend
+
+    def _supports_low_precision(self) -> bool:
+        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
 
     def _needs_alt(self) -> bool:
         return self.training  # eval reads only c_t
@@ -57,17 +62,24 @@ class FusedManifestoHardLUT(ManifestoLUT):
         return "tier1"                                # train (CPU / no native): embedding_bag + STE
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        # bf16/fp16 support lives here (not in the pure base). Addressing runs in fp32 so the
+        # discrete bit decisions don't flip vs fp32; every read/reduction accumulates in fp32
+        # and the output is cast back to the input dtype once, at the end.
+        low = x.dtype in _LOW_PREC
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         be = self._pick(x) if self.backend == "auto" else self.backend
         if be == "pure_eval":
             rd = self._read(c)
             grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)
         elif be == "native":
             # Single mode reuses the native forward + weight-grad kernels (index-only); only
-            # the input-grad scatters to one coordinate (handled inside NativeHard).
+            # the input-grad scatters to one coordinate (handled inside NativeHard). The grad
+            # target z is passed in the INPUT dtype (bf16) so the input grad stays bf16 end to
+            # end (one cast), while the fp32 addressing above supplies c/c_alt/us.
             al, bl, ag, bg, us = self._star(z, u, j_star)
-            grp_out = NativeHard.apply(self.weights, z, c, c_alt, us, ag, bg, self.single)
+            zc = x[:, self.in_head, :] if low else z
+            grp_out = NativeHard.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single)
         else:  # tier1
             al, bl, ag, bg, us = self._star(z, u, j_star)
             grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl, self.single)
-        return self._route(grp_out, x)
+        return self._route(grp_out, x).to(x.dtype)

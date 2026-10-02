@@ -83,31 +83,29 @@ class FusedHardSTE(torch.autograd.Function):
         ctx.dims = (G, tph, K, d_out, B, d_in)
         ctx.single = single
         ctx.wdtype = weights.dtype
-        ctx.zdtype = z.dtype
-        return val                              # fp32; the cartridge casts to the caller dtype in _route
+        return val                              # acc dtype; the cartridge casts to the caller dtype in _route
 
     @staticmethod
-    def backward(ctx, grad_out):                 # grad_out [B,G,d_out] (fp32)
+    def backward(ctx, grad_out):                 # grad_out [B,G,d_out] — already in the acc dtype
         gc, gdiff, delta, a_star, b_star = ctx.saved_tensors
         G, tph, K, d_out, B, d_in = ctx.dims
         acc = _acc_dtype(ctx.wdtype)
-        go_f = grad_out.to(acc)
-        # Weight gradient: HARD — grad_out scattered to each addressed cell c_t (index_add),
-        # accumulated in the acc dtype (fp32 for bf16/fp16) and cast back to the weight dtype,
-        # so low-precision weight grads don't lose the batch sum.
+        # grad_out and delta are already in `acc`: the cartridge upcasts bf16/fp16 x before
+        # addressing (so delta = z[.] is fp32) and the forward value is produced in `acc` (so its
+        # grad is too). The weight grad accumulates in `acc` and casts back to the weight dtype.
         grad_W2 = torch.zeros(G * tph * K, d_out, device=grad_out.device, dtype=acc)
-        go = go_f.unsqueeze(2).expand(B, G, tph, d_out).reshape(-1, d_out)
+        go = grad_out.unsqueeze(2).expand(B, G, tph, d_out).reshape(-1, d_out)
         grad_W2.index_add_(0, gc.reshape(-1), go)
         grad_weights = grad_W2.reshape(G, tph, K, d_out).to(ctx.wdtype)
         # Input gradient via the surrogate: du = (grad_out . (W[c]-W[c'])) * (-dU/ddelta),
-        # with U = 0.5/(1+|delta|) -> -dU/ddelta = 0.5*sign(delta)/(1+|delta|)^2. acc throughout.
+        # with U = 0.5/(1+|delta|) -> -dU/ddelta = 0.5*sign(delta)/(1+|delta|)^2. gdiff (weight
+        # dtype) is the only operand upcast to `acc`.
         # Pairs: delta = z[a]-z[b] -> +du to a, -du to b. Single: delta = z[a] -> +du to a.
-        gd = (go_f.unsqueeze(2) * gdiff.to(acc)).sum(-1)       # [B,G,tph]
-        df = delta.to(acc)
-        coeff = 0.5 * torch.sign(df) / (1.0 + df.abs()) ** 2
+        gd = (grad_out.unsqueeze(2) * gdiff.to(acc)).sum(-1)   # [B,G,tph]
+        coeff = 0.5 * torch.sign(delta) / (1.0 + delta.abs()) ** 2
         du = gd * coeff
         grad_z = torch.zeros(B, G, d_in, device=grad_out.device, dtype=acc)
         grad_z.scatter_add_(2, a_star, du)
         if not ctx.single:
             grad_z.scatter_add_(2, b_star, -du)
-        return grad_weights, grad_z.to(ctx.zdtype), None, None, None, None, None
+        return grad_weights, grad_z, None, None, None, None, None
