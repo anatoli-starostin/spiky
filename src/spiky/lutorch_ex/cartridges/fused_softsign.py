@@ -119,6 +119,13 @@ class FusedSoftSignHardLUT(FusedSoftSignLUT):
 class FusedSoftSignSmoothLUT(FusedSoftSignLUT):
     """Native fused twin of SoftSignSmoothLUT (variant 2.4)."""
 
+    def _pick(self, x: torch.Tensor) -> str:
+        # Smooth override: the pure embedding_bag train read is already fused and lighter on peak
+        # memory at large batch, and the native soft-sign path is a wash (no speedup) for smooth —
+        # so "auto" prefers tier1 (embedding_bag). The native path stays reachable via an explicit
+        # backend="native". (Hard keeps the base _pick: its native path is a clear win.)
+        return "pure_eval" if not self.training else "tier1"
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         low = x.dtype in _LOW_PREC
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
