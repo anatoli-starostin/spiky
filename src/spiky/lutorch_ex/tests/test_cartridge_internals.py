@@ -47,3 +47,11 @@ def test_soft_always_uses_fused_pair():
         counts = _instrument(cart)
         cart(torch.randn(4, cart.spec.h_in, cart.spec.d_in))
         assert counts == {"read": 0, "pair": 1}, (training, counts)
+
+
+def test_compile_not_used_on_cpu():
+    # torch.compile is GPU-only; a CPU forward must stay eager (self._compiled stays None).
+    for cls in (ManifestoHardLUT, ManifestoSoftLUT):
+        cart = cls(_spec(), seed=0)
+        cart(torch.randn(2, cart.spec.h_in, cart.spec.d_in))  # CPU tensor
+        assert cart._compiled is None

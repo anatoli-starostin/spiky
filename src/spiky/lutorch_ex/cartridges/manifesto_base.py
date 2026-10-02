@@ -24,6 +24,7 @@ Subclasses implement only :meth:`_combine`.
 """
 from __future__ import annotations
 
+import os
 from abc import abstractmethod
 from typing import Optional
 
@@ -34,6 +35,10 @@ from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
+
+# Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
+# CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
+_COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
 
 class ManifestoLUT(MultiHeadLUT):
@@ -77,6 +82,9 @@ class ManifestoLUT(MultiHeadLUT):
         wgen = torch.Generator().manual_seed(seed)
         w = torch.randn(G, tph, spec.n_cells, d_out, generator=wgen) * weight_init_std
         self.weights = nn.Parameter(w)
+
+        # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
+        self._compiled = None
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``."""
@@ -136,6 +144,15 @@ class ManifestoLUT(MultiHeadLUT):
         raise NotImplementedError
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # GPU: run the torch.compiled forward (built lazily on first CUDA call, per instance);
+        # CPU: eager. Gated so CPU stays plain pure-pytorch and the CPU tests are unaffected.
+        if _COMPILE_ENABLED and x.is_cuda:
+            if self._compiled is None:
+                self._compiled = torch.compile(self._forward_impl, dynamic=True)
+            return self._compiled(x)
+        return self._forward_impl(x)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         self._check_input(x)  # [B, h_in, d_in]
         spec = self.spec
         G, tph, nap = spec.n_groups, spec.tph, spec.nap
