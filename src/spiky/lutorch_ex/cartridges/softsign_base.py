@@ -20,7 +20,8 @@ the backward blend coincides with the forward blend. The all-K softmax backward
 deliberately out of scope.
 
 Two cartridges subclass this base (both use ``F.embedding_bag`` for the fused train read,
-eval-only torch.compile on CUDA, a plain-autograd backward and bf16/fp16 support):
+eval-only torch.compile on CUDA, and a plain-autograd backward; fp32/fp64 only — like the other
+non-fused cartridges they reject bf16/fp16, which was benchmarked and dropped as no speedup):
 * :class:`~spiky.lutorch_ex.cartridges.softsign_hard.SoftSignHardLUT` (variant 2.3): hard forward,
   2-alt soft-surrogate backward.
 * :class:`~spiky.lutorch_ex.cartridges.softsign_smooth.SoftSignSmoothLUT` (variant 2.4): the

@@ -105,23 +105,18 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
         assert m(x).shape == (64, h_out, 8)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize("Cls", CARTRIDGES)
-@pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
-def test_bf16_matches_fp32_reference(Cls, anchor_mode):
-    spec = LUTSpec(h_in=4, h_out=4, tph=6, nap=5, d_in=12, d_out=8, anchor_mode=anchor_mode)
-    ref = Cls(spec, seed=0, weight_init_std=1.0).cuda()
-    bf = Cls(spec, seed=0, weight_init_std=1.0).cuda().to(torch.bfloat16)
-    x = torch.randn(128, 4, 12, device="cuda").to(torch.bfloat16)
-    xr = x.float().clone().requires_grad_(True); xb = x.clone().requires_grad_(True)
-    ref.train(); bf.train()
-    yr, yb = ref(xr), bf(xb)
-    assert yb.dtype == torch.bfloat16
-    assert _normrel(yb, yr) < 5e-2
-    go = torch.randn_like(yr)
-    gxr, gwr = torch.autograd.grad(yr, (xr, ref.weights), go)
-    gxb, gwb = torch.autograd.grad(yb, (xb, bf.weights), go.to(torch.bfloat16))
-    assert _normrel(gxb, gxr) < 5e-2 and _normrel(gwb, gwr) < 5e-2
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_rejects_low_precision(Cls, dtype):
+    """Gen-2 soft-sign cartridges are fp32/fp64 only (bf16 gave no speedup); low-precision params
+    OR inputs must raise, like the other non-fused cartridges."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)
+    with pytest.raises(TypeError, match="does not support low precision"):
+        m(torch.randn(8, 2, 6, dtype=dtype))
+    m32 = Cls(spec, seed=0, weight_init_std=1.0)
+    with pytest.raises(TypeError, match="does not support low precision"):
+        m32(torch.randn(8, 2, 6, dtype=dtype))
 
 
 def test_temps_are_learnable_parameters():
