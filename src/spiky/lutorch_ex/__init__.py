@@ -12,9 +12,15 @@ imports from the old ``spiky.lutorch``. The pieces:
 from .cartridges import (
     FusedManifestoHardLUT,
     FusedManifestoSoftLUT,
+    FusedSoftSignHardLUT,
+    FusedSoftSignLUT,
+    FusedSoftSignSmoothLUT,
     ManifestoHardLUT,
     ManifestoLUT,
     ManifestoSoftLUT,
+    SoftSignHardLUT,
+    SoftSignLUT,
+    SoftSignSmoothLUT,
     rational_uncertainty,
 )
 from .lut_base import MultiHeadLUT
@@ -29,6 +35,12 @@ __all__ = [
     "ManifestoSoftLUT",
     "FusedManifestoHardLUT",
     "FusedManifestoSoftLUT",
+    "SoftSignLUT",
+    "SoftSignHardLUT",
+    "SoftSignSmoothLUT",
+    "FusedSoftSignLUT",
+    "FusedSoftSignHardLUT",
+    "FusedSoftSignSmoothLUT",
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",
