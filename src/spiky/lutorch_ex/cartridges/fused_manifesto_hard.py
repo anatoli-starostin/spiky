@@ -66,8 +66,11 @@ class FusedManifestoHardLUT(ManifestoLUT):
         # discrete bit decisions don't flip vs fp32; every read/reduction accumulates in fp32
         # and the output is cast back to the input dtype once, at the end.
         low = x.dtype in _LOW_PREC
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
+        xa = x.float() if low else x
         be = self._pick(x) if self.backend == "auto" else self.backend
+        # Native train path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization);
+        # eval/tier1 keep plain _addresses (eval is already compiled whole by the base forward).
+        z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if be == "native" else self._addresses(xa)
         if be == "pure_eval":
             rd = self._read(c)
             grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)

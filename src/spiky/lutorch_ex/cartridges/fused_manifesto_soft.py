@@ -69,8 +69,11 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         # bf16/fp16 support lives here (not in the pure base). fp32 addressing; fp32-accumulated
         # reads; output cast back to the input dtype once at the end.
         low = x.dtype in _LOW_PREC
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
+        xa = x.float() if low else x
         be = self._pick(x) if self.backend == "auto" else self.backend
+        # Native train path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization);
+        # eval/tier1 keep plain _addresses (eval is already compiled whole by the base forward).
+        z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if be == "native" else self._addresses(xa)
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":

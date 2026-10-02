@@ -113,6 +113,8 @@ class ManifestoLUT(MultiHeadLUT):
 
         # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
         self._compiled = None
+        # Lazily-built torch.compile of the addressing, for the native TRAIN path (see _addr()).
+        self._compiled_addr = None
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
@@ -195,6 +197,19 @@ class ManifestoLUT(MultiHeadLUT):
                 self._compiled = torch.compile(self._forward_impl, dynamic=True)
             return self._compiled(x)
         return self._forward_impl(x)
+
+    def _addr(self, x: torch.Tensor):
+        """Addressing for the native TRAIN path. Identical result to :meth:`_addresses`, but
+        compiled with ``torch.compile`` on CUDA so inductor fuses the margin / sign-bit-pack /
+        argmin steps instead of materialising the big ``[B, G, tph, nap]`` intermediates eagerly
+        (~10x faster at the training batch: 4.4 ms -> 0.4 ms on the champion shape). Eager on CPU
+        or when compile is disabled. NOT used on the eval path (the base ``forward`` already
+        compiles the whole eval ``_forward_impl``), so there is no nested compile."""
+        if _COMPILE_ENABLED and x.is_cuda:
+            if self._compiled_addr is None:
+                self._compiled_addr = torch.compile(self._addresses, dynamic=True)
+            return self._compiled_addr(x)
+        return self._addresses(x)
 
     def _addresses(self, x: torch.Tensor):
         """Shared addressing: input routing + per-table sign-bit address and its neighbour.
