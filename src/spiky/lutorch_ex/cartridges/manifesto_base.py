@@ -35,6 +35,7 @@ from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
+from ._fused_ops import _global_cells
 
 # Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
@@ -87,26 +88,21 @@ class ManifestoLUT(MultiHeadLUT):
         self._compiled = None
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
-        """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``."""
-        B = idx.shape[0]
-        G, tph, d_out, K = (
-            self.spec.n_groups, self.spec.tph, self.spec.d_out, self.spec.n_cells,
-        )
-        idx_e = idx.unsqueeze(-1).unsqueeze(-1).expand(B, G, tph, 1, d_out)
-        w_e = self.weights.unsqueeze(0).expand(B, G, tph, K, d_out)
-        return w_e.gather(3, idx_e).squeeze(3)
+        """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
+
+        Flat advanced-index gather into the reshaped weight table: the backward scatters the
+        gradient into grad_W of shape [G*tph*K, d_out] (small), with NO [B,G,tph,K,d_out]
+        intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
+        """
+        G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        return W2[_global_cells(idx, G, tph, K)]              # [B, G, tph, d_out]
 
     def _read_pair(self, c: torch.Tensor, c_alt: torch.Tensor):
-        """Gather BOTH cells in one kernel: returns ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]``."""
-        B = c.shape[0]
-        G, tph, d_out, K = (
-            self.spec.n_groups, self.spec.tph, self.spec.d_out, self.spec.n_cells,
-        )
-        pair = torch.stack((c, c_alt), dim=-1)                 # [B, G, tph, 2]
-        idx_e = pair.unsqueeze(-1).expand(B, G, tph, 2, d_out)
-        w_e = self.weights.unsqueeze(0).expand(B, G, tph, K, d_out)
-        both = w_e.gather(3, idx_e)                            # [B, G, tph, 2, d_out]
-        return both[..., 0, :], both[..., 1, :]
+        """Return ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]`` — two flat gathers, same as _read."""
+        G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
+        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
     def _needs_alt(self) -> bool:
         """Whether the alternative cell ``c_t'`` (and the uncertainty) is needed this call.
