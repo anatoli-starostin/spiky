@@ -33,6 +33,8 @@ import os
 
 import torch
 
+from ._fused_ops import _acc_dtype
+
 _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
 _TRIED = False
@@ -148,14 +150,20 @@ def _single_input_grad(gc_main, gc_alt, delta, a_glob, B, G, d_in, nt):
 
 
 def _flatten(weights, c, c_alt, u_signed_star):
-    """Common reshapes to gen-1 flat layout. Returns (W, li, lai, lad, nt, B, G, tph, K, d_out)."""
+    """Common reshapes to gen-1 flat layout. Returns (W, li, lai, lad, nt, B, G, tph, K, d_out).
+
+    lad (the signed deciding margin) is cast to the weight dtype: the native kernels dispatch
+    on the weight dtype, so the margin must match it (addressing was computed in fp32 upstream;
+    casting the magnitude to bf16 here costs only bf16 round-off, and the kernels re-accumulate
+    in fp32 internally).
+    """
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
     nt = G * tph
     W = weights.reshape(nt, K, d_out).contiguous()
     li = c.reshape(B, nt).contiguous()
     lai = c_alt.reshape(B, nt, 1).contiguous()
-    lad = u_signed_star.reshape(B, nt, 1).contiguous()
+    lad = u_signed_star.reshape(B, nt, 1).to(weights.dtype).contiguous()
     return W, li, lai, lad, nt, B, G, tph, K, d_out
 
 
@@ -169,13 +177,16 @@ class NativeSoft(torch.autograd.Function):
         d_in = z.shape[2]
         tif = _table_indices(B, nt, z.device)
         out, mw, aw = mgr.lprojection_forward_smooth(W, li, lai, lad, tif, tif, True, _THREADS)
-        grp = out.reshape(B, G, tph, d_out).sum(2)
+        grp = out.reshape(B, G, tph, d_out).sum(2, dtype=_acc_dtype(out.dtype)).to(weights.dtype)
         batch_off = (torch.arange(B, device=z.device).repeat_interleave(nt) * (G * d_in)).contiguous()
+        # z values are unused by the input-grad kernels (only its shape / dtype); keep it in the
+        # weight dtype so the anchor kernel's dtype checks pass. grad_z is cast back to z's dtype.
         ctx.save_for_backward(W, li, lai, lad, tif, mw, aw,
                               a_glob.reshape(B, nt, 1), b_glob.reshape(B, nt, 1), batch_off,
-                              z.reshape(B, G * d_in))
+                              z.reshape(B, G * d_in).to(weights.dtype))
         ctx.dims = (G, tph, K, d_out, B, d_in, nt)
         ctx.single = single
+        ctx.z_dtype = z.dtype
         return grp
 
     @staticmethod
@@ -192,7 +203,7 @@ class NativeSoft(torch.autograd.Function):
             xg = mgr.anchor_pairs_lookup_backward_all(
                 z_flat, a_g.reshape(-1).contiguous(), b_g.reshape(-1).contiguous(), lad, batch_off,
                 gc_main.contiguous(), gc_alt.reshape(-1).contiguous(), True, _THREADS).view(B, G, d_in)
-        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None
+        return wgrad.reshape(G, tph, K, d_out), xg.to(ctx.z_dtype), None, None, None, None, None, None
 
 
 class NativeHard(torch.autograd.Function):
@@ -205,14 +216,17 @@ class NativeHard(torch.autograd.Function):
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
         tif = _table_indices(B, nt, z.device)
-        # Hard value: sum_t W[c_t]. lutorch_cuda has no nonsmooth forward, so gather+sum here.
-        val = W[tif.reshape(B, nt), li].reshape(B, G, tph, d_out).sum(2)
+        # Hard value: sum_t W[c_t]. lutorch_cuda has no nonsmooth forward, so gather+sum here
+        # (fp32-accumulated for bf16/fp16, cast back to the weight dtype).
+        val = (W[tif.reshape(B, nt), li].reshape(B, G, tph, d_out)
+               .sum(2, dtype=_acc_dtype(W.dtype)).to(weights.dtype))
         batch_off = (torch.arange(B, device=z.device).repeat_interleave(nt) * (G * d_in)).contiguous()
         ctx.save_for_backward(W, li, lai, lad, tif,
                               a_glob.reshape(B, nt, 1), b_glob.reshape(B, nt, 1), batch_off,
-                              z.reshape(B, G * d_in))
+                              z.reshape(B, G * d_in).to(weights.dtype))
         ctx.dims = (G, tph, K, d_out, B, d_in, nt)
         ctx.single = single
+        ctx.z_dtype = z.dtype
         return val
 
     @staticmethod
@@ -229,4 +243,4 @@ class NativeHard(torch.autograd.Function):
             xg = mgr.anchor_pairs_lookup_backward_all(
                 z_flat, a_g.reshape(-1).contiguous(), b_g.reshape(-1).contiguous(), lad, batch_off,
                 gc_main.contiguous(), gc_alt.reshape(-1).contiguous(), True, _THREADS).view(B, G, d_in)
-        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None
+        return wgrad.reshape(G, tph, K, d_out), xg.to(ctx.z_dtype), None, None, None, None, None, None

@@ -95,9 +95,10 @@ def test_bf16_projection_mhl(device, anchor_mode):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize("Cls", CARTRIDGES)
-def test_bf16_cuda_does_not_use_fp32_only_native(Cls):
-    """On CUDA the fp32-only native kernels must be skipped for bf16 (routed to tier-1), so a
-    bf16 training step runs without error and stays bf16."""
+def test_bf16_cuda_native_training_step(Cls):
+    """On CUDA a bf16 training step runs end-to-end through the native lutorch_cuda kernels
+    (which now carry bf16 template specializations with fp32 accumulators) and stays bf16 with
+    a finite weight gradient."""
     spec = LUTSpec(h_in=4, h_out=4, tph=6, nap=5, d_in=12, d_out=8)
     m = Cls(spec, seed=0, weight_init_std=1.0).cuda().to(torch.bfloat16).train()
     x = torch.randn(256, 4, 12, device="cuda", dtype=torch.bfloat16, requires_grad=True)
@@ -105,3 +106,4 @@ def test_bf16_cuda_does_not_use_fp32_only_native(Cls):
     assert y.dtype == torch.bfloat16
     y.float().pow(2).sum().backward()
     assert m.weights.grad is not None and torch.isfinite(m.weights.grad.float()).all()
+    assert m.weights.grad.dtype == torch.bfloat16 and x.grad.dtype == torch.bfloat16

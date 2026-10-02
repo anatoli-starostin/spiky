@@ -56,16 +56,13 @@ class FusedManifestoSoftLUT(ManifestoLUT):
             return "tier1"                                   # embedding_bag wins at large batch
         if not self.training:
             return "pure"                                    # eval small/mid: compiled read wins
-        # The native lutorch_cuda kernels are fp32-only; bf16/fp16 train on tier-1 (fp32-accum).
-        if native_available(x.device) and self.weights.dtype == torch.float32:
-            return "native"                                  # train small/mid: native step wins
+        if native_available(x.device):
+            return "native"                                  # train small/mid: native step wins (fp32/bf16/fp16)
         return "tier1" if x.is_cuda else "pure"
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         be = self._pick(x) if self.backend == "auto" else self.backend
-        if be == "native" and self.weights.dtype != torch.float32:
-            be = "tier1"                                     # native kernels are fp32-only
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":

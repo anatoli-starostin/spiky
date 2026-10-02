@@ -52,16 +52,13 @@ class FusedManifestoHardLUT(ManifestoLUT):
     def _pick(self, x: torch.Tensor) -> str:
         if not self.training:
             return "pure_eval"                        # eval: compiled gather read wins
-        # The native lutorch_cuda kernels are fp32-only; bf16/fp16 train on tier-1 (fp32-accum).
-        if native_available(x.device) and self.weights.dtype == torch.float32:
-            return "native"                           # train: native backward (both modes)
-        return "tier1"                                # train (CPU / no native / low precision): embedding_bag + STE
+        if native_available(x.device):
+            return "native"                           # train: native backward (fp32/bf16/fp16, both modes)
+        return "tier1"                                # train (CPU / no native): embedding_bag + STE
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         be = self._pick(x) if self.backend == "auto" else self.backend
-        if be == "native" and self.weights.dtype != torch.float32:
-            be = "tier1"                                  # native kernels are fp32-only
         if be == "pure_eval":
             rd = self._read(c)
             grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)
