@@ -1,8 +1,6 @@
 """Cartridges — swappable lookup-math strategies behind the MultiHeadLUT contract."""
 from .fused_manifesto_hard import FusedManifestoHardLUT
 from .fused_manifesto_soft import FusedManifestoSoftLUT
-from .fused_softsign_hard import FusedSoftSignHardLUT
-from .fused_softsign_smooth import FusedSoftSignSmoothLUT
 from .manifesto_base import ManifestoLUT
 from .manifesto_hard import ManifestoHardLUT
 from .manifesto_soft import ManifestoSoftLUT
@@ -20,7 +18,5 @@ __all__ = [
     "SoftSignLUT",
     "SoftSignHardLUT",
     "SoftSignSmoothLUT",
-    "FusedSoftSignHardLUT",
-    "FusedSoftSignSmoothLUT",
     "rational_uncertainty",
 ]

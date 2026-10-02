@@ -19,12 +19,12 @@ the backward blend coincides with the forward blend. The all-K softmax backward
 (``backward_topk = 0``), ``n_alternatives > 1``, the WTA primitive and ``exp_outputs`` are
 deliberately out of scope.
 
-Subclasses:
+Two cartridges subclass this base (both use ``F.embedding_bag`` for the fused train read,
+eval-only torch.compile on CUDA, a plain-autograd backward and bf16/fp16 support):
 * :class:`~spiky.lutorch_ex.cartridges.softsign_hard.SoftSignHardLUT` (variant 2.3): hard forward,
   2-alt soft-surrogate backward.
 * :class:`~spiky.lutorch_ex.cartridges.softsign_smooth.SoftSignSmoothLUT` (variant 2.4): the
   two-cell blend as both forward value and gradient.
-Plus the fused twins ``FusedSoftSign{Hard,Smooth}LUT``.
 """
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ class SoftSignLUT(ManifestoLUT):
     """Base for the Gen-2 soft-sign cartridges: the learned-temperature blend weight ``w``.
 
     Adds the two learned per-layer temperatures to the shared Manifesto addressing and provides
-    :meth:`_blend_w`. Subclasses supply :meth:`_combine` (unfused) or override ``_forward_impl``
-    (fused). Abstract like :class:`ManifestoLUT` — not instantiated directly.
+    :meth:`_blend_w`. Subclasses override ``_forward_impl`` (embedding_bag read + the hard STE or
+    the two-cell blend). Abstract like :class:`ManifestoLUT` — not instantiated directly.
     """
 
     def __init__(
