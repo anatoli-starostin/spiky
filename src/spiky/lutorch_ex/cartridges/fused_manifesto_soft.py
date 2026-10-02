@@ -33,7 +33,9 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         je = j_star.unsqueeze(-1)
         u_signed = u.gather(-1, je).squeeze(-1)
         al = self.anchor_a.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        bl = self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
+        bl = al if self.single else (  # single: b is a placeholder; input grad scatters to a only
+            self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
+        )
         off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
         return al + off, bl + off, u_signed
 
@@ -63,8 +65,9 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":
+            # Single mode reuses the native smooth forward + weight-grad; input grad to a only.
             ag, bg, us = self._star_global(z, u, j_star)
-            grp_out = NativeSoft.apply(self.weights, z, c, c_alt, us, ag, bg)
+            grp_out = NativeSoft.apply(self.weights, z, c, c_alt, us, ag, bg, self.single)
         else:  # tier1
             U = rational_uncertainty(u_abs_star)
             grp_out = fused_blend_read(self.weights, c, c_alt, U)

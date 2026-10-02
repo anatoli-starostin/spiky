@@ -52,8 +52,10 @@ class FusedHardSTE(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, a_star, b_star):
+    def forward(ctx, weights, z, c, c_alt, a_star, b_star, single):
         # weights [G,tph,K,d_out]; z [B,G,d_in]; c/c_alt/a_star/b_star [B,G,tph] (long for c/*).
+        # single: when True the margin is z[a_star] (anchor vs zero) and the input grad
+        # scatters to a_star only; b_star is ignored (may be a placeholder).
         G, tph, K, d_out = weights.shape
         B, _, d_in = z.shape
         W2 = weights.reshape(G * tph * K, d_out)
@@ -61,9 +63,12 @@ class FusedHardSTE(torch.autograd.Function):
         gca = _global_cells(c_alt, G, tph, K)
         val = F.embedding_bag(gc.reshape(B * G, tph), W2, mode="sum").reshape(B, G, d_out)
         gdiff = W2[gc] - W2[gca]                 # [B,G,tph,d_out] = W[c_t] - W[c_t']
-        delta = z.gather(2, a_star) - z.gather(2, b_star)  # [B,G,tph] signed deciding margin
+        delta = z.gather(2, a_star)              # [B,G,tph] signed deciding margin
+        if not single:
+            delta = delta - z.gather(2, b_star)
         ctx.save_for_backward(gc, gdiff, delta, a_star, b_star)
         ctx.dims = (G, tph, K, d_out, B, d_in)
+        ctx.single = single
         return val
 
     @staticmethod
@@ -77,10 +82,12 @@ class FusedHardSTE(torch.autograd.Function):
         grad_weights = grad_W2.reshape(G, tph, K, d_out)
         # Input gradient via the surrogate: du = (grad_out . (W[c]-W[c'])) * (-dU/ddelta),
         # with U = 0.5/(1+|delta|) -> -dU/ddelta = 0.5*sign(delta)/(1+|delta|)^2.
+        # Pairs: delta = z[a]-z[b] -> +du to a, -du to b. Single: delta = z[a] -> +du to a.
         gd = (grad_out.unsqueeze(2) * gdiff).sum(-1)            # [B,G,tph]
         coeff = 0.5 * torch.sign(delta) / (1.0 + delta.abs()) ** 2
         du = gd * coeff
         grad_z = torch.zeros(B, G, d_in, device=grad_out.device, dtype=grad_out.dtype)
         grad_z.scatter_add_(2, a_star, du)
-        grad_z.scatter_add_(2, b_star, -du)
-        return grad_weights, grad_z, None, None, None, None
+        if not ctx.single:
+            grad_z.scatter_add_(2, b_star, -du)
+        return grad_weights, grad_z, None, None, None, None, None

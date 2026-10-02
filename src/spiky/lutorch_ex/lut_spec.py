@@ -14,12 +14,26 @@ head-for-head:
 Any other combination (both ``!= 1`` and unequal) is forbidden — there is no consistent
 head-grouping for it. The number of table groups is ``n_groups = max(h_in, h_out)``.
 
+Addressing mode
+---------------
+``anchor_mode`` selects how each of a table's ``nap`` address bits is formed from the
+input slice ``z`` (``[d_in]`` per group):
+
+* ``"pairs"`` (default) — each bit compares *two* coordinates, ``bit_j = [z[a_j] - z[b_j]
+  > eps]`` (fixed anchor **pairs**, the gen-1 Manifesto front-end).
+* ``"single"`` — each bit compares *one* coordinate against zero, ``bit_j = [z[a_j] >
+  eps]`` (single anchor vs zero). This mirrors the old ``HyperplaneMultiHeadLUT`` special
+  case: composed with a learned input projection (a ``ProjectionMHL`` compress with bias,
+  ``z = W x + b``) each bit becomes a learned hyperplane test ``[⟨w_j, x⟩ + b_j > 0]``.
+
 Everything cartridge-specific (the lookup math, quantisation, …) lives in the cartridge;
 the spec is just the shape skeleton the wrapper and the contract agree on.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+ANCHOR_MODES = ("pairs", "single")
 
 
 @dataclass(frozen=True)
@@ -30,9 +44,12 @@ class LUTSpec:
         h_in: number of input heads. ``1`` means the whole input is shared across groups.
         h_out: number of output heads. ``1`` means all groups sum into one shared output.
         tph: tables per group (``n_tables = max(h_in, h_out) * tph``).
-        nap: anchor pairs per table. Each table holds ``K = 2 ** nap`` cells.
+        nap: address bits per table (``nap`` anchor pairs, or ``nap`` single anchors when
+            ``anchor_mode == "single"``). Each table holds ``K = 2 ** nap`` cells.
         d_in: per-head input width (how many features one table reads).
         d_out: per-head output width (how many features one table writes).
+        anchor_mode: ``"pairs"`` (two-coordinate sign tests, the default) or ``"single"``
+            (single coordinate vs zero). See the module docstring.
     """
 
     h_in: int
@@ -41,12 +58,17 @@ class LUTSpec:
     nap: int
     d_in: int
     d_out: int
+    anchor_mode: str = "pairs"
 
     def __post_init__(self) -> None:
         for name in ("h_in", "h_out", "tph", "nap", "d_in", "d_out"):
             v = getattr(self, name)
             if not isinstance(v, int) or v < 1:
                 raise ValueError(f"LUTSpec.{name} must be a positive int, got {v!r}")
+        if self.anchor_mode not in ANCHOR_MODES:
+            raise ValueError(
+                f"LUTSpec.anchor_mode must be one of {ANCHOR_MODES}, got {self.anchor_mode!r}"
+            )
         # Allowed head patterns only: equal, fan-out (h_in==1), or fan-in (h_out==1).
         if not (self.h_in == self.h_out or self.h_in == 1 or self.h_out == 1):
             raise ValueError(
