@@ -71,9 +71,11 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         low = x.dtype in _LOW_PREC
         xa = x.float() if low else x
         be = self._pick(x) if self.backend == "auto" else self.backend
-        # Native train path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization);
-        # eval/tier1 keep plain _addresses (eval is already compiled whole by the base forward).
-        z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if be == "native" else self._addresses(xa)
+        # Every TRAIN path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization),
+        # including the large-batch tier-1 (embedding_bag) route this cartridge picks at scale. Eval
+        # keeps plain _addresses — it is already compiled whole by the base forward, so gating on
+        # self.training (False in eval) avoids a nested compile.
+        z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if self.training else self._addresses(xa)
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":
