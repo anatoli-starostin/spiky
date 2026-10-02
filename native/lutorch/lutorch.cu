@@ -1,6 +1,15 @@
 #include <tuple>
+#include <ATen/AccumulateType.h>
 #include "../common/misc.h"
 #include "lutorch.h"
+
+// bf16/fp16 reductions accumulate in fp32 (at::acc_type<scalar_t,true> is float for Half/
+// BFloat16 and the type itself for float/double, so fp32/fp64 stay byte-identical). The three
+// kernels that accumulate a grad via atomicAdd write into an accumulator buffer of this scalar
+// type; the wrapper allocates it and casts back to the input dtype.
+static inline at::ScalarType lutorch_acc_scalar_type(at::ScalarType t) {
+    return (t == at::kHalf || t == at::kBFloat16) ? at::kFloat : t;
+}
 
 namespace py = pybind11;
 
@@ -434,7 +443,7 @@ __global__ void anchor_pairs_lookup_forward_all_kernel(
 }
 
 // Generic backward kernel matching Python fallback semantics for any n_alternatives.
-template <typename scalar_t>
+template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void anchor_pairs_lookup_backward_all_kernel(
     int64_t total,
     const int64_t* anchor1_ids_ptr,
@@ -448,7 +457,7 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
     int64_t n_tables,
     int64_t n_alternatives,
     bool inv_l1,
-    scalar_t* x_grad_flat_ptr
+    acc_t* x_grad_flat_ptr
 ) {
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear_tid >= total) {
@@ -459,20 +468,21 @@ __global__ void anchor_pairs_lookup_backward_all_kernel(
     int64_t b = bt / n_tables;
     int64_t t = bt - b * n_tables;
 
-    scalar_t delta = lookup_alt_deltas_ptr[linear_tid];
-    scalar_t minus_uncertainty_derivative = static_cast<scalar_t>(0);
+    acc_t delta = static_cast<acc_t>(lookup_alt_deltas_ptr[linear_tid]);
+    acc_t minus_uncertainty_derivative = static_cast<acc_t>(0);
     if (inv_l1) {
-        scalar_t one_plus_abs = static_cast<scalar_t>(1) + lutorch_abs(delta);
+        acc_t one_plus_abs = static_cast<acc_t>(1) + (delta < acc_t(0) ? -delta : delta);
         minus_uncertainty_derivative =
-            static_cast<scalar_t>(0.5) * lutorch_sign(delta) / (one_plus_abs * one_plus_abs);
+            static_cast<acc_t>(0.5) * static_cast<acc_t>((delta > acc_t(0)) - (delta < acc_t(0)))
+            / (one_plus_abs * one_plus_abs);
     } else {
-        scalar_t one_plus_sq = static_cast<scalar_t>(1) + delta * delta;
+        acc_t one_plus_sq = static_cast<acc_t>(1) + delta * delta;
         minus_uncertainty_derivative = delta / (one_plus_sq * one_plus_sq);
     }
 
-    scalar_t grad_main = grad_main_ptr[b * grad_main_stride0 + t * grad_main_stride1];
-    scalar_t grad_alt = grad_alt_ptr[linear_tid];
-    scalar_t du = (grad_main - grad_alt) * minus_uncertainty_derivative / static_cast<scalar_t>(n_alternatives);
+    acc_t grad_main = static_cast<acc_t>(grad_main_ptr[b * grad_main_stride0 + t * grad_main_stride1]);
+    acc_t grad_alt = static_cast<acc_t>(grad_alt_ptr[linear_tid]);
+    acc_t du = (grad_main - grad_alt) * minus_uncertainty_derivative / static_cast<acc_t>(n_alternatives);
 
     int64_t idx1 = batch_offset_ptr[linear_tid] + anchor1_ids_ptr[linear_tid];
     int64_t idx2 = batch_offset_ptr[linear_tid] + anchor2_ids_ptr[linear_tid];
@@ -671,7 +681,7 @@ __global__ void wta_lookup_backward_kernel(
     atomicAdd(x_grad_flat_ptr + idx_alt,    -du);
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
     int64_t total_bt,
     int64_t n_tables,
@@ -683,7 +693,7 @@ __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
     int64_t grad_output_stride0,
     int64_t grad_output_stride1,
     int64_t grad_output_stride2,
-    scalar_t* weights_grad_ptr
+    acc_t* weights_grad_ptr
 ) {
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t total = total_bt * n_outputs;
@@ -698,7 +708,7 @@ __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
     int64_t table = table_indices_flat_ptr[bt];
     int64_t entry = lookup_indices_flat_ptr[bt];
     int64_t widx = (table * n_entries + entry) * n_outputs + o;
-    atomicAdd(weights_grad_ptr + widx, g);
+    atomicAdd(weights_grad_ptr + widx, static_cast<acc_t>(g));  // fp32 accumulation for bf16/fp16
 }
 
 template <typename scalar_t>
@@ -714,21 +724,22 @@ __global__ void lprojection_forward_smooth_weights_kernel(
     if (bt >= total_bt) {
         return;
     }
-    scalar_t inv_n_alt = static_cast<scalar_t>(1.0) / static_cast<scalar_t>(n_alternatives);
-    scalar_t uncertainty_sum = static_cast<scalar_t>(0);
+    using acc_t = at::acc_type<scalar_t, true>;
+    acc_t inv_n_alt = static_cast<acc_t>(1.0) / static_cast<acc_t>(n_alternatives);
+    acc_t uncertainty_sum = static_cast<acc_t>(0);
     int64_t base = bt * n_alternatives;
     for (int64_t a = 0; a < n_alternatives; ++a) {
-        scalar_t d = lookup_alt_deltas_ptr[base + a];
-        scalar_t u;
+        acc_t d = static_cast<acc_t>(lookup_alt_deltas_ptr[base + a]);
+        acc_t u;
         if (l1_uncertainty) {
-            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + lutorch_abs(d));
+            u = static_cast<acc_t>(0.5) / (static_cast<acc_t>(1.0) + (d < acc_t(0) ? -d : d));
         } else {
-            u = static_cast<scalar_t>(0.5) / (static_cast<scalar_t>(1.0) + d * d);
+            u = static_cast<acc_t>(0.5) / (static_cast<acc_t>(1.0) + d * d);
         }
-        alt_weight_ptr[base + a] = u * inv_n_alt;
+        alt_weight_ptr[base + a] = static_cast<scalar_t>(u * inv_n_alt);
         uncertainty_sum += u;
     }
-    main_weight_ptr[bt] = static_cast<scalar_t>(1.0) - uncertainty_sum * inv_n_alt;
+    main_weight_ptr[bt] = static_cast<scalar_t>(static_cast<acc_t>(1.0) - uncertainty_sum * inv_n_alt);
 }
 
 template <typename scalar_t>
@@ -757,23 +768,25 @@ __global__ void lprojection_forward_smooth_output_kernel(
     int64_t b = bt / n_tables;
     int64_t t = bt - b * n_tables;
 
+    using acc_t = at::acc_type<scalar_t, true>;
     int64_t table_main = table_indices_flat_ptr[bt];
     int64_t entry_main = lookup_indices_flat_ptr[bt];
-    scalar_t acc = weights_ptr[(table_main * n_entries + entry_main) * n_outputs + o] * main_weight_ptr[bt];
+    acc_t acc = static_cast<acc_t>(weights_ptr[(table_main * n_entries + entry_main) * n_outputs + o])
+                * static_cast<acc_t>(main_weight_ptr[bt]);
 
     int64_t base = bt * n_alternatives;
     for (int64_t a = 0; a < n_alternatives; ++a) {
         int64_t bta = base + a;
         int64_t table_alt = table_indices_alt_flat_ptr[bta];
         int64_t entry_alt = lookup_alt_indices_flat_ptr[bta];
-        scalar_t w = weights_ptr[(table_alt * n_entries + entry_alt) * n_outputs + o];
-        acc += w * alt_weight_ptr[bta];
+        acc_t w = static_cast<acc_t>(weights_ptr[(table_alt * n_entries + entry_alt) * n_outputs + o]);
+        acc += w * static_cast<acc_t>(alt_weight_ptr[bta]);
     }
 
-    output_ptr[(b * n_tables + t) * n_outputs + o] = acc;
+    output_ptr[(b * n_tables + t) * n_outputs + o] = static_cast<scalar_t>(acc);
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void lprojection_backward_na1_smooth_weights_kernel(
     int64_t total_bt,
     int64_t n_tables,
@@ -789,7 +802,7 @@ __global__ void lprojection_backward_na1_smooth_weights_kernel(
     int64_t grad_output_stride0,
     int64_t grad_output_stride1,
     int64_t grad_output_stride2,
-    scalar_t* weights_grad_ptr
+    acc_t* weights_grad_ptr
 ) {
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t total = total_bt * n_outputs;
@@ -800,9 +813,9 @@ __global__ void lprojection_backward_na1_smooth_weights_kernel(
     int64_t o = linear_tid - bt * n_outputs;
     int64_t b = bt / n_tables;
     int64_t t = bt - b * n_tables;
-    scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
-    scalar_t g_main = g * main_weight_flat_ptr[bt];
-    scalar_t g_alt = g * alt_weight_flat_ptr[bt];
+    acc_t g = static_cast<acc_t>(grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2]);
+    acc_t g_main = g * static_cast<acc_t>(main_weight_flat_ptr[bt]);
+    acc_t g_alt = g * static_cast<acc_t>(alt_weight_flat_ptr[bt]);
 
     int64_t table_main = table_indices_flat_ptr[bt];
     int64_t entry_main = lookup_indices_flat_ptr[bt];
@@ -843,17 +856,18 @@ __global__ void lprojection_backward_na1_carriers_kernel(
     int64_t entry_main = lookup_indices_flat_ptr[bt];
     int64_t table_alt = table_indices_alt_flat_ptr[bt];
     int64_t entry_alt = lookup_alt_indices_flat_ptr[bt];
-    scalar_t acc_main = static_cast<scalar_t>(0);
-    scalar_t acc_alt = static_cast<scalar_t>(0);
+    using acc_t = at::acc_type<scalar_t, true>;
+    acc_t acc_main = static_cast<acc_t>(0);
+    acc_t acc_alt = static_cast<acc_t>(0);
     for (int64_t o = 0; o < n_outputs; ++o) {
-        scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
+        acc_t g = static_cast<acc_t>(grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2]);
         int64_t widx_main = (table_main * n_entries + entry_main) * n_outputs + o;
         int64_t widx_alt = (table_alt * n_entries + entry_alt) * n_outputs + o;
-        acc_main += g * weights_ptr[widx_main];
-        acc_alt += g * weights_ptr[widx_alt];
+        acc_main += g * static_cast<acc_t>(weights_ptr[widx_main]);
+        acc_alt += g * static_cast<acc_t>(weights_ptr[widx_alt]);
     }
-    lookup_indices_grad_c_grad_ptr[bt] = acc_main;
-    lookup_alt_indices_grad_c_grad_ptr[bt] = acc_alt;
+    lookup_indices_grad_c_grad_ptr[bt] = static_cast<scalar_t>(acc_main);
+    lookup_alt_indices_grad_c_grad_ptr[bt] = static_cast<scalar_t>(acc_alt);
 }
 
 template <typename scalar_t>
@@ -1674,7 +1688,8 @@ public:
         int blocks_bt = static_cast<int>((total_bt + threads - 1) / threads);
         int blocks_out = static_cast<int>(((total_bt * n_outputs) + threads - 1) / threads);
 
-        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_forward_smooth", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
+                                        weights.scalar_type(), "lprojection_forward_smooth", [&] {
             lprojection_forward_smooth_weights_kernel<scalar_t><<<blocks_bt, threads>>>(
                 total_bt,
                 n_alternatives,
@@ -1767,8 +1782,11 @@ public:
             throw py::value_error("grad_alt numel must be batch_size * n_tables * n_alternatives");
         }
 
-        auto opts_x = torch::TensorOptions().dtype(x.dtype()).device(x.device());
-        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_x);
+        // Accumulate the scatter in fp32 for bf16/fp16 (and so atomicAdd runs on float, which
+        // is well-supported); fp32/fp64 keep their own dtype so this is byte-identical there.
+        auto acc_scalar = lutorch_acc_scalar_type(x.scalar_type());
+        auto opts_acc = torch::TensorOptions().dtype(acc_scalar).device(x.device());
+        torch::Tensor x_grad_flat = torch::zeros({batch_size * input_dim}, opts_acc);
 
         int device = x.device().index();
         c10::cuda::CUDAGuard guard(device);
@@ -1779,7 +1797,8 @@ public:
         int64_t grad_main_stride0 = grad_main.stride(0);
         int64_t grad_main_stride1 = grad_main.stride(1);
 
-        AT_DISPATCH_FLOATING_TYPES(x.scalar_type(), "anchor_pairs_lookup_backward_all_kernel", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
+                                        x.scalar_type(), "anchor_pairs_lookup_backward_all_kernel", [&] {
             anchor_pairs_lookup_backward_all_kernel<scalar_t><<<blocks, threads>>>(
                 total,
                 reinterpret_cast<const int64_t*>(anchor1_ids.data_ptr()),
@@ -1793,13 +1812,13 @@ public:
                 n_tables,
                 n_alternatives,
                 inv_l1,
-                reinterpret_cast<scalar_t*>(x_grad_flat.data_ptr())
+                reinterpret_cast<at::acc_type<scalar_t, true>*>(x_grad_flat.data_ptr())
             );
         });
         CU_CHECK(cudaGetLastError());
 
         PROF_END(LUTORCH_MANAGER_ANCHOR_PAIRS_BACKWARD_PROFILER_OP);
-        return x_grad_flat;
+        return x_grad_flat.to(x.dtype());
     }
 
     // ---- WTA Lookup ----
@@ -2066,7 +2085,11 @@ public:
         }
 
         auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
-        torch::Tensor weights_grad = torch::zeros_like(weights);
+        // Weight grad accumulates via atomicAdd across the batch: in fp32 for bf16/fp16 (and so
+        // atomicAdd runs on float), cast back to the weight dtype. fp32/fp64 are byte-identical.
+        auto acc_scalar = lutorch_acc_scalar_type(weights.scalar_type());
+        torch::Tensor weights_grad = torch::zeros(
+            weights.sizes(), torch::TensorOptions().dtype(acc_scalar).device(weights.device()));
         torch::Tensor lookup_indices_grad_c_grad = torch::empty({batch_size, n_tables}, opts);
         torch::Tensor lookup_alt_indices_grad_c_grad = torch::empty({batch_size, n_tables, 1}, opts);
 
@@ -2079,7 +2102,8 @@ public:
         int64_t go_s1 = grad_output.stride(1);
         int64_t go_s2 = grad_output.stride(2);
 
-        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_nonsmooth", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
+                                        weights.scalar_type(), "lprojection_backward_na1_nonsmooth", [&] {
             lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
                 total_bt,
                 n_tables,
@@ -2089,7 +2113,7 @@ public:
                 reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
                 reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
                 go_s0, go_s1, go_s2,
-                reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
+                reinterpret_cast<at::acc_type<scalar_t, true>*>(weights_grad.data_ptr())
             );
             lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
                 total_bt,
@@ -2109,7 +2133,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
         PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
-        return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
+        return py::make_tuple(weights_grad.to(weights.dtype()), lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 
     py::tuple
@@ -2182,7 +2206,10 @@ public:
         }
 
         auto opts = torch::TensorOptions().dtype(weights.dtype()).device(weights.device());
-        torch::Tensor weights_grad = torch::zeros_like(weights);
+        // Weight grad accumulates via atomicAdd across the batch: fp32 buffer for bf16/fp16.
+        auto acc_scalar = lutorch_acc_scalar_type(weights.scalar_type());
+        torch::Tensor weights_grad = torch::zeros(
+            weights.sizes(), torch::TensorOptions().dtype(acc_scalar).device(weights.device()));
         torch::Tensor lookup_indices_grad_c_grad = torch::empty({batch_size, n_tables}, opts);
         torch::Tensor lookup_alt_indices_grad_c_grad = torch::empty({batch_size, n_tables, 1}, opts);
 
@@ -2195,7 +2222,8 @@ public:
 
         int device = weights.device().index();
         c10::cuda::CUDAGuard guard(device);
-        AT_DISPATCH_FLOATING_TYPES(weights.scalar_type(), "lprojection_backward_na1_smooth_weights", [&] {
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
+                                        weights.scalar_type(), "lprojection_backward_na1_smooth_weights", [&] {
             lprojection_backward_na1_smooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
                 total_bt,
                 n_tables,
@@ -2209,7 +2237,7 @@ public:
                 reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
                 reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
                 go_s0, go_s1, go_s2,
-                reinterpret_cast<scalar_t*>(weights_grad.data_ptr())
+                reinterpret_cast<at::acc_type<scalar_t, true>*>(weights_grad.data_ptr())
             );
             lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
                 total_bt,
@@ -2229,7 +2257,7 @@ public:
         });
         CU_CHECK(cudaGetLastError());
         PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
-        return py::make_tuple(weights_grad, lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
+        return py::make_tuple(weights_grad.to(weights.dtype()), lookup_indices_grad_c_grad, lookup_alt_indices_grad_c_grad);
     }
 
     py::tuple

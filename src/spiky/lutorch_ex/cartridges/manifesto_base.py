@@ -45,6 +45,8 @@ from ._fused_ops import _global_cells
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
+_LOW_PRECISION = (torch.bfloat16, torch.float16)
+
 
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
@@ -52,6 +54,15 @@ class ManifestoLUT(MultiHeadLUT):
     Abstract: subclasses supply :meth:`_combine` to turn the two addressed cells
     (``y_hard`` = ``W[c_t]``, ``y_alt`` = ``W[c_t']``) and the deciding margin ``u_star``
     into the per-table output.
+
+    Dtype contract: this base (the pure cartridges' path) carries **no mixed-precision
+    handling** — it reads, reduces, and routes in the weight/input dtype, and supports only
+    float32/float64. Handed bf16/fp16 params or inputs it **raises** (see :meth:`forward`)
+    rather than run lossy low-precision math. Low precision (fp32 addressing + fp32-accumulated
+    reads) is a fused-cartridge feature
+    (:class:`~spiky.lutorch_ex.cartridges.fused_manifesto_hard.FusedManifestoHardLUT` /
+    :class:`~spiky.lutorch_ex.cartridges.fused_manifesto_soft.FusedManifestoSoftLUT`), which
+    override :meth:`_supports_low_precision`.
     """
 
     def __init__(
@@ -109,6 +120,9 @@ class ManifestoLUT(MultiHeadLUT):
         Flat advanced-index gather into the reshaped weight table: the backward scatters the
         gradient into grad_W of shape [G*tph*K, d_out] (small), with NO [B,G,tph,K,d_out]
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
+
+        Operates in the weight dtype as-is — this pure path carries no mixed-precision handling
+        (bf16/fp16 support lives in the fused cartridges). See the class docstring.
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
@@ -136,7 +150,7 @@ class ManifestoLUT(MultiHeadLUT):
         if spec.h_out == 1:
             return grp_out.sum(dim=1, keepdim=True)           # fan-in: plain sum over groups
         # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
-        y = x.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
+        y = grp_out.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
         return y.index_add_(1, self.out_head, grp_out)
 
     @abstractmethod
@@ -155,7 +169,23 @@ class ManifestoLUT(MultiHeadLUT):
         """
         raise NotImplementedError
 
+    def _supports_low_precision(self) -> bool:
+        """Whether this cartridge supports bf16/fp16 params/inputs. False on the pure base
+        (see the class docstring); the fused cartridges override it to True."""
+        return False
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Low precision (bf16/fp16) is a fused-cartridge feature; the pure cartridges reject it
+        # with a clear error rather than silently running lossy bf16 math.
+        if not self._supports_low_precision() and (
+            x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
+        ):
+            raise TypeError(
+                f"{type(self).__name__} does not support low precision: got input dtype "
+                f"{x.dtype} and weight dtype {self.weights.dtype}. bf16/fp16 is supported only by "
+                "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT); keep this "
+                "cartridge (and ProjectionMHL wrapping it) in float32/float64."
+            )
         # Compile ONLY the EVAL forward on CUDA (built lazily on first such call, per instance).
         # torch.compile helps the eval/inference path, but hurts the train+backward step at the
         # training batch (memory-bound there — eager is fastest), so training forward and its

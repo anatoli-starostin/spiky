@@ -13,6 +13,7 @@
 // extension), so it never touches the shared build; _native_ops falls back to the eager
 // body when it cannot be compiled/loaded.
 #include <torch/extension.h>
+#include <ATen/AccumulateType.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 
@@ -21,7 +22,7 @@ __device__ __forceinline__ scalar_t sgn(scalar_t x) {
     return static_cast<scalar_t>((x > scalar_t(0)) - (x < scalar_t(0)));
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void single_anchor_input_grad_kernel(
     int64_t total,            // B * nt
     int64_t nt,               // tables per batch row (G * tph)
@@ -30,14 +31,14 @@ __global__ void single_anchor_input_grad_kernel(
     const scalar_t* delta,    // [B*nt] signed deciding margin z[a]
     const scalar_t* gm,       // [B*nt] grad . W[c]
     const scalar_t* ga,       // [B*nt] grad . W[c']
-    scalar_t* out)            // [B*width] zero-initialised
+    acc_t* out)               // [B*width] zero-initialised (fp32 for bf16/fp16)
 {
     int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= total) return;
-    scalar_t del = delta[i];
-    scalar_t one_plus_abs = static_cast<scalar_t>(1) + (del < scalar_t(0) ? -del : del);
-    scalar_t coeff = static_cast<scalar_t>(0.5) * sgn(del) / (one_plus_abs * one_plus_abs);
-    scalar_t du = (gm[i] - ga[i]) * coeff;
+    acc_t del = static_cast<acc_t>(delta[i]);
+    acc_t one_plus_abs = static_cast<acc_t>(1) + (del < acc_t(0) ? -del : del);
+    acc_t coeff = static_cast<acc_t>(0.5) * sgn(del) / (one_plus_abs * one_plus_abs);
+    acc_t du = (static_cast<acc_t>(gm[i]) - static_cast<acc_t>(ga[i])) * coeff;
     int64_t b = i / nt;
     atomicAdd(out + b * width + a_ids[i], du);
 }
@@ -53,16 +54,22 @@ torch::Tensor single_anchor_input_grad(
     auto B = gm.size(0);
     auto nt = gm.size(1);
     int64_t total = B * nt;
-    auto out = torch::zeros({B, width}, gm.options());
-    if (total == 0) return out;
+    // Accumulate the scatter in fp32 for bf16/fp16 (and so atomicAdd runs on float); fp32/fp64
+    // keep their own dtype so this is byte-identical there.
+    auto acc_scalar = (gm.scalar_type() == at::kHalf || gm.scalar_type() == at::kBFloat16)
+                          ? at::kFloat : gm.scalar_type();
+    auto out = torch::zeros({B, width}, gm.options().dtype(acc_scalar));
+    if (total == 0) return out.to(gm.dtype());
     int64_t blocks = (total + threads - 1) / threads;
-    AT_DISPATCH_FLOATING_TYPES(gm.scalar_type(), "single_anchor_input_grad", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
+                                    gm.scalar_type(), "single_anchor_input_grad", [&] {
         single_anchor_input_grad_kernel<scalar_t><<<blocks, threads>>>(
             total, nt, width,
             a_ids.data_ptr<int64_t>(), delta.data_ptr<scalar_t>(),
-            gm.data_ptr<scalar_t>(), ga.data_ptr<scalar_t>(), out.data_ptr<scalar_t>());
+            gm.data_ptr<scalar_t>(), ga.data_ptr<scalar_t>(),
+            reinterpret_cast<at::acc_type<scalar_t, true>*>(out.data_ptr()));
     });
-    return out;
+    return out.to(gm.dtype());
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
