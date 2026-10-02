@@ -144,9 +144,11 @@ class ManifestoLUT(MultiHeadLUT):
         raise NotImplementedError
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # GPU: run the torch.compiled forward (built lazily on first CUDA call, per instance);
-        # CPU: eager. Gated so CPU stays plain pure-pytorch and the CPU tests are unaffected.
-        if _COMPILE_ENABLED and x.is_cuda:
+        # Compile ONLY the EVAL forward on CUDA (built lazily on first such call, per instance).
+        # torch.compile helps the eval/inference path, but hurts the train+backward step at the
+        # training batch (memory-bound there — eager is fastest), so training forward and its
+        # backward run eager. CPU is always plain eager (keeps the CPU tests unaffected).
+        if _COMPILE_ENABLED and x.is_cuda and not self.training:
             if self._compiled is None:
                 self._compiled = torch.compile(self._forward_impl, dynamic=True)
             return self._compiled(x)

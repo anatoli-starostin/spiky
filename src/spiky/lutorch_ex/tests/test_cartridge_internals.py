@@ -50,8 +50,11 @@ def test_soft_always_uses_fused_pair():
 
 
 def test_compile_not_used_on_cpu():
-    # torch.compile is GPU-only; a CPU forward must stay eager (self._compiled stays None).
+    # torch.compile is CUDA-only and (on CUDA) eval-path-only; on CPU every forward stays
+    # eager, so self._compiled is never built — in either eval or train mode.
     for cls in (ManifestoHardLUT, ManifestoSoftLUT):
-        cart = cls(_spec(), seed=0)
-        cart(torch.randn(2, cart.spec.h_in, cart.spec.d_in))  # CPU tensor
-        assert cart._compiled is None
+        for training in (False, True):
+            cart = cls(_spec(), seed=0)
+            cart.train(training)
+            cart(torch.randn(2, cart.spec.h_in, cart.spec.d_in))  # CPU tensor
+            assert cart._compiled is None
