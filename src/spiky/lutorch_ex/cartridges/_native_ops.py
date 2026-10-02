@@ -19,9 +19,13 @@ not available the cartridges fall back to the pure/tier-1 path.
 Single-anchor mode (``anchor_mode == "single"``) reuses the native forward and weight-grad
 kernels unchanged — they are index-only and so correct for single anchors — and only the
 input gradient differs: instead of the pairs kernel's +du-to-a / -du-to-b scatter it keeps
-the +du-to-a half, formed cheaply from the same per-table gradient carriers the backward
-already produces (``_single_input_grad``). No pairs-specific CUDA kernel is bypassed and no
-large ``W[c]-W[c']`` tensor is materialised.
+the +du-to-a half, formed from the same per-table gradient carriers the backward already
+produces (``_single_input_grad``), so no large ``W[c]-W[c']`` tensor is materialised. That
++du-to-a scatter is itself a dedicated one-launch CUDA kernel
+(``native/lutorch/single_anchor_input_grad.cu``, JIT-built via ``cpp_extension.load`` — it is
+standalone and does NOT rebuild the shared ``lutorch_cuda`` extension), mirroring the pairs
+path's single fused input-grad kernel so the single backward is not launch-bound at small
+batch. If that kernel cannot be built/loaded, the eager body is used (identical result).
 """
 from __future__ import annotations
 
@@ -32,6 +36,38 @@ import torch
 _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
 _TRIED = False
+
+# The single-anchor input gradient is a short elementwise chain + one scatter_add. In eager
+# PyTorch that is ~10 tiny kernel launches and, at small batch, the backward is launch-bound
+# there (measured ~0.075 ms vs the pairs path's single fused input-grad kernel at ~0.018 ms).
+# A dedicated one-launch CUDA kernel (native/lutorch/single_anchor_input_grad.cu, JIT-built via
+# cpp_extension.load — standalone, it does NOT touch the shared lutorch_cuda extension) matches
+# the pairs path, so single-anchor is <= pairs at every batch. If it cannot be built/loaded, or
+# on CPU, the eager body is used (identical result, just the extra launches).
+_SINGLE_IG_EXT = None
+_SINGLE_IG_TRIED = False
+
+
+def _single_ig_ext():
+    """Lazily JIT-build/load the single-anchor input-grad kernel; None if unavailable."""
+    global _SINGLE_IG_EXT, _SINGLE_IG_TRIED
+    if _SINGLE_IG_TRIED:
+        return _SINGLE_IG_EXT
+    _SINGLE_IG_TRIED = True
+    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
+        return None
+    try:
+        from pathlib import Path
+
+        from torch.utils.cpp_extension import load
+
+        # .../src/spiky/lutorch_ex/cartridges/_native_ops.py -> repo root is parents[4].
+        repo_root = Path(__file__).resolve().parents[4]
+        src = repo_root / "native" / "lutorch" / "single_anchor_input_grad.cu"
+        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[str(src)], verbose=False)
+    except Exception:
+        _SINGLE_IG_EXT = None
+    return _SINGLE_IG_EXT
 
 
 def native_manager():
@@ -74,6 +110,15 @@ def _table_indices(B: int, nt: int, device) -> torch.Tensor:
     return torch.arange(nt, device=device).view(1, nt).expand(B, nt).reshape(-1).contiguous()
 
 
+def _single_ig_body(gm, ga, d, ag, width):
+    """du = (gm - ga) * 0.5*sign(d)/(1+|d|)^2, scattered +du to coordinate a. [B, nt] -> [B, width]."""
+    coeff = 0.5 * torch.sign(d) / (1.0 + d.abs()) ** 2
+    du = (gm - ga) * coeff                            # [B, nt]
+    grad_zf = torch.zeros(gm.shape[0], width, device=du.device, dtype=du.dtype)
+    grad_zf.scatter_add_(1, ag, du)
+    return grad_zf
+
+
 def _single_input_grad(gc_main, gc_alt, delta, a_glob, B, G, d_in, nt):
     """Single-anchor input gradient (anchor vs zero): scatter +du to coordinate a only.
 
@@ -84,14 +129,21 @@ def _single_input_grad(gc_main, gc_alt, delta, a_glob, B, G, d_in, nt):
     single case keeps only the +du-to-a half. ``coeff = 0.5*sign(delta)/(1+|delta|)^2`` is the
     same rational-uncertainty surrogate — so this is bit-equivalent to the pure single
     cartridge — and it costs O(B*nt): no [B, nt, d_out] gather of W. Returns ``[B, G, d_in]``.
+
+    On CUDA the elementwise+scatter is a dedicated one-launch kernel (see _single_ig_ext), so
+    the single-anchor backward is not launch-bound at small batch — it matches the pairs path's
+    single fused input-grad kernel. On CPU, or if the kernel can't be built, the eager body is
+    used (identical result). Returns ``[B, G, d_in]``.
     """
-    gm = gc_main.reshape(B, nt)
-    ga = gc_alt.reshape(B, nt)
-    d = delta.reshape(B, nt)                          # signed deciding margin z[a]
-    coeff = 0.5 * torch.sign(d) / (1.0 + d.abs()) ** 2
-    du = (gm - ga) * coeff                            # [B, nt]
-    grad_zf = torch.zeros(B, G * d_in, device=du.device, dtype=du.dtype)
-    grad_zf.scatter_add_(1, a_glob.reshape(B, nt), du)
+    gm = gc_main.reshape(B, nt).contiguous()
+    ga = gc_alt.reshape(B, nt).contiguous()
+    d = delta.reshape(B, nt).contiguous()             # signed deciding margin z[a]
+    ag = a_glob.reshape(B, nt).contiguous()
+    ext = _single_ig_ext() if gm.is_cuda else None
+    if ext is not None:
+        grad_zf = ext.single_anchor_input_grad(gm, ga, d, ag, G * d_in, _THREADS)
+    else:
+        grad_zf = _single_ig_body(gm, ga, d, ag, G * d_in)
     return grad_zf.view(B, G, d_in)
 
 
