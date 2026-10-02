@@ -32,13 +32,20 @@ class FusedManifestoHardLUT(ManifestoLUT):
         raise NotImplementedError
 
     def _star(self, z, u, j_star):
-        """Return (a_local, b_local, a_global, b_global, u_signed_star) at the j* pair."""
+        """Return (a_local, b_local, a_global, b_global, u_signed_star) at the j* bit.
+
+        In single mode b is a placeholder (= a): each bit tests one coordinate vs zero, so
+        the input grad scatters to a only (FusedHardSTE honours ``single``; native is not
+        used in single mode).
+        """
         G, tph, nap, d_in = self.spec.n_groups, self.spec.tph, self.spec.nap, self.spec.d_in
         B = z.shape[0]
         je = j_star.unsqueeze(-1)
         u_signed = u.gather(-1, je).squeeze(-1)
         al = self.anchor_a.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        bl = self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
+        bl = al if self.single else (
+            self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
+        )
         off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
         return al, bl, al + off, bl + off, u_signed
 
@@ -46,8 +53,8 @@ class FusedManifestoHardLUT(ManifestoLUT):
         if not self.training:
             return "pure_eval"                        # eval: compiled gather read wins
         if native_available(x.device):
-            return "native"                           # train: native backward (CUDA default)
-        return "tier1"                                # train (CPU or no native): embedding_bag + STE
+            return "native"                           # train: native backward (both modes)
+        return "tier1"                                # train (CPU / no native): embedding_bag + STE
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
@@ -55,9 +62,11 @@ class FusedManifestoHardLUT(ManifestoLUT):
         if be == "pure_eval":
             grp_out = self._read(c).sum(dim=2)            # pure compiled gather read + sum (eval)
         elif be == "native":
+            # Single mode reuses the native forward + weight-grad kernels (index-only); only
+            # the input-grad scatters to one coordinate (handled inside NativeHard).
             al, bl, ag, bg, us = self._star(z, u, j_star)
-            grp_out = NativeHard.apply(self.weights, z, c, c_alt, us, ag, bg)
+            grp_out = NativeHard.apply(self.weights, z, c, c_alt, us, ag, bg, self.single)
         else:  # tier1
             al, bl, ag, bg, us = self._star(z, u, j_star)
-            grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl)
+            grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl, self.single)
         return self._route(grp_out, x)

@@ -1,8 +1,11 @@
-"""Tests for the canonical full-coverage anchor-pair sampler."""
+"""Tests for the canonical full-coverage anchor samplers (pairs and singles)."""
 import pytest
 import torch
 
-from spiky.lutorch_ex.anchors import canonical_full_coverage_pairs
+from spiky.lutorch_ex.anchors import (
+    canonical_full_coverage_pairs,
+    canonical_full_coverage_singles,
+)
 
 
 def test_shapes_and_canonical_ordering():
@@ -66,3 +69,61 @@ def test_nap_exceeds_pool_raises():
         canonical_full_coverage_pairs(d_in=3, n_groups=1, tph=1, nap=4, seed=0)
     # nap == P is allowed.
     canonical_full_coverage_pairs(d_in=3, n_groups=1, tph=1, nap=3, seed=0)
+
+
+# --------------------------------------------------------------------------------------
+# Single-anchor canonical coverage (anchor_mode="single"): pool is the d_in coordinates.
+# --------------------------------------------------------------------------------------
+
+def test_singles_shapes_and_range():
+    a = canonical_full_coverage_singles(d_in=6, n_groups=4, tph=3, nap=2, seed=0)
+    assert a.shape == (4, 3, 2) and a.dtype == torch.long
+    assert bool((a >= 0).all()) and bool((a < 6).all())
+
+
+def test_singles_within_table_distinctness():
+    a = canonical_full_coverage_singles(d_in=8, n_groups=3, tph=5, nap=4, seed=7)
+    G, tph, nap = a.shape
+    for g in range(G):
+        for t in range(tph):
+            coords = {int(a[g, t, j]) for j in range(nap)}
+            assert len(coords) == nap, f"table (g={g},t={t}) repeats a coordinate"
+
+
+def test_singles_full_coverage_is_permutation():
+    # tph*nap == d_in -> each group's single anchors are a permutation of range(d_in).
+    d_in, G, tph, nap = 6, 3, 2, 3
+    a = canonical_full_coverage_singles(d_in, G, tph, nap, seed=3)
+    for g in range(G):
+        assert sorted(a[g].reshape(-1).tolist()) == list(range(d_in)), f"group {g} not a permutation"
+
+
+def test_singles_coverage_with_tile_repeat_keeps_table_distinct():
+    # slots (tph*nap=8) > d_in (3): tiling repeats the pool; repair keeps each table distinct.
+    d_in, G, tph, nap = 3, 2, 4, 2
+    a = canonical_full_coverage_singles(d_in, G, tph, nap, seed=1)
+    for g in range(G):
+        for t in range(tph):
+            coords = {int(a[g, t, j]) for j in range(nap)}
+            assert len(coords) == nap
+
+
+def test_singles_determinism():
+    kw = dict(d_in=10, n_groups=3, tph=4, nap=3)
+    a1 = canonical_full_coverage_singles(**kw, seed=42)
+    a2 = canonical_full_coverage_singles(**kw, seed=42)
+    assert torch.equal(a1, a2), "same seed must reproduce exactly"
+    a3 = canonical_full_coverage_singles(**kw, seed=43)
+    assert not torch.equal(a1, a3), "different seed should differ"
+
+
+def test_singles_groups_differ():
+    a = canonical_full_coverage_singles(d_in=12, n_groups=2, tph=4, nap=3, seed=5)
+    assert not torch.equal(a[0], a[1])
+
+
+def test_singles_nap_exceeds_pool_raises():
+    # nap > d_in must raise; nap == d_in is allowed.
+    with pytest.raises(ValueError):
+        canonical_full_coverage_singles(d_in=3, n_groups=1, tph=1, nap=4, seed=0)
+    canonical_full_coverage_singles(d_in=3, n_groups=1, tph=1, nap=3, seed=0)

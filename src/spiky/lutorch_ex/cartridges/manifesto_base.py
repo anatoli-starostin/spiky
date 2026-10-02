@@ -10,12 +10,16 @@ cell ``c_t`` is combined with its least-confident-bit-flip neighbour ``c_t'``:
 
 Everything else lives here and is identical between them:
 
-- **Anchor pairs**: canonical full coverage (``anchors.canonical_full_coverage_pairs``),
-  frozen index buffers ``anchor_a``/``anchor_b`` of shape ``[G, tph, nap]``.
+- **Anchors**: canonical full coverage. In ``anchor_mode == "pairs"`` (default) frozen
+  index buffers ``anchor_a``/``anchor_b`` of shape ``[G, tph, nap]``
+  (``anchors.canonical_full_coverage_pairs``); in ``anchor_mode == "single"`` only
+  ``anchor_a`` (``anchors.canonical_full_coverage_singles``, ``anchor_b is None``).
 - **Addressing**: MSB-first sign-bit packing (``addressing.msb_first_powers``). Each table's
-  ``nap`` margins ``u_j = z[a_j] - z[b_j]`` give sign bits ``[u_j > eps]`` packed (pair 0 =
-  high bit) into the cell index ``c_t``; the neighbour ``c_t' = c_t`` with the bit of the
-  least-confident pair ``j* = argmin_j |u_j|`` flipped.
+  ``nap`` margins — ``u_j = z[a_j] - z[b_j]`` in pairs mode, ``u_j = z[a_j]`` (single anchor
+  vs zero) in single mode — give sign bits ``[u_j > eps]`` packed (bit 0 = high bit) into
+  the cell index ``c_t``; the neighbour ``c_t' = c_t`` with the bit of the least-confident
+  margin ``j* = argmin_j |u_j|`` flipped. Only the margin changes between modes; the whole
+  two-cell structure and routing below are identical, so every cartridge supports both.
 - **Head routing** (the shape-contract invariant): ``G = max(h_in, h_out)`` groups, group
   ``g`` reads input head ``g % h_in`` and writes output head ``g % h_out``, groups summed
   into the output (fan-in sums all groups into head 0).
@@ -32,7 +36,7 @@ import torch
 import torch.nn as nn
 
 from ..addressing import msb_first_powers
-from ..anchors import canonical_full_coverage_pairs
+from ..anchors import canonical_full_coverage_pairs, canonical_full_coverage_singles
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
 from ._fused_ops import _global_cells
@@ -64,15 +68,27 @@ class ManifestoLUT(MultiHeadLUT):
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
-        if d_in < 2:
-            raise ValueError(f"Manifesto cartridges need d_in >= 2 to form anchor pairs, got {d_in}")
+        self.single = spec.anchor_mode == "single"
+        min_d = 1 if self.single else 2
+        if d_in < min_d:
+            raise ValueError(
+                f"Manifesto cartridges need d_in >= {min_d} for anchor_mode={spec.anchor_mode!r}, "
+                f"got {d_in}"
+            )
         self.cmp_eps = float(cmp_eps)
 
-        # Fixed anchor pairs per (group, table): canonical full-coverage policy (distinct
-        # canonical a<b pairs per table, covering the whole C(d_in,2) pool). Frozen buffers.
-        a, b = canonical_full_coverage_pairs(d_in, G, tph, nap, seed=seed)
-        self.register_buffer("anchor_a", a)
-        self.register_buffer("anchor_b", b)
+        # Fixed anchors per (group, table): canonical full-coverage policy. In "pairs" mode
+        # distinct canonical a<b pairs per table (covering the C(d_in,2) pool); in "single"
+        # mode distinct single coordinates per table (covering the d_in coordinates). Frozen
+        # buffers. anchor_b is None in single mode (each bit tests one coordinate vs zero).
+        if self.single:
+            a = canonical_full_coverage_singles(d_in, G, tph, nap, seed=seed)
+            self.register_buffer("anchor_a", a)
+            self.anchor_b = None
+        else:
+            a, b = canonical_full_coverage_pairs(d_in, G, tph, nap, seed=seed)
+            self.register_buffer("anchor_a", a)
+            self.register_buffer("anchor_b", b)
         # MSB-first bit weights: pair 0 -> high bit 2**(nap-1).
         self.register_buffer("powers", msb_first_powers(nap))
         # Group -> input/output head maps (the routing invariant).
@@ -167,10 +183,14 @@ class ManifestoLUT(MultiHeadLUT):
         B = x.shape[0]
         z = x[:, self.in_head, :]  # route each group to its input head -> [B, G, d_in]
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
-        z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
-        u = z_a - z_b
+        if self.single:
+            # Single anchor vs zero: the margin is the coordinate itself (no partner).
+            u = z_a
+        else:
+            idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+            z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
+            u = z_a - z_b
         c = ((u > self.cmp_eps).to(torch.long) * self.powers).sum(dim=-1)  # MSB-first, stop-grad
         u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
         c_alt = c ^ self.powers[j_star]
