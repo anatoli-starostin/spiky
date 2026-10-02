@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import fused_blend_read
+from ._fused_ops import fused_blend_read, _acc_dtype
 from ._native_ops import NativeSoft, native_available
 from .manifesto_base import ManifestoLUT
 from .uncertainty import rational_uncertainty
@@ -42,7 +42,8 @@ class FusedManifestoSoftLUT(ManifestoLUT):
     def _pure_blend(self, c, c_alt, u_abs_star):
         y_hard, y_alt = self._read_pair(c, c_alt)
         u = rational_uncertainty(u_abs_star).unsqueeze(-1)
-        return (y_hard + u * (y_alt - y_hard)).sum(dim=2)
+        blend = y_hard + u * (y_alt - y_hard)
+        return blend.sum(dim=2, dtype=_acc_dtype(blend.dtype))  # fp32-accum for bf16/fp16
 
     # H100 measurements: pure read wins soft eval at small/mid batch; the fused embedding_bag
     # (tier1) wins at large batch (both eval and the train step); native wins the train step at
@@ -55,13 +56,16 @@ class FusedManifestoSoftLUT(ManifestoLUT):
             return "tier1"                                   # embedding_bag wins at large batch
         if not self.training:
             return "pure"                                    # eval small/mid: compiled read wins
-        if native_available(x.device):
+        # The native lutorch_cuda kernels are fp32-only; bf16/fp16 train on tier-1 (fp32-accum).
+        if native_available(x.device) and self.weights.dtype == torch.float32:
             return "native"                                  # train small/mid: native step wins
         return "tier1" if x.is_cuda else "pure"
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if be == "native" and self.weights.dtype != torch.float32:
+            be = "tier1"                                     # native kernels are fp32-only
         if be == "pure":
             grp_out = self._pure_blend(c, c_alt, u_abs_star)
         elif be == "native":

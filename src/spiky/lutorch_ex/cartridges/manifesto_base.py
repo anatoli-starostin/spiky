@@ -39,7 +39,7 @@ from ..addressing import msb_first_powers
 from ..anchors import canonical_full_coverage_pairs, canonical_full_coverage_singles
 from ..lut_base import MultiHeadLUT
 from ..lut_spec import LUTSpec
-from ._fused_ops import _global_cells
+from ._fused_ops import _acc_dtype, _global_cells
 
 # Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
@@ -103,6 +103,21 @@ class ManifestoLUT(MultiHeadLUT):
         # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
         self._compiled = None
 
+    def _w2(self) -> torch.Tensor:
+        """The weight table reshaped to ``[G*tph*K, d_out]`` for gathering.
+
+        In low precision (bf16/fp16) with grad enabled we upcast to fp32 first, so the gather's
+        backward accumulates the per-cell weight gradient (an index_add over the batch) in fp32
+        rather than in the low-precision storage dtype — otherwise summing many batch terms in
+        bf16 is catastrophically lossy. Eval (no grad) keeps the bf16 table and lets the fp32
+        reduction in ``_forward_impl`` do the accumulation, so inference stays memory-light. A
+        no-op for fp32 weights.
+        """
+        W = self.weights
+        if torch.is_grad_enabled() and W.dtype in (torch.bfloat16, torch.float16):
+            W = W.float()
+        return W.reshape(self.spec.n_groups * self.spec.tph * self.spec.n_cells, self.spec.d_out)
+
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
 
@@ -111,13 +126,12 @@ class ManifestoLUT(MultiHeadLUT):
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
-        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
-        return W2[_global_cells(idx, G, tph, K)]              # [B, G, tph, d_out]
+        return self._w2()[_global_cells(idx, G, tph, K)]      # [B, G, tph, d_out]
 
     def _read_pair(self, c: torch.Tensor, c_alt: torch.Tensor):
         """Return ``(W[c_t], W[c_t'])``, each ``[B,G,tph,d_out]`` — two flat gathers, same as _read."""
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
-        W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
+        W2 = self._w2()
         return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
     def _needs_alt(self) -> bool:
@@ -129,15 +143,22 @@ class ManifestoLUT(MultiHeadLUT):
         return True
 
     def _route(self, grp_out: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant."""
+        """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant.
+
+        ``grp_out`` is the fp32-accumulated per-group output; the fan-in sum over groups stays
+        in fp32, and the result is cast to the input dtype (bf16/fp16/fp32) on the way out, so
+        every reduction accumulates in fp32 and only the final output carries the low precision.
+        """
         spec = self.spec
         if spec.h_out == spec.n_groups:
-            return grp_out                                    # bijection (per-head / fan-out): no scatter
-        if spec.h_out == 1:
-            return grp_out.sum(dim=1, keepdim=True)           # fan-in: plain sum over groups
-        # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
-        y = x.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
-        return y.index_add_(1, self.out_head, grp_out)
+            out = grp_out                                     # bijection (per-head / fan-out): no scatter
+        elif spec.h_out == 1:
+            out = grp_out.sum(dim=1, keepdim=True)            # fan-in: fp32 sum over groups
+        else:
+            # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
+            y = grp_out.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
+            out = y.index_add_(1, self.out_head, grp_out)
+        return out.to(x.dtype)
 
     @abstractmethod
     def _combine(
@@ -181,7 +202,11 @@ class ManifestoLUT(MultiHeadLUT):
         self._check_input(x)  # [B, h_in, d_in]
         G, tph, nap = self.spec.n_groups, self.spec.tph, self.spec.nap
         B = x.shape[0]
-        z = x[:, self.in_head, :]  # route each group to its input head -> [B, G, d_in]
+        # Addressing runs in fp32 for bf16/fp16 inputs: the margins, their argmin j*, and the
+        # packed cell index are discrete decisions that a lossy bf16 subtraction z[a]-z[b] could
+        # flip near a decision boundary. Cheap (nap comparisons per table). fp32 and fp64 keep
+        # their own precision (never downcast fp64), so the fp64 equivalence tests stay exact.
+        z = x[:, self.in_head, :].to(_acc_dtype(x.dtype))  # route each group to its input head -> [B, G, d_in]
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         z_a = z.gather(2, idx_a).reshape(B, G, tph, nap)
         if self.single:
@@ -205,5 +230,5 @@ class ManifestoLUT(MultiHeadLUT):
         else:
             # Eval shortcut (hard cartridge): only the addressed cell matters — one gather.
             per_table = self._read(c)
-        grp_out = per_table.sum(dim=2)  # sum over tph -> [B, G, d_out]
+        grp_out = per_table.sum(dim=2, dtype=_acc_dtype(per_table.dtype))  # fp32-accum for bf16/fp16; [B, G, d_out]
         return self._route(grp_out, x)

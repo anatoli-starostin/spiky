@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import FusedHardSTE
+from ._fused_ops import FusedHardSTE, _acc_dtype
 from ._native_ops import NativeHard, native_available
 from .manifesto_base import ManifestoLUT
 
@@ -52,15 +52,19 @@ class FusedManifestoHardLUT(ManifestoLUT):
     def _pick(self, x: torch.Tensor) -> str:
         if not self.training:
             return "pure_eval"                        # eval: compiled gather read wins
-        if native_available(x.device):
+        # The native lutorch_cuda kernels are fp32-only; bf16/fp16 train on tier-1 (fp32-accum).
+        if native_available(x.device) and self.weights.dtype == torch.float32:
             return "native"                           # train: native backward (both modes)
-        return "tier1"                                # train (CPU / no native): embedding_bag + STE
+        return "tier1"                                # train (CPU / no native / low precision): embedding_bag + STE
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if be == "native" and self.weights.dtype != torch.float32:
+            be = "tier1"                                  # native kernels are fp32-only
         if be == "pure_eval":
-            grp_out = self._read(c).sum(dim=2)            # pure compiled gather read + sum (eval)
+            rd = self._read(c)
+            grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)
         elif be == "native":
             # Single mode reuses the native forward + weight-grad kernels (index-only); only
             # the input-grad scatters to one coordinate (handled inside NativeHard).

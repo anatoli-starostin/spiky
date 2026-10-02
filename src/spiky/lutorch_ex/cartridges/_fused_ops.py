@@ -14,6 +14,16 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+# Low-precision reductions accumulate in fp32 and the result is cast back to the caller's dtype
+# (the cartridge does that in _route). For bf16/fp16 weights the embedding_bag reduce runs on an
+# fp32 view of the table (torch's embedding_bag has no accumulate-dtype knob), so summing a
+# group's tph rows does not lose precision. fp32 and fp64 keep their own dtype (so the fp64
+# equivalence tests stay bit-exact — upcasting fp32 to fp64 or downcasting fp64 to fp32 would
+# both be wrong).
+def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
+    """fp32 for bf16/fp16, else the dtype itself (fp32->fp32, fp64->fp64)."""
+    return torch.float32 if dtype in (torch.bfloat16, torch.float16) else dtype
+
 
 def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
     """Map per-(group,table) cell index c[B,G,tph] -> flat index into a [G*tph*K, d_out] table."""
@@ -23,10 +33,10 @@ def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
 
 
 def fused_hard_read(weights: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out]."""
+    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out] fp32."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
-    W2 = weights.reshape(G * tph * K, d_out)
+    W2 = weights.reshape(G * tph * K, d_out).to(_acc_dtype(weights.dtype))
     gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
     return F.embedding_bag(gc, W2, mode="sum").reshape(B, G, d_out)
 
@@ -34,14 +44,16 @@ def fused_hard_read(weights: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
 def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor,
                      U: torch.Tensor) -> torch.Tensor:
     """Soft blend y[b,g] = sum_t (1-U)W[g,t,c] + U W[g,t,c_alt] via one embedding_bag with
-    per_sample_weights. Fully differentiable — matches pure ManifestoSoftLUT. -> [B,G,d_out]."""
+    per_sample_weights (fp32 accumulation). Fully differentiable — matches pure ManifestoSoftLUT.
+    -> [B,G,d_out] fp32 (the cartridge casts to the caller dtype in _route)."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
-    W2 = weights.reshape(G * tph * K, d_out)
+    acc = _acc_dtype(weights.dtype)
+    W2 = weights.reshape(G * tph * K, d_out).to(acc)
     gc = _global_cells(c, G, tph, K)          # [B, G, tph]
     gca = _global_cells(c_alt, G, tph, K)     # [B, G, tph]
     idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
-    psw = torch.cat([1.0 - U, U], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
+    psw = torch.cat([1.0 - U, U], dim=2).reshape(B * G, 2 * tph).to(acc)
     return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
 
@@ -61,33 +73,41 @@ class FusedHardSTE(torch.autograd.Function):
         W2 = weights.reshape(G * tph * K, d_out)
         gc = _global_cells(c, G, tph, K)        # [B,G,tph]
         gca = _global_cells(c_alt, G, tph, K)
-        val = F.embedding_bag(gc.reshape(B * G, tph), W2, mode="sum").reshape(B, G, d_out)
-        gdiff = W2[gc] - W2[gca]                 # [B,G,tph,d_out] = W[c_t] - W[c_t']
+        val = F.embedding_bag(gc.reshape(B * G, tph), W2.to(_acc_dtype(weights.dtype)),
+                              mode="sum").reshape(B, G, d_out)
+        gdiff = W2[gc] - W2[gca]                 # [B,G,tph,d_out] = W[c_t] - W[c_t'] (weights dtype)
         delta = z.gather(2, a_star)              # [B,G,tph] signed deciding margin
         if not single:
             delta = delta - z.gather(2, b_star)
         ctx.save_for_backward(gc, gdiff, delta, a_star, b_star)
         ctx.dims = (G, tph, K, d_out, B, d_in)
         ctx.single = single
-        return val
+        ctx.wdtype = weights.dtype
+        ctx.zdtype = z.dtype
+        return val                              # fp32; the cartridge casts to the caller dtype in _route
 
     @staticmethod
-    def backward(ctx, grad_out):                 # grad_out [B,G,d_out]
+    def backward(ctx, grad_out):                 # grad_out [B,G,d_out] (fp32)
         gc, gdiff, delta, a_star, b_star = ctx.saved_tensors
         G, tph, K, d_out, B, d_in = ctx.dims
-        # Weight gradient: HARD — grad_out scattered to each addressed cell c_t (index_add).
-        grad_W2 = torch.zeros(G * tph * K, d_out, device=grad_out.device, dtype=grad_out.dtype)
-        go = grad_out.unsqueeze(2).expand(B, G, tph, d_out).reshape(-1, d_out)
+        acc = _acc_dtype(ctx.wdtype)
+        go_f = grad_out.to(acc)
+        # Weight gradient: HARD — grad_out scattered to each addressed cell c_t (index_add),
+        # accumulated in the acc dtype (fp32 for bf16/fp16) and cast back to the weight dtype,
+        # so low-precision weight grads don't lose the batch sum.
+        grad_W2 = torch.zeros(G * tph * K, d_out, device=grad_out.device, dtype=acc)
+        go = go_f.unsqueeze(2).expand(B, G, tph, d_out).reshape(-1, d_out)
         grad_W2.index_add_(0, gc.reshape(-1), go)
-        grad_weights = grad_W2.reshape(G, tph, K, d_out)
+        grad_weights = grad_W2.reshape(G, tph, K, d_out).to(ctx.wdtype)
         # Input gradient via the surrogate: du = (grad_out . (W[c]-W[c'])) * (-dU/ddelta),
-        # with U = 0.5/(1+|delta|) -> -dU/ddelta = 0.5*sign(delta)/(1+|delta|)^2.
+        # with U = 0.5/(1+|delta|) -> -dU/ddelta = 0.5*sign(delta)/(1+|delta|)^2. acc throughout.
         # Pairs: delta = z[a]-z[b] -> +du to a, -du to b. Single: delta = z[a] -> +du to a.
-        gd = (grad_out.unsqueeze(2) * gdiff).sum(-1)            # [B,G,tph]
-        coeff = 0.5 * torch.sign(delta) / (1.0 + delta.abs()) ** 2
+        gd = (go_f.unsqueeze(2) * gdiff.to(acc)).sum(-1)       # [B,G,tph]
+        df = delta.to(acc)
+        coeff = 0.5 * torch.sign(df) / (1.0 + df.abs()) ** 2
         du = gd * coeff
-        grad_z = torch.zeros(B, G, d_in, device=grad_out.device, dtype=grad_out.dtype)
+        grad_z = torch.zeros(B, G, d_in, device=grad_out.device, dtype=acc)
         grad_z.scatter_add_(2, a_star, du)
         if not ctx.single:
             grad_z.scatter_add_(2, b_star, -du)
-        return grad_weights, grad_z, None, None, None, None, None
+        return grad_weights, grad_z.to(ctx.zdtype), None, None, None, None, None
