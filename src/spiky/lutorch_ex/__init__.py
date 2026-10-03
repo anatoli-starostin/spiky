@@ -11,6 +11,7 @@ imports from the old ``spiky.lutorch``. The pieces:
 """
 from .cartridges import (
     ConfidenceLUT,
+    QuantisedConfidenceLUT,
     FusedManifestoHardLUT,
     FusedManifestoSoftLUT,
     FusedSoftSignHardLUT,
@@ -43,6 +44,7 @@ __all__ = [
     "FusedSoftSignHardLUT",
     "FusedSoftSignSmoothLUT",
     "ConfidenceLUT",
+    "QuantisedConfidenceLUT",
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",
