@@ -65,6 +65,14 @@ class ManifestoLUT(MultiHeadLUT):
     override :meth:`_supports_low_precision`.
     """
 
+    # Whether to torch.compile the TRAIN forward too (not just eval). Default False: for the
+    # Gen-1/Gen-2 cartridges the train step is memory-bound and eager is fastest. The Gen-3
+    # confidence cartridges set this True -- their score/blend read-out fans out into ~10 tiny
+    # elementwise kernels (abs/logsigmoid/exp/sum/sigmoid/gather/cat/psw) that inductor folds into
+    # 1-2 (graph break at embedding_bag), cutting the train step AND its peak memory substantially
+    # (matches the OLD LightMHL blend-compile lever). CUDA-only; see :meth:`forward`.
+    _COMPILE_TRAIN: bool = False
+
     def __init__(
         self,
         spec: LUTSpec,
@@ -112,7 +120,8 @@ class ManifestoLUT(MultiHeadLUT):
         self.weights = nn.Parameter(w)
 
         # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
-        self._compiled = None
+        self._compiled = None          # eval forward
+        self._compiled_train = None    # train forward (only when _COMPILE_TRAIN; Gen-3)
         # Lazily-built torch.compile of the addressing, for the native TRAIN path (see _addr()).
         self._compiled_addr = None
 
@@ -188,14 +197,23 @@ class ManifestoLUT(MultiHeadLUT):
                 "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT); keep this "
                 "cartridge (and ProjectionMHL wrapping it) in float32/float64."
             )
-        # Compile ONLY the EVAL forward on CUDA (built lazily on first such call, per instance).
-        # torch.compile helps the eval/inference path, but hurts the train+backward step at the
-        # training batch (memory-bound there — eager is fastest), so training forward and its
-        # backward run eager. CPU is always plain eager (keeps the CPU tests unaffected).
-        if _COMPILE_ENABLED and x.is_cuda and not self.training:
-            if self._compiled is None:
-                self._compiled = torch.compile(self._forward_impl, dynamic=True)
-            return self._compiled(x)
+        # Compile the forward on CUDA (built lazily on first such call, per instance). EVAL is
+        # always compiled. TRAIN is compiled only for cartridges that opt in via _COMPILE_TRAIN
+        # (the Gen-3 confidence line): there the score/blend read-out is a long chain of tiny
+        # elementwise kernels that inductor fuses, cutting both the train step and its peak memory.
+        # For the Gen-1/Gen-2 cartridges (_COMPILE_TRAIN False) the train step is memory-bound and
+        # eager is fastest, so training stays eager. CPU is always plain eager (keeps CPU tests
+        # eager / bit-identical). Eval and train use separate compiled objects (each traces its own
+        # branch of _forward_impl).
+        if _COMPILE_ENABLED and x.is_cuda:
+            if not self.training:
+                if self._compiled is None:
+                    self._compiled = torch.compile(self._forward_impl, dynamic=True)
+                return self._compiled(x)
+            if self._COMPILE_TRAIN:
+                if self._compiled_train is None:
+                    self._compiled_train = torch.compile(self._forward_impl, dynamic=True)
+                return self._compiled_train(x)
         return self._forward_impl(x)
 
     def _addr(self, x: torch.Tensor):

@@ -56,6 +56,12 @@ class ConfidenceLUT(ManifestoLUT):
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
     """
 
+    # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
+    # of fused kernels, cutting the training step and peak memory (see ManifestoLUT.forward). The
+    # whole _forward_impl is compiled, so the addressing is included -- _addresses is called
+    # directly (no separate compiled _addr) to avoid a nested compile.
+    _COMPILE_TRAIN = True
+
     def __init__(
         self,
         spec,

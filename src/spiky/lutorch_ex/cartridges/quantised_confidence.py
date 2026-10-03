@@ -119,10 +119,11 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # Quant-aware read for both train (STE grads) and eval (no_grad -> the pure quantised value;
-        # ste_tables' W - W.detach() term is 0 under no_grad). The TRAIN addressing uses the base's
-        # compiled _addr (fuses the eager margin/sign-bit/argmin materialisation on CUDA, ~10x);
-        # eval uses plain _addresses inside the base forward's whole-forward compile.
-        z, u, c, j_star, u_abs_star, c_alt = self._addr(x) if self.training else self._addresses(x)
+        # ste_tables' W - W.detach() term is 0 under no_grad). Plain _addresses in both modes: the
+        # base forward compiles the WHOLE _forward_impl on CUDA (eval always; train via
+        # _COMPILE_TRAIN, inherited from ConfidenceLUT), so inductor fuses the addressing here too
+        # -- no separate compiled _addr (that would be a nested compile).
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         grp_out = self._quant_grp_out(u, c, c_alt, u_abs_star)
         return self._route(grp_out, x)
 
