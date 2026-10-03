@@ -171,13 +171,16 @@ class NativeSoft(torch.autograd.Function):
     """Soft blend via lutorch_cuda lprojection_forward_smooth (+ its na1 smooth backward)."""
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single):
+    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, drop_mask=None):
         mgr = native_manager()
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
         tif = _table_indices(B, nt, z.device)
         out, mw, aw = mgr.lprojection_forward_smooth(W, li, lai, lad, tif, tif, True, _THREADS)
-        grp = out.reshape(B, G, tph, d_out).sum(2, dtype=_acc_dtype(out.dtype)).to(weights.dtype)
+        out_pt = out.reshape(B, G, tph, d_out)
+        if drop_mask is not None:                 # table dropout: scale each table's blend by its keep
+            out_pt = out_pt * drop_mask.unsqueeze(-1).to(out_pt.dtype)  # (same mask scales grad_pt below)
+        grp = out_pt.sum(2, dtype=_acc_dtype(out.dtype)).to(weights.dtype)
         batch_off = (torch.arange(B, device=z.device).repeat_interleave(nt) * (G * d_in)).contiguous()
         # z is passed by the cartridge already in the weight dtype (the kernels dispatch on it;
         # its values are unused by the input-grad kernels, only its shape). The input gradient is
@@ -188,6 +191,7 @@ class NativeSoft(torch.autograd.Function):
                               z.reshape(B, G * d_in))
         ctx.dims = (G, tph, K, d_out, B, d_in, nt)
         ctx.single = single
+        ctx.drop_mask = drop_mask
         return grp
 
     @staticmethod
@@ -195,7 +199,10 @@ class NativeSoft(torch.autograd.Function):
         W, li, lai, lad, tif, mw, aw, a_g, b_g, batch_off, z_flat = ctx.saved_tensors
         G, tph, K, d_out, B, d_in, nt = ctx.dims
         mgr = native_manager()
-        grad_pt = grad_grp.unsqueeze(2).expand(B, G, tph, d_out).reshape(B, nt, d_out).contiguous()
+        grad_pt = grad_grp.unsqueeze(2).expand(B, G, tph, d_out)
+        if ctx.drop_mask is not None:            # scale each table's grad by its keep-mask
+            grad_pt = grad_pt * ctx.drop_mask.unsqueeze(-1).to(grad_pt.dtype)
+        grad_pt = grad_pt.reshape(B, nt, d_out).contiguous()
         wgrad, gc_main, gc_alt = mgr.lprojection_backward_na1_smooth(
             grad_pt, W, li, lai, tif, tif, mw.contiguous(), aw.contiguous(), _THREADS)
         if ctx.single:
@@ -204,7 +211,7 @@ class NativeSoft(torch.autograd.Function):
             xg = mgr.anchor_pairs_lookup_backward_all(
                 z_flat, a_g.reshape(-1).contiguous(), b_g.reshape(-1).contiguous(), lad, batch_off,
                 gc_main.contiguous(), gc_alt.reshape(-1).contiguous(), True, _THREADS).view(B, G, d_in)
-        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None
+        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None, None
 
 
 class NativeHard(torch.autograd.Function):
@@ -212,7 +219,7 @@ class NativeHard(torch.autograd.Function):
     input-grad via the uncertainty carriers)."""
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single):
+    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, drop_mask=None):
         mgr = native_manager()
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
@@ -221,14 +228,18 @@ class NativeHard(torch.autograd.Function):
         # gather + tph-sum with embedding_bag (fp32-accumulated for bf16/fp16, cast back to the
         # weight dtype) instead of the eager W[tif,li].sum(2), which materialized the full
         # [B,G,tph,d_out] cell tensor (~2.4 GB at the champion batch). Numerically identical; the
-        # saved tensors / backward are unchanged.
-        val = fused_hard_read(weights, c).to(weights.dtype)
+        # saved tensors / backward are unchanged. drop_mask [B,G,tph] (optional) folds into the value
+        # via per_sample_weights (sum_t mask_t W[c_t]); the SAME mask scales grad_pt in backward so
+        # wgrad and the input-grad carriers inherit the mask_t factor -- table dropout honoured
+        # through the native kernels with NO kernel change.
+        val = fused_hard_read(weights, c, drop_mask=drop_mask).to(weights.dtype)
         batch_off = (torch.arange(B, device=z.device).repeat_interleave(nt) * (G * d_in)).contiguous()
         ctx.save_for_backward(W, li, lai, lad, tif,
                               a_glob.reshape(B, nt, 1), b_glob.reshape(B, nt, 1), batch_off,
                               z.reshape(B, G * d_in))
         ctx.dims = (G, tph, K, d_out, B, d_in, nt)
         ctx.single = single
+        ctx.drop_mask = drop_mask
         return val
 
     @staticmethod
@@ -236,7 +247,10 @@ class NativeHard(torch.autograd.Function):
         W, li, lai, lad, tif, a_g, b_g, batch_off, z_flat = ctx.saved_tensors
         G, tph, K, d_out, B, d_in, nt = ctx.dims
         mgr = native_manager()
-        grad_pt = grad_grp.unsqueeze(2).expand(B, G, tph, d_out).reshape(B, nt, d_out).contiguous()
+        grad_pt = grad_grp.unsqueeze(2).expand(B, G, tph, d_out)
+        if ctx.drop_mask is not None:            # scale each table's grad by its keep-mask (matches the
+            grad_pt = grad_pt * ctx.drop_mask.unsqueeze(-1).to(grad_pt.dtype)  # masked forward value)
+        grad_pt = grad_pt.reshape(B, nt, d_out).contiguous()
         wgrad, gc_main, gc_alt = mgr.lprojection_backward_na1_nonsmooth(
             grad_pt, W, li, lai, tif, tif, _THREADS)
         if ctx.single:
@@ -245,4 +259,4 @@ class NativeHard(torch.autograd.Function):
             xg = mgr.anchor_pairs_lookup_backward_all(
                 z_flat, a_g.reshape(-1).contiguous(), b_g.reshape(-1).contiguous(), lad, batch_off,
                 gc_main.contiguous(), gc_alt.reshape(-1).contiguous(), True, _THREADS).view(B, G, d_in)
-        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None
+        return wgrad.reshape(G, tph, K, d_out), xg, None, None, None, None, None, None, None

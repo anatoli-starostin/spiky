@@ -23,6 +23,7 @@ from .cartridges import (
     SoftSignHardLUT,
     SoftSignLUT,
     SoftSignSmoothLUT,
+    cell_tv_penalty,
     rational_uncertainty,
 )
 from .lut_base import MultiHeadLUT
@@ -45,6 +46,7 @@ __all__ = [
     "FusedSoftSignSmoothLUT",
     "ConfidenceLUT",
     "QuantisedConfidenceLUT",
+    "cell_tv_penalty",
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",

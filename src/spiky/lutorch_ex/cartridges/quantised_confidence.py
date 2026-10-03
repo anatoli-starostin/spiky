@@ -89,6 +89,7 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         W2 = self._fake_quant_tables()
         m = u.abs()
         mv = u_abs_star.unsqueeze(-1)                              # [B, G, tph, 1]
+        dmask = self._table_dropout_mask(B, u.device, u.dtype)    # [B,G,tph] keep-mask or None
         if self.read_top_n == 2:
             tau = self.log_read_tau.to(u.dtype).exp()
             if frozen_coef is None:
@@ -111,6 +112,8 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
                 x2 = 2.0 * mv / tau
                 ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
                 psw2 = ex * frozen_coef                                          # smooth, frozen ratio
+            if dmask is not None:
+                psw2 = psw2 * dmask.unsqueeze(-1)       # table dropout (one Bernoulli/table, both cells)
             gc = _global_cells(c, G, tph, K)
             gca = _global_cells(c_alt, G, tph, K)
             idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
@@ -130,6 +133,8 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
             psw = self._ste_score_weight(s, k1, skip).reshape(B * G, tph).to(W2.dtype)
         else:
             psw = (s * frozen_coef).reshape(B * G, tph).to(W2.dtype)            # smooth, frozen ratio
+        if dmask is not None:
+            psw = psw * dmask.reshape(B * G, tph).to(psw.dtype)                 # table dropout
         gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
         return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
@@ -156,6 +161,9 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         g0 = torch.zeros((), dtype=d.dtype, device=d.device)
         tau = self.log_read_tau.to(d.dtype).exp()
         psw, idx = _pow2_int8.cell_weights(d, None, self.powers, tau, g0, beta, gamma, cfg)  # [B,G,tph,2]
+        dmask = self._table_dropout_mask(B, d.device, d.dtype)
+        if dmask is not None:
+            psw = psw * dmask.unsqueeze(-1)            # table dropout (one Bernoulli/table, both cells)
         W = _pow2.ste_tables(self.weights.reshape(G * tph, K, d_out), n_heads=G,
                              bits=cfg["bits"], offset=cfg["offset"])
         flat_q = W.reshape(-1, d_out)

@@ -71,6 +71,10 @@ class FusedManifestoHardLUT(ManifestoLUT):
         # Native train path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization);
         # eval/tier1 keep plain _addresses (eval is already compiled whole by the base forward).
         z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if be == "native" else self._addresses(xa)
+        # Table-dropout keep-mask [B,G,tph] (train+grad only; None at eval / rate 0), in the fp32
+        # accumulation dtype. Threaded into the native / STE custom-autograd Functions so a dropped
+        # table contributes 0 to BOTH value and gradient (the SAME mask is reused in their backward).
+        dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             rd = self._read(c)
             grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)
@@ -81,8 +85,8 @@ class FusedManifestoHardLUT(ManifestoLUT):
             # end (one cast), while the fp32 addressing above supplies c/c_alt/us.
             al, bl, ag, bg, us = self._star(z, u, j_star)
             zc = x[:, self.in_head, :] if low else z
-            grp_out = NativeHard.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single)
+            grp_out = NativeHard.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
         else:  # tier1
             al, bl, ag, bg, us = self._star(z, u, j_star)
-            grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl, self.single)
+            grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl, self.single, dmask)
         return self._route(grp_out, x).to(x.dtype)

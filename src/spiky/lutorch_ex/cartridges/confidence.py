@@ -148,6 +148,11 @@ class ConfidenceLUT(ManifestoLUT):
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         s = self._score(u)                                    # [B, G, tph]
+        # Table dropout folds into the per-table score s (which gates each table's whole
+        # contribution): no-op at eval / rate 0. Covers n=1 and n=2 (both read-outs use s).
+        mask = self._table_dropout_mask(s.shape[0], s.device, s.dtype)
+        if mask is not None:
+            s = s * mask
         if self.read_top_n == 1:
             if self.training:
                 grp_out = self._scored_read(c, s)
