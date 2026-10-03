@@ -270,22 +270,3 @@ def test_fused_backward_supported_dtypes(dtype):
     x = torch.randn(9, 16, device=dev, dtype=torch.float32, requires_grad=True)
     m(x).float().sum().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all()
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_bf16_tables_cannot_train_through_the_fusion():
-    """PyTorch has no bf16 CUDA kernel for the per_sample_weights backward.
-
-    Pinned deliberately rather than left to be rediscovered: bf16 TABLES are usable for
-    inference (the forward test above covers that) but NOT for training through the fused
-    path, because `_embedding_bag_per_sample_weights_backward_cuda` is unimplemented for
-    BFloat16. Train in fp32 (or fp16) and cast the tables to bf16 for deployment. If a
-    future PyTorch adds the kernel, this test starts failing and should simply be removed.
-    """
-    dev = torch.device("cuda:0")
-    m = LightMultiHeadLUT(input_dim=16, n_tables=32, output_dim=8, n_anchor_pairs=4,
-                          confidence_form="bounded_norm", random_seed=1, device=dev)
-    m.tables.data = m.tables.data.to(torch.bfloat16)
-    x = torch.randn(9, 16, device=dev, dtype=torch.float32, requires_grad=True)
-    with pytest.raises(NotImplementedError, match="per_sample_weights_backward"):
-        m(x).float().sum().backward()

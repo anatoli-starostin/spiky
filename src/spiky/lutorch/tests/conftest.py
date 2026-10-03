@@ -3,6 +3,16 @@ import os
 # Must be set before lutorch modules are imported.
 os.environ.setdefault("SPIKY_GT_NO_COMPILE", "1")
 
+# The sandbox cage mounts ~/.triton (triton's default JIT cache) read-only, so compiling a
+# triton kernel there fails with OSError(Errno 30, read-only file system). Point the cache at a
+# writable dir before any triton / torch.compile import, matching the ffn_replacement run wrapper
+# (TRITON_CACHE_DIR=~/.cache/triton). setdefault respects an explicit override from the shell.
+os.environ.setdefault("TRITON_CACHE_DIR", os.path.expanduser("~/.cache/triton"))
+try:
+    os.makedirs(os.environ["TRITON_CACHE_DIR"], exist_ok=True)
+except OSError:
+    pass
+
 import pytest
 import torch
 
