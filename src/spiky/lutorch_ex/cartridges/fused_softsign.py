@@ -94,6 +94,7 @@ class FusedSoftSignHardLUT(FusedSoftSignLUT):
         low = x.dtype in _LOW_PREC
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights
             rd = self._read(c) if not low else None
@@ -104,14 +105,17 @@ class FusedSoftSignHardLUT(FusedSoftSignLUT):
             zc = x[:, self.in_head, :] if low else z
             t_soft, t_select = self._temps(us.dtype)
             grp_out = NativeSoftSignHard.apply(self.weights, zc, c, c_alt, us, ag, bg,
-                                               self.single, t_soft, t_select)
+                                               self.single, t_soft, t_select, dmask)
         else:  # tier1: pure embedding_bag straight-through (CPU / no native)
             W = self.weights.float() if low else self.weights
             w = self._blend_w(u_abs_star)
-            y_c = fused_hard_read(W, c)
+            y_c = fused_hard_read(W, c, drop_mask=dmask)
             y_hard_pt, y_alt_pt = self._read_both(W, c, c_alt)
             diff = (y_alt_pt - y_hard_pt).detach()
-            surr = (w.unsqueeze(-1) * diff).sum(dim=2)
+            sw = w.unsqueeze(-1) * diff
+            if dmask is not None:
+                sw = sw * dmask.unsqueeze(-1)
+            surr = sw.sum(dim=2)
             grp_out = y_c + (surr - surr.detach())
         return self._route(grp_out, x).to(x.dtype)
 
@@ -131,18 +135,21 @@ class FusedSoftSignSmoothLUT(FusedSoftSignLUT):
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         w = self._blend_w(u_abs_star)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights
             y_hard, y_alt = self._read_both(W, c, c_alt)
-            grp_out = (y_hard + w.unsqueeze(-1) * (y_alt - y_hard)).sum(
-                dim=2, dtype=_acc_dtype(self.weights.dtype))
+            blend = y_hard + w.unsqueeze(-1) * (y_alt - y_hard)
+            if dmask is not None:
+                blend = blend * dmask.unsqueeze(-1)
+            grp_out = blend.sum(dim=2, dtype=_acc_dtype(self.weights.dtype))
         elif be == "native":
             al, bl, ag, bg, us = self._star(z, u, j_star)
             zc = x[:, self.in_head, :] if low else z
             t_soft, t_select = self._temps(us.dtype)
             grp_out = NativeSoftSignSmooth.apply(self.weights, zc, c, c_alt, us, ag, bg,
-                                                 self.single, t_soft, t_select, w.detach())
+                                                 self.single, t_soft, t_select, w.detach(), dmask)
         else:  # tier1: pure fused blend read (CPU / no native)
             W = self.weights.float() if low else self.weights
-            grp_out = fused_blend_read(W, c, c_alt, w)
+            grp_out = fused_blend_read(W, c, c_alt, w, drop_mask=dmask)
         return self._route(grp_out, x).to(x.dtype)

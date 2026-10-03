@@ -32,19 +32,25 @@ def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
     return c + base  # [B, G, tph]
 
 
-def fused_hard_read(weights: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out] fp32."""
+def fused_hard_read(weights: torch.Tensor, c: torch.Tensor, drop_mask=None) -> torch.Tensor:
+    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out] fp32.
+    ``drop_mask`` [B,G,tph] (optional): per-table keep weights folded in as per_sample_weights, so
+    dropped tables contribute 0 — table dropout honoured inside the fused read (no new kernel)."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
-    W2 = weights.reshape(G * tph * K, d_out).to(_acc_dtype(weights.dtype))
+    acc = _acc_dtype(weights.dtype)
+    W2 = weights.reshape(G * tph * K, d_out).to(acc)
     gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
-    return F.embedding_bag(gc, W2, mode="sum").reshape(B, G, d_out)
+    psw = None if drop_mask is None else drop_mask.reshape(B * G, tph).to(acc)
+    return F.embedding_bag(gc, W2, mode="sum", per_sample_weights=psw).reshape(B, G, d_out)
 
 
 def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor,
-                     U: torch.Tensor) -> torch.Tensor:
+                     U: torch.Tensor, drop_mask=None) -> torch.Tensor:
     """Soft blend y[b,g] = sum_t (1-U)W[g,t,c] + U W[g,t,c_alt] via one embedding_bag with
     per_sample_weights (fp32 accumulation). Fully differentiable — matches pure ManifestoSoftLUT.
+    ``drop_mask`` [B,G,tph] (optional): per-table keep weights multiplied into BOTH cells' weights
+    (one Bernoulli per table), so dropped tables contribute 0 — table dropout, fused in.
     -> [B,G,d_out] fp32 (the cartridge casts to the caller dtype in _route)."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
@@ -53,7 +59,10 @@ def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor
     gc = _global_cells(c, G, tph, K)          # [B, G, tph]
     gca = _global_cells(c_alt, G, tph, K)     # [B, G, tph]
     idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
-    psw = torch.cat([1.0 - U, U], dim=2).reshape(B * G, 2 * tph).to(acc)
+    w0, w1 = 1.0 - U, U
+    if drop_mask is not None:
+        w0, w1 = w0 * drop_mask, w1 * drop_mask
+    psw = torch.cat([w0, w1], dim=2).reshape(B * G, 2 * tph).to(acc)
     return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
 
@@ -64,17 +73,22 @@ class FusedHardSTE(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, a_star, b_star, single):
+    def forward(ctx, weights, z, c, c_alt, a_star, b_star, single, drop_mask=None):
         # weights [G,tph,K,d_out]; z [B,G,d_in]; c/c_alt/a_star/b_star [B,G,tph] (long for c/*).
         # single: when True the margin is z[a_star] (anchor vs zero) and the input grad
         # scatters to a_star only; b_star is ignored (may be a placeholder).
+        # drop_mask [B,G,tph] (optional): per-table keep weights folded into the value (per_sample_
+        # weights) and into both grad terms in backward, so a dropped table contributes 0 to value
+        # AND grad -- table dropout through the custom STE, train-only (the cartridge passes None at eval).
         G, tph, K, d_out = weights.shape
         B, _, d_in = z.shape
+        acc = _acc_dtype(weights.dtype)
         W2 = weights.reshape(G * tph * K, d_out)
         gc = _global_cells(c, G, tph, K)        # [B,G,tph]
         gca = _global_cells(c_alt, G, tph, K)
-        val = F.embedding_bag(gc.reshape(B * G, tph), W2.to(_acc_dtype(weights.dtype)),
-                              mode="sum").reshape(B, G, d_out)
+        psw = None if drop_mask is None else drop_mask.reshape(B * G, tph).to(acc)
+        val = F.embedding_bag(gc.reshape(B * G, tph), W2.to(acc),
+                              mode="sum", per_sample_weights=psw).reshape(B, G, d_out)
         gdiff = W2[gc] - W2[gca]                 # [B,G,tph,d_out] = W[c_t] - W[c_t'] (weights dtype)
         delta = z.gather(2, a_star)              # [B,G,tph] signed deciding margin
         if not single:
@@ -83,6 +97,7 @@ class FusedHardSTE(torch.autograd.Function):
         ctx.dims = (G, tph, K, d_out, B, d_in)
         ctx.single = single
         ctx.wdtype = weights.dtype
+        ctx.drop_mask = drop_mask               # constant keep-mask (no grad); None when off
         return val                              # acc dtype; the cartridge casts to the caller dtype in _route
 
     @staticmethod
@@ -93,8 +108,12 @@ class FusedHardSTE(torch.autograd.Function):
         # grad_out and delta are already in `acc`: the cartridge upcasts bf16/fp16 x before
         # addressing (so delta = z[.] is fp32) and the forward value is produced in `acc` (so its
         # grad is too). The weight grad accumulates in `acc` and casts back to the weight dtype.
+        mask = ctx.drop_mask                      # [B,G,tph] keep-mask or None
         grad_W2 = torch.zeros(G * tph * K, d_out, device=grad_out.device, dtype=acc)
-        go = grad_out.unsqueeze(2).expand(B, G, tph, d_out).reshape(-1, d_out)
+        go = grad_out.unsqueeze(2).expand(B, G, tph, d_out)
+        if mask is not None:                      # a dropped table gets 0 weight grad (its value was 0)
+            go = go * mask.unsqueeze(-1).to(acc)
+        go = go.reshape(-1, d_out)
         grad_W2.index_add_(0, gc.reshape(-1), go)
         grad_weights = grad_W2.reshape(G, tph, K, d_out).to(ctx.wdtype)
         # Input gradient via the surrogate: du = (grad_out . (W[c]-W[c'])) * (-dU/ddelta),
@@ -104,8 +123,10 @@ class FusedHardSTE(torch.autograd.Function):
         gd = (grad_out.unsqueeze(2) * gdiff.to(acc)).sum(-1)   # [B,G,tph]
         coeff = 0.5 * torch.sign(delta) / (1.0 + delta.abs()) ** 2
         du = gd * coeff
+        if mask is not None:                      # a dropped table contributes no input gradient either
+            du = du * mask.to(acc)
         grad_z = torch.zeros(B, G, d_in, device=grad_out.device, dtype=acc)
         grad_z.scatter_add_(2, a_star, du)
         if not ctx.single:
             grad_z.scatter_add_(2, b_star, -du)
-        return grad_weights, grad_z, None, None, None, None, None
+        return grad_weights, grad_z, None, None, None, None, None, None

@@ -38,9 +38,13 @@ class SoftSignHardLUT(SoftSignLUT):
             grp_out = self._read(c).sum(dim=2)                   # hard eval: one cell per table
         else:
             w = self._blend_w(u_abs_star)
-            y_c = fused_hard_read(self.weights, c)               # value = sum_t W[c_t]; weight grad 1-row
+            dmask = self._table_dropout_mask(x.shape[0], self.weights.device, self.weights.dtype)
+            y_c = fused_hard_read(self.weights, c, drop_mask=dmask)  # value = sum_t keep_t W[c_t]
             y_hard_pt, y_alt_pt = self._read_pair(c, c_alt)      # the two cells for the surrogate
             diff = (y_alt_pt - y_hard_pt).detach()               # detached: no weight grad from the surrogate
-            surr = (w.unsqueeze(-1) * diff).sum(dim=2)
+            sw = w.unsqueeze(-1) * diff
+            if dmask is not None:                                # dropped tables contribute no surrogate grad
+                sw = sw * dmask.unsqueeze(-1)
+            surr = sw.sum(dim=2)
             grp_out = y_c + (surr - surr.detach())               # value == y_c; grad via w into input/temps
         return self._route(grp_out, x)

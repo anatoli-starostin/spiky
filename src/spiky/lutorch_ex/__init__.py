@@ -10,6 +10,8 @@ imports from the old ``spiky.lutorch``. The pieces:
 * :class:`ProjectionMHL` — a compress/decompress bottleneck around any cartridge.
 """
 from .cartridges import (
+    ConfidenceLUT,
+    QuantisedConfidenceLUT,
     FusedManifestoHardLUT,
     FusedManifestoSoftLUT,
     FusedSoftSignHardLUT,
@@ -21,6 +23,7 @@ from .cartridges import (
     SoftSignHardLUT,
     SoftSignLUT,
     SoftSignSmoothLUT,
+    cell_tv_penalty,
     rational_uncertainty,
 )
 from .lut_base import MultiHeadLUT
@@ -41,6 +44,9 @@ __all__ = [
     "FusedSoftSignLUT",
     "FusedSoftSignHardLUT",
     "FusedSoftSignSmoothLUT",
+    "ConfidenceLUT",
+    "QuantisedConfidenceLUT",
+    "cell_tv_penalty",
     "ProjectionMHL",
     "SupportsDecompressBake",
     "rational_uncertainty",

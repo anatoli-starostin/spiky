@@ -40,7 +40,8 @@ class SoftSignSmoothLUT(SoftSignLUT):
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         w = self._blend_w(u_abs_star)
         if self.training:
-            grp_out = fused_blend_read(self.weights, c, c_alt, w)
+            dmask = self._table_dropout_mask(x.shape[0], self.weights.device, self.weights.dtype)
+            grp_out = fused_blend_read(self.weights, c, c_alt, w, drop_mask=dmask)
         else:
             grp_out = self._pure_blend(c, c_alt, w)
         return self._route(grp_out, x)
