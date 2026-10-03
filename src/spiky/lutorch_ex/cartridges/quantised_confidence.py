@@ -100,10 +100,15 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
             idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
             psw = torch.cat([psw2[..., 0], psw2[..., 1]], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
             return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
-        # read_top_n == 1: single scored cell, score rounded to a power of two (STE)
-        s = self._score(u)                                         # [B, G, tph]
+        # read_top_n == 1: single scored cell, score rounded to a power of two (STE). The native
+        # p2_scalars op is a 2-cell-blend kernel (q / c_q / neighbour) and has no single-cell form
+        # in the reference, so n=1 stays on the pure path — but shares ONE logsigmoid pass between
+        # the linear score s and its log2 (k'), instead of computing the score twice.
+        msum = m.sum(dim=-1)
+        lse = F.logsigmoid(beta * m).sum(dim=-1)
+        s = msum * torch.exp(gamma * lse)                          # == self._score(u)
         if frozen_coef is None:
-            k1 = _pow2.round_half_up(_pow2.log2_score(m, g0, beta, gamma))
+            k1 = _pow2.round_half_up(torch.log2(msum) + gamma * lse / _pow2.LN2)
             skip = k1 < cfg["lo"]
             k1 = torch.clamp(k1, cfg["lo"], cfg["hi"])
             psw = self._ste_score_weight(s, k1, skip).reshape(B * G, tph).to(W2.dtype)
