@@ -86,10 +86,20 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         if self.read_top_n == 2:
             tau = self.log_read_tau.to(u.dtype).exp()
             if frozen_coef is None:
-                # Native p2_scalars op when available (fused q/k'/skip/drop + STE weights), else the
-                # pure _pow2 path. Both give bit-identical psw; we pair it with our own c/c_alt
-                # (the op's returned cell indices are discarded, so no bit-convention coupling).
-                psw2 = _pow2_int8.cell_weights(u, c, self.powers, tau, g0, beta, gamma, cfg)[0]
+                # Straight-through per-cell blend weights. TRAIN uses the PURE fused path
+                # (blend_exponents + ste_cell_weights -- the `val + (st - st.detach())` STE), so the
+                # whole forward AND backward fuse in the compiled region with NO graph break and NO
+                # surrogate-recompute backward (the opaque p2_scalars op's autograd re-runs the
+                # surrogate + an inner autograd.grad, ~1 ms). This matches the n=1 quant path and the
+                # float scored cartridge. EVAL (no grad) keeps the native op: its single-pass
+                # exponent kernel is the fastest forward and there is no backward to fuse. Both give
+                # bit-identical psw; cells come from our own c / c_alt below (any op-returned indices
+                # are discarded, so there is no bit-convention coupling either way).
+                if self.training:
+                    q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
+                    psw2 = _pow2_int8.ste_cell_weights(u, tau, g0, beta, gamma, q, k, skip, drop)
+                else:
+                    psw2 = _pow2_int8.cell_weights(u, c, self.powers, tau, g0, beta, gamma, cfg)[0]
             else:
                 s = self._score(u)
                 x2 = 2.0 * mv / tau
