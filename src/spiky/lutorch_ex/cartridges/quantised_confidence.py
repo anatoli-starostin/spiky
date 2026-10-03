@@ -38,6 +38,12 @@ from .confidence import ConfidenceLUT
 class QuantisedConfidenceLUT(ConfidenceLUT):
     """p2_int8 quant-aware twin of :class:`ConfidenceLUT`; see module docstring."""
 
+    # The n=2 quant train path is the OLD-matching monolith (see _quant_read_monolith). To reproduce
+    # OLD LightMHL's fused backward it must also compile the way OLD does -- torch.compile(dynamic=None)
+    # (auto: specialise on the first shape), not the base's dynamic=True. With dynamic=True the backward
+    # fuses ~0.65 ms worse; dynamic=None closes it (step 24.9 -> 24.4, backward 21.0 -> 20.3).
+    _COMPILE_TRAIN_DYNAMIC = None
+
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
         super().__init__(spec, **kw)
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
@@ -127,12 +133,51 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
         return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
+    def _quant_read_monolith(self, x: torch.Tensor) -> torch.Tensor:
+        """n=2 CUDA-fp32 TRAIN read, a flat port of OLD LightMHL._quant_read (one compile unit).
+
+        This cartridge is ALLOWED to diverge from the shared ManifestoLUT primitives for the hot quant
+        n=2 train path (owner-approved): instead of composing _addresses / _quant_grp_out / _route /
+        _fake_quant_tables / _global_cells, it inlines OLD's exact op sequence -- margins, the native
+        p2_scalars op (cells + straight-through power-of-two weights), ste_tables at the read site, and
+        OLD's offsets-based 1-D flat_idx embedding_bag -- so aot-autograd/inductor see OLD's FX graph and
+        emit OLD's (cheaper) fused backward. Pairs mode only; the gate in :meth:`_forward_impl` keeps
+        n=1 / eval / CPU / single-anchor / no-op on the shared path. Forward value + grads are bit-
+        identical to the shared path (the op's cells equal our c/c_alt; same ste_tables / embedding_bag)."""
+        G, tph, K, d_out = self.weights.shape
+        nap = self.spec.nap
+        B = x.shape[0]
+        cfg = self._quant
+        z = x[:, self.in_head, :]                                           # route (identity when h_in==G)
+        idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # OLD's d
+        beta, gamma = self._betagamma(d.dtype)
+        g0 = torch.zeros((), dtype=d.dtype, device=d.device)
+        tau = self.log_read_tau.to(d.dtype).exp()
+        psw, idx = _pow2_int8.cell_weights(d, None, self.powers, tau, g0, beta, gamma, cfg)  # [B,G,tph,2]
+        W = _pow2.ste_tables(self.weights.reshape(G * tph, K, d_out), n_heads=G,
+                             bits=cfg["bits"], offset=cfg["offset"])
+        flat_q = W.reshape(-1, d_out)
+        toff = (torch.arange(G * tph, device=x.device, dtype=torch.long) * K).view(1, G, tph, 1)
+        flat_idx = (idx + toff).reshape(-1)
+        offsets = torch.arange(B * G, device=x.device, dtype=torch.long) * (2 * tph)
+        grp_out = F.embedding_bag(flat_idx, flat_q, offsets=offsets, mode="sum",
+                                  per_sample_weights=psw.reshape(-1).to(flat_q.dtype)).view(B, G, d_out)
+        # Apply the routing invariant: a no-op passthrough for the per-head/fan-out case (h_out == G,
+        # the champion -- adds nothing to the FX graph), a group-sum for fan-in (h_out < G).
+        return self._route(grp_out, x)
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        # Hot path: n=2 CUDA-fp32 TRAIN uses the flat OLD-matching monolith (see _quant_read_monolith)
+        # to get OLD's cheaper fused backward. Everything else -- n=1, eval, CPU, single-anchor, or when
+        # the native op is unavailable -- uses the shared _addresses + _quant_grp_out + _route path.
+        if (self.training and self.read_top_n == 2 and not self.single
+                and x.is_cuda and x.dtype == torch.float32 and _pow2_int8._enabled):
+            return self._quant_read_monolith(x)
         # Quant-aware read for both train (STE grads) and eval (no_grad -> the pure quantised value;
-        # ste_tables' W - W.detach() term is 0 under no_grad). Plain _addresses in both modes: the
-        # base forward compiles the WHOLE _forward_impl on CUDA (eval always; train via
-        # _COMPILE_TRAIN, inherited from ConfidenceLUT), so inductor fuses the addressing here too
-        # -- no separate compiled _addr (that would be a nested compile).
+        # ste_tables' W - W.detach() term is 0 under no_grad). The base forward compiles the WHOLE
+        # _forward_impl on CUDA (eval always; train via _COMPILE_TRAIN, inherited from ConfidenceLUT).
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         grp_out = self._quant_grp_out(u, c, c_alt, u_abs_star)
         return self._route(grp_out, x)

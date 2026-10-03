@@ -72,6 +72,11 @@ class ManifestoLUT(MultiHeadLUT):
     # 1-2 (graph break at embedding_bag), cutting the train step AND its peak memory substantially
     # (matches the OLD LightMHL blend-compile lever). CUDA-only; see :meth:`forward`.
     _COMPILE_TRAIN: bool = False
+    # `dynamic=` for the TRAIN compile. True (default) traces one shape-agnostic graph (no recompiles
+    # across batch sizes). A cartridge whose hot train path needs the reference's exact fusion can set
+    # None (torch.compile's auto: specialise on the first shape, matching OLD LightMHL's compile) --
+    # that produces a cheaper fused backward for the quant monolith. Only consulted when _COMPILE_TRAIN.
+    _COMPILE_TRAIN_DYNAMIC = True
 
     def __init__(
         self,
@@ -212,7 +217,8 @@ class ManifestoLUT(MultiHeadLUT):
                 return self._compiled(x)
             if self._COMPILE_TRAIN:
                 if self._compiled_train is None:
-                    self._compiled_train = torch.compile(self._forward_impl, dynamic=True)
+                    self._compiled_train = torch.compile(self._forward_impl,
+                                                         dynamic=self._COMPILE_TRAIN_DYNAMIC)
                 return self._compiled_train(x)
         return self._forward_impl(x)
 
