@@ -30,7 +30,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from . import _pow2
+from . import _pow2, _pow2_int8
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
 
@@ -43,6 +43,9 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
             raise ValueError("QuantisedConfidenceLUT requires a quant_mode (e.g. 'p2_int8')")
+        # Eagerly build/register the native p2_scalars op (standalone JIT; returns False and falls
+        # back to the pure _pow2 path on CPU / no nvcc / build failure — never raises).
+        _pow2_int8.ensure_registered()
 
     # -- quant-aware building blocks -------------------------------------------------------
 
@@ -77,16 +80,18 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         cfg = self._quant
         beta, gamma = self._betagamma(u.dtype)
         g0 = torch.zeros((), dtype=u.dtype, device=u.device)       # g dropped (== 0)
-        s = self._score(u)                                         # [B, G, tph]
         W2 = self._fake_quant_tables()
         m = u.abs()
         mv = u_abs_star.unsqueeze(-1)                              # [B, G, tph, 1]
         if self.read_top_n == 2:
             tau = self.log_read_tau.to(u.dtype).exp()
             if frozen_coef is None:
-                q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
-                psw2 = _pow2.ste_blend_weights(s, mv, tau, q, k, skip, drop)     # [B, G, tph, 2]
+                # Native p2_scalars op when available (fused q/k'/skip/drop + STE weights), else the
+                # pure _pow2 path. Both give bit-identical psw; we pair it with our own c/c_alt
+                # (the op's returned cell indices are discarded, so no bit-convention coupling).
+                psw2 = _pow2_int8.cell_weights(u, c, self.powers, tau, g0, beta, gamma, cfg)[0]
             else:
+                s = self._score(u)
                 x2 = 2.0 * mv / tau
                 ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
                 psw2 = ex * frozen_coef                                          # smooth, frozen ratio
@@ -96,6 +101,7 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
             psw = torch.cat([psw2[..., 0], psw2[..., 1]], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
             return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
         # read_top_n == 1: single scored cell, score rounded to a power of two (STE)
+        s = self._score(u)                                         # [B, G, tph]
         if frozen_coef is None:
             k1 = _pow2.round_half_up(_pow2.log2_score(m, g0, beta, gamma))
             skip = k1 < cfg["lo"]
@@ -108,8 +114,10 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # Quant-aware read for both train (STE grads) and eval (no_grad -> the pure quantised value;
-        # ste_tables' W - W.detach() term is 0 under no_grad). torch.compile wraps eval on CUDA.
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        # ste_tables' W - W.detach() term is 0 under no_grad). The TRAIN addressing uses the base's
+        # compiled _addr (fuses the eager margin/sign-bit/argmin materialisation on CUDA, ~10x);
+        # eval uses plain _addresses inside the base forward's whole-forward compile.
+        z, u, c, j_star, u_abs_star, c_alt = self._addr(x) if self.training else self._addresses(x)
         grp_out = self._quant_grp_out(u, c, c_alt, u_abs_star)
         return self._route(grp_out, x)
 
