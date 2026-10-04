@@ -14,7 +14,7 @@
 //
 //   PROLOGUE = true   (read_fused, the inference read) -- the kernel computes the per-table integers itself from the
 //        compressed code Z, in the same launch, by calling p2::table_scalars (csrc/pow2_scalars.cuh): the same function
-//        the spiky_lutorch::p2_scalars custom op runs (p2_scalar_kernel below) for the training forward, so training and
+//        the lutorch_ex::p2_scalars custom op runs (p2_scalar_kernel below) for the training forward, so training and
 //        inference take identical integers by construction.
 //
 //   PROLOGUE = false  (read_cells, the test reference) -- the per-table integers are supplied by the caller, packed as
@@ -346,7 +346,7 @@ torch::Tensor p2_read(const torch::Tensor& Z, const torch::Tensor& Aa, const tor
 
 
 // ============================================================================================================================
-// Forward of the spiky_lutorch::p2_scalars custom op: p2::table_scalars for every table, from margins D [B, T, nap] (B =
+// Forward of the lutorch_ex::p2_scalars custom op: p2::table_scalars for every table, from margins D [B, T, nap] (B =
 // tokens x heads, flattened). One launch, ONE TABLE PER THREAD (1024 per block), so the per-table math runs across the
 // warp's lanes. Outputs (all [B, T, ...], global):
 //   PSW   float [.., 2]  forward cell weights: skip ? 0 : 2^kc,  (skip || drop) ? 0 : 2^(kc - q)
@@ -419,5 +419,5 @@ std::map<std::string, int64_t> shared_bytes(int64_t T, int64_t nap, int64_t din,
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("read", &p2_read, "int8 power-of-two LUT read, generic cell width D: fused (integers in-kernel) or on supplied cells (reference)");
   m.def("shared_bytes", &shared_bytes, "dynamic shared memory per block for a configuration");
-  m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the spiky_lutorch::p2_scalars op");
+  m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the lutorch_ex::p2_scalars op");
 }

@@ -1,5 +1,5 @@
 """The int8 power-of-two read on the CUDA extension, usable from torch: extension build / load and device gating,
-row striding, the fused inference read, and the spiky_lutorch::p2_scalars custom op. Hardware-gated, never raises.
+row striding, the fused inference read, and the lutorch_ex::p2_scalars custom op. Hardware-gated, never raises.
 
 EXTENSION
 
@@ -14,7 +14,7 @@ csrc/pow2_int8_read.cu provides
                 table is accumulated, and discarded cells are masked rather than branched over. A bf16 code is
                 converted on load and the accumulators written as bf16 (see read_fused). `cells_out` exposes the
                 kernel's integers for tests.
-  * scalars     the forward of the spiky_lutorch::p2_scalars custom op (below): p2::table_scalars for every
+  * scalars     the forward of the lutorch_ex::p2_scalars custom op (below): p2::table_scalars for every
                 table, used by the training forward -- so training and inference take their integers from one function.
   * read_cells  the same accumulation on integers supplied by the caller (packed by pack_cells). A REFERENCE for tests:
                 bit-identical to pow2_read.int8_blend_read on the same integers, it pins read_fused's accumulation
@@ -35,7 +35,7 @@ the torch implementation (pow2_read).
 CUSTOM OP -- the per-table integers of the power-of-two read, from ONE forward implementation for training and eval.
 
 With the CUDA extension available (a validated architecture) and CUDA fp32 margins, the integers come from the
-registered custom op `spiky_lutorch::p2_scalars`, whose forward is p2::table_scalars (csrc/pow2_scalars.cuh) -- the same
+registered custom op `lutorch_ex::p2_scalars`, whose forward is p2::table_scalars (csrc/pow2_scalars.cuh) -- the same
 function the inference kernel calls inline:
 
   * LightMultiHeadLUT quant_mode training forward      -> cell_weights (the op, differentiable)
@@ -167,7 +167,7 @@ def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tens
 
 
 # ======================================================================================================================
-# the spiky_lutorch::p2_scalars custom op
+# the lutorch_ex::p2_scalars custom op
 def score_from_margins(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
     """learned_margin score s = (sum_i m_i) exp(g + gamma sum_i logsigmoid(beta m_i)), m = |d| [..., NAP] -> [...].
     The expression of fast_multi_head_lut._confidence_score with beta = exp(log_beta), gamma = exp(log_gamma) given."""
@@ -189,7 +189,7 @@ _enabled = False        # True once the op is registered; set_enabled(False) for
 
 
 def ensure_registered() -> bool:
-    """Build / load the extension and register spiky_lutorch::p2_scalars, once and eagerly (call before any torch.compile'd
+    """Build / load the extension and register lutorch_ex::p2_scalars, once and eagerly (call before any torch.compile'd
     forward). False when the extension is unavailable (load never raises)."""
     global _registered
     if _registered:
