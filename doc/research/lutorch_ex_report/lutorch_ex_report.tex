@@ -1,0 +1,249 @@
+% lutorch_ex library report (DRAFT — to be refined). Build: latexmk -pdf -interaction=nonstopmode lutorch_ex_report.tex
+% Style/preamble adapted from doc/research/lut_ablation/lut_ablation_table_v4.tex.
+% SOURCES: doc/lutorch/lut_mechanisms.tex (cartridge math), doc/research/lut_ablation/lut_ablation_table_v4.tex
+%          (ablation results + quant math), spiky/src/spiky/lutorch_ex/ (the library code).
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+
+\newcommand{\tbd}[1]{\textcolor{red!70!black}{\textbf{[TBD}~--- #1\textbf{]}}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,breaklines=true,frame=single,language=Python,
+        keywordstyle=\color{blue!60!black},commentstyle=\color{green!40!black},showstringspaces=false}
+
+\title{\textbf{The \code{lutorch\_ex} library}\\[2pt]\large architecture, cartridges, and the 48k champion-topology sweep}
+\author{(draft)}
+\date{2026-10-04 (DRAFT — refine next session)}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+\code{lutorch\_ex} is a clean, cartridge-based re-implementation of the lookup-table FFN with zero imports
+from the old \code{spiky.lutorch}. This report documents (1) its architecture, (2) each cartridge's math
+and usage, and (3) a seven-configuration champion-topology sweep at 48k steps. \tbd{abstract — finalise once
+all 7 runs land.}
+\end{abstract}
+
+% ======================================================================================================
+\section{General architecture}
+\label{sec:arch}
+
+The library factors the LUT-FFN into four layers: an immutable \emph{geometry}, a cartridge \emph{contract},
+concrete \emph{cartridges} (the lookup math), and a dense \emph{wrapper} that presents a plain
+$d_\text{model}\!\to\!d_\text{model}$ map.
+
+\paragraph{Geometry --- \code{LUTSpec}.} An immutable dataclass fixing heads/tables/anchor-pairs/widths:
+\code{h\_in, h\_out, tph, nap, d\_in, d\_out}, with derived \code{n\_groups}$=\max(h_\text{in},h_\text{out})$,
+\code{n\_cells}$=2^{\text{nap}}$ (cells per table, $K$), \code{in\_features}$=h_\text{in}\,d_\text{in}$,
+\code{out\_features}$=h_\text{out}\,d_\text{out}$, \code{n\_tables}$=\code{n\_groups}\cdot\code{tph}$.
+
+\paragraph{Base --- \code{ManifestoLUT}.} The abstract multi-head LUT. It owns the learnable cell tables
+$W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$ ($G=\code{n\_groups}$) and the addressing
+machinery: anchors, the per-group cell index $c$ from the sign pattern of anchor-pair differences
+(\code{\_addresses}, which uses only spec/anchors/powers, never the weight \emph{values}), the routing
+invariant \code{\_route} ($[B,G,d_\text{out}]\!\to\![B,h_\text{out},d_\text{out}]$: identity when
+$h_\text{out}=G$, group-sum when $h_\text{out}=1$), and cell total-variation \code{cell\_tv\_penalty}.
+\code{forward} compiles \code{\_forward\_impl} with \code{torch.compile} on CUDA (eval always; train when the
+cartridge sets \code{\_COMPILE\_TRAIN}); CPU stays eager.
+
+\paragraph{Default init (faithful, OLD-matching).} Cell tables initialise per head from a CPU generator seeded
+$(\text{seed}+h+1)$, $\text{Uniform}[-\sigma,+\sigma]$ with $\sigma=\code{weight\_init\_std}$ (realised std
+$\sigma/\sqrt3\approx5.77\mathrm{e}{-4}$ at the $10^{-3}$ default), reproducing the OLD LightMHL draw
+bit-for-bit. \code{ProjectionMHL} initialises \code{compress}$\sim\mathcal N(0,0.02)$ and \emph{zeroes}
+\code{decompress} (the FFN starts as a zero contribution).
+
+\subsection{\code{ProjectionMHL}: the ProjectionLUT wrapper}
+\label{sec:projection}
+\code{ProjectionMHL} is the only module the surrounding transformer sees: it turns an opaque cartridge into a
+plain $d_\text{model}\!\to\!d_\text{model}$ FFN, so the (cheap, discrete) lookup runs in a narrow per-head
+space while the block sees a dense map. It treats the cartridge as a black box reached only through the shape
+contract.
+\paragraph{Protocol.} $z=\text{compress}(x)$ reshaped to $[B,h_\text{in},d_\text{in}]$; $y=\text{cartridge}(z)$
+of shape $[B,h_\text{out},d_\text{out}]$; $\text{out}=\text{decompress}(y)$. Here \code{compress} is a Linear
+$d_\text{model}\!\to\!\code{in\_features}$ and \code{decompress} a Linear $\code{out\_features}\!\to\!d_\text{model}$;
+either side may be switched off (Identity), with the matching width required to already equal $d_\text{model}$.
+\paragraph{Init and first-backward warmup.} \code{compress}$\sim\mathcal N(0,0.02)$; \code{decompress} is
+\emph{zeroed}. Because $\partial\,\text{out}/\partial y = W_\text{dec}=0$ at init, the very first backward sends
+\emph{no} gradient through the main loss to the cartridge or to \code{compress}; on step 0 only \code{decompress}
+itself (and, separately, the cartridge tables via the TV term) receive gradient, and the input-side path
+``warms up'' once \code{decompress} moves off zero. This reproduces OLD's zero-contribution FFN at init. Both
+inits are meta-guarded so the deployment skeleton build allocates nothing.
+\paragraph{Two capabilities it mediates.}
+\begin{itemize}
+\item \code{SupportsDecompressBake}: a cartridge may expose \code{decompress\_scale()} returning a length-
+ \code{out\_features} vector; \code{ProjectionMHL} folds it into the \code{decompress} matrix on every forward
+ (scaling column $k$ of $W_\text{dec}$ $=$ scaling cartridge output channel $k$, with no extra op). This is how
+ a quantised cartridge's per-channel scale is moved into the dense projection.
+\item \code{SupportsDeploymentExport}: \code{to\_deployment()} for compaction. The general, cartridge-agnostic
+ deploy path (\S\ref{sec:arch}) pairs it with a \code{from\_deployment} rebuilder (via \code{deploy\_registry}).
+ \code{ProjectionMHL} is the seam at which the power-of-two output scale is folded, once, into \code{decompress}
+ at export time.
+\end{itemize}
+
+\paragraph{Native-op resolution.} Fused cartridges reach a tier-2 CUDA fast path through a single choke point,
+\code{\_native\_ops.native\_manager()}, which now resolves: (1) the co-located JIT extension
+\code{lutorch\_ex\_lprojection} (vendored lprojection / anchor-pairs kernels, built via
+\code{torch.utils.cpp\_extension.load} from \code{cartridges/csrc/}); then (2) the pure/tier-1 torch path.
+The int8 power-of-two read is a second co-located JIT extension, \code{lutorch\_ex\_pow2\_int8\_read}. All
+paths fall back to pure torch when CUDA/nvcc/ninja are unavailable. \tbd{confirm final fallback wording vs the
+merged PR \#140 (lutorch\_cuda fallback removed).}
+
+\paragraph{Deployment --- \code{export\_deployment} / \code{load\_deployment}.} An inference-only, cartridge-
+agnostic path (\code{deploy.py}). \code{export\_deployment(model, "m.lxq")} walks the model, and for each
+\code{ProjectionMHL} whose cartridge implements \code{SupportsDeploymentExport.to\_deployment()} it writes a
+compact payload; the per-(group,channel) power-of-two output scale is folded \emph{exactly} into a copy of the
+\code{decompress} weight. \code{load\_deployment(path, make\_skeleton, device)} builds the architecture on the
+\code{meta} device (no fp32 allocation), then swaps each compacted FFN for the inference cartridge named by a
+stored format tag (via the leaf \code{deploy\_registry}: tag $\to$ \code{from\_deployment}), so the fp32 LUT
+table is never allocated. The \code{.lxq} file is a safetensors container; footprint drops $\sim$4$\times$ for
+the quantised LUT (int8 \code{packed} table replaces the fp32 master + exponent buffer).
+
+% ======================================================================================================
+\section{Cartridges}
+\label{sec:cartridges}
+
+\emph{Shared read.} Each group $g$ addresses one cell $c_g\in[0,K)$ per table from the sign pattern of its
+anchor-pair differences; the read sums the selected cell rows over the \code{tph} tables, optionally
+score-weighted, then \code{\_route}s $[B,G,d_\text{out}]\!\to\![B,h_\text{out},d_\text{out}]$. \tbd{cross-check
+all per-cartridge math against \code{doc/lutorch/lut\_mechanisms.tex} (\S LightMHL, \S confidence forms).}
+
+\subsection{\code{ConfidenceLUT}}
+Gen-3 scored read. A learned-margin confidence score weights each table's cell contribution. With margins
+$u$ (anchor-pair differences) and $m=|u|$, the per-table score is
+\[
+ s \;=\; \Big(\textstyle\sum_j m_j\Big)\,\exp\!\Big(\gamma\textstyle\sum_j \log\sigma(\beta\,m_j)\Big),
+\]
+$\beta=e^{\log\beta}$, $\gamma=e^{\log\gamma}$ learnable (per layer; $g$ frozen at $0$ in the champion).
+\code{read\_top\_n}$=2$ blends the two most-confident cells with a $\tau$-temperature softmax over the deciding
+margin; \code{read\_top\_n}$=1$ reads the single scored cell. Gradients flow to $W$, $\beta$, $\gamma$ (and
+$\tau$ for $n{=}2$). \tbd{write the exact $n{=}2$ blend weights $(v,1{-}v)$ and the $\tau$ form from
+\code{confidence.py} / lut\_mechanisms \S confidence forms.}
+\begin{lstlisting}
+from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
+cart = ConfidenceLUT(spec, seed=1, read_top_n=2, beta_init=2.0, gamma_init=1.0,
+                     read_tau_init=0.5, read_tau_learnable=True)
+ffn  = ProjectionMHL(cart, d_model=512)   # drop-in d_model -> d_model FFN
+\end{lstlisting}
+
+\subsection{\code{QuantisedConfidenceLUT} (extended)}
+The p2\_int8 quant-aware twin of \code{ConfidenceLUT}. Same confidence score/blend, but the read is
+quantisation-aware with a straight-through estimator (STE):
+\begin{itemize}
+\item \textbf{Cell tables} are fake-quantised to int8 with a per-(group,channel) \emph{power-of-two} scale:
+ for group $g$, channel $k$, an integer exponent $e_{g,k}$ (\code{head\_chan\_exponents}) gives
+ $\hat W = \mathrm{round}(W/2^{e})\cdot 2^{e}$, clamped to int8; STE passes the identity gradient to the fp32
+ master $W$.
+\item \textbf{Blend weights} are rounded to powers of two: $2^{k'}$ and $2^{k'-q}$ with
+ $k'=\mathrm{round}(\log_2 s - c_q)$ and $q=\mathrm{round}(2|u_{j^\star}|/(\tau\ln 2))$ (stop-grad exponents;
+ the STE carries the exact $(s\!\cdot\!v,\,s\!\cdot\!(1\!-\!v))/s$ gradient).
+\item \textbf{Integer read} (\code{forward\_int} / the deployed path): int8 cell rows, int32 shift-add in fixed
+ point (shift $=6$, \code{FIXED\_POINT\_SHIFT}), the accumulator in units $2^{-6}$, then scaled by
+ $2^{\,e-6}$ per (group,channel). This equals the fake-quant forward value to round-off.
+\end{itemize}
+\textbf{Deployment bake.} \code{to\_deployment()} emits the int8 \code{packed} table and the per-out-feature
+scale $2^{\,e-6}$; \code{export\_deployment} folds that pure-power-of-two multiplier \emph{exactly} into a copy
+of the \code{decompress} weight (scaling column $k$ by $2^{\,e-6}$ only touches the fp32 exponent field). The
+deployed cartridge then returns the \emph{raw} int32 accumulator and reports \code{decompress\_scale()}$=$None
+(the scale is static in the stored weight). Requires \code{read\_top\_n}$=2$ and $h_\text{out}=G$ (the champion);
+fan-in would need a pre-route scale. \tbd{verify the exact $c_q$ constant and the \code{quant\_cfg}
+(bits/offset/Q/lo/hi) against \code{\_pow2.py}; cite lut\_ablation \S quant.}
+\begin{lstlisting}
+from spiky.lutorch_ex import QuantisedConfidenceLUT, ProjectionMHL, export_deployment, load_deployment
+cart = QuantisedConfidenceLUT(spec, seed=1, quant_mode="p2_int8", read_top_n=2,
+                              beta_init=2.0, gamma_init=1.0, read_tau_init=0.5)
+ffn  = ProjectionMHL(cart, d_model=512)
+# ... train ...
+export_deployment(model, "m.lxq")                      # int8 bake + fold pow2 scale into decompress
+dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()   # fp32 table never allocated
+\end{lstlisting}
+
+\subsection{\code{FusedManifestoHardLUT}}
+Hard value read $\sum_t W[c_t]$ (argmax cell per table), fused. Tier-2 native path uses the lprojection
+non-smooth backward; tier-1 uses \code{embedding\_bag}. \tbd{exact forward/backward from \code{manifesto\_hard.py}
++ \code{\_native\_ops.NativeHard}.}
+\begin{lstlisting}
+from spiky.lutorch_ex import FusedManifestoHardLUT, ProjectionMHL
+ffn = ProjectionMHL(FusedManifestoHardLUT(spec, seed=1), d_model=512)
+\end{lstlisting}
+
+\subsection{\code{FusedManifestoSoftLUT}}
+Soft temperature-blended read; native path uses \code{lprojection\_forward\_smooth} + its na1-smooth backward.
+\tbd{soft-blend math from \code{manifesto\_soft.py}.}
+
+\subsection{\code{FusedSoftSignHardLUT} / \code{FusedSoftSignSmoothLUT}}
+Gen-2 soft-sign cartridges. The two-cell blend weight is $w=\sigma(-2\rho/T_\text{sel})$ with
+$\rho=|m|/(T_\text{soft}+|m|)$ (deciding margin $m$, learned temperatures $T_\text{soft},T_\text{sel}$); hard
+uses the straight-through value, smooth the true blend. The surrogate's $m$/$T$ gradients are a one-launch
+\code{softsign\_surrogate\_grad} kernel (tier-1: eager). \tbd{confirm against \code{softsign\_*.py} +
+\code{\_native\_softsign.py}; lut\_mechanisms has the Gen-2 forms.}
+\begin{lstlisting}
+from spiky.lutorch_ex import FusedSoftSignHardLUT, FusedSoftSignSmoothLUT, ProjectionMHL
+ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1), d_model=512)
+\end{lstlisting}
+
+% ======================================================================================================
+\section{The 48k champion-topology sweep}
+\label{sec:ml}
+
+Seven configurations, all at the champion topology and regularisation: $h{=}8$, \code{tph}$=64$, \code{nap}$=8$,
+$d_\text{in}=d_\text{out}=48$ (6 blocks, $\approx$68.2M params), cell-TV $\lambda=10$, head-dropout $0.2$,
+48{,}000 steps, cosine schedule (10\% warmup, floor $0.1\times$lr), seed 1, faithful small-std default init.
+wandb project \code{Spiky}, group \code{lutorch\_ex}. \tbd{confirm lr/weight\_decay/batch from the config.json
+and add them here.}
+
+\subsection{Regularisation and training recipe}
+\label{sec:reg}
+Two regularisers are part of the champion recipe (applied on \code{lutorch\_ex}, not the skeleton), both at
+whole-cell / whole-table granularity.
+
+\paragraph{Cell total-variation ($\mathcal R_\text{TV}$, $\lambda=10$).} View each table's $K=2^\text{nap}$
+cells as the vertices of an nap-dimensional hypercube, reshaping the table to
+$[\,G\!\cdot\!\text{tph},\,\underbrace{2,\dots,2}_{\text{nap}},\,d_\text{out}\,]$. The penalty sums the squared
+difference (channels summed in) over every Hamming-1 cell pair --- realised as a size-2 \code{diff} along each
+of the nap bit-axes, each pair counted once --- normalised by the pair count:
+\[
+ \mathcal R_\text{TV} \;=\; \frac{1}{n_\text{tables}\,\text{nap}\,2^{\text{nap}-1}}
+   \sum_{\substack{(c,c')\ \text{Hamming-1}}} \bigl\lVert W_c - W_{c'}\bigr\rVert_2^2 .
+\]
+It is added to the loss as $\lambda\,\mathcal R_\text{TV}$ ($\lambda=10$) through a separate backward, is
+differentiable w.r.t.\ $W$ only, and adds nothing to the forward graph. Two cells that are Hamming-1 neighbours
+are addressed by inputs differing in a \emph{single} anchor-sign bit, so penalising their squared difference
+smooths the table: a one-bit flip of the address changes the read little --- a locality/smoothness prior over
+the discrete lookup. (Bit-for-bit the reference \code{LightMultiHeadLUT.cell\_tv}.)
+
+\paragraph{Head (table) dropout ($r=0.2$).} Inverted dropout at \emph{whole-table} granularity: one
+independent Bernoulli per (sample, group$=$head, table) on the $[B,G,\text{tph}]$ axis, keep probability
+$1-r$, survivors rescaled by $1/(1-r)$ so the expected read is unchanged; dropped tables contribute $0$. It is
+train-time and grad-only (eval reads all tables). By randomly removing whole tables within a head each step it
+discourages co-adaptation among a head's \code{tph} tables. The same keep-mask multiplies the backward, so the
+weight-gradient and the input-grad carriers inherit the per-table factor.
+
+\begin{longtable}{@{}l l l r@{}}
+\toprule
+Configuration & cartridge / mode & wandb run & final \code{val\_bpb} \\
+\midrule
+ConfidenceLUT $n{=}2$        & scored, float        & \code{lutorch\_ex\_abl47\_conf\_1004\_1148}      & 1.10606 \\
+QuantConfidence $n{=}2$      & scored, p2\_int8     & \code{lutorch\_ex\_abl47\_quant\_1004\_1148}     & 1.10724 \\
+ConfidenceLUT $n{=}1$        & scored, float, $n{=}1$ & \code{lutorch\_ex\_abl47\_conf\_n1\_vm\_1004\_1806}  & \tbd{queued (VM)} \\
+FusedManifestoHard          & hard                 & \code{lutorch\_ex\_abl47\_fmh\_wk\_1004\_1510}   & \tbd{running (worker)} \\
+FusedManifestoSoft          & soft                 & \code{lutorch\_ex\_abl47\_fms\_wk\_1004\_1510}   & \tbd{queued (worker)} \\
+FusedSoftSignHard           & soft-sign, hard      & \code{lutorch\_ex\_abl47\_fss\_hard\_wk\_1004\_1510} & \tbd{queued (worker)} \\
+FusedSoftSignSmooth         & soft-sign, smooth    & \code{lutorch\_ex\_abl47\_fss\_smooth\_vm\_1004\_1806} & \tbd{running (VM)} \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Status (2026-10-04).} 2 done (ConfidenceLUT $n{=}2$, QuantConfidence $n{=}2$), 2 running
+(FusedSoftSignSmooth on the VM, FusedManifestoHard on the worker), 3 queued (ConfidenceLUT $n{=}1$;
+FusedManifestoSoft, FusedSoftSignHard). \tbd{insert the val\_bpb learning-curve figure (7 curves) once the
+runs complete; pull per-step from wandb or the local \code{metrics.csv}.}
+
+\end{document}
