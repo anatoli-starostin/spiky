@@ -37,6 +37,7 @@ from ..lut_spec import LUTSpec
 from . import _pow2, _pow2_int8
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
+from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION
 
 
 class QuantisedConfidenceLUT(ConfidenceLUT):
@@ -342,6 +343,20 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         return False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference; fp32/fp64
+        # This class has no fp32 ``weights`` Parameter (int8 ``packed`` instead), so the base
+        # ManifestoLUT.forward low-precision guard (which reads ``self.weights.dtype``) cannot run on
+        # it -- hence the override. We keep the bf16/fp16 rejection on the *input* dtype alone (int8
+        # deploy inference is fp32/fp64 only), then mirror the base compile-on-CUDA path: eval is
+        # always torch.compiled (built lazily per instance), so the int8 read is fused by inductor
+        # instead of running eager -- eager was ~5.8x slower than the compiled QuantisedConfidenceLUT
+        # twin; compiling closes the gap entirely.
+        if x.dtype in _LOW_PRECISION:
+            raise TypeError(
+                f"{type(self).__name__} is fp32/fp64 inference only; got input dtype {x.dtype}")
+        if _COMPILE_ENABLED and x.is_cuda:
+            if self._compiled is None:
+                self._compiled = torch.compile(self._forward_impl, dynamic=True)
+            return self._compiled(x)
         return self._forward_impl(x)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
