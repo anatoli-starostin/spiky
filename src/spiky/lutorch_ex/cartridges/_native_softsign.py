@@ -59,13 +59,12 @@ def _ss_ext():
     if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
         return None
     try:
-        from pathlib import Path
-
         from torch.utils.cpp_extension import load
 
-        repo_root = Path(__file__).resolve().parents[4]
-        src = repo_root / "native" / "lutorch" / "softsign_surrogate_grad.cu"
-        _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[str(src)], verbose=False)
+        # Vendored, co-located source (no longer reaches into native/lutorch).
+        _csrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
+        src = os.path.join(_csrc, "softsign_surrogate_grad.cu")
+        _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[src], verbose=False)
     except Exception:
         _SS_EXT = None
     return _SS_EXT

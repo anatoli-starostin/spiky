@@ -1,8 +1,10 @@
-"""Tier-2 native fast-path: reuse the existing ``lutorch_cuda`` kernels.
+"""Tier-2 native fast-path: the gen-1 lprojection / anchor_pairs CUDA kernels.
 
-The gen-1 lutorch kernels (native/lutorch/lutorch.cu, built as the ``lutorch_cuda``
-extension) already implement the manifesto primitives. We reuse them for the fused
-cartridges with thin adapters for lutorch_ex's representation:
+These kernels are now vendored co-located under ``cartridges/csrc/`` (lprojection.cu +
+lprojection_py.cpp + common_misc.cpp) and JIT-built as the ``lutorch_ex_lprojection`` extension
+(the PRIMARY path, see :func:`_lprojection_ext`); the prebuilt ``lutorch_cuda`` library is kept
+only as a last-resort fallback for one release. They implement the manifesto primitives, reused
+for the fused cartridges with thin adapters for lutorch_ex's representation:
 
 * MSB-first addressing: lprojection reads ``weights[table, index]`` and is agnostic to how
   the index was packed, so we pass OUR MSB indices and OUR weight table directly — no
@@ -22,7 +24,7 @@ input gradient differs: instead of the pairs kernel's +du-to-a / -du-to-b scatte
 the +du-to-a half, formed from the same per-table gradient carriers the backward already
 produces (``_single_input_grad``), so no large ``W[c]-W[c']`` tensor is materialised. That
 +du-to-a scatter is itself a dedicated one-launch CUDA kernel
-(``native/lutorch/single_anchor_input_grad.cu``, JIT-built via ``cpp_extension.load`` — it is
+(``cartridges/csrc/single_anchor_input_grad.cu``, JIT-built via ``cpp_extension.load`` — it is
 standalone and does NOT rebuild the shared ``lutorch_cuda`` extension), mirroring the pairs
 path's single fused input-grad kernel so the single backward is not launch-bound at small
 batch. If that kernel cannot be built/loaded, the eager body is used (identical result).
@@ -39,10 +41,73 @@ _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
 _TRIED = False
 
+# Co-located CUDA sources (vendored from native/lutorch so lutorch_ex is self-contained) and a stable,
+# persistent extension cache so the ~117 KB lprojection nvcc compile is paid once across processes.
+_CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
+os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
+
+
+def _pick_gpp():
+    """A host compiler for nvcc --compiler-bindir (parity with native/lutorch/setup.py); None if none."""
+    import shutil
+    for c in ("g++-13", "g++-12", "g++-11", "g++-10", "g++-9", "g++-8", "g++"):
+        p = shutil.which(c)
+        if p:
+            return p
+    return None
+
+
+_LPROJ_EXT = None
+_LPROJ_TRIED = False
+
+
+def _lprojection_ext():
+    """Build/load the co-located ``lutorch_ex_lprojection`` JIT extension (the vendored lprojection /
+    anchor_pairs kernels + LUTorchManager). Mirrors the ``lutorch_ex_pow2_int8_read`` setup: lazy, cached,
+    device-gated, never raises -> ``None`` falls through to the prebuilt lib / pure-torch path. nvcc flags
+    match native/lutorch/setup.py (-std=c++20, -O3, -lcuda, --compiler-bindir, -I cuda/include)."""
+    global _LPROJ_EXT, _LPROJ_TRIED
+    if _LPROJ_TRIED:
+        return _LPROJ_EXT
+    _LPROJ_TRIED = True
+    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
+        return None
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        from torch.utils.cpp_extension import load
+        std = os.environ.get("SPIKY_CXX_STD", "c++20")
+        # Mirror the working pow2_int8 build (and the prebuilt lutorch_cuda's semantics): cpp_extension
+        # already supplies the correct CUDA_HOME include paths and a compatible host compiler, so we do
+        # NOT hardcode -I/usr/local/cuda/include or --compiler-bindir (a stray -I mixes toolkits and
+        # breaks the build: "CUDA compiler and CUDA toolkit headers are incompatible"). -lcuda matches
+        # setup.py's libraries=["cuda"] (driver API); arch is auto-detected from the visible device.
+        cpp = [f"-std={std}", "-O3"]
+        cuda = [f"-std={std}", "-O3"]
+        _LPROJ_EXT = load(name="lutorch_ex_lprojection",
+                          sources=[os.path.join(_CSRC, "lprojection.cu"),
+                                   os.path.join(_CSRC, "lprojection_py.cpp"),
+                                   os.path.join(_CSRC, "common_misc.cpp")],
+                          extra_cflags=cpp, extra_cuda_cflags=cuda, extra_ldflags=["-lcuda"],
+                          verbose=False)
+    except Exception:
+        _LPROJ_EXT = None
+    return _LPROJ_EXT
+
+
+def warm_up_native():
+    """Eagerly build/load the lprojection extension so the nvcc compile is paid once up front (e.g. at
+    model build), not on the first forward. Never raises; a failure just leaves the fallbacks in place."""
+    try:
+        _lprojection_ext()
+    except Exception:
+        pass
+
 # The single-anchor input gradient is a short elementwise chain + one scatter_add. In eager
 # PyTorch that is ~10 tiny kernel launches and, at small batch, the backward is launch-bound
 # there (measured ~0.075 ms vs the pairs path's single fused input-grad kernel at ~0.018 ms).
-# A dedicated one-launch CUDA kernel (native/lutorch/single_anchor_input_grad.cu, JIT-built via
+# A dedicated one-launch CUDA kernel (cartridges/csrc/single_anchor_input_grad.cu, JIT-built via
 # cpp_extension.load — standalone, it does NOT touch the shared lutorch_cuda extension) matches
 # the pairs path, so single-anchor is <= pairs at every batch. If it cannot be built/loaded, or
 # on CPU, the eager body is used (identical result, just the extra launches).
@@ -59,26 +124,35 @@ def _single_ig_ext():
     if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
         return None
     try:
-        from pathlib import Path
-
         from torch.utils.cpp_extension import load
 
-        # .../src/spiky/lutorch_ex/cartridges/_native_ops.py -> repo root is parents[4].
-        repo_root = Path(__file__).resolve().parents[4]
-        src = repo_root / "native" / "lutorch" / "single_anchor_input_grad.cu"
-        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[str(src)], verbose=False)
+        # Vendored, co-located source (no longer reaches into native/lutorch).
+        src = os.path.join(_CSRC, "single_anchor_input_grad.cu")
+        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src], verbose=False)
     except Exception:
         _SINGLE_IG_EXT = None
     return _SINGLE_IG_EXT
 
 
 def native_manager():
-    """Return the lutorch_cuda LUTorchManager, or None if unavailable. Robust to the
-    libc10.so load issue (torch-first import; ctypes-preload fallback)."""
+    """Return a LUTorchManager, or None if unavailable. Resolution order:
+    (1) the co-located ``lutorch_ex_lprojection`` JIT extension (primary; self-contained);
+    (2) the prebuilt ``lutorch_cuda`` library (last-resort fallback, kept one release);
+    (3) ``None`` -> callers use the pure/tier-1 torch path.
+    Robust to the libc10.so dlopen issue for path (2) (torch-first import; ctypes-preload fallback)."""
     global _MANAGER, _TRIED
     if _TRIED:
         return _MANAGER
     _TRIED = True
+    # (1) primary: the co-located JIT extension.
+    ext = _lprojection_ext()
+    if ext is not None:
+        try:
+            _MANAGER = ext.get_lutorch_manager()
+            return _MANAGER
+        except Exception:
+            _MANAGER = None
+    # (2) last-resort fallback: the prebuilt lutorch_cuda library.
     try:
         import torch  # noqa: F401  (ensures libc10.so is loaded into the process)
         import lutorch_cuda
