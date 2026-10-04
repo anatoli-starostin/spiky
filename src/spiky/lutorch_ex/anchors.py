@@ -30,9 +30,13 @@ import torch
 
 
 def _canonical_pool(d_in: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return ``(tri_i, tri_j)`` — the canonical ``a < b`` pair pool, each ``[P]`` long."""
-    tri_i, tri_j = torch.triu_indices(d_in, d_in, offset=1)
-    return tri_i.to(device).long(), tri_j.to(device).long()
+    """Return ``(tri_i, tri_j)`` — the canonical ``a < b`` pair pool, each ``[P]`` long.
+
+    Built directly on ``device`` (not created on the default device then ``.to(device)``) so the
+    construction is meta-device-safe — a meta-device skeleton build (deployment load) would otherwise
+    hit "cannot copy out of meta tensor" on the ``.to``. Identical result on every real device."""
+    idx = torch.triu_indices(d_in, d_in, offset=1, device=device).long()
+    return idx[0], idx[1]
 
 
 def _repair_intra_table_duplicates(pairs_table: torch.Tensor) -> None:

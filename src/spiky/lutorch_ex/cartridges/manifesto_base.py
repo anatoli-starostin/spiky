@@ -218,6 +218,13 @@ class ManifestoLUT(MultiHeadLUT):
         n_pairs = (G * tph) * nap * (1 << (nap - 1))             # total Hamming-1 pairs
         return tv / n_pairs
 
+    def to_deployment(self) -> dict:
+        """SupportsDeploymentExport (deployment-compaction axis): base no-op pass-through. A cartridge
+        that cannot compactify reports ``format='dense'`` and export_deployment serialises its params
+        via the normal (backbone) state_dict, unchanged. Compactifiable cartridges (e.g.
+        :class:`QuantisedConfidenceLUT`) override this to emit a compact payload. Never raises."""
+        return {"format": "dense", "tensors": {}, "meta": {"cartridge": type(self).__name__}}
+
     def _table_dropout_mask(self, B: int, device, dtype) -> Optional[torch.Tensor]:
         """Inverted table-dropout keep-mask ``[B, G, tph]`` (TRAIN + grad only; ``None`` otherwise).
 

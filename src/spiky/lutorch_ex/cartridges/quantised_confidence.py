@@ -246,3 +246,49 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         scale = torch.pow(2.0, e.to(x.dtype) - _pow2.FIXED_POINT_SHIFT)       # [G, d_out], per-(group,channel)
         grp_out = acc.to(x.dtype) * scale.unsqueeze(0)
         return self._route(grp_out, x)
+
+    # -- deployment compaction (SupportsDeploymentExport) -------------------------------------
+
+    @torch.no_grad()
+    def to_deployment(self) -> dict:
+        """Compact int8 payload for deployment export (the `SupportsDeploymentExport` axis).
+
+        Emits the int8 `packed` table (fp32 master + raw exponent buffer are NOT included) plus a
+        per-out-feature output scale ``2^(e - FIXED_POINT_SHIFT)`` that ``export_deployment`` folds
+        EXACTLY (power-of-two -> only the fp32 exponent field changes) into a copy of the ProjectionMHL
+        decompress weight. The deployed cartridge then returns the RAW int32 accumulator (units 2^-6).
+        read_top_n==2 (the reference integer form) and h_out==n_groups only (the per-(group,channel)
+        scale maps 1:1 to decompress out_features; fan-in would need a pre-route scale). NOTE: this is a
+        deploy-only transform; the trained cartridge deliberately does NOT implement `decompress_scale`,
+        so ProjectionMHL never folds anything on the live (fake-quant, already-2^e-scaled) forward."""
+        cfg = self._quant
+        G, tph, K, d_out = self.weights.shape
+        if self.spec.h_out != G:
+            raise NotImplementedError(
+                f"to_deployment supports h_out == n_groups only (got h_out={self.spec.h_out}, n_groups={G}); "
+                "the per-(group,channel) output scale folds 1:1 into decompress out_features in that case.")
+        if self.read_top_n != 2:
+            raise NotImplementedError("to_deployment supports read_top_n==2 (the reference integer read).")
+        Wflat = self.weights.reshape(G * tph, K, d_out)
+        e = _pow2.head_chan_exponents(Wflat, G, cfg["bits"], cfg["offset"])                 # [G, d_out]
+        packed = _pow2.pack_tables(_pow2.quantise_tables(Wflat, e, cfg["bits"]), cfg["bits"]).contiguous()  # [n_tables,K,d_out] int8
+        decompress_scale = torch.pow(2.0, e.float() - _pow2.FIXED_POINT_SHIFT).reshape(-1).contiguous()     # [out_features]
+        return {
+            "format": "p2_int8",
+            "decompress_scale": decompress_scale,
+            "tensors": {
+                "packed": packed,
+                "confidence_log_beta": self.confidence_log_beta.detach().clone(),
+                "confidence_log_gamma": self.confidence_log_gamma.detach().clone(),
+                "log_read_tau": self.log_read_tau.detach().clone(),
+                "anchor_a": self.anchor_a.clone(), "anchor_b": self.anchor_b.clone(),
+                "powers": self.powers.clone(), "in_head": self.in_head.clone(), "out_head": self.out_head.clone(),
+            },
+            "meta": {
+                "cartridge": "QuantisedConfidenceLUT", "quant_mode": "p2_int8",
+                "quant_cfg": {k: int(v) for k, v in cfg.items() if isinstance(v, (int, bool))},
+                "read_top_n": int(self.read_top_n), "cmp_eps": float(self.cmp_eps),
+                "spec": {"h_in": self.spec.h_in, "h_out": self.spec.h_out, "tph": self.spec.tph,
+                         "nap": self.spec.nap, "d_in": self.spec.d_in, "d_out": self.spec.d_out},
+            },
+        }
