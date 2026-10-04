@@ -17,6 +17,10 @@ from spiky.lutorch_ex import (
 def test_round_trip_shapes_and_backward(h_in, h_out):
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=2, nap=4, d_in=8, d_out=6)
     proj = ProjectionMHL(ManifestoHardLUT(spec, seed=20), d_model=32).train()
+    # The faithful default zero-inits decompress (the FFN starts as a zero contribution, as in
+    # OLD), which gates first-step gradient to the input side; nudge it off zero so this test
+    # exercises what it is about - that ProjectionMHL routes gradient through the composition.
+    torch.nn.init.normal_(proj.decompress.weight, std=0.02)
     x = torch.randn(10, 32, requires_grad=True)
     y = proj(x)
     assert y.shape == (10, 32)

@@ -70,6 +70,8 @@ class ProjectionMHL(nn.Module):
 
         if compress:
             self.compress = nn.Linear(d_model, spec.in_features, bias=bias, device=device)
+            if self.compress.weight.device.type != "meta":
+                nn.init.normal_(self.compress.weight, std=0.02)   # faithful init: OLD CompressionMHL ~0.02
         else:
             if spec.in_features != d_model:
                 raise ValueError(
@@ -79,6 +81,8 @@ class ProjectionMHL(nn.Module):
 
         if decompress:
             self.decompress = nn.Linear(spec.out_features, d_model, bias=bias, device=device)
+            if self.decompress.weight.device.type != "meta":
+                nn.init.zeros_(self.decompress.weight)            # faithful init: FFN starts ~0 (OLD zeroes decompress)
         else:
             if spec.out_features != d_model:
                 raise ValueError(

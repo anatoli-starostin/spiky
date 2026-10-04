@@ -125,10 +125,14 @@ class ManifestoLUT(MultiHeadLUT):
         self.register_buffer("in_head", torch.arange(G, dtype=torch.long) % spec.h_in)
         self.register_buffer("out_head", torch.arange(G, dtype=torch.long) % spec.h_out)
 
-        # Learnable cell tables: W[g, t, c, :], c in [0, K).
-        wgen = torch.Generator().manual_seed(seed)
-        w = torch.randn(G, tph, spec.n_cells, d_out, generator=wgen) * weight_init_std
-        self.weights = nn.Parameter(w)
+        # Learnable cell tables W[g, t, c, :], c in [0, K). Default init = the OLD LightMHL faithful
+        # scheme: per-head CPU generator seeded (seed + h + 1), Uniform[-weight_init_std, +weight_init_std]
+        # (realised std = weight_init_std / sqrt(3) ~= 5.77e-4 at the 1e-3 default). Reproduces OLD's
+        # per-head table draw bit-for-bit at a given seed. (Previously Normal(0, weight_init_std).)
+        blocks = [(torch.rand(tph, spec.n_cells, d_out,
+                              generator=torch.Generator().manual_seed(seed + h + 1)) - 0.5) * (2.0 * weight_init_std)
+                  for h in range(G)]
+        self.weights = nn.Parameter(torch.stack(blocks, dim=0))   # [G, tph, K, d_out]
 
         # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
         self._compiled = None          # eval forward
@@ -217,6 +221,13 @@ class ManifestoLUT(MultiHeadLUT):
             tv = tv + (d * d).sum()
         n_pairs = (G * tph) * nap * (1 << (nap - 1))             # total Hamming-1 pairs
         return tv / n_pairs
+
+    def to_deployment(self) -> dict:
+        """SupportsDeploymentExport (deployment-compaction axis): base no-op pass-through. A cartridge
+        that cannot compactify reports ``format='dense'`` and export_deployment serialises its params
+        via the normal (backbone) state_dict, unchanged. Compactifiable cartridges (e.g.
+        :class:`QuantisedConfidenceLUT`) override this to emit a compact payload. Never raises."""
+        return {"format": "dense", "tensors": {}, "meta": {"cartridge": type(self).__name__}}
 
     def _table_dropout_mask(self, B: int, device, dtype) -> Optional[torch.Tensor]:
         """Inverted table-dropout keep-mask ``[B, G, tph]`` (TRAIN + grad only; ``None`` otherwise).

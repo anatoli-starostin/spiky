@@ -1,7 +1,7 @@
 // The per-table scalars of the power-of-two read -- THE single definition of the forward integers.
 //
 // Included by csrc/pow2_int8_read.cu and called, with the same compile flags (--fmad=false: no contraction anywhere), by
-//   * p2_scalar_kernel  -- the forward of the spiky_lutorch::p2_scalars custom op (the training forward), and
+//   * p2_scalar_kernel  -- the forward of the lutorch_ex::p2_scalars custom op (the training forward), and
 //   * p2_int8_kernel    -- the inference read (read_fused), inline in the same launch as the int8 accumulation.
 // Because both call this one function on the same margins d = z[a] - z[b], training and inference take the same c1, c2,
 // q and k' by construction. (The torch implementation in pow2_read.py computes the same quantities and remains the fallback
