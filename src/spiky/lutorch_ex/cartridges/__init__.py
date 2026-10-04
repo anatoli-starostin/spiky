@@ -1,6 +1,6 @@
 """Cartridges — swappable lookup-math strategies behind the MultiHeadLUT contract."""
 from .confidence import ConfidenceLUT
-from .quantised_confidence import QuantisedConfidenceLUT
+from .quantised_confidence import DeployedQuantisedConfidenceLUT, QuantisedConfidenceLUT
 from .fused_manifesto_hard import FusedManifestoHardLUT
 from .fused_manifesto_soft import FusedManifestoSoftLUT
 from .fused_softsign import FusedSoftSignHardLUT, FusedSoftSignLUT, FusedSoftSignSmoothLUT
@@ -26,6 +26,7 @@ __all__ = [
     "FusedSoftSignSmoothLUT",
     "ConfidenceLUT",
     "QuantisedConfidenceLUT",
+    "DeployedQuantisedConfidenceLUT",
     "rational_uncertainty",
     "cell_tv_penalty",
 ]

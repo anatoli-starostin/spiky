@@ -12,6 +12,7 @@ imports from the old ``spiky.lutorch``. The pieces:
 from .cartridges import (
     ConfidenceLUT,
     QuantisedConfidenceLUT,
+    DeployedQuantisedConfidenceLUT,
     FusedManifestoHardLUT,
     FusedManifestoSoftLUT,
     FusedSoftSignHardLUT,
@@ -30,7 +31,6 @@ from .lut_base import MultiHeadLUT
 from .lut_spec import LUTSpec
 from .projection import ProjectionMHL, SupportsDecompressBake
 from .deploy import (
-    DeployedQuantisedConfidenceLUT,
     SupportsDeploymentExport,
     export_deployment,
     load_deployment,

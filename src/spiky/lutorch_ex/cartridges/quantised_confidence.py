@@ -27,9 +27,13 @@ is a lutorch_ex extension of the reference (which was n=2-only).
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
+from ..lut_spec import LUTSpec
 from . import _pow2, _pow2_int8
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
@@ -292,3 +296,73 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
                          "nap": self.spec.nap, "d_in": self.spec.d_in, "d_out": self.spec.d_out},
             },
         }
+
+    @classmethod
+    def from_deployment(cls, spec: LUTSpec, tensors: dict, meta: dict, device=None) -> "MultiHeadLUT":
+        """Reconstruct the inference-only deployed cartridge from stored tensors + meta (the load-side
+        complement of :meth:`to_deployment`). Registered under the ``"p2_int8"`` format tag so
+        :func:`~spiky.lutorch_ex.deploy.load_deployment` can dispatch without naming a concrete class."""
+        return DeployedQuantisedConfidenceLUT(spec, tensors, meta, device=device)
+
+
+class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
+    """Inference-only p2_int8 cartridge: holds the int8 ``packed`` table (NO fp32 master Parameter),
+    the anchors and the β/γ/τ scalars as buffers. Reuses the base addressing (which needs only
+    spec/anchors/powers) and returns the RAW int32 accumulator (units 2^-6); the per-(group,channel)
+    output scale lives, pre-folded, in the ProjectionMHL decompress weight. read_top_n==2 only.
+
+    Lives next to :class:`QuantisedConfidenceLUT` so the general deployment module (``deploy.py``)
+    holds no cartridge-specific knowledge; it is reached only via the format-tag registry (see
+    :meth:`QuantisedConfidenceLUT.from_deployment`)."""
+
+    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None):
+        nn.Module.__init__(self)   # skip the fp32-weight-allocating ManifestoLUT.__init__
+        self.spec = spec
+        self.read_top_n = int(meta["read_top_n"])
+        if self.read_top_n != 2:
+            raise NotImplementedError("DeployedQuantisedConfidenceLUT supports read_top_n==2 only")
+        self.single = (spec.anchor_mode == "single")
+        self.cmp_eps = float(meta.get("cmp_eps", 0.0))
+        self._quant = _pow2.resolve_quant_config(meta.get("quant_mode", "p2_int8"))
+        self.table_dropout_rate = 0.0
+        self._compiled = None
+        self._compiled_train = None
+        self._compiled_addr = None
+        dev = torch.device(device) if device is not None else None
+        self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])  # int8 [n_tables,K,d_out]
+        for b in ("anchor_a", "anchor_b", "powers", "in_head", "out_head",
+                  "confidence_log_beta", "confidence_log_gamma", "log_read_tau"):
+            t = tensors[b]
+            self.register_buffer(b, t.to(dev) if dev else t)
+
+    def decompress_scale(self) -> Optional[torch.Tensor]:
+        return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
+
+    def _supports_low_precision(self) -> bool:
+        return False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference; fp32/fp64
+        return self._forward_impl(x)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        cfg = self._quant
+        spec = self.spec
+        G, tph, K, d_out = spec.n_groups, spec.tph, spec.n_cells, spec.d_out
+        B = x.shape[0]
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        beta, gamma = self._betagamma(u.dtype)
+        g0 = torch.zeros((), dtype=u.dtype, device=u.device)
+        tau = self.log_read_tau.to(u.dtype).exp()
+        m = u.abs(); mv = u_abs_star.unsqueeze(-1)
+        q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
+        gc = _global_cells(c, G, tph, K); gca = _global_cells(c_alt, G, tph, K)
+        flat_idx = torch.stack([gc, gca], dim=-1).reshape(B, G, tph, 2)
+        packed = self.packed.reshape(G * tph * K, d_out)
+        acc = _pow2.int_blend_read(packed, cfg["bits"], d_out, flat_idx, q, k, skip, drop)  # int32 [B,G,d_out]
+        return self._route(acc.to(x.dtype), x)   # RAW (units 2^-6); scale folded into decompress
+
+
+# Register the load-side rebuilder under its format tag (leaf registry -> no import cycle with deploy).
+from ..deploy_registry import register_rebuilder  # noqa: E402  (bottom import avoids a cycle)
+
+register_rebuilder("p2_int8", QuantisedConfidenceLUT.from_deployment)

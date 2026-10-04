@@ -22,9 +22,11 @@ API::
     m = load_deployment("deploy.lxq", make_skeleton, device="cuda").eval()   # fp32 LUT table NEVER allocated
     y = m(x)
 
-``make_skeleton`` builds the architecture on the ``meta`` device (no real allocation); load swaps the
-ProjectionMHL FFNs for :class:`DeployedQuantisedConfidenceLUT` (real int8) and materialises the backbone
-from the stored state_dict.
+``make_skeleton`` builds the architecture on the ``meta`` device (no real allocation); load swaps each
+compacted ProjectionMHL FFN for the inference cartridge its stored format tag names (via the
+:mod:`.deploy_registry` ``format -> from_deployment`` registry; e.g. ``"p2_int8"`` ->
+``DeployedQuantisedConfidenceLUT``) and materialises the backbone from the stored state_dict. This
+module itself names no concrete cartridge class and holds no int8 knowledge.
 
 Serialisation: safetensors when available, else a ``weights_only=True`` torch load (pickle-free on load);
 either way only tensors + a small JSON-able meta dict, no arbitrary pickled objects executed on load.
@@ -32,16 +34,14 @@ either way only tensors + a small JSON-able meta dict, no arbitrary pickled obje
 from __future__ import annotations
 
 import json
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 import torch
 import torch.nn as nn
 
 from .lut_spec import LUTSpec
 from .projection import ProjectionMHL
-from .cartridges import _pow2
-from .cartridges._fused_ops import _global_cells
-from .cartridges.quantised_confidence import QuantisedConfidenceLUT
+from .deploy_registry import get_rebuilder
 
 _FORMAT_VERSION = 1
 
@@ -56,61 +56,6 @@ class SupportsDeploymentExport(Protocol):
 
     def to_deployment(self) -> dict:
         ...
-
-
-# ---- the inference-only deployed quantised cartridge -------------------------------------------
-
-class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
-    """Inference-only p2_int8 cartridge: holds the int8 ``packed`` table (NO fp32 master Parameter),
-    the anchors and the β/γ/τ scalars as buffers. Reuses the base addressing (which needs only
-    spec/anchors/powers) and returns the RAW int32 accumulator (units 2^-6); the per-(group,channel)
-    output scale lives, pre-folded, in the ProjectionMHL decompress weight. read_top_n==2 only."""
-
-    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None):
-        nn.Module.__init__(self)   # skip the fp32-weight-allocating ManifestoLUT.__init__
-        self.spec = spec
-        self.read_top_n = int(meta["read_top_n"])
-        if self.read_top_n != 2:
-            raise NotImplementedError("DeployedQuantisedConfidenceLUT supports read_top_n==2 only")
-        self.single = (spec.anchor_mode == "single")
-        self.cmp_eps = float(meta.get("cmp_eps", 0.0))
-        self._quant = _pow2.resolve_quant_config(meta.get("quant_mode", "p2_int8"))
-        self.table_dropout_rate = 0.0
-        self._compiled = None
-        self._compiled_train = None
-        self._compiled_addr = None
-        dev = torch.device(device) if device is not None else None
-        self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])  # int8 [n_tables,K,d_out]
-        for b in ("anchor_a", "anchor_b", "powers", "in_head", "out_head",
-                  "confidence_log_beta", "confidence_log_gamma", "log_read_tau"):
-            t = tensors[b]
-            self.register_buffer(b, t.to(dev) if dev else t)
-
-    def decompress_scale(self) -> Optional[torch.Tensor]:
-        return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
-
-    def _supports_low_precision(self) -> bool:
-        return False
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference; fp32/fp64
-        return self._forward_impl(x)
-
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        cfg = self._quant
-        spec = self.spec
-        G, tph, K, d_out = spec.n_groups, spec.tph, spec.n_cells, spec.d_out
-        B = x.shape[0]
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
-        beta, gamma = self._betagamma(u.dtype)
-        g0 = torch.zeros((), dtype=u.dtype, device=u.device)
-        tau = self.log_read_tau.to(u.dtype).exp()
-        m = u.abs(); mv = u_abs_star.unsqueeze(-1)
-        q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
-        gc = _global_cells(c, G, tph, K); gca = _global_cells(c_alt, G, tph, K)
-        flat_idx = torch.stack([gc, gca], dim=-1).reshape(B, G, tph, 2)
-        packed = self.packed.reshape(G * tph * K, d_out)
-        acc = _pow2.int_blend_read(packed, cfg["bits"], d_out, flat_idx, q, k, skip, drop)  # int32 [B,G,d_out]
-        return self._route(acc.to(x.dtype), x)   # RAW (units 2^-6); scale folded into decompress
 
 
 # ---- (de)serialisation (pickle-free on load) ---------------------------------------------------
@@ -141,9 +86,6 @@ def _load_payload(path: str):
 
 # ---- export / load -----------------------------------------------------------------------------
 
-_BUFKEYS = ("confidence_log_beta", "confidence_log_gamma", "log_read_tau",
-            "anchor_a", "anchor_b", "powers", "in_head", "out_head")
-
 
 def export_deployment(model: nn.Module, path: str) -> dict:
     """Walk ``model``; bake every ProjectionMHL whose cartridge compactifies (``to_deployment`` with a
@@ -171,7 +113,7 @@ def export_deployment(model: nn.Module, path: str) -> dict:
         tensors[f"{name}::decompress.weight"] = dec_w
         if mod.decompress.bias is not None:
             tensors[f"{name}::decompress.bias"] = mod.decompress.bias.detach()
-        meta["ffns"][name] = {**payload["meta"], "d_model": mod.d_model,
+        meta["ffns"][name] = {**payload["meta"], "format": payload["format"], "d_model": mod.d_model,
                               "has_compress_bias": mod.compress.bias is not None,
                               "has_decompress_bias": mod.decompress.bias is not None}
         compacted.append(name)
@@ -200,16 +142,24 @@ def load_deployment(path: str, make_skeleton: Callable[[], nn.Module], device=No
     """Rebuild an inference-only model from a compact checkpoint WITHOUT allocating any fp32 LUT table.
 
     ``make_skeleton()`` must build the architecture on the ``meta`` device (no real memory). Each
-    ProjectionMHL FFN that was compacted is replaced by a real :class:`DeployedQuantisedConfidenceLUT`
-    (int8) wrapped in a ProjectionMHL whose decompress weight already has the pow2 scale folded in; the
-    remaining (backbone) params are materialised from the stored state_dict."""
+    ProjectionMHL FFN that was compacted is replaced by a real inference cartridge, rebuilt via the
+    format-tag registry (``meta["format"]`` -> the cartridge's ``from_deployment``), wrapped in a
+    ProjectionMHL whose decompress weight already has the pow2 scale folded in; the remaining
+    (backbone) params are materialised from the stored state_dict. This module names no concrete
+    cartridge class: which inference cartridge to build is decided entirely by the stored format tag."""
     tensors, meta = _load_payload(path)
     model = make_skeleton()
     for name, ff in meta["ffns"].items():
         spec = LUTSpec(h_in=ff["spec"]["h_in"], h_out=ff["spec"]["h_out"], tph=ff["spec"]["tph"],
                        nap=ff["spec"]["nap"], d_in=ff["spec"]["d_in"], d_out=ff["spec"]["d_out"])
-        cart_tensors = {b: tensors[f"{name}::{b}"] for b in ("packed",) + _BUFKEYS}
-        dep = DeployedQuantisedConfidenceLUT(spec, cart_tensors, ff, device=device)
+        # Collect this FFN's cartridge tensors by prefix (everything under "{name}::" except the
+        # ProjectionMHL compress/decompress weights); the cartridge's from_deployment knows its keys.
+        prefix = f"{name}::"
+        cart_tensors = {k[len(prefix):]: t for k, t in tensors.items()
+                        if k.startswith(prefix)
+                        and not k.startswith(prefix + "compress.")
+                        and not k.startswith(prefix + "decompress.")}
+        dep = get_rebuilder(ff["format"])(spec, cart_tensors, ff, device=device)
         proj = ProjectionMHL(dep, d_model=ff["d_model"], bias=ff["has_decompress_bias"], device=device)
         with torch.no_grad():
             proj.compress.weight.copy_(tensors[f"{name}::compress.weight"].to(proj.compress.weight.device))
