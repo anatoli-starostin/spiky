@@ -134,7 +134,7 @@ def _load_payload(path: str):
             for k in f.keys():
                 tensors[k] = f.get_tensor(k)
         return tensors, meta
-    except (ImportError, Exception):
+    except ImportError:
         obj = torch.load(path, map_location="cpu", weights_only=True)
         return obj["tensors"], json.loads(obj["meta_json"])
 
