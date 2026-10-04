@@ -132,9 +132,10 @@ class NativeSoftSignHard(torch.autograd.Function):
     the soft-sign tail for the input/temperature gradient (no two-cell tensor materialised)."""
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, t_soft, t_select):
+    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, t_soft, t_select,
+                drop_mask=None):
         with torch.no_grad():
-            val = fused_hard_read(weights, c).to(weights.dtype)          # [B,G,d_out], no [B,G,tph,d_out]
+            val = fused_hard_read(weights, c, drop_mask=drop_mask).to(weights.dtype)  # sum_t keep_t W[c_t]
         W, li, lai, tif, dims = _prep(weights, c, c_alt, z)
         G, tph, K, d_out, B, d_in, nt = dims
         ctx.save_for_backward(W, li, lai, tif, u_signed_star.reshape(B, nt),
@@ -142,6 +143,7 @@ class NativeSoftSignHard(torch.autograd.Function):
         ctx.dims = dims
         ctx.single = bool(single)
         ctx.wdtype = weights.dtype
+        ctx.drop_mask = drop_mask
         return val
 
     @staticmethod
@@ -149,14 +151,17 @@ class NativeSoftSignHard(torch.autograd.Function):
         W, li, lai, tif, delta, a_g, b_g, t_soft, t_select = ctx.saved_tensors
         G, tph, K, d_out, B, d_in, nt = ctx.dims
         mgr = native_manager()
-        grad_pt = grad_grp.to(ctx.wdtype).unsqueeze(2).expand(B, G, tph, d_out).reshape(B, nt, d_out).contiguous()
+        grad_pt = grad_grp.to(ctx.wdtype).unsqueeze(2).expand(B, G, tph, d_out)
+        if ctx.drop_mask is not None:                 # scale each table's grad by its keep-mask
+            grad_pt = grad_pt * ctx.drop_mask.unsqueeze(-1).to(grad_pt.dtype)
+        grad_pt = grad_pt.reshape(B, nt, d_out).contiguous()
         wgrad, gc_main, gc_alt = mgr.lprojection_backward_na1_nonsmooth(
             grad_pt, W, li, lai, tif, tif, _THREADS)
         dLdw = gc_alt.reshape(B, nt) - gc_main.reshape(B, nt)            # dL/dw = <grad, W[c']-W[c]>
         grad_z, dts, dtl = _softsign_grads_from_dLdw(
             dLdw, delta, t_soft, t_select, a_g, b_g, ctx.single, B, G, d_in, nt)
         return (wgrad.reshape(G, tph, K, d_out).to(ctx.wdtype), grad_z.to(ctx.wdtype),
-                None, None, None, None, None, None, dts, dtl)
+                None, None, None, None, None, None, dts, dtl, None)
 
 
 class NativeSoftSignSmooth(torch.autograd.Function):
@@ -164,10 +169,11 @@ class NativeSoftSignSmooth(torch.autograd.Function):
     per-table ``main_weight=1-w`` / ``alt_weight=w`` + carriers, then the soft-sign tail."""
 
     @staticmethod
-    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, t_soft, t_select, w):
+    def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, t_soft, t_select, w,
+                drop_mask=None):
         # w [B,G,tph] is the Gen-2 blend weight (computed by the cartridge in the addressing dtype).
         with torch.no_grad():
-            val = fused_blend_read(weights, c, c_alt, w).to(weights.dtype)   # (1-w)W[c] + w W[c']
+            val = fused_blend_read(weights, c, c_alt, w, drop_mask=drop_mask).to(weights.dtype)
         W, li, lai, tif, dims = _prep(weights, c, c_alt, z)
         G, tph, K, d_out, B, d_in, nt = dims
         wt = w.reshape(B, nt).to(weights.dtype)
@@ -176,6 +182,7 @@ class NativeSoftSignSmooth(torch.autograd.Function):
         ctx.dims = dims
         ctx.single = bool(single)
         ctx.wdtype = weights.dtype
+        ctx.drop_mask = drop_mask
         return val
 
     @staticmethod
@@ -183,7 +190,10 @@ class NativeSoftSignSmooth(torch.autograd.Function):
         W, li, lai, tif, delta, a_g, b_g, t_soft, t_select, wt = ctx.saved_tensors
         G, tph, K, d_out, B, d_in, nt = ctx.dims
         mgr = native_manager()
-        grad_pt = grad_grp.to(ctx.wdtype).unsqueeze(2).expand(B, G, tph, d_out).reshape(B, nt, d_out).contiguous()
+        grad_pt = grad_grp.to(ctx.wdtype).unsqueeze(2).expand(B, G, tph, d_out)
+        if ctx.drop_mask is not None:                          # scale each table's grad by its keep-mask
+            grad_pt = grad_pt * ctx.drop_mask.unsqueeze(-1).to(grad_pt.dtype)
+        grad_pt = grad_pt.reshape(B, nt, d_out).contiguous()
         main_w = (1.0 - wt).contiguous()                       # [B,nt]   -> grad into W[c]
         alt_w = wt.reshape(B, nt, 1).contiguous()              # [B,nt,1] -> grad into W[c']
         wgrad, gc_main, gc_alt = mgr.lprojection_backward_na1_smooth(
@@ -192,4 +202,4 @@ class NativeSoftSignSmooth(torch.autograd.Function):
         grad_z, dts, dtl = _softsign_grads_from_dLdw(
             dLdw, delta, t_soft, t_select, a_g, b_g, ctx.single, B, G, d_in, nt)
         return (wgrad.reshape(G, tph, K, d_out).to(ctx.wdtype), grad_z.to(ctx.wdtype),
-                None, None, None, None, None, None, dts, dtl, None)
+                None, None, None, None, None, None, dts, dtl, None, None)

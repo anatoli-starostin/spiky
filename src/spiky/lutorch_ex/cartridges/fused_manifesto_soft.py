@@ -44,10 +44,12 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
         return al + off, bl + off, u_signed
 
-    def _pure_blend(self, c, c_alt, u_abs_star):
+    def _pure_blend(self, c, c_alt, u_abs_star, drop_mask=None):
         y_hard, y_alt = self._read_pair(c, c_alt)
         u = rational_uncertainty(u_abs_star).unsqueeze(-1)
         blend = y_hard + u * (y_alt - y_hard)
+        if drop_mask is not None:                              # table dropout before the tph-sum
+            blend = blend * drop_mask.unsqueeze(-1)
         return blend.sum(dim=2, dtype=_acc_dtype(blend.dtype))  # fp32-accum for bf16/fp16
 
     # H100 measurements: pure read wins soft eval at small/mid batch; the fused embedding_bag
@@ -76,15 +78,17 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         # keeps plain _addresses — it is already compiled whole by the base forward, so gating on
         # self.training (False in eval) avoids a nested compile.
         z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if self.training else self._addresses(xa)
+        # Table-dropout keep-mask [B,G,tph] (train+grad only; None at eval / rate 0), fp32-acc dtype.
+        dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure":
-            grp_out = self._pure_blend(c, c_alt, u_abs_star)
+            grp_out = self._pure_blend(c, c_alt, u_abs_star, drop_mask=dmask)
         elif be == "native":
             # Single mode reuses the native smooth forward + weight-grad; input grad to a only.
             # Grad target z passed in the input dtype (bf16) -> input grad stays bf16, one cast.
             ag, bg, us = self._star_global(z, u, j_star)
             zc = x[:, self.in_head, :] if low else z
-            grp_out = NativeSoft.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single)
+            grp_out = NativeSoft.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
         else:  # tier1
             U = rational_uncertainty(u_abs_star)
-            grp_out = fused_blend_read(self.weights, c, c_alt, U)
+            grp_out = fused_blend_read(self.weights, c, c_alt, U, drop_mask=dmask)
         return self._route(grp_out, x).to(x.dtype)
