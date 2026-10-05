@@ -167,15 +167,36 @@ the output projection consumes (fan-in).}):
   \ \xrightarrow{\ \code{decompress}\ }\ \text{out}\in[B,D_\text{out}].
 \]
 \begin{itemize}\itemsep1pt
-\item \textbf{The input projection shapes the hashing.} A probe is also a hyperplane test on $z$ ---
-  $z[a]-z[b]=0$ or $z[a]=0$, a plane through the origin with coefficients $\pm1$ --- and with
-  \code{compress} in front, the same probe on the projected vector is an \emph{arbitrary} learned
-  hyperplane $w^\top x+b$ on the original $x$. This is how fixed probes get general decision boundaries
-  (the manifesto's ``hyperplane LSH'' with learnable anchor vectors, \citealp[\S VIII-H]{manifesto}, is the
-  same form; the pair comparison is its special case with one $+1$ and one $-1$).
-\item \textbf{The output projection compresses the tables.} Tables live in a narrow $d_\text{out}$
-  (48 in every experiment below); \code{decompress} expands the summed read back to model width, so the
-  cells stay small.
+\item \textbf{The input projection shapes the hashing.} A probe is also a hyperplane test, and what
+  plane it tests depends on whether \code{compress} is in front and on the kind of probe:
+  \begin{center}\footnotesize
+  \begin{tabular}{@{}l >{\raggedright\arraybackslash}p{4.9cm} >{\raggedright\arraybackslash}p{5.6cm}@{}}
+  \toprule
+  & single anchors & anchor pairs \\
+  \midrule
+  \code{compress} off & $x[a]>0$: an axis-aligned plane of the raw input & $x[a]-x[b]>0$: coefficients $\pm1$, zero bias --- the manifesto's form \\
+  \code{compress} on & $w_a^\top x+b_a>0$: an arbitrary learned hyperplane & $(w_a-w_b)^\top x+(b_a-b_b)>0$: also arbitrary; up to $\binom{d_\text{in}}{2}$ distinct planes per head \\
+  \bottomrule
+  \end{tabular}
+  \end{center}
+  With \code{compress} on, a single-anchor probe reads one row of the projection and is exactly the
+  manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}). A pair
+  probe is just as expressive \emph{per probe} --- a difference of two rows is still a free vector --- so
+  the advantage of pairs lies elsewhere: a head has only $d_\text{in}$ distinct single-anchor planes to
+  hand out across its \code{tph}$\cdot$\code{nap} probes ($48$ for $512$ probes at the sweep geometry,
+  so every table re-uses the same few bits) but $\binom{d_\text{in}}{2}$ distinct pair planes ($1{,}128$,
+  so no two probes coincide); and a pair bit ignores any offset shared by the coordinates, where a
+  coordinate that drifts to a constant sign would lock its bit (a measured failure of coordinate signing
+  on trained codes; \citealp[\S6]{mechanisms}). Richer partitions from the same projection, not richer
+  planes.
+\item \textbf{The output projection compresses the tables.} A layer holds an exponential number of
+  cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads --- and every
+  cell stores a $d_\text{out}$-wide row, so the cell width multiplies that count. At the sweep geometry
+  that is $8\times64\times256=131{,}072$ cells per layer, $6.3$M table parameters at $d_\text{out}=48$
+  ($37.7$M over six layers, more than half of the model's $68.2$M); at the model width of $384$ it would
+  be $50$M per layer. So the tables live in a narrow $d_\text{out}$ ($48$ in every experiment below), and
+  \code{decompress} expands the summed read back to model width afterwards, at the cost of one small
+  dense map per layer ($0.15$M parameters).
 \end{itemize}
 Given a learned input projection, the single-anchor mode alone would have sufficed in principle: a pair
 comparison $z[a]-z[b]>0$ is itself a hyperplane on $x$, so anchor pairs could have been dropped and left
