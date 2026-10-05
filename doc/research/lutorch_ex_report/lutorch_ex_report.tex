@@ -255,11 +255,13 @@ Everything described so far is the same for every read form: the geometry, the a
 tables, the routing, the wrapper. A
 \emph{cartridge} is the swappable read \emph{mathematics} inside that frame. The contract is a shape:
 $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ (\code{MultiHeadLUT}), and the wrapper never
-reaches inside it. Every shipped cartridge inherits one base, \code{ManifestoLUT}, which owns the tables
-$W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$, the anchors (drawn once from a seed and
-never trained), the addressing
-$(c,\,u,\,c')$, the sum over \code{tph} and the routing; what a cartridge adds is how it turns the addressed
-cell, its neighbour and the margins into a per-table output --- and which function training differentiates.
+reaches inside it. All shipped cartridges are built on one shared base class, \code{ManifestoLUT}. It
+holds the tables $W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$ and the anchors (drawn
+once from a seed and never trained), and it provides the steps every cartridge needs: working out which
+cell each table addresses, how far each bit is from flipping, and which cell is the runner-up, and, at the
+end, handing each head's result on to its output slot. What a cartridge decides is the rest: how the
+addressed row and its neighbour are combined and weighted into a head's output --- including how the
+tables of a head are added up --- and which function training differentiates.
 
 \paragraph{Three generations of one idea.} The cartridges form a progression. Gen-1 \emph{Manifesto} is
 the Spiking Manifesto's model as published: a hard read and a fixed uncertainty function for the
