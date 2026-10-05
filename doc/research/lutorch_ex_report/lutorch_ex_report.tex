@@ -180,18 +180,18 @@ the output projection consumes (fan-in).}):
   \end{tabular}
   \end{center}
   With \code{compress} on, a single-anchor probe reads one row of the projection and is exactly the
-  manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}). A pair
-  probe is just as expressive \emph{per probe} --- a difference of two rows is still a free vector --- so
-  the advantage of pairs lies elsewhere: a head has only $d_\text{in}$ distinct single-anchor planes to
-  hand out across its \code{tph}$\cdot$\code{nap} probes ($48$ for $512$ probes at the sweep geometry,
-  so every table re-uses the same few bits) but $\binom{d_\text{in}}{2}$ distinct pair planes ($1{,}128$,
-  so no two probes coincide); and a pair bit ignores any offset shared by the coordinates, where a
-  coordinate that drifts to a constant sign would lock its bit (a measured failure of coordinate signing
-  on trained codes; \citealp[\S6]{mechanisms}). Richer partitions from the same projection, not richer
-  planes.
+  manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}).
+  Pairs are the stronger form. The input projection already gives both modes arbitrary learned
+  hyperplanes; pairwise comparison sits on top of that, and the same projection yields far more distinct
+  planes in pair form than in single form, so tables partition the space differently instead of re-using
+  the same few bits. Single anchors are the simpler special case, and the weaker one in practice: in one
+  matched experiment of the earlier LightMHL line, single-anchor addressing trailed pair addressing by
+  $0.008$ bpb at 48k steps ($1.13884$ vs.\ $1.13120$, H8/\code{tph}64/\code{nap}8/$d$48, matched parameter
+  count, one seed per arm) --- background, not a \code{lutorch\_ex} result.
 \item \textbf{The output projection compresses the tables.} A layer holds an exponential number of
-  cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads --- and every
-  cell stores a $d_\text{out}$-wide row, so the cell width multiplies that count. At the sweep geometry
+  cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads, so the count is
+  exponential in \code{nap} --- and every cell stores a $d_\text{out}$-wide row, so the per-cell width
+  $d_\text{out}$ is what controls table size. At the sweep geometry
   that is $8\times64\times256=131{,}072$ cells per layer, $6.3$M table parameters at $d_\text{out}=48$
   ($37.7$M over six layers, more than half of the model's $68.2$M); at the model width of $384$ it would
   be $50$M per layer. So the tables live in a narrow $d_\text{out}$ ($48$ in every experiment below), and
