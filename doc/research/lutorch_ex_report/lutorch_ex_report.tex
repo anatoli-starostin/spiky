@@ -207,10 +207,8 @@ $d_\text{in}$ weights per bit --- at the sweep geometry, some 4{,}000 subtractio
 against about 200{,}000 multiply-adds. Single anchors were added later for flexibility, as the even
 cheaper probe, and sit at the other end of the same trade.
 
-Either side may be switched off (Identity) when the widths already match. \code{decompress} is initialised
-to zero and \code{compress} to $\mathcal{N}(0,0.02)$, so a freshly built layer contributes nothing and the
-tables start learning only once \code{decompress} has moved off zero --- the usual zero-init of a residual
-branch.
+Either side may be switched off (Identity) when the widths already match. By default \code{decompress} is
+initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
 
 \begin{figure}[t]
 \centering
