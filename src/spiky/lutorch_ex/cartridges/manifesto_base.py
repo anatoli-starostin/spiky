@@ -74,7 +74,9 @@ class ManifestoLUT(MultiHeadLUT):
     # Gen-1/Gen-2 cartridges the train step is memory-bound and eager is fastest. The Gen-3
     # confidence cartridges set this True -- their score/blend read-out fans out into ~10 tiny
     # elementwise kernels (abs/logsigmoid/exp/sum/sigmoid/gather/cat/psw) that inductor folds into
-    # 1-2 (graph break at embedding_bag), cutting the train step AND its peak memory substantially.
+    # 1-2 fused kernels, cutting the train step AND its peak memory substantially. Dynamo captures
+    # each Gen-3 train forward as one graph with no graph break; embedding_bag stays in that graph
+    # but runs as its own ATen kernel (an inductor fallback), so fusion stops at it on both sides.
     # CUDA-only; see :meth:`forward`.
     _COMPILE_TRAIN: bool = False
     # `dynamic=` for the TRAIN compile. True (default) traces one shape-agnostic graph (no recompiles
