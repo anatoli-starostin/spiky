@@ -186,15 +186,16 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `read_top_n` | `1` | `1` = scored single cell, `2` = scored two-cell blend |
+| `read_top_n` | `1` (`2` for `QuantisedConfidenceLUT`) | `1` = scored single cell, `2` = scored two-cell blend |
 | `beta_init`, `gamma_init` | `2.0`, `1.0` | initial `β`, `γ` (must be `> 0`) |
 | `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
-(the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Note that
-`read_top_n` still defaults to `1` here, while deployment needs `2`.
+(the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
+`read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
+but `export_deployment` refuses it with a clear error.
 
 Fused twins (`Fused…`): `backend="auto"`, see the next section.
 
@@ -210,7 +211,8 @@ implementation. `backend="auto"` picks the path per call; any other value forces
 | class | `backend` values | `auto` picks |
 | --- | --- | --- |
 | `FusedManifestoHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: `native` if available, else `tier1` |
-| `FusedSoftSignHardLUT`, `FusedSoftSignSmoothLUT` | `auto`, `pure_eval`, `tier1`, `native` | as above |
+| `FusedSoftSignHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | as above |
+| `FusedSoftSignSmoothLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: always `tier1` (`native` only when forced) |
 | `FusedManifestoSoftLUT` | `auto`, `pure`, `tier1`, `native` | CUDA batch `>= 4096`: `tier1`; smaller eval: `pure`; smaller train: `native` if available |
 
 - `tier1` is one `F.embedding_bag` over the addressed cells, and runs anywhere.
@@ -233,8 +235,8 @@ a bit; reads and reductions accumulate in fp32; and the output is cast back once
 | environment variable | effect |
 | --- | --- |
 | `LUTORCH_EX_NO_COMPILE=1` | disable `torch.compile` everywhere |
-| `LUTORCH_EX_NO_CUDA_EXT=1` | skip the `lprojection`, single-anchor and soft-sign surrogate extensions |
-| `SPIKY_P2_CUDA_DISABLE=1` | skip the int8 power-of-two read extension |
+| `LUTORCH_EX_NO_CUDA_EXT=1` | skip every native extension: `lprojection`, single-anchor, soft-sign surrogate and the int8 read |
+| `SPIKY_P2_CUDA_DISABLE=1` | deprecated alias, still honoured: skips the int8 read extension only |
 
 ## The wrapper: `ProjectionMHL`
 

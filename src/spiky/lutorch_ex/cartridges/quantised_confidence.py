@@ -49,8 +49,10 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
     # fuses ~0.65 ms worse; dynamic=None closes it (step 24.9 -> 24.4, backward 21.0 -> 20.3).
     _COMPILE_TRAIN_DYNAMIC = None
 
-    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
-        super().__init__(spec, **kw)
+    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
+        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
+        # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
+        super().__init__(spec, read_top_n=read_top_n, **kw)
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
             raise ValueError("QuantisedConfidenceLUT requires a quant_mode (e.g. 'p2_int8')")
@@ -273,7 +275,10 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
                 f"to_deployment supports h_out == n_groups only (got h_out={self.spec.h_out}, n_groups={G}); "
                 "the per-(group,channel) output scale folds 1:1 into decompress out_features in that case.")
         if self.read_top_n != 2:
-            raise NotImplementedError("to_deployment supports read_top_n==2 (the reference integer read).")
+            raise NotImplementedError(
+                f"to_deployment supports read_top_n==2 only (the reference integer read); this cartridge has "
+                f"read_top_n={self.read_top_n}. A read_top_n=1 QuantisedConfidenceLUT trains and evaluates, but cannot "
+                f"be exported yet.")
         Wflat = self.weights.reshape(G * tph, K, d_out)
         e = _pow2.head_chan_exponents(Wflat, G, cfg["bits"], cfg["offset"])                 # [G, d_out]
         packed = _pow2.pack_tables(_pow2.quantise_tables(Wflat, e, cfg["bits"]), cfg["bits"]).contiguous()  # [n_tables,K,d_out] int8

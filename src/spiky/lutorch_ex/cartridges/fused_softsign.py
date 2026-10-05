@@ -10,7 +10,10 @@ Option 2.
 
 Dispatch (``backend`` forces a path; 'auto' is the hybrid):
 * eval  -> pure compiled gather read (fastest on the inference path, inherited);
-* train -> 'native' (H100 + lutorch_cuda) else 'tier1' (pure embedding_bag path, CPU / no ext).
+* train -> 'native' whenever native_available(): a CUDA device with the lutorch_cuda native ops loaded (any
+  architecture the extension builds for -- e.g. H100 or RTX 5090), else 'tier1' (pure embedding_bag path,
+  CPU / no ext). FusedSoftSignSmoothLUT overrides this: its 'auto' always trains on 'tier1' (native is no
+  faster there); 'native' stays reachable with backend="native".
 
 bf16/fp16: addressing runs in fp32 (so the discrete bit decisions don't drift), reads/reductions
 accumulate in fp32, output cast back once. Kept only if it is a real H100 speedup (evaluated in

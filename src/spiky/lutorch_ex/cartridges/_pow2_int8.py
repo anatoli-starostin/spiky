@@ -26,10 +26,13 @@ The padding lanes are ALSO predicated off inside the kernel (masked at accumulat
 the padding bytes; the tests fill them with garbage to prove it.
 
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
-in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel's test matrix (tests/
-test_pow2_int8.py) has passed. Nothing in the kernel is architecture-specific; the allowlist records validation, not a
-hardware requirement, and an architecture joins it once that matrix is green on it. Everything else -- no CUDA, an
-architecture not on the list, no nvcc, a failed build, SPIKY_P2_CUDA_DISABLE=1 -- makes `load()` return None and callers use
+in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel's test matrix has passed. That
+matrix is NOT in this package: it is src/spiky/lutorch/tests/test_pow2_int8.py in the old lutorch tree this module was
+ported from (branch research/ffn_replacement_fix). Inside lutorch_ex the kernel is exercised only through the p2_scalars
+op, by the CUDA cases of tests/test_quantised_confidence.py; read_fused / read_cells have no test here. Nothing in the
+kernel is architecture-specific; the allowlist records validation, not a hardware requirement, and an architecture joins it
+once that matrix is green on it. Everything else -- no CUDA, an architecture not on the list, no nvcc, a failed build,
+LUTORCH_EX_NO_CUDA_EXT=1 (or the deprecated alias SPIKY_P2_CUDA_DISABLE=1) -- makes `load()` return None and callers use
 the torch implementation (pow2_read).
 
 CUSTOM OP -- the per-table integers of the power-of-two read, from ONE forward implementation for training and eval.
@@ -64,7 +67,8 @@ DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_s
 _CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
 # Compute capabilities the kernel is enabled on -- only those whose test matrix has passed on real hardware:
 #   (12, 0) sm_120  RTX 5090 (Blackwell), validated on gpustar
-#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: tests/test_pow2_int8.py must be green there
+#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: the matrix (src/spiky/lutorch/tests/
+#                   test_pow2_int8.py on research/ffn_replacement_fix -- not part of lutorch_ex) must be green there
 #                   before its results are trusted (see the lut_ablation exp_n_abl_47 package's validation gate)
 VALIDATED_ARCHES = ((12, 0), (9, 0))
 
@@ -79,8 +83,12 @@ def load():
     if _tried:
         return _ext
     _tried = True
-    if os.environ.get("SPIKY_P2_CUDA_DISABLE") == "1":
-        _error = "disabled by SPIKY_P2_CUDA_DISABLE=1"
+    # LUTORCH_EX_NO_CUDA_EXT=1 is the package-wide opt-out (as for the other extensions);
+    # SPIKY_P2_CUDA_DISABLE=1 is kept as a deprecated alias so existing scripts keep working.
+    disabled_by = next((v for v in ("LUTORCH_EX_NO_CUDA_EXT", "SPIKY_P2_CUDA_DISABLE")
+                        if os.environ.get(v) == "1"), None)
+    if disabled_by is not None:
+        _error = f"disabled by {disabled_by}=1"
         return None
     try:
         cap = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
