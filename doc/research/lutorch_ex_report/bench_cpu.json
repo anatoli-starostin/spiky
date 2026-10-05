@@ -1,0 +1,299 @@
+{
+ "device_name": "cpu",
+ "spec": "LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48, anchor_mode='pairs')",
+ "batches": [
+  1024
+ ],
+ "warmup": 5,
+ "repeats": 15,
+ "torch": "2.9.1+cu130",
+ "rows": [
+  {
+   "cartridge": "FusedManifestoHardLUT",
+   "cells": [
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 21.494253998753265,
+     "min_ms": 19.90378300070006,
+     "throughput_rows_per_s": 47640.63921731804,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 36.35329300050216,
+     "min_ms": 30.184293998900102,
+     "throughput_rows_per_s": 28168.012179415357,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 26.521604999288684,
+     "min_ms": 22.354705999532598,
+     "throughput_rows_per_s": 38610.03133209563,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "FusedManifestoSoftLUT",
+   "cells": [
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 45.63186900122673,
+     "min_ms": 42.070413001056295,
+     "throughput_rows_per_s": 22440.457128163467,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 44.595511000807164,
+     "min_ms": 41.813937001279555,
+     "throughput_rows_per_s": 22961.95238084537,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 47.7204939998046,
+     "min_ms": 43.68863300078374,
+     "throughput_rows_per_s": 21458.285825880026,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "FusedSoftSignHardLUT",
+   "cells": [
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 14.09394399888697,
+     "min_ms": 12.32742000138387,
+     "throughput_rows_per_s": 72655.31919815116,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 34.30303599998297,
+     "min_ms": 32.179656000153045,
+     "throughput_rows_per_s": 29851.585148338138,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 34.517494999818155,
+     "min_ms": 32.06357899944123,
+     "throughput_rows_per_s": 29666.115690185357,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "FusedSoftSignSmoothLUT",
+   "cells": [
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 43.0676689993561,
+     "min_ms": 37.67130400046881,
+     "throughput_rows_per_s": 23776.53640867607,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 8.034774000407197,
+     "min_ms": 7.61825100016722,
+     "throughput_rows_per_s": 127446.02398874,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 52.73944299915456,
+     "min_ms": 49.46608599857427,
+     "throughput_rows_per_s": 19416.208093369798,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "ConfidenceLUT n=1",
+   "cells": [
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 23.175505999461166,
+     "min_ms": 22.285438999460894,
+     "throughput_rows_per_s": 44184.580048599935,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 9.076528000150574,
+     "min_ms": 7.868810000218218,
+     "throughput_rows_per_s": 112818.46979186451,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 26.772551998874405,
+     "min_ms": 25.76647400019283,
+     "throughput_rows_per_s": 38248.128159132975,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "ConfidenceLUT n=2",
+   "cells": [
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 48.24517199995171,
+     "min_ms": 45.41750399948796,
+     "throughput_rows_per_s": 21224.92173934057,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 11.08009299969126,
+     "min_ms": 8.869602999766357,
+     "throughput_rows_per_s": 92417.99685512866,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 55.66178499975649,
+     "min_ms": 52.194738998878165,
+     "throughput_rows_per_s": 18396.822883141096,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  },
+  {
+   "cartridge": "QuantisedConfidenceLUT n=2",
+   "cells": [
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 33.21010900071997,
+     "min_ms": 25.632666000092286,
+     "throughput_rows_per_s": 30833.984916393998,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 26.017010999566992,
+     "min_ms": 23.47297400046955,
+     "throughput_rows_per_s": 39358.864091537755,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cpu",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 57.40658900140261,
+     "min_ms": 51.5455770000699,
+     "throughput_rows_per_s": 17837.673650580087,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "1024": null
+   }
+  }
+ ]
+}
