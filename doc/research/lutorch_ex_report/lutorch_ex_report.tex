@@ -74,7 +74,8 @@ hyperplane $u_j=0$ passes through the origin and has trivial coefficients. Two m
 \item \textbf{single} (\code{anchor\_mode="single"}): $u_j = z[a_j]$ --- a single $+1$ coefficient; the bit
   is the sign of one coordinate.
 \end{itemize}
-Arbitrary hyperplanes $w^\top z+b$ do not exist at this level. The next section recovers them.
+Arbitrary hyperplanes $w^\top z+b$ do not exist at this level. The next section recovers them --- and
+explains why the library nonetheless keeps both primitive modes rather than one general one.
 
 \paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups
 ($G=\max(h_\text{in},h_\text{out})$; a group is a head in the usual case $h_\text{in}=h_\text{out}$). A
@@ -160,6 +161,17 @@ each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{m
   (48 in every experiment below); \code{decompress} expands the summed read back to model width, so the
   cells stay small.
 \end{itemize}
+Given a learned input projection, the single-anchor mode alone would have sufficed in principle: a pair
+comparison $z[a]-z[b]>0$ is itself a hyperplane on $x$, so anchor pairs could have been dropped and left
+to \code{compress} to realise. The library keeps both modes deliberately. The pair comparison is the
+Spiking Manifesto's mechanism as stated --- the relative order of two coordinates --- and it is the
+cheap special case that the whole design is built to exploit: an address bit costs two coordinate reads
+and one subtraction, with the anchors stored as integer indices and no weights of its own (the kernels
+do exactly this), whereas a general per-table hyperplane would cost a $d_\text{in}$-length dot product and
+$d_\text{in}$ weights per bit --- at the sweep geometry, some 4{,}000 subtractions per token and layer
+against about 200{,}000 multiply-adds. Single anchors were added later for flexibility, as the even
+cheaper bit, and sit at the other end of the same trade.
+
 Either side may be switched off (Identity) when the widths already match. \code{decompress} is initialised
 to zero and \code{compress} to $\mathcal{N}(0,0.02)$, so a freshly built layer contributes nothing and the
 tables start learning only once \code{decompress} has moved off zero --- the usual zero-init of a residual
