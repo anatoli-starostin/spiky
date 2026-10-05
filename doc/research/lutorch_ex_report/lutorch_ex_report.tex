@@ -181,10 +181,11 @@ the output projection consumes (fan-in).}):
   \end{center}
   With \code{compress} on, a single-anchor probe reads one row of the projection and is exactly the
   manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}).
-  Pairs are the stronger form. The input projection already gives both modes arbitrary learned
-  hyperplanes; pairwise comparison sits on top of that, and the same projection yields far more distinct
-  planes in pair form, so tables partition the space differently instead of re-using the same few bits.
-  Single anchors are the simpler special case, and the weaker one in practice.
+  With \code{compress} in front, both modes get arbitrary hyperplanes; pairwise comparison sits on top
+  of that, and the same projection yields far more distinct planes in pair form, so tables partition the
+  space differently instead of re-using the same few bits. Without it a single anchor tests the sign of
+  one raw coordinate --- an axis-aligned split --- where a pair still compares two. In both regimes single
+  anchors are the simpler special case, and the weaker one in practice.
 \item \textbf{The output projection compresses the tables.} A layer holds an exponential number of
   cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads, so the count is
   exponential in \code{nap} --- and every cell stores a $d_\text{out}$-wide row, so the per-cell width
