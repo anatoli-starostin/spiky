@@ -152,19 +152,17 @@ many such tables.}
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
 each side of the cartridge --- the stack of tables together with its read mathematics --- and so turns it
-into a plain dense-width layer. The wrapper takes an input
-width and an output width that are independent and may differ; in every configuration used here both
-are the model width, $d_\text{model}\!\to d_\text{model}$. Writing
-$h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$, $d_\text{out}$
-for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The two head counts
+into a plain dense-width layer, $D_\text{in}\to D_\text{out}$. The two widths are independent arguments
+of the wrapper and may differ. Writing $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$,
+$d_\text{out}$ for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The two head counts
 may differ only when one of them is $1$; the library rejects every other combination. With
 $h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$ heads read
 (fan-out); with $h_\text{out}=1$ the heads' outputs are summed into one $d_\text{out}$-wide slice that
 the output projection consumes (fan-in).}):
 \[
-  z=\code{compress}(x)\in[B,h_\text{in},d_\text{in}],\qquad
-  y=\code{cartridge}(z)\in[B,h_\text{out},d_\text{out}],\qquad
-  \text{out}=\code{decompress}(y).
+  x\in[B,D_\text{in}]\ \xrightarrow{\ \code{compress}\ }\ z\in[B,h_\text{in},d_\text{in}]
+  \ \xrightarrow{\ \code{cartridge}\ }\ y\in[B,h_\text{out},d_\text{out}]
+  \ \xrightarrow{\ \code{decompress}\ }\ \text{out}\in[B,D_\text{out}].
 \]
 \begin{itemize}\itemsep1pt
 \item \textbf{The input projection shapes the hashing.} A probe is also a hyperplane test on $z$ ---
@@ -201,14 +199,14 @@ branch.
   proj/.style={box, fill=blue!8, minimum width=17mm, font=\footnotesize\ttfamily},
   tbl/.style={draw, fill=orange!14, align=center, inner sep=3pt, minimum width=24mm, minimum height=9mm},
   sumop/.style={draw, circle, inner sep=1pt, minimum size=7mm, fill=green!10}]
-\node[io] (x) {$x$\\$\scriptstyle d_\text{model}$};
+\node[io] (x) {$x$\\$\scriptstyle D_\text{in}$};
 \node[proj, right=7mm of x] (cmp) {compress};
 \node[tbl, right=15mm of cmp, yshift=11mm] (t1) {group 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
 \node[tbl, right=15mm of cmp, yshift=-11mm] (t2) {group $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
 \node at ($(t1)!0.5!(t2)$) {$\vdots$};
 \node[sumop, right=15mm of cmp, xshift=26mm] (sum) {$\Sigma$};
 \node[proj, right=8mm of sum] (dec) {decompress};
-\node[io, right=7mm of dec] (y) {$\text{out}$\\$\scriptstyle d_\text{model}$};
+\node[io, right=7mm of dec] (y) {$\text{out}$\\$\scriptstyle D_\text{out}$};
 \begin{scope}[on background layer]
   \foreach \t in {t1,t2}{ \foreach \dx in {1.3,2.6}{
     \draw[fill=orange!14, draw=black] ([xshift=\dx mm,yshift=\dx mm]\t.south east) rectangle ([xshift=\dx mm,yshift=\dx mm]\t.north west); }}
@@ -221,12 +219,12 @@ branch.
 \draw[->] (sum) -- node[above,font=\scriptsize]{route} (dec);
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
-\caption{The ProjectionLUT data path. The input projection \code{compress} ($d_\text{model}\to
+\caption{The ProjectionLUT data path. The input projection \code{compress} ($D_\text{in}\to
 h_\text{in}d_\text{in}$) splits $x$ into per-group spaces $z_g$; in each group the probes hash
 $z_g$ to a cell per table and the \code{tph} reads are summed; the group outputs are routed and the output
-projection \code{decompress} ($h_\text{out}d_\text{out}\to d_\text{model}$) expands the result. The input
-and output widths are independent; both are $d_\text{model}$ in every configuration here. The box in the
-middle is the cartridge; the wrapper treats it as opaque.}
+projection \code{decompress} ($h_\text{out}d_\text{out}\to D_\text{out}$) expands the result. $D_\text{in}$
+and $D_\text{out}$ are independent and may differ. The box in the middle is the cartridge; the wrapper
+treats it as opaque.}
 \label{fig:projlut}
 \end{figure}
 
@@ -284,7 +282,9 @@ means the surrogate shapes the input gradient but the table update stays on the 
 Each subsection follows one template: the value, the gradient, what is learned, when to use it, and the
 three lines that build it. Throughout, \code{spec} is a \code{LUTSpec} --- the layer's geometry in one
 frozen dataclass: heads, tables per head, probes per table, widths and probe kind
-(Appendix~\ref{app:ref}) --- and \code{ffn = ProjectionMHL(cart, d\_model)} wraps any cartridge.
+(Appendix~\ref{app:ref}) --- and \code{ffn = ProjectionMHL(cart, input\_dim=$D_\text{in}$,
+output\_dim=$D_\text{out}$)} wraps any cartridge (\code{d\_model=}$D$ is the shorthand for
+$D_\text{in}=D_\text{out}=D$).
 
 \subsection{Manifesto: \code{ManifestoHardLUT}, \code{ManifestoSoftLUT}}
 \label{sec:manifesto}
@@ -319,7 +319,7 @@ reference points; the hard read is the cheapest possible inference.
 \begin{lstlisting}
 from spiky.lutorch_ex import LUTSpec, FusedManifestoHardLUT, FusedManifestoSoftLUT, ProjectionMHL
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
-ffn  = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1), d_model=384)
+ffn  = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1), input_dim=384, output_dim=384)
 \end{lstlisting}
 
 \subsection{SoftSign: \code{SoftSignHardLUT}, \code{SoftSignSmoothLUT}}
@@ -341,7 +341,7 @@ cartridge at the training batch); \code{FusedSoftSignSmoothLUT}'s best path is t
 one, so that is what its default dispatch picks. \textbf{When:} when a learned sharpness matters and
 the score of Gen-3 is not wanted.
 \begin{lstlisting}
-ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1, soft_score_temp=0.5, select_temp=0.5), d_model=384)
+ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1, soft_score_temp=0.5, select_temp=0.5), input_dim=384, output_dim=384)
 \end{lstlisting}
 
 \subsection{Confidence: \code{ConfidenceLUT}}
@@ -369,7 +369,7 @@ accuracy of the three generations (Table~\ref{tab:results}); fp32/fp64 only.
 \begin{lstlisting}
 cart = ConfidenceLUT(spec, seed=1, read_top_n=2, beta_init=2.0, gamma_init=1.0,
                      read_tau_init=0.5, read_tau_learnable=True)
-ffn  = ProjectionMHL(cart, d_model=384)
+ffn  = ProjectionMHL(cart, input_dim=384, output_dim=384)
 \end{lstlisting}
 
 \subsection{Quantised confidence: \code{QuantisedConfidenceLUT}}
@@ -450,7 +450,9 @@ forward, training forward and backward of any configuration.
 \label{sec:ml}
 
 \paragraph{Setup.} A six-block GPT ($d_\text{model}=384$, 6 attention heads, $68.2$M parameters) with the
-feed-forward layer of every block replaced by a \code{ProjectionMHL} around the cartridge under test. All
+feed-forward layer of every block replaced by a \code{ProjectionMHL} around the cartridge under test.
+Every configuration here is square: the wrapper's input and output widths both equal the model width,
+$D_\text{in}=D_\text{out}=d_\text{model}=384$. All
 seven runs share the champion topology --- $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
 $d_\text{in}=d_\text{out}=48$, anchor pairs --- seed~1, the default init (per-head Uniform$[\pm10^{-3}]$
 tables, \code{decompress} zeroed), cell-TV
