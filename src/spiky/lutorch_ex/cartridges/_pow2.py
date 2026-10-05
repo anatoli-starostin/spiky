@@ -1,13 +1,16 @@
 """Power-of-two int8 LUT read — vendored (verbatim) from ``spiky.lutorch.pow2_read`` on the
-``research/ffn_replacement_fix`` branch, the ONE shared definition used by LightMultiHeadLUT's
-quant-aware training forward (straight-through), its integer eval read, and the exported artefact.
+``research/ffn_replacement_fix`` branch (where it served the old LightMultiHeadLUT). In lutorch_ex it is
+the torch definition of the power-of-two read: QuantisedConfidenceLUT's straight-through reads and
+forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it, and on CUDA the
+p2_scalars op in ``_pow2_int8`` computes the same integers (that agreement is tested, see there).
 
 It is copied unchanged (pure PyTorch, no CUDA / no shared-extension dependency) so that
 ``QuantisedConfidenceLUT`` reuses exactly the reference quantisation math — the p2_int8 power-of-two
 scale, the log-domain score exponent, the two-cell blend exponents, the straight-through weights
-and tables, and the int8 shift-add read — and cross-tests against the old implementation to
-round-off. Keeping it a separate module keeps Gen-1/Gen-2/ConfidenceLUT and the shared
-``lutorch_cuda`` untouched.
+and tables, and the int8 shift-add read. It was cross-checked against the old implementation when
+ported (PR #138: idx, q/k exponents, STE weights, fake-quant tables, packed rows all 0.0 max-abs-diff);
+no test in lutorch_ex compares against the old module. Keeping it a separate module keeps
+Gen-1/Gen-2/ConfidenceLUT and the shared ``lutorch_cuda`` untouched.
 
 Reference note: ``doc/research/lut_ablation/quantisation_simple.tex``.
 log2 s is in the log domain, log2 S + (g + gamma*sum_i logsigmoid(beta u_i))/ln2 (g=0 in the

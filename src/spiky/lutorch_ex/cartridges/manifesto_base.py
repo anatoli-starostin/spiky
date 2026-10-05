@@ -21,8 +21,13 @@ Everything else lives here and is identical between them:
   margin ``j* = argmin_j |u_j|`` flipped. Only the margin changes between modes; the whole
   two-cell structure and routing below are identical, so every cartridge supports both.
 - **Head routing** (the shape-contract invariant): ``G = max(h_in, h_out)`` groups, group
-  ``g`` reads input head ``g % h_in`` and writes output head ``g % h_out``, groups summed
-  into the output (fan-in sums all groups into head 0).
+  ``g`` reads input head ``g % h_in``. A head always sums its own tables; across heads the
+  outputs are routed one-to-one and concatenated, and summed only in fan-in. Concretely,
+  ``per_table.sum(dim=2)`` gives ``[B, G, d_out]``; :meth:`_route` returns it unchanged when
+  ``h_out == G`` (per-head; fan-out, where every group reads input head 0) and
+  ``.sum(dim=1, keepdim=True)`` -> ``[B, 1, d_out]`` when ``h_out == 1`` (fan-in);
+  ``ProjectionMHL.forward`` then reshapes ``[B, h_out, d_out]`` to ``[B, h_out * d_out]``,
+  the concatenation.
 
 Subclasses implement only :meth:`_combine`.
 """

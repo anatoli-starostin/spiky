@@ -5,7 +5,9 @@ EXTENSION
 
 csrc/pow2_int8_read.cu provides
 
-  * read_fused  the inference read (QuantisedLightFFN): for every (token, head), in ONE launch, the per-table integers from
+  * read_fused  a fused inference read (in the old lutorch tree, QuantisedLightFFN's CUDA read; nothing in lutorch_ex
+                calls it -- DeployedQuantisedConfidenceLUT reads with the torch int_blend_read): for every (token,
+                head), in ONE launch, the per-table integers from
                 the compressed code (calling p2::table_scalars, csrc/pow2_scalars.cuh) and the note's Section 6 integer
                 accumulation -- each cell's int8 row loaded 16 bytes at a time (int4 vector loads), every byte
                 sign-extended to int32 in registers, shifted by k' + 6 or k' + 6 - q and added into int32 accumulators that
@@ -15,7 +17,7 @@ csrc/pow2_int8_read.cu provides
                 converted on load and the accumulators written as bf16 (see read_fused). `cells_out` exposes the
                 kernel's integers for tests.
   * scalars     the forward of the lutorch_ex::p2_scalars custom op (below): p2::table_scalars for every
-                table, used by the training forward -- so training and inference take their integers from one function.
+                table, the same function read_fused calls inline.
   * read_cells  the same accumulation on integers supplied by the caller (packed by pack_cells). A REFERENCE for tests:
                 bit-identical to pow2_read.int8_blend_read on the same integers, it pins read_fused's accumulation
                 independently of how the integers were computed.
@@ -35,17 +37,22 @@ once that matrix is green on it. Everything else -- no CUDA, an architecture not
 LUTORCH_EX_NO_CUDA_EXT=1 (or the deprecated alias SPIKY_P2_CUDA_DISABLE=1) -- makes `load()` return None and callers use
 the torch implementation (pow2_read).
 
-CUSTOM OP -- the per-table integers of the power-of-two read, from ONE forward implementation for training and eval.
+CUSTOM OP -- the per-table integers of the power-of-two read.
 
 With the CUDA extension available (a validated architecture) and CUDA fp32 margins, the integers come from the
 registered custom op `lutorch_ex::p2_scalars`, whose forward is p2::table_scalars (csrc/pow2_scalars.cuh) -- the same
-function the inference kernel calls inline:
+function read_fused calls inline. In lutorch_ex:
 
-  * LightMultiHeadLUT quant_mode training forward      -> cell_weights (the op, differentiable)
-  * LightMultiHeadLUT.forward_int, QuantisedLightFFN's torch read -> table_integers (the op, no grad)
-  * QuantisedLightFFN on CUDA                          -> read_fused, calling the same function in-kernel
+  * QuantisedConfidenceLUT, read_top_n=2, CUDA fp32: the training read (_quant_read_monolith, pairs mode) and the
+    eval read (_quant_grp_out)                         -> cell_weights (the op, differentiable)
+  * QuantisedConfidenceLUT's other reads (read_top_n=1; single-anchor training), QuantisedConfidenceLUT.forward_int,
+    and DeployedQuantisedConfidenceLUT                 -> the torch definition in pow2_read (e.g. blend_exponents,
+                                                          int_blend_read), not the op
+  * table_integers, read_fused, read_cells             -> no caller in lutorch_ex (ported with the kernel)
 
-so the training forward, forward_int and the exported artefact take identical integers by construction.
+So the op and the torch definition must agree on the integers. That is tested, not guaranteed by construction:
+tests/test_quantised_confidence.py checks the fake-quant eval read (the op, on CUDA) against forward_int (the torch
+int8 read), and tests/test_deploy.py the exported artefact against the trained model.
 
 Backward: RECOMPUTE with the torch expression. The op's backward re-evaluates the straight-through form of pow2_read (score,
 smallest margin, ste_blend_weights) with the op's integers held fixed and returns autograd's gradient of it: the same code as
