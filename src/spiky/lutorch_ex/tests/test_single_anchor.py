@@ -4,8 +4,8 @@ Single mode replaces each table's two-coordinate sign test ``[z[a_j] - z[b_j] > 
 a single coordinate vs zero, ``[z[a_j] > eps]``. The two-cell structure, routing, and
 uncertainty backward are untouched, so every cartridge supports it. Composed with a learned
 input projection (a :class:`ProjectionMHL` compress with bias, ``z = W x + b``) each bit
-becomes a learned hyperplane ``[⟨w_j, x⟩ + b_j > 0]`` — exactly the old
-``HyperplaneMultiHeadLUT`` front-end, which the final test reproduces bit-for-bit.
+becomes a learned hyperplane ``[⟨w_j, x⟩ + b_j > 0]``. The final test checks that end to end
+against an independent torch reference, in both anchor modes.
 """
 import pytest
 import torch
@@ -134,61 +134,57 @@ def test_projection_mhl_wraps_single_cartridge_and_trains():
     assert proj.decompress.weight.grad.abs().sum() > 0, "decompress got no gradient"
 
 
-# ------------------------------------------------- HyperplaneMHL redundancy (the deliverable)
+# ------------------------------------------------- end-to-end value check against a reference
 
-def _build_hyperplane_equivalent(H, O, nap, tph, seed=0, noise=0.5):
-    """Construct a HyperplaneMultiHeadLUT and a ProjectionMHL(single-anchor) that match it.
+def _reference_hard_output(x, Wc, bc, anchor_a, anchor_b, tables):
+    """Independent plain-torch reference for ProjectionMHL(compress -> hard cartridge), decompress off.
+
+    The compress row feeding head g's coordinate i is ``g * d_in + i`` (head-major). Each (head g,
+    table t, bit j) is an affine function of x: a = <w, x> + b, with (w, b) the compress row of its
+    anchor (single), or the difference of its two anchors' rows (pairs). Then bits = a > 0, MSB-first
+    packing, and each head sums its tables' rows: y[:, g] = sum_t W[g, t, idx]."""
+    G, tph, nap = anchor_a.shape
+    d_in = Wc.shape[0] // G
+    rows_a = anchor_a + d_in * torch.arange(G).view(G, 1, 1)                      # [G, tph, nap]
+    w, b = Wc[rows_a], bc[rows_a]
+    if anchor_b is not None:
+        rows_b = anchor_b + d_in * torch.arange(G).view(G, 1, 1)
+        w, b = w - Wc[rows_b], b - bc[rows_b]
+    a = torch.einsum("bd,gtjd->bgtj", x, w) + b                                    # [B, G, tph, nap]
+    idx = ((a > 0).long() * (1 << torch.arange(nap - 1, -1, -1))).sum(-1)          # [B, G, tph]
+    return tables[torch.arange(G).view(1, G, 1), torch.arange(tph).view(1, 1, tph), idx].sum(2)
+
+
+@pytest.mark.parametrize("anchor_mode", ["single", "pairs"])
+@pytest.mark.parametrize("H,O,nap,tph", [(2, 3, 3, 2), (1, 4, 4, 1), (3, 2, 2, 3)])
+def test_projection_end_to_end_matches_reference(H, O, nap, tph, anchor_mode):
+    """ProjectionMHL(compress with bias -> ManifestoHardLUT, decompress off) equals an independent
+    torch reference of the hyperplane-LSH hard read, in both anchor modes.
 
     ``d_in = tph*nap`` makes each group's canonical single-anchor coverage a permutation of
-    ``range(d_in)`` (a bijection (table,bit) -> coordinate), and ``d_model = H*O`` lets the
-    decompress be the identity, so the ProjectionMHL output IS the cartridge output. The
-    input projection (compress, with bias) carries the hyperplane weights/biases to the
-    coordinate each (table, bit) addresses, so ``z[coord] = ⟨w,x⟩ + b`` and the single-anchor
-    sign bit ``[z[coord] > 0]`` equals the hyperplane bit ``[⟨w,x⟩ + b > 0]``.
-    """
-    from spiky.lutorch.hyperplane_multi_head_lut import HyperplaneMultiHeadLUT
-
-    d_in = tph * nap
-    D = H * O
-    K = 1 << nap
-    hyper = HyperplaneMultiHeadLUT(
-        input_dim=D, n_heads=H, n_outputs=O, n_anchor_pairs=nap, tables_per_head=tph,
-        forward_mode="hard", use_bf16=False, hyperplane_init="random",
-        weight_dtype=torch.float32, hyperplane_dtype=torch.float32,
-        random_seed=seed, initial_weights_noise=noise,
-    )
-    spec = LUTSpec(h_in=H, h_out=H, tph=tph, nap=nap, d_in=d_in, d_out=O, anchor_mode="single")
-    cart = ManifestoHardLUT(spec, seed=seed)
-    # LUT table weights: table_global = g*tph + t (head-major), same flat order both sides.
-    cart.weights.data = hyper.weights.data.view(H, tph, K, O).clone()
-    proj = ProjectionMHL(cart, d_model=D, compress=True, decompress=False, bias=True)
-    Wc = torch.zeros(H * d_in, D)
-    bc = torch.zeros(H * d_in)
-    for g in range(H):
-        for t in range(tph):
-            tg = g * tph + t
-            for j in range(nap):
-                coord = int(cart.anchor_a[g, t, j])
-                Wc[g * d_in + coord] = hyper.hyperplane_weight[tg, j]
-                bc[g * d_in + coord] = hyper.hyperplane_bias[tg, j]
-    proj.compress.weight.data = Wc
-    proj.compress.bias.data = bc
-    return hyper, proj, (H, O)
-
-
-@pytest.mark.parametrize("H,O,nap,tph", [(2, 3, 3, 2), (1, 4, 4, 1), (3, 2, 2, 3)])
-def test_projection_single_reproduces_hyperplane_mhl(H, O, nap, tph):
-    """ProjectionMHL(big input projection + single-anchor canonical coverage) reproduces the
-    HyperplaneMultiHeadLUT hard output exactly — the evidence it can be dropped later."""
-    hyper, proj, (H, O) = _build_hyperplane_equivalent(H, O, nap, tph)
-    # Canonical single coverage is a per-group permutation (d_in == tph*nap), so the
-    # (table, bit) -> coordinate map used above is a bijection.
-    for g in range(H):
-        assert sorted(proj.cartridge.anchor_a[g].reshape(-1).tolist()) == list(range(tph * nap))
-    hyper.eval(); proj.eval()
-    torch.manual_seed(11)
-    x = torch.randn(128, H * O)
+    ``range(d_in)`` (a bijection (table, bit) -> coordinate), so in single mode each compress row
+    is set to exactly one seeded random hyperplane (w, b) and the bit is ``[<w, x> + b > 0]``. In
+    pairs mode the compress rows are seeded random and each bit compares two of them. ``d_model =
+    H*O`` with decompress off makes the ProjectionMHL output the cartridge output itself."""
+    gen = torch.Generator().manual_seed(1000 * H + 100 * O + 10 * nap + tph)
+    d_in, D = tph * nap, H * O
+    spec = LUTSpec(h_in=H, h_out=H, tph=tph, nap=nap, d_in=d_in, d_out=O, anchor_mode=anchor_mode)
+    cart = ManifestoHardLUT(spec, seed=0)
+    cart.weights.data = torch.randn(cart.weights.shape, generator=gen)
+    proj = ProjectionMHL(cart, d_model=D, compress=True, decompress=False, bias=True).eval()
+    if anchor_mode == "single":
+        for g in range(H):          # the canonical coverage is a per-group permutation of range(d_in)
+            assert sorted(cart.anchor_a[g].reshape(-1).tolist()) == list(range(d_in))
+        w = torch.randn(H, tph, nap, D, generator=gen)          # one hyperplane per (head, table, bit)
+        b = torch.randn(H, tph, nap, generator=gen)
+        Wc, bc = torch.zeros(H * d_in, D), torch.zeros(H * d_in)
+        rows = cart.anchor_a + d_in * torch.arange(H).view(H, 1, 1)
+        Wc[rows], bc[rows] = w, b
+    else:
+        Wc, bc = torch.randn(H * d_in, D, generator=gen), torch.randn(H * d_in, generator=gen)
+    proj.compress.weight.data, proj.compress.bias.data = Wc, bc
+    x = torch.randn(128, D, generator=gen)
     with torch.no_grad():
-        yh = hyper(x)                           # [B, H, O]
-        yp = proj(x).view(128, H, O)            # compress -> single-anchor cartridge -> identity
-    assert torch.allclose(yh, yp, atol=1e-6), (yh - yp).abs().max().item()
+        y = proj(x).view(128, H, O)
+    ref = _reference_hard_output(x, Wc, bc, cart.anchor_a, cart.anchor_b, cart.weights.detach())
+    assert torch.allclose(y, ref, atol=1e-5), (y - ref).abs().max().item()
