@@ -1,12 +1,10 @@
 // The per-table scalars of the power-of-two read -- THE single definition of the forward integers.
 //
-// Included by csrc/pow2_int8_read.cu and called, with the same compile flags (--fmad=false: no contraction anywhere), by
-//   * p2_scalar_kernel  -- the forward of the lutorch_ex::p2_scalars custom op (the training forward), and
-//   * p2_int8_kernel    -- the inference read (read_fused), inline in the same launch as the int8 accumulation.
-// Because both call this one function on the same margins d = z[a] - z[b], training and inference take the same c1, c2,
-// q and k' by construction. (The torch implementation in pow2_read.py computes the same quantities and remains the fallback
-// when the extension is unavailable; it is not bit-identical to this code -- torch.compile's float32 reduction order and
-// libdevice differ -- which is exactly why the CUDA build uses this function for every path it serves.)
+// Included by csrc/pow2_int8_read.cu and called, compiled with --fmad=false (no contraction anywhere), by p2_scalar_kernel
+// -- the forward of the lutorch_ex::p2_scalars custom op. (The torch implementation in pow2_read.py computes the same
+// quantities; it is the fallback when the extension is unavailable and the path of every read the op does not serve. It is
+// not bit-identical to this code -- torch.compile's float32 reduction order and libdevice differ -- so agreement between the
+// two is checked by the tests rather than guaranteed.)
 //
 // For one table with margins d[0..nap-1] (note Sections 2-4):
 //   m_p = |d_p|,  c1 = sum_p [d_p > 0] 2^(nap-1-p),  mj = first argmin_p m_p,  mv = m_mj,  c2 = c1 ^ 2^(nap-1-mj)
