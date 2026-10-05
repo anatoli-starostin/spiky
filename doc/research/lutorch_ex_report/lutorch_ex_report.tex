@@ -101,20 +101,20 @@ several heads into one shared output by summing them.
 \node[bit] (b1) at (3.5,1.5) {1};
 \node[bit] (b2) at (3.5,0.3) {0};
 \draw[->] (c1) -- (b1); \draw[->] (c2) -- (b2);
-\node[idx] (ix) at (4.6,0.9) {c = 10 = 2};
+\node[idx] (ix) at (5.0,0.9) {c = 10 = 2};
 \draw[->] (b1.east) to[out=0,in=180] (ix.west);
 \draw[->] (b2.east) to[out=0,in=180] (ix.west);
-\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (r\r) at (6.3,\y) {W[\r]};}
-\node[row, fill=orange!35] (rc) at (6.3,0.6) {W[2]};
-\node[row, fill=orange!12] (ra) at (6.3,0.0) {W[3]};
-\node[tag, anchor=west] at (7.0,0.6) {$c$: read};
-\node[tag, anchor=west] at (7.0,0.0) {$c'$: neighbour};
-\node[tag, anchor=south] at (6.3,2.1) {table, $K=2^{\text{nap}}=4$ rows};
+\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (r\r) at (6.8,\y) {W[\r]};}
+\node[row, fill=orange!35] (rc) at (6.8,0.6) {W[2]};
+\node[row, fill=orange!12] (ra) at (6.8,0.0) {W[3]};
+\node[tag, anchor=west] at (7.5,0.6) {$c$: read};
+\node[tag, anchor=west] at (7.5,0.0) {$c'$: neighbour};
+\node[tag, anchor=south] at (6.8,2.1) {table, $K=2^{\text{nap}}=4$ rows};
 \draw[->] (ix) -- (rc.west);
 \node[note] at (4.3,-0.75) {each probe compares two coordinates of $z$; the two sign bits are the row index};
 \end{scope}
 % ================= panel (b): single anchors =================
-\begin{scope}[xshift=10.2cm]
+\begin{scope}[xshift=10.7cm]
 \node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(b) probes = single anchors};
 \foreach \i/\y in {1/1.8,2/1.2,3/0.6,4/0.0}{\node[coord] (s\i) at (0,\y) {$z_{\i}$};}
 \node[cmp] (d1) at (2.0,1.5) {$z_2>0$};
@@ -124,15 +124,15 @@ several heads into one shared output by summing them.
 \node[bit] (e1) at (3.5,1.5) {1};
 \node[bit] (e2) at (3.5,0.3) {1};
 \draw[->] (d1) -- (e1); \draw[->] (d2) -- (e2);
-\node[idx] (jx) at (4.6,0.9) {c = 11 = 3};
+\node[idx] (jx) at (5.0,0.9) {c = 11 = 3};
 \draw[->] (e1.east) to[out=0,in=180] (jx.west);
 \draw[->] (e2.east) to[out=0,in=180] (jx.west);
-\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (q\r) at (6.3,\y) {W[\r]};}
-\node[row, fill=orange!35] (qc) at (6.3,0.0) {W[3]};
-\node[row, fill=orange!12] (qa) at (6.3,0.6) {W[2]};
-\node[tag, anchor=west] at (7.0,0.0) {$c$: read};
-\node[tag, anchor=west] at (7.0,0.6) {$c'$: neighbour};
-\node[tag, anchor=south] at (6.3,2.1) {table, $K=2^{\text{nap}}=4$ rows};
+\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (q\r) at (6.8,\y) {W[\r]};}
+\node[row, fill=orange!35] (qc) at (6.8,0.0) {W[3]};
+\node[row, fill=orange!12] (qa) at (6.8,0.6) {W[2]};
+\node[tag, anchor=west] at (7.5,0.0) {$c$: read};
+\node[tag, anchor=west] at (7.5,0.6) {$c'$: neighbour};
+\node[tag, anchor=south] at (6.8,2.1) {table, $K=2^{\text{nap}}=4$ rows};
 \draw[->] (jx) -- (qc.west);
 \node[note] at (4.3,-0.75) {each probe tests one coordinate against zero; same address, same read};
 \end{scope}
