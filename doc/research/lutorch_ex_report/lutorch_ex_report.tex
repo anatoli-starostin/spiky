@@ -38,8 +38,8 @@
 \noindent\textbf{In one paragraph.} \code{lutorch\_ex} is a small PyTorch library for \emph{lookup-table layers}: a
 learnable map built from many discrete tables, each addressed by a cheap locality-sensitive hash of its
 input. It has four parts, and this report walks through them in order: the tables and their hash
-(\S\ref{sec:idea}); a projection wrapper that turns a stack of tables into a drop-in $d_\text{model}\!\to
-d_\text{model}$ layer (\S\ref{sec:projection}); \emph{cartridges} --- interchangeable read mathematics behind
+(\S\ref{sec:idea}); a projection wrapper that turns a stack of tables into a drop-in dense-width layer
+(\S\ref{sec:projection}); \emph{cartridges} --- interchangeable read mathematics behind
 one fixed contract, in three generations (\S\ref{sec:cartridges}--\ref{sec:body}), one of which is
 quantised to int8 and ships with a deployment path (\S\ref{sec:quant}--\ref{sec:deploy}); and the shared
 machinery of regularisers, precision and kernels (\S\ref{sec:machinery}). \S\ref{sec:ml} reports a
@@ -70,9 +70,7 @@ else from the input.
 \paragraph{Two kinds of probe.} Which kind a layer uses is fixed when the layer is built. In the default,
 pair form, every probe compares two coordinates of $z$: this is the manifesto's Eq.~1, where the bit
 records which of two neurons fired first. In the single form every probe tests the sign of one
-coordinate instead. Nothing downstream can tell the two forms apart --- the address, the neighbour cell
-and the read are identical --- and the next section shows what the comparisons become once a learned
-projection sits in front of them, and why both forms are kept.
+coordinate instead.
 
 \paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups, called
 heads. A head reads its own slice of the input and writes its own slice of the output, and its output
@@ -152,14 +150,15 @@ many such tables.}
 
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{model}$ layer --- the same
-width on both sides by construction, since the wrapper takes a single \code{d\_model}. Writing
+each side of the cartridge and so turns it into a plain dense-width layer. The wrapper takes an input
+width and an output width that are independent and may differ; in every configuration used here both
+are the model width, $d_\text{model}\!\to d_\text{model}$. Writing
 $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$, $d_\text{out}$
-for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The geometry allows
-$h_\text{in}\neq h_\text{out}$ only when one of them is $1$; \code{LUTSpec} rejects every other
-combination. With $h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$
-heads read (fan-out); with $h_\text{out}=1$ the heads' outputs are summed into one $d_\text{out}$-wide
-slice that the output projection consumes (fan-in).}):
+for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The two head counts
+may differ only when one of them is $1$; the library rejects every other combination. With
+$h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$ heads read
+(fan-out); with $h_\text{out}=1$ the heads' outputs are summed into one $d_\text{out}$-wide slice that
+the output projection consumes (fan-in).}):
 \[
   z=\code{compress}(x)\in[B,h_\text{in},d_\text{in}],\qquad
   y=\code{cartridge}(z)\in[B,h_\text{out},d_\text{out}],\qquad
@@ -223,8 +222,9 @@ branch.
 \caption{The ProjectionLUT data path. The input projection \code{compress} ($d_\text{model}\to
 h_\text{in}d_\text{in}$) splits $x$ into per-group spaces $z_g$; in each group the probes hash
 $z_g$ to a cell per table and the \code{tph} reads are summed; the group outputs are routed and the output
-projection \code{decompress} ($h_\text{out}d_\text{out}\to d_\text{model}$) expands the result. The box in
-the middle is the cartridge; the wrapper treats it as opaque.}
+projection \code{decompress} ($h_\text{out}d_\text{out}\to d_\text{model}$) expands the result. The input
+and output widths are independent; both are $d_\text{model}$ in every configuration here. The box in the
+middle is the cartridge; the wrapper treats it as opaque.}
 \label{fig:projlut}
 \end{figure}
 
@@ -618,7 +618,8 @@ Confidence & \code{read\_top\_n} $\in\{1,2\}$, \code{beta\_init}, \code{gamma\_i
   \code{read\_tau\_learnable}, \code{learnable\_score} \\
 Quantised & \code{quant\_mode="p2\_int8"}, \code{quant\_overrides} \\
 Fused twins & \code{backend} $\in\{$\code{auto}, \code{pure}/\code{pure\_eval}, \code{tier1}, \code{native}$\}$ \\
-\code{ProjectionMHL} & \code{d\_model}, \code{compress}/\code{decompress} (bool), \code{bias}, \code{device} \\
+\code{ProjectionMHL} & \code{input\_dim}, \code{output\_dim} (may differ; \code{d\_model} sets both),
+  \code{compress}/\code{decompress} (bool), \code{bias}, \code{device} \\
 \bottomrule
 \end{tabular}
 \end{center}
