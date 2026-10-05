@@ -67,21 +67,17 @@ least certain bit, and flipping that bit gives the \emph{neighbour} cell $c'$ --
 land in under the smallest perturbation. Every cartridge in this library uses $c$, $u$, and $c'$ and nothing
 else from the input.
 
-\paragraph{Two kinds of probe.} Which kind a layer uses is a property of its geometry. With
-\code{anchor\_mode="pairs"} (the default) every probe compares two coordinates of $z$ --- the anchor pairs
-of the manifesto, its Eq.~1, where the bit records which of two neurons fired first. With
-\code{anchor\_mode="single"} every probe tests the sign of one coordinate. The address, the neighbour cell
-and the read are the same in both modes; only what sits behind each bit changes. The next section shows
-what these comparisons become once a learned projection sits in front of them, and why both kinds are
-kept.
+\paragraph{Two kinds of probe.} Which kind a layer uses is fixed when the layer is built. In the default,
+pair form, every probe compares two coordinates of $z$: this is the manifesto's Eq.~1, where the bit
+records which of two neurons fired first. In the single form every probe tests the sign of one
+coordinate instead. Nothing downstream can tell the two forms apart --- the address, the neighbour cell
+and the read are identical --- and the next section shows what the comparisons become once a learned
+projection sits in front of them, and why both forms are kept.
 
 \paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups, called
 heads. A head reads its own slice of the input and writes its own slice of the output, and its output
 is the \emph{sum} of its \code{tph} table reads (weighted, in some cartridges). A layer may also fan
-several heads into one shared output by summing them; that is the only case in which the routing step
-after the sum does anything. The geometry --- heads, tables per head, probes per table, widths, probe
-kind --- is one frozen dataclass, \code{LUTSpec}; the anchors are drawn once from a seed and frozen
-(Appendix~\ref{app:ref}).
+several heads into one shared output by summing them.
 
 \begin{figure}[t]
 \centering
@@ -156,9 +152,14 @@ many such tables.}
 
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{model}$ layer. Writing
+each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{model}$ layer --- the same
+width on both sides by construction, since the wrapper takes a single \code{d\_model}. Writing
 $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$, $d_\text{out}$
-for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case):
+for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The geometry allows
+$h_\text{in}\neq h_\text{out}$ only when one of them is $1$; \code{LUTSpec} rejects every other
+combination. With $h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$
+heads read (fan-out); with $h_\text{out}=1$ the heads' outputs are summed into one $d_\text{out}$-wide
+slice that the output projection consumes (fan-in).}):
 \[
   z=\code{compress}(x)\in[B,h_\text{in},d_\text{in}],\qquad
   y=\code{cartridge}(z)\in[B,h_\text{out},d_\text{out}],\qquad
@@ -235,7 +236,8 @@ Everything above is fixed: the geometry, the addressing, the sum over tables, th
 \emph{cartridge} is the swappable read \emph{mathematics} inside that frame. The contract is a shape:
 $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ (\code{MultiHeadLUT}), and the wrapper never
 reaches inside it. Every shipped cartridge inherits one base, \code{ManifestoLUT}, which owns the tables
-$W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$, the frozen anchors, the addressing
+$W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$, the anchors (drawn once from a seed and
+never trained), the addressing
 $(c,\,u,\,c')$, the sum over \code{tph} and the routing; what a cartridge adds is how it turns the addressed
 cell, its neighbour and the margins into a per-table output --- and which function training differentiates.
 
@@ -278,8 +280,9 @@ means the surrogate shapes the input gradient but the table update stays on the 
 \label{sec:body}
 
 Each subsection follows one template: the value, the gradient, what is learned, when to use it, and the
-three lines that build it. Throughout, \code{spec} is a \code{LUTSpec} and \code{ffn = ProjectionMHL(cart,
-d\_model)} wraps any cartridge.
+three lines that build it. Throughout, \code{spec} is a \code{LUTSpec} --- the layer's geometry in one
+frozen dataclass: heads, tables per head, probes per table, widths and probe kind
+(Appendix~\ref{app:ref}) --- and \code{ffn = ProjectionMHL(cart, d\_model)} wraps any cartridge.
 
 \subsection{Manifesto: \code{ManifestoHardLUT}, \code{ManifestoSoftLUT}}
 \label{sec:manifesto}
