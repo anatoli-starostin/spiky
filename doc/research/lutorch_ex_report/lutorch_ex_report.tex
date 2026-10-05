@@ -57,25 +57,23 @@ Manifesto}~\citep{manifesto}: a spiking network stores a vast number of synapses
 the neurons that fired, which is exactly what a table read does, and the \emph{order} of spikes rather than
 their magnitude carries the information, which is exactly what a sign-bit address encodes.
 
-\paragraph{One table.} Work in a space $z\in\mathbb{R}^{d_\text{in}}$ (Figure~\ref{fig:table}). A table owns
-\code{nap} \emph{anchors}; each defines a scalar form $u_j$ of $z$ and contributes one bit,
-$[\,u_j>0\,]$. The \code{nap} bits form an address $c\in[0,K)$, $K=2^{\text{nap}}$, and the table holds a
-learnable row $W[c]\in\mathbb{R}^{d_\text{out}}$ per address. The magnitudes $|u_j|$ are the
+\paragraph{One table.} Work in a space $z\in\mathbb{R}^{d_\text{in}}$ (Figure~\ref{fig:table}). An
+\emph{anchor} is an index into $z$. A table owns \code{nap} \emph{probes}; probe $j$ is either an anchor
+pair $(a_j,b_j)$, giving $u_j=z[a_j]-z[b_j]$, or a single anchor $a_j$, giving $u_j=z[a_j]$. Each probe
+contributes one bit $[\,u_j>0\,]$, so an address $c\in[0,K)$ has \code{nap} bits and the table has
+$K=2^{\text{nap}}$ cells, each holding a learnable row $W[c]\in\mathbb{R}^{d_\text{out}}$. The magnitudes $|u_j|$ are the
 \emph{margins}: how far each bit is from flipping. The smallest one, $u^\star=\min_j|u_j|$, marks the
 least certain bit, and flipping that bit gives the \emph{neighbour} cell $c'$ --- the one the input would
 land in under the smallest perturbation. Every cartridge in this library uses $c$, $u$, and $c'$ and nothing
 else from the input.
 
-\paragraph{Primitive hyperplanes only.} The forms a table can use are deliberately \emph{primitive}: each
-hyperplane $u_j=0$ passes through the origin and has trivial coefficients. Two modes:
-\begin{itemize}\itemsep1pt
-\item \textbf{pairs} (\code{anchor\_mode="pairs"}, the default): $u_j = z[a_j]-z[b_j]$ --- coefficients
-  $\{-1,+1\}$ on two coordinates, the \emph{anchor pairs} of the manifesto (its Eq.~1).
-\item \textbf{single} (\code{anchor\_mode="single"}): $u_j = z[a_j]$ --- a single $+1$ coefficient; the bit
-  is the sign of one coordinate.
-\end{itemize}
-Arbitrary hyperplanes $w^\top z+b$ do not exist at this level. The next section recovers them --- and
-explains why the library nonetheless keeps both primitive modes rather than one general one.
+\paragraph{Two kinds of probe.} Which kind a layer uses is a property of its geometry. With
+\code{anchor\_mode="pairs"} (the default) every probe compares two coordinates of $z$ --- the anchor pairs
+of the manifesto, its Eq.~1, where the bit records which of two neurons fired first. With
+\code{anchor\_mode="single"} every probe tests the sign of one coordinate. The address, the neighbour cell
+and the read are the same in both modes; only what sits behind each bit changes. The next section shows
+what these comparisons become once a learned projection sits in front of them, and why both kinds are
+kept.
 
 \paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups
 ($G=\max(h_\text{in},h_\text{out})$; a group is a head in the usual case $h_\text{in}=h_\text{out}$). A
@@ -130,12 +128,13 @@ drawn once from a seed and frozen (Appendix~\ref{app:ref}).
 \node[bit] (sb) at (5.6,-2.6) {b$_j$};
 \draw[->] (sc) -- (sb);
 \node[font=\scriptsize, text=black!60, text width=62mm, align=left, anchor=west] at (6.3,-2.6)
-  {one coordinate against zero: same address, same neighbour, same read; the hyperplane is a coordinate axis};
+  {one coordinate against zero: same address, same neighbour, same read; only what sits behind the bit changes};
 \end{tikzpicture}}
-\caption{One lookup table. (a) \code{nap}$=3$ anchor pairs compare two coordinates each; the three sign
-bits concatenate (most significant first) into the cell index $c$, which selects one learnable row of the
-$K=2^{\text{nap}}$-row table. The least-certain bit (smallest margin) names the neighbour cell $c'$.
-(b) The single-anchor mode tests one coordinate against zero. A layer sums many such tables.}
+\caption{One lookup table. (a) \code{nap}$=3$ probes, here anchor pairs, each comparing two coordinates
+of $z$; the three sign bits concatenate (most significant first) into the cell index $c$, which selects one
+learnable row of the $K=2^{\text{nap}}$-row table. The least-certain bit (smallest margin) names the
+neighbour cell $c'$. (b) In single-anchor mode each probe tests one coordinate against zero. A layer sums
+many such tables.}
 \label{fig:table}
 \end{figure}
 
@@ -152,11 +151,13 @@ each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{m
   \text{out}=\code{decompress}(y).
 \]
 \begin{itemize}\itemsep1pt
-\item \textbf{The input projection shapes the hashing.} With \code{compress} in front, a primitive form
-  $z[a]-z[b]$ or $z[a]$ on the projected vector is an \emph{arbitrary} learned hyperplane $w^\top x+b$ on
-  the original $x$. This is how primitive-only tables get general hyperplanes --- the same move the
-  manifesto describes as ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}),
-  factored as a dense projection followed by the fixed primitive anchors.
+\item \textbf{The input projection shapes the hashing.} Here a reading that came later, and is not the
+  manifesto's own language, earns its keep: a probe is a hyperplane test on $z$ --- $z[a]-z[b]=0$ or
+  $z[a]=0$, a plane through the origin with coefficients $\pm1$ --- and with \code{compress} in front, the
+  same probe on the projected vector is an \emph{arbitrary} learned hyperplane $w^\top x+b$ on the original
+  $x$. This is how fixed probes get general decision boundaries. The manifesto reaches the same form from
+  the other side, as ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}), of
+  which the pair comparison is the special case with one $+1$ and one $-1$.
 \item \textbf{The output projection compresses the tables.} Tables live in a narrow $d_\text{out}$
   (48 in every experiment below); \code{decompress} expands the summed read back to model width, so the
   cells stay small.
@@ -170,7 +171,7 @@ and one subtraction, with the anchors stored as integer indices and no weights o
 do exactly this), whereas a general per-table hyperplane would cost a $d_\text{in}$-length dot product and
 $d_\text{in}$ weights per bit --- at the sweep geometry, some 4{,}000 subtractions per token and layer
 against about 200{,}000 multiply-adds. Single anchors were added later for flexibility, as the even
-cheaper bit, and sit at the other end of the same trade.
+cheaper probe, and sit at the other end of the same trade.
 
 Either side may be switched off (Identity) when the widths already match. \code{decompress} is initialised
 to zero and \code{compress} to $\mathcal{N}(0,0.02)$, so a freshly built layer contributes nothing and the
@@ -206,7 +207,7 @@ branch.
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
 \caption{The ProjectionLUT data path. The input projection \code{compress} ($d_\text{model}\to
-h_\text{in}d_\text{in}$) splits $x$ into per-group spaces $z_g$; in each group the primitive anchors hash
+h_\text{in}d_\text{in}$) splits $x$ into per-group spaces $z_g$; in each group the probes hash
 $z_g$ to a cell per table and the \code{tph} reads are summed; the group outputs are routed and the output
 projection \code{decompress} ($h_\text{out}d_\text{out}\to d_\text{model}$) expands the result. The box in
 the middle is the cartridge; the wrapper treats it as opaque.}
@@ -277,8 +278,8 @@ Eqs.~1--3). \textbf{Gradient.} The addresses are integers, so the paper differen
 \[
   \tilde y=\sum_t\big[(1-U_t)\,W_t[c_t]+U_t\,W_t[c_t']\big],\qquad U_t=U(u^\star_t)=\frac{0.5}{1+|u^\star_t|},
 \]
-whose derivative lands on the deciding anchor pair only: $\partial\tilde y/\partial z[a]=-\partial\tilde
-y/\partial z[b]=U'(u^\star)(W[c']-W[c])$ (Eq.~5). $U$ is the paper's own choice; $U(0)=\tfrac12$,
+whose derivative lands on the two anchors of the deciding probe alone (Eq.~5):
+$\partial\tilde y/\partial z[a]=-\partial\tilde y/\partial z[b]=U'(u^\star)\,(W[c']-W[c])$. $U$ is the paper's own choice; $U(0)=\tfrac12$,
 $U\to0$ for a confident bit. \textbf{Learned:} the tables only.
 
 \textbf{Hard vs.\ soft, and provenance.} \code{ManifestoHardLUT} is Izhikevich's rule verbatim: hard value
