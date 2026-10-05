@@ -518,9 +518,11 @@ their \code{embedding\_bag} read with a compiled forward is already the fast pat
 exist as plain-PyTorch \emph{reference} cartridges (\code{ManifestoHardLUT} and so on): written for
 readability, and the oracle the fused twins are tested against for equal results. They are not tuned for
 speed and the sweep did not train with them, so the table leaves them out. The CPU and RTX 5090 columns
-were measured for this report with the library's own harness (\code{bench.py}, driven by
-\code{bench\_report.py}, which lives with the run results on the branch named in the footnote of
-\S\ref{sec:ml}, under \code{doc/research/lutorch\_ex\_report/}).
+were measured for this report with the library's benchmark harness, the module
+\code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by the script
+\code{bench\_report.py}. That script and its per-cell output are on the branch named in the footnote of
+\S\ref{sec:ml}, under \code{doc/research/lutorch\_ex\_report/}; the run results are under
+\code{experiments/lutorch\_ex/} on the same branch.
 
 \begin{table}[h]
 \centering\footnotesize
