@@ -75,65 +75,77 @@ and the read are the same in both modes; only what sits behind each bit changes.
 what these comparisons become once a learned projection sits in front of them, and why both kinds are
 kept.
 
-\paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups
-($G=\max(h_\text{in},h_\text{out})$; a group is a head in the usual case $h_\text{in}=h_\text{out}$). A
-group's output is the \emph{sum} of its \code{tph} table reads (weighted, in some cartridges); a routing
-step maps the $[B,G,d_\text{out}]$ group outputs to $[B,h_\text{out},d_\text{out}]$ --- the identity when
-$h_\text{out}=G$, a sum over groups when $h_\text{out}=1$ (fan-in). The geometry --- heads, tables per
-group, bits per table, widths, anchor mode --- is one frozen dataclass, \code{LUTSpec}; the anchors are
-drawn once from a seed and frozen (Appendix~\ref{app:ref}).
+\paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups, called
+heads. A head reads its own slice of the input and writes its own slice of the output, and its output
+is the \emph{sum} of its \code{tph} table reads (weighted, in some cartridges). A layer may also fan
+several heads into one shared output by summing them; that is the only case in which the routing step
+after the sum does anything. The geometry --- heads, tables per head, probes per table, widths, probe
+kind --- is one frozen dataclass, \code{LUTSpec}; the anchors are drawn once from a seed and frozen
+(Appendix~\ref{app:ref}).
 
 \begin{figure}[t]
 \centering
-\resizebox{0.92\linewidth}{!}{%
+\resizebox{0.96\linewidth}{!}{%
 \begin{tikzpicture}[>=Latex, font=\footnotesize,
-  coord/.style={draw, circle, inner sep=1.2pt, minimum size=4.2mm, fill=black!5},
-  cmp/.style={draw, rounded corners=2pt, inner sep=2pt, minimum height=5mm, fill=blue!8},
+  coord/.style={draw, circle, inner sep=1.2pt, minimum size=4.4mm, fill=black!5},
+  cmp/.style={draw, rounded corners=2pt, inner sep=2.5pt, minimum height=5mm, fill=blue!8},
   bit/.style={draw, inner sep=2pt, minimum size=4.6mm, fill=orange!15, font=\scriptsize\ttfamily},
-  row/.style={draw, minimum width=16mm, minimum height=3.2mm, inner sep=0pt, font=\scriptsize\ttfamily}]
-% ---- (a) pairs ----
-\node[font=\small\bfseries] at (-0.2,2.9) {(a) anchor pairs};
-\foreach \i/\y in {1/2.2,2/1.6,3/1.0,4/0.4,5/-0.2,6/-0.8}{
-  \node[coord] (z\i) at (0,\y) {$z_{\i}$};}
-\node[cmp] (c1) at (2.3,1.9) {$z_1\!-\!z_3>0$};
-\node[cmp] (c2) at (2.3,0.7) {$z_2\!-\!z_5>0$};
-\node[cmp] (c3) at (2.3,-0.5) {$z_4\!-\!z_6>0$};
+  idx/.style={draw, rounded corners=2pt, fill=orange!25, inner sep=3pt, font=\scriptsize\ttfamily},
+  row/.style={draw, minimum width=13mm, minimum height=3.6mm, inner sep=0pt, font=\scriptsize\ttfamily},
+  tag/.style={font=\scriptsize, text=black!70},
+  note/.style={font=\scriptsize, text=black!60, align=center, text width=58mm}]
+% ================= panel (a): anchor pairs =================
+\begin{scope}
+\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(a) probes = anchor pairs};
+\foreach \i/\y in {1/1.8,2/1.2,3/0.6,4/0.0}{\node[coord] (z\i) at (0,\y) {$z_{\i}$};}
+\node[cmp] (c1) at (2.0,1.5) {$z_1\!-\!z_3>0$};
+\node[cmp] (c2) at (2.0,0.3) {$z_2\!-\!z_4>0$};
 \draw[->] (z1) -- (c1); \draw[->] (z3) -- (c1);
-\draw[->] (z2) -- (c2); \draw[->] (z5) -- (c2);
-\draw[->] (z4) -- (c3); \draw[->] (z6) -- (c3);
-\node[bit] (b1) at (4.3,1.9) {1};
-\node[bit] (b2) at (4.3,0.7) {0};
-\node[bit] (b3) at (4.3,-0.5) {1};
-\draw[->] (c1) -- (b1); \draw[->] (c2) -- (b2); \draw[->] (c3) -- (b3);
-\node[font=\scriptsize, text=black!60, text width=22mm, align=center] at (4.3,-1.35) {sign bits = margins $u_j$ signed};
-\node[draw, rounded corners=2pt, fill=orange!25, inner sep=3pt, font=\scriptsize\ttfamily] (idx) at (6.0,0.7) {c = 101 = 5};
-\draw[->] (b1.east) to[out=0,in=180] (idx.west);
-\draw[->] (b2.east) -- (idx.west);
-\draw[->] (b3.east) to[out=0,in=180] (idx.west);
-% table
-\foreach \r/\y in {0/2.45,1/2.10,2/1.75,3/1.40,4/1.05,5/0.70,6/0.35,7/0.00}{
-  \node[row] (r\r) at (8.6,\y) {W[\r]};}
-\node[row, fill=orange!35] at (8.6,0.70) {W[5]};
-\node[row, fill=orange!12] at (8.6,1.40) {W[1]};
-\node[font=\scriptsize, text=black!60] at (8.6,2.85) {table: $K=2^{3}$ rows};
-\draw[->] (idx) -- (r5.west);
-\node[font=\scriptsize, text=black!60, text width=34mm, align=left, anchor=west] at (9.6,1.05)
-  {read $W[c]$; the neighbour $c'$ flips the least-certain bit ($=\,$\code{001}) and is read by the soft and surrogate forms};
-\draw[->, black!50, dashed] (r1.east) -- (9.55,1.4);
-% ---- (b) single ----
-\node[font=\small\bfseries] at (-0.2,-1.9) {(b) single anchors};
-\foreach \i/\x in {1/0.0,2/0.9,3/1.8}{\node[coord] (s\i) at (\x,-2.6) {$z_{\i}$};}
-\node[cmp] (sc) at (3.9,-2.6) {$z_{a_j}>0$};
-\draw[->] (s2) -- (sc);
-\node[bit] (sb) at (5.6,-2.6) {b$_j$};
-\draw[->] (sc) -- (sb);
-\node[font=\scriptsize, text=black!60, text width=62mm, align=left, anchor=west] at (6.3,-2.6)
-  {one coordinate against zero: same address, same neighbour, same read; only what sits behind the bit changes};
+\draw[->] (z2) -- (c2); \draw[->] (z4) -- (c2);
+\node[bit] (b1) at (3.5,1.5) {1};
+\node[bit] (b2) at (3.5,0.3) {0};
+\draw[->] (c1) -- (b1); \draw[->] (c2) -- (b2);
+\node[idx] (ix) at (4.6,0.9) {c = 10 = 2};
+\draw[->] (b1.east) to[out=0,in=180] (ix.west);
+\draw[->] (b2.east) to[out=0,in=180] (ix.west);
+\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (r\r) at (6.3,\y) {W[\r]};}
+\node[row, fill=orange!35] (rc) at (6.3,0.6) {W[2]};
+\node[row, fill=orange!12] (ra) at (6.3,0.0) {W[3]};
+\node[tag, anchor=west] at (7.0,0.6) {$c$: read};
+\node[tag, anchor=west] at (7.0,0.0) {$c'$: neighbour};
+\node[tag, anchor=south] at (6.3,2.1) {table, $K=2^{\text{nap}}=4$ rows};
+\draw[->] (ix) -- (rc.west);
+\node[note] at (4.3,-0.75) {each probe compares two coordinates of $z$; the two sign bits are the row index};
+\end{scope}
+% ================= panel (b): single anchors =================
+\begin{scope}[xshift=10.2cm]
+\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(b) probes = single anchors};
+\foreach \i/\y in {1/1.8,2/1.2,3/0.6,4/0.0}{\node[coord] (s\i) at (0,\y) {$z_{\i}$};}
+\node[cmp] (d1) at (2.0,1.5) {$z_2>0$};
+\node[cmp] (d2) at (2.0,0.3) {$z_4>0$};
+\draw[->] (s2) -- (d1);
+\draw[->] (s4) -- (d2);
+\node[bit] (e1) at (3.5,1.5) {1};
+\node[bit] (e2) at (3.5,0.3) {1};
+\draw[->] (d1) -- (e1); \draw[->] (d2) -- (e2);
+\node[idx] (jx) at (4.6,0.9) {c = 11 = 3};
+\draw[->] (e1.east) to[out=0,in=180] (jx.west);
+\draw[->] (e2.east) to[out=0,in=180] (jx.west);
+\foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (q\r) at (6.3,\y) {W[\r]};}
+\node[row, fill=orange!35] (qc) at (6.3,0.0) {W[3]};
+\node[row, fill=orange!12] (qa) at (6.3,0.6) {W[2]};
+\node[tag, anchor=west] at (7.0,0.0) {$c$: read};
+\node[tag, anchor=west] at (7.0,0.6) {$c'$: neighbour};
+\node[tag, anchor=south] at (6.3,2.1) {table, $K=2^{\text{nap}}=4$ rows};
+\draw[->] (jx) -- (qc.west);
+\node[note] at (4.3,-0.75) {each probe tests one coordinate against zero; same address, same read};
+\end{scope}
 \end{tikzpicture}}
-\caption{One lookup table. (a) \code{nap}$=3$ probes, here anchor pairs, each comparing two coordinates
-of $z$; the three sign bits concatenate (most significant first) into the cell index $c$, which selects one
-learnable row of the $K=2^{\text{nap}}$-row table. The least-certain bit (smallest margin) names the
-neighbour cell $c'$. (b) In single-anchor mode each probe tests one coordinate against zero. A layer sums
+\caption{One lookup table in each of the two modes, \code{nap}$=2$. A probe yields one sign bit; the
+bits, most significant first, form the row index $c$, which selects one learnable row of the
+$K=2^{\text{nap}}$-row table. The probe with the smallest margin is the least certain, and flipping its
+bit names the neighbour row $c'$ (lighter), which the soft and surrogate reads also touch. (a) Anchor
+pairs compare two coordinates of $z$; (b) single anchors test one coordinate against zero. A layer sums
 many such tables.}
 \label{fig:table}
 \end{figure}
@@ -144,20 +156,21 @@ many such tables.}
 
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{model}$ layer:
+each side of the cartridge and so turns it into a $d_\text{model}\!\to d_\text{model}$ layer. Writing
+$h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$, $d_\text{out}$
+for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case):
 \[
   z=\code{compress}(x)\in[B,h_\text{in},d_\text{in}],\qquad
   y=\code{cartridge}(z)\in[B,h_\text{out},d_\text{out}],\qquad
   \text{out}=\code{decompress}(y).
 \]
 \begin{itemize}\itemsep1pt
-\item \textbf{The input projection shapes the hashing.} Here a reading that came later, and is not the
-  manifesto's own language, earns its keep: a probe is a hyperplane test on $z$ --- $z[a]-z[b]=0$ or
-  $z[a]=0$, a plane through the origin with coefficients $\pm1$ --- and with \code{compress} in front, the
-  same probe on the projected vector is an \emph{arbitrary} learned hyperplane $w^\top x+b$ on the original
-  $x$. This is how fixed probes get general decision boundaries. The manifesto reaches the same form from
-  the other side, as ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}), of
-  which the pair comparison is the special case with one $+1$ and one $-1$.
+\item \textbf{The input projection shapes the hashing.} A probe is also a hyperplane test on $z$ ---
+  $z[a]-z[b]=0$ or $z[a]=0$, a plane through the origin with coefficients $\pm1$ --- and with
+  \code{compress} in front, the same probe on the projected vector is an \emph{arbitrary} learned
+  hyperplane $w^\top x+b$ on the original $x$. This is how fixed probes get general decision boundaries
+  (the manifesto's ``hyperplane LSH'' with learnable anchor vectors, \citealp[\S VIII-H]{manifesto}, is the
+  same form; the pair comparison is its special case with one $+1$ and one $-1$).
 \item \textbf{The output projection compresses the tables.} Tables live in a narrow $d_\text{out}$
   (48 in every experiment below); \code{decompress} expands the summed read back to model width, so the
   cells stay small.
