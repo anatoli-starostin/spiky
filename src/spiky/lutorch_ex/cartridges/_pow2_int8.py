@@ -1,56 +1,26 @@
-"""The int8 power-of-two read on the CUDA extension, usable from torch: extension build / load and device gating,
-row striding, the fused inference read, and the lutorch_ex::p2_scalars custom op. Hardware-gated, never raises.
+"""The CUDA side of the power-of-two int8 read: extension build / load and device gating, and the lutorch_ex::p2_scalars
+custom op. Hardware-gated, never raises.
 
 EXTENSION
 
-csrc/pow2_int8_read.cu provides
-
-  * read_fused  a fused inference read (nothing in lutorch_ex calls it -- DeployedQuantisedConfidenceLUT reads
-                with the torch int_blend_read): for every (token, head), in ONE launch, the per-table integers from
-                the compressed code (calling p2::table_scalars, csrc/pow2_scalars.cuh) and the note's Section 6 integer
-                accumulation -- each cell's int8 row loaded 16 bytes at a time (int4 vector loads), every byte
-                sign-extended to int32 in registers, shifted by k' + 6 or k' + 6 - q and added into int32 accumulators that
-                stay in registers across the table loop; skipped tables and dropped second cells excluded; the
-                accumulators converted to float once. The next table's first row is loaded ahead while the current
-                table is accumulated, and discarded cells are masked rather than branched over. A bf16 code is
-                converted on load and the accumulators written as bf16 (see read_fused). `cells_out` exposes the
-                kernel's integers for tests.
-  * scalars     the forward of the lutorch_ex::p2_scalars custom op (below): p2::table_scalars for every
-                table, the same function read_fused calls inline.
-  * read_cells  the same accumulation on integers supplied by the caller (packed by pack_cells). A REFERENCE for tests:
-                bit-identical to pow2_read.int8_blend_read on the same integers, it pins read_fused's accumulation
-                independently of how the integers were computed.
-
-Cell width D is a runtime parameter. The kernel reads rows with a STRIDE = ceil(D / 16) * 16 bytes (the vector load width):
-`stride_tables` pads the stored int8 rows with zero bytes up to it -- nothing at D = 48, at most 15 bytes per row otherwise.
-The padding lanes are ALSO predicated off inside the kernel (masked at accumulate time), so the result does not depend on
-the padding bytes; the tests fill them with garbage to prove it.
+csrc/pow2_int8_read.cu provides one function, `scalars`: the forward of the lutorch_ex::p2_scalars custom op (below),
+p2::table_scalars (csrc/pow2_scalars.cuh) for every table. lutorch_ex reads int8 tables with the torch definition
+(pow2_read.int_blend_read, compiled on CUDA); the extension supplies only the per-table integers.
 
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
-in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel's test matrix has passed. That
-matrix is NOT in this package. Inside lutorch_ex the kernel is exercised only through the p2_scalars
-op, by the CUDA cases of tests/test_quantised_confidence.py; read_fused / read_cells have no test here. Nothing in the
-kernel is architecture-specific; the allowlist records validation, not a hardware requirement, and an architecture joins it
-once that matrix is green on it. Everything else -- no CUDA, an architecture not on the list, no nvcc, a failed build,
-LUTORCH_EX_NO_CUDA_EXT=1 (or the deprecated alias SPIKY_P2_CUDA_DISABLE=1) -- makes `load()` return None and callers use
-the torch implementation (pow2_read).
+in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been validated on real
+hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware requirement. Everything
+else -- no CUDA, an architecture not on the list, no nvcc, a failed build, LUTORCH_EX_NO_CUDA_EXT=1 (or the deprecated
+alias SPIKY_P2_CUDA_DISABLE=1) -- makes `load()` return None and callers use the torch implementation (pow2_read).
 
 CUSTOM OP -- the per-table integers of the power-of-two read.
 
-With the CUDA extension available (a validated architecture) and CUDA fp32 margins, the integers come from the
-registered custom op `lutorch_ex::p2_scalars`, whose forward is p2::table_scalars (csrc/pow2_scalars.cuh) -- the same
-function read_fused calls inline. In lutorch_ex:
-
-  * QuantisedConfidenceLUT, read_top_n=2, CUDA fp32: the training read (_quant_read_monolith, pairs mode) and the
-    eval read (_quant_grp_out)                         -> cell_weights (the op, differentiable)
-  * QuantisedConfidenceLUT's other reads (read_top_n=1; single-anchor training), QuantisedConfidenceLUT.forward_int,
-    and DeployedQuantisedConfidenceLUT                 -> the torch definition in pow2_read (e.g. blend_exponents,
-                                                          int_blend_read), not the op
-  * table_integers, read_fused, read_cells             -> no caller in lutorch_ex (ported with the kernel)
-
-So the op and the torch definition must agree on the integers. That is tested, not guaranteed by construction:
-tests/test_quantised_confidence.py checks the fake-quant eval read (the op, on CUDA) against forward_int (the torch
-int8 read), and tests/test_deploy.py the exported artefact against the trained model.
+With the extension available and CUDA fp32 margins, QuantisedConfidenceLUT's read_top_n=2 reads -- the training read
+(_quant_read_monolith, pairs mode) and the eval read (_quant_grp_out) -- take their per-table integers and straight-through
+cell weights from the op, through cell_weights. Every other read (read_top_n=1, single-anchor training,
+QuantisedConfidenceLUT.forward_int, DeployedQuantisedConfidenceLUT) uses the torch definition in pow2_read. The two must
+agree on the integers. That is tested, not guaranteed by construction: tests/test_quantised_confidence.py checks the
+op-backed eval read against forward_int, and tests/test_deploy.py the exported artefact against the trained model.
 
 Backward: RECOMPUTE with the torch expression. The op's backward re-evaluates the straight-through form of pow2_read (score,
 smallest margin, ste_blend_weights) with the op's integers held fixed and returns autograd's gradient of it: the same code as
@@ -65,15 +35,12 @@ import torch.nn.functional as F
 
 from . import _pow2 as pow2_read  # the torch definition of the power-of-two read
 
-BLOCK_NS = (32, 64, 128)
-DEFAULT_BLOCK_N = 64
-LOAD_WIDTH = 16
 DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_scalars.cuh)
 _CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-# Compute capabilities the kernel is enabled on -- only those whose test matrix has passed on real hardware:
+# Compute capabilities the kernel is enabled on -- only those it has been validated on, on real hardware:
 #   (12, 0) sm_120  RTX 5090 (Blackwell), validated on gpustar
-#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: the validation matrix (not part of
-#                   lutorch_ex) must be green there before its results are trusted (see the lut_ablation exp_n_abl_47 package's validation gate)
+#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100 (see the lut_ablation exp_n_abl_47
+#                   package's validation gate)
 VALIDATED_ARCHES = ((12, 0), (9, 0))
 
 _ext = None
@@ -119,63 +86,6 @@ def available():
 def _reset_for_tests():
     global _ext, _error, _tried
     _ext, _error, _tried = None, None, False
-
-
-def row_stride(D: int) -> int:
-    """Stored row stride for the kernel: D padded up to a multiple of the 16-byte load width."""
-    return (D + LOAD_WIDTH - 1) // LOAD_WIDTH * LOAD_WIDTH
-
-
-def stride_tables(packed: torch.Tensor, D: int) -> torch.Tensor:
-    """int8 rows [R, D] -> [R, row_stride(D)], zero-padded and contiguous (the same tensor when D is 16-byte aligned)."""
-    if packed.dtype != torch.int8 or packed.dim() != 2 or packed.shape[1] != D:
-        raise ValueError(f"expected int8 rows [R, {D}], got {packed.dtype} {tuple(packed.shape)}")
-    pad = row_stride(D) - D
-    return packed.contiguous() if pad == 0 else F.pad(packed, (0, pad)).contiguous()
-
-
-def pack_cells(idx: torch.Tensor, q: torch.Tensor, k: torch.Tensor, skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
-    """Cells for read_cells: uint8 [N, H, T, 3] = (c1, c2, sh1 | sh2 << 4), sh = discard code 15 for a cell that is not
-    read. idx [N, H, T, 2] are cell numbers inside their table (0..2^NAP - 1, no table offset). Compile-friendly."""
-    group = pow2_read.shift_groups(q, k, skip, drop)                       # [.., 2], discard = N_SHIFTS (11)
-    sh = torch.where(group == pow2_read.N_SHIFTS, torch.full_like(group, DISCARD), group)
-    return torch.stack([idx[..., 0], idx[..., 1], sh[..., 0] | (sh[..., 1] << 4)], dim=-1).to(torch.uint8)
-
-
-def _check(tables_stride, D):
-    ext = load()
-    if ext is None:
-        raise RuntimeError(f"pow2 int8 CUDA kernel unavailable: {_error}")
-    if tables_stride.shape[1] != row_stride(D):
-        raise ValueError(f"tables must have stride {row_stride(D)} for D={D} (use stride_tables)")
-    return ext
-
-
-def read_cells(tables_stride: torch.Tensor, cells: torch.Tensor, n_anchor_pairs: int, D: int, lo: int, hi: int, Q: int,
-               block_n: int = DEFAULT_BLOCK_N, load16: bool = True) -> torch.Tensor:
-    """REFERENCE (tests): the int32 accumulators (as float32, units of 2^-6) [N, H, D] from caller-supplied cells."""
-    ext = _check(tables_stride, D)
-    N, H, T, _ = cells.shape
-    e = torch.empty(0, device=tables_stride.device)
-    return ext.read(e, e, e, cells.contiguous(), tables_stride, N, H, T, n_anchor_pairs, 1 << n_anchor_pairs, 0, D,
-                    lo, hi, Q, e, e, e, e, block_n, False, load16)
-
-
-def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tensor, tables_stride: torch.Tensor,
-               scalars, n_anchor_pairs: int, D: int, lo: int, hi: int, Q: int, block_n: int = DEFAULT_BLOCK_N,
-               load16: bool = True, cells_out: torch.Tensor = None) -> torch.Tensor:
-    """The int32 accumulators (units of 2^-6) [N, H, D], per-table integers computed in the kernel.
-    z [N, H, din] fp32 or bf16; anchors int32 [H, T, NAP] (column indices inside the head); scalars = (tau, g, beta, gamma) as
-    one-element fp32 CUDA tensors -- the same values the op receives.
-    The output dtype follows z: fp32 z -> float32 accumulators. A bf16 z is converted to fp32 on load inside the kernel (exact),
-    every integer is computed and accumulated exactly as for that fp32 code, and the accumulators are written as bf16 with the
-    rounding of torch's fp32 -> bf16 cast -- so no cast launches are needed around a bf16 compress / decompress."""
-    ext = _check(tables_stride, D)
-    N, H, din = z.shape
-    T = anchor_a32.shape[1]
-    e = torch.empty(0, device=tables_stride.device, dtype=torch.uint8) if cells_out is None else cells_out
-    return ext.read(z.contiguous(), anchor_a32, anchor_b32, e, tables_stride, N, H, T, n_anchor_pairs,
-                    1 << n_anchor_pairs, din, D, lo, hi, Q, *scalars, block_n, True, load16)
 
 
 # ======================================================================================================================
@@ -273,13 +183,3 @@ def cell_weights(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor, tau
     m, mv, idx = pow2_read.blend_candidates(d, index, powers)
     q, k, skip, drop = pow2_read.blend_exponents(m, mv, tau, g, beta, gamma, cfg)
     return ste_cell_weights(d, tau, g, beta, gamma, q, k, skip, drop), idx
-
-
-@torch.no_grad()
-def table_integers(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor, tau, g, beta, gamma, cfg: dict):
-    """Eval: (idx [..., 2] cell numbers, q, k, skip, drop), from the op when available, else from pow2_read."""
-    if op_available(d):
-        _psw, cells, kq = torch.ops.lutorch_ex.p2_scalars(d, tau, g, beta, gamma, cfg["lo"], cfg["hi"], cfg["Q"])
-        return (cells[..., :2].to(torch.int64), *_integers_from(cells, kq, cfg["Q"]))
-    m, mv, idx = pow2_read.blend_candidates(d, index, powers)
-    return (idx, *pow2_read.blend_exponents(m, mv, tau, g, beta, gamma, cfg))
