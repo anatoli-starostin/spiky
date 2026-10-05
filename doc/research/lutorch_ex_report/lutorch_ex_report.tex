@@ -38,8 +38,9 @@
 \noindent\textbf{In one paragraph.} \code{lutorch\_ex} is a small PyTorch library for \emph{lookup-table layers}: a
 learnable map built from many discrete tables, each addressed by a cheap locality-sensitive hash of its
 input. It has four parts, and this report walks through them in order: the tables and their hash
-(\S\ref{sec:idea}); a projection wrapper that turns a stack of tables into a drop-in dense-width layer
-(\S\ref{sec:projection}); \emph{cartridges} --- interchangeable read mathematics behind
+(\S\ref{sec:idea}); a projection wrapper that gives a stack of tables an ordinary vector-in, vector-out
+interface, so it can sit anywhere a feed-forward layer would (\S\ref{sec:projection}); \emph{cartridges}
+--- interchangeable read mathematics behind
 one fixed contract, in three generations (\S\ref{sec:cartridges}--\ref{sec:body}), one of which is
 quantised to int8 and ships with a deployment path (\S\ref{sec:quant}--\ref{sec:deploy}); and the shared
 machinery of regularisers, precision and kernels (\S\ref{sec:machinery}). \S\ref{sec:ml} reports a
@@ -151,9 +152,10 @@ many such tables.}
 
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge --- the stack of tables together with its read mathematics --- and so turns it
-into a plain dense-width layer, $D_\text{in}\to D_\text{out}$. The two widths are independent arguments
-of the wrapper and may differ. Writing $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$,
+each side of the cartridge --- the stack of tables together with its read mathematics --- so that, from
+the outside, it takes an ordinary vector of width $D_\text{in}$ and returns one of width $D_\text{out}$,
+like any feed-forward layer, while the tables work in their narrow per-head spaces. The two widths are
+independent arguments of the wrapper and may differ. Writing $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$,
 $d_\text{out}$ for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The two head counts
 may differ only when one of them is $1$; the library rejects every other combination. With
 $h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$ heads read
