@@ -35,17 +35,17 @@
 \maketitle
 \vspace{-1.2em}
 
-\noindent\textbf{In one paragraph.} \code{lutorch\_ex} is a small PyTorch library for \emph{lookup-table layers}: a
-learnable map built from many discrete tables, each addressed by a cheap locality-sensitive hash of its
-input. It has four parts, and this report walks through them in order: the tables and their hash
-(\S\ref{sec:idea}); a projection wrapper that gives a stack of tables an ordinary vector-in, vector-out
+\noindent\textbf{In one paragraph.} \code{lutorch\_ex} is a small PyTorch library of \emph{lookup-table
+layers}: drop-in replacements for a feed-forward layer that, instead of multiplying the input by weight
+matrices, turn it into a few sign bits, use those bits as addresses into many small learnable tables, and
+add up the rows they read. This report walks through it in four parts: how a table is addressed and read,
+and how tables form a layer (\S\ref{sec:idea}); a projection wrapper that gives a stack of tables an ordinary vector-in, vector-out
 interface, so it can sit anywhere a feed-forward layer would (\S\ref{sec:projection}); \emph{cartridges}
 --- interchangeable read mathematics behind
-one fixed contract, in three generations (\S\ref{sec:cartridges}--\ref{sec:body}), one of which is
-quantised to int8 and ships with a deployment path (\S\ref{sec:quant}--\ref{sec:deploy}); and the shared
-machinery of regularisers, precision and kernels (\S\ref{sec:machinery}). \S\ref{sec:ml} reports a
-seven-configuration sweep at 48k steps; \S\ref{sec:status} lists what is still open. Reference material
-is in Appendix~\ref{app:ref}.
+one fixed contract, in three generations, one of which is quantised to int8 and ships with a deployment
+path (\S\ref{sec:cartridges}). \S\ref{sec:ml} reports a seven-configuration sweep at 48k steps;
+\S\ref{sec:status} lists what is still open. Reference material and implementation notes (kernels,
+precision, the deployment format) are in Appendix~\ref{app:ref}.
 
 % ======================================================================================================
 \section{The idea: tables addressed by an LSH}
@@ -59,7 +59,8 @@ the neurons that fired, which is exactly what a table read does, and the \emph{o
 their magnitude carries the information, which is exactly what a sign-bit address encodes.
 
 \paragraph{One table.} Work in a space $z\in\mathbb{R}^{d_\text{in}}$ (Figure~\ref{fig:table}). An
-\emph{anchor} is an index into $z$. A table owns \code{nap} \emph{probes}; probe $j$ is either an anchor
+\emph{anchor} is an index into $z$. A table owns \code{nap}\footnote{\code{nap}: the number of anchor
+probes per table.} \emph{probes}; probe $j$ is either an anchor
 pair $(a_j,b_j)$, giving $u_j=z[a_j]-z[b_j]$, or a single anchor $a_j$, giving $u_j=z[a_j]$. Each probe
 contributes one bit $[\,u_j>0\,]$, so an address $c\in[0,K)$ has \code{nap} bits and the table has
 $K=2^{\text{nap}}$ cells, each holding a learnable row $W[c]\in\mathbb{R}^{d_\text{out}}$. The magnitudes $|u_j|$ are the
@@ -69,15 +70,17 @@ land in under the smallest perturbation. Every read mathematics in this library 
 \emph{cartridge}, in the vocabulary of \S\ref{sec:cartridges} --- uses $c$, $u$, and $c'$ and nothing else
 from the input.
 
+\paragraph{Many tables, many heads.} Tables are grouped into $G$ \emph{heads} of \code{tph}\footnote{\code{tph}:
+tables per head.} tables each, and the heads together make up a \emph{layer}, the unit that replaces a
+feed-forward layer. A head reads its own $d_\text{in}$-wide slice of the input, and its output is the
+\emph{sum} of its \code{tph} table reads (weighted, in some cartridges). The $G$ head outputs are then
+\emph{concatenated} into the layer's output, $G\,d_\text{out}$ wide. A layer may instead fan all heads
+into one shared output by summing them.
+
 \paragraph{Two kinds of probe.} Which kind a layer uses is fixed when the layer is built. In the default,
 pair form, every probe compares two coordinates of $z$: this is the manifesto's Eq.~1, where the bit
 records which of two neurons fired first. In the single form every probe tests the sign of one
 coordinate instead.
-
-\paragraph{Many tables, many heads.} A layer stacks \code{tph} tables per group over $G$ groups, called
-heads. A head reads its own slice of the input and writes its own slice of the output, and its output
-is the \emph{sum} of its \code{tph} table reads (weighted, in some cartridges). A layer may also fan
-several heads into one shared output by summing them.
 
 \begin{figure}[t]
 \centering
@@ -141,7 +144,7 @@ several heads into one shared output by summing them.
 bits, most significant first, form the row index $c$, which selects one learnable row of the
 $K=2^{\text{nap}}$-row table. The probe with the smallest margin is the least certain, and flipping its
 bit names the neighbour row $c'$ (lighter), which the richer read forms described later also fetch. (a) Anchor
-pairs compare two coordinates of $z$; (b) single anchors test one coordinate against zero. A layer sums
+pairs compare two coordinates of $z$; (b) single anchors test one coordinate against zero. A head sums
 many such tables.}
 \label{fig:table}
 \end{figure}
@@ -150,7 +153,6 @@ many such tables.}
 \section{ProjectionLUT: input and output projections}
 \label{sec:projection}
 
-On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
 each side of the cartridge --- the stack of tables together with its read mathematics --- so that, from
 the outside, it takes an ordinary vector of width $D_\text{in}$ and returns one of width $D_\text{out}$,
@@ -189,26 +191,44 @@ the output projection consumes (fan-in).}):
   cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads, so the count is
   exponential in \code{nap} --- and every cell stores a $d_\text{out}$-wide row, so the per-cell width
   $d_\text{out}$ is what controls table size. For example, with 8 heads of 64 tables
-  and \code{nap}$=8$ --- the geometry of the six-block language model of \S\ref{sec:ml} --- that is
-  $8\times64\times256=131{,}072$ cells per layer, $6.3$M table parameters at $d_\text{out}=48$
-  ($37.7$M over six layers, more than half of the model's $68.2$M); at the model width of $384$ it would
-  be $50$M per layer. So the tables live in a narrow $d_\text{out}$ ($48$ in every experiment below), and
-  \code{decompress} expands the summed read back to model width afterwards, at the cost of one small
+  and \code{nap}$=8$, that is $8\times64\times256=131{,}072$ cells per layer, $6.3$M table parameters at
+  $d_\text{out}=48$; in a six-block model of width $384$ that is $37.7$M over six layers, more than half
+  of its $68.2$M parameters, and at the full model width, $d_\text{out}=384$, it would be $50$M per layer. So the tables
+  live in a narrow $d_\text{out}$, and
+  \code{decompress} expands the concatenated head outputs back to model width afterwards, at the cost of one small
   dense map per layer ($0.15$M parameters).
 \end{itemize}
 Given a learned input projection, the single-anchor mode alone would have sufficed in principle: a pair
-comparison $z[a]-z[b]>0$ is itself a hyperplane on $x$, so anchor pairs could have been dropped and left
-to \code{compress} to realise. The library keeps both modes deliberately. The pair comparison is the
+comparison $z[a]-z[b]>0$ is itself a hyperplane on $x$, so in principle anchor pairs could have been
+dropped and the pair form left to \code{compress} to realise. In practice it would not be: ordinary
+training has no reason to drive the \code{compress} matrix into a $\{+1,-1\}$ pair form, so recovering it
+would take strict regularisation or a straight-through estimator onto $\pm1$ weights. The library keeps
+both modes deliberately. The pair comparison is the
 Spiking Manifesto's mechanism as stated --- the relative order of two coordinates --- and it is the
 cheap special case that the whole design is built to exploit: an address bit costs two coordinate reads
 and one subtraction, with the anchors stored as integer indices and no weights of its own (the kernels
 do exactly this), whereas a general per-table hyperplane would cost a $d_\text{in}$-length dot product and
-$d_\text{in}$ weights per bit --- at the sweep geometry, some 4{,}000 subtractions per token and layer
+$d_\text{in}$ weights per bit --- in the example above, with $d_\text{in}=48$, some 4{,}000 subtractions per token and layer
 against about 200{,}000 multiply-adds. Single anchors were added later for flexibility, as the even
 cheaper probe, and sit at the other end of the same trade.
 
 Either side may be switched off (Identity) when the widths already match. By default \code{decompress} is
 initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
+
+In code, the wrapper takes any cartridge --- the swappable read mathematics of \S\ref{sec:cartridges},
+here \code{ConfidenceLUT} --- and maps $[N,D_\text{in}]$ to $[N,D_\text{out}]$, so a sequence is
+flattened first:
+\begin{lstlisting}
+import torch
+from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+
+spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)  # 8 heads of 64 tables
+cart = ConfidenceLUT(spec, seed=1, read_top_n=2)                    # the read mathematics
+ffn  = ProjectionMHL(cart, d_model=384)          # or input_dim=..., output_dim=... (may differ)
+x = torch.randn(4, 128, 384)                     # (B, T, D) activations
+y = ffn(x.reshape(-1, 384)).reshape(x.shape)     # torch.Size([4, 128, 384])
+\end{lstlisting}
+Any other cartridge of \S\ref{sec:cartridges} can take \code{ConfidenceLUT}'s place.
 
 \begin{figure}[t]
 \centering
@@ -220,11 +240,14 @@ initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
   sumop/.style={draw, circle, inner sep=1pt, minimum size=7mm, fill=green!10}]
 \node[io] (x) {$x$\\$\scriptstyle D_\text{in}$};
 \node[proj, right=7mm of x] (cmp) {compress};
-\node[tbl, right=15mm of cmp, yshift=11mm] (t1) {group 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
-\node[tbl, right=15mm of cmp, yshift=-11mm] (t2) {group $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
+\node[tbl, right=15mm of cmp, yshift=11mm] (t1) {head 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
+\node[tbl, right=15mm of cmp, yshift=-11mm] (t2) {head $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
 \node at ($(t1)!0.5!(t2)$) {$\vdots$};
-\node[sumop, right=15mm of cmp, xshift=36mm] (sum) {$\Sigma$};
-\node[proj, right=8mm of sum] (dec) {decompress};
+\node[sumop, right=7mm of t1] (s1) {$\Sigma$};
+\node[sumop] (s2) at (s1 |- t2) {$\Sigma$};
+\node at ($(s1)!0.5!(s2)$) {$\vdots$};
+\node[box, fill=green!10, right=19mm of cmp, xshift=42mm, minimum width=13mm] (cat) {concat\\$\scriptstyle G\,d_\text{out}$};
+\node[proj, right=6mm of cat] (dec) {decompress};
 \node[io, right=7mm of dec] (y) {$\text{out}$\\$\scriptstyle D_\text{out}$};
 \begin{scope}[on background layer]
   \foreach \t in {t1,t2}{ \foreach \dx in {1.3,2.6}{
@@ -233,243 +256,166 @@ initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
 \draw[->] (x) -- (cmp);
 \draw[->] (cmp.east) to[out=25,in=180] node[above,sloped,font=\scriptsize]{$z_1$} (t1.west);
 \draw[->] (cmp.east) to[out=-25,in=180] node[below,sloped,font=\scriptsize]{$z_G$} (t2.west);
-\draw[->] ([xshift=2.6mm]t1.east) to[out=0,in=150] (sum);
-\draw[->] ([xshift=2.6mm]t2.east) to[out=0,in=210] (sum);
-\draw[->] (sum) -- node[above,font=\scriptsize]{route} (dec);
+\draw[->] ([xshift=2.6mm]t1.east) -- (s1);
+\draw[->] ([xshift=2.6mm]t2.east) -- (s2);
+\draw[->] (s1.east) to[out=0,in=150] (cat.west);
+\draw[->] (s2.east) to[out=0,in=210] (cat.west);
+\draw[->] (cat) -- (dec);
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
 \caption{The ProjectionLUT data path. The input projection \code{compress} ($D_\text{in}\to
-h_\text{in}d_\text{in}$) splits $x$ into per-group spaces $z_g$; in each group the probes hash
-$z_g$ to a cell per table and the \code{tph} reads are summed; the group outputs are routed and the output
-projection \code{decompress} ($h_\text{out}d_\text{out}\to D_\text{out}$) expands the result. $D_\text{in}$
-and $D_\text{out}$ are independent and may differ. The box in the middle is the cartridge; the wrapper
-treats it as opaque.}
+h_\text{in}d_\text{in}$) splits $x$ into per-head spaces $z_g$; in each head the probes hash $z_g$ to a
+cell per table and that head's \code{tph} reads are summed ($\Sigma$); the $G$ head outputs are
+concatenated, and the output projection \code{decompress} ($h_\text{out}d_\text{out}\to D_\text{out}$)
+maps the concatenation to the output. (With fan-in, $h_\text{out}=1$, the heads are summed into one slice
+instead.) $D_\text{in}$ and $D_\text{out}$ are independent and may differ. The tables and per-head sums
+are the cartridge; the wrapper treats it as opaque.}
 \label{fig:projlut}
 \end{figure}
 
 % ======================================================================================================
-\section{Cartridges: one contract, three generations}
+\section{Cartridges}
 \label{sec:cartridges}
 
 Everything described so far is the same for every read form: the geometry, the addressing, the sum over
-tables, the routing, the wrapper. A
-\emph{cartridge} is the swappable read \emph{mathematics} inside that frame. The contract is a shape:
-$[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ (\code{MultiHeadLUT}), and the wrapper never
-reaches inside it. All shipped cartridges are built on one shared base class, \code{ManifestoLUT}. It
-holds the tables $W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$ and the anchors (drawn
-once from a seed and never trained), and it provides the steps every cartridge needs: working out which
-cell each table addresses, how far each bit is from flipping, and which cell is the runner-up, and, at the
-end, handing each head's result on to its output slot. What a cartridge decides is the rest: how the
-addressed row and its neighbour are combined and weighted into a head's output --- including how the
-tables of a head are added up --- and which function training differentiates.
+tables, the routing, the wrapper. A \emph{cartridge} is the swappable read \emph{mathematics} inside that
+frame. The contract is a shape, $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$
+(\code{MultiHeadLUT}), and the wrapper never reaches inside it. All cartridges are built on one base class,
+\code{ManifestoLUT}. It holds the tables $W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$
+and the anchors (drawn once from a seed, never trained), and it provides what every cartridge needs: the
+addressed cell, the margins, the runner-up, and at the end the routing of each head's result to its output
+slot. A cartridge decides the rest: how the addressed row and its neighbour are weighted and added up into
+a head's output, and which function training differentiates. Gen-1 and Gen-2 also come as \code{Fused…}
+twins with identical mathematics and faster kernels (Appendix~\ref{app:impl}).
 
-\paragraph{Three generations of one idea.} The cartridges form a progression. Gen-1 \emph{Manifesto} is
-the Spiking Manifesto's model as published: a hard read and a fixed uncertainty function for the
-gradient. Gen-2 \emph{SoftSign} replaces the fixed uncertainty by a blend weight with two learned
-temperatures. Gen-3 \emph{Confidence} replaces the blend by a learned \emph{score} that weights each table
-by how confident its address is --- and has an int8 twin for deployment. Table~\ref{tab:matrix} is the map.
+\subsection{One read, three ways to weight it}
+\label{sec:oneread}
+Every cartridge computes, per head,
+\[
+  y=\sum_t\big(a_t\,W_t[c_t]+b_t\,W_t[c_t']\big),
+\]
+with $c$ the addressed cell, $c'$ its least-certain-bit neighbour, and weights $a,b$ that depend on the
+margins only. The generations differ in $a$ and $b$ (Table~\ref{tab:matrix}). The addresses are integers
+and carry no gradient, so the input gradient flows through $a$ and $b$ alone.
 
-\paragraph{Pure and fused twins.} Each generation has a \emph{pure} cartridge --- readable PyTorch, the
-numerical oracle --- and a \emph{fused} twin with the same mathematics that dispatches each forward to the
-fastest available path: a single \code{F.embedding\_bag} over the addressed cells, or co-located CUDA
-kernels (\S\ref{sec:machinery}). Fused twins are tested against the pure ones; the sweep in
-\S\ref{sec:ml} runs the fused twins where they exist.
+\textbf{Hard and soft.} A \emph{soft} read uses the formula above as its value at train and eval, so both
+rows learn. A \emph{hard} read returns $W[c]$ alone ($a=1$, $b=0$), adds rows without a multiply, and uses
+the soft formula only as a \emph{surrogate} for the input gradient; the table update stays on row $c$.
+Gen-1 and Gen-2 come in both forms. Gen-3 has no hard form: its weighted read is always the value.
 
-\begin{table}[t]
+\begin{table}[h]
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X l@{}}
+\begin{tabularx}{\textwidth}{@{}l l l >{\raggedright\arraybackslash}X@{}}
 \toprule
-cartridge & gen & forward value (per table) & gradient / surrogate & learned scalars \\
+generation & $a$, $b$ & learned scalars & cartridges (hard / soft) \\
 \midrule
-\code{ManifestoHardLUT} / \code{Fused…} & 1 & $W[c]$ & input through the blend $(1-U)W[c]+U\,W[c']$, $U=0.5/(1+|u^\star|)$; weights: row $c$ only & --- \\
-\code{ManifestoSoftLUT} / \code{Fused…} & 1 & $(1-U)W[c]+U\,W[c']$ & the value itself; weights: both rows & --- \\
-\code{SoftSignHardLUT} / \code{Fused…} & 2 & $W[c]$ & input and temperatures through $(1-w)W[c]+w\,W[c']$; weights: row $c$ & $T_\text{soft},T_\text{sel}$ \\
-\code{SoftSignSmoothLUT} / \code{Fused…} & 2 & $(1-w)W[c]+w\,W[c']$ & the value itself; weights: both rows & $T_\text{soft},T_\text{sel}$ \\
-\code{ConfidenceLUT} ($n{=}1$) & 3 & $s\,W[c]$ & the value itself; input only through $s$ & $\beta,\gamma$ \\
-\code{ConfidenceLUT} ($n{=}2$) & 3 & $s[(1-v)W[c]+v\,W[c']]$ & the value itself; input through $s$ and $v$ & $\beta,\gamma,\tau$ \\
-\code{QuantisedConfidenceLUT} & 3 & as above with int8 rows and power-of-two weights & straight-through to the float masters & $\beta,\gamma,\tau$ \\
+1 Manifesto (\S\ref{sec:manifesto}) & $1-U$, $U$ & --- & \code{ManifestoHardLUT} / \code{ManifestoSoftLUT} \\
+2 SoftSign (\S\ref{sec:softsign}) & $1-w$, $w$ & $T_\text{soft},T_\text{sel}$ & \code{SoftSignHardLUT} / \code{SoftSignSmoothLUT} \\
+3 Confidence (\S\ref{sec:confidence}) & $s(1-v)$, $s\,v$\ \ ($n{=}2$); $s$, $0$\ \ ($n{=}1$) & $\beta,\gamma$ (+$\tau$) & no hard form: \code{ConfidenceLUT}, int8 \code{QuantisedConfidenceLUT} (\S\ref{sec:quant}) \\
 \bottomrule
 \end{tabularx}
-\caption{The cartridge matrix. $c$: addressed cell; $c'$: least-certain-bit neighbour; $u^\star$: the
-deciding margin; ``Fused…'' marks a fused twin with identical mathematics. ``Weights: row $c$ only''
-means the surrogate shapes the input gradient but the table update stays on the addressed row.}
+\caption{The three generations as weights on the addressed row and its neighbour. Gen-1 and Gen-2 each
+also have \code{Fused…} twins of both forms.}
 \label{tab:matrix}
 \end{table}
 
-% ======================================================================================================
-\section{The cartridges}
-\label{sec:body}
-
-Each subsection follows one template: the value, the gradient, what is learned, when to use it, and the
-three lines that build it. Throughout, \code{spec} is a \code{LUTSpec} --- the layer's geometry in one
-frozen dataclass: heads, tables per head, probes per table, widths and probe kind
-(Appendix~\ref{app:ref}) --- and \code{ffn = ProjectionMHL(cart, input\_dim=$D_\text{in}$,
-output\_dim=$D_\text{out}$)} wraps any cartridge (\code{d\_model=}$D$ is the shorthand for
-$D_\text{in}=D_\text{out}=D$).
-
-\subsection{Manifesto: \code{ManifestoHardLUT}, \code{ManifestoSoftLUT}}
-\label{sec:manifesto}
-The Spiking Manifesto's model and learning rule, with its uncertainty function.
-
-\textbf{Value.} The hard read $y=\sum_t W_t[c_t]$ --- one row per table, added, no multiply (manifesto
-Eqs.~1--3). \textbf{Gradient.} The addresses are integers, so the paper differentiates a surrogate instead
-(its Eq.~4): the two-cell blend
-\[
-  \tilde y=\sum_t\big[(1-U_t)\,W_t[c_t]+U_t\,W_t[c_t']\big],\qquad U_t=U(u^\star_t)=\frac{0.5}{1+|u^\star_t|},
-\]
-whose derivative lands on the two anchors of the deciding probe alone (Eq.~5):
-$\partial\tilde y/\partial z[a]=-\partial\tilde y/\partial z[b]=U'(u^\star)\,(W[c']-W[c])$. $U$ is the paper's own choice; $U(0)=\tfrac12$,
-$U\to0$ for a confident bit. \textbf{Learned:} the tables only.
-
-\textbf{Hard vs.\ soft, and provenance.} \code{ManifestoHardLUT} is Izhikevich's rule verbatim: hard value
-at train and eval, the addressed row updated, the input gradient through the minimal-pair surrogate Eq.~4
-with $U=0.5/(1+|u|)$ (\citealp[\S III-A and Fig.~10]{manifesto}). \code{ManifestoSoftLUT} goes one step
-beyond the paper: it uses Eq.~4 itself as the forward value at train \emph{and} eval, so both the addressed
-cell and its neighbour receive weight gradient. The manifesto states that $U$ is used ``only in the training
-mode to calculate gradients'' and that inference uses Eq.~3 without $U$ (\S III-A); its appendix explores
-other surrogates of the same family --- all pairs, or dropping the flipped row, $y=\sum S_x(1-U)$
-(\S VIII-K, Eqs.~17--18) --- again only as learning rules. In the sweep the soft read is the better of the
-two by $0.012$ bpb (Table~\ref{tab:results}).
-
-\textbf{Fused twins.} \code{FusedManifestoHardLUT} keeps the exact straight-through backward in a
-hand-written scatter: the weight gradient goes to row $c$ by \code{index\_add}, the input gradient is
-$U'(u^\star)$ times the alignment of the output gradient with $W[c]-W[c']$, scattered to the deciding pair
-with opposite signs. \code{FusedManifestoSoftLUT} reads with \code{embedding\_bag} and per-sample weights
-$[1-U,\,U]$. Both can route training to the native \code{lprojection} kernels. \textbf{When:} the
-reference points; the hard read is the cheapest possible inference.
+\noindent Swapping the read changes one line:
 \begin{lstlisting}
-from spiky.lutorch_ex import LUTSpec, FusedManifestoHardLUT, FusedManifestoSoftLUT, ProjectionMHL
-spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
-ffn  = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1), input_dim=384, output_dim=384)
-\end{lstlisting}
-
-\subsection{SoftSign: \code{SoftSignHardLUT}, \code{SoftSignSmoothLUT}}
-\label{sec:softsign}
-Gen-2 keeps Gen-1's structure and replaces the fixed $U$ by a blend weight with two learned temperatures
-per layer (the two-cell form of the soft-sign mechanism in \citealp[\S2]{mechanisms}):
-\[
-  \rho=\frac{|u^\star|}{T_\text{soft}+|u^\star|}\in(0,1),\qquad
-  w=\sigma\!\big(-2\rho/T_\text{sel}\big)\in(0,\tfrac12]\ \ \text{(weight on the neighbour $c'$)}.
-\]
-\textbf{Value / gradient.} \code{SoftSignHardLUT}: hard read, surrogate $(1-w)W[c]+w\,W[c']$ for the
-input and the temperatures, weights updated on row $c$. \code{SoftSignSmoothLUT}: the blend is the value
-at train and eval, both rows learn. Only the two cells $\{c,c'\}$ enter; a softmax over all $K$ cells and
-several-neighbour forms are deliberately out of scope.
-\textbf{Learned:} tables, $\log T_\text{soft}$, $\log T_\text{sel}$ (init $0.5$; freezable).
-\textbf{Fused twins.} \code{FusedSoftSignHardLUT} runs its training step on the native kernels plus one
-small surrogate-gradient kernel (a clear win: $1.6\times$ faster step, $2.7\times$ less memory than the pure
-cartridge at the training batch); \code{FusedSoftSignSmoothLUT}'s best path is the \code{embedding\_bag}
-one, so that is what its default dispatch picks. \textbf{When:} when a learned sharpness matters and
-the score of Gen-3 is not wanted.
-\begin{lstlisting}
-ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1, soft_score_temp=0.5, select_temp=0.5), input_dim=384, output_dim=384)
-\end{lstlisting}
-
-\subsection{Confidence: \code{ConfidenceLUT}}
-\label{sec:confidence}
-Gen-3 does not blend by uncertainty --- it \emph{weights} each table by how confident its address is,
-with the learned-margin score of LookupFFN~\citep{lookupffn} (derived in \citealp[\S3, \S6]{mechanisms}).
-With margins $m_j=|u_j|$,
-\[
-  s=\Big(\sum_j m_j\Big)\exp\!\Big(\gamma\sum_j\log\sigma(\beta m_j)\Big),\qquad
-  \beta=e^{\log\beta},\ \gamma=e^{\log\gamma}\ \text{learned per layer (init $2,1$)}.
-\]
-\textbf{Value.} $n{=}1$: $y=\sum_t s_t\,W_t[c_t]$. $n{=}2$: the scored two-cell blend
-$y=\sum_t s_t\big[(1-v_t)W_t[c_t]+v_t\,W_t[c_t']\big]$ with $v=\sigma(-2|u^\star|/\tau)\in(0,\tfrac12]$
-the weight on the \emph{neighbour}\footnote{The code and the ablation table write $v$ on the neighbour,
-$v=\sigma(-2|u^\star|/\tau)$. The quantisation note~\citep{quantnote} writes the same blend the other way,
-$v=\sigma(2u^\star/\tau)$ on the addressed cell; the values agree since $\sigma(x)+\sigma(-x)=1$.}, $\tau$
-learned per layer (init $0.5$). \textbf{Gradient.} The value itself. The address is a detached integer, so
-the input gradient reaches $z$ \emph{only} through $s$ (all \code{nap} margins) and, for $n{=}2$, through
-$v$ (the deciding margin): a table learns how confident to be, never that a different row would have been
-better. \textbf{Learned:} tables, $\log\beta$, $\log\gamma$, and $\log\tau$ for $n{=}2$.
-\textbf{Implementation.} One \code{embedding\_bag} with the scores as per-sample weights; the whole
-training forward is \code{torch.compile}d on CUDA, which folds the score's chain of small kernels and is
-what makes this cartridge's training step the cheapest of the three (\S\ref{sec:bench}). \textbf{When:} the best
-accuracy of the three generations (Table~\ref{tab:results}); fp32/fp64 only.
-\begin{lstlisting}
-cart = ConfidenceLUT(spec, seed=1, read_top_n=2, beta_init=2.0, gamma_init=1.0,
-                     read_tau_init=0.5, read_tau_learnable=True)
+from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)   # geometry, Appendix A
+cart = ConfidenceLUT(spec, seed=1, read_top_n=2)                     # or any cartridge of Table 1
 ffn  = ProjectionMHL(cart, input_dim=384, output_dim=384)
 \end{lstlisting}
 
-\subsection{Quantised confidence: \code{QuantisedConfidenceLUT}}
+\subsection{Gen-1 Manifesto}
+\label{sec:manifesto}
+The Spiking Manifesto's model~\citep{manifesto}, with the paper's fixed uncertainty function of the
+deciding margin $|u_{j^\star}|=u^\star$:
+\[
+  U=\frac{0.5}{1+u^\star}\in(0,\tfrac12],\qquad
+  \frac{\partial\tilde y}{\partial z[a_{j^\star}]}=-\frac{\partial\tilde y}{\partial z[b_{j^\star}]}
+  =U'(u^\star)\,\sgn(u_{j^\star})\,\big(W[c']-W[c]\big),
+\]
+so the input gradient lands on the two anchors of the deciding probe alone (manifesto Eqs.~4--5).
+\code{ManifestoHardLUT} is Izhikevich's rule verbatim; \code{ManifestoSoftLUT} promotes the surrogate
+Eq.~4 to the value, which goes beyond the paper (Appendix~\ref{app:impl}).
+
+\subsection{Gen-2 SoftSign}
+\label{sec:softsign}
+The fixed $U$ becomes a blend weight with two temperatures learned per layer (init $0.5$, freezable;
+the two-cell soft-sign mechanism of \citealp[\S2]{mechanisms}):
+\[
+  \rho=\frac{u^\star}{T_\text{soft}+u^\star}\in[0,1),\qquad
+  w=\sigma\!\big(-2\rho/T_\text{sel}\big)\in(0,\tfrac12].
+\]
+
+\subsection{Gen-3 Confidence}
+\label{sec:confidence}
+Gen-3 adds a learned \emph{score} $s$ that weights each table by how confident its whole address is (all
+\code{nap} margins), the score of LookupFFN~\citep{lookupffn} (derived in \citealp[\S3, \S6]{mechanisms}).
+With $n{=}1$ the scored cell is the whole read, no blend. With $n{=}2$ the score multiplies a two-cell
+blend by uncertainty, as in Gen-2: the neighbour weight $v$ depends only on the deciding margin $u^\star$
+and a learned $\tau$. With margins $m_j=|u_j|$,
+\[
+  s=\Big(\sum_j m_j\Big)\exp\!\Big(\gamma\sum_j\log\sigma(\beta m_j)\Big),\qquad
+  v=\sigma(-2u^\star/\tau)\in(0,\tfrac12],
+\]
+with $\beta,\gamma,\tau$ learned per layer in log form (init $2,1,0.5$). The key property: the input
+gradient reaches $z$ \emph{only} through $s$ (all \code{nap} margins) and, for $n{=}2$, through $v$ (the
+deciding margin). A table learns how confident to be, never that a different row would have been better.
+
+\subsection{The int8 read and deployment}
 \label{sec:quant}
-The same cartridge trained so that the deployed read needs only int8 rows, additions and bit shifts
-(\code{quant\_mode="p2\_int8"}; the derivation is \citealp{quantnote}, here only the three facts).
+\textbf{Why.} The tables are most of a LUT model: in the example of \S\ref{sec:projection}, $6.3$M table
+parameters per layer, $37.7$M of the model's $68.2$M. Stored as int8 instead of fp32 they take a quarter of
+the memory. \code{QuantisedConfidenceLUT} (\code{quant\_mode="p2\_int8"}, after~\citep{quantnote}) is the
+Gen-3 cartridge ($n{=}2$) trained for that deployed form.
+
+\textbf{What p2\_int8 is.} Two roundings turn the read $s(1-v)\,W[c]+s\,v\,W[c']$ into integer work:
 \begin{enumerate}\itemsep1pt
-\item \textbf{Rows are int8 with a power-of-two scale} shared by all tables of a group and one output
-  channel: $e_{g,k}=\lceil\log_2\max|W|\rceil-7$, $\hat W=\operatorname{clamp}(\operatorname{round}(W/2^{e}),-128,127)$.
-  Training uses $2^{e}\hat W$ in value with a straight-through gradient to the float master $W$.
-\item \textbf{The two blend weights are rounded to powers of two.} With $r=(1-v)/v=e^{-2|u^\star|/\tau}$
-  the read factorises as $s(1-v)\,(W[c]+r\,W[c'])$; $q=\operatorname{round}(2|u^\star|/(\tau\ln2))$ rounds
-  $r$ to $2^{-q}$ and $k'=\operatorname{round}(\log_2 s-c_q)$ rounds the rest, so a table contributes
-  $2^{k'}W[c]+2^{k'-q}W[c']$. Again straight-through: the forward uses the rounded weights, the gradient
-  is that of $s(1-v)$ and $s\,v$, so $\beta,\gamma,\tau$ keep learning.
-\item \textbf{The integer read.} In units of $2^{-6}$ every shift is a left shift, the int32 sum fits, and
-  the per-$(g,k)$ scale $2^{e-6}$ is the only float left --- and it is applied \emph{after} the table sum.
+\item \textbf{int8 cells.} Each row is stored as $\hat W=\operatorname{clamp}(\operatorname{round}(W/2^{e}),-128,127)$,
+  with one power-of-two scale per group and output channel, $e=\lceil\log_2\max|W|\rceil-7$ (the maximum over
+  all of the group's tables and cells), so the largest entry just fits in eight bits.
+\item \textbf{Power-of-two weights.} Write the read as $s(1-v)\,(W[c]+r\,W[c'])$ with
+  $r=v/(1-v)=e^{-2u^\star/\tau}$. Round $r$ to $2^{-q}$, $q=\operatorname{round}\big(2u^\star/(\tau\ln2)\big)$,
+  and $s(1-v)=s/(1+r)$ to $2^{k'}$, $k'=\operatorname{round}(\log_2 s-c_q)$ with $c_q=\log_2(1+2^{-q})$. A
+  table then adds $2^{k'}\hat W[c]+2^{k'-q}\hat W[c']$: two shifts and an add, no multiply.
+\item \textbf{Integer sum.} Shifts are counted in units of $2^{-6}$, so all are left shifts into an int32
+  accumulator; the only float left is the per-channel $2^{e-6}$, applied once after the table sum.
 \end{enumerate}
-Exact constants (window, cutoffs, drop rule) are in Table~\ref{tab:quant} of the appendix. The train-mode
-read equals the deployed read bit for bit; \code{forward\_int} performs the int32 shift-add for
-cross-checking. \textbf{Cost:} $+0.0012$ bpb against the float cartridge in the 48k sweep, under the
-$+0.003$ upper bound of the note; tables $4\times$ smaller. \textbf{When:} whenever the model will be
-deployed. $n{=}2$ is the reference integer form; $n{=}1$ is a library extension.
+The exponents $q$ and $k'$ are computed from the margins in floating point; the table read itself is
+integer (window, cutoffs and drop rule: Table~\ref{tab:quant}).
+
+\textbf{Training is quant-aware.} The training forward already reads the rounded tables with the rounded
+weights. Both roundings are straight-through:
+the value is the rounded read, while the gradient is that of the float master tables and of the exact
+weights $s(1-v)$, $s\,v$, so $\beta,\gamma,\tau$ keep learning.
+
+\textbf{Deployment.} Because training is quant-aware, the deployed numbers are the trained numbers, up to
+round-off: every training forward already computes with the int8 tables $\hat W$ and scales $2^e$ derived
+from the float masters. Export is a change of storage, not of the model: \code{export\_deployment} stores those int8
+values, drops the float masters, and bakes the scale $2^{e-6}$ \emph{statically} into a copy of the layer's
+\code{decompress} weight --- exact, since a power of two changes only a float's exponent; no runtime hook
+applies a scale afterwards. The file holds the int8 tables, the anchors and the three scalars: $24$~MiB $\to$ $6$~MiB per layer in the example. \code{load\_deployment} builds the model on
+PyTorch's \code{meta} device and fills it from the file, so the float tables are never allocated. The
+deployed layer returns the integer accumulator, and \code{decompress} applies the folded scale. File
+format, loader and scope: Appendix~\ref{app:impl}.
 \begin{lstlisting}
-cart = QuantisedConfidenceLUT(spec, seed=1, quant_mode="p2_int8", read_top_n=2,
-                              beta_init=2.0, gamma_init=1.0, read_tau_init=0.5)
+export_deployment(model, "m.lxq")
+dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()
 \end{lstlisting}
 
-\subsection{Deployment: the \code{.lxq} format}
-\label{sec:deploy}
-\begin{lstlisting}
-from spiky.lutorch_ex import export_deployment, load_deployment
-export_deployment(model, "m.lxq")                                   # int8 rows, scale folded, fp32 dropped
-dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()  # the fp32 table is never allocated
-\end{lstlisting}
-\code{export\_deployment} walks the model and, for every \code{ProjectionMHL} whose cartridge emits a
-compact payload (\code{to\_deployment()}, a protocol the base answers with ``dense, nothing to do''),
-writes the int8 rows, the anchors and the three scalars, and \textbf{folds the scale $2^{e-6}$ into a copy
-of that layer's \code{decompress} weight}. The fold is exact --- a power of two only touches the exponent
-field of a float --- and legal because nothing sits between the table sum and \code{decompress} and one
-exponent is shared across a group's tables, so it factors out of the sum (the same idea as the
-\code{SupportsDecompressBake} hook of the wrapper, applied once and statically at export; the runtime
-hook is implemented by no shipped cartridge). The loader builds the architecture on the \code{meta}
-device, rebuilds each compacted layer from a format tag through a small registry (so \code{deploy.py}
-names no cartridge class), and loads the rest of the state dict. The deployed cartridge holds only the
-int8 \code{packed} buffer and returns the raw int32 accumulator; the file is a safetensors container with
-a JSON header. Per layer at the sweep geometry: 24~MiB fp32 $\to$ 6~MiB int8. Scope today: $n{=}2$ and
-$h_\text{out}=G$.
-
-% ======================================================================================================
-\section{Shared machinery}
-\label{sec:machinery}
-
-\paragraph{Regularisers (both default off, inherited by every cartridge).} \emph{Cell total variation}:
-view a table's $K=2^{\text{nap}}$ cells as the vertices of an \code{nap}-cube and penalise the mean squared
-difference over all Hamming-1 pairs, $\mathcal R_\text{TV}=\langle\|W_c-W_{c'}\|_2^2\rangle_{(c,c')}$
-(the mean over the $n_\text{tables}\cdot\text{nap}\cdot2^{\text{nap}-1}$ pairs) --- a locality prior: a
-one-bit address flip should change the read little. \code{cell\_tv\_penalty(model)}
-averages it over the model's cartridges; add $\lambda\,\mathcal R_\text{TV}$ to the loss. \emph{Table
-dropout} (\code{table\_dropout\_rate}): inverted dropout at whole-table granularity, one Bernoulli per
-(sample, group, table), training only; a dropped table contributes nothing to the value or the gradient.
-
-\paragraph{Precision.} The pure cartridges are fp32/fp64 and raise on bf16/fp16. The fused Manifesto and
-SoftSign twins accept bf16/fp16: addressing runs in fp32 (so a lossy margin cannot flip a bit), reads and
-reductions accumulate in fp32, the output is cast once. Gen-3 is fp32/fp64.
-
-\paragraph{Compilation and kernels.} Eval forwards are \code{torch.compile}d on CUDA; training forwards
-are compiled only for Gen-3, where it pays. The fused twins resolve one native extension,
-\code{lutorch\_ex\_lprojection} (the lookup and anchor-pair kernels under \code{cartridges/csrc/},
-JIT-built with \code{torch.utils.cpp\_extension}), plus three small standalone kernels (int8 scalars,
-single-anchor input gradient, soft-sign surrogate). Each is lazy, cached across processes, and falls back
-to pure torch on CPU or without \code{nvcc}/\code{ninja}, with identical results. A \code{backend=}
-argument forces \code{pure}, \code{tier1} or \code{native} on any fused twin; \code{bench.py} times the
-forward, training forward and backward of any configuration.
+\subsection{Which to use}
+\label{sec:which}
+For accuracy, \code{ConfidenceLUT} $n{=}2$. For deployment, its int8 twin \code{QuantisedConfidenceLUT}.
+Gen-1 and Gen-2 are reference points; a hard read is the cheapest possible inference, at a cost in
+accuracy against its soft twin.
 
 % ======================================================================================================
 \section{Experiments: the seven-configuration sweep}
 \label{sec:ml}
+\suppressfloats[t]% keep the results table from floating above this heading
 
 \paragraph{Setup.} A six-block GPT ($d_\text{model}=384$, 6 attention heads, $68.2$M parameters) with the
 feed-forward layer of every block replaced by a \code{ProjectionMHL} around the cartridge under test.
@@ -478,7 +424,11 @@ $D_\text{in}=D_\text{out}=d_\text{model}=384$. All
 seven runs share the champion topology --- $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
 $d_\text{in}=d_\text{out}=48$, anchor pairs --- seed~1, the default init (per-head Uniform$[\pm10^{-3}]$
 tables, \code{decompress} zeroed), cell-TV
-$\lambda=10$, table dropout $0.2$, AdamW ($3\!\times\!10^{-4}$, weight decay $0.1$, none on the tables),
+$\lambda=10$, table dropout $0.2$ (both regularisers are inherited by every cartridge and default off:
+\emph{cell total variation} views a table's $K$ cells as the vertices of an \code{nap}-cube and adds
+$\lambda$ times the mean $\|W_c-W_{c'}\|_2^2$ over all Hamming-1 pairs to the loss, a prior that a one-bit
+address flip should change the read little; \emph{table dropout} drops whole tables, one Bernoulli per
+sample, group and table, in training only), AdamW ($3\!\times\!10^{-4}$, weight decay $0.1$, none on the tables),
 48{,}000 steps, cosine schedule with $10\%$ warm-up to a $0.1\times$ floor, sequence length 512, 24{,}576
 tokens per step (device batch 12, accumulation 4), evaluation every 500 steps; the backbone runs in bf16,
 the LUT layers in fp32. Data and tokenisation are the \emph{NanoChat} setup: the ClimbMix text corpus as
@@ -493,7 +443,7 @@ tokenisers. Per-run configs, metric histories and summaries are under \code{expe
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}l l r r r@{}}
 \toprule
-feed-forward layer & read & params & best \code{val\_bpb}\footnotemark & $\Delta$ vs.\ dense \\
+feed-forward layer & read & params & best \code{val\_bpb} & $\Delta$ vs.\ dense \\
 \midrule
 dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \midrule
@@ -514,9 +464,6 @@ identifiers, hosts, wall-clock and peak memory of the seven LUT runs are in Tabl
 \code{experiments/lutorch\_ex/README.md}.}
 \label{tab:results}
 \end{table}
-\footnotetext{Best over the 96 evaluations. For the three runs reconstructed from the tracking server
-(\code{FusedManifestoHard/Soft}, \code{FusedSoftSignHard}) the final values are $0.0004$--$0.0007$ higher
-than the best; for the other four best and final coincide. The baseline's final value is $1.11542$.}
 
 \begin{figure}[t]
 \centering
@@ -529,8 +476,8 @@ Generated by \code{make\_fig\_curves.py} from the committed \code{metrics.csv} f
 
 \paragraph{Reading the results.} Four things are visible in Table~\ref{tab:results} and
 Figure~\ref{fig:curves}. (i) A \emph{soft} read beats its hard counterpart in every generation: $-0.012$
-(Manifesto), $-0.027$ (SoftSign), $-0.011$ (Confidence $n{=}2$ vs.\ $n{=}1$). (ii) A \emph{learned
-confidence score} beats a blend by uncertainty: the Confidence line leads the SoftSign line by $0.023$ and
+(Manifesto), $-0.027$ (SoftSign), $-0.011$ (Confidence $n{=}2$ vs.\ $n{=}1$). (ii) Adding a \emph{learned
+confidence score} beats a blend by uncertainty alone: the Confidence line leads the SoftSign line by $0.023$ and
 the Manifesto line by $0.033$. The two effects stack, and the ordering is fixed from about step 8k
 onwards. (iii) \emph{Quantisation is nearly free}: int8 rows and power-of-two weights cost $+0.0012$ bpb,
 well under the $+0.003$ bound of the quantisation note, for tables one quarter the size. (iv) Against the
@@ -551,7 +498,7 @@ benchmark recorded in the pull request that landed the Gen-3 cartridges\footnote
 its own process, 25 warm-up + 60 timed repetitions, GPU clock held at 1980\,MHz. PR \#137 reports the
 four fused Gen-1/2 twins on the same card with the same harness and agrees within 2\%. Those recorded
 numbers are process-peak allocations; the RTX 5090 peak here is the allocation added by one training
-step. The deployed int8 cartridge (\S\ref{sec:deploy}) has no training row; its recorded eval forward
+step. The deployed int8 cartridge (\S\ref{sec:quant}) has no training row; its recorded eval forward
 (PR \#139, H100, $B=4{,}096$) was 2.6\,ms against 2.8\,ms for the float twin.}, and is not re-measured
 here --- that machine is gone.
 
@@ -592,7 +539,10 @@ GB), because its compiled forward fuses the score's chain of small kernels and r
 cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
 $1.5\to4.6$ ms for Confidence). The quantised cartridge's eval forward is not faster than the float one
 --- its training-time read still fetches float rows for the straight-through estimator; the integer read
-belongs to the deployed cartridge (\S\ref{sec:deploy}). The two GPUs agree to within $15\%$ on every row:
+belongs to the deployed cartridge (\S\ref{sec:quant}). The fused twins earn their place:
+\code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
+than the pure \code{SoftSignHardLUT} at the training batch (recorded when the twin landed; the pure
+cartridges are not in Table~\ref{tab:bench}). The two GPUs agree to within $15\%$ on every row:
 these layers are bound by memory traffic, not arithmetic. On the CPU, at a batch $24\times$ smaller, the
 same layers take $36$--$92$ ms per step --- roughly two orders of magnitude slower per row --- with the
 same ordering: the one-cell scored read is the cheapest, the two-cell blends cost $1.7$--$2.6\times$ more.
@@ -630,6 +580,9 @@ same ordering: the one-cell scored read is the cheapest, the two-cell blends cos
 \label{app:ref}
 \small
 
+\subsection{Geometry, constants and runs}
+\label{app:tables}
+
 \paragraph{Geometry and constructor arguments.}
 \begin{center}\footnotesize
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{12.3cm}@{}}
@@ -666,8 +619,7 @@ fixed point & accumulator in units $2^{-6}$ (\code{FIXED\_POINT\_SHIFT}$=6$), so
 \label{tab:quant}
 \end{center}
 
-\paragraph{The seven runs.}
-\begin{center}\footnotesize
+\begin{table}[ht]\centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}l l r r@{}}
 \toprule
@@ -682,10 +634,10 @@ run folder (suffix after \code{lutorch\_ex\_abl47\_}) & cartridge & hours & peak
 \code{fss\_hard\_wk\_1004\_1510}  & \code{FusedSoftSignHardLUT} & 5.2 & 9.4 \\
 \bottomrule
 \end{tabular}
-\captionof{table}{Wall-clock and peak device memory per run, from each run's \code{summary.json} under
-\code{experiments/lutorch\_ex/}; the \code{vm} and \code{wk} runs trained on two different cloud hosts.}
+\caption{The seven runs: wall-clock and peak device memory per run, from each run's \code{summary.json}
+under \code{experiments/lutorch\_ex/}; the \code{vm} and \code{wk} runs trained on two different cloud hosts.}
 \label{tab:runs}
-\end{center}
+\end{table}
 
 \paragraph{Environment and layout.} \sloppy \code{LUTORCH\_EX\_NO\_COMPILE=1} disables
 \code{torch.compile}, \code{LUTORCH\_EX\_NO\_CUDA\_EXT=1} skips the JIT kernels, \code{TORCH\_EXTENSIONS\_DIR}
@@ -693,5 +645,50 @@ relocates their build cache. Under \code{src/spiky/lutorch\_ex/}: the geometry, 
 anchors, wrapper, deployment and benchmark modules at the top level; one module per cartridge under
 \code{cartridges/} (shared base \code{manifesto\_base.py}, quantisation mathematics \code{\_pow2.py},
 kernel sources \code{csrc/}); 17 test files under \code{tests/}.
+
+\subsection{Implementation notes}
+\label{app:impl}
+
+\paragraph{Manifesto provenance.} \code{ManifestoHardLUT} is the manifesto's rule \citep[\S III-A and
+Fig.~10]{manifesto}: hard value at train and eval, the addressed row updated, the input gradient through the
+minimal-pair surrogate Eq.~4. The manifesto states that $U$ is used ``only in the training mode to calculate
+gradients'' and that inference uses Eq.~3 without $U$ (\S III-A); its appendix explores other surrogates of
+the same family --- all pairs, or dropping the flipped row, $y=\sum S_x(1-U)$ (\S VIII-K, Eqs.~17--18) ---
+again only as learning rules.
+
+\paragraph{Fused twins.} Each is tested against its pure cartridge. \code{FusedManifestoHardLUT} keeps the
+exact straight-through backward in a hand-written scatter: the weight gradient goes to row $c$ by
+\code{index\_add}, the input gradient is $U'$ times the alignment of the output gradient with
+$W[c]-W[c']$, scattered to the deciding pair with opposite signs. \code{FusedManifestoSoftLUT} reads with
+\code{F.embedding\_bag} and per-sample weights $[1-U,\,U]$. Both can route training to the native
+\code{lprojection} kernels. \code{FusedSoftSignHardLUT} trains on the native kernels plus one small
+surrogate-gradient kernel; \code{FusedSoftSignSmoothLUT}'s best path is the \code{embedding\_bag} one, so
+that is what its default dispatch picks. \code{ConfidenceLUT} needs no twin: its training read is one
+\code{embedding\_bag} with the scores as per-sample weights, and its training forward is
+\code{torch.compile}d on CUDA, which folds the score's chain of small kernels.
+
+\paragraph{Precision.} The pure cartridges and Gen-3 are fp32/fp64 and raise on bf16/fp16. The fused
+Manifesto and SoftSign twins accept bf16/fp16: addressing runs in fp32 (so a lossy margin cannot flip a
+bit), reads and reductions accumulate in fp32, the output is cast once.
+
+\paragraph{Compilation and kernels.} Eval forwards are \code{torch.compile}d on CUDA; training forwards
+are compiled only for Gen-3, where it pays. The fused twins resolve one native extension,
+\code{lutorch\_ex\_lprojection} (the lookup and anchor-pair kernels under \code{cartridges/csrc/},
+JIT-built with \code{torch.utils.cpp\_extension}), plus three small standalone kernels (int8 scalars,
+single-anchor input gradient, soft-sign surrogate). Each is lazy, cached across processes, and falls back
+to pure torch on CPU or without \code{nvcc}/\code{ninja}, with identical results. A \code{backend=}
+argument forces \code{pure}, \code{tier1} or \code{native} on any fused twin.
+
+\paragraph{Deployment.} \code{export\_deployment} walks the model and, for every \code{ProjectionMHL} whose
+cartridge emits a compact payload (\code{to\_deployment()}; the base answers ``dense, nothing to do''),
+stores the int8 rows training already used, the anchors and the three scalars, and folds the scale
+$2^{e-6}$ into a copy of that layer's \code{decompress} weight. The fold is exact --- a power of two only touches the exponent field of a
+float --- and legal because nothing sits between the table sum and \code{decompress} and one exponent is
+shared across a group's tables, so it factors out of the sum. The loader builds the architecture on the
+\code{meta} device, rebuilds each compacted layer from a format tag through a small registry (so
+\code{deploy.py} names no cartridge class), and loads the rest of the state dict. The file is a safetensors
+container with the metadata as JSON (or, without \code{safetensors}, a \code{weights\_only} torch file).
+Scope today: $n{=}2$, $h_\text{out}=G$, and a wrapper with a \code{decompress} layer to fold the scale into
+(\S\ref{sec:status}).
 
 \end{document}
