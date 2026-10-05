@@ -251,7 +251,8 @@ treats it as opaque.}
 \section{Cartridges: one contract, three generations}
 \label{sec:cartridges}
 
-Everything above is fixed: the geometry, the addressing, the sum over tables, the routing, the wrapper. A
+Everything described so far is the same for every read form: the geometry, the addressing, the sum over
+tables, the routing, the wrapper. A
 \emph{cartridge} is the swappable read \emph{mathematics} inside that frame. The contract is a shape:
 $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ (\code{MultiHeadLUT}), and the wrapper never
 reaches inside it. Every shipped cartridge inherits one base, \code{ManifestoLUT}, which owns the tables
