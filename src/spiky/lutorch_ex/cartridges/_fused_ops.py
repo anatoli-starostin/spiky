@@ -25,6 +25,29 @@ def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
     return torch.float32 if dtype in (torch.bfloat16, torch.float16) else dtype
 
 
+# The fused twins do not share one spelling for their pure-read backend: FusedManifestoSoftLUT calls
+# it "pure" (it also serves CPU training there), FusedManifestoHardLUT and the FusedSoftSign twins call
+# it "pure_eval". Each class lists its own names in a _BACKENDS class constant next to its dispatch.
+_PURE_NAME_HINT = {
+    "pure_eval": "this class uses 'pure_eval' (FusedManifestoSoftLUT is the one that calls its pure path 'pure')",
+    "pure": "this class uses 'pure' (FusedManifestoHardLUT and the FusedSoftSign twins call their pure path "
+            "'pure_eval')",
+}
+
+
+def validate_backend(owner: str, backend, accepted: tuple) -> str:
+    """Return ``backend`` if it is one of ``accepted``; otherwise raise ValueError naming the accepted values
+    (and, for the sibling's spelling of the pure path, which spelling this class uses). A dispatch that
+    meets an unknown name would otherwise fall through to tier1 silently."""
+    if backend in accepted:
+        return backend
+    msg = f"{owner}: backend={backend!r} is not valid here; this class accepts {', '.join(map(repr, accepted))}"
+    if backend in ("pure", "pure_eval"):
+        own_pure = "pure" if "pure" in accepted else "pure_eval"
+        msg += f". backend={backend!r} is the sibling class's name: {_PURE_NAME_HINT[own_pure]}"
+    raise ValueError(msg + ".")
+
+
 def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
     """Map per-(group,table) cell index c[B,G,tph] -> flat index into a [G*tph*K, d_out] table."""
     base = (torch.arange(G, device=c.device).view(G, 1) * tph

@@ -213,10 +213,14 @@ implementation. `backend="auto"` picks the path per call; any other value forces
 | `FusedManifestoHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: `native` if available, else `tier1` |
 | `FusedSoftSignHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | as above |
 | `FusedSoftSignSmoothLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: always `tier1` (`native` only when forced) |
-| `FusedManifestoSoftLUT` | `auto`, `pure`, `tier1`, `native` | CUDA batch `>= 4096`: `tier1`; smaller eval: `pure`; smaller train: `native` if available |
+| `FusedManifestoSoftLUT` | `auto`, `pure`, `tier1`, `native` | CUDA batch `>= 4096`: `tier1`; smaller eval: `pure`; smaller train: `native` if available, else `tier1` on CUDA and `pure` on CPU |
 
 - `tier1` is one `F.embedding_bag` over the addressed cells, and runs anywhere.
 - `native` uses the `lutorch_ex_lprojection` CUDA extension.
+- The pure path is spelled `pure` on `FusedManifestoSoftLUT`, which also uses it for CPU training, and
+  `pure_eval` on the other three, where it serves evaluation only.
+- Any other value raises `ValueError` at construction. The message lists the values the class accepts
+  and, for the sibling's spelling of the pure path, says which one this class uses.
 
 The Gen-3 cartridges have no twin: their `embedding_bag` read with a compiled forward is already the
 fast path.

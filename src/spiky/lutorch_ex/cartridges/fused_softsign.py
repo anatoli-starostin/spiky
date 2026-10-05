@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read
+from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read, validate_backend
 from ._native_ops import native_available
 from ._native_softsign import NativeSoftSignHard, NativeSoftSignSmooth
 from .softsign_base import SoftSignLUT
@@ -38,7 +38,11 @@ class FusedSoftSignLUT(SoftSignLUT):
     #: bf16/fp16 support — a real H100 speedup keeps it True, otherwise flipped to False (drop).
     _SUPPORTS_LOW_PRECISION = True
 
+    #: Every backend the twins' _forward_impl dispatches on ('auto' picks one of the others per call).
+    _BACKENDS = ("auto", "pure_eval", "tier1", "native")
+
     def __init__(self, spec, *, backend: str = "auto", **kw):
+        validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
 

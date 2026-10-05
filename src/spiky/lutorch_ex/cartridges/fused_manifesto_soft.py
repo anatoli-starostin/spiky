@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import fused_blend_read, _acc_dtype
+from ._fused_ops import fused_blend_read, _acc_dtype, validate_backend
 from ._native_ops import NativeSoft, native_available
 from .manifesto_base import ManifestoLUT
 from .uncertainty import rational_uncertainty
@@ -22,7 +22,12 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 
 
 class FusedManifestoSoftLUT(ManifestoLUT):
+    #: Every backend _forward_impl dispatches on ('auto' picks one of the others per call). The pure path is
+    #: called 'pure' here (not 'pure_eval' as in the other twins): auto also uses it for CPU training.
+    _BACKENDS = ("auto", "pure", "tier1", "native")
+
     def __init__(self, spec, *, backend: str = "auto", **kw):
+        validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
 

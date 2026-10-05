@@ -148,3 +148,40 @@ def test_fused_defaults_and_backend_kwarg():
         m = FusedCls(spec, seed=0, weight_init_std=1.0)
         assert m.backend == "auto"
         assert {"log_soft_score_temp", "log_select_temp"} <= {n for n, _ in m.named_parameters()}
+
+
+# ---- backend validation: every accepted name runs; a wrong-but-plausible name raises ----------------
+from spiky.lutorch_ex.cartridges._native_ops import native_available  # noqa: E402
+
+_TRAINABLE = {"auto", "tier1", "native"}               # 'pure_eval' is the eval-only read
+
+
+@pytest.mark.parametrize("FusedCls,backend",
+                         [(C, b) for C in (FusedSoftSignHardLUT, FusedSoftSignSmoothLUT) for b in C._BACKENDS])
+def test_every_accepted_backend_runs(FusedCls, backend):
+    if backend == "native" and not (torch.cuda.is_available() and native_available(torch.device("cuda"))):
+        pytest.skip("native lutorch_cuda ops not available")
+    dev = "cuda" if backend == "native" else "cpu"
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)
+    x = torch.randn(8, 2, 6, device=dev, requires_grad=True)
+    m.eval()
+    with torch.no_grad():
+        assert m(x).shape == (8, 2, 5)
+    if backend in _TRAINABLE:
+        m.train()
+        m(x).sum().backward()
+        assert m.weights.grad is not None and x.grad is not None
+
+
+@pytest.mark.parametrize("FusedCls", [FusedSoftSignHardLUT, FusedSoftSignSmoothLUT])
+@pytest.mark.parametrize("bad,hint", [("pure", "this class uses 'pure_eval'"), ("fastest", None)])
+def test_invalid_backend_raises(FusedCls, bad, hint):
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    with pytest.raises(ValueError) as ei:
+        FusedCls(spec, seed=0, backend=bad)
+    msg = str(ei.value)
+    assert FusedCls.__name__ in msg and repr(bad) in msg
+    assert all(repr(b) in msg for b in FusedCls._BACKENDS)
+    if hint is not None:
+        assert hint in msg
