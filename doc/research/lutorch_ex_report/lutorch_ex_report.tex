@@ -224,7 +224,7 @@ branch.
 \node[tbl, right=15mm of cmp, yshift=11mm] (t1) {group 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
 \node[tbl, right=15mm of cmp, yshift=-11mm] (t2) {group $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
 \node at ($(t1)!0.5!(t2)$) {$\vdots$};
-\node[sumop, right=15mm of cmp, xshift=26mm] (sum) {$\Sigma$};
+\node[sumop, right=15mm of cmp, xshift=36mm] (sum) {$\Sigma$};
 \node[proj, right=8mm of sum] (dec) {decompress};
 \node[io, right=7mm of dec] (y) {$\text{out}$\\$\scriptstyle D_\text{out}$};
 \begin{scope}[on background layer]
@@ -234,8 +234,8 @@ branch.
 \draw[->] (x) -- (cmp);
 \draw[->] (cmp.east) to[out=25,in=180] node[above,sloped,font=\scriptsize]{$z_1$} (t1.west);
 \draw[->] (cmp.east) to[out=-25,in=180] node[below,sloped,font=\scriptsize]{$z_G$} (t2.west);
-\draw[->] (t1.east) to[out=0,in=150] (sum);
-\draw[->] (t2.east) to[out=0,in=210] (sum);
+\draw[->] ([xshift=2.6mm]t1.east) to[out=0,in=150] (sum);
+\draw[->] ([xshift=2.6mm]t2.east) to[out=0,in=210] (sum);
 \draw[->] (sum) -- node[above,font=\scriptsize]{route} (dec);
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
