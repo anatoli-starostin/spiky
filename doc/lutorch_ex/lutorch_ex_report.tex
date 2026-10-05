@@ -1,7 +1,6 @@
 % lutorch_ex library report.
 % Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lutorch_ex_report.tex
-% fig_curves.pdf (Figure 3) and the benchmark data were produced on branch feature/lutorch_ex_report,
-% doc/research/lutorch_ex_report/ (make_fig_curves.py, bench_report.py); the code is src/spiky/lutorch_ex/.
+% fig_curves.pdf is Figure 3, plotted from the run histories; the code is src/spiky/lutorch_ex/.
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{lmodern}
@@ -519,10 +518,8 @@ exist as plain-PyTorch \emph{reference} cartridges (\code{ManifestoHardLUT} and 
 readability, and the oracle the fused twins are tested against for equal results. They are not tuned for
 speed and the sweep did not train with them, so the table leaves them out. The CPU and RTX 5090 columns
 were measured for this report with the library's benchmark harness, the module
-\code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by the script
-\code{bench\_report.py}. That script and its per-cell output are on the branch named in the footnote of
-\S\ref{sec:ml}, under \code{doc/research/lutorch\_ex\_report/}; the run results are under
-\code{experiments/lutorch\_ex/} on the same branch.
+\code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by a small script that
+runs the seven configurations at the sweep geometry.
 
 \begin{table}[h]
 \centering\footnotesize
@@ -548,8 +545,7 @@ forward + backward. GPU columns at $B=24{,}576$ (the sweep's training batch). \t
 one workstation, torch 2.9.1 (cu130), CUDA 13.3 toolkit for the JIT kernels, driver 595; RTX 5090 (32\,GB,
 native kernels active): medians of 10 repeats after 3 warm-ups; CPU (24-thread desktop part, the fused
 twins' \code{embedding\_bag} path, $B=1{,}024$): medians of 15 repeats after 5 warm-ups, with the
-fastest repeat within $15\%$ of the median (\code{bench\_cpu.json} and
-\code{bench\_cuda.json} beside that script hold every cell). H100 column measured on an H100 VM provided by Nebius.}
+fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius.}
 \label{tab:bench}
 \end{table}
 
