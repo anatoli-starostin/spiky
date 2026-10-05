@@ -1,0 +1,9 @@
+{
+  "exp_name": "lutorch_ex_abl47_quant_1004_1148",
+  "variant": "quant",
+  "best_val_bpb": 1.10723554601175,
+  "total_params": 68237586,
+  "peak_gb": 7.682,
+  "hours": 4.79,
+  "n_steps": 48000
+}
