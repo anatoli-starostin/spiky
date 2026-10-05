@@ -215,7 +215,7 @@ against about 200{,}000 multiply-adds. Single anchors were added later for flexi
 cheaper probe, and sit at the other end of the same trade.
 
 Either projection --- the input projection \code{compress} or the output projection \code{decompress},
-but not both --- may be switched off (Identity) when the widths already match. By default \code{decompress} is
+but not both --- may be switched off (Identity) when the widths already match. By default both are present, \code{decompress} is
 initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
 
 In code, the wrapper takes any cartridge --- the swappable read mathematics of \S\ref{sec:cartridges},
@@ -334,8 +334,9 @@ deciding margin $|u_{j^\star}|=u^\star$:
   =U'(u^\star)\,\sgn(u_{j^\star})\,\big(W[c']-W[c]\big),
 \]
 so the input gradient lands on the two anchors of the deciding probe alone (manifesto Eqs.~4--5).
-\code{ManifestoHardLUT} is Izhikevich's rule verbatim; \code{ManifestoSoftLUT} promotes the surrogate
-Eq.~4 to the value, which goes beyond the paper (Appendix~\ref{app:impl}).
+\code{ManifestoHardLUT} is Izhikevich's rule verbatim: its value has $a=1$, $b=0$, and $a=1-U$, $b=U$
+serve only as the surrogate. \code{ManifestoSoftLUT} promotes the surrogate Eq.~4 to the value, $a=1-U$,
+$b=U$, which goes beyond the paper (Appendix~\ref{app:impl}).
 
 \subsection{Gen-2 SoftSign}
 \label{sec:softsign}
@@ -344,19 +345,25 @@ The fixed $U$ becomes a blend weight with two temperatures learned per layer (in
   \rho=\frac{u^\star}{T_\text{soft}+u^\star}\in[0,1),\qquad
   w=\sigma\!\big(-2\rho/T_\text{sel}\big)\in(0,\tfrac12].
 \]
+\code{SoftSignSmoothLUT} reads with $a=1-w$, $b=w$; \code{SoftSignHardLUT} reads $a=1$, $b=0$ and uses
+$a=1-w$, $b=w$ as its surrogate.
 
 \subsection{Gen-3 Confidence}
 \label{sec:confidence}
-Gen-3 adds a learned \emph{score} $s$ that weights each table by how confident its whole address is (all
-\code{nap} margins), the score of LookupFFN~\citep{lookupffn}.
-With $n{=}1$ the scored cell is the whole read, no blend. With $n{=}2$ the score multiplies a two-cell
-blend by uncertainty, as in Gen-2: the neighbour weight $v$ depends only on the deciding margin $u^\star$
-and a learned $\tau$. With margins $m_j=|u_j|$,
+Gen-3 weights each table by a \emph{confidence score} $s$, the score of LookupFFN~\citep{lookupffn},
+computed from all \code{nap} margins $m_j=|u_j|$ of the table's address:
 \[
   s=\Big(\sum_j m_j\Big)\exp\!\Big(\gamma\sum_j\log\sigma(\beta m_j)\Big),\qquad
-  v=\sigma(-2u^\star/\tau)\in(0,\tfrac12],
+  v=\sigma(-2u^\star/\tau)\in(0,\tfrac12].
 \]
-with $\beta,\gamma,\tau$ learned per layer in log form (init $2,1,0.5$). The key property: the input
+The sum of the margins grows with how far the input sits from the bit boundaries; the second factor is
+the product of $\sigma(\beta m_j)^\gamma$ over the margins, near $1$ for a margin far from its boundary
+and $2^{-\gamma}$ for a margin of zero, so every uncertain bit discounts the table. $\beta$ sets what
+counts as a large margin, $\gamma$ how strong the discount is. $\beta$, $\gamma$ (and $\tau$) are single scalars per layer, shared by
+all its tables and stored in log form (init $2,1,0.5$). With $n{=}1$ the scored cell is the whole read,
+$a=s$, $b=0$, no blend. With $n{=}2$ the score multiplies a two-cell blend by uncertainty, as in Gen-2:
+$a=s(1-v)$, $b=s\,v$, where the neighbour weight $v$ depends only on the deciding margin $u^\star$ and
+$\tau$. The key property: the input
 gradient reaches $z$ \emph{only} through $s$ (all \code{nap} margins) and, for $n{=}2$, through $v$ (the
 deciding margin). A table learns how confident to be, never that a different row would have been better.
 
@@ -408,6 +415,35 @@ Gen-1 and Gen-2 are reference points; a hard read is the cheapest possible infer
 accuracy against its soft twin.
 
 % ======================================================================================================
+\section{Regularisers}
+\label{sec:reg}
+Two regularisers live in the shared base class \code{ManifestoLUT}, so every cartridge has them; both
+are off by default.
+
+\paragraph{Cell total variation.} The $K=2^{\text{nap}}$ cells of a table are the corners of an
+\code{nap}-dimensional cube: two cells are neighbours when their addresses differ in one bit, as $c$ and
+$c'$ do. The penalty of a layer is the mean squared difference between neighbouring rows,
+\[
+  \mathcal R_\text{TV}=\frac{1}{T\cdot\text{nap}\cdot2^{\text{nap}-1}}
+  \sum_{t=1}^{T}\ \sum_{(c,c')\,\text{Hamming-1}}\big\|W_t[c]-W_t[c']\big\|_2^2,
+\]
+over all $T=G\cdot\text{tph}$ tables and every neighbouring pair, each counted once
+(\code{ManifestoLUT.cell\_tv}). \code{cell\_tv\_penalty(model)} averages it over the model's LUT layers,
+and the training loss adds $\lambda$ times that. It acts on the table weights only and leaves the forward
+pass unchanged. The prior it encodes: a one-bit change of address, the smallest change of input, should
+change the read only a little.
+
+\paragraph{Table dropout.} With \code{table\_dropout\_rate} $p>0$, training drops whole tables: one
+Bernoulli draw per sample, head and table keeps each table with probability $1-p$, and the survivors
+are scaled by $1/(1-p)$, so the expected read is unchanged. A dropped table contributes nothing to that
+sample's value or gradient; in Gen-3 the mask multiplies the score $s$, to the same effect. At evaluation,
+or whenever gradients are off, nothing is dropped and nothing is rescaled.
+
+\paragraph{Settings used.} All seven runs of \S\ref{sec:ml} use both: $\lambda=10$ (the run configs'
+\code{lut\_cell\_smoothness}) and $p=0.2$ (their \code{lut\_head\_dropout\_rate}; despite the name it
+drops individual tables, not heads).
+
+% ======================================================================================================
 \section{Experiments: the seven-configuration sweep}
 \label{sec:ml}
 \suppressfloats[t]% keep the results table from floating above this heading
@@ -416,14 +452,9 @@ accuracy against its soft twin.
 feed-forward layer of every block replaced by a \code{ProjectionMHL} around the cartridge under test.
 Every configuration here is square: the wrapper's input and output widths both equal the model width,
 $D_\text{in}=D_\text{out}=d_\text{model}=384$. All
-seven runs share the champion topology --- $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
+seven runs share the same topology --- $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
 $d_\text{in}=d_\text{out}=48$, anchor pairs --- seed~1, the default init (per-head Uniform$[\pm10^{-3}]$
-tables, \code{decompress} zeroed), cell-TV
-$\lambda=10$, table dropout $0.2$ (both regularisers are inherited by every cartridge and default off:
-\emph{cell total variation} views a table's $K$ cells as the vertices of an \code{nap}-cube and adds
-$\lambda$ times the mean $\|W_c-W_{c'}\|_2^2$ over all Hamming-1 pairs to the loss, a prior that a one-bit
-address flip should change the read little; \emph{table dropout} drops whole tables, one Bernoulli per
-sample, group and table, in training only), AdamW ($3\!\times\!10^{-4}$, weight decay $0.1$, none on the tables),
+tables, \code{decompress} zeroed), cell TV $\lambda=10$ and table dropout $p=0.2$ (\S\ref{sec:reg}), AdamW ($3\!\times\!10^{-4}$, weight decay $0.1$, none on the tables),
 48{,}000 steps, cosine schedule with $10\%$ warm-up to a $0.1\times$ floor, sequence length 512, 24{,}576
 tokens per step (device batch 12, accumulation 4), evaluation every 500 steps; the backbone runs in bf16,
 the LUT layers in fp32. Data and tokenisation are the \emph{NanoChat} setup: the ClimbMix text corpus as
@@ -471,8 +502,7 @@ Generated by \code{make\_fig\_curves.py} from the committed \code{metrics.csv} f
 
 \paragraph{Reading the results.} Four things are visible in Table~\ref{tab:results} and
 Figure~\ref{fig:curves}. (i) A \emph{soft} read beats its hard counterpart in every generation: $-0.012$
-(Manifesto), $-0.027$ (SoftSign), $-0.011$ (Confidence $n{=}2$ vs.\ $n{=}1$). (ii) Adding a \emph{learned
-confidence score} beats a blend by uncertainty alone: the Confidence line leads the SoftSign line by $0.023$ and
+(Manifesto), $-0.027$ (SoftSign), $-0.011$ (Confidence $n{=}2$ vs.\ $n{=}1$). (ii) Adding the \emph{confidence score} beats a blend by uncertainty alone: the Confidence line leads the SoftSign line by $0.023$ and
 the Manifesto line by $0.033$. The two effects stack, and the ordering is fixed from about step 8k
 onwards. (iii) \emph{Quantisation is nearly free}: int8 rows and power-of-two weights cost $+0.0012$ bpb,
 for tables one quarter the size. (iv) Against the
