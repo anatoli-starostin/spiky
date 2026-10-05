@@ -1,8 +1,6 @@
 """Sign-bit address packing for lutorch_ex cartridges.
 
-The convention is **MSB-first**, matching the gen-1 production addressers
-(FastMultiHeadLut, LightMultiHeadLUT, BH4MultiHeadLUT, HyperplaneMultiHeadLUT): anchor
-pair ``0`` is the most-significant bit. For ``nap`` pairs the bit weights are
+The convention is **MSB-first**: anchor pair ``0`` is the most-significant bit. For ``nap`` pairs the bit weights are
 ``powers[i] = 2 ** (nap - 1 - i)``, and a table's cell index is
 
     c = sum_i bit_i * powers[i],   bit_i = [margin_i > eps]

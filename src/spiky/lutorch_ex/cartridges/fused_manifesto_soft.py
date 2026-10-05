@@ -5,7 +5,7 @@ numerically equivalent to the pure ManifestoSoftLUT oracle:
 
 * ``pure``   — base two-cell read + blend (the compiled read; best for small-batch eval);
 * ``tier1``  — one F.embedding_bag with per_sample_weights=[1-U, U] (fuses read+scale+sum);
-* ``native`` — lutorch_cuda lprojection_forward_smooth + its na1-smooth backward.
+* ``native`` — the native lprojection_forward_smooth + its na1-smooth backward.
 
 ``backend`` forces a path ('pure'/'tier1'/'native'/'auto'); 'auto' is the hybrid.
 """

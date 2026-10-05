@@ -6,7 +6,7 @@ forward/backward dispatch to whichever implementation is fastest for the current
 it (the oracle):
 
 * eval  -> the pure compiled gather read (fastest on the inference path);
-* train -> tier-2 NATIVE lutorch_cuda kernels when available, else tier-1 embedding_bag +
+* train -> tier-2 NATIVE lprojection kernels when available, else tier-1 embedding_bag +
   the custom straight-through autograd.Function.
 
 ``backend`` forces a path ('pure_eval'/'tier1'/'native'/'auto'); 'auto' is the hybrid.

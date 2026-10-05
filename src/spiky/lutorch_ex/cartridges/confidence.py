@@ -1,4 +1,4 @@
-"""ConfidenceLUT — the Gen-3 "LightMHL" (LookupFFN-inspired) cartridge, scored-only.
+"""ConfidenceLUT — the Gen-3 confidence-scored (LookupFFN-inspired) cartridge, scored-only.
 
 Same sign-bit addressing as the Manifesto family — per table, ``n = nap`` anchor-pair margins
 ``u_j`` (``u_j = z[a_j] - z[b_j]`` in pairs mode, ``u_j = z[a_j]`` in single mode), a cell
@@ -9,9 +9,8 @@ magnitudes:
     s_t = (Σ_j |u_j|) · exp( γ · Σ_j logσ(β·|u_j|) )          # LookupFFN's learned-margin score
     y   = Σ_t s_t · W_t[c_t]                                  # read_top_n = 1  (ablation row 3.1)
 
-with ``β = exp(confidence_log_beta)``, ``γ = exp(confidence_log_gamma)`` learned per layer (the
-log-gain ``g`` of the reference is dropped — it was frozen at 0 in both champions, ``exp(0)=1``,
-so it did nothing). At ``read_top_n = 2`` (the Gen-3 champion, ablation row 3.2) the read is a
+with ``β = exp(confidence_log_beta)``, ``γ = exp(confidence_log_gamma)`` learned per layer (there
+is no additive log-gain ``g``: frozen at 0, ``exp(0)=1``, it would do nothing). At ``read_top_n = 2`` (the Gen-3 champion, ablation row 3.2) the read is a
 two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit neighbour ``c'``
 (``j* = argmin_j |u_j|``), still score-gated:
 
@@ -20,7 +19,7 @@ two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit n
 
 The address is non-differentiable, so the input gradient reaches ``x`` ONLY through the score
 ``s_t`` (all ``nap`` margins) and, at ``n = 2``, the blend weight ``v`` (the deciding margin
-``|u_{j*}|``) — there is no directional routing gradient (that is FastMHL's; LightMHL omits it).
+``|u_{j*}|``) — there is no directional routing gradient.
 Gradients flow to the weight tables, ``β``, ``γ`` and (``n = 2``) ``τ``.
 
 Scope (locked): **scored-only** (no hard-forward mode / STE stitch / score rescale), **constant
@@ -46,7 +45,7 @@ from .manifesto_base import ManifestoLUT
 
 
 class ConfidenceLUT(ManifestoLUT):
-    """Gen-3 confidence-scored cartridge (LightMHL math); see module docstring.
+    """Gen-3 confidence-scored cartridge; see module docstring.
 
     Args (beyond the shared :class:`ManifestoLUT` ones):
         read_top_n: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion).

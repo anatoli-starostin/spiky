@@ -1,9 +1,8 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
 // Soft-sign surrogate gradient tail for the Gen-2 fused cartridges (standalone JIT kernel).
 //
 // The heavy, must-be-fused part of the Gen-2 backward (reading both cells, the weighted weight
 // grad, and the per-table carriers gc_main = grad.W[c], gc_alt = grad.W[c']) is done by the
-// reused gen-1 lprojection kernels. This kernel is the ONLY soft-sign-specific piece: given
+// reused Gen-1 lprojection kernels. This kernel is the ONLY soft-sign-specific piece: given
 //   dLdw   = gc_alt - gc_main          [B, nt]   (dL/d w, the blend weight on the neighbour)
 //   delta  = signed deciding margin    [B, nt]
 //   a_glob/b_glob = global anchor coords (coord + group*d_in)  [B, nt] (int64)
@@ -17,8 +16,8 @@
 //     dLdw*dw/dt_select into [B,nt] buffers (summed to scalars by the caller — avoids
 //     scalar-atomic contention).
 //
-// Standalone: built via torch.utils.cpp_extension.load; it does NOT touch the shared
-// lutorch_cuda extension. fp32/fp64 (double atomicAdd is fine on sm_60+). Mirrors the eager
+// Standalone: built via torch.utils.cpp_extension.load; it does NOT touch the
+// lutorch_ex_lprojection extension. fp32/fp64 (double atomicAdd is fine on sm_60+). Mirrors the eager
 // fallback in _native_softsign._softsign_grads_from_dLdw bit-for-bit (same algebra).
 #include <torch/extension.h>
 #include <c10/cuda/CUDAGuard.h>

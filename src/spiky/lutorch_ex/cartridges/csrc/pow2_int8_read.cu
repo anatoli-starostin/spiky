@@ -1,7 +1,6 @@
-// int8 power-of-two LUT read for QuantisedLightFFN, and the forward of the p2_scalars custom op -- RTX 5090 (sm_120).
+// int8 power-of-two LUT read, and the forward of the p2_scalars custom op -- RTX 5090 (sm_120).
 //
-// One launch per call computes, for every (token, head) and every one of that head's T tables, the note's integer read
-// (doc/research/lut_ablation/quantisation_simple.tex, Section 6):
+// One launch per call computes, for every (token, head) and every one of that head's T tables, the integer read:
 //
 //     acc_h[c] = sum_t  (W[c1_t][c] << (k'_t + 6))  +  (W[c2_t][c] << (k'_t + 6 - q_t))      int32, units of 2^-6
 //

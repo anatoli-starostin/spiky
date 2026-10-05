@@ -5,9 +5,8 @@ EXTENSION
 
 csrc/pow2_int8_read.cu provides
 
-  * read_fused  a fused inference read (in the old lutorch tree, QuantisedLightFFN's CUDA read; nothing in lutorch_ex
-                calls it -- DeployedQuantisedConfidenceLUT reads with the torch int_blend_read): for every (token,
-                head), in ONE launch, the per-table integers from
+  * read_fused  a fused inference read (nothing in lutorch_ex calls it -- DeployedQuantisedConfidenceLUT reads
+                with the torch int_blend_read): for every (token, head), in ONE launch, the per-table integers from
                 the compressed code (calling p2::table_scalars, csrc/pow2_scalars.cuh) and the note's Section 6 integer
                 accumulation -- each cell's int8 row loaded 16 bytes at a time (int4 vector loads), every byte
                 sign-extended to int32 in registers, shifted by k' + 6 or k' + 6 - q and added into int32 accumulators that
@@ -29,8 +28,7 @@ the padding bytes; the tests fill them with garbage to prove it.
 
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
 in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel's test matrix has passed. That
-matrix is NOT in this package: it is src/spiky/lutorch/tests/test_pow2_int8.py in the old lutorch tree this module was
-ported from (branch research/ffn_replacement_fix). Inside lutorch_ex the kernel is exercised only through the p2_scalars
+matrix is NOT in this package. Inside lutorch_ex the kernel is exercised only through the p2_scalars
 op, by the CUDA cases of tests/test_quantised_confidence.py; read_fused / read_cells have no test here. Nothing in the
 kernel is architecture-specific; the allowlist records validation, not a hardware requirement, and an architecture joins it
 once that matrix is green on it. Everything else -- no CUDA, an architecture not on the list, no nvcc, a failed build,
@@ -65,7 +63,7 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 
-from . import _pow2 as pow2_read  # vendored pow2_read (lutorch_ex copy)
+from . import _pow2 as pow2_read  # the torch definition of the power-of-two read
 
 BLOCK_NS = (32, 64, 128)
 DEFAULT_BLOCK_N = 64
@@ -74,9 +72,8 @@ DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_s
 _CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
 # Compute capabilities the kernel is enabled on -- only those whose test matrix has passed on real hardware:
 #   (12, 0) sm_120  RTX 5090 (Blackwell), validated on gpustar
-#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: the matrix (src/spiky/lutorch/tests/
-#                   test_pow2_int8.py on research/ffn_replacement_fix -- not part of lutorch_ex) must be green there
-#                   before its results are trusted (see the lut_ablation exp_n_abl_47 package's validation gate)
+#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100: the validation matrix (not part of
+#                   lutorch_ex) must be green there before its results are trusted (see the lut_ablation exp_n_abl_47 package's validation gate)
 VALIDATED_ARCHES = ((12, 0), (9, 0))
 
 _ext = None
@@ -185,7 +182,8 @@ def read_fused(z: torch.Tensor, anchor_a32: torch.Tensor, anchor_b32: torch.Tens
 # the lutorch_ex::p2_scalars custom op
 def score_from_margins(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
     """learned_margin score s = (sum_i m_i) exp(g + gamma sum_i logsigmoid(beta m_i)), m = |d| [..., NAP] -> [...].
-    The expression of fast_multi_head_lut._confidence_score with beta = exp(log_beta), gamma = exp(log_gamma) given."""
+    ConfidenceLUT._score plus an additive log-gain g (always 0 in lutorch_ex), with beta = exp(log_beta),
+    gamma = exp(log_gamma) given."""
     return m.sum(dim=-1) * torch.exp(g + gamma * F.logsigmoid(beta * m).sum(dim=-1))
 
 

@@ -100,7 +100,7 @@ def test_fused_bf16_projection_mhl(device, anchor_mode):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize("Cls", FUSED)
 def test_fused_bf16_cuda_native_training_step(Cls):
-    """On CUDA a bf16 training step runs end-to-end through the native lutorch_cuda kernels
+    """On CUDA a bf16 training step runs end-to-end through the native lprojection kernels
     (bf16 template specializations, fp32 accumulators) and stays bf16 with finite grads."""
     spec = LUTSpec(h_in=4, h_out=4, tph=6, nap=5, d_in=12, d_out=8)
     m = Cls(spec, seed=0, weight_init_std=1.0).cuda().to(torch.bfloat16).train()

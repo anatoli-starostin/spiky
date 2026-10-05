@@ -23,7 +23,7 @@ _CUDA = torch.cuda.is_available()
 
 def _ref_cell_tv(weights: torch.Tensor, nap: int) -> torch.Tensor:
     """Explicit reference: mean over all Hamming-1 cell pairs (and tables) of ||v_c - v_c'||^2
-    (d_out summed in). This is the formula the reference LightMultiHeadLUT.cell_tv implements."""
+    (d_out summed in)."""
     G, tph, K, d_out = weights.shape
     t = weights.reshape(G * tph, K, d_out)
     tot = t.new_zeros(())

@@ -1,7 +1,6 @@
-"""lutorch_ex — greenfield multi-head LUT library.
+"""lutorch_ex — a multi-head lookup-table (LUT) layer library.
 
-A clean, cartridge-based re-implementation of the lutorch lookup-table FFN, with zero
-imports from the old ``spiky.lutorch``. The pieces:
+A cartridge-based lookup-table feed-forward layer. The pieces:
 
 * :class:`LUTSpec` — the immutable geometry (heads / tables / anchor pairs / widths).
 * :class:`MultiHeadLUT` — the cartridge contract (an ABC + the shape contract).

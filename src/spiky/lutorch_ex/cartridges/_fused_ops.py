@@ -4,8 +4,8 @@ Pure-PyTorch tier: the gather+sum over a group's ``tph`` tables is fused into a 
 ``torch.nn.functional.embedding_bag`` call (itself a fused CUDA kernel), and the hard
 cartridge's straight-through backward is a custom ``torch.autograd.Function`` with a
 hand-written scatter backward (which also avoids the inductor mis-schedule of the STE
-composite). This is the graceful fallback path; an optional native fast-path (reusing the
-``lutorch_cuda`` lprojection kernels) can sit behind an availability check later.
+composite). This is the graceful fallback path; the native fast path (the lprojection kernels,
+see ``_native_ops``) sits behind an availability check.
 
 Numerically identical to the pure ManifestoHardLUT / ManifestoSoftLUT (the oracle).
 """
@@ -90,7 +90,7 @@ def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor
 
 
 class FusedHardSTE(torch.autograd.Function):
-    """Hard forward (value = sum_t W[c_t]) with the gen-1 straight-through backward:
+    """Hard forward (value = sum_t W[c_t]) with the Manifesto straight-through backward:
     weight gradient is HARD (only the addressed cell c_t), input gradient flows through the
     two-alternative rational-uncertainty surrogate. Hand-written scatter backward.
     """

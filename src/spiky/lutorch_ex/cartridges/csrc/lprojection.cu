@@ -1,4 +1,3 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
 #include <tuple>
 #include <ATen/AccumulateType.h>
 #include "common_misc.h"
@@ -160,7 +159,7 @@ __global__ void anchor_pairs_lookup_eval_forward_msb_kernel(
 ) {
     // MSB-first variant of anchor_pairs_lookup_eval_forward_kernel: anchor pair
     // 0 contributes to bit (n_anchor_pairs - 1), pair (n_anchor_pairs - 1) to
-    // bit 0. Matches the MSB-first convention used by FastMultiHeadLut so the
+    // bit 0. Matches lutorch_ex's MSB-first convention (addressing.py) so the
     // caller can skip a bit-reverse lookup step.
     int64_t linear_tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t total = batch_size * n_tables;
@@ -1219,7 +1218,7 @@ public:
     ) {
         // MSB-first variant: anchor pair p contributes to bit
         // (n_anchor_pairs - 1 - p) of the emitted row index. Matches
-        // FastMultiHeadLut's MSB-first packing so the caller can use the
+        // lutorch_ex's MSB-first packing (addressing.py) so the caller can use the
         // returned indices directly without a bit-reverse step.
         PROF_START(LUTORCH_MANAGER_ANCHOR_PAIRS_EVAL_FORWARD_PROFILER_OP);
 

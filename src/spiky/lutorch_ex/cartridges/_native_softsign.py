@@ -5,16 +5,16 @@ to form the weight gradient and the input/temperature gradients you need, per ta
 products ``grad . W[c_t]`` and ``grad . W[c_t']`` and (for smooth) a weighted scatter into the
 weight table — all WITHOUT ever materialising the ``[B, G, tph, d_out]`` cell tensors.
 
-The existing gen-1 ``lutorch_cuda`` kernels already do exactly that, and the parts we need are
-**uncertainty-agnostic**, so we reuse them verbatim:
+The Gen-1 lprojection kernels (``_native_ops``) already do exactly that, and the parts we need are
+**uncertainty-agnostic**, so we reuse them unchanged:
 
 * ``lprojection_backward_na1_nonsmooth`` -> (hard 1-row weight grad, carriers gc_main/gc_alt),
 * ``lprojection_backward_na1_smooth``    -> (weighted 2-row weight grad for EXPLICIT per-table
   ``main_weight``/``alt_weight`` we pass in, + the same carriers),
 
 where ``gc_main = grad . W[c]`` and ``gc_alt = grad . W[c']`` depend only on the indices, not on
-the blend weight. The ONLY gen-1-specific kernel is ``anchor_pairs_lookup_backward_all``, which
-folds in gen-1's inverse-L1 ``dU/dmargin`` — that is exactly the soft-sign-specific step, so we do
+the blend weight. The ONLY Gen-1-specific kernel is ``anchor_pairs_lookup_backward_all``, which
+folds in Gen-1's inverse-L1 ``dU/dmargin`` — that is exactly the soft-sign-specific step, so we do
 NOT use it and instead compute the Gen-2 surrogate's input/temperature gradient here.
 
 Gen-2 surrogate recap: the output gradient behaves as if the value were the blend
@@ -33,7 +33,7 @@ Forward value: hard = ``sum_t W[c_t]`` (fused via ``embedding_bag``); smooth = t
 
 fp32/fp64 are the oracle (the native kernels dispatch Double too); bf16/fp16 run with fp32
 addressing + fp32 weight-grad accumulation (the kernels' ``at::acc_type`` buffers). Falls back to
-the pure cartridge on CPU or when ``lutorch_cuda`` is unavailable (handled by the cartridge).
+the pure cartridge on CPU or when the native extension is unavailable (handled by the cartridge).
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from ._native_ops import _THREADS, _table_indices, native_manager
 
 # Standalone JIT kernel for the soft-sign surrogate tail (one fused launch: w + its margin/temp
 # derivatives + the input-grad scatter). Built lazily; None -> eager fallback (identical result).
-# Does NOT touch the shared lutorch_cuda extension.
+# Separate from the lutorch_ex_lprojection extension.
 _SS_EXT = None
 _SS_TRIED = False
 
@@ -61,7 +61,6 @@ def _ss_ext():
     try:
         from torch.utils.cpp_extension import load
 
-        # Vendored, co-located source (no longer reaches into native/lutorch).
         _csrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
         src = os.path.join(_csrc, "softsign_surrogate_grad.cu")
         _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[src], verbose=False)
@@ -114,7 +113,7 @@ def _softsign_grads_from_dLdw(dLdw, delta, t_soft, t_select, a_glob, b_glob, sin
 
 
 def _prep(weights, c, c_alt, z):
-    """Common reshapes to the gen-1 flat native layout. Returns tensors + dims."""
+    """Common reshapes to the kernels' flat native layout. Returns tensors + dims."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
     nt = G * tph

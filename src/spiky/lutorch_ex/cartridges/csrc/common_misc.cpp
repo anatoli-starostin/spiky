@@ -1,4 +1,3 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
 #include "common_misc.h"
 #include <iostream>
 #include <chrono>

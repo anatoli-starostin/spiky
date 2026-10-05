@@ -120,8 +120,7 @@ def test_projection_mhl_wraps_single_cartridge_and_trains():
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=6, d_out=4, anchor_mode="single")
     cart = ManifestoHardLUT(spec, seed=0, weight_init_std=1.0)
     proj = ProjectionMHL(cart, d_model=10, compress=True, decompress=True, bias=True)
-    # The faithful default zero-inits decompress (the FFN starts as a zero contribution, as in
-    # OLD), which gates first-step gradient to the input side; nudge it off zero so this test
+    # The default zero-inits decompress (the FFN starts as a zero contribution), which gates first-step gradient to the input side; nudge it off zero so this test
     # exercises what it is about - that gradient reaches the input projection and the LUT table.
     torch.nn.init.normal_(proj.decompress.weight, std=0.02)
     proj.train()

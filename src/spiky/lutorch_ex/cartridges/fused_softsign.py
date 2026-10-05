@@ -1,8 +1,8 @@
 """Fused, GPU-efficient twins of the Gen-2 soft-sign cartridges.
 
 ``FusedSoftSignHardLUT`` / ``FusedSoftSignSmoothLUT`` are numerically equivalent to the pure
-``SoftSignHardLUT`` / ``SoftSignSmoothLUT`` (the oracle) but dispatch the training step to native
-``lutorch_cuda`` kernels, reusing the gen-1 fused read / weight-grad / carrier machinery and
+``SoftSignHardLUT`` / ``SoftSignSmoothLUT`` (the oracle) but dispatch the training step to the native
+lprojection kernels, reusing the Gen-1 fused read / weight-grad / carrier machinery and
 adding only the soft-sign-specific margin/temperature gradient (see ``_native_softsign``). The
 native backward forms the weight gradient and the two carriers ``grad.W[c]`` / ``grad.W[c']`` in
 one fused pass WITHOUT materialising the ``[B, G, tph, d_out]`` cell tensors — the whole point of
@@ -10,7 +10,7 @@ Option 2.
 
 Dispatch (``backend`` forces a path; 'auto' is the hybrid):
 * eval  -> pure compiled gather read (fastest on the inference path, inherited);
-* train -> 'native' whenever native_available(): a CUDA device with the lutorch_cuda native ops loaded (any
+* train -> 'native' whenever native_available(): a CUDA device with the native ops loaded (any
   architecture the extension builds for -- e.g. H100 or RTX 5090), else 'tier1' (pure embedding_bag path,
   CPU / no ext). FusedSoftSignSmoothLUT overrides this: its 'auto' always trains on 'tier1' (native is no
   faster there); 'native' stays reachable with backend="native".

@@ -1,10 +1,9 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
 #include <pybind11/pybind11.h>
 
-// Forward declaration; implementation lives in lutorch.cu
+// Forward declaration; implementation lives in lprojection.cu
 void PB_LUTorchManager(pybind11::module& m);
 
-// Entry point for the standalone `lutorch_cuda` extension module.
+// Entry point for the lutorch_ex_lprojection extension module.
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     PB_LUTorchManager(m);
 }
